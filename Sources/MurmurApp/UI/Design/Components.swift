@@ -160,9 +160,13 @@ struct KeyChip: View {
     var body: some View {
         let minWidth: CGFloat = isWide ? size.height * 2.6 : size.height
         let sink: CGFloat = isPressed ? baseDepth * 0.75 : 0
-        legend
-            .padding(.horizontal, size.horizontalPadding)
-            .frame(minWidth: minWidth, minHeight: size.height, maxHeight: size.height)
+        // A ZStack of fixed-size children instead of `.frame(minWidth:)`: a flexible frame reports its
+        // minimum as the ideal width under `.fixedSize()`, which squeezed the legend out of the face.
+        ZStack {
+            Color.clear.frame(width: minWidth, height: 1)
+            legend.padding(.horizontal, size.horizontalPadding)
+        }
+            .frame(height: size.height)
             .background(face)
             .offset(y: sink)
             .background(shape.fill(Color.chipBase).offset(y: baseDepth))
@@ -858,96 +862,22 @@ struct ModelStatusText: View {
 
 // MARK: - Mini pill
 
-/// Lightweight, non-panel pill for illustrations and previews.
-/// PILL replaces the body with `PillView(model: .preview(phase:))` once the real view lands.
+/// Non-panel pill for illustrations and previews: the real `PillView` driven by a frozen preview model.
 struct MiniPill: View {
     var phase: PillPhase
-    var level: Float = 0.55
+    var level: Float
+
+    @State private var model: PillModel
 
     init(phase: PillPhase, level: Float = 0.55) {
         self.phase = phase
         self.level = level
-    }
-
-    private var size: CGSize {
-        switch phase {
-        case .hidden: CGSize(width: 0, height: 0)
-        case .rest: CGSize(width: 40, height: 10)
-        case .listening, .processing, .error: CGSize(width: 104, height: 32)
-        case .locked: CGSize(width: 168, height: 36)
-        case .success: CGSize(width: 32, height: 32)
-        }
+        _model = State(initialValue: .preview(phase: phase, level: level))
     }
 
     var body: some View {
-        ZStack {
-            if phase != .hidden {
-                Capsule(style: .continuous)
-                    .fill(Color.pillFill)
-                    .overlay {
-                        Capsule(style: .continuous).ring(0.5)
-                            .fill(LinearGradient(colors: [.white.opacity(0.22), .white.opacity(0.06)],
-                                                 startPoint: .top, endPoint: .bottom), style: FillStyle(eoFill: true))
-                    }
-                    .shadow(color: .black.opacity(phase == .rest ? 0.11 : 0.22), radius: 1, x: 0, y: 1)
-                    .shadow(color: .black.opacity(phase == .rest ? 0.14 : 0.28), radius: 9, x: 0, y: 6)
-                content
-            }
-        }
-        .frame(width: size.width, height: size.height)
-        .accessibilityHidden(true)
-    }
-
-    @ViewBuilder private var content: some View {
-        switch phase {
-        case .hidden, .rest:
-            EmptyView()
-        case .listening:
-            bars
-        case .locked:
-            HStack(spacing: 10) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.8))
-                    .frame(width: 22, height: 22)
-                    .background(.white.opacity(0.12), in: Circle())
-                bars
-                RoundedRectangle(cornerRadius: 2, style: .continuous)
-                    .fill(.white)
-                    .frame(width: 8, height: 8)
-                    .frame(width: 22, height: 22)
-                    .background(Color(nsColor: .hex(0xFF453A)), in: Circle())
-            }
-        case .processing:
-            HStack(spacing: 3.5) {
-                ForEach(0..<13, id: \.self) { i in
-                    let wave = (sin(Double(i) * 0.7) + 1) / 2
-                    Circle()
-                        .fill(.white.opacity(0.35 + 0.55 * wave))
-                        .frame(width: 3, height: 3)
-                        .offset(y: -2.5 * wave)
-                }
-            }
-        case .success:
-            Image(systemName: "checkmark")
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(Color(nsColor: .hex(0x34C759)))
-        case .error:
-            Image(systemName: "exclamationmark")
-                .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(Color(nsColor: .hex(0xFF6B5E)))
-        }
-    }
-
-    private var bars: some View {
-        let profile: [Float] = [0.25, 0.4, 0.62, 0.5, 0.85, 0.7, 1.0, 0.78, 0.92, 0.55, 0.66, 0.42, 0.28]
-        return HStack(spacing: 2.5) {
-            ForEach(0..<13, id: \.self) { i in
-                Capsule(style: .continuous)
-                    .fill(.white.opacity(0.96))
-                    .frame(width: 2.5, height: max(3, CGFloat(profile[i] * level) * 18))
-            }
-        }
-        .frame(height: 18)
+        PillView(model: model)
+            .onChange(of: phase) { _, new in model.phase = new }
+            .accessibilityHidden(true)
     }
 }

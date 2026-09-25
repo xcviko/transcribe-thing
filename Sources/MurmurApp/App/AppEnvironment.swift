@@ -1,4 +1,5 @@
 import AppKit
+import Observation
 
 /// Composition root, built once by the AppDelegate (or per snapshot via `preview()`).
 @MainActor
@@ -28,6 +29,9 @@ final class AppEnvironment {
     let menuBar: MenuBarController
     /// Preview environments never start services.
     let isPreview: Bool
+
+    private var isStarted = false
+    private var maintenanceTask: Task<Void, Never>?
 
     init(paths: AppPaths, settings: AppSettings, keychain: KeychainStore, levelMeter: LevelMeter,
          devices: AudioDeviceCatalog, recorder: AudioRecorder, openRouterClient: OpenRouterClient,
@@ -63,6 +67,7 @@ final class AppEnvironment {
         self.isPreview = isPreview
         windows.environment = self
         menuBar.environment = self
+        wire()
     }
 
     static func live() -> AppEnvironment {
@@ -113,7 +118,7 @@ final class AppEnvironment {
         models: ModelStore, history: HistoryStore, permissions: PermissionsCenter, hotkeys: HotkeyMonitor,
         secureInput: SecureInputMonitor, launchAtLogin: LaunchAtLogin, isPreview: Bool
     ) -> AppEnvironment {
-        let recorder = AudioRecorder(levelMeter: levelMeter, devices: devices)
+        let recorder = AudioRecorder(levelMeter: levelMeter, devices: devices, settings: settings)
         let client = OpenRouterClient()
         let account = makeAccount(keychain, client)
         let transcription = TranscriptionService(models: models, account: account, client: client, settings: settings)
@@ -136,9 +141,26 @@ final class AppEnvironment {
             isPreview: isPreview)
     }
 
+    /// Cross-object references that are safe in previews too (no side effects).
+    private func wire() {
+        dictation.devices = devices
+        dictation.secureInput = secureInput
+        dictation.openHub = { [weak self] section in self?.windows.showHub(section) }
+        dictation.onActivityChanged = { [weak self] activity in self?.menuBar.show(activity) }
+        // Before "Try it", onboarding has no text field: holding fn there is key practice, not dictation.
+        // Dictating into another app meanwhile still pastes there.
+        dictation.deliversQuietly = { [weak self] in
+            guard let self, self.windows.isOnboardingFocused else { return false }
+            return self.settings.onboardingStep < OnboardingStep.tryIt.rawValue
+        }
+        let builder = menuBar.builder
+        pillModel.contextMenuProvider = { builder.makeMenu(includeQuit: false) }
+    }
+
     /// Starts services in the SPEC §4.14 order.
     func start() {
-        guard !isPreview else { return }
+        guard !isPreview, !isStarted else { return }
+        isStarted = true
         do {
             try paths.ensureDirectories()
         } catch {
@@ -153,14 +175,59 @@ final class AppEnvironment {
         sounds.preload()
         pill.start()
         dictation.start()
-        if !hotkeys.start() {
-            permissions.startPolling()
+        permissions.onAccessibilityGranted = { [weak self] in self?.startHotkeys() }
+        hotkeys.onTapAvailabilityChanged = { [weak self] available in
+            if !available { self?.permissions.startPolling() }
         }
+        startHotkeys()
         secureInput.start()
         menuBar.start()
+        observeDockIconSetting()
+        windows.updateActivationPolicy()
         if !settings.onboardingCompleted {
             windows.showOnboarding()
         }
         history.pruneOldRecordings()
+        scheduleMaintenance()
+    }
+
+    /// Called at quit: persist what's pending and release the event tap.
+    func stop() {
+        history.flush()
+        hotkeys.stop()
+        maintenanceTask?.cancel()
+    }
+
+    /// The event tap needs Accessibility; until it's granted, PermissionsCenter polls and calls back here.
+    /// A running monitor without a live tap retries right away (its own probe would take up to 3 s).
+    private func startHotkeys() {
+        guard !hotkeys.isTapActive else { return }
+        if hotkeys.start() {
+            Log.app.info("Hotkeys active")
+        } else {
+            permissions.startPolling()
+        }
+    }
+
+    private func observeDockIconSetting() {
+        withObservationTracking {
+            _ = settings.showDockIcon
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.windows.updateActivationPolicy()
+                self?.observeDockIconSetting()
+            }
+        }
+    }
+
+    /// Murmur runs for weeks at a time: prune retained audio a few times a day, not only at launch.
+    private func scheduleMaintenance() {
+        maintenanceTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(6 * 3600))
+                guard !Task.isCancelled else { return }
+                self?.history.pruneOldRecordings()
+            }
+        }
     }
 }

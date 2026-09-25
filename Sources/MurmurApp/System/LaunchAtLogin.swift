@@ -1,20 +1,89 @@
 import Foundation
 import Observation
+import os
+import ServiceManagement
 
-// STUB (FOUNDATION): SYSTEM replaces this with SMAppService.mainApp.
+struct LaunchAtLoginError: LocalizedError, Equatable {
+    var message: String
+    var errorDescription: String? { message }
+}
+
+/// "Open at login" through `SMAppService.mainApp`.
 @MainActor @Observable
 final class LaunchAtLogin {
-    private var enabled = false
+    enum Status: Equatable, Sendable {
+        case enabled
+        case disabled
+        /// Registered, but the user has to allow it in System Settings ▸ General ▸ Login Items.
+        case requiresApproval
+    }
 
-    init() {}
+    private(set) var status: Status
 
-    var isEnabled: Bool { enabled }
+    /// Registered (including "waiting for approval", so the switch reflects what the user chose).
+    var isEnabled: Bool { status != .disabled }
+    var requiresApproval: Bool { status == .requiresApproval }
 
-    func set(_ on: Bool) throws {
-        enabled = on
+    @ObservationIgnored private let isPreview: Bool
+
+    init() {
+        isPreview = false
+        status = Self.readStatus()
+    }
+
+    private init(previewStatus: Status) {
+        isPreview = true
+        status = previewStatus
     }
 
     static func preview() -> LaunchAtLogin {
-        LaunchAtLogin()
+        LaunchAtLogin(previewStatus: .disabled)
+    }
+
+    static func preview(status: Status) -> LaunchAtLogin {
+        LaunchAtLogin(previewStatus: status)
+    }
+
+    func refresh() {
+        guard !isPreview else { return }
+        let current = Self.readStatus()
+        if status != current { status = current }
+    }
+
+    func set(_ on: Bool) throws {
+        if isPreview {
+            status = on ? .enabled : .disabled
+            return
+        }
+        let service = SMAppService.mainApp
+        do {
+            if on {
+                if service.status != .enabled { try service.register() }
+            } else if service.status != .notRegistered {
+                try service.unregister()
+            }
+        } catch {
+            refresh()
+            Log.app.error("Login item \(on ? "register" : "unregister", privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            throw LaunchAtLoginError(message: on
+                ? "Murmur couldn’t add itself to your login items. Try again from the Applications folder."
+                : "Murmur couldn’t remove itself from your login items. You can remove it in System Settings.")
+        }
+        refresh()
+        if on, status == .requiresApproval { openLoginItemsSettings() }
+    }
+
+    func openLoginItemsSettings() {
+        guard !isPreview else { return }
+        SMAppService.openSystemSettingsLoginItems()
+    }
+
+    private static func readStatus() -> Status {
+        switch SMAppService.mainApp.status {
+        case .enabled: .enabled
+        case .requiresApproval: .requiresApproval
+        case .notRegistered, .notFound: .disabled
+        @unknown default: .disabled
+        }
     }
 }
