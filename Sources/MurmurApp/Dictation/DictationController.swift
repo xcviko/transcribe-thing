@@ -51,11 +51,18 @@ final class DictationController {
     @ObservationIgnored var transcribeOverride: (@MainActor (Recording, EngineID) async throws -> TranscriptResult)?
     @ObservationIgnored var insertOverride: (@MainActor (String, pid_t?) async -> InsertionOutcome)?
     @ObservationIgnored var copyOverride: (@MainActor (String) -> Void)?
+    @ObservationIgnored var pasteNowOverride: (@MainActor (String) async -> InsertionOutcome)?
+    /// TCC's answer right now (about 25 ms), asked only while the cached permission isn't granted.
+    @ObservationIgnored var microphoneAuthorizedNow: () -> Bool = { AudioRecorder.isMicrophoneAuthorized }
 
     private(set) var machine = DictationMachine()
     private(set) var activity: DictationActivity = .idle
     /// Recordings waiting to be transcribed or delivered, oldest first.
     private(set) var pendingJobCount = 0
+    /// The shortcut's event tap has been down for longer than `shortcutNoticeGrace`: fn does nothing.
+    private(set) var isShortcutUnavailable = false
+    /// How long the tap may stay down before the user is told (its own retries and brief drops stay quiet).
+    @ObservationIgnored var shortcutNoticeGrace: Duration = .seconds(6)
 
     @ObservationIgnored private var timers: [DictationMachine.TimerID: (token: UUID, task: Task<Void, Never>)] = [:]
     @ObservationIgnored private var queue: [Job] = []
@@ -67,17 +74,22 @@ final class DictationController {
     @ObservationIgnored private var retained: [UUID: Recording] = [:]
     @ObservationIgnored private var retainedOrder: [UUID] = []
     @ObservationIgnored private var lastCancelledID: UUID?
+    /// Retained recordings whose job came from the Hub: their Retry and Undo update history, never paste.
+    @ObservationIgnored private var historyOnlyIDs: Set<UUID> = []
     @ObservationIgnored private var noSpeechQuota = DailyQuota(limit: 3)
     @ObservationIgnored private var historyHintQuota = DailyQuota(limit: 3)
     @ObservationIgnored private var didShowSecureInputNotice = false
-    /// A device notice ("Using X instead", the AirPods hint) held until the user commits to dictating.
-    @ObservationIgnored private var pendingDeviceNotice: Notice?
+    /// The mic was opened for this recording: its device notice ("Using X instead", the AirPods hint) is
+    /// decided once the user commits to dictating, so fn combos and quick taps don't use it up.
+    @ObservationIgnored private var deviceNoticeDue = false
     @ObservationIgnored private var announcedFallbacks: Set<String> = []
     @ObservationIgnored private var bluetoothHintQuota = DailyQuota(limit: 1)
     @ObservationIgnored private var slowNoticeIDs: [UUID: UUID] = [:]
     @ObservationIgnored private var isStarted = false
     /// The job whose recording is being finished by the current effect batch (its stop cue waits for the tail).
     @ObservationIgnored private var finishingJob: Job?
+    @ObservationIgnored private var isTapAvailable = true
+    @ObservationIgnored private var shortcutNoticeTask: Task<Void, Never>?
 
     private static let retainedLimit = 8
     private static let undoMinimumDuration: TimeInterval = 1
@@ -124,8 +136,30 @@ final class DictationController {
             previousFailure?(engine, error)
             self?.modelFailed(engine, error)
         }
+        observeMicrophonePermission()
         stateDidChange()
     }
+
+    /// The sticky "Murmur can't hear you" toast lasts only until access is on, however it was turned on
+    /// (the toast's button, the Hub, System Settings on its own).
+    private func observeMicrophonePermission() {
+        withObservationTracking {
+            _ = permissions.microphone
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if self.permissions.microphone == .granted { self.dismissMicrophoneNotices() }
+                self.observeMicrophonePermission()
+            }
+        }
+    }
+
+    private func dismissMicrophoneNotices() {
+        toasts.dismiss(dedupeKey: Self.microphoneDeniedKey)
+        toasts.dismiss(dedupeKey: "mic.request")
+    }
+
+    private static let microphoneDeniedKey = "error.\(MurmurError.microphonePermissionDenied.code)"
 
     // MARK: - Inputs
 
@@ -191,7 +225,8 @@ final class DictationController {
     }
 
     private func syncConfig() {
-        machine.config.maxDuration = settings.maxRecordingDuration
+        // The limit is fixed for the recording in progress: its timers, pill and notices all use one value.
+        if !machine.isRecording { machine.config.maxDuration = settings.effectiveMaxRecordingDuration }
         machine.config.doublePressEnabled = settings.doublePressForHandsFree
     }
 
@@ -199,6 +234,8 @@ final class DictationController {
 
     private func execute(_ effects: [DictationMachine.Effect]) {
         defer { finishingJob = nil }
+        // Esc while the only job is already being pasted: nothing to cancel, so no cancel cue either.
+        var nothingCancelled = false
         for effect in effects {
             switch effect {
             case .startCapture:
@@ -219,6 +256,7 @@ final class DictationController {
             case .showPill:
                 refreshPill()
             case .playSound(let sound):
+                if sound == .cancel, nothingCancelled { continue }
                 if sound == .stop, let job = finishingJob {
                     // Played once the tail is captured, so the cue never lands in the recording.
                     job.playsStopCue = true
@@ -230,7 +268,7 @@ final class DictationController {
             case .cancelTimer(let id):
                 cancelTimer(id)
             case .cancelNewestJob:
-                cancelNewestJob()
+                nothingCancelled = !cancelNewestJob()
             case .notice(let kind):
                 post(kind)
             }
@@ -243,7 +281,7 @@ final class DictationController {
         guard !captureDevice.isCapturing else { return nil }
         do {
             try captureDevice.start(preferredDeviceUID: settings.microphoneUID)
-            pendingDeviceNotice = captureDevice === recorder ? deviceNotice(for: recorder.lastChoice) : nil
+            deviceNoticeDue = captureDevice === recorder
             return nil
         } catch let error as MurmurError {
             return error
@@ -258,23 +296,43 @@ final class DictationController {
         switch permissions.microphone {
         case .granted:
             break
-        case .notDetermined where AudioRecorder.isMicrophoneAuthorized:
-            // PermissionsCenter reads TCC asynchronously; right after launch it may not know yet.
-            break
         case .notDetermined, .denied:
-            return .microphonePermissionDenied
+            // PermissionsCenter reads TCC asynchronously (right after launch it may not know yet), and nothing
+            // tells it when the user turns the mic on in System Settings while Murmur stays in the background.
+            guard microphoneAuthorizedNow() else { return .microphonePermissionDenied }
+            permissions.refresh()
+            dismissMicrophoneNotices()
         }
         let engine = settings.selectedEngine
         if engine.isLocal {
             switch models.state(of: engine) {
+            case .notInstalled where !models.hasScannedDisk:
+                // Launch: the first disk scan hasn't landed yet. The job waits for it.
+                return nil
             case .notInstalled: return .modelNotDownloaded(engine)
-            case .failed(let message): return .modelLoadFailed(engine, message)
+            case .failed(let message):
+                switch models.lastErrors[engine] {
+                case .modelLoadFailed?:
+                    // The files are complete: the job loads the model once more before giving up, and a
+                    // failure then keeps the recording for Retry.
+                    return nil
+                case let error?:
+                    // A failed download keeps its own error (Try Again, Manage Storage).
+                    return error
+                case nil:
+                    return .modelLoadFailed(engine, message)
+                }
             case .downloading, .installed, .preparing, .ready: return nil
             }
         }
         switch account.status {
         case .missing: return .openRouterMissingKey
-        case .invalid(let message): return .openRouterInvalidKey(message)
+        case .invalid(let message):
+            // Usually final, but a single request's 401 (a brief OpenRouter outage, a key re-enabled since)
+            // shouldn't block Gemini for good: check the key in the background, the next press sees the answer.
+            account.refreshIfStale(maxAge: 30)
+            return .openRouterInvalidKey(message)
+        case .failed where account.isKeyUnreadable: return .openRouterKeyUnreadable
         case .checking, .valid, .noCredit, .offline, .failed: return nil
         }
     }
@@ -302,7 +360,8 @@ final class DictationController {
             keepCancelled(recording, engine: job.engine, notify: true)
             return
         }
-        if job.playsStopCue { sounds.play(.stop) }
+        // A new recording may already be running (re-pressed during the tail): keep the cue out of it.
+        if job.playsStopCue { playCue(.stop) }
         guard passesPreflight(recording) else {
             queue.removeAll { $0 === job }
             _ = machine.handle(.jobEnded, now: clock())
@@ -332,6 +391,8 @@ final class DictationController {
     }
 
     private func cancelCapture(keepForUndo: Bool, notify: Bool) {
+        // "Dictation stopped · Undo" offers this recording or nothing, never an older one still retained.
+        if keepForUndo { lastCancelledID = nil }
         guard captureDevice.isCapturing else { return }
         let recording = captureDevice.cancel()
         guard keepForUndo, let recording else { return }
@@ -523,6 +584,11 @@ final class DictationController {
     private func waitForLocalModel(_ engine: EngineID) async throws {
         while true {
             try Task.checkCancellation()
+            // Right after launch every model reads as not installed until the first disk scan lands.
+            guard models.hasScannedDisk else {
+                try await Task.sleep(for: .milliseconds(100))
+                continue
+            }
             switch models.state(of: engine) {
             case .downloading:
                 try await Task.sleep(for: .milliseconds(300))
@@ -551,8 +617,10 @@ final class DictationController {
         }
     }
 
-    private func cancelNewestJob() {
-        guard let job = queue.last else { return }
+    /// False when there was nothing left to cancel (the last result is already being delivered).
+    @discardableResult
+    private func cancelNewestJob() -> Bool {
+        guard let job = queue.last else { return false }
         queue.removeLast()
         job.stop()
         job.isCancelled = true
@@ -560,8 +628,10 @@ final class DictationController {
         _ = machine.handle(.jobEnded, now: clock())
         if let recording = job.recording {
             keepCancelled(recording, engine: job.engine, notify: true)
+            if job.delivery == .historyOnly, retained[recording.id] != nil { historyOnlyIDs.insert(recording.id) }
         }
         drain()
+        return true
     }
 
     private func deliver(_ job: Job, _ outcome: Outcome) async {
@@ -601,7 +671,9 @@ final class DictationController {
         guard let recording = job.recording else { return }
         let file = history.saveAudio(recording)
         retain(recording)
-        let notice = error.notice(recordingID: job.id, fallbackEngine: readyFallback(excluding: job.engine))
+        if job.delivery == .historyOnly { historyOnlyIDs.insert(job.id) }
+        // A downloaded model that isn't loaded yet loads for the retry, so it counts too.
+        let notice = error.notice(recordingID: job.id, fallbackEngine: usableFallback(excluding: job.engine))
         history.upsert(TranscriptEntry(
             id: job.id, createdAt: recording.startedAt, text: "", engine: job.engine, status: .failed,
             audioDuration: recording.duration, voicedSeconds: recording.speech.voicedSeconds,
@@ -695,8 +767,14 @@ final class DictationController {
             toasts.dismiss(notice.id)
             Task { [weak self] in
                 guard let self else { return }
-                let outcome = await self.inserter.pasteNow(text)
-                if outcome == .pasted { self.sounds.play(.paste) }
+                let outcome: InsertionOutcome
+                if let override = self.pasteNowOverride {
+                    outcome = await override(text)
+                } else {
+                    outcome = await self.inserter.pasteNow(text)
+                }
+                // Anything but a paste brings the text back (a card, or the Accessibility notice).
+                self.handleInsertion(outcome, text: text, celebrate: false)
             }
             return
         default:
@@ -704,6 +782,10 @@ final class DictationController {
         }
         toasts.dismiss(notice.id)
         switch action.kind {
+        case .openSettingsPane(.accessibility) where permissions.accessibility != .granted:
+            // The first request shows the system prompt, which also adds Murmur to the list; later ones open
+            // the pane. Both watch for the grant.
+            permissions.requestAccessibility()
         case .openSettingsPane(let pane):
             permissions.open(pane)
         case .openHub(let section):
@@ -758,7 +840,12 @@ final class DictationController {
             return
         }
         let chosen = engine ?? history.entry(id: id)?.engine ?? settings.selectedEngine
-        enqueue(recording, engine: chosen, delivery: .paste(targetPID: inserter.frontmostPID()))
+        enqueue(recording, engine: chosen, delivery: redeliveryTarget(for: id))
+    }
+
+    /// Where a retried or undone recording goes: back to history for Hub jobs, else the cursor now.
+    private func redeliveryTarget(for id: UUID) -> Delivery {
+        historyOnlyIDs.contains(id) ? .historyOnly : .paste(targetPID: inserter.frontmostPID())
     }
 
     /// Transcribes a canceled recording after all and pastes it wherever the cursor is now.
@@ -768,7 +855,7 @@ final class DictationController {
             return
         }
         guard passesPreflight(recording) else { return }
-        enqueue(recording, engine: settings.selectedEngine, delivery: .paste(targetPID: inserter.frontmostPID()))
+        enqueue(recording, engine: settings.selectedEngine, delivery: redeliveryTarget(for: id))
     }
 
     private func startDownload(_ engine: EngineID) {
@@ -815,7 +902,7 @@ final class DictationController {
     // MARK: - Machine notices
 
     private func post(_ kind: DictationMachine.NoticeKind) {
-        let minutes = settings.maxRecordingMinutes
+        let minutes = Int((machine.config.maxDuration / 60).rounded())
         switch kind {
         case .oneMinuteLeft:
             toasts.post(Notice(dedupeKey: "limit", style: .warning, symbol: "timer", title: "1 minute left",
@@ -860,12 +947,14 @@ final class DictationController {
     }
 
     private func postSlowNotice(for job: Job) {
-        let fallback = readyFallback(excluding: job.engine)
+        var fallback = usableFallback(excluding: job.engine)
         var notice: Notice
         switch models.state(of: job.engine) {
         case .downloading(let progress) where job.engine.isLocal:
             notice = MurmurError.modelDownloading(job.engine, progress.fraction).notice(recordingID: nil, fallbackEngine: nil)
         case .preparing where job.engine.isLocal, .installed where job.engine.isLocal:
+            // This model's load holds the inference gate: only an already loaded one would be any faster.
+            fallback = readyFallback(excluding: job.engine)
             notice = MurmurError.modelPreparing(job.engine).notice(recordingID: nil, fallbackEngine: nil)
         default:
             guard job.engine.isCloud else { return }
@@ -888,6 +977,33 @@ final class DictationController {
         toasts.dismiss(id)
     }
 
+    // MARK: - Shortcut availability
+
+    /// The event tap came up or went down. Down for longer than a brief drop, it becomes a sticky notice
+    /// (after onboarding, which explains Accessibility itself) and a Hub card; up again, both go away.
+    func shortcutAvailabilityChanged(_ available: Bool) {
+        guard available != isTapAvailable else { return }
+        isTapAvailable = available
+        shortcutNoticeTask?.cancel()
+        shortcutNoticeTask = nil
+        if available {
+            if isShortcutUnavailable { isShortcutUnavailable = false }
+            toasts.dismiss(dedupeKey: Notice.shortcutUnavailableKey)
+            return
+        }
+        let grace = shortcutNoticeGrace
+        shortcutNoticeTask = Task { [weak self] in
+            try? await Task.sleep(for: grace)
+            guard !Task.isCancelled, let self, !self.isTapAvailable else { return }
+            self.shortcutNoticeTask = nil
+            self.isShortcutUnavailable = true
+            guard self.settings.onboardingCompleted else { return }
+            self.toasts.post(.shortcutUnavailable(accessibility: self.permissions.accessibility,
+                                                  likelyStale: self.permissions.accessibilityLikelyStale,
+                                                  shortcut: self.pttHint))
+        }
+    }
+
     private func showSecureInputNoticeIfNeeded() {
         guard !didShowSecureInputNotice, let secureInput, secureInput.isActive,
               machine.capture.isListeningOrLocked else { return }
@@ -907,8 +1023,11 @@ final class DictationController {
     // MARK: - Engines and recordings
 
     /// A loaded local engine other than `engine`, offered as "Retry with …" for a saved recording.
+    /// None while a local model loads: that load holds the inference gate (and unloads the others), so
+    /// another model couldn't start before it finishes.
     private func readyFallback(excluding engine: EngineID) -> EngineID? {
-        EngineID.localEngines.first { $0 != engine && models.state(of: $0) == .ready }
+        guard !EngineID.localEngines.contains(where: { models.state(of: $0).isPreparing }) else { return nil }
+        return EngineID.localEngines.first { $0 != engine && models.state(of: $0) == .ready }
     }
 
     /// A downloaded local engine other than `engine`, offered as "Use …" when nothing was recorded.
@@ -927,13 +1046,16 @@ final class DictationController {
         retainedOrder.removeAll { $0 == recording.id }
         retainedOrder.append(recording.id)
         while retainedOrder.count > Self.retainedLimit {
-            retained[retainedOrder.removeFirst()] = nil
+            let evicted = retainedOrder.removeFirst()
+            retained[evicted] = nil
+            historyOnlyIDs.remove(evicted)
         }
     }
 
     private func forget(_ id: UUID) {
         retained[id] = nil
         retainedOrder.removeAll { $0 == id }
+        historyOnlyIDs.remove(id)
     }
 
     private func recording(for id: UUID) -> Recording? {
@@ -992,10 +1114,10 @@ final class DictationController {
         refreshPill()
         showSecureInputNoticeIfNeeded()
         if !machine.isRecording {
-            pendingDeviceNotice = nil
-        } else if machine.capture.isListeningOrLocked, let notice = pendingDeviceNotice {
-            pendingDeviceNotice = nil
-            toasts.post(notice)
+            deviceNoticeDue = false
+        } else if machine.capture.isListeningOrLocked, deviceNoticeDue {
+            deviceNoticeDue = false
+            if let notice = deviceNotice(for: recorder.lastChoice) { toasts.post(notice) }
         }
         let next: DictationActivity = machine.capture.isListeningOrLocked ? .recording : (hasPendingWork ? .processing : .idle)
         if next != activity {

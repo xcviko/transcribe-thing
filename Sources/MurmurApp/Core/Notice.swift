@@ -93,6 +93,35 @@ struct Notice: Identifiable, Equatable, Sendable {
     var primaryAction: NoticeAction? { actions.first(where: \.isPrimary) }
 }
 
+extension Notice {
+    static let shortcutUnavailableKey = "shortcut.unavailable"
+
+    /// The event tap is down, so holding the shortcut does nothing. Sticky until the tap is back.
+    /// `shortcut` is the push-to-talk hint ("fn").
+    static func shortcutUnavailable(accessibility: PermissionState, likelyStale: Bool, shortcut: String) -> Notice {
+        let title: String
+        let body: String
+        let fixTitle: String
+        if accessibility != .granted && likelyStale {
+            title = "macOS needs to trust Murmur again"
+            body = "Murmur was updated, so \(shortcut) does nothing yet. Remove Murmur from Accessibility, then add it back."
+            fixTitle = "Open Settings"
+        } else if accessibility != .granted {
+            title = "Murmur can’t hear your shortcut"
+            body = "Turn on Accessibility so \(shortcut) starts dictation and text pastes where you type."
+            fixTitle = "Allow Access"
+        } else {
+            title = "Murmur can’t hear your shortcut"
+            body = "macOS stopped sending key presses to Murmur. Turn Murmur off and on again in Accessibility."
+            fixTitle = "Open Settings"
+        }
+        return Notice(dedupeKey: shortcutUnavailableKey, style: .error, symbol: "keyboard", title: title, body: body,
+                      actions: [NoticeAction(title: fixTitle, kind: .openSettingsPane(.accessibility), isPrimary: true),
+                                NoticeAction(title: "Dismiss", kind: .dismiss)],
+                      lifetime: .sticky)
+    }
+}
+
 // MARK: - Destinations
 
 enum SettingsPane: String, Sendable {
@@ -164,8 +193,12 @@ enum MurmurError: Error, Equatable, Sendable {
     case downloadFailed(EngineID, String)
     case notEnoughDisk(needed: Int64, available: Int64)
     case openRouterMissingKey
+    /// A key is stored, but the Keychain refused to hand it over (a denied or cancelled prompt).
+    case openRouterKeyUnreadable
     case openRouterInvalidKey(String)
     case openRouterNoCredits(String)
+    /// 402 from this key's own spending limit (the account may still have credit).
+    case openRouterKeyLimit(String)
     case openRouterRateLimited(retryAfter: Double?)
     /// 404 / "No endpoints found": privacy, ZDR or allowed-provider settings.
     case openRouterNoRoute(String)
@@ -175,6 +208,8 @@ enum MurmurError: Error, Equatable, Sendable {
     /// 400, 413, 422.
     case openRouterBadRequest(String)
     case openRouterServer(String)
+    /// Gemini ran out of output tokens mid-transcript (a repetition loop or a cut-off ending); the partial text.
+    case openRouterTruncated(String)
     case timeout(EngineID)
     case offline
     case emptyResult(EngineID)
@@ -187,14 +222,23 @@ enum MurmurError: Error, Equatable, Sendable {
         switch self {
         case .microphoneDisconnected,
              .modelDownloading, .modelPreparing, .modelLoadFailed,
-             .openRouterRateLimited, .openRouterProviderUnavailable, .openRouterServer,
+             .openRouterRateLimited, .openRouterProviderUnavailable, .openRouterServer, .openRouterTruncated,
              .timeout, .offline, .emptyResult, .engineFailed:
             true
         case .microphonePermissionDenied, .noMicrophone, .microphoneNotResponding, .microphoneSilent,
              .accessibilityMissing, .modelNotDownloaded, .downloadFailed, .notEnoughDisk,
-             .openRouterMissingKey, .openRouterInvalidKey, .openRouterNoCredits, .openRouterNoRoute,
-             .openRouterRefused, .openRouterBadRequest, .noSpeech, .recordingTooLarge:
+             .openRouterMissingKey, .openRouterKeyUnreadable, .openRouterInvalidKey, .openRouterNoCredits,
+             .openRouterKeyLimit, .openRouterNoRoute, .openRouterRefused, .openRouterBadRequest, .noSpeech,
+             .recordingTooLarge:
             false
+        }
+    }
+
+    /// A brief OpenRouter or provider hiccup: the same request sent again a moment later can succeed.
+    var isTransientCloudFailure: Bool {
+        switch self {
+        case .openRouterRateLimited, .openRouterProviderUnavailable, .openRouterServer: true
+        default: false
         }
     }
 
@@ -202,9 +246,10 @@ enum MurmurError: Error, Equatable, Sendable {
     private var fallbackCanHelp: Bool {
         switch self {
         case .modelNotDownloaded, .modelDownloading, .modelPreparing, .modelLoadFailed,
-             .openRouterMissingKey, .openRouterInvalidKey, .openRouterNoCredits, .openRouterRateLimited,
-             .openRouterNoRoute, .openRouterProviderUnavailable, .openRouterRefused, .openRouterBadRequest,
-             .openRouterServer, .timeout, .offline, .emptyResult, .engineFailed, .recordingTooLarge:
+             .openRouterMissingKey, .openRouterKeyUnreadable, .openRouterInvalidKey, .openRouterNoCredits,
+             .openRouterKeyLimit, .openRouterRateLimited, .openRouterNoRoute, .openRouterProviderUnavailable,
+             .openRouterRefused, .openRouterBadRequest, .openRouterServer, .openRouterTruncated, .timeout, .offline,
+             .emptyResult, .engineFailed, .recordingTooLarge:
             true
         case .microphonePermissionDenied, .noMicrophone, .microphoneNotResponding, .microphoneDisconnected,
              .microphoneSilent, .accessibilityMissing, .downloadFailed, .notEnoughDisk, .noSpeech:
@@ -228,14 +273,17 @@ enum MurmurError: Error, Equatable, Sendable {
         case .downloadFailed(let e, _): "downloadFailed.\(e.rawValue)"
         case .notEnoughDisk: "notEnoughDisk"
         case .openRouterMissingKey: "openRouterMissingKey"
+        case .openRouterKeyUnreadable: "openRouterKeyUnreadable"
         case .openRouterInvalidKey: "openRouterInvalidKey"
         case .openRouterNoCredits: "openRouterNoCredits"
+        case .openRouterKeyLimit: "openRouterKeyLimit"
         case .openRouterRateLimited: "openRouterRateLimited"
         case .openRouterNoRoute: "openRouterNoRoute"
         case .openRouterProviderUnavailable: "openRouterProviderUnavailable"
         case .openRouterRefused: "openRouterRefused"
         case .openRouterBadRequest: "openRouterBadRequest"
         case .openRouterServer: "openRouterServer"
+        case .openRouterTruncated: "openRouterTruncated"
         case .timeout(let e): "timeout.\(e.rawValue)"
         case .offline: "offline"
         case .emptyResult(let e): "emptyResult.\(e.rawValue)"
@@ -249,7 +297,7 @@ enum MurmurError: Error, Equatable, Sendable {
     var detail: String? {
         switch self {
         case .microphoneNotResponding(let s), .modelLoadFailed(_, let s), .downloadFailed(_, let s),
-             .openRouterInvalidKey(let s), .openRouterNoCredits(let s), .openRouterNoRoute(let s),
+             .openRouterInvalidKey(let s), .openRouterNoCredits(let s), .openRouterKeyLimit(let s), .openRouterNoRoute(let s),
              .openRouterProviderUnavailable(let s), .openRouterRefused(let s), .openRouterBadRequest(let s),
              .openRouterServer(let s), .engineFailed(_, let s):
             s.isEmpty ? nil : s
@@ -329,11 +377,17 @@ extension MurmurError {
             symbol: copy.symbol,
             title: copy.title,
             body: body,
+            transcript: partialTranscript,
             actions: actions,
             lifetime: lifetime,
             sound: copy.sound,
             recordingID: recordingID
         )
+    }
+
+    /// Text that came back but wasn't pasted, shown in the notice so it can still be copied.
+    private var partialTranscript: String? {
+        if case .openRouterTruncated(let text) = self, !text.isEmpty { text } else { nil }
     }
 
     private var failingEngine: EngineID? {
@@ -342,9 +396,9 @@ extension MurmurError {
              .modelLoadFailed(let e, _), .downloadFailed(let e, _), .timeout(let e),
              .emptyResult(let e), .engineFailed(let e, _):
             e
-        case .openRouterMissingKey, .openRouterInvalidKey, .openRouterNoCredits, .openRouterRateLimited,
-             .openRouterNoRoute, .openRouterProviderUnavailable, .openRouterRefused, .openRouterBadRequest,
-             .openRouterServer, .recordingTooLarge:
+        case .openRouterMissingKey, .openRouterKeyUnreadable, .openRouterInvalidKey, .openRouterNoCredits,
+             .openRouterKeyLimit, .openRouterRateLimited, .openRouterNoRoute, .openRouterProviderUnavailable,
+             .openRouterRefused, .openRouterBadRequest, .openRouterServer, .openRouterTruncated, .recordingTooLarge:
             nil
         default:
             nil
@@ -459,6 +513,12 @@ extension MurmurError {
                         body: "Gemini needs a key to transcribe.",
                         fixes: [Fix(title: "Add Key", kind: .openHub(.models))],
                         order: .fixFirst, offersSwitch: true)
+        case .openRouterKeyUnreadable:
+            return Copy(symbol: "key.fill",
+                        title: "Murmur can’t read your OpenRouter key",
+                        body: "macOS didn’t let Murmur open it in the Keychain. Check the key again and choose Always Allow.",
+                        fixes: [Fix(title: "Check Key", kind: .openHub(.models))],
+                        order: .fixFirst, offersSwitch: true)
         case .openRouterInvalidKey:
             return Copy(symbol: "key.fill",
                         title: "Your OpenRouter key was rejected",
@@ -470,6 +530,12 @@ extension MurmurError {
                         title: "Out of OpenRouter credit",
                         body: "Add credit to keep using Gemini.",
                         fixes: [Fix(title: "Add Credit", kind: .openURL(OpenRouterLinks.credits))],
+                        order: .fixFirst, offersSwitch: true)
+        case .openRouterKeyLimit:
+            return Copy(symbol: "creditcard",
+                        title: "Your OpenRouter key hit its limit",
+                        body: "This key has a spending limit, and it’s used up. Raise it to keep using Gemini.",
+                        fixes: [Fix(title: "Raise Limit", kind: .openURL(OpenRouterLinks.keys))],
                         order: .fixFirst, offersSwitch: true)
         case .openRouterRateLimited(let retryAfter):
             let wait = retryAfter.map { $0 >= 1 ? "Try again in about \(Int($0.rounded(.up))) s." : nil } ?? nil
@@ -499,6 +565,12 @@ extension MurmurError {
             return Copy(symbol: "icloud.slash",
                         title: "OpenRouter ran into a problem",
                         body: "This is usually temporary. Try again in a moment.")
+        case .openRouterTruncated:
+            return Copy(style: .warning, symbol: "text.badge.xmark",
+                        title: "Gemini stopped before finishing",
+                        body: "The text may be cut off or repeat itself, so Murmur didn’t paste it.",
+                        fixes: partialTranscript.map { [Fix(title: "Copy", kind: .copyText($0))] } ?? [],
+                        sound: .alert)
         case .timeout(let e):
             return Copy(symbol: "hourglass",
                         title: "\(e.shortName) took too long",

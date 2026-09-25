@@ -685,6 +685,31 @@ private final class EventLog: @unchecked Sendable {
         #expect(session.finishNow(discard: false).isEmpty)
     }
 
+    /// Released before a slow (Bluetooth) mic delivered anything: the start timeout ends the session and
+    /// must still answer the stop that is waiting for its tail, or `AudioRecorder.finish` never returns.
+    @Test func startTimeoutAnswersAStopWaitingForItsTail() async throws {
+        let log = EventLog()
+        let session = makeSession(log: log, timeout: 0.1)
+        session.armStartTimeout()
+        session.finish(tail: 5) { log.complete($0) }
+        try await waitUntil { !log.completions.isEmpty }
+        #expect(log.completions == [[]])
+        #expect(log.names == ["noAudio"])
+    }
+
+    @Test func finalizeHandsOverAPendingStop() {
+        var state = CaptureState(device: AudioInputDevice(id: "x", name: "X", transport: .usb, isAvailable: true),
+                                 keepsSamples: true)
+        state.phase = .tail(until: 1)
+        state.tailCompletion = { _ in }
+        let (samples, completion) = state.finalizeTakingCompletion(discard: true)
+        #expect(samples.isEmpty)
+        #expect(completion != nil)
+        #expect(state.tailCompletion == nil)
+        #expect(state.phase == .finished)
+        #expect(state.finalizeTakingCompletion(discard: false).completion == nil)
+    }
+
     @Test func audioBeforeTheTimeoutKeepsTheSession() async throws {
         let log = EventLog()
         let session = makeSession(log: log, timeout: 0.1)

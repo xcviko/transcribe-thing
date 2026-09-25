@@ -15,9 +15,9 @@ struct ModelStep: View {
             let free = model.freeDiskBytes < .max ? " \(Fmt.bytes(model.freeDiskBytes)) free on this Mac." : ""
             return ("internaldrive", "\(name) downloads once (\(size)), then works offline.\(free)")
         case .downloading:
-            return ("arrow.down.circle", "The download keeps going if you continue. You can practice as soon as it's done.")
+            return ("arrow.down.circle", "The download keeps going if you continue. You can practice as soon as it’s done.")
         case .preparing, .installed:
-            return ("cpu", "\(name) is being tuned for this Mac's Neural Engine. This can take a few minutes.")
+            return ("cpu", "\(name) is being tuned for this Mac’s Neural Engine. This can take a few minutes.")
         case .ready:
             return ("lock.shield", "\(name) runs entirely on your Mac. Nothing you say leaves this computer.")
         case .failed(let message):
@@ -28,18 +28,10 @@ struct ModelStep: View {
     var body: some View {
         let cloudSelected = selected.isCloud
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .bottom, spacing: 24) {
-                StepHeader(title: "Pick how Murmur listens")
-                Spacer(minLength: 0)
-                Text("You can switch anytime in Settings. On-device models stay private and work offline.")
-                    .font(.system(size: 12.5))
-                    .lineSpacing(2)
-                    .foregroundStyle(.inkSecondary)
-                    .multilineTextAlignment(.trailing)
-                    .frame(width: 320, alignment: .trailing)
-                    .padding(.bottom, 3)
-            }
-            .padding(.bottom, 20)
+            StepHeader(title: "Pick how Murmur listens",
+                       subtitle: "On-device models stay private and work offline. You can switch anytime in Settings.",
+                       titleSize: 28)
+                .padding(.bottom, 18)
 
             Grid(horizontalSpacing: 12, verticalSpacing: 12) {
                 GridRow {
@@ -64,7 +56,7 @@ struct ModelStep: View {
                     Text(note.text)
                 }
                 .font(.system(size: 12))
-                .foregroundStyle(.inkTertiary)
+                .foregroundStyle(.inkSecondary)
                 .padding(.top, 16)
                 .padding(.leading, 4)
                 .transition(.opacity)
@@ -120,7 +112,9 @@ private struct EngineCard: View {
 
     private var header: some View {
         HStack(alignment: .top, spacing: 11) {
+            // The slot keeps its width when the icon shrinks, so names line up down the grid.
             EngineIcon(engine: engine, size: compact ? 30 : 34)
+                .frame(width: 34, alignment: .leading)
             VStack(alignment: .leading, spacing: 2) {
                 Text(engine.displayName)
                     .font(.system(size: 14, weight: .semibold))
@@ -154,7 +148,8 @@ private struct EngineCard: View {
                 .font(.system(size: 12).monospacedDigit())
                 .foregroundStyle(.inkSecondary)
         } else {
-            ModelStatusText(state: localState, engine: engine, showsDot: false)
+            ModelStatusText(state: localState, engine: engine, showsDot: false,
+                            localError: model.ctx.models.lastErrors[engine])
         }
     }
 
@@ -175,16 +170,25 @@ private struct EngineCard: View {
         case .preparing(let since):
             PreparingRow(since: since)
         case .failed:
+            // A model that downloaded but won't load needs fresh files: "Try again" only loads the same ones.
+            let loadFailed = ModelFailure(model.ctx.models.lastErrors[engine]) == .load
             HStack(spacing: 8) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.danger)
-                Text("Download didn't finish")
+                Text(loadFailed ? "Couldn’t load" : "Download didn’t finish")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.danger)
+                    .lineLimit(1)
                 Spacer(minLength: 0)
-                Button("Try again") { model.download(engine) }
+                Button("Try Again") { model.download(engine) }
                     .buttonStyle(SecondaryButtonStyle(size: .small))
+                    .fixedSize()
+                if loadFailed {
+                    Button("Download Again") { model.reinstall(engine) }
+                        .buttonStyle(SecondaryButtonStyle(size: .small))
+                        .fixedSize()
+                }
             }
         case .notInstalled:
             if isSelected, !model.hasEnoughDisk(for: engine), let needed = model.requiredDiskBytes(for: engine) {
@@ -244,7 +248,7 @@ private struct EngineCard: View {
                 Button {
                     model.select(engine)
                 } label: {
-                    Label("Add key", systemImage: "key.fill")
+                    Label("Add Key", systemImage: "key.fill")
                         .labelStyle(.titleAndIcon)
                 }
                 .buttonStyle(SecondaryButtonStyle(size: .small))
@@ -350,18 +354,20 @@ private struct DiskWarningRow: View {
     var onManage: () -> Void
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
             Image(systemName: "internaldrive")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(.warning)
-            Text("Needs \(Fmt.bytes(needed)) free. You have \(Fmt.bytes(available)).")
-                .font(.system(size: 12, weight: .medium))
+            // Both numbers stay whole: the line wraps rather than cutting off the free space.
+            Text("Needs \(Fmt.bytes(needed)) · \(Fmt.bytes(available)) free")
+                .font(.system(size: 12, weight: .medium).monospacedDigit())
                 .foregroundStyle(.warning)
-                .lineLimit(1)
-                .minimumScaleFactor(0.85)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
             Button("Manage Storage…", action: onManage)
                 .buttonStyle(QuietButtonStyle(tint: .accent, size: .small))
+                .fixedSize()
         }
     }
 }
@@ -420,7 +426,7 @@ private struct OpenRouterKeyPanel: View {
                 Spacer(minLength: 12)
                 Text("Your audio goes to OpenRouter and Google AI Studio to be transcribed. Nothing else is sent.")
                     .font(.system(size: 11))
-                    .foregroundStyle(.inkTertiary)
+                    .foregroundStyle(.inkSecondary)
                     .multilineTextAlignment(.trailing)
                     .frame(maxWidth: 300, alignment: .trailing)
             }
@@ -438,16 +444,16 @@ private struct OpenRouterKeyPanel: View {
 
     private var keyField: some View {
         let text = Binding(get: { model.keyDraft }, set: { model.updateKeyDraft($0) })
-        let prompt = Text(verbatim: "sk-or-v1-…").foregroundStyle(Color.inkTertiary)
         return HStack(spacing: 6) {
             Group {
                 if revealKey {
-                    TextField("", text: text, prompt: prompt)
+                    TextField("", text: text)
                 } else {
-                    SecureField("", text: text, prompt: prompt)
+                    SecureField("", text: text)
                 }
             }
             .textFieldStyle(.plain)
+            .fieldPlaceholder("sk-or-v1-…", isShown: model.keyDraft.isEmpty)
             .font(.system(size: 12.5, design: .monospaced))
             .foregroundStyle(.ink)
             .autocorrectionDisabled()
@@ -529,13 +535,15 @@ private struct KeyStatusLine: View {
             }
             return ("checkmark.circle.fill", "Connected · no spending limit", .positive)
         case .invalid:
-            return ("xmark.octagon.fill", "OpenRouter didn't accept this key. Copy it again from openrouter.ai/keys.", .negative)
+            return ("xmark.octagon.fill", "OpenRouter didn’t accept this key. Copy it again from openrouter.ai/keys.", .negative)
+        case .noCredit where status.isKeyLimitReached:
+            return ("exclamationmark.triangle.fill", "Key works, but it reached its spending limit. Raise it at openrouter.ai/keys.", .warning)
         case .noCredit:
             return ("exclamationmark.triangle.fill", "Key works, but the account has no credit. Add credits at openrouter.ai/credits.", .warning)
         case .offline:
-            return ("wifi.slash", "You're offline. We'll check the key when you're back.", .neutral)
+            return ("wifi.slash", "You’re offline. We’ll check the key when you’re back.", .neutral)
         case .failed(let message):
-            return ("exclamationmark.triangle.fill", "Couldn't check the key: \(message)", .warning)
+            return ("exclamationmark.triangle.fill", "Couldn’t check the key: \(message)", .warning)
         }
     }
 

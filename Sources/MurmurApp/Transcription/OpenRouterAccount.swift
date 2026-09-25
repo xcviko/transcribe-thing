@@ -32,6 +32,14 @@ enum KeyStatus: Equatable, Sendable {
     case failed(String)
 }
 
+extension KeyStatus {
+    /// Out of credit because this key's own spending limit is used up (the account may still have credit).
+    var isKeyLimitReached: Bool {
+        guard case .noCredit(let info?) = self, info.limit != nil, let remaining = info.limitRemaining else { return false }
+        return remaining <= 0
+    }
+}
+
 /// The user's OpenRouter key: stored in the Keychain, validated against `GET /api/v1/key`.
 @MainActor @Observable
 final class OpenRouterAccount {
@@ -40,8 +48,16 @@ final class OpenRouterAccount {
     @ObservationIgnored private let debounce: Duration
     @ObservationIgnored private var cachedKey: String?
     @ObservationIgnored private var hasReadKeychain = false
+    /// The last Keychain read failed (a denied or cancelled access prompt). Only `validate()` reads again, so
+    /// dictations don't raise the prompt over and over.
+    @ObservationIgnored private var keychainReadFailed = false
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var recheckTask: Task<Void, Never>?
+    @ObservationIgnored private var isPreview = false
+    /// When the last key check finished. Statuses set by a failed transcription don't count as a check.
+    @ObservationIgnored private(set) var lastCheckedAt: Date?
+    /// When `refreshIfStale` last started a check (it runs quietly, so the status doesn't show it).
+    @ObservationIgnored private var lastRefreshAt: Date?
 
     private(set) var status: KeyStatus = .missing
     /// "sk-or-v1-••••3f9a"
@@ -50,6 +66,7 @@ final class OpenRouterAccount {
     private(set) var lastKeyInfo: KeyInfo?
 
     static let offlineRecheckDelay: Duration = .seconds(60)
+    static let keychainReadFailedMessage = "Murmur couldn’t read your key from the Keychain."
 
     init(keychain: KeychainStore, client: OpenRouterClient) {
         self.keychain = keychain
@@ -65,6 +82,7 @@ final class OpenRouterAccount {
 
     static func preview(status: KeyStatus) -> OpenRouterAccount {
         let account = OpenRouterAccount(keychain: .inMemory(), client: OpenRouterClient())
+        account.isPreview = true
         account.status = status
         if status != .missing { account.maskedKey = "sk-or-v1-••••3f9a" }
         if case .valid(let info) = status { account.lastKeyInfo = info }
@@ -73,14 +91,25 @@ final class OpenRouterAccount {
 
     /// The stored key, read from the Keychain once and cached.
     func apiKey() -> String? {
-        if !hasReadKeychain {
-            hasReadKeychain = true
-            cachedKey = keychain.read(KeychainStore.openRouterAccount)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if let cachedKey, cachedKey.isEmpty { self.cachedKey = nil }
-            maskedKey = cachedKey.map(Self.mask)
-        }
+        if !hasReadKeychain, !keychainReadFailed { readKeychain() }
         return cachedKey
+    }
+
+    /// A key may be stored, but the Keychain wouldn't hand it over. "Check again" (`validate()`) asks again.
+    var isKeyUnreadable: Bool { keychainReadFailed }
+
+    private func readKeychain() {
+        do {
+            let value = try keychain.lookup(KeychainStore.openRouterAccount)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            hasReadKeychain = true
+            keychainReadFailed = false
+            cachedKey = value?.isEmpty == false ? value : nil
+            maskedKey = cachedKey.map(Self.mask)
+        } catch {
+            // Not "no key": leave the cache unread so an explicit check can try again.
+            keychainReadFailed = true
+        }
     }
 
     /// Trims, stores in the Keychain, validates. An empty string removes the key.
@@ -99,6 +128,7 @@ final class OpenRouterAccount {
             return
         }
         hasReadKeychain = true
+        keychainReadFailed = false
         cachedKey = key
         maskedKey = Self.mask(key)
         lastKeyInfo = nil
@@ -110,6 +140,7 @@ final class OpenRouterAccount {
         recheckTask?.cancel()
         keychain.delete(KeychainStore.openRouterAccount)
         hasReadKeychain = true
+        keychainReadFailed = false
         cachedKey = nil
         maskedKey = nil
         lastKeyInfo = nil
@@ -117,18 +148,34 @@ final class OpenRouterAccount {
     }
 
     /// Checks the key. Calls in quick succession collapse into one request, and a result that arrives after a
-    /// newer check started (or after the key changed) is dropped.
-    func validate() async {
+    /// newer check started (or after the key changed) is dropped. `quietly` keeps the current status on screen
+    /// until the answer arrives (background refreshes), instead of showing "Checking key…".
+    func validate(quietly: Bool = false) async {
         generation += 1
         let current = generation
         recheckTask?.cancel()
-        guard let key = apiKey() else {
+        if !hasReadKeychain {
+            // An explicit check asks the Keychain again after a failed read.
+            keychainReadFailed = false
+            readKeychain()
+        }
+        if keychainReadFailed {
+            status = .failed(Self.keychainReadFailedMessage)
+            return
+        }
+        guard let key = cachedKey else {
             status = .missing
             return
         }
-        status = .checking
+        if !quietly { status = .checking }
+        // The check runs in a task of its own: a caller that gets cancelled (a UI debounce restarted by the
+        // next keystroke, a closing window) must not leave the status stuck on .checking.
+        await Task { await self.check(key, generation: current) }.value
+    }
+
+    private func check(_ key: String, generation current: Int) async {
         if debounce > .zero {
-            do { try await Task.sleep(for: debounce) } catch { return }
+            try? await Task.sleep(for: debounce)
             guard current == generation else { return }
         }
         let outcome: Result<KeyInfo, Error>
@@ -138,6 +185,7 @@ final class OpenRouterAccount {
             outcome = .failure(error)
         }
         guard current == generation else { return }
+        lastCheckedAt = Date()
         switch outcome {
         case .success(let info):
             lastKeyInfo = info
@@ -157,26 +205,55 @@ final class OpenRouterAccount {
         case .openRouterNoCredits:
             generation += 1
             status = .noCredit(lastKeyInfo)
+        case .openRouterKeyLimit:
+            // The key's own limit: fetch its limit and usage so the status says what ran out.
+            Task { await self.validate(quietly: true) }
         default:
             break
         }
     }
 
+    /// A transcription went through: a key an earlier request marked rejected or out of credit works again
+    /// (re-enabled, topped up, a monthly limit reset), so check it and let the status catch up.
+    func noteCloudSuccess() {
+        switch status {
+        case .invalid, .noCredit: Task { await self.validate(quietly: true) }
+        default: break
+        }
+    }
+
+    /// Checks the key again when the last check is older than `maxAge` (a page showing the status appeared, a
+    /// dictation was refused on a key a request rejected). Never during a check, without a key, or after the
+    /// Keychain refused: only "Check again" asks the Keychain again.
+    func refreshIfStale(maxAge: TimeInterval, now: Date = Date()) {
+        guard !isPreview, !keychainReadFailed else { return }
+        switch status {
+        case .checking, .missing: return
+        case .valid, .invalid, .noCredit, .offline, .failed: break
+        }
+        let last = [lastCheckedAt, lastRefreshAt].compactMap { $0 }.max()
+        if let last, now.timeIntervalSince(last) < maxAge { return }
+        lastRefreshAt = now
+        Task { await self.validate(quietly: true) }
+    }
+
     // MARK: Pure helpers
 
     nonisolated static func status(for info: KeyInfo) -> KeyStatus {
+        // `limit_remaining` is null for a key without a limit, so this is always the key's own limit.
         if let remaining = info.limitRemaining, remaining <= 0 { return .noCredit(info) }
         return .valid(info)
     }
 
     nonisolated static func status(for error: Error, lastInfo: KeyInfo?) -> KeyStatus {
+        if error is CancellationError { return .failed("The check didn’t finish.") }
         guard let error = error as? MurmurError else {
             return .failed(error.localizedDescription)
         }
         switch error {
         case .openRouterInvalidKey(let message): return .invalid(message.isEmpty ? "OpenRouter rejected this key." : message)
         case .openRouterMissingKey: return .missing
-        case .openRouterNoCredits: return .noCredit(lastInfo)
+        case .openRouterNoCredits, .openRouterKeyLimit: return .noCredit(lastInfo)
         case .offline: return .offline
         case .timeout: return .failed("OpenRouter didn’t answer in time.")
         default: return .failed(error.detail ?? error.localizedDescription)

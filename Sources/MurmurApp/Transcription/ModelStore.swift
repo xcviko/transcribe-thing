@@ -42,6 +42,9 @@ final class ModelStore {
 
     private(set) var states: [EngineID: LocalModelState] = [.parakeet: .notInstalled, .whisper: .notInstalled]
     private(set) var diskUsageBytes: Int64 = 0
+    /// The first disk scan has landed. Until then every model reads as not installed, which only means
+    /// "not known yet".
+    private(set) var hasScannedDisk = false
     /// The most recent download or load failure per engine; cleared when that engine recovers.
     private(set) var lastErrors: [EngineID: MurmurError] = [:]
     /// Wall time of the last successful load per engine (Core ML specialization makes the first one long).
@@ -59,6 +62,9 @@ final class ModelStore {
     @ObservationIgnored private var prepareTasks: [EngineID: Task<Void, Never>] = [:]
     /// Loads run one after another so their completions land in order (the last requested model wins).
     @ObservationIgnored private var loadChain: Task<Void, Never>?
+    /// Bumped by every queued load. A load that finishes after a newer one was queued (for the other model:
+    /// a model already loading or loaded never queues again) is about to be unloaded by it.
+    @ObservationIgnored private var prepareGeneration = 0
 
     static let diskHeadroom = 1.25
 
@@ -80,10 +86,12 @@ final class ModelStore {
         [.parakeet: ParakeetEngine(modelsRoot: paths.models), .whisper: WhisperEngine(baseDir: paths.whisperBase)]
     }
 
-    static func preview(states: [EngineID: LocalModelState]) -> ModelStore {
+    static func preview(states: [EngineID: LocalModelState], lastErrors: [EngineID: MurmurError] = [:]) -> ModelStore {
         let store = ModelStore(paths: .temporary(), settings: .inMemory())
         store.isPreview = true
+        store.hasScannedDisk = true
         for (id, state) in states where id.isLocal { store.states[id] = state }
+        store.lastErrors = lastErrors
         store.diskUsageBytes = store.states.reduce(Int64(0)) { total, entry in
             switch entry.value {
             case .ready, .installed, .preparing: total + (entry.key.approxDownloadBytes ?? 0)
@@ -137,6 +145,7 @@ final class ModelStore {
             }
         }
         diskUsageBytes = scan.1
+        if !hasScannedDisk { hasScannedDisk = true }
     }
 
     private func refreshDiskUsage() async {
@@ -283,6 +292,16 @@ final class ModelStore {
         await refreshDiskUsage()
     }
 
+    /// Deletes the files and downloads the model again: the fix for an install that downloaded but won't load
+    /// (model libraries skip files that already exist, so a plain retry can't repair it). A selected model
+    /// loads once the download lands.
+    func reinstall(_ id: EngineID) async {
+        guard !isPreview, id.isLocal else { return }
+        await delete(id)
+        guard state(of: id) == .notInstalled else { return }
+        download(id)
+    }
+
     // MARK: Select and prepare
 
     /// Sets the selected engine; a local one starts loading (which unloads the other local model).
@@ -327,6 +346,14 @@ final class ModelStore {
             return
         }
         states[id] = .preparing(since: Date())
+        // The queued load unloads every other model first, however it ends. They stop being ready now, not
+        // minutes later when a first Whisper load finishes: a dictation or a switch back must see a model that
+        // needs loading again, not a loaded one.
+        for other in engines.keys where other != id && state(of: other) == .ready {
+            states[other] = .installed
+        }
+        prepareGeneration += 1
+        let generation = prepareGeneration
         let others = engines.filter { $0.key != id }
         let gate = self.gate
         let previous = loadChain
@@ -343,21 +370,23 @@ final class ModelStore {
             } catch {
                 result = .failure(error)
             }
-            self?.finishPrepare(id, unloaded: Array(others.keys), result: result,
+            self?.finishPrepare(id, generation: generation, unloaded: Array(others.keys), result: result,
                                 duration: ProcessInfo.processInfo.systemUptime - started)
         }
         loadChain = task
         prepareTasks[id] = task
     }
 
-    private func finishPrepare(_ id: EngineID, unloaded: [EngineID], result: Result<Void, Error>, duration: TimeInterval) {
+    private func finishPrepare(_ id: EngineID, generation: Int, unloaded: [EngineID], result: Result<Void, Error>,
+                               duration: TimeInterval) {
         prepareTasks[id] = nil
         for other in unloaded where state(of: other) == .ready {
             states[other] = .installed
         }
         switch result {
         case .success:
-            states[id] = .ready
+            // Switched away and back while this loaded: the other model's queued load unloads this one next.
+            states[id] = generation == prepareGeneration ? .ready : .installed
             lastErrors[id] = nil
             lastLoadDurations[id] = duration
             Log.engine.info("Loaded \(id.rawValue, privacy: .public) in \(duration, format: .fixed(precision: 2), privacy: .public) s")
@@ -366,7 +395,7 @@ final class ModelStore {
             let detail = Self.oneLine(error)
             // Model libraries skip files that already exist, so Retry can't repair a damaged install.
             fail(id, .modelLoadFailed(id, detail),
-                 message: "Couldn’t load the model. If Retry doesn’t help, delete it and download it again.")
+                 message: "Couldn’t load the model. Retry, or download it again.")
         }
     }
 

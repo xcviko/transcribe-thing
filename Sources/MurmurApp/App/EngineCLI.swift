@@ -1,10 +1,19 @@
+import CoreML
+import FluidAudio
 import Foundation
+
+// Never import WhisperKit in this file (FluidAudio's `WordTiming` clashes with it).
 
 /// Headless engine checks, dispatched by MurmurMain before the app starts:
 ///
 ///     Murmur --transcribe <audio file> --engine parakeet|whisper|geminiFlash|geminiPro
 ///            [--download] [--language <iso>] [--prompt <text>] [--repeat <n>]
 ///     Murmur --model-status
+///
+/// Hidden diagnostics (not in the usage text): `--whisper-compute ane|gpu|gpu-all` and `--parakeet-compute ane|gpu`
+/// load the local model on other Core ML compute units (see `WhisperEngine.ComputePreset`). Core ML
+/// specializes and caches each model per compute unit, so the first run with a new choice is a cold load, and
+/// it can evict the default Neural Engine build: the next default Whisper load then takes minutes again.
 ///
 /// Uses the real model folder (~/Library/Application Support/Murmur) and the real pipeline
 /// (ModelStore → InferenceGate → engine, or OpenRouterClient). Cloud engines read the key from
@@ -70,6 +79,8 @@ enum EngineCLI {
         var language: String?
         var prompt: String?
         var repeatCount: Int
+        var whisperCompute: WhisperEngine.ComputePreset?
+        var parakeetCompute: ParakeetCompute?
 
         init?(_ arguments: [String]) {
             func value(_ flag: String) -> String? {
@@ -86,6 +97,15 @@ enum EngineCLI {
             language = value("--language")
             prompt = value("--prompt")
             repeatCount = max(1, min(20, value("--repeat").flatMap(Int.init) ?? 1))
+            if arguments.contains("--whisper-compute") {
+                guard let preset = value("--whisper-compute").flatMap(WhisperEngine.ComputePreset.init(rawValue:))
+                else { return nil }
+                whisperCompute = preset
+            }
+            if arguments.contains("--parakeet-compute") {
+                guard let preset = value("--parakeet-compute").flatMap(ParakeetCompute.init(rawValue:)) else { return nil }
+                parakeetCompute = preset
+            }
         }
 
         static func engine(named name: String) -> EngineID? {
@@ -118,13 +138,31 @@ enum EngineCLI {
         let audioSeconds = Double(samples.count) / Recording.sampleRate
         print("AUDIO: \(url.lastPathComponent) · \(format(audioSeconds)) s · 16 kHz mono · decoded in \(format(seconds(since: decodeStart))) s")
         print("ENGINE: \(options.engine.displayName) (\(options.engine.rawValue))")
+        switch options.engine {
+        case .whisper:
+            let preset = options.whisperCompute ?? .default
+            print("COMPUTE: \(preset.rawValue) · \(preset.summary)")
+        case .parakeet:
+            let preset = options.parakeetCompute ?? .ane
+            print("COMPUTE: \(preset.rawValue) · \(preset.summary)")
+        default:
+            break
+        }
 
         let paths = AppPaths.live()
         let settings = AppSettings.inMemory()
         settings.selectedEngine = options.engine
         settings.whisperLanguage = options.language
         settings.geminiSystemPrompt = options.prompt ?? ""
-        let store = ModelStore(paths: paths, settings: settings)
+        var engines = ModelStore.makeEngines(paths: paths)
+        if let preset = options.whisperCompute {
+            engines[.whisper] = WhisperEngine(baseDir: paths.whisperBase, compute: preset)
+        }
+        if options.parakeetCompute == .gpu {
+            engines[.parakeet] = ParakeetEncoderOnGPU(modelsRoot: paths.models)
+        }
+        let store = ModelStore(paths: paths, settings: settings, engines: engines, gate: .shared,
+                               freeDiskBytes: { paths.freeDiskBytes() })
         let client = OpenRouterClient()
         let account = OpenRouterAccount(keychain: .inMemory(), client: client)
         let service = TranscriptionService(models: store, account: account, client: client, settings: settings)
@@ -185,7 +223,7 @@ enum EngineCLI {
         case .notInstalled, .downloading, .preparing, .ready: break
         }
         if store.state(of: id).isPreparing {
-            print("PREPARE: loading \(id.shortName)… (Core ML optimizes a new model or app build for this Mac once; that can take minutes)")
+            print("PREPARE: loading \(id.shortName)… (after a download, a macOS update or a Core ML cache eviction, optimizing it for this Mac takes minutes)")
         }
         let loadStarted = ContinuousClock.now
         var lastNote = ContinuousClock.now
@@ -233,6 +271,88 @@ enum EngineCLI {
             return env
         }
         return KeychainStore().read(KeychainStore.openRouterAccount)
+    }
+
+    // MARK: Parakeet compute diagnostics
+
+    enum ParakeetCompute: String, Sendable {
+        /// ParakeetEngine as shipped: preprocessor on the CPU, everything else on the Neural Engine.
+        case ane
+        /// The conformer encoder on the GPU instead; decoder and joint stay on the Neural Engine.
+        case gpu
+
+        var summary: String {
+            switch self {
+            case .ane: "preprocessor CPU · encoder ANE · decoder ANE · joint ANE"
+            case .gpu: "preprocessor CPU · encoder GPU · decoder ANE · joint ANE"
+            }
+        }
+    }
+
+    /// `--parakeet-compute gpu`: ParakeetEngine's load and transcribe with the encoder on `.cpuAndGPU`.
+    /// Install state, download and delete are ParakeetEngine's own.
+    private actor ParakeetEncoderOnGPU: LocalEngine {
+        nonisolated let engineID: EngineID = .parakeet
+        private nonisolated let base: ParakeetEngine
+        private var manager: AsrManager?
+
+        init(modelsRoot: URL) {
+            base = ParakeetEngine(modelsRoot: modelsRoot)
+        }
+
+        nonisolated var storageURLs: [URL] { base.storageURLs }
+        nonisolated func isInstalled() -> Bool { base.isInstalled() }
+        func remoteDownloadBytes() async -> Int64 { await base.remoteDownloadBytes() }
+        func download(progress: @escaping @Sendable (Double) -> Void) async throws {
+            try await base.download(progress: progress)
+        }
+
+        var isLoaded: Bool { manager != nil }
+
+        func load() async throws {
+            if manager != nil { return }
+            guard isInstalled() else { throw LocalEngineError.notInstalled }
+            let directory = base.repoDirectory
+            let models: AsrModels = try await withCheckedThrowingContinuation { continuation in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    do {
+                        continuation.resume(returning: try AsrModels.loadLocal(
+                            from: directory, version: ParakeetEngine.version,
+                            encoderPrecision: ParakeetEngine.precision, encoderComputeUnits: .cpuAndGPU))
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
+            let asr = AsrManager(
+                config: ASRConfig(tdtConfig: TdtConfig(maxTokensPerChunk: ParakeetEngine.maxTokensPerWindow)),
+                models: models)
+            var warmState = TdtDecoderState.make(decoderLayers: ParakeetEngine.version.decoderLayers)
+            _ = try? await asr.transcribe([Float](repeating: 0, count: 16_000), decoderState: &warmState, language: nil)
+            manager = asr
+        }
+
+        func unload() async {
+            guard let manager else { return }
+            await manager.cleanup()
+            self.manager = nil
+        }
+
+        func transcribe(_ samples: [Float], options: LocalTranscriptionOptions) async throws -> String {
+            guard let manager else { throw LocalEngineError.notLoaded }
+            var input = samples
+            let minimum = ASRConstants.minimumRequiredSamples(forSampleRate: ASRConstants.sampleRate)
+            if input.count < minimum { input.append(contentsOf: [Float](repeating: 0, count: minimum - input.count)) }
+            var state = TdtDecoderState.make(decoderLayers: ParakeetEngine.version.decoderLayers)
+            let result = try await manager.transcribe(input, decoderState: &state, language: nil)
+            try Task.checkCancellation()
+            return result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        func deleteFiles() async throws {
+            await unload()
+            try await base.deleteFiles()
+        }
     }
 
     // MARK: Model status

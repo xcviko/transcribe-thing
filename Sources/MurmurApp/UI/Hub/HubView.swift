@@ -72,7 +72,8 @@ final class HubContext: Observable {
     }
 
     func readiness(of engine: EngineID) -> EngineReadiness {
-        EngineReadiness.of(engine, localState: models.state(of: engine), keyStatus: account.status)
+        EngineReadiness.of(engine, localState: models.state(of: engine), keyStatus: account.status,
+                           localError: models.lastErrors[engine])
     }
 
     /// "Murmur 0.1 (build 42)", or without the build when running the bare binary.
@@ -151,6 +152,8 @@ private struct HubRoot: View {
         .overlay(alignment: .topLeading) {
             if hub.drawsWindowControls { PreviewTrafficLights() }
         }
+        // The key's status (and credit left) is a snapshot from the last check: refresh a stale one.
+        .task { hub.account.refreshIfStale(maxAge: 300) }
     }
 
     @ViewBuilder private func page(_ section: HubSection) -> some View {
@@ -225,7 +228,8 @@ private struct HubSidebar: View {
 
     private var footer: some View {
         let engine = settings.selectedEngine
-        let summary = EngineSummary.make(engine: engine, localState: models.state(of: engine), keyStatus: account.status)
+        let summary = EngineSummary.make(engine: engine, localState: models.state(of: engine), keyStatus: account.status,
+                                         localError: models.lastErrors[engine])
         return VStack(alignment: .leading, spacing: 10) {
             EngineStatusChip(summary: summary, engine: engine) { hub.show(.models) }
             Text(hub.versionLine)

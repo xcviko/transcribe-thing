@@ -32,6 +32,7 @@ final class AppEnvironment {
 
     private var isStarted = false
     private var maintenanceTask: Task<Void, Never>?
+    private var activationObserver: MainNotificationObserver?
 
     init(paths: AppPaths, settings: AppSettings, keychain: KeychainStore, levelMeter: LevelMeter,
          devices: AudioDeviceCatalog, recorder: AudioRecorder, openRouterClient: OpenRouterClient,
@@ -177,7 +178,8 @@ final class AppEnvironment {
         dictation.start()
         permissions.onAccessibilityGranted = { [weak self] in self?.startHotkeys() }
         hotkeys.onTapAvailabilityChanged = { [weak self] available in
-            if !available { self?.permissions.startPolling() }
+            if !available { self?.permissions.pollInBackground() }
+            self?.dictation.shortcutAvailabilityChanged(available)
         }
         startHotkeys()
         secureInput.start()
@@ -189,6 +191,20 @@ final class AppEnvironment {
         }
         history.pruneOldRecordings()
         scheduleMaintenance()
+        activationObserver = MainNotificationObserver(center: .default, name: NSApplication.didBecomeActiveNotification) {
+            [weak self] in self?.didBecomeActive()
+        }
+    }
+
+    /// Coming back to Murmur, often from System Settings or a browser: statuses that only change out there.
+    private func didBecomeActive() {
+        // Approved or removed in Login Items.
+        launchAtLogin.refresh()
+        // A key a request rejected or found out of credit may have been fixed on openrouter.ai.
+        switch account.status {
+        case .invalid, .noCredit: account.refreshIfStale(maxAge: 30)
+        default: break
+        }
     }
 
     /// Called at quit: persist what's pending and release the event tap.
@@ -202,10 +218,13 @@ final class AppEnvironment {
     /// A running monitor without a live tap retries right away (its own probe would take up to 3 s).
     private func startHotkeys() {
         guard !hotkeys.isTapActive else { return }
+        // At launch no availability callback fires, so the result is passed on here.
         if hotkeys.start() {
             Log.app.info("Hotkeys active")
+            dictation.shortcutAvailabilityChanged(true)
         } else {
-            permissions.startPolling()
+            permissions.pollInBackground()
+            dictation.shortcutAvailabilityChanged(false)
         }
     }
 

@@ -29,6 +29,8 @@ final class OpenRouterClient: Sendable {
     static let title = "Murmur"
     /// Gemini accepts about 20 MB of inline data; stay under it (about 7.4 minutes of 16 kHz WAV).
     static let maxBase64Bytes = 19_000_000
+    /// Recording limit with a Gemini engine selected: a margin under what `maxBase64Bytes` can carry.
+    static let maxRecordingDuration: TimeInterval = 7 * 60
     static let keyCheckTimeout: TimeInterval = 15
     /// Longest server-requested wait worth sitting through during a dictation.
     static let maxRetryWait: TimeInterval = 8
@@ -57,8 +59,9 @@ final class OpenRouterClient: Sendable {
 
     // MARK: Transcribe
 
-    /// `wav` is a complete WAV file. Retries once, only for 429/500/502/503/529 or a dropped connection, and
-    /// only when the wait is at most 8 s; never after a timeout (the user already waited).
+    /// `wav` is a complete WAV file. Retries once, only for a transient failure (429/500/502/503/529, a 402 from
+    /// the in-flight budget, a dropped connection, or the same failures reported quickly inside a 200) and only
+    /// when the wait is at most 8 s; never after a timeout (the user already waited).
     func transcribe(wav: Data, model: String, systemPrompt: String?, apiKey: String,
                     timeout: TimeInterval) async throws -> CloudResult {
         let engine = Self.engine(forModel: model)
@@ -77,16 +80,28 @@ final class OpenRouterClient: Sendable {
 
         var attempt = 1
         while true {
+            let started = ContinuousClock.now
             do {
                 let (data, http) = try await send(request, engine: engine)
                 guard http.statusCode == 200 else {
                     let retryAfter = OpenRouterErrorMapper.retryAfter(http.value(forHTTPHeaderField: "Retry-After"))
                     let error = OpenRouterErrorMapper.httpError(status: http.statusCode, data: data,
                                                                 retryAfter: retryAfter, engine: engine)
-                    throw AttemptFailure(error: error, retryable: Self.retryableStatuses.contains(http.statusCode),
-                                         retryAfter: retryAfter)
+                    // The mapped error decides, not the status alone: a 503 "No endpoints found" fails the same
+                    // way every time, and a 402 is worth another go only when it's the in-flight budget.
+                    let retryable = Self.retryableStatuses.contains(http.statusCode) && error.isTransientCloudFailure
+                    throw AttemptFailure(error: error, retryable: retryable, retryAfter: retryAfter)
                 }
-                var result = try OpenRouterErrorMapper.success(data: data, engine: engine)
+                var result: CloudResult
+                do {
+                    result = try OpenRouterErrorMapper.success(data: data, engine: engine)
+                } catch let error as MurmurError {
+                    // An upstream failure reported after OpenRouter committed a 200. Retried like its HTTP twin,
+                    // but only when it came back quickly: after a long Gemini wait the user already waited once.
+                    let quick = started.duration(to: .now) < Self.quickFailureWindow
+                    throw AttemptFailure(error: error, retryable: quick && error.isTransientCloudFailure,
+                                         retryAfter: nil)
+                }
                 if result.provider == nil { result.provider = http.value(forHTTPHeaderField: "X-Provider-Name") }
                 if let provider = result.provider, provider != "Google AI Studio" {
                     Log.net.warning("Unexpected OpenRouter provider: \(provider, privacy: .public)")
@@ -102,7 +117,9 @@ final class OpenRouterClient: Sendable {
         }
     }
 
-    private static let retryableStatuses: Set<Int> = [429, 500, 502, 503, 529]
+    private static let retryableStatuses: Set<Int> = [402, 429, 500, 502, 503, 529]
+    /// A failure inside a 200 that arrives sooner than this is retried like the same HTTP status.
+    static let quickFailureWindow: Duration = .seconds(10)
 
     func makeTranscriptionRequest(body: Data, apiKey: String, timeout: TimeInterval) -> URLRequest {
         var request = URLRequest(url: baseURL.appendingPathComponent("chat/completions"))

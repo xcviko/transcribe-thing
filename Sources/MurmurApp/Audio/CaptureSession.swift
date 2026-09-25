@@ -91,11 +91,7 @@ final class CaptureSession: @unchecked Sendable {
 
     /// Stops appending immediately and returns everything captured (empty when `discard`).
     func finishNow(discard: Bool) -> [Float] {
-        let (samples, pending) = box.withLock { state -> ([Float], (@Sendable ([Float]) -> Void)?) in
-            let pending = state.tailCompletion
-            state.tailCompletion = nil
-            return (state.finalize(discard: discard), pending)
-        }
+        let (samples, pending) = box.withLock { $0.finalizeTakingCompletion(discard: discard) }
         pending?(samples)
         control.async { self.shutdownOnQueue() }
         return samples
@@ -135,11 +131,12 @@ final class CaptureSession: @unchecked Sendable {
         do {
             try buildEngine(on: initialRecord)
         } catch {
-            let shouldReport = box.withLock { state -> Bool in
-                guard state.phase != .finished else { return false }
-                _ = state.finalize(discard: true)
-                return true
+            let (shouldReport, pending) = box.withLock { state -> (Bool, CaptureState.Completion?) in
+                guard state.phase != .finished else { return (false, nil) }
+                return (true, state.finalizeTakingCompletion(discard: true).completion)
             }
+            // A stop that arrived while the device was starting still waits for its (now empty) audio.
+            pending?([])
             if shouldReport { onEvent(.startFailed(Self.describe(error, device: initialRecord.device))) }
             return
         }
@@ -150,12 +147,13 @@ final class CaptureSession: @unchecked Sendable {
     }
 
     private func checkFirstBuffer() {
-        let timedOut: String? = box.withLock { state in
+        let timedOut = box.withLock { state -> (name: String, pending: CaptureState.Completion?)? in
             guard state.phase != .finished, state.firstArrival == nil else { return nil }
-            _ = state.finalize(discard: true)
-            return state.device.name
+            return (state.device.name, state.finalizeTakingCompletion(discard: true).completion)
         }
-        guard let name = timedOut else { return }
+        guard let (name, pending) = timedOut else { return }
+        // Released before any audio arrived: the stop is still waiting for the tail, and gets nothing.
+        pending?([])
         Log.audio.error("No audio from \(name, privacy: .public) within the start timeout")
         onEvent(.noAudio("No audio from \(name) after \(Int(options.firstBufferTimeout)) seconds"))
         control.async { self.shutdownOnQueue() }
@@ -280,21 +278,23 @@ final class CaptureSession: @unchecked Sendable {
         watchdog = nil
         teardownEngineOnQueue()
         isRunning = false
-        let pending = box.withLock { state -> ((@Sendable ([Float]) -> Void), [Float])? in
+        let pending = box.withLock { state -> (CaptureState.Completion, [Float])? in
             state.isLive = false
-            guard let completion = state.tailCompletion else { return nil }
-            state.tailCompletion = nil
-            return (completion, state.finalize(discard: false))
+            guard state.tailCompletion != nil else { return nil }
+            let (samples, completion) = state.finalizeTakingCompletion(discard: false)
+            return completion.map { ($0, samples) }
         }
         if let (completion, samples) = pending { completion(samples) }
         onEvent(.deviceLost)
     }
 
     private func completeTailOnQueue() {
-        let pending = box.withLock { state -> ((@Sendable ([Float]) -> Void), [Float])? in
-            guard case .tail = state.phase, let completion = state.tailCompletion else { return nil }
-            state.tailCompletion = nil
-            return (completion, state.finalize(discard: false))
+        // Delivers whenever a completion is still waiting, whatever the phase (finalize returns [] once
+        // the state has already finished), so a stop request is always answered.
+        let pending = box.withLock { state -> (CaptureState.Completion, [Float])? in
+            guard state.tailCompletion != nil else { return nil }
+            let (samples, completion) = state.finalizeTakingCompletion(discard: false)
+            return completion.map { ($0, samples) }
         }
         guard let (completion, samples) = pending else { return }
         completion(samples)
@@ -354,9 +354,9 @@ final class CaptureSession: @unchecked Sendable {
 
     private static func describe(_ error: any Error, device: AudioInputDevice) -> String {
         switch error {
-        case CaptureFailure.cannotSelectDevice(let status): "Couldn't select \(device.name) (\(status))"
+        case CaptureFailure.cannotSelectDevice(let status): "Couldn’t select \(device.name) (\(status))"
         case CaptureFailure.noFormat: "\(device.name) reported no audio format"
-        case CaptureFailure.startFailed(let underlying): "\(device.name) didn't start (\(underlying.code))"
+        case CaptureFailure.startFailed(let underlying): "\(device.name) didn’t start (\(underlying.code))"
         default: "\(device.name): \(error.localizedDescription)"
         }
     }
@@ -411,10 +411,12 @@ struct CaptureState {
         case finished
     }
 
+    typealias Completion = @Sendable ([Float]) -> Void
+
     struct IngestOutcome {
         var isFirstBuffer = false
         var levels: [(time: TimeInterval, db: Float)] = []
-        var tailCompletion: (@Sendable ([Float]) -> Void)?
+        var tailCompletion: Completion?
         var finalSamples: [Float] = []
     }
 
@@ -431,7 +433,7 @@ struct CaptureState {
     var resampler = StreamingResampler(targetSampleRate: Recording.sampleRate)
     var firstArrival: TimeInterval?
     var lastArrival: TimeInterval?
-    var tailCompletion: (@Sendable ([Float]) -> Void)?
+    var tailCompletion: Completion?
     /// Output frames produced since the session began (monitoring discards them, this keeps counting).
     private(set) var totalFrames = 0
     private var ducks: [DuckWindow] = []
@@ -491,14 +493,22 @@ struct CaptureState {
         if !keepsSamples { samples.removeAll(keepingCapacity: true) }
 
         if reachedTail {
-            outcome.tailCompletion = tailCompletion
-            tailCompletion = nil
-            outcome.finalSamples = finalize(discard: false)
+            (outcome.finalSamples, outcome.tailCompletion) = finalizeTakingCompletion(discard: false)
         }
         return outcome
     }
 
+    /// Finalizes and hands over any stop request still waiting for its tail, which the caller must call
+    /// outside the lock. Every path that ends a session goes through here, so a pending
+    /// `AudioRecorder.finish` is always answered.
+    mutating func finalizeTakingCompletion(discard: Bool) -> (samples: [Float], completion: Completion?) {
+        let completion = tailCompletion
+        tailCompletion = nil
+        return (finalize(discard: discard), completion)
+    }
+
     /// Flushes the converter and hands over the samples; the state accepts no more audio afterwards.
+    /// Prefer `finalizeTakingCompletion`, which also releases a waiting stop request.
     mutating func finalize(discard: Bool) -> [Float] {
         guard phase != .finished else { return [] }
         phase = .finished

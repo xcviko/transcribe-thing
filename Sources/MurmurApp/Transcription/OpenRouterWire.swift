@@ -228,17 +228,29 @@ enum OpenRouterErrorMapper {
     /// carries no numeric code.
     static func map(_ body: OpenRouterAPIError, status: Int, retryAfter: Double?, engine: EngineID) -> MurmurError {
         map(status: body.code?.intValue ?? status, message: body.message ?? "",
-            errorType: body.metadata?.errorType, retryAfter: retryAfter, engine: engine)
+            errorType: body.metadata?.errorType, limitSource: body.metadata?.limitSource,
+            retryAfter: retryAfter, engine: engine)
     }
 
-    static func map(status: Int, message rawMessage: String, errorType: String?, retryAfter: Double?,
-                    engine: EngineID) -> MurmurError {
+    static func map(status: Int, message rawMessage: String, errorType: String?, limitSource: String? = nil,
+                    retryAfter: Double?, engine: EngineID) -> MurmurError {
         let message = rawMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         let lowered = message.lowercased()
         // Routing dead ends are documented both as 404 and as 503; the message tells them apart.
         let noRoute = lowered.hasPrefix("no endpoints") || lowered.hasPrefix("no allowed providers")
             || lowered.contains("no endpoints found")
         if noRoute { return .openRouterNoRoute(join(message, noRouteHint)) }
+
+        // A 402 says which limit it hit. Only openrouter_credits means the account is out of credit.
+        switch limitSource {
+        case "openrouter_in_flight_budget":
+            // Too much reserved by requests still running (each reserves up to max_tokens): wait, then retry.
+            return .openRouterRateLimited(retryAfter: retryAfter)
+        case "openrouter_key_limit":
+            return .openRouterKeyLimit(message)
+        default:
+            break
+        }
 
         switch errorType {
         case "content_policy_violation", "refusal": return .openRouterRefused(message)
@@ -296,6 +308,9 @@ enum OpenRouterErrorMapper {
             throw MurmurError.openRouterRefused(reason ?? "Stopped by the safety filter.")
         case "length" where text.isEmpty:
             throw MurmurError.emptyResult(engine)
+        case "length":
+            // Out of output tokens mid-transcript: a repetition loop or a cut-off ending. Never pasted as if whole.
+            throw MurmurError.openRouterTruncated(text)
         default:
             break
         }

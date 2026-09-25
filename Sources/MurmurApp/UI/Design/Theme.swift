@@ -18,7 +18,8 @@ enum Palette {
 
     static let ink = dynamic("ink", light: .hex(0x1C1A17), dark: .hex(0xF4F1EC))
     static let inkSecondary = dynamic("inkSecondary", light: .hex(0x1C1A17, alpha: 0.62), dark: .hex(0xF4F1EC, alpha: 0.64))
-    static let inkTertiary = dynamic("inkTertiary", light: .hex(0x1C1A17, alpha: 0.40), dark: .hex(0xF4F1EC, alpha: 0.42))
+    /// Meta text and placeholders: 3.8:1 on the light canvas, 4.8:1 on the dark one.
+    static let inkTertiary = dynamic("inkTertiary", light: .hex(0x1C1A17, alpha: 0.55), dark: .hex(0xF4F1EC, alpha: 0.50))
 
     static let accent = dynamic("accent", light: .hex(0x5B4FE0), dark: .hex(0x8F86FF))
     /// Button fills: a touch deeper than `accent` in dark mode so white labels keep 4.5:1 contrast.
@@ -30,7 +31,8 @@ enum Palette {
     static let warm = dynamic("warm", light: .hex(0xFF9F6E), dark: .hex(0xFFB38F))
     static let lilacWash = dynamic("lilacWash", light: .hex(0xEFEAFF), dark: .hex(0x2A2640))
     static let success = dynamic("success", light: .hex(0x2F9E57), dark: .hex(0x3CCB6C))
-    static let warning = dynamic("warning", light: .hex(0xC97A00), dark: .hex(0xFFB340))
+    /// Deep enough in light mode for warning text (4.4:1 on the canvas).
+    static let warning = dynamic("warning", light: .hex(0xA86400), dark: .hex(0xFFB340))
     static let danger = dynamic("danger", light: .hex(0xD93B30), dark: .hex(0xFF6B5E))
 
     /// The pill is always dark, in both appearances.

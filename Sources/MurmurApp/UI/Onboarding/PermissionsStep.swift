@@ -20,7 +20,7 @@ struct PermissionsStep: View {
                 }
                 if model.skipAccessibilityArmed {
                     StepNote(symbol: "exclamationmark.triangle.fill", tint: .warning,
-                             text: Text("Without Accessibility, Murmur can't paste into other apps or hear your shortcut. You can turn it on later in Settings."))
+                             text: Text("Without Accessibility, Murmur can’t paste into other apps or hear your shortcut. You can turn it on later in Settings."))
                         .transition(.opacity)
                 }
                 if model.showsFnKeyCard {
@@ -90,8 +90,8 @@ struct PermissionsStep: View {
         let minus = Text(verbatim: "−").fontWeight(.bold)
         let plus = Text(verbatim: "+").fontWeight(.bold)
         let text: Text = model.accessibilityLooksStale
-            ? Text("Murmur was rebuilt, so macOS needs it added again: select Murmur, click \(minus), then \(plus) and pick Murmur.")
-            : Text("Already switched on? If this doesn't update, select Murmur in the list, click \(minus), then \(plus) and add it again.")
+            ? Text("macOS still has an old copy of Murmur listed. Select Murmur, click \(minus), then \(plus) and add it again.")
+            : Text("Already switched on? If this doesn’t update, select Murmur in the list, click \(minus), then \(plus) and add it again.")
         return StepNote(symbol: "arrow.triangle.2.circlepath", tint: .warning, text: text) {
             Button {
                 model.revealAppInFinder()
@@ -248,7 +248,8 @@ struct PermissionsStage: View {
                         MicPromptSketch()
                             .transition(.opacity.combined(with: .scale(scale: 0.96)))
                     } else {
-                        SettingsSketch(isOn: ax, time: reduceMotion ? 0 : t)
+                        // A stale grant is already switched on in System Settings: show it that way.
+                        SettingsSketch(isOn: ax || model.accessibilityLooksStale, time: reduceMotion ? 0 : t)
                             .transition(.opacity.combined(with: .scale(scale: 0.96)))
                     }
                 }
@@ -373,7 +374,7 @@ private struct MicPromptSketch: View {
                     .multilineTextAlignment(.center)
             }
             HStack(spacing: 8) {
-                sketchButton("Don't Allow", prominent: false)
+                sketchButton("Don’t Allow", prominent: false)
                 sketchButton("Allow", prominent: true)
             }
             .padding(.top, 4)
@@ -512,7 +513,7 @@ private struct AllSetCard: View {
         HStack(spacing: 12) {
             DrawOnCheck(size: 28)
             VStack(alignment: .leading, spacing: 2) {
-                Text("You're all set")
+                Text("You’re all set")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.ink)
                 Text("Murmur can hear you and type for you.")

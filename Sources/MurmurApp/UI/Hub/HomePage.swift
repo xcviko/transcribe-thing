@@ -103,7 +103,9 @@ struct HomePage: View {
             pushToTalkUsesFn: settings.shortcuts[.pushToTalk]?.usesFunctionKey ?? false,
             engine: settings.selectedEngine,
             localState: models.state(of: settings.selectedEngine),
-            keyStatus: account.status))
+            keyStatus: account.status,
+            localError: models.lastErrors[settings.selectedEngine],
+            shortcutUnavailable: hub.dictation.isShortcutUnavailable))
         if !items.isEmpty {
             VStack(spacing: Theme.Spacing.xs) {
                 ForEach(items) { item in

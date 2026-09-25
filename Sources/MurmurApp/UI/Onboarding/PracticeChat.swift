@@ -135,9 +135,9 @@ struct PracticeChat: View {
         let prompt = "Hold \(model.pushToTalkLabel) and answer out loud…"
         return HStack(alignment: .bottom, spacing: 8) {
             HStack(alignment: .center, spacing: 8) {
-                TextField("", text: Binding(get: { model.draft }, set: { model.updateDraft($0) }),
-                          prompt: Text(prompt).foregroundStyle(Color.inkTertiary), axis: .vertical)
+                TextField("", text: Binding(get: { model.draft }, set: { model.updateDraft($0) }), axis: .vertical)
                     .textFieldStyle(.plain)
+                    .fieldPlaceholder(prompt, isShown: model.draft.isEmpty, alignment: .topLeading)
                     .font(.system(size: 13))
                     .foregroundStyle(.ink)
                     .lineLimit(1...4)
@@ -331,9 +331,9 @@ private struct ReadinessBanner: View {
         case .needsAccessibility:
             "Turn on Accessibility so Murmur can hear your shortcut and paste into this box."
         case .downloading(let engine, let fraction):
-            "\(engine.shortName) is still downloading (\(Fmt.percent(fraction))). You can practice as soon as it's ready."
+            "\(engine.shortName) is still downloading (\(Fmt.percent(fraction))). You can practice as soon as it’s ready."
         case .notDownloaded(let engine):
-            "\(engine.shortName) isn't downloaded yet. Download it, or pick another model."
+            "\(engine.shortName) isn’t downloaded yet. Download it, or pick another model."
         case .needsKey(let engine):
             "\(engine.shortName) needs an OpenRouter key before you can practice."
         case .ready, .warmingUp:

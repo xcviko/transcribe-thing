@@ -224,6 +224,28 @@ struct Shortcut: Codable, Hashable, Sendable {
         keyCode == code && modifiersMatchExactly(snapshot)
     }
 
+    /// Some key press triggers both: the same key, the same modifier families, and sides that can coincide
+    /// (`.either` meets anything; left and right never meet). ⌥ and Right ⌥ overlap; Left ⌥ and Right ⌥ don't.
+    func overlaps(_ other: Shortcut) -> Bool {
+        guard keyCode == other.keyCode, modifiers.count == other.modifiers.count else { return false }
+        return zip(modifiers, other.modifiers).allSatisfy { a, b in
+            a.modifier == b.modifier && Self.sidesMeet(a.side, b.side)
+        }
+    }
+
+    /// Modifier-only, and held on the way to `other` (a larger modifier-only chord): a chord that fires on
+    /// press would fire here before `other` is complete.
+    func isHeldOnTheWay(to other: Shortcut) -> Bool {
+        guard isModifierOnly, other.isModifierOnly, modifiers.count < other.modifiers.count else { return false }
+        return modifiers.allSatisfy { mine in
+            other.modifiers.contains { $0.modifier == mine.modifier && Self.sidesMeet($0.side, mine.side) }
+        }
+    }
+
+    private static func sidesMeet(_ a: Side, _ b: Side) -> Bool {
+        a == .either || b == .either || a == b
+    }
+
     // MARK: Display conveniences
 
     var displayTokens: [String] { ShortcutFormatter.tokens(self) }
@@ -296,9 +318,23 @@ struct ShortcutBindings: Codable, Equatable, Sendable {
         set { bindings[action] = newValue }
     }
 
-    /// First other action (in declaration order) already bound to the same shortcut.
+    /// First other action (in declaration order) whose shortcut some key press would trigger together with
+    /// this one (⌥ and Right ⌥ clash as much as two identical shortcuts do).
     func conflict(for shortcut: Shortcut, excluding: ShortcutAction) -> ShortcutAction? {
-        ShortcutAction.allCases.first { $0 != excluding && bindings[$0] == shortcut }
+        ShortcutAction.allCases.first { $0 != excluding && bindings[$0]?.overlaps(shortcut) == true }
+    }
+
+    /// A modifier-only binding other than push to talk fires the moment its keys are held, so it must not be
+    /// the start of another modifier-only binding: that one would fire it first. Push to talk as the start
+    /// of another chord is intended (fn, then fn ⌃ for hands-free). Returns the action that clashes, and
+    /// whether `shortcut` is the shorter one.
+    func prefixClash(for shortcut: Shortcut, as action: ShortcutAction) -> (other: ShortcutAction, isShorter: Bool)? {
+        for other in ShortcutAction.allCases where other != action {
+            guard let theirs = bindings[other] else { continue }
+            if action != .pushToTalk, shortcut.isHeldOnTheWay(to: theirs) { return (other, true) }
+            if other != .pushToTalk, theirs.isHeldOnTheWay(to: shortcut) { return (other, false) }
+        }
+        return nil
     }
 
     /// Exchanges two bindings (the "Swap" answer to a conflict).
@@ -648,6 +684,11 @@ enum ShortcutValidator {
         if let other = bindings.conflict(for: s, excluding: action) {
             v.conflict = other
             v.errors.append("Already used for \(other.title.lowercased()).")
+        } else if let clash = bindings.prefixClash(for: s, as: action), let theirs = bindings[clash.other] {
+            let name = "\(clash.other.title.lowercased()) (\(theirs.compactDescription))"
+            v.errors.append(clash.isShorter
+                ? "This is part of \(name) and would go off every time you press that."
+                : "This starts with \(name), which would go off first.")
         }
         // The PTT modifiers being a prefix of the hands-free chord is intended (fn / fn+Space).
         return v

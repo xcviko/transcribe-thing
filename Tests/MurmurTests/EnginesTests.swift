@@ -126,6 +126,10 @@ struct OKBodyCase: Sendable, CustomTestStringConvertible {
               .openRouterInvalidKey("Missing Authentication header")),
         .init(402, #"{"error":{"code":402,"message":"Insufficient credits","metadata":{"error_type":"payment_required","limit_source":"openrouter_credits"}}}"#,
               .openRouterNoCredits("Insufficient credits")),
+        .init(402, #"{"error":{"code":402,"message":"Key limit exceeded","metadata":{"error_type":"payment_required","limit_source":"openrouter_key_limit"}}}"#,
+              .openRouterKeyLimit("Key limit exceeded")),
+        .init(402, #"{"error":{"code":402,"message":"Too many requests in flight","metadata":{"error_type":"payment_required","limit_source":"openrouter_in_flight_budget"}}}"#,
+              retryAfter: 2, .openRouterRateLimited(retryAfter: 2)),
         .init(403, #"{"error":{"code":403,"message":"Input was flagged","metadata":{"error_type":"content_policy_violation"}}}"#,
               .openRouterRefused("Input was flagged")),
         .init(403, #"{"error":{"code":403,"message":"Key is disabled"}}"#, .openRouterRefused("Key is disabled")),
@@ -223,9 +227,12 @@ struct OKBodyCase: Sendable, CustomTestStringConvertible {
         #expect(try OpenRouterErrorMapper.success(data: Data(body.utf8), engine: .geminiFlash).text == "Hello world.")
     }
 
-    @Test func truncatedButNonEmptyTextIsKept() throws {
-        let body = #"{"choices":[{"finish_reason":"length","message":{"content":"A long transcript"}}]}"#
-        #expect(try OpenRouterErrorMapper.success(data: Data(body.utf8), engine: .geminiFlash).text == "A long transcript")
+    @Test func truncatedTextIsNeverTakenForAWholeTranscript() throws {
+        // Out of tokens: a repetition loop or a cut-off ending. The text is kept for the notice, not pasted.
+        let body = #"{"choices":[{"finish_reason":"length","message":{"content":" A long transcript "}}]}"#
+        #expect(throws: MurmurError.openRouterTruncated("A long transcript")) {
+            try OpenRouterErrorMapper.success(data: Data(body.utf8), engine: .geminiFlash)
+        }
     }
 
     @Test func retryAfterAcceptsSecondsAndDates() {
@@ -352,6 +359,43 @@ enum Fixtures {
                                         apiKey: "k", timeout: 120)
         }
         #expect(StubURLProtocol.registry.requests(for: host).count == 2)
+    }
+
+    @Test func noRouteBehindA503IsNotRetried() async throws {
+        let noRoute = StubURLProtocol.Reply(status: 503, body: #"{"error":{"code":503,"message":"No endpoints found matching your data policy."}}"#)
+        let (client, host) = StubURLProtocol.client([noRoute, Fixtures.success])
+        await #expect(throws: MurmurError.openRouterNoRoute("No endpoints found matching your data policy. \(OpenRouterErrorMapper.noRouteHint)")) {
+            try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil,
+                                        apiKey: "k", timeout: 120)
+        }
+        #expect(StubURLProtocol.registry.requests(for: host).count == 1)
+    }
+
+    @Test func upstreamFailureInsideA200IsRetriedOnce() async throws {
+        let upstream = StubURLProtocol.Reply(body: #"{"id":"gen-1","error":{"code":502,"message":"Upstream error"}}"#)
+        let (client, host) = StubURLProtocol.client([upstream, Fixtures.success])
+        let result = try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil,
+                                                 apiKey: "k", timeout: 120)
+        #expect(result.text == "Hello there.")
+        #expect(StubURLProtocol.registry.requests(for: host).count == 2)
+    }
+
+    @Test func inFlightBudgetIsRetriedButNoCreditIsNot() async throws {
+        let inFlight = StubURLProtocol.Reply(
+            status: 402, headers: ["Retry-After": "0"],
+            body: #"{"error":{"code":402,"message":"In flight","metadata":{"limit_source":"openrouter_in_flight_budget"}}}"#)
+        let (client, host) = StubURLProtocol.client([inFlight, Fixtures.success])
+        #expect(try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil,
+                                            apiKey: "k", timeout: 120).text == "Hello there.")
+        #expect(StubURLProtocol.registry.requests(for: host).count == 2)
+
+        let broke = StubURLProtocol.Reply(status: 402, body: #"{"error":{"code":402,"message":"Insufficient credits"}}"#)
+        let (second, secondHost) = StubURLProtocol.client([broke, Fixtures.success])
+        await #expect(throws: MurmurError.openRouterNoCredits("Insufficient credits")) {
+            try await second.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil,
+                                        apiKey: "k", timeout: 120)
+        }
+        #expect(StubURLProtocol.registry.requests(for: secondHost).count == 1)
     }
 
     @Test func longRetryAfterIsNotAwaited() async throws {
@@ -516,6 +560,21 @@ enum Fixtures {
         #expect(keychain.read(KeychainStore.openRouterAccount) == nil)
     }
 
+    @Test func cancellingTheCallerDoesntStrandTheCheck() async throws {
+        // Onboarding's key field: the next keystroke cancels the debounce task that is saving the key.
+        let account = OpenRouterAccount(keychain: .inMemory(), client: StubURLProtocol.client([.init(body: Fixtures.keyInfo)]).0,
+                                        debounce: .milliseconds(150))
+        let caller = Task { await account.setKey("sk-or-v1-abcdef") }
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(account.status == .checking)
+        caller.cancel()
+        try await waitUntil { account.status != .checking }
+        guard case .valid = account.status else {
+            Issue.record("expected valid, got \(account.status)")
+            return
+        }
+    }
+
     @Test func validateWithoutKeyIsMissing() async {
         let account = account([])
         await account.validate()
@@ -528,6 +587,59 @@ enum Fixtures {
         #expect(account.status == .invalid("revoked"))
         account.noteCloudFailure(.openRouterNoCredits("empty"))
         #expect(account.status == .noCredit(nil))
+    }
+
+    @Test func aWorkingDictationClearsAStaleNoCredit() async throws {
+        let keychain = KeychainStore.inMemory([KeychainStore.openRouterAccount: "sk-or-v1-abcdef"])
+        let account = account([.init(body: Fixtures.keyInfo)], keychain: keychain)
+        account.noteCloudFailure(.openRouterNoCredits("empty"))
+        #expect(account.status == .noCredit(nil))
+        // The user topped up; the next Gemini dictation goes through.
+        account.noteCloudSuccess()
+        try await waitUntil { if case .valid = account.status { true } else { false } }
+    }
+
+    @Test func aRefusedDictationRechecksARejectedKeyAtMostSoOften() async throws {
+        let keychain = KeychainStore.inMemory([KeychainStore.openRouterAccount: "sk-or-v1-abcdef"])
+        let account = account([.init(body: Fixtures.keyInfo)], keychain: keychain)
+        // One request's 401 during a brief OpenRouter outage.
+        account.noteCloudFailure(.openRouterInvalidKey("User not found."))
+        account.refreshIfStale(maxAge: 30)
+        try await waitUntil { if case .valid = account.status { true } else { false } }
+        let checked = try #require(account.lastCheckedAt)
+        account.noteCloudFailure(.openRouterInvalidKey("User not found."))
+        account.refreshIfStale(maxAge: 30, now: checked.addingTimeInterval(5))
+        #expect(account.status == .invalid("User not found."), "checked 5 s ago: no new request")
+    }
+
+    @Test func keyLimitFetchesTheKeyToSayWhatRanOut() async throws {
+        let body = #"{"data":{"label":"k","limit":5,"limit_remaining":0,"usage":5,"is_free_tier":false}}"#
+        let keychain = KeychainStore.inMemory([KeychainStore.openRouterAccount: "sk-or-v1-abcdef"])
+        let account = account([.init(body: body)], keychain: keychain)
+        account.noteCloudFailure(.openRouterKeyLimit("Key limit exceeded"))
+        try await waitUntil { if case .noCredit = account.status { true } else { false } }
+        #expect(account.status.isKeyLimitReached)
+        #expect(!KeyStatus.noCredit(nil).isKeyLimitReached)
+    }
+
+    @Test func aRefusedKeychainReadIsNotAMissingKey() async throws {
+        let keychain = KeychainStore.inMemory([KeychainStore.openRouterAccount: "sk-or-v1-abcdef"])
+        keychain.simulateReadFailure(-128) // errSecUserCanceled: the prompt was dismissed
+        let account = account([.init(body: Fixtures.keyInfo)], keychain: keychain)
+        await account.validate()
+        #expect(account.status == .failed(OpenRouterAccount.keychainReadFailedMessage))
+        #expect(account.isKeyUnreadable)
+        // Dictations don't raise the prompt again...
+        keychain.simulateReadFailure(nil)
+        #expect(account.apiKey() == nil)
+        // ..."Check again" does.
+        await account.validate()
+        #expect(account.apiKey() == "sk-or-v1-abcdef")
+        #expect(!account.isKeyUnreadable)
+        guard case .valid = account.status else {
+            Issue.record("expected valid, got \(account.status)")
+            return
+        }
     }
 }
 
@@ -1054,7 +1166,7 @@ struct FakeFailure: Error, LocalizedError {
         await #expect(throws: MurmurError.modelLoadFailed(.parakeet, "corrupt weights")) {
             try await store.transcribeLocal(.parakeet, samples: [0])
         }
-        #expect(store.state(of: .parakeet) == .failed("Couldn’t load the model. If Retry doesn’t help, delete it and download it again."))
+        #expect(store.state(of: .parakeet) == .failed("Couldn’t load the model. Retry, or download it again."))
         #expect(await parakeet.loadCount == 2, "one retry per dictation")
     }
 
@@ -1081,6 +1193,40 @@ struct FakeFailure: Error, LocalizedError {
         #expect(store.state(of: .parakeet) == .installed)
         #expect(await !parakeet.isLoaded)
         #expect(await whisper.isLoaded)
+    }
+
+    @Test func theModelBeingUnloadedStopsReadingReadyRightAway() async throws {
+        let (store, parakeet, whisper, _) = makeStore(whisperInstalled: true)
+        store.start()
+        try await waitUntil { store.state(of: .parakeet) == .ready }
+        await whisper.configure(loadDelay: .milliseconds(300))
+        store.select(.whisper)
+        // Whisper's queued load unloads Parakeet first: a dictation or a switch back must not trust it.
+        #expect(store.state(of: .parakeet) == .installed)
+        store.select(.parakeet)
+        #expect(store.state(of: .parakeet).isPreparing, "switching back queues a load instead of doing nothing")
+        var whisperWasReady = false
+        try await waitUntil {
+            if store.state(of: .whisper) == .ready { whisperWasReady = true }
+            return store.state(of: .parakeet) == .ready
+        }
+        #expect(!whisperWasReady, "Whisper finished loading only to be unloaded by Parakeet's queued load")
+        #expect(store.state(of: .whisper) == .installed)
+        #expect(await parakeet.isLoaded)
+        #expect(await !whisper.isLoaded)
+    }
+
+    @Test func reinstallReplacesAModelThatWontLoad() async throws {
+        let (store, parakeet, _, _) = makeStore()
+        await parakeet.configure(loadError: FakeFailure(message: "corrupt weights"))
+        store.start()
+        try await waitUntil { if case .failed = store.state(of: .parakeet) { true } else { false } }
+        await parakeet.configure()
+        await store.reinstall(.parakeet)
+        #expect(store.state(of: .parakeet).isDownloading)
+        try await waitUntil { store.state(of: .parakeet) == .ready }
+        #expect(store.lastErrors[.parakeet] == nil)
+        #expect(await parakeet.loadCount == 2)
     }
 
     @Test func selectingACloudEngineKeepsTheLocalModelLoaded() async throws {
@@ -1130,7 +1276,14 @@ struct FakeFailure: Error, LocalizedError {
 @MainActor
 @Suite struct TranscriptionServiceTests {
     private func makeService(replies: [StubURLProtocol.Reply] = [], key: String? = "sk-or-v1-test",
-                             prompt: String = "") -> (TranscriptionService, ModelStore) {
+                             prompt: String = "", keychainFailure: OSStatus? = nil) -> (TranscriptionService, ModelStore) {
+        let made = makeServiceAndAccount(replies: replies, key: key, prompt: prompt, keychainFailure: keychainFailure)
+        return (made.0, made.1)
+    }
+
+    private func makeServiceAndAccount(replies: [StubURLProtocol.Reply] = [], key: String? = "sk-or-v1-test",
+                                       prompt: String = "", keychainFailure: OSStatus? = nil)
+        -> (TranscriptionService, ModelStore, OpenRouterAccount) {
         let settings = AppSettings.inMemory()
         settings.geminiSystemPrompt = prompt
         let store = ModelStore(paths: .temporary(), settings: settings,
@@ -1139,8 +1292,9 @@ struct FakeFailure: Error, LocalizedError {
                                gate: InferenceGate(), freeDiskBytes: { 50_000_000_000 })
         let client = StubURLProtocol.client(replies).0
         let keychain = KeychainStore.inMemory(key.map { [KeychainStore.openRouterAccount: $0] } ?? [:])
+        keychain.simulateReadFailure(keychainFailure)
         let account = OpenRouterAccount(keychain: keychain, client: client, debounce: .zero)
-        return (TranscriptionService(models: store, account: account, client: client, settings: settings), store)
+        return (TranscriptionService(models: store, account: account, client: client, settings: settings), store, account)
     }
 
     private func speech(seconds: Double = 1) -> Recording {
@@ -1194,6 +1348,20 @@ struct FakeFailure: Error, LocalizedError {
         await #expect(throws: MurmurError.recordingTooLarge) {
             try await service.transcribe(long, engine: .geminiPro)
         }
+    }
+
+    @Test func unreadableKeychainIsNotAMissingKey() async throws {
+        let (service, _) = makeService(replies: [Fixtures.success], keychainFailure: -128)
+        await #expect(throws: MurmurError.openRouterKeyUnreadable) {
+            try await service.transcribe(speech(), engine: .geminiFlash)
+        }
+    }
+
+    @Test func aWorkingDictationRechecksAKeyMarkedOutOfCredit() async throws {
+        let (service, _, account) = makeServiceAndAccount(replies: [Fixtures.success, .init(body: Fixtures.keyInfo)])
+        account.noteCloudFailure(.openRouterNoCredits("empty"))
+        _ = try await service.transcribe(speech(), engine: .geminiFlash)
+        try await waitUntil { if case .valid = account.status { true } else { false } }
     }
 
     @Test func rejectedKeyUpdatesTheAccount() async throws {

@@ -56,17 +56,19 @@ enum PillTimerMode: Equatable, Sendable {
 /// What the capsule looks like: the phase plus hover, presentation and the recording timer.
 enum PillVisual: Equatable, Sendable {
     case hidden, rest, peek, listening
+    /// One-time post-onboarding bloom: listening size, bars ripple once, then rest as dots.
+    case hello
     case locked(PillTimerMode)
     case processing(wide: Bool)
     case success, error
 
-    enum Content: Hashable { case empty, peek, recording, processing, success, error }
+    enum Content: Hashable { case empty, peek, hello, recording, processing, success, error }
 
     var size: CGSize {
         switch self {
         case .hidden, .rest: PillMetrics.restSize
         case .peek: PillMetrics.peekSize
-        case .listening: PillMetrics.listeningSize
+        case .listening, .hello: PillMetrics.listeningSize
         case .locked(let timer): timer == .none ? PillMetrics.lockedSize : PillMetrics.lockedTimerSize
         case .processing(let wide): CGSize(width: wide ? PillMetrics.lockedSize.width : PillMetrics.listeningSize.width,
                                            height: PillMetrics.listeningSize.height)
@@ -79,6 +81,7 @@ enum PillVisual: Equatable, Sendable {
         switch self {
         case .hidden, .rest: .empty
         case .peek: .peek
+        case .hello: .hello
         case .listening, .locked: .recording
         case .processing: .processing
         case .success: .success
@@ -131,7 +134,10 @@ struct PillView: View {
         let phase = model.visiblePhase
         if isPanel {
             guard model.isPresented else { return .hidden }
-            if phase.isIdle { return model.isHovering || model.isHelloActive ? .peek : .rest }
+            if phase.isIdle {
+                if model.isHelloActive { return .hello }
+                return model.isHovering ? .peek : .rest
+            }
         } else if phase == .hidden {
             return .hidden
         }
@@ -180,6 +186,10 @@ struct PillView: View {
             PeekDots()
                 .id(PillVisual.Content.peek)
                 .transition(contentTransition)
+        case .hello:
+            HelloRipple()
+                .id(PillVisual.Content.hello)
+                .transition(contentTransition)
         case .recording:
             RecordingContent(model: model, locked: visual.isLocked, timer: visual.timer, regions: regions)
                 .id(PillVisual.Content.recording)
@@ -215,6 +225,7 @@ struct PillView: View {
         switch visual {
         case .hidden, .rest: return .spring(duration: 0.28, bounce: 0)
         case .peek: return .spring(duration: 0.22, bounce: 0.15)
+        case .hello: return .spring(duration: 0.42, bounce: 0.3)
         case .listening: return .spring(duration: 0.32, bounce: 0.26)
         case .locked: return .spring(duration: 0.34, bounce: 0.3)
         case .processing: return .spring(duration: 0.3, bounce: 0.12)
@@ -225,7 +236,7 @@ struct PillView: View {
     private func accessibilityLabel(for visual: PillVisual) -> String {
         switch visual {
         case .hidden: "Murmur"
-        case .rest, .peek: "Murmur. Click to start hands-free dictation"
+        case .rest, .peek, .hello: "Murmur. Click to start hands-free dictation"
         case .listening: "Murmur is listening"
         case .locked: "Murmur is listening, hands-free"
         case .processing: "Murmur is transcribing"
@@ -259,9 +270,15 @@ struct PillCapsule: View {
                                           startPoint: .top, endPoint: .center))
             }
             .overlay {
+                // The resting shapes are small: a brighter top edge keeps them from sinking into dark content.
                 shape.ring(0.5)
-                    .fill(LinearGradient(colors: [.white.opacity(0.24), .white.opacity(0.07)],
+                    .fill(LinearGradient(colors: [.white.opacity(quiet ? 0.30 : 0.24), .white.opacity(0.07)],
                                          startPoint: .top, endPoint: .bottom), style: FillStyle(eoFill: true))
+            }
+            .overlay {
+                // Faint outer edge: lost on light documents, it outlines the dark capsule on dark editors.
+                shape.inset(by: -0.5).ring(0.5)
+                    .fill(.white.opacity(0.11), style: FillStyle(eoFill: true))
             }
             .shadow(color: .black.opacity(quiet ? 0.11 : 0.22), radius: 1, x: 0, y: 1)
             .shadow(color: .black.opacity(quiet ? 0.14 : 0.28), radius: 9, x: 0, y: 6)
@@ -287,6 +304,59 @@ private struct PeekDots: View {
             }
         }
         .onAppear { appeared = true }
+    }
+}
+
+/// Hello bloom: the thirteen bars rise in a single wave from the left and settle into quiet dots, the way the
+/// Done step previews it. Static snapshots freeze mid-wave; Reduce Motion shows the dots only.
+private struct HelloRipple: View {
+    @Environment(\.pillStaticRendering) private var isStatic
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var appearedAt = Date()
+    @State private var finished = false
+
+    /// Bloom settles first, then each bar follows the previous one by 45 ms; each swell lasts 0.62 s.
+    private static let start = 0.12
+    private static let stagger = 0.045
+    private static let swell = 0.62
+    static var duration: Double { start + stagger * Double(PillMetrics.barCount - 1) + swell }
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 60, paused: isStatic || reduceMotion || finished)) { timeline in
+            let t = isStatic ? 0.62 : (reduceMotion ? Self.duration : timeline.date.timeIntervalSince(appearedAt))
+            Canvas(rendersAsynchronously: false) { context, size in
+                Self.draw(in: &context, size: size, time: t)
+            }
+        }
+        .frame(width: PillMetrics.barFieldWidth, height: PillMetrics.barMaxHeight)
+        .onAppear { appearedAt = Date() }
+        .task {
+            try? await Task.sleep(for: .seconds(Self.duration + 0.1))
+            finished = true
+        }
+        .accessibilityHidden(true)
+    }
+
+    private static func draw(in context: inout GraphicsContext, size: CGSize, time t: Double) {
+        let w = PillMetrics.barWidth
+        let step = w + PillMetrics.barGap
+        let minH = PillMetrics.barMinHeight
+        let midY = size.height / 2
+        for i in 0..<PillMetrics.barCount {
+            let local = (t - start - stagger * Double(i)) / swell
+            // 0 → 1 → 0 over the swell: sin(πx), eased so the rise is quicker than the fall.
+            let lift = local <= 0 || local >= 1 ? 0 : sin(.pi * pow(local, 0.8))
+            let h = minH + (size.height - minH) * WaveformEngine.envelope(i) * CGFloat(lift) * 0.85
+            let x = CGFloat(i) * step
+            if h <= minH + 0.4 {
+                let rect = CGRect(x: x, y: midY - minH / 2, width: w, height: minH)
+                context.fill(Path(ellipseIn: rect), with: .color(.white.opacity(0.5)))
+            } else {
+                let rect = CGRect(x: x, y: midY - h / 2, width: w, height: h)
+                context.fill(Path(roundedRect: rect, cornerRadius: w / 2),
+                             with: .color(.white.opacity(0.5 + 0.46 * lift)))
+            }
+        }
     }
 }
 
@@ -514,6 +584,21 @@ struct PillRestTooltip: View {
             Text("·").foregroundStyle(.white.opacity(0.4))
             Text("Click for hands-free")
                 .foregroundStyle(.white.opacity(0.7))
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// "Hold [fn] anywhere to dictate": the one-time hello after onboarding. No click hint, since in the default
+/// mode the pill steps aside a few seconds later.
+struct PillHelloTooltip: View {
+    let model: PillModel
+
+    var body: some View {
+        PillTooltipBubble {
+            Text("Hold")
+            PillShortcutChips(shortcut: model.settings.shortcuts[.pushToTalk], fallback: model.shortcutHint)
+            Text("anywhere to dictate")
         }
         .accessibilityElement(children: .combine)
     }

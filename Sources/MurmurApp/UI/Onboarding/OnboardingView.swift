@@ -187,7 +187,7 @@ private struct OnboardingFooter: View {
             }
             Spacer(minLength: 0)
             if model.canSkipAccessibility {
-                Button(model.skipAccessibilityArmed ? "Skip anyway" : "Skip for now") {
+                Button(model.skipAccessibilityArmed ? "Skip Anyway" : "Skip for Now") {
                     model.skipAccessibility()
                 }
                 .buttonStyle(QuietButtonStyle(tint: .inkSecondary, size: .regular))

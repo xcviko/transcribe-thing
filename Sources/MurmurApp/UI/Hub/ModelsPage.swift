@@ -9,6 +9,12 @@ struct ModelsPage: View {
 
     @State private var keyFocusRequest = 0
     @State private var freeBytes: Int64?
+    /// Narrow window: every row drops "Private" and "Offline" together, so the two local models never look
+    /// like they differ in privacy.
+    @State private var compactBadges = false
+
+    /// Below this list width the full badge rows of the local models stop fitting beside their actions.
+    static let compactBadgeWidth: CGFloat = 640
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -16,6 +22,9 @@ struct ModelsPage: View {
                 HubGroup("On your Mac", footer: nil) {
                     SettingsGroup {
                         ForEach(EngineID.localEngines) { engine in row(engine, proxy: proxy) }
+                    }
+                    .onGeometryChange(for: Bool.self) { $0.size.width < Self.compactBadgeWidth } action: { compact in
+                        compactBadges = compact
                     }
                     storageLine
                 }
@@ -46,6 +55,7 @@ struct ModelsPage: View {
         .task(id: models.diskUsageBytes) {
             freeBytes = hub.paths.freeDiskBytes()
         }
+        .task { account.refreshIfStale(maxAge: 300) }
     }
 
     private var whisperLanguage: Binding<String?> {
@@ -57,6 +67,7 @@ struct ModelsPage: View {
             engine: engine,
             isSelected: settings.selectedEngine == engine,
             isPendingSwitch: models.pendingSelection == engine,
+            compactBadges: compactBadges,
             choose: { choose(engine, proxy: proxy) },
             use: { use(engine) },
             focusKey: { focusKey(proxy) })
@@ -95,7 +106,7 @@ struct ModelsPage: View {
                 .monospacedDigit()
         }
         .typeface(.callout)
-        .foregroundStyle(.inkTertiary)
+        .foregroundStyle(.inkSecondary)
         .padding(.horizontal, 4)
         .padding(.top, 2)
     }
@@ -117,6 +128,7 @@ private struct ModelRow: View {
     var engine: EngineID
     var isSelected: Bool
     var isPendingSwitch: Bool
+    var compactBadges: Bool
     var choose: () -> Void
     var use: () -> Void
     var focusKey: () -> Void
@@ -137,7 +149,6 @@ private struct ModelRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 ViewThatFits(in: .horizontal) {
                     titleLine(badges: badges)
-                    titleLine(badges: Array(badges.prefix(1)))
                     titleLine(badges: [])
                 }
                 Text(engine.factLine)
@@ -162,7 +173,9 @@ private struct ModelRow: View {
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
-    private var badges: [String] { engine.badges.filter { $0 != "Cloud" } }
+    private var badges: [String] {
+        engine.badges.filter { $0 != "Cloud" && !(compactBadges && EngineID.privacyBadges.contains($0)) }
+    }
 
     private func titleLine(badges: [String]) -> some View {
         HStack(spacing: 6) {
@@ -286,6 +299,18 @@ private struct ModelRow: View {
         case .failed:
             Button("Retry") { models.download(engine) }
                 .buttonStyle(SecondaryButtonStyle(size: .small))
+            if case .modelLoadFailed? = models.lastErrors[engine] {
+                // The files downloaded but don't load: Retry loads the same files again, this replaces them.
+                Button("Download Again") {
+                    let models = models
+                    Task { await models.reinstall(engine) }
+                }
+                .buttonStyle(SecondaryButtonStyle(size: .small))
+                .help("Delete \(engine.displayName) and download it again")
+            } else {
+                // A partial download or a half-removed install can go even while selected: nothing is loaded.
+                deleteButton(isEnabled: true, freedBytes: nil)
+            }
         case .downloading:
             Button("Cancel") { models.cancelDownload(engine) }
                 .buttonStyle(SecondaryButtonStyle(size: .small))
@@ -294,17 +319,17 @@ private struct ModelRow: View {
                 Button("Use", action: use)
                     .buttonStyle(SecondaryButtonStyle(size: .small))
             }
-            deleteButton
+            deleteButton(isEnabled: !isSelected, freedBytes: engine.approxDownloadBytes)
         }
     }
 
     @ViewBuilder private var cloudActions: some View {
         switch readiness {
         case .needsKey:
-            Button("Add key", action: focusKey)
+            Button("Add Key", action: focusKey)
                 .buttonStyle(SecondaryButtonStyle(size: .small))
         case .keyProblem:
-            Button("Update key", action: focusKey)
+            Button("Update Key", action: focusKey)
                 .buttonStyle(SecondaryButtonStyle(size: .small))
         case .ready, .warming, .needsDownload, .failed:
             if !isSelected {
@@ -314,18 +339,18 @@ private struct ModelRow: View {
         }
     }
 
-    private var deleteButton: some View {
+    private func deleteButton(isEnabled: Bool, freedBytes: Int64?) -> some View {
         Button {
             confirmingDelete = true
         } label: {
             Image(systemName: "trash")
         }
         .buttonStyle(IconButtonStyle(size: 26))
-        .disabled(isSelected)
-        .help(isSelected ? "Switch to another model to delete this one." : "Delete \(engine.displayName)")
+        .disabled(!isEnabled)
+        .help(isEnabled ? "Delete \(engine.displayName)" : "Switch to another model to delete this one.")
         .accessibilityLabel("Delete \(engine.displayName)")
         .popover(isPresented: $confirmingDelete, arrowEdge: .bottom) {
-            DeleteModelConfirmation(engine: engine, freedBytes: engine.approxDownloadBytes) {
+            DeleteModelConfirmation(engine: engine, freedBytes: freedBytes) {
                 confirmingDelete = false
                 let models = models
                 Task { await models.delete(engine) }

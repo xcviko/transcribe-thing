@@ -115,11 +115,14 @@ struct ShortcutRecorderView: View {
                         onHeldChanged: { held = $0 },
                         onResult: handle)
                 }
+                // In a SettingsRow the title lines up with the keys, not with the middle of keys + note.
+                .alignmentGuide(.settingsRowAccessory) { $0[VerticalAlignment.center] }
             if isRecording {
                 RecordingHint(action: action)
                     .transition(.opacity.combined(with: .move(edge: .top)))
             } else if let message {
-                RecorderMessageView(message: message, alignment: alignment, onSwap: swap, onDismiss: { self.message = nil })
+                RecorderMessageView(message: message, alignment: alignment, onSwap: swap, onUse: apply,
+                                    onDismiss: { self.message = nil })
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
@@ -205,7 +208,7 @@ struct ShortcutRecorderView: View {
             message = nil
         case .apply(let warning):
             write(shortcut)
-            message = warning.map { .warning($0) }
+            message = warning.map { .warning($0, suggestion: ShortcutEdit.betterSide(for: shortcut)) }
         case .reject(let reason):
             message = .error(reason, attempted: shortcut)
         case .offerSwap(let other):
@@ -234,7 +237,8 @@ struct ShortcutRecorderView: View {
 
 enum RecorderMessage: Equatable {
     case error(String, attempted: Shortcut)
-    case warning(String)
+    /// `suggestion`: a binding that avoids the problem (Right ⌥ for ⌥), offered as a one-click fix.
+    case warning(String, suggestion: Shortcut?)
     case conflict(ShortcutAction, attempted: Shortcut)
     case swapped(ShortcutAction, warning: String?)
 }
@@ -243,6 +247,7 @@ private struct RecorderMessageView: View {
     let message: RecorderMessage
     let alignment: HorizontalAlignment
     var onSwap: () -> Void
+    var onUse: (Shortcut) -> Void
     var onDismiss: () -> Void
 
     var body: some View {
@@ -260,9 +265,14 @@ private struct RecorderMessageView: View {
                 }
                 Text(text).foregroundStyle(.inkSecondary)
             }
-        case .warning(let text):
+        case .warning(let text, let suggestion):
             MessageBubble(symbol: "exclamationmark.triangle.fill", tint: .warning) {
                 Text(text).foregroundStyle(.inkSecondary)
+                if let suggestion {
+                    Button("Use \(suggestion.compactDescription)") { onUse(suggestion) }
+                        .buttonStyle(SecondaryButtonStyle(size: .small))
+                        .padding(.top, 2)
+                }
             }
         case .conflict(let other, let attempted):
             MessageBubble(symbol: "arrow.left.arrow.right.circle.fill", tint: .accent) {
@@ -275,7 +285,7 @@ private struct RecorderMessageView: View {
                     Button("Swap", action: onSwap)
                         .buttonStyle(PrimaryButtonStyle(size: .small))
                         .help("\(other.title) takes this action’s current shortcut")
-                    Button("Keep current", action: onDismiss)
+                    Button("Keep Current", action: onDismiss)
                         .buttonStyle(QuietButtonStyle(tint: .inkSecondary))
                 }
                 .padding(.top, 2)
@@ -617,7 +627,8 @@ private struct RecorderGallery: View {
                 }
                 row(.pushToTalk) {
                     ShortcutRecorderView(shortcut: .constant(Shortcut(modifiers: [.init(.option)])), action: .pushToTalk,
-                                         previewState: .message(.warning("⌥ alone types special characters. Right ⌥ works better.")))
+                                         previewState: .message(.warning("⌥ alone types special characters. Right ⌥ works better.",
+                                                                         suggestion: .rightOption)))
                 }
                 row(.handsFree) {
                     ShortcutRecorderView(shortcut: .constant(.rightOption), action: .handsFree,

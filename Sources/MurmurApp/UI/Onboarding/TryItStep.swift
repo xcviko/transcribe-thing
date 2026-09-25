@@ -59,7 +59,7 @@ struct TryItStep: View {
         switch hint {
         case .noSpeech:
             StepNote(symbol: "mic.badge.xmark", tint: .warning,
-                     text: Text("Didn't catch that. Is the right mic selected?")) {
+                     text: Text("Didn’t catch that. Is the right mic selected?")) {
                 MicrophoneMenu(model: model)
             }
         case .typedInstead:

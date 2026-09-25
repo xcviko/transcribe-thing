@@ -6,25 +6,13 @@ import CoreGraphics
 /// The target app reads the key code through its layout, so a hard-coded `kVK_ANSI_V` is wrong for
 /// some layouts. Verified on macOS 26.6: RussianWin/Russian/Greek/Hebrew → 9 (their ⌘ layer is Latin),
 /// Dvorak → 47, "Dvorak – QWERTY ⌘" → 9, ABC/German/French/Colemak → 9.
+///
+/// Resolved on every paste rather than cached: the input-source-changed notification is distributed, and
+/// AppKit holds those back while Murmur (an agent app) is inactive, which is nearly always.
 @MainActor
-final class PasteKeyResolver {
-    private(set) var keyCode: CGKeyCode
-    private var observer: MainDistributedObserver?
-
-    /// Text Input Sources are main-thread APIs inside apps, hence the main actor.
-    init() {
-        keyCode = Self.resolveCurrent()
-        observer = MainDistributedObserver(
-            name: NSNotification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String)
-        ) { [weak self] in
-            self?.refresh()
-        }
-    }
-
-    func refresh() {
-        keyCode = Self.resolveCurrent()
-    }
-
+enum PasteKeyResolver {
+    /// Text Input Sources are main-thread APIs inside apps, hence the main actor. Usually one
+    /// `UCKeyTranslate` (the ANSI V check answers for most layouts).
     static func resolveCurrent() -> CGKeyCode {
         guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue() else { return fallback }
         return resolve(source: source) ?? fallback

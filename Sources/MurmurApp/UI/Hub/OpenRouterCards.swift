@@ -59,7 +59,7 @@ struct OpenRouterKeyCard: View {
                 hub.open(OpenRouterLinks.keys)
             } label: {
                 HStack(spacing: 3) {
-                    Text("Get a key")
+                    Text("Get a Key")
                     Image(systemName: "arrow.up.right").font(.system(size: 9, weight: .bold))
                 }
             }
@@ -103,12 +103,14 @@ struct OpenRouterKeyCard: View {
     private var field: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                SecureField("sk-or-v1-…", text: $draft)
+                SecureField("", text: $draft)
                     .textFieldStyle(.plain)
+                    .fieldPlaceholder("sk-or-v1-…", isShown: draft.isEmpty)
                     .typeface(.mono)
                     .foregroundStyle(.ink)
                     .focused($fieldFocused)
                     .onSubmit(save)
+                    .accessibilityLabel("OpenRouter API key")
                     .padding(.horizontal, 11)
                     .frame(height: 32)
                     .background(HubPalette.field, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
@@ -154,12 +156,23 @@ struct OpenRouterKeyCard: View {
         case .valid(let info):
             status("checkmark.circle.fill", .success, connectedText(info))
         case .invalid:
-            status("xmark.octagon.fill", .danger, "OpenRouter didn’t accept this key. Copy it again from openrouter.ai/keys.")
+            HStack(spacing: 8) {
+                status("xmark.octagon.fill", .danger, "OpenRouter didn’t accept this key. Copy it again from openrouter.ai/keys.")
+                checkAgain
+            }
         case .noCredit:
             HStack(spacing: 8) {
-                status("exclamationmark.triangle.fill", .warning, "Key works, but the account has no credit.")
-                Button("Add credit") { hub.open(OpenRouterLinks.credits) }
-                    .buttonStyle(.murmurQuiet)
+                if account.status.isKeyLimitReached {
+                    status("exclamationmark.triangle.fill", .warning, "This key reached its spending limit.")
+                    Button("Raise Limit") { hub.open(OpenRouterLinks.keys) }
+                        .buttonStyle(.murmurQuiet)
+                } else {
+                    status("exclamationmark.triangle.fill", .warning, "Key works, but the account has no credit.")
+                    Button("Add Credit") { hub.open(OpenRouterLinks.credits) }
+                        .buttonStyle(.murmurQuiet)
+                }
+                // After a top-up or a raised limit: nothing else re-checks until a dictation goes through.
+                checkAgain
             }
         case .offline:
             status("wifi.slash", .inkTertiary, "You’re offline. We’ll check the key when you’re back.")
@@ -167,13 +180,18 @@ struct OpenRouterKeyCard: View {
             HStack(spacing: 8) {
                 status("exclamationmark.circle.fill", .warning,
                        message.isEmpty ? "Couldn’t check the key." : "Couldn’t check the key. \(message)")
-                Button("Check again") {
-                    let account = account
-                    Task { await account.validate() }
-                }
-                .buttonStyle(.murmurQuiet)
+                checkAgain
             }
         }
+    }
+
+    private var checkAgain: some View {
+        Button("Check Again") {
+            let account = account
+            Task { await account.validate() }
+        }
+        .buttonStyle(.murmurQuiet)
+        .fixedSize()
     }
 
     private func status(_ symbol: String, _ tint: Color, _ text: String) -> some View {
@@ -223,7 +241,7 @@ struct OpenRouterKeyCard: View {
             }
             Text("Your audio is sent to OpenRouter and Google AI Studio to be transcribed. Nothing else is sent.")
                 .font(.system(size: 11))
-                .foregroundStyle(.inkTertiary)
+                .foregroundStyle(.inkSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -306,7 +324,7 @@ struct GeminiInstructionsCard: View {
                     .foregroundStyle(.inkSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 2) {
-                    Button("Insert example", action: insertExample)
+                    Button("Insert Example", action: insertExample)
                         .buttonStyle(.murmurQuiet)
                         .padding(.leading, -8)
                     Button("Clear") { settings.geminiSystemPrompt = "" }

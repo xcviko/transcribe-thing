@@ -129,14 +129,14 @@ private struct DesignGallery: View {
                 HStack(spacing: 10) {
                     Button("Continue") {}.buttonStyle(PrimaryButtonStyle(size: .large))
                     Button("Download") {}.buttonStyle(.murmurPrimary)
-                    Button("Add key") {}.buttonStyle(PrimaryButtonStyle(size: .small))
+                    Button("Add Key") {}.buttonStyle(PrimaryButtonStyle(size: .small))
                     Button("Disabled") {}.buttonStyle(.murmurPrimary).disabled(true)
                 }
                 HStack(spacing: 10) {
                     Button("Back") {}.buttonStyle(SecondaryButtonStyle(size: .large))
                     Button {} label: { Label("Open Settings", systemImage: "gearshape") }.buttonStyle(.murmurSecondary)
-                    Button("Delete model") {}.buttonStyle(SecondaryButtonStyle(isDestructive: true))
-                    Button("Skip for now") {}.buttonStyle(.murmurQuiet)
+                    Button("Delete Model") {}.buttonStyle(SecondaryButtonStyle(isDestructive: true))
+                    Button("Skip for Now") {}.buttonStyle(.murmurQuiet)
                     Spacer(minLength: 0)
                     HStack(spacing: 2) {
                         Button {} label: { Image(systemName: "doc.on.doc") }.buttonStyle(.murmurIcon)

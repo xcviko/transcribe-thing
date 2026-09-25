@@ -39,15 +39,27 @@ final class PermissionsCenter {
     @ObservationIgnored private var refreshInFlight = false
     @ObservationIgnored private var refreshAgain = false
     @ObservationIgnored private var pollTimer: Timer?
-    @ObservationIgnored private var pollInterval: TimeInterval = 0.5
-    @ObservationIgnored private var pollStopsWhenGranted = false
-    @ObservationIgnored private var pollDeadline: Date?
+    /// Why the timer runs; the fastest reason wins. A permissions UI on screen (`startPolling`):
+    @ObservationIgnored private var uiPollInterval: TimeInterval?
+    /// The app is waiting for a grant in the background (`pollInBackground`), e.g. the event tap is down:
+    @ObservationIgnored private var pollsInBackground = false
+    /// The user was just sent to grant these (`requestAccessibility`, or their pane opened from a card or a
+    /// toast): fast until that permission is granted or the date passes. Murmur usually stays in the
+    /// background meanwhile, so no activation tells it the grant happened.
+    @ObservationIgnored private var grantWatch: [SettingsPane: Date] = [:]
     @ObservationIgnored private var observers: [AnyObject] = []
 
     private static let lastTrustedCDHashKey = "murmur.permissions.lastTrustedCDHash"
     private static let requestedAccessibilityKey = "murmur.permissions.requestedAccessibility"
+    /// While a permissions UI is on screen or the user just asked for access: grants show up at once.
+    nonisolated static let fastPollInterval: TimeInterval = 0.5
+    /// Background waiting. Returning to Murmur and the Accessibility-list notification refresh at once
+    /// anyway, and the event tap retries every 3 s by itself; this only catches what they miss.
+    nonisolated static let backgroundPollInterval: TimeInterval = 3
     /// When everything required is granted, polling relaxes to this (revocation and Globe-key changes).
-    private static let relaxedPollInterval: TimeInterval = 5
+    nonisolated static let relaxedPollInterval: TimeInterval = 5
+    /// How long a grant the user was sent to give is watched for at the fast pace.
+    nonisolated static let grantWatchDuration: TimeInterval = 180
 
     init() {
         self.defaults = .standard
@@ -135,32 +147,67 @@ final class PermissionsCenter {
 
     // MARK: Polling
 
-    /// Polls at `interval` while something required is missing, then relaxes to every 5 s.
-    func startPolling(interval: TimeInterval = 0.5) {
+    /// Fast polling while a permissions UI is on screen (relaxed to every 5 s once everything is granted).
+    /// Call `stopPolling()` when that UI goes away.
+    func startPolling(interval: TimeInterval = PermissionsCenter.fastPollInterval) {
         guard !isPreview else { return }
-        pollInterval = max(0.2, interval)
-        pollStopsWhenGranted = false
-        pollDeadline = nil
-        schedulePollTimer()
+        uiPollInterval = max(0.2, interval)
+        adjustPolling()
         refresh()
     }
 
+    /// The permissions UI went away. Background polling, if requested, carries on at its own pace.
     func stopPolling() {
-        pollTimer?.invalidate()
-        pollTimer = nil
-        pollStopsWhenGranted = false
-        pollDeadline = nil
+        uiPollInterval = nil
+        grantWatch.removeAll()
+        adjustPolling()
+    }
+
+    /// Slow polling for as long as the app runs, while it can't work without a grant (event tap down).
+    func pollInBackground() {
+        guard !isPreview else { return }
+        pollsInBackground = true
+        adjustPolling()
+        refresh()
     }
 
     var isPolling: Bool { pollTimer != nil }
 
-    private var effectivePollInterval: TimeInterval {
-        allRequiredGranted ? max(pollInterval, Self.relaxedPollInterval) : pollInterval
+    /// nil = no polling. Pure so the policy is testable.
+    nonisolated static func pollInterval(ui: TimeInterval?, background: Bool, awaitingGrant: Bool,
+                                         allGranted: Bool) -> TimeInterval? {
+        var wanted: TimeInterval?
+        if let ui { wanted = ui }
+        if awaitingGrant { wanted = min(wanted ?? fastPollInterval, fastPollInterval) }
+        if background { wanted = min(wanted ?? backgroundPollInterval, backgroundPollInterval) }
+        guard let wanted else { return nil }
+        return allGranted ? max(wanted, relaxedPollInterval) : wanted
     }
 
-    private func schedulePollTimer() {
+    private var effectivePollInterval: TimeInterval? {
+        let now = Date()
+        grantWatch = grantWatch.filter { pane, until in until > now && state(of: pane) != .granted }
+        return Self.pollInterval(ui: uiPollInterval, background: pollsInBackground,
+                                 awaitingGrant: !grantWatch.isEmpty, allGranted: allRequiredGranted)
+    }
+
+    private func state(of pane: SettingsPane) -> PermissionState? {
+        switch pane {
+        case .microphone: microphone
+        case .accessibility: accessibility
+        case .inputMonitoring, .keyboard, .sound, .storage: nil
+        }
+    }
+
+    /// Polls fast until `pane`'s permission is granted (3 min at most).
+    private func watchForGrant(of pane: SettingsPane) {
+        guard state(of: pane) != nil else { return }
+        grantWatch[pane] = Date().addingTimeInterval(Self.grantWatchDuration)
+        adjustPolling()
+    }
+
+    private func schedulePollTimer(interval: TimeInterval) {
         pollTimer?.invalidate()
-        let interval = effectivePollInterval
         let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.pollTick() }
         }
@@ -170,20 +217,19 @@ final class PermissionsCenter {
     }
 
     private func pollTick() {
-        if let deadline = pollDeadline, Date() > deadline {
-            stopPolling()
-            return
-        }
+        adjustPolling()
+        guard pollTimer != nil else { return }
         refresh()
     }
 
     private func adjustPolling() {
-        guard let timer = pollTimer else { return }
-        if pollStopsWhenGranted, accessibility == .granted {
-            stopPolling()
+        guard let interval = effectivePollInterval else {
+            pollTimer?.invalidate()
+            pollTimer = nil
             return
         }
-        if abs(timer.timeInterval - effectivePollInterval) > 0.01 { schedulePollTimer() }
+        if let timer = pollTimer, abs(timer.timeInterval - interval) <= 0.01 { return }
+        schedulePollTimer(interval: interval)
     }
 
     /// Returning from System Settings is the usual moment a grant happens; the AX list change posts an
@@ -202,7 +248,7 @@ final class PermissionsCenter {
     // MARK: Requests
 
     /// Shows the system prompt the first time. When access was denied before, opens the Microphone pane
-    /// instead (the prompt never appears again) and returns false.
+    /// instead (the prompt never appears again, and the grant is watched for) and returns false.
     func requestMicrophone() async -> Bool {
         guard !isPreview else { return microphone == .granted }
         let status = await Task.detached(priority: .userInitiated) {
@@ -232,7 +278,7 @@ final class PermissionsCenter {
     }
 
     /// First time: the system prompt (which adds Murmur to the list and links to Settings). After that the
-    /// prompt never shows again, so the Accessibility pane opens directly. Polls until granted.
+    /// prompt never shows again, so the Accessibility pane opens directly. Polls fast until granted (3 min at most).
     func requestAccessibility() {
         guard !isPreview else { return }
         let askedBefore = defaults.bool(forKey: Self.requestedAccessibilityKey)
@@ -240,20 +286,18 @@ final class PermissionsCenter {
         // == kAXTrustedCheckOptionPrompt, which imports as a mutable global.
         let trusted = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
         if !trusted && (askedBefore || accessibilityLikelyStale) { open(.accessibility) }
-        if pollTimer == nil {
-            pollInterval = 0.5
-            pollStopsWhenGranted = true
-            pollDeadline = Date().addingTimeInterval(180)
-            schedulePollTimer()
-        }
+        watchForGrant(of: .accessibility)
         refresh()
     }
 
+    /// Opens the pane. For Microphone and Accessibility it also watches for the grant, so a toast's
+    /// "Open Settings" is noticed without Murmur being activated again.
     func open(_ pane: SettingsPane) {
         guard !isPreview else { return }
         if !NSWorkspace.shared.open(pane.url) {
             NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security")!)
         }
+        watchForGrant(of: pane)
     }
 }
 

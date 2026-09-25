@@ -59,6 +59,10 @@ struct DictationMachine: Equatable {
 
     private(set) var capture: Capture = .idle
     private(set) var activeJobs: Int = 0
+    /// Locked by the second press of a double-press, and that press is still down. The router reports the
+    /// press before it can know a chord follows, so fn tap, then fn+Space arrives as pttDown (locks) and then
+    /// handsFreeToggle, which only confirms the lock.
+    private(set) var lockingPressHeld = false
     var config: Config
 
     init(config: Config = Config()) {
@@ -106,6 +110,12 @@ struct DictationMachine: Equatable {
             break
         }
 
+        let effects = reduce(input, now: now)
+        if case .locked = capture {} else { lockingPressHeld = false }
+        return effects
+    }
+
+    private mutating func reduce(_ input: Input, now: TimeInterval) -> [Effect] {
         switch capture {
         case .idle:
             return handleIdle(input, now: now)
@@ -208,6 +218,14 @@ struct DictationMachine: Equatable {
             return []
         case .pttUp:
             // Release of the key that locked it (fn+Space, or the second press of a double-press).
+            lockingPressHeld = false
+            return []
+        case .pttInterrupted:
+            // The locking press became a combo (fn+←): it is over, and the recording goes on.
+            lockingPressHeld = false
+            return []
+        case .handsFreeToggle where lockingPressHeld:
+            lockingPressHeld = false
             return []
         case .handsFreeToggle, .pillStop:
             return finishHandsFree()
@@ -252,6 +270,7 @@ struct DictationMachine: Equatable {
         switch input {
         case .pttDown where config.doublePressEnabled && now - firstDownAt <= config.doublePressWindow:
             capture = .locked(startedAt: now)
+            lockingPressHeld = true
             return [.cancelTimer(.doublePressWindow), .startCapture, .showPill(.locked), .playSound(.lock)]
                 + limitTimers(startedAt: now, now: now)
         case .pttDown:

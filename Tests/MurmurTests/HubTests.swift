@@ -94,7 +94,26 @@ import Testing
         #expect(EngineReadiness.of(.whisper, localState: .downloading(.zero), keyStatus: .missing) == .warming)
         #expect(EngineReadiness.of(.whisper, localState: .preparing(since: Date()), keyStatus: .missing) == .warming)
         #expect(EngineReadiness.of(.parakeet, localState: .notInstalled, keyStatus: .missing) == .needsDownload)
-        #expect(EngineReadiness.of(.parakeet, localState: .failed("x"), keyStatus: .missing) == .failed("x"))
+        #expect(EngineReadiness.of(.parakeet, localState: .failed("x"), keyStatus: .missing) == .failed("Download failed"))
+    }
+
+    @Test func failedModelsSayWhatFailed() {
+        let loadError = MurmurError.modelLoadFailed(.whisper, "corrupt")
+        #expect(EngineReadiness.of(.whisper, localState: .failed("x"), keyStatus: .missing, localError: loadError)
+            .unavailableReason == "Couldn’t load")
+        #expect(EngineReadiness.of(.whisper, localState: .failed("x"), keyStatus: .missing,
+                                   localError: .notEnoughDisk(needed: 2, available: 1)).unavailableReason == "Not enough space")
+        #expect(EngineSummary.make(engine: .whisper, localState: .failed("x"), keyStatus: .missing, localError: loadError)
+            .status == "Couldn’t load")
+        #expect(EngineSummary.make(engine: .whisper, localState: .failed("x"), keyStatus: .missing,
+                                   localError: .downloadFailed(.whisper, "offline")).status == "Download failed")
+        var input = HubAttention.Input(microphone: .granted, accessibility: .granted, accessibilityLikelyStale: false,
+                                       fnKeyUsage: .doNothing, pushToTalkUsesFn: true, engine: .whisper,
+                                       localState: .failed("Couldn’t load the model."), keyStatus: .missing,
+                                       localError: loadError)
+        #expect(HubAttention.items(input).first?.title == "Couldn’t load Whisper Large V3 Turbo")
+        input.localError = .downloadFailed(.whisper, "offline")
+        #expect(HubAttention.items(input).first?.title == "Whisper Large V3 Turbo didn’t finish downloading")
     }
 
     @Test func cloudStatesIgnoreLocalState() {
@@ -150,6 +169,28 @@ import Testing
     @Test func staleAccessibilityPointsToSettings() {
         let items = HubAttention.items(input(ax: .denied, stale: true))
         #expect(items.first?.action == .openPane(.accessibility))
+        #expect(items.first?.tone == .error)
+    }
+
+    @Test func missingAccessibilitySaysTheShortcutIsDead() throws {
+        let item = try #require(HubAttention.items(input(ax: .denied)).first)
+        #expect(item.title == "Murmur can’t hear your shortcut")
+        #expect(item.body == "Turn on Accessibility so fn works and text pastes where you type.")
+        #expect(item.tone == .error)
+        #expect(HubAttention.items(input(ax: .denied, pttUsesFn: false)).first?.body
+            == "Turn on Accessibility so your shortcut works and text pastes where you type.")
+    }
+
+    @Test func aDeadTapShowsEvenWhenAccessibilityReadsGranted() throws {
+        var dead = input()
+        dead.shortcutUnavailable = true
+        let item = try #require(HubAttention.items(dead).first)
+        #expect(item.title == "Murmur can’t hear your shortcut")
+        #expect(item.action == .openPane(.accessibility))
+        // Accessibility off already explains it: one card, not two.
+        var both = input(ax: .denied)
+        both.shortcutUnavailable = true
+        #expect(HubAttention.items(both).filter { $0.id == "accessibility" }.count == 1)
     }
 
     @Test func downloadShowsProgress() throws {
@@ -162,8 +203,8 @@ import Testing
     }
 
     @Test func keyProblemsForCloudEngines() {
-        #expect(HubAttention.items(input(engine: .geminiFlash, key: .missing)).first?.actionTitle == "Add key")
-        #expect(HubAttention.items(input(engine: .geminiPro, key: .invalid("401"))).first?.actionTitle == "Update key")
+        #expect(HubAttention.items(input(engine: .geminiFlash, key: .missing)).first?.actionTitle == "Add Key")
+        #expect(HubAttention.items(input(engine: .geminiPro, key: .invalid("401"))).first?.actionTitle == "Update Key")
         #expect(HubAttention.items(input(engine: .geminiPro, key: .noCredit(nil))).first?.action == .openURL(OpenRouterLinks.credits))
         #expect(HubAttention.items(input(engine: .geminiPro, key: .offline)).isEmpty)
     }

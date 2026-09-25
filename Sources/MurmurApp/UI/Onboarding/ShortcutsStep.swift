@@ -35,7 +35,7 @@ struct ShortcutsStep: View {
             if model.showKeyboardHint {
                 StepNote(symbol: "keyboard", tint: .accent,
                          text: Text("fn not lighting up? Some external keyboards keep fn to themselves. You can pick another key, like right ⌥.")) {
-                    Button("Use right ⌥ to talk") {
+                    Button("Use Right ⌥ to Talk") {
                         settings.shortcuts[.pushToTalk] = .rightOption
                     }
                     .buttonStyle(QuietButtonStyle(tint: .accent, size: .small))
@@ -144,13 +144,14 @@ struct ShortcutsStage: View {
                 .frame(maxHeight: 56)
             KeyboardIllustration(pressed: model.pressedKeys, emphasized: model.pushToTalkKeys.union(model.handsFreeKeys))
                 .fixedSize()
-                .frame(width: OnboardingLayout.stageWidth - 28, alignment: .leading)
+                // An intentional crop: 28 pt in from both stage edges, faded out before the right one.
+                .frame(width: OnboardingLayout.stageWidth - 56, alignment: .leading)
                 .mask {
-                    LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.8),
-                                           .init(color: .black.opacity(0), location: 1)],
+                    LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.68),
+                                           .init(color: .black.opacity(0), location: 0.92)],
                                    startPoint: .leading, endPoint: .trailing)
                 }
-                .padding(.leading, 28)
+                .padding(.horizontal, 28)
             Spacer(minLength: 0)
         }
         // Trying out fn + space or esc here shouldn't beep: nothing else in this window wants those keys.
@@ -192,7 +193,7 @@ private struct CoachLine: View {
         let handsFree = settings.shortcuts[.handsFree]
         switch phase {
         case .listening:
-            return model.heldPushToTalk ? ("Listening. Let go when you're done", nil, nil) : ("Keep holding…", nil, nil)
+            return model.heldPushToTalk ? ("Listening. Let go when you’re done", nil, nil) : ("Keep holding…", nil, nil)
         case .locked:
             return ("Hands-free. Press", ptt, "to finish")
         case .processing:
@@ -200,11 +201,11 @@ private struct CoachLine: View {
         case .success:
             return ("Nice.", nil, nil)
         case .error:
-            return ("Didn't catch that. Try again", nil, nil)
+            return ("Didn’t catch that. Try again", nil, nil)
         case .hidden, .rest:
             if !model.heldPushToTalk { return ("Hold", ptt, "and say something") }
             if !model.triedHandsFree { return ("Now tap", handsFree, "to go hands-free") }
-            return ("You've got it.", settings.shortcuts[.cancel], "cancels anytime")
+            return ("You’ve got it.", settings.shortcuts[.cancel], "cancels anytime")
         }
     }
 }

@@ -69,9 +69,9 @@ import Testing
     @Test func primaryTitles() {
         let downloading = inputs(local: .downloading(DownloadProgress(fraction: 0.4)))
         #expect(OnboardingGate.primaryTitle(.welcome, inputs(), practiceStarted: false) == "Get Started")
-        #expect(OnboardingGate.primaryTitle(.model, downloading, practiceStarted: false) == "Continue (download keeps going)")
+        #expect(OnboardingGate.primaryTitle(.model, downloading, practiceStarted: false) == "Continue")
         #expect(OnboardingGate.primaryTitle(.model, inputs(), practiceStarted: false) == "Continue")
-        #expect(OnboardingGate.primaryTitle(.tryIt, inputs(), practiceStarted: false) == "Skip practice")
+        #expect(OnboardingGate.primaryTitle(.tryIt, inputs(), practiceStarted: false) == "Skip Practice")
         #expect(OnboardingGate.primaryTitle(.tryIt, inputs(), practiceStarted: true) == "Continue")
         #expect(OnboardingGate.primaryTitle(.done, inputs(), practiceStarted: true) == "Start Dictating")
     }
@@ -325,5 +325,74 @@ import Testing
         model.ctx.settings.shortcuts[.pushToTalk] = .rightOption
         model.ctx.settings.shortcuts[.handsFree] = .f13
         #expect(!model.showsFnKeyCard)
+    }
+}
+
+// MARK: - Copy style
+
+/// Visible copy uses the typographic apostrophe (’). A straight tick looks cheap next to the rest of the app,
+/// most of all in the serif display titles.
+@Suite struct CopyStyleTests {
+    /// Sample dictation keeps the ASCII apostrophe the engines produce.
+    private static let dictatedSamples: Set<String> = [
+        "Let's push the review to Thursday and ship on Monday.",
+        "Let's move the design review to Thursday afternoon so Maya can join, and I'll send the updated deck tonight. Also, can someone check whether the staging build picked up the new onboarding copy?",
+        "Let's move the design review to Thursday afternoon so Maya can join.",
+    ]
+
+    /// Single-line string literals on one line of Swift, comments skipped.
+    static func stringLiterals(in line: String) -> [String] {
+        var literals: [String] = []
+        var current = ""
+        var inString = false
+        var chars = Array(line)[...]
+        while let c = chars.popFirst() {
+            if inString {
+                if c == "\\" {
+                    current.append(c)
+                    if let next = chars.popFirst() { current.append(next) }
+                } else if c == "\"" {
+                    inString = false
+                    literals.append(current)
+                } else {
+                    current.append(c)
+                }
+            } else if c == "/", chars.first == "/" {
+                break
+            } else if c == "\"" {
+                if chars.starts(with: "\"\"") { break }
+                inString = true
+                current = ""
+            }
+        }
+        return literals
+    }
+
+    @Test func literalScannerSkipsCommentsAndEscapes() {
+        #expect(Self.stringLiterals(in: #"Text("You’re set") // don't"#) == ["You’re set"])
+        #expect(Self.stringLiterals(in: #"f("a \"b\" c", "it's")"#) == [#"a \"b\" c"#, "it's"])
+    }
+
+    @Test func uiCopyUsesTypographicApostrophes() throws {
+        let sources = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/MurmurApp")
+        var offenders: [String] = []
+        for folder in ["UI", "Pill"] {
+            let dir = sources.appendingPathComponent(folder)
+            let files = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: nil)?
+                .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" } ?? []
+            #expect(!files.isEmpty, "No sources under \(dir.path)")
+            for file in files {
+                let lines = try String(contentsOf: file, encoding: .utf8).components(separatedBy: "\n")
+                for (index, line) in lines.enumerated() {
+                    for literal in Self.stringLiterals(in: line)
+                    where literal.contains("'") && !Self.dictatedSamples.contains(literal) {
+                        offenders.append("\(file.lastPathComponent):\(index + 1): \(literal)")
+                    }
+                }
+            }
+        }
+        #expect(offenders.isEmpty, "Use ’ instead of ' in: \(offenders.joined(separator: "\n"))")
     }
 }

@@ -348,6 +348,27 @@ import Testing
         #expect(m.capture == .locked(startedAt: 10.3125))
     }
 
+    @Test func fnTapThenFnSpaceLocksOnce() {
+        // A quick fn tap, then fn+Space within the double-press window: the router reports the press
+        // before it knows Space follows, so the lock comes first and Space only confirms it.
+        var m = Self.tapPending()
+        let lock = m.handle(.pttDown, now: 10.25)
+        #expect(m.capture == .locked(startedAt: 10.25))
+        #expect(lock.contains(.startCapture))
+        #expect(m.handle(.handsFreeToggle, now: 10.375).isEmpty)
+        #expect(m.capture == .locked(startedAt: 10.25))
+        // The chord consumed fn's release; the next fn+Space stops as usual.
+        #expect(m.handle(.handsFreeToggle, now: 20).contains(.stopCaptureAndTranscribe(mode: .handsFree)))
+    }
+
+    @Test func doublePressHeldThenReleasedStopsOnTheNextToggle() {
+        var m = Self.tapPending()
+        _ = m.handle(.pttDown, now: 10.25)
+        #expect(m.handle(.pttUp, now: 10.5).isEmpty)
+        #expect(!m.lockingPressHeld)
+        #expect(m.handle(.handsFreeToggle, now: 20).contains(.stopCaptureAndTranscribe(mode: .handsFree)))
+    }
+
     @Test func fnArrowWhileLockedKeepsRecordingThenStops() {
         var m = Self.locked()
         _ = m.handle(.pttDown, now: 20)
@@ -606,12 +627,13 @@ final class FakeRecorder: DictationRecorder {
     }
 
     static func make(models: [EngineID: LocalModelState] = [.parakeet: .ready],
-                     mic: PermissionState = .granted) -> Harness {
+                     modelErrors: [EngineID: MurmurError] = [:], store: ModelStore? = nil,
+                     mic: PermissionState = .granted, micLive: Bool = false, keyStatus: KeyStatus = .missing) -> Harness {
         let settings = AppSettings.inMemory()
         let meter = LevelMeter.preview(level: 0)
         let devices = AudioDeviceCatalog.preview()
-        let store = ModelStore.preview(states: models)
-        let account = OpenRouterAccount.preview(status: .missing)
+        let store = store ?? ModelStore.preview(states: models, lastErrors: modelErrors)
+        let account = OpenRouterAccount.preview(status: keyStatus)
         let client = OpenRouterClient()
         let history = HistoryStore.preview(entries: [])
         let toasts = ToastCenter()
@@ -626,6 +648,7 @@ final class FakeRecorder: DictationRecorder {
         let recorder = FakeRecorder()
         controller.captureDevice = recorder
         controller.copyOverride = { _ in }
+        controller.microphoneAuthorizedNow = { micLive }
         return Harness(controller: controller, recorder: recorder, history: history, toasts: toasts,
                        settings: settings, pill: pill, hotkeys: hotkeys)
     }
@@ -774,6 +797,147 @@ final class FakeRecorder: DictationRecorder {
         #expect(h.toasts.notices.first?.dedupeKey == "error.microphonePermissionDenied")
     }
 
+    @Test func micTurnedOnInSettingsIsNoticedAtTheNextPress() {
+        // The cached state still says denied (nothing refreshed it while Murmur stayed in the background).
+        let h = Self.make(mic: .denied, micLive: true)
+        h.controller.send(.handsFreeToggle)
+        #expect(h.recorder.starts == 1)
+        #expect(h.controller.machine.capture.isListeningOrLocked)
+        #expect(h.toasts.notices.isEmpty)
+    }
+
+    @Test func failedDownloadKeepsItsOwnNotice() {
+        let h = Self.make(models: [.parakeet: .failed("Download didn’t finish."), .whisper: .notInstalled],
+                          modelErrors: [.parakeet: .downloadFailed(.parakeet, "offline")])
+        #expect(h.controller.captureRefusal() == .downloadFailed(.parakeet, "offline"))
+        let noDisk = Self.make(models: [.parakeet: .failed("Not enough space.")],
+                               modelErrors: [.parakeet: .notEnoughDisk(needed: 2, available: 1)])
+        #expect(noDisk.controller.captureRefusal() == .notEnoughDisk(needed: 2, available: 1))
+        let unknown = Self.make(models: [.parakeet: .failed("Couldn’t remove all model files.")])
+        #expect(unknown.controller.captureRefusal() == .modelLoadFailed(.parakeet, "Couldn’t remove all model files."))
+    }
+
+    @Test func failedLoadStillRecordsSoTheJobCanLoadAgain() {
+        // The files are complete: the job retries the load once and keeps the audio if that fails too.
+        let h = Self.make(models: [.parakeet: .failed("Couldn’t load the model.")],
+                          modelErrors: [.parakeet: .modelLoadFailed(.parakeet, "corrupt weights")])
+        #expect(h.controller.captureRefusal() == nil)
+    }
+
+    @Test func modelsArentMissingBeforeTheFirstDiskScan() async throws {
+        let settings = AppSettings.inMemory()
+        let store = ModelStore(paths: .temporary(), settings: settings,
+                               engines: [.parakeet: FakeEngine(.parakeet, installed: false),
+                                         .whisper: FakeEngine(.whisper, installed: false)],
+                               gate: InferenceGate(), freeDiskBytes: { 50_000_000_000 })
+        let h = Self.make(store: store)
+        #expect(h.controller.captureRefusal() == nil, "not known yet is not missing")
+        await store.refreshFromDisk()
+        #expect(h.controller.captureRefusal() == .modelNotDownloaded(.parakeet))
+    }
+
+    @Test func stoppedByOtherKeyNeverOffersAnOlderRecording() {
+        let h = Self.make()
+        var now: TimeInterval = 100
+        h.controller.clock = { now }
+        // An earlier cancel that was never undone stays retained.
+        h.recorder.next = Recording(samples: Array(repeating: 0.1, count: 16_000 * 2),
+                                    speech: SpeechStats(voicedSeconds: 1.5, peakDBFS: -12, isSilent: false))
+        h.controller.send(.handsFreeToggle)
+        h.controller.handle(.cancel)
+        #expect(h.toasts.notices.contains { $0.title == "Dictation canceled" })
+        h.toasts.dismissAll()
+
+        // A slow mic captured only half a second of a 2 s hold before another key interrupted it.
+        h.recorder.next = Recording(samples: Array(repeating: 0.1, count: 8_000),
+                                    speech: SpeechStats(voicedSeconds: 0.4, peakDBFS: -12, isSilent: false))
+        now = 200
+        h.controller.handle(.pttDown)
+        h.controller.send(.timer(.arming))
+        now = 202
+        h.controller.handle(.pttInterrupted)
+        #expect(!h.toasts.notices.contains { $0.title == "Dictation stopped" })
+
+        // Long enough to keep: the notice offers exactly this recording.
+        let kept = Recording(samples: Array(repeating: 0.1, count: 16_000 * 2),
+                             speech: SpeechStats(voicedSeconds: 1.5, peakDBFS: -12, isSilent: false))
+        h.recorder.next = kept
+        now = 300
+        h.controller.handle(.pttDown)
+        h.controller.send(.timer(.arming))
+        now = 302
+        h.controller.handle(.pttInterrupted)
+        #expect(h.toasts.notices.first { $0.title == "Dictation stopped" }?.recordingID == kept.id)
+    }
+
+    @Test func retryOfAHubJobStaysInHistory() async throws {
+        let h = Self.make()
+        var fail = true
+        var pasted: [String] = []
+        h.controller.transcribeOverride = { _, engine in
+            if fail { throw MurmurError.timeout(engine) }
+            return TranscriptResult(text: "retried", engine: engine, processingTime: 0.1)
+        }
+        h.controller.insertOverride = { text, _ in pasted.append(text); return .pasted }
+        let r = Self.recording()
+        h.controller.enqueue(r, engine: .parakeet, delivery: .historyOnly)
+        try await waitUntil { h.controller.machine.activeJobs == 0 }
+        let notice = try #require(h.toasts.notices.first { $0.recordingID == r.id })
+        let retry = try #require(notice.actions.first { $0.kind == .retry })
+        fail = false
+        h.controller.perform(retry, from: notice)
+        try await waitUntil { h.history.entry(id: r.id)?.status == .success }
+        try await waitUntil { h.controller.machine.activeJobs == 0 }
+        #expect(pasted.isEmpty, "a Hub retry never pastes into whatever is frontmost")
+        #expect(h.toasts.notices.contains { $0.dedupeKey == "retry.\(r.id)" })
+    }
+
+    @Test func theLimitIsFixedForTheRecordingInProgress() {
+        let h = Self.make()
+        h.controller.send(.handsFreeToggle)
+        #expect(h.pill.limitSeconds == 1200)
+        h.settings.maxRecordingMinutes = 5
+        h.controller.send(.timer(.limitWarning))
+        #expect(h.pill.limitSeconds == 1200)
+        #expect(h.toasts.notices.first { $0.dedupeKey == "limit" }?.body == "Recording stops at 20 min and gets transcribed.")
+        h.controller.send(.pillCancel)
+        h.controller.send(.handsFreeToggle)
+        #expect(h.pill.limitSeconds == 300, "the next recording uses the new limit")
+        h.controller.send(.pillCancel)
+    }
+
+    @Test func geminiRecordingsStopWhileTheyStillFitInOneRequest() {
+        let h = Self.make(keyStatus: .valid(KeyInfo()))
+        h.settings.selectedEngine = .geminiFlash
+        h.controller.send(.handsFreeToggle)
+        #expect(h.controller.machine.capture.isListeningOrLocked)
+        #expect(h.pill.limitSeconds == 420, "Gemini takes about 7.4 minutes per request, not the 20-minute setting")
+        h.controller.send(.timer(.limitWarning))
+        #expect(h.toasts.notices.first { $0.dedupeKey == "limit" }?.body == "Recording stops at 7 min and gets transcribed.")
+        h.controller.send(.pillCancel)
+        h.settings.maxRecordingMinutes = 5
+        h.controller.send(.handsFreeToggle)
+        #expect(h.pill.limitSeconds == 300, "a shorter setting still wins")
+        h.controller.send(.pillCancel)
+        #expect(OpenRouterClient.base64Length(ofByteCount: 44 + Int(OpenRouterClient.maxRecordingDuration) * 16_000 * 2)
+            <= OpenRouterClient.maxBase64Bytes)
+    }
+
+    @Test func truncatedGeminiTextIsShownNotPasted() async throws {
+        let h = Self.make(keyStatus: .valid(KeyInfo()))
+        var pasted: [String] = []
+        h.controller.transcribeOverride = { _, _ in throw MurmurError.openRouterTruncated("so the plan is so the plan is") }
+        h.controller.insertOverride = { text, _ in pasted.append(text); return .pasted }
+        let recording = Self.recording()
+        h.controller.enqueue(recording, engine: .geminiFlash, delivery: .paste(targetPID: nil))
+        try await waitUntil { h.controller.machine.activeJobs == 0 }
+        #expect(pasted.isEmpty)
+        let notice = try #require(h.toasts.notices.first { $0.dedupeKey == "error.openRouterTruncated" })
+        #expect(notice.transcript == "so the plan is so the plan is")
+        #expect(notice.recordingID == recording.id)
+        #expect(h.history.entry(id: recording.id)?.status == .failed)
+    }
+
     @Test func escCancelsTheNewestJobAndOffersUndo() async throws {
         let h = Self.make()
         var pasted: [String] = []
@@ -822,6 +986,94 @@ final class FakeRecorder: DictationRecorder {
         let h = Self.make()
         h.controller.pasteLast()
         #expect(h.toasts.notices.first?.title == "Nothing to paste yet")
+    }
+
+    @Test func grantingTheMicDismissesTheStickyToast() throws {
+        let h = Self.make(mic: .denied)
+        h.controller.send(.handsFreeToggle)
+        let sticky = try #require(h.toasts.notices.first { $0.dedupeKey == "error.microphonePermissionDenied" })
+        #expect(sticky.lifetime == .sticky)
+        // Turned on in System Settings; the cached state hasn't caught up yet.
+        h.controller.microphoneAuthorizedNow = { true }
+        h.controller.send(.handsFreeToggle)
+        #expect(h.recorder.starts == 1)
+        #expect(!h.toasts.notices.contains { $0.dedupeKey == "error.microphonePermissionDenied" })
+        h.controller.send(.pillCancel)
+    }
+
+    @Test func failedCloudJobOffersADownloadedLocalModelThatIsntLoaded() async throws {
+        // Gemini selected at launch: Parakeet is on disk but not loaded. Retrying with it loads it.
+        let h = Self.make(models: [.parakeet: .installed, .whisper: .notInstalled], keyStatus: .valid(KeyInfo()))
+        h.controller.transcribeOverride = { _, _ in throw MurmurError.offline }
+        let r = Self.recording()
+        h.controller.enqueue(r, engine: .geminiFlash, delivery: .paste(targetPID: nil))
+        try await waitUntil { h.controller.machine.activeJobs == 0 }
+        let notice = try #require(h.toasts.notices.first { $0.recordingID == r.id })
+        #expect(notice.actions.contains { $0.kind == .retryWith(.parakeet) })
+    }
+
+    @Test func pasteHereThatFailsBringsTheTextBack() async throws {
+        let h = Self.make()
+        h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "Hello there", engine: engine, processingTime: 0.1) }
+        h.controller.insertOverride = { _, _ in .failed("no event source") }
+        h.controller.enqueue(Self.recording(), engine: .parakeet, delivery: .paste(targetPID: nil))
+        try await waitUntil { h.controller.machine.activeJobs == 0 }
+        let card = try #require(h.toasts.notices.first { $0.transcript == "Hello there" })
+        let pasteHere = try #require(card.actions.first { $0.kind == .pasteText("Hello there") })
+
+        h.controller.pasteNowOverride = { _ in .failed("no event source") }
+        h.controller.perform(pasteHere, from: card)
+        try await waitUntil { h.toasts.notices.contains { $0.transcript == "Hello there" && $0.id != card.id } }
+
+        let again = try #require(h.toasts.notices.first { $0.transcript == "Hello there" })
+        let retry = try #require(again.actions.first { $0.kind == .pasteText("Hello there") })
+        h.controller.pasteNowOverride = { _ in .accessibilityMissing }
+        h.controller.perform(retry, from: again)
+        try await waitUntil { h.toasts.notices.contains { $0.dedupeKey == "error.accessibilityMissing" } }
+        #expect(h.toasts.notices.first { $0.dedupeKey == "error.accessibilityMissing" }?.transcript == "Hello there")
+    }
+
+    @Test func shortcutDownForLongerThanTheGraceIsShown() async throws {
+        let h = Self.make()
+        h.settings.onboardingCompleted = true
+        h.controller.shortcutNoticeGrace = .milliseconds(30)
+
+        // A brief drop (the tap's own restart) stays quiet.
+        h.controller.shortcutAvailabilityChanged(false)
+        h.controller.shortcutAvailabilityChanged(true)
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(!h.controller.isShortcutUnavailable)
+        #expect(h.toasts.notices.isEmpty)
+
+        h.controller.shortcutAvailabilityChanged(false)
+        #expect(h.toasts.notices.isEmpty, "not before the grace period")
+        try await waitUntil { h.controller.isShortcutUnavailable }
+        let notice = try #require(h.toasts.notices.first { $0.dedupeKey == Notice.shortcutUnavailableKey })
+        #expect(notice.lifetime == .sticky)
+        #expect(notice.actions.first?.kind == .openSettingsPane(.accessibility))
+
+        h.controller.shortcutAvailabilityChanged(true)
+        #expect(!h.controller.isShortcutUnavailable)
+        #expect(!h.toasts.notices.contains { $0.dedupeKey == Notice.shortcutUnavailableKey })
+    }
+
+    @Test func shortcutNoticeWaitsForOnboardingToFinish() async throws {
+        let h = Self.make()
+        h.controller.shortcutNoticeGrace = .milliseconds(10)
+        h.controller.shortcutAvailabilityChanged(false)
+        try await waitUntil { h.controller.isShortcutUnavailable }
+        #expect(h.toasts.notices.isEmpty, "onboarding explains Accessibility itself")
+    }
+
+    @Test func shortcutNoticeCopyFollowsTheCause() {
+        let off = Notice.shortcutUnavailable(accessibility: .denied, likelyStale: false, shortcut: "fn")
+        #expect(off.title == "Murmur can’t hear your shortcut")
+        #expect(off.actions.first?.title == "Allow Access")
+        let stale = Notice.shortcutUnavailable(accessibility: .denied, likelyStale: true, shortcut: "fn")
+        #expect(stale.title == "macOS needs to trust Murmur again")
+        let dropped = Notice.shortcutUnavailable(accessibility: .granted, likelyStale: false, shortcut: "fn")
+        #expect(dropped.body?.contains("stopped sending key presses") == true)
+        #expect(dropped.actions.first?.title == "Open Settings")
     }
 }
 
@@ -888,7 +1140,7 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
         env.settings.pillMode = .always
         let menu = env.menuBar.builder.makeMenu(includeQuit: true)
         let pill = try #require(menu.items.first { $0.title == "Show Pill" }?.submenu)
-        #expect(pill.items.map(\.title) == ["Always", "Only While Dictating", "Never"])
+        #expect(pill.items.map(\.title) == ["Always", "While Dictating", "Never"])
         #expect(pill.items.map(\.state) == [.on, .off, .off])
     }
 

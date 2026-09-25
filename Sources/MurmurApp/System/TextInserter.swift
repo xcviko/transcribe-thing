@@ -5,7 +5,7 @@ import os
 
 enum InsertionOutcome: Equatable, Sendable {
     case pasted
-    /// No text field has focus, or it is a password field. The text was also copied to the clipboard.
+    /// No text field has focus, or it is a password field. Nothing was pasted or copied.
     case noEditableTarget
     /// Another app came to the front while we transcribed. Nothing was pasted or copied.
     case targetChanged
@@ -39,7 +39,6 @@ final class TextInserter {
     private let pasteboard: NSPasteboard
     private var system: System
     private var pendingRestore: PendingRestore?
-    private var resolver: PasteKeyResolver?
     private var queueTail: Task<Void, Never>?
 
     private struct PendingRestore {
@@ -56,10 +55,8 @@ final class TextInserter {
             canPostEvents: { CGPreflightPostEventAccess() },
             modifiersHeld: { TextInserter.physicalModifiersHeld() },
             inspectFocus: { await FocusInspector.inspect() },
-            pasteKeyCode: { PasteKeyResolver.fallback },
+            pasteKeyCode: { PasteKeyResolver.resolveCurrent() },
             postPaste: { TextInserter.postCommandV(keyCode: $0) })
-        // The resolver registers for input-source changes, so it is created on first use, not here.
-        system.pasteKeyCode = { [unowned self] in self.currentPasteKeyCode() }
     }
 
     /// Tests: a private pasteboard and fake system hooks.
@@ -93,7 +90,8 @@ final class TextInserter {
         if let expectedPID, let focusPID = focus.pid, focusPID != expectedPID { return .targetChanged }
         if let expectedPID, system.frontmostPID() != expectedPID { return .targetChanged }
         if focus.isSecure || focus.editability == .notEditable {
-            copy(text)
+            // Leave the clipboard alone: the transcript card offers Copy, and paste-last works once a text
+            // field has focus. Next to a password field this also keeps the text out of clipboard history.
             return .noEditableTarget
         }
 
@@ -229,11 +227,6 @@ final class TextInserter {
         }
     }
 
-    private func currentPasteKeyCode() -> CGKeyCode {
-        if resolver == nil { resolver = PasteKeyResolver() }
-        return resolver?.keyCode ?? PasteKeyResolver.fallback
-    }
-
     // MARK: Helpers
 
     private static var bundleID: String { Bundle.main.bundleIdentifier ?? "dev.murmur.app" }
@@ -259,10 +252,12 @@ final class TextInserter {
     nonisolated static func postCommandV(keyCode: CGKeyCode) -> Bool {
         guard let source = CGEventSource(stateID: .combinedSessionState) else { return false }
         source.userData = SyntheticEvent.tag
-        // Hold back local keyboard events briefly so the user's typing can't interleave with ⌘V.
-        source.setLocalEventsFilterDuringSuppressionState([.permitLocalMouseEvents, .permitSystemDefinedEvents],
-                                                          state: .eventSuppressionStateSuppressionInterval)
-        source.localEventsSuppressionInterval = 0.05
+        // Never hold back the user's own keys: a suppressed flagsChanged would be a PTT release our tap never
+        // sees (the recording would run on, with a phantom Fn held), and typed keys would be lost. The four
+        // posts take about 15 ms, so interleaving is unlikely anyway.
+        source.setLocalEventsFilterDuringSuppressionState(
+            [.permitLocalMouseEvents, .permitLocalKeyboardEvents, .permitSystemDefinedEvents],
+            state: .eventSuppressionStateSuppressionInterval)
 
         let commandFlags = CGEventFlags(rawValue: CGEventFlags.maskCommand.rawValue | DeviceModifierMask.leftCommand)
         guard let commandDown = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Command), keyDown: true),

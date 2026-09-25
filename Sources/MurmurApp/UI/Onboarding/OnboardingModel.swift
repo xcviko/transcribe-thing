@@ -87,16 +87,12 @@ enum OnboardingGate {
         switch step {
         case .welcome:
             return "Get Started"
-        case .model:
-            if inputs.engine.isLocal, case .downloading = inputs.localState {
-                return "Continue (download keeps going)"
-            }
-            return "Continue"
         case .tryIt:
-            return practiceStarted ? "Continue" : "Skip practice"
+            return practiceStarted ? "Continue" : "Skip Practice"
         case .done:
             return "Start Dictating"
-        case .permissions, .shortcuts:
+        // While a model downloads, the note under the cards says the download keeps going.
+        case .permissions, .model, .shortcuts:
             return "Continue"
         }
     }
@@ -349,7 +345,7 @@ final class OnboardingModel {
     @ObservationIgnored private var permissionsWereComplete = false
 
     static let alexOpening = "hey! quick one: what are you up to this afternoon?"
-    static let alexAfterFirst = "sounds good. and what's the plan for tomorrow?"
+    static let alexAfterFirst = "sounds good. and what’s the plan for tomorrow?"
     static let alexAfterSecond = "perfect, thanks!"
     static let cancelNote = "Nothing sent. Undo is right there if you need it."
 
@@ -448,6 +444,7 @@ final class OnboardingModel {
         activationObserver = nil
         guard !ctx.isPreview else { return }
         ctx.hotkeys.onRawKey = nil
+        ctx.permissions.stopPolling()
     }
 
     private func appBecameActive() {
@@ -534,6 +531,8 @@ final class OnboardingModel {
     private func stepWillDisappear() {
         tasks["autoAdvance"]?.cancel()
         skipAccessibilityArmed = false
+        // Fast permission polling is for the permissions step only (background polling carries on).
+        if step == .permissions, !ctx.isPreview { ctx.permissions.stopPolling() }
     }
 
     /// Another surface (the Hub's "Practice in onboarding") moved the resume point while this window is open.
@@ -616,6 +615,14 @@ final class OnboardingModel {
         ctx.models.download(engine)
     }
 
+    /// Replaces a model that downloaded but won't load: deletes its files and downloads it again.
+    func reinstall(_ engine: EngineID) {
+        select(engine)
+        celebrateReady.insert(engine)
+        let models = ctx.models
+        Task { await models.reinstall(engine) }
+    }
+
     func cancelDownload(_ engine: EngineID) {
         celebrateReady.remove(engine)
         ctx.models.cancelDownload(engine)
@@ -669,7 +676,10 @@ final class OnboardingModel {
     }
 
     private func submitKey(_ key: String) async {
+        // The account finishes its check even when the next keystroke cancels this task; the field then
+        // holds the newer draft, so leave it alone.
         await ctx.account.setKey(key)
+        guard !Task.isCancelled else { return }
         if case .valid = ctx.account.status {
             keyDraft = ""
             isReplacingKey = false

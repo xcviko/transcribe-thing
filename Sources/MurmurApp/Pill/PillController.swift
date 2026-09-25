@@ -69,7 +69,7 @@ final class PillController {
         guard PillVisibility.isPillAllowed(mode: settings.pillMode, hiddenUntil: settings.pillHiddenUntil, now: Date()) else {
             toasts.post(Notice(dedupeKey: "pill.hello", style: .info, symbol: "waveform",
                                title: "You’re all set",
-                               body: "Hold \(settings.shortcuts[.pushToTalk]?.spokenDescription ?? "fn") anywhere to dictate.",
+                               body: "Hold \(settings.shortcuts[.pushToTalk]?.compactDescription ?? "fn") anywhere to dictate.",
                                lifetime: .seconds(6)))
             return
         }
@@ -105,7 +105,7 @@ final class PillController {
         if model.shortcutHint != hint { model.shortcutHint = hint }
         // Follow the setting only when it changes, so a limit the dictation controller sets stays put.
         if knownMaxMinutes != settings.maxRecordingMinutes {
-            if knownMaxMinutes != nil { model.limitSeconds = settings.maxRecordingDuration }
+            if knownMaxMinutes != nil { model.limitSeconds = settings.effectiveMaxRecordingDuration }
             knownMaxMinutes = settings.maxRecordingMinutes
         }
 

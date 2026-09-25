@@ -8,11 +8,15 @@ struct ShortcutsPage: View {
     var body: some View {
         @Bindable var settings = settings
         HubPage("Shortcuts", subtitle: "Hold, tap or combine. Murmur listens everywhere, even in full-screen apps.") {
-            Button("Restore defaults") {
-                withAnimation(Theme.Motion.snappy) { settings.shortcuts = .defaults }
+            // Offered only when there is something to restore; a dimmed label here read as stray text.
+            if settings.shortcuts != .defaults {
+                Button("Restore Defaults") {
+                    withAnimation(Theme.Motion.snappy) { settings.shortcuts = .defaults }
+                }
+                .buttonStyle(QuietButtonStyle())
+                .padding(.trailing, -8)
+                .transition(.opacity)
             }
-            .buttonStyle(QuietButtonStyle(tint: .inkSecondary))
-            .disabled(settings.shortcuts == .defaults)
         } content: {
             if secureInput.isActive {
                 Callout(.warning, symbol: "lock.fill", text: secureInputText)
@@ -64,20 +68,20 @@ struct ShortcutsPage: View {
     }
 
     private var doublePressSubtitle: String {
-        let key = settings.shortcuts[.pushToTalk]?.spokenDescription ?? "the push-to-talk key"
+        let key = settings.shortcuts[.pushToTalk]?.compactDescription ?? "the push-to-talk key"
         return "Press \(key) twice quickly to start. Press it again to finish."
     }
 
     private var tipLockWhileHolding: String {
-        guard let ptt = settings.shortcuts[.pushToTalk]?.spokenDescription,
-              let handsFree = settings.shortcuts[.handsFree]?.spokenDescription else {
+        guard let ptt = settings.shortcuts[.pushToTalk]?.compactDescription,
+              let handsFree = settings.shortcuts[.handsFree]?.compactDescription else {
             return "Start with push to talk and switch to hands-free without letting go."
         }
         return "Holding \(ptt) and want to keep going? Press \(handsFree) to lock hands-free without letting go."
     }
 
     private var cancelTip: String {
-        let key = settings.shortcuts[.cancel]?.spokenDescription ?? "The cancel key"
+        let key = settings.shortcuts[.cancel]?.compactDescription ?? "The cancel key"
         return "\(key) only cancels while Murmur is recording. The rest of the time it works as usual."
     }
 

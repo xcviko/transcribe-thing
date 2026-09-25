@@ -28,20 +28,34 @@ struct KeychainStore: Sendable {
 
     var isInMemory: Bool { memory != nil }
 
+    /// nil for a failed read too; use `lookup` where "no item" and "couldn't read it" must differ.
     func read(_ account: String) -> String? {
-        if let memory { return memory.get(account) }
+        (try? lookup(account)) ?? nil
+    }
+
+    /// nil only when there is no item. Anything else the Keychain says (a denied or cancelled access prompt,
+    /// a locked keychain) throws.
+    func lookup(_ account: String) throws -> String? {
+        if let memory {
+            if let status = memory.readFailure { throw KeychainError.unexpectedStatus(status) }
+            return memory.get(account)
+        }
         var query = baseQuery(account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess, let data = result as? Data else {
-            if status != errSecItemNotFound {
-                Log.app.error("Keychain read failed: \(status, privacy: .public)")
-            }
-            return nil
+            Log.app.error("Keychain read failed: \(status, privacy: .public)")
+            throw KeychainError.unexpectedStatus(status)
         }
         return String(data: data, encoding: .utf8)
+    }
+
+    /// In-memory stores only (tests): make reads fail with `status` until set back to nil.
+    func simulateReadFailure(_ status: OSStatus?) {
+        memory?.readFailure = status
     }
 
     func write(_ value: String, account: String) throws {
@@ -78,11 +92,16 @@ struct KeychainStore: Sendable {
     private final class MemoryBox: @unchecked Sendable {
         private let lock = NSLock()
         private var values: [String: String]
+        private var failure: OSStatus?
 
         init(_ values: [String: String]) { self.values = values }
 
         func get(_ key: String) -> String? { lock.withLock { values[key] } }
         func set(_ value: String?, for key: String) { lock.withLock { values[key] = value } }
+        var readFailure: OSStatus? {
+            get { lock.withLock { failure } }
+            set { lock.withLock { failure = newValue } }
+        }
     }
 }
 

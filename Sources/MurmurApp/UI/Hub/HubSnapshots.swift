@@ -35,6 +35,20 @@ enum HubSnapshots {
             hub("hub-models-failed", .models) { c in
                 c.models = .preview(states: [.parakeet: .ready, .whisper: .failed("Download didn’t finish. The connection was lost.")])
             },
+            hub("hub-models-load-failed", .models) { c in
+                c.models = .preview(states: [.parakeet: .failed("Couldn’t load the model. Retry, or download it again."),
+                                             .whisper: .notInstalled],
+                                    lastErrors: [.parakeet: .modelLoadFailed(.parakeet, "Corrupt weights")])
+            },
+            hub("hub-home-load-failed", .home) { c in
+                c.models = .preview(states: [.parakeet: .failed("Couldn’t load the model. Retry, or download it again."),
+                                             .whisper: .notInstalled],
+                                    lastErrors: [.parakeet: .modelLoadFailed(.parakeet, "Corrupt weights")])
+            },
+            hub("hub-models-key-limit", .models, height: 1100) { c in
+                c.settings.selectedEngine = .geminiFlash
+                c.account = .preview(status: .noCredit(KeyInfo(label: "Murmur", limit: 5, limitRemaining: 0, usage: 5)))
+            },
             hub("hub-models-key-invalid", .models, height: 1100) { c in
                 c.settings.selectedEngine = .geminiFlash
                 c.account = .preview(status: .invalid("401"))
@@ -45,8 +59,10 @@ enum HubSnapshots {
             },
 
             hub("hub-shortcuts", .shortcuts, height: 860),
+            // Also a customized binding, so "Restore Defaults" shows in the header.
             hub("hub-shortcuts-secure", .shortcuts) { c in
                 c.secureInput = .preview(active: true, owningAppName: "1Password")
+                c.settings.shortcuts[.pushToTalk] = .rightOption
             },
 
             hub("hub-pill", .pillAndSounds, height: 860),

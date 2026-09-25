@@ -135,7 +135,8 @@ final class MenuBuilder {
         case .invalid:
             return EngineStatus(text: "Key rejected", color: Palette.danger, isUsable: false)
         case .noCredit:
-            return EngineStatus(text: "Out of credit", color: Palette.danger, isUsable: true)
+            return EngineStatus(text: account.status.isKeyLimitReached ? "Key limit reached" : "Out of credit",
+                                color: Palette.danger, isUsable: true)
         case .offline:
             return EngineStatus(text: "Offline", color: Palette.warning, isUsable: true)
         case .failed:
@@ -202,7 +203,7 @@ final class MenuBuilder {
     private func pillMenu(_ env: AppEnvironment) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
-        let titles: [(PillMode, String)] = [(.always, "Always"), (.whileDictating, "Only While Dictating"), (.never, "Never")]
+        let titles: [(PillMode, String)] = [(.always, "Always"), (.whileDictating, "While Dictating"), (.never, "Never")]
         for (mode, title) in titles {
             let item = MenuActionItem(title: title) { [weak env] in
                 env?.settings.pillMode = mode

@@ -9,7 +9,7 @@ enum PillMode: String, Codable, CaseIterable, Sendable, Identifiable {
     var title: String {
         switch self {
         case .always: "Always"
-        case .whileDictating: "Only while dictating"
+        case .whileDictating: "While dictating"
         case .never: "Never"
         }
     }
@@ -72,6 +72,13 @@ final class AppSettings {
     }
 
     var maxRecordingDuration: TimeInterval { TimeInterval(maxRecordingMinutes) * 60 }
+
+    /// The limit a new recording gets: Gemini takes about 7.4 minutes of audio per request, so with a cloud
+    /// engine selected a recording stops (and is transcribed) at 7 minutes even when the setting allows more.
+    var effectiveMaxRecordingDuration: TimeInterval {
+        guard selectedEngine.isCloud else { return maxRecordingDuration }
+        return min(maxRecordingDuration, OpenRouterClient.maxRecordingDuration)
+    }
 
     /// Pill hidden by "Hide for 1 hour" right now.
     func isPillTemporarilyHidden(now: Date = Date()) -> Bool {

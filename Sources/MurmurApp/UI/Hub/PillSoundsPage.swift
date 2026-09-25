@@ -43,8 +43,11 @@ struct PillSoundsPage: View {
                                 .font(.system(size: 10))
                                 .foregroundStyle(.inkTertiary)
                         }
-                        .disabled(!settings.soundsEnabled)
                     }
+                    // The whole row dims with sounds off, not only the slider.
+                    .disabled(!settings.soundsEnabled)
+                    .opacity(settings.soundsEnabled ? 1 : 0.5)
+                    .animation(Theme.Motion.fade, value: settings.soundsEnabled)
                 }
             }
         }
@@ -60,13 +63,13 @@ struct PillSoundsPage: View {
                         systemImage: hiddenUntil == nil ? "eye.slash" : "clock",
                         iconTint: .inkSecondary) {
                 if hiddenUntil == nil {
-                    Button("Hide for 1 hour") {
+                    Button("Hide for 1 Hour") {
                         withAnimation(Theme.Motion.snappy) { settings.hidePill(now: hub.now) }
                     }
                     .buttonStyle(SecondaryButtonStyle(size: .small))
                     .disabled(settings.pillMode == .never)
                 } else {
-                    Button("Show now") {
+                    Button("Show Now") {
                         withAnimation(Theme.Motion.snappy) { settings.pillHiddenUntil = nil }
                     }
                     .buttonStyle(SecondaryButtonStyle(size: .small))
@@ -208,14 +211,15 @@ private struct DeskScene: View {
                 }
             }
             .padding(14)
-            .frame(width: 300, height: 86, alignment: .topLeading)
+            // Ends 12 pt above the tallest preview pill (hands-free: 36 pt × 1.3, 20 pt off the bottom).
+            .frame(width: 300, height: 74, alignment: .topLeading)
             .background(Color.white.opacity(dark ? 0.05 : 0.45),
                         in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .strokeBorder(Color.white.opacity(dark ? 0.06 : 0.7), lineWidth: 1)
             }
-            .offset(y: -28)
+            .offset(y: -34)
         }
         .accessibilityHidden(true)
     }
@@ -240,7 +244,7 @@ private struct PillModeTile: View {
     var body: some View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 10) {
-                MiniScreen(mode: mode)
+                PillModeMiniScreen(mode: mode)
                     .frame(height: 76)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(mode.title)
@@ -282,53 +286,5 @@ private struct PillModeTile: View {
         .accessibilityLabel(mode.title)
         .accessibilityHint(caption)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
-    }
-}
-
-/// Miniature screen showing where (and whether) the pill sits.
-private struct MiniScreen: View {
-    var mode: PillMode
-    @Environment(\.colorScheme) private var scheme
-
-    var body: some View {
-        let dark = scheme == .dark
-        let shape = RoundedRectangle(cornerRadius: 9, style: .continuous)
-        ZStack(alignment: .bottom) {
-            shape.fill(LinearGradient(colors: dark
-                                      ? [Color(nsColor: .hex(0x28243F)), Color(nsColor: .hex(0x2B211C))]
-                                      : [Color(nsColor: .hex(0xECE7FF)), Color(nsColor: .hex(0xFFE9DC))],
-                                      startPoint: .topLeading, endPoint: .bottomTrailing))
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(Color.white.opacity(dark ? 0.06 : 0.55))
-                .frame(width: 70, height: 36)
-                .frame(maxHeight: .infinity, alignment: .top)
-                .padding(.top, 10)
-            pill.padding(.bottom, 8)
-        }
-        .overlay { shape.strokeBorder(Color.stroke, lineWidth: 1) }
-        .accessibilityHidden(true)
-    }
-
-    @ViewBuilder private var pill: some View {
-        switch mode {
-        case .always:
-            Capsule(style: .continuous)
-                .fill(Color.pillFill)
-                .frame(width: 22, height: 6)
-                .shadow(color: .black.opacity(0.2), radius: 2, y: 1)
-        case .whileDictating:
-            HStack(spacing: 1.6) {
-                ForEach(Array([0.3, 0.55, 0.85, 1.0, 0.7, 0.5, 0.3].enumerated()), id: \.offset) { _, h in
-                    Capsule(style: .continuous).fill(.white).frame(width: 1.6, height: max(1.6, 8 * h))
-                }
-            }
-            .frame(width: 42, height: 14)
-            .background(Capsule(style: .continuous).fill(Color.pillFill))
-            .shadow(color: .black.opacity(0.25), radius: 3, y: 1.5)
-        case .never:
-            Capsule(style: .continuous)
-                .strokeBorder(Color.inkTertiary, style: StrokeStyle(lineWidth: 1, dash: [2.5, 2]))
-                .frame(width: 34, height: 10)
-        }
     }
 }

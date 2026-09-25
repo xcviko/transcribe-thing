@@ -72,7 +72,13 @@ struct PillCanvasView: View {
         PillView(model: model, context: .panel(regions))
             .overlay(alignment: .top) {
                 if showsRestTooltip {
-                    PillRestTooltip(model: model)
+                    Group {
+                        if model.isHelloActive {
+                            PillHelloTooltip(model: model)
+                        } else {
+                            PillRestTooltip(model: model)
+                        }
+                    }
                         .fixedSize()
                         .offset(y: -(PillMetrics.tooltipHeight + 8))
                         .transition(tooltipTransition)

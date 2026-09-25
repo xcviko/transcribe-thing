@@ -9,7 +9,8 @@ final class PillModel {
     @ObservationIgnored let levelMeter: LevelMeter
 
     /// Requested phase. `.rest` and `.hidden` both mean "idle": the resting capsule in Always mode, nothing otherwise.
-    /// `.success` and `.error` are transient: after their flourish the model returns to `.rest` by itself.
+    /// `.success` and `.error` are transient: after their flourish the model returns to `.rest` (or to a
+    /// `.processing` requested meanwhile) by itself.
     var phase: PillPhase = .rest {
         didSet { if phase != oldValue { phaseDidChange() } }
     }
@@ -80,7 +81,7 @@ final class PillModel {
     init(settings: AppSettings, levelMeter: LevelMeter) {
         self.settings = settings
         self.levelMeter = levelMeter
-        self.limitSeconds = settings.maxRecordingDuration
+        self.limitSeconds = settings.effectiveMaxRecordingDuration
         self.shortcutHint = settings.shortcuts[.pushToTalk]?.compactDescription ?? "fn"
     }
 
@@ -102,8 +103,9 @@ final class PillModel {
     private func phaseDidChange() {
         let target = phase
         let now = Date()
-        // A new idle request must not cut the check mark or the error flash short.
-        if target.isIdle, visiblePhase == .success || visiblePhase == .error,
+        // A new idle (or processing: the next dictation is still queued) request must not cut the check
+        // mark or the error flash short. A new recording does.
+        if target.isIdle || target == .processing, visiblePhase == .success || visiblePhase == .error,
            let holdUntil, holdUntil > now, autoSettles {
             scheduleSettle(at: holdUntil)
             return

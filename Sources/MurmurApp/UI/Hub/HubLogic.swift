@@ -109,6 +109,28 @@ enum StatFormat {
 
 // MARK: - Engine readiness
 
+/// What went wrong with a local model in `.failed`, read from the error ModelStore kept for it.
+enum ModelFailure: Equatable {
+    case download, disk, load
+
+    init(_ error: MurmurError?) {
+        switch error {
+        case .modelLoadFailed?: self = .load
+        case .notEnoughDisk?: self = .disk
+        default: self = .download
+        }
+    }
+
+    /// "Download failed", "Not enough space", "Couldn’t load".
+    var label: String {
+        switch self {
+        case .download: "Download failed"
+        case .disk: "Not enough space"
+        case .load: "Couldn’t load"
+        }
+    }
+}
+
 enum EngineReadiness: Equatable {
     /// Can transcribe now (a downloaded local model loads on first use).
     case ready
@@ -117,6 +139,7 @@ enum EngineReadiness: Equatable {
     case needsDownload
     case needsKey
     case keyProblem(String)
+    /// A short reason: "Download failed", "Couldn’t load".
     case failed(String)
 
     /// Picking it keeps dictation working.
@@ -133,25 +156,26 @@ enum EngineReadiness: Equatable {
         case .ready, .warming: nil
         case .needsDownload: "Not downloaded"
         case .needsKey: "Needs key"
-        case .keyProblem(let reason): reason
-        case .failed: "Download failed"
+        case .keyProblem(let reason), .failed(let reason): reason
         }
     }
 
-    static func of(_ engine: EngineID, localState: LocalModelState, keyStatus: KeyStatus) -> EngineReadiness {
+    /// `localError` is the error ModelStore kept for a failed local model.
+    static func of(_ engine: EngineID, localState: LocalModelState, keyStatus: KeyStatus,
+                   localError: MurmurError? = nil) -> EngineReadiness {
         if engine.isLocal {
             switch localState {
             case .ready, .installed: return .ready
             case .downloading, .preparing: return .warming
             case .notInstalled: return .needsDownload
-            case .failed(let message): return .failed(message)
+            case .failed: return .failed(ModelFailure(localError).label)
             }
         }
         switch keyStatus {
         case .valid, .checking, .offline, .failed: return .ready
         case .missing: return .needsKey
         case .invalid: return .keyProblem("Key rejected")
-        case .noCredit: return .keyProblem("No credit")
+        case .noCredit: return .keyProblem(keyStatus.isKeyLimitReached ? "Key limit reached" : "No credit")
         }
     }
 }
@@ -162,24 +186,16 @@ struct EngineSummary: Equatable {
     var status: String
     var tone: StatusTone
 
-    static func chipName(_ engine: EngineID) -> String {
-        switch engine {
-        case .parakeet: "Parakeet v3"
-        case .whisper: "Whisper Turbo"
-        case .geminiFlash: "Gemini Flash"
-        case .geminiPro: "Gemini Pro"
-        }
-    }
-
-    static func make(engine: EngineID, localState: LocalModelState, keyStatus: KeyStatus) -> EngineSummary {
-        let name = chipName(engine)
+    static func make(engine: EngineID, localState: LocalModelState, keyStatus: KeyStatus,
+                     localError: MurmurError? = nil) -> EngineSummary {
+        let name = engine.shortName
         if engine.isLocal {
             switch localState {
             case .ready, .installed: return EngineSummary(name: name, status: "Ready", tone: .positive)
             case .downloading(let p): return EngineSummary(name: name, status: "Downloading \(p.percent)%", tone: .progress)
             case .preparing: return EngineSummary(name: name, status: "Optimizing…", tone: .progress)
             case .notInstalled: return EngineSummary(name: name, status: "Not downloaded", tone: .negative)
-            case .failed: return EngineSummary(name: name, status: "Download failed", tone: .negative)
+            case .failed: return EngineSummary(name: name, status: ModelFailure(localError).label, tone: .negative)
             }
         }
         switch keyStatus {
@@ -187,7 +203,9 @@ struct EngineSummary: Equatable {
         case .checking: return EngineSummary(name: name, status: "Checking key…", tone: .progress)
         case .missing: return EngineSummary(name: name, status: "Key missing", tone: .negative)
         case .invalid: return EngineSummary(name: name, status: "Key rejected", tone: .negative)
-        case .noCredit: return EngineSummary(name: name, status: "Out of credit", tone: .negative)
+        case .noCredit:
+            return EngineSummary(name: name, status: keyStatus.isKeyLimitReached ? "Key limit reached" : "Out of credit",
+                                 tone: .negative)
         case .offline: return EngineSummary(name: name, status: "Offline", tone: .warning)
         case .failed: return EngineSummary(name: name, status: "Couldn’t check key", tone: .warning)
         }
@@ -231,6 +249,10 @@ enum HubAttention {
         var engine: EngineID
         var localState: LocalModelState
         var keyStatus: KeyStatus
+        /// The error ModelStore kept for a failed local model.
+        var localError: MurmurError? = nil
+        /// The shortcut's event tap has stayed down (it can while Accessibility still reads as granted).
+        var shortcutUnavailable = false
     }
 
     /// Most blocking first: microphone, accessibility, the selected model or key, then the fn key setting.
@@ -252,18 +274,25 @@ enum HubAttention {
                 actionTitle: "Allow", action: .requestMicrophone))
         }
 
+        // Without Accessibility there is no event tap: the shortcut does nothing, not just the paste.
+        let shortcut = input.pushToTalkUsesFn ? "fn" : "your shortcut"
         if input.accessibility != .granted {
             if input.accessibilityLikelyStale {
                 items.append(AttentionItem(
-                    id: "accessibility", tone: .warning, symbol: "accessibility", title: "macOS needs to trust Murmur again",
-                    body: "Murmur was updated. Remove it from Accessibility, then add it back.",
+                    id: "accessibility", tone: .error, symbol: "accessibility", title: "macOS needs to trust Murmur again",
+                    body: "Murmur was updated, so \(shortcut) does nothing yet. Remove it from Accessibility, then add it back.",
                     actionTitle: "Open Settings", action: .openPane(.accessibility)))
             } else {
                 items.append(AttentionItem(
-                    id: "accessibility", tone: .warning, symbol: "accessibility", title: "Murmur can’t paste yet",
-                    body: "Accessibility is off, so transcripts go to the clipboard instead.",
+                    id: "accessibility", tone: .error, symbol: "accessibility", title: "Murmur can’t hear your shortcut",
+                    body: "Turn on Accessibility so \(shortcut) works and text pastes where you type.",
                     actionTitle: "Fix", action: .requestAccessibility))
             }
+        } else if input.shortcutUnavailable {
+            items.append(AttentionItem(
+                id: "accessibility", tone: .error, symbol: "keyboard", title: "Murmur can’t hear your shortcut",
+                body: "macOS stopped sending key presses to Murmur. Turn Murmur off and on again in Accessibility.",
+                actionTitle: "Open Settings", action: .openPane(.accessibility)))
         }
 
         let name = input.engine.displayName
@@ -289,8 +318,9 @@ enum HubAttention {
                     body: "Optimizing for your Mac. This can take a few minutes after installing or updating.",
                     actionTitle: "View", action: .openModels, isIndeterminate: true))
             case .failed(let message):
+                let title = ModelFailure(input.localError) == .load ? "Couldn’t load \(name)" : "\(name) didn’t finish downloading"
                 items.append(AttentionItem(
-                    id: "model", tone: .error, symbol: "exclamationmark.triangle.fill", title: "\(name) didn’t finish downloading",
+                    id: "model", tone: .error, symbol: "exclamationmark.triangle.fill", title: title,
                     body: message.isEmpty ? "Something went wrong. Try again." : message,
                     actionTitle: "Retry", action: .download(input.engine)))
             }
@@ -302,17 +332,22 @@ enum HubAttention {
                 items.append(AttentionItem(
                     id: "key", tone: .error, symbol: "key.fill", title: "Add your OpenRouter key",
                     body: "\(input.engine.shortName) needs a key to transcribe.",
-                    actionTitle: "Add key", action: .openModels))
+                    actionTitle: "Add Key", action: .openModels))
             case .invalid:
                 items.append(AttentionItem(
                     id: "key", tone: .error, symbol: "key.fill", title: "Your OpenRouter key stopped working",
                     body: "It may be revoked or mistyped.",
-                    actionTitle: "Update key", action: .openModels))
+                    actionTitle: "Update Key", action: .openModels))
+            case .noCredit where input.keyStatus.isKeyLimitReached:
+                items.append(AttentionItem(
+                    id: "key", tone: .error, symbol: "creditcard", title: "Your OpenRouter key hit its limit",
+                    body: "This key has a spending limit, and it’s used up. Raise it to keep using Gemini.",
+                    actionTitle: "Raise Limit", action: .openURL(OpenRouterLinks.keys)))
             case .noCredit:
                 items.append(AttentionItem(
                     id: "key", tone: .error, symbol: "creditcard", title: "Out of OpenRouter credit",
                     body: "Add credit to keep using Gemini.",
-                    actionTitle: "Add credit", action: .openURL(OpenRouterLinks.credits)))
+                    actionTitle: "Add Credit", action: .openURL(OpenRouterLinks.credits)))
             }
         }
 

@@ -7,7 +7,7 @@ struct DoneStep: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            StepHeader(title: "You're set.", subtitle: nil)
+            StepHeader(title: "You’re set.", subtitle: nil)
                 .padding(.bottom, 8)
             Text("Hold \(Text(model.pushToTalkLabel).fontWeight(.semibold).foregroundColor(.ink)) in any app to start talking.")
                 .font(.system(size: 13.5))
@@ -15,7 +15,9 @@ struct DoneStep: View {
                 .padding(.bottom, 16)
 
             FlowLayout(spacing: 6, lineSpacing: 6) {
+                // Every chip reads label (secondary), then value (ink).
                 SummaryChip {
+                    Text("Model").foregroundStyle(.inkSecondary)
                     EngineIcon(engine: settings.selectedEngine, size: 18)
                     Text(settings.selectedEngine.displayName)
                 }
@@ -101,7 +103,7 @@ private struct SummaryChip<Content: View>: View {
         HStack(spacing: 6) { content }
             .font(.system(size: 12, weight: .medium))
             .foregroundStyle(.ink)
-            .padding(.leading, 6)
+            .padding(.leading, 10)
             .padding(.trailing, 9)
             .frame(height: 30)
             .background(Color.bgSurface, in: Capsule(style: .continuous))
@@ -121,16 +123,9 @@ private struct PillModeTile: View {
         let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
         Button(action: action) {
             VStack(spacing: 7) {
-                ZStack(alignment: .bottom) {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(LinearGradient(colors: [Color.lilacWash.opacity(0.9), Color.bgSunken],
-                                             startPoint: .topLeading, endPoint: .bottomTrailing))
-                        .overlay { RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(Color.stroke, lineWidth: 1) }
-                    illustration
-                        .padding(.bottom, 7)
-                }
-                .frame(height: 44)
-                Text(title)
+                PillModeMiniScreen(mode: mode, compact: true)
+                    .frame(height: 44)
+                Text(mode.title)
                     .font(.system(size: 11.5, weight: .semibold))
                     .foregroundStyle(isSelected ? Color.accent : Color.ink)
                     .lineLimit(1)
@@ -150,38 +145,6 @@ private struct PillModeTile: View {
         .animation(Theme.Motion.expand, value: isSelected)
         .accessibilityLabel(mode.title)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
-    }
-
-    private var title: String {
-        switch mode {
-        case .always: "Always"
-        case .whileDictating: "While dictating"
-        case .never: "Never"
-        }
-    }
-
-    @ViewBuilder private var illustration: some View {
-        switch mode {
-        case .always:
-            Capsule(style: .continuous)
-                .fill(Color.pillFill)
-                .overlay { Capsule(style: .continuous).ring(0.5).fill(.white.opacity(0.25), style: FillStyle(eoFill: true)) }
-                .frame(width: 20, height: 5)
-        case .whileDictating:
-            HStack(spacing: 1.5) {
-                ForEach([0.35, 0.6, 1.0, 0.7, 0.45, 0.8, 0.4], id: \.self) { h in
-                    Capsule(style: .continuous).fill(.white.opacity(0.95)).frame(width: 1.5, height: 2 + 6 * h)
-                }
-            }
-            .frame(width: 34, height: 13)
-            .background(Color.pillFill, in: Capsule(style: .continuous))
-            .overlay { Capsule(style: .continuous).ring(0.5).fill(.white.opacity(0.22), style: FillStyle(eoFill: true)) }
-        case .never:
-            Image(systemName: "eye.slash")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(.inkTertiary)
-                .padding(.bottom, 1)
-        }
     }
 }
 

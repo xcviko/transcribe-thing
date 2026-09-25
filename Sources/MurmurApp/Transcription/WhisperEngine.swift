@@ -23,12 +23,64 @@ actor WhisperEngine: LocalEngine {
     /// Leaving either nil makes the Hub client write to ~/Documents/huggingface.
     nonisolated let baseDir: URL
 
+    /// Which Core ML compute units each Whisper model runs on. Core ML specializes and caches every model
+    /// per compute unit, so each preset pays its own first load, and loading another preset can evict the
+    /// cached Neural Engine build (the next `.ane` load is cold again).
+    ///
+    /// Measured on M1 Max (macOS 26, release build, 8 s / 38 s clips): `.ane` first load ~236 s, cached ~2.5 s,
+    /// 1.42 s / 3.48 s per clip. `.gpu` first load ~25-31 s, cached ~3.4-4.4 s, but 1.7-3.3 s / 4.6-6.3 s per clip
+    /// (the GPU is shared with WindowServer), a 2.4 GB cache, and one MPSGraph assertion crash in 8 runs.
+    /// `.gpuAll`: 9.6-10.9 s on the long clip. Transcripts were identical. Hence `.ane` stays the default.
+    enum ComputePreset: String, CaseIterable, Sendable {
+        /// WhisperKit's default: mel on the GPU, encoder and decoder on the Neural Engine.
+        case ane
+        /// Encoder on the GPU, decoder on the Neural Engine.
+        case gpu
+        /// Encoder and decoder on the GPU.
+        case gpuAll = "gpu-all"
+
+        static let `default`: ComputePreset = .ane
+
+        var options: ModelComputeOptions {
+            switch self {
+            case .ane:
+                ModelComputeOptions(melCompute: .cpuAndGPU, audioEncoderCompute: .cpuAndNeuralEngine,
+                                    textDecoderCompute: .cpuAndNeuralEngine)
+            case .gpu:
+                ModelComputeOptions(melCompute: .cpuAndGPU, audioEncoderCompute: .cpuAndGPU,
+                                    textDecoderCompute: .cpuAndNeuralEngine)
+            case .gpuAll:
+                ModelComputeOptions(melCompute: .cpuAndGPU, audioEncoderCompute: .cpuAndGPU,
+                                    textDecoderCompute: .cpuAndGPU)
+            }
+        }
+
+        /// e.g. "mel GPU · encoder ANE · decoder ANE"
+        var summary: String {
+            let o = options
+            func name(_ units: MLComputeUnits) -> String {
+                switch units {
+                case .cpuOnly: "CPU"
+                case .cpuAndGPU: "GPU"
+                case .cpuAndNeuralEngine: "ANE"
+                case .all: "all"
+                @unknown default: "?"
+                }
+            }
+            return "mel \(name(o.melCompute)) · encoder \(name(o.audioEncoderCompute)) · decoder \(name(o.textDecoderCompute))"
+        }
+    }
+
+    /// Fixed for the engine's lifetime; `--whisper-compute` in EngineCLI picks another one for diagnostics.
+    nonisolated let compute: ComputePreset
+
     private var kit: WhisperKit?
     private var remoteFiles: [HuggingFaceTree.File]?
     private var tokenizerRemoteFiles: [HuggingFaceTree.File]?
 
-    init(baseDir: URL) {
+    init(baseDir: URL, compute: ComputePreset = .default) {
         self.baseDir = baseDir
+        self.compute = compute
     }
 
     // MARK: Layout (mirrors the Hub client: <downloadBase>/models/<repo id>)
@@ -170,8 +222,9 @@ actor WhisperEngine: LocalEngine {
 
     var isLoaded: Bool { kit != nil }
 
-    /// The first load after install (and after every macOS update) specializes the Core ML models for this
-    /// chip: minutes on M1-class Macs, about 2 s afterwards.
+    /// The first load after install, after a macOS update, or after Core ML evicted its cache specializes the
+    /// models for this chip: about 4 minutes on M1 Max, about 2.5 s afterwards. A new app binary doesn't
+    /// invalidate that cache (measured).
     func load() async throws {
         if kit != nil { return }
         guard isInstalled() else { throw LocalEngineError.notInstalled }
@@ -180,7 +233,7 @@ actor WhisperEngine: LocalEngine {
             modelRepo: Self.modelRepo,
             modelFolder: modelFolder.path,      // non-nil: no network I/O during setup
             tokenizerFolder: baseDir,
-            computeOptions: ModelComputeOptions(),  // mel on GPU, encoder and decoder on the Neural Engine
+            computeOptions: compute.options,
             verbose: false,
             prewarm: false,
             load: true,
@@ -232,13 +285,24 @@ actor WhisperEngine: LocalEngine {
         let voiced = SilenceGuard.voicedSeconds(samples)
         guard voiced >= SilenceGuard.minimumVoicedSeconds else { return "" }
 
-        let results = try await kit.transcribe(audioArray: samples,
+        let results = try await kit.transcribe(audioArray: Self.paddedForChunking(samples),
                                                decodeOptions: Self.decodingOptions(language: options.language))
         // With VAD chunking, per-chunk errors (including cancellation) are swallowed rather than thrown.
         try Task.checkCancellation()
         let text = Self.clean(results.map(\.text))
         return SilenceGuard.isLikelyHallucination(text, voicedSeconds: voiced) ? "" : text
     }
+
+    /// WhisperKit's VAD chunker (audio over one 30 s window) stops a fixed 1 s (`windowPadding`, not settable
+    /// through DecodingOptions) before the end, so a chunk boundary inside the last second silently drops the
+    /// words after it. A second of trailing silence means only the padding can be left out.
+    static func paddedForChunking(_ samples: [Float]) -> [Float] {
+        guard samples.count > Constants.defaultWindowSamples else { return samples }
+        return samples + [Float](repeating: 0, count: chunkerWindowPadding)
+    }
+
+    /// VADAudioChunker's default `windowPadding`.
+    static let chunkerWindowPadding = WhisperKit.sampleRate
 
     static func clean(_ chunks: [String]) -> String {
         chunks.joined(separator: " ")

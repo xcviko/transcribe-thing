@@ -27,8 +27,9 @@ struct HotkeyInput: Equatable, Sendable {
 ///
 /// Rules (SPEC §5.3, macos-input.md §4):
 /// - Modifier events are never swallowed.
-/// - Fn is tracked only from flagsChanged with keycode 63: arrows, F-keys and navigation keys carry
-///   `.maskSecondaryFn` without Fn being held.
+/// - Fn goes down only on flagsChanged with keycode 63: arrows, F-keys and navigation keys carry
+///   `.maskSecondaryFn` without Fn being held. Its absence is not ambiguous, though: Fn held puts the bit
+///   on every keyboard event, so an event without it means Fn is up even if its release never arrived.
 /// - A modifier-only PTT arms on a key *press* that produces an exact match, never on the release of an
 ///   extra modifier (⌘ up while fn stays down after ⌘fnV must not start a dictation).
 /// - Anything else while a modifier-only PTT is held interrupts it, and the PTT stays blocked until every
@@ -119,11 +120,12 @@ struct HotkeyRouter: Equatable, Sendable {
 
     private mutating func flagsChanged(_ input: HotkeyInput, _ config: Config) -> Decision {
         let previous = modifiers
-        if input.keyCode == KeyCode.function {
+        if input.keyCode == KeyCode.function || input.flags & Self.functionMask == 0 {
             functionDown = input.flags & Self.functionMask != 0
         }
         modifiers = ModifierSnapshot(rawFlags: input.flags, functionDown: functionDown)
-        let isPress = modifiers.count > previous.count
+        let isPress = Self.isPress(input, functionDown: functionDown,
+                                   countWentUp: modifiers.count > previous.count)
 
         var decision = Decision()
         if config.forwardsRawKeys, modifiers != previous {
@@ -182,10 +184,21 @@ struct HotkeyRouter: Equatable, Sendable {
         let key = input.keyCode
         // A fresh press of a key we think is still down means its keyUp was lost: evaluate it again.
         if !input.isRepeat { swallowedKeys.remove(key) }
+        var decision = Decision()
+        // Fn's release was lost if this key arrives without the Fn bit (see type docs): end the hold it
+        // left behind before the key is matched with a phantom Fn (Space as fn+Space, ⌘V as ⌘fnV).
+        let lostFunctionRelease = functionDown && input.flags & Self.functionMask == 0
+        if lostFunctionRelease { functionDown = false }
         // Key events carry authoritative device bits; Fn keeps its tracked value (see type docs).
         modifiers = ModifierSnapshot(rawFlags: input.flags, functionDown: functionDown)
+        if lostFunctionRelease {
+            if modifiers.isEmpty { blockedUntilModifiersReleased = false }
+            if gesture == .holdingModifiers, !(config.bindings[.pushToTalk]?.requiredModifiersHeld(modifiers) ?? false) {
+                gesture = .idle
+                decision.events.append(.pttUp)
+            }
+        }
 
-        var decision = Decision()
         if config.forwardsRawKeys, !input.isRepeat, Self.isIllustrated(key, config) {
             decision.rawKey = RawKeyEvent(key: RawKeyEvent.Key(keyCode: key), isDown: true)
         }
@@ -263,6 +276,31 @@ struct HotkeyRouter: Equatable, Sendable {
     }
 
     // MARK: Helpers
+
+    /// Whether a flagsChanged is its key going down, read from that key's own bit in the new flags.
+    /// Comparing with the previous snapshot goes wrong after a foreign synthetic keyDown (a clipboard
+    /// manager's ⌘V) left `modifiers` holding a key that isn't down.
+    private static func isPress(_ input: HotkeyInput, functionDown: Bool, countWentUp: Bool) -> Bool {
+        let family: CGEventFlags, own: UInt64, other: UInt64
+        switch input.keyCode {
+        case KeyCode.function: return functionDown
+        case KeyCode.command: (family, own, other) = (.maskCommand, DeviceModifierMask.leftCommand, DeviceModifierMask.rightCommand)
+        case KeyCode.rightCommand: (family, own, other) = (.maskCommand, DeviceModifierMask.rightCommand, DeviceModifierMask.leftCommand)
+        case KeyCode.option: (family, own, other) = (.maskAlternate, DeviceModifierMask.leftOption, DeviceModifierMask.rightOption)
+        case KeyCode.rightOption: (family, own, other) = (.maskAlternate, DeviceModifierMask.rightOption, DeviceModifierMask.leftOption)
+        case KeyCode.control: (family, own, other) = (.maskControl, DeviceModifierMask.leftControl, DeviceModifierMask.rightControl)
+        case KeyCode.rightControl: (family, own, other) = (.maskControl, DeviceModifierMask.rightControl, DeviceModifierMask.leftControl)
+        case KeyCode.shift: (family, own, other) = (.maskShift, DeviceModifierMask.leftShift, DeviceModifierMask.rightShift)
+        case KeyCode.rightShift: (family, own, other) = (.maskShift, DeviceModifierMask.rightShift, DeviceModifierMask.leftShift)
+        default: return countWentUp
+        }
+        let flags = input.flags
+        guard flags & family.rawValue != 0 else { return false }
+        if flags & own != 0 { return true }
+        if flags & other != 0 { return false }
+        // Only the family bit (some synthetic events): fall back to the count.
+        return countWentUp
+    }
 
     private func isBusy(_ config: Config) -> Bool {
         // A held PTT means a capture is starting even if the app hasn't reported busy yet.

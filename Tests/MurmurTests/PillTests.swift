@@ -283,6 +283,18 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(model.visiblePhase == .rest)
     }
 
+    @Test func theNextQueuedJobWaitsForTheCheckMark() async throws {
+        let model = makeModel()
+        model.timing.successHold = 0.15
+        model.phase = .processing
+        model.phase = .success
+        // Job 2 is still transcribing: the controller asks for processing in the same turn.
+        model.phase = .processing
+        #expect(model.visiblePhase == .success)
+        try await Task.sleep(for: .seconds(0.35))
+        #expect(model.visiblePhase == .processing)
+    }
+
     @Test func aNewRecordingInterruptsTheFlourish() {
         let model = makeModel()
         model.phase = .error
@@ -413,5 +425,16 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(PillView(model: PillModel.preview(phase: .hidden), context: .panel(nil)).visual == .rest)
         let hover = PillModel.preview(phase: .locked, isHovering: true)
         #expect(PillView(model: hover).visual == .locked(.elapsed))
+    }
+
+    @Test func helloBloomsToListeningSize() {
+        let model = PillModel.preview(phase: .rest, isHovering: true)
+        model.beginHello(duration: 60)
+        #expect(PillView(model: model, context: .panel(nil)).visual == .hello)
+        #expect(PillVisual.hello.size == PillMetrics.listeningSize)
+        #expect(!PillVisual.hello.isQuiet)
+        // A real dictation takes over from the hello.
+        model.phase = .listening
+        #expect(PillView(model: model, context: .panel(nil)).visual == .listening)
     }
 }

@@ -636,6 +636,25 @@ struct ShimmerBar: View {
     }
 }
 
+// MARK: - Fields
+
+extension View {
+    /// Placeholder for an empty text field, drawn in `inkTertiary`. A field's `prompt:` takes the field's own
+    /// foreground style, so an empty field would read as filled in. Apply it before the field's `.font`, so the
+    /// placeholder inherits the font.
+    func fieldPlaceholder(_ text: String, isShown: Bool, alignment: Alignment = .leading) -> some View {
+        overlay(alignment: alignment) {
+            if isShown {
+                Text(verbatim: text)
+                    .foregroundStyle(.inkTertiary)
+                    .lineLimit(1)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+}
+
 // MARK: - Layout
 
 struct SectionHeader<Trailing: View>: View {
@@ -679,6 +698,17 @@ extension SectionHeader where Trailing == EmptyView {
     }
 }
 
+extension VerticalAlignment {
+    private enum SettingsRowAccessory: AlignmentID {
+        static func defaultValue(in d: ViewDimensions) -> CGFloat { d[VerticalAlignment.center] }
+    }
+
+    /// What a `SettingsRow` centers its icon and text on. Defaults to the trailing view's center; a trailing
+    /// view that grows a note underneath (the shortcut recorder) moves it to its control, so the title stays
+    /// beside the control instead of drifting down to the middle of the taller row.
+    static let settingsRowAccessory = VerticalAlignment(SettingsRowAccessory.self)
+}
+
 struct SettingsRow<Trailing: View>: View {
     var title: String
     var subtitle: String?
@@ -696,7 +726,7 @@ struct SettingsRow<Trailing: View>: View {
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: Theme.Spacing.sm) {
+        HStack(alignment: .settingsRowAccessory, spacing: Theme.Spacing.sm) {
             if let systemImage {
                 Image(systemName: systemImage)
                     .font(.system(size: 13, weight: .medium))
@@ -795,8 +825,9 @@ struct ModelStatusText: View {
     private let tone: StatusTone
     var showsDot = true
 
-    init(state: LocalModelState, engine: EngineID, showsDot: Bool = true) {
-        (text, tone) = Self.describe(state, engine: engine)
+    /// `localError` is the error ModelStore kept for a failed model (what failed: download, disk, load).
+    init(state: LocalModelState, engine: EngineID, showsDot: Bool = true, localError: MurmurError? = nil) {
+        (text, tone) = Self.describe(state, engine: engine, localError: localError)
         self.showsDot = showsDot
     }
 
@@ -819,7 +850,8 @@ struct ModelStatusText: View {
         }
     }
 
-    static func describe(_ state: LocalModelState, engine: EngineID) -> (text: String, tone: StatusTone) {
+    static func describe(_ state: LocalModelState, engine: EngineID,
+                         localError: MurmurError? = nil) -> (text: String, tone: StatusTone) {
         let size = engine.approxDownloadBytes.map { " · \(Fmt.bytes($0))" } ?? ""
         switch state {
         case .notInstalled:
@@ -834,7 +866,11 @@ struct ModelStatusText: View {
         case .ready:
             return ("Ready\(size)", .positive)
         case .failed:
-            return ("Didn’t finish · try again", .negative)
+            switch ModelFailure(localError) {
+            case .download: return ("Didn’t finish · try again", .negative)
+            case .disk: return ("Not enough space", .negative)
+            case .load: return ("Couldn’t load · try again", .negative)
+            }
         }
     }
 
@@ -851,7 +887,7 @@ struct ModelStatusText: View {
         case .invalid:
             return ("Key rejected", .negative)
         case .noCredit:
-            return ("Out of credit", .negative)
+            return (status.isKeyLimitReached ? "Key limit reached" : "Out of credit", .negative)
         case .offline:
             return ("Offline · will check again", .warning)
         case .failed:
@@ -879,5 +915,69 @@ struct MiniPill: View {
         PillView(model: model)
             .onChange(of: phase) { _, new in model.phase = new }
             .accessibilityHidden(true)
+    }
+}
+
+// MARK: - Pill mode illustration
+
+/// Miniature screen showing where (and whether) the pill sits in each "Show the pill" mode. The Hub's tiles use
+/// the full size; onboarding's shorter tiles use `compact`.
+struct PillModeMiniScreen: View {
+    var mode: PillMode
+    var compact = false
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        let dark = scheme == .dark
+        let shape = RoundedRectangle(cornerRadius: compact ? 7 : 9, style: .continuous)
+        ZStack(alignment: .bottom) {
+            shape.fill(LinearGradient(colors: dark
+                                      ? [Color(nsColor: .hex(0x28243F)), Color(nsColor: .hex(0x2B211C))]
+                                      : [Color(nsColor: .hex(0xECE7FF)), Color(nsColor: .hex(0xFFE9DC))],
+                                      startPoint: .topLeading, endPoint: .bottomTrailing))
+            // An app window, suggested rather than drawn.
+            RoundedRectangle(cornerRadius: compact ? 3 : 5, style: .continuous)
+                .fill(Color.white.opacity(dark ? 0.06 : 0.55))
+                .frame(width: compact ? 50 : 70, height: compact ? 14 : 36)
+                .frame(maxHeight: .infinity, alignment: .top)
+                .padding(.top, compact ? 6 : 10)
+            PillModeGlyph(mode: mode, scale: compact ? 0.85 : 1)
+                .padding(.bottom, compact ? 6 : 8)
+        }
+        .overlay { shape.strokeBorder(Color.stroke, lineWidth: 1) }
+        .accessibilityHidden(true)
+    }
+}
+
+/// The pill as each mode shows it: a slim resting bar, the listening bars, or a dashed outline for Never.
+private struct PillModeGlyph: View {
+    var mode: PillMode
+    var scale: CGFloat = 1
+
+    var body: some View {
+        switch mode {
+        case .always:
+            Capsule(style: .continuous)
+                .fill(Color.pillFill)
+                // The ring keeps the dark bar visible on the dark wallpaper.
+                .overlay { Capsule(style: .continuous).ring(0.5).fill(.white.opacity(0.25), style: FillStyle(eoFill: true)) }
+                .frame(width: 22 * scale, height: 6 * scale)
+                .shadow(color: .black.opacity(0.2), radius: 2, y: 1)
+        case .whileDictating:
+            HStack(spacing: 1.6 * scale) {
+                ForEach(Array([0.3, 0.55, 0.85, 1.0, 0.7, 0.5, 0.3].enumerated()), id: \.offset) { _, h in
+                    Capsule(style: .continuous).fill(.white)
+                        .frame(width: 1.6 * scale, height: max(1.6, 8 * h) * scale)
+                }
+            }
+            .frame(width: 42 * scale, height: 14 * scale)
+            .background(Capsule(style: .continuous).fill(Color.pillFill))
+            .overlay { Capsule(style: .continuous).ring(0.5).fill(.white.opacity(0.22), style: FillStyle(eoFill: true)) }
+            .shadow(color: .black.opacity(0.25), radius: 3, y: 1.5)
+        case .never:
+            Capsule(style: .continuous)
+                .strokeBorder(Color.inkTertiary, style: StrokeStyle(lineWidth: 1, dash: [2.5, 2]))
+                .frame(width: 34 * scale, height: 10 * scale)
+        }
     }
 }

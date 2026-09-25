@@ -87,6 +87,9 @@ struct ToastCard: View {
     @State private var copiedAt: Date?
 
     private var isTranscript: Bool { notice.transcript != nil }
+    /// A delivered transcript that didn't land points at paste-last instead of repeating its body. A failure
+    /// showing text that came back (warning or error) keeps its explanation, and paste-last wouldn't paste it.
+    private var showsPasteHint: Bool { isTranscript && notice.style == .info }
     private var tint: Color { ToastPalette.tint(for: notice.style) }
 
     /// Title with one short action and nothing else: a single compact row.
@@ -107,7 +110,7 @@ struct ToastCard: View {
                         actionRow
                             .padding(.leading, isTranscript ? 0 : ToastMetrics.textInset)
                     }
-                    if isTranscript {
+                    if showsPasteHint {
                         pasteHint
                     }
                 }
@@ -160,7 +163,7 @@ struct ToastCard: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.ink)
                     .fixedSize(horizontal: false, vertical: true)
-                if let body = notice.body, !isTranscript {
+                if let body = notice.body, !showsPasteHint {
                     Text(body)
                         .font(.system(size: 12))
                         .foregroundStyle(.inkSecondary)

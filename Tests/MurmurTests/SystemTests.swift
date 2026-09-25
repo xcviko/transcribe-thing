@@ -376,6 +376,56 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
         #expect(kb.router.gesture == .idle)
     }
 
+    @Test func lostFnReleaseHealsOnTheNextKey() {
+        var kb = Keyboard()
+        #expect(kb.press(.fn).events == [.pttDown])
+        // The fn release never reaches the tap: the next key arrives without the Fn bit.
+        let space = kb.send(HotkeyInput(kind: .keyDown, keyCode: UInt16(kVK_Space), flags: 0))
+        #expect(space.events == [.pttUp], "the hold ends as a release, not as fn+Space")
+        #expect(!space.swallow)
+        #expect(!kb.router.functionDown)
+        // ⌘V without the Fn bit is a plain paste, not ⌘fnV.
+        let paste = kb.send(HotkeyInput(kind: .keyDown, keyCode: UInt16(kVK_ANSI_V),
+                                        flags: Keyboard.Modifier.leftCommand.flags))
+        #expect(paste.events.isEmpty)
+        #expect(!paste.swallow)
+    }
+
+    @Test func lostFnReleaseHealsOnAModifierChange() {
+        var kb = Keyboard()
+        #expect(kb.press(.fn).events == [.pttDown])
+        let shift = kb.send(HotkeyInput(kind: .flagsChanged, keyCode: KeyCode.shift,
+                                        flags: Keyboard.Modifier.leftShift.flags))
+        #expect(shift.events == [.pttUp])
+        #expect(!kb.router.functionDown)
+    }
+
+    @Test func fnFlaggedKeysDontInventAnFnPress() {
+        var kb = Keyboard()
+        #expect(kb.down(kVK_LeftArrow, fnFlagged: true).events.isEmpty)
+        #expect(!kb.router.functionDown)
+    }
+
+    @Test func foreignSyntheticPasteDoesntSwallowTheNextPTTPress() {
+        var kb = Keyboard()
+        // A clipboard manager posts V with only the device-independent ⌘ bit; no ⌘ flagsChanged follows.
+        _ = kb.send(HotkeyInput(kind: .keyDown, keyCode: UInt16(kVK_ANSI_V), flags: CGEventFlags.maskCommand.rawValue))
+        _ = kb.send(HotkeyInput(kind: .keyUp, keyCode: UInt16(kVK_ANSI_V), flags: CGEventFlags.maskCommand.rawValue))
+        #expect(kb.press(.fn).events == [.pttDown])
+        #expect(kb.release(.fn).events == [.pttUp])
+    }
+
+    @Test func releasingOneSideOfAHeldPairIsNotAPress() {
+        let handsFree = Shortcut(modifiers: [.init(.command, .left)])
+        var kb = Keyboard(bindings: bindings([.handsFree: handsFree]))
+        #expect(kb.press(.rightCommand).events.isEmpty)
+        #expect(kb.press(.leftCommand).events.isEmpty)
+        // Left ⌘ alone is held now, but that came from a release (the ⌘ family bit is still set).
+        #expect(kb.release(.rightCommand).events.isEmpty)
+        #expect(kb.release(.leftCommand).events.isEmpty)
+        #expect(kb.press(.leftCommand).events == [.handsFreeToggle])
+    }
+
     @Test func resetInterruptsAHoldInProgress() {
         var kb = Keyboard()
         kb.press(.fn)
@@ -480,7 +530,6 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
     @Test func currentLayoutPastesWithKeyCodeNine() {
         // This Mac types in RussianWin and ABC; both carry a Latin ⌘ layer.
         #expect(PasteKeyResolver.resolveCurrent() == 9)
-        #expect(PasteKeyResolver().keyCode == 9)
     }
 
     @Test func russianUsesTheLatinCommandLayer() throws {
@@ -539,6 +588,25 @@ private func privatePasteboard() -> NSPasteboard {
         pb.clearContents()
         pb.writeObjects([item])
         #expect(try #require(PasteboardSnapshot.capture(pb)).containsConcealed)
+    }
+
+    @Test func slowUniversalClipboardIsLeftOut() {
+        let remote = PasteboardSnapshot.remoteClipboardType
+        #expect(PasteboardSnapshot.isSlowRemote(types: [[remote, NSPasteboard.PasteboardType("public.png")]]))
+        #expect(PasteboardSnapshot.isSlowRemote(types: [[remote], [.tiff]]))
+        // Remote text is small: still restored.
+        #expect(!PasteboardSnapshot.isSlowRemote(types: [[remote, .string, .rtf, .html, PasteboardSnapshot.transientType]]))
+        // Local images are read locally.
+        #expect(!PasteboardSnapshot.isSlowRemote(types: [[.png, .tiff]]))
+
+        let pb = privatePasteboard()
+        defer { pb.releaseGlobally() }
+        let item = NSPasteboardItem()
+        item.setData(Data([0x89, 0x50]), forType: .png)
+        item.setData(Data(), forType: remote)
+        pb.clearContents()
+        pb.writeObjects([item])
+        #expect(PasteboardSnapshot.capture(pb) == nil)
     }
 
     @Test func refusesOversizedContents() {
@@ -663,19 +731,39 @@ private final class PasteLog: @unchecked Sendable {
         #expect(!types.contains(PasteboardSnapshot.transientType))
     }
 
-    @Test func secureFieldIsRefusedAndTheTextCopied() async {
+    @Test func secureFieldIsRefusedAndTheClipboardLeftAlone() async {
         let rig = rig(focus: FocusInfo(pid: 42, subrole: "AXSecureTextField", editability: .editable, isSecure: true))
         defer { rig.pasteboard.releaseGlobally() }
+        rig.pasteboard.clearContents()
+        rig.pasteboard.setString("user clipboard", forType: .string)
         #expect(await rig.inserter.insert("not a password", expectedPID: 42) == .noEditableTarget)
         #expect(rig.log.codes.isEmpty)
-        #expect(rig.pasteboard.string(forType: .string) == "not a password")
+        #expect(rig.pasteboard.string(forType: .string) == "user clipboard")
     }
 
-    @Test func nonTextFocusIsNotPasted() async {
+    @Test func nonTextFocusIsNotPastedNorCopied() async {
         let rig = rig(focus: FocusInfo(pid: 42, role: "AXButton", editability: .notEditable))
         defer { rig.pasteboard.releaseGlobally() }
+        rig.pasteboard.clearContents()
+        rig.pasteboard.setString("user clipboard", forType: .string)
         #expect(await rig.inserter.insert("hello", expectedPID: 42) == .noEditableTarget)
         #expect(rig.log.codes.isEmpty)
+        #expect(rig.pasteboard.string(forType: .string) == "user clipboard")
+    }
+
+    @Test func noTargetDoesntCutAPendingRestoreShort() async throws {
+        let rig = rig()
+        defer { rig.pasteboard.releaseGlobally() }
+        rig.pasteboard.clearContents()
+        rig.pasteboard.setString("original", forType: .string)
+        #expect(await rig.inserter.insert("first", expectedPID: 42) == .pasted)
+        let noTarget = TextInserter(settings: rig.settings, pasteboard: rig.pasteboard, system: .init(
+            frontmostPID: { 42 }, canPostEvents: { true }, modifiersHeld: { false },
+            inspectFocus: { FocusInfo(pid: 42, editability: .notEditable) }, pasteKeyCode: { 9 },
+            postPaste: { _ in true }))
+        #expect(await noTarget.insert("second", expectedPID: 42) == .noEditableTarget)
+        try await settle()
+        #expect(rig.pasteboard.string(forType: .string) == "original")
     }
 
     @Test func unknownFocusPastesAnyway() async {
@@ -738,6 +826,17 @@ private final class PasteLog: @unchecked Sendable {
         #expect(!center.isPolling)
         #expect(!center.allRequiredGranted)
         #expect(PermissionsCenter.preview(mic: .granted, ax: .granted).allRequiredGranted)
+    }
+
+    @Test func pollingIsFastOnlyWhileAPermissionsUIOrARequestNeedsIt() {
+        typealias P = PermissionsCenter
+        #expect(P.pollInterval(ui: nil, background: false, awaitingGrant: false, allGranted: false) == nil)
+        #expect(P.pollInterval(ui: nil, background: true, awaitingGrant: false, allGranted: false)
+            == P.backgroundPollInterval)
+        #expect(P.pollInterval(ui: 0.5, background: true, awaitingGrant: false, allGranted: false) == 0.5)
+        #expect(P.pollInterval(ui: nil, background: true, awaitingGrant: true, allGranted: false) == 0.5)
+        #expect(P.pollInterval(ui: nil, background: true, awaitingGrant: false, allGranted: true) == 5)
+        #expect(P.pollInterval(ui: 0.5, background: false, awaitingGrant: false, allGranted: true) == 5)
     }
 
     @Test func previewSecureInput() {
@@ -850,6 +949,20 @@ private final class PasteLog: @unchecked Sendable {
         #expect(warning.contains("Right ⌥"))
     }
 
+    @Test func loneModifiersSuggestTheRightHandKey() {
+        #expect(ShortcutEdit.betterSide(for: Shortcut(modifiers: [.init(.option)])) == .rightOption)
+        #expect(ShortcutEdit.betterSide(for: Shortcut(modifiers: [.init(.command, .left)]))
+            == Shortcut(modifiers: [.init(.command, .right)]))
+        #expect(ShortcutEdit.betterSide(for: Shortcut(modifiers: [.init(.control)]))
+            == Shortcut(modifiers: [.init(.control, .right)]))
+        // Nothing better to offer: already right-handed, fn, shift, chords and key combos.
+        #expect(ShortcutEdit.betterSide(for: .rightOption) == nil)
+        #expect(ShortcutEdit.betterSide(for: .fn) == nil)
+        #expect(ShortcutEdit.betterSide(for: Shortcut(modifiers: [.init(.shift)])) == nil)
+        #expect(ShortcutEdit.betterSide(for: Shortcut(modifiers: [.init(.control), .init(.option)])) == nil)
+        #expect(ShortcutEdit.betterSide(for: .fnSpace) == nil)
+    }
+
     @Test func systemComboIsRejected() {
         let spotlight = Shortcut(modifiers: [.init(.command)], keyCode: KeyCode.space)
         guard case .reject = ShortcutEdit.evaluate(spotlight, for: .handsFree, bindings: defaults, swapAllowed: true) else {
@@ -876,6 +989,41 @@ private final class PasteLog: @unchecked Sendable {
         // Push to talk would receive Esc, which is reserved for cancel.
         #expect(ShortcutEdit.evaluate(.fn, for: .cancel, bindings: defaults, swapAllowed: true)
             == .reject("Push to talk already uses this shortcut."))
+    }
+
+    @Test func sidesThatCanMeetConflict() {
+        // Right ⌥ push to talk (onboarding's alternative) and a lone ⌥ recorded for hands-free.
+        let rightOptionPTT = bindings([.pushToTalk: .rightOption])
+        let option = Shortcut(modifiers: [.init(.option)])
+        #expect(ShortcutValidator.validate(option, for: .handsFree, bindings: rightOptionPTT).conflict == .pushToTalk)
+        #expect(ShortcutValidator.validate(Shortcut(modifiers: [.init(.option, .left)]), for: .handsFree,
+                                           bindings: rightOptionPTT).conflict == nil)
+        // ⌃⌘C (either side) would make copy last (⌘ left⌃ C) unreachable.
+        let controlCommandC = Shortcut(modifiers: [.init(.control), .init(.command)], keyCode: KeyCode.ansiC)
+        #expect(ShortcutValidator.validate(controlCommandC, for: .pasteLast, bindings: defaults).conflict == .copyLast)
+    }
+
+    @Test func aChordMustNotStartAnotherModifierOnlyBinding() {
+        let controlOption = Shortcut(modifiers: [.init(.control), .init(.option)])
+        let control = Shortcut(modifiers: [.init(.control, .right)])
+        // Hands-free ⌃ would fire on the way to a ⌃⌥ push to talk.
+        let ptt = bindings([.pushToTalk: controlOption])
+        guard case .reject = ShortcutEdit.evaluate(control, for: .handsFree, bindings: ptt, swapAllowed: true) else {
+            Issue.record("a prefix of push to talk must be rejected")
+            return
+        }
+        // And the other way round: push to talk ⌃⌥ while hands-free is ⌃.
+        let handsFree = bindings([.handsFree: control])
+        guard case .reject = ShortcutEdit.evaluate(controlOption, for: .pushToTalk, bindings: handsFree, swapAllowed: true) else {
+            Issue.record("push to talk must not start with another modifier-only binding")
+            return
+        }
+        // Push to talk as the start of a modifier-only hands-free is intended.
+        let fnControl = Shortcut(modifiers: [.init(.function), .init(.control)])
+        guard case .apply = ShortcutEdit.evaluate(fnControl, for: .handsFree, bindings: defaults, swapAllowed: true) else {
+            Issue.record("fn ⌃ for hands-free next to an fn push to talk must be accepted")
+            return
+        }
     }
 
     @Test func swappingExchangesBothBindings() {

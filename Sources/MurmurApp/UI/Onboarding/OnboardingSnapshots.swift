@@ -38,6 +38,12 @@ enum OnboardingSnapshots {
                 ctx.settings.selectedEngine = .whisper
                 ctx.account = .preview(status: .missing)
             }) { model in model.stage(step: .model) },
+            entry("onboarding-3-model-load-failed", context: { ctx in
+                ctx.models = .preview(states: [.parakeet: .failed("Couldn’t load the model. Retry, or download it again."),
+                                               .whisper: .notInstalled],
+                                      lastErrors: [.parakeet: .modelLoadFailed(.parakeet, "Corrupt weights")])
+                ctx.account = .preview(status: .missing)
+            }) { model in model.stage(step: .model) },
             entry("onboarding-3-model-disk", context: { ctx in
                 ctx.models = .preview(states: [.parakeet: .notInstalled, .whisper: .ready])
                 ctx.account = .preview(status: .missing)

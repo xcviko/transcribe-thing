@@ -119,7 +119,8 @@ struct HistoryRow: View {
         case .failed:
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .firstTextBaseline, spacing: 7) {
-                    Circle().fill(Color.danger).frame(width: 6, height: 6).alignmentGuide(.firstTextBaseline) { $0[.bottom] - 0.5 }
+                    // Centered on the cap height of the 13 pt label (≈4.5 pt above its baseline), not sitting on it.
+                    Circle().fill(Color.danger).frame(width: 6, height: 6).alignmentGuide(.firstTextBaseline) { $0[.bottom] + 1.5 }
                     Text("\(Text("Couldn’t transcribe").fontWeight(.medium).foregroundStyle(Color.ink)) · \(failureReason)")
                         .foregroundStyle(Color.inkSecondary)
                         .font(.system(size: 13))
@@ -229,7 +230,7 @@ struct HistoryRow: View {
             Button("Copy") { hub.copy(entry.text) }
         }
         if hasAudio {
-            Menu(entry.status == .success ? "Transcribe again with" : "Retry with") {
+            Menu(entry.status == .success ? "Transcribe Again With" : "Retry With") {
                 RetryMenuItems(entry: entry, includesHeader: false)
             }
         }
@@ -295,7 +296,7 @@ private struct HistoryEmptyState: View {
                 .font(.system(size: 13))
                 .foregroundStyle(.inkSecondary)
                 .padding(.top, -8)
-            Button("Practice in onboarding") {
+            Button("Practice in Onboarding") {
                 settings.onboardingStep = OnboardingStepIndex.tryIt
                 hub.windows.showOnboarding()
             }
@@ -330,7 +331,7 @@ private struct NoMatches: View {
                 .font(.system(size: 13))
                 .foregroundStyle(.inkSecondary)
                 .multilineTextAlignment(.center)
-            Button("Clear search", action: onClear)
+            Button("Clear Search", action: onClear)
                 .buttonStyle(.murmurQuiet)
         }
         .frame(maxWidth: .infinity)

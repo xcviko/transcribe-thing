@@ -32,8 +32,19 @@ enum PillSnapshots {
             SnapshotEntry("pill-toast-error", width: 640, height: 270) { _ in
                 CanvasScene(model: .preview(phase: .error), notices: [PillSnapshotFixtures.keyRejected])
             },
+            // Nothing was pasted in either case, so no check mark (DictationController flashes success only
+            // after a paste lands).
             SnapshotEntry("pill-toast-transcript", width: 640, height: 340) { _ in
-                CanvasScene(model: .preview(phase: .success), notices: [PillSnapshotFixtures.switchedApps])
+                CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.switchedApps])
+            },
+            SnapshotEntry("pill-toast-copied", width: 640, height: 360) { _ in
+                CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.copiedNotPasted])
+            },
+            SnapshotEntry("pill-toast-shortcut", width: 640, height: 270) { _ in
+                CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.shortcutUnavailable])
+            },
+            SnapshotEntry("pill-toast-truncated", width: 640, height: 360) { _ in
+                CanvasScene(model: .preview(phase: .error), notices: [PillSnapshotFixtures.truncated])
             },
             SnapshotEntry("pill-toast-stack", width: 640, height: 330) { _ in
                 CanvasScene(model: .preview(phase: .processing), notices: [PillSnapshotFixtures.micFallback,
@@ -45,7 +56,7 @@ enum PillSnapshots {
         ]
     }
 
-    /// Post-onboarding hello in the real canvas: peek + tooltip.
+    /// Post-onboarding hello in the real canvas: the bloom mid-ripple with its "Hold fn anywhere" tooltip.
     @MainActor private static func helloModel() -> PillModel {
         let model = PillModel.preview(phase: .rest)
         model.beginHello(duration: 60)
@@ -90,16 +101,33 @@ enum PillSnapshotFixtures {
     static let keyRejected = MurmurError.openRouterInvalidKey("Invalid API key")
         .notice(recordingID: UUID(), fallbackEngine: .parakeet)
 
+    static let truncated = MurmurError.openRouterTruncated(
+        "So the plan for Thursday is to move the design review to the afternoon so Maya can join, and then so the plan for Thursday is to move the design review to the afternoon so Maya can join, and then so the plan for Thursday is")
+        .notice(recordingID: UUID(), fallbackEngine: nil)
+
     static let switchedApps = Notice(
         dedupeKey: "paste.transcript", style: .info, symbol: "doc.on.clipboard",
         title: "You switched apps", body: "Paste here, or copy it.",
         transcript: "Let's move the design review to Thursday afternoon so Maya can join, and I'll send the updated deck tonight. Also, can someone check whether the staging build picked up the new onboarding copy?",
-        actions: [NoticeAction(title: "Paste Here", kind: .pasteText("…"), isPrimary: true)],
+        actions: [NoticeAction(title: "Paste Here", kind: .pasteText("…"), isPrimary: true),
+                  NoticeAction(title: "Copy", kind: .copyText("…"))],
         lifetime: .seconds(20))
+
+    /// What DictationController posts when Accessibility is missing at paste time.
+    static let copiedNotPasted: Notice = {
+        let text = "Let's move the design review to Thursday afternoon so Maya can join."
+        var notice = MurmurError.accessibilityMissing.notice(recordingID: nil, fallbackEngine: nil)
+        notice.transcript = text
+        notice.actions = [NoticeAction(title: "Allow Access", kind: .openSettingsPane(.accessibility), isPrimary: true),
+                          NoticeAction(title: "Copy Again", kind: .copyText(text))]
+        return notice
+    }()
+
+    static let shortcutUnavailable = Notice.shortcutUnavailable(accessibility: .denied, likelyStale: false, shortcut: "fn")
 
     static let micFallback = Notice(
         dedupeKey: "mic.fallback", style: .warning, symbol: "mic.fill",
-        title: "Using MacBook Pro Microphone instead", body: "AirPods Pro isn't available right now.",
+        title: "Using MacBook Pro Microphone instead", body: "AirPods Pro isn’t available right now.",
         actions: [NoticeAction(title: "Choose Mic", kind: .chooseMicrophone, isPrimary: true)],
         lifetime: .seconds(8), sound: .alert)
 

@@ -41,7 +41,7 @@ struct MicrophonePage: View {
                 Callout(.warning, symbol: "airpods",
                         text: "Bluetooth mics start slower and can drop the first words. Wired or built-in mics are more accurate.") {
                     if let builtIn = builtInDevice {
-                        Button("Use built-in mic") {
+                        Button("Use Built-in Mic") {
                             withAnimation(Theme.Motion.snappy) { settings.microphoneUID = builtIn.id }
                         }
                         .buttonStyle(SecondaryButtonStyle(size: .small))
@@ -118,9 +118,9 @@ struct MicrophonePage: View {
         let isSelected = settings.microphoneUID == nil
         let current = devices.device(uid: devices.defaultDeviceUID)?.name
         return MicrophoneRow(
-            symbol: "sparkles",
+            symbol: "arrow.triangle.branch",
             title: "Automatic",
-            subtitle: current.map { "System default · currently \($0)" } ?? "Follows the system default",
+            subtitle: current.map { "Follows macOS · now \($0)" } ?? "Follows macOS",
             isSelected: isSelected,
             isAvailable: true,
             meter: isSelected ? selectedMeter : nil
@@ -131,12 +131,8 @@ struct MicrophonePage: View {
 
     private func deviceRow(_ device: AudioInputDevice) -> some View {
         let isSelected = settings.microphoneUID == device.id
-        var subtitle = device.transportLabel
-        if !device.isAvailable {
-            subtitle = device.unavailableReason ?? "Disconnected"
-        } else if device.id == devices.defaultDeviceUID {
-            subtitle += " · System default"
-        }
+        // Which device macOS picks is already on the Automatic row just above.
+        let subtitle = device.isAvailable ? device.transportLabel : (device.unavailableReason ?? "Disconnected")
         return MicrophoneRow(
             symbol: device.symbolName,
             title: device.name,

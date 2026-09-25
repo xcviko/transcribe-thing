@@ -36,7 +36,7 @@ struct HubPage<Content: View, Accessory: View>: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.section) {
-                HStack(alignment: .bottom, spacing: Theme.Spacing.md) {
+                HStack(alignment: .lastTextBaseline, spacing: Theme.Spacing.md) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(title)
                             .typeface(.title)
@@ -178,7 +178,6 @@ struct HubSlider: View {
     @Binding var value: Double
     var range: ClosedRange<Double> = 0...1
     var onEditingChanged: (Bool) -> Void = { _ in }
-    @Environment(\.isEnabled) private var isEnabled
     @State private var isDragging = false
 
     private let trackHeight: CGFloat = 4
@@ -227,7 +226,7 @@ struct HubSlider: View {
             .animation(Theme.Motion.hover, value: isDragging)
         }
         .frame(height: 20)
-        .opacity(isEnabled ? 1 : 0.45)
+        // No dimming of its own: the row it sits in dims as a whole when disabled.
         .accessibilityElement()
         .accessibilityLabel("Volume")
         .accessibilityValue(Fmt.percent((value - range.lowerBound) / (range.upperBound - range.lowerBound)))
@@ -254,12 +253,14 @@ struct HubSearchField: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.inkTertiary)
-            TextField(prompt, text: $text)
+            TextField("", text: $text)
                 .textFieldStyle(.plain)
+                .fieldPlaceholder(prompt, isShown: text.isEmpty)
                 .font(.system(size: 13))
                 .foregroundStyle(.ink)
                 .focused(focused)
                 .onExitCommand { text = "" }
+                .accessibilityLabel(prompt)
             if !text.isEmpty {
                 Button {
                     text = ""

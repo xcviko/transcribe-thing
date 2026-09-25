@@ -120,6 +120,14 @@ enum ShortcutEdit {
         return .offerSwap(other)
     }
 
+    /// A lone ⌘, ⌥ or ⌃ (either side, or the left one) gets in the way of typing; the right-hand key
+    /// alone rarely does. Returns that right-hand binding, or nil when there is nothing better to offer.
+    static func betterSide(for shortcut: Shortcut) -> Shortcut? {
+        guard shortcut.keyCode == nil, shortcut.modifiers.count == 1, let only = shortcut.modifiers.first,
+              [.command, .option, .control].contains(only.modifier), only.side != .right else { return nil }
+        return Shortcut(modifiers: [.init(only.modifier, .right)])
+    }
+
     /// The bindings after Swap: `action` takes `shortcut`, `other` takes what `action` had.
     static func swapping(_ bindings: ShortcutBindings, action: ShortcutAction, to shortcut: Shortcut,
                          with other: ShortcutAction) -> ShortcutBindings {

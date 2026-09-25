@@ -191,6 +191,8 @@ import Testing
         .openRouterBadRequest("Invalid audio format"), .openRouterServer("Internal server error"),
         .timeout(.geminiFlash), .timeout(.whisper), .offline, .emptyResult(.geminiPro), .noSpeech,
         .engineFailed(.parakeet, "CoreML error"), .recordingTooLarge,
+        .openRouterKeyUnreadable, .openRouterKeyLimit("Key limit exceeded"),
+        .openRouterTruncated("So the plan is so the plan is so the plan is"),
     ]
 
     static let fallbacks: [EngineID?] = [nil, .parakeet, .whisper]
@@ -238,16 +240,29 @@ import Testing
 
     @Test func retryableCloudFailureOffersRetryThenFallback() {
         let notice = MurmurError.timeout(.geminiFlash).notice(recordingID: UUID(), fallbackEngine: .parakeet)
-        #expect(notice.actions.map(\.title) == ["Retry", "Retry with Parakeet"])
+        #expect(notice.actions.map(\.title) == ["Retry", "Retry with Parakeet v3"])
         #expect(notice.actions.map(\.kind) == [.retry, .retryWith(.parakeet)])
         #expect(notice.style == .error)
         #expect(notice.sound == .error)
         #expect(notice.lifetime == .seconds(10))
     }
 
+    @Test func truncatedTranscriptIsShownNotPasted() {
+        let notice = MurmurError.openRouterTruncated("Let's move the review to").notice(recordingID: UUID(), fallbackEngine: nil)
+        #expect(notice.transcript == "Let's move the review to")
+        #expect(notice.actions.map(\.title) == ["Retry", "Copy"])
+        #expect(notice.actions.last?.kind == .copyText("Let's move the review to"))
+        #expect(MurmurError.openRouterTruncated("x").isRetryable)
+    }
+
+    @Test func keyLimitPointsAtTheKeysPage() {
+        let notice = MurmurError.openRouterKeyLimit("limit").notice(recordingID: nil, fallbackEngine: .parakeet)
+        #expect(notice.actions.map(\.kind) == [.openURL(OpenRouterLinks.keys), .selectEngine(.parakeet)])
+    }
+
     @Test func keyProblemsLeadWithTheFix() {
         let invalid = MurmurError.openRouterInvalidKey("401").notice(recordingID: UUID(), fallbackEngine: .parakeet)
-        #expect(invalid.actions.map(\.title) == ["Update Key", "Retry with Parakeet"])
+        #expect(invalid.actions.map(\.title) == ["Update Key", "Retry with Parakeet v3"])
         let missing = MurmurError.openRouterMissingKey.notice(recordingID: nil, fallbackEngine: .parakeet)
         #expect(missing.actions.map(\.kind) == [.openHub(.models), .selectEngine(.parakeet)])
     }
@@ -262,7 +277,7 @@ import Testing
 
     @Test func missingModelOffersDownloadThenSwitch() {
         let withFallback = MurmurError.modelNotDownloaded(.whisper).notice(recordingID: nil, fallbackEngine: .parakeet)
-        #expect(withFallback.actions.map(\.title) == ["Download", "Use Parakeet"])
+        #expect(withFallback.actions.map(\.title) == ["Download", "Use Parakeet v3"])
         let alone = MurmurError.modelNotDownloaded(.whisper).notice(recordingID: nil, fallbackEngine: nil)
         #expect(alone.actions.map(\.kind) == [.download(.whisper), .openHub(.models)])
         #expect(alone.body == "Download it (about 630 MB) or pick another model.")

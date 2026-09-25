@@ -54,16 +54,21 @@ final class TranscriptionService {
         guard let model = engine.openRouterModelID else {
             throw MurmurError.engineFailed(engine, "No cloud model for \(engine.displayName).")
         }
-        guard let key = account.apiKey() else { throw MurmurError.openRouterMissingKey }
-        // Refuse before spending time encoding a recording that can't be sent.
+        guard let key = account.apiKey() else {
+            throw account.isKeyUnreadable ? MurmurError.openRouterKeyUnreadable : MurmurError.openRouterMissingKey
+        }
+        // Refuse before spending time encoding a recording that can't be sent (the recording limit for Gemini
+        // normally stops it well before this).
         let wavBytes = 44 + samples.count * 2
         guard OpenRouterClient.base64Length(ofByteCount: wavBytes) <= OpenRouterClient.maxBase64Bytes else {
             throw MurmurError.recordingTooLarge
         }
         let wav = await Task.detached(priority: .userInitiated) { WAVEncoder.pcm16(samples) }.value
         do {
-            return try await client.transcribe(wav: wav, model: model, systemPrompt: settings.geminiSystemPrompt,
-                                               apiKey: key, timeout: engine.cloudTimeout)
+            let result = try await client.transcribe(wav: wav, model: model, systemPrompt: settings.geminiSystemPrompt,
+                                                     apiKey: key, timeout: engine.cloudTimeout)
+            account.noteCloudSuccess()
+            return result
         } catch let error as MurmurError {
             account.noteCloudFailure(error)
             throw error

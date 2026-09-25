@@ -29,10 +29,11 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    /// The one short form, wherever `displayName` doesn't fit (sidebar chip, notices, notes).
     var shortName: String {
         switch self {
-        case .parakeet: "Parakeet"
-        case .whisper: "Whisper"
+        case .parakeet: "Parakeet v3"
+        case .whisper: "Whisper Turbo"
         case .geminiFlash: "Gemini Flash"
         case .geminiPro: "Gemini Pro"
         }
@@ -54,6 +55,9 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
         case .geminiPro: "Most accurate · slower · higher cost"
         }
     }
+
+    /// Badges every local model carries; narrow layouts drop them from all rows at once.
+    static let privacyBadges: Set<String> = ["Private", "Offline"]
 
     var badges: [String] {
         switch self {

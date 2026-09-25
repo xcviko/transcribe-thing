@@ -40,7 +40,7 @@ struct GeneralPage: View {
             HubGroup("Recording") {
                 SettingsGroup {
                     SettingsRow(title: "Maximum recording length",
-                                subtitle: "Murmur warns you a minute before, then transcribes what you have.",
+                                subtitle: "Murmur warns you a minute before, then transcribes. Gemini stops at 7 min.",
                                 systemImage: "timer", iconTint: .inkSecondary) {
                         HubMenuPicker(options: AppSettings.maxRecordingChoices, selection: $settings.maxRecordingMinutes) {
                             "\($0) min"
@@ -68,7 +68,7 @@ struct GeneralPage: View {
                                     ? "History is empty."
                                     : "Deletes \(Fmt.number(history.entries.count)) transcripts and their recordings.",
                                 systemImage: "trash", iconTint: .danger) {
-                        Button("Clear History…") { confirmingClear = true }
+                        Button("Delete All…") { confirmingClear = true }
                             .buttonStyle(SecondaryButtonStyle(size: .small, isDestructive: true))
                             .disabled(history.entries.isEmpty)
                     }
@@ -99,6 +99,8 @@ struct GeneralPage: View {
                 AboutCard()
             }
         }
+        // Approval in Login Items (or removal there) happens outside Murmur.
+        .onAppear { launchAtLogin.refresh() }
         .confirmationDialog("Delete all transcripts and recordings?", isPresented: $confirmingClear) {
             Button("Delete Everything", role: .destructive) {
                 withAnimation(Theme.Motion.collapse) { history.clearAll() }
@@ -146,9 +148,18 @@ private struct PermissionRow: View {
     var state: PermissionState
     var action: () -> Void
 
+    /// Icon and status share one tone. Off is red, like Home's attention card for the same problem.
+    private var tone: Color {
+        switch state {
+        case .granted: .success
+        case .denied: .danger
+        case .notDetermined: .warning
+        }
+    }
+
     var body: some View {
         SettingsRow(title: title, subtitle: subtitle, systemImage: symbol,
-                    iconTint: state == .granted ? .success : .warning) {
+                    iconTint: tone) {
             HStack(spacing: 10) {
                 switch state {
                 case .granted:
@@ -159,17 +170,17 @@ private struct PermissionRow: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.success)
                     Button("Open Settings", action: action)
-                        .buttonStyle(QuietButtonStyle(tint: .inkSecondary))
+                        .buttonStyle(SecondaryButtonStyle(size: .small))
                 case .denied:
                     Text("Off")
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.danger)
+                        .foregroundStyle(tone)
                     Button("Open Settings", action: action)
                         .buttonStyle(SecondaryButtonStyle(size: .small))
                 case .notDetermined:
                     Text("Not set up")
                         .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(.warning)
+                        .foregroundStyle(tone)
                     Button("Allow", action: action)
                         .buttonStyle(SecondaryButtonStyle(size: .small))
                 }
@@ -203,7 +214,7 @@ private struct AboutCard: View {
                     settings.onboardingStep = OnboardingStepIndex.welcome
                     hub.windows.showOnboarding()
                 } label: {
-                    Label("Replay onboarding", systemImage: "arrow.counterclockwise")
+                    Label("Replay Onboarding", systemImage: "arrow.counterclockwise")
                 }
                 .buttonStyle(SecondaryButtonStyle(size: .small))
             }
