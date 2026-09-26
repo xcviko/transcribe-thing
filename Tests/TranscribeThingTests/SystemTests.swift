@@ -791,6 +791,16 @@ private final class PasteLog: @unchecked Sendable {
         #expect(rig.pasteboard.string(forType: .string) == "hello")
     }
 
+    /// Accessibility granted after launch: the preflight still says no, but the live event tap proves the grant.
+    @Test func aRunningEventTapOverridesAStalePreflight() async throws {
+        let rig = rig(canPost: false)
+        defer { rig.pasteboard.releaseGlobally() }
+        rig.inserter.eventTapActive = { true }
+        #expect(await rig.inserter.insert("hello", expectedPID: 42) == .pasted)
+        #expect(rig.log.codes == [9])
+        try await settle()
+    }
+
     @Test func pasteNowSkipsFocusAndTargetChecks() async {
         let rig = rig(focus: FocusInfo(pid: 1, editability: .notEditable), frontmost: 7)
         defer { rig.pasteboard.releaseGlobally() }

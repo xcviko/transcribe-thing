@@ -112,8 +112,18 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             previousApp = front
         }
         NSApp.setActivationPolicy(.regular)
-        window.makeKeyAndOrderFront(nil)
+        window.collectionBehavior.insert(.moveToActiveSpace)
+        // An agent app launched from Terminal or Finder is not activated for us, and activation is
+        // cooperative since macOS 14: makeKeyAndOrderFront alone can leave the window behind the active app.
+        window.orderFrontRegardless()
+        window.makeKey()
         NSApp.activate()
+        DispatchQueue.main.async { [weak window] in
+            MainActor.assumeIsolated {
+                guard let window, window.isVisible, !NSApp.isActive else { return }
+                window.orderFrontRegardless()
+            }
+        }
     }
 
     func windowWillClose(_ notification: Notification) {

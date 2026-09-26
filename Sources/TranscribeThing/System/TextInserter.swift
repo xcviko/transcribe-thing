@@ -34,6 +34,9 @@ final class TextInserter {
 
     var restoreDelay: Duration = .milliseconds(800)
     var modifierReleaseTimeout: Duration = .milliseconds(600)
+    /// Our active event tap is running. Creating an active tap requires the same PostEvent grant, so a live
+    /// tap proves we may post ⌘V even when the preflight still answers from its stale per-process cache.
+    var eventTapActive: @MainActor () -> Bool = { false }
 
     private let settings: AppSettings
     private let pasteboard: NSPasteboard
@@ -52,7 +55,9 @@ final class TextInserter {
         self.pasteboard = .general
         self.system = System(
             frontmostPID: { NSWorkspace.shared.frontmostApplication?.processIdentifier },
-            canPostEvents: { CGPreflightPostEventAccess() },
+            // CGPreflightPostEventAccess() caches its first answer for the life of the process, so a grant
+            // given after launch stays "denied" there; AXIsProcessTrusted() follows live changes.
+            canPostEvents: { AXIsProcessTrusted() || CGPreflightPostEventAccess() },
             modifiersHeld: { TextInserter.physicalModifiersHeld() },
             inspectFocus: { await FocusInspector.inspect() },
             pasteKeyCode: { PasteKeyResolver.resolveCurrent() },
@@ -87,6 +92,7 @@ final class TextInserter {
 
         await waitForModifierRelease()
         let focus = await system.inspectFocus()
+        Log.app.notice("Paste target: \(focus.bundleID ?? "?", privacy: .public) role=\(focus.role ?? "-", privacy: .public) subrole=\(focus.subrole ?? "-", privacy: .public) editable=\(String(describing: focus.editability), privacy: .public)")
         if let expectedPID, let focusPID = focus.pid, focusPID != expectedPID { return .targetChanged }
         if let expectedPID, system.frontmostPID() != expectedPID { return .targetChanged }
         if focus.isSecure || focus.editability == .notEditable {
@@ -134,6 +140,7 @@ final class TextInserter {
     }
 
     private func checkPermission(for text: String) async -> InsertionOutcome? {
+        if eventTapActive() { return nil }
         let canPost = system.canPostEvents
         guard await Task.detached(priority: .userInitiated, operation: { canPost() }).value else {
             copy(text)

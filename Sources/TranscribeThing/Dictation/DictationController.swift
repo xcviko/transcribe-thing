@@ -695,6 +695,7 @@ final class DictationController {
     }
 
     private func handleInsertion(_ outcome: InsertionOutcome, text: String, celebrate: Bool) {
+        Log.app.notice("Insertion outcome: \(String(describing: outcome), privacy: .public)")
         switch outcome {
         case .pasted:
             // A paste landing mid-recording must not leak its tick into the new recording.

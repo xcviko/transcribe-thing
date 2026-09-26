@@ -156,6 +156,7 @@ final class AppEnvironment {
         }
         let builder = menuBar.builder
         pillModel.contextMenuProvider = { builder.makeMenu(includeQuit: false) }
+        inserter.eventTapActive = { [weak hotkeys] in hotkeys?.isTapActive ?? false }
     }
 
     /// Starts services in the SPEC §4.14 order.
