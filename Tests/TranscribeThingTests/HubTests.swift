@@ -132,7 +132,7 @@ import Testing
         #expect(EngineSummary.make(engine: .whisper, localState: .downloading(DownloadProgress(fraction: 0.42)), keyStatus: .missing).status
             == "Downloading 42%")
         #expect(EngineSummary.make(engine: .geminiFlash, localState: .notInstalled, keyStatus: .missing)
-            == EngineSummary(name: "Gemini Flash", status: "Key missing", tone: .negative))
+            == EngineSummary(name: "Gemini Flash", status: "Needs key", tone: .negative))
     }
 }
 
@@ -209,8 +209,41 @@ import Testing
         #expect(HubAttention.items(input(engine: .geminiPro, key: .offline)).isEmpty)
     }
 
+    @Test func keyProblemsNameTheCloudSpeechModel() {
+        let limit = KeyStatus.noCredit(KeyInfo(limit: 5, limitRemaining: 0, usage: 5))
+        #expect(HubAttention.items(input(engine: .whisperCloud, key: limit)).first?.body
+            == "This key has a spending limit, and it’s used up. Raise it to keep using Whisper Turbo · Cloud.")
+        #expect(HubAttention.items(input(engine: .parakeetCloud, key: .noCredit(nil))).first?.body
+            == "Add credit to keep using Parakeet v3 · Cloud.")
+        #expect(HubAttention.items(input(engine: .geminiFlash, key: .noCredit(nil))).first?.body
+            == "Add credit to keep using Gemini.")
+        #expect(HubAttention.items(input(engine: .parakeetCloud, key: .missing)).first?.body
+            == "Parakeet v3 · Cloud needs a key to transcribe.")
+    }
+
     @Test func fnHintOnlyWhenPushToTalkUsesFn() {
         #expect(HubAttention.items(input(fn: .other("Dictation"), pttUsesFn: false)).isEmpty)
+    }
+}
+
+@Suite struct CloudSpeechHubTests {
+    @Test func readinessAndSummaryFollowTheKey() {
+        for engine in EngineID.cloudTranscriptionEngines {
+            #expect(EngineReadiness.of(engine, localState: .notInstalled, keyStatus: .valid(KeyInfo())) == .ready)
+            #expect(EngineReadiness.of(engine, localState: .ready, keyStatus: .missing).unavailableReason == "Needs key")
+        }
+        #expect(EngineSummary.make(engine: .whisperCloud, localState: .ready, keyStatus: .valid(KeyInfo()))
+            == EngineSummary(name: "Whisper Turbo · Cloud", status: "Ready", tone: .positive))
+    }
+
+    @Test func providerNotesAreHonestAboutRouting() throws {
+        let parakeet = try #require(ProviderNote.make(.parakeetCloud))
+        #expect(parakeet.text == "Served by Together." && parakeet.kind == .pinned)
+        let whisper = try #require(ProviderNote.make(.whisperCloud))
+        #expect(whisper.kind == .routed)
+        #expect(whisper.text.contains("Groq or DeepInfra") && whisper.text.contains("History shows which"))
+        #expect(ProviderNote.make(.geminiPro)?.text == "Served by Google AI Studio only.")
+        #expect(ProviderNote.make(.parakeet) == nil && ProviderNote.make(.whisper) == nil)
     }
 }
 

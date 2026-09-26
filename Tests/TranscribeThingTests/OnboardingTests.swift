@@ -195,6 +195,24 @@ import Testing
         #expect(model.showsKeyField)
     }
 
+    @Test func cloudSpeechSharesTheOneKey() {
+        let missing = makeModel(step: 2) { ctx in
+            ctx.models = .preview(states: [.parakeet: .notInstalled, .whisper: .notInstalled])
+            ctx.account = .preview(status: .missing)
+        }
+        missing.select(.parakeetCloud)
+        #expect(missing.ctx.settings.selectedEngine == .parakeetCloud)
+        #expect(missing.showsKeyField)
+        #expect(!missing.canContinue)
+
+        let connected = makeModel(step: 2) { ctx in
+            ctx.models = .preview(states: [.parakeet: .notInstalled, .whisper: .notInstalled])
+        }
+        connected.select(.whisperCloud)
+        #expect(connected.canContinue, "the key Gemini uses works for cloud Parakeet and Whisper too")
+        #expect(!connected.showsKeyField)
+    }
+
     @Test func keyFormatErrorShowsOnSubmit() {
         let model = makeModel(step: 2)
         model.updateKeyDraft("sk-proj-abcdef")

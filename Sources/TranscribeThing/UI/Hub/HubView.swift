@@ -302,10 +302,7 @@ private struct EngineStatusChip: View {
             HStack(spacing: 8) {
                 EngineIcon(engine: engine, size: 26)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(summary.name)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.ink)
-                        .lineLimit(1)
+                    nameLine
                     HStack(spacing: 4) {
                         StatusDot(color: summary.tone.color, size: 6, pulsing: summary.tone == .progress)
                             .frame(width: 10, height: 10)
@@ -338,6 +335,22 @@ private struct EngineStatusChip: View {
         .animation(Theme.Motion.hover, value: hovering)
         .help("Open Models")
         .accessibilityLabel("\(summary.name), \(summary.status). Open Models.")
+    }
+
+    /// "Whisper Turbo · Cloud" doesn't fit the sidebar, so cloud Parakeet and Whisper show the model's short
+    /// name with a cloud, the same mark their history rows carry.
+    private var nameLine: some View {
+        HStack(spacing: 4) {
+            Text(engine.cloudAPI == .transcriptions ? (engine.localCounterpart?.shortName ?? summary.name) : summary.name)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.ink)
+                .lineLimit(1)
+            if engine.cloudAPI == .transcriptions {
+                Image(systemName: "cloud.fill")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(HubPalette.apricotInk)
+            }
+        }
     }
 }
 

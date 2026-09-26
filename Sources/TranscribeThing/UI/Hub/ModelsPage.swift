@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Four engines (download, use, delete), storage, the OpenRouter key, Gemini instructions and Whisper's language.
+/// Six engines (download, use, delete), storage, the OpenRouter key, Gemini instructions and Whisper's language.
 struct ModelsPage: View {
     @Environment(HubContext.self) private var hub
     @Environment(ModelStore.self) private var models
@@ -42,7 +42,7 @@ struct ModelsPage: View {
                 HubGroup("Language") {
                     SettingsGroup {
                         SettingsRow(title: "Whisper language",
-                                    subtitle: "A hint for Whisper. Parakeet detects the language on its own.",
+                                    subtitle: "A hint for Whisper, on your Mac and through OpenRouter. Parakeet and Gemini detect the language on their own.",
                                     systemImage: "character.bubble") {
                             HubMenuPicker(options: [nil] + WhisperLanguage.all.map(\.code),
                                           selection: whisperLanguage,
@@ -155,6 +155,9 @@ private struct ModelRow: View {
                     .typeface(.callout)
                     .foregroundStyle(.inkSecondary)
                     .lineLimit(1)
+                if let note = ProviderNote.make(engine) {
+                    providerLine(note.text, kind: note.kind)
+                }
                 status
                     .padding(.top, 2)
             }
@@ -177,13 +180,29 @@ private struct ModelRow: View {
         engine.badges.filter { $0 != "Cloud" && !(compactBadges && EngineID.privacyBadges.contains($0)) }
     }
 
+    /// Under "Through OpenRouter" the "· Cloud" suffix would only repeat the heading.
+    private var title: String { engine.isLocal ? engine.displayName : engine.modelName }
+
+    private func providerLine(_ text: String, kind: ProviderNote.Kind) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
+            Image(systemName: kind == .routed ? "arrow.triangle.branch" : "server.rack")
+                .font(.system(size: 9.5, weight: .semibold))
+                .frame(width: 12)
+            Text(text)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .typeface(.callout)
+        .foregroundStyle(.inkTertiary)
+    }
+
     private func titleLine(badges: [String]) -> some View {
         HStack(spacing: 6) {
-            Text(engine.displayName)
+            Text(title)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.ink)
                 .lineLimit(1)
                 .fixedSize()
+                .accessibilityLabel(engine.displayName)
             ForEach(badges, id: \.self) { Badge.engine($0) }
         }
     }

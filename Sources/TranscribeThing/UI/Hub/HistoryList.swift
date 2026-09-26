@@ -180,6 +180,12 @@ struct HistoryRow: View {
         .frame(minWidth: 88, alignment: .topTrailing)
     }
 
+    /// Gemini is pinned to one provider, so only cloud Parakeet and Whisper say who answered.
+    private var servedBy: String? {
+        guard entry.engine.cloudAPI == .transcriptions, let provider = entry.provider, !provider.isEmpty else { return nil }
+        return provider
+    }
+
     private var meta: some View {
         HStack(spacing: 7) {
             if let cost = entry.costUSD, cost > 0 {
@@ -188,7 +194,13 @@ struct HistoryRow: View {
                     .monospacedDigit()
                     .foregroundStyle(.inkTertiary)
             }
-            EngineGlyph(engine: entry.engine)
+            if let servedBy {
+                Text("via \(servedBy)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.inkTertiary)
+                    .lineLimit(1)
+            }
+            EngineGlyph(engine: entry.engine, provider: entry.provider)
             Text(Fmt.duration(entry.audioDuration))
                 .font(.system(size: 11.5))
                 .monospacedDigit()
@@ -239,14 +251,19 @@ struct HistoryRow: View {
     }
 }
 
-/// "Transcribe with" → the four engines; unavailable ones are disabled with the reason.
+/// "Transcribe with" → every engine, grouped like the menu bar's Model menu (on this Mac, cloud speech, Gemini);
+/// unavailable ones are disabled with the reason.
 struct RetryMenuItems: View {
     var entry: TranscriptEntry
     var includesHeader = true
     @Environment(HubContext.self) private var hub
 
     var body: some View {
-        let items = ForEach(EngineID.allCases) { engine in
+        let engines = EngineID.allCases
+        let items = ForEach(Array(engines.enumerated()), id: \.element) { index, engine in
+            if index > 0, engines[index - 1].cloudAPI != engine.cloudAPI {
+                Divider()
+            }
             let readiness = hub.readiness(of: engine)
             Button {
                 hub.dictation.retry(entry, with: engine)

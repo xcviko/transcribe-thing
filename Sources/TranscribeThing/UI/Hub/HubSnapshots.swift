@@ -19,12 +19,15 @@ enum HubSnapshots {
             hub("hub-models-compact", .models, width: 820, height: 560) { c in
                 c.models = .preview(states: [.parakeet: .ready, .whisper: .downloading(Samples.downloading)])
             },
+            hub("hub-models-compact-cloud", .models, width: 820, height: 1100) { c in
+                c.settings.selectedEngine = .parakeetCloud
+            },
             hub("hub-home-search", .home) { c in
                 c.initialSearch = "zzz"
             },
 
             hub("hub-models", .models),
-            hub("hub-models-full", .models, height: 1560),
+            hub("hub-models-full", .models, height: 1720),
             hub("hub-models-downloading", .models) { c in
                 c.models = .preview(states: [.parakeet: .ready, .whisper: .downloading(Samples.downloading)])
             },
@@ -44,6 +47,9 @@ enum HubSnapshots {
                 c.models = .preview(states: [.parakeet: .failed("Couldn’t load the model. Retry, or download it again."),
                                              .whisper: .notInstalled],
                                     lastErrors: [.parakeet: .modelLoadFailed(.parakeet, "Corrupt weights")])
+            },
+            hub("hub-models-cloud-stt", .models, height: 1100) { c in
+                c.settings.selectedEngine = .whisperCloud
             },
             hub("hub-models-key-limit", .models, height: 1100) { c in
                 c.settings.selectedEngine = .geminiFlash

@@ -1,6 +1,6 @@
 import Foundation
 
-// Wire formats for OpenRouter's chat completions and key endpoints, and the mapping of every documented
+// Wire formats for OpenRouter's chat completions, transcription, generation and key endpoints, and the mapping of every documented
 // failure shape to `AppError`. Pure and synchronous so tests can drive them with canned bodies.
 
 // MARK: Request
@@ -81,7 +81,71 @@ enum OpenRouterMessage: Encodable, Equatable {
     }
 }
 
+/// `POST /audio/transcriptions` body. No `provider` object: routing preferences (`order`, `only`, `ignore`) are
+/// not applied to transcription requests, so sending them would only suggest a pin that doesn't exist.
+struct OpenRouterSpeechRequest: Encodable, Equatable {
+    let model: String
+    let inputAudio: InputAudio
+    /// ISO 639-1; omitted for auto-detection.
+    let language: String?
+
+    struct InputAudio: Encodable, Equatable {
+        /// Raw base64, not a data URI.
+        let data: String
+        let format: String
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case model, language
+        case inputAudio = "input_audio"
+    }
+
+    static func wav(model: String, audioBase64: String, language: String?) -> OpenRouterSpeechRequest {
+        OpenRouterSpeechRequest(model: model, inputAudio: InputAudio(data: audioBase64, format: "wav"),
+                                language: normalizedLanguage(language))
+    }
+
+    /// "EN " → "en"; blank → nil.
+    static func normalizedLanguage(_ raw: String?) -> String? {
+        guard let code = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !code.isEmpty else {
+            return nil
+        }
+        return code
+    }
+
+    func encoded() throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.withoutEscapingSlashes]
+        return try encoder.encode(self)
+    }
+}
+
 // MARK: Response
+
+/// `POST /audio/transcriptions` → `{ text, usage }`; the generation id comes in the `X-Generation-Id` header.
+struct OpenRouterSpeechResponse: Decodable {
+    let text: String?
+    let usage: Usage?
+    let error: OpenRouterAPIError?
+
+    struct Usage: Decodable {
+        let seconds: Double?
+        let cost: Double?
+    }
+}
+
+/// `GET /api/v1/generation?id=` → `data`. Only what transcribe-thing reads.
+struct OpenRouterGeneration: Decodable {
+    let id: String?
+    let providerName: String?
+    let totalCost: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case providerName = "provider_name"
+        case totalCost = "total_cost"
+    }
+}
 
 struct OpenRouterChatResponse: Decodable {
     let id: String?
@@ -215,6 +279,12 @@ struct OpenRouterDataEnvelope<T: Decodable>: Decodable { let data: T }
 enum OpenRouterErrorMapper {
     static let noRouteHint = "Google AI Studio isn’t reachable with your OpenRouter settings. Check openrouter.ai/settings/privacy: zero data retention (ZDR) for Google and your allowed providers must let Google AI Studio through."
 
+    static func noRouteHint(for engine: EngineID) -> String {
+        guard engine.cloudAPI == .transcriptions else { return noRouteHint }
+        let providers = engine.knownProviders.isEmpty ? "its providers" : engine.knownProviders.joined(separator: " or ")
+        return "No provider of \(engine.modelName) is reachable with your OpenRouter settings. Check openrouter.ai/settings/privacy: your data policy and allowed providers must let \(providers) through."
+    }
+
     /// Maps a non-200 response (body may be JSON, HTML or empty).
     static func httpError(status: Int, data: Data, retryAfter: Double?, engine: EngineID) -> AppError {
         if let envelope = try? JSONDecoder().decode(OpenRouterErrorEnvelope.self, from: data) {
@@ -239,7 +309,7 @@ enum OpenRouterErrorMapper {
         // Routing dead ends are documented both as 404 and as 503; the message tells them apart.
         let noRoute = lowered.hasPrefix("no endpoints") || lowered.hasPrefix("no allowed providers")
             || lowered.contains("no endpoints found")
-        if noRoute { return .openRouterNoRoute(join(message, noRouteHint)) }
+        if noRoute { return .openRouterNoRoute(join(message, noRouteHint(for: engine))) }
 
         // A 402 says which limit it hit. Only openrouter_credits means the account is out of credit.
         switch limitSource {
@@ -260,7 +330,7 @@ enum OpenRouterErrorMapper {
         case "provider_overloaded", "provider_unavailable": return .openRouterProviderUnavailable(message)
         case "authentication": return .openRouterInvalidKey(message)
         case "payment_required": return .openRouterNoCredits(message)
-        case "not_found": return .openRouterNoRoute(join(message, noRouteHint))
+        case "not_found": return .openRouterNoRoute(join(message, noRouteHint(for: engine)))
         case "permission_denied": return .openRouterRefused(message)
         case "context_length_exceeded", "max_tokens_exceeded", "token_limit_exceeded", "string_too_long",
              "invalid_request", "invalid_prompt", "unprocessable", "precondition_failed":
@@ -273,7 +343,7 @@ enum OpenRouterErrorMapper {
         case 401: return .openRouterInvalidKey(message)
         case 402: return .openRouterNoCredits(message)
         case 403: return .openRouterRefused(message)
-        case 404: return .openRouterNoRoute(join(message, noRouteHint))
+        case 404: return .openRouterNoRoute(join(message, noRouteHint(for: engine)))
         case 408, 504, 524: return .timeout(engine)
         case 413: return .recordingTooLarge
         case 429: return .openRouterRateLimited(retryAfter: retryAfter)
@@ -319,6 +389,21 @@ enum OpenRouterErrorMapper {
         }
         return CloudResult(text: text, provider: decoded.provider, costUSD: decoded.usage?.cost,
                            reasoningTokens: decoded.usage?.completionTokensDetails?.reasoningTokens)
+    }
+
+    /// Interprets a 200 from the transcription endpoint. An error object inside it is an upstream failure, mapped
+    /// like the chat endpoint's. Empty text is returned as is: silence legitimately transcribes to nothing.
+    static func speechSuccess(data: Data, engine: EngineID) throws -> CloudResult {
+        let decoded: OpenRouterSpeechResponse
+        do {
+            decoded = try JSONDecoder().decode(OpenRouterSpeechResponse.self, from: data)
+        } catch {
+            throw AppError.openRouterServer("OpenRouter sent a response \(Brand.name) couldn’t read.")
+        }
+        if let error = decoded.error { throw map(error, status: 502, retryAfter: nil, engine: engine) }
+        guard let text = decoded.text else { throw AppError.openRouterServer("OpenRouter sent no transcript.") }
+        return CloudResult(text: text.trimmingCharacters(in: .whitespacesAndNewlines), provider: nil,
+                           costUSD: decoded.usage?.cost, reasoningTokens: nil)
     }
 
     /// `Retry-After` is seconds or an HTTP date.

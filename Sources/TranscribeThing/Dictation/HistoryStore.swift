@@ -18,11 +18,14 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
     var errorMessage: String?
     /// Present only for failed/canceled entries; pruned after `keepFailedRecordingsDays`.
     var audioFileName: String?
+    /// OpenRouter provider that served a cloud transcript ("Groq", "Together"; "Groq, DeepInfra" when chunks
+    /// went to different providers). Filled in shortly after delivery; absent from older history files.
+    var provider: String?
 
     init(id: UUID = UUID(), createdAt: Date = Date(), text: String, engine: EngineID,
          status: TranscriptStatus = .success, audioDuration: TimeInterval, voicedSeconds: TimeInterval,
          processingTime: TimeInterval? = nil, costUSD: Double? = nil, errorMessage: String? = nil,
-         audioFileName: String? = nil) {
+         audioFileName: String? = nil, provider: String? = nil) {
         self.id = id
         self.createdAt = createdAt
         self.text = text
@@ -34,6 +37,7 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
         self.costUSD = costUSD
         self.errorMessage = errorMessage
         self.audioFileName = audioFileName
+        self.provider = provider
     }
 
     var wordCount: Int { Self.countWords(text) }

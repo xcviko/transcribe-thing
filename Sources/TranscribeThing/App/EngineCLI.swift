@@ -6,7 +6,8 @@ import Foundation
 
 /// Headless engine checks, dispatched by TranscribeThingMain before the app starts:
 ///
-///     transcribe-thing --transcribe <audio file> --engine parakeet|whisper|geminiFlash|geminiPro
+///     transcribe-thing --transcribe <audio file>
+///            --engine parakeet|whisper|parakeetCloud|whisperCloud|geminiFlash|geminiPro
 ///            [--download] [--language <iso>] [--prompt <text>] [--repeat <n>]
 ///     transcribe-thing --model-status
 ///
@@ -17,7 +18,9 @@ import Foundation
 ///
 /// Uses the real model folder (~/Library/Application Support/transcribe-thing) and the real pipeline
 /// (ModelStore → InferenceGate → engine, or OpenRouterClient). Cloud engines read the key from
-/// OPENROUTER_API_KEY, else from the Keychain. Settings are in-memory: the CLI never changes the app's.
+/// OPENROUTER_API_KEY, else from the Keychain; cloud Parakeet and Whisper also print the provider that served
+/// the request. `--language` applies to both Whisper engines, `--prompt` to Gemini only. Settings are
+/// in-memory: the CLI never changes the app's.
 enum EngineCLI {
     static func handles(_ arguments: [String]) -> Bool {
         arguments.contains("--transcribe") || arguments.contains("--model-status")
@@ -54,7 +57,9 @@ enum EngineCLI {
         do {
             return try await transcribe(options)
         } catch let error as AppError {
-            printError("ERROR: \(error.code): \(error.localizedDescription)")
+            let notice = error.notice(recordingID: nil, fallbackEngine: nil, engine: options.engine)
+            let message = [notice.title, notice.body].compactMap { $0 }.joined(separator: ". ")
+            printError("ERROR: \(error.code): \(message)")
             if let detail = error.detail { printError("DETAIL: \(detail)") }
             if case .modelNotDownloaded = error { return ExitCode.notDownloaded }
             return ExitCode.failed
@@ -68,7 +73,8 @@ enum EngineCLI {
 
     private struct Options {
         static let usage = """
-        usage: transcribe-thing --transcribe <audio file> --engine parakeet|whisper|geminiFlash|geminiPro \
+        usage: transcribe-thing --transcribe <audio file> \
+        --engine parakeet|whisper|parakeetCloud|whisperCloud|geminiFlash|geminiPro \
         [--download] [--language <iso>] [--prompt <text>] [--repeat <n>]
                transcribe-thing --model-status
         """
@@ -113,6 +119,8 @@ enum EngineCLI {
             switch name.lowercased().replacingOccurrences(of: "-", with: "").replacingOccurrences(of: "_", with: "") {
             case "parakeet": return .parakeet
             case "whisper": return .whisper
+            case "parakeetcloud", "cloudparakeet": return .parakeetCloud
+            case "whispercloud", "cloudwhisper": return .whisperCloud
             case "geminiflash", "flash": return .geminiFlash
             case "geminipro", "pro": return .geminiPro
             default: return nil
@@ -191,6 +199,16 @@ enum EngineCLI {
             last = result
         }
         if let last {
+            if options.engine.cloudAPI == .transcriptions {
+                let provider: String?
+                if let known = last.provider {
+                    provider = known
+                } else {
+                    provider = await service.servedProvider(generationIDs: last.generationIDs)
+                }
+                let preferred = options.engine.preferredProvider.map { " · preferred \($0)" } ?? ""
+                print("PROVIDER: \(provider ?? "unknown")\(preferred)")
+            }
             print("TEXT: \(last.text)")
             if let best = runTimes.min() { print("TRANSCRIBE: first \(format(runTimes[0], digits: 3)) s · best \(format(best, digits: 3)) s") }
         }

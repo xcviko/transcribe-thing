@@ -131,7 +131,7 @@ final class MenuBuilder {
         case .checking:
             return EngineStatus(text: "Checking key…", color: Palette.warning, isUsable: true)
         case .missing:
-            return EngineStatus(text: "Key needed", color: Palette.danger, isUsable: false)
+            return EngineStatus(text: "Needs key", color: Palette.danger, isUsable: false)
         case .invalid:
             return EngineStatus(text: "Key rejected", color: Palette.danger, isUsable: false)
         case .noCredit:
@@ -149,7 +149,8 @@ final class MenuBuilder {
     private func modelMenu(_ env: AppEnvironment) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
-        for engine in EngineID.allCases {
+        for (index, engine) in EngineID.allCases.enumerated() {
+            if index > 0, EngineID.allCases[index - 1].cloudAPI != engine.cloudAPI { menu.addItem(.separator()) }
             let status = Self.engineStatus(engine, models: env.models, account: env.account)
             let item = MenuActionItem(title: engine.displayName) { [weak env] in
                 env?.models.select(engine)

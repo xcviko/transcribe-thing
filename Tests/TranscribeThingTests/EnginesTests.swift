@@ -264,18 +264,36 @@ final class StubURLProtocol: URLProtocol {
         private let lock = NSLock()
         private var replies: [String: [Reply]] = [:]
         private var requests: [String: [URLRequest]] = [:]
+        private var bodies: [String: [Data]] = [:]
 
         func enqueue(_ reply: [Reply], host: String) { lock.withLock { replies[host, default: []] += reply } }
         func requests(for host: String) -> [URLRequest] { lock.withLock { requests[host] ?? [] } }
+        /// Request bodies in arrival order (URLSession hands them to the protocol as a stream).
+        func bodies(for host: String) -> [Data] { lock.withLock { bodies[host] ?? [] } }
         func next(for request: URLRequest) -> Reply? {
-            lock.withLock {
+            let body = request.httpBody ?? request.httpBodyStream.map(Self.drain) ?? Data()
+            return lock.withLock {
                 let host = request.url?.host ?? ""
                 requests[host, default: []].append(request)
+                bodies[host, default: []].append(body)
                 guard var queue = replies[host], !queue.isEmpty else { return nil }
                 let reply = queue.removeFirst()
                 replies[host] = queue
                 return reply
             }
+        }
+
+        private static func drain(_ stream: InputStream) -> Data {
+            stream.open()
+            defer { stream.close() }
+            var data = Data()
+            var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+            while stream.hasBytesAvailable {
+                let read = stream.read(&buffer, maxLength: buffer.count)
+                guard read > 0 else { break }
+                data.append(buffer, count: read)
+            }
+            return data
         }
     }
 

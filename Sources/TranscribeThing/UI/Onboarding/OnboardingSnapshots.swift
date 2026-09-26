@@ -55,6 +55,15 @@ enum OnboardingSnapshots {
                 ctx.models = .preview(states: [.parakeet: .ready, .whisper: .notInstalled])
                 ctx.settings.selectedEngine = .geminiFlash
             }) { model in model.stage(step: .model) },
+            entry("onboarding-3-model-cloud-stt", context: { ctx in
+                ctx.models = .preview(states: [.parakeet: .ready, .whisper: .notInstalled])
+                ctx.settings.selectedEngine = .whisperCloud
+            }) { model in model.stage(step: .model) },
+            entry("onboarding-3-model-cloud-stt-missing", context: { ctx in
+                ctx.models = .preview(states: [.parakeet: .notInstalled, .whisper: .notInstalled])
+                ctx.settings.selectedEngine = .parakeetCloud
+                ctx.account = .preview(status: .missing)
+            }) { model in model.stage(step: .model) },
             entry("onboarding-3-model-cloud-invalid", context: { ctx in
                 ctx.models = .preview(states: [.parakeet: .notInstalled, .whisper: .notInstalled])
                 ctx.settings.selectedEngine = .geminiPro
@@ -95,6 +104,9 @@ enum OnboardingSnapshots {
             }) { model in model.stage(step: .tryIt) },
 
             entry("onboarding-6-done", still: 0.42) { model in model.stage(step: .done) },
+            entry("onboarding-6-done-cloud", still: 0.42, context: { ctx in
+                ctx.settings.selectedEngine = .whisperCloud
+            }) { model in model.stage(step: .done) },
         ]
     }
 

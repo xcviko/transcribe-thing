@@ -49,7 +49,7 @@ struct OpenRouterKeyCard: View {
                 Text("OpenRouter key")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.ink)
-                Text("Gemini runs on your own OpenRouter account. You pay OpenRouter per use.")
+                Text("Cloud models run on your own OpenRouter account. You pay OpenRouter per use.")
                     .typeface(.callout)
                     .foregroundStyle(.inkSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -147,7 +147,7 @@ struct OpenRouterKeyCard: View {
     @ViewBuilder private var statusLine: some View {
         switch account.status {
         case .missing:
-            status("key.slash", .inkTertiary, "No key yet. Gemini models need one.")
+            status("key.slash", .inkTertiary, "No key yet. The four cloud models need one.")
         case .checking:
             HStack(spacing: 7) {
                 ProgressView().controlSize(.mini)
@@ -218,31 +218,28 @@ struct OpenRouterKeyCard: View {
         return text
     }
 
+    /// Who hears the audio. Each model row names its provider; this says nothing else leaves the Mac.
     private var routing: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .center, spacing: 8) {
-                Image(systemName: "lock.shield")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.success)
-                Text("Requests go only to \(Text("Google AI Studio").fontWeight(.semibold)) through OpenRouter.")
-                    .typeface(.callout)
-                    .foregroundStyle(.inkSecondary)
-                Spacer(minLength: 8)
-                HStack(spacing: 4) {
-                    Text("Reasoning").foregroundStyle(.inkSecondary)
-                    Text("High").fontWeight(.semibold).foregroundStyle(.ink)
-                    Image(systemName: "info.circle").font(.system(size: 9.5)).foregroundStyle(.inkTertiary)
-                }
-                .font(.system(size: 11.5, weight: .medium))
-                .padding(.horizontal, 9)
-                .frame(height: 22)
-                .background(Color.ink.opacity(0.05), in: Capsule(style: .continuous))
-                .help("Set for best accuracy")
-            }
-            Text("Your audio is sent to OpenRouter and Google AI Studio to be transcribed. Nothing else is sent.")
-                .font(.system(size: 11))
+        HStack(alignment: .center, spacing: 8) {
+            Image(systemName: "lock.shield")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.success)
+            Text("Only your audio is sent, to OpenRouter and the model’s provider.")
+                .typeface(.callout)
                 .foregroundStyle(.inkSecondary)
                 .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            HStack(spacing: 4) {
+                Text("Gemini reasoning").foregroundStyle(.inkSecondary)
+                Text("High").fontWeight(.semibold).foregroundStyle(.ink)
+                Image(systemName: "info.circle").font(.system(size: 9.5)).foregroundStyle(.inkTertiary)
+            }
+            .font(.system(size: 11.5, weight: .medium))
+            .padding(.horizontal, 9)
+            .frame(height: 22)
+            .background(Color.ink.opacity(0.05), in: Capsule(style: .continuous))
+            .fixedSize()
+            .help("Set for best accuracy. Parakeet and Whisper don’t reason.")
         }
     }
 
@@ -268,7 +265,8 @@ struct OpenRouterKeyCard: View {
     }
 }
 
-/// Optional system prompt for Gemini. Empty (the default) means the request carries only the audio.
+/// Optional system prompt for Gemini. Empty (the default) means the request carries only the audio. Parakeet
+/// and Whisper take no prompt, so the card says it applies to Gemini alone.
 struct GeminiInstructionsCard: View {
     @Environment(AppSettings.self) private var settings
     @FocusState private var focused: Bool
@@ -319,7 +317,7 @@ struct GeminiInstructionsCard: View {
                         .strokeBorder(focused ? Color.accentRing : Color.stroke, lineWidth: focused ? 1.5 : 1)
                 }
                 .animation(Theme.Motion.hover, value: focused)
-                Text("When this is empty, \(Brand.name) sends your recording with no text or system message and pastes Gemini’s reply exactly as it comes back. Anything you write here is sent as a system prompt and can change the output.")
+                Text("When this is empty, \(Brand.name) sends your recording with no text or system message and pastes Gemini’s reply exactly as it comes back. Anything you write here is sent as a system prompt and can change the output. Only Gemini reads it: Parakeet and Whisper transcribe without instructions.")
                     .typeface(.callout)
                     .foregroundStyle(.inkSecondary)
                     .fixedSize(horizontal: false, vertical: true)

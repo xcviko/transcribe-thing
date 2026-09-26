@@ -73,10 +73,11 @@ final class AppSettings {
 
     var maxRecordingDuration: TimeInterval { TimeInterval(maxRecordingMinutes) * 60 }
 
-    /// The limit a new recording gets: Gemini takes about 7.4 minutes of audio per request, so with a cloud
-    /// engine selected a recording stops (and is transcribed) at 7 minutes even when the setting allows more.
+    /// The limit a new recording gets: Gemini takes about 7.4 minutes of audio per request, so with Gemini
+    /// selected a recording stops (and is transcribed) at 7 minutes even when the setting allows more. Cloud
+    /// Parakeet and Whisper send long recordings in chunks and keep the setting.
     var effectiveMaxRecordingDuration: TimeInterval {
-        guard selectedEngine.isCloud else { return maxRecordingDuration }
+        guard selectedEngine.cloudAPI == .chatCompletions else { return maxRecordingDuration }
         return min(maxRecordingDuration, OpenRouterClient.maxRecordingDuration)
     }
 

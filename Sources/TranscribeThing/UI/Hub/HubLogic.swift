@@ -180,7 +180,7 @@ enum EngineReadiness: Equatable {
     }
 }
 
-/// The sidebar footer chip: "Parakeet v3 · Ready", "Whisper Turbo · Optimizing…", "Gemini Flash · Key missing".
+/// The sidebar footer chip: "Parakeet v3 · Ready", "Whisper Turbo · Optimizing…", "Gemini Flash · Needs key".
 struct EngineSummary: Equatable {
     var name: String
     var status: String
@@ -201,13 +201,34 @@ struct EngineSummary: Equatable {
         switch keyStatus {
         case .valid: return EngineSummary(name: name, status: "Ready", tone: .positive)
         case .checking: return EngineSummary(name: name, status: "Checking key…", tone: .progress)
-        case .missing: return EngineSummary(name: name, status: "Key missing", tone: .negative)
+        case .missing: return EngineSummary(name: name, status: "Needs key", tone: .negative)
         case .invalid: return EngineSummary(name: name, status: "Key rejected", tone: .negative)
         case .noCredit:
             return EngineSummary(name: name, status: keyStatus.isKeyLimitReached ? "Key limit reached" : "Out of credit",
                                  tone: .negative)
         case .offline: return EngineSummary(name: name, status: "Offline", tone: .warning)
         case .failed: return EngineSummary(name: name, status: "Couldn’t check key", tone: .warning)
+        }
+    }
+}
+
+/// Who serves a cloud model, as the Models page says it. Transcription requests can't pin a provider, so a
+/// model with several says OpenRouter chooses; Gemini requests are pinned to Google AI Studio.
+enum ProviderNote {
+    enum Kind: Equatable { case pinned, routed }
+
+    static func make(_ engine: EngineID) -> (text: String, kind: Kind)? {
+        let providers = engine.knownProviders
+        guard let first = providers.first else { return nil }
+        switch engine.cloudAPI {
+        case nil:
+            return nil
+        case .chatCompletions:
+            return ("Served by \(providers.joined(separator: " or ")) only.", .pinned)
+        case .transcriptions where providers.count > 1:
+            return ("Served by \(providers.joined(separator: " or ")), whichever OpenRouter picks. History shows which.", .routed)
+        case .transcriptions:
+            return ("Served by \(first).", .pinned)
         }
     }
 }
@@ -325,6 +346,8 @@ enum HubAttention {
                     actionTitle: "Retry", action: .download(input.engine)))
             }
         } else {
+            // Same naming as the OpenRouter notices: "Gemini" for either Gemini, the model for cloud speech.
+            let service = input.engine.cloudAPI == .transcriptions ? input.engine.shortName : "Gemini"
             switch input.keyStatus {
             case .valid, .checking, .offline, .failed:
                 break
@@ -341,12 +364,12 @@ enum HubAttention {
             case .noCredit where input.keyStatus.isKeyLimitReached:
                 items.append(AttentionItem(
                     id: "key", tone: .error, symbol: "creditcard", title: "Your OpenRouter key hit its limit",
-                    body: "This key has a spending limit, and it’s used up. Raise it to keep using Gemini.",
+                    body: "This key has a spending limit, and it’s used up. Raise it to keep using \(service).",
                     actionTitle: "Raise Limit", action: .openURL(OpenRouterLinks.keys)))
             case .noCredit:
                 items.append(AttentionItem(
                     id: "key", tone: .error, symbol: "creditcard", title: "Out of OpenRouter credit",
-                    body: "Add credit to keep using Gemini.",
+                    body: "Add credit to keep using \(service).",
                     actionTitle: "Add Credit", action: .openURL(OpenRouterLinks.credits)))
             }
         }

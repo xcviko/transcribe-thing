@@ -32,6 +32,9 @@ enum PillSnapshots {
             SnapshotEntry("pill-toast-error", width: 640, height: 270) { _ in
                 CanvasScene(model: .preview(phase: .error), notices: [PillSnapshotFixtures.keyRejected])
             },
+            SnapshotEntry("pill-toast-cloud-speech", width: 640, height: 270) { _ in
+                CanvasScene(model: .preview(phase: .error), notices: [PillSnapshotFixtures.cloudSpeechRateLimited])
+            },
             // Nothing was pasted in either case, so no check mark (DictationController flashes success only
             // after a paste lands).
             SnapshotEntry("pill-toast-transcript", width: 640, height: 340) { _ in
@@ -100,6 +103,10 @@ enum PillSnapshotFixtures {
 
     static let keyRejected = AppError.openRouterInvalidKey("Invalid API key")
         .notice(recordingID: UUID(), fallbackEngine: .parakeet)
+
+    /// Cloud speech errors name the model and offer the same model on this Mac first.
+    static let cloudSpeechRateLimited = AppError.openRouterRateLimited(retryAfter: nil)
+        .notice(recordingID: UUID(), fallbackEngine: .whisper, engine: .whisperCloud)
 
     static let truncated = AppError.openRouterTruncated(
         "So the plan for Thursday is to move the design review to the afternoon so Maya can join, and then so the plan for Thursday is to move the design review to the afternoon so Maya can join, and then so the plan for Thursday is")

@@ -361,20 +361,34 @@ struct IconTile: View {
     }
 }
 
-/// The engine mark on history rows: P, W, F, Pro.
+/// The engine mark on history rows: P, W, F, Pro. Cloud Parakeet and Whisper share the local letter, so they
+/// carry a small cloud as well as the cloud tint.
 struct EngineGlyph: View {
     var engine: EngineID
+    /// The OpenRouter provider that served the transcript, for the tooltip.
+    var provider: String?
 
     var body: some View {
         let tint: Color = engine.isLocal ? .accent : HubPalette.apricotInk
-        Text(engine.glyph)
-            .font(.system(size: 9.5, weight: .bold, design: .rounded))
-            .foregroundStyle(tint)
-            .padding(.horizontal, 4)
-            .frame(minWidth: 17, minHeight: 17)
-            .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
-            .help(engine.displayName)
-            .accessibilityLabel(engine.displayName)
+        HStack(spacing: 1.5) {
+            if engine.cloudAPI == .transcriptions {
+                Image(systemName: "cloud.fill")
+                    .font(.system(size: 7, weight: .bold))
+            }
+            Text(engine.glyph)
+                .font(.system(size: 9.5, weight: .bold, design: .rounded))
+        }
+        .foregroundStyle(tint)
+        .padding(.horizontal, 4)
+        .frame(minWidth: 17, minHeight: 17)
+        .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+        .help(label)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+    }
+
+    private var label: String {
+        provider.map { "\(engine.displayName) · via \($0)" } ?? engine.displayName
     }
 }
 

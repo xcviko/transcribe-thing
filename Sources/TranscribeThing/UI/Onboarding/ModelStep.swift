@@ -3,9 +3,14 @@ import SwiftUI
 struct ModelStep: View {
     let model: OnboardingModel
 
+    /// Width of the cloud card row, so the key panel's notch can point at the selected card.
+    @State private var cloudRowWidth: CGFloat = 0
+
     private var selected: EngineID { model.selectedEngine }
 
-    /// One line under the grid that answers the question the selected local card raises.
+    private static let cloudSpacing: CGFloat = 10
+
+    /// One line under the local cards that answers the question the selected one raises.
     private var localNote: (symbol: String, text: String)? {
         guard selected.isLocal else { return nil }
         let name = selected.shortName
@@ -25,49 +30,193 @@ struct ModelStep: View {
         }
     }
 
+    /// 0...1 across the key panel: the center of the selected cloud card.
+    private var notchX: CGFloat {
+        let engines = EngineID.cloudEngines
+        guard let index = engines.firstIndex(of: selected), cloudRowWidth > 0 else { return 0.5 }
+        let count = CGFloat(engines.count)
+        let cardWidth = (cloudRowWidth - Self.cloudSpacing * (count - 1)) / count
+        return (CGFloat(index) * (cardWidth + Self.cloudSpacing) + cardWidth / 2) / cloudRowWidth
+    }
+
     var body: some View {
         let cloudSelected = selected.isCloud
         VStack(alignment: .leading, spacing: 0) {
             StepHeader(title: "Pick how \(Brand.name) listens",
                        subtitle: "On-device models stay private and work offline. You can switch anytime in Settings.",
                        titleSize: 28)
-                .padding(.bottom, 18)
+                .padding(.bottom, 16)
 
-            Grid(horizontalSpacing: 12, verticalSpacing: 12) {
-                GridRow {
-                    ForEach(EngineID.localEngines) { engine in
-                        EngineCard(model: model, engine: engine, compact: cloudSelected)
-                    }
-                }
-                GridRow {
-                    ForEach(EngineID.cloudEngines) { engine in
-                        EngineCard(model: model, engine: engine, compact: false)
-                    }
+            SectionHeader("On your Mac")
+                .padding(.bottom, 8)
+            HStack(spacing: 12) {
+                ForEach(EngineID.localEngines) { engine in
+                    EngineCard(model: model, engine: engine, compact: cloudSelected)
                 }
             }
-            if cloudSelected {
-                OpenRouterKeyPanel(model: model, pointsRight: selected == EngineID.cloudEngines.last)
-                    .padding(.top, 12)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            } else if let note = localNote {
+            if !cloudSelected, let note = localNote {
                 HStack(spacing: 7) {
                     Image(systemName: note.symbol)
                         .font(.system(size: 11, weight: .semibold))
                     Text(note.text)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .font(.system(size: 12))
                 .foregroundStyle(.inkSecondary)
-                .padding(.top, 16)
+                .padding(.top, 10)
                 .padding(.leading, 4)
                 .transition(.opacity)
                 .id(note.text)
             }
+
+            SectionHeader("Through OpenRouter") {
+                CloudKeySummary(status: model.ctx.account.status, hasStoredKey: model.ctx.account.maskedKey != nil)
+            }
+            .padding(.top, cloudSelected ? 16 : 18)
+            .padding(.bottom, 8)
+            HStack(spacing: Self.cloudSpacing) {
+                ForEach(EngineID.cloudEngines) { engine in
+                    CloudEngineCard(model: model, engine: engine)
+                }
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { cloudRowWidth = $0 }
+
+            if cloudSelected {
+                OpenRouterKeyPanel(model: model, notchX: notchX)
+                    .padding(.top, 14)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
         }
         .animation(Theme.Motion.expand, value: cloudSelected)
+        .animation(Theme.Motion.snappy, value: selected)
     }
 }
 
-// MARK: - Card
+/// Trailing text of the "Through OpenRouter" header: what the four cloud cards have in common, or the key's state.
+private struct CloudKeySummary: View {
+    var status: KeyStatus
+    var hasStoredKey: Bool
+
+    var body: some View {
+        HStack(spacing: 5) {
+            if let symbol = content.symbol {
+                Image(systemName: symbol)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(content.tone.color)
+            }
+            Text(content.text)
+                .foregroundStyle(content.tone == .negative ? Color.danger : Color.inkTertiary)
+        }
+        .font(.system(size: 11.5, weight: .medium))
+        .monospacedDigit()
+        .lineLimit(1)
+        .animation(Theme.Motion.fade, value: status)
+    }
+
+    private var content: (symbol: String?, text: String, tone: StatusTone) {
+        switch status {
+        case .valid(let info):
+            let credit = info.limitRemaining.map { " · \(Fmt.usd($0)) left" } ?? ""
+            return ("checkmark.circle.fill", "Key connected\(credit)", .positive)
+        case .invalid:
+            return ("xmark.octagon.fill", "Key rejected", .negative)
+        case .noCredit:
+            return ("exclamationmark.triangle.fill", status.isKeyLimitReached ? "Key limit reached" : "No credit left", .warning)
+        case .missing, .checking, .offline, .failed:
+            return (nil, hasStoredKey ? "One key for all four · pay per use" : "Needs an OpenRouter key · pay per use", .neutral)
+        }
+    }
+}
+
+// MARK: - Cloud card
+
+/// Compact card for a model served through OpenRouter: name, who serves it, what it costs.
+private struct CloudEngineCard: View {
+    let model: OnboardingModel
+    let engine: EngineID
+
+    @State private var hovering = false
+
+    private var isSelected: Bool { model.selectedEngine == engine }
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top) {
+                EngineIcon(engine: engine, size: 24)
+                Spacer(minLength: 0)
+                RadioMark(isOn: isSelected, size: 18)
+            }
+            .padding(.bottom, 7)
+            Text(engine.cloudCardName)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.ink)
+                .lineLimit(1)
+            Text("\(engine.cloudCardProvider) · \(engine.cloudCardPrice)")
+                .font(.system(size: 11.5).monospacedDigit())
+                .foregroundStyle(.inkSecondary)
+                .lineLimit(1)
+                .padding(.top, 1)
+        }
+        .padding(.horizontal, 11)
+        .padding(.top, 10)
+        .padding(.bottom, 9)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background {
+            shape.fill(Color.bgSurface)
+            shape.fill(isSelected ? Color.accentSoft : (hovering ? Color.hover : .clear))
+        }
+        .overlay {
+            shape.strokeBorder(isSelected ? Color.accent : Color.stroke, lineWidth: isSelected ? 1.5 : 1)
+        }
+        .cardShadow(elevated: isSelected)
+        .contentShape(shape)
+        .onTapGesture { model.select(engine) }
+        .onHover { hovering = $0 }
+        .animation(Theme.Motion.hover, value: hovering)
+        .animation(Theme.Motion.expand, value: isSelected)
+        .help(engine.cloudCardHelp)
+        .accessibilityElement(children: .ignore)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityLabel(engine.displayName)
+        .accessibilityValue("\(engine.cloudCardProvider), \(engine.cloudCardPrice)")
+        .accessibilityAction { model.select(engine) }
+    }
+}
+
+private extension EngineID {
+    /// Under the "Through OpenRouter" header the "· Cloud" suffix is noise; Whisper takes its short name to fit.
+    var cloudCardName: String {
+        switch self {
+        case .whisperCloud: "Whisper Turbo"
+        default: modelName
+        }
+    }
+
+    /// "via Together", "via Groq", "via Google". For Whisper this is the preferred provider; the key panel and the
+    /// tooltip say OpenRouter may pick another.
+    var cloudCardProvider: String {
+        switch cloudAPI {
+        case .chatCompletions: "via Google"
+        case .transcriptions, nil: preferredProvider.map { "via \($0)" } ?? ""
+        }
+    }
+
+    var cloudCardPrice: String {
+        switch self {
+        case .parakeetCloud: "≈ $0.09/hour"
+        case .whisperCloud: "≈ $0.04/hour"
+        case .geminiFlash, .geminiPro: "pay per use"
+        case .parakeet, .whisper: ""
+        }
+    }
+
+    var cloudCardHelp: String {
+        [displayName, providerLine, factLine, providerRoutingNote].compactMap { $0 }.joined(separator: "\n")
+    }
+}
+
+// MARK: - Local card
 
 private struct EngineCard: View {
     let model: OnboardingModel
@@ -85,12 +234,13 @@ private struct EngineCard: View {
             header
             if !compact {
                 Spacer(minLength: 10)
-                footer
+                localFooter
                     .frame(minHeight: 26)
             }
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, minHeight: compact ? 62 : 124, maxHeight: compact ? 62 : 124, alignment: .topLeading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, compact ? 12 : 14)
+        .frame(maxWidth: .infinity, minHeight: compact ? 58 : 124, maxHeight: compact ? 58 : 124, alignment: .topLeading)
         .background {
             shape.fill(Color.bgSurface)
             shape.fill(isSelected ? Color.accentSoft : (hovering ? Color.hover : .clear))
@@ -113,7 +263,7 @@ private struct EngineCard: View {
     private var header: some View {
         HStack(alignment: .top, spacing: 11) {
             // The slot keeps its width when the icon shrinks, so names line up down the grid.
-            EngineIcon(engine: engine, size: compact ? 30 : 34)
+            EngineIcon(engine: engine, size: compact ? 32 : 34)
                 .frame(width: 34, alignment: .leading)
             VStack(alignment: .leading, spacing: 2) {
                 Text(engine.displayName)
@@ -154,14 +304,6 @@ private struct EngineCard: View {
     }
 
     // MARK: Footer
-
-    @ViewBuilder private var footer: some View {
-        if engine.isLocal {
-            localFooter
-        } else {
-            cloudFooter
-        }
-    }
 
     @ViewBuilder private var localFooter: some View {
         switch localState {
@@ -230,32 +372,6 @@ private struct EngineCard: View {
         isSelected ? AnyButtonStyle(PrimaryButtonStyle(size: .small)) : AnyButtonStyle(SecondaryButtonStyle(size: .small))
     }
 
-    @ViewBuilder private var cloudFooter: some View {
-        HStack(spacing: 8) {
-            badges
-            Spacer(minLength: 0)
-            let status = model.ctx.account.status
-            if case .valid = status {
-                HStack(spacing: 6) {
-                    DrawOnCheck(size: 16, animated: false)
-                    Text("Connected")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.success)
-                }
-            } else if isSelected {
-                ModelStatusText(keyStatus: status)
-            } else {
-                Button {
-                    model.select(engine)
-                } label: {
-                    Label("Add Key", systemImage: "key.fill")
-                        .labelStyle(.titleAndIcon)
-                }
-                .buttonStyle(SecondaryButtonStyle(size: .small))
-            }
-        }
-    }
-
     private var badges: some View {
         HStack(spacing: 5) {
             ForEach(engine.badges, id: \.self) { Badge.engine($0) }
@@ -278,20 +394,21 @@ struct AnyButtonStyle: ButtonStyle {
 
 private struct RadioMark: View {
     var isOn: Bool
+    var size: CGFloat = 20
 
     var body: some View {
         ZStack {
             if isOn {
                 Circle().fill(Color.accentFill)
                 Image(systemName: "checkmark")
-                    .font(.system(size: 9, weight: .bold))
+                    .font(.system(size: size * 0.45, weight: .bold))
                     .foregroundStyle(.onAccent)
                     .transition(.scale.combined(with: .opacity))
             } else {
                 Circle().strokeBorder(Color.strokeStrong, lineWidth: 1.5)
             }
         }
-        .frame(width: 20, height: 20)
+        .frame(width: size, height: size)
         .animation(.spring(duration: 0.28, bounce: 0.4), value: isOn)
         .accessibilityHidden(true)
     }
@@ -376,7 +493,8 @@ private struct DiskWarningRow: View {
 
 private struct OpenRouterKeyPanel: View {
     let model: OnboardingModel
-    var pointsRight: Bool
+    /// 0...1 across the panel: where the notch points up at the selected card.
+    var notchX: CGFloat
 
     @FocusState private var fieldFocused: Bool
     @State private var revealKey = false
@@ -390,7 +508,7 @@ private struct OpenRouterKeyPanel: View {
                 Text("OpenRouter API key")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.ink)
-                Text("One key works for both Gemini models.")
+                Text("One key works for all four cloud models.")
                     .font(.system(size: 12))
                     .foregroundStyle(.inkTertiary)
                 Spacer(minLength: 0)
@@ -424,7 +542,7 @@ private struct OpenRouterKeyPanel: View {
                 KeyStatusLine(status: account.status, formatError: model.keyFormatError,
                               hasDraft: !model.keyDraft.isEmpty, showingStoredKey: !model.showsKeyField)
                 Spacer(minLength: 12)
-                Text("Your audio goes to OpenRouter and Google AI Studio to be transcribed. Nothing else is sent.")
+                Text(privacyLine)
                     .font(.system(size: 11))
                     .foregroundStyle(.inkSecondary)
                     .multilineTextAlignment(.trailing)
@@ -433,13 +551,24 @@ private struct OpenRouterKeyPanel: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
-        .background(KeyPanelShape(notchX: pointsRight ? 0.75 : 0.25).fill(Color.bgSurface))
-        .overlay(KeyPanelShape(notchX: pointsRight ? 0.75 : 0.25).stroke(Color.accentRing, lineWidth: 1))
+        .background(KeyPanelShape(notchX: notchX).fill(Color.bgSurface))
+        .overlay(KeyPanelShape(notchX: notchX).stroke(Color.accentRing, lineWidth: 1))
         .cardShadow(elevated: true)
         .animation(Theme.Motion.fade, value: model.showsKeyField)
         .onAppear {
             if stillTime == nil, model.showsKeyField, !model.ctx.isPreview { fieldFocused = true }
         }
+    }
+
+    /// Names who hears the audio for the selected model. Transcription requests can't pin a provider, so for
+    /// Whisper it names every provider OpenRouter may pick.
+    private var privacyLine: String {
+        let engine = model.selectedEngine
+        let providers = engine.knownProviders
+        if engine.providerRoutingNote != nil, providers.count > 1 {
+            return "Your audio goes to OpenRouter, then \(providers.joined(separator: " or ")) (OpenRouter picks each time). Nothing else is sent."
+        }
+        return "Your audio goes to OpenRouter and \(providers.first ?? "its provider") to be transcribed. Nothing else is sent."
     }
 
     private var keyField: some View {
@@ -576,6 +705,11 @@ private struct KeyPanelShape: Shape {
     var radius: CGFloat = Theme.Radius.card
     var notchWidth: CGFloat = 18
     var notchHeight: CGFloat = 8
+
+    var animatableData: CGFloat {
+        get { notchX }
+        set { notchX = newValue }
+    }
 
     func path(in rect: CGRect) -> Path {
         let r = min(radius, rect.height / 2)

@@ -1135,6 +1135,32 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
         #expect(whisper.attributedTitle?.string.contains("Not downloaded") == true)
     }
 
+    @Test func modelSubmenuGroupsLocalCloudSpeechAndGemini() throws {
+        let env = AppEnvironment.preview()
+        let menu = env.menuBar.builder.makeMenu(includeQuit: true)
+        let models = try #require(menu.items.first { $0.title == "Model" }?.submenu)
+        // A status suffix follows the name after two spaces ("Whisper Large V3 Turbo  Not downloaded").
+        #expect(models.items.map { $0.isSeparatorItem ? "—" : $0.title.components(separatedBy: "  ")[0] } == [
+            "Parakeet v3", "Whisper Large V3 Turbo", "—",
+            "Parakeet v3 · Cloud", "Whisper Large V3 Turbo · Cloud", "—",
+            "Gemini 3.8 Flash", "Gemini 3.1 Pro", "—", "Manage Models…",
+        ])
+        let cloudEnabled = models.items.filter { $0.title.contains("· Cloud") }.map(\.isEnabled)
+        #expect(cloudEnabled == [true, true], "the preview key is valid")
+    }
+
+    @Test func cloudModelsNeedTheKey() throws {
+        let env = AppEnvironment.preview()
+        env.account.removeKey()
+        let menu = env.menuBar.builder.makeMenu(includeQuit: true)
+        let models = try #require(menu.items.first { $0.title == "Model" }?.submenu)
+        for engine in EngineID.cloudEngines {
+            let item = try #require(models.items.first { $0.title.hasPrefix(engine.displayName + "  ") })
+            #expect(!item.isEnabled)
+            #expect(item.attributedTitle?.string == "\(engine.displayName)  Needs key")
+        }
+    }
+
     @Test func pillSubmenuReflectsTheMode() throws {
         let env = AppEnvironment.preview()
         env.settings.pillMode = .always

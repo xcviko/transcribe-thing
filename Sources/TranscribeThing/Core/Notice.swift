@@ -318,9 +318,10 @@ extension AppError: LocalizedError {
 extension AppError {
     /// Canonical copy per the error catalog (wispr-ux.md §5.9, adapted).
     /// `recordingID` non-nil means the audio is retained, which enables Retry and Retry-with actions.
-    /// `fallbackEngine` is a ready engine other than the failing one.
-    func notice(recordingID: UUID?, fallbackEngine: EngineID?) -> Notice {
-        let copy = self.copy
+    /// `fallbackEngine` is a ready engine other than the failing one. `engine` is the engine the error came
+    /// from: OpenRouter errors name it ("Whisper Turbo · Cloud is rate-limited"), and say "Gemini" without it.
+    func notice(recordingID: UUID?, fallbackEngine: EngineID?, engine: EngineID? = nil) -> Notice {
+        let copy = self.copy(for: engine)
         let hasAudio = recordingID != nil
         let fallback = fallbackEngine.flatMap { $0 == failingEngine ? nil : $0 }
 
@@ -430,7 +431,25 @@ extension AppError {
         return String(flat.prefix(limit - 1)).trimmingCharacters(in: .whitespaces) + "…"
     }
 
-    private var copy: Copy {
+    /// What OpenRouter copy calls the service: "Gemini" (also when the engine is unknown), or the cloud speech
+    /// model ("Parakeet v3 · Cloud").
+    private struct CloudName {
+        let service: String
+        let isSpeech: Bool
+
+        init(_ engine: EngineID?) {
+            if let engine, engine.cloudAPI == .transcriptions {
+                service = engine.shortName
+                isSpeech = true
+            } else {
+                service = "Gemini"
+                isSpeech = false
+            }
+        }
+    }
+
+    private func copy(for engine: EngineID?) -> Copy {
+        let cloud = CloudName(engine)
         switch self {
         case .microphonePermissionDenied:
             return Copy(symbol: "mic.slash.fill",
@@ -510,7 +529,7 @@ extension AppError {
         case .openRouterMissingKey:
             return Copy(symbol: "key.fill",
                         title: "Add your OpenRouter key",
-                        body: "Gemini needs a key to transcribe.",
+                        body: "\(cloud.service) needs a key to transcribe.",
                         fixes: [Fix(title: "Add Key", kind: .openHub(.models))],
                         order: .fixFirst, offersSwitch: true)
         case .openRouterKeyUnreadable:
@@ -528,37 +547,40 @@ extension AppError {
         case .openRouterNoCredits:
             return Copy(symbol: "creditcard",
                         title: "Out of OpenRouter credit",
-                        body: "Add credit to keep using Gemini.",
+                        body: "Add credit to keep using \(cloud.service).",
                         fixes: [Fix(title: "Add Credit", kind: .openURL(OpenRouterLinks.credits))],
                         order: .fixFirst, offersSwitch: true)
         case .openRouterKeyLimit:
             return Copy(symbol: "creditcard",
                         title: "Your OpenRouter key hit its limit",
-                        body: "This key has a spending limit, and it’s used up. Raise it to keep using Gemini.",
+                        body: "This key has a spending limit, and it’s used up. Raise it to keep using \(cloud.service).",
                         fixes: [Fix(title: "Raise Limit", kind: .openURL(OpenRouterLinks.keys))],
                         order: .fixFirst, offersSwitch: true)
         case .openRouterRateLimited(let retryAfter):
             let wait = retryAfter.map { $0 >= 1 ? "Try again in about \(Int($0.rounded(.up))) s." : nil } ?? nil
             return Copy(symbol: "hourglass",
-                        title: "Gemini is rate-limited",
+                        title: "\(cloud.service) is rate-limited",
                         body: wait ?? "Wait a few seconds and try again.")
         case .openRouterNoRoute:
             return Copy(symbol: "lock.shield",
-                        title: "Gemini isn’t available for your key",
-                        body: "OpenRouter found no Google AI Studio route. Check your privacy and provider settings.",
+                        title: "\(cloud.service) isn’t available for your key",
+                        body: cloud.isSpeech
+                            ? "OpenRouter found no provider your settings allow. Check your privacy and provider settings."
+                            : "OpenRouter found no Google AI Studio route. Check your privacy and provider settings.",
                         fixes: [Fix(title: "Open Settings", kind: .openURL(OpenRouterLinks.privacy))],
                         order: .fixFirst, offersSwitch: true)
         case .openRouterProviderUnavailable:
             return Copy(symbol: "icloud.slash",
-                        title: "Google AI Studio is unavailable",
-                        body: "OpenRouter couldn’t reach Gemini right now.")
+                        title: cloud.isSpeech ? "\(cloud.service) is unavailable" : "Google AI Studio is unavailable",
+                        body: cloud.isSpeech ? "OpenRouter couldn’t reach its provider right now."
+                            : "OpenRouter couldn’t reach Gemini right now.")
         case .openRouterRefused(let message):
             return Copy(symbol: "hand.raised.fill",
-                        title: "Gemini refused this request",
+                        title: "\(cloud.service) refused this request",
                         body: Self.oneLine(message) ?? "The provider declined to transcribe this recording.",
                         order: .fallbackFirst)
         case .openRouterBadRequest(let message):
-            return Copy(title: "Gemini couldn’t process this recording",
+            return Copy(title: "\(cloud.service) couldn’t process this recording",
                         body: Self.oneLine(message) ?? "OpenRouter rejected the request.",
                         order: .fallbackFirst)
         case .openRouterServer:
@@ -567,18 +589,21 @@ extension AppError {
                         body: "This is usually temporary. Try again in a moment.")
         case .openRouterTruncated:
             return Copy(style: .warning, symbol: "text.badge.xmark",
-                        title: "Gemini stopped before finishing",
+                        title: "\(cloud.service) stopped before finishing",
                         body: "The text may be cut off or repeat itself, so it wasn’t pasted.",
                         fixes: partialTranscript.map { [Fix(title: "Copy", kind: .copyText($0))] } ?? [],
                         sound: .alert)
         case .timeout(let e):
-            return Copy(symbol: "hourglass",
-                        title: "\(e.shortName) took too long",
-                        body: e.isLocal ? "The model didn’t finish in time." : "Gemini didn’t answer in time.")
+            let body = switch e.cloudAPI {
+            case nil: "The model didn’t finish in time."
+            case .chatCompletions: "Gemini didn’t answer in time."
+            case .transcriptions: "OpenRouter didn’t answer in time."
+            }
+            return Copy(symbol: "hourglass", title: "\(e.shortName) took too long", body: body)
         case .offline:
             return Copy(symbol: "wifi.slash",
                         title: "You’re offline",
-                        body: "Gemini needs the internet.",
+                        body: "\(cloud.service) needs the internet.",
                         order: .fallbackFirst, offersSwitch: true)
         case .emptyResult(let e):
             return Copy(style: .warning, symbol: "text.badge.xmark",
@@ -597,8 +622,9 @@ extension AppError {
                         fixes: [Fix(title: "Try Another Model", kind: .openHub(.models))])
         case .recordingTooLarge:
             return Copy(symbol: "waveform.badge.exclamationmark",
-                        title: "Too long to send to Gemini",
-                        body: "Gemini takes about 7 minutes of audio at a time. A local model has no limit.",
+                        title: cloud.isSpeech ? "Too large to send to OpenRouter" : "Too long to send to Gemini",
+                        body: cloud.isSpeech ? "OpenRouter refused this audio as too large. A local model has no limit."
+                            : "Gemini takes about 7 minutes of audio at a time. A local model has no limit.",
                         order: .fallbackFirst)
         }
     }
