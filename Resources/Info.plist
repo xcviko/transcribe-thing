@@ -5,19 +5,19 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>Murmur</string>
+	<string>transcribe-thing</string>
 	<key>CFBundleExecutable</key>
-	<string>Murmur</string>
+	<string>transcribe-thing</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleIconName</key>
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
-	<string>dev.murmur.app</string>
+	<string>dev.transcribe-thing.app</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Murmur</string>
+	<string>transcribe-thing</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -33,9 +33,9 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>
-	<string>Murmur. Dictation that stays out of your way.</string>
+	<string>transcribe-thing. Dictation that stays out of your way.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Murmur listens only while you hold the dictation key or use hands-free mode, and turns your speech into text.</string>
+	<string>transcribe-thing listens only while you hold the dictation key or use hands-free mode, and turns your speech into text.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 	<key>NSSupportsAutomaticTermination</key>

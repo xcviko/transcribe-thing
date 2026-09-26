@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# build-app.sh: wrap the SwiftPM executable into build/Murmur.app and sign it.
+# build-app.sh: wrap the SwiftPM executable into build/transcribe-thing.app and sign it.
 #
 # Usage: scripts/build-app.sh [release|debug]
 # Env:
@@ -17,8 +17,8 @@ case "$CONFIG" in
   *) echo "usage: $0 [release|debug]" >&2; exit 64 ;;
 esac
 
-APP_NAME="Murmur"
-PRODUCT="Murmur"
+APP_NAME="transcribe-thing"
+PRODUCT="transcribe-thing"
 MIN_OS="26.0"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RES="$ROOT/Resources"
@@ -98,7 +98,7 @@ else
   echo "==> Signing with \"$SIGN_IDENTITY\""
 fi
 SIGN_ARGS=(--force --sign "$SIGN_IDENTITY" --timestamp=none)
-APP_SIGN_ARGS=("${SIGN_ARGS[@]}" --entitlements "$RES/Murmur.entitlements")
+APP_SIGN_ARGS=("${SIGN_ARGS[@]}" --entitlements "$RES/transcribe-thing.entitlements")
 if [ "${HARDENED:-0}" = "1" ]; then
   APP_SIGN_ARGS+=(--options runtime)
 fi

@@ -2,10 +2,10 @@
 import PackageDescription
 
 let package = Package(
-    name: "Murmur",
+    name: "transcribe-thing",
     platforms: [.macOS(.v26)],
     products: [
-        .executable(name: "Murmur", targets: ["Murmur"])
+        .executable(name: "transcribe-thing", targets: ["transcribe-thing"])
     ],
     dependencies: [
         .package(url: "https://github.com/FluidInference/FluidAudio", from: "0.17.4", traits: []),
@@ -13,7 +13,7 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "MurmurApp",
+            name: "TranscribeThing",
             dependencies: [
                 .product(name: "FluidAudio", package: "FluidAudio"),
                 .product(name: "WhisperKit", package: "argmax-oss-swift"),
@@ -21,13 +21,13 @@ let package = Package(
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .executableTarget(
-            name: "Murmur",
-            dependencies: ["MurmurApp"],
+            name: "transcribe-thing",
+            dependencies: ["TranscribeThing"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .testTarget(
-            name: "MurmurTests",
-            dependencies: ["MurmurApp"],
+            name: "TranscribeThingTests",
+            dependencies: ["TranscribeThing"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""analyze-sounds.py: check Murmur's UI sounds against their recipes (standard library only).
+"""analyze-sounds.py: check transcribe-thing's UI sounds against their recipes (standard library only).
 
 Usage: python3 scripts/analyze-sounds.py [sounds_dir]        (default: Resources/Sounds)
 

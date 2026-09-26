@@ -1,0 +1,2 @@
+import TranscribeThing
+TranscribeThingMain.run()

@@ -1,2 +1,0 @@
-import MurmurApp
-MurmurMain.run()

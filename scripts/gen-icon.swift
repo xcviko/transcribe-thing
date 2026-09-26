@@ -1,5 +1,5 @@
 #!/usr/bin/env swift
-// gen-icon.swift: draws Murmur's app icon with CoreGraphics.
+// gen-icon.swift: draws transcribe-thing's app icon with CoreGraphics.
 //
 // Usage: swift scripts/gen-icon.swift [Resources]
 // Writes into the given folder (default: Resources next to this script's parent):
@@ -9,7 +9,7 @@
 //                  scripts/build-app.sh compiles it with actool when available.
 //
 // The artwork: a deep ink-to-iris squircle with a quiet top light and a warm apricot glow low on the right;
-// in the middle, a white capsule (Murmur's pill, inverted) holding five rounded waveform bars.
+// in the middle, a white capsule (transcribe-thing's pill, inverted) holding five rounded waveform bars.
 import AppKit
 import CoreGraphics
 import Foundation
@@ -218,7 +218,7 @@ try fm.createDirectory(at: outDir, withIntermediateDirectories: true)
 try writePNG(drawIcon(size: 1024), to: outDir.appendingPathComponent("AppIcon.png"))
 
 // .icns through a temporary iconset.
-let work = fm.temporaryDirectory.appendingPathComponent("murmur-icon-\(UUID().uuidString)")
+let work = fm.temporaryDirectory.appendingPathComponent("transcribe-thing-icon-\(UUID().uuidString)")
 let iconset = work.appendingPathComponent("AppIcon.iconset")
 try fm.createDirectory(at: iconset, withIntermediateDirectories: true)
 for base in [16, 32, 128, 256, 512] {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""gen-sounds.py: synthesize Murmur's eight original UI sounds (standard library only).
+"""gen-sounds.py: synthesize transcribe-thing's eight original UI sounds (standard library only).
 
 Usage: python3 scripts/gen-sounds.py [out_dir]        (default: Resources/Sounds)
 
