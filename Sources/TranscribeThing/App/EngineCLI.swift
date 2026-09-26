@@ -200,11 +200,9 @@ enum EngineCLI {
         }
         if let last {
             if options.engine.cloudAPI == .transcriptions {
-                let provider: String?
-                if let known = last.provider {
-                    provider = known
-                } else {
-                    provider = await service.servedProvider(generationIDs: last.generationIDs)
+                var provider = last.provider
+                if provider == nil, let generationID = last.generationID {
+                    provider = await service.servedProvider(generationID: generationID)
                 }
                 let preferred = options.engine.preferredProvider.map { " · preferred \($0)" } ?? ""
                 print("PROVIDER: \(provider ?? "unknown")\(preferred)")

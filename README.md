@@ -17,7 +17,7 @@ whatever app you're using. Transcription only, no rewriting.
 ## Build and run
 
 ```sh
-make app          # release build → build/transcribe-thing.app, signed
+make app          # release build → build/transcribe-thing.app, signed (see Permissions)
 make run          # build, then launch through LaunchServices
 make run-log      # same, with transcribe-thing's output in this terminal
 make install      # copy to /Applications/transcribe-thing.app
@@ -41,14 +41,19 @@ OPENROUTER_API_KEY=sk-or-… .build/debug/transcribe-thing --transcribe memo.m4a
 transcribe-thing asks for **Microphone** (to hear you) and **Accessibility** (to paste and to listen for its shortcuts).
 Onboarding walks through both.
 
-Ad-hoc signed builds (the default) are tied to the exact binary: after every rebuild, System Settings still
-shows transcribe-thing as allowed under Accessibility, but macOS quietly stops honoring it. Two ways out:
+Ad-hoc signed builds (what you get without the certificate below) are tied to the exact binary: after every
+rebuild, System Settings still shows transcribe-thing as allowed under Accessibility, but macOS quietly stops
+honoring it. Two ways out:
 
 - **Sign with a stable certificate (recommended).** Grants then survive rebuilds.
   1. Open Keychain Access → Certificate Assistant → Create a Certificate…
   2. Name it `transcribe-thing Developer`, Identity Type **Self-Signed Root**, Certificate Type **Code Signing**, Create.
-  3. Build with it: `make install SIGN_IDENTITY="transcribe-thing Developer"` (or `export SIGN_IDENTITY=…` once).
-  4. Grant Accessibility one last time.
+  3. Rebuild (`make install`) and grant Accessibility one last time.
+
+  The Makefile signs with `transcribe-thing Developer` automatically whenever that certificate is in your
+  keychain, and ad-hoc otherwise; `SIGN_IDENTITY=…` overrides it. Keychain Access marks a self-signed
+  certificate as not trusted, and that's fine for signing. The first build may ask to let codesign use the key:
+  choose Always Allow.
 - **Reset and grant again:** `make reset-tcc`, then relaunch and allow access.
 
 If fn opens the emoji picker or switches input sources, set System Settings → Keyboard → "Press 🌐 key to"

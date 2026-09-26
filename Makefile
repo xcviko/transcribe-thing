@@ -1,5 +1,5 @@
 # transcribe-thing: SwiftPM -> build/transcribe-thing.app
-#   make app            release bundle, signed (ad-hoc unless SIGN_IDENTITY is set)
+#   make app            release bundle, signed with SIGN_IDENTITY (see below)
 #   make run            build and launch through LaunchServices
 #   make install        copy the bundle to /Applications
 CONFIG        ?= release
@@ -7,6 +7,11 @@ APP           := build/transcribe-thing.app
 BUNDLE_ID     := dev.transcribe-thing.app
 INSTALL_DIR   ?= /Applications
 SNAPSHOT_DIR  ?= build/snapshots
+# The stable self-signed certificate from the README when the keychain has it, else ad-hoc ("-"). Matched by
+# name, not with `-v`: a self-signed root is never "valid" (CSSMERR_TP_NOT_TRUSTED), yet codesign uses it fine.
+# Evaluated only by the targets that sign.
+SIGN_CERT     := transcribe-thing Developer
+SIGN_IDENTITY ?= $(shell security find-identity -p codesigning 2>/dev/null | grep -qF '"$(SIGN_CERT)"' && echo '$(SIGN_CERT)' || echo -)
 
 .PHONY: all build app run run-log install uninstall sounds icon test snapshots reset-tcc clean
 
@@ -16,7 +21,7 @@ build:
 	swift build -c $(CONFIG)
 
 app:
-	./scripts/build-app.sh $(CONFIG)
+	SIGN_IDENTITY='$(SIGN_IDENTITY)' ./scripts/build-app.sh $(CONFIG)
 
 # Through `open` so macOS attributes permission prompts to transcribe-thing, not to the terminal.
 run: app
@@ -53,7 +58,7 @@ snapshots:
 	swift build
 	"$$(swift build --show-bin-path)/transcribe-thing" --snapshots $(SNAPSHOT_DIR) $(if $(ONLY),--only $(ONLY)) $(if $(APPEARANCE),--appearance $(APPEARANCE))
 
-# Ad-hoc rebuilds change the code hash, so macOS stops honoring old Accessibility grants.
+# Ad-hoc rebuilds change the code hash, so macOS stops honoring old Accessibility grants (a stable certificate avoids it).
 reset-tcc:
 	-tccutil reset Accessibility $(BUNDLE_ID)
 	-tccutil reset Microphone $(BUNDLE_ID)

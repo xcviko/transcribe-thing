@@ -3,8 +3,8 @@ import Foundation
 import Testing
 @testable import TranscribeThing
 
-// Parakeet and Whisper through OpenRouter's speech-to-text endpoint: engine metadata, wire format, chunking,
-// provider lookup, history and notices.
+// Parakeet and Whisper through OpenRouter's speech-to-text endpoint: engine metadata, wire format, one request
+// per recording, provider lookup, history and notices.
 
 private let rate = 16_000
 
@@ -57,15 +57,6 @@ private let babbleBlock: [Float] = {
 }()
 
 private func babble(_ seconds: Double) -> [Float] { tiled(babbleBlock, seconds: seconds) }
-
-private func sample(atSeconds seconds: Double) -> Int { Int(seconds * Double(rate)) }
-
-private final class Counter: @unchecked Sendable {
-    private let lock = NSLock()
-    private var count = 0
-    var value: Int { lock.withLock { count } }
-    func increment() { lock.withLock { count += 1 } }
-}
 
 private func json(_ data: Data) throws -> [String: Any] {
     try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -131,7 +122,7 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
             #expect(engine.cloudAPI == .transcriptions)
             #expect(engine.badges == ["Cloud"])
             #expect(engine.approxDownloadBytes == nil)
-            #expect(engine.cloudTimeout > 60 && engine.cloudTimeout < 120)
+            #expect(engine.cloudTimeout == 180)
             #expect(engine.localCounterpart?.cloudCounterpart == engine)
             #expect(OpenRouterClient.engine(forModel: engine.openRouterModelID!) == engine)
         }
@@ -155,11 +146,17 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         }
     }
 
-    @Test func slowNoticeAllowanceGrowsWithChunks() {
-        #expect(DictationController.slowNoticeDelay(for: .parakeet, audioSeconds: 300) == 3)
-        #expect(DictationController.slowNoticeDelay(for: .geminiFlash, audioSeconds: 300) == 12)
-        #expect(DictationController.slowNoticeDelay(for: .whisperCloud, audioSeconds: 20) == 10)
-        #expect(DictationController.slowNoticeDelay(for: .whisperCloud, audioSeconds: 120) == 18)
+    @Test func slowNoticeThresholdIsOnePerEngineKind() {
+        #expect(DictationController.slowNoticeDelay(for: .parakeet) == 3)
+        #expect(DictationController.slowNoticeDelay(for: .whisperCloud) == 10)
+        #expect(DictationController.slowNoticeDelay(for: .parakeetCloud) == 10)
+        #expect(DictationController.slowNoticeDelay(for: .geminiFlash) == 12)
+    }
+
+    @Test func cloudSessionTimeouts() {
+        let config = URLSession.openRouterCloud.configuration
+        #expect(config.timeoutIntervalForRequest == 180)
+        #expect(config.timeoutIntervalForResource == 330)
     }
 }
 
@@ -237,7 +234,7 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
 
     private func call(_ client: OpenRouterClient, model: String = "openai/whisper-large-v3-turbo",
                       language: String? = nil) async throws -> CloudResult {
-        try await client.transcribeSpeech(wav: wav, model: model, language: language, apiKey: "sk-or-v1-test", timeout: 65)
+        try await client.transcribeSpeech(wav: wav, model: model, language: language, apiKey: "sk-or-v1-test", timeout: 180)
     }
 
     @Test func postsToTheTranscriptionEndpoint() async throws {
@@ -251,7 +248,7 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         let request = try #require(StubURLProtocol.registry.requests(for: host).first)
         #expect(request.url?.path == "/api/v1/audio/transcriptions")
         #expect(request.httpMethod == "POST")
-        #expect(request.timeoutInterval == 65)
+        #expect(request.timeoutInterval == 180)
         #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer sk-or-v1-test")
         #expect(request.value(forHTTPHeaderField: "Content-Type") == "application/json")
         #expect(request.value(forHTTPHeaderField: "X-OpenRouter-Title") == "transcribe-thing")
@@ -304,15 +301,6 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         }
     }
 
-    @Test func oversizedChunkNeverLeavesTheMac() async throws {
-        let (client, host) = StubURLProtocol.client([speechReply("never")])
-        await #expect(throws: AppError.recordingTooLarge) {
-            try await client.transcribeSpeech(wav: Data(count: 15_000_000), model: "nvidia/parakeet-tdt-0.6b-v3",
-                                              language: nil, apiKey: "k", timeout: 65)
-        }
-        #expect(StubURLProtocol.registry.requests(for: host).isEmpty)
-    }
-
     @Test func liveInvalidKeyShapeMapsToInvalidKey() {
         // Body OpenRouter returned on 2026-09-27 for `Authorization: Bearer sk-or-v1-invalid` on this endpoint.
         let error = OpenRouterErrorMapper.httpError(status: 401, data: Data(#"{"error":{"message":"User not found.","code":401}}"#.utf8),
@@ -350,137 +338,6 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
     }
 }
 
-// MARK: - Chunk boundaries
-
-@Suite struct CloudChunkerTests {
-    private func expectCovers(_ ranges: [Range<Int>], count: Int) {
-        #expect(ranges.first?.lowerBound == 0)
-        #expect(ranges.last?.upperBound == count)
-        for (a, b) in zip(ranges, ranges.dropFirst()) { #expect(a.upperBound == b.lowerBound) }
-        #expect(ranges.allSatisfy { !$0.isEmpty && $0.count <= sample(atSeconds: CloudChunker.maxChunkSeconds) })
-    }
-
-    @Test func shortRecordingsStayWhole() {
-        #expect(CloudChunker.ranges(for: []) == [])
-        let audio = tone(50)
-        #expect(CloudChunker.ranges(for: audio) == [0..<audio.count])
-    }
-
-    @Test func cutsLandInTheQuietGaps() {
-        // Talking with pauses at 44.0–44.5 s and 88.0–88.4 s, and a longer pause at 30 s that is too early to use.
-        let audio = tone(30) + silence(1) + tone(13) + silence(0.5) + tone(43.5) + silence(0.4) + tone(41.6)
-        let ranges = CloudChunker.ranges(for: audio)
-        #expect(ranges.count == 3)
-        expectCovers(ranges, count: audio.count)
-        let firstCut = ranges[0].upperBound, secondCut = ranges[1].upperBound
-        #expect((sample(atSeconds: 44.0)...sample(atSeconds: 44.5)).contains(firstCut), "cut at \(Double(firstCut) / 16_000) s")
-        #expect((sample(atSeconds: 88.0)...sample(atSeconds: 88.4)).contains(secondCut), "cut at \(Double(secondCut) / 16_000) s")
-    }
-
-    @Test func quietGapsInSpeechAreFound() {
-        let audio = babble(44) + roomNoise(0.5) + babble(43.5) + roomNoise(0.4) + babble(31.6)
-        let ranges = CloudChunker.ranges(for: audio)
-        #expect(ranges.count == 3)
-        expectCovers(ranges, count: audio.count)
-        #expect((sample(atSeconds: 44.0)...sample(atSeconds: 44.5)).contains(ranges[0].upperBound))
-        #expect((sample(atSeconds: 88.0)...sample(atSeconds: 88.4)).contains(ranges[1].upperBound))
-    }
-
-    @Test func aQuietMicStillCountsAsSpeech() async throws {
-        // Speech peaking near −60 dBFS: under SilenceGuard's fixed −50 dBFS bar, still voice to the recorder's analyzer.
-        let quiet = babble(60).map { $0 * 0.007 }
-        #expect(SilenceGuard.voicedSeconds(quiet) < SilenceGuard.minimumVoicedSeconds)
-        let ranges = CloudChunker.ranges(for: quiet)
-        #expect(ranges.count == 2)
-        var calls = 0
-        _ = try await CloudChunker.transcribe(quiet, ranges: ranges, dropsSilencePhrases: false) { _ in
-            calls += 1
-            return CloudResult(text: "soft words")
-        }
-        #expect(calls == 2)
-    }
-
-    @Test func talkingWithoutPausesStillFitsTheLimit() {
-        let audio = tone(151, amplitude: 0.3)
-        let ranges = CloudChunker.ranges(for: audio)
-        #expect(ranges.count == 4)
-        expectCovers(ranges, count: audio.count)
-        #expect(ranges.dropLast().allSatisfy { $0.count >= sample(atSeconds: 40) })
-    }
-
-    @Test func theLastChunkIsNeverASliver() {
-        // The quietest spot is 0.3 s before the end: cutting there would leave a scrap of audio.
-        let audio = tone(50.2) + silence(0.3)
-        let ranges = CloudChunker.ranges(for: audio)
-        #expect(ranges.count == 2)
-        expectCovers(ranges, count: audio.count)
-        #expect(ranges[1].count >= sample(atSeconds: CloudChunker.minimumTailSeconds))
-    }
-
-    @Test func aSearchRegionOneWindowLongDoesNotTrap() {
-        let window = Int(CloudChunker.quietWindowSeconds * 100)
-        #expect(CloudChunker.quietestCut(tone(1), in: 0..<(window * 160), frame: 160, windowFrames: window)
-            == window * 160 / 2)
-        // 0.31 s chunks leave a first search region of exactly one 0.3 s window.
-        let audio = tone(5)
-        let ranges = CloudChunker.ranges(for: audio, maxSeconds: 0.31)
-        #expect(ranges.first?.lowerBound == 0 && ranges.last?.upperBound == audio.count)
-        for (a, b) in zip(ranges, ranges.dropFirst()) { #expect(a.upperBound == b.lowerBound) }
-        #expect(ranges.allSatisfy { !$0.isEmpty && $0.count <= sample(atSeconds: 0.31) })
-    }
-
-    @Test func chunksAreSentInOrderAndCancellationStopsBetweenThem() async throws {
-        let audio = babble(120)
-        let ranges = CloudChunker.ranges(for: audio)
-        #expect(ranges.count == 3)
-
-        var sent: [Int] = []
-        let transcript = try await CloudChunker.transcribe(audio, ranges: ranges, dropsSilencePhrases: false) { wav in
-            let count = WAVEncoder.decode(wav)?.count ?? 0
-            sent.append(count)
-            return CloudResult(text: " part \(sent.count) ", provider: sent.count == 2 ? "DeepInfra" : "Groq",
-                               costUSD: 0.001, generationID: "gen-\(sent.count)")
-        }
-        #expect(sent == ranges.map(\.count))
-        #expect(transcript.text == "part 1 part 2 part 3")
-        #expect(transcript.providers == ["Groq", "DeepInfra"])
-        #expect(transcript.generationIDs == ["gen-1", "gen-2", "gen-3"])
-        #expect(abs((transcript.costUSD ?? 0) - 0.003) < 1e-12)
-        #expect(transcript.requestCount == 3)
-
-        let calls = Counter()
-        let cancelled = Task {
-            try await CloudChunker.transcribe(audio, ranges: ranges, dropsSilencePhrases: false) { _ in
-                calls.increment()
-                withUnsafeCurrentTask { $0?.cancel() }
-                return CloudResult(text: "first")
-            }
-        }
-        await #expect(throws: CancellationError.self) { try await cancelled.value }
-        #expect(calls.value == 1)
-    }
-
-    @Test func silentChunksAreSkippedAndWhisperPhrasesDropped() async throws {
-        let audio = babble(45) + roomNoise(40) + silence(15)
-        let ranges = CloudChunker.ranges(for: audio)
-        #expect(ranges.count == 3)
-        var calls = 0
-        let transcript = try await CloudChunker.transcribe(audio, ranges: ranges, dropsSilencePhrases: true) { _ in
-            calls += 1
-            return CloudResult(text: "Real words.")
-        }
-        #expect(calls == 1)
-        #expect(transcript.text == "Real words.")
-        #expect(transcript.costUSD == nil)
-
-        let faint = babble(0.3) + roomNoise(3)
-        let dropped = try await CloudChunker.transcribe(faint, ranges: [0..<faint.count], dropsSilencePhrases: true) { _ in
-            CloudResult(text: "Thanks for watching!")
-        }
-        #expect(dropped.text.isEmpty && dropped.requestCount == 1)
-    }
-}
-
 // MARK: - TranscriptionService
 
 @MainActor
@@ -501,39 +358,37 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
 
     private func speech(_ seconds: Double) -> Recording { Recording(samples: tone(seconds)) }
 
-    @Test func longRecordingGoesUpInOrderedChunks() async throws {
-        let audio = await offMain { babble(44) + roomNoise(0.5) + babble(43.5) + roomNoise(0.4) + babble(31.6) }
-        let (service, host, _) = makeService([speechReply("one", cost: 0.001, generation: "gen-1"),
-                                              speechReply("two", cost: 0.002, generation: "gen-2"),
-                                              speechReply("three.", generation: "gen-3")], language: "de")
+    @Test func aTenMinuteRecordingIsOneRequest() async throws {
+        // 19.2 MB of WAV, more than Gemini's inline limit: the speech endpoint takes it whole, no local cap.
+        let audio = await offMain { babble(600) }
+        let (service, host, _) = makeService([speechReply("The whole talk.", cost: 0.004, generation: "gen-1")],
+                                             language: "de")
         let result = try await service.transcribe(Recording(samples: audio), engine: .whisperCloud)
-        #expect(result.text == "one two three.")
+        #expect(result.text == "The whole talk.")
         #expect(result.engine == .whisperCloud)
-        #expect(abs((result.costUSD ?? 0) - 0.003) < 1e-12)
-        #expect(result.generationIDs == ["gen-1", "gen-2", "gen-3"])
+        #expect(result.costUSD == 0.004)
+        #expect(result.generationID == "gen-1")
         #expect(result.provider == nil)
         #expect(result.processingTime > 0)
 
+        let requests = StubURLProtocol.registry.requests(for: host)
+        #expect(requests.count == 1)
+        let request = try #require(requests.first)
+        #expect(request.url?.path == "/api/v1/audio/transcriptions")
+        #expect(request.httpMethod == "POST")
+        #expect(request.timeoutInterval == 180)
         let bodies = StubURLProtocol.registry.bodies(for: host)
-        #expect(bodies.count == 3)
-        let fields = await offMain {
-            bodies.map { body -> (model: String?, language: String?, keys: Set<String>, samples: Int?) in
-                let object = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
-                return (object["model"] as? String, object["language"] as? String, Set(object.keys),
-                        wavSampleCount(inRequestBody: body))
-            }
+        #expect(bodies.count == 1)
+        let body = try #require(bodies.first)
+        let fields = await offMain { () -> (model: String?, language: String?, keys: Set<String>, samples: Int?) in
+            let object = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
+            return (object["model"] as? String, object["language"] as? String, Set(object.keys),
+                    wavSampleCount(inRequestBody: body))
         }
-        var total = 0
-        for field in fields {
-            #expect(field.model == "openai/whisper-large-v3-turbo")
-            #expect(field.language == "de")
-            #expect(field.keys == ["model", "input_audio", "language"])
-            let count = try #require(field.samples)
-            #expect(count <= sample(atSeconds: 50))
-            total += count
-        }
-        #expect(total == audio.count)
-        #expect(StubURLProtocol.registry.requests(for: host).allSatisfy { $0.url?.path == "/api/v1/audio/transcriptions" })
+        #expect(fields.model == "openai/whisper-large-v3-turbo")
+        #expect(fields.language == "de")
+        #expect(fields.keys == ["model", "input_audio", "language"], "no provider routing")
+        #expect(fields.samples == audio.count)
     }
 
     @Test func parakeetSendsNoLanguage() async throws {
@@ -546,17 +401,53 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         #expect(body["model"] as? String == "nvidia/parakeet-tdt-0.6b-v3")
     }
 
-    @Test func aFailedChunkFailsTheDictationAndStopsSending() async throws {
-        let audio = await offMain { babble(120) }
+    @Test func aFailedRequestFailsTheDictation() async throws {
         let (service, host, account) = makeService([
-            speechReply("one"), .init(status: 402, body: #"{"error":{"code":402,"message":"Insufficient credits"}}"#),
-            speechReply("never"),
+            .init(status: 402, body: #"{"error":{"code":402,"message":"Insufficient credits"}}"#), speechReply("never"),
         ])
         await #expect(throws: AppError.openRouterNoCredits("Insufficient credits")) {
-            try await service.transcribe(Recording(samples: audio), engine: .whisperCloud)
+            try await service.transcribe(speech(3), engine: .whisperCloud)
         }
-        #expect(StubURLProtocol.registry.requests(for: host).count == 2)
+        #expect(StubURLProtocol.registry.requests(for: host).count == 1)
         #expect(account.status == .noCredit(nil))
+    }
+
+    @Test func aTransientFailureIsRetriedOnceForTheWholeRecording() async throws {
+        let audio = await offMain { babble(90) }
+        let (service, host, _) = makeService([
+            .init(status: 503, body: #"{"error":{"code":503,"message":"Overloaded"}}"#), speechReply("ok", generation: "gen-2"),
+        ])
+        let result = try await service.transcribe(Recording(samples: audio), engine: .parakeetCloud)
+        #expect(result.text == "ok" && result.generationID == "gen-2")
+        let bodies = StubURLProtocol.registry.bodies(for: host)
+        #expect(bodies.count == 2)
+        let counts = await offMain { bodies.map { wavSampleCount(inRequestBody: $0) } }
+        #expect(counts == [audio.count, audio.count])
+    }
+
+    @Test func tooLargeForOpenRouterIsReportedNotRetried() async throws {
+        let (service, host, _) = makeService([
+            .init(status: 413, body: #"{"error":{"code":413,"message":"Request payload too large"}}"#), speechReply("never"),
+        ])
+        await #expect(throws: AppError.recordingTooLarge) {
+            try await service.transcribe(speech(3), engine: .parakeetCloud)
+        }
+        #expect(StubURLProtocol.registry.requests(for: host).count == 1)
+    }
+
+    @Test func whisperStockPhrasesOnNearSilenceAreDropped() async throws {
+        let faint = babble(0.3) + roomNoise(3)
+        let (whisper, _, _) = makeService([speechReply("Thanks for watching!")])
+        // Dropped like local Whisper's: no text, with a trace of voice, reads as an empty result.
+        await #expect(throws: AppError.emptyResult(.whisperCloud)) {
+            try await whisper.transcribe(Recording(samples: faint), engine: .whisperCloud)
+        }
+        let (parakeet, _, _) = makeService([speechReply("Thanks for watching!")])
+        #expect(try await parakeet.transcribe(Recording(samples: faint), engine: .parakeetCloud).text
+            == "Thanks for watching!")
+        let (spoken, _, _) = makeService([speechReply("Thanks for watching!")])
+        #expect(try await spoken.transcribe(speech(3), engine: .whisperCloud).text == "Thanks for watching!",
+                "with plenty of voice it was said")
     }
 
     @Test func noTextOnSpeechIsEmptyResultAndOnSilenceNoSpeech() async throws {
@@ -580,28 +471,33 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
     @Test func servedProviderToleratesALateGenerationRecord() async throws {
         let (service, host, _) = makeService([.init(status: 404, body: #"{"error":{"code":404,"message":"Not found"}}"#),
                                               generationReply("Groq")])
-        #expect(await service.servedProvider(generationIDs: ["gen-1"]) == "Groq")
+        #expect(await service.servedProvider(generationID: "gen-1") == "Groq")
         #expect(StubURLProtocol.registry.requests(for: host).count == 2)
     }
 
     @Test func servedProviderGivesUpQuietly() async throws {
         let notFound = StubURLProtocol.Reply(status: 404, body: #"{"error":{"code":404,"message":"Not found"}}"#)
         let (service, host, _) = makeService([notFound, notFound])
-        #expect(await service.servedProvider(generationIDs: ["gen-1"]) == nil)
+        #expect(await service.servedProvider(generationID: "gen-1") == nil)
         #expect(StubURLProtocol.registry.requests(for: host).count == 2)
 
         let (failing, failingHost, _) = makeService([.init(status: 500, body: "oops"), generationReply("Groq")])
-        #expect(await failing.servedProvider(generationIDs: ["gen-1"]) == nil)
+        #expect(await failing.servedProvider(generationID: "gen-1") == nil)
         #expect(StubURLProtocol.registry.requests(for: failingHost).count == 1, "only a 404 is worth asking again")
 
         let (keyless, keylessHost, _) = makeService([generationReply("Groq")], key: nil)
-        #expect(await keyless.servedProvider(generationIDs: ["gen-1"]) == nil)
+        #expect(await keyless.servedProvider(generationID: "gen-1") == nil)
         #expect(StubURLProtocol.registry.requests(for: keylessHost).isEmpty)
     }
 
-    @Test func servedProviderListsEachProviderOnce() async throws {
-        let (service, _, _) = makeService([generationReply("Groq"), generationReply("DeepInfra"), generationReply("Groq")])
-        #expect(await service.servedProvider(generationIDs: ["gen-1", "gen-2", "gen-3"]) == "Groq, DeepInfra")
+    @Test func servedProviderIsOneLookupForTheOneGeneration() async throws {
+        let (service, host, _) = makeService([generationReply("Groq"), generationReply("DeepInfra")])
+        #expect(await service.servedProvider(generationID: "gen-1") == "Groq")
+        let requests = StubURLProtocol.registry.requests(for: host)
+        #expect(requests.count == 1)
+        let url = try #require(requests.first?.url)
+        #expect(url.path == "/api/v1/generation")
+        #expect(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems == [URLQueryItem(name: "id", value: "gen-1")])
     }
 }
 
@@ -641,21 +537,21 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
 
     @Test func deliveredCloudTranscriptLearnsItsProvider() async throws {
         let h = DictationControllerTests.make()
-        var asked: [[String]] = []
-        h.controller.providerLookupOverride = { ids in
-            asked.append(ids)
+        var asked: [String] = []
+        h.controller.providerLookupOverride = { id in
+            asked.append(id)
             return "Groq"
         }
         h.controller.transcribeOverride = { _, engine in
             TranscriptResult(text: "Hallo", engine: engine, processingTime: 0.4, costUSD: 0.00001,
-                             generationIDs: ["gen-1"])
+                             generationID: "gen-1")
         }
         h.controller.insertOverride = { _, _ in .pasted }
         let recording = DictationControllerTests.recording()
         h.controller.enqueue(recording, engine: .whisperCloud, delivery: .paste(targetPID: nil))
         try await waitUntil { h.history.entry(id: recording.id)?.provider != nil }
         #expect(h.history.entry(id: recording.id)?.provider == "Groq")
-        #expect(asked == [["gen-1"]])
+        #expect(asked == ["gen-1"])
     }
 
     @Test func aProviderFromTheResponseNeedsNoLookup() async throws {
@@ -666,7 +562,7 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         }
         h.controller.transcribeOverride = { _, engine in
             TranscriptResult(text: "Hallo", engine: engine, processingTime: 0.4, provider: "Together",
-                             generationIDs: ["gen-1"])
+                             generationID: "gen-1")
         }
         h.controller.insertOverride = { _, _ in .pasted }
         let recording = DictationControllerTests.recording()

@@ -53,7 +53,7 @@ final class DictationController {
     @ObservationIgnored var copyOverride: (@MainActor (String) -> Void)?
     @ObservationIgnored var pasteNowOverride: (@MainActor (String) async -> InsertionOutcome)?
     /// Replaces the OpenRouter generation lookup that fills in a delivered cloud transcript's provider.
-    @ObservationIgnored var providerLookupOverride: (@MainActor ([String]) async -> String?)?
+    @ObservationIgnored var providerLookupOverride: (@MainActor (String) async -> String?)?
     /// TCC's answer right now (about 25 ms), asked only while the cached permission isn't granted.
     @ObservationIgnored var microphoneAuthorizedNow: () -> Bool = { AudioRecorder.isMicrophoneAuthorized }
 
@@ -556,7 +556,7 @@ final class DictationController {
             self.dismissSlowNotice(for: job.id)
             self.drain()
         }
-        let hintDelay = Self.slowNoticeDelay(for: engine, audioSeconds: recording.duration)
+        let hintDelay = Self.slowNoticeDelay(for: engine)
         job.hintTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(hintDelay))
             guard !Task.isCancelled, let self, job.outcome == nil, job.generation == generation else { return }
@@ -583,15 +583,12 @@ final class DictationController {
         }
     }
 
-    /// How long a job may run before "taking longer than usual". Cloud speech-to-text sends a long recording as
-    /// several requests in a row, so its allowance grows with the audio.
-    nonisolated static func slowNoticeDelay(for engine: EngineID, audioSeconds: TimeInterval) -> TimeInterval {
+    /// How long a job may run before "taking longer than usual".
+    nonisolated static func slowNoticeDelay(for engine: EngineID) -> TimeInterval {
         switch engine.cloudAPI {
-        case nil: return 3
-        case .chatCompletions: return 12
-        case .transcriptions:
-            let chunks = max(1, (audioSeconds / CloudChunker.maxChunkSeconds).rounded(.up))
-            return 10 + 4 * (chunks - 1)
+        case nil: 3
+        case .transcriptions: 10
+        case .chatCompletions: 12
         }
     }
 
@@ -666,8 +663,8 @@ final class DictationController {
                 status: .success, audioDuration: recording.duration,
                 voicedSeconds: recording.speech.voicedSeconds,
                 processingTime: result.processingTime, costUSD: result.costUSD, provider: result.provider))
-            if result.provider == nil, !result.generationIDs.isEmpty {
-                resolveProvider(entryID: job.id, result: result, text: text)
+            if result.provider == nil, let generationID = result.generationID {
+                resolveProvider(entryID: job.id, generationID: generationID, engine: result.engine, text: text)
             }
             switch job.delivery {
             case .historyOnly:
@@ -687,18 +684,17 @@ final class DictationController {
 
     /// Asks OpenRouter who served a delivered cloud transcript, in the background, and records it on the history
     /// entry, unless the entry changed meanwhile (deleted, or retried with another engine).
-    private func resolveProvider(entryID: UUID, result: TranscriptResult, text: String) {
-        let ids = result.generationIDs
+    private func resolveProvider(entryID: UUID, generationID: String, engine: EngineID, text: String) {
         Task { [weak self] in
             guard let self else { return }
             let name: String?
             if let override = self.providerLookupOverride {
-                name = await override(ids)
+                name = await override(generationID)
             } else {
-                name = await self.transcription.servedProvider(generationIDs: ids)
+                name = await self.transcription.servedProvider(generationID: generationID)
             }
             guard let name, var entry = self.history.entry(id: entryID), entry.status == .success,
-                  entry.engine == result.engine, entry.text == text, entry.provider == nil else { return }
+                  entry.engine == engine, entry.text == text, entry.provider == nil else { return }
             entry.provider = name
             self.history.upsert(entry)
         }

@@ -89,15 +89,15 @@ final class OpenRouterClient: Sendable {
         return result
     }
 
-    /// Parakeet or Whisper over `POST /audio/transcriptions`. `wav` is one complete WAV file (one chunk; the
-    /// caller splits long recordings, since upstream providers time out after 60 s). `language` is an ISO 639-1
-    /// hint, omitted when nil. Same retry policy as `transcribe(wav:model:systemPrompt:apiKey:timeout:)`.
+    /// Parakeet or Whisper over `POST /audio/transcriptions`. `wav` is the whole recording as one WAV file, in
+    /// one request: the providers behind it transcribe many times faster than real time, and a size OpenRouter
+    /// refuses comes back as a 413 (`recordingTooLarge`). `language` is an ISO 639-1 hint, omitted when nil.
+    /// Same retry policy as `transcribe(wav:model:systemPrompt:apiKey:timeout:)`.
     func transcribeSpeech(wav: Data, model: String, language: String?, apiKey: String,
                           timeout: TimeInterval) async throws -> CloudResult {
         let engine = Self.engine(forModel: model)
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw AppError.openRouterMissingKey }
-        guard Self.base64Length(ofByteCount: wav.count) <= Self.maxBase64Bytes else { throw AppError.recordingTooLarge }
 
         let body: Data
         do {

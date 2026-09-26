@@ -4,7 +4,9 @@
 # Usage: scripts/build-app.sh [release|debug]
 # Env:
 #   SIGN_IDENTITY  codesign identity (default "-" = ad-hoc). Use a stable self-signed certificate so
-#                  Accessibility and Microphone grants survive rebuilds (see README).
+#                  Accessibility and Microphone grants survive rebuilds (see README); `make app` passes
+#                  "transcribe-thing Developer" when the keychain has it. A self-signed identity isn't trusted
+#                  (CSSMERR_TP_NOT_TRUSTED), which codesign doesn't mind.
 #   VERSION        CFBundleShortVersionString (default: the one in Resources/Info.plist)
 #   BUILD_NUMBER   CFBundleVersion (default: yyyymmddHHMM)
 #   HARDENED=1     sign with the hardened runtime (the audio-input entitlement is already included)
@@ -110,5 +112,6 @@ done
 shopt -u nullglob
 codesign "${APP_SIGN_ARGS[@]}" "$APP"
 
+# Integrity and the designated requirement only: no trust evaluation, so an untrusted self-signed identity passes.
 codesign --verify --deep --strict --verbose=1 "$APP"
 echo "==> Built $APP ($CONFIG, $VERSION build $BUILD_NUMBER)"

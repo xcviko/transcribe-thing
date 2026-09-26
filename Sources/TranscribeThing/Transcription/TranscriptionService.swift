@@ -6,10 +6,10 @@ struct TranscriptResult: Sendable, Equatable {
     var processingTime: TimeInterval
     var costUSD: Double?
     /// The OpenRouter provider that served it, when the response said so. Otherwise look it up with
-    /// `TranscriptionService.servedProvider(generationIDs:)` once the result is delivered.
+    /// `TranscriptionService.servedProvider(generationID:)` once the result is delivered.
     var provider: String? = nil
-    /// OpenRouter generation ids of the requests behind this result, oldest first.
-    var generationIDs: [String] = []
+    /// OpenRouter generation id of the request behind this result.
+    var generationID: String? = nil
 }
 
 /// Routes a recording to the local model, Gemini, or OpenRouter speech-to-text, and returns non-empty, trimmed text.
@@ -20,9 +20,6 @@ final class TranscriptionService {
     private let client: OpenRouterClient
     private let settings: AppSettings
     private let providerLookupDelay: Duration
-
-    /// Generation lookups per result: one per chunk, capped so a long dictation doesn't fire dozens of requests.
-    static let maxProviderLookups = 6
 
     init(models: ModelStore, account: OpenRouterAccount, client: OpenRouterClient, settings: AppSettings,
          providerLookupDelay: Duration = .milliseconds(1500)) {
@@ -45,8 +42,8 @@ final class TranscriptionService {
                 let cloud = try await transcribeCloud(recording.samples, engine: engine)
                 result.text = cloud.text
                 result.costUSD = cloud.costUSD
-                result.provider = cloud.providers.isEmpty ? nil : cloud.providers.joined(separator: ", ")
-                result.generationIDs = cloud.generationIDs
+                result.provider = cloud.provider
+                result.generationID = cloud.generationID
             }
             result.text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !result.text.isEmpty else { throw await emptyResultError(for: recording.samples, engine: engine) }
@@ -62,7 +59,7 @@ final class TranscriptionService {
         }
     }
 
-    private func transcribeCloud(_ samples: [Float], engine: EngineID) async throws -> CloudChunker.Transcript {
+    private func transcribeCloud(_ samples: [Float], engine: EngineID) async throws -> CloudResult {
         guard let model = engine.openRouterModelID, let api = engine.cloudAPI else {
             throw AppError.engineFailed(engine, "No cloud model for \(engine.displayName).")
         }
@@ -70,15 +67,15 @@ final class TranscriptionService {
             throw account.isKeyUnreadable ? AppError.openRouterKeyUnreadable : AppError.openRouterMissingKey
         }
         do {
-            let transcript: CloudChunker.Transcript
+            let result: CloudResult
             switch api {
             case .chatCompletions:
-                transcript = try await transcribeWithChat(samples, engine: engine, model: model, key: key)
+                result = try await transcribeWithChat(samples, engine: engine, model: model, key: key)
             case .transcriptions:
-                transcript = try await transcribeSpeech(samples, engine: engine, model: model, key: key)
+                result = try await transcribeSpeech(samples, engine: engine, model: model, key: key)
             }
             account.noteCloudSuccess()
-            return transcript
+            return result
         } catch let error as AppError {
             account.noteCloudFailure(error)
             throw error
@@ -87,7 +84,7 @@ final class TranscriptionService {
 
     /// Gemini: the whole recording in one request, with the user's system prompt.
     private func transcribeWithChat(_ samples: [Float], engine: EngineID, model: String,
-                                    key: String) async throws -> CloudChunker.Transcript {
+                                    key: String) async throws -> CloudResult {
         // Refuse before spending time encoding a recording that can't be sent (the recording limit for Gemini
         // normally stops it well before this).
         let wavBytes = 44 + samples.count * 2
@@ -95,61 +92,48 @@ final class TranscriptionService {
             throw AppError.recordingTooLarge
         }
         let wav = await Task.detached(priority: .userInitiated) { WAVEncoder.pcm16(samples) }.value
-        let result = try await client.transcribe(wav: wav, model: model, systemPrompt: settings.geminiSystemPrompt,
-                                                 apiKey: key, timeout: engine.cloudTimeout)
-        return CloudChunker.Transcript(text: result.text, costUSD: result.costUSD,
-                                       providers: result.provider.map { [$0] } ?? [],
-                                       generationIDs: result.generationID.map { [$0] } ?? [], requestCount: 1)
+        return try await client.transcribe(wav: wav, model: model, systemPrompt: settings.geminiSystemPrompt,
+                                           apiKey: key, timeout: engine.cloudTimeout)
     }
 
-    /// Parakeet and Whisper over the speech-to-text endpoint: chunks of at most 50 s, one after another. The
-    /// Gemini system prompt doesn't apply; Whisper gets the language setting.
+    /// Parakeet and Whisper over the speech-to-text endpoint: the whole recording in one request. The Gemini
+    /// system prompt doesn't apply; Whisper gets the language setting, and its stock phrases on a nearly silent
+    /// recording ("Thanks for watching!") are dropped, as on this Mac.
     private func transcribeSpeech(_ samples: [Float], engine: EngineID, model: String,
-                                  key: String) async throws -> CloudChunker.Transcript {
-        let ranges = await Task.detached(priority: .userInitiated) { CloudChunker.ranges(for: samples) }.value
+                                  key: String) async throws -> CloudResult {
+        let dropsSilencePhrases = engine.localCounterpart == .whisper
+        let prepared = await Task.detached(priority: .userInitiated) { () -> (wav: Data, voiced: Double) in
+            (WAVEncoder.pcm16(samples), dropsSilencePhrases ? SilenceGuard.voicedSeconds(samples) : 0)
+        }.value
+        try Task.checkCancellation()
         let language = engine.acceptsLanguageHint ? settings.whisperLanguage : nil
-        let client = client
-        let transcript = try await CloudChunker.transcribe(
-            samples, ranges: ranges, dropsSilencePhrases: engine.localCounterpart == .whisper) { wav in
-            try await client.transcribeSpeech(wav: wav, model: model, language: language, apiKey: key,
-                                              timeout: engine.cloudTimeout)
+        var result = try await client.transcribeSpeech(wav: prepared.wav, model: model, language: language,
+                                                       apiKey: key, timeout: engine.cloudTimeout)
+        if dropsSilencePhrases, SilenceGuard.isLikelyHallucination(result.text, voicedSeconds: prepared.voiced) {
+            result.text = ""
         }
-        if ranges.count > 1 {
-            Log.engine.info("\(engine.rawValue, privacy: .public): \(transcript.requestCount) of \(ranges.count) chunks sent")
-        }
-        return transcript
+        return result
     }
 
-    /// Who served a delivered cloud result, from OpenRouter's generation records: provider names, each once, in
-    /// order ("Groq", or "Groq, DeepInfra" when chunks went to different providers). A generation OpenRouter hasn't
-    /// recorded yet is asked for once more after a short wait. nil when nothing could be learned; never throws.
-    func servedProvider(generationIDs: [String]) async -> String? {
-        guard !generationIDs.isEmpty, let key = account.apiKey() else { return nil }
-        var names: [String] = []
-        for id in generationIDs.prefix(Self.maxProviderLookups) {
-            for attempt in 0..<2 {
-                if attempt > 0 {
-                    do { try await Task.sleep(for: providerLookupDelay) } catch { return Self.joined(names) }
-                }
-                let name: String?
-                do {
-                    name = try await client.generationProvider(id: id, apiKey: key)
-                } catch is CancellationError {
-                    return Self.joined(names)
-                } catch {
+    /// Who served a delivered cloud result, from OpenRouter's generation record ("Groq"). A generation OpenRouter
+    /// hasn't recorded yet is asked for once more after a short wait. nil when nothing could be learned; never
+    /// throws.
+    func servedProvider(generationID: String) async -> String? {
+        guard let key = account.apiKey() else { return nil }
+        for attempt in 0..<2 {
+            if attempt > 0 {
+                do { try await Task.sleep(for: providerLookupDelay) } catch { return nil }
+            }
+            do {
+                if let name = try await client.generationProvider(id: generationID, apiKey: key) { return name }
+            } catch {
+                if !(error is CancellationError) {
                     Log.net.info("Generation lookup failed: \(String(describing: error), privacy: .public)")
-                    break
                 }
-                guard let name else { continue }
-                if !names.contains(name) { names.append(name) }
-                break
+                return nil
             }
         }
-        return Self.joined(names)
-    }
-
-    private static func joined(_ names: [String]) -> String? {
-        names.isEmpty ? nil : names.joined(separator: ", ")
+        return nil
     }
 
     nonisolated static func seconds(_ duration: Duration) -> TimeInterval {

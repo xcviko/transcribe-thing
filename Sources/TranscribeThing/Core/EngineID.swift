@@ -20,7 +20,7 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
     enum CloudAPI: Sendable, Equatable {
         /// `POST /chat/completions` with the audio as an `input_audio` part (Gemini). One request per recording.
         case chatCompletions
-        /// `POST /audio/transcriptions` (Parakeet, Whisper). Long recordings go up in chunks.
+        /// `POST /audio/transcriptions` (Parakeet, Whisper). One request per recording, however long.
         case transcriptions
     }
 
@@ -193,12 +193,12 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// Per request. Transcription requests carry at most one chunk (`CloudChunker.maxChunkSeconds`), and
-    /// OpenRouter's upstream providers give up after 60 s.
+    /// Per request (`URLRequest.timeoutInterval`); `URLSession.openRouterCloud` caps the whole attempt at 330 s.
+    /// A request carries the whole recording, and a non-streaming answer sends no bytes until it's ready.
     var cloudTimeout: TimeInterval {
         switch self {
         case .parakeet, .whisper: 0
-        case .parakeetCloud, .whisperCloud: 65
+        case .parakeetCloud, .whisperCloud: 180
         case .geminiFlash: 120
         case .geminiPro: 180
         }
