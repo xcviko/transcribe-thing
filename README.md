@@ -3,8 +3,9 @@
 Dictation for macOS that stays out of your way. Hold **fn**, speak, let go: the text lands at your cursor in
 whatever app you're using. Transcription only, no rewriting.
 
-- **Engines:** Parakeet TDT 0.6B v3 (local, default) and Whisper Large V3 Turbo (local) run entirely on
-  your Mac; Gemini 3.8 Flash and Gemini 3.1 Pro run through your own OpenRouter key.
+- **Engines:** Parakeet TDT 0.6B v3 (the default) runs entirely on your Mac and detects any of 25 European
+  languages on its own. Through your own OpenRouter key: the same Parakeet v3 (served by Together), Gemini 3.8
+  Flash and Gemini 3.1 Pro.
 - **Hands-free mode**, a floating pill with a live waveform, a menu bar extra, rebindable shortcuts, soft
   sound cues, history with retry, and Undo for anything you cancel.
 
@@ -64,7 +65,6 @@ If fn opens the emoji picker or switches input sources, set System Settings → 
 | What | Where |
 |---|---|
 | Parakeet model | `~/Library/Application Support/transcribe-thing/Models/parakeet-tdt-0.6b-v3` |
-| Whisper model | `~/Library/Application Support/transcribe-thing/WhisperKit` |
 | History | `~/Library/Application Support/transcribe-thing/history.json` (last 2,000 dictations) |
 | Audio of failed or canceled dictations | `~/Library/Application Support/transcribe-thing/Recordings` (kept 14 days by default, for Retry and Undo) |
 | Settings | `defaults read dev.transcribe-thing.app` |

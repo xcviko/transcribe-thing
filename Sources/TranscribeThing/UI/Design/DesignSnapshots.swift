@@ -112,9 +112,9 @@ private struct DesignGallery: View {
                 }
                 VStack(alignment: .leading, spacing: 6) {
                     ModelStatusText(state: .ready, engine: .parakeet)
-                    ModelStatusText(state: .downloading(DownloadProgress(fraction: 0.42, bytesReceived: 265_000_000, totalBytes: 632_321_326, bytesPerSecond: 6_000_000, secondsRemaining: 64)), engine: .whisper)
-                    ModelStatusText(state: .preparing(since: Date()), engine: .whisper)
-                    ModelStatusText(state: .notInstalled, engine: .whisper)
+                    ModelStatusText(state: .downloading(DownloadProgress(fraction: 0.42, bytesReceived: 265_000_000, totalBytes: 632_321_326, bytesPerSecond: 6_000_000, secondsRemaining: 64)), engine: .parakeet)
+                    ModelStatusText(state: .preparing(since: Date()), engine: .parakeet)
+                    ModelStatusText(state: .notInstalled, engine: .parakeet)
                     ModelStatusText(keyStatus: .valid(PreviewFixtures.keyInfo))
                     ModelStatusText(keyStatus: .missing)
                     ModelStatusText(keyStatus: .invalid("401"))
@@ -194,7 +194,7 @@ private struct DesignGallery: View {
         section("Model card") {
             HStack(alignment: .top, spacing: 12) {
                 modelCard(.parakeet, state: .ready, selected: true)
-                modelCard(.whisper, state: .downloading(DownloadProgress(fraction: 0.42, secondsRemaining: 64)), selected: false)
+                modelCard(.parakeet, state: .downloading(DownloadProgress(fraction: 0.42, secondsRemaining: 64)), selected: false)
             }
         }
     }

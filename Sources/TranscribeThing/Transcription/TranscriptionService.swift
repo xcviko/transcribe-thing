@@ -96,26 +96,16 @@ final class TranscriptionService {
                                            apiKey: key, timeout: engine.cloudTimeout)
     }
 
-    /// Parakeet and Whisper over the speech-to-text endpoint: the whole recording in one request. The Gemini
-    /// system prompt doesn't apply; Whisper gets the language setting, and its stock phrases on a nearly silent
-    /// recording ("Thanks for watching!") are dropped, as on this Mac.
+    /// Parakeet over the speech-to-text endpoint: the whole recording in one request. The Gemini system prompt
+    /// doesn't apply, and no language is sent: Parakeet v3 detects it.
     private func transcribeSpeech(_ samples: [Float], engine: EngineID, model: String,
                                   key: String) async throws -> CloudResult {
-        let dropsSilencePhrases = engine.localCounterpart == .whisper
-        let prepared = await Task.detached(priority: .userInitiated) { () -> (wav: Data, voiced: Double) in
-            (WAVEncoder.pcm16(samples), dropsSilencePhrases ? SilenceGuard.voicedSeconds(samples) : 0)
-        }.value
+        let wav = await Task.detached(priority: .userInitiated) { WAVEncoder.pcm16(samples) }.value
         try Task.checkCancellation()
-        let language = engine.acceptsLanguageHint ? settings.whisperLanguage : nil
-        var result = try await client.transcribeSpeech(wav: prepared.wav, model: model, language: language,
-                                                       apiKey: key, timeout: engine.cloudTimeout)
-        if dropsSilencePhrases, SilenceGuard.isLikelyHallucination(result.text, voicedSeconds: prepared.voiced) {
-            result.text = ""
-        }
-        return result
+        return try await client.transcribeSpeech(wav: wav, model: model, apiKey: key, timeout: engine.cloudTimeout)
     }
 
-    /// Who served a delivered cloud result, from OpenRouter's generation record ("Groq"). A generation OpenRouter
+    /// Who served a delivered cloud result, from OpenRouter's generation record ("Together"). A generation OpenRouter
     /// hasn't recorded yet is asked for once more after a short wait. nil when nothing could be learned; never
     /// throws.
     func servedProvider(generationID: String) async -> String? {

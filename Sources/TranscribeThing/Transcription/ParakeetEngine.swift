@@ -2,7 +2,7 @@ import CoreML
 import FluidAudio
 import Foundation
 
-/// NVIDIA Parakeet TDT 0.6B v3 through FluidAudio. Never import WhisperKit in this file.
+/// NVIDIA Parakeet TDT 0.6B v3 through FluidAudio.
 actor ParakeetEngine: LocalEngine {
     static let version: AsrModelVersion = .v3
     static let repo: Repo = .parakeetV3
@@ -141,7 +141,7 @@ actor ParakeetEngine: LocalEngine {
 
     // MARK: Transcribe
 
-    func transcribe(_ samples: [Float], options: LocalTranscriptionOptions) async throws -> String {
+    func transcribe(_ samples: [Float]) async throws -> String {
         guard let manager else { throw LocalEngineError.notLoaded }
         var input = samples
         let minimum = ASRConstants.minimumRequiredSamples(forSampleRate: ASRConstants.sampleRate)

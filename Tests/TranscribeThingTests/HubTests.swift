@@ -90,30 +90,30 @@ import Testing
 @Suite struct EngineReadinessTests {
     @Test func localStates() {
         #expect(EngineReadiness.of(.parakeet, localState: .ready, keyStatus: .missing) == .ready)
-        #expect(EngineReadiness.of(.whisper, localState: .installed, keyStatus: .missing) == .ready)
-        #expect(EngineReadiness.of(.whisper, localState: .downloading(.zero), keyStatus: .missing) == .warming)
-        #expect(EngineReadiness.of(.whisper, localState: .preparing(since: Date()), keyStatus: .missing) == .warming)
+        #expect(EngineReadiness.of(.parakeet, localState: .installed, keyStatus: .missing) == .ready)
+        #expect(EngineReadiness.of(.parakeet, localState: .downloading(.zero), keyStatus: .missing) == .warming)
+        #expect(EngineReadiness.of(.parakeet, localState: .preparing(since: Date()), keyStatus: .missing) == .warming)
         #expect(EngineReadiness.of(.parakeet, localState: .notInstalled, keyStatus: .missing) == .needsDownload)
         #expect(EngineReadiness.of(.parakeet, localState: .failed("x"), keyStatus: .missing) == .failed("Download failed"))
     }
 
     @Test func failedModelsSayWhatFailed() {
-        let loadError = AppError.modelLoadFailed(.whisper, "corrupt")
-        #expect(EngineReadiness.of(.whisper, localState: .failed("x"), keyStatus: .missing, localError: loadError)
+        let loadError = AppError.modelLoadFailed(.parakeet, "corrupt")
+        #expect(EngineReadiness.of(.parakeet, localState: .failed("x"), keyStatus: .missing, localError: loadError)
             .unavailableReason == "Couldn’t load")
-        #expect(EngineReadiness.of(.whisper, localState: .failed("x"), keyStatus: .missing,
+        #expect(EngineReadiness.of(.parakeet, localState: .failed("x"), keyStatus: .missing,
                                    localError: .notEnoughDisk(needed: 2, available: 1)).unavailableReason == "Not enough space")
-        #expect(EngineSummary.make(engine: .whisper, localState: .failed("x"), keyStatus: .missing, localError: loadError)
+        #expect(EngineSummary.make(engine: .parakeet, localState: .failed("x"), keyStatus: .missing, localError: loadError)
             .status == "Couldn’t load")
-        #expect(EngineSummary.make(engine: .whisper, localState: .failed("x"), keyStatus: .missing,
-                                   localError: .downloadFailed(.whisper, "offline")).status == "Download failed")
+        #expect(EngineSummary.make(engine: .parakeet, localState: .failed("x"), keyStatus: .missing,
+                                   localError: .downloadFailed(.parakeet, "offline")).status == "Download failed")
         var input = HubAttention.Input(microphone: .granted, accessibility: .granted, accessibilityLikelyStale: false,
-                                       fnKeyUsage: .doNothing, pushToTalkUsesFn: true, engine: .whisper,
+                                       fnKeyUsage: .doNothing, pushToTalkUsesFn: true, engine: .parakeet,
                                        localState: .failed("Couldn’t load the model."), keyStatus: .missing,
                                        localError: loadError)
-        #expect(HubAttention.items(input).first?.title == "Couldn’t load Whisper Large V3 Turbo")
-        input.localError = .downloadFailed(.whisper, "offline")
-        #expect(HubAttention.items(input).first?.title == "Whisper Large V3 Turbo didn’t finish downloading")
+        #expect(HubAttention.items(input).first?.title == "Couldn’t load Parakeet v3")
+        input.localError = .downloadFailed(.parakeet, "offline")
+        #expect(HubAttention.items(input).first?.title == "Parakeet v3 didn’t finish downloading")
     }
 
     @Test func cloudStatesIgnoreLocalState() {
@@ -128,8 +128,8 @@ import Testing
     @Test func summaryChip() {
         #expect(EngineSummary.make(engine: .parakeet, localState: .ready, keyStatus: .missing)
             == EngineSummary(name: "Parakeet v3", status: "Ready", tone: .positive))
-        #expect(EngineSummary.make(engine: .whisper, localState: .preparing(since: Date()), keyStatus: .missing).status == "Optimizing…")
-        #expect(EngineSummary.make(engine: .whisper, localState: .downloading(DownloadProgress(fraction: 0.42)), keyStatus: .missing).status
+        #expect(EngineSummary.make(engine: .parakeet, localState: .preparing(since: Date()), keyStatus: .missing).status == "Optimizing…")
+        #expect(EngineSummary.make(engine: .parakeet, localState: .downloading(DownloadProgress(fraction: 0.42)), keyStatus: .missing).status
             == "Downloading 42%")
         #expect(EngineSummary.make(engine: .geminiFlash, localState: .notInstalled, keyStatus: .missing)
             == EngineSummary(name: "Gemini Flash", status: "Needs key", tone: .negative))
@@ -152,11 +152,11 @@ import Testing
 
     @Test func blockingIssuesComeFirst() {
         let items = HubAttention.items(input(mic: .denied, ax: .notDetermined, fn: .other("Emoji & Symbols"),
-                                             engine: .whisper, local: .notInstalled))
+                                             engine: .parakeet, local: .notInstalled))
         #expect(items.map(\.id) == ["microphone", "accessibility", "model", "fnKey"])
         #expect(items[0].action == .openPane(.microphone))
         #expect(items[1].action == .requestAccessibility)
-        #expect(items[2].action == .download(.whisper))
+        #expect(items[2].action == .download(.parakeet))
         #expect(items[3].title == "The fn key opens Emoji & Symbols")
     }
 
@@ -195,8 +195,8 @@ import Testing
 
     @Test func downloadShowsProgress() throws {
         let progress = DownloadProgress(fraction: 0.64, secondsRemaining: 30)
-        let item = try #require(HubAttention.items(input(engine: .whisper, local: .downloading(progress))).first)
-        #expect(item.title == "Whisper Large V3 Turbo is downloading · 64%")
+        let item = try #require(HubAttention.items(input(engine: .parakeet, local: .downloading(progress))).first)
+        #expect(item.title == "Parakeet v3 is downloading · 64%")
         #expect(item.body == "About 30 s left.")
         #expect(item.progress == 0.64)
         #expect(item.action == .openModels)
@@ -211,8 +211,8 @@ import Testing
 
     @Test func keyProblemsNameTheCloudSpeechModel() {
         let limit = KeyStatus.noCredit(KeyInfo(limit: 5, limitRemaining: 0, usage: 5))
-        #expect(HubAttention.items(input(engine: .whisperCloud, key: limit)).first?.body
-            == "This key has a spending limit, and it’s used up. Raise it to keep using Whisper Turbo · Cloud.")
+        #expect(HubAttention.items(input(engine: .parakeetCloud, key: limit)).first?.body
+            == "This key has a spending limit, and it’s used up. Raise it to keep using Parakeet v3 · Cloud.")
         #expect(HubAttention.items(input(engine: .parakeetCloud, key: .noCredit(nil))).first?.body
             == "Add credit to keep using Parakeet v3 · Cloud.")
         #expect(HubAttention.items(input(engine: .geminiFlash, key: .noCredit(nil))).first?.body
@@ -232,29 +232,28 @@ import Testing
             #expect(EngineReadiness.of(engine, localState: .notInstalled, keyStatus: .valid(KeyInfo())) == .ready)
             #expect(EngineReadiness.of(engine, localState: .ready, keyStatus: .missing).unavailableReason == "Needs key")
         }
-        #expect(EngineSummary.make(engine: .whisperCloud, localState: .ready, keyStatus: .valid(KeyInfo()))
-            == EngineSummary(name: "Whisper Turbo · Cloud", status: "Ready", tone: .positive))
+        #expect(EngineSummary.make(engine: .parakeetCloud, localState: .ready, keyStatus: .valid(KeyInfo()))
+            == EngineSummary(name: "Parakeet v3 · Cloud", status: "Ready", tone: .positive))
     }
 
-    @Test func providerNotesAreHonestAboutRouting() throws {
-        let parakeet = try #require(ProviderNote.make(.parakeetCloud))
-        #expect(parakeet.text == "Served by Together." && parakeet.kind == .pinned)
-        let whisper = try #require(ProviderNote.make(.whisperCloud))
-        #expect(whisper.kind == .routed)
-        #expect(whisper.text.contains("Groq or DeepInfra") && whisper.text.contains("History shows which"))
-        #expect(ProviderNote.make(.geminiPro)?.text == "Served by Google AI Studio only.")
-        #expect(ProviderNote.make(.parakeet) == nil && ProviderNote.make(.whisper) == nil)
+    @Test func providerNotesNameWhoServesEachCloudModel() {
+        #expect(ProviderNote.text(.parakeetCloud) == "Served by Together.")
+        #expect(ProviderNote.text(.geminiFlash) == "Served by Google AI Studio only.")
+        #expect(ProviderNote.text(.geminiPro) == "Served by Google AI Studio only.")
+        #expect(ProviderNote.text(.parakeet) == nil)
+    }
+
+    @Test func preparingCopyFitsParakeetsShortFirstLoad() throws {
+        let input = HubAttention.Input(microphone: .granted, accessibility: .granted, accessibilityLikelyStale: false,
+                                       fnKeyUsage: .doNothing, pushToTalkUsesFn: true, engine: .parakeet,
+                                       localState: .preparing(since: Date()), keyStatus: .missing)
+        let item = try #require(HubAttention.items(input).first)
+        #expect(item.title == "Getting Parakeet v3 ready")
+        #expect(!item.body.contains("minutes"))
     }
 }
 
 @Suite struct HubChoicesTests {
-    @Test func whisperLanguageNames() {
-        #expect(WhisperLanguage.name(for: nil) == "Automatic")
-        #expect(WhisperLanguage.name(for: "ru") == "Russian")
-        #expect(WhisperLanguage.name(for: "xx") == "XX")
-        #expect(Set(WhisperLanguage.all.map(\.code)).count == WhisperLanguage.all.count)
-    }
-
     @Test func retentionLabels() {
         #expect(RetentionChoice.days.map(RetentionChoice.label) == ["Don’t keep", "1 day", "7 days", "14 days", "30 days"])
         #expect(RetentionChoice.days.contains(14))

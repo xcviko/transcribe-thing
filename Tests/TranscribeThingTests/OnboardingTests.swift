@@ -103,7 +103,7 @@ import Testing
         #expect(eval(ax: .notDetermined) == .needsAccessibility)
         #expect(eval() == .ready)
         #expect(eval(local: .preparing(since: .distantPast)) == .warmingUp(.parakeet))
-        #expect(eval(engine: .whisper, local: .installed) == .warmingUp(.whisper))
+        #expect(eval(local: .installed) == .warmingUp(.parakeet))
         #expect(eval(local: .downloading(DownloadProgress(fraction: 0.62))) == .downloading(.parakeet, 0.62))
         #expect(eval(local: .failed("x")) == .notDownloaded(.parakeet))
         #expect(eval(engine: .geminiFlash, key: .missing) == .needsKey(.geminiFlash))
@@ -173,7 +173,7 @@ import Testing
 
     @Test func modelStepBlocksUntilSomethingIsUsable() {
         let model = makeModel(step: 2) { ctx in
-            ctx.models = .preview(states: [.parakeet: .notInstalled, .whisper: .notInstalled])
+            ctx.models = .preview(states: [.parakeet: .notInstalled])
             ctx.account = .preview(status: .missing)
         }
         #expect(!model.canContinue)
@@ -197,7 +197,7 @@ import Testing
 
     @Test func cloudSpeechSharesTheOneKey() {
         let missing = makeModel(step: 2) { ctx in
-            ctx.models = .preview(states: [.parakeet: .notInstalled, .whisper: .notInstalled])
+            ctx.models = .preview(states: [.parakeet: .notInstalled])
             ctx.account = .preview(status: .missing)
         }
         missing.select(.parakeetCloud)
@@ -206,10 +206,10 @@ import Testing
         #expect(!missing.canContinue)
 
         let connected = makeModel(step: 2) { ctx in
-            ctx.models = .preview(states: [.parakeet: .notInstalled, .whisper: .notInstalled])
+            ctx.models = .preview(states: [.parakeet: .notInstalled])
         }
-        connected.select(.whisperCloud)
-        #expect(connected.canContinue, "the key Gemini uses works for cloud Parakeet and Whisper too")
+        connected.select(.parakeetCloud)
+        #expect(connected.canContinue, "the key Gemini uses works for cloud Parakeet too")
         #expect(!connected.showsKeyField)
     }
 

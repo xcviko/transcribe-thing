@@ -361,8 +361,8 @@ struct IconTile: View {
     }
 }
 
-/// The engine mark on history rows: P, W, F, Pro. Cloud Parakeet and Whisper share the local letter, so they
-/// carry a small cloud as well as the cloud tint.
+/// The engine mark on history rows: P, F, Pro. Cloud Parakeet shares the local letter, so it carries a small
+/// cloud as well as the cloud tint.
 struct EngineGlyph: View {
     var engine: EngineID
     /// The OpenRouter provider that served the transcript, for the tooltip.

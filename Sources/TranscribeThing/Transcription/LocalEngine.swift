@@ -1,14 +1,6 @@
 import Foundation
 import os
 
-/// Per-utterance knobs for a local engine.
-struct LocalTranscriptionOptions: Sendable, Equatable {
-    /// ISO 639-1 code for Whisper; nil = auto-detect. Parakeet ignores it (v3 detects the language itself).
-    var language: String?
-
-    static let `default` = LocalTranscriptionOptions(language: nil)
-}
-
 enum LocalEngineError: Error, Equatable, Sendable, LocalizedError {
     case notInstalled
     case notLoaded
@@ -26,9 +18,8 @@ enum LocalEngineError: Error, Equatable, Sendable, LocalizedError {
     }
 }
 
-/// A downloadable on-device model. ParakeetEngine and WhisperEngine implement it in separate files because
-/// FluidAudio and WhisperKit can't be imported into the same file (`WordTiming` clash). ModelStore only
-/// talks to this protocol, so it never imports either framework.
+/// A downloadable on-device model. ParakeetEngine implements it; ModelStore only talks to this protocol, so it
+/// never imports FluidAudio, and tests substitute fakes.
 protocol LocalEngine: Actor {
     nonisolated var engineID: EngineID { get }
     /// Everything this engine writes to disk: measured for disk usage, removed by `deleteFiles()`.
@@ -41,11 +32,11 @@ protocol LocalEngine: Actor {
     /// Cancel by cancelling the calling task; partial files stay on disk and resume next time.
     func download(progress: @escaping @Sendable (Double) -> Void) async throws
     var isLoaded: Bool { get }
-    /// Loads (and warms up) the model. The first load after install can take minutes (Core ML specialization).
+    /// Loads (and warms up) the model. The first load after install takes longer (Core ML specialization).
     func load() async throws
     func unload() async
     /// 16 kHz mono Float32 in [-1, 1]. Returns "" when the engine hears no speech.
-    func transcribe(_ samples: [Float], options: LocalTranscriptionOptions) async throws -> String
+    func transcribe(_ samples: [Float]) async throws -> String
     /// Unloads, then removes every file in `storageURLs`.
     func deleteFiles() async throws
 }
@@ -90,11 +81,11 @@ enum HuggingFaceTree {
         let size: Int64
     }
 
-    static func list(repo: String, folder: String? = nil, recursive: Bool = true,
-                     session: URLSession = .shared) async throws -> [File] {
+    /// Every file in the repo, recursively.
+    static func list(repo: String, session: URLSession = .shared) async throws -> [File] {
         var components = URLComponents(string: "https://huggingface.co")!
-        components.path = "/api/models/\(repo)/tree/main" + (folder.map { "/\($0)" } ?? "")
-        if recursive { components.queryItems = [URLQueryItem(name: "recursive", value: "1")] }
+        components.path = "/api/models/\(repo)/tree/main"
+        components.queryItems = [URLQueryItem(name: "recursive", value: "1")]
         guard var next = components.url else { throw LocalEngineError.listingFailed("bad URL") }
 
         var files: [File] = []

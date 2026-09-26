@@ -180,7 +180,7 @@ enum EngineReadiness: Equatable {
     }
 }
 
-/// The sidebar footer chip: "Parakeet v3 · Ready", "Whisper Turbo · Optimizing…", "Gemini Flash · Needs key".
+/// The sidebar footer chip: "Parakeet v3 · Ready", "Parakeet v3 · Optimizing…", "Gemini Flash · Needs key".
 struct EngineSummary: Equatable {
     var name: String
     var status: String
@@ -212,24 +212,12 @@ struct EngineSummary: Equatable {
     }
 }
 
-/// Who serves a cloud model, as the Models page says it. Transcription requests can't pin a provider, so a
-/// model with several says OpenRouter chooses; Gemini requests are pinned to Google AI Studio.
+/// Who serves a cloud model, as the Models page says it: "Served by Together.", or "… only." for Gemini, whose
+/// requests are pinned to Google AI Studio. nil for the local model.
 enum ProviderNote {
-    enum Kind: Equatable { case pinned, routed }
-
-    static func make(_ engine: EngineID) -> (text: String, kind: Kind)? {
-        let providers = engine.knownProviders
-        guard let first = providers.first else { return nil }
-        switch engine.cloudAPI {
-        case nil:
-            return nil
-        case .chatCompletions:
-            return ("Served by \(providers.joined(separator: " or ")) only.", .pinned)
-        case .transcriptions where providers.count > 1:
-            return ("Served by \(providers.joined(separator: " or ")), whichever OpenRouter picks. History shows which.", .routed)
-        case .transcriptions:
-            return ("Served by \(first).", .pinned)
-        }
+    static func text(_ engine: EngineID) -> String? {
+        guard let provider = engine.provider else { return nil }
+        return engine.cloudAPI == .chatCompletions ? "Served by \(provider) only." : "Served by \(provider)."
     }
 }
 
@@ -336,7 +324,7 @@ enum HubAttention {
             case .preparing:
                 items.append(AttentionItem(
                     id: "model", tone: .progress, symbol: "cpu", title: "Getting \(input.engine.shortName) ready",
-                    body: "Optimizing for your Mac. This can take a few minutes after installing or updating.",
+                    body: "Optimizing for your Mac. This takes about half a minute after installing or updating.",
                     actionTitle: "View", action: .openModels, isIndeterminate: true))
             case .failed(let message):
                 let title = ModelFailure(input.localError) == .load ? "Couldn’t load \(name)" : "\(name) didn’t finish downloading"
@@ -391,25 +379,6 @@ enum HubAttention {
 }
 
 // MARK: - Choices
-
-struct WhisperLanguage: Hashable, Sendable {
-    var code: String
-    var name: String
-
-    static let all: [WhisperLanguage] = [
-        .init(code: "en", name: "English"), .init(code: "ru", name: "Russian"), .init(code: "uk", name: "Ukrainian"),
-        .init(code: "de", name: "German"), .init(code: "fr", name: "French"), .init(code: "es", name: "Spanish"),
-        .init(code: "it", name: "Italian"), .init(code: "pt", name: "Portuguese"), .init(code: "nl", name: "Dutch"),
-        .init(code: "pl", name: "Polish"), .init(code: "cs", name: "Czech"), .init(code: "sv", name: "Swedish"),
-        .init(code: "tr", name: "Turkish"), .init(code: "ar", name: "Arabic"), .init(code: "hi", name: "Hindi"),
-        .init(code: "ja", name: "Japanese"), .init(code: "ko", name: "Korean"), .init(code: "zh", name: "Chinese"),
-    ]
-
-    static func name(for code: String?) -> String {
-        guard let code else { return "Automatic" }
-        return all.first { $0.code == code }?.name ?? code.uppercased()
-    }
-}
 
 enum RetentionChoice {
     /// Days of audio kept for failed or canceled dictations; 0 = don't keep.

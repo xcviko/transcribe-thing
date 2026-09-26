@@ -3,34 +3,14 @@ import SwiftUI
 struct ModelStep: View {
     let model: OnboardingModel
 
-    /// Width of the cloud card row, so the key panel's notch can point at the selected card.
+    /// Width of the cloud tile row, so the key panel's notch can point at the selected tile.
     @State private var cloudRowWidth: CGFloat = 0
 
     private var selected: EngineID { model.selectedEngine }
 
     private static let cloudSpacing: CGFloat = 10
 
-    /// One line under the local cards that answers the question the selected one raises.
-    private var localNote: (symbol: String, text: String)? {
-        guard selected.isLocal else { return nil }
-        let name = selected.shortName
-        switch model.ctx.models.state(of: selected) {
-        case .notInstalled:
-            let size = selected.approxDownloadBytes.map(Fmt.bytes) ?? ""
-            let free = model.freeDiskBytes < .max ? " \(Fmt.bytes(model.freeDiskBytes)) free on this Mac." : ""
-            return ("internaldrive", "\(name) downloads once (\(size)), then works offline.\(free)")
-        case .downloading:
-            return ("arrow.down.circle", "The download keeps going if you continue. You can practice as soon as it’s done.")
-        case .preparing, .installed:
-            return ("cpu", "\(name) is being tuned for this Mac’s Neural Engine. This can take a few minutes.")
-        case .ready:
-            return ("lock.shield", "\(name) runs entirely on your Mac. Nothing you say leaves this computer.")
-        case .failed(let message):
-            return ("exclamationmark.triangle", message.isEmpty ? "Something went wrong. Try again." : message)
-        }
-    }
-
-    /// 0...1 across the key panel: the center of the selected cloud card.
+    /// 0...1 across the key panel: the center of the selected cloud tile.
     private var notchX: CGFloat {
         let engines = EngineID.cloudEngines
         guard let index = engines.firstIndex(of: selected), cloudRowWidth > 0 else { return 0.5 }
@@ -43,36 +23,21 @@ struct ModelStep: View {
         let cloudSelected = selected.isCloud
         VStack(alignment: .leading, spacing: 0) {
             StepHeader(title: "Pick how \(Brand.name) listens",
-                       subtitle: "On-device models stay private and work offline. You can switch anytime in Settings.",
+                       subtitle: "Parakeet runs on your Mac, private and offline. Cloud models use your own OpenRouter key. "
+                           + "Switch anytime in Settings.",
                        titleSize: 28)
                 .padding(.bottom, 16)
 
             SectionHeader("On your Mac")
                 .padding(.bottom, 8)
-            HStack(spacing: 12) {
-                ForEach(EngineID.localEngines) { engine in
-                    EngineCard(model: model, engine: engine, compact: cloudSelected)
-                }
-            }
-            if !cloudSelected, let note = localNote {
-                HStack(spacing: 7) {
-                    Image(systemName: note.symbol)
-                        .font(.system(size: 11, weight: .semibold))
-                    Text(note.text)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .font(.system(size: 12))
-                .foregroundStyle(.inkSecondary)
-                .padding(.top, 10)
-                .padding(.leading, 4)
-                .transition(.opacity)
-                .id(note.text)
+            ForEach(EngineID.localEngines) { engine in
+                LocalModelCard(model: model, engine: engine, compact: cloudSelected)
             }
 
             SectionHeader("Through OpenRouter") {
                 CloudKeySummary(status: model.ctx.account.status, hasStoredKey: model.ctx.account.maskedKey != nil)
             }
-            .padding(.top, cloudSelected ? 16 : 18)
+            .padding(.top, cloudSelected ? 16 : 20)
             .padding(.bottom, 8)
             HStack(spacing: Self.cloudSpacing) {
                 ForEach(EngineID.cloudEngines) { engine in
@@ -92,7 +57,7 @@ struct ModelStep: View {
     }
 }
 
-/// Trailing text of the "Through OpenRouter" header: what the four cloud cards have in common, or the key's state.
+/// Trailing text of the "Through OpenRouter" header: what the cloud tiles have in common, or the key's state.
 private struct CloudKeySummary: View {
     var status: KeyStatus
     var hasStoredKey: Bool
@@ -123,14 +88,14 @@ private struct CloudKeySummary: View {
         case .noCredit:
             return ("exclamationmark.triangle.fill", status.isKeyLimitReached ? "Key limit reached" : "No credit left", .warning)
         case .missing, .checking, .offline, .failed:
-            return (nil, hasStoredKey ? "One key for all four · pay per use" : "Needs an OpenRouter key · pay per use", .neutral)
+            return (nil, hasStoredKey ? "One key for all three · pay per use" : "Needs an OpenRouter key · pay per use", .neutral)
         }
     }
 }
 
-// MARK: - Cloud card
+// MARK: - Cloud tile
 
-/// Compact card for a model served through OpenRouter: name, who serves it, what it costs.
+/// Compact tile for a model served through OpenRouter: name, who serves it, what it costs.
 private struct CloudEngineCard: View {
     let model: OnboardingModel
     let engine: EngineID
@@ -148,7 +113,7 @@ private struct CloudEngineCard: View {
                 RadioMark(isOn: isSelected, size: 18)
             }
             .padding(.bottom, 7)
-            Text(engine.cloudCardName)
+            Text(engine.modelName)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.ink)
                 .lineLimit(1)
@@ -158,9 +123,9 @@ private struct CloudEngineCard: View {
                 .lineLimit(1)
                 .padding(.top, 1)
         }
-        .padding(.horizontal, 11)
+        .padding(.horizontal, 12)
         .padding(.top, 10)
-        .padding(.bottom, 9)
+        .padding(.bottom, 10)
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .background {
             shape.fill(Color.bgSurface)
@@ -175,7 +140,7 @@ private struct CloudEngineCard: View {
         .onHover { hovering = $0 }
         .animation(Theme.Motion.hover, value: hovering)
         .animation(Theme.Motion.expand, value: isSelected)
-        .help(engine.cloudCardHelp)
+        .help([engine.displayName, engine.providerLine, engine.factLine].joined(separator: "\n"))
         .accessibilityElement(children: .ignore)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityLabel(engine.displayName)
@@ -185,40 +150,47 @@ private struct CloudEngineCard: View {
 }
 
 private extension EngineID {
-    /// Under the "Through OpenRouter" header the "· Cloud" suffix is noise; Whisper takes its short name to fit.
-    var cloudCardName: String {
-        switch self {
-        case .whisperCloud: "Whisper Turbo"
-        default: modelName
-        }
-    }
-
-    /// "via Together", "via Groq", "via Google". For Whisper this is the preferred provider; the key panel and the
-    /// tooltip say OpenRouter may pick another.
+    /// "via Together", "via Google".
     var cloudCardProvider: String {
         switch cloudAPI {
         case .chatCompletions: "via Google"
-        case .transcriptions, nil: preferredProvider.map { "via \($0)" } ?? ""
+        case .transcriptions, nil: provider.map { "via \($0)" } ?? ""
         }
     }
 
     var cloudCardPrice: String {
         switch self {
         case .parakeetCloud: "≈ $0.09/hour"
-        case .whisperCloud: "≈ $0.04/hour"
         case .geminiFlash, .geminiPro: "pay per use"
-        case .parakeet, .whisper: ""
+        case .parakeet: ""
         }
     }
 
-    var cloudCardHelp: String {
-        [displayName, providerLine, factLine, providerRoutingNote].compactMap { $0 }.joined(separator: "\n")
+    /// The local card's spec strip: what running on this Mac gets you.
+    var localFacts: [LocalFact] {
+        switch self {
+        case .parakeet:
+            [LocalFact(symbol: "bolt.fill", title: "Fastest", detail: "No upload, no waiting"),
+             LocalFact(symbol: "globe", title: "25 languages", detail: "European, auto-detected"),
+             LocalFact(symbol: "lock.fill", title: "Private", detail: "Audio stays on this Mac"),
+             LocalFact(symbol: "wifi.slash", title: "Offline", detail: "No internet, no key")]
+        case .parakeetCloud, .geminiFlash, .geminiPro:
+            []
+        }
     }
+}
+
+private struct LocalFact: Hashable {
+    var symbol: String
+    var title: String
+    var detail: String
 }
 
 // MARK: - Local card
 
-private struct EngineCard: View {
+/// The model that runs on this Mac, full width: what it offers, then a footer that downloads it, shows the
+/// download or the first optimization, or says it's ready. Collapses to one row while a cloud model is picked.
+private struct LocalModelCard: View {
     let model: OnboardingModel
     let engine: EngineID
     var compact: Bool
@@ -233,14 +205,23 @@ private struct EngineCard: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             if !compact {
-                Spacer(minLength: 10)
-                localFooter
-                    .frame(minHeight: 26)
+                facts
+                    .padding(.top, 16)
+                Rectangle()
+                    .fill(Color.stroke)
+                    .frame(height: 1)
+                    .padding(.top, 14)
+                    .padding(.bottom, 12)
+                footer
+                    .frame(minHeight: 28)
+                    .id(footerID)
+                    .transition(.opacity)
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, compact ? 12 : 14)
-        .frame(maxWidth: .infinity, minHeight: compact ? 58 : 124, maxHeight: compact ? 58 : 124, alignment: .topLeading)
+        .padding(.horizontal, 16)
+        .padding(.top, compact ? 12 : 16)
+        .padding(.bottom, 12)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
         .background {
             shape.fill(Color.bgSurface)
             shape.fill(isSelected ? Color.accentSoft : (hovering ? Color.hover : .clear))
@@ -254,6 +235,7 @@ private struct EngineCard: View {
         .onHover { hovering = $0 }
         .animation(Theme.Motion.hover, value: hovering)
         .animation(Theme.Motion.expand, value: isSelected)
+        .animation(Theme.Motion.fade, value: footerID)
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityLabel(engine.displayName)
@@ -261,25 +243,26 @@ private struct EngineCard: View {
     }
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 11) {
-            // The slot keeps its width when the icon shrinks, so names line up down the grid.
-            EngineIcon(engine: engine, size: compact ? 32 : 34)
-                .frame(width: 34, alignment: .leading)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(engine.displayName)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.ink)
-                    .lineLimit(1)
+        HStack(alignment: compact ? .center : .top, spacing: 12) {
+            // The slot keeps its width when the icon shrinks, so the name doesn't jump.
+            EngineIcon(engine: engine, size: compact ? 32 : 40)
+                .frame(width: 40, alignment: .leading)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    Text(engine.displayName)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.ink)
+                        .lineLimit(1)
+                    ForEach(engine.badges.filter { !EngineID.privacyBadges.contains($0) }, id: \.self) {
+                        Badge.engine($0)
+                    }
+                }
                 if compact {
                     compactStatus
                 } else {
                     Text(engine.providerLine)
-                        .font(.system(size: 12))
+                        .font(.system(size: 12.5))
                         .foregroundStyle(.inkSecondary)
-                    Text(factLine)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.inkTertiary)
-                        .lineLimit(1)
                 }
             }
             Spacer(minLength: 0)
@@ -287,9 +270,35 @@ private struct EngineCard: View {
         }
     }
 
-    private var factLine: String {
-        guard let bytes = engine.approxDownloadBytes else { return engine.factLine }
-        return "\(engine.factLine) · \(Fmt.bytes(bytes))"
+    /// Equal columns across the card, hairlines between them.
+    private var facts: some View {
+        HStack(alignment: .top, spacing: 0) {
+            ForEach(Array(engine.localFacts.enumerated()), id: \.element) { index, fact in
+                if index > 0 {
+                    Rectangle()
+                        .fill(Color.stroke)
+                        .frame(width: 1, height: 30)
+                        .padding(.horizontal, 12)
+                }
+                HStack(alignment: .firstTextBaseline, spacing: 7) {
+                    Image(systemName: fact.symbol)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.accent)
+                        .frame(width: 14)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(fact.title)
+                            .font(.system(size: 12.5, weight: .semibold))
+                            .foregroundStyle(.ink)
+                        Text(fact.detail)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.inkSecondary)
+                    }
+                    .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityElement(children: .combine)
+            }
+        }
     }
 
     @ViewBuilder private var compactStatus: some View {
@@ -305,24 +314,30 @@ private struct EngineCard: View {
 
     // MARK: Footer
 
-    @ViewBuilder private var localFooter: some View {
+    /// Changes when the footer swaps layouts, so it cross-fades instead of morphing.
+    private var footerID: String {
+        switch localState {
+        case .notInstalled: "notInstalled"
+        case .downloading: "downloading"
+        case .installed, .ready: "onDisk"
+        case .preparing: "preparing"
+        case .failed: "failed"
+        }
+    }
+
+    @ViewBuilder private var footer: some View {
         switch localState {
         case .downloading(let progress):
             DownloadProgressRow(engine: engine, progress: progress) { model.cancelDownload(engine) }
         case .preparing(let since):
             PreparingRow(since: since)
-        case .failed:
+        case .failed(let message):
             // A model that downloaded but won't load needs fresh files: "Try again" only loads the same ones.
             let loadFailed = ModelFailure(model.ctx.models.lastErrors[engine]) == .load
             HStack(spacing: 8) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.danger)
-                Text(loadFailed ? "Couldn’t load" : "Download didn’t finish")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.danger)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
+                FooterNote(symbol: "exclamationmark.triangle.fill", tint: .danger,
+                           text: message.isEmpty ? "Something went wrong. Try again." : message)
+                Spacer(minLength: 8)
                 Button("Try Again") { model.download(engine) }
                     .buttonStyle(SecondaryButtonStyle(size: .small))
                     .fixedSize()
@@ -337,49 +352,78 @@ private struct EngineCard: View {
                 DiskWarningRow(needed: needed, available: model.freeDiskBytes) { model.openStorageSettings() }
             } else {
                 HStack(spacing: 8) {
-                    badges
-                    Spacer(minLength: 0)
-                    Button("Download") { model.download(engine) }
-                        .buttonStyle(downloadStyle)
-                        .fixedSize()
-                        .layoutPriority(1)
+                    FooterNote(symbol: "internaldrive", tint: .inkSecondary, text: downloadNote)
+                    Spacer(minLength: 8)
+                    Button {
+                        model.download(engine)
+                    } label: {
+                        Label("Download", systemImage: "arrow.down")
+                    }
+                    .buttonStyle(downloadStyle)
+                    .fixedSize()
+                    .layoutPriority(1)
                 }
             }
-        case .installed:
+        case .installed, .ready:
             HStack(spacing: 8) {
-                badges
-                Spacer(minLength: 0)
-                Text("On your Mac")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.inkSecondary)
-            }
-        case .ready:
-            HStack(spacing: 8) {
-                badges
-                Spacer(minLength: 0)
-                HStack(spacing: 6) {
-                    DrawOnCheck(size: 16, animated: model.celebrateReady.contains(engine))
-                    Text("Ready")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.success)
+                FooterNote(symbol: "internaldrive", tint: .inkSecondary, text: onDiskNote)
+                Spacer(minLength: 8)
+                if localState == .ready {
+                    HStack(spacing: 6) {
+                        DrawOnCheck(size: 16, animated: model.celebrateReady.contains(engine))
+                        Text("Ready")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(.success)
+                    }
+                    .accessibilityElement(children: .combine)
+                } else {
+                    Text("Loads on first use")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.inkSecondary)
                 }
-                .accessibilityElement(children: .combine)
             }
         }
+    }
+
+    /// "Downloads once · 632 MB · 212 GB free on this Mac"
+    private var downloadNote: String {
+        let size = engine.approxDownloadBytes.map { " · \(Fmt.bytes($0))" } ?? ""
+        let free = model.freeDiskBytes < .max ? " · \(Fmt.bytes(model.freeDiskBytes)) free on this Mac" : ""
+        return "Downloads once\(size)\(free)"
+    }
+
+    /// "Downloaded · 632 MB on this Mac"
+    private var onDiskNote: String {
+        engine.approxDownloadBytes.map { "Downloaded · \(Fmt.bytes($0)) on this Mac" } ?? "Downloaded"
     }
 
     private var downloadStyle: AnyButtonStyle {
         isSelected ? AnyButtonStyle(PrimaryButtonStyle(size: .small)) : AnyButtonStyle(SecondaryButtonStyle(size: .small))
     }
+}
 
-    private var badges: some View {
-        HStack(spacing: 5) {
-            ForEach(engine.badges, id: \.self) { Badge.engine($0) }
+/// Symbol + one line of text on the left of the local card's footer.
+private struct FooterNote: View {
+    var symbol: String
+    var tint: Color
+    var text: String
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: symbol)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(tint)
+            Text(text)
+                .font(.system(size: 12))
+                .foregroundStyle(tint == .danger ? Color.danger : Color.inkSecondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
         }
+        .monospacedDigit()
     }
 }
 
-/// Type-erased button style so a card can swap primary/secondary without duplicating the button.
+/// Type-erased button style so the local card can swap primary/secondary without duplicating the button.
 struct AnyButtonStyle: ButtonStyle {
     private let make: (Configuration) -> AnyView
 
@@ -426,11 +470,16 @@ private struct DownloadProgressRow: View {
         HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 7) {
                 ProgressBar(fraction: progress.fraction)
-                Text("\(Fmt.bytes(received)) of \(Fmt.bytes(total))\(eta)")
-                    .font(.system(size: 11.5).monospacedDigit())
-                    .foregroundStyle(.inkSecondary)
-                    .contentTransition(.numericText())
-                    .lineLimit(1)
+                HStack(spacing: 0) {
+                    Text("\(Fmt.bytes(received)) of \(Fmt.bytes(total))\(eta)")
+                        .foregroundStyle(.inkSecondary)
+                        .contentTransition(.numericText())
+                    Spacer(minLength: 8)
+                    Text("Keeps going if you continue")
+                        .foregroundStyle(.inkTertiary)
+                }
+                .font(.system(size: 11.5).monospacedDigit())
+                .lineLimit(1)
             }
             Button(action: onCancel) {
                 Image(systemName: "xmark")
@@ -451,7 +500,7 @@ private struct PreparingRow: View {
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 let elapsed = context.date.timeIntervalSince(since)
                 HStack(spacing: 0) {
-                    Text("Optimizing for your Mac… can take a few minutes")
+                    Text("Optimizing for this Mac’s Neural Engine… usually under a minute")
                     if elapsed >= 20 {
                         Text(" · \(Fmt.duration(elapsed))")
                             .monospacedDigit()
@@ -493,7 +542,7 @@ private struct DiskWarningRow: View {
 
 private struct OpenRouterKeyPanel: View {
     let model: OnboardingModel
-    /// 0...1 across the panel: where the notch points up at the selected card.
+    /// 0...1 across the panel: where the notch points up at the selected tile.
     var notchX: CGFloat
 
     @FocusState private var fieldFocused: Bool
@@ -508,7 +557,7 @@ private struct OpenRouterKeyPanel: View {
                 Text("OpenRouter API key")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.ink)
-                Text("One key works for all four cloud models.")
+                Text("One key works for all three cloud models.")
                     .font(.system(size: 12))
                     .foregroundStyle(.inkTertiary)
                 Spacer(minLength: 0)
@@ -560,15 +609,9 @@ private struct OpenRouterKeyPanel: View {
         }
     }
 
-    /// Names who hears the audio for the selected model. Transcription requests can't pin a provider, so for
-    /// Whisper it names every provider OpenRouter may pick.
+    /// Names who hears the audio for the selected model.
     private var privacyLine: String {
-        let engine = model.selectedEngine
-        let providers = engine.knownProviders
-        if engine.providerRoutingNote != nil, providers.count > 1 {
-            return "Your audio goes to OpenRouter, then \(providers.joined(separator: " or ")) (OpenRouter picks each time). Nothing else is sent."
-        }
-        return "Your audio goes to OpenRouter and \(providers.first ?? "its provider") to be transcribed. Nothing else is sent."
+        "Your audio goes to OpenRouter and \(model.selectedEngine.provider ?? "its provider") to be transcribed. Nothing else is sent."
     }
 
     private var keyField: some View {
@@ -698,7 +741,7 @@ private struct KeyStatusLine: View {
     }
 }
 
-/// Rounded panel with a small notch pointing up at the selected cloud card.
+/// Rounded panel with a small notch pointing up at the selected cloud tile.
 private struct KeyPanelShape: Shape {
     /// 0...1 across the width.
     var notchX: CGFloat

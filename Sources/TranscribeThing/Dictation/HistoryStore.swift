@@ -18,8 +18,8 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
     var errorMessage: String?
     /// Present only for failed/canceled entries; pruned after `keepFailedRecordingsDays`.
     var audioFileName: String?
-    /// OpenRouter provider that served a cloud transcript ("Groq", "Together"). Filled in shortly after
-    /// delivery; absent from older history files.
+    /// OpenRouter provider that served a cloud transcript ("Together", "Google AI Studio"). Filled in shortly
+    /// after delivery; absent from older history files.
     var provider: String?
 
     init(id: UUID = UUID(), createdAt: Date = Date(), text: String, engine: EngineID,
@@ -39,6 +39,34 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
         self.audioFileName = audioFileName
         self.provider = provider
     }
+
+    /// Decodes like the synthesized conformance, except that an engine older builds offered and this one doesn't
+    /// maps to the closest engine left (`retiredEngines`): the entry keeps its text, cost and provider, and
+    /// Retry and the history glyph go on working.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        text = try c.decode(String.self, forKey: .text)
+        let rawEngine = try c.decode(String.self, forKey: .engine)
+        guard let engine = EngineID(rawValue: rawEngine) ?? Self.retiredEngines[rawEngine] else {
+            throw DecodingError.dataCorruptedError(forKey: .engine, in: c,
+                                                   debugDescription: "Unknown engine \(rawEngine)")
+        }
+        self.engine = engine
+        status = try c.decode(TranscriptStatus.self, forKey: .status)
+        audioDuration = try c.decode(TimeInterval.self, forKey: .audioDuration)
+        voicedSeconds = try c.decode(TimeInterval.self, forKey: .voicedSeconds)
+        processingTime = try c.decodeIfPresent(TimeInterval.self, forKey: .processingTime)
+        costUSD = try c.decodeIfPresent(Double.self, forKey: .costUSD)
+        errorMessage = try c.decodeIfPresent(String.self, forKey: .errorMessage)
+        audioFileName = try c.decodeIfPresent(String.self, forKey: .audioFileName)
+        provider = try c.decodeIfPresent(String.self, forKey: .provider)
+    }
+
+    /// Removed engines by raw value → the engine their entries read as now: Whisper Large V3 Turbo on this Mac
+    /// and through OpenRouter each map to Parakeet v3 on the same side.
+    static let retiredEngines: [String: EngineID] = ["whisper": .parakeet, "whisperCloud": .parakeetCloud]
 
     var wordCount: Int { Self.countWords(text) }
 

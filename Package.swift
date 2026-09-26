@@ -9,14 +9,12 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/FluidInference/FluidAudio", from: "0.17.4", traits: []),
-        .package(url: "https://github.com/argmaxinc/argmax-oss-swift", from: "1.1.0"),
     ],
     targets: [
         .target(
             name: "TranscribeThing",
             dependencies: [
                 .product(name: "FluidAudio", package: "FluidAudio"),
-                .product(name: "WhisperKit", package: "argmax-oss-swift"),
             ],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),

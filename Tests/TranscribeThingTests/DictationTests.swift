@@ -510,7 +510,7 @@ import Testing
         let now = Date()
         let older = TranscriptEntry(createdAt: now.addingTimeInterval(-60), text: "older", engine: .parakeet,
                                     audioDuration: 1, voicedSeconds: 1)
-        let newer = TranscriptEntry(createdAt: now, text: "newer", engine: .whisper, audioDuration: 1, voicedSeconds: 1)
+        let newer = TranscriptEntry(createdAt: now, text: "newer", engine: .geminiPro, audioDuration: 1, voicedSeconds: 1)
         store.upsert(newer)
         store.upsert(older)
         #expect(store.entries.map(\.text) == ["newer", "older"])
@@ -712,10 +712,10 @@ final class FakeRecorder: DictationRecorder {
         h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "  \n", engine: engine, processingTime: 0.1) }
         h.controller.insertOverride = { _, _ in Issue.record("nothing should be pasted"); return .pasted }
         let r = Self.recording()
-        h.controller.enqueue(r, engine: .whisper, delivery: .paste(targetPID: nil))
+        h.controller.enqueue(r, engine: .parakeet, delivery: .paste(targetPID: nil))
         try await waitUntil { h.controller.machine.activeJobs == 0 }
         #expect(h.history.entry(id: r.id)?.status == .failed)
-        #expect(h.toasts.notices.contains { $0.dedupeKey == "error.emptyResult.whisper" })
+        #expect(h.toasts.notices.contains { $0.dedupeKey == "error.emptyResult.parakeet" })
     }
 
     @Test func noEditableTargetShowsTheTranscriptCard() async throws {
@@ -775,14 +775,58 @@ final class FakeRecorder: DictationRecorder {
     }
 
     @Test func missingModelRefusesHandsFreeImmediately() {
-        let h = Self.make(models: [.parakeet: .notInstalled, .whisper: .ready])
+        let h = Self.make(models: [.parakeet: .notInstalled], keyStatus: .valid(KeyInfo()))
         h.controller.send(.handsFreeToggle)
         #expect(h.recorder.starts == 0)
         #expect(h.controller.machine.capture == .idle)
         let notice = h.toasts.notices.first
         #expect(notice?.dedupeKey == "error.modelNotDownloaded.parakeet")
-        #expect(notice?.actions.contains { $0.kind == .selectEngine(.whisper) } == true)
+        #expect(notice?.actions.map(\.kind) == [.download(.parakeet), .selectEngine(.parakeetCloud)],
+                "the same model through OpenRouter, the key works")
         #expect(h.pill.visiblePhase == .error)
+
+        let keyless = Self.make(models: [.parakeet: .notInstalled])
+        keyless.controller.send(.handsFreeToggle)
+        #expect(keyless.toasts.notices.first?.actions.map(\.kind) == [.download(.parakeet), .openHub(.models)])
+    }
+
+    @Test func fallbacksPairParakeetOnThisMacWithParakeetInTheCloud() {
+        #expect(DictationController.fallbackCandidates(for: .parakeet) == [.parakeetCloud])
+        #expect(DictationController.fallbackCandidates(for: .parakeetCloud) == [.parakeet])
+        #expect(DictationController.fallbackCandidates(for: .geminiFlash) == [.parakeet, .parakeetCloud])
+        #expect(DictationController.fallbackCandidates(for: .geminiPro) == [.parakeet, .parakeetCloud])
+    }
+
+    @Test func aFailedLocalDictationOffersParakeetInTheCloudOnlyWithAWorkingKey() async throws {
+        for (key, expected) in [(KeyStatus.valid(KeyInfo()), true), (.missing, false), (.invalid("401"), false)] {
+            let h = Self.make(models: [.parakeet: .ready], keyStatus: key)
+            h.controller.transcribeOverride = { _, engine in throw AppError.engineFailed(engine, "CoreML error") }
+            let r = Self.recording()
+            h.controller.enqueue(r, engine: .parakeet, delivery: .paste(targetPID: nil))
+            try await waitUntil { h.controller.machine.activeJobs == 0 }
+            let notice = try #require(h.toasts.notices.first { $0.recordingID == r.id })
+            #expect(notice.actions.contains { $0.kind == .retryWith(.parakeetCloud) } == expected, "\(key)")
+        }
+    }
+
+    @Test func aFailedGeminiDictationFallsBackToParakeetHereThenInTheCloud() async throws {
+        func fallback(local: LocalModelState, error: AppError) async throws -> EngineID? {
+            let h = Self.make(models: [.parakeet: local], keyStatus: .valid(KeyInfo()))
+            h.controller.transcribeOverride = { _, _ in throw error }
+            let r = Self.recording()
+            h.controller.enqueue(r, engine: .geminiFlash, delivery: .paste(targetPID: nil))
+            try await waitUntil { h.controller.machine.activeJobs == 0 }
+            let notice = try #require(h.toasts.notices.first { $0.recordingID == r.id })
+            return notice.actions.lazy.compactMap { if case .retryWith(let e) = $0.kind { e } else { nil } }.first
+        }
+        let limited = AppError.openRouterRateLimited(retryAfter: nil)
+        #expect(try await fallback(local: .ready, error: limited) == .parakeet, "loaded on this Mac comes first")
+        #expect(try await fallback(local: .notInstalled, error: limited) == .parakeetCloud)
+        #expect(try await fallback(local: .installed, error: limited) == .parakeetCloud,
+                "a model that still has to load waits behind a key that works now")
+        #expect(try await fallback(local: .notInstalled, error: .openRouterNoCredits("")) == nil,
+                "no credit stops every cloud model")
+        #expect(try await fallback(local: .installed, error: .offline) == .parakeet)
     }
 
     @Test func refusalWhileArmingStaysSilentForFnCombos() {
@@ -807,7 +851,7 @@ final class FakeRecorder: DictationRecorder {
     }
 
     @Test func failedDownloadKeepsItsOwnNotice() {
-        let h = Self.make(models: [.parakeet: .failed("Download didn’t finish."), .whisper: .notInstalled],
+        let h = Self.make(models: [.parakeet: .failed("Download didn’t finish.")],
                           modelErrors: [.parakeet: .downloadFailed(.parakeet, "offline")])
         #expect(h.controller.captureRefusal() == .downloadFailed(.parakeet, "offline"))
         let noDisk = Self.make(models: [.parakeet: .failed("Not enough space.")],
@@ -827,8 +871,7 @@ final class FakeRecorder: DictationRecorder {
     @Test func modelsArentMissingBeforeTheFirstDiskScan() async throws {
         let settings = AppSettings.inMemory()
         let store = ModelStore(paths: .temporary(), settings: settings,
-                               engines: [.parakeet: FakeEngine(.parakeet, installed: false),
-                                         .whisper: FakeEngine(.whisper, installed: false)],
+                               engines: [.parakeet: FakeEngine(.parakeet, installed: false)],
                                gate: InferenceGate(), freeDiskBytes: { 50_000_000_000 })
         let h = Self.make(store: store)
         #expect(h.controller.captureRefusal() == nil, "not known yet is not missing")
@@ -1003,7 +1046,7 @@ final class FakeRecorder: DictationRecorder {
 
     @Test func failedCloudJobOffersADownloadedLocalModelThatIsntLoaded() async throws {
         // Gemini selected at launch: Parakeet is on disk but not loaded. Retrying with it loads it.
-        let h = Self.make(models: [.parakeet: .installed, .whisper: .notInstalled], keyStatus: .valid(KeyInfo()))
+        let h = Self.make(models: [.parakeet: .installed], keyStatus: .valid(KeyInfo()))
         h.controller.transcribeOverride = { _, _ in throw AppError.offline }
         let r = Self.recording()
         h.controller.enqueue(r, engine: .geminiFlash, delivery: .paste(targetPID: nil))
@@ -1124,29 +1167,27 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
         #expect(menu.items.last?.title == "Settings…")
     }
 
-    @Test func modelSubmenuMarksSelectionAndDisablesUnavailable() throws {
+    @Test func modelSubmenuMarksTheSelection() throws {
         let env = AppEnvironment.preview()
         let menu = env.menuBar.builder.makeMenu(includeQuit: true)
         let models = try #require(menu.items.first { $0.title == "Model" }?.submenu)
         let parakeet = try #require(models.items.first { $0.title == "Parakeet v3" })
-        let whisper = try #require(models.items.first { $0.title.hasPrefix("Whisper Large V3 Turbo") })
+        let flash = try #require(models.items.first { $0.title == "Gemini 3.8 Flash" })
         #expect(parakeet.state == .on && parakeet.isEnabled)
-        #expect(whisper.state == .off && !whisper.isEnabled, "not downloaded in the preview fixtures")
-        #expect(whisper.attributedTitle?.string.contains("Not downloaded") == true)
+        #expect(flash.state == .off && flash.isEnabled, "the preview key is valid")
     }
 
-    @Test func modelSubmenuGroupsLocalCloudSpeechAndGemini() throws {
+    @Test func modelSubmenuGroupsThisMacThenOpenRouter() throws {
         let env = AppEnvironment.preview()
         let menu = env.menuBar.builder.makeMenu(includeQuit: true)
         let models = try #require(menu.items.first { $0.title == "Model" }?.submenu)
-        // A status suffix follows the name after two spaces ("Whisper Large V3 Turbo  Not downloaded").
+        // A status suffix follows the name after two spaces ("Parakeet v3  Not downloaded").
         #expect(models.items.map { $0.isSeparatorItem ? "—" : $0.title.components(separatedBy: "  ")[0] } == [
-            "Parakeet v3", "Whisper Large V3 Turbo", "—",
-            "Parakeet v3 · Cloud", "Whisper Large V3 Turbo · Cloud", "—",
-            "Gemini 3.8 Flash", "Gemini 3.1 Pro", "—", "Manage Models…",
+            "Parakeet v3", "—",
+            "Parakeet v3 · Cloud", "Gemini 3.8 Flash", "Gemini 3.1 Pro", "—", "Manage Models…",
         ])
         let cloudEnabled = models.items.filter { $0.title.contains("· Cloud") }.map(\.isEnabled)
-        #expect(cloudEnabled == [true, true], "the preview key is valid")
+        #expect(cloudEnabled == [true], "the preview key is valid")
     }
 
     @Test func cloudModelsNeedTheKey() throws {

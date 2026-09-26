@@ -337,8 +337,8 @@ private struct EngineStatusChip: View {
         .accessibilityLabel("\(summary.name), \(summary.status). Open Models.")
     }
 
-    /// "Whisper Turbo · Cloud" doesn't fit the sidebar, so cloud Parakeet and Whisper show the model's short
-    /// name with a cloud, the same mark their history rows carry.
+    /// Cloud Parakeet shows the model's name with a cloud, the same mark its history rows carry, rather than
+    /// spelling out "· Cloud" in the narrow sidebar.
     private var nameLine: some View {
         HStack(spacing: 4) {
             Text(engine.cloudAPI == .transcriptions ? (engine.localCounterpart?.shortName ?? summary.name) : summary.name)

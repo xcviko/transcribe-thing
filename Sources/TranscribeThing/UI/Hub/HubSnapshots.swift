@@ -12,12 +12,11 @@ enum HubSnapshots {
             },
             hub("hub-home-attention", .home, height: 900) { c in
                 c.permissions = .preview(mic: .denied, ax: .notDetermined)
-                c.settings.selectedEngine = .whisper
-                c.models = .preview(states: [.parakeet: .ready, .whisper: .downloading(Samples.downloading)])
+                c.models = .preview(states: [.parakeet: .downloading(Samples.downloading)])
             },
             hub("hub-home-compact", .home, width: 820, height: 560),
             hub("hub-models-compact", .models, width: 820, height: 560) { c in
-                c.models = .preview(states: [.parakeet: .ready, .whisper: .downloading(Samples.downloading)])
+                c.models = .preview(states: [.parakeet: .downloading(Samples.downloading)])
             },
             hub("hub-models-compact-cloud", .models, width: 820, height: 1100) { c in
                 c.settings.selectedEngine = .parakeetCloud
@@ -27,29 +26,27 @@ enum HubSnapshots {
             },
 
             hub("hub-models", .models),
-            hub("hub-models-full", .models, height: 1720),
+            hub("hub-models-full", .models, height: 1320),
             hub("hub-models-downloading", .models) { c in
-                c.models = .preview(states: [.parakeet: .ready, .whisper: .downloading(Samples.downloading)])
+                c.models = .preview(states: [.parakeet: .downloading(Samples.downloading)])
             },
             hub("hub-models-preparing", .models) { c in
-                c.settings.selectedEngine = .whisper
-                c.models = .preview(states: [.parakeet: .installed, .whisper: .preparing(since: Date().addingTimeInterval(-34))])
+                c.models = .preview(states: [.parakeet: .preparing(since: Date().addingTimeInterval(-24))])
             },
             hub("hub-models-failed", .models) { c in
-                c.models = .preview(states: [.parakeet: .ready, .whisper: .failed("Download didn’t finish. The connection was lost.")])
+                c.models = .preview(states: [.parakeet: .failed("Download didn’t finish. The connection was lost.")],
+                                    lastErrors: [.parakeet: .downloadFailed(.parakeet, "The connection was lost.")])
             },
             hub("hub-models-load-failed", .models) { c in
-                c.models = .preview(states: [.parakeet: .failed("Couldn’t load the model. Retry, or download it again."),
-                                             .whisper: .notInstalled],
+                c.models = .preview(states: [.parakeet: .failed("Couldn’t load the model. Retry, or download it again.")],
                                     lastErrors: [.parakeet: .modelLoadFailed(.parakeet, "Corrupt weights")])
             },
             hub("hub-home-load-failed", .home) { c in
-                c.models = .preview(states: [.parakeet: .failed("Couldn’t load the model. Retry, or download it again."),
-                                             .whisper: .notInstalled],
+                c.models = .preview(states: [.parakeet: .failed("Couldn’t load the model. Retry, or download it again.")],
                                     lastErrors: [.parakeet: .modelLoadFailed(.parakeet, "Corrupt weights")])
             },
             hub("hub-models-cloud-stt", .models, height: 1100) { c in
-                c.settings.selectedEngine = .whisperCloud
+                c.settings.selectedEngine = .parakeetCloud
             },
             hub("hub-models-key-limit", .models, height: 1100) { c in
                 c.settings.selectedEngine = .geminiFlash
@@ -108,7 +105,7 @@ enum HubSnapshots {
     }
 
     private enum Samples {
-        static let downloading = DownloadProgress(fraction: 0.42, bytesReceived: 264_500_000, totalBytes: 629_700_000,
+        static let downloading = DownloadProgress(fraction: 0.42, bytesReceived: 265_600_000, totalBytes: 632_321_326,
                                                   bytesPerSecond: 9_800_000, secondsRemaining: 38)
     }
 }

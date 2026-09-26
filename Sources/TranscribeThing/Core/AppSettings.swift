@@ -31,7 +31,7 @@ final class AppSettings {
     var onboardingCompleted: Bool = false { didSet { store.set(onboardingCompleted, .onboardingCompleted) } }
     /// Resume point for onboarding.
     var onboardingStep: Int = 0 { didSet { store.set(onboardingStep, .onboardingStep) } }
-    var selectedEngine: EngineID = .parakeet { didSet { store.set(selectedEngine.rawValue, .selectedEngine) } }
+    var selectedEngine: EngineID = .default { didSet { store.set(selectedEngine.rawValue, .selectedEngine) } }
     var pillMode: PillMode = .whileDictating { didSet { store.set(pillMode.rawValue, .pillMode) } }
     var pillHiddenUntil: Date? = nil { didSet { store.set(pillHiddenUntil, .pillHiddenUntil) } }
     var soundsEnabled: Bool = true { didSet { store.set(soundsEnabled, .soundsEnabled) } }
@@ -43,8 +43,6 @@ final class AppSettings {
     var showDockIcon: Bool = false { didSet { store.set(showDockIcon, .showDockIcon) } }
     /// Empty by default: Gemini then receives only the audio.
     var geminiSystemPrompt: String = "" { didSet { store.set(geminiSystemPrompt, .geminiSystemPrompt) } }
-    /// nil = auto-detect; otherwise an ISO 639-1 code.
-    var whisperLanguage: String? = nil { didSet { store.set(whisperLanguage, .whisperLanguage) } }
     /// One of `maxRecordingChoices`.
     var maxRecordingMinutes: Int = 20 { didSet { store.set(maxRecordingMinutes, .maxRecordingMinutes) } }
     var doublePressForHandsFree: Bool = true { didSet { store.set(doublePressForHandsFree, .doublePressForHandsFree) } }
@@ -75,7 +73,7 @@ final class AppSettings {
 
     /// The limit a new recording gets: Gemini takes about 7.4 minutes of audio per request, so with Gemini
     /// selected a recording stops (and is transcribed) at 7 minutes even when the setting allows more. Cloud
-    /// Parakeet and Whisper keep the setting.
+    /// Parakeet keeps the setting.
     var effectiveMaxRecordingDuration: TimeInterval {
         guard selectedEngine.cloudAPI == .chatCompletions else { return maxRecordingDuration }
         return min(maxRecordingDuration, OpenRouterClient.maxRecordingDuration)
@@ -95,6 +93,7 @@ final class AppSettings {
     private func load() {
         if let v = store.bool(.onboardingCompleted) { onboardingCompleted = v }
         if let v = store.int(.onboardingStep) { onboardingStep = max(0, v) }
+        // An engine this build doesn't offer (one since removed) leaves the default selected.
         if let v = store.string(.selectedEngine).flatMap(EngineID.init(rawValue:)) { selectedEngine = v }
         if let v = store.string(.pillMode).flatMap(PillMode.init(rawValue:)) { pillMode = v }
         pillHiddenUntil = store.date(.pillHiddenUntil)
@@ -104,7 +103,6 @@ final class AppSettings {
         if let v = store.bool(.preferBuiltInMicOverBluetooth) { preferBuiltInMicOverBluetooth = v }
         if let v = store.bool(.showDockIcon) { showDockIcon = v }
         if let v = store.string(.geminiSystemPrompt) { geminiSystemPrompt = v }
-        whisperLanguage = store.string(.whisperLanguage)
         if let v = store.int(.maxRecordingMinutes), v > 0 { maxRecordingMinutes = v }
         if let v = store.bool(.doublePressForHandsFree) { doublePressForHandsFree = v }
         if let v = store.bool(.restoreClipboard) { restoreClipboard = v }
@@ -119,7 +117,7 @@ final class AppSettings {
 enum SettingsKey: String, CaseIterable {
     case onboardingCompleted, onboardingStep, selectedEngine, pillMode, pillHiddenUntil
     case soundsEnabled, soundVolume, microphoneUID, preferBuiltInMicOverBluetooth, showDockIcon
-    case geminiSystemPrompt, whisperLanguage, maxRecordingMinutes, doublePressForHandsFree
+    case geminiSystemPrompt, maxRecordingMinutes, doublePressForHandsFree
     case restoreClipboard, keepFailedRecordingsDays, shortcuts, hasShownWelcomeHello
 
     var defaultsKey: String { "tt.\(rawValue)" }

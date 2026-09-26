@@ -1,8 +1,8 @@
 import Foundation
 
-/// Serializes every local model load, unload, delete and inference across BOTH engines, in FIFO order.
-/// Concurrent Core ML work from FluidAudio and WhisperKit can crash inside libBNNS (FluidAudio issue #661),
-/// and each engine is also unsafe to call re-entrantly (AsrManager and WhisperKit suspend mid-inference).
+/// Serializes every local model load, unload, delete and inference, in FIFO order. Concurrent Core ML work
+/// can crash inside libBNNS (FluidAudio issue #661), and AsrManager is unsafe to call re-entrantly (it
+/// suspends mid-inference).
 actor InferenceGate {
     static let shared = InferenceGate()
 

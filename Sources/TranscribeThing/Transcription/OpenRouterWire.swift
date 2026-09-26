@@ -86,8 +86,6 @@ enum OpenRouterMessage: Encodable, Equatable {
 struct OpenRouterSpeechRequest: Encodable, Equatable {
     let model: String
     let inputAudio: InputAudio
-    /// ISO 639-1; omitted for auto-detection.
-    let language: String?
 
     struct InputAudio: Encodable, Equatable {
         /// Raw base64, not a data URI.
@@ -96,21 +94,13 @@ struct OpenRouterSpeechRequest: Encodable, Equatable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case model, language
+        case model
         case inputAudio = "input_audio"
     }
 
-    static func wav(model: String, audioBase64: String, language: String?) -> OpenRouterSpeechRequest {
-        OpenRouterSpeechRequest(model: model, inputAudio: InputAudio(data: audioBase64, format: "wav"),
-                                language: normalizedLanguage(language))
-    }
-
-    /// "EN " → "en"; blank → nil.
-    static func normalizedLanguage(_ raw: String?) -> String? {
-        guard let code = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !code.isEmpty else {
-            return nil
-        }
-        return code
+    /// No `language`: Parakeet v3 detects it.
+    static func wav(model: String, audioBase64: String) -> OpenRouterSpeechRequest {
+        OpenRouterSpeechRequest(model: model, inputAudio: InputAudio(data: audioBase64, format: "wav"))
     }
 
     func encoded() throws -> Data {
@@ -281,8 +271,8 @@ enum OpenRouterErrorMapper {
 
     static func noRouteHint(for engine: EngineID) -> String {
         guard engine.cloudAPI == .transcriptions else { return noRouteHint }
-        let providers = engine.knownProviders.isEmpty ? "its providers" : engine.knownProviders.joined(separator: " or ")
-        return "No provider of \(engine.modelName) is reachable with your OpenRouter settings. Check openrouter.ai/settings/privacy: your data policy and allowed providers must let \(providers) through."
+        let provider = engine.provider ?? "its provider"
+        return "No provider of \(engine.modelName) is reachable with your OpenRouter settings. Check openrouter.ai/settings/privacy: your data policy and allowed providers must let \(provider) through."
     }
 
     /// Maps a non-200 response (body may be JSON, HTML or empty).

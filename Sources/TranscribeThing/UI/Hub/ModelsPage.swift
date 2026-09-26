@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Six engines (download, use, delete), storage, the OpenRouter key, Gemini instructions and Whisper's language.
+/// Four engines (download, use, delete), storage, the OpenRouter key and Gemini instructions.
 struct ModelsPage: View {
     @Environment(HubContext.self) private var hub
     @Environment(ModelStore.self) private var models
@@ -9,11 +9,10 @@ struct ModelsPage: View {
 
     @State private var keyFocusRequest = 0
     @State private var freeBytes: Int64?
-    /// Narrow window: every row drops "Private" and "Offline" together, so the two local models never look
-    /// like they differ in privacy.
+    /// Narrow window: the local model drops "Private" and "Offline" and keeps "Recommended".
     @State private var compactBadges = false
 
-    /// Below this list width the full badge rows of the local models stop fitting beside their actions.
+    /// Below this list width the local model's full badge row stops fitting beside its actions.
     static let compactBadgeWidth: CGFloat = 640
 
     var body: some View {
@@ -39,27 +38,12 @@ struct ModelsPage: View {
                 HubGroup("Gemini") {
                     GeminiInstructionsCard()
                 }
-                HubGroup("Language") {
-                    SettingsGroup {
-                        SettingsRow(title: "Whisper language",
-                                    subtitle: "A hint for Whisper, on your Mac and through OpenRouter. Parakeet and Gemini detect the language on their own.",
-                                    systemImage: "character.bubble") {
-                            HubMenuPicker(options: [nil] + WhisperLanguage.all.map(\.code),
-                                          selection: whisperLanguage,
-                                          label: WhisperLanguage.name(for:))
-                        }
-                    }
-                }
             }
         }
         .task(id: models.diskUsageBytes) {
             freeBytes = hub.paths.freeDiskBytes()
         }
         .task { account.refreshIfStale(maxAge: 300) }
-    }
-
-    private var whisperLanguage: Binding<String?> {
-        Binding(get: { settings.whisperLanguage }, set: { settings.whisperLanguage = $0 })
     }
 
     private func row(_ engine: EngineID, proxy: ScrollViewProxy) -> some View {
@@ -111,10 +95,12 @@ struct ModelsPage: View {
         .padding(.top, 2)
     }
 
+    /// "Takes 632 MB on disk · 23.6 GB free on this Mac"; just the free space before anything is downloaded.
     private var storageText: String {
-        let used = models.diskUsageBytes > 0 ? "Models use \(Fmt.bytes(models.diskUsageBytes))" : "No models downloaded yet"
-        guard let freeBytes, freeBytes > 0 else { return used }
-        return "\(used) · \(Fmt.bytes(freeBytes)) free on this Mac"
+        let free = freeBytes.flatMap { $0 > 0 ? "\(Fmt.bytes($0)) free on this Mac" : nil }
+        guard models.diskUsageBytes > 0 else { return free ?? "Nothing downloaded yet" }
+        let used = "Takes \(Fmt.bytes(models.diskUsageBytes)) on disk"
+        return free.map { "\(used) · \($0)" } ?? used
     }
 }
 
@@ -155,8 +141,8 @@ private struct ModelRow: View {
                     .typeface(.callout)
                     .foregroundStyle(.inkSecondary)
                     .lineLimit(1)
-                if let note = ProviderNote.make(engine) {
-                    providerLine(note.text, kind: note.kind)
+                if let note = ProviderNote.text(engine) {
+                    providerLine(note)
                 }
                 status
                     .padding(.top, 2)
@@ -183,9 +169,9 @@ private struct ModelRow: View {
     /// Under "Through OpenRouter" the "· Cloud" suffix would only repeat the heading.
     private var title: String { engine.isLocal ? engine.displayName : engine.modelName }
 
-    private func providerLine(_ text: String, kind: ProviderNote.Kind) -> some View {
+    private func providerLine(_ text: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 5) {
-            Image(systemName: kind == .routed ? "arrow.triangle.branch" : "server.rack")
+            Image(systemName: "server.rack")
                 .font(.system(size: 9.5, weight: .semibold))
                 .frame(width: 12)
             Text(text)
@@ -220,29 +206,35 @@ private struct ModelRow: View {
     @ViewBuilder private var localStatus: some View {
         switch state {
         case .downloading(let progress):
-            HStack(spacing: 8) {
+            BarThenCaption {
                 ProgressBar(fraction: progress.fraction, height: 4)
                     .frame(width: 120)
-                Text(downloadLabel(progress))
-                    .typeface(.callout)
-                    .monospacedDigit()
-                    .foregroundStyle(.inkSecondary)
-                    .contentTransition(.numericText())
-                    .lineLimit(1)
-                pendingNote
-            }
-        case .preparing(let since):
-            HStack(spacing: 8) {
-                ShimmerBar(height: 4).frame(width: 100)
-                TimelineView(.periodic(from: since, by: 1)) { context in
-                    let elapsed = context.date.timeIntervalSince(since)
-                    Text("Optimizing for your Mac… can take a few minutes" + (elapsed >= 20 ? " · \(Fmt.duration(elapsed))" : ""))
+            } caption: {
+                HStack(spacing: 8) {
+                    Text(downloadLabel(progress))
                         .typeface(.callout)
                         .monospacedDigit()
                         .foregroundStyle(.inkSecondary)
+                        .contentTransition(.numericText())
                         .lineLimit(1)
+                    pendingNote
                 }
-                pendingNote
+            }
+        case .preparing(let since):
+            BarThenCaption {
+                ShimmerBar(height: 4).frame(width: 100)
+            } caption: {
+                HStack(spacing: 8) {
+                    TimelineView(.periodic(from: since, by: 1)) { context in
+                        let elapsed = context.date.timeIntervalSince(since)
+                        Text("Optimizing for your Mac… usually under a minute" + (elapsed >= 20 ? " · \(Fmt.duration(elapsed))" : ""))
+                            .typeface(.callout)
+                            .monospacedDigit()
+                            .foregroundStyle(.inkSecondary)
+                            .lineLimit(1)
+                    }
+                    pendingNote
+                }
             }
         case .failed(let message):
             HStack(spacing: 4) {
@@ -375,6 +367,31 @@ private struct ModelRow: View {
                 Task { await models.delete(engine) }
             } cancel: {
                 confirmingDelete = false
+            }
+        }
+    }
+}
+
+/// A progress bar with its caption on the same line, or under it when the row is too narrow for both (a narrow
+/// window, beside "In use" and an action button), so the caption keeps its end: "about 40 s left".
+private struct BarThenCaption<Bar: View, Caption: View>: View {
+    private let bar: Bar
+    private let caption: Caption
+
+    init(@ViewBuilder bar: () -> Bar, @ViewBuilder caption: () -> Caption) {
+        self.bar = bar()
+        self.caption = caption()
+    }
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                bar
+                caption
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                bar
+                caption
             }
         }
     }

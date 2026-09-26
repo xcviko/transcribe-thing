@@ -180,7 +180,7 @@ struct HistoryRow: View {
         .frame(minWidth: 88, alignment: .topTrailing)
     }
 
-    /// Gemini is pinned to one provider, so only cloud Parakeet and Whisper say who answered.
+    /// Gemini is pinned to one provider, so only cloud Parakeet says who answered.
     private var servedBy: String? {
         guard entry.engine.cloudAPI == .transcriptions, let provider = entry.provider, !provider.isEmpty else { return nil }
         return provider

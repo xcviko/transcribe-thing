@@ -106,7 +106,7 @@ enum PillSnapshotFixtures {
 
     /// Cloud speech errors name the model and offer the same model on this Mac first.
     static let cloudSpeechRateLimited = AppError.openRouterRateLimited(retryAfter: nil)
-        .notice(recordingID: UUID(), fallbackEngine: .whisper, engine: .whisperCloud)
+        .notice(recordingID: UUID(), fallbackEngine: .parakeet, engine: .parakeetCloud)
 
     static let truncated = AppError.openRouterTruncated(
         "So the plan for Thursday is to move the design review to the afternoon so Maya can join, and then so the plan for Thursday is to move the design review to the afternoon so Maya can join, and then so the plan for Thursday is")

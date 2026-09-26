@@ -27,9 +27,9 @@ extension LocalModelState {
     var isReady: Bool { self == .ready }
 }
 
-/// Owns the two local models: install state, downloads, loading and local inference.
-/// State is main-actor observable; file scans, downloads, loads and inference run off the main thread.
-/// Only one local model is loaded at a time, and every load and inference goes through `InferenceGate`.
+/// Owns the local model (Parakeet v3): install state, download, loading and local inference.
+/// State is main-actor observable; file scans, downloads, loads and inference run off the main thread,
+/// and every load and inference goes through `InferenceGate`.
 @MainActor @Observable
 final class ModelStore {
     @ObservationIgnored private let paths: AppPaths
@@ -40,7 +40,7 @@ final class ModelStore {
     @ObservationIgnored private var isPreview = false
     @ObservationIgnored private var hasStarted = false
 
-    private(set) var states: [EngineID: LocalModelState] = [.parakeet: .notInstalled, .whisper: .notInstalled]
+    private(set) var states: [EngineID: LocalModelState] = [.parakeet: .notInstalled]
     private(set) var diskUsageBytes: Int64 = 0
     /// The first disk scan has landed. Until then every model reads as not installed, which only means
     /// "not known yet".
@@ -60,11 +60,6 @@ final class ModelStore {
     @ObservationIgnored private var downloadTasks: [EngineID: Task<Void, Never>] = [:]
     @ObservationIgnored private var downloadTokens: [EngineID: UUID] = [:]
     @ObservationIgnored private var prepareTasks: [EngineID: Task<Void, Never>] = [:]
-    /// Loads run one after another so their completions land in order (the last requested model wins).
-    @ObservationIgnored private var loadChain: Task<Void, Never>?
-    /// Bumped by every queued load. A load that finishes after a newer one was queued (for the other model:
-    /// a model already loading or loaded never queues again) is about to be unloaded by it.
-    @ObservationIgnored private var prepareGeneration = 0
 
     static let diskHeadroom = 1.25
 
@@ -83,7 +78,7 @@ final class ModelStore {
     }
 
     nonisolated static func makeEngines(paths: AppPaths) -> [EngineID: any LocalEngine] {
-        [.parakeet: ParakeetEngine(modelsRoot: paths.models), .whisper: WhisperEngine(baseDir: paths.whisperBase)]
+        [.parakeet: ParakeetEngine(modelsRoot: paths.models)]
     }
 
     static func preview(states: [EngineID: LocalModelState], lastErrors: [EngineID: AppError] = [:]) -> ModelStore {
@@ -304,7 +299,7 @@ final class ModelStore {
 
     // MARK: Select and prepare
 
-    /// Sets the selected engine; a local one starts loading (which unloads the other local model).
+    /// Sets the selected engine; a local one starts loading.
     func select(_ id: EngineID) {
         pendingSelection = nil
         settings.selectedEngine = id
@@ -346,47 +341,25 @@ final class ModelStore {
             return
         }
         states[id] = .preparing(since: Date())
-        // The queued load unloads every other model first, however it ends. They stop being ready now, not
-        // minutes later when a first Whisper load finishes: a dictation or a switch back must see a model that
-        // needs loading again, not a loaded one.
-        for other in engines.keys where other != id && state(of: other) == .ready {
-            states[other] = .installed
-        }
-        prepareGeneration += 1
-        let generation = prepareGeneration
-        let others = engines.filter { $0.key != id }
         let gate = self.gate
-        let previous = loadChain
-        let task = Task { [weak self] in
-            await previous?.value
+        prepareTasks[id] = Task { [weak self] in
             let started = ProcessInfo.processInfo.systemUptime
             let result: Result<Void, Error>
             do {
-                try await gate.run {
-                    for other in others.values { await other.unload() }
-                    try await engine.load()
-                }
+                try await gate.run { try await engine.load() }
                 result = .success(())
             } catch {
                 result = .failure(error)
             }
-            self?.finishPrepare(id, generation: generation, unloaded: Array(others.keys), result: result,
-                                duration: ProcessInfo.processInfo.systemUptime - started)
+            self?.finishPrepare(id, result: result, duration: ProcessInfo.processInfo.systemUptime - started)
         }
-        loadChain = task
-        prepareTasks[id] = task
     }
 
-    private func finishPrepare(_ id: EngineID, generation: Int, unloaded: [EngineID], result: Result<Void, Error>,
-                               duration: TimeInterval) {
+    private func finishPrepare(_ id: EngineID, result: Result<Void, Error>, duration: TimeInterval) {
         prepareTasks[id] = nil
-        for other in unloaded where state(of: other) == .ready {
-            states[other] = .installed
-        }
         switch result {
         case .success:
-            // Switched away and back while this loaded: the other model's queued load unloads this one next.
-            states[id] = generation == prepareGeneration ? .ready : .installed
+            states[id] = .ready
             lastErrors[id] = nil
             lastLoadDurations[id] = duration
             Log.engine.info("Loaded \(id.rawValue, privacy: .public) in \(duration, format: .fixed(precision: 2), privacy: .public) s")
@@ -407,16 +380,15 @@ final class ModelStore {
         guard id.isLocal, let engine = engines[id] else {
             throw AppError.engineFailed(id, "\(id.displayName) doesn’t run on this Mac.")
         }
-        let options = LocalTranscriptionOptions(language: id == .whisper ? settings.whisperLanguage : nil)
         let gate = self.gate
         var attempts = 0
         while true {
             attempts += 1
             try await waitUntilReady(id, engine: engine)
             do {
-                return try await gate.run { try await engine.transcribe(samples, options: options) }
+                return try await gate.run { try await engine.transcribe(samples) }
             } catch LocalEngineError.notLoaded where attempts < 3 {
-                // Another engine's load unloaded this one after it reported ready: load it again.
+                // Unloaded after it reported ready (a delete queued ahead of this): look at its state again.
                 if state(of: id) == .ready { states[id] = .installed }
             } catch let error as AppError {
                 throw error

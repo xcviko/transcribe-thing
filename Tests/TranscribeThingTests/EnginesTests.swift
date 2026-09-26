@@ -784,44 +784,6 @@ enum Fixtures {
         #expect(!ParakeetEngine(modelsRoot: root).isInstalled())
     }
 
-    @Test func whisperNeedsMarkerSizesAndTokenizer() throws {
-        let base = try tempDir()
-        defer { try? FileManager.default.removeItem(at: base) }
-        let engine = WhisperEngine(baseDir: base)
-        let variant = WhisperEngine.variant
-        let files = [("\(variant)/AudioEncoder.mlmodelc/weights/weight.bin", 64), ("\(variant)/config.json", 10)]
-        let repoRoot = base.appendingPathComponent("models/argmaxinc/whisperkit-coreml")
-        for (path, size) in files { try write(repoRoot.appendingPathComponent(path), bytes: size) }
-        #expect(!engine.isInstalled(), "no marker yet")
-
-        let marker = WhisperEngine.InstallMarker(variant: variant,
-                                                 files: files.map { .init(path: $0.0, size: Int64($0.1)) },
-                                                 installedAt: Date())
-        try JSONEncoder().encode(marker).write(to: engine.markerURL)
-        #expect(!engine.isInstalled(), "tokenizer missing")
-
-        for name in ["tokenizer.json", "tokenizer_config.json"] {
-            try write(base.appendingPathComponent("models/openai/whisper-large-v3/\(name)"))
-        }
-        #expect(engine.isInstalled())
-        #expect(engine.modelFolder.path.hasSuffix("models/argmaxinc/whisperkit-coreml/\(variant)"))
-
-        try write(repoRoot.appendingPathComponent(files[0].0), bytes: 63)
-        #expect(!engine.isInstalled(), "a truncated file breaks the install")
-    }
-
-    @Test func whisperDeleteRemovesEverything() async throws {
-        let base = try tempDir()
-        defer { try? FileManager.default.removeItem(at: base) }
-        let engine = WhisperEngine(baseDir: base)
-        try write(base.appendingPathComponent("models/argmaxinc/whisperkit-coreml/x/y.bin"), bytes: 100)
-        try write(engine.markerURL)
-        #expect(engine.bytesOnDisk() > 0)
-        try await engine.deleteFiles()
-        #expect(engine.bytesOnDisk() == 0)
-        #expect(!FileManager.default.fileExists(atPath: engine.markerURL.path))
-    }
-
     @Test func treeListingParsesFilesAndLFSSizes() throws {
         let json = #"""
         [{"type":"directory","oid":"a","size":0,"path":"Encoder_v2.mlmodelc"},
@@ -837,36 +799,9 @@ enum Fixtures {
     }
 }
 
-// MARK: - Whisper decoding and silence handling
+// MARK: - Silence check
 
-@Suite struct WhisperOutputTests {
-    @Test func decodingOptionsFollowTheSpec() {
-        let auto = WhisperEngine.decodingOptions(language: nil)
-        #expect(auto.language == nil)
-        #expect(auto.detectLanguage)
-        #expect(auto.windowClipTime == 0)
-        #expect(!auto.suppressBlank)
-        #expect(auto.temperatureFallbackCount == 2)
-        #expect(auto.withoutTimestamps)
-        #expect(auto.skipSpecialTokens)
-        #expect(auto.usePrefillPrompt)
-        #expect(auto.concurrentWorkerCount == 4)
-        #expect(auto.chunkingStrategy == .vad)
-
-        let russian = WhisperEngine.decodingOptions(language: "ru")
-        #expect(russian.language == "ru")
-        #expect(!russian.detectLanguage)
-
-        let unknown = WhisperEngine.decodingOptions(language: "xx")
-        #expect(unknown.language == nil)
-        #expect(unknown.detectLanguage)
-    }
-
-    @Test func specialTokensAndSpacesAreCleaned() {
-        #expect(WhisperEngine.clean(["<|startoftranscript|><|en|> Hello  ", "  world.<|endoftext|>"]) == "Hello world.")
-        #expect(WhisperEngine.clean([]) == "")
-    }
-
+@Suite struct SilenceGuardTests {
     private func tone(seconds: Double, amplitude: Float = 0.1) -> [Float] {
         (0..<Int(seconds * 16_000)).map { amplitude * sin(Float($0) * 2 * .pi * 220 / 16_000) }
     }
@@ -885,17 +820,6 @@ enum Fixtures {
         #expect(abs(SilenceGuard.voicedSeconds(hissAndSpeech) - 0.5) < 0.06)
 
         #expect(abs(SilenceGuard.voicedSeconds(tone(seconds: 2)) - 2) < 0.05, "speech without a single pause")
-    }
-
-    @Test func silencePhrasesAreDroppedOnlyWhenThereIsLittleVoice() {
-        #expect(SilenceGuard.isLikelyHallucination("Thank you.", voicedSeconds: 0.2))
-        #expect(!SilenceGuard.isLikelyHallucination("Thank you.", voicedSeconds: 0.9))
-        #expect(SilenceGuard.isLikelyHallucination("Продолжение следует...", voicedSeconds: 1.2))
-        #expect(!SilenceGuard.isLikelyHallucination("Продолжение следует...", voicedSeconds: 3))
-        #expect(SilenceGuard.isLikelyHallucination("Субтитры сделал DimaTorzok", voicedSeconds: 0.5))
-        #expect(SilenceGuard.isLikelyHallucination(" Thanks for watching! ", voicedSeconds: 1))
-        #expect(!SilenceGuard.isLikelyHallucination("Thank you for the update.", voicedSeconds: 0.2))
-        #expect(!SilenceGuard.isLikelyHallucination("", voicedSeconds: 0))
     }
 }
 
@@ -1021,7 +945,7 @@ actor FakeEngine: LocalEngine {
 
     func unload() async { loaded = false }
 
-    func transcribe(_ samples: [Float], options: LocalTranscriptionOptions) async throws -> String {
+    func transcribe(_ samples: [Float]) async throws -> String {
         guard loaded else { throw LocalEngineError.notLoaded }
         transcribeCount += 1
         return transcript
@@ -1040,17 +964,14 @@ struct FakeFailure: Error, LocalizedError {
 
 @MainActor
 @Suite struct ModelStoreTests {
-    private func makeStore(parakeetInstalled: Bool = true, whisperInstalled: Bool = false,
-                           freeBytes: Int64 = 50_000_000_000, selected: EngineID = .parakeet)
-        -> (ModelStore, FakeEngine, FakeEngine, AppSettings) {
+    private func makeStore(installed: Bool = true, freeBytes: Int64 = 50_000_000_000, selected: EngineID = .parakeet)
+        -> (ModelStore, FakeEngine, AppSettings) {
         let settings = AppSettings.inMemory()
         settings.selectedEngine = selected
-        let parakeet = FakeEngine(.parakeet, installed: parakeetInstalled)
-        let whisper = FakeEngine(.whisper, installed: whisperInstalled)
-        let store = ModelStore(paths: .temporary(), settings: settings,
-                               engines: [.parakeet: parakeet, .whisper: whisper],
+        let parakeet = FakeEngine(.parakeet, installed: installed)
+        let store = ModelStore(paths: .temporary(), settings: settings, engines: [.parakeet: parakeet],
                                gate: InferenceGate(), freeDiskBytes: { freeBytes })
-        return (store, parakeet, whisper, settings)
+        return (store, parakeet, settings)
     }
 
     private func waitUntil(_ timeout: Duration = .seconds(3), _ condition: () -> Bool) async throws {
@@ -1065,91 +986,90 @@ struct FakeFailure: Error, LocalizedError {
     }
 
     @Test func startScansAndPreparesTheSelectedModel() async throws {
-        let (store, parakeet, _, _) = makeStore()
+        let (store, parakeet, _) = makeStore()
         store.start()
         try await waitUntil { store.state(of: .parakeet) == .ready }
-        #expect(store.state(of: .whisper) == .notInstalled)
         #expect(await parakeet.isLoaded)
     }
 
     @Test func downloadReportsProgressThenInstallsAndPreparesWhenSelected() async throws {
-        let (store, _, whisper, _) = makeStore(selected: .whisper)
+        let (store, parakeet, _) = makeStore(installed: false)
         var finished: [EngineID] = []
         store.onDownloadFinished = { finished.append($0) }
         await store.refreshFromDisk()
-        #expect(store.state(of: .whisper) == .notInstalled)
-        store.download(.whisper)
-        #expect(store.state(of: .whisper).isDownloading)
+        #expect(store.state(of: .parakeet) == .notInstalled)
+        store.download(.parakeet)
+        #expect(store.state(of: .parakeet).isDownloading)
         var sawProgress = false
         try await waitUntil {
-            if let p = store.state(of: .whisper).downloadProgress, p.fraction > 0 {
+            if let p = store.state(of: .parakeet).downloadProgress, p.fraction > 0 {
                 sawProgress = true
                 #expect(p.totalBytes == 1_000_000)
             }
-            return store.state(of: .whisper) == .ready
+            return store.state(of: .parakeet) == .ready
         }
         #expect(sawProgress)
-        #expect(finished == [.whisper])
-        #expect(await whisper.isLoaded)
+        #expect(finished == [.parakeet])
+        #expect(await parakeet.isLoaded)
     }
 
     @Test func downloadOfAnUnselectedModelStopsAtInstalled() async throws {
-        let (store, _, _, _) = makeStore(selected: .parakeet)
-        store.download(.whisper)
-        try await waitUntil { store.state(of: .whisper) == .installed }
+        let (store, _, _) = makeStore(installed: false, selected: .geminiFlash)
+        store.download(.parakeet)
+        try await waitUntil { store.state(of: .parakeet) == .installed }
     }
 
     @Test func notEnoughDiskFailsBeforeDownloading() async throws {
-        let (store, _, whisper, _) = makeStore(freeBytes: 100_000_000)
+        let (store, parakeet, _) = makeStore(installed: false, freeBytes: 100_000_000)
         var failures: [AppError] = []
         store.onFailure = { _, error in failures.append(error) }
-        store.download(.whisper)
-        try await waitUntil { if case .failed = store.state(of: .whisper) { true } else { false } }
-        let needed = Int64((Double(EngineID.whisper.approxDownloadBytes!) * 1.25).rounded(.up))
-        #expect(store.lastErrors[.whisper] == .notEnoughDisk(needed: needed, available: 100_000_000))
+        store.download(.parakeet)
+        try await waitUntil { if case .failed = store.state(of: .parakeet) { true } else { false } }
+        let needed = Int64((Double(EngineID.parakeet.approxDownloadBytes!) * 1.25).rounded(.up))
+        #expect(store.lastErrors[.parakeet] == .notEnoughDisk(needed: needed, available: 100_000_000))
         #expect(failures == [.notEnoughDisk(needed: needed, available: 100_000_000)])
-        #expect(!whisper.isInstalled())
+        #expect(!parakeet.isInstalled())
     }
 
     @Test func downloadFailureIsReported() async throws {
-        let (store, _, whisper, _) = makeStore()
-        await whisper.configure(downloadError: URLError(.notConnectedToInternet))
-        store.download(.whisper)
-        try await waitUntil { if case .failed = store.state(of: .whisper) { true } else { false } }
-        #expect(store.state(of: .whisper) == .failed("Download didn’t finish. No internet connection."))
-        #expect(store.lastErrors[.whisper] == .downloadFailed(.whisper, "No internet connection."))
+        let (store, parakeet, _) = makeStore(installed: false)
+        await parakeet.configure(downloadError: URLError(.notConnectedToInternet))
+        store.download(.parakeet)
+        try await waitUntil { if case .failed = store.state(of: .parakeet) { true } else { false } }
+        #expect(store.state(of: .parakeet) == .failed("Download didn’t finish. No internet connection."))
+        #expect(store.lastErrors[.parakeet] == .downloadFailed(.parakeet, "No internet connection."))
     }
 
     @Test func cancelledDownloadReturnsQuietly() async throws {
-        let (store, _, whisper, _) = makeStore()
-        await whisper.configure(downloadStepDelay: .milliseconds(200))
+        let (store, parakeet, _) = makeStore(installed: false)
+        await parakeet.configure(downloadStepDelay: .milliseconds(200))
         var failures = 0
         store.onFailure = { _, _ in failures += 1 }
-        store.download(.whisper)
+        store.download(.parakeet)
         try await Task.sleep(for: .milliseconds(50))
-        store.cancelDownload(.whisper)
-        #expect(store.state(of: .whisper) == .notInstalled)
+        store.cancelDownload(.parakeet)
+        #expect(store.state(of: .parakeet) == .notInstalled)
         try await Task.sleep(for: .milliseconds(400))
-        #expect(store.state(of: .whisper) == .notInstalled)
+        #expect(store.state(of: .parakeet) == .notInstalled)
         #expect(failures == 0)
-        #expect(!whisper.isInstalled())
+        #expect(!parakeet.isInstalled())
     }
 
     @Test func downloadRestartedRightAfterCancelFinishes() async throws {
-        let (store, _, whisper, _) = makeStore()
-        await whisper.configure(downloadStepDelay: .milliseconds(100))
-        store.download(.whisper)
+        let (store, parakeet, _) = makeStore(installed: false, selected: .geminiFlash)
+        await parakeet.configure(downloadStepDelay: .milliseconds(100))
+        store.download(.parakeet)
         try await Task.sleep(for: .milliseconds(30))
-        store.cancelDownload(.whisper)
-        store.download(.whisper)
-        #expect(store.state(of: .whisper).isDownloading)
+        store.cancelDownload(.parakeet)
+        store.download(.parakeet)
+        #expect(store.state(of: .parakeet).isDownloading)
         try await Task.sleep(for: .milliseconds(60))
-        #expect(store.state(of: .whisper).isDownloading, "the cancelled run must not reset the new one")
-        try await waitUntil { store.state(of: .whisper) == .installed }
+        #expect(store.state(of: .parakeet).isDownloading, "the cancelled run must not reset the new one")
+        try await waitUntil { store.state(of: .parakeet) == .installed }
     }
 
     @Test func transcribeWaitsForPreparing() async throws {
-        let (store, parakeet, _, _) = makeStore()
+        let (store, parakeet, _) = makeStore()
         await parakeet.configure(loadDelay: .milliseconds(250))
         await store.refreshFromDisk()
         store.prepare(.parakeet)
@@ -1160,22 +1080,22 @@ struct FakeFailure: Error, LocalizedError {
     }
 
     @Test func transcribeLoadsAnInstalledModelOnDemand() async throws {
-        let (store, _, _, _) = makeStore()
+        let (store, _, _) = makeStore()
         await store.refreshFromDisk()
         #expect(store.state(of: .parakeet) == .installed)
         #expect(try await store.transcribeLocal(.parakeet, samples: [0]) == "hello from the fake")
     }
 
     @Test func missingModelThrowsNotDownloaded() async throws {
-        let (store, _, _, _) = makeStore()
+        let (store, _, _) = makeStore(installed: false)
         await store.refreshFromDisk()
-        await #expect(throws: AppError.modelNotDownloaded(.whisper)) {
-            try await store.transcribeLocal(.whisper, samples: [0])
+        await #expect(throws: AppError.modelNotDownloaded(.parakeet)) {
+            try await store.transcribeLocal(.parakeet, samples: [0])
         }
     }
 
     @Test func loadFailureSurfacesAsModelLoadFailed() async throws {
-        let (store, parakeet, _, _) = makeStore()
+        let (store, parakeet, _) = makeStore()
         await parakeet.configure(loadError: FakeFailure(message: "corrupt weights"))
         await store.refreshFromDisk()
         store.prepare(.parakeet)
@@ -1189,7 +1109,7 @@ struct FakeFailure: Error, LocalizedError {
     }
 
     @Test func retryAfterAFailedLoadLoadsAgainInsteadOfDownloading() async throws {
-        let (store, parakeet, _, _) = makeStore()
+        let (store, parakeet, _) = makeStore()
         await parakeet.configure(loadError: FakeFailure(message: "boom"))
         await store.refreshFromDisk()
         store.prepare(.parakeet)
@@ -1201,41 +1121,8 @@ struct FakeFailure: Error, LocalizedError {
         #expect(store.lastErrors[.parakeet] == nil)
     }
 
-    @Test func selectingTheOtherLocalModelUnloadsTheFirst() async throws {
-        let (store, parakeet, whisper, settings) = makeStore(whisperInstalled: true)
-        store.start()
-        try await waitUntil { store.state(of: .parakeet) == .ready }
-        store.select(.whisper)
-        #expect(settings.selectedEngine == .whisper)
-        try await waitUntil { store.state(of: .whisper) == .ready }
-        #expect(store.state(of: .parakeet) == .installed)
-        #expect(await !parakeet.isLoaded)
-        #expect(await whisper.isLoaded)
-    }
-
-    @Test func theModelBeingUnloadedStopsReadingReadyRightAway() async throws {
-        let (store, parakeet, whisper, _) = makeStore(whisperInstalled: true)
-        store.start()
-        try await waitUntil { store.state(of: .parakeet) == .ready }
-        await whisper.configure(loadDelay: .milliseconds(300))
-        store.select(.whisper)
-        // Whisper's queued load unloads Parakeet first: a dictation or a switch back must not trust it.
-        #expect(store.state(of: .parakeet) == .installed)
-        store.select(.parakeet)
-        #expect(store.state(of: .parakeet).isPreparing, "switching back queues a load instead of doing nothing")
-        var whisperWasReady = false
-        try await waitUntil {
-            if store.state(of: .whisper) == .ready { whisperWasReady = true }
-            return store.state(of: .parakeet) == .ready
-        }
-        #expect(!whisperWasReady, "Whisper finished loading only to be unloaded by Parakeet's queued load")
-        #expect(store.state(of: .whisper) == .installed)
-        #expect(await parakeet.isLoaded)
-        #expect(await !whisper.isLoaded)
-    }
-
     @Test func reinstallReplacesAModelThatWontLoad() async throws {
-        let (store, parakeet, _, _) = makeStore()
+        let (store, parakeet, _) = makeStore()
         await parakeet.configure(loadError: FakeFailure(message: "corrupt weights"))
         store.start()
         try await waitUntil { if case .failed = store.state(of: .parakeet) { true } else { false } }
@@ -1248,7 +1135,7 @@ struct FakeFailure: Error, LocalizedError {
     }
 
     @Test func selectingACloudEngineKeepsTheLocalModelLoaded() async throws {
-        let (store, parakeet, _, settings) = makeStore()
+        let (store, parakeet, settings) = makeStore()
         store.start()
         try await waitUntil { store.state(of: .parakeet) == .ready }
         store.select(.geminiFlash)
@@ -1258,7 +1145,7 @@ struct FakeFailure: Error, LocalizedError {
     }
 
     @Test func deleteUnloadsAndRemoves() async throws {
-        let (store, parakeet, _, _) = makeStore()
+        let (store, parakeet, _) = makeStore()
         store.start()
         try await waitUntil { store.state(of: .parakeet) == .ready }
         await store.delete(.parakeet)
@@ -1268,7 +1155,7 @@ struct FakeFailure: Error, LocalizedError {
     }
 
     @Test func cancellingAWaitingJobThrowsCancellation() async throws {
-        let (store, parakeet, _, _) = makeStore()
+        let (store, parakeet, _) = makeStore()
         await parakeet.configure(loadDelay: .seconds(2))
         await store.refreshFromDisk()
         store.prepare(.parakeet)
@@ -1279,13 +1166,17 @@ struct FakeFailure: Error, LocalizedError {
     }
 
     @Test func previewStoreNeverTouchesEngines() {
-        let store = ModelStore.preview(states: [.parakeet: .ready, .whisper: .downloading(DownloadProgress(fraction: 0.4))])
-        store.start()
-        store.download(.whisper)
-        store.prepare(.parakeet)
-        #expect(store.state(of: .parakeet) == .ready)
-        #expect(store.state(of: .whisper).downloadProgress?.fraction == 0.4)
-        #expect(store.diskUsageBytes == EngineID.parakeet.approxDownloadBytes)
+        let ready = ModelStore.preview(states: [.parakeet: .ready])
+        ready.start()
+        ready.prepare(.parakeet)
+        #expect(ready.state(of: .parakeet) == .ready)
+        #expect(ready.diskUsageBytes == EngineID.parakeet.approxDownloadBytes)
+
+        let downloading = ModelStore.preview(states: [.parakeet: .downloading(DownloadProgress(fraction: 0.4))])
+        downloading.download(.parakeet)
+        downloading.cancelDownload(.parakeet)
+        #expect(downloading.state(of: .parakeet).downloadProgress?.fraction == 0.4)
+        #expect(downloading.diskUsageBytes == 0)
     }
 }
 
@@ -1305,8 +1196,7 @@ struct FakeFailure: Error, LocalizedError {
         let settings = AppSettings.inMemory()
         settings.geminiSystemPrompt = prompt
         let store = ModelStore(paths: .temporary(), settings: settings,
-                               engines: [.parakeet: FakeEngine(.parakeet, installed: true),
-                                         .whisper: FakeEngine(.whisper, installed: false)],
+                               engines: [.parakeet: FakeEngine(.parakeet, installed: true)],
                                gate: InferenceGate(), freeDiskBytes: { 50_000_000_000 })
         let client = StubURLProtocol.client(replies).0
         let keychain = KeychainStore.inMemory(key.map { [KeychainStore.openRouterAccount: $0] } ?? [:])

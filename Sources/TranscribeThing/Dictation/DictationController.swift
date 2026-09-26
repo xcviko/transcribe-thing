@@ -706,8 +706,8 @@ final class DictationController {
         retain(recording)
         if job.delivery == .historyOnly { historyOnlyIDs.insert(job.id) }
         // A downloaded model that isn't loaded yet loads for the retry, so it counts too.
-        let notice = error.notice(recordingID: job.id, fallbackEngine: usableFallback(excluding: job.engine),
-                                  engine: job.engine)
+        let fallback = usableFallback(excluding: job.engine, after: error)
+        let notice = error.notice(recordingID: job.id, fallbackEngine: fallback, engine: job.engine)
         history.upsert(TranscriptEntry(
             id: job.id, createdAt: recording.startedAt, text: "", engine: job.engine, status: .failed,
             audioDuration: recording.duration, voicedSeconds: recording.speech.voicedSeconds,
@@ -863,7 +863,7 @@ final class DictationController {
     private func retry(recordingID: UUID?, engine: EngineID?) {
         guard let id = recordingID else { return }
         if let waiting = queue.first(where: { $0.id == id }) {
-            // Still in the queue ("Use Parakeet instead" while Whisper loads): switch engines in place.
+            // Still in the queue ("Use Parakeet v3 · Cloud Instead" while Parakeet loads): switch engines in place.
             if let engine, engine != waiting.engine, waiting.outcome == nil {
                 waiting.engine = engine
                 run(waiting)
@@ -914,7 +914,8 @@ final class DictationController {
     /// their failures surface as notices. A failed dictation's notice for the same error shares the dedupe key.
     private func modelFailed(_ engine: EngineID, _ error: AppError) {
         if case .modelLoadFailed = error, engine != settings.selectedEngine { return }
-        toasts.post(error.notice(recordingID: nil, fallbackEngine: usableFallback(excluding: engine), engine: engine))
+        toasts.post(error.notice(recordingID: nil, fallbackEngine: usableFallback(excluding: engine, after: error),
+                                 engine: engine))
     }
 
     private func useBuiltInMicrophone() {
@@ -976,8 +977,9 @@ final class DictationController {
                                body: "Choose Allow in the macOS prompt, then try again.",
                                lifetime: .seconds(8)))
         } else {
-            toasts.post(error.notice(recordingID: nil, fallbackEngine: usableFallback(excluding: settings.selectedEngine),
-                                     engine: settings.selectedEngine))
+            let engine = settings.selectedEngine
+            toasts.post(error.notice(recordingID: nil, fallbackEngine: usableFallback(excluding: engine, after: error),
+                                     engine: engine))
         }
         flash(.error)
     }
@@ -989,7 +991,7 @@ final class DictationController {
         case .downloading(let progress) where job.engine.isLocal:
             notice = AppError.modelDownloading(job.engine, progress.fraction).notice(recordingID: nil, fallbackEngine: nil)
         case .preparing where job.engine.isLocal, .installed where job.engine.isLocal:
-            // This model's load holds the inference gate: only an already loaded one would be any faster.
+            // Only an engine that can start right now is any faster than waiting for this load.
             fallback = readyFallback(excluding: job.engine)
             notice = AppError.modelPreparing(job.engine).notice(recordingID: nil, fallbackEngine: nil)
         default:
@@ -1058,24 +1060,34 @@ final class DictationController {
 
     // MARK: - Engines and recordings
 
-    /// Local engines to fall back to from `engine`, the same model first (cloud Whisper → Whisper on this Mac).
-    private static func fallbackCandidates(for engine: EngineID) -> [EngineID] {
-        let local = EngineID.localEngines.filter { $0 != engine }
-        guard let counterpart = engine.localCounterpart, local.contains(counterpart) else { return local }
-        return [counterpart] + local.filter { $0 != counterpart }
+    /// Engines to fall back to from `engine`, in order: the same model on the other side (Parakeet · Cloud ↔
+    /// Parakeet on this Mac), then Parakeet on this Mac, then Parakeet · Cloud (Gemini's fallbacks).
+    static func fallbackCandidates(for engine: EngineID) -> [EngineID] {
+        let ordered = [engine.localCounterpart, engine.cloudCounterpart].compactMap { $0 }
+            + EngineID.localEngines + EngineID.cloudTranscriptionEngines
+        var candidates: [EngineID] = []
+        for candidate in ordered where candidate != engine && !candidates.contains(candidate) {
+            candidates.append(candidate)
+        }
+        return candidates
     }
 
-    /// A loaded local engine other than `engine`, offered as "Retry with …" for a saved recording.
-    /// None while a local model loads: that load holds the inference gate (and unloads the others), so
-    /// another model couldn't start before it finishes.
-    private func readyFallback(excluding engine: EngineID) -> EngineID? {
-        guard !EngineID.localEngines.contains(where: { models.state(of: $0).isPreparing }) else { return nil }
-        return Self.fallbackCandidates(for: engine).first { models.state(of: $0) == .ready }
+    /// An engine other than `engine` that can start at once, offered as "Retry with …" for a saved recording: a
+    /// loaded local model, or a cloud one while the key is valid, unless `error` (the key's, the credit's, the
+    /// connection's) would stop it too.
+    private func readyFallback(excluding engine: EngineID, after error: AppError? = nil) -> EngineID? {
+        Self.fallbackCandidates(for: engine).first { candidate in
+            if candidate.isLocal { return models.state(of: candidate) == .ready }
+            guard case .valid = account.status else { return false }
+            return error?.stopsEveryCloudModel != true
+        }
     }
 
-    /// A downloaded local engine other than `engine`, offered as "Use …" when nothing was recorded.
-    private func usableFallback(excluding engine: EngineID) -> EngineID? {
-        readyFallback(excluding: engine) ?? Self.fallbackCandidates(for: engine).first {
+    /// `readyFallback`, else a downloaded local model that isn't loaded yet (it loads for the retry), also
+    /// offered as "Use …" when nothing was recorded.
+    private func usableFallback(excluding engine: EngineID, after error: AppError? = nil) -> EngineID? {
+        readyFallback(excluding: engine, after: error) ?? Self.fallbackCandidates(for: engine).first {
+            guard $0.isLocal else { return false }
             switch models.state(of: $0) {
             case .installed, .preparing: return true
             default: return false

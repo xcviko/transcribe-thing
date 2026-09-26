@@ -58,7 +58,7 @@ shopt -s nullglob
 for bundle in "$BIN_DIR"/*.bundle; do
   ditto "$bundle" "$CONTENTS/Resources/$(basename "$bundle")"
 done
-# Dynamic frameworks and dylibs (none today: FluidAudio and WhisperKit link statically).
+# Dynamic frameworks and dylibs (none today: FluidAudio links statically).
 for framework in "$BIN_DIR"/PackageFrameworks/*.framework "$BIN_DIR"/*.framework; do
   ditto "$framework" "$CONTENTS/Frameworks/$(basename "$framework")"
 done

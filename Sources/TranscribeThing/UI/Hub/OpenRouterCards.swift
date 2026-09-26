@@ -147,7 +147,7 @@ struct OpenRouterKeyCard: View {
     @ViewBuilder private var statusLine: some View {
         switch account.status {
         case .missing:
-            status("key.slash", .inkTertiary, "No key yet. The four cloud models need one.")
+            status("key.slash", .inkTertiary, "No key yet. The three cloud models need one.")
         case .checking:
             HStack(spacing: 7) {
                 ProgressView().controlSize(.mini)
@@ -239,7 +239,7 @@ struct OpenRouterKeyCard: View {
             .frame(height: 22)
             .background(Color.ink.opacity(0.05), in: Capsule(style: .continuous))
             .fixedSize()
-            .help("Set for best accuracy. Parakeet and Whisper don’t reason.")
+            .help("Set for best accuracy. Parakeet doesn’t reason.")
         }
     }
 
@@ -266,7 +266,7 @@ struct OpenRouterKeyCard: View {
 }
 
 /// Optional system prompt for Gemini. Empty (the default) means the request carries only the audio. Parakeet
-/// and Whisper take no prompt, so the card says it applies to Gemini alone.
+/// takes no prompt, so the card says it applies to Gemini alone.
 struct GeminiInstructionsCard: View {
     @Environment(AppSettings.self) private var settings
     @FocusState private var focused: Bool
@@ -317,7 +317,7 @@ struct GeminiInstructionsCard: View {
                         .strokeBorder(focused ? Color.accentRing : Color.stroke, lineWidth: focused ? 1.5 : 1)
                 }
                 .animation(Theme.Motion.hover, value: focused)
-                Text("When this is empty, \(Brand.name) sends your recording with no text or system message and pastes Gemini’s reply exactly as it comes back. Anything you write here is sent as a system prompt and can change the output. Only Gemini reads it: Parakeet and Whisper transcribe without instructions.")
+                Text("When this is empty, \(Brand.name) sends your recording with no text or system message and pastes Gemini’s reply exactly as it comes back. Anything you write here is sent as a system prompt and can change the output. Only Gemini reads it: Parakeet transcribes without instructions.")
                     .typeface(.callout)
                     .foregroundStyle(.inkSecondary)
                     .fixedSize(horizontal: false, vertical: true)

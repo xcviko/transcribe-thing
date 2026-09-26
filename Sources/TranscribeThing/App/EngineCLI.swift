@@ -2,25 +2,21 @@ import CoreML
 import FluidAudio
 import Foundation
 
-// Never import WhisperKit in this file (FluidAudio's `WordTiming` clashes with it).
-
 /// Headless engine checks, dispatched by TranscribeThingMain before the app starts:
 ///
 ///     transcribe-thing --transcribe <audio file>
-///            --engine parakeet|whisper|parakeetCloud|whisperCloud|geminiFlash|geminiPro
-///            [--download] [--language <iso>] [--prompt <text>] [--repeat <n>]
+///            --engine parakeet|parakeetCloud|geminiFlash|geminiPro
+///            [--download] [--prompt <text>] [--repeat <n>]
 ///     transcribe-thing --model-status
 ///
-/// Hidden diagnostics (not in the usage text): `--whisper-compute ane|gpu|gpu-all` and `--parakeet-compute ane|gpu`
-/// load the local model on other Core ML compute units (see `WhisperEngine.ComputePreset`). Core ML
-/// specializes and caches each model per compute unit, so the first run with a new choice is a cold load, and
-/// it can evict the default Neural Engine build: the next default Whisper load then takes minutes again.
+/// Hidden diagnostic (not in the usage text): `--parakeet-compute ane|gpu` loads the local model on other Core ML
+/// compute units. Core ML specializes and caches the model per compute unit, so the first run with a new choice
+/// is a cold load, and it can evict the default Neural Engine build (the next default load is cold again).
 ///
 /// Uses the real model folder (~/Library/Application Support/transcribe-thing) and the real pipeline
 /// (ModelStore → InferenceGate → engine, or OpenRouterClient). Cloud engines read the key from
-/// OPENROUTER_API_KEY, else from the Keychain; cloud Parakeet and Whisper also print the provider that served
-/// the request. `--language` applies to both Whisper engines, `--prompt` to Gemini only. Settings are
-/// in-memory: the CLI never changes the app's.
+/// OPENROUTER_API_KEY, else from the Keychain; cloud Parakeet also prints the provider that served the request.
+/// `--prompt` applies to Gemini only. Settings are in-memory: the CLI never changes the app's.
 enum EngineCLI {
     static func handles(_ arguments: [String]) -> Bool {
         arguments.contains("--transcribe") || arguments.contains("--model-status")
@@ -74,18 +70,16 @@ enum EngineCLI {
     private struct Options {
         static let usage = """
         usage: transcribe-thing --transcribe <audio file> \
-        --engine parakeet|whisper|parakeetCloud|whisperCloud|geminiFlash|geminiPro \
-        [--download] [--language <iso>] [--prompt <text>] [--repeat <n>]
+        --engine parakeet|parakeetCloud|geminiFlash|geminiPro \
+        [--download] [--prompt <text>] [--repeat <n>]
                transcribe-thing --model-status
         """
 
         var file: URL
         var engine: EngineID
         var download: Bool
-        var language: String?
         var prompt: String?
         var repeatCount: Int
-        var whisperCompute: WhisperEngine.ComputePreset?
         var parakeetCompute: ParakeetCompute?
 
         init?(_ arguments: [String]) {
@@ -100,14 +94,8 @@ enum EngineCLI {
             file = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
             self.engine = engine
             download = arguments.contains("--download")
-            language = value("--language")
             prompt = value("--prompt")
             repeatCount = max(1, min(20, value("--repeat").flatMap(Int.init) ?? 1))
-            if arguments.contains("--whisper-compute") {
-                guard let preset = value("--whisper-compute").flatMap(WhisperEngine.ComputePreset.init(rawValue:))
-                else { return nil }
-                whisperCompute = preset
-            }
             if arguments.contains("--parakeet-compute") {
                 guard let preset = value("--parakeet-compute").flatMap(ParakeetCompute.init(rawValue:)) else { return nil }
                 parakeetCompute = preset
@@ -118,9 +106,7 @@ enum EngineCLI {
             if let id = EngineID(rawValue: name) { return id }
             switch name.lowercased().replacingOccurrences(of: "-", with: "").replacingOccurrences(of: "_", with: "") {
             case "parakeet": return .parakeet
-            case "whisper": return .whisper
             case "parakeetcloud", "cloudparakeet": return .parakeetCloud
-            case "whispercloud", "cloudwhisper": return .whisperCloud
             case "geminiflash", "flash": return .geminiFlash
             case "geminipro", "pro": return .geminiPro
             default: return nil
@@ -146,26 +132,16 @@ enum EngineCLI {
         let audioSeconds = Double(samples.count) / Recording.sampleRate
         print("AUDIO: \(url.lastPathComponent) · \(format(audioSeconds)) s · 16 kHz mono · decoded in \(format(seconds(since: decodeStart))) s")
         print("ENGINE: \(options.engine.displayName) (\(options.engine.rawValue))")
-        switch options.engine {
-        case .whisper:
-            let preset = options.whisperCompute ?? .default
-            print("COMPUTE: \(preset.rawValue) · \(preset.summary)")
-        case .parakeet:
+        if options.engine.isLocal {
             let preset = options.parakeetCompute ?? .ane
             print("COMPUTE: \(preset.rawValue) · \(preset.summary)")
-        default:
-            break
         }
 
         let paths = AppPaths.live()
         let settings = AppSettings.inMemory()
         settings.selectedEngine = options.engine
-        settings.whisperLanguage = options.language
         settings.geminiSystemPrompt = options.prompt ?? ""
         var engines = ModelStore.makeEngines(paths: paths)
-        if let preset = options.whisperCompute {
-            engines[.whisper] = WhisperEngine(baseDir: paths.whisperBase, compute: preset)
-        }
         if options.parakeetCompute == .gpu {
             engines[.parakeet] = ParakeetEncoderOnGPU(modelsRoot: paths.models)
         }
@@ -204,8 +180,8 @@ enum EngineCLI {
                 if provider == nil, let generationID = last.generationID {
                     provider = await service.servedProvider(generationID: generationID)
                 }
-                let preferred = options.engine.preferredProvider.map { " · preferred \($0)" } ?? ""
-                print("PROVIDER: \(provider ?? "unknown")\(preferred)")
+                let expected = options.engine.provider.map { " · expected \($0)" } ?? ""
+                print("PROVIDER: \(provider ?? "unknown")\(expected)")
             }
             print("TEXT: \(last.text)")
             if let best = runTimes.min() { print("TRANSCRIBE: first \(format(runTimes[0], digits: 3)) s · best \(format(best, digits: 3)) s") }
@@ -239,7 +215,7 @@ enum EngineCLI {
         case .notInstalled, .downloading, .preparing, .ready: break
         }
         if store.state(of: id).isPreparing {
-            print("PREPARE: loading \(id.shortName)… (after a download, a macOS update or a Core ML cache eviction, optimizing it for this Mac takes minutes)")
+            print("PREPARE: loading \(id.shortName)… (after a download, a macOS update or a Core ML cache eviction, optimizing it for this Mac takes about 30 s)")
         }
         let loadStarted = ContinuousClock.now
         var lastNote = ContinuousClock.now
@@ -354,7 +330,7 @@ enum EngineCLI {
             self.manager = nil
         }
 
-        func transcribe(_ samples: [Float], options: LocalTranscriptionOptions) async throws -> String {
+        func transcribe(_ samples: [Float]) async throws -> String {
             guard let manager else { throw LocalEngineError.notLoaded }
             var input = samples
             let minimum = ASRConstants.minimumRequiredSamples(forSampleRate: ASRConstants.sampleRate)

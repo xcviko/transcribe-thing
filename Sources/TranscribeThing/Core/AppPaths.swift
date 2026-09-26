@@ -11,8 +11,6 @@ struct AppPaths: Sendable {
 
     /// root/Models (Parakeet lives in Models/parakeet-tdt-0.6b-v3).
     var models: URL { root.appendingPathComponent("Models", isDirectory: true) }
-    /// root/WhisperKit: WhisperKit's downloadBase and tokenizerFolder.
-    var whisperBase: URL { root.appendingPathComponent("WhisperKit", isDirectory: true) }
     /// root/Recordings: WAV files of failed or canceled dictations.
     var recordings: URL { root.appendingPathComponent("Recordings", isDirectory: true) }
     /// root/history.json
@@ -36,7 +34,7 @@ struct AppPaths: Sendable {
 
     func ensureDirectories() throws {
         let fm = FileManager.default
-        for dir in [root, models, whisperBase, recordings] {
+        for dir in [root, models, recordings] {
             try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         }
     }

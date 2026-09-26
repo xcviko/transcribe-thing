@@ -150,7 +150,8 @@ final class MenuBuilder {
         let menu = NSMenu()
         menu.autoenablesItems = false
         for (index, engine) in EngineID.allCases.enumerated() {
-            if index > 0, EngineID.allCases[index - 1].cloudAPI != engine.cloudAPI { menu.addItem(.separator()) }
+            // On this Mac, then through OpenRouter: the grouping the Models page uses.
+            if index > 0, EngineID.allCases[index - 1].isLocal != engine.isLocal { menu.addItem(.separator()) }
             let status = Self.engineStatus(engine, models: env.models, account: env.account)
             let item = MenuActionItem(title: engine.displayName) { [weak env] in
                 env?.models.select(engine)

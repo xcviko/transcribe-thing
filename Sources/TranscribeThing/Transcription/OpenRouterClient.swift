@@ -25,8 +25,8 @@ struct CloudResult: Sendable, Equatable {
     var generationID: String?
 }
 
-/// Transcription through OpenRouter: Gemini over chat completions, Parakeet and Whisper over the speech-to-text
-/// endpoint. Every failure surfaces as `AppError` (or `CancellationError` when the calling task is cancelled).
+/// Transcription through OpenRouter: Gemini over chat completions, Parakeet over the speech-to-text endpoint.
+/// Every failure surfaces as `AppError` (or `CancellationError` when the calling task is cancelled).
 final class OpenRouterClient: Sendable {
     static let referer = "http://localhost/transcribe-thing"
     static let title = "transcribe-thing"
@@ -89,20 +89,17 @@ final class OpenRouterClient: Sendable {
         return result
     }
 
-    /// Parakeet or Whisper over `POST /audio/transcriptions`. `wav` is the whole recording as one WAV file, in
-    /// one request: the providers behind it transcribe many times faster than real time, and a size OpenRouter
-    /// refuses comes back as a 413 (`recordingTooLarge`). `language` is an ISO 639-1 hint, omitted when nil.
-    /// Same retry policy as `transcribe(wav:model:systemPrompt:apiKey:timeout:)`.
-    func transcribeSpeech(wav: Data, model: String, language: String?, apiKey: String,
-                          timeout: TimeInterval) async throws -> CloudResult {
+    /// Parakeet over `POST /audio/transcriptions`. `wav` is the whole recording as one WAV file, in one request:
+    /// the provider behind it transcribes many times faster than real time, and a size OpenRouter refuses comes
+    /// back as a 413 (`recordingTooLarge`). Same retry policy as `transcribe(wav:model:systemPrompt:apiKey:timeout:)`.
+    func transcribeSpeech(wav: Data, model: String, apiKey: String, timeout: TimeInterval) async throws -> CloudResult {
         let engine = Self.engine(forModel: model)
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw AppError.openRouterMissingKey }
 
         let body: Data
         do {
-            body = try OpenRouterSpeechRequest.wav(model: model, audioBase64: wav.base64EncodedString(),
-                                                   language: language).encoded()
+            body = try OpenRouterSpeechRequest.wav(model: model, audioBase64: wav.base64EncodedString()).encoded()
         } catch {
             throw AppError.openRouterBadRequest("Couldn’t build the request.")
         }

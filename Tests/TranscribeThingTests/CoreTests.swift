@@ -181,7 +181,7 @@ import Testing
     static let allErrors: [AppError] = [
         .microphonePermissionDenied, .noMicrophone, .microphoneNotResponding("AVAudioEngine start failed"),
         .microphoneDisconnected, .microphoneSilent, .accessibilityMissing,
-        .modelNotDownloaded(.whisper), .modelDownloading(.whisper, 0.64), .modelPreparing(.whisper),
+        .modelNotDownloaded(.parakeet), .modelDownloading(.parakeet, 0.64), .modelPreparing(.parakeet),
         .modelLoadFailed(.parakeet, "Corrupt weights"), .downloadFailed(.parakeet, "Connection lost"),
         .notEnoughDisk(needed: 2_000_000_000, available: 1_200_000_000),
         .openRouterMissingKey, .openRouterInvalidKey("No auth credentials found"),
@@ -189,13 +189,13 @@ import Testing
         .openRouterRateLimited(retryAfter: nil), .openRouterNoRoute("No endpoints found"),
         .openRouterProviderUnavailable("Provider returned error"), .openRouterRefused("Content blocked by the provider"),
         .openRouterBadRequest("Invalid audio format"), .openRouterServer("Internal server error"),
-        .timeout(.geminiFlash), .timeout(.whisper), .offline, .emptyResult(.geminiPro), .noSpeech,
+        .timeout(.geminiFlash), .timeout(.parakeetCloud), .timeout(.parakeet), .offline, .emptyResult(.geminiPro), .noSpeech,
         .engineFailed(.parakeet, "CoreML error"), .recordingTooLarge,
         .openRouterKeyUnreadable, .openRouterKeyLimit("Key limit exceeded"),
         .openRouterTruncated("So the plan is so the plan is so the plan is"),
     ]
 
-    static let fallbacks: [EngineID?] = [nil, .parakeet, .whisper]
+    static let fallbacks: [EngineID?] = [nil, .parakeet, .parakeetCloud]
 
     @Test(arguments: allErrors)
     func copyIsPoliteAndCompact(_ error: AppError) {
@@ -270,7 +270,7 @@ import Testing
     }
 
     @Test func noRetryWithoutAudioOrForUnusableRecordings() {
-        let noAudio = AppError.engineFailed(.parakeet, "x").notice(recordingID: nil, fallbackEngine: .whisper)
+        let noAudio = AppError.engineFailed(.parakeet, "x").notice(recordingID: nil, fallbackEngine: .parakeetCloud)
         #expect(!noAudio.actions.contains { $0.kind == .retry })
         let silent = AppError.microphoneSilent.notice(recordingID: UUID(), fallbackEngine: .parakeet)
         #expect(!silent.actions.contains { if case .retryWith = $0.kind { true } else { false } })
@@ -278,15 +278,26 @@ import Testing
     }
 
     @Test func missingModelOffersDownloadThenSwitch() {
-        let withFallback = AppError.modelNotDownloaded(.whisper).notice(recordingID: nil, fallbackEngine: .parakeet)
-        #expect(withFallback.actions.map(\.title) == ["Download", "Use Parakeet v3"])
-        let alone = AppError.modelNotDownloaded(.whisper).notice(recordingID: nil, fallbackEngine: nil)
-        #expect(alone.actions.map(\.kind) == [.download(.whisper), .openHub(.models)])
-        #expect(alone.body == "Download it (about 630 MB) or pick another model.")
+        let withFallback = AppError.modelNotDownloaded(.parakeet).notice(recordingID: nil, fallbackEngine: .parakeetCloud)
+        #expect(withFallback.actions.map(\.title) == ["Download", "Use Parakeet v3 · Cloud"])
+        let alone = AppError.modelNotDownloaded(.parakeet).notice(recordingID: nil, fallbackEngine: nil)
+        #expect(alone.actions.map(\.kind) == [.download(.parakeet), .openHub(.models)])
+        #expect(alone.body == "Download it (about 632 MB) or pick another model.")
+    }
+
+    @Test func onlyTheLocalModelHelpsWhenTheKeyOrConnectionFails() {
+        for error in [AppError.openRouterMissingKey, .openRouterKeyUnreadable, .openRouterInvalidKey("401"),
+                      .openRouterNoCredits(""), .openRouterKeyLimit(""), .offline] {
+            #expect(error.stopsEveryCloudModel, "\(error.code)")
+        }
+        for error in [AppError.openRouterRateLimited(retryAfter: nil), .openRouterNoRoute(""), .timeout(.geminiPro),
+                      .openRouterProviderUnavailable(""), .recordingTooLarge, .modelNotDownloaded(.parakeet)] {
+            #expect(!error.stopsEveryCloudModel, "\(error.code)")
+        }
     }
 
     @Test func micDisconnectKeepsTheAudioAndPointsAtTheMic() {
-        let notice = AppError.microphoneDisconnected.notice(recordingID: UUID(), fallbackEngine: .whisper)
+        let notice = AppError.microphoneDisconnected.notice(recordingID: UUID(), fallbackEngine: .parakeetCloud)
         #expect(notice.actions.map(\.title) == ["Transcribe It", "Choose Mic"])
     }
 
@@ -387,7 +398,6 @@ import Testing
         var bindings = ShortcutBindings.defaults
         bindings[.pushToTalk] = .rightOption
         settings.shortcuts = bindings
-        settings.whisperLanguage = "ru"
 
         let reloaded = AppSettings(defaults: defaults)
         #expect(reloaded.selectedEngine == .geminiPro)
@@ -396,16 +406,29 @@ import Testing
         #expect(reloaded.soundVolume == 0.25)
         #expect(reloaded.maxRecordingMinutes == 10)
         #expect(reloaded.shortcuts[.pushToTalk] == .rightOption)
-        #expect(reloaded.whisperLanguage == "ru")
 
         settings.microphoneUID = nil
         #expect(AppSettings(defaults: defaults).microphoneUID == nil)
     }
 
+    @Test(arguments: ["whisper", "whisperCloud", "someFutureEngine"])
+    func aSelectedEngineThisBuildDoesntOfferFallsBackToTheDefault(_ raw: String) throws {
+        let suite = NSTemporaryDirectory() + "transcribe-thing-tests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(atPath: suite + ".plist")
+        }
+        defaults.set(raw, forKey: SettingsKey.selectedEngine.defaultsKey)
+        #expect(AppSettings(defaults: defaults).selectedEngine == .default)
+        defaults.set(EngineID.geminiFlash.rawValue, forKey: SettingsKey.selectedEngine.defaultsKey)
+        #expect(AppSettings(defaults: defaults).selectedEngine == .geminiFlash)
+    }
+
     @Test func inMemorySettingsAreIndependent() {
         let a = AppSettings.inMemory()
         let b = AppSettings.inMemory()
-        a.selectedEngine = .whisper
+        a.selectedEngine = .geminiPro
         #expect(b.selectedEngine == .parakeet)
     }
 
@@ -429,7 +452,7 @@ import Testing
 
     @Test func engineFacts() {
         #expect(EngineID.default == .parakeet)
-        #expect(EngineID.localEngines == [.parakeet, .whisper])
+        #expect(EngineID.localEngines == [.parakeet])
         #expect(EngineID.geminiPro.openRouterModelID == "google/gemini-3.1-pro-preview")
         #expect(EngineID.parakeet.approxDownloadBytes == 632_321_326)
         #expect(EngineID.geminiFlash.approxDownloadBytes == nil)

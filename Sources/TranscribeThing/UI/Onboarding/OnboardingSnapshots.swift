@@ -21,7 +21,7 @@ enum OnboardingSnapshots {
             entry("onboarding-2-permissions-granted") { model in model.stage(step: .permissions) },
 
             entry("onboarding-3-model", context: { ctx in
-                ctx.models = .preview(states: [.parakeet: .notInstalled, .whisper: .notInstalled])
+                ctx.models = .preview(states: [.parakeet: .notInstalled])
                 ctx.account = .preview(status: .missing)
             }) { model in model.stage(step: .model) },
             entry("onboarding-3-model-downloading", context: { ctx in
@@ -29,43 +29,44 @@ enum OnboardingSnapshots {
                     .parakeet: .downloading(DownloadProgress(fraction: 0.335, bytesReceived: 212_000_000,
                                                              totalBytes: 632_321_326, bytesPerSecond: 14_000_000,
                                                              secondsRemaining: 30)),
-                    .whisper: .notInstalled,
                 ])
                 ctx.account = .preview(status: .missing)
             }) { model in model.stage(step: .model) },
+            entry("onboarding-3-model-ready", context: { ctx in
+                ctx.models = .preview(states: [.parakeet: .ready])
+                ctx.account = .preview(status: .missing)
+            }) { model in model.stage(step: .model) },
             entry("onboarding-3-model-optimizing", context: { ctx in
-                ctx.models = .preview(states: [.parakeet: .ready, .whisper: .preparing(since: Date().addingTimeInterval(-34))])
-                ctx.settings.selectedEngine = .whisper
+                ctx.models = .preview(states: [.parakeet: .preparing(since: Date().addingTimeInterval(-24))])
                 ctx.account = .preview(status: .missing)
             }) { model in model.stage(step: .model) },
             entry("onboarding-3-model-load-failed", context: { ctx in
-                ctx.models = .preview(states: [.parakeet: .failed("Couldn’t load the model. Retry, or download it again."),
-                                               .whisper: .notInstalled],
+                ctx.models = .preview(states: [.parakeet: .failed("Couldn’t load the model. Retry, or download it again.")],
                                       lastErrors: [.parakeet: .modelLoadFailed(.parakeet, "Corrupt weights")])
                 ctx.account = .preview(status: .missing)
             }) { model in model.stage(step: .model) },
             entry("onboarding-3-model-disk", context: { ctx in
-                ctx.models = .preview(states: [.parakeet: .notInstalled, .whisper: .ready])
+                ctx.models = .preview(states: [.parakeet: .notInstalled])
                 ctx.account = .preview(status: .missing)
             }) { model in
                 model.stage(step: .model)
                 model.stageDisk(free: 412_000_000)
             },
             entry("onboarding-3-model-cloud-valid", context: { ctx in
-                ctx.models = .preview(states: [.parakeet: .ready, .whisper: .notInstalled])
+                ctx.models = .preview(states: [.parakeet: .ready])
                 ctx.settings.selectedEngine = .geminiFlash
             }) { model in model.stage(step: .model) },
             entry("onboarding-3-model-cloud-stt", context: { ctx in
-                ctx.models = .preview(states: [.parakeet: .ready, .whisper: .notInstalled])
-                ctx.settings.selectedEngine = .whisperCloud
+                ctx.models = .preview(states: [.parakeet: .ready])
+                ctx.settings.selectedEngine = .parakeetCloud
             }) { model in model.stage(step: .model) },
             entry("onboarding-3-model-cloud-stt-missing", context: { ctx in
-                ctx.models = .preview(states: [.parakeet: .notInstalled, .whisper: .notInstalled])
+                ctx.models = .preview(states: [.parakeet: .notInstalled])
                 ctx.settings.selectedEngine = .parakeetCloud
                 ctx.account = .preview(status: .missing)
             }) { model in model.stage(step: .model) },
             entry("onboarding-3-model-cloud-invalid", context: { ctx in
-                ctx.models = .preview(states: [.parakeet: .notInstalled, .whisper: .notInstalled])
+                ctx.models = .preview(states: [.parakeet: .notInstalled])
                 ctx.settings.selectedEngine = .geminiPro
                 ctx.account = .preview(status: .invalid("401"))
             }) { model in
@@ -99,13 +100,12 @@ enum OnboardingSnapshots {
                 ctx.models = .preview(states: [
                     .parakeet: .downloading(DownloadProgress(fraction: 0.62, bytesReceived: 392_000_000,
                                                              totalBytes: 632_321_326, secondsRemaining: 18)),
-                    .whisper: .notInstalled,
                 ])
             }) { model in model.stage(step: .tryIt) },
 
             entry("onboarding-6-done", still: 0.42) { model in model.stage(step: .done) },
             entry("onboarding-6-done-cloud", still: 0.42, context: { ctx in
-                ctx.settings.selectedEngine = .whisperCloud
+                ctx.settings.selectedEngine = .parakeetCloud
             }) { model in model.stage(step: .done) },
         ]
     }

@@ -3,8 +3,8 @@ import Foundation
 import Testing
 @testable import TranscribeThing
 
-// Parakeet and Whisper through OpenRouter's speech-to-text endpoint: engine metadata, wire format, one request
-// per recording, provider lookup, history and notices.
+// Parakeet through OpenRouter's speech-to-text endpoint: engine metadata, wire format, one request per recording,
+// provider lookup, history and notices.
 
 private let rate = 16_000
 
@@ -86,18 +86,17 @@ private func speechReply(_ text: String, cost: Double? = nil, generation: String
 
 private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
     let name = provider.map { "\"\($0)\"" } ?? "null"
-    return StubURLProtocol.Reply(body: #"{"data":{"id":"gen-1","api_type":"stt","model":"openai/whisper-large-v3-turbo","provider_name":\#(name),"total_cost":0.0001,"created_at":"2026-09-27T10:00:00Z"}}"#)
+    return StubURLProtocol.Reply(body: #"{"data":{"id":"gen-1","api_type":"stt","model":"nvidia/parakeet-tdt-0.6b-v3","provider_name":\#(name),"total_cost":0.0001,"created_at":"2026-09-27T10:00:00Z"}}"#)
 }
 
 // MARK: - Engine metadata
 
 @Suite struct CloudEngineFactsTests {
     @Test func rawValuesAreStableAndOrderIsLocalThenCloudSpeechThenGemini() {
-        #expect(EngineID.allCases.map(\.rawValue)
-            == ["parakeet", "whisper", "parakeetCloud", "whisperCloud", "geminiFlash", "geminiPro"])
-        #expect(EngineID.localEngines == [.parakeet, .whisper])
-        #expect(EngineID.cloudEngines == [.parakeetCloud, .whisperCloud, .geminiFlash, .geminiPro])
-        #expect(EngineID.cloudTranscriptionEngines == [.parakeetCloud, .whisperCloud])
+        #expect(EngineID.allCases.map(\.rawValue) == ["parakeet", "parakeetCloud", "geminiFlash", "geminiPro"])
+        #expect(EngineID.localEngines == [.parakeet])
+        #expect(EngineID.cloudEngines == [.parakeetCloud, .geminiFlash, .geminiPro])
+        #expect(EngineID.cloudTranscriptionEngines == [.parakeetCloud])
         #expect(EngineID.cloudChatEngines == [.geminiFlash, .geminiPro])
     }
 
@@ -105,18 +104,14 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         #expect(Set(EngineID.allCases.map(\.displayName)).count == EngineID.allCases.count)
         #expect(Set(EngineID.allCases.map(\.shortName)).count == EngineID.allCases.count)
         #expect(EngineID.parakeetCloud.shortName == "Parakeet v3 · Cloud")
-        #expect(EngineID.whisperCloud.shortName == "Whisper Turbo · Cloud")
         #expect(EngineID.parakeetCloud.modelName == EngineID.parakeet.displayName)
-        #expect(EngineID.whisperCloud.modelName == EngineID.whisper.displayName)
     }
 
     @Test func cloudSpeechFacts() {
         #expect(EngineID.parakeetCloud.openRouterModelID == "nvidia/parakeet-tdt-0.6b-v3")
-        #expect(EngineID.whisperCloud.openRouterModelID == "openai/whisper-large-v3-turbo")
-        #expect(EngineID.parakeetCloud.preferredProvider == "Together")
-        #expect(EngineID.whisperCloud.preferredProvider == "Groq")
-        #expect(EngineID.parakeetCloud.providerRoutingNote == nil)
-        #expect(EngineID.whisperCloud.providerRoutingNote?.contains("Groq or DeepInfra") == true)
+        #expect(EngineID.parakeetCloud.provider == "Together")
+        #expect(EngineID.geminiFlash.provider == "Google AI Studio" && EngineID.geminiPro.provider == "Google AI Studio")
+        #expect(EngineID.parakeet.provider == nil)
         for engine in EngineID.cloudTranscriptionEngines {
             #expect(engine.isCloud && !engine.isLocal)
             #expect(engine.cloudAPI == .transcriptions)
@@ -126,7 +121,6 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
             #expect(engine.localCounterpart?.cloudCounterpart == engine)
             #expect(OpenRouterClient.engine(forModel: engine.openRouterModelID!) == engine)
         }
-        #expect(EngineID.whisperCloud.acceptsLanguageHint && !EngineID.parakeetCloud.acceptsLanguageHint)
         #expect(EngineID.geminiFlash.cloudAPI == .chatCompletions)
         #expect(EngineID.parakeet.cloudAPI == nil)
     }
@@ -148,7 +142,6 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
 
     @Test func slowNoticeThresholdIsOnePerEngineKind() {
         #expect(DictationController.slowNoticeDelay(for: .parakeet) == 3)
-        #expect(DictationController.slowNoticeDelay(for: .whisperCloud) == 10)
         #expect(DictationController.slowNoticeDelay(for: .parakeetCloud) == 10)
         #expect(DictationController.slowNoticeDelay(for: .geminiFlash) == 12)
     }
@@ -163,35 +156,27 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
 // MARK: - Request and response
 
 @Suite struct OpenRouterSpeechWireTests {
-    @Test func requestCarriesModelAudioAndLanguageOnly() throws {
-        let body = try json(OpenRouterSpeechRequest.wav(model: "openai/whisper-large-v3-turbo",
-                                                        audioBase64: "UklG+/==", language: " DE ").encoded())
-        #expect(Set(body.keys) == ["model", "input_audio", "language"], "no provider routing, temperature or format")
-        #expect(body["model"] as? String == "openai/whisper-large-v3-turbo")
-        #expect(body["language"] as? String == "de")
+    @Test func requestCarriesModelAndAudioOnly() throws {
+        let body = try json(OpenRouterSpeechRequest.wav(model: "nvidia/parakeet-tdt-0.6b-v3",
+                                                        audioBase64: "UklG+/==").encoded())
+        #expect(Set(body.keys) == ["model", "input_audio"], "no language, provider routing, temperature or format")
+        #expect(body["model"] as? String == "nvidia/parakeet-tdt-0.6b-v3")
         let audio = try #require(body["input_audio"] as? [String: Any])
         #expect(audio["data"] as? String == "UklG+/==")
         #expect(audio["format"] as? String == "wav")
         #expect(audio.count == 2)
     }
 
-    @Test(arguments: [nil, "", "  \n"] as [String?])
-    func blankLanguageIsOmitted(_ language: String?) throws {
-        let body = try json(OpenRouterSpeechRequest.wav(model: "nvidia/parakeet-tdt-0.6b-v3", audioBase64: "AA==",
-                                                        language: language).encoded())
-        #expect(Set(body.keys) == ["model", "input_audio"])
-    }
-
     @Test func base64SlashesAreNotEscaped() throws {
-        let raw = String(decoding: try OpenRouterSpeechRequest.wav(model: "openai/whisper-large-v3-turbo",
-                                                                   audioBase64: "ab/cd+/ef==", language: nil).encoded(),
+        let raw = String(decoding: try OpenRouterSpeechRequest.wav(model: "nvidia/parakeet-tdt-0.6b-v3",
+                                                                   audioBase64: "ab/cd+/ef==").encoded(),
                          as: UTF8.self)
-        #expect(raw.contains("ab/cd+/ef==") && raw.contains("openai/whisper-large-v3-turbo") && !raw.contains("\\/"))
+        #expect(raw.contains("ab/cd+/ef==") && raw.contains("nvidia/parakeet-tdt-0.6b-v3") && !raw.contains("\\/"))
     }
 
     @Test func successDecodesTextAndCost() throws {
         let data = Data(#"{"text":"  Hello, world. ","usage":{"seconds":9.2,"total_tokens":113,"cost":0.000508}}"#.utf8)
-        let result = try OpenRouterErrorMapper.speechSuccess(data: data, engine: .whisperCloud)
+        let result = try OpenRouterErrorMapper.speechSuccess(data: data, engine: .parakeetCloud)
         #expect(result == CloudResult(text: "Hello, world.", costUSD: 0.000508))
     }
 
@@ -203,25 +188,25 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
     @Test func failuresInsideA200() {
         #expect(throws: AppError.openRouterProviderUnavailable("Upstream error")) {
             try OpenRouterErrorMapper.speechSuccess(data: Data(#"{"error":{"code":502,"message":"Upstream error"}}"#.utf8),
-                                                    engine: .whisperCloud)
+                                                    engine: .parakeetCloud)
         }
         #expect(throws: AppError.openRouterServer("OpenRouter sent no transcript.")) {
-            try OpenRouterErrorMapper.speechSuccess(data: Data(#"{"usage":{"cost":0}}"#.utf8), engine: .whisperCloud)
+            try OpenRouterErrorMapper.speechSuccess(data: Data(#"{"usage":{"cost":0}}"#.utf8), engine: .parakeetCloud)
         }
         #expect(throws: AppError.openRouterServer("OpenRouter sent a response \(Brand.name) couldn’t read.")) {
-            try OpenRouterErrorMapper.speechSuccess(data: Data("<html>".utf8), engine: .whisperCloud)
+            try OpenRouterErrorMapper.speechSuccess(data: Data("<html>".utf8), engine: .parakeetCloud)
         }
     }
 
-    @Test func noRouteHintNamesTheSpeechProviders() {
+    @Test func noRouteHintNamesTheSpeechProvider() {
         let error = OpenRouterErrorMapper.httpError(
-            status: 404, data: Data(#"{"error":{"code":404,"message":"No endpoints found for openai/whisper-large-v3-turbo."}}"#.utf8),
-            retryAfter: nil, engine: .whisperCloud)
+            status: 404, data: Data(#"{"error":{"code":404,"message":"No endpoints found for nvidia/parakeet-tdt-0.6b-v3."}}"#.utf8),
+            retryAfter: nil, engine: .parakeetCloud)
         guard case .openRouterNoRoute(let message) = error else {
             Issue.record("expected no route, got \(error)")
             return
         }
-        #expect(message.contains("Groq or DeepInfra"))
+        #expect(message.contains("Parakeet v3") && message.contains("let Together through"))
         #expect(!message.contains("Google"))
         #expect(OpenRouterErrorMapper.noRouteHint(for: .geminiFlash) == OpenRouterErrorMapper.noRouteHint)
     }
@@ -232,14 +217,13 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
 @Suite struct OpenRouterSpeechClientTests {
     private let wav = WAVEncoder.pcm16(tone(1))
 
-    private func call(_ client: OpenRouterClient, model: String = "openai/whisper-large-v3-turbo",
-                      language: String? = nil) async throws -> CloudResult {
-        try await client.transcribeSpeech(wav: wav, model: model, language: language, apiKey: "sk-or-v1-test", timeout: 180)
+    private func call(_ client: OpenRouterClient, model: String = "nvidia/parakeet-tdt-0.6b-v3") async throws -> CloudResult {
+        try await client.transcribeSpeech(wav: wav, model: model, apiKey: "sk-or-v1-test", timeout: 180)
     }
 
     @Test func postsToTheTranscriptionEndpoint() async throws {
         let (client, host) = StubURLProtocol.client([speechReply(" Hallo. ", cost: 0.0001, generation: "gen-abc")])
-        let result = try await call(client, language: "de")
+        let result = try await call(client)
         #expect(result.text == "Hallo.")
         #expect(result.costUSD == 0.0001)
         #expect(result.generationID == "gen-abc")
@@ -253,14 +237,13 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         #expect(request.value(forHTTPHeaderField: "Content-Type") == "application/json")
         #expect(request.value(forHTTPHeaderField: "X-OpenRouter-Title") == "transcribe-thing")
         let body = try json(try #require(StubURLProtocol.registry.bodies(for: host).first))
-        #expect(Set(body.keys) == ["model", "input_audio", "language"])
-        #expect(body["language"] as? String == "de")
+        #expect(Set(body.keys) == ["model", "input_audio"])
         #expect(wavSampleCount(inRequestBody: StubURLProtocol.registry.bodies(for: host)[0]) == rate)
     }
 
     @Test func providerHeaderIsTakenWhenPresent() async throws {
-        let (client, _) = StubURLProtocol.client([speechReply("Hi.", generation: "gen-1", provider: "Groq")])
-        #expect(try await call(client).provider == "Groq")
+        let (client, _) = StubURLProtocol.client([speechReply("Hi.", generation: "gen-1", provider: "Together")])
+        #expect(try await call(client).provider == "Together")
     }
 
     @Test func invalidKeyMapsAndIsNotRetried() async throws {
@@ -290,8 +273,8 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
             (.init(status: 413, body: #"{"error":{"code":413,"message":"Request payload too large"}}"#),
              .recordingTooLarge),
             (.init(status: 524, body: #"{"error":{"code":524,"message":"Request timed out."}}"#),
-             .timeout(.whisperCloud)),
-            (.init(error: .timedOut), .timeout(.whisperCloud)),
+             .timeout(.parakeetCloud)),
+            (.init(error: .timedOut), .timeout(.parakeetCloud)),
             (.init(error: .notConnectedToInternet), .offline),
         ]
         for (reply, expected) in cases {
@@ -304,7 +287,7 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
     @Test func liveInvalidKeyShapeMapsToInvalidKey() {
         // Body OpenRouter returned on 2026-09-27 for `Authorization: Bearer sk-or-v1-invalid` on this endpoint.
         let error = OpenRouterErrorMapper.httpError(status: 401, data: Data(#"{"error":{"message":"User not found.","code":401}}"#.utf8),
-                                                    retryAfter: nil, engine: .whisperCloud)
+                                                    retryAfter: nil, engine: .parakeetCloud)
         #expect(error == .openRouterInvalidKey("User not found."))
     }
 }
@@ -313,8 +296,8 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
 
 @Suite struct OpenRouterGenerationTests {
     @Test func decodesTheProviderName() async throws {
-        let (client, host) = StubURLProtocol.client([generationReply("Groq")])
-        #expect(try await client.generationProvider(id: "gen-1 2", apiKey: "sk-or-v1-test") == "Groq")
+        let (client, host) = StubURLProtocol.client([generationReply("Together")])
+        #expect(try await client.generationProvider(id: "gen-1 2", apiKey: "sk-or-v1-test") == "Together")
         let request = try #require(StubURLProtocol.registry.requests(for: host).first)
         #expect(request.httpMethod == "GET")
         #expect(request.url?.path == "/api/v1/generation")
@@ -342,10 +325,9 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
 
 @MainActor
 @Suite struct CloudSpeechServiceTests {
-    private func makeService(_ replies: [StubURLProtocol.Reply], language: String? = nil, key: String? = "sk-or-v1-test")
+    private func makeService(_ replies: [StubURLProtocol.Reply], key: String? = "sk-or-v1-test")
         -> (TranscriptionService, String, OpenRouterAccount) {
         let settings = AppSettings.inMemory()
-        settings.whisperLanguage = language
         settings.geminiSystemPrompt = "Never sent to speech models."
         let store = ModelStore.preview(states: [.parakeet: .ready])
         let (client, host) = StubURLProtocol.client(replies)
@@ -361,11 +343,10 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
     @Test func aTenMinuteRecordingIsOneRequest() async throws {
         // 19.2 MB of WAV, more than Gemini's inline limit: the speech endpoint takes it whole, no local cap.
         let audio = await offMain { babble(600) }
-        let (service, host, _) = makeService([speechReply("The whole talk.", cost: 0.004, generation: "gen-1")],
-                                             language: "de")
-        let result = try await service.transcribe(Recording(samples: audio), engine: .whisperCloud)
+        let (service, host, _) = makeService([speechReply("The whole talk.", cost: 0.004, generation: "gen-1")])
+        let result = try await service.transcribe(Recording(samples: audio), engine: .parakeetCloud)
         #expect(result.text == "The whole talk.")
-        #expect(result.engine == .whisperCloud)
+        #expect(result.engine == .parakeetCloud)
         #expect(result.costUSD == 0.004)
         #expect(result.generationID == "gen-1")
         #expect(result.provider == nil)
@@ -380,19 +361,17 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         let bodies = StubURLProtocol.registry.bodies(for: host)
         #expect(bodies.count == 1)
         let body = try #require(bodies.first)
-        let fields = await offMain { () -> (model: String?, language: String?, keys: Set<String>, samples: Int?) in
+        let fields = await offMain { () -> (model: String?, keys: Set<String>, samples: Int?) in
             let object = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
-            return (object["model"] as? String, object["language"] as? String, Set(object.keys),
-                    wavSampleCount(inRequestBody: body))
+            return (object["model"] as? String, Set(object.keys), wavSampleCount(inRequestBody: body))
         }
-        #expect(fields.model == "openai/whisper-large-v3-turbo")
-        #expect(fields.language == "de")
-        #expect(fields.keys == ["model", "input_audio", "language"], "no provider routing")
+        #expect(fields.model == "nvidia/parakeet-tdt-0.6b-v3")
+        #expect(fields.keys == ["model", "input_audio"], "no language, no provider routing")
         #expect(fields.samples == audio.count)
     }
 
-    @Test func parakeetSendsNoLanguage() async throws {
-        let (service, host, _) = makeService([speechReply("Dzień dobry.", provider: "Together")], language: "pl")
+    @Test func parakeetSendsNoLanguageOrPrompt() async throws {
+        let (service, host, _) = makeService([speechReply("Dzień dobry.", provider: "Together")])
         let result = try await service.transcribe(speech(3), engine: .parakeetCloud)
         #expect(result.text == "Dzień dobry.")
         #expect(result.provider == "Together")
@@ -406,7 +385,7 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
             .init(status: 402, body: #"{"error":{"code":402,"message":"Insufficient credits"}}"#), speechReply("never"),
         ])
         await #expect(throws: AppError.openRouterNoCredits("Insufficient credits")) {
-            try await service.transcribe(speech(3), engine: .whisperCloud)
+            try await service.transcribe(speech(3), engine: .parakeetCloud)
         }
         #expect(StubURLProtocol.registry.requests(for: host).count == 1)
         #expect(account.status == .noCredit(nil))
@@ -435,19 +414,12 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         #expect(StubURLProtocol.registry.requests(for: host).count == 1)
     }
 
-    @Test func whisperStockPhrasesOnNearSilenceAreDropped() async throws {
+    @Test func textOnANearlySilentRecordingIsKept() async throws {
+        // Parakeet doesn't make up subtitle credits on silence, so nothing it returns is filtered out.
         let faint = babble(0.3) + roomNoise(3)
-        let (whisper, _, _) = makeService([speechReply("Thanks for watching!")])
-        // Dropped like local Whisper's: no text, with a trace of voice, reads as an empty result.
-        await #expect(throws: AppError.emptyResult(.whisperCloud)) {
-            try await whisper.transcribe(Recording(samples: faint), engine: .whisperCloud)
-        }
-        let (parakeet, _, _) = makeService([speechReply("Thanks for watching!")])
-        #expect(try await parakeet.transcribe(Recording(samples: faint), engine: .parakeetCloud).text
+        let (service, _, _) = makeService([speechReply("Thanks for watching!")])
+        #expect(try await service.transcribe(Recording(samples: faint), engine: .parakeetCloud).text
             == "Thanks for watching!")
-        let (spoken, _, _) = makeService([speechReply("Thanks for watching!")])
-        #expect(try await spoken.transcribe(speech(3), engine: .whisperCloud).text == "Thanks for watching!",
-                "with plenty of voice it was said")
     }
 
     @Test func noTextOnSpeechIsEmptyResultAndOnSilenceNoSpeech() async throws {
@@ -463,15 +435,15 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
     @Test func missingKeyStopsBeforeTheNetwork() async throws {
         let (service, host, _) = makeService([speechReply("never")], key: nil)
         await #expect(throws: AppError.openRouterMissingKey) {
-            try await service.transcribe(speech(1), engine: .whisperCloud)
+            try await service.transcribe(speech(1), engine: .parakeetCloud)
         }
         #expect(StubURLProtocol.registry.requests(for: host).isEmpty)
     }
 
     @Test func servedProviderToleratesALateGenerationRecord() async throws {
         let (service, host, _) = makeService([.init(status: 404, body: #"{"error":{"code":404,"message":"Not found"}}"#),
-                                              generationReply("Groq")])
-        #expect(await service.servedProvider(generationID: "gen-1") == "Groq")
+                                              generationReply("Together")])
+        #expect(await service.servedProvider(generationID: "gen-1") == "Together")
         #expect(StubURLProtocol.registry.requests(for: host).count == 2)
     }
 
@@ -481,18 +453,18 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         #expect(await service.servedProvider(generationID: "gen-1") == nil)
         #expect(StubURLProtocol.registry.requests(for: host).count == 2)
 
-        let (failing, failingHost, _) = makeService([.init(status: 500, body: "oops"), generationReply("Groq")])
+        let (failing, failingHost, _) = makeService([.init(status: 500, body: "oops"), generationReply("Together")])
         #expect(await failing.servedProvider(generationID: "gen-1") == nil)
         #expect(StubURLProtocol.registry.requests(for: failingHost).count == 1, "only a 404 is worth asking again")
 
-        let (keyless, keylessHost, _) = makeService([generationReply("Groq")], key: nil)
+        let (keyless, keylessHost, _) = makeService([generationReply("Together")], key: nil)
         #expect(await keyless.servedProvider(generationID: "gen-1") == nil)
         #expect(StubURLProtocol.registry.requests(for: keylessHost).isEmpty)
     }
 
     @Test func servedProviderIsOneLookupForTheOneGeneration() async throws {
-        let (service, host, _) = makeService([generationReply("Groq"), generationReply("DeepInfra")])
-        #expect(await service.servedProvider(generationID: "gen-1") == "Groq")
+        let (service, host, _) = makeService([generationReply("Together"), generationReply("Someone Else")])
+        #expect(await service.servedProvider(generationID: "gen-1") == "Together")
         let requests = StubURLProtocol.registry.requests(for: host)
         #expect(requests.count == 1)
         let url = try #require(requests.first?.url)
@@ -522,17 +494,60 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         let entry = try #require(store.entries.first)
         #expect(entry.text == "Hello" && entry.engine == .geminiFlash && entry.provider == nil)
 
-        store.upsert(TranscriptEntry(text: "Cześć", engine: .whisperCloud, audioDuration: 2, voicedSeconds: 1.5,
-                                     processingTime: 0.8, costUSD: 0.00002, provider: "Groq"))
+        store.upsert(TranscriptEntry(text: "Cześć", engine: .parakeetCloud, audioDuration: 2, voicedSeconds: 1.5,
+                                     processingTime: 0.8, costUSD: 0.00005, provider: "Together"))
         store.flush()
         let raw = String(decoding: try Data(contentsOf: paths.historyFile), as: UTF8.self)
-        #expect(raw.contains(#""provider":"Groq""#) && raw.contains(#""engine":"whisperCloud""#))
+        #expect(raw.contains(#""provider":"Together""#) && raw.contains(#""engine":"parakeetCloud""#))
         #expect(raw.components(separatedBy: #""provider""#).count == 2, "absent, not null, when unknown")
 
         let reloaded = HistoryStore(paths: paths, settings: settings)
         reloaded.load()
         try await waitUntil { reloaded.isLoaded }
-        #expect(reloaded.entries.map(\.provider) == ["Groq", nil])
+        #expect(reloaded.entries.map(\.provider) == ["Together", nil])
+    }
+
+    @Test func historyFromBeforeWhisperWasRemovedKeepsEveryEntry() async throws {
+        let paths = AppPaths.temporary()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        try FileManager.default.createDirectory(at: paths.root, withIntermediateDirectories: true)
+        // Written by a build that still offered Whisper on this Mac and through OpenRouter, plus one entry from
+        // an engine no build of this one knows.
+        let old = #"""
+        {"version":1,"entries":[
+        {"audioDuration":6,"createdAt":"2026-09-26T10:04:00.000Z","engine":"whisperCloud",
+         "id":"11111111-1111-1111-1111-111111111111","processingTime":1.1,"status":"success","text":"Cloud text",
+         "voicedSeconds":5,"costUSD":0.00016,"provider":"Groq"},
+        {"audioDuration":5,"createdAt":"2026-09-26T10:03:00.000Z","engine":"whisper",
+         "id":"22222222-2222-2222-2222-222222222222","processingTime":0.9,"status":"success","text":"Local text",
+         "voicedSeconds":4},
+        {"audioDuration":7,"createdAt":"2026-09-26T10:02:00.000Z","engine":"whisper","errorMessage":"Couldn’t transcribe",
+         "id":"33333333-3333-3333-3333-333333333333","status":"failed","text":"","voicedSeconds":6},
+        {"audioDuration":3,"createdAt":"2026-09-26T10:01:00.000Z","engine":"someFutureEngine",
+         "id":"44444444-4444-4444-4444-444444444444","status":"success","text":"From the future","voicedSeconds":2},
+        {"audioDuration":4,"createdAt":"2026-09-26T10:00:00.000Z","engine":"geminiFlash",
+         "id":"55555555-5555-5555-5555-555555555555","status":"success","text":"Gemini text","voicedSeconds":3}
+        ]}
+        """#
+        try Data(old.utf8).write(to: paths.historyFile)
+        let settings = AppSettings.inMemory()
+        let store = HistoryStore(paths: paths, settings: settings)
+        store.load()
+        try await waitUntil { store.isLoaded }
+
+        // Each removed engine reads as Parakeet v3 on the same side; the rest of the entry is untouched.
+        #expect(store.entries.map(\.engine) == [.parakeetCloud, .parakeet, .parakeet, .geminiFlash])
+        #expect(store.entries.map(\.text) == ["Cloud text", "Local text", "", "Gemini text"])
+        let cloud = try #require(store.entries.first)
+        #expect(cloud.provider == "Groq" && cloud.costUSD == 0.00016 && cloud.processingTime == 1.1)
+        let failed = try #require(store.entries.first { $0.status == .failed })
+        #expect(failed.engine == .parakeet && failed.errorMessage == "Couldn’t transcribe")
+        let siblings = try FileManager.default.contentsOfDirectory(atPath: paths.root.path)
+        #expect(!siblings.contains { $0.hasPrefix("history-unreadable") }, "the file was read, not set aside")
+
+        store.flush()
+        let raw = String(decoding: try Data(contentsOf: paths.historyFile), as: UTF8.self)
+        #expect(raw.contains(#""engine":"parakeetCloud""#) && !raw.contains(#""engine":"whisper"#))
     }
 
     @Test func deliveredCloudTranscriptLearnsItsProvider() async throws {
@@ -540,7 +555,7 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         var asked: [String] = []
         h.controller.providerLookupOverride = { id in
             asked.append(id)
-            return "Groq"
+            return "Together"
         }
         h.controller.transcribeOverride = { _, engine in
             TranscriptResult(text: "Hallo", engine: engine, processingTime: 0.4, costUSD: 0.00001,
@@ -548,9 +563,9 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         }
         h.controller.insertOverride = { _, _ in .pasted }
         let recording = DictationControllerTests.recording()
-        h.controller.enqueue(recording, engine: .whisperCloud, delivery: .paste(targetPID: nil))
+        h.controller.enqueue(recording, engine: .parakeetCloud, delivery: .paste(targetPID: nil))
         try await waitUntil { h.history.entry(id: recording.id)?.provider != nil }
-        #expect(h.history.entry(id: recording.id)?.provider == "Groq")
+        #expect(h.history.entry(id: recording.id)?.provider == "Together")
         #expect(asked == ["gen-1"])
     }
 
@@ -572,27 +587,27 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
     }
 
     @Test func aMissingKeyRefusesCloudSpeechBeforeRecording() throws {
-        let h = DictationControllerTests.make(models: [.parakeet: .ready, .whisper: .ready], keyStatus: .missing)
-        h.settings.selectedEngine = .whisperCloud
+        let h = DictationControllerTests.make(models: [.parakeet: .ready], keyStatus: .missing)
+        h.settings.selectedEngine = .parakeetCloud
         h.controller.send(.handsFreeToggle)
         #expect(h.recorder.starts == 0)
         #expect(h.controller.machine.capture == .idle)
         let notice = try #require(h.toasts.notices.first)
         #expect(notice.title == "Add your OpenRouter key")
-        #expect(notice.body == "Whisper Turbo · Cloud needs a key to transcribe.")
-        #expect(notice.actions.map(\.kind) == [.openHub(.models), .selectEngine(.whisper)])
+        #expect(notice.body == "Parakeet v3 · Cloud needs a key to transcribe.")
+        #expect(notice.actions.map(\.kind) == [.openHub(.models), .selectEngine(.parakeet)])
     }
 
     @Test func aFailedCloudDictationOffersTheSameModelOnThisMacFirst() async throws {
-        let h = DictationControllerTests.make(models: [.parakeet: .ready, .whisper: .ready])
+        let h = DictationControllerTests.make(models: [.parakeet: .ready], keyStatus: .valid(KeyInfo()))
         h.controller.transcribeOverride = { _, _ in throw AppError.openRouterRateLimited(retryAfter: nil) }
         let recording = DictationControllerTests.recording()
-        h.controller.enqueue(recording, engine: .whisperCloud, delivery: .paste(targetPID: nil))
+        h.controller.enqueue(recording, engine: .parakeetCloud, delivery: .paste(targetPID: nil))
         try await waitUntil { h.history.entry(id: recording.id)?.status == .failed }
         let notice = try #require(h.toasts.notices.first { $0.recordingID == recording.id })
-        #expect(notice.title == "Whisper Turbo · Cloud is rate-limited")
-        #expect(notice.actions.contains { $0.kind == .retryWith(.whisper) })
-        #expect(h.history.entry(id: recording.id)?.errorMessage == "Whisper Turbo · Cloud is rate-limited")
+        #expect(notice.title == "Parakeet v3 · Cloud is rate-limited")
+        #expect(notice.actions.contains { $0.kind == .retryWith(.parakeet) })
+        #expect(h.history.entry(id: recording.id)?.errorMessage == "Parakeet v3 · Cloud is rate-limited")
     }
 }
 
@@ -626,8 +641,8 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         #expect(AppError.openRouterProviderUnavailable("x").notice(recordingID: nil, fallbackEngine: nil,
                                                                    engine: .parakeetCloud).title
             == "Parakeet v3 · Cloud is unavailable")
-        #expect(AppError.offline.notice(recordingID: nil, fallbackEngine: nil, engine: .whisperCloud).body
-            == "Whisper Turbo · Cloud needs the internet.")
+        #expect(AppError.offline.notice(recordingID: nil, fallbackEngine: nil, engine: .parakeetCloud).body
+            == "Parakeet v3 · Cloud needs the internet.")
         #expect(AppError.timeout(.parakeetCloud).notice(recordingID: nil, fallbackEngine: nil).body
             == "OpenRouter didn’t answer in time.")
     }

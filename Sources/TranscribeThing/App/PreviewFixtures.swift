@@ -17,8 +17,8 @@ enum PreviewFixtures {
             TranscriptEntry(
                 createdAt: ago(31),
                 text: "Can you add the Q3 numbers to the deck and flag anything that looks off? I'll go through it tonight.",
-                engine: .whisperCloud, audioDuration: 14.6, voicedSeconds: 12.8, processingTime: 1.1, costUSD: 0.00016,
-                provider: "Groq"),
+                engine: .parakeetCloud, audioDuration: 14.6, voicedSeconds: 12.8, processingTime: 1.1, costUSD: 0.00037,
+                provider: "Together"),
             TranscriptEntry(
                 createdAt: ago(52),
                 text: "Привет, созвонимся завтра в десять утра. Я пришлю ссылку на встречу и короткую повестку, если что-то поменяется, напиши.",

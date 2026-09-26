@@ -242,6 +242,18 @@ enum AppError: Error, Equatable, Sendable {
         }
     }
 
+    /// The key, the credit or the connection failed: every cloud model would fail the same way, so only the local
+    /// model can take over.
+    var stopsEveryCloudModel: Bool {
+        switch self {
+        case .openRouterMissingKey, .openRouterKeyUnreadable, .openRouterInvalidKey, .openRouterNoCredits,
+             .openRouterKeyLimit, .offline:
+            true
+        default:
+            false
+        }
+    }
+
     /// Another engine could transcribe the same recording (the failure is the engine's, not the audio's or the mic's).
     private var fallbackCanHelp: Bool {
         switch self {
@@ -319,7 +331,7 @@ extension AppError {
     /// Canonical copy per the error catalog (wispr-ux.md §5.9, adapted).
     /// `recordingID` non-nil means the audio is retained, which enables Retry and Retry-with actions.
     /// `fallbackEngine` is a ready engine other than the failing one. `engine` is the engine the error came
-    /// from: OpenRouter errors name it ("Whisper Turbo · Cloud is rate-limited"), and say "Gemini" without it.
+    /// from: OpenRouter errors name it ("Parakeet v3 · Cloud is rate-limited"), and say "Gemini" without it.
     func notice(recordingID: UUID?, fallbackEngine: EngineID?, engine: EngineID? = nil) -> Notice {
         let copy = self.copy(for: engine)
         let hasAudio = recordingID != nil

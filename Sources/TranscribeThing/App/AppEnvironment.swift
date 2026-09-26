@@ -102,7 +102,7 @@ final class AppEnvironment {
             levelMeter: .preview(level: 0.55),
             devices: .preview(),
             makeAccount: { _, _ in .preview(status: .valid(PreviewFixtures.keyInfo)) },
-            models: .preview(states: [.parakeet: .ready, .whisper: .notInstalled]),
+            models: .preview(states: [.parakeet: .ready]),
             history: .preview(entries: PreviewFixtures.history()),
             permissions: .preview(mic: .granted, ax: .granted),
             hotkeys: .preview(),
