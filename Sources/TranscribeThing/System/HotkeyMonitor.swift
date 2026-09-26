@@ -161,6 +161,7 @@ final class HotkeyMonitor {
         guard !requestedFallbackAccess else { return }
         requestedFallbackAccess = true
         Task.detached(priority: .utility) {
+            // Only when Accessibility is granted and the tap still fails; otherwise these would prompt at launch.
             guard AXIsProcessTrusted() else { return }
             if !CGPreflightPostEventAccess() { _ = CGRequestPostEventAccess() }
             if !CGPreflightListenEventAccess() { _ = CGRequestListenEventAccess() }
@@ -297,6 +298,9 @@ final class HotkeyTapEngine: @unchecked Sendable {
 
     private func createTap() -> Bool {
         guard tap == nil, let loop = runLoop else { return tap != nil }
+        // An untrusted tapCreate makes macOS show its own "control this computer" prompt, which would pop
+        // up at launch and every retry. Ask quietly first; the prompt belongs to onboarding's Permissions step.
+        guard AXIsProcessTrusted() else { return false }
         let callback: CGEventTapCallBack = { _, type, event, userInfo in
             guard let userInfo else { return Unmanaged.passUnretained(event) }
             let engine = Unmanaged<HotkeyTapEngine>.fromOpaque(userInfo).takeUnretainedValue()
