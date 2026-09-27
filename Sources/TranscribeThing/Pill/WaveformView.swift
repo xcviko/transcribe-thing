@@ -172,13 +172,13 @@ final class WaveformEngine {
         bars.reserveCapacity(filled)
         for k in 0..<filled {
             let x = size.width - w - (CGFloat(k) + phase) * step
-            guard x > -w else { continue }
             let h = minH + (size.height - minH) * (settled ? columns[k] : amplitude(k, at: now))
             let lift = Self.lift(settled ? columns[k] : light(k, at: now))
             let landing = newest - Double(k) * Self.columnInterval
             let appear = settled ? 1 : min(1, max(0, (now - landing) / Self.appearDuration))
-            // The history dissolves over its last two steps on the left.
-            let tail = min(1, max(0, (x + step) / (2 * step)))
+            // The history dissolves left of the second slot, gone just as a column has slid wholly past the edge,
+            // so the clip never cuts one that is still bright.
+            let tail = min(1, max(0, (x + w) / (step + w)))
             let opacity = (0.45 + 0.51 * Double(lift)) * appear * Double(tail)
             guard opacity > 0 else { continue }
             bars.append(Bar(rect: CGRect(x: x, y: midY - h / 2, width: w, height: h), opacity: opacity))

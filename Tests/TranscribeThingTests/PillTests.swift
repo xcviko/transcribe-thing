@@ -651,7 +651,8 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
             #expect(oldest.rect.minX > -PillMetrics.barWidth)
             if oldest.rect.minX < 0 {
                 exits += 1
-                #expect(oldest.opacity < 0.5 * 0.96)
+                // Its fade runs out as the clip takes it: the less of it shows, the dimmer it is, down to 0.
+                #expect(oldest.opacity < 0.4 * oldest.rect.maxX / PillMetrics.barWidth)
             }
         }
         #expect(exits > 100)
