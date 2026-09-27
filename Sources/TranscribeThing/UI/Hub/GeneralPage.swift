@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Startup, the pill and sounds, recording limits, history retention, permissions and About.
+/// Software Update, startup, the pill and sounds, recording limits, history retention, permissions and About.
 struct GeneralPage: View {
     @Environment(HubContext.self) private var hub
     @Environment(AppSettings.self) private var settings
@@ -13,7 +13,12 @@ struct GeneralPage: View {
 
     var body: some View {
         @Bindable var settings = settings
-        HubPage("General", subtitle: "Startup, pill and sounds, recording, history and permissions.") {
+        HubPage("General", subtitle: "Updates, startup, pill and sounds, recording, history and permissions.") {
+            HubGroup("Updates") {
+                SettingsGroup {
+                    SoftwareUpdateRow()
+                }
+            }
             HubGroup("Startup") {
                 SettingsGroup {
                     SettingsRow(title: "Open \(Brand.name) at login", subtitle: loginSubtitle, systemImage: "power",
@@ -168,6 +173,38 @@ struct GeneralPage: View {
             return "\(Brand.name) was updated. Remove it from the list, then add it back."
         }
         return "Pastes text into other apps and listens for your shortcut."
+    }
+}
+
+/// Opens General › Software Update, like the row in System Settings: what's new at a glance, a red badge while
+/// an update waits (with reminders on), and a chevron.
+private struct SoftwareUpdateRow: View {
+    @Environment(HubContext.self) private var hub
+    @Environment(UpdateCenter.self) private var updates
+    @State private var hovering = false
+
+    var body: some View {
+        Button {
+            hub.show(.softwareUpdate)
+        } label: {
+            SettingsRow(title: "Software Update", subtitle: UpdateFormat.summary(updates, now: hub.now),
+                        systemImage: HubSection.softwareUpdate.symbolName,
+                        iconTint: updates.showsBadge ? .accent : .inkSecondary) {
+                HStack(spacing: 8) {
+                    if updates.showsBadge {
+                        CountBadge(count: 1)
+                    }
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.inkTertiary)
+                }
+            }
+            .background { RowHighlight(isSelected: false, isHovering: hovering) }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .accessibilityLabel("Software Update, \(UpdateFormat.summary(updates, now: hub.now))")
     }
 }
 

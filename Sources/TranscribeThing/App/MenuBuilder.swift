@@ -59,6 +59,7 @@ final class MenuBuilder {
         prefs.keyEquivalent = ","
         prefs.keyEquivalentModifierMask = [.command]
         menu.addItem(prefs)
+        menu.addItem(updateItem(env))
 
         if includeQuit {
             menu.addItem(.separator())
@@ -73,6 +74,21 @@ final class MenuBuilder {
         case .locked, .lockedStopPending: true
         default: false
         }
+    }
+
+    // MARK: - Updates
+
+    /// "Check for Updates…", or "Update to 0.3.0…" with a badge while an update waits (and reminders are on).
+    private func updateItem(_ env: AppEnvironment) -> NSMenuItem {
+        let updates = env.updates
+        guard updates.showsBadge, let available = updates.availableUpdate else {
+            return MenuActionItem(title: "Check for Updates…") { [weak env] in env?.checkForUpdates() }
+        }
+        let item = MenuActionItem(title: "Update to \(available.version)…") { [weak env] in
+            env?.windows.showHub(.softwareUpdate)
+        }
+        item.badge = .updates(count: 1)
+        return item
     }
 
     // MARK: - Status line

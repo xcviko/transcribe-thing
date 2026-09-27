@@ -48,6 +48,15 @@ final class AppSettings {
     var keepFailedRecordingsDays: Int = 14 { didSet { store.set(keepFailedRecordingsDays, .keepFailedRecordingsDays) } }
     var shortcuts: ShortcutBindings = .defaults { didSet { store.setJSON(shortcuts, .shortcuts) } }
     var hasShownWelcomeHello: Bool = false { didSet { store.set(hasShownWelcomeHello, .hasShownWelcomeHello) } }
+    /// Checks GitHub in the background and announces new versions. Off: no reminders and no badges, though the
+    /// Software Update page still checks when opened.
+    var checkForUpdatesAutomatically: Bool = true {
+        didSet { store.set(checkForUpdatesAutomatically, .checkForUpdatesAutomatically) }
+    }
+    /// The newest version the pill has announced ("x.y.z"): each version is announced once, whatever the answer.
+    var announcedUpdateVersion: String? = nil { didSet { store.set(announcedUpdateVersion, .announcedUpdateVersion) } }
+    /// The version that ran last time, so the first launch after an update can say so. nil on a fresh install.
+    var lastLaunchedVersion: String? = nil { didSet { store.set(lastLaunchedVersion, .lastLaunchedVersion) } }
 
     @ObservationIgnored private let store: SettingsStore
 
@@ -122,6 +131,9 @@ final class AppSettings {
         if let v = store.int(.keepFailedRecordingsDays), v >= 0 { keepFailedRecordingsDays = v }
         if let v: ShortcutBindings = store.json(.shortcuts) { shortcuts = v }
         if let v = store.bool(.hasShownWelcomeHello) { hasShownWelcomeHello = v }
+        if let v = store.bool(.checkForUpdatesAutomatically) { checkForUpdatesAutomatically = v }
+        announcedUpdateVersion = store.string(.announcedUpdateVersion)
+        lastLaunchedVersion = store.string(.lastLaunchedVersion)
     }
 }
 
@@ -135,6 +147,7 @@ enum SettingsKey: String, CaseIterable {
     case soundsEnabled, soundVolume, microphoneUID, preferBuiltInMicOverBluetooth, showDockIcon
     case geminiSystemPrompt, maxRecordingMinutes, doublePressForHandsFree
     case restoreClipboard, keepFailedRecordingsDays, shortcuts, hasShownWelcomeHello
+    case checkForUpdatesAutomatically, announcedUpdateVersion, lastLaunchedVersion
 
     var defaultsKey: String { "tt.\(rawValue)" }
 }

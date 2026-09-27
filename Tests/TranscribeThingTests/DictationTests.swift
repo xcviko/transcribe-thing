@@ -1283,7 +1283,7 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
             "Parakeet v3 · Ready", "—",
             "Start Hands-free Dictation", "Paste Last Transcript", "Copy Last Transcript", "—",
             "Model", "Microphone", "Show Pill", "—",
-            "Open transcribe-thing…", "Settings…", "—", "Quit transcribe-thing",
+            "Open transcribe-thing…", "Settings…", "Check for Updates…", "—", "Quit transcribe-thing",
         ])
         #expect(menu.items.first?.isEnabled == false)
     }
@@ -1292,7 +1292,25 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
         let env = AppEnvironment.preview()
         let menu = env.menuBar.builder.makeMenu(includeQuit: false)
         #expect(!menu.items.contains { $0.title == "Quit transcribe-thing" })
-        #expect(menu.items.last?.title == "Settings…")
+        #expect(menu.items.last?.title == "Check for Updates…")
+    }
+
+    @Test func updateItemCarriesABadgeWhileAnUpdateWaits() throws {
+        let current = AppEnvironment.preview()
+        let plain = try #require(current.menuBar.builder.makeMenu(includeQuit: true).items.first { $0.title == "Check for Updates…" })
+        #expect(plain.badge == nil)
+
+        // The preview runs 0.2.0; the full feed has 0.3.0.
+        let env = AppEnvironment.preview(releases: PreviewFixtures.releases())
+        let titles = env.menuBar.builder.makeMenu(includeQuit: true).items.map(\.title)
+        #expect(!titles.contains("Check for Updates…"))
+        let update = try #require(env.menuBar.builder.makeMenu(includeQuit: true).items.first { $0.title == "Update to 0.3.0…" })
+        #expect(update.badge != nil)
+
+        // Updates ignored: back to the plain item, no badge.
+        env.settings.checkForUpdatesAutomatically = false
+        let ignored = try #require(env.menuBar.builder.makeMenu(includeQuit: true).items.first { $0.title == "Check for Updates…" })
+        #expect(ignored.badge == nil)
     }
 
     @Test func modelSubmenuMarksTheSelection() throws {

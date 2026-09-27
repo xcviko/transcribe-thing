@@ -90,6 +90,48 @@ enum HubSnapshots {
                 c.permissions = .preview(mic: .granted, ax: .denied)
                 c.launchAtLogin = .preview()
             },
+            // 0.3.0 is out: a red badge on General in the sidebar and on the Software Update row.
+            hub("hub-general-update", .general) { c in
+                c.updates = Samples.updates(c)
+            },
+            // Reminders off: no badges, though the row still says what's out.
+            hub("hub-general-update-ignored", .general) { c in
+                c.settings.checkForUpdatesAutomatically = false
+                c.updates = Samples.updates(c)
+            },
+
+            hub("hub-update-available", .softwareUpdate, height: 1240) { c in
+                c.updates = Samples.updates(c)
+            },
+            hub("hub-update-available-compact", .softwareUpdate, width: 820, height: 560) { c in
+                c.updates = Samples.updates(c)
+            },
+            hub("hub-update-downloading", .softwareUpdate) { c in
+                c.updates = Samples.updates(c, install: .downloading(Samples.newVersion, received: 4_200_000, total: 12_400_000))
+            },
+            hub("hub-update-waiting", .softwareUpdate) { c in
+                c.updates = Samples.updates(c, install: .waitingForDictation(Samples.newVersion))
+            },
+            hub("hub-update-install-failed", .softwareUpdate) { c in
+                c.updates = Samples.updates(c, install: .failed(Samples.newVersion, .adHocSigned))
+            },
+            hub("hub-update-download-failed", .softwareUpdate) { c in
+                c.updates = Samples.updates(c, install: .failed(Samples.newVersion, .downloadFailed("The network connection was lost.")))
+            },
+            hub("hub-update-current", .softwareUpdate, height: 1000) { c in
+                c.updates = Samples.updates(c, releases: PreviewFixtures.releases(upTo: PreviewFixtures.installedVersion))
+            },
+            hub("hub-update-checking", .softwareUpdate) { c in
+                c.updates = Samples.updates(c, releases: PreviewFixtures.releases(upTo: PreviewFixtures.installedVersion),
+                                            isChecking: true)
+            },
+            hub("hub-update-check-failed", .softwareUpdate) { c in
+                c.updates = Samples.updates(c, releases: PreviewFixtures.releases(upTo: PreviewFixtures.installedVersion),
+                                            checkError: .offline)
+            },
+            hub("hub-update-no-releases", .softwareUpdate) { c in
+                c.updates = Samples.updates(c, releases: [])
+            },
         ]
     }
 
@@ -113,6 +155,20 @@ enum HubSnapshots {
         static var now: Date {
             Calendar.current.date(bySettingHour: 14, minute: 40, second: 0, of: Date()) ?? Date()
         }
+        /// Software Update was last checked at 2:05 PM, five minutes before the page's "now".
+        static var checkedAt: Date {
+            Calendar.current.date(bySettingHour: 14, minute: 5, second: 0, of: Date()) ?? Date()
+        }
+        static let newVersion = AppVersion(major: 0, minor: 3, patch: 0)
+
+        @MainActor static func updates(_ context: HubContext, releases: [Release] = PreviewFixtures.releases(),
+                                       isChecking: Bool = false, checkError: UpdateCheckError? = nil,
+                                       install: UpdateCenter.InstallPhase = .idle) -> UpdateCenter {
+            context.fixedNow = checkedAt.addingTimeInterval(5 * 60)
+            return .preview(settings: context.settings, toasts: context.toasts, releases: releases,
+                            lastChecked: checkedAt, isChecking: isChecking, checkError: checkError, install: install)
+        }
+
         static let downloading = DownloadProgress(fraction: 0.42, bytesReceived: 265_600_000, totalBytes: 632_321_326,
                                                   bytesPerSecond: 9_800_000, secondsRemaining: 38)
     }

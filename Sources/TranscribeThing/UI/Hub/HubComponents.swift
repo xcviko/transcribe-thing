@@ -18,17 +18,20 @@ enum HubPalette {
 
 // MARK: - Page scaffold
 
-/// A Hub page: title + subtitle header, then sections, in a centered readable column.
+/// A Hub page: title + subtitle header, then sections, in a centered readable column. A sub-page (Software
+/// Update) gets a "‹ General" link above its title.
 struct HubPage<Content: View, Accessory: View>: View {
     var title: String
     var subtitle: String?
+    var back: HubBackLink?
     @ViewBuilder var accessory: Accessory
     @ViewBuilder var content: Content
 
-    init(_ title: String, subtitle: String? = nil, @ViewBuilder accessory: () -> Accessory,
+    init(_ title: String, subtitle: String? = nil, back: HubBackLink? = nil, @ViewBuilder accessory: () -> Accessory,
          @ViewBuilder content: () -> Content) {
         self.title = title
         self.subtitle = subtitle
+        self.back = back
         self.accessory = accessory()
         self.content = content()
     }
@@ -38,6 +41,10 @@ struct HubPage<Content: View, Accessory: View>: View {
             VStack(alignment: .leading, spacing: Theme.Spacing.section) {
                 HStack(alignment: .lastTextBaseline, spacing: Theme.Spacing.md) {
                     VStack(alignment: .leading, spacing: 4) {
+                        if let back {
+                            BackLinkButton(link: back)
+                                .padding(.bottom, 2)
+                        }
                         Text(title)
                             .typeface(.title)
                             .foregroundStyle(.ink)
@@ -65,8 +72,44 @@ struct HubPage<Content: View, Accessory: View>: View {
 }
 
 extension HubPage where Accessory == EmptyView {
-    init(_ title: String, subtitle: String? = nil, @ViewBuilder content: () -> Content) {
-        self.init(title, subtitle: subtitle, accessory: { EmptyView() }, content: content)
+    init(_ title: String, subtitle: String? = nil, back: HubBackLink? = nil, @ViewBuilder content: () -> Content) {
+        self.init(title, subtitle: subtitle, back: back, accessory: { EmptyView() }, content: content)
+    }
+}
+
+/// Where a sub-page's back link goes: "‹ General". ⌘[ follows it too.
+struct HubBackLink {
+    var title: String
+    var action: () -> Void
+}
+
+private struct BackLinkButton: View {
+    var link: HubBackLink
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: link.action) {
+            HStack(spacing: 3) {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 10.5, weight: .semibold))
+                Text(link.title)
+                    .font(.system(size: 12.5, weight: .medium))
+            }
+            .foregroundStyle(hovering ? Color.ink : Color.accent)
+            .padding(.horizontal, 6)
+            .frame(height: 22)
+            .background {
+                RoundedRectangle(cornerRadius: 6, style: .continuous).fill(hovering ? Color.hover : .clear)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.leading, -6)
+        .onHover { hovering = $0 }
+        .animation(Theme.Motion.hover, value: hovering)
+        .keyboardShortcut("[", modifiers: .command)
+        .help("Back to \(link.title)")
+        .accessibilityLabel("Back to \(link.title)")
     }
 }
 
@@ -337,6 +380,23 @@ struct IconTile: View {
             .foregroundStyle(tint)
             .frame(width: size, height: size)
             .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: size * 0.26, style: .continuous))
+            .accessibilityHidden(true)
+    }
+}
+
+/// macOS's red count badge (System Settings' "1" beside General): white digits on a red capsule.
+struct CountBadge: View {
+    var count: Int
+
+    var body: some View {
+        Text("\(count)")
+            .font(.system(size: 11, weight: .semibold))
+            .monospacedDigit()
+            .foregroundStyle(.white)
+            .padding(.horizontal, 5.5)
+            .frame(minWidth: 18, minHeight: 18)
+            .background(Color(nsColor: .systemRed), in: Capsule(style: .continuous))
+            .fixedSize()
             .accessibilityHidden(true)
     }
 }

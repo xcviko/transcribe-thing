@@ -15,6 +15,7 @@ final class HubContext: Observable {
     var devices: AudioDeviceCatalog
     var launchAtLogin: LaunchAtLogin
     var secureInput: SecureInputMonitor
+    var updates: UpdateCenter
     var levelMeter: LevelMeter
     /// Meters the selected mic outside dictation while the Microphone page is on screen.
     var microphoneMonitor: MicrophoneMonitor
@@ -41,6 +42,7 @@ final class HubContext: Observable {
         devices = env.devices
         launchAtLogin = env.launchAtLogin
         secureInput = env.secureInput
+        updates = env.updates
         levelMeter = env.levelMeter
         microphoneMonitor = env.isPreview ? .preview(level: 0.5) : MicrophoneMonitor()
         windows = env.windows
@@ -74,10 +76,10 @@ final class HubContext: Observable {
                            localError: models.lastErrors[engine])
     }
 
-    /// "transcribe-thing 0.1 (build 42)", or without the build when running the bare binary.
+    /// "transcribe-thing 0.1.0 (build 42)", or without the build when running the bare binary.
     var versionLine: String {
         let info = Bundle.main.infoDictionary
-        let version = info?["CFBundleShortVersionString"] as? String ?? "0.1"
+        let version = updates.currentVersion?.description ?? info?["CFBundleShortVersionString"] as? String ?? "0.1"
         if let build = info?["CFBundleVersion"] as? String, !build.isEmpty, build != version {
             return "\(Brand.name) \(version) (build \(build))"
         }
@@ -109,6 +111,7 @@ struct HubView: View {
             .environment(context.devices)
             .environment(context.launchAtLogin)
             .environment(context.secureInput)
+            .environment(context.updates)
             .environment(context.windows)
             .environment(context.toasts)
     }
@@ -161,6 +164,7 @@ private struct HubRoot: View {
         case .shortcuts: ShortcutsPage()
         case .microphone: MicrophonePage()
         case .general: GeneralPage()
+        case .softwareUpdate: SoftwareUpdatePage()
         }
     }
 }
@@ -173,6 +177,7 @@ private struct HubSidebar: View {
     @Environment(AppSettings.self) private var settings
     @Environment(ModelStore.self) private var models
     @Environment(OpenRouterAccount.self) private var account
+    @Environment(UpdateCenter.self) private var updates
     @Namespace private var selection
 
     var body: some View {
@@ -216,9 +221,11 @@ private struct HubSidebar: View {
         .background(HubPalette.sidebar)
     }
 
-    /// ⌘1…⌘N follow `HubSection.sidebar`.
+    /// ⌘1…⌘N follow `HubSection.sidebar`. Software Update keeps General selected, and an update waiting
+    /// (with reminders on) puts a red count on General, as System Settings does.
     private func item(_ section: HubSection) -> some View {
-        SidebarItem(section: section, isSelected: windows.hubSection == section, namespace: selection) {
+        SidebarItem(section: section, isSelected: windows.hubSection.sidebarItem == section,
+                    badge: section == .general && updates.showsBadge ? 1 : nil, namespace: selection) {
             hub.show(section)
         }
         .keyboardShortcut(section.shortcutDigit.map { KeyboardShortcut(KeyEquivalent($0), modifiers: .command) })
@@ -241,6 +248,7 @@ private struct HubSidebar: View {
 private struct SidebarItem: View {
     var section: HubSection
     var isSelected: Bool
+    var badge: Int?
     var namespace: Namespace.ID
     var action: () -> Void
     @State private var hovering = false
@@ -258,6 +266,10 @@ private struct SidebarItem: View {
                     .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
                     .foregroundStyle(Color.ink)
                 Spacer(minLength: 0)
+                if let badge {
+                    CountBadge(count: badge)
+                        .transition(.scale.combined(with: .opacity))
+                }
             }
             .padding(.horizontal, 10)
             .frame(height: 30)
@@ -280,7 +292,8 @@ private struct SidebarItem: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .animation(Theme.Motion.hover, value: hovering)
-        .accessibilityLabel(section.title)
+        .animation(Theme.Motion.snappy, value: badge)
+        .accessibilityLabel(badge == nil ? section.title : "\(section.title), update available")
         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
     }
 }

@@ -29,6 +29,8 @@ enum NoticeActionKind: Sendable, Equatable {
     case pasteText(String)
     case chooseMicrophone
     case useBuiltInMicrophone
+    /// Open Software Update and install the newest release there, where its progress shows.
+    case installUpdate
     case dismiss
 }
 
@@ -143,6 +145,8 @@ enum SettingsPane: String, Sendable {
 
 enum HubSection: String, CaseIterable, Sendable, Identifiable {
     case home, models, shortcuts, microphone, general
+    /// A sub-page of General (no sidebar item of its own), like a pane inside System Settings.
+    case softwareUpdate
 
     var id: String { rawValue }
 
@@ -153,6 +157,7 @@ enum HubSection: String, CaseIterable, Sendable, Identifiable {
         case .shortcuts: "Shortcuts"
         case .microphone: "Microphone"
         case .general: "General"
+        case .softwareUpdate: "Software Update"
         }
     }
 
@@ -163,6 +168,7 @@ enum HubSection: String, CaseIterable, Sendable, Identifiable {
         case .shortcuts: "keyboard"
         case .microphone: "mic"
         case .general: "gearshape"
+        case .softwareUpdate: "arrow.down.circle"
         }
     }
 }

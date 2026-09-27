@@ -2,6 +2,7 @@
 #   make app            release bundle, signed with SIGN_IDENTITY (see below)
 #   make run            build and launch through LaunchServices
 #   make install        copy the bundle to /Applications
+#   make release VERSION=x.y.z   signed zip + draft notes in dist/; prints (never runs) the publish commands
 CONFIG        ?= release
 APP           := build/transcribe-thing.app
 BUNDLE_ID     := dev.transcribe-thing.app
@@ -13,7 +14,7 @@ SNAPSHOT_DIR  ?= build/snapshots
 SIGN_CERT     := transcribe-thing Developer
 SIGN_IDENTITY ?= $(shell security find-identity -p codesigning 2>/dev/null | grep -qF '"$(SIGN_CERT)"' && echo '$(SIGN_CERT)' || echo -)
 
-.PHONY: all build app run run-log install uninstall sounds icon test snapshots reset-tcc clean
+.PHONY: all build app run run-log install uninstall release sounds icon test snapshots reset-tcc clean
 
 all: app
 
@@ -42,6 +43,11 @@ install: app
 uninstall:
 	-pkill -x transcribe-thing
 	rm -rf "$(INSTALL_DIR)/transcribe-thing.app"
+
+# Never pushes or publishes: scripts/release.sh prints the git push and gh release create commands to run yourself.
+release:
+	@test -n "$(VERSION)" || { echo "usage: make release VERSION=x.y.z"; exit 64; }
+	SIGN_IDENTITY='$(SIGN_IDENTITY)' ./scripts/release.sh $(VERSION)
 
 sounds:
 	python3 scripts/gen-sounds.py Resources/Sounds

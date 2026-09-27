@@ -15,6 +15,8 @@ struct AppPaths: Sendable {
     var recordings: URL { root.appendingPathComponent("Recordings", isDirectory: true) }
     /// root/history.json
     var historyFile: URL { root.appendingPathComponent("history.json", isDirectory: false) }
+    /// root/updates.json: the last release feed GitHub sent, its ETag and when it was checked.
+    var updateFeedFile: URL { root.appendingPathComponent("updates.json", isDirectory: false) }
 
     func recordingURL(fileName: String) -> URL {
         recordings.appendingPathComponent(fileName, isDirectory: false)

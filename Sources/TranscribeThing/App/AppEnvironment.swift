@@ -25,6 +25,7 @@ final class AppEnvironment {
     let toasts: ToastCenter
     let pill: PillController
     let dictation: DictationController
+    let updates: UpdateCenter
     let windows: WindowCoordinator
     let menuBar: MenuBarController
     /// Preview environments never start services.
@@ -40,8 +41,8 @@ final class AppEnvironment {
          history: HistoryStore, permissions: PermissionsCenter, hotkeys: HotkeyMonitor,
          inserter: TextInserter, secureInput: SecureInputMonitor, launchAtLogin: LaunchAtLogin,
          sounds: SoundPlayer, pillModel: PillModel, toasts: ToastCenter, pill: PillController,
-         dictation: DictationController, windows: WindowCoordinator, menuBar: MenuBarController,
-         isPreview: Bool) {
+         dictation: DictationController, updates: UpdateCenter, windows: WindowCoordinator,
+         menuBar: MenuBarController, isPreview: Bool) {
         self.paths = paths
         self.settings = settings
         self.keychain = keychain
@@ -63,6 +64,7 @@ final class AppEnvironment {
         self.toasts = toasts
         self.pill = pill
         self.dictation = dictation
+        self.updates = updates
         self.windows = windows
         self.menuBar = menuBar
         self.isPreview = isPreview
@@ -87,12 +89,14 @@ final class AppEnvironment {
             hotkeys: HotkeyMonitor(settings: settings),
             secureInput: SecureInputMonitor(),
             launchAtLogin: LaunchAtLogin(),
+            makeUpdates: { settings, toasts in UpdateCenter.live(settings: settings, toasts: toasts, paths: paths) },
             isPreview: false
         )
     }
 
-    /// In-memory everything with fixture data; nothing is started.
-    static func preview() -> AppEnvironment {
+    /// In-memory everything with fixture data; nothing is started. `releases`: what the update feed lists (by
+    /// default nothing newer than the preview's version).
+    static func preview(releases: [Release] = PreviewFixtures.releases(upTo: PreviewFixtures.installedVersion)) -> AppEnvironment {
         let settings = AppSettings.inMemory()
         settings.onboardingCompleted = true
         return assemble(
@@ -108,6 +112,7 @@ final class AppEnvironment {
             hotkeys: .preview(),
             secureInput: .preview(),
             launchAtLogin: .preview(),
+            makeUpdates: { settings, toasts in UpdateCenter.preview(settings: settings, toasts: toasts, releases: releases) },
             isPreview: true
         )
     }
@@ -117,7 +122,8 @@ final class AppEnvironment {
         devices: AudioDeviceCatalog,
         makeAccount: (KeychainStore, OpenRouterClient) -> OpenRouterAccount,
         models: ModelStore, history: HistoryStore, permissions: PermissionsCenter, hotkeys: HotkeyMonitor,
-        secureInput: SecureInputMonitor, launchAtLogin: LaunchAtLogin, isPreview: Bool
+        secureInput: SecureInputMonitor, launchAtLogin: LaunchAtLogin,
+        makeUpdates: (AppSettings, ToastCenter) -> UpdateCenter, isPreview: Bool
     ) -> AppEnvironment {
         let recorder = AudioRecorder(levelMeter: levelMeter, devices: devices, settings: settings)
         let client = OpenRouterClient()
@@ -138,6 +144,7 @@ final class AppEnvironment {
             transcription: transcription, history: history, permissions: permissions, hotkeys: hotkeys,
             inserter: inserter, secureInput: secureInput, launchAtLogin: launchAtLogin, sounds: sounds,
             pillModel: pillModel, toasts: toasts, pill: pill, dictation: dictation,
+            updates: makeUpdates(settings, toasts),
             windows: WindowCoordinator(settings: settings), menuBar: MenuBarController(),
             isPreview: isPreview)
     }
@@ -148,6 +155,9 @@ final class AppEnvironment {
         dictation.secureInput = secureInput
         dictation.openHub = { [weak self] section in self?.windows.showHub(section) }
         dictation.onActivityChanged = { [weak self] activity in self?.menuBar.show(activity) }
+        dictation.onDictationDelivered = { [weak self] in self?.updates.dictationDelivered() }
+        dictation.installUpdate = { [weak self] in self?.installUpdate() }
+        updates.isDictationActive = { [weak dictation] in (dictation?.activity ?? .idle) != .idle }
         let builder = menuBar.builder
         pillModel.contextMenuProvider = { builder.makeMenu(includeQuit: false) }
         inserter.eventTapActive = { [weak hotkeys] in hotkeys?.isTapActive ?? false }
@@ -186,6 +196,7 @@ final class AppEnvironment {
         }
         history.pruneOldRecordings()
         scheduleMaintenance()
+        updates.start()
         activationObserver = MainNotificationObserver(center: .default, name: NSApplication.didBecomeActiveNotification) {
             [weak self] in self?.didBecomeActive()
         }
@@ -207,6 +218,19 @@ final class AppEnvironment {
         history.flush()
         hotkeys.stop()
         maintenanceTask?.cancel()
+        updates.stop()
+    }
+
+    /// The pill's "Update" and the menu: Software Update shows the download and the restart.
+    func installUpdate() {
+        windows.showHub(.softwareUpdate)
+        updates.installUpdate()
+    }
+
+    /// "Check for Updates…": the page, and a fresh check whatever the setting.
+    func checkForUpdates() {
+        windows.showHub(.softwareUpdate)
+        updates.checkNow()
     }
 
     /// The event tap needs Accessibility; until it's granted, PermissionsCenter polls and calls back here.

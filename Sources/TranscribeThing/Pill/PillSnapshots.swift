@@ -53,6 +53,12 @@ enum PillSnapshots {
                 CanvasScene(model: .preview(phase: .processing), notices: [PillSnapshotFixtures.micFallback,
                                                                              PillSnapshotFixtures.noSpeech])
             },
+            SnapshotEntry("pill-toast-update", width: 640, height: 270) { _ in
+                CanvasScene(model: .preview(phase: .success), notices: [PillSnapshotFixtures.updateAvailable])
+            },
+            SnapshotEntry("pill-toast-updated", width: 640, height: 220) { _ in
+                CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.updated])
+            },
             SnapshotEntry("pill-toast-never", width: 640, height: 200) { _ in
                 CanvasScene(model: neverModel(), notices: [PillSnapshotFixtures.noSpeech])
             },
@@ -139,6 +145,13 @@ enum PillSnapshotFixtures {
         lifetime: .seconds(8), sound: .alert)
 
     static let noSpeech = AppError.noSpeech.notice(recordingID: nil, fallbackEngine: nil)
+
+    /// Right after a paste: the newest release, announced once.
+    static let updateAvailable = UpdateCenter.availableNotice(PreviewFixtures.releases()[0])
+
+    /// The first launch after installing it.
+    static let updated = UpdateCenter.installedNotice(PreviewFixtures.releases()[0].version,
+                                                      notes: PreviewFixtures.releases()[0].notes)
 }
 
 // MARK: - Scenes

@@ -16,6 +16,9 @@ public enum TranscribeThingMain {
             if EngineCLI.handles(arguments) {
                 EngineCLI.run(arguments)
             }
+            if UpdateCLI.handles(arguments) {
+                UpdateCLI.run(arguments)
+            }
             let app = NSApplication.shared
             let appDelegate = AppDelegate()
             delegate = appDelegate

@@ -43,6 +43,10 @@ final class DictationController {
     @ObservationIgnored var secureInput: SecureInputMonitor?
     @ObservationIgnored var openHub: ((HubSection) -> Void)?
     @ObservationIgnored var onActivityChanged: ((DictationActivity) -> Void)?
+    /// A dictation's text was just pasted where the user is typing (not paste-last, not a toast's Paste Here).
+    @ObservationIgnored var onDictationDelivered: (() -> Void)?
+    /// The update toast's "Update".
+    @ObservationIgnored var installUpdate: (() -> Void)?
 
     // Seams for tests: time, capture, transcription and insertion can be replaced.
     @ObservationIgnored var clock: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
@@ -812,7 +816,10 @@ final class DictationController {
         case .pasted:
             // A paste landing mid-recording must not leak its tick into the new recording.
             if !machine.isRecording { sounds.play(.paste) }
-            if celebrate { flash(.success) }
+            if celebrate {
+                flash(.success)
+                onDictationDelivered?()
+            }
         case .noEditableTarget:
             toasts.post(transcriptCard(text, title: "Nowhere to paste",
                                        body: "Or click a text field and press \(pasteLastHint).", pasteHere: false))
@@ -921,6 +928,8 @@ final class DictationController {
             openHub?(.microphone)
         case .useBuiltInMicrophone:
             useBuiltInMicrophone()
+        case .installUpdate:
+            installUpdate?()
         case .dismiss, .copyText, .pasteText:
             break
         }

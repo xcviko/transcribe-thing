@@ -262,9 +262,16 @@ import Testing
 
 @Suite struct HubSidebarTests {
     @Test func everyPageHasASidebarItem() {
-        // Pill & Sounds is gone (its settings live in General): the sidebar lists every section, in case order.
+        // Pill & Sounds is gone (its settings live in General): the sidebar lists every section but the
+        // sub-pages, in case order.
         #expect(HubSection.sidebar == [.home, .models, .shortcuts, .microphone, .general])
-        #expect(HubSection.sidebar == HubSection.allCases)
+        #expect(HubSection.sidebar == HubSection.allCases.filter { $0 != .softwareUpdate })
+    }
+
+    @Test func softwareUpdateSelectsGeneral() {
+        #expect(HubSection.softwareUpdate.sidebarItem == .general)
+        #expect(HubSection.softwareUpdate.shortcutDigit == nil)
+        #expect(HubSection.sidebar.allSatisfy { $0.sidebarItem == $0 })
     }
 
     @Test func commandDigitsFollowTheSidebar() {

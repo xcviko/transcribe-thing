@@ -403,6 +403,14 @@ extension HubSection {
     var shortcutDigit: Character? {
         HubSection.sidebar.firstIndex(of: self).map { Character(String($0 + 1)) }
     }
+
+    /// The sidebar item that reads as selected on this page: itself, or General for Software Update.
+    var sidebarItem: HubSection {
+        switch self {
+        case .softwareUpdate: .general
+        case .home, .models, .shortcuts, .microphone, .general: self
+        }
+    }
 }
 
 // MARK: - Pill
