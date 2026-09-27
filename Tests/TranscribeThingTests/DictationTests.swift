@@ -1275,9 +1275,9 @@ final class FakeRecorder: DictationRecorder {
         #expect(h.pill.visiblePhase == .success, "held for its minimum time")
     }
 
-    /// Every press starts from the "connecting" dots, even one refused before the mic opens (whose start would
+    /// Every press starts from an empty equalizer, even one refused before the mic opens (whose start would
     /// clear the meter): never the still bars of the last recording.
-    @Test func everyPressStartsFromTheConnectingDots() {
+    @Test func everyPressStartsFromAnEmptyEqualizer() {
         let meter = LevelMeter()
         let h = Self.make(mic: .denied, meter: meter)
         for index in 0..<30 { meter.ingest(rmsDBFS: -30, at: Double(index) * 0.01) }

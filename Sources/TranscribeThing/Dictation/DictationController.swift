@@ -224,7 +224,7 @@ final class DictationController {
         let wasRecording = machine.isRecording
         let effects = machine.handle(input, now: clock())
         if !wasRecording, machine.isRecording {
-            // Every press starts in the "connecting" state: the meter still holds the last recording's levels,
+            // Every press starts with an empty equalizer: the meter still holds the last recording's levels,
             // and a refused press never opens the mic, whose start would clear them.
             pillModel.levelMeter.reset()
         }
@@ -1316,7 +1316,7 @@ final class DictationController {
         let phase: PillPhase
         switch machine.capture {
         case .arming:
-            // From key-down on: the "connecting" dots until the first buffer, then the voice. Over a job in
+            // From key-down on: an empty equalizer until the first buffer, then the voice. Over a job in
             // flight, the processing pill (already on screen) waits for the press to commit; once the job is
             // gone, the held key shows its dots again unless the job's check or shake is still on screen.
             let showsFlourish = pillModel.visiblePhase == .success || pillModel.visiblePhase == .error
