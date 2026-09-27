@@ -7,6 +7,8 @@ enum NoticeStyle: Sendable {
 }
 
 enum NoticeLifetime: Sendable, Equatable {
+    /// Nominal lifetime; the toast's countdown runs `ToastCountdown.speed` times faster, so `.seconds(10)` is
+    /// on screen for 5 s.
     case seconds(Double)
     case sticky
 }

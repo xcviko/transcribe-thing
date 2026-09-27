@@ -62,11 +62,12 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(center.notices.map(\.dedupeKey) == ["b", "c"])
     }
 
-    @Test func expiresAfterItsLifetime() {
+    @Test func expiresAfterHalfItsNominalLifetime() {
+        #expect(ToastCountdown.speed == 2)
         let (center, clock) = makeCenter()
         center.post(notice("a", lifetime: .seconds(5)))
         center.post(notice("sticky", lifetime: .sticky))
-        clock.advance(4.9)
+        clock.advance(2.4)
         center.expire(now: clock.now)
         #expect(center.notices.count == 2)
         clock.advance(0.2)
@@ -80,9 +81,9 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
     @Test func dedupeRestartsTheCountdown() {
         let (center, clock) = makeCenter()
         center.post(notice("a", lifetime: .seconds(5)))
-        clock.advance(4)
+        clock.advance(2)
         center.post(notice("a", "Again", lifetime: .seconds(5)))
-        clock.advance(4)
+        clock.advance(2)
         center.expire(now: clock.now)
         #expect(center.notices.map(\.title) == ["Again"])
     }
@@ -90,7 +91,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
     @Test func hoverPausesAndResumesWithGrace() throws {
         let (center, clock) = makeCenter()
         center.post(notice("a", lifetime: .seconds(5)))
-        clock.advance(2)
+        clock.advance(1)
         center.setPaused(true)
         clock.advance(30)
         center.expire(now: clock.now)
@@ -99,7 +100,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(abs((center.fractionRemaining(for: id, at: clock.now) ?? 0) - 0.6) < 0.001)
 
         center.setPaused(false)
-        clock.advance(2.9)
+        clock.advance(1.4)
         center.expire(now: clock.now)
         #expect(center.notices.count == 1)
         clock.advance(0.2)
@@ -110,7 +111,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
     @Test func resumingNearTheEndKeepsTheToastBriefly() {
         let (center, clock) = makeCenter()
         center.post(notice("a", lifetime: .seconds(5)))
-        clock.advance(4.9)
+        clock.advance(2.4)
         center.setPaused(true)
         center.setPaused(false)
         clock.advance(1)
@@ -159,13 +160,13 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         let copy = NoticeAction(title: "Copy", kind: .copyText("hello"), isPrimary: true)
         let card = notice("paste", lifetime: .seconds(20), actions: [copy], transcript: "hello")
         center.post(card)
-        clock.advance(19)
+        clock.advance(9)
         center.perform(copy, on: card)
         #expect(received == [.copyText("hello")])
-        clock.advance(3)
+        clock.advance(1.9)
         center.expire(now: clock.now)
         #expect(center.notices.count == 1)
-        clock.advance(1.1)
+        clock.advance(0.2)
         center.expire(now: clock.now)
         #expect(center.notices.isEmpty)
     }

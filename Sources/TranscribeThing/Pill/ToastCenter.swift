@@ -8,8 +8,9 @@ final class ToastCenter {
     static let maxVisible = 2
     /// After a hover ends, a toast keeps at least this long so it doesn't vanish under a leaving pointer.
     static let resumeGrace: TimeInterval = 1.5
-    /// "Copied ✓" keeps the transcript card around at least this long.
-    static let afterCopyLifetime: TimeInterval = 4
+    /// "Copied ✓" keeps the transcript card around at least this long (real seconds, not scaled by
+    /// `ToastCountdown.speed`).
+    static let afterCopyLifetime: TimeInterval = 2
 
     /// Newest last; at most two visible.
     private(set) var notices: [Notice] = []
@@ -164,6 +165,10 @@ final class ToastCenter {
 
 /// Remaining lifetime of one toast; frozen while paused (`resumedAt == nil`).
 struct ToastCountdown: Equatable, Sendable {
+    /// Timed notices run their countdown this many times faster than their `NoticeLifetime`, so every toast,
+    /// current or future, is on screen for `lifetime / speed` seconds.
+    static let speed: Double = 2
+
     var total: TimeInterval
     /// Remaining as of `resumedAt` (running) or now (paused).
     var remaining: TimeInterval
@@ -176,7 +181,8 @@ struct ToastCountdown: Equatable, Sendable {
     }
 
     init?(lifetime: NoticeLifetime, now: Date, paused: Bool) {
-        guard case .seconds(let seconds) = lifetime else { return nil }
+        guard case .seconds(let nominal) = lifetime else { return nil }
+        let seconds = nominal / Self.speed
         self.init(total: seconds, remaining: seconds, resumedAt: paused ? nil : now)
     }
 
