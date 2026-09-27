@@ -250,6 +250,9 @@ struct OnboardingContext {
     var launchAtLogin: LaunchAtLogin
     var history: HistoryStore
     var pillModel: PillModel
+    /// The real pill's phase as recordings count it (`DictationController.committedPillPhase`): the pill comes up
+    /// at key-down, but a quick tap or an fn combo never commits to recording.
+    var dictationPhase: () -> PillPhase
     var levelMeter: LevelMeter
     var devices: AudioDeviceCatalog
     var freeDiskBytes: () -> Int64
@@ -267,6 +270,8 @@ struct OnboardingContext {
         launchAtLogin = env.launchAtLogin
         history = env.history
         pillModel = env.pillModel
+        let dictation = env.dictation
+        dictationPhase = { [weak dictation] in dictation?.committedPillPhase ?? .rest }
         levelMeter = env.levelMeter
         devices = env.devices
         let paths = env.paths
@@ -406,9 +411,12 @@ final class OnboardingModel {
 
     var pushToTalkLabel: String { ctx.settings.shortcuts[.pushToTalk]?.compactDescription ?? "fn" }
 
+    /// The real pill's phase, counting only committed recordings: what the lessons and the stage follow.
+    var dictationPhase: PillPhase { ctx.dictationPhase() }
+
     /// The practice stage mirrors the real pill while a dictation runs, else follows the keys.
     var livePhase: PillPhase {
-        let real = ctx.pillModel.phase
+        let real = dictationPhase
         if real.isActive { return real }
         if handsFreeLatched { return .locked }
         if isHoldingPushToTalk { return .listening }
@@ -770,7 +778,7 @@ final class OnboardingModel {
         let holdingHandsFree = !handsFreeKeys.isEmpty && handsFreeKeys.isSubset(of: pressedKeys)
 
         if key == .escape, event.isDown,
-           recordingInProgress || ctx.pillModel.phase.isRecording || holdingPTT || handsFreeLatched {
+           recordingInProgress || dictationPhase.isRecording || holdingPTT || handsFreeLatched {
             completeCancelLesson()
         }
 
@@ -820,7 +828,7 @@ final class OnboardingModel {
         if lessonsFollowKeys { completedLessons.insert(.handsFree) }
     }
 
-    /// Called by the view when the real pill changes phase.
+    /// Called by the view when the real pill changes phase (`dictationPhase`: taps and fn combos don't count).
     func pillPhaseChanged(from old: PillPhase, to new: PillPhase, now: Date = Date()) {
         if new.isRecording && !old.isRecording {
             recordingInProgress = true
@@ -851,7 +859,7 @@ final class OnboardingModel {
             if !isHoldingPushToTalk {
                 // Keys that only reach the event tap (another app in front): count the real pill as a hold.
                 schedule("hold", after: 0.45) { model in
-                    if model.ctx.pillModel.phase == .listening { model.markHeldPushToTalk() }
+                    if model.dictationPhase == .listening { model.markHeldPushToTalk() }
                 }
             }
         }
@@ -883,7 +891,7 @@ final class OnboardingModel {
     }
 
     private func hasRecentRecording(now: Date) -> Bool {
-        if recordingInProgress || ctx.pillModel.phase.isActive { return true }
+        if recordingInProgress || dictationPhase.isActive { return true }
         if let span = lastRecordingSpan, now.timeIntervalSince(span.end) < 120 { return true }
         return newSuccessEntry(within: 120, now: now) != nil
     }

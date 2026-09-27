@@ -64,6 +64,8 @@ final class DictationController {
     @ObservationIgnored var microphoneAuthorizedNow: () -> Bool = { AudioRecorder.isMicrophoneAuthorized }
     /// Replaces the sound player for the dictation cues.
     @ObservationIgnored var playCueOverride: (@MainActor (SoundEffect) -> Void)?
+    /// False in tests that fire the machine's timers by hand (`send(.timer(_:))`), so none fires on its own.
+    @ObservationIgnored var runsTimers = true
 
     private(set) var machine = DictationMachine()
     private(set) var activity: DictationActivity = .idle
@@ -82,6 +84,12 @@ final class DictationController {
     @ObservationIgnored private var pendingRefusal: AppError?
     /// When the last success/error flourish was requested (pill clicks during it don't start a recording).
     @ObservationIgnored private var lastFlash: (phase: PillPhase, at: TimeInterval)?
+    /// A flourish that came while the pill showed a press that hasn't committed (arming, the tap window). It
+    /// plays when the press folds away; a press that commits drops it, as a recording cuts one on screen.
+    @ObservationIgnored private var deferredFlourish: PillPhase?
+    /// The press under way began while a job was in flight: until it commits, the processing pill stays exactly
+    /// as it is (its width, "Still transcribing…"), so an fn tap or an fn combo doesn't disturb it.
+    @ObservationIgnored private var pressKeepsProcessing = false
     @ObservationIgnored private var retained: [UUID: Recording] = [:]
     @ObservationIgnored private var retainedOrder: [UUID] = []
     @ObservationIgnored private var lastCancelledID: UUID?
@@ -212,7 +220,19 @@ final class DictationController {
     func send(_ input: DictationMachine.Input) {
         syncConfig()
         let wasArming = machine.capture.isArming
+        let wasIdle = machine.capture == .idle
+        let wasRecording = machine.isRecording
         let effects = machine.handle(input, now: clock())
+        if !wasRecording, machine.isRecording {
+            // Every press starts in the "connecting" state: the meter still holds the last recording's levels,
+            // and a refused press never opens the mic, whose start would clear them.
+            pillModel.levelMeter.reset()
+        }
+        if !machine.capture.isUncommittedPress {
+            pressKeepsProcessing = false
+        } else if wasIdle {
+            pressKeepsProcessing = hasPendingWork
+        }
         if let refusal = pendingRefusal, wasArming, machine.isRecording, !machine.capture.isArming {
             // The user committed (arming confirmed or hands-free) but capture was refused at key-down.
             pendingRefusal = nil
@@ -537,6 +557,7 @@ final class DictationController {
 
     private func schedule(_ id: DictationMachine.TimerID, after delay: TimeInterval) {
         cancelTimer(id)
+        guard runsTimers else { return }
         let token = UUID()
         let task = Task { [weak self] in
             try? await Task.sleep(for: .seconds(max(0, delay)))
@@ -1244,12 +1265,32 @@ final class DictationController {
 
     private var hasPendingWork: Bool { !queue.isEmpty || isDelivering }
 
+    /// The pill's phase as recordings count it: a press that hasn't committed reads as the phase under it (rest or
+    /// processing), though the pill already shows it, so a quick tap or an fn combo is never taken for a
+    /// recording (onboarding practice).
+    var committedPillPhase: PillPhase {
+        let phase = pillModel.phase
+        guard machine.capture.isUncommittedPress, phase.isRecording else { return phase }
+        return pendingJobCount > 0 ? .processing : .rest
+    }
+
     /// A one-shot success check or error shake. PillModel keeps the flourish on screen for its minimum time
     /// and settles back by itself, even when the next `refreshPill` already asks for rest.
     private func flash(_ phase: PillPhase) {
         lastFlash = (phase, clock())
         if phase == .error { onDictationFailed?() }
-        guard machine.capture == .idle else { return }
+        showFlourish(phase)
+    }
+
+    /// Only a real recording suppresses the flourish. The dots of a press that hasn't committed hold it back
+    /// until the press folds away (a quick tap, an fn combo), so the check or the shake is never lost to it.
+    private func showFlourish(_ phase: PillPhase) {
+        guard !machine.capture.isListeningOrLocked else { return }
+        if machine.capture.isUncommittedPress, !pressKeepsProcessing {
+            deferredFlourish = phase
+            return
+        }
+        deferredFlourish = nil
         // Leave any recording phase first, so the shake lands on the idle/processing pill.
         refreshPill()
         if phase == .error {
@@ -1260,16 +1301,30 @@ final class DictationController {
         }
     }
 
+    /// Plays the flourish held back during a press once the press has folded away, or drops it if the press
+    /// committed.
+    private func replayDeferredFlourish() {
+        guard let flourish = deferredFlourish, !machine.capture.isUncommittedPress else { return }
+        deferredFlourish = nil
+        guard machine.capture == .idle else { return }
+        lastFlash = (flourish, clock())
+        showFlourish(flourish)
+    }
+
     private func refreshPill() {
+        let idle: PillPhase = hasPendingWork ? .processing : .rest
         let phase: PillPhase
         switch machine.capture {
-        case .arming, .listening, .tapPending:
-            // From key-down on: the "connecting" dots until the first buffer, then the voice.
+        case .arming, .tapPending:
+            // From key-down on: the "connecting" dots until the first buffer, then the voice. Over a job in
+            // flight, the processing pill (already on screen) waits for the press to commit.
+            phase = pressKeepsProcessing ? idle : .listening
+        case .listening:
             phase = .listening
         case .locked, .lockedStopPending:
             phase = .locked
         case .idle:
-            phase = hasPendingWork ? .processing : .rest
+            phase = idle
         }
         // An idle request doesn't cut a success/error flourish short: PillModel holds it for its minimum time.
         if pillModel.phase != phase { pillModel.phase = phase }
@@ -1291,6 +1346,7 @@ final class DictationController {
         let count = queue.count + (isDelivering ? 1 : 0)
         if pendingJobCount != count { pendingJobCount = count }
         refreshPill()
+        replayDeferredFlourish()
         showSecureInputNoticeIfNeeded()
         if !machine.isRecording {
             deviceNoticeDue = false
@@ -1309,6 +1365,15 @@ final class DictationController {
 extension DictationMachine.Capture {
     var isArming: Bool {
         if case .arming = self { true } else { false }
+    }
+
+    /// Key down but not committed yet: arming, or the double-press window after a quick tap. The pill shows it,
+    /// but nothing counts it as a recording.
+    var isUncommittedPress: Bool {
+        switch self {
+        case .arming, .tapPending: true
+        case .idle, .listening, .locked, .lockedStopPending: false
+        }
     }
 
     /// Recording past the confirm delay. Arming already shows the pill, but its sound, notices and the menu bar
