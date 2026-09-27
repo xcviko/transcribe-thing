@@ -35,6 +35,7 @@ struct ShortcutsPage: View {
                             .labelsHidden()
                     }
                     row(.cancel)
+                    row(.switchModel)
                 }
             }
             HubGroup("Transcripts") {
@@ -49,6 +50,7 @@ struct ShortcutsPage: View {
                             text: tipLockWhileHolding)
                         tip(symbol: "arrow.uturn.backward", text: "Canceled by accident? Undo in the notice brings the recording back.")
                         tip(symbol: "escape", text: cancelTip)
+                        tip(symbol: "sparkles", text: switchModelTip)
                     }
                 }
             }
@@ -82,6 +84,15 @@ struct ShortcutsPage: View {
     private var cancelTip: String {
         let key = settings.shortcuts[.cancel]?.compactDescription ?? "The cancel key"
         return "\(key) only cancels while \(Brand.name) is recording. The rest of the time it works as usual."
+    }
+
+    private var switchModelTip: String {
+        let key = settings.shortcuts[.switchModel]?.compactDescription ?? "Switch model"
+        guard !settings.switchEngines.isEmpty else {
+            return "Turn on an extra model in Models to switch to it with \(key) while you dictate."
+        }
+        return"\(key) steps through your extra models while you dictate. The next dictation starts on "
+            + "\(settings.selectedEngine.shortName) again."
     }
 
     private var secureInputText: String {

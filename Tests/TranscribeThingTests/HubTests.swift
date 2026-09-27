@@ -286,3 +286,33 @@ import Testing
         #expect(PillCaption.text(.never) == "Nothing on screen while you dictate. Notices still appear.")
     }
 }
+
+@Suite struct ExtraModelsTests {
+    private let rightCommand = Shortcut.rightCommand
+
+    @Test func statusFollowsTheBindingAndTheToggles() {
+        #expect(ExtraModels.status(binding: .fnTab, enabled: [.geminiFlash, .geminiPro]) == .ready(.fnTab))
+        #expect(ExtraModels.status(binding: nil, enabled: [.geminiPro]) == .unbound)
+        #expect(ExtraModels.status(binding: Shortcut(modifiers: []), enabled: [.geminiPro]) == .unbound)
+        #expect(ExtraModels.status(binding: .fnTab, enabled: []) == .noneEnabled(.fnTab))
+        #expect(ExtraModels.status(binding: nil, enabled: []) == .noneEnabled(nil))
+    }
+
+    /// The copy names the user's own binding, never a hard-coded fn Tab.
+    @Test func explanationUsesTheActualBinding() {
+        let custom = ExtraModels.explanation(.ready(rightCommand))
+        #expect(custom.contains(rightCommand.compactDescription))
+        #expect(!custom.contains("fn"))
+        #expect(ExtraModels.explanation(.ready(.fnTab)).contains(Shortcut.fnTab.compactDescription))
+        #expect(ExtraModels.explanation(.noneEnabled(rightCommand)).contains(rightCommand.compactDescription))
+        #expect(ExtraModels.explanation(.noneEnabled(nil)).contains("Switch model"))
+        #expect(ExtraModels.explanation(.unbound).contains("no shortcut"))
+    }
+
+    @Test func togglesKeepTheCycleOrder() {
+        #expect(ExtraModels.setting(.geminiFlash, on: false, in: [.geminiFlash, .geminiPro]) == [.geminiPro])
+        #expect(ExtraModels.setting(.geminiFlash, on: true, in: [.geminiPro]) == [.geminiFlash, .geminiPro])
+        #expect(ExtraModels.setting(.geminiPro, on: true, in: [.geminiPro]) == [.geminiPro], "no duplicates")
+        #expect(ExtraModels.setting(.geminiPro, on: false, in: [.geminiPro]).isEmpty)
+    }
+}

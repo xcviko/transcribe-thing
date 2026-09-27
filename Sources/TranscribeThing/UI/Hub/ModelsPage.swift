@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Four engines (download, use, delete), storage, the OpenRouter key and Gemini instructions.
+/// The main model (download, use, delete) and storage, the extra models the Switch model shortcut steps through
+/// with Gemini's instructions, and the OpenRouter key.
 struct ModelsPage: View {
     @Environment(HubContext.self) private var hub
     @Environment(ModelStore.self) private var models
@@ -17,26 +18,30 @@ struct ModelsPage: View {
 
     var body: some View {
         ScrollViewReader { proxy in
-            HubPage("Models", subtitle: "Choose how \(Brand.name) turns speech into text. Switch anytime.") {
-                HubGroup("On your Mac", footer: nil) {
+            HubPage("Models", subtitle: "Every dictation starts on your main model. Switch to an extra one while you talk.") {
+                HubGroup("Main model") {
                     SettingsGroup {
-                        ForEach(EngineID.localEngines) { engine in row(engine, proxy: proxy) }
+                        ForEach(EngineID.mainCandidates) { engine in row(engine, proxy: proxy) }
                     }
                     .onGeometryChange(for: Bool.self) { $0.size.width < Self.compactBadgeWidth } action: { compact in
                         compactBadges = compact
                     }
                     storageLine
                 }
-                HubGroup("Through OpenRouter") {
+                HubGroup("Extra models", footer: extraFooter) {
+                    ExtraModelsLine(status: extraStatus) { hub.show(.shortcuts) }
                     SettingsGroup {
-                        ForEach(EngineID.cloudEngines) { engine in row(engine, proxy: proxy) }
+                        ForEach(EngineID.switchCandidates) { engine in
+                            ExtraModelRow(engine: engine, isOn: extraBinding(engine)) { focusKey(proxy) }
+                        }
                     }
-                    OpenRouterKeyCard(focusRequest: keyFocusRequest)
-                        .id(ModelsAnchor.key)
-                        .padding(.top, 4)
                 }
                 HubGroup("Gemini") {
                     GeminiInstructionsCard()
+                }
+                HubGroup("OpenRouter") {
+                    OpenRouterKeyCard(focusRequest: keyFocusRequest)
+                        .id(ModelsAnchor.key)
                 }
             }
         }
@@ -44,6 +49,20 @@ struct ModelsPage: View {
             freeBytes = hub.paths.freeDiskBytes()
         }
         .task { account.refreshIfStale(maxAge: 300) }
+    }
+
+    private var extraStatus: ExtraModels.Status {
+        ExtraModels.status(binding: settings.shortcuts[.switchModel], enabled: settings.switchEngines)
+    }
+
+    private var extraFooter: String {
+        "The next dictation starts on \(settings.selectedEngine.shortName) again. Gemini takes up to 7 minutes of audio."
+    }
+
+    private func extraBinding(_ engine: EngineID) -> Binding<Bool> {
+        let settings = settings
+        return Binding(get: { settings.switchEngines.contains(engine) },
+                       set: { on in settings.switchEngines = ExtraModels.setting(engine, on: on, in: settings.switchEngines) })
     }
 
     private func row(_ engine: EngineID, proxy: ScrollViewProxy) -> some View {
@@ -166,9 +185,6 @@ private struct ModelRow: View {
         engine.badges.filter { $0 != "Cloud" && !(compactBadges && EngineID.privacyBadges.contains($0)) }
     }
 
-    /// Under "Through OpenRouter" the "· Cloud" suffix would only repeat the heading.
-    private var title: String { engine.isLocal ? engine.displayName : engine.modelName }
-
     private func providerLine(_ text: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 5) {
             Image(systemName: "server.rack")
@@ -183,12 +199,11 @@ private struct ModelRow: View {
 
     private func titleLine(badges: [String]) -> some View {
         HStack(spacing: 6) {
-            Text(title)
+            Text(engine.displayName)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.ink)
                 .lineLimit(1)
                 .fixedSize()
-                .accessibilityLabel(engine.displayName)
             ForEach(badges, id: \.self) { Badge.engine($0) }
         }
     }
@@ -369,6 +384,111 @@ private struct ModelRow: View {
                 confirmingDelete = false
             }
         }
+    }
+}
+
+// MARK: - Extra models
+
+/// What the Switch model shortcut does, with the user's own binding as key caps; or what's missing for it to work.
+private struct ExtraModelsLine: View {
+    var status: ExtraModels.Status
+    var openShortcuts: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(isReady ? Color.accent : Color.inkTertiary)
+            switch status {
+            case .ready(let binding):
+                // Key caps mid-sentence; the explanation's text is the accessibility label.
+                HStack(spacing: 5) {
+                    Text("Press")
+                    ShortcutChips(shortcut: binding, size: .small)
+                    Text("while dictating to use one for that dictation.")
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(ExtraModels.explanation(status))
+            case .noneEnabled, .unbound:
+                Text(ExtraModels.explanation(status))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if status == .unbound {
+                Button("Set Shortcut", action: openShortcuts)
+                    .buttonStyle(.appQuiet)
+                    .fixedSize()
+            }
+        }
+        .typeface(.callout)
+        .foregroundStyle(.inkSecondary)
+        .padding(.horizontal, 4)
+        .padding(.bottom, 2)
+    }
+
+    private var isReady: Bool {
+        if case .ready = status { true } else { false }
+    }
+}
+
+/// An extra model: what it's like, its OpenRouter status, and whether the Switch model shortcut steps to it.
+private struct ExtraModelRow: View {
+    var engine: EngineID
+    @Binding var isOn: Bool
+    var focusKey: () -> Void
+
+    @Environment(HubContext.self) private var hub
+    @Environment(OpenRouterAccount.self) private var account
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            EngineIcon(engine: engine, size: 36)
+                .opacity(isOn ? 1 : 0.55)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(engine.modelName)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(isOn ? Color.ink : Color.inkSecondary)
+                    .lineLimit(1)
+                Text(engine.factLine)
+                    .typeface(.callout)
+                    .foregroundStyle(.inkSecondary)
+                    .lineLimit(1)
+                if let note = ProviderNote.text(engine) {
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
+                        Image(systemName: "server.rack")
+                            .font(.system(size: 9.5, weight: .semibold))
+                            .frame(width: 12)
+                        Text(note)
+                    }
+                    .typeface(.callout)
+                    .foregroundStyle(.inkTertiary)
+                }
+                ModelStatusText(keyStatus: account.status)
+                    .padding(.top, 2)
+            }
+            Spacer(minLength: 8)
+            HStack(spacing: 10) {
+                switch hub.readiness(of: engine) {
+                case .needsKey:
+                    Button("Add Key", action: focusKey)
+                        .buttonStyle(SecondaryButtonStyle(size: .small))
+                case .keyProblem:
+                    Button("Update Key", action: focusKey)
+                        .buttonStyle(SecondaryButtonStyle(size: .small))
+                case .ready, .warming, .needsDownload, .failed:
+                    EmptyView()
+                }
+                Toggle("", isOn: $isOn)
+                    .toggleStyle(.appSwitch)
+                    .labelsHidden()
+                    .accessibilityLabel("Include \(engine.displayName) when switching")
+                    .help(isOn ? "Included when switching models" : "Not included when switching models")
+            }
+        }
+        .padding(.horizontal, Theme.Spacing.md)
+        .padding(.vertical, 12)
+        .frame(minHeight: 76)
+        .animation(Theme.Motion.hover, value: isOn)
+        .accessibilityElement(children: .contain)
     }
 }
 

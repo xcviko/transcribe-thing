@@ -601,3 +601,53 @@ import Testing
         #expect(offenders.isEmpty, "Use ’ instead of ' in: \(offenders.joined(separator: "\n"))")
     }
 }
+
+// MARK: - Extra models
+
+@Suite struct OnboardingExtraModelsGateTests {
+    @Test func extraModelsNeedAnEnabledModelAndAWorkingKey() {
+        let valid = KeyStatus.valid(KeyInfo(limitRemaining: 3))
+        #expect(OnboardingGate.extraModelsUsable(enabled: [.geminiFlash], keyStatus: valid, hasStoredKey: true))
+        #expect(!OnboardingGate.extraModelsUsable(enabled: [], keyStatus: valid, hasStoredKey: true))
+        #expect(!OnboardingGate.extraModelsUsable(enabled: [.geminiPro], keyStatus: .missing, hasStoredKey: false))
+        #expect(!OnboardingGate.extraModelsUsable(enabled: [.geminiPro], keyStatus: .invalid("401"), hasStoredKey: true))
+        #expect(OnboardingGate.extraModelsUsable(enabled: [.geminiPro], keyStatus: .offline, hasStoredKey: true))
+    }
+
+    @Test func noteNamesTheActualSwitchModelBinding() {
+        let fnTab = OnboardingGate.extraModelsNote(binding: .fnTab, enabled: [.geminiFlash])
+        #expect(fnTab.contains(Shortcut.fnTab.compactDescription.replacingOccurrences(of: " ", with: "\u{00A0}")))
+        let custom = OnboardingGate.extraModelsNote(binding: .rightCommand, enabled: [.geminiFlash])
+        #expect(custom.contains(Shortcut.rightCommand.compactDescription.replacingOccurrences(of: " ", with: "\u{00A0}")))
+        #expect(!custom.contains("fn"))
+        #expect(OnboardingGate.extraModelsNote(binding: nil, enabled: [.geminiFlash]).contains("Settings"))
+        #expect(OnboardingGate.extraModelsNote(binding: .fnTab, enabled: []).contains("Settings"))
+    }
+}
+
+@MainActor
+@Suite struct OnboardingExtraModelsTests {
+    private func makeModel(_ configure: (inout OnboardingContext) -> Void = { _ in }) -> OnboardingModel {
+        let env = AppEnvironment.preview()
+        env.settings.onboardingCompleted = false
+        env.settings.onboardingStep = OnboardingStep.model.rawValue
+        var ctx = OnboardingContext(env: env)
+        configure(&ctx)
+        return OnboardingModel(context: ctx)
+    }
+
+    @Test func theModelStepPicksOnlyAMainModel() {
+        let model = makeModel()
+        model.select(.parakeetCloud)
+        for engine in EngineID.switchCandidates {
+            model.select(engine)
+            #expect(model.selectedEngine == .parakeetCloud, "\(engine) is picked per dictation, not here")
+        }
+    }
+
+    @Test func switchModelLessonShowsOnlyWhenGeminiWouldAnswer() {
+        #expect(makeModel().showsSwitchModelLesson, "the preview key is valid")
+        #expect(!makeModel { ctx in ctx.account = .preview(status: .missing) }.showsSwitchModelLesson)
+        #expect(!makeModel { ctx in ctx.settings.switchEngines = [] }.showsSwitchModelLesson)
+    }
+}

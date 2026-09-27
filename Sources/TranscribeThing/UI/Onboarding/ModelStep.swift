@@ -3,6 +3,9 @@ import SwiftUI
 struct ModelStep: View {
     let model: OnboardingModel
 
+    /// The main models served through OpenRouter; Gemini is an extra model, picked per dictation.
+    private static let cloudEngines = EngineID.mainCandidates.filter(\.isCloud)
+
     /// Width of the cloud tile row, so the key panel's notch can point at the selected tile.
     @State private var cloudRowWidth: CGFloat = 0
 
@@ -12,7 +15,7 @@ struct ModelStep: View {
 
     /// 0...1 across the key panel: the center of the selected cloud tile.
     private var notchX: CGFloat {
-        let engines = EngineID.cloudEngines
+        let engines = Self.cloudEngines
         guard let index = engines.firstIndex(of: selected), cloudRowWidth > 0 else { return 0.5 }
         let count = CGFloat(engines.count)
         let cardWidth = (cloudRowWidth - Self.cloudSpacing * (count - 1)) / count
@@ -23,8 +26,8 @@ struct ModelStep: View {
         let cloudSelected = selected.isCloud
         VStack(alignment: .leading, spacing: 0) {
             StepHeader(title: "Pick how \(Brand.name) listens",
-                       subtitle: "Parakeet runs on your Mac, private and offline. Cloud models use your own OpenRouter key. "
-                           + "Switch anytime in Settings.",
+                       subtitle: "Parakeet runs on your Mac, private and offline, or in the cloud with your own "
+                           + "OpenRouter key. Switch anytime in Settings.",
                        titleSize: 28)
                 .padding(.bottom, 16)
 
@@ -40,7 +43,7 @@ struct ModelStep: View {
             .padding(.top, cloudSelected ? 16 : 20)
             .padding(.bottom, 8)
             HStack(spacing: Self.cloudSpacing) {
-                ForEach(EngineID.cloudEngines) { engine in
+                ForEach(Self.cloudEngines) { engine in
                     CloudEngineCard(model: model, engine: engine)
                 }
             }
@@ -51,6 +54,9 @@ struct ModelStep: View {
                     .padding(.top, 14)
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
+
+            ExtraModelsNote(text: model.extraModelsNote)
+                .padding(.top, 14)
         }
         .animation(Theme.Motion.expand, value: cloudSelected)
         .animation(Theme.Motion.snappy, value: selected)
@@ -88,14 +94,15 @@ private struct CloudKeySummary: View {
         case .noCredit:
             return ("exclamationmark.triangle.fill", status.isKeyLimitReached ? "Key limit reached" : "No credit left", .warning)
         case .missing, .checking, .offline, .failed:
-            return (nil, hasStoredKey ? "One key for all three · pay per use" : "Needs an OpenRouter key · pay per use", .neutral)
+            return (nil, hasStoredKey ? "One key for Parakeet and Gemini · pay per use" : "Needs an OpenRouter key · pay per use",
+                    .neutral)
         }
     }
 }
 
 // MARK: - Cloud tile
 
-/// Compact tile for a model served through OpenRouter: name, who serves it, what it costs.
+/// Tile for a main model served through OpenRouter: name, who serves it, what it costs.
 private struct CloudEngineCard: View {
     let model: OnboardingModel
     let engine: EngineID
@@ -106,27 +113,26 @@ private struct CloudEngineCard: View {
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top) {
-                EngineIcon(engine: engine, size: 24)
-                Spacer(minLength: 0)
-                RadioMark(isOn: isSelected, size: 18)
+        HStack(alignment: .center, spacing: 12) {
+            // Same slot as the local card's icon, so the names line up.
+            EngineIcon(engine: engine, size: 32)
+                .frame(width: 40, alignment: .leading)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(engine.modelName)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.ink)
+                    .lineLimit(1)
+                Text("\(engine.cloudCardProvider) · \(engine.cloudCardPrice)")
+                    .font(.system(size: 12.5).monospacedDigit())
+                    .foregroundStyle(.inkSecondary)
+                    .lineLimit(1)
             }
-            .padding(.bottom, 7)
-            Text(engine.modelName)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.ink)
-                .lineLimit(1)
-            Text("\(engine.cloudCardProvider) · \(engine.cloudCardPrice)")
-                .font(.system(size: 11.5).monospacedDigit())
-                .foregroundStyle(.inkSecondary)
-                .lineLimit(1)
-                .padding(.top, 1)
+            Spacer(minLength: 0)
+            RadioMark(isOn: isSelected)
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 10)
-        .padding(.bottom, 10)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background {
             shape.fill(Color.bgSurface)
             shape.fill(isSelected ? Color.accentSoft : (hovering ? Color.hover : .clear))
@@ -146,6 +152,24 @@ private struct CloudEngineCard: View {
         .accessibilityLabel(engine.displayName)
         .accessibilityValue("\(engine.cloudCardProvider), \(engine.cloudCardPrice)")
         .accessibilityAction { model.select(engine) }
+    }
+}
+
+/// One line under the models: Gemini isn't picked here, it's a key press away while dictating.
+private struct ExtraModelsNote: View {
+    var text: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 7) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.warm)
+            Text(text)
+                .font(.system(size: 12))
+                .foregroundStyle(.inkSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 4)
     }
 }
 
@@ -557,7 +581,7 @@ private struct OpenRouterKeyPanel: View {
                 Text("OpenRouter API key")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.ink)
-                Text("One key works for all three cloud models.")
+                Text("The same key works for Gemini.")
                     .font(.system(size: 12))
                     .foregroundStyle(.inkTertiary)
                 Spacer(minLength: 0)

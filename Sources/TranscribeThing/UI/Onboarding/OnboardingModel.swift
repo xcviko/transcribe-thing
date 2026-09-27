@@ -113,6 +113,25 @@ enum OnboardingGate {
         return key.count >= 24 && keyFormatProblem(key) == nil
     }
 
+    /// The Switch model lesson is offered once an extra model can actually answer: one is on and the key works.
+    static func extraModelsUsable(enabled: [EngineID], keyStatus: KeyStatus, hasStoredKey: Bool) -> Bool {
+        guard let engine = enabled.first else { return false }
+        return engineIsUsable(engine, localState: .notInstalled, keyStatus: keyStatus, hasStoredKey: hasStoredKey)
+    }
+
+    /// The model step's line about Gemini, with the user's own Switch model binding.
+    static func extraModelsNote(binding: Shortcut?, enabled: [EngineID]) -> String {
+        switch ExtraModels.status(binding: binding, enabled: enabled) {
+        case .ready(let binding):
+            // "fn ⇥" stays on one line inside running copy.
+            let key = binding.compactDescription.replacingOccurrences(of: " ", with: "\u{00A0}")
+            return "For a long talk where every word counts, press \(key) while dictating to use Gemini. "
+                + "It uses the same OpenRouter key."
+        case .noneEnabled, .unbound:
+            return "Gemini is there for long talks where every word counts. Set it up later in Settings."
+        }
+    }
+
     static func requiredDiskBytes(for engine: EngineID) -> Int64? {
         engine.approxDownloadBytes.map { Int64((Double($0) * 1.25).rounded(.up)) }
     }
@@ -409,6 +428,18 @@ final class OnboardingModel {
         pushToTalkKeys.union(handsFreeKeys).union(IllustratedKey.keys(for: ctx.settings.shortcuts[.cancel]))
     }
 
+    /// Gemini on the model step: a key press while dictating, never the main model.
+    var extraModelsNote: String {
+        OnboardingGate.extraModelsNote(binding: ctx.settings.shortcuts[.switchModel], enabled: ctx.settings.switchEngines)
+    }
+
+    /// The optional "Switch to Gemini" row on the practice step: only when an extra model would answer.
+    var showsSwitchModelLesson: Bool {
+        let inputs = gateInputs
+        return OnboardingGate.extraModelsUsable(enabled: ctx.settings.switchEngines, keyStatus: inputs.keyStatus,
+                                                hasStoredKey: inputs.hasStoredKey)
+    }
+
     var pushToTalkLabel: String { ctx.settings.shortcuts[.pushToTalk]?.compactDescription ?? "fn" }
 
     /// The real pill's phase, counting only committed recordings: what the lessons and the stage follow.
@@ -618,6 +649,8 @@ final class OnboardingModel {
     // MARK: Models
 
     func select(_ engine: EngineID) {
+        // Extra models are picked per dictation, never as the main model.
+        guard !engine.isSwitchModel else { return }
         ctx.models.select(engine)
         // Preview stores keep their own settings; keep the shared selection authoritative either way.
         if ctx.settings.selectedEngine != engine { ctx.settings.selectedEngine = engine }

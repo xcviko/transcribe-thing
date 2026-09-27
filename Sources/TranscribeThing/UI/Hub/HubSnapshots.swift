@@ -49,21 +49,31 @@ enum HubSnapshots {
                 c.settings.selectedEngine = .parakeetCloud
             },
             hub("hub-models-key-limit", .models, height: 1100) { c in
-                c.settings.selectedEngine = .geminiFlash
+                c.settings.selectedEngine = .parakeetCloud
                 c.account = .preview(status: .noCredit(KeyInfo(label: "transcribe-thing", limit: 5, limitRemaining: 0, usage: 5)))
             },
             hub("hub-models-key-invalid", .models, height: 1100) { c in
-                c.settings.selectedEngine = .geminiFlash
                 c.account = .preview(status: .invalid("401"))
             },
             hub("hub-models-key-missing", .models, height: 1100) { c in
                 c.account = .preview(status: .missing)
                 c.settings.geminiSystemPrompt = "Transcribe the audio verbatim. Output only the transcript."
             },
+            // Switch model rebound to right ⌘, Pro left out: the line under "Extra models" shows the real binding.
+            hub("hub-models-extra-custom", .models, height: 1100) { c in
+                c.settings.shortcuts[.switchModel] = .rightCommand
+                c.settings.switchEngines = [.geminiFlash]
+            },
+            hub("hub-models-extra-unbound", .models, height: 1100) { c in
+                c.settings.shortcuts[.switchModel] = nil
+            },
+            hub("hub-models-extra-off", .models, height: 1100) { c in
+                c.settings.switchEngines = []
+            },
 
-            hub("hub-shortcuts", .shortcuts, height: 860),
+            hub("hub-shortcuts", .shortcuts, height: 960),
             // Hands-free just recorded as ⌃⌥Space: saved, with macOS's input-source shortcut as the warning.
-            hub("hub-shortcuts-warning", .shortcuts, height: 940,
+            hub("hub-shortcuts-warning", .shortcuts, height: 1040,
                 recorderMessages: ShortcutRecorderSnapshots.message(
                     recording: ShortcutRecorderSnapshots.controlOptionSpace, for: .handsFree).map { [.handsFree: $0] } ?? [:]) { c in
                 c.settings.shortcuts[.handsFree] = ShortcutRecorderSnapshots.controlOptionSpace

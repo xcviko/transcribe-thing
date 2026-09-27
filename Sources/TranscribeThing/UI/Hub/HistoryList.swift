@@ -251,8 +251,8 @@ struct HistoryRow: View {
     }
 }
 
-/// "Transcribe with" → every engine, grouped like the menu bar's Model menu (on this Mac, cloud speech, Gemini);
-/// unavailable ones are disabled with the reason.
+/// "Transcribe with" → every engine, the extra models included (a retry picks the model for that one recording),
+/// grouped by where it runs (on this Mac, cloud speech, Gemini); unavailable ones are disabled with the reason.
 struct RetryMenuItems: View {
     var entry: TranscriptEntry
     var includesHeader = true
