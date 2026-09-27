@@ -1,0 +1,359 @@
+import AVFAudio
+import CoreAudio
+import Foundation
+import os
+
+/// What `CueEngine` asks of the audio hardware. Every call arrives on the engine's queue, never the main thread.
+/// `AVCueOutput` is the real one; tests substitute a fake, so nothing ever plays.
+protocol CueOutput: AnyObject {
+    /// The output must be rebuilt (the engine's configuration or the default output device changed). May be
+    /// called on any thread; the engine hops to its queue.
+    var onChange: (() -> Void)? { get set }
+    var isRunning: Bool { get }
+    /// Reads the sound files and starts watching the default output; returns each loaded cue's length in seconds.
+    func load() -> [SoundEffect: TimeInterval]
+    /// Builds the graph for the current output device if there is none, then starts it.
+    func start() throws
+    /// Stops the device (AirPods leave their playback state) and keeps the graph for the next start.
+    func stop()
+    /// Drops the graph: the next `start` builds one for whatever device is the default then.
+    func reset()
+    /// Plays `effect` from its start, cutting off an earlier play of the same cue (other cues keep playing).
+    /// False when it isn't loaded or the output isn't running.
+    func play(_ effect: SoundEffect) -> Bool
+}
+
+/// Plays transcribe-thing's sound cues without ever touching audio on the main thread.
+///
+/// Starting an output is a blocking `AudioDeviceStart`: a few ms on the built-in speakers, up to ~300 ms while
+/// AirPods wake their Bluetooth route. `AVAudioPlayer` did that on the main thread for every cue and froze the
+/// pill each time. Here one persistent output lives on a private serial queue: callers only enqueue ("play X",
+/// "warm up") and return at once. `warmUp()` at key-down gets the device running before the start cue 120 ms
+/// later; the output stops `idleRelease` seconds after the last cue while no dictation holds it, so AirPods don't
+/// stay in an active playback state.
+///
+/// A cue that waits behind a (re)start still plays once the output runs, unless it is more than
+/// `maxLateness` late and is one of the key-feedback cues: those confirm a press or a paste the user has already
+/// seen, and that late they would land mid-sentence in the next recording. Notice cues always play: their toast
+/// is still on screen and the sound is what draws the eye to it.
+///
+/// Threading: public methods are safe from any thread and never block; everything else runs on `queue`.
+final class CueEngine: @unchecked Sendable {
+    static let idleRelease: TimeInterval = 5
+    static let maxLateness: TimeInterval = 0.3
+    /// Cues that are dropped rather than played more than `maxLateness` late.
+    static let keyFeedback: Set<SoundEffect> = [.start, .stop, .lock, .paste, .cancel, .modelSwitch]
+
+    private let queue = DispatchQueue(label: "dev.transcribe-thing.audio.cues", qos: .userInteractive)
+    private let idleDelay: TimeInterval
+    private let makeOutput: @Sendable () -> CueOutput
+    /// Loaded cue lengths, read on the main actor for ducking.
+    private let durations = OSAllocatedUnfairLock<[SoundEffect: TimeInterval]>(initialState: [:])
+
+    // Queue state.
+    private var output: CueOutput?
+    /// A dictation is under way: the output stays up however long ago the last cue was.
+    private var isHeld = false
+    private var idleTimer: DispatchWorkItem?
+
+    init(idleRelease: TimeInterval = CueEngine.idleRelease,
+         makeOutput: @escaping @Sendable () -> CueOutput = { AVCueOutput() }) {
+        self.idleDelay = idleRelease
+        self.makeOutput = makeOutput
+    }
+
+    deinit {
+        // Audio objects are released on the queue too.
+        let output = output
+        queue.async { _ = output }
+    }
+
+    // MARK: Public API (any thread, never blocks)
+
+    /// Reads the sound files; the output itself starts only for the first cue or warm-up.
+    func load() {
+        queue.async { self.loadOnQueue() }
+    }
+
+    /// `requestedAt`: `DispatchTime` uptime in ns when the cue was asked for (lateness is measured from it).
+    func play(_ effect: SoundEffect, requestedAt: UInt64 = DispatchTime.now().uptimeNanoseconds) {
+        queue.async { self.playOnQueue(effect, requestedAt: requestedAt) }
+    }
+
+    /// Starts the output ahead of a cue that is about to play.
+    func warmUp() {
+        queue.async { self.warmUpOnQueue() }
+    }
+
+    /// While held (a dictation records or waits for its text) the output never idles out.
+    func setHeld(_ held: Bool) {
+        queue.async { self.setHeldOnQueue(held) }
+    }
+
+    func duration(of effect: SoundEffect) -> TimeInterval? {
+        durations.withLock { $0[effect] }
+    }
+
+    /// Waits for everything enqueued so far (tests).
+    func flush() {
+        queue.sync {}
+    }
+
+    // MARK: Queue
+
+    private func loadOnQueue() {
+        Self.checkOffMain("load")
+        guard output == nil else { return }
+        let output = makeOutput()
+        output.onChange = { [weak self] in
+            guard let self else { return }
+            self.queue.async { self.outputChanged() }
+        }
+        self.output = output
+        let loaded = output.load()
+        durations.withLock { $0 = loaded }
+    }
+
+    private func playOnQueue(_ effect: SoundEffect, requestedAt: UInt64) {
+        Self.checkOffMain("play")
+        guard let output else { return }
+        defer { scheduleRelease() }
+        guard ensureRunning() else { return }
+        let late = Self.milliseconds(since: requestedAt)
+        if Double(late) > Self.maxLateness * 1000, Self.keyFeedback.contains(effect) {
+            Log.app.debug("Cue \(effect.rawValue, privacy: .public) dropped: \(late) ms late")
+            return
+        }
+        guard output.play(effect) else {
+            Log.app.error("Cue \(effect.rawValue, privacy: .public) couldn't play")
+            return
+        }
+        Log.app.debug("Cue \(effect.rawValue, privacy: .public) scheduled in \(Self.milliseconds(since: requestedAt)) ms")
+    }
+
+    private func warmUpOnQueue() {
+        Self.checkOffMain("warmUp")
+        guard output != nil else { return }
+        let requestedAt = DispatchTime.now().uptimeNanoseconds
+        let wasRunning = output?.isRunning == true
+        if ensureRunning(), !wasRunning {
+            Log.app.debug("Cue output warmed up in \(Self.milliseconds(since: requestedAt)) ms")
+        }
+        scheduleRelease()
+    }
+
+    private func setHeldOnQueue(_ held: Bool) {
+        Self.checkOffMain("setHeld")
+        guard held != isHeld else { return }
+        isHeld = held
+        scheduleRelease()
+    }
+
+    /// Starts the output if it isn't running; a start that fails drops the graph and tries once more on a fresh
+    /// one (the old one may be bound to a device that is gone). Failures are logged, never thrown.
+    @discardableResult
+    private func ensureRunning() -> Bool {
+        guard let output else { return false }
+        if output.isRunning { return true }
+        for attempt in 1...2 {
+            do {
+                try output.start()
+                return true
+            } catch {
+                Log.app.error("Cue output didn't start (attempt \(attempt)): \(error.localizedDescription, privacy: .public)")
+                output.reset()
+            }
+        }
+        return false
+    }
+
+    /// (Re)arms the idle release; a held output has none.
+    private func scheduleRelease() {
+        idleTimer?.cancel()
+        idleTimer = nil
+        guard !isHeld else { return }
+        let item = DispatchWorkItem { [weak self] in self?.releaseIfIdle() }
+        idleTimer = item
+        queue.asyncAfter(deadline: .now() + idleDelay, execute: item)
+    }
+
+    private func releaseIfIdle() {
+        Self.checkOffMain("releaseIfIdle")
+        idleTimer = nil
+        guard !isHeld, let output, output.isRunning else { return }
+        output.stop()
+        Log.app.debug("Cue output stopped after \(self.idleDelay) s idle")
+    }
+
+    /// AirPods connected or left, the route changed format: rebuild for the new default output, right away if the
+    /// output should be up (a dictation holds it, or a cue played moments ago), else at the next cue.
+    private func outputChanged() {
+        Self.checkOffMain("outputChanged")
+        guard let output else { return }
+        let wantsRunning = isHeld || idleTimer != nil
+        output.reset()
+        Log.app.debug("Cue output rebuilt after a device change")
+        if wantsRunning { ensureRunning() }
+    }
+
+    private static func milliseconds(since start: UInt64) -> Int {
+        let now = DispatchTime.now().uptimeNanoseconds
+        return now > start ? Int((now - start) / 1_000_000) : 0
+    }
+
+    /// Audio work on the main thread is the stall this type exists to avoid.
+    static func checkOffMain(_ function: String) {
+        guard Thread.isMainThread else { return }
+        Log.app.fault("Cue engine \(function, privacy: .public) ran on the main thread")
+        assertionFailure("Cue engine \(function) ran on the main thread")
+    }
+}
+
+// MARK: - AVAudioEngine output
+
+enum CueOutputError: LocalizedError {
+    case noOutputDevice
+
+    var errorDescription: String? { "No output device" }
+}
+
+/// The real cue output: one `AVAudioEngine` (output only: its input node is never touched, so it can't open a
+/// mic) with a player node per cue into the main mixer, which lets different cues overlap as before. The cues
+/// are read once into buffers, then converted to the output's sample rate each time the graph is built.
+/// Confined to `CueEngine`'s queue.
+final class AVCueOutput: CueOutput {
+    var onChange: (() -> Void)?
+
+    /// The files as read (the processing format of each WAV).
+    private var sources: [SoundEffect: AVAudioPCMBuffer] = [:]
+    private var engine: AVAudioEngine?
+    private var players: [SoundEffect: AVAudioPlayerNode] = [:]
+    private var buffers: [SoundEffect: AVAudioPCMBuffer] = [:]
+    private var configurationObserver: NSObjectProtocol?
+    private var outputListener: AudioObjectPropertyListenerBlock?
+
+    private static var defaultOutputAddress = AudioObjectPropertyAddress(
+        mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain)
+
+    deinit {
+        if let outputListener {
+            AudioObjectRemovePropertyListenerBlock(
+                AudioObjectID(kAudioObjectSystemObject), &Self.defaultOutputAddress, nil, outputListener)
+        }
+        if let configurationObserver { NotificationCenter.default.removeObserver(configurationObserver) }
+    }
+
+    var isRunning: Bool { engine?.isRunning ?? false }
+
+    func load() -> [SoundEffect: TimeInterval] {
+        CueEngine.checkOffMain("AVCueOutput.load")
+        var durations: [SoundEffect: TimeInterval] = [:]
+        for effect in SoundEffect.allCases {
+            guard let url = AppResources.url(effect.fileName, ext: SoundEffect.fileExtension, subdirectory: "Sounds") else {
+                Log.app.error("Missing sound \(effect.rawValue, privacy: .public).wav")
+                continue
+            }
+            do {
+                let file = try AVAudioFile(forReading: url)
+                guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat,
+                                                    frameCapacity: AVAudioFrameCount(file.length)) else { continue }
+                try file.read(into: buffer)
+                sources[effect] = buffer
+                durations[effect] = Double(file.length) / file.fileFormat.sampleRate
+            } catch {
+                Log.app.error("Couldn't load sound \(effect.rawValue, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        observeDefaultOutput()
+        return durations
+    }
+
+    func start() throws {
+        CueEngine.checkOffMain("AVCueOutput.start")
+        let engine = try engine ?? build()
+        if !engine.isRunning { try engine.start() }
+    }
+
+    func stop() {
+        CueEngine.checkOffMain("AVCueOutput.stop")
+        for player in players.values { player.stop() }
+        engine?.stop()
+    }
+
+    func reset() {
+        CueEngine.checkOffMain("AVCueOutput.reset")
+        stop()
+        if let configurationObserver { NotificationCenter.default.removeObserver(configurationObserver) }
+        configurationObserver = nil
+        players = [:]
+        buffers = [:]
+        engine = nil
+    }
+
+    func play(_ effect: SoundEffect) -> Bool {
+        guard let engine, engine.isRunning, let player = players[effect], let buffer = buffers[effect] else { return false }
+        // `.interrupts` restarts this cue if it is still sounding; the other nodes keep theirs.
+        player.scheduleBuffer(buffer, at: nil, options: .interrupts)
+        if !player.isPlaying { player.play() }
+        return true
+    }
+
+    private func build() throws -> AVAudioEngine {
+        let engine = AVAudioEngine()
+        let rate = engine.outputNode.outputFormat(forBus: 0).sampleRate
+        guard rate > 0 else { throw CueOutputError.noOutputDevice }
+        for (effect, source) in sources {
+            guard let format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: source.format.channelCount),
+                  let buffer = Self.convert(source, to: format) else {
+                Log.app.error("Couldn't convert sound \(effect.rawValue, privacy: .public) to \(rate) Hz")
+                continue
+            }
+            let player = AVAudioPlayerNode()
+            engine.attach(player)
+            engine.connect(player, to: engine.mainMixerNode, format: format)
+            players[effect] = player
+            buffers[effect] = buffer
+        }
+        engine.prepare()
+        // The engine stops itself when the output's format changes (AirPods switching to their headset profile).
+        configurationObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
+        ) { [weak self] _ in self?.onChange?() }
+        self.engine = engine
+        return engine
+    }
+
+    /// An engine stays bound to the device that was default when it was built (AirPods connecting, switching to a
+    /// display's speakers), so rebuild when the default output changes. CoreAudio calls the block on its own
+    /// thread; `onChange` hops to the engine's queue.
+    private func observeDefaultOutput() {
+        guard outputListener == nil else { return }
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.onChange?() }
+        let status = AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject), &Self.defaultOutputAddress, nil, block)
+        if status == noErr { outputListener = block }
+    }
+
+    /// `source` resampled (and converted) to `format`; the same buffer when it already matches.
+    static func convert(_ source: AVAudioPCMBuffer, to format: AVAudioFormat) -> AVAudioPCMBuffer? {
+        if source.format == format { return source }
+        guard let converter = AVAudioConverter(from: source.format, to: format) else { return nil }
+        let ratio = format.sampleRate / source.format.sampleRate
+        let capacity = AVAudioFrameCount((Double(source.frameLength) * ratio).rounded(.up)) + 1024
+        guard let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else { return nil }
+        let fed = OSAllocatedUnfairLock(initialState: false)
+        var error: NSError?
+        let status = converter.convert(to: output, error: &error) { _, inputStatus in
+            let isFirst = fed.withLock { done in
+                defer { done = true }
+                return !done
+            }
+            inputStatus.pointee = isFirst ? .haveData : .endOfStream
+            return isFirst ? source : nil
+        }
+        guard status != .error, error == nil else { return nil }
+        return output
+    }
+}

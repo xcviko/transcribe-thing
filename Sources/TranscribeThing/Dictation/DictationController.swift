@@ -273,6 +273,8 @@ final class DictationController {
             // Every press starts with an empty equalizer: the meter still holds the last recording's levels,
             // and a refused press never opens the mic, whose start would clear them.
             pillModel.levelMeter.reset()
+            // Its start cue follows in 120 ms: the sound output (AirPods wake slowly) starts now, off the main thread.
+            sounds.warmUp()
         }
         if !machine.capture.isUncommittedPress {
             pressKeepsProcessing = false
@@ -1556,6 +1558,7 @@ final class DictationController {
         let next: DictationActivity = machine.capture.isListeningOrLocked ? .recording : (hasPendingWork ? .processing : .idle)
         if next != activity {
             activity = next
+            sounds.setDictationActive(next != .idle)
             onActivityChanged?(next)
         }
     }
