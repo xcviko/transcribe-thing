@@ -531,6 +531,50 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(newest(at: end + WaveformEngine.growDuration) == newest(at: end, reduceMotion: true))
     }
 
+    /// 10 ms windows ending at `start + 0.01`, `start + 0.02`, ...
+    private func ingest(_ meter: LevelMeter, from start: TimeInterval, seconds: Double, db: (Double) -> Float) {
+        for step in 0..<Int((seconds * 100).rounded()) {
+            meter.ingest(rmsDBFS: db(Double(step) * 0.01), at: start + Double(step + 1) * 0.01)
+        }
+    }
+
+    @Test func anOnsetConfirmedByTheNextChunkStillDraws() throws {
+        let clock = Clock()
+        let meter = LevelMeter(clock: { clock.now })
+        let engine = WaveformEngine()
+        let onset = clock.now + 1
+        ingest(meter, from: clock.now, seconds: 1) { _ in -50 }
+        engine.advance(meter: meter, to: onset - 0.2)
+        // The first 50 ms of a word arrive; the gate needs one more window, which is in the next chunk.
+        ingest(meter, from: onset, seconds: 0.05) { _ in -22 }
+        engine.advance(meter: meter, to: onset - 0.2 + 3 * WaveformEngine.columnInterval)
+        let end = try #require(engine.newestEnd)
+        #expect(engine.columns[0] == 0)
+        ingest(meter, from: onset + 0.05, seconds: 0.03) { _ in -22 }
+        engine.advance(meter: meter, to: end + 0.017)
+        #expect(engine.columns[0] > 0.5)
+        // The row starts sliding at once instead of waiting for the next column.
+        let bars = engine.bars(size: Self.size, now: end + 0.034, reduceMotion: false, isStatic: false)
+        #expect(bars[0].rect.minX < Self.size.width - PillMetrics.barWidth)
+    }
+
+    @Test func aLateChunkFillsInInsteadOfLeavingDots() {
+        let clock = Clock()
+        let meter = LevelMeter(clock: { clock.now })
+        let engine = WaveformEngine()
+        let speech = clock.now + 1
+        ingest(meter, from: clock.now, seconds: 1) { _ in -50 }
+        ingest(meter, from: speech, seconds: 0.3) { _ in -22 }
+        engine.advance(meter: meter, to: speech + 0.3 - meter.tuning.readBehind)
+        // The tap thread stalls for 350 ms: the columns of that time land before their audio does.
+        let stalled = speech + 0.3 + 0.35 - meter.tuning.readBehind
+        engine.advance(meter: meter, to: stalled)
+        #expect(engine.columns[0] == 0)
+        ingest(meter, from: speech + 0.3, seconds: 0.35) { _ in -22 }
+        engine.advance(meter: meter, to: stalled + 0.017)
+        #expect(engine.columns.prefix(5).allSatisfy { $0 > 0.5 }, "\(engine.columns)")
+    }
+
     @Test func staticRenderingIsDeterministic() {
         let a = WaveformEngine(), b = WaveformEngine()
         let meter = LevelMeter.preview(level: 0.7)

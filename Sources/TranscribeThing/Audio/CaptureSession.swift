@@ -344,7 +344,7 @@ final class CaptureSession: @unchecked Sendable {
         }
         if outcome.isFirstBuffer { onEvent(.firstBuffer) }
         if let meter, !outcome.levels.isEmpty {
-            for point in outcome.levels { meter.ingest(rmsDBFS: point.db, at: point.time) }
+            for point in outcome.levels { meter.ingest(rmsDBFS: point.db, at: point.time, ducked: point.ducked) }
         }
         if let completion = outcome.tailCompletion {
             completion(outcome.finalSamples)
@@ -415,7 +415,7 @@ struct CaptureState {
 
     struct IngestOutcome {
         var isFirstBuffer = false
-        var levels: [(time: TimeInterval, db: Float)] = []
+        var levels: [(time: TimeInterval, db: Float, ducked: Bool)] = []
         var tailCompletion: Completion?
         var finalSamples: [Float] = []
     }
@@ -576,9 +576,10 @@ struct CaptureState {
         }
     }
 
-    /// RMS per 10 ms of output audio, carried across chunk boundaries, stamped with capture time.
-    private mutating func meterPoints(globalRange: Range<Int>) -> [(time: TimeInterval, db: Float)] {
-        var points: [(time: TimeInterval, db: Float)] = []
+    /// RMS per 10 ms of output audio, carried across chunk boundaries, stamped with capture time, and whether
+    /// a duck touched the window.
+    private mutating func meterPoints(globalRange: Range<Int>) -> [(time: TimeInterval, db: Float, ducked: Bool)] {
+        var points: [(time: TimeInterval, db: Float, ducked: Bool)] = []
         points.reserveCapacity(globalRange.count / Self.levelWindow + 1)
         let base = samplesBase
         for frame in globalRange {
@@ -587,7 +588,9 @@ struct CaptureState {
             levelCount += 1
             if levelCount == Self.levelWindow {
                 let rms = (levelSum / Float(levelCount)).squareRoot()
-                points.append((time(ofFrame: frame + 1), rms > 1e-8 ? 20 * log10(rms) : -160))
+                let window = (frame + 1 - Self.levelWindow)..<(frame + 1)
+                let ducked = ducks.contains { overlaps($0, window) }
+                points.append((time(ofFrame: frame + 1), rms > 1e-8 ? 20 * log10(rms) : -160, ducked))
                 levelSum = 0
                 levelCount = 0
             }

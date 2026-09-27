@@ -735,6 +735,76 @@ private final class MeterTestClock: @unchecked Sendable {
         #expect(windows.allSatisfy { $0.amplitude == 0 })
     }
 
+    @Test func shortSyllablesAfterABreathReopenTheGate() {
+        let clock = MeterTestClock()
+        let meter = LevelMeter(clock: { clock.now })
+        var noise = Noise(state: 14)
+        feed(meter, clock: clock, seconds: 1) { _ in noise.db(-50, 2) }
+        feed(meter, clock: clock, seconds: 0.8) { _ in noise.db(-30, 3) }
+        // A breath long enough to close the gate ...
+        let breath = feed(meter, clock: clock, seconds: 0.3) { _ in noise.db(-50, 2) }
+        #expect(breath.suffix(3).allSatisfy { $0.amplitude == 0 })
+        // ... then fast syllables only 50 ms loud each, too short for a cold onset.
+        let syllables = feed(meter, clock: clock, seconds: 0.64) { t in
+            t.truncatingRemainder(dividingBy: 0.08) < 0.05 ? noise.db(-30, 2) : noise.db(-50, 2)
+        }
+        #expect(syllables.allSatisfy { $0.amplitude > 0 }, "\(syllables.filter { $0.amplitude == 0 }.count) windows dropped")
+    }
+
+    @Test func aClickNeverArmsTheQuickReopen() {
+        let clock = MeterTestClock()
+        let meter = LevelMeter(clock: { clock.now })
+        var noise = Noise(state: 15)
+        feed(meter, clock: clock, seconds: 1) { _ in noise.db(-50, 2) }
+        // A thud that rings just long enough to open the gate, then closes it again ...
+        feed(meter, clock: clock, seconds: 0.06) { _ in -25 }
+        feed(meter, clock: clock, seconds: 0.3) { _ in noise.db(-50, 2) }
+        // ... must not let 40 ms taps right after it through.
+        let taps = feed(meter, clock: clock, seconds: 0.5) { t in
+            t.truncatingRemainder(dividingBy: 0.1) < 0.04 ? -25 : noise.db(-50, 2)
+        }
+        #expect(taps.allSatisfy { $0.amplitude == 0 })
+    }
+
+    @Test func aCueDuckedOverSpeechKeepsTheBars() {
+        let clock = MeterTestClock()
+        let meter = LevelMeter(clock: { clock.now })
+        let plain = LevelMeter(clock: { clock.now })
+        var noise = Noise(state: 16)
+        func both(seconds: Double, ducked: Bool = false, db: () -> Float) {
+            for _ in 0..<Int((seconds * 100).rounded()) {
+                clock.now += 0.01
+                let level = db()
+                meter.ingest(rmsDBFS: level, at: clock.now, ducked: ducked)
+                plain.ingest(rmsDBFS: level, at: clock.now)
+            }
+        }
+        both(seconds: 1) { noise.db(-50, 2) }
+        both(seconds: 0.5) { noise.db(-25, 2) }
+        // The hands-free lock ping plays mid-word: the capture path pulls the voice 30 dB down for 250 ms.
+        let duck = clock.now
+        both(seconds: 0.25, ducked: true) { noise.db(-55, 2) }
+        both(seconds: 0.2) { noise.db(-25, 2) }
+        for step in stride(from: 0.0, to: 0.25, by: 0.05) {
+            #expect(meter.voiceAmplitude(from: duck + step, to: duck + step + 0.05) > 0.5, "dropped at +\(step) s")
+        }
+        // The ping only bypasses the gate: the level, the floor and silence detection see the audio as it is.
+        #expect(meter.level(at: duck + 0.2) == plain.level(at: duck + 0.2))
+        #expect(meter.noiseFloorDBFS == plain.noiseFloorDBFS)
+        #expect(meter.secondsSinceVoice == plain.secondsSinceVoice)
+    }
+
+    @Test func settledTimeTrailsTheOnsetProof() throws {
+        let clock = MeterTestClock()
+        let meter = LevelMeter(clock: { clock.now })
+        #expect(meter.settledTime == nil)
+        feed(meter, clock: clock, seconds: 1) { _ in -50 }
+        // The next window can still mark the 5 before it as an onset.
+        let settled = try #require(meter.settledTime)
+        #expect(abs(settled - (clock.now - 0.04)) < 1e-9)
+        #expect(LevelMeter.preview(level: 0.5).settledTime == .infinity)
+    }
+
     @Test func resetForgetsTheGate() {
         let clock = MeterTestClock()
         let meter = LevelMeter(clock: { clock.now })
@@ -753,9 +823,9 @@ private final class MeterTestClock: @unchecked Sendable {
 
     /// Feeds `seconds` of a 48 kHz stereo tone in 100 ms chunks stamped from `start`.
     private func feed(_ state: inout CaptureState, seconds: Double, start: TimeInterval,
-                      amplitude: Float = 0.5) -> [(time: TimeInterval, db: Float)] {
+                      amplitude: Float = 0.5) -> [(time: TimeInterval, db: Float, ducked: Bool)] {
         let tone = Signal.sine(700, seconds: seconds, rate: 48_000, amplitude: amplitude)
-        var levels: [(time: TimeInterval, db: Float)] = []
+        var levels: [(time: TimeInterval, db: Float, ducked: Bool)] = []
         for (index, chunk) in Signal.chunks(of: [tone, tone], rate: 48_000, sizes: [4_800]).enumerated() {
             let outcome = state.ingest(chunk, chunkStart: start + Double(index) * 0.1, arrival: start + Double(index + 1) * 0.1)
             levels += outcome.levels
@@ -799,6 +869,18 @@ private final class MeterTestClock: @unchecked Sendable {
         #expect(abs((open - ducked) - 30) < 1.5)
         #expect(abs((open - late) - 30) < 1.5)
         #expect(abs(open - Signal.rmsDB(samples[13_500..<15_000])) < 0.5)
+    }
+
+    @Test func tagsTheMeterWindowsADuckTouches() {
+        var state = CaptureState(device: Self.device, keepsSamples: false)
+        let gain = pow(10, AudioRecorder.duckAttenuationDB / 20)
+        state.addDuck(DuckWindow(start: 10.30, end: 10.50, gain: gain))
+        let levels = feed(&state, seconds: 1, start: 10)
+        let ducked = levels.filter { $0.ducked }
+        #expect(ducked.count >= 20 && ducked.count <= 22)
+        #expect(ducked.allSatisfy { $0.time > 10.295 && $0.time < 10.515 })
+        let covered = levels.filter { $0.time > 10.31 && $0.time <= 10.50 }
+        #expect(covered.allSatisfy { $0.ducked })
     }
 
     @Test func duckWindowRamps() {

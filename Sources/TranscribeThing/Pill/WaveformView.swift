@@ -50,18 +50,21 @@ final class WaveformEngine {
     private(set) var newestEnd: TimeInterval?
     /// Whether the columns slide this interval: only while a voiced column is on screen, so silence is a
     /// fixed row of dots rather than a drifting one. Decided when a column lands, where the slide offset is 0
-    /// either way, so starting or stopping never jumps.
+    /// either way, so starting or stopping never jumps (a late column starts it a frame or two after landing,
+    /// when only dots can shift).
     private var isScrolling = false
+    /// The newest columns whose audio isn't final yet (a late chunk, or an onset the gate hasn't confirmed):
+    /// they are read again every frame until the meter settles them, instead of freezing as dots.
+    private var unsettled = 0
 
     /// Records the columns whose audio has ended by `now` (meter time). Rebuilds the history from the meter
     /// on the first frame, after a stall longer than the history, or when the clock went backwards.
     func advance(meter: LevelMeter, to now: TimeInterval) {
         let interval = Self.columnInterval
         guard let end = newestEnd, now >= end - 0.5, now - end < interval * Double(Self.columnCount) else {
-            columns = (0..<Self.columnCount).map { k in
-                CGFloat(meter.voiceAmplitude(from: now - interval * Double(k + 1), to: now - interval * Double(k)))
-            }
             newestEnd = now
+            unsettled = Self.columnCount
+            settle(meter: meter)
             isScrolling = columns.contains { $0 > 0 }
             return
         }
@@ -69,12 +72,36 @@ final class WaveformEngine {
         while now >= newest + interval {
             newest += interval
             columns.removeLast()
-            columns.insert(CGFloat(meter.voiceAmplitude(from: newest - interval, to: newest)), at: 0)
+            columns.insert(0, at: 0)
+            unsettled = min(Self.columnCount, unsettled + 1)
         }
         if newest != end {
             newestEnd = newest
+            settle(meter: meter)
             isScrolling = columns.contains { $0 > 0 }
+        } else if settle(meter: meter), !isScrolling {
+            // Voice filled in a still row just after its column landed: slide from now on. Stopping waits for a
+            // landing, where the offset is 0 either way.
+            isScrolling = true
         }
+    }
+
+    /// Reads the unsettled columns; true when one of them rose from a dot.
+    @discardableResult
+    private func settle(meter: LevelMeter) -> Bool {
+        guard unsettled > 0, let newest = newestEnd else { return false }
+        let settledTime = meter.settledTime ?? -.infinity
+        var rose = false
+        var open = 0
+        for k in 0..<unsettled {
+            let end = newest - Double(k) * Self.columnInterval
+            let value = CGFloat(meter.voiceAmplitude(from: end - Self.columnInterval, to: end))
+            if value > 0, columns[k] == 0 { rose = true }
+            columns[k] = value
+            if end > settledTime { open = k + 1 }
+        }
+        unsettled = open
+        return rose
     }
 
     /// Bar geometry at `now` for a field of `size`. Column k sits k + offset steps left of the rightmost slot,

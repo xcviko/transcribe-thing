@@ -37,6 +37,12 @@ final class LevelMeter: @unchecked Sendable {
         var gateCloseWindows = 5
         var gateHangover: TimeInterval = 0.2
         var gateMinimumDBFS: Float = -55
+        /// A breath of 0.25 s or more still closes the gate, and the syllables right after it are often only
+        /// 40-50 ms loud: within `gateReopenWindow` of closing after at least `gateReopenMinOpen` of voice (speech,
+        /// not a click) the same margin reopens it after `gateReopenSustain` windows instead.
+        var gateReopenSustain = 4
+        var gateReopenWindow: TimeInterval = 0.5
+        var gateReopenMinOpen: TimeInterval = 0.3
         /// The gate's floor is a minimum tracker: it falls quickly into every pause but rises only
         /// `gateFloorRise` dB/s, so continuous speech can't drag it up. The first `gateWarmup` seconds rise
         /// faster, in case the stream opened on a transient.
@@ -81,6 +87,10 @@ final class LevelMeter: @unchecked Sendable {
         var isOpen = false
         var run = 0
         var lastAbove: TimeInterval = 0
+        var openedAt: TimeInterval = 0
+        var closedAt: TimeInterval = 0
+        /// The last close ended a stretch of voice, so a quick reopen is allowed.
+        var reopenArmed = false
     }
 
     private struct Preview {
@@ -97,8 +107,9 @@ final class LevelMeter: @unchecked Sendable {
 
     // MARK: Writing (capture thread)
 
-    /// `time` is the capture time of the window on the `AudioClock` timebase.
-    func ingest(rmsDBFS: Float, at time: TimeInterval) {
+    /// `time` is the capture time of the window on the `AudioClock` timebase. `ducked`: the capture path
+    /// attenuated the window to keep a UI sound out of the recording, so it says nothing about the voice.
+    func ingest(rmsDBFS: Float, at time: TimeInterval, ducked: Bool = false) {
         let db = rmsDBFS.isFinite ? max(rmsDBFS, -160) : -160
         lock.withLock {
             guard preview == nil else { return }
@@ -122,7 +133,13 @@ final class LevelMeter: @unchecked Sendable {
             if firstTime == nil { firstTime = time }
             lastTime = max(lastTime ?? time, time)
             if db >= floorDB + tuning.voiceMargin { lastVoiceTime = time }
-            gateLocked(db: db, at: time, dt: dt)
+            if ducked, gate.isOpen, let last = windows.last {
+                // A cue played over speech (the hands-free lock ping): hold the gate and the voice's last level
+                // instead of dropping the bars for the length of the ping.
+                windows.append(Window(time: time, power: last.power, voiced: true))
+            } else {
+                gateLocked(db: db, at: time, dt: dt)
+            }
         }
     }
 
@@ -150,6 +167,17 @@ final class LevelMeter: @unchecked Sendable {
 
     /// The moment readers look at: now minus `readBehind`, on the meter's clock.
     var readTime: TimeInterval { clock() - tuning.readBehind }
+
+    /// `voiceAmplitude(from:to:)` of a range ending at or before this time is final: its audio has arrived and
+    /// the gate can no longer mark its windows as an onset. Later ranges may still grow. Nil before audio.
+    var settledTime: TimeInterval? {
+        lock.withLock {
+            if preview != nil { return .infinity }
+            guard windows.count > 0 else { return nil }
+            // Opening on the next window marks the `gateSustain - 1` windows before it.
+            return windows[max(0, windows.count - (tuning.gateSustain - 1))].time
+        }
+    }
 
     /// Equalizer amplitude 0...1 of the audio captured in `start..<end`: the RMS of its windows with every
     /// window outside the voice gate counted as silence. Exactly 0 unless someone spoke.
@@ -316,16 +344,22 @@ final class LevelMeter: @unchecked Sendable {
                 gate.lastAbove = time
             } else if time - gate.lastAbove > tuning.gateHangover {
                 gate.isOpen = false
+                gate.closedAt = time
+                // A key click that slipped through never arms it, so typing can't chain reopens.
+                gate.reopenArmed = time - gate.openedAt >= tuning.gateReopenMinOpen
             }
         }
         if !gate.isOpen {
+            let reopening = gate.reopenArmed && time - gate.closedAt <= tuning.gateReopenWindow
+            let sustain = reopening ? tuning.gateReopenSustain : tuning.gateSustain
             gate.run = db >= max(floor + tuning.gateOpenMargin, tuning.gateMinimumDBFS) ? gate.run + 1 : 0
-            if gate.run >= tuning.gateSustain {
+            if gate.run >= sustain {
                 gate.isOpen = true
                 gate.run = 0
                 gate.lastAbove = time
+                gate.openedAt = time
                 // The windows that proved the onset are voice too.
-                for back in stride(from: 1, to: min(tuning.gateSustain, windows.count + 1), by: 1) {
+                for back in stride(from: 1, to: min(sustain, windows.count + 1), by: 1) {
                     windows[windows.count - back].voiced = true
                 }
             }
