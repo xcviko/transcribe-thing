@@ -134,9 +134,12 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         let settings = AppSettings.inMemory()
         settings.maxRecordingMinutes = 20
         for engine in EngineID.allCases {
-            settings.selectedEngine = engine
             let expected: TimeInterval = engine.cloudAPI == .chatCompletions ? 7 * 60 : 20 * 60
-            #expect(settings.effectiveMaxRecordingDuration == expected, "\(engine)")
+            #expect(settings.maxRecordingDuration(for: engine) == expected, "\(engine)")
+        }
+        for engine in EngineID.mainCandidates {
+            settings.selectedEngine = engine
+            #expect(settings.effectiveMaxRecordingDuration == 20 * 60, "\(engine)")
         }
     }
 

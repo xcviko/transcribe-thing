@@ -27,11 +27,36 @@ enum PillMode: String, Codable, CaseIterable, Sendable, Identifiable {
 @MainActor @Observable
 final class AppSettings {
     static let maxRecordingChoices = [5, 10, 20, 30]
+    static let switchHintLimit = 3
 
     var onboardingCompleted: Bool = false { didSet { store.set(onboardingCompleted, .onboardingCompleted) } }
     /// Resume point for onboarding: an `OnboardingStep` raw value (five steps).
     var onboardingStep: Int = 0 { didSet { store.set(onboardingStep, .onboardingResumeStep) } }
-    var selectedEngine: EngineID = .default { didSet { store.set(selectedEngine.rawValue, .selectedEngine) } }
+    /// The main model, the one every dictation starts with: Parakeet on this Mac or through OpenRouter. An extra
+    /// model assigned here (Gemini is picked per dictation, see `switchEngines`) leaves the default selected.
+    var selectedEngine: EngineID = .default {
+        didSet {
+            guard !selectedEngine.isSwitchModel else {
+                selectedEngine = .default
+                return
+            }
+            store.set(selectedEngine.rawValue, .selectedEngine)
+        }
+    }
+    /// The extra models the Switch model shortcut steps through, in `EngineID.switchCandidates` order. Empty turns
+    /// the shortcut off.
+    var switchEngines: [EngineID] = EngineID.switchCandidates {
+        didSet {
+            let normalized = Self.normalizedSwitchEngines(switchEngines)
+            guard normalized == switchEngines else {
+                switchEngines = normalized
+                return
+            }
+            store.setJSON(switchEngines.map(\.rawValue), .switchEngines)
+        }
+    }
+    /// How many times the pill has shown the Switch model hint (it shows at most `switchHintLimit` times).
+    var switchHintShownCount: Int = 0 { didSet { store.set(switchHintShownCount, .switchHintShownCount) } }
     var pillMode: PillMode = .whileDictating { didSet { store.set(pillMode.rawValue, .pillMode) } }
     var soundsEnabled: Bool = true { didSet { store.set(soundsEnabled, .soundsEnabled) } }
     /// nil = follow the system default input.
@@ -77,12 +102,20 @@ final class AppSettings {
 
     var maxRecordingDuration: TimeInterval { TimeInterval(maxRecordingMinutes) * 60 }
 
-    /// The limit a new recording gets: Gemini takes about 7.4 minutes of audio per request, so with Gemini
-    /// selected a recording stops (and is transcribed) at 7 minutes even when the setting allows more. Cloud
-    /// Parakeet keeps the setting.
-    var effectiveMaxRecordingDuration: TimeInterval {
-        guard selectedEngine.cloudAPI == .chatCompletions else { return maxRecordingDuration }
+    /// The limit a new recording gets with the main model.
+    var effectiveMaxRecordingDuration: TimeInterval { maxRecordingDuration(for: selectedEngine) }
+
+    /// The limit of a recording transcribed by `engine`: Gemini takes about 7.4 minutes of audio per request, so
+    /// with Gemini a recording stops (and is transcribed) at 7 minutes even when the setting allows more. Parakeet
+    /// keeps the setting.
+    func maxRecordingDuration(for engine: EngineID) -> TimeInterval {
+        guard engine.cloudAPI == .chatCompletions else { return maxRecordingDuration }
         return min(maxRecordingDuration, OpenRouterClient.maxRecordingDuration)
+    }
+
+    /// Extra models only, each once, in `EngineID.switchCandidates` order.
+    nonisolated static func normalizedSwitchEngines(_ engines: [EngineID]) -> [EngineID] {
+        EngineID.switchCandidates.filter(engines.contains)
     }
 
     /// Onboarding had six steps (welcome, permissions, model, shortcuts, try it, done) until shortcuts and try it
@@ -107,7 +140,18 @@ final class AppSettings {
             store.remove(.onboardingStep)
         }
         // An engine this build doesn't offer (one since removed) leaves the default selected.
-        if let v = store.string(.selectedEngine).flatMap(EngineID.init(rawValue:)) { selectedEngine = v }
+        if let v = store.string(.selectedEngine).flatMap(EngineID.init(rawValue:)) {
+            if v.isSwitchModel {
+                // Gemini used to be selectable as the main model; it is picked per dictation now. Once.
+                store.set(EngineID.default.rawValue, .selectedEngine)
+            } else {
+                selectedEngine = v
+            }
+        }
+        if let v: [String] = store.json(.switchEngines) {
+            switchEngines = Self.normalizedSwitchEngines(v.compactMap(EngineID.init(rawValue:)))
+        }
+        if let v = store.int(.switchHintShownCount) { switchHintShownCount = max(0, v) }
         if let v = store.string(.pillMode).flatMap(PillMode.init(rawValue:)) { pillMode = v }
         // Older builds could hide the pill for an hour; that deadline has no meaning now.
         store.remove(.pillHiddenUntil)
@@ -148,6 +192,7 @@ enum SettingsKey: String, CaseIterable {
     case geminiSystemPrompt, maxRecordingMinutes, doublePressForHandsFree
     case restoreClipboard, keepFailedRecordingsDays, shortcuts, hasShownWelcomeHello
     case checkForUpdatesAutomatically, announcedUpdateVersion, lastLaunchedVersion
+    case switchEngines, switchHintShownCount
 
     var defaultsKey: String { "tt.\(rawValue)" }
 }

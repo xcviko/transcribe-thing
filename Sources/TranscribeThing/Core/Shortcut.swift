@@ -181,6 +181,7 @@ struct Shortcut: Codable, Hashable, Sendable {
 
     static let fn = Shortcut(modifiers: [.init(.function)])
     static let fnSpace = Shortcut(modifiers: [.init(.function)], keyCode: KeyCode.space)
+    static let fnTab = Shortcut(modifiers: [.init(.function)], keyCode: KeyCode.tab)
     static let escape = Shortcut(modifiers: [], keyCode: KeyCode.escape)
     static let commandFnV = Shortcut(modifiers: [.init(.command), .init(.function)], keyCode: KeyCode.ansiV)
     static let rightOption = Shortcut(modifiers: [.init(.option, .right)])
@@ -256,9 +257,17 @@ struct Shortcut: Codable, Hashable, Sendable {
 // MARK: - Actions and bindings
 
 enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, CodingKeyRepresentable {
-    case pushToTalk, handsFree, cancel, pasteLast
+    case pushToTalk, handsFree, cancel, pasteLast, switchModel
 
     var id: String { rawValue }
+
+    /// Live only while a dictation records (cancel also while one is transcribing): outside one its keys reach apps.
+    var isDuringDictation: Bool {
+        switch self {
+        case .cancel, .switchModel: true
+        case .pushToTalk, .handsFree, .pasteLast: false
+        }
+    }
 
     var title: String {
         switch self {
@@ -266,6 +275,7 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
         case .handsFree: "Hands-free"
         case .cancel: "Cancel"
         case .pasteLast: "Paste last transcript"
+        case .switchModel: "Switch model"
         }
     }
 
@@ -275,6 +285,7 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
         case .handsFree: "Tap to start. Tap again to finish."
         case .cancel: "Discard the current recording."
         case .pasteLast: "Paste your most recent transcript again. It stays on the clipboard."
+        case .switchModel: "While dictating: use Gemini for this dictation."
         }
     }
 
@@ -284,6 +295,7 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
         case .handsFree: "lock.fill"
         case .cancel: "xmark"
         case .pasteLast: "doc.on.clipboard"
+        case .switchModel: "sparkles"
         }
     }
 
@@ -307,6 +319,7 @@ struct ShortcutBindings: Codable, Equatable, Sendable {
         .handsFree: .fnSpace,
         .cancel: .escape,
         .pasteLast: .commandFnV,
+        .switchModel: .fnTab,
     ])
 
     subscript(_ action: ShortcutAction) -> Shortcut? {
@@ -709,7 +722,7 @@ enum ShortcutValidator {
     }
 
     /// Everything that may get in the way, most specific first. The router swallows a bound key everywhere
-    /// (Esc for cancel only while busy), so "apps won't get it" is literal.
+    /// (cancel's and switch model's only during a dictation), so "apps won't get it" is literal.
     static func warnings(for s: Shortcut, action: ShortcutAction, system: SystemKeyboardState) -> [ShortcutWarning] {
         var out: [ShortcutWarning] = []
         let mods = Set(s.modifiers.map(\.modifier))
@@ -735,10 +748,10 @@ enum ShortcutValidator {
         if let key = s.keyCode {
             let typesText = mods.isDisjoint(with: [.control, .command, .function])
             if key == KeyCode.escape {
-                if mods.isEmpty && action != .cancel {
+                if mods.isEmpty && !action.isDuringDictation {
                     out.append(ShortcutWarning(.escape, "Apps won’t get Esc while it’s bound here."))
                 }
-            } else if typesText && !KeyNames.functionKeys.contains(key) {
+            } else if typesText && !KeyNames.functionKeys.contains(key) && !action.isDuringDictation {
                 out.append(ShortcutWarning(.typing, "This will fire while you type.", detail: appsLoseIt))
             }
             if KeyNames.mediaFunctionKeys.contains(key), !mods.contains(.function), !system.functionKeysAreStandard {

@@ -142,9 +142,11 @@ final class MenuBuilder {
     private func modelMenu(_ env: AppEnvironment) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
-        for (index, engine) in EngineID.allCases.enumerated() {
+        // The main models only: extra models are picked per dictation, from the pill.
+        let engines = EngineID.mainCandidates
+        for (index, engine) in engines.enumerated() {
             // On this Mac, then through OpenRouter: the grouping the Models page uses.
-            if index > 0, EngineID.allCases[index - 1].isLocal != engine.isLocal { menu.addItem(.separator()) }
+            if index > 0, engines[index - 1].isLocal != engine.isLocal { menu.addItem(.separator()) }
             let status = Self.engineStatus(engine, models: env.models, account: env.account)
             let item = MenuActionItem(title: engine.displayName) { [weak env] in
                 env?.models.select(engine)

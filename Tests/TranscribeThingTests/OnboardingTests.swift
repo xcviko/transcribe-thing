@@ -222,8 +222,8 @@ import Testing
             ctx.account = .preview(status: .missing)
         }
         #expect(!model.canContinue)
-        model.select(.geminiFlash)
-        #expect(model.ctx.settings.selectedEngine == .geminiFlash)
+        model.select(.parakeetCloud)
+        #expect(model.ctx.settings.selectedEngine == .parakeetCloud)
         #expect(model.showsKeyField)
         #expect(!model.canContinue)
     }
@@ -233,7 +233,7 @@ import Testing
             ctx.models = .preview(states: [.parakeet: .notInstalled])
             ctx.account = .preview(status: .valid(KeyInfo(limitRemaining: 4.2)))
         }
-        model.select(.geminiPro)
+        model.select(.parakeetCloud)
         #expect(model.canContinue)
         #expect(!model.showsKeyField)
         model.replaceKey()

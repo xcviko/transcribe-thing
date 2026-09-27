@@ -1432,15 +1432,20 @@ final class FakeRecorder: DictationRecorder {
 
     @Test func geminiRecordingsStopWhileTheyStillFitInOneRequest() {
         let h = Self.make(keyStatus: .valid(KeyInfo()))
-        h.settings.selectedEngine = .geminiFlash
         h.controller.send(.handsFreeToggle)
         #expect(h.controller.machine.capture.isListeningOrLocked)
+        #expect(h.pill.limitSeconds == 1200)
+        h.controller.cycleEngine()
+        #expect(h.controller.effectiveEngine == .geminiFlash)
         #expect(h.pill.limitSeconds == 420, "Gemini takes about 7.4 minutes per request, not the 20-minute setting")
         h.controller.send(.timer(.limitWarning))
         #expect(h.toasts.notices.first { $0.dedupeKey == "limit" }?.body == "Recording stops at 7 min and gets transcribed.")
         h.controller.send(.pillCancel)
         h.settings.maxRecordingMinutes = 5
         h.controller.send(.handsFreeToggle)
+        #expect(h.controller.effectiveEngine == .parakeet, "the next dictation starts on the main model")
+        h.controller.cycleEngine()
+        #expect(h.controller.effectiveEngine == .geminiFlash)
         #expect(h.pill.limitSeconds == 300, "a shorter setting still wins")
         h.controller.send(.pillCancel)
         #expect(OpenRouterClient.base64Length(ofByteCount: 44 + Int(OpenRouterClient.maxRecordingDuration) * 16_000 * 2)
@@ -1785,9 +1790,10 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
         let menu = env.menuBar.builder.makeMenu(includeQuit: true)
         let models = try #require(menu.items.first { $0.title == "Model" }?.submenu)
         let parakeet = try #require(models.items.first { $0.title == "Parakeet v3" })
-        let flash = try #require(models.items.first { $0.title == "Gemini 3.8 Flash" })
+        let cloud = try #require(models.items.first { $0.title == "Parakeet v3 · Cloud" })
         #expect(parakeet.state == .on && parakeet.isEnabled)
-        #expect(flash.state == .off && flash.isEnabled, "the preview key is valid")
+        #expect(cloud.state == .off && cloud.isEnabled, "the preview key is valid")
+        #expect(!models.items.contains { $0.title.hasPrefix("Gemini") }, "extra models are picked per dictation")
     }
 
     @Test func modelSubmenuGroupsThisMacThenOpenRouter() throws {
@@ -1797,7 +1803,7 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
         // A status suffix follows the name after two spaces ("Parakeet v3  Not downloaded").
         #expect(models.items.map { $0.isSeparatorItem ? "—" : $0.title.components(separatedBy: "  ")[0] } == [
             "Parakeet v3", "—",
-            "Parakeet v3 · Cloud", "Gemini 3.8 Flash", "Gemini 3.1 Pro", "—", "Manage Models…",
+            "Parakeet v3 · Cloud", "—", "Manage Models…",
         ])
         let cloudEnabled = models.items.filter { $0.title.contains("· Cloud") }.map(\.isEnabled)
         #expect(cloudEnabled == [true], "the preview key is valid")
@@ -1808,7 +1814,7 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
         env.account.removeKey()
         let menu = env.menuBar.builder.makeMenu(includeQuit: true)
         let models = try #require(menu.items.first { $0.title == "Model" }?.submenu)
-        for engine in EngineID.cloudEngines {
+        for engine in EngineID.cloudEngines where !engine.isSwitchModel {
             let item = try #require(models.items.first { $0.title.hasPrefix(engine.displayName + "  ") })
             #expect(!item.isEnabled)
             #expect(item.attributedTitle?.string == "\(engine.displayName)  Needs key")

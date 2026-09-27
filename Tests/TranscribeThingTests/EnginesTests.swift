@@ -993,7 +993,7 @@ struct FakeFailure: Error, LocalizedError {
     }
 
     @Test func downloadOfAnUnselectedModelStopsAtInstalled() async throws {
-        let (store, _, _) = makeStore(installed: false, selected: .geminiFlash)
+        let (store, _, _) = makeStore(installed: false, selected: .parakeetCloud)
         store.download(.parakeet)
         try await waitUntil { store.state(of: .parakeet) == .installed }
     }
@@ -1035,7 +1035,7 @@ struct FakeFailure: Error, LocalizedError {
     }
 
     @Test func downloadRestartedRightAfterCancelFinishes() async throws {
-        let (store, parakeet, _) = makeStore(installed: false, selected: .geminiFlash)
+        let (store, parakeet, _) = makeStore(installed: false, selected: .parakeetCloud)
         await parakeet.configure(downloadStepDelay: .milliseconds(100))
         store.download(.parakeet)
         try await Task.sleep(for: .milliseconds(30))
@@ -1117,8 +1117,8 @@ struct FakeFailure: Error, LocalizedError {
         let (store, parakeet, settings) = makeStore()
         store.start()
         try await waitUntil { store.state(of: .parakeet) == .ready }
-        store.select(.geminiFlash)
-        #expect(settings.selectedEngine == .geminiFlash)
+        store.select(.parakeetCloud)
+        #expect(settings.selectedEngine == .parakeetCloud)
         #expect(store.state(of: .parakeet) == .ready)
         #expect(await parakeet.isLoaded)
     }

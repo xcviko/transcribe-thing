@@ -41,6 +41,15 @@ final class PillModel {
     /// Processing has run longer than `timing.slowProcessing`: the pill says "Still transcribing…".
     private(set) var isProcessingSlow = false
 
+    /// The extra model this dictation uses (Gemini Flash, Gemini Pro), set by the controller while it records and
+    /// until its text lands; nil for the main model.
+    var sessionEngine: EngineID?
+    /// Bumped on every switch of the dictation's engine, back to the main model too, so the view can show the
+    /// model chip (and fade a main-model one out).
+    var engineChipPulse = 0
+    /// The Switch model discovery hint next to a long push-to-talk hold (its first few times).
+    var showsTabHint = false
+
     /// Key-chip text for the tooltip, from `settings.shortcuts[.pushToTalk]`.
     var shortcutHint: String = "fn"
     /// Increment to shake. Shaking an idle or processing pill turns it into a brief error flash

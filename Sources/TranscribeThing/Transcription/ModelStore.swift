@@ -299,8 +299,10 @@ final class ModelStore {
 
     // MARK: Select and prepare
 
-    /// Sets the selected engine; a local one starts loading.
+    /// Sets the selected (main) engine; a local one starts loading. Extra models are picked per dictation, so
+    /// selecting one does nothing.
     func select(_ id: EngineID) {
+        guard !id.isSwitchModel else { return }
         pendingSelection = nil
         settings.selectedEngine = id
         guard id.isLocal else { return }

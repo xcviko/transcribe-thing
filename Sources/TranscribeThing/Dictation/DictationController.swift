@@ -73,6 +73,12 @@ final class DictationController {
     private(set) var pendingJobCount = 0
     /// The shortcut's event tap has been down for longer than `shortcutNoticeGrace`: fn does nothing.
     private(set) var isShortcutUnavailable = false
+    /// The extra model this dictation uses instead of the main one (Switch model); nil for the main model. It lasts
+    /// while the dictation records: its job keeps the engine, the next dictation starts on the main model, and an
+    /// Undo-resume brings back the canceled dictation's.
+    private(set) var engineOverride: EngineID?
+    /// How long a push-to-talk hold lasts before the pill hints at Switch model.
+    @ObservationIgnored var switchHintDelay: TimeInterval = 1.5
     /// How long the tap may stay down before the user is told (its own retries and brief drops stay quiet).
     @ObservationIgnored var shortcutNoticeGrace: Duration = .seconds(6)
 
@@ -93,6 +99,11 @@ final class DictationController {
     @ObservationIgnored private var retained: [UUID: Recording] = [:]
     @ObservationIgnored private var retainedOrder: [UUID] = []
     @ObservationIgnored private var lastCancelledID: UUID?
+    /// The engine each canceled recording kept for Undo was dictated with (an extra model is resumed with it).
+    @ObservationIgnored private var cancelledEngines: [UUID: EngineID] = [:]
+    @ObservationIgnored private var switchHintTask: Task<Void, Never>?
+    /// The push-to-talk hold (its key-down time) the hint timer runs for.
+    @ObservationIgnored private var switchHintHold: TimeInterval?
     /// The canceled recording the capture in progress continues (Undo), while that capture runs.
     @ObservationIgnored private var continuing: Recording?
     /// The recording the next `.resumeCapture` effect continues.
@@ -200,8 +211,41 @@ final class DictationController {
         case .handsFreeToggle: send(.handsFreeToggle)
         case .cancel: send(.cancel)
         case .pasteLast: pasteLast()
+        case .cycleEngine: send(.cycleEngine)
         }
     }
+
+    /// The Switch model shortcut: the next engine for the dictation being recorded, main model → each extra model
+    /// in `settings.switchEngines` → main model.
+    func cycleEngine() {
+        send(.cycleEngine)
+    }
+
+    /// The pill's model menu (hands-free): `engine` for the dictation being recorded; the main model, or any
+    /// extra model.
+    func selectEngineForCurrentDictation(_ engine: EngineID) {
+        guard machine.isRecording else { return }
+        let target: EngineID? = engine.isSwitchModel ? engine : nil
+        guard target != engineOverride else { return }
+        if let target {
+            guard isCloudKeyUsable else {
+                rejectSwitchWithoutKey()
+                return
+            }
+            guard fitsRecording(target) else {
+                rejectSwitchTooLong()
+                return
+            }
+        }
+        switchEngine(to: target)
+        stateDidChange()
+    }
+
+    /// The engine the dictation being recorded goes to: the extra model picked for it, else the main model.
+    var effectiveEngine: EngineID { engineOverride ?? settings.selectedEngine }
+
+    /// The Switch model shortcut can do something: an extra model takes part, and the OpenRouter key works.
+    var canSwitchModels: Bool { !settings.switchEngines.isEmpty && isCloudKeyUsable }
 
     /// The pill's click, and the menu's "Finish Dictation" while hands-free.
     func toggleHandsFree() {
@@ -240,7 +284,12 @@ final class DictationController {
         } else {
             execute(effects)
         }
-        if !machine.isRecording { pendingRefusal = nil }
+        if !machine.isRecording {
+            pendingRefusal = nil
+            // The dictation is over (its job and any kept recording hold the engine): the next one starts on the
+            // main model.
+            if engineOverride != nil { engineOverride = nil }
+        }
         stateDidChange()
     }
 
@@ -266,7 +315,7 @@ final class DictationController {
 
     private func syncConfig() {
         // The limit is fixed for the recording in progress: its timers, pill and notices all use one value.
-        if !machine.isRecording { machine.config.maxDuration = settings.effectiveMaxRecordingDuration }
+        if !machine.isRecording { machine.config.maxDuration = settings.maxRecordingDuration(for: effectiveEngine) }
         machine.config.doublePressEnabled = settings.doublePressForHandsFree
     }
 
@@ -313,6 +362,8 @@ final class DictationController {
                 nothingCancelled = !cancelNewestJob()
             case .notice(let kind):
                 post(kind)
+            case .cycleEngine:
+                advanceEngine()
             }
         }
     }
@@ -341,7 +392,7 @@ final class DictationController {
         }
     }
 
-    /// Checks made before the mic opens: permission and whether the selected engine can run at all.
+    /// Checks made before the mic opens: permission and whether the dictation's engine can run at all.
     /// Downloading or loading models are fine: the job waits for them.
     func captureRefusal() -> AppError? {
         switch permissions.microphone {
@@ -354,7 +405,7 @@ final class DictationController {
             permissions.refresh()
             dismissMicrophoneNotices()
         }
-        let engine = settings.selectedEngine
+        let engine = effectiveEngine
         if engine.isLocal {
             switch models.state(of: engine) {
             case .notInstalled where !models.hasScannedDisk:
@@ -395,7 +446,7 @@ final class DictationController {
         guard captureDevice.isCapturing else { return }
         let delivery: Delivery = .paste(targetPID: inserter.frontmostPID())
         // A resumed dictation keeps the canceled recording's id, already while its tail is captured.
-        let job = Job(recording: nil, engine: settings.selectedEngine, delivery: delivery, id: resumedID)
+        let job = Job(recording: nil, engine: effectiveEngine, delivery: delivery, id: resumedID)
         queue.append(job)
         _ = machine.handle(.jobStarted, now: clock())
         finishingJob = job
@@ -458,10 +509,10 @@ final class DictationController {
         let recording = captureDevice.isCapturing ? captureDevice.cancel() : nil
         if keepForUndo {
             guard let recording else { return }
-            keepCancelled(recording, engine: settings.selectedEngine, notify: notify)
+            keepCancelled(recording, engine: effectiveEngine, notify: notify)
         } else if let resumed {
             // A resumed dictation whose mic failed: its audio (the kept part at least) stays for another Undo.
-            keepCancelled(recording ?? resumed, engine: settings.selectedEngine, notify: true)
+            keepCancelled(recording ?? resumed, engine: effectiveEngine, notify: true)
         }
     }
 
@@ -470,6 +521,7 @@ final class DictationController {
     private func keepCancelled(_ recording: Recording, engine: EngineID, notify: Bool, historyOnly: Bool = false) {
         guard recording.duration >= Self.undoMinimumDuration else { return }
         retain(recording)
+        cancelledEngines[recording.id] = engine
         if historyOnly { historyOnlyIDs.insert(recording.id) }
         lastCancelledID = recording.id
         let saved = recording.duration >= Self.saveCancelledMinimumDuration
@@ -1016,8 +1068,9 @@ final class DictationController {
             postRecordingGone()
             return
         }
+        let engine = cancelledEngines[id] ?? history.entry(id: id)?.engine
         if historyOnlyIDs.contains(id) {
-            enqueue(recording, engine: settings.selectedEngine, delivery: .historyOnly)
+            enqueue(recording, engine: engine ?? settings.selectedEngine, delivery: .historyOnly)
             return
         }
         // Already being transcribed (a Hub retry of it) or recorded on.
@@ -1028,6 +1081,8 @@ final class DictationController {
             return
         }
         resumeRequest = recording
+        // The same dictation goes on, with the model it had (its limit too); `send` drops it if the mic won't start.
+        engineOverride = engine.flatMap { $0.isSwitchModel ? $0 : nil }
         send(.resume(prefix: recording.duration))
         resumeRequest = nil
         if continuing?.id != id {
@@ -1120,7 +1175,7 @@ final class DictationController {
                                body: "Choose Allow in the macOS prompt, then try again.",
                                lifetime: .seconds(8)))
         } else {
-            let engine = settings.selectedEngine
+            let engine = effectiveEngine
             postFailure(error.notice(recordingID: nil, fallbackEngine: usableFallback(excluding: engine, after: error),
                                      engine: engine))
         }
@@ -1246,6 +1301,7 @@ final class DictationController {
             let evicted = retainedOrder.removeFirst()
             retained[evicted] = nil
             historyOnlyIDs.remove(evicted)
+            cancelledEngines[evicted] = nil
         }
     }
 
@@ -1253,6 +1309,129 @@ final class DictationController {
         retained[id] = nil
         retainedOrder.removeAll { $0 == id }
         historyOnlyIDs.remove(id)
+        cancelledEngines[id] = nil
+    }
+
+    // MARK: - Switch model
+
+    /// Whether OpenRouter would take a Gemini request: a key that isn't known to be missing, rejected, unreadable
+    /// or out of credit (a check in progress or offline is given the benefit of the doubt).
+    private var isCloudKeyUsable: Bool {
+        switch account.status {
+        case .missing, .invalid, .noCredit: false
+        case .failed where account.isKeyUnreadable: false
+        case .checking, .valid, .offline, .failed: true
+        }
+    }
+
+    /// An extra model needs at least this much of its limit left to be switched to.
+    private static let switchMinimumRemaining: TimeInterval = 10
+
+    /// `engine` can still take the whole recording (Gemini stops at 7 minutes).
+    private func fitsRecording(_ engine: EngineID) -> Bool {
+        guard let started = machine.recordingStartedAt else { return true }
+        return settings.maxRecordingDuration(for: engine) - (clock() - started) >= Self.switchMinimumRemaining
+    }
+
+    /// The machine's `.cycleEngine`: main model → each extra model in `settings.switchEngines` → main model. Extra
+    /// models that can't take the recording any more are skipped.
+    private func advanceEngine() {
+        let extras = settings.switchEngines
+        guard !extras.isEmpty else { return }
+        guard isCloudKeyUsable else {
+            rejectSwitchWithoutKey()
+            return
+        }
+        let cycle: [EngineID?] = [nil] + extras.filter(fitsRecording).map(Optional.some)
+        let index = cycle.firstIndex(of: engineOverride) ?? 0
+        let next = cycle[(index + 1) % cycle.count]
+        guard next != engineOverride else {
+            rejectSwitchTooLong()
+            return
+        }
+        switchEngine(to: next)
+        // Found it: the hint has nothing left to teach.
+        if settings.switchHintShownCount < AppSettings.switchHintLimit {
+            settings.switchHintShownCount = AppSettings.switchHintLimit
+        }
+    }
+
+    /// Another engine for this dictation: its limit (Gemini's is shorter), the pill's chip and a soft tick.
+    private func switchEngine(to engine: EngineID?) {
+        engineOverride = engine
+        execute(machine.changeLimit(to: settings.maxRecordingDuration(for: effectiveEngine), now: clock()))
+        pillModel.engineChipPulse &+= 1
+        if pillModel.showsTabHint { pillModel.showsTabHint = false }
+        playCue(.modelSwitch)
+    }
+
+    /// No usable OpenRouter key: the engine stays, the pill shakes and a notice says what Gemini needs.
+    private func rejectSwitchWithoutKey() {
+        pillModel.shakeTrigger += 1
+        let notice: Notice
+        switch account.status {
+        case .noCredit:
+            notice = Notice(dedupeKey: Self.switchModelNoticeKey, style: .warning, symbol: "creditcard",
+                            title: "Gemini needs OpenRouter credit", body: "Add credit to use extra models.",
+                            actions: [NoticeAction(title: "Add Credit", kind: .openURL(OpenRouterLinks.credits), isPrimary: true)],
+                            lifetime: .seconds(8))
+        default:
+            if case .invalid = account.status { account.refreshIfStale(maxAge: 30) }
+            let body = switch account.status {
+            case .invalid: "OpenRouter rejected yours. Update it to use extra models."
+            case .failed: "\(Brand.name) can’t read yours. Check it to use extra models."
+            default: "Add one to use extra models."
+            }
+            notice = Notice(dedupeKey: Self.switchModelNoticeKey, style: .warning, symbol: "key.fill",
+                            title: "Gemini needs an OpenRouter key", body: body,
+                            actions: [NoticeAction(title: "Add Key", kind: .openHub(.models), isPrimary: true)],
+                            lifetime: .seconds(8))
+        }
+        toasts.post(notice)
+    }
+
+    /// Every extra model's limit is (nearly) used up by this recording.
+    private func rejectSwitchTooLong() {
+        pillModel.shakeTrigger += 1
+        let minutes = Int((OpenRouterClient.maxRecordingDuration / 60).rounded())
+        toasts.post(Notice(dedupeKey: Self.switchModelNoticeKey, style: .info, symbol: "timer",
+                           title: "Too long for Gemini",
+                           body: "Gemini takes up to \(minutes) minutes of audio. This dictation stays on \(settings.selectedEngine.shortName).",
+                           lifetime: .seconds(6)))
+    }
+
+    static let switchModelNoticeKey = "switchModel"
+
+    /// Starts the hint timer when a push-to-talk hold confirms, and hides the hint when the hold ends.
+    private func updateSwitchHint() {
+        guard case .listening(let downAt) = machine.capture else {
+            switchHintTask?.cancel()
+            switchHintTask = nil
+            switchHintHold = nil
+            if pillModel.showsTabHint { pillModel.showsTabHint = false }
+            return
+        }
+        guard switchHintHold != downAt else { return }
+        switchHintHold = downAt
+        switchHintTask?.cancel()
+        guard runsTimers else { return }
+        let delay = max(0, downAt + switchHintDelay - clock())
+        switchHintTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
+            self?.showSwitchHintIfDue()
+        }
+    }
+
+    /// The hint timer's action (tests call it directly): a push-to-talk hold on the main model that has lasted
+    /// `switchHintDelay` shows the Switch model hint, its first `AppSettings.switchHintLimit` times.
+    func showSwitchHintIfDue() {
+        guard case .listening(let downAt) = machine.capture, clock() - downAt >= switchHintDelay - 0.01,
+              !pillModel.showsTabHint, engineOverride == nil, canSwitchModels,
+              settings.shortcuts[.switchModel] != nil,
+              settings.switchHintShownCount < AppSettings.switchHintLimit else { return }
+        settings.switchHintShownCount += 1
+        pillModel.showsTabHint = true
     }
 
     private func recording(for id: UUID) -> Recording? {
@@ -1327,6 +1506,11 @@ final class DictationController {
         }
         // An idle request doesn't cut the error flourish short: PillModel holds it for its minimum time.
         if pillModel.phase != phase { pillModel.phase = phase }
+        // The chip stays through processing until the dictation's text lands.
+        let session = phase.isRecording || engineOverride != nil
+            ? engineOverride
+            : (phase == .processing ? processingSessionEngine : nil)
+        if pillModel.sessionEngine != session { pillModel.sessionEngine = session }
 
         if phase.isRecording, let started = machine.recordingStartedAt {
             let wallStart = Date().addingTimeInterval(started - clock())
@@ -1340,8 +1524,17 @@ final class DictationController {
         if pillModel.limitSeconds != limit { pillModel.limitSeconds = limit }
     }
 
+    /// The extra model of the newest dictation still being transcribed or pasted (Hub jobs don't count).
+    private var processingSessionEngine: EngineID? {
+        let jobs = (deliveringJob.map { [$0] } ?? []) + queue
+        guard let newest = jobs.last(where: { $0.delivery != .historyOnly }), newest.engine.isSwitchModel else { return nil }
+        return newest.engine
+    }
+
     private func stateDidChange() {
         if hotkeys.isBusy != machine.isBusy { hotkeys.isBusy = machine.isBusy }
+        if hotkeys.isRecording != machine.isRecording { hotkeys.isRecording = machine.isRecording }
+        updateSwitchHint()
         let count = queue.count + (isDelivering ? 1 : 0)
         if pendingJobCount != count { pendingJobCount = count }
         refreshPill()

@@ -164,10 +164,12 @@ import Testing
             + #""pasteLast":null,"pushToTalk":{"modifiers":[{"modifier":"option","side":"right"}]}}"#
     }
 
+    /// Saved before Switch model existed: it gets its default binding, and the others stay as they were.
     static let customized = ShortcutBindings(bindings: [
         .pushToTalk: .rightOption,
         .handsFree: Shortcut(modifiers: [.init(.control), .init(.option)], keyCode: KeyCode.space),
         .cancel: .escape,
+        .switchModel: .fnTab,
     ])
 
     @Test func conflictsAndSwap() {
@@ -701,7 +703,9 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         #expect(settings.geminiSystemPrompt.isEmpty)
         #expect(settings.shortcuts == .defaults)
 
-        settings.selectedEngine = .geminiPro
+        settings.selectedEngine = .parakeetCloud
+        settings.switchEngines = [.geminiPro]
+        settings.switchHintShownCount = 2
         settings.pillMode = .always
         settings.microphoneUID = "usb-mic"
         settings.soundsEnabled = false
@@ -711,7 +715,9 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         settings.shortcuts = bindings
 
         let reloaded = AppSettings(defaults: defaults)
-        #expect(reloaded.selectedEngine == .geminiPro)
+        #expect(reloaded.selectedEngine == .parakeetCloud)
+        #expect(reloaded.switchEngines == [.geminiPro])
+        #expect(reloaded.switchHintShownCount == 2)
         #expect(reloaded.pillMode == .always)
         #expect(reloaded.microphoneUID == "usb-mic")
         #expect(!reloaded.soundsEnabled)
@@ -748,8 +754,50 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         }
         defaults.set(raw, forKey: SettingsKey.selectedEngine.defaultsKey)
         #expect(AppSettings(defaults: defaults).selectedEngine == .default)
-        defaults.set(EngineID.geminiFlash.rawValue, forKey: SettingsKey.selectedEngine.defaultsKey)
-        #expect(AppSettings(defaults: defaults).selectedEngine == .geminiFlash)
+        defaults.set(EngineID.parakeetCloud.rawValue, forKey: SettingsKey.selectedEngine.defaultsKey)
+        #expect(AppSettings(defaults: defaults).selectedEngine == .parakeetCloud)
+    }
+
+    /// Gemini was once selectable as the main model; it is an extra model now, picked per dictation.
+    @Test(arguments: [EngineID.geminiFlash, .geminiPro])
+    func aStoredGeminiSelectionBecomesParakeetOnce(_ engine: EngineID) throws {
+        let suite = NSTemporaryDirectory() + "transcribe-thing-tests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(atPath: suite + ".plist")
+        }
+        defaults.set(engine.rawValue, forKey: SettingsKey.selectedEngine.defaultsKey)
+        let settings = AppSettings(defaults: defaults)
+        #expect(settings.selectedEngine == .parakeet)
+        #expect(defaults.string(forKey: SettingsKey.selectedEngine.defaultsKey) == EngineID.parakeet.rawValue)
+        #expect(settings.switchEngines == [.geminiFlash, .geminiPro], "both extra models take part by default")
+    }
+
+    @Test func onlyAMainModelCanBeSelected() {
+        let settings = AppSettings.inMemory()
+        settings.selectedEngine = .parakeetCloud
+        settings.selectedEngine = .geminiFlash
+        #expect(settings.selectedEngine == .parakeet)
+        #expect(EngineID.mainCandidates == [.parakeet, .parakeetCloud])
+        #expect(EngineID.switchCandidates == [.geminiFlash, .geminiPro])
+        #expect(EngineID.allCases.filter(\.isSwitchModel) == EngineID.switchCandidates)
+    }
+
+    @Test func switchEnginesKeepExtraModelsInCycleOrder() throws {
+        let suite = NSTemporaryDirectory() + "transcribe-thing-tests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(atPath: suite + ".plist")
+        }
+        let settings = AppSettings(defaults: defaults)
+        settings.switchEngines = [.geminiPro, .parakeet, .geminiFlash, .geminiPro]
+        #expect(settings.switchEngines == [.geminiFlash, .geminiPro])
+        settings.switchEngines = []
+        #expect(AppSettings(defaults: defaults).switchEngines.isEmpty, "none taking part is remembered too")
+        defaults.set(try JSONEncoder().encode(["geminiPro", "someFutureEngine"]), forKey: SettingsKey.switchEngines.defaultsKey)
+        #expect(AppSettings(defaults: defaults).switchEngines == [.geminiPro])
     }
 
     /// The removed volume slider: left at zero it meant no sounds; any other level now plays at full volume.
@@ -784,7 +832,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
     @Test func inMemorySettingsAreIndependent() {
         let a = AppSettings.inMemory()
         let b = AppSettings.inMemory()
-        a.selectedEngine = .geminiPro
+        a.selectedEngine = .parakeetCloud
         #expect(b.selectedEngine == .parakeet)
     }
 

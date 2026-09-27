@@ -5,10 +5,10 @@ import Testing
 /// Cross-module behavior added while wiring the app together.
 @MainActor
 @Suite struct PendingModelSelectionTests {
-    /// Gemini in use, Parakeet on this Mac not downloaded (or already on disk).
+    /// Cloud Parakeet in use, Parakeet on this Mac not downloaded (or already on disk).
     private func makeStore(parakeetInstalled: Bool = false) -> (ModelStore, FakeEngine, AppSettings) {
         let settings = AppSettings.inMemory()
-        settings.selectedEngine = .geminiFlash
+        settings.selectedEngine = .parakeetCloud
         let parakeet = FakeEngine(.parakeet, installed: parakeetInstalled)
         let store = ModelStore(paths: .temporary(), settings: settings, engines: [.parakeet: parakeet],
                                gate: InferenceGate(), freeDiskBytes: { 50_000_000_000 })
@@ -23,7 +23,7 @@ import Testing
         store.selectWhenInstalled(.parakeet)
         #expect(store.pendingSelection == .parakeet)
         #expect(store.state(of: .parakeet).isDownloading)
-        #expect(settings.selectedEngine == .geminiFlash, "dictation keeps using the working engine meanwhile")
+        #expect(settings.selectedEngine == .parakeetCloud, "dictation keeps using the working engine meanwhile")
         try await waitUntil { store.state(of: .parakeet) == .ready }
         #expect(settings.selectedEngine == .parakeet)
         #expect(selectedWhenFinished == .parakeet, "the ready toast already sees the new selection")
@@ -40,7 +40,7 @@ import Testing
         store.cancelDownload(.parakeet)
         #expect(store.pendingSelection == nil)
         try await Task.sleep(for: .milliseconds(700))
-        #expect(settings.selectedEngine == .geminiFlash)
+        #expect(settings.selectedEngine == .parakeetCloud)
     }
 
     @Test func aFailedDownloadDropsThePendingSwitch() async throws {
@@ -50,7 +50,7 @@ import Testing
         store.selectWhenInstalled(.parakeet)
         try await waitUntil { if case .failed = store.state(of: .parakeet) { true } else { false } }
         #expect(store.pendingSelection == nil)
-        #expect(settings.selectedEngine == .geminiFlash)
+        #expect(settings.selectedEngine == .parakeetCloud)
     }
 
     @Test func choosingSomethingElseWhileDownloadingWins() async throws {
@@ -58,10 +58,10 @@ import Testing
         await parakeet.configure(downloadStepDelay: .milliseconds(40))
         await store.refreshFromDisk()
         store.selectWhenInstalled(.parakeet)
-        store.select(.geminiPro)
+        store.select(.parakeetCloud)
         #expect(store.pendingSelection == nil)
         try await waitUntil { store.state(of: .parakeet) == .installed }
-        #expect(settings.selectedEngine == .geminiPro)
+        #expect(settings.selectedEngine == .parakeetCloud)
     }
 
     @Test func aModelOnDiskIsSelectedRightAway() async throws {
@@ -75,8 +75,11 @@ import Testing
 
     @Test func cloudEnginesAreSelectedRightAway() {
         let (store, _, settings) = makeStore()
-        store.selectWhenInstalled(.geminiPro)
-        #expect(settings.selectedEngine == .geminiPro)
+        settings.selectedEngine = .parakeet
+        store.selectWhenInstalled(.parakeetCloud)
+        #expect(settings.selectedEngine == .parakeetCloud)
         #expect(store.pendingSelection == nil)
+        store.selectWhenInstalled(.geminiPro)
+        #expect(settings.selectedEngine == .parakeetCloud, "extra models are picked per dictation, not selected")
     }
 }

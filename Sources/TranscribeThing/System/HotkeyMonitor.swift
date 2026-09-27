@@ -6,6 +6,8 @@ import os
 
 enum HotkeyEvent: Equatable, Sendable {
     case pttDown, pttUp, pttInterrupted, handsFreeToggle, cancel, pasteLast
+    /// The switch model shortcut, during a dictation.
+    case cycleEngine
 }
 
 /// Marker written into `kCGEventSourceUserData` of every event transcribe-thing synthesizes (the ⌘V paste),
@@ -28,6 +30,10 @@ final class HotkeyMonitor {
     /// Swallow the cancel key only while busy.
     var isBusy = false {
         didSet { if isBusy != oldValue { pushConfig() } }
+    }
+    /// Swallow the switch model shortcut only while a dictation records.
+    var isRecording = false {
+        didSet { if isRecording != oldValue { pushConfig() } }
     }
     /// The tap thread is running (it keeps retrying tap creation until permission arrives).
     private(set) var isRunning = false
@@ -108,7 +114,8 @@ final class HotkeyMonitor {
     // MARK: Config
 
     private func currentConfig() -> HotkeyRouter.Config {
-        HotkeyRouter.Config(bindings: settings.shortcuts, isBusy: isBusy,
+        HotkeyRouter.Config(bindings: settings.shortcuts, isBusy: isBusy, isRecording: isRecording,
+                            switchesModels: !settings.switchEngines.isEmpty,
                             isSuspended: suspendCount > 0, forwardsRawKeys: onRawKey != nil)
     }
 
@@ -116,7 +123,8 @@ final class HotkeyMonitor {
         engine?.update(currentConfig())
     }
 
-    /// Bindings edited in the Hub or onboarding take effect on the next keystroke.
+    /// Bindings (and the extra models taking part in Switch model) edited in the Hub or onboarding take effect on
+    /// the next keystroke.
     private func observeSettings() {
         guard !isObservingSettings else { return }
         isObservingSettings = true
@@ -126,6 +134,7 @@ final class HotkeyMonitor {
     private func trackBindings() {
         withObservationTracking {
             _ = settings.shortcuts
+            _ = settings.switchEngines
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 self?.pushConfig()

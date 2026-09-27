@@ -25,6 +25,8 @@ struct DictationMachine: Equatable {
         /// `pttInterrupted`: another key, extra modifier or mouse click while the PTT key is held.
         case pttDown, pttUp, pttInterrupted
         case handsFreeToggle, cancel, pillClick, pillStop, pillCancel
+        /// The switch model shortcut: another engine for the dictation being recorded.
+        case cycleEngine
         /// Undo of a canceled dictation: record on, hands-free, after `prefix` seconds of kept audio.
         case resume(prefix: TimeInterval)
         case timer(TimerID)
@@ -47,6 +49,8 @@ struct DictationMachine: Equatable {
         case schedule(TimerID, after: TimeInterval), cancelTimer(TimerID)
         case cancelNewestJob
         case notice(NoticeKind)
+        /// Step to the next engine for this dictation (the controller owns the choice and its sound).
+        case cycleEngine
     }
 
     enum NoticeKind: Equatable {
@@ -170,6 +174,8 @@ struct DictationMachine: Equatable {
             return [.cancelTimer(.arming), .showPill(.locked), .playSound(.lock)] + limitTimers(startedAt: downAt, now: now)
         case .cancel, .pillCancel:
             return cancelRecording()
+        case .cycleEngine:
+            return [.cycleEngine]
         case .deviceLost:
             capture = .idle
             return [.cancelTimer(.arming), .cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)]
@@ -200,6 +206,8 @@ struct DictationMachine: Equatable {
             return [.cancelTimer(.arming), .showPill(.locked), .playSound(.lock)]
         case .cancel, .pillCancel:
             return cancelRecording()
+        case .cycleEngine:
+            return [.cycleEngine]
         case .timer(.limitWarning):
             return [.notice(.oneMinuteLeft)]
         case .timer(.limit):
@@ -246,6 +254,10 @@ struct DictationMachine: Equatable {
             // It was a combo like fn+←: keep recording.
             capture = .locked(startedAt: startedAt)
             return []
+        case .cycleEngine:
+            // fn+Tab: the fn press was for switching, so its release must not stop hands-free.
+            capture = .locked(startedAt: startedAt)
+            return [.cycleEngine]
         default:
             return handleHandsFreeCommon(input)
         }
@@ -255,6 +267,8 @@ struct DictationMachine: Equatable {
         switch input {
         case .cancel, .pillCancel:
             return cancelRecording()
+        case .cycleEngine:
+            return [.cycleEngine]
         case .timer(.limitWarning):
             return [.notice(.oneMinuteLeft)]
         case .timer(.limit):
@@ -287,6 +301,19 @@ struct DictationMachine: Equatable {
         case .resume(let prefix):
             return resumeFromRest(prefix: prefix, now: now)
         default:
+            return []
+        }
+    }
+
+    /// A new recording limit (the dictation switched to an engine with another one). A running recording's
+    /// timers are measured again from its start; one still arming schedules them when it confirms.
+    mutating func changeLimit(to maxDuration: TimeInterval, now: TimeInterval) -> [Effect] {
+        guard maxDuration != config.maxDuration else { return [] }
+        config.maxDuration = maxDuration
+        switch capture {
+        case .listening(let startedAt), .locked(let startedAt), .lockedStopPending(let startedAt):
+            return limitTimers(startedAt: startedAt, now: now)
+        case .idle, .arming, .tapPending:
             return []
         }
     }

@@ -15,6 +15,11 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
     static var cloudTranscriptionEngines: [EngineID] { allCases.filter { $0.cloudAPI == .transcriptions } }
     /// Gemini through chat completions.
     static var cloudChatEngines: [EngineID] { allCases.filter { $0.cloudAPI == .chatCompletions } }
+    /// What Settings can select as the main model, the one every dictation starts with.
+    static var mainCandidates: [EngineID] { allCases.filter { !$0.isSwitchModel } }
+    /// The extra models, in the order the Switch model shortcut steps through them: picked per dictation from the
+    /// pill, never selected in Settings.
+    static var switchCandidates: [EngineID] { allCases.filter(\.isSwitchModel) }
 
     /// Which OpenRouter endpoint a cloud engine uses. Routing code switches on this, never on specific cases.
     enum CloudAPI: Sendable, Equatable {
@@ -32,6 +37,14 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
     }
 
     var isCloud: Bool { !isLocal }
+
+    /// An extra model: used for one dictation at a time (Switch model), never as the main model.
+    var isSwitchModel: Bool {
+        switch self {
+        case .parakeet, .parakeetCloud: false
+        case .geminiFlash, .geminiPro: true
+        }
+    }
 
     /// nil for local engines.
     var cloudAPI: CloudAPI? {

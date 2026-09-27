@@ -1178,3 +1178,153 @@ private final class PasteLog: @unchecked Sendable {
         #expect(swapped[.handsFree] == .commandFnV)
     }
 }
+
+// MARK: - Switch model in the router
+
+/// The switch model shortcut is live only during a dictation, never ends the push-to-talk hold, and tolerates
+/// the PTT's modifiers still being held, whatever it is bound to.
+@Suite struct SwitchModelRouterTests {
+    @Test func fnTabWhileHoldingFnCyclesAndTheHoldGoesOn() {
+        var kb = Keyboard()
+        #expect(kb.press(.fn).events == [.pttDown])
+        let tab = kb.down(kVK_Tab)
+        #expect(tab.events == [.cycleEngine])
+        #expect(tab.swallow)
+        let repeated = kb.down(kVK_Tab, isRepeat: true)
+        #expect(repeated.events.isEmpty, "autorepeat doesn't step again")
+        #expect(repeated.swallow)
+        #expect(kb.up(kVK_Tab).swallow)
+        #expect(kb.down(kVK_Tab).events == [.cycleEngine], "every press steps")
+        kb.up(kVK_Tab)
+        #expect(kb.release(.fn).events == [.pttUp], "releasing fn still ends the dictation, not an interruption")
+    }
+
+    @Test func otherFnCombosStillInterrupt() {
+        var kb = Keyboard()
+        kb.press(.fn)
+        let left = kb.down(kVK_LeftArrow, fnFlagged: true)
+        #expect(left.events == [.pttInterrupted])
+        #expect(!left.swallow)
+        kb.up(kVK_LeftArrow, fnFlagged: true)
+        kb.release(.fn)
+        kb.press(.fn)
+        #expect(kb.press(.leftCommand).events == [.pttInterrupted], "an extra modifier fn+Tab doesn't use")
+    }
+
+    @Test func tabWithoutFnAndOutsideADictationPassesThrough() {
+        var kb = Keyboard()
+        let idle = kb.down(kVK_Tab)
+        #expect(idle.events.isEmpty && !idle.swallow)
+        kb.up(kVK_Tab)
+        // Hands-free is recording, fn is up: a plain Tab types.
+        kb.config.isRecording = true
+        let plain = kb.down(kVK_Tab)
+        #expect(plain.events.isEmpty && !plain.swallow)
+        #expect(!kb.up(kVK_Tab).swallow)
+    }
+
+    /// Hands-free: fn goes down (the machine arms stop-on-release), Tab steps, fn comes up again.
+    @Test func handsFreeFnTabCycles() {
+        var kb = Keyboard()
+        kb.config.isRecording = true
+        #expect(kb.press(.fn).events == [.pttDown])
+        #expect(kb.down(kVK_Tab).events == [.cycleEngine])
+        kb.up(kVK_Tab)
+        #expect(kb.release(.fn).events == [.pttUp])
+    }
+
+    @Test func noExtraModelMeansTabIsNotIntercepted() {
+        var kb = Keyboard()
+        kb.config.switchesModels = false
+        kb.press(.fn)
+        let tab = kb.down(kVK_Tab)
+        #expect(tab.events == [.pttInterrupted])
+        #expect(!tab.swallow)
+    }
+
+    @Test func aCustomComboWorksWithFnStillHeld() {
+        let commandShiftM = Shortcut(modifiers: [.init(.command), .init(.shift)], keyCode: UInt16(kVK_ANSI_M))
+        var kb = Keyboard(bindings: bindings([.switchModel: commandShiftM]))
+        #expect(kb.press(.fn).events == [.pttDown])
+        #expect(kb.press(.leftCommand).events.isEmpty, "⌘ may be on the way to ⌘⇧M")
+        #expect(kb.press(.leftShift).events.isEmpty)
+        let m = kb.down(kVK_ANSI_M)
+        #expect(m.events == [.cycleEngine])
+        #expect(m.swallow)
+        kb.up(kVK_ANSI_M)
+        #expect(kb.release(.leftShift).events.isEmpty)
+        #expect(kb.release(.leftCommand).events.isEmpty)
+        #expect(kb.release(.fn).events == [.pttUp])
+
+        // ⌘C on the way isn't it: that interrupts, and C reaches the app.
+        kb.press(.fn)
+        kb.press(.leftCommand)
+        let copy = kb.down(kVK_ANSI_C)
+        #expect(copy.events == [.pttInterrupted])
+        #expect(!copy.swallow)
+        kb.up(kVK_ANSI_C)
+        kb.release(.leftCommand)
+        kb.release(.fn)
+
+        // Fn fn Tab is no longer anything special.
+        kb.press(.fn)
+        #expect(kb.down(kVK_Tab).events == [.pttInterrupted])
+        kb.up(kVK_Tab)
+        kb.release(.fn)
+
+        // Hands-free: ⌘⇧M steps; outside a dictation it reaches the app.
+        kb.config.isRecording = true
+        kb.press(.leftCommand)
+        kb.press(.leftShift)
+        #expect(kb.down(kVK_ANSI_M).events == [.cycleEngine])
+        kb.up(kVK_ANSI_M)
+        kb.config.isRecording = false
+        let outside = kb.down(kVK_ANSI_M)
+        #expect(outside.events.isEmpty && !outside.swallow)
+    }
+
+    @Test func aModifierOnlyChordWorksDuringPushToTalkAndHandsFree() {
+        var kb = Keyboard(bindings: bindings([.switchModel: .rightCommand]))
+        kb.press(.fn)
+        #expect(kb.press(.rightCommand).events == [.cycleEngine])
+        #expect(kb.release(.rightCommand).events.isEmpty)
+        #expect(kb.press(.rightCommand).events == [.cycleEngine], "pressed again, it steps again")
+        kb.release(.rightCommand)
+        #expect(kb.release(.fn).events == [.pttUp])
+
+        kb.config.isRecording = true
+        #expect(kb.press(.rightCommand).events == [.cycleEngine])
+        kb.release(.rightCommand)
+        kb.config.isRecording = false
+        #expect(kb.press(.rightCommand).events.isEmpty)
+    }
+
+    /// A modifier-only chord that starts with the PTT's own fn.
+    @Test func anFnChordAsTheSwitchKeyWorksWithFnPushToTalk() {
+        let fnControl = Shortcut(modifiers: [.init(.function), .init(.control)])
+        var kb = Keyboard(bindings: bindings([.switchModel: fnControl]))
+        #expect(kb.press(.fn).events == [.pttDown])
+        #expect(kb.press(.leftControl).events == [.cycleEngine])
+        #expect(kb.release(.leftControl).events.isEmpty)
+        #expect(kb.release(.fn).events == [.pttUp])
+    }
+
+    @Test func fnTabWorksWithAnotherPushToTalkHeld() {
+        var kb = Keyboard(bindings: bindings([.pushToTalk: .rightOption]))
+        #expect(kb.press(.rightOption).events == [.pttDown])
+        #expect(kb.press(.fn).events.isEmpty, "fn is on the way to fn+Tab")
+        #expect(kb.down(kVK_Tab).events == [.cycleEngine])
+        kb.up(kVK_Tab)
+        #expect(kb.release(.fn).events.isEmpty)
+        #expect(kb.release(.rightOption).events == [.pttUp])
+    }
+
+    @Test func nothingFiresWhileTheRecorderCaptures() {
+        var kb = Keyboard()
+        kb.config.isRecording = true
+        kb.config.isSuspended = true
+        kb.press(.fn)
+        let tab = kb.down(kVK_Tab)
+        #expect(tab.events.isEmpty && !tab.swallow)
+    }
+}
