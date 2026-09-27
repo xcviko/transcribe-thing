@@ -8,7 +8,7 @@ struct UpdatePolicy: Equatable, Sendable {
     static let interval: TimeInterval = 6 * 3600
     /// Opening Software Update checks again when the last check is older than this.
     static let pageRefreshAge: TimeInterval = 60
-    /// After the paste's own feedback (sound, check mark) has played.
+    /// After the paste's own feedback (its sound) has played and the pill has settled.
     static let announceDelay: TimeInterval = 0.9
     /// Lets the network come back after a wake before checking.
     static let wakeDelay: TimeInterval = 10
