@@ -12,7 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             exit(0)
         }
         NSApp.mainMenu = MainMenu.make(
-            openSettings: { [weak self] in self?.environment?.windows.showHub(.general) },
+            openSettings: { [weak self] in self?.environment?.windows.showHub(.home) },
             openHub: { [weak self] in self?.showMainWindow() })
     }
 

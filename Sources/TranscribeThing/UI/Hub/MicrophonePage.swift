@@ -1,13 +1,11 @@
 import SwiftUI
 
-/// Input device choice with a live level on the active row and the Bluetooth hint. The picked mic is the only one
-/// dictation opens, so there is no separate built-in-over-AirPods switch.
+/// Input device choice and the Bluetooth hint. The picked mic is the only one dictation opens, so there is no
+/// separate built-in-over-AirPods switch, and nothing here opens a mic.
 struct MicrophonePage: View {
-    @Environment(HubContext.self) private var hub
     @Environment(AppSettings.self) private var settings
     @Environment(AudioDeviceCatalog.self) private var devices
     @Environment(PermissionsCenter.self) private var permissions
-    @Environment(\.appearsActive) private var appearsActive
 
     var body: some View {
         @Bindable var settings = settings
@@ -26,7 +24,7 @@ struct MicrophonePage: View {
                     .buttonStyle(SecondaryButtonStyle(size: .small))
                 }
             }
-            HubGroup("Input", footer: meterFooter) {
+            HubGroup("Input") {
                 if devices.devices.isEmpty {
                     noDevices
                 } else {
@@ -52,59 +50,6 @@ struct MicrophonePage: View {
             }
         }
         .animation(Theme.Motion.fade, value: effectiveDevice?.id)
-        .onAppear { updateMonitor() }
-        .onDisappear { hub.microphoneMonitor.stop() }
-        .onChange(of: monitorKey) { updateMonitor() }
-    }
-
-    // MARK: Live meter
-
-    /// While dictating, the selected row shows dictation's own meter; otherwise a monitoring-only capture
-    /// (nothing kept) runs while this page is visible in an active window, so the orange mic indicator
-    /// never lingers behind other apps.
-    private var isDictating: Bool { hub.dictation.activity == .recording }
-
-    private var selectedMeter: (meter: LevelMeter, isLive: Bool) {
-        if isDictating { return (hub.levelMeter, true) }
-        return (hub.microphoneMonitor.meter, hub.microphoneMonitor.isRunning)
-    }
-
-    struct MonitorKey: Equatable {
-        var uid: String?
-        /// Automatic meters the system default, so a new default reopens the meter on it.
-        var automaticDevice: String?
-        var shouldRun: Bool
-    }
-
-    static func monitorKey(uid: String?, defaultUID: String?, shouldRun: Bool) -> MonitorKey {
-        MonitorKey(uid: uid, automaticDevice: uid == nil ? defaultUID : nil, shouldRun: shouldRun)
-    }
-
-    private var monitorKey: MonitorKey {
-        Self.monitorKey(uid: settings.microphoneUID, defaultUID: devices.defaultDeviceUID,
-                        shouldRun: appearsActive && !isDictating && permissions.microphone == .granted)
-    }
-
-    private func updateMonitor() {
-        let key = monitorKey
-        let monitor = hub.microphoneMonitor
-        guard !hub.isPreview else { return }
-        if key.shouldRun {
-            monitor.start(deviceUID: key.uid)
-        } else {
-            monitor.stop()
-        }
-    }
-
-    private var meterFooter: String {
-        switch hub.microphoneMonitor.problem {
-        case .microphoneDisconnected?:
-            return "This mic disconnected. Pick another one above."
-        case .microphoneNotResponding?:
-            return "This mic isn’t sending any sound. Try another one, or check Sound settings."
-        default:
-            return "Speak to see the level. This audio isn’t saved."
-        }
     }
 
     // MARK: Rows
@@ -117,8 +62,7 @@ struct MicrophonePage: View {
             title: "Automatic",
             subtitle: current.map { "Follows macOS · now \($0)" } ?? "Follows macOS",
             isSelected: isSelected,
-            isAvailable: true,
-            meter: isSelected ? selectedMeter : nil
+            isAvailable: true
         ) {
             withAnimation(Theme.Motion.snappy) { settings.microphoneUID = nil }
         }
@@ -133,8 +77,7 @@ struct MicrophonePage: View {
             title: device.name,
             subtitle: subtitle,
             isSelected: isSelected,
-            isAvailable: device.isAvailable,
-            meter: isSelected ? selectedMeter : nil
+            isAvailable: device.isAvailable
         ) {
             withAnimation(Theme.Motion.snappy) { settings.microphoneUID = device.id }
         }
@@ -180,7 +123,6 @@ private struct MicrophoneRow: View {
     var subtitle: String
     var isSelected: Bool
     var isAvailable: Bool
-    var meter: (meter: LevelMeter, isLive: Bool)?
     var select: () -> Void
     @State private var hovering = false
 
@@ -199,10 +141,6 @@ private struct MicrophoneRow: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
-            if let meter, isAvailable {
-                LevelBars(meter: meter.meter, isLive: meter.isLive)
-                    .transition(.opacity)
-            }
         }
         .padding(.horizontal, Theme.Spacing.md)
         .padding(.vertical, 10)

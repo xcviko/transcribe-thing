@@ -17,8 +17,6 @@ final class HubContext: Observable {
     var secureInput: SecureInputMonitor
     var updates: UpdateCenter
     var levelMeter: LevelMeter
-    /// Meters the selected mic outside dictation while the Microphone page is on screen.
-    var microphoneMonitor: MicrophoneMonitor
     let windows: WindowCoordinator
     let sounds: SoundPlayer
     let dictation: DictationController
@@ -44,7 +42,6 @@ final class HubContext: Observable {
         secureInput = env.secureInput
         updates = env.updates
         levelMeter = env.levelMeter
-        microphoneMonitor = env.isPreview ? .preview(level: 0.5) : MicrophoneMonitor()
         windows = env.windows
         sounds = env.sounds
         dictation = env.dictation

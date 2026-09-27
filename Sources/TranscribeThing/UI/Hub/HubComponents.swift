@@ -503,39 +503,6 @@ struct RowHighlight: View {
     }
 }
 
-// MARK: - Level meter
-
-/// Segmented input meter driven by the shared LevelMeter; redraws only while audio is flowing.
-struct LevelBars: View {
-    var meter: LevelMeter
-    /// Whether something is feeding the meter; the redraw loop stops otherwise.
-    var isLive = true
-    var segments = 12
-
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1 / 30, paused: !isLive)) { _ in
-            let level = CGFloat(meter.hasReceivedAudio ? meter.level : 0)
-            HStack(spacing: 2) {
-                ForEach(0..<segments, id: \.self) { i in
-                    let threshold = CGFloat(i) / CGFloat(segments)
-                    let lit = level > threshold
-                    Capsule(style: .continuous)
-                        .fill(lit ? color(for: i) : Color.ink.opacity(0.10))
-                        .frame(width: 3, height: 6 + CGFloat(i) * 0.9)
-                }
-            }
-            .frame(height: 18, alignment: .center)
-        }
-        .accessibilityLabel("Input level")
-    }
-
-    private func color(for index: Int) -> Color {
-        let f = Double(index) / Double(segments)
-        if f > 0.85 { return .warning }
-        return .accent
-    }
-}
-
 // MARK: - Actions
 
 /// Copy button that confirms with a checkmark for 1.2 s.

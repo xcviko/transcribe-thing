@@ -1248,15 +1248,6 @@ private final class EventLog: @unchecked Sendable {
         #expect(recording.speech == .empty)
     }
 
-    @Test func previewMonitorNeverCaptures() {
-        let monitor = MicrophoneMonitor.preview(level: 0.4)
-        monitor.start(deviceUID: nil)
-        #expect(monitor.isRunning)
-        #expect(monitor.meter.hasReceivedAudio)
-        monitor.stop()
-        #expect(monitor.isRunning)
-    }
-
     @Test func clockMatchesSystemUptime() {
         #expect(abs(AudioClock.now() - ProcessInfo.processInfo.systemUptime) < 0.01)
         let host = mach_absolute_time()
