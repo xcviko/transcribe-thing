@@ -7,66 +7,208 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
     /// Same as `Recording.id`.
     let id: UUID
     var createdAt: Date
-    /// Empty for failed/canceled entries.
-    var text: String
-    var engine: EngineID
     var status: TranscriptStatus
     var audioDuration: TimeInterval
     var voicedSeconds: TimeInterval
-    var processingTime: TimeInterval?
-    var costUSD: Double?
     var errorMessage: String?
-    /// The recording, for Retry and Transcribe Again: failed/canceled entries keep it for
+    /// The recording, for Retry and Transcribe With: failed/canceled entries keep it for
     /// `keepFailedRecordingsDays`, successful ones for `keepSuccessfulRecordingsDays`. nil once pruned.
     var audioFileName: String?
-    /// OpenRouter provider that served a cloud transcript ("Together", "Google AI Studio"). Filled in shortly
-    /// after delivery; absent from older history files.
-    var provider: String?
-    /// The transcript this one replaced when the recording was transcribed again with another model, so Restore
-    /// Previous Text can bring it back. Absent from older history files.
-    var previous: TranscriptVersion?
+    /// Every transcript of the recording, oldest first, at most one of each kind (one per model). Empty for failed
+    /// and canceled entries. Change them through `addVersion`, `selectVersion` and `updateMetadata`.
+    private(set) var versions: [TranscriptVersion]
+    /// The version the row shows, copies, searches and pastes. nil exactly when `versions` is empty.
+    private(set) var currentKind: TranscriptVersionKind?
+    /// The engine of a failed or canceled dictation (what Retry uses again); kept equal to the current version's
+    /// otherwise, so entries that read the same compare equal.
+    private var attemptedEngine: EngineID
 
+    /// `text`, `provider`, `costUSD` and `processingTime` describe a successful entry's first version. Failed and
+    /// canceled entries have no version: no text and nothing else, just the engine they were dictated with.
     init(id: UUID = UUID(), createdAt: Date = Date(), text: String, engine: EngineID,
          status: TranscriptStatus = .success, audioDuration: TimeInterval, voicedSeconds: TimeInterval,
          processingTime: TimeInterval? = nil, costUSD: Double? = nil, errorMessage: String? = nil,
-         audioFileName: String? = nil, provider: String? = nil, previous: TranscriptVersion? = nil) {
+         audioFileName: String? = nil, provider: String? = nil) {
+        let version = TranscriptVersion(text: text, engine: engine, provider: provider, costUSD: costUSD,
+                                        processingTime: processingTime, createdAt: createdAt)
+        self.init(id: id, createdAt: createdAt, engine: engine, status: status, audioDuration: audioDuration,
+                  voicedSeconds: voicedSeconds, errorMessage: errorMessage, audioFileName: audioFileName,
+                  versions: status == .success ? [version] : [])
+    }
+
+    /// An entry with these versions (success only; ignored otherwise). `current`: the one it shows, by default the
+    /// last. Versions of a kind already listed are dropped.
+    init(id: UUID = UUID(), createdAt: Date = Date(), engine: EngineID, status: TranscriptStatus = .success,
+         audioDuration: TimeInterval, voicedSeconds: TimeInterval, errorMessage: String? = nil,
+         audioFileName: String? = nil, versions: [TranscriptVersion], current: TranscriptVersionKind? = nil) {
         self.id = id
         self.createdAt = createdAt
-        self.text = text
-        self.engine = engine
         self.status = status
         self.audioDuration = audioDuration
         self.voicedSeconds = voicedSeconds
-        self.processingTime = processingTime
-        self.costUSD = costUSD
         self.errorMessage = errorMessage
         self.audioFileName = audioFileName
-        self.provider = provider
-        self.previous = previous
+        self.attemptedEngine = engine
+        var unique: [TranscriptVersion] = []
+        for version in versions where !unique.contains(where: { $0.kind == version.kind }) { unique.append(version) }
+        self.versions = status == .success ? unique : []
+        let chosen = current.flatMap { kind in self.versions.contains { $0.kind == kind } ? kind : nil }
+        self.currentKind = chosen ?? self.versions.last?.kind
+        syncEngine()
     }
 
-    /// Decodes like the synthesized conformance, except that an engine older builds offered and this one doesn't
-    /// maps to the closest engine left (`retiredEngines`): the entry keeps its text, cost and provider, and
-    /// Retry and the history glyph go on working.
+    private mutating func syncEngine() {
+        if let engine = currentVersion?.engine { attemptedEngine = engine }
+    }
+
+    // MARK: The current version
+
+    var currentVersion: TranscriptVersion? {
+        currentKind.flatMap { kind in versions.first { $0.kind == kind } }
+    }
+
+    private var currentIndex: Int? {
+        currentKind.flatMap { kind in versions.firstIndex { $0.kind == kind } }
+    }
+
+    /// The current version's text; empty for failed/canceled entries. Setting it edits the current version.
+    var text: String {
+        get { currentVersion?.text ?? "" }
+        set { if let i = currentIndex { versions[i].text = newValue } }
+    }
+
+    /// The engine that heard the audio: the current version's, or the one a failed or canceled dictation used.
+    var engine: EngineID { currentVersion?.engine ?? attemptedEngine }
+
+    /// OpenRouter provider that served the current version ("Together", "Google AI Studio"). Filled in shortly
+    /// after delivery when the response didn't say.
+    var provider: String? {
+        get { currentVersion?.metadata.provider }
+        set { if let i = currentIndex { versions[i].metadata.provider = newValue } }
+    }
+
+    var costUSD: Double? { currentVersion?.metadata.costUSD }
+    var processingTime: TimeInterval? { currentVersion?.metadata.processingTime }
+
+    // MARK: Versions
+
+    func version(_ kind: TranscriptVersionKind) -> TranscriptVersion? {
+        versions.first { $0.kind == kind }
+    }
+
+    func hasVersion(_ kind: TranscriptVersionKind) -> Bool {
+        versions.contains { $0.kind == kind }
+    }
+
+    /// Adds `version` (replacing one of the same kind, which keeps its place) and, by default, makes it current.
+    /// Only a successful entry has versions: false otherwise.
+    @discardableResult
+    mutating func addVersion(_ version: TranscriptVersion, makeCurrent: Bool = true) -> Bool {
+        guard status == .success else { return false }
+        if let i = versions.firstIndex(where: { $0.kind == version.kind }) {
+            versions[i] = version
+        } else {
+            versions.append(version)
+        }
+        if makeCurrent || currentKind == nil { currentKind = version.kind }
+        syncEngine()
+        return true
+    }
+
+    /// Shows the version of `kind`; false when there is none.
+    @discardableResult
+    mutating func selectVersion(_ kind: TranscriptVersionKind) -> Bool {
+        guard hasVersion(kind) else { return false }
+        currentKind = kind
+        syncEngine()
+        return true
+    }
+
+    /// Edits the metadata of the version of `kind`; false when there is none.
+    @discardableResult
+    mutating func updateMetadata(of kind: TranscriptVersionKind, _ update: (inout TranscriptMetadata) -> Void) -> Bool {
+        guard let i = versions.firstIndex(where: { $0.kind == kind }) else { return false }
+        update(&versions[i].metadata)
+        return true
+    }
+
+    // MARK: Coding
+
+    private enum CodingKeys: String, CodingKey {
+        case id, createdAt, status, audioDuration, voicedSeconds, errorMessage, audioFileName, versions
+        case currentKind = "currentVersion"
+        /// The current version, flat, as older builds read it; and what an entry from before versions holds.
+        case text, engine, provider, costUSD, processingTime
+        /// The transcript a Transcribe Again replaced, from the builds between the two formats.
+        case previous
+    }
+
+    /// Reads every format: with versions; from before versions (the transcript flat, maybe a `previous` one, which
+    /// becomes the older version); retired engines mapped to their successors (`retiredEngines`), so the entry keeps
+    /// its text, cost and provider, and Retry and the history glyph go on working. A version this build can't read
+    /// (an engine from a newer build) is dropped, not the entry.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
         createdAt = try c.decode(Date.self, forKey: .createdAt)
-        text = try c.decode(String.self, forKey: .text)
-        engine = try Self.decodeEngine(from: c, forKey: .engine)
         status = try c.decode(TranscriptStatus.self, forKey: .status)
         audioDuration = try c.decode(TimeInterval.self, forKey: .audioDuration)
         voicedSeconds = try c.decode(TimeInterval.self, forKey: .voicedSeconds)
-        processingTime = try c.decodeIfPresent(TimeInterval.self, forKey: .processingTime)
-        costUSD = try c.decodeIfPresent(Double.self, forKey: .costUSD)
         errorMessage = try c.decodeIfPresent(String.self, forKey: .errorMessage)
         audioFileName = try c.decodeIfPresent(String.self, forKey: .audioFileName)
-        provider = try c.decodeIfPresent(String.self, forKey: .provider)
-        // A previous transcript this build can't read (an engine from a newer build) is dropped, not the entry.
-        previous = try? c.decodeIfPresent(TranscriptVersion.self, forKey: .previous)
+        attemptedEngine = try Self.decodeEngine(from: c, forKey: .engine)
+
+        var decoded = ((try? c.decodeIfPresent([LossyVersion].self, forKey: .versions)) ?? []).compactMap(\.value)
+        var current = (try? c.decodeIfPresent(String.self, forKey: .currentKind)).flatMap { $0 }
+            .flatMap(TranscriptVersionKind.init(rawValue:))
+        if status == .success, current.map({ kind in !decoded.contains { $0.kind == kind } }) ?? true {
+            // No versions yet (an older file), or the current one is unreadable: the flat transcript is current.
+            let flat = TranscriptVersion(
+                text: try c.decode(String.self, forKey: .text), engine: attemptedEngine,
+                provider: try c.decodeIfPresent(String.self, forKey: .provider),
+                costUSD: try c.decodeIfPresent(Double.self, forKey: .costUSD),
+                processingTime: try c.decodeIfPresent(TimeInterval.self, forKey: .processingTime), createdAt: createdAt)
+            decoded.removeAll { $0.kind == flat.kind }
+            decoded.append(flat)
+            current = flat.kind
+        }
+        if var previous = try? c.decodeIfPresent(TranscriptVersion.self, forKey: .previous),
+           !decoded.contains(where: { $0.kind == previous.kind }) {
+            if previous.metadata.createdAt == TranscriptVersion.legacyDate { previous.metadata.createdAt = createdAt }
+            decoded.insert(previous, at: 0)
+        }
+        versions = status == .success ? decoded : []
+        currentKind = status == .success ? current : nil
+        syncEngine()
     }
 
-    fileprivate static func decodeEngine<Key: CodingKey>(from c: KeyedDecodingContainer<Key>, forKey key: Key) throws -> EngineID {
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(createdAt, forKey: .createdAt)
+        try c.encode(status, forKey: .status)
+        try c.encode(audioDuration, forKey: .audioDuration)
+        try c.encode(voicedSeconds, forKey: .voicedSeconds)
+        try c.encodeIfPresent(errorMessage, forKey: .errorMessage)
+        try c.encodeIfPresent(audioFileName, forKey: .audioFileName)
+        try c.encode(text, forKey: .text)
+        try c.encode(engine, forKey: .engine)
+        try c.encodeIfPresent(provider, forKey: .provider)
+        try c.encodeIfPresent(costUSD, forKey: .costUSD)
+        try c.encodeIfPresent(processingTime, forKey: .processingTime)
+        if !versions.isEmpty {
+            try c.encode(versions, forKey: .versions)
+            try c.encodeIfPresent(currentKind?.rawValue, forKey: .currentKind)
+        }
+    }
+
+    /// One element of `versions`, nil when this build can't read it.
+    private struct LossyVersion: Decodable {
+        var value: TranscriptVersion?
+        init(from decoder: Decoder) throws { value = try? TranscriptVersion(from: decoder) }
+    }
+
+    static func decodeEngine<Key: CodingKey>(from c: KeyedDecodingContainer<Key>, forKey key: Key) throws -> EngineID {
         let rawEngine = try c.decode(String.self, forKey: key)
         guard let engine = EngineID(rawValue: rawEngine) ?? retiredEngines[rawEngine] else {
             throw DecodingError.dataCorruptedError(forKey: key, in: c, debugDescription: "Unknown engine \(rawEngine)")
@@ -80,16 +222,6 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
 
     var wordCount: Int { Self.countWords(text) }
 
-    /// Puts `version` in place of the current transcript, which becomes `previous`. Same row, same date and audio.
-    mutating func replaceTranscript(with version: TranscriptVersion) {
-        previous = TranscriptVersion(of: self)
-        text = version.text
-        engine = version.engine
-        provider = version.provider
-        costUSD = version.costUSD
-        processingTime = version.processingTime
-    }
-
     /// Whitespace-separated tokens; tokens made only of punctuation (a lone "—" or "…") don't count.
     static func countWords(_ text: String) -> Int {
         var count = 0
@@ -98,40 +230,6 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
             count += 1
         }
         return count
-    }
-}
-
-/// One transcript of an entry's recording: what it says, which engine wrote it and what that cost. An entry
-/// transcribed again with another model keeps the version it had as `previous`.
-struct TranscriptVersion: Codable, Equatable, Sendable {
-    var text: String
-    var engine: EngineID
-    var provider: String?
-    var costUSD: Double?
-    var processingTime: TimeInterval?
-
-    init(text: String, engine: EngineID, provider: String? = nil, costUSD: Double? = nil,
-         processingTime: TimeInterval? = nil) {
-        self.text = text
-        self.engine = engine
-        self.provider = provider
-        self.costUSD = costUSD
-        self.processingTime = processingTime
-    }
-
-    init(of entry: TranscriptEntry) {
-        self.init(text: entry.text, engine: entry.engine, provider: entry.provider, costUSD: entry.costUSD,
-                  processingTime: entry.processingTime)
-    }
-
-    /// Retired engines map like the entry's own (`TranscriptEntry.retiredEngines`).
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        text = try c.decode(String.self, forKey: .text)
-        engine = try TranscriptEntry.decodeEngine(from: c, forKey: .engine)
-        provider = try c.decodeIfPresent(String.self, forKey: .provider)
-        costUSD = try c.decodeIfPresent(Double.self, forKey: .costUSD)
-        processingTime = try c.decodeIfPresent(TimeInterval.self, forKey: .processingTime)
     }
 }
 
@@ -316,10 +414,9 @@ final class HistoryStore {
         changed()
     }
 
-    /// Swaps the entry's transcript with the one it replaced (Restore Previous Text); again swaps back.
-    func restorePreviousText(_ id: UUID) {
-        guard var entry = entry(id: id), let previous = entry.previous else { return }
-        entry.replaceTranscript(with: previous)
+    /// Shows the entry's version of `kind` (the Versions menu); nothing happens when it has none.
+    func selectVersion(_ kind: TranscriptVersionKind, of id: UUID) {
+        guard var entry = entry(id: id), entry.currentKind != kind, entry.selectVersion(kind) else { return }
         upsert(entry)
     }
 

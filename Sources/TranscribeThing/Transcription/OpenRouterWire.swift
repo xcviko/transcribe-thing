@@ -22,6 +22,9 @@ struct OpenRouterChatRequest: Encodable, Equatable {
         let only: [String]
         let allowFallbacks: Bool
         enum CodingKeys: String, CodingKey { case only, allowFallbacks = "allow_fallbacks" }
+
+        /// Google AI Studio and nothing else, no fallbacks: every Gemini request.
+        static let googleAIStudio = Provider(only: ["google-ai-studio"], allowFallbacks: false)
     }
 
     enum CodingKeys: String, CodingKey {
@@ -29,10 +32,11 @@ struct OpenRouterChatRequest: Encodable, Equatable {
         case maxTokens = "max_tokens"
     }
 
-    /// Gemini via Google AI Studio only, high reasoning with the reasoning text excluded, no temperature
+    /// Gemini via Google AI Studio only, thinking at `effort` with the reasoning text excluded, no temperature
     /// (Google recommends the default for Gemini 3). The system message exists only for a non-empty prompt,
     /// and the user message carries ONLY the audio: no text part, ever.
-    static func transcription(model: String, audioBase64: String, systemPrompt: String?) -> OpenRouterChatRequest {
+    static func transcription(model: String, audioBase64: String, systemPrompt: String?,
+                              effort: ReasoningEffort) -> OpenRouterChatRequest {
         var messages: [OpenRouterMessage] = []
         if let prompt = systemPrompt?.trimmingCharacters(in: .whitespacesAndNewlines), !prompt.isEmpty {
             messages.append(.system(prompt))
@@ -41,9 +45,27 @@ struct OpenRouterChatRequest: Encodable, Equatable {
         return OpenRouterChatRequest(
             model: model,
             messages: messages,
-            reasoning: Reasoning(effort: "high", exclude: true),
-            provider: Provider(only: ["google-ai-studio"], allowFallbacks: false),
+            reasoning: Reasoning(effort: effort.rawValue, exclude: true),
+            provider: .googleAIStudio,
             maxTokens: 32_768,
+            stream: false)
+    }
+
+    /// Clean-up of a transcript (Gemini 3.5 Flash Lite): the prompt as the system message, then the transcript as
+    /// plain user text inside `<transcript>` tags. Pinned, reasoning excluded and no temperature like transcription;
+    /// `max_tokens` grows with the text (`CleanupModel.maxTokens`).
+    static func cleanup(model: String, systemPrompt: String, transcript: String,
+                        effort: ReasoningEffort) -> OpenRouterChatRequest {
+        var messages: [OpenRouterMessage] = []
+        let prompt = systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !prompt.isEmpty { messages.append(.system(prompt)) }
+        messages.append(.user(CleanupModel.userMessage(for: transcript)))
+        return OpenRouterChatRequest(
+            model: model,
+            messages: messages,
+            reasoning: Reasoning(effort: effort.rawValue, exclude: true),
+            provider: .googleAIStudio,
+            maxTokens: CleanupModel.maxTokens(forCharacterCount: transcript.count, effort: effort),
             stream: false)
     }
 
@@ -57,6 +79,8 @@ struct OpenRouterChatRequest: Encodable, Equatable {
 
 enum OpenRouterMessage: Encodable, Equatable {
     case system(String)
+    /// Plain text from the user (the transcript a clean-up works on).
+    case user(String)
     case userAudio(base64: String, format: String)
 
     private struct AudioPart: Encodable {
@@ -73,6 +97,9 @@ enum OpenRouterMessage: Encodable, Equatable {
         switch self {
         case .system(let text):
             try container.encode("system", forKey: .role)
+            try container.encode(text, forKey: .content)
+        case .user(let text):
+            try container.encode("user", forKey: .role)
             try container.encode(text, forKey: .content)
         case .userAudio(let data, let format):
             try container.encode("user", forKey: .role)
@@ -124,17 +151,51 @@ struct OpenRouterSpeechResponse: Decodable {
     }
 }
 
-/// `GET /api/v1/generation?id=` → `data`. Only what transcribe-thing reads.
+/// `GET /api/v1/generation?id=` → `data`. Only what transcribe-thing reads; every field is nullable.
 struct OpenRouterGeneration: Decodable {
     let id: String?
     let providerName: String?
     let totalCost: Double?
+    /// Milliseconds. The API reference calls it total latency; OpenRouter has also used it for the time to the
+    /// first token. Unverified for these models, so it's recorded, not labeled in the UI.
+    let latency: Double?
+    /// Milliseconds spent generating.
+    let generationTime: Double?
+    let tokensPrompt: Int?
+    let tokensCompletion: Int?
+    let nativeTokensPrompt: Int?
+    let nativeTokensCompletion: Int?
+    let nativeTokensReasoning: Int?
+    let nativeTokensCached: Int?
+    let finishReason: String?
 
     enum CodingKeys: String, CodingKey {
-        case id
+        case id, latency
         case providerName = "provider_name"
         case totalCost = "total_cost"
+        case generationTime = "generation_time"
+        case tokensPrompt = "tokens_prompt", tokensCompletion = "tokens_completion"
+        case nativeTokensPrompt = "native_tokens_prompt", nativeTokensCompletion = "native_tokens_completion"
+        case nativeTokensReasoning = "native_tokens_reasoning", nativeTokensCached = "native_tokens_cached"
+        case finishReason = "finish_reason"
     }
+
+    var details: GenerationDetails {
+        let name = providerName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return GenerationDetails(provider: name?.isEmpty == false ? name : nil, costUSD: totalCost,
+                                 latency: latency.map { $0 / 1000 }, generationTime: generationTime.map { $0 / 1000 },
+                                 reasoningTokens: nativeTokensReasoning)
+    }
+}
+
+/// What OpenRouter's generation record adds to a delivered result, in seconds and dollars.
+struct GenerationDetails: Sendable, Equatable {
+    var provider: String?
+    var costUSD: Double?
+    /// OpenRouter's `latency` (see `OpenRouterGeneration.latency`).
+    var latency: TimeInterval?
+    var generationTime: TimeInterval?
+    var reasoningTokens: Int?
 }
 
 struct OpenRouterChatResponse: Decodable {
@@ -145,6 +206,14 @@ struct OpenRouterChatResponse: Decodable {
     let choices: [Choice]?
     let usage: Usage?
     let error: OpenRouterAPIError?
+    /// Present with the `X-OpenRouter-Metadata: enabled` request header.
+    let openrouterMetadata: Metadata?
+
+    struct Metadata: Decodable {
+        /// Milliseconds from dispatching the upstream request until its response body ended.
+        let generationTime: Double?
+        enum CodingKeys: String, CodingKey { case generationTime = "generation_time" }
+    }
 
     struct Choice: Decodable {
         let finishReason: String?
@@ -185,19 +254,42 @@ struct OpenRouterChatResponse: Decodable {
         }
     }
 
+    /// Always included now. `completion_tokens` includes the reasoning tokens.
     struct Usage: Decodable {
+        let promptTokens: Int?
+        let completionTokens: Int?
+        let totalTokens: Int?
         let cost: Double?
+        let isBYOK: Bool?
+        let promptTokensDetails: PromptDetails?
         let completionTokensDetails: CompletionDetails?
+        struct PromptDetails: Decodable {
+            let cachedTokens: Int?
+            let audioTokens: Int?
+            enum CodingKeys: String, CodingKey { case cachedTokens = "cached_tokens", audioTokens = "audio_tokens" }
+        }
         struct CompletionDetails: Decodable {
             let reasoningTokens: Int?
             enum CodingKeys: String, CodingKey { case reasoningTokens = "reasoning_tokens" }
         }
-        enum CodingKeys: String, CodingKey { case cost, completionTokensDetails = "completion_tokens_details" }
+        enum CodingKeys: String, CodingKey {
+            case cost
+            case promptTokens = "prompt_tokens", completionTokens = "completion_tokens", totalTokens = "total_tokens"
+            case isBYOK = "is_byok"
+            case promptTokensDetails = "prompt_tokens_details", completionTokensDetails = "completion_tokens_details"
+        }
+
+        var tokens: TokenUsage {
+            TokenUsage(promptTokens: promptTokens, audioTokens: promptTokensDetails?.audioTokens,
+                       cachedTokens: promptTokensDetails?.cachedTokens, completionTokens: completionTokens,
+                       reasoningTokens: completionTokensDetails?.reasoningTokens, totalTokens: totalTokens)
+        }
     }
 
     enum CodingKeys: String, CodingKey {
         case id, model, provider, choices, usage, error
         case serviceTier = "service_tier"
+        case openrouterMetadata = "openrouter_metadata"
     }
 }
 
@@ -378,7 +470,9 @@ enum OpenRouterErrorMapper {
             throw AppError.openRouterRefused(refusal)
         }
         return CloudResult(text: text, provider: decoded.provider, costUSD: decoded.usage?.cost,
-                           reasoningTokens: decoded.usage?.completionTokensDetails?.reasoningTokens)
+                           usage: decoded.usage?.tokens, generationID: decoded.id, model: decoded.model,
+                           finishReason: choice.finishReason,
+                           generationTime: decoded.openrouterMetadata?.generationTime.map { $0 / 1000 })
     }
 
     /// Interprets a 200 from the transcription endpoint. An error object inside it is an upstream failure, mapped
@@ -393,7 +487,7 @@ enum OpenRouterErrorMapper {
         if let error = decoded.error { throw map(error, status: 502, retryAfter: nil, engine: engine) }
         guard let text = decoded.text else { throw AppError.openRouterServer("OpenRouter sent no transcript.") }
         return CloudResult(text: text.trimmingCharacters(in: .whitespacesAndNewlines), provider: nil,
-                           costUSD: decoded.usage?.cost, reasoningTokens: nil)
+                           costUSD: decoded.usage?.cost, audioSeconds: decoded.usage?.seconds)
     }
 
     /// `Retry-After` is seconds or an HTTP date.

@@ -20,9 +20,36 @@ struct CloudResult: Sendable, Equatable {
     /// Who served the request, when the response says (Gemini's body, an `X-Provider-Name` header).
     var provider: String?
     var costUSD: Double?
-    var reasoningTokens: Int?
-    /// `X-Generation-Id`, for `generationProvider(id:apiKey:)`.
+    /// Token counts from the chat response's `usage`; nil from the speech endpoint, which reports seconds.
+    var usage: TokenUsage?
+    /// The body's `id`, else `X-Generation-Id`: for `generationDetails(id:apiKey:)`.
     var generationID: String?
+    /// The model that answered, as the response names it.
+    var model: String?
+    var finishReason: String?
+    /// Seconds OpenRouter measured for the generation (`openrouter_metadata.generation_time`).
+    var generationTime: TimeInterval?
+    /// Seconds of audio the speech endpoint billed.
+    var audioSeconds: Double?
+
+    var reasoningTokens: Int? { usage?.reasoningTokens }
+}
+
+/// Token counts of one OpenRouter chat completion. `completionTokens` includes `reasoningTokens`.
+struct TokenUsage: Codable, Equatable, Sendable {
+    var promptTokens: Int?
+    /// The part of `promptTokens` that was audio, when reported.
+    var audioTokens: Int?
+    var cachedTokens: Int?
+    var completionTokens: Int?
+    var reasoningTokens: Int?
+    var totalTokens: Int?
+
+    /// Visible output: completion minus reasoning.
+    var outputTokens: Int? {
+        guard let completionTokens else { return nil }
+        return max(0, completionTokens - (reasoningTokens ?? 0))
+    }
 }
 
 /// Transcription through OpenRouter: Gemini over chat completions, Parakeet over the speech-to-text endpoint.
@@ -71,7 +98,7 @@ final class OpenRouterClient: Sendable {
     /// Gemini over chat completions. `wav` is a complete WAV file. Retries once, only for a transient failure
     /// (429/500/502/503/529, a 402 from the in-flight budget, a dropped connection, or the same failures reported
     /// quickly inside a 200) and only when the wait is at most 8 s; never after a timeout (the user already waited).
-    func transcribe(wav: Data, model: String, systemPrompt: String?, apiKey: String,
+    func transcribe(wav: Data, model: String, systemPrompt: String?, effort: ReasoningEffort, apiKey: String,
                     timeout: TimeInterval) async throws -> CloudResult {
         let engine = Self.engine(forModel: model)
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -81,7 +108,7 @@ final class OpenRouterClient: Sendable {
         let body: Data
         do {
             body = try OpenRouterChatRequest.transcription(model: model, audioBase64: wav.base64EncodedString(),
-                                                           systemPrompt: systemPrompt).encoded()
+                                                           systemPrompt: systemPrompt, effort: effort).encoded()
         } catch {
             throw AppError.openRouterBadRequest("Couldn’t build the request.")
         }
@@ -92,6 +119,29 @@ final class OpenRouterClient: Sendable {
         if let provider = result.provider, provider != "Google AI Studio" {
             Log.net.warning("Unexpected OpenRouter provider: \(provider, privacy: .public)")
         }
+        return result
+    }
+
+    /// Clean-up of `transcript` (Gemini 3.5 Flash Lite over chat completions): text in, text out, with
+    /// `systemPrompt` as the instructions. Same retry policy as transcription; a failure is mapped as a Gemini one.
+    /// The returned text is the model's reply without any tags or quotes it put around it.
+    func cleanUp(transcript: String, model: String, systemPrompt: String, effort: ReasoningEffort, apiKey: String,
+                 timeout: TimeInterval) async throws -> CloudResult {
+        let engine = EngineID.geminiFlash
+        let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { throw AppError.openRouterMissingKey }
+        let body: Data
+        do {
+            body = try OpenRouterChatRequest.cleanup(model: model, systemPrompt: systemPrompt, transcript: transcript,
+                                                     effort: effort).encoded()
+        } catch {
+            throw AppError.openRouterBadRequest("Couldn’t build the request.")
+        }
+        let request = makeTranscriptionRequest(body: body, apiKey: key, timeout: timeout)
+        var result = try await sendWithRetry(request, engine: engine) { data in
+            try OpenRouterErrorMapper.success(data: data, engine: engine)
+        }
+        result.text = CleanupModel.cleanedText(from: result.text)
         return result
     }
 
@@ -166,9 +216,11 @@ final class OpenRouterClient: Sendable {
     /// A failure inside a 200 that arrives sooner than this is retried like the same HTTP status.
     static let quickFailureWindow: Duration = .seconds(10)
 
-    /// The Gemini request (chat completions).
+    /// The Gemini request (chat completions). Asks for `openrouter_metadata`, which carries the generation time.
     func makeTranscriptionRequest(body: Data, apiKey: String, timeout: TimeInterval) -> URLRequest {
-        makeRequest(path: "chat/completions", body: body, apiKey: apiKey, timeout: timeout)
+        var request = makeRequest(path: "chat/completions", body: body, apiKey: apiKey, timeout: timeout)
+        request.setValue("enabled", forHTTPHeaderField: "X-OpenRouter-Metadata")
+        return request
     }
 
     func makeRequest(path: String, body: Data, apiKey: String, timeout: TimeInterval) -> URLRequest {
@@ -216,6 +268,13 @@ final class OpenRouterClient: Sendable {
     /// recorded the generation yet (a 404 shortly after the response) or when it names no provider; other
     /// failures throw `AppError`.
     func generationProvider(id: String, apiKey: String) async throws -> String? {
+        try await generationDetails(id: id, apiKey: apiKey)?.provider
+    }
+
+    /// `GET /api/v1/generation?id=`: who served a finished request, what it cost and how long it took. nil while
+    /// OpenRouter hasn't recorded the generation yet (a 404 shortly after the response); other failures throw
+    /// `AppError`.
+    func generationDetails(id: String, apiKey: String) async throws -> GenerationDetails? {
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw AppError.openRouterMissingKey }
         guard var components = URLComponents(url: baseURL.appendingPathComponent("generation"),
@@ -237,14 +296,11 @@ final class OpenRouterClient: Sendable {
                     retryAfter: OpenRouterErrorMapper.retryAfter(http.value(forHTTPHeaderField: "Retry-After")),
                     engine: .geminiFlash)
             }
-            let generation: OpenRouterGeneration
             do {
-                generation = try JSONDecoder().decode(OpenRouterDataEnvelope<OpenRouterGeneration>.self, from: data).data
+                return try JSONDecoder().decode(OpenRouterDataEnvelope<OpenRouterGeneration>.self, from: data).data.details
             } catch {
                 throw AppError.openRouterServer("OpenRouter sent generation details \(Brand.name) couldn’t read.")
             }
-            let name = generation.providerName?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return name?.isEmpty == false ? name : nil
         } catch let failure as AttemptFailure {
             throw failure.error
         }

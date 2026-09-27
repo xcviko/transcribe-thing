@@ -34,8 +34,13 @@ Engine checks without the UI:
 ```sh
 .build/debug/transcribe-thing --model-status
 .build/debug/transcribe-thing --transcribe memo.m4a --engine parakeet --download
-OPENROUTER_API_KEY=sk-or-… .build/debug/transcribe-thing --transcribe memo.m4a --engine geminiFlash
+OPENROUTER_API_KEY=sk-or-… .build/debug/transcribe-thing --transcribe memo.m4a --engine geminiFlash --effort low
+OPENROUTER_API_KEY=sk-or-… .build/debug/transcribe-thing --transcribe memo.m4a --engine parakeet --clean-up
 ```
+
+`--effort` sets how long Gemini thinks (3.8 Flash and 3.1 Pro: low, medium or high; thinking can't be turned
+off). `--clean-up` sends the transcript to Gemini 3.5 Flash Lite with the example clean-up prompt
+(`--clean-up-prompt` and `--clean-up-effort` change them).
 
 ## Permissions
 
@@ -117,12 +122,15 @@ The zip's name (`transcribe-thing-<version>.zip`) and the tag (`v<version>`) are
 |---|---|
 | Parakeet model | `~/Library/Application Support/transcribe-thing/Models/parakeet-tdt-0.6b-v3` |
 | History | `~/Library/Application Support/transcribe-thing/history.json` (last 2,000 dictations) |
-| Recordings | `~/Library/Application Support/transcribe-thing/Recordings`: failed or canceled dictations for 14 days by default (Retry and Undo), successful ones for 1 day (Transcribe Again) |
+| Recordings | `~/Library/Application Support/transcribe-thing/Recordings`: failed or canceled dictations for 14 days by default (Retry and Undo), successful ones for 1 day (Transcribe With) |
 | Release feed cache | `~/Library/Application Support/transcribe-thing/updates.json` (what the last update check saw) |
 | Settings | `defaults read dev.transcribe-thing.app` |
 | OpenRouter key | login Keychain, service `dev.transcribe-thing.app` |
 
-Successful dictations keep their audio for a day by default, so History can send one to another model (Transcribe Again With, say Gemini after a long dictation went to Parakeet); set General → History → Keep audio to transcribe again to Off to keep only the text.
+Successful dictations keep their audio for a day by default, so History can send one to another model (Versions →
+Transcribe With, say Gemini after a long dictation went to Parakeet); set General → History → Keep audio to transcribe
+again to Off to keep only the text. Every transcript a recording gets stays in its Versions menu with how it was made
+(model, reasoning level, tokens, cost, time), each model at most once, and switching between them needs no audio.
 
 ## Shortcuts
 

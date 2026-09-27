@@ -180,7 +180,7 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
     @Test func successDecodesTextAndCost() throws {
         let data = Data(#"{"text":"  Hello, world. ","usage":{"seconds":9.2,"total_tokens":113,"cost":0.000508}}"#.utf8)
         let result = try OpenRouterErrorMapper.speechSuccess(data: data, engine: .parakeetCloud)
-        #expect(result == CloudResult(text: "Hello, world.", costUSD: 0.000508))
+        #expect(result == CloudResult(text: "Hello, world.", costUSD: 0.000508, audioSeconds: 9.2))
     }
 
     @Test func emptyTextIsNotAnErrorHere() throws {
@@ -499,7 +499,8 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         store.flush()
         let raw = String(decoding: try Data(contentsOf: paths.historyFile), as: UTF8.self)
         #expect(raw.contains(#""provider":"Together""#) && raw.contains(#""engine":"parakeetCloud""#))
-        #expect(raw.components(separatedBy: #""provider""#).count == 2, "absent, not null, when unknown")
+        // Flat for older builds and in its version: absent, not null, when unknown.
+        #expect(raw.components(separatedBy: #""provider""#).count == 3, "absent, not null, when unknown")
 
         let reloaded = HistoryStore(paths: paths, settings: settings)
         reloaded.load()

@@ -96,6 +96,17 @@ enum Fmt {
         return "\(Int((value / 60).rounded())) min"
     }
 
+    /// Token counts: "820", "17.7k", "120k", "1.2M".
+    static func tokens(_ count: Int) -> String {
+        let value = Double(max(0, count))
+        if value < 1_000 { return "\(Int(value))" }
+        if value < 1_000_000 {
+            let k = value / 1_000
+            return "\(decimal(k, fractionDigits: k < 100 ? 1 : 0))k"
+        }
+        return "\(decimal(value / 1_000_000, fractionDigits: 1))M"
+    }
+
     private static func decimal(_ value: Double, fractionDigits: Int, minimumFractionDigits: Int = 0) -> String {
         value.formatted(.number.locale(locale)
             .precision(.fractionLength(minimumFractionDigits...max(minimumFractionDigits, fractionDigits))))

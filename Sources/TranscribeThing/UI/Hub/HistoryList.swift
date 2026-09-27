@@ -162,7 +162,7 @@ struct HistoryRow: View {
                 .padding(.vertical, 4)
         } else if hasAudio {
             Menu {
-                TranscribeAgainItems(entry: entry)
+                VersionsMenuItems(entry: entry)
             } label: {
                 Label(title, systemImage: symbol)
             }
@@ -229,7 +229,7 @@ struct HistoryRow: View {
             }
             if entry.status != .success && hasAudio && transcribing == nil {
                 Menu {
-                    TranscribeAgainItems(entry: entry)
+                    VersionsMenuItems(entry: entry)
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
@@ -266,18 +266,9 @@ struct HistoryRow: View {
         if entry.status == .success && !isEmptySuccess {
             Button("Copy") { hub.copy(entry.text) }
         }
-        let menu = hub.transcribeAgainMenu(for: entry)
-        if let unavailable = menu.unavailableTitle {
-            Button(unavailable) {}
-                .disabled(true)
-        } else {
-            Menu(menu.title) {
-                TranscribeAgainItems(entry: entry, includesHeader: false)
-            }
-        }
-        if entry.status == .success && entry.previous != nil {
-            Button("Restore Previous Text") { hub.history.restorePreviousText(entry.id) }
-                .disabled(transcribing != nil)
+        let menu = hub.versionsMenu(for: entry)
+        Menu(menu.title) {
+            VersionsMenuItems(entry: entry)
         }
         Divider()
         Button("Delete", role: .destructive) { onDelete(entry) }
@@ -301,33 +292,36 @@ private struct TranscribingLine: View {
     }
 }
 
-/// "Transcribe with" → the engines a row's recording can go to (`TranscribeAgainMenu`): every engine for a retry,
-/// the extra models included (a retry picks the model for that one recording), every other engine for a
-/// transcript, grouped by where it runs (on this Mac, cloud speech, Gemini); unavailable ones are disabled with
-/// the reason. One disabled line instead while the recording is being transcribed or is gone.
-struct TranscribeAgainItems: View {
+/// A row's Versions menu (`VersionsMenu`): the versions it has, the current one checked, then "Transcribe With"
+/// the engines (and clean-up) not used on it yet, unavailable ones disabled with the reason. A failed or canceled
+/// dictation lists only the engines to retry with.
+struct VersionsMenuItems: View {
     var entry: TranscriptEntry
-    var includesHeader = true
     @Environment(HubContext.self) private var hub
 
     var body: some View {
-        let menu = hub.transcribeAgainMenu(for: entry)
-        let items = ForEach(Array(menu.items.enumerated()), id: \.element.id) { index, item in
-            if index > 0, menu.items[index - 1].engine.cloudAPI != item.engine.cloudAPI {
-                Divider()
-            }
-            Button(item.title) {
-                hub.dictation.retry(entry, with: item.engine)
-            }
-            .disabled(!item.isEnabled)
-        }
-        if let unavailable = menu.unavailableTitle {
-            Button(unavailable) {}
+        let menu = hub.versionsMenu(for: entry)
+        if let running = menu.runningTitle {
+            Button(running) {}
                 .disabled(true)
-        } else if includesHeader {
-            Section("Transcribe with") { items }
-        } else {
-            items
+        }
+        if !menu.versions.isEmpty {
+            Section(VersionsMenu.versionsSectionTitle) {
+                ForEach(menu.versions) { version in
+                    Toggle(isOn: Binding(get: { version.isCurrent },
+                                         set: { _ in hub.dictation.showVersion(version.kind, of: entry.id) })) {
+                        Text(version.summary.isEmpty ? version.title : "\(version.title) · \(version.summary)")
+                    }
+                }
+            }
+        }
+        Section(menu.isRetry ? menu.title : VersionsMenu.actionsSectionTitle) {
+            ForEach(menu.actions) { action in
+                Button(action.title) {
+                    hub.dictation.makeVersion(action.kind, of: entry)
+                }
+                .disabled(!action.isEnabled)
+            }
         }
     }
 }

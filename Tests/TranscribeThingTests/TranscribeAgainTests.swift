@@ -56,140 +56,309 @@ import Testing
     }
 }
 
-// MARK: - Entries: previous text, decoding
+// MARK: - Entries: versions, decoding, migration
 
 @MainActor
 @Suite struct TranscriptVersionTests {
-    @Test func restorePreviousTextSwapsBackAndForth() {
-        let entry = TranscriptEntry(text: "gemini text", engine: .geminiFlash, audioDuration: 3, voicedSeconds: 2,
-                                    costUSD: 0.002, audioFileName: "a.wav", provider: "Google AI Studio",
-                                    previous: TranscriptVersion(text: "parakeet text", engine: .parakeet, processingTime: 0.3))
-        let store = HistoryStore.preview(entries: [entry])
-        store.restorePreviousText(entry.id)
-        var restored = try! #require(store.entry(id: entry.id))
-        #expect(restored.text == "parakeet text")
-        #expect(restored.engine == .parakeet)
-        #expect(restored.costUSD == nil && restored.provider == nil)
-        #expect(restored.createdAt == entry.createdAt && restored.audioFileName == "a.wav")
-        #expect(restored.previous == TranscriptVersion(text: "gemini text", engine: .geminiFlash, provider: "Google AI Studio",
-                                                       costUSD: 0.002))
-        store.restorePreviousText(entry.id)
-        restored = try! #require(store.entry(id: entry.id))
-        #expect(restored.text == "gemini text" && restored.engine == .geminiFlash)
-    }
-
-    @Test func oldHistoryWithoutTheNewFieldsDecodes() throws {
-        let json = """
-        {"audioDuration":4.5,"createdAt":"2026-09-20T10:00:00Z","engine":"parakeet","id":"\(UUID().uuidString)",
-         "status":"success","text":"hello","voicedSeconds":3}
-        """
+    private func decode(_ json: String) throws -> TranscriptEntry {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
-        let entry = try decoder.decode(TranscriptEntry.self, from: Data(json.utf8))
-        #expect(entry.text == "hello")
-        #expect(entry.previous == nil && entry.audioFileName == nil)
+        return try decoder.decode(TranscriptEntry.self, from: Data(json.utf8))
+    }
+
+    private func roundTrip(_ entry: TranscriptEntry) throws -> TranscriptEntry {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(TranscriptEntry.self, from: encoder.encode(entry))
+    }
+
+    private let gemini = TranscriptVersion(
+        kind: .transcription(.geminiFlash), text: "gemini text",
+        metadata: TranscriptMetadata(createdAt: Date(timeIntervalSince1970: 1_790_000_100), modelID: "google/gemini-3.8-flash",
+                                     provider: "Google AI Studio", generationID: "gen-1", reasoningEffort: .low,
+                                     usage: TokenUsage(promptTokens: 1925, audioTokens: 1800, cachedTokens: 0,
+                                                       completionTokens: 17_900, reasoningTokens: 17_700, totalTokens: 19_825),
+                                     costUSD: 0.07, processingTime: 76, generationTime: 74.5, usedSystemPrompt: false,
+                                     finishReason: "stop"))
+
+    @Test func aNewEntryHasOneCurrentVersion() {
+        let entry = TranscriptEntry(text: "hello", engine: .parakeetCloud, audioDuration: 3, voicedSeconds: 2,
+                                    processingTime: 0.4, costUSD: 0.0001, provider: "Together")
+        #expect(entry.versions.count == 1)
+        #expect(entry.currentKind == .transcription(.parakeetCloud))
+        #expect(entry.text == "hello" && entry.engine == .parakeetCloud && entry.provider == "Together")
+        #expect(entry.costUSD == 0.0001 && entry.processingTime == 0.4)
+        let failed = TranscriptEntry(text: "", engine: .geminiPro, status: .failed, audioDuration: 3, voicedSeconds: 2)
+        #expect(failed.versions.isEmpty && failed.currentKind == nil)
+        #expect(failed.engine == .geminiPro && failed.text.isEmpty)
+    }
+
+    @Test func switchingVersionsChangesWhatTheRowShows() {
+        var entry = TranscriptEntry(text: "parakeet text", engine: .parakeet, audioDuration: 3, voicedSeconds: 2,
+                                    audioFileName: "a.wav")
+        let added = entry.addVersion(gemini)
+        #expect(added)
+        #expect(entry.text == "gemini text" && entry.engine == .geminiFlash && entry.costUSD == 0.07)
+        #expect(entry.versions.map(\.kind) == [.transcription(.parakeet), .transcription(.geminiFlash)])
+        let store = HistoryStore.preview(entries: [entry])
+        store.selectVersion(.transcription(.parakeet), of: entry.id)
+        let switched = try! #require(store.entry(id: entry.id))
+        #expect(switched.text == "parakeet text" && switched.engine == .parakeet && switched.costUSD == nil)
+        #expect(switched.provider == nil)
+        #expect(switched.createdAt == entry.createdAt && switched.audioFileName == "a.wav")
+        #expect(switched.versions.count == 2, "switching keeps every version")
+        store.selectVersion(.cleanup(of: .parakeet), of: entry.id)
+        #expect(store.entry(id: entry.id)?.currentKind == .transcription(.parakeet), "a version it doesn't have")
+    }
+
+    @Test func aVersionOfTheSameKindReplacesTheOldOneInPlace() {
+        var entry = TranscriptEntry(text: "parakeet text", engine: .parakeet, audioDuration: 3, voicedSeconds: 2)
+        entry.addVersion(gemini)
+        entry.addVersion(TranscriptVersion(text: "parakeet again", engine: .parakeet), makeCurrent: false)
+        #expect(entry.versions.map(\.text) == ["parakeet again", "gemini text"])
+        #expect(entry.currentKind == .transcription(.geminiFlash))
+        var failed = TranscriptEntry(text: "", engine: .parakeet, status: .failed, audioDuration: 3, voicedSeconds: 2)
+        let addedToFailed = failed.addVersion(gemini)
+        #expect(!addedToFailed, "a failed row has no versions")
+    }
+
+    @Test func metadataRoundTripsWithEveryField() throws {
+        var entry = TranscriptEntry(text: "parakeet text", engine: .parakeet, audioDuration: 3, voicedSeconds: 2,
+                                    processingTime: 0.3)
+        entry.addVersion(gemini)
+        entry.addVersion(TranscriptVersion(kind: .cleanup(of: .parakeet), text: "Parakeet text.",
+                                           metadata: TranscriptMetadata(modelID: CleanupModel.openRouterModelID,
+                                                                        reasoningEffort: .minimal, usedSystemPrompt: true)),
+                         makeCurrent: false)
+        let decoded = try roundTrip(entry)
+        #expect(decoded.versions.count == 3)
+        #expect(decoded.version(.transcription(.geminiFlash))?.metadata == gemini.metadata)
+        #expect(decoded.version(.cleanup(of: .parakeet))?.metadata.reasoningEffort == .minimal)
+        #expect(decoded.currentKind == .transcription(.geminiFlash))
+        #expect(decoded.text == "gemini text")
+    }
+
+    @Test func theFlatFieldsStayReadableForOlderBuilds() throws {
+        var entry = TranscriptEntry(text: "raw", engine: .parakeet, audioDuration: 3, voicedSeconds: 2)
+        entry.addVersion(TranscriptVersion(kind: .cleanup(of: .parakeet), text: "Clean.",
+                                           metadata: TranscriptMetadata(provider: "Google AI Studio", costUSD: 0.0002)))
+        let object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(entry)) as? [String: Any])
+        #expect(object["text"] as? String == "Clean.")
+        #expect(object["engine"] as? String == "parakeet")
+        #expect(object["costUSD"] as? Double == 0.0002)
+        #expect(object["currentVersion"] as? String == "cleanup:parakeet")
+        #expect(object["previous"] == nil)
+    }
+
+    @Test func oldHistoryWithoutVersionsBecomesOneVersion() throws {
+        let entry = try decode("""
+        {"audioDuration":4.5,"createdAt":"2026-09-20T10:00:00Z","engine":"parakeetCloud","id":"\(UUID().uuidString)",
+         "status":"success","text":"hello","voicedSeconds":3,"costUSD":0.0001,"provider":"Together","processingTime":1.1}
+        """)
+        #expect(entry.versions.count == 1)
+        let version = try #require(entry.currentVersion)
+        #expect(version.kind == .transcription(.parakeetCloud) && version.text == "hello")
+        #expect(version.metadata.provider == "Together" && version.metadata.costUSD == 0.0001)
+        #expect(version.metadata.processingTime == 1.1)
+        #expect(version.metadata.createdAt == entry.createdAt)
+        #expect(entry.audioFileName == nil)
+    }
+
+    @Test func aPreviousTextBecomesTheOlderVersion() throws {
+        let entry = try decode("""
+        {"audioDuration":4.5,"createdAt":"2026-09-20T10:00:00Z","engine":"geminiPro","id":"\(UUID().uuidString)",
+         "status":"success","text":"new","voicedSeconds":3,"costUSD":0.01,
+         "previous":{"text":"old","engine":"parakeetCloud","provider":"Together","costUSD":0.0001,"processingTime":1.25}}
+        """)
+        #expect(entry.versions.map(\.kind) == [.transcription(.parakeetCloud), .transcription(.geminiPro)])
+        #expect(entry.currentKind == .transcription(.geminiPro) && entry.text == "new")
+        let old = try #require(entry.version(.transcription(.parakeetCloud)))
+        #expect(old.text == "old" && old.metadata.provider == "Together" && old.metadata.costUSD == 0.0001)
+        #expect(old.metadata.processingTime == 1.25 && old.metadata.createdAt == entry.createdAt)
     }
 
     @Test func aPreviousTextFromARetiredEngineReadsAsItsSuccessor() throws {
-        let json = """
+        let entry = try decode("""
         {"audioDuration":4.5,"createdAt":"2026-09-20T10:00:00Z","engine":"geminiPro","id":"\(UUID().uuidString)",
          "status":"success","text":"new","voicedSeconds":3,"previous":{"text":"old","engine":"whisper"}}
-        """
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let entry = try decoder.decode(TranscriptEntry.self, from: Data(json.utf8))
-        #expect(entry.previous == TranscriptVersion(text: "old", engine: .parakeet))
+        """)
+        #expect(entry.version(.transcription(.parakeet))?.text == "old")
     }
 
-    @Test func anUnreadablePreviousTextDoesntCostTheEntry() throws {
-        let json = """
+    @Test func aPreviousTextOfTheSameEngineAsTheCurrentOneIsDropped() throws {
+        let entry = try decode("""
+        {"audioDuration":4.5,"createdAt":"2026-09-20T10:00:00Z","engine":"parakeet","id":"\(UUID().uuidString)",
+         "status":"success","text":"new","voicedSeconds":3,"previous":{"text":"old","engine":"parakeet"}}
+        """)
+        #expect(entry.versions.map(\.text) == ["new"])
+    }
+
+    @Test func anUnreadablePreviousTextOrVersionDoesntCostTheEntry() throws {
+        let previous = try decode("""
         {"audioDuration":4.5,"createdAt":"2026-09-20T10:00:00Z","engine":"geminiPro","id":"\(UUID().uuidString)",
          "status":"success","text":"new","voicedSeconds":3,"previous":{"text":"old","engine":"futureModel"}}
-        """
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        let entry = try decoder.decode(TranscriptEntry.self, from: Data(json.utf8))
-        #expect(entry.text == "new" && entry.previous == nil)
+        """)
+        #expect(previous.text == "new" && previous.versions.count == 1)
+        let versions = try decode("""
+        {"audioDuration":4.5,"createdAt":"2026-09-20T10:00:00Z","engine":"parakeet","id":"\(UUID().uuidString)",
+         "status":"success","text":"Clean.","voicedSeconds":3,"currentVersion":"cleanup:parakeet",
+         "versions":[{"kind":"futureModel","text":"x","metadata":{"createdAt":"2026-09-20T10:00:00Z"}},
+                     {"kind":"parakeet","text":"raw","metadata":{"createdAt":"2026-09-20T10:00:00Z","reasoningEffort":"extreme"}},
+                     {"kind":"cleanup:parakeet","text":"Clean.","metadata":{"createdAt":"2026-09-20T10:00:01Z","costUSD":0.0002}}]}
+        """)
+        #expect(versions.versions.map(\.kind) == [.transcription(.parakeet), .cleanup(of: .parakeet)])
+        #expect(versions.version(.transcription(.parakeet))?.metadata.reasoningEffort == nil, "an unknown level is dropped")
+        #expect(versions.currentKind == .cleanup(of: .parakeet) && versions.text == "Clean.")
     }
 
-    @Test func previousTextPersists() async throws {
+    @Test func aCurrentVersionThatDidntDecodeFallsBackToTheFlatText() throws {
+        let entry = try decode("""
+        {"audioDuration":4.5,"createdAt":"2026-09-20T10:00:00Z","engine":"parakeet","id":"\(UUID().uuidString)",
+         "status":"success","text":"shown","voicedSeconds":3,"currentVersion":"cleanup:futureModel",
+         "versions":[{"kind":"parakeet","text":"raw","metadata":{"createdAt":"2026-09-20T10:00:00Z"}}]}
+        """)
+        #expect(entry.text == "shown" && entry.currentKind == .transcription(.parakeet))
+        #expect(entry.versions.count == 1, "the flat transcript takes the place of its kind")
+    }
+
+    @Test func versionsPersist() async throws {
         let paths = AppPaths.temporary()
         defer { try? FileManager.default.removeItem(at: paths.root) }
         let settings = AppSettings.inMemory()
         let store = HistoryStore(paths: paths, settings: settings)
         store.load()
         try await waitUntil { store.isLoaded }
-        let entry = TranscriptEntry(createdAt: Date(timeIntervalSince1970: 1_790_000_000.5), text: "new", engine: .geminiPro,
-                                    audioDuration: 4, voicedSeconds: 3, audioFileName: "x.wav",
-                                    previous: TranscriptVersion(text: "old", engine: .parakeetCloud, provider: "Together",
-                                                                costUSD: 0.0001, processingTime: 1.25))
+        var entry = TranscriptEntry(createdAt: Date(timeIntervalSince1970: 1_790_000_000.5), text: "old", engine: .parakeetCloud,
+                                    audioDuration: 4, voicedSeconds: 3, processingTime: 1.25, costUSD: 0.0001,
+                                    provider: "Together")
+        entry.addVersion(gemini)
         store.upsert(entry)
         store.flush()
         let reloaded = HistoryStore(paths: paths, settings: settings)
         reloaded.load()
         try await waitUntil { reloaded.isLoaded }
-        #expect(reloaded.entries.first?.previous == entry.previous)
+        let loaded = try #require(reloaded.entries.first)
+        #expect(loaded.versions.map(\.metadata) == entry.versions.map(\.metadata))
+        #expect(loaded.versions.map(\.kind) == entry.versions.map(\.kind))
+        #expect(loaded.createdAt == entry.createdAt)
+        #expect(loaded == entry)
+    }
+
+    @Test func kindsHaveStableRawValues() {
+        #expect(TranscriptVersionKind.transcription(.geminiPro).rawValue == "geminiPro")
+        #expect(TranscriptVersionKind.cleanup(of: .parakeetCloud).rawValue == "cleanup:parakeetCloud")
+        #expect(TranscriptVersionKind(rawValue: "cleanup:whisper") == .cleanup(of: .parakeet))
+        #expect(TranscriptVersionKind(rawValue: "cleanup:nope") == nil)
+        #expect(TranscriptVersionKind.cleanup(of: .parakeet).displayName == "Parakeet v3 + Clean-up")
+    }
+
+    @Test func metadataSummaryIsCompact() {
+        #expect(gemini.metadata.summary == "76 s · $0.07 · 17.7k thinking")
+        #expect(TranscriptMetadata(processingTime: 0.42).summary == "0.4 s")
+        #expect(TranscriptMetadata().summary.isEmpty)
+        #expect(Fmt.tokens(820) == "820" && Fmt.tokens(17_700) == "17.7k" && Fmt.tokens(120_400) == "120k")
     }
 }
 
-// MARK: - The row menu
+// MARK: - The Versions menu
 
-@Suite struct TranscribeAgainMenuTests {
-    private func menu(_ entry: TranscriptEntry, key: KeyStatus = .valid(KeyInfo()),
-                      local: LocalModelState = .ready, transcribingWith: EngineID? = nil) -> TranscribeAgainMenu {
-        TranscribeAgainMenu.make(for: entry, transcribingWith: transcribingWith) {
+@Suite struct VersionsMenuTests {
+    private func menu(_ entry: TranscriptEntry, key: KeyStatus = .valid(KeyInfo()), local: LocalModelState = .ready,
+                      running: TranscriptVersionKind? = nil, prompt: Bool = true) -> VersionsMenu {
+        VersionsMenu.make(for: entry, running: running, readiness: {
             EngineReadiness.of($0, localState: local, keyStatus: key)
-        }
+        }, hasCleanupPrompt: prompt)
     }
 
     private func transcript(_ engine: EngineID = .parakeet, duration: TimeInterval = 90, audio: Bool = true) -> TranscriptEntry {
         TranscriptEntry(text: "hello", engine: engine, audioDuration: duration, voicedSeconds: duration / 2,
-                        audioFileName: audio ? "a.wav" : nil)
+                        processingTime: 0.4, audioFileName: audio ? "a.wav" : nil)
     }
 
-    @Test func aTranscriptOffersEveryOtherEngine() {
+    private func action(_ m: VersionsMenu, _ kind: TranscriptVersionKind) -> VersionsMenu.Action? {
+        m.actions.first { $0.kind == kind }
+    }
+
+    @Test func aTranscriptListsItsVersionAndOffersEveryOtherEngineAndCleanUp() {
         let m = menu(transcript(.parakeet))
-        #expect(m.title == "Transcribe Again With")
-        #expect(m.unavailableTitle == nil)
-        #expect(m.items.map(\.engine) == [.parakeetCloud, .geminiFlash, .geminiPro])
-        #expect(m.items.allSatisfy { $0.isEnabled })
-        #expect(m.items.map(\.title) == ["Parakeet v3 · Cloud", "Gemini 3.8 Flash", "Gemini 3.1 Pro"])
-        #expect(menu(transcript(.geminiFlash)).items.map(\.engine) == [.parakeet, .parakeetCloud, .geminiPro])
+        #expect(m.title == "Versions" && !m.isRetry && m.runningTitle == nil)
+        #expect(m.versions == [VersionsMenu.Version(kind: .transcription(.parakeet), summary: "0.4 s", isCurrent: true)])
+        #expect(m.actions.map(\.kind) == [.transcription(.parakeetCloud), .transcription(.geminiFlash),
+                                          .transcription(.geminiPro), .cleanup(of: .parakeet)])
+        #expect(m.actions.allSatisfy { $0.isEnabled })
+        #expect(m.actions.map(\.title) == ["Parakeet v3 · Cloud", "Gemini 3.8 Flash", "Gemini 3.1 Pro", "Clean Up"])
     }
 
-    @Test func withoutAKeyCloudEnginesSaySo() {
+    @Test func aModelAlreadyUsedIsAVersionNotAnAction() {
+        var entry = transcript(.parakeet)
+        entry.addVersion(TranscriptVersion(text: "g", engine: .geminiFlash, costUSD: 0.002, processingTime: 3))
+        entry.addVersion(TranscriptVersion(kind: .cleanup(of: .parakeet), text: "c", metadata: TranscriptMetadata()),
+                         makeCurrent: false)
+        let m = menu(entry)
+        #expect(m.versions.map(\.kind) == [.transcription(.parakeet), .transcription(.geminiFlash), .cleanup(of: .parakeet)])
+        #expect(m.versions.map(\.isCurrent) == [false, true, false])
+        #expect(m.versions[1].summary == "3.0 s · $0.002")
+        #expect(m.actions.map(\.kind) == [.transcription(.parakeetCloud), .transcription(.geminiPro)])
+    }
+
+    @Test func geminiTranscriptsAreNeverCleanedUp() {
+        #expect(!menu(transcript(.geminiPro)).actions.contains { $0.kind.isCleanup })
+        #expect(menu(transcript(.parakeetCloud)).actions.last?.kind == .cleanup(of: .parakeetCloud))
+    }
+
+    @Test func withoutAKeyCloudActionsSaySo() {
         let m = menu(transcript(.parakeet), key: .missing)
-        #expect(m.items.map(\.title) == ["Parakeet v3 · Cloud · Needs key", "Gemini 3.8 Flash · Needs key",
-                                         "Gemini 3.1 Pro · Needs key"])
-        #expect(!m.items.contains { $0.isEnabled })
-        #expect(menu(transcript(.parakeetCloud), key: .invalid("401")).items.first { $0.engine == .geminiPro }?.title
+        #expect(m.actions.map(\.title) == ["Parakeet v3 · Cloud · Needs key", "Gemini 3.8 Flash · Needs key",
+                                           "Gemini 3.1 Pro · Needs key", "Clean Up · Needs key"])
+        #expect(action(menu(transcript(.parakeetCloud), key: .invalid("401")), .transcription(.geminiPro))?.title
                 == "Gemini 3.1 Pro · Key rejected")
-        #expect(menu(transcript(.parakeetCloud), key: .missing).items.first { $0.engine == .parakeet }?.isEnabled == true)
+        #expect(action(menu(transcript(.parakeetCloud), key: .missing), .transcription(.parakeet))?.isEnabled == true)
     }
 
     @Test func geminiCantTakeMoreThanOneRequest() {
         let long = menu(transcript(.parakeet, duration: 8 * 60))
-        #expect(long.items.first { $0.engine == .geminiFlash }?.title == "Gemini 3.8 Flash · Too long for Gemini")
-        #expect(long.items.first { $0.engine == .geminiPro }?.isEnabled == false)
-        #expect(long.items.first { $0.engine == .parakeetCloud }?.isEnabled == true)
-        // A Gemini dictation stopped at its 7-minute limit, plus the tail, still fits.
-        #expect(menu(transcript(.parakeet, duration: 7 * 60 + 1)).items.allSatisfy { $0.isEnabled })
+        #expect(action(long, .transcription(.geminiFlash))?.title == "Gemini 3.8 Flash · Too long for Gemini")
+        #expect(action(long, .transcription(.geminiPro))?.blocker == .tooLongForGemini)
+        #expect(action(long, .transcription(.parakeetCloud))?.isEnabled == true)
+        #expect(action(long, .cleanup(of: .parakeet))?.isEnabled == true, "a clean-up needs only the text")
+        #expect(menu(transcript(.parakeet, duration: 7 * 60 + 1)).actions.allSatisfy { $0.isEnabled })
     }
 
-    @Test func noAudioOrATranscriptionUnderWayDisablesTheWholeMenu() {
-        #expect(menu(transcript(audio: false)).unavailableTitle == "Transcribe Again · Recording no longer kept")
-        #expect(menu(transcript(), transcribingWith: .geminiFlash).unavailableTitle == "Transcribing with Gemini Flash…")
+    @Test func withoutAudioVersionsStaySwitchableAndCleanUpStillWorks() {
+        var entry = transcript(.parakeet, audio: false)
+        entry.addVersion(TranscriptVersion(text: "g", engine: .geminiFlash))
+        let m = menu(entry)
+        #expect(m.versions.count == 2)
+        #expect(action(m, .transcription(.geminiPro))?.blocker == .recordingGone)
+        #expect(action(m, .transcription(.geminiPro))?.title == "Gemini 3.1 Pro · Recording no longer kept")
+        #expect(action(m, .cleanup(of: .parakeet))?.isEnabled == true)
+    }
+
+    @Test func cleanUpNeedsAPrompt() {
+        let m = menu(transcript(.parakeet), prompt: false)
+        #expect(action(m, .cleanup(of: .parakeet))?.blocker == .cleanupPromptEmpty)
+        #expect(action(m, .cleanup(of: .parakeet))?.title == "Clean Up · Needs a clean-up prompt")
+    }
+
+    @Test func somethingRunningBlocksEveryActionButNotSwitching() {
+        let m = menu(transcript(), running: .transcription(.geminiFlash))
+        #expect(m.runningTitle == "Transcribing with Gemini Flash…")
+        #expect(m.actions.allSatisfy { $0.blocker == .running(.transcription(.geminiFlash)) })
+        #expect(m.versions.count == 1)
+        #expect(menu(transcript(), running: .cleanup(of: .parakeet)).runningTitle == "Cleaning up…")
     }
 
     @Test func aFailedDictationRetriesWithAnyEngineItsOwnIncluded() {
         let failed = TranscriptEntry(text: "", engine: .geminiPro, status: .failed, audioDuration: 20, voicedSeconds: 15,
                                      audioFileName: "f.wav")
         let m = menu(failed)
-        #expect(m.title == "Retry With")
-        #expect(m.items.map(\.engine) == EngineID.allCases)
+        #expect(m.title == "Retry With" && m.isRetry && m.versions.isEmpty)
+        #expect(m.actions.map(\.kind) == EngineID.allCases.map { .transcription($0) })
         var gone = failed
         gone.audioFileName = nil
-        #expect(menu(gone).unavailableTitle == "Retry · Recording no longer kept")
+        #expect(menu(gone).actions.allSatisfy { $0.blocker == .recordingGone })
     }
 }
 
@@ -256,16 +425,17 @@ import Testing
         #expect(updated.createdAt == original.createdAt)
         #expect(updated.costUSD == 0.003)
         #expect(updated.audioFileName == original.audioFileName)
-        #expect(updated.previous?.text == "parakeet text" && updated.previous?.engine == .parakeet)
+        #expect(updated.versions.map(\.kind) == [.transcription(.parakeet), .transcription(.geminiFlash)])
+        #expect(updated.currentKind == .transcription(.geminiFlash))
         #expect(pasted == ["parakeet text"], "Transcribe Again never pastes by itself")
 
         let card = try #require(h.toasts.notices.first { $0.transcript == "gemini text" })
         #expect(card.title == "Transcribed with Gemini Flash")
         #expect(card.actions.map(\.kind) == [.pasteText("gemini text"), .copyText("gemini text")])
 
-        h.history.restorePreviousText(id)
+        h.controller.showVersion(.transcription(.parakeet), of: id)
         #expect(h.history.entry(id: id)?.text == "parakeet text")
-        #expect(h.history.entry(id: id)?.previous?.text == "gemini text")
+        #expect(h.history.entry(id: id)?.version(.transcription(.geminiFlash))?.text == "gemini text")
     }
 
     @Test func aFailedTranscribeAgainKeepsTheTextAndRetriesWithTheSameEngine() async throws {
@@ -292,7 +462,7 @@ import Testing
         h.controller.perform(retry, from: notice)
         try await waitUntil { h.history.entry(id: id)?.text == "second try" }
         #expect(engines == [.geminiPro, .geminiPro])
-        #expect(h.history.entry(id: id)?.previous?.text == "parakeet text")
+        #expect(h.history.entry(id: id)?.version(.transcription(.parakeet))?.text == "parakeet text")
     }
 
     @Test func aCanceledTranscribeAgainLeavesTheRowAndUndoFinishesIt() async throws {
@@ -338,12 +508,13 @@ import Testing
         try await waitUntil { h.history.entry(id: id)?.engine == .geminiFlash && h.controller.machine.activeJobs == 0 }
         #expect(!h.toasts.notices.contains { $0.recordingID == id }, "the failure notice goes once the row has new text")
 
-        // Clicked all the same (it was on its way out): back into the row, never pasted, the row keeps a previous text.
+        // Clicked all the same (it was on its way out): never pasted, and never Gemini Flash a second time.
         h.controller.perform(retry, from: failure)
         try await waitUntil { h.controller.machine.activeJobs == 0 }
         #expect(pasted == ["parakeet text"])
         let entry = try #require(h.history.entry(id: id))
-        #expect(entry.status == .success && entry.previous != nil)
+        #expect(entry.status == .success && entry.versions.count == 2)
+        #expect(entry.currentKind == .transcription(.geminiFlash))
         #expect(h.history.entries.count == 1)
     }
 
@@ -371,7 +542,7 @@ import Testing
         #expect(!h.controller.machine.isRecording, "Undo never opens the mic for a transcribed recording")
         #expect(h.controller.machine.activeJobs == 0)
         #expect(h.history.entry(id: id)?.text == "text by geminiFlash")
-        #expect(h.history.entry(id: id)?.previous?.text == "parakeet text")
+        #expect(h.history.entry(id: id)?.version(.transcription(.parakeet))?.text == "parakeet text")
         #expect(pasted == ["parakeet text"])
     }
 
@@ -389,7 +560,7 @@ import Testing
         try await waitUntil { asked && h.controller.machine.activeJobs == 0 }
         let kept = try #require(h.history.entry(id: id))
         #expect(kept.text == original.text && kept.engine == original.engine)
-        #expect(kept.previous == nil)
+        #expect(kept.versions.count == 1)
         #expect(kept.audioFileName == original.audioFileName)
         #expect(h.history.loadRecording(for: kept) != nil)
     }

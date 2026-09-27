@@ -77,12 +77,21 @@ enum PreviewFixtures {
                 engine: .parakeetCloud, audioDuration: 14.6, voicedSeconds: 12.8, processingTime: 1.1, costUSD: 0.00037,
                 audioFileName: "preview-recent-2.wav", provider: "Together"),
             TranscriptEntry(
-                createdAt: ago(52),
-                text: "Привет, созвонимся завтра в десять утра. Я пришлю ссылку на встречу и короткую повестку, если что-то поменяется, напиши.",
-                engine: .geminiFlash, audioDuration: 9.8, voicedSeconds: 8.7, processingTime: 2.6, costUSD: 0.0021,
-                audioFileName: "preview-recent-3.wav", provider: "Google AI Studio",
-                previous: TranscriptVersion(text: "Привет, созвонимся завтра в 10 утра. Я пришлю ссылку на встречу и короткую повестку.",
-                                            engine: .parakeet, processingTime: 0.35)),
+                createdAt: ago(52), engine: .geminiFlash, audioDuration: 9.8, voicedSeconds: 8.7,
+                audioFileName: "preview-recent-3.wav",
+                versions: [
+                    TranscriptVersion(text: "Привет, созвонимся завтра в 10 утра. Я пришлю ссылку на встречу и короткую повестку.",
+                                      engine: .parakeet, processingTime: 0.35, createdAt: ago(52)),
+                    TranscriptVersion(
+                        kind: .transcription(.geminiFlash),
+                        text: "Привет, созвонимся завтра в десять утра. Я пришлю ссылку на встречу и короткую повестку, если что-то поменяется, напиши.",
+                        metadata: TranscriptMetadata(
+                            createdAt: ago(50), modelID: "google/gemini-3.8-flash", provider: "Google AI Studio",
+                            generationID: "gen-preview-1", reasoningEffort: .low,
+                            usage: TokenUsage(promptTokens: 330, audioTokens: 314, completionTokens: 612, reasoningTokens: 540),
+                            costUSD: 0.0021, processingTime: 2.6, generationTime: 2.2, usedSystemPrompt: false,
+                            finishReason: "stop")),
+                ]),
             TranscriptEntry(
                 createdAt: ago(135),
                 text: "", engine: .geminiPro, status: .failed, audioDuration: 23.4, voicedSeconds: 19.8,

@@ -65,6 +65,35 @@ final class AppSettings {
     var showDockIcon: Bool = false { didSet { store.set(showDockIcon, .showDockIcon) } }
     /// Empty by default: Gemini then receives only the audio.
     var geminiSystemPrompt: String = "" { didSet { store.set(geminiSystemPrompt, .geminiSystemPrompt) } }
+    /// How long each Gemini model thinks, by engine: only levels the model supports (`EngineID.reasoningEfforts`),
+    /// only models that reason. Read and change it through `reasoningEffort(for:)` and `setReasoningEffort(_:for:)`.
+    private(set) var reasoningEfforts: [EngineID: ReasoningEffort] = AppSettings.defaultReasoningEfforts {
+        didSet {
+            let normalized = Self.normalizedReasoningEfforts(reasoningEfforts)
+            guard normalized == reasoningEfforts else {
+                reasoningEfforts = normalized
+                return
+            }
+            store.setJSON(Dictionary(uniqueKeysWithValues: reasoningEfforts.map { ($0.key.rawValue, $0.value.rawValue) }),
+                          .reasoningEfforts)
+        }
+    }
+    /// Clean-up of Parakeet transcripts by Gemini 3.5 Flash Lite before they're pasted. Takes effect only with a
+    /// clean-up prompt (`isCleanupActive`): with no instruction the model would reply to the text instead.
+    var cleanupEnabled: Bool = false { didSet { store.set(cleanupEnabled, .cleanupEnabled) } }
+    /// Empty by default; "Use Example" fills in `CleanupModel.examplePrompt`.
+    var cleanupSystemPrompt: String = "" { didSet { store.set(cleanupSystemPrompt, .cleanupSystemPrompt) } }
+    /// One of `CleanupModel.reasoningEfforts`.
+    var cleanupReasoningEffort: ReasoningEffort = CleanupModel.defaultReasoningEffort {
+        didSet {
+            let normalized = cleanupReasoningEffort.nearest(in: CleanupModel.reasoningEfforts)
+            guard normalized == cleanupReasoningEffort else {
+                cleanupReasoningEffort = normalized
+                return
+            }
+            store.set(cleanupReasoningEffort.rawValue, .cleanupReasoningEffort)
+        }
+    }
     /// One of `maxRecordingChoices`.
     var maxRecordingMinutes: Int = 20 { didSet { store.set(maxRecordingMinutes, .maxRecordingMinutes) } }
     var doublePressForHandsFree: Bool = true { didSet { store.set(doublePressForHandsFree, .doublePressForHandsFree) } }
@@ -113,6 +142,38 @@ final class AppSettings {
     }
 
     var maxRecordingDuration: TimeInterval { TimeInterval(maxRecordingMinutes) * 60 }
+
+    // MARK: Reasoning and clean-up
+
+    /// The level `engine` thinks at; nil for a model that doesn't reason.
+    func reasoningEffort(for engine: EngineID) -> ReasoningEffort? {
+        reasoningEfforts[engine] ?? engine.defaultReasoningEffort
+    }
+
+    /// `effort` for `engine`, moved to the nearest level the model supports; ignored for a model that doesn't reason.
+    func setReasoningEffort(_ effort: ReasoningEffort, for engine: EngineID) {
+        guard !engine.reasoningEfforts.isEmpty else { return }
+        reasoningEfforts[engine] = effort.nearest(in: engine.reasoningEfforts)
+    }
+
+    nonisolated static var defaultReasoningEfforts: [EngineID: ReasoningEffort] {
+        Dictionary(uniqueKeysWithValues: EngineID.allCases.compactMap { engine in
+            engine.defaultReasoningEffort.map { (engine, $0) }
+        })
+    }
+
+    /// Every reasoning model with a level it supports: missing ones get their default, unsupported levels the nearest.
+    nonisolated static func normalizedReasoningEfforts(_ efforts: [EngineID: ReasoningEffort]) -> [EngineID: ReasoningEffort] {
+        Dictionary(uniqueKeysWithValues: EngineID.allCases.compactMap { engine in
+            guard let fallback = engine.defaultReasoningEffort else { return nil }
+            return (engine, (efforts[engine] ?? fallback).nearest(in: engine.reasoningEfforts))
+        })
+    }
+
+    /// Dictations by the main model are cleaned up: the switch is on and there is a prompt to follow.
+    var isCleanupActive: Bool { cleanupEnabled && hasCleanupPrompt }
+
+    var hasCleanupPrompt: Bool { !cleanupSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     /// The limit a new recording gets with the main model.
     var effectiveMaxRecordingDuration: TimeInterval { maxRecordingDuration(for: selectedEngine) }
@@ -181,6 +242,20 @@ final class AppSettings {
         migrateBuiltInOverBluetoothOnce()
         if let v = store.bool(.showDockIcon) { showDockIcon = v }
         if let v = store.string(.geminiSystemPrompt) { geminiSystemPrompt = v }
+        if let v: [String: String] = store.json(.reasoningEfforts) {
+            var efforts: [EngineID: ReasoningEffort] = [:]
+            for (engine, effort) in v {
+                if let engine = EngineID(rawValue: engine), let effort = ReasoningEffort(rawValue: effort) {
+                    efforts[engine] = effort
+                }
+            }
+            reasoningEfforts = Self.normalizedReasoningEfforts(efforts)
+        }
+        if let v = store.bool(.cleanupEnabled) { cleanupEnabled = v }
+        if let v = store.string(.cleanupSystemPrompt) { cleanupSystemPrompt = v }
+        if let v = store.string(.cleanupReasoningEffort).flatMap(ReasoningEffort.init(rawValue:)) {
+            cleanupReasoningEffort = v.nearest(in: CleanupModel.reasoningEfforts)
+        }
         if let v = store.int(.maxRecordingMinutes), v > 0 { maxRecordingMinutes = v }
         if let v = store.bool(.doublePressForHandsFree) { doublePressForHandsFree = v }
         if let v = store.bool(.restoreClipboard) { restoreClipboard = v }
@@ -267,6 +342,7 @@ enum SettingsKey: String, CaseIterable {
     case restoreClipboard, keepFailedRecordingsDays, keepSuccessfulRecordingsDays, shortcuts, hasShownWelcomeHello
     case checkForUpdatesAutomatically, announcedUpdateVersion, lastLaunchedVersion
     case switchEngines, switchHintShownCount, microphoneChoiceMigrated
+    case reasoningEfforts, cleanupEnabled, cleanupSystemPrompt, cleanupReasoningEffort
 
     var defaultsKey: String { "tt.\(rawValue)" }
 }

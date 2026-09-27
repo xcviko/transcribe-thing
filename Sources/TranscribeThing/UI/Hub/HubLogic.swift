@@ -180,53 +180,109 @@ enum EngineReadiness: Equatable {
     }
 }
 
-// MARK: - Transcribe again
+// MARK: - Versions
 
-/// What a History row offers for transcribing its recording again: every engine for a failed or canceled
-/// dictation (Retry), every engine but the one that wrote the text for a transcript. Unavailable engines stay
-/// listed, disabled, with the reason in their title.
-struct TranscribeAgainMenu: Equatable {
-    struct Item: Equatable, Identifiable {
-        var engine: EngineID
-        /// "Needs key", "Too long for Gemini"; nil when it can be picked.
-        var unavailableReason: String?
+/// A History row's Versions menu: the transcripts the recording already has (`versions`, the current one checked)
+/// and what can still make another one (`actions`): each engine not used on it yet, and a clean-up of each Parakeet
+/// version not cleaned up yet. A model never runs twice on the same recording. A failed or canceled dictation has
+/// no versions, and every engine retries it, its own included. Unavailable actions stay listed, disabled, with the
+/// reason; versions can always be switched to, even without the audio.
+struct VersionsMenu: Equatable {
+    /// Why an action can't run right now.
+    enum Blocker: Equatable {
+        /// The engine or the key isn't ready: "Needs key", "Key rejected", "Not downloaded" (`EngineReadiness`).
+        case engine(String)
+        case tooLongForGemini
+        /// The audio is no longer kept (a clean-up needs only the text, so never this).
+        case recordingGone
+        /// Something is already running for this recording.
+        case running(TranscriptVersionKind)
+        /// Clean-up has no prompt to follow.
+        case cleanupPromptEmpty
 
-        var id: EngineID { engine }
-        var isEnabled: Bool { unavailableReason == nil }
-        /// "Gemini 3.8 Flash", "Gemini 3.1 Pro · Needs key".
-        var title: String { unavailableReason.map { "\(engine.displayName) · \($0)" } ?? engine.displayName }
+        var label: String {
+            switch self {
+            case .engine(let reason): reason
+            case .tooLongForGemini: "Too long for Gemini"
+            case .recordingGone: "Recording no longer kept"
+            case .running: "Busy"
+            case .cleanupPromptEmpty: "Needs a clean-up prompt"
+            }
+        }
     }
 
-    /// "Transcribe Again With" for a transcript, "Retry With" for a failed or canceled dictation.
+    struct Version: Equatable, Identifiable {
+        var kind: TranscriptVersionKind
+        /// "76 s · $0.07 · 17.7k thinking"; empty when nothing is known.
+        var summary: String
+        var isCurrent: Bool
+
+        var id: TranscriptVersionKind { kind }
+        /// "Gemini 3.8 Flash", "Parakeet v3 + Clean-up".
+        var title: String { kind.displayName }
+    }
+
+    struct Action: Equatable, Identifiable {
+        var kind: TranscriptVersionKind
+        var blocker: Blocker?
+
+        var id: TranscriptVersionKind { kind }
+        var isEnabled: Bool { blocker == nil }
+        /// "Gemini 3.1 Pro", "Clean Up"; with the reason when it can't run: "Gemini 3.1 Pro · Needs key".
+        var title: String {
+            let name = switch kind {
+            case .transcription(let engine): engine.displayName
+            case .cleanup: "Clean Up"
+            }
+            return blocker.map { "\(name) · \($0.label)" } ?? name
+        }
+    }
+
+    /// A failed or canceled dictation: `actions` retry it.
+    var isRetry: Bool
+    /// "Versions" for a transcript, "Retry With" for a failed or canceled dictation.
     var title: String
-    /// Stands in for the whole submenu when nothing can be picked: "Transcribing with Gemini Flash…",
-    /// "Transcribe Again · Recording no longer kept".
-    var unavailableTitle: String?
-    var items: [Item]
+    /// Oldest first.
+    var versions: [Version]
+    /// Engines in `EngineID` order, then clean-ups.
+    var actions: [Action]
+    /// What is running for the recording right now: "Transcribing with Gemini Flash…", "Cleaning up…".
+    var runningTitle: String?
 
-    static let recordingGone = "Recording no longer kept"
-    static let tooLongForGemini = "Too long for Gemini"
+    static let versionsSectionTitle = "Versions"
+    static let actionsSectionTitle = "Transcribe With"
 
-    /// `transcribingWith`: the engine the recording is being transcribed with right now, if it is.
-    static func make(for entry: TranscriptEntry, transcribingWith: EngineID?,
-                     readiness: (EngineID) -> EngineReadiness) -> TranscribeAgainMenu {
-        let isTranscript = entry.status == .success
-        let title = isTranscript ? "Transcribe Again With" : "Retry With"
-        let unavailable: String?
-        if let transcribingWith {
-            unavailable = "Transcribing with \(transcribingWith.shortName)…"
-        } else if entry.audioFileName == nil {
-            unavailable = "\(isTranscript ? "Transcribe Again" : "Retry") · \(recordingGone)"
-        } else {
-            unavailable = nil
+    /// `running`: what is being made for this recording right now. `readiness`: each engine's (a clean-up needs the
+    /// OpenRouter key like Gemini, so it goes by Gemini Flash's). `hasCleanupPrompt`: the clean-up prompt isn't empty.
+    static func make(for entry: TranscriptEntry, running: TranscriptVersionKind?,
+                     readiness: (EngineID) -> EngineReadiness, hasCleanupPrompt: Bool) -> VersionsMenu {
+        let isRetry = entry.status != .success
+        let hasAudio = entry.audioFileName != nil
+        let versions = entry.versions.map {
+            Version(kind: $0.kind, summary: $0.metadata.summary, isCurrent: $0.kind == entry.currentKind)
         }
-        let engines = EngineID.allCases.filter { !isTranscript || $0 != entry.engine }
-        let items = engines.map { engine in
-            Item(engine: engine, unavailableReason: readiness(engine).unavailableReason
-                 ?? (engine.cloudAPI == .chatCompletions && !OpenRouterClient.fitsOneChatRequest(duration: entry.audioDuration)
-                     ? tooLongForGemini : nil))
+        let busy = running.map(Blocker.running)
+        var actions = EngineID.allCases.filter { isRetry || !entry.hasVersion(.transcription($0)) }.map { engine in
+            let tooLong = engine.cloudAPI == .chatCompletions
+                && !OpenRouterClient.fitsOneChatRequest(duration: entry.audioDuration)
+            let blocker = busy ?? (hasAudio ? nil : .recordingGone)
+                ?? readiness(engine).unavailableReason.map(Blocker.engine) ?? (tooLong ? .tooLongForGemini : nil)
+            return Action(kind: .transcription(engine), blocker: blocker)
         }
-        return TranscribeAgainMenu(title: title, unavailableTitle: unavailable, items: items)
+        if !isRetry {
+            for version in entry.versions {
+                guard case .transcription(let source) = version.kind, CleanupModel.canClean(source),
+                      !entry.hasVersion(.cleanup(of: source)) else { continue }
+                let blocker = busy ?? (hasCleanupPrompt ? nil : .cleanupPromptEmpty)
+                    ?? readiness(.geminiFlash).unavailableReason.map(Blocker.engine)
+                actions.append(Action(kind: .cleanup(of: source), blocker: blocker))
+            }
+        }
+        let runningTitle = running.map { kind in
+            kind.isCleanup ? "Cleaning up…" : "Transcribing with \(kind.engine.shortName)…"
+        }
+        return VersionsMenu(isRetry: isRetry, title: isRetry ? "Retry With" : "Versions", versions: versions,
+                            actions: actions, runningTitle: runningTitle)
     }
 }
 

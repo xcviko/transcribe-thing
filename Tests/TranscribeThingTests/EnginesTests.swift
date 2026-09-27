@@ -11,7 +11,7 @@ import Testing
 
     @Test func emptyPromptSendsOnlyTheAudio() throws {
         let body = OpenRouterChatRequest.transcription(model: "google/gemini-3.8-flash", audioBase64: "UklG+/==",
-                                                       systemPrompt: "")
+                                                       systemPrompt: "", effort: .high)
         let json = try object(body)
         #expect(Set(json.keys) == ["model", "messages", "reasoning", "provider", "max_tokens", "stream"])
         #expect(json["model"] as? String == "google/gemini-3.8-flash")
@@ -41,13 +41,13 @@ import Testing
 
     @Test(arguments: [nil, "", "   \n\t "] as [String?])
     func blankPromptsAddNoSystemMessage(_ prompt: String?) throws {
-        let body = OpenRouterChatRequest.transcription(model: "m", audioBase64: "AA==", systemPrompt: prompt)
+        let body = OpenRouterChatRequest.transcription(model: "m", audioBase64: "AA==", systemPrompt: prompt, effort: .high)
         #expect(body.messages == [.userAudio(base64: "AA==", format: "wav")])
     }
 
     @Test func systemPromptComesFirstTrimmed() throws {
         let body = OpenRouterChatRequest.transcription(model: "google/gemini-3.1-pro-preview", audioBase64: "AA==",
-                                                       systemPrompt: "  Transcribe verbatim.\n")
+                                                       systemPrompt: "  Transcribe verbatim.\n", effort: .high)
         let json = try object(body)
         let messages = try #require(json["messages"] as? [[String: Any]])
         #expect(messages.count == 2)
@@ -61,7 +61,7 @@ import Testing
 
     @Test func slashesInBase64AreNotEscaped() throws {
         let raw = String(decoding: try OpenRouterChatRequest.transcription(
-            model: "google/gemini-3.8-flash", audioBase64: "ab/cd+/ef==", systemPrompt: nil).encoded(), as: UTF8.self)
+            model: "google/gemini-3.8-flash", audioBase64: "ab/cd+/ef==", systemPrompt: nil, effort: .high).encoded(), as: UTF8.self)
         #expect(raw.contains("ab/cd+/ef=="))
         #expect(raw.contains("google/gemini-3.8-flash"))
         #expect(!raw.contains("\\/"))
@@ -351,7 +351,7 @@ enum Fixtures {
     @Test func invalidKeyIsNotRetried() async throws {
         let (client, host) = StubURLProtocol.client([.init(status: 401, body: #"{"error":{"message":"User not found.","code":401}}"#)])
         await #expect(throws: AppError.openRouterInvalidKey("User not found.")) {
-            try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil,
+            try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil, effort: .high,
                                         apiKey: "sk-or-v1-invalid", timeout: 120)
         }
         let requests = StubURLProtocol.registry.requests(for: host)
@@ -365,7 +365,7 @@ enum Fixtures {
             .init(status: 503, body: #"{"error":{"code":503,"message":"Overloaded"}}"#), Fixtures.success,
         ])
         let result = try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash",
-                                                 systemPrompt: "", apiKey: "k", timeout: 120)
+                                                 systemPrompt: "", effort: .high, apiKey: "k", timeout: 120)
         #expect(result.text == "Hello there.")
         #expect(result.costUSD == 0.001)
         #expect(StubURLProtocol.registry.requests(for: host).count == 2)
@@ -375,7 +375,7 @@ enum Fixtures {
         let failure = StubURLProtocol.Reply(status: 500, body: #"{"error":{"code":500,"message":"Internal Server Error"}}"#)
         let (client, host) = StubURLProtocol.client([failure, failure, Fixtures.success])
         await #expect(throws: AppError.openRouterServer("Internal Server Error")) {
-            try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil,
+            try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil, effort: .high,
                                         apiKey: "k", timeout: 120)
         }
         #expect(StubURLProtocol.registry.requests(for: host).count == 2)
@@ -385,7 +385,7 @@ enum Fixtures {
         let noRoute = StubURLProtocol.Reply(status: 503, body: #"{"error":{"code":503,"message":"No endpoints found matching your data policy."}}"#)
         let (client, host) = StubURLProtocol.client([noRoute, Fixtures.success])
         await #expect(throws: AppError.openRouterNoRoute("No endpoints found matching your data policy. \(OpenRouterErrorMapper.noRouteHint)")) {
-            try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil,
+            try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil, effort: .high,
                                         apiKey: "k", timeout: 120)
         }
         #expect(StubURLProtocol.registry.requests(for: host).count == 1)
@@ -394,7 +394,7 @@ enum Fixtures {
     @Test func upstreamFailureInsideA200IsRetriedOnce() async throws {
         let upstream = StubURLProtocol.Reply(body: #"{"id":"gen-1","error":{"code":502,"message":"Upstream error"}}"#)
         let (client, host) = StubURLProtocol.client([upstream, Fixtures.success])
-        let result = try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil,
+        let result = try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil, effort: .high,
                                                  apiKey: "k", timeout: 120)
         #expect(result.text == "Hello there.")
         #expect(StubURLProtocol.registry.requests(for: host).count == 2)
@@ -405,14 +405,14 @@ enum Fixtures {
             status: 402, headers: ["Retry-After": "0"],
             body: #"{"error":{"code":402,"message":"In flight","metadata":{"limit_source":"openrouter_in_flight_budget"}}}"#)
         let (client, host) = StubURLProtocol.client([inFlight, Fixtures.success])
-        #expect(try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil,
+        #expect(try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil, effort: .high,
                                             apiKey: "k", timeout: 120).text == "Hello there.")
         #expect(StubURLProtocol.registry.requests(for: host).count == 2)
 
         let broke = StubURLProtocol.Reply(status: 402, body: #"{"error":{"code":402,"message":"Insufficient credits"}}"#)
         let (second, secondHost) = StubURLProtocol.client([broke, Fixtures.success])
         await #expect(throws: AppError.openRouterNoCredits("Insufficient credits")) {
-            try await second.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil,
+            try await second.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil, effort: .high,
                                         apiKey: "k", timeout: 120)
         }
         #expect(StubURLProtocol.registry.requests(for: secondHost).count == 1)
@@ -424,7 +424,7 @@ enum Fixtures {
             Fixtures.success,
         ])
         await #expect(throws: AppError.openRouterRateLimited(retryAfter: 30)) {
-            try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil,
+            try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil, effort: .high,
                                         apiKey: "k", timeout: 120)
         }
         #expect(StubURLProtocol.registry.requests(for: host).count == 1)
@@ -433,7 +433,7 @@ enum Fixtures {
     @Test func droppedConnectionIsRetried() async throws {
         let (client, host) = StubURLProtocol.client([.init(error: .networkConnectionLost), Fixtures.success])
         let result = try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.1-pro-preview",
-                                                 systemPrompt: nil, apiKey: "k", timeout: 180)
+                                                 systemPrompt: nil, effort: .high, apiKey: "k", timeout: 180)
         #expect(result.text == "Hello there.")
         #expect(StubURLProtocol.registry.requests(for: host).count == 2)
     }
@@ -441,7 +441,7 @@ enum Fixtures {
     @Test func timeoutIsNotRetried() async throws {
         let (client, host) = StubURLProtocol.client([.init(error: .timedOut), Fixtures.success])
         await #expect(throws: AppError.timeout(.geminiPro)) {
-            try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.1-pro-preview", systemPrompt: nil,
+            try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.1-pro-preview", systemPrompt: nil, effort: .high,
                                         apiKey: "k", timeout: 180)
         }
         #expect(StubURLProtocol.registry.requests(for: host).count == 1)
@@ -450,7 +450,7 @@ enum Fixtures {
     @Test func offline() async throws {
         let (client, _) = StubURLProtocol.client([.init(error: .notConnectedToInternet)])
         await #expect(throws: AppError.offline) {
-            try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil,
+            try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil, effort: .high,
                                         apiKey: "k", timeout: 120)
         }
     }
@@ -459,7 +459,7 @@ enum Fixtures {
         let (client, host) = StubURLProtocol.client([Fixtures.success])
         let wav = Data(count: 15_000_000)
         await #expect(throws: AppError.recordingTooLarge) {
-            try await client.transcribe(wav: wav, model: "google/gemini-3.8-flash", systemPrompt: nil,
+            try await client.transcribe(wav: wav, model: "google/gemini-3.8-flash", systemPrompt: nil, effort: .high,
                                         apiKey: "k", timeout: 120)
         }
         #expect(StubURLProtocol.registry.requests(for: host).isEmpty)
@@ -468,7 +468,7 @@ enum Fixtures {
     @Test func missingKey() async throws {
         let (client, _) = StubURLProtocol.client([])
         await #expect(throws: AppError.openRouterMissingKey) {
-            try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil,
+            try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil, effort: .high,
                                         apiKey: "  ", timeout: 120)
         }
     }

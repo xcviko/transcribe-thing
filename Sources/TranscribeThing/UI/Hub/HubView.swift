@@ -82,8 +82,15 @@ final class HubContext: Observable {
         (previewTranscribing ?? dictation.transcribingEngines)[id]
     }
 
-    func transcribeAgainMenu(for entry: TranscriptEntry) -> TranscribeAgainMenu {
-        TranscribeAgainMenu.make(for: entry, transcribingWith: transcribingEngine(for: entry.id), readiness: readiness(of:))
+    /// What is being made for a History row's recording right now (a transcription or a clean-up), if anything.
+    func runningVersion(for id: UUID) -> TranscriptVersionKind? {
+        if let previewTranscribing { return previewTranscribing[id].map { .transcription($0) } }
+        return dictation.runningVersions[id]
+    }
+
+    func versionsMenu(for entry: TranscriptEntry) -> VersionsMenu {
+        VersionsMenu.make(for: entry, running: runningVersion(for: entry.id), readiness: readiness(of:),
+                          hasCleanupPrompt: settings.hasCleanupPrompt)
     }
 
     /// "transcribe-thing 0.1.0 (build 42)", or without the build when running the bare binary.

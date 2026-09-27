@@ -6,7 +6,8 @@ import Foundation
 ///
 ///     transcribe-thing --transcribe <audio file>
 ///            --engine parakeet|parakeetCloud|geminiFlash|geminiPro
-///            [--download] [--prompt <text>] [--repeat <n>]
+///            [--download] [--prompt <text>] [--repeat <n>] [--effort minimal|low|medium|high]
+///            [--clean-up [--clean-up-prompt <text>] [--clean-up-effort minimal|low|medium|high]]
 ///     transcribe-thing --model-status
 ///
 /// Hidden diagnostic (not in the usage text): `--parakeet-compute ane|gpu` loads the local model on other Core ML
@@ -16,7 +17,9 @@ import Foundation
 /// Uses the real model folder (~/Library/Application Support/transcribe-thing) and the real pipeline
 /// (ModelStore → InferenceGate → engine, or OpenRouterClient). Cloud engines read the key from
 /// OPENROUTER_API_KEY, else from the Keychain; cloud Parakeet also prints the provider that served the request.
-/// `--prompt` applies to Gemini only. Settings are in-memory: the CLI never changes the app's.
+/// `--prompt` and `--effort` apply to Gemini only (the effort moves to the nearest level the model supports).
+/// `--clean-up` sends the last transcript to Gemini 3.5 Flash Lite with the clean-up prompt (by default
+/// `CleanupModel.examplePrompt`) and prints the cleaned text. Settings are in-memory: the CLI never changes the app's.
 /// An engine that answers with no text heard no speech: that prints `NO SPEECH` instead of `TEXT:` and exits 0,
 /// like any other answer. Only real failures print `ERROR:` and exit non-zero.
 enum EngineCLI {
@@ -73,7 +76,7 @@ enum EngineCLI {
         static let usage = """
         usage: transcribe-thing --transcribe <audio file> \
         --engine parakeet|parakeetCloud|geminiFlash|geminiPro \
-        [--download] [--prompt <text>] [--repeat <n>]
+        [--download] [--prompt <text>] [--repeat <n>] [--effort minimal|low|medium|high]         [--clean-up [--clean-up-prompt <text>] [--clean-up-effort minimal|low|medium|high]]
                transcribe-thing --model-status
         """
 
@@ -83,6 +86,10 @@ enum EngineCLI {
         var prompt: String?
         var repeatCount: Int
         var parakeetCompute: ParakeetCompute?
+        var effort: ReasoningEffort?
+        var cleanUp: Bool
+        var cleanupPrompt: String?
+        var cleanupEffort: ReasoningEffort?
 
         init?(_ arguments: [String]) {
             func value(_ flag: String) -> String? {
@@ -98,6 +105,16 @@ enum EngineCLI {
             download = arguments.contains("--download")
             prompt = value("--prompt")
             repeatCount = max(1, min(20, value("--repeat").flatMap(Int.init) ?? 1))
+            if arguments.contains("--effort") {
+                guard let level = value("--effort").flatMap(ReasoningEffort.init(rawValue:)) else { return nil }
+                effort = level
+            }
+            cleanUp = arguments.contains("--clean-up")
+            cleanupPrompt = value("--clean-up-prompt")
+            if arguments.contains("--clean-up-effort") {
+                guard let level = value("--clean-up-effort").flatMap(ReasoningEffort.init(rawValue:)) else { return nil }
+                cleanupEffort = level
+            }
             if arguments.contains("--parakeet-compute") {
                 guard let preset = value("--parakeet-compute").flatMap(ParakeetCompute.init(rawValue:)) else { return nil }
                 parakeetCompute = preset
@@ -143,6 +160,10 @@ enum EngineCLI {
         let settings = AppSettings.inMemory()
         settings.selectedEngine = options.engine
         settings.geminiSystemPrompt = options.prompt ?? ""
+        if let effort = options.effort { settings.setReasoningEffort(effort, for: options.engine) }
+        settings.cleanupSystemPrompt = options.cleanupPrompt ?? CleanupModel.examplePrompt
+        if let effort = options.cleanupEffort { settings.cleanupReasoningEffort = effort }
+        if let effort = settings.reasoningEffort(for: options.engine) { print("EFFORT: \(effort.rawValue)") }
         var engines = ModelStore.makeEngines(paths: paths)
         if options.parakeetCompute == .gpu {
             engines[.parakeet] = ParakeetEncoderOnGPU(modelsRoot: paths.models)
@@ -158,7 +179,8 @@ enum EngineCLI {
             ParakeetEngine.quietLibraryLogging()
             let code = try await prepareLocal(options, store: store)
             guard code == ExitCode.ok else { return code }
-        } else {
+        }
+        if options.engine.isCloud || options.cleanUp {
             guard let key = cloudKey() else { throw AppError.openRouterMissingKey }
             await account.setKey(key)
             print("KEY: \(account.maskedKey ?? "?") · \(describe(account.status))")
@@ -173,6 +195,7 @@ enum EngineCLI {
             let speed = result.processingTime > 0 ? audioSeconds / result.processingTime : 0
             var line = "RUN \(run): \(format(result.processingTime, digits: 3)) s · \(format(speed, digits: 1))x real time"
             if let cost = result.costUSD { line += " · $\(String(format: "%.5f", cost))" }
+            if let reasoning = result.usage?.reasoningTokens { line += " · \(reasoning) reasoning tokens" }
             print(line)
             last = result
         }
@@ -187,6 +210,14 @@ enum EngineCLI {
             }
             print(last.text.isEmpty ? "NO SPEECH" : "TEXT: \(last.text)")
             if let best = runTimes.min() { print("TRANSCRIBE: first \(format(runTimes[0], digits: 3)) s · best \(format(best, digits: 3)) s") }
+            if options.cleanUp, !last.text.isEmpty {
+                let cleaned = try await service.cleanUp(last.text, of: last.engine)
+                var line = "CLEAN-UP: \(settings.cleanupReasoningEffort.rawValue) · \(format(cleaned.processingTime, digits: 3)) s"
+                if let cost = cleaned.costUSD { line += " · $\(String(format: "%.5f", cost))" }
+                if let reasoning = cleaned.usage?.reasoningTokens { line += " · \(reasoning) reasoning tokens" }
+                print(line)
+                print(cleaned.text.isEmpty ? "CLEANED: (empty)" : "CLEANED: \(cleaned.text)")
+            }
         }
         return ExitCode.ok
     }
