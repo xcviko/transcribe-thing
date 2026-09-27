@@ -69,13 +69,16 @@ final class UpdateCenter {
         case waitingForDictation(AppVersion)
         case installing(AppVersion)
         case restarting(AppVersion)
+        /// Installed, but the relaunch didn't start: quitting and reopening finishes it. Installing again would
+        /// only replace the app a second time.
+        case needsRestart(AppVersion)
         case failed(AppVersion, UpdateInstallError)
 
-        /// Downloading through restarting: another install can't start.
+        /// Downloading through needing a restart: another install can't start.
         var isBusy: Bool {
             switch self {
             case .idle, .failed: false
-            case .downloading, .verifying, .waitingForDictation, .installing, .restarting: true
+            case .downloading, .verifying, .waitingForDictation, .installing, .restarting, .needsRestart: true
             }
         }
 
@@ -83,7 +86,7 @@ final class UpdateCenter {
             switch self {
             case .idle: nil
             case .downloading(let v, _, _), .verifying(let v), .waitingForDictation(let v), .installing(let v),
-                 .restarting(let v), .failed(let v, _):
+                 .restarting(let v), .needsRestart(let v), .failed(let v, _):
                 v
             }
         }
@@ -297,6 +300,13 @@ final class UpdateCenter {
         }
     }
 
+    /// A queued dictation failed right after one was pasted: its error toast has the pill to itself, and the
+    /// announcement waits for the next paste.
+    func dictationFailed() {
+        announceTask?.cancel()
+        announceTask = nil
+    }
+
     /// Posts the toast and marks the version announced at once: Update, What's New, the close button and a
     /// timeout all end it for this version. Waits for the next dictation if a new one already started.
     func announceIfDue() {
@@ -357,6 +367,11 @@ final class UpdateCenter {
         installTask?.cancel()
     }
 
+    /// "Quit" once the update is installed but the relaunch didn't start.
+    func quitToFinishUpdate() {
+        terminate()
+    }
+
     func openReleasePage(_ release: Release? = nil) {
         openURL(release?.pageURL ?? Brand.releasesPage)
     }
@@ -385,7 +400,9 @@ final class UpdateCenter {
             do {
                 try relaunch(installer.target)
             } catch {
-                throw UpdateInstallError.installFailed("It’s installed: quit and reopen \(Brand.name) to finish.")
+                Log.app.error("Couldn't relaunch after the update: \(error.localizedDescription, privacy: .public)")
+                install = .needsRestart(version)
+                return
             }
             terminate()
         } catch {
@@ -469,14 +486,16 @@ enum UpdateFormat {
     }
 
     /// The Software Update row's subtitle in General.
+    /// Same precedence as the Software Update page's status row.
     @MainActor static func summary(_ center: UpdateCenter, now: Date) -> String {
+        if case .needsRestart(let version) = center.install { return "Reopen \(Brand.name) to finish updating to \(version)" }
         if let version = center.install.version, center.install.isBusy {
             return "Updating to \(version)…"
         }
         if center.isChecking { return "Checking…" }
         if let available = center.availableUpdate { return "\(Brand.name) \(available.version) is available" }
-        if let checked = center.lastChecked { return "Up to date · \(checkedAgo(checked, now: now))" }
         if center.checkError != nil { return "Couldn’t check for updates" }
+        if let checked = center.lastChecked { return "Up to date · \(checkedAgo(checked, now: now))" }
         return center.currentVersion.map { "Version \($0)" } ?? "Check for new versions"
     }
 }

@@ -85,6 +85,8 @@ struct PreparedUpdate: Equatable, Sendable {
 /// Every side effect goes through `Operations`, so tests run the flow on fakes and temporary folders.
 struct UpdateInstaller: Sendable {
     static let appName = "transcribe-thing.app"
+    /// What the download is saved as inside the work folder.
+    static let archiveName = "update.zip"
 
     enum Step: Equatable, Sendable {
         case downloading(received: Int64, total: Int64?)
@@ -133,7 +135,8 @@ struct UpdateInstaller: Sendable {
         let work = workRoot.appendingPathComponent("transcribe-thing-update-\(UUID().uuidString)", isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
-            let archive = work.appendingPathComponent(asset.name.isEmpty ? "update.zip" : asset.name, isDirectory: false)
+            // A fixed name: the feed's asset name never becomes a path.
+            let archive = work.appendingPathComponent(Self.archiveName, isDirectory: false)
             progress(.downloading(received: 0, total: asset.size > 0 ? asset.size : nil))
             do {
                 try await operations.download(asset.url, archive) { received, total in
@@ -211,16 +214,18 @@ struct UpdateInstaller: Sendable {
         }
     }
 
-    /// The zip must hold exactly one transcribe-thing.app (at its top level, or one folder down).
+    /// The zip must hold exactly one transcribe-thing.app (at its top level, or one folder down), and it must be a
+    /// real folder: a symlink would be verified through its target but installed as the link itself.
     static func singleApp(in folder: URL) throws -> URL {
         let fm = FileManager.default
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey]
         var found: [URL] = []
-        let top = (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isDirectoryKey])) ?? []
+        let top = (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: keys)) ?? []
         for item in top where item.lastPathComponent != "__MACOSX" {
             if item.lastPathComponent == appName {
                 found.append(item)
-            } else if (try? item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true, item.pathExtension != "app" {
-                let inner = (try? fm.contentsOfDirectory(at: item, includingPropertiesForKeys: nil)) ?? []
+            } else if isRealFolder(item), item.pathExtension != "app" {
+                let inner = (try? fm.contentsOfDirectory(at: item, includingPropertiesForKeys: keys)) ?? []
                 found += inner.filter { $0.lastPathComponent == appName }
             }
         }
@@ -228,7 +233,16 @@ struct UpdateInstaller: Sendable {
             throw UpdateInstallError.badArchive(found.isEmpty ? "No \(appName) in the archive."
                                                               : "\(found.count) copies of \(appName) in the archive.")
         }
+        guard isRealFolder(found[0]) else {
+            throw UpdateInstallError.badArchive("\(appName) in the archive is a symbolic link or not a folder.")
+        }
         return found[0]
+    }
+
+    /// A directory that isn't a symbolic link (to one or to anything else).
+    private static func isRealFolder(_ url: URL) -> Bool {
+        guard let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else { return false }
+        return values.isSymbolicLink != true && values.isDirectory == true
     }
 
     private static func fileSize(_ url: URL) -> Int64? {
@@ -398,8 +412,15 @@ enum CodeSignature {
         var error: Unmanaged<CFError>?
         let status = SecStaticCodeCheckValidityWithErrors(code, flags, requirement, &error)
         guard status == errSecSuccess else {
-            let reason = error?.takeRetainedValue().localizedDescription
-            throw UpdateInstallError.signatureMismatch(reason ?? Failure(status: status, context: "Checking the signature").localizedDescription)
+            // The CFError's description is a bare "OSStatus error -67050"; Security's own message says why.
+            var reason = Failure(status: status, context: "Checking the signature").localizedDescription
+            if let cfError = error?.takeRetainedValue() {
+                let info = cfError as Error as NSError
+                if let extra = info.localizedFailureReason ?? (info.userInfo[kSecCFErrorRequirementSyntax as String] as? String) {
+                    reason += " (\(extra))"
+                }
+            }
+            throw UpdateInstallError.signatureMismatch(reason)
         }
     }
 }

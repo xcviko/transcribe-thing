@@ -45,6 +45,8 @@ final class DictationController {
     @ObservationIgnored var onActivityChanged: ((DictationActivity) -> Void)?
     /// A dictation's text was just pasted where the user is typing (not paste-last, not a toast's Paste Here).
     @ObservationIgnored var onDictationDelivered: (() -> Void)?
+    /// A dictation ended with the error shake (a failure, silence, no speech).
+    @ObservationIgnored var onDictationFailed: (() -> Void)?
     /// The update toast's "Update".
     @ObservationIgnored var installUpdate: (() -> Void)?
 
@@ -1229,6 +1231,7 @@ final class DictationController {
     /// and settles back by itself, even when the next `refreshPill` already asks for rest.
     private func flash(_ phase: PillPhase) {
         lastFlash = (phase, clock())
+        if phase == .error { onDictationFailed?() }
         guard !machine.capture.isListeningOrLocked else { return }
         // Leave any recording phase first, so the shake lands on the idle/processing pill.
         refreshPill()

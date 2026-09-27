@@ -485,7 +485,10 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         let clock = Clock()
         let meter = LevelMeter(clock: { clock.now })
         let engine = WaveformEngine()
-        _ = run(meter, engine, clock: clock, seconds: 2) { t in t < 0.5 ? -50 : -20 }
+        // Speech with a short dip every 300 ms: a level that never dips for a second is noise to the gate.
+        _ = run(meter, engine, clock: clock, seconds: 2) { t in
+            t < 0.5 ? -50 : (t.truncatingRemainder(dividingBy: 0.3) < 0.24 ? -20 : -40)
+        }
         let end = try #require(engine.newestEnd)
         #expect(engine.columns.allSatisfy { $0 > 0.5 })
         func newest(at time: TimeInterval, reduceMotion: Bool = false) -> CGFloat {

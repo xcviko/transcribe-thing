@@ -293,16 +293,18 @@ final class StubTransport: @unchecked Sendable {
     static func make(feed: [[String: Any]] = [FeedFixtures.release("v0.3.0", body: "Faster startup. And more.",
                                                                    assets: ["transcribe-thing-0.3.0.zip"], size: 3),
                                              FeedFixtures.release("v0.2.0")],
-                     installer: UpdateInstaller? = nil) -> Harness {
+                     installer: UpdateInstaller? = nil, runsInBackground: Bool = false,
+                     failsAfterFirstCheck: Bool = false) -> Harness {
         let settings = AppSettings.inMemory()
         let toasts = ToastCenter(clock: { Date() }, schedulesExpiry: false)
-        let stub = StubTransport([.success((FeedFixtures.json(feed), 200, ["ETag": "\"e1\""])), .success((Data(), 304, [:]))])
+        let stub = StubTransport([.success((FeedFixtures.json(feed), 200, ["ETag": "\"e1\""])),
+                                  failsAfterFirstCheck ? .failure(URLError(.notConnectedToInternet)) : .success((Data(), 304, [:]))])
         let cache = FileManager.default.temporaryDirectory.appendingPathComponent("tt-updates-\(UUID().uuidString)/updates.json")
         var makeInstaller: (@MainActor () -> UpdateInstaller?)?
         if let installer { makeInstaller = { installer } }
         let center = UpdateCenter(settings: settings, toasts: toasts, currentVersion: AppVersion("0.2.0"),
                                   client: stub.client(), cacheFile: cache,
-                                  makeInstaller: makeInstaller, runsInBackground: false)
+                                  makeInstaller: makeInstaller, runsInBackground: runsInBackground)
         // Never the real browser, relaunch or quit.
         center.openURL = { _ in }
         center.relaunch = { _ in }
@@ -366,6 +368,31 @@ final class StubTransport: @unchecked Sendable {
         #expect(!h.center.showsBadge)
     }
 
+    @Test func aFailedDictationCancelsThePendingAnnouncement() async throws {
+        // Only an .app announces; start() isn't called, so nothing else runs in the background.
+        let h = Self.make(runsInBackground: true)
+        defer { try? FileManager.default.removeItem(at: h.cache.deletingLastPathComponent()) }
+        await h.center.check()
+        h.center.dictationDelivered()
+        h.center.dictationFailed()
+        try await Task.sleep(for: .seconds(UpdatePolicy.announceDelay + 0.3))
+        #expect(h.toasts.notices.isEmpty && h.settings.announcedUpdateVersion == nil, "the error toast has the pill")
+
+        h.center.dictationDelivered()
+        try await waitUntil { !h.toasts.notices.isEmpty }
+        #expect(h.settings.announcedUpdateVersion == "0.3.0", "the next paste announces it")
+    }
+
+    @Test func theGeneralRowAgreesWithThePageAfterAFailedCheck() async {
+        let h = Self.make(feed: [], failsAfterFirstCheck: true)
+        defer { try? FileManager.default.removeItem(at: h.cache.deletingLastPathComponent()) }
+        await h.center.check()
+        #expect(UpdateFormat.summary(h.center, now: Date()).hasPrefix("Up to date"))
+        await h.center.check()
+        #expect(h.center.checkError != nil && h.center.lastChecked != nil)
+        #expect(UpdateFormat.summary(h.center, now: Date()) == "Couldn’t check for updates")
+    }
+
     @Test func installsThenRelaunches() async throws {
         let fixture = try InstallerFixture()
         defer { fixture.cleanUp() }
@@ -386,6 +413,25 @@ final class StubTransport: @unchecked Sendable {
         #expect(relaunched == fixture.target)
         #expect(h.center.install == .restarting(AppVersion(major: 0, minor: 3)))
         #expect(fixture.installedVersion == "0.3.0")
+    }
+
+    @Test func aFailedRelaunchAsksForARestartInsteadOfReinstalling() async throws {
+        let fixture = try InstallerFixture()
+        defer { fixture.cleanUp() }
+        let h = Self.make(installer: fixture.installer())
+        defer { try? FileManager.default.removeItem(at: h.cache.deletingLastPathComponent()) }
+        await h.center.check()
+        var terminated = false
+        h.center.relaunch = { _ in throw CocoaError(.executableNotLoadable) }
+        h.center.terminate = { terminated = true }
+        h.center.installUpdate()
+        let version = AppVersion(major: 0, minor: 3)
+        try await waitUntil { h.center.install == .needsRestart(version) }
+        #expect(fixture.installedVersion == "0.3.0" && !terminated)
+        #expect(h.center.install.isBusy, "Update Now can't install it a second time")
+        #expect(UpdateFormat.summary(h.center, now: Date()) == "Reopen \(Brand.name) to finish updating to 0.3.0")
+        h.center.quitToFinishUpdate()
+        #expect(terminated)
     }
 
     @Test func failureOffersTheReleasePage() async throws {
@@ -436,6 +482,8 @@ struct InstallerFixture {
     var zipBundleID = "dev.transcribe-thing.app"
     var zipVersion = "0.3.0"
     var appsInZip = 1
+    /// The zip's transcribe-thing.app is a relative symlink to a real one two folders down.
+    var appIsSymlink = false
     var signatureOK = true
     var adHoc = false
     var writable = true
@@ -467,6 +515,13 @@ struct InstallerFixture {
                 progress(3, 3)
             },
             unzip: { _, destination in
+                if fixture.appIsSymlink {
+                    try InstallerFixture.makeApp(at: destination.appendingPathComponent("a/b/transcribe-thing.app"),
+                                                 id: fixture.zipBundleID, version: fixture.zipVersion)
+                    try FileManager.default.createSymbolicLink(atPath: destination.appendingPathComponent("transcribe-thing.app").path,
+                                                               withDestinationPath: "a/b/transcribe-thing.app")
+                    return
+                }
                 for index in 0..<fixture.appsInZip {
                     let folder = index == 0 ? destination : destination.appendingPathComponent("copy\(index)")
                     try InstallerFixture.makeApp(at: folder.appendingPathComponent("transcribe-thing.app"),
@@ -578,6 +633,26 @@ final class StepLog: @unchecked Sendable {
         if case .badArchive? = await failure(fixture) {} else { Issue.record("no app must be refused") }
     }
 
+    @Test func theAssetNameNeverBecomesAPath() async throws {
+        let fixture = try InstallerFixture()
+        defer { fixture.cleanUp() }
+        let hostile = InstallerFixture.release(assets: ["../../escaped.zip"])
+        let installer = fixture.installer()
+        let prepared = try await installer.prepare(hostile) { _ in }
+        defer { installer.discard(prepared) }
+        #expect(!FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("escaped.zip").path))
+        let archive = prepared.workDirectory.appendingPathComponent(UpdateInstaller.archiveName)
+        #expect(FileManager.default.fileExists(atPath: archive.path))
+    }
+
+    @Test func refusesASymlinkedApp() async throws {
+        var fixture = try InstallerFixture()
+        defer { fixture.cleanUp() }
+        fixture.appIsSymlink = true
+        if case .badArchive? = await failure(fixture) {} else { Issue.record("a symlinked app must be refused") }
+        #expect(fixture.installedVersion == "0.2.0")
+    }
+
     @Test func realReplaceSwapsTheBundle() throws {
         let fixture = try InstallerFixture()
         defer { fixture.cleanUp() }
@@ -634,12 +709,12 @@ final class StepLog: @unchecked Sendable {
             .list(ReleaseNotesList(ordered: false, start: 1, items: [
                 ReleaseNotesListItem(text: "One\ncontinued"),
                 ReleaseNotesListItem(text: "Two", children: [
-                    ReleaseNotesList(ordered: false, start: 1, items: [
+                    .list(ReleaseNotesList(ordered: false, start: 1, items: [
                         ReleaseNotesListItem(text: "Two a", children: [
-                            ReleaseNotesList(ordered: true, start: 1, items: [ReleaseNotesListItem(text: "deep")]),
+                            .list(ReleaseNotesList(ordered: true, start: 1, items: [ReleaseNotesListItem(text: "deep")])),
                         ]),
                         ReleaseNotesListItem(text: "Two b"),
-                    ]),
+                    ])),
                 ]),
                 ReleaseNotesListItem(text: "Three"),
             ])),
@@ -668,6 +743,20 @@ final class StepLog: @unchecked Sendable {
             .paragraph("Run:"),
             .code("xattr -dr com.apple.quarantine /Applications/transcribe-thing.app\n# not a heading"),
         ])
+    }
+
+    @Test func aCodeFenceInsideAListItemStaysInIt() {
+        let blocks = ReleaseNotes.blocks("- item\n  ```\n  code in item\n    indented\n  ```\n- next")
+        #expect(blocks == [
+            .list(ReleaseNotesList(ordered: false, start: 1, items: [
+                ReleaseNotesListItem(text: "item", children: [.code("code in item\n  indented")]),
+                ReleaseNotesListItem(text: "next"),
+            ])),
+        ])
+        #expect(ReleaseNotes.blocks("- item\n```\ncode\n```") == [
+            .list(ReleaseNotesList(ordered: false, start: 1, items: [ReleaseNotesListItem(text: "item")])),
+            .code("code"),
+        ], "an unindented fence ends the list")
     }
 
     @Test func boldIsNotABullet() {
@@ -711,6 +800,18 @@ final class StepLog: @unchecked Sendable {
         #expect(ReleaseNotes.tidy("[here](https://example.com)") == "[here](https://example.com)")
         #expect(ReleaseNotes.tidy("<https://example.com>") == "<https://example.com>")
         #expect(ReleaseNotes.tidy("```\nhttps://example.com\n```") == "```\nhttps://example.com\n```")
+        #expect(ReleaseNotes.tidy("Add `https://example.com/x` support") == "Add `https://example.com/x` support")
+        #expect(ReleaseNotes.tidy("Run `curl https://x.io/install.sh | sh` or https://x.io")
+                == "Run `curl https://x.io/install.sh | sh` or <https://x.io>")
+        #expect(ReleaseNotes.tidy("Unclosed ` https://x.io") == "Unclosed ` <https://x.io>")
+    }
+
+    @Test func layoutHTMLGoesAndItsTextStays() {
+        let notes = "- shown\n<details><summary>More</summary>\n\n- hidden\n</details>\n<img src=\"https://x.com/a.png\">"
+        #expect(ReleaseNotes.tidy(notes) == "- shown\n\n- hidden")
+        #expect(ReleaseNotes.summary("<details><summary>More</summary>\n\n- hidden\n</details>") == "hidden")
+        #expect(ReleaseNotes.summary("<table><tr><td>x</td></tr></table>\n\nReal news.") == "Real news.")
+        #expect(ReleaseNotes.tidy("Keep `<br>` as code") == "Keep `<br>` as code")
     }
 
     @Test func summaryForTheToast() {

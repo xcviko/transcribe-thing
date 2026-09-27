@@ -113,8 +113,8 @@ final class WaveformEngine {
               reduceMotion: Bool, isStatic: Bool) {
         let w = PillMetrics.barWidth
         guard meter.hasReceivedAudio else {
-            // Connecting: a slow ripple of dim dots, never a fake waveform.
-            let t = date.timeIntervalSinceReferenceDate
+            // Connecting: a slow ripple of dim dots, never a fake waveform. Snapshots freeze it at one phase.
+            let t = isStatic ? Self.staticTime : date.timeIntervalSinceReferenceDate
             let minH = PillMetrics.barMinHeight
             for i in 0..<PillMetrics.barCount {
                 let ripple = reduceMotion ? 0.5 : 0.5 + 0.5 * sin(2 * .pi * t / 1.4 - 0.5 * Double(i))

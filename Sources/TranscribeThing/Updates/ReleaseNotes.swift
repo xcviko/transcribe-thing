@@ -22,7 +22,8 @@ struct ReleaseNotesList: Equatable, Sendable {
 
 struct ReleaseNotesListItem: Equatable, Sendable {
     var text: String
-    var children: [ReleaseNotesList] = []
+    /// Nested lists and code blocks, in order.
+    var children: [ReleaseNotesBlock] = []
 }
 
 enum ReleaseNotes {
@@ -30,7 +31,8 @@ enum ReleaseNotes {
 
     /// GitHub's auto-generated notes, made readable: "* Fix paste by @sam in https://github.com/o/r/pull/12"
     /// becomes "* Fix paste ([#12](…))", "**Full Changelog**: …/compare/v1...v2" a "Full changelog" link, the
-    /// "What’s Changed" heading (each release already has a header) and HTML comments go, and bare URLs link.
+    /// "What’s Changed" heading (each release already has a header), HTML comments and layout tags (`<details>`,
+    /// `<img>`, `<br>`…) go, and bare URLs link. Inline code is left as written.
     static func tidy(_ markdown: String) -> String {
         let text = stripComments(markdown.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n"))
         var output: [String] = []
@@ -51,7 +53,10 @@ enum ReleaseNotes {
                 output.append("[Full changelog](\(full))")
                 continue
             }
-            output.append(linkBareURLs(pullRequestCredits(line)))
+            let tidied = outsideInlineCode(pullRequestCredits(line)) { linkBareURLs(stripTags($0)) }
+            // A line that was only tags goes, so it doesn't split the list or paragraph around it.
+            if !trimmed.isEmpty, tidied.trimmingCharacters(in: .whitespaces).isEmpty { continue }
+            output.append(tidied)
         }
         return output.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -99,7 +104,67 @@ enum ReleaseNotes {
         return String(line[..<whole.lowerBound]) + " ([#\(line[number])](\(line[url])))"
     }
 
-    private static let bareURLPattern = try! NSRegularExpression(pattern: #"(?<![(<\[\w/])https?://[^\s<>()\[\]]+"#)
+    /// Applies `transform` to the parts of `line` outside inline code spans (a run of backticks up to the next run
+    /// of the same length); an unmatched run is literal text.
+    private static func outsideInlineCode(_ line: String, _ transform: (String) -> String) -> String {
+        guard line.contains("`") else { return transform(line) }
+        var result = ""
+        var plain = ""
+        var index = line.startIndex
+        while index < line.endIndex {
+            guard line[index] == "`" else {
+                plain.append(line[index])
+                index = line.index(after: index)
+                continue
+            }
+            let run = line[index...].prefix(while: { $0 == "`" })
+            let afterOpen = run.endIndex
+            if let close = closingRun(of: run.count, in: line, from: afterOpen) {
+                result += transform(plain) + line[index..<close]
+                plain = ""
+                index = close
+            } else {
+                plain += run
+                index = afterOpen
+            }
+        }
+        return result + transform(plain)
+    }
+
+    /// The end of the next run of exactly `length` backticks at or after `start`.
+    private static func closingRun(of length: Int, in line: String, from start: String.Index) -> String.Index? {
+        var index = start
+        while index < line.endIndex {
+            guard line[index] == "`" else {
+                index = line.index(after: index)
+                continue
+            }
+            let run = line[index...].prefix(while: { $0 == "`" })
+            if run.count == length { return run.endIndex }
+            index = run.endIndex
+        }
+        return nil
+    }
+
+    /// HTML GitHub renders but the page can't: collapsibles, images, line breaks, layout wrappers. Their text stays,
+    /// except a collapsible's label ("More"), since its content is shown anyway.
+    private static let summaryPattern = try! NSRegularExpression(
+        pattern: #"<summary\b[^>]*>.*?</summary>"#, options: [.caseInsensitive])
+    private static let layoutTagPattern = try! NSRegularExpression(
+        pattern: #"</?(?:details|summary|img|br|p|div|span|picture|source|video|sub|sup|hr|center)\b[^>]*>"#,
+        options: [.caseInsensitive])
+
+    private static func stripTags(_ text: String) -> String {
+        guard text.contains("<") else { return text }
+        var result = text
+        for pattern in [summaryPattern, layoutTagPattern] {
+            result = pattern.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result),
+                                                      withTemplate: "")
+        }
+        return result
+    }
+
+    private static let bareURLPattern = try! NSRegularExpression(pattern: #"(?<![(<\[\w/"'=])https?://[^\s<>()\[\]`"]+"#)
 
     /// Wraps bare URLs in <…> so they become links; ones already inside a link or an autolink are left alone.
     private static func linkBareURLs(_ line: String) -> String {
@@ -148,7 +213,8 @@ enum ReleaseNotes {
                 .split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
             plain = plain.replacingOccurrences(of: #"\s*\(#\d+\)$"#, with: "", options: .regularExpression)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !plain.isEmpty, plain.lowercased() != "full changelog" else { continue }
+            // Raw HTML the tidying doesn't know is never a toast's text.
+            guard !plain.isEmpty, !plain.hasPrefix("<"), plain.lowercased() != "full changelog" else { continue }
             if let end = plain.range(of: ". ") {
                 plain = String(plain[..<end.lowerBound]) + "."
             }
@@ -184,10 +250,15 @@ enum ReleaseNotes {
     }
 
     private final class ItemNode {
+        enum Child {
+            case list(ListNode)
+            case code(String)
+        }
+
         var lines: [String]
         /// Column where the item's text starts; lines indented this far belong to it.
         let contentIndent: Int
-        var children: [ListNode] = []
+        var children: [Child] = []
 
         init(text: String, contentIndent: Int) {
             lines = [text]
@@ -195,7 +266,12 @@ enum ReleaseNotes {
         }
 
         var value: ReleaseNotesListItem {
-            ReleaseNotesListItem(text: lines.joined(separator: "\n"), children: children.map(\.value))
+            ReleaseNotesListItem(text: lines.joined(separator: "\n"), children: children.map { child in
+                switch child {
+                case .list(let list): .list(list.value)
+                case .code(let code): .code(code)
+                }
+            })
         }
     }
 
@@ -212,7 +288,8 @@ enum ReleaseNotes {
         var paragraph: [String] = []
         /// Open lists, outermost first.
         var stack: [ListNode] = []
-        var fence: (marker: String, lines: [String])?
+        /// An open code block; `owner` is the list item it's nested in, whose indentation its lines lose.
+        var fence: (marker: String, lines: [String], owner: ItemNode?)?
         var previousBlank = false
 
         mutating func consume(_ rawLine: String) {
@@ -222,10 +299,10 @@ enum ReleaseNotes {
 
             if var open = fence {
                 if trimmed.hasPrefix(open.marker) && trimmed.drop(while: { $0 == open.marker.first }).trimmingCharacters(in: .whitespaces).isEmpty {
-                    blocks.append(.code(open.lines.joined(separator: "\n")))
-                    fence = nil
+                    closeFence()
                 } else {
-                    open.lines.append(line)
+                    let strip = min(indent, open.owner?.contentIndent ?? 0)
+                    open.lines.append(String(line.dropFirst(strip)))
                     fence = open
                 }
                 return
@@ -237,10 +314,19 @@ enum ReleaseNotes {
             }
             defer { previousBlank = false }
 
-            if indent < 4, trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
-                flushAll()
-                fence = (String(trimmed.prefix(3)), [])
-                return
+            if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
+                // Indented under an open item, the code belongs to it (and the list goes on after it).
+                if !stack.isEmpty, let owner = deepestItem(acceptingIndent: indent) {
+                    flushParagraph()
+                    closeLists(below: owner)
+                    fence = (String(trimmed.prefix(3)), [], owner)
+                    return
+                }
+                if indent < 4 {
+                    flushAll()
+                    fence = (String(trimmed.prefix(3)), [], nil)
+                    return
+                }
             }
             if indent < 4, let heading = Self.heading(trimmed) {
                 flushAll()
@@ -277,12 +363,26 @@ enum ReleaseNotes {
         }
 
         mutating func finish() -> [ReleaseNotesBlock] {
-            if let open = fence {
-                blocks.append(.code(open.lines.joined(separator: "\n")))
-                fence = nil
-            }
+            closeFence()
             flushAll()
             return blocks
+        }
+
+        private mutating func closeFence() {
+            guard let open = fence else { return }
+            let code = open.lines.joined(separator: "\n")
+            if let owner = open.owner {
+                owner.children.append(.code(code))
+            } else {
+                blocks.append(.code(code))
+            }
+            fence = nil
+        }
+
+        /// Ends the lists nested deeper than `item`, so what follows it continues `item`'s own list.
+        private mutating func closeLists(below item: ItemNode) {
+            guard let level = stack.lastIndex(where: { $0.items.last === item }) else { return }
+            stack.removeSubrange((level + 1)...)
         }
 
         private mutating func addItem(_ marker: Marker) {
@@ -293,7 +393,7 @@ enum ReleaseNotes {
             if let top = stack.last, let last = top.items.last, marker.indent >= last.contentIndent {
                 let child = ListNode(ordered: marker.ordered, start: marker.number, indent: marker.indent)
                 child.items.append(item)
-                last.children.append(child)
+                last.children.append(.list(child))
                 stack.append(child)
                 return
             }
@@ -307,7 +407,7 @@ enum ReleaseNotes {
                 if let parent = stack.last?.items.last {
                     let sibling = ListNode(ordered: marker.ordered, start: marker.number, indent: marker.indent)
                     sibling.items.append(item)
-                    parent.children.append(sibling)
+                    parent.children.append(.list(sibling))
                     stack.append(sibling)
                     return
                 }

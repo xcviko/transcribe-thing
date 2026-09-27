@@ -534,6 +534,16 @@ private final class MeterTestClock: @unchecked Sendable {
         mutating func db(_ center: Float, _ spread: Float) -> Float {
             center + spread * Float(2 * next() - 1)
         }
+        /// Normal around `center`: deep dips as well as peaks, like a rumble's 10 ms windows.
+        mutating func gaussian(_ center: Float, sd: Float) -> Float {
+            let u = max(1e-12, next()), v = next()
+            return center + sd * Float((-2 * log(u)).squareRoot() * cos(2 * .pi * v))
+        }
+    }
+
+    /// Two levels played at once.
+    private static func mix(_ a: Float, _ b: Float) -> Float {
+        10 * log10(pow(10, a / 10) + pow(10, b / 10))
     }
 
     /// Feeds 10 ms windows and returns each window's gated amplitude as the UI reads it, 100 ms later (so the
@@ -616,6 +626,53 @@ private final class MeterTestClock: @unchecked Sendable {
             clicks.contains { t >= $0.start && t < $0.end } ? -25 : noise.db(-50, 2)
         }
         #expect(windows.allSatisfy { $0.amplitude == 0 })
+    }
+
+    @Test func ringingKeyClicksDontOpenTheGate() {
+        for (peak, decay) in [(Float(-20), Float(6)), (-30, 5)] {
+            let clock = MeterTestClock()
+            let meter = LevelMeter(clock: { clock.now })
+            var noise = Noise(state: 8)
+            feed(meter, clock: clock, seconds: 1) { _ in noise.db(-50, 2) }
+            // Clicks that ring for 30-50 ms above the room, every 170-330 ms.
+            var clicks: [Double] = []
+            var cursor = 0.05
+            while cursor < 4 {
+                clicks.append(cursor)
+                cursor += 0.17 + 0.16 * noise.next()
+            }
+            let windows = feed(meter, clock: clock, seconds: 4) { t in
+                var db = noise.db(-50, 2)
+                for click in clicks where t >= click && t < click + 0.2 {
+                    db = Self.mix(db, peak - decay * Float(((t - click) / 0.01).rounded(.down)))
+                }
+                return db
+            }
+            #expect(windows.allSatisfy { $0.amplitude == 0 }, "clicks at \(peak) dBFS ringing \(decay) dB per 10 ms")
+        }
+    }
+
+    @Test func aFanSwitchingOnSettlesWithinTwoSeconds() {
+        let clock = MeterTestClock()
+        let meter = LevelMeter(clock: { clock.now })
+        var noise = Noise(state: 9)
+        feed(meter, clock: clock, seconds: 2) { _ in noise.gaussian(-60, sd: 1.5) }
+        let windows = feed(meter, clock: clock, seconds: 6) { _ in noise.gaussian(-45, sd: 1.5) }
+        let settled = windows.filter { $0.elapsed >= 2 }
+        #expect(settled.allSatisfy { $0.amplitude == 0 }, "still moving \(settled.filter { $0.amplitude > 0 }.count) windows later")
+    }
+
+    @Test(arguments: [UInt64(10), 11, 12, 13])
+    func rumbleWithDeepDipsNeitherOpensNorLatchesTheGate(seed: UInt64) {
+        let clock = MeterTestClock()
+        let meter = LevelMeter(clock: { clock.now })
+        var noise = Noise(state: seed)
+        let idle = feed(meter, clock: clock, seconds: 10) { _ in noise.gaussian(-48, sd: 3.5) }
+        #expect(idle.allSatisfy { $0.amplitude == 0 })
+        let speech = Speech(seconds: 2, loud: -28 ... -18, noise: &noise)
+        feed(meter, clock: clock, seconds: 2) { t in speech.db(at: t) ?? noise.gaussian(-48, sd: 3.5) }
+        let after = feed(meter, clock: clock, seconds: 5) { _ in noise.gaussian(-48, sd: 3.5) }
+        #expect(after.filter { $0.elapsed >= 0.5 }.allSatisfy { $0.amplitude == 0 }, "the gate closes once the speech ends")
     }
 
     @Test func speechOpensTheGateAndHoldsThroughSyllableGaps() {

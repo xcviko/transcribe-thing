@@ -58,6 +58,9 @@ fi
 [ "$SIGN_IDENTITY" != "-" ] \
   || fail "no signing certificate: releases must be signed with \"$SIGN_CERT\" (see README), never ad-hoc"
 
+# Releases are tagged on GitHub (gh release create), so the previous tag is only local after a fetch. Read-only;
+# offline, the notes start from the newest tag already here.
+git fetch --quiet --tags origin 2>/dev/null || echo "release: note: couldn't fetch tags from origin" >&2
 PREVIOUS_TAG="$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)"
 
 CURRENT="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO_PLIST")"
@@ -118,7 +121,7 @@ Release $VERSION is ready (nothing was pushed or published):
 
 To publish, run these yourself:
 
-  git push origin main
-  gh release create $TAG dist/$APP_NAME-$VERSION.zip --title "transcribe-thing $VERSION" --notes-file dist/release-notes-$VERSION.md --target main
+  git push origin $BRANCH
+  gh release create $TAG dist/$APP_NAME-$VERSION.zip --title "transcribe-thing $VERSION" --notes-file dist/release-notes-$VERSION.md --target $BRANCH
 
 EOF

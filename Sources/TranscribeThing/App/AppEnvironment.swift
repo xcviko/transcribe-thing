@@ -156,6 +156,7 @@ final class AppEnvironment {
         dictation.openHub = { [weak self] section in self?.windows.showHub(section) }
         dictation.onActivityChanged = { [weak self] activity in self?.menuBar.show(activity) }
         dictation.onDictationDelivered = { [weak self] in self?.updates.dictationDelivered() }
+        dictation.onDictationFailed = { [weak self] in self?.updates.dictationFailed() }
         dictation.installUpdate = { [weak self] in self?.installUpdate() }
         updates.isDictationActive = { [weak dictation] in (dictation?.activity ?? .idle) != .idle }
         let builder = menuBar.builder

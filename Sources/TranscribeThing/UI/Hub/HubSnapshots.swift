@@ -112,6 +112,9 @@ enum HubSnapshots {
             hub("hub-update-waiting", .softwareUpdate) { c in
                 c.updates = Samples.updates(c, install: .waitingForDictation(Samples.newVersion))
             },
+            hub("hub-update-needs-restart", .softwareUpdate) { c in
+                c.updates = Samples.updates(c, install: .needsRestart(Samples.newVersion))
+            },
             hub("hub-update-install-failed", .softwareUpdate) { c in
                 c.updates = Samples.updates(c, install: .failed(Samples.newVersion, .adHocSigned))
             },

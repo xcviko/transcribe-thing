@@ -101,6 +101,7 @@ private struct UpdateStatusRow: View {
 
     private var glyph: (symbol: String, color: Color)? {
         if case .failed = updates.install { return ("exclamationmark.circle.fill", .danger) }
+        if case .needsRestart = updates.install { return ("checkmark.circle.fill", .success) }
         if updates.install.isBusy || updates.isChecking { return nil }
         if updates.availableUpdate != nil { return ("arrow.down.circle.fill", .accent) }
         if updates.checkError != nil { return ("exclamationmark.circle.fill", .warning) }
@@ -114,6 +115,7 @@ private struct UpdateStatusRow: View {
         case .waitingForDictation: return "Will restart when your dictation finishes"
         case .installing: return "Installing…"
         case .restarting: return "Restarting…"
+        case .needsRestart: return "Reopen \(Brand.name) to finish"
         case .failed: return "Couldn’t install the update"
         case .idle: break
         }
@@ -136,6 +138,8 @@ private struct UpdateStatusRow: View {
             return "\(Brand.name) \(version)"
         case .restarting(let version):
             return "\(Brand.name) \(version) opens in a moment."
+        case .needsRestart(let version):
+            return "\(Brand.name) \(version) is installed but couldn’t reopen itself. Quit and open it again."
         case .failed(_, let error):
             return error.message
         case .idle:
@@ -178,6 +182,9 @@ private struct UpdateStatusRow: View {
         case .installing, .restarting:
             ProgressView()
                 .controlSize(.small)
+        case .needsRestart:
+            Button("Quit \(Brand.name)") { updates.quitToFinishUpdate() }
+                .buttonStyle(PrimaryButtonStyle(size: .small))
         case .failed(let version, let error):
             HStack(spacing: 8) {
                 let release = updates.releases.first { $0.version == version }
@@ -366,17 +373,7 @@ struct ReleaseNotesView: View {
         case .list(let list):
             NotesList(list: list, depth: 0)
         case .code(let code):
-            Text(code)
-                .font(Theme.Typeface.mono.font)
-                .foregroundStyle(.ink)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .background(HubPalette.field, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(Color.stroke, lineWidth: 1)
-                }
+            NotesCode(code: code)
         case .rule:
             Rectangle()
                 .fill(Color.stroke)
@@ -398,6 +395,24 @@ private struct NotesText: View {
     }
 }
 
+private struct NotesCode: View {
+    var code: String
+
+    var body: some View {
+        Text(code)
+            .font(Theme.Typeface.mono.font)
+            .foregroundStyle(.ink)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(HubPalette.field, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(Color.stroke, lineWidth: 1)
+            }
+    }
+}
+
 private struct NotesList: View {
     var list: ReleaseNotesList
     var depth: Int
@@ -410,7 +425,11 @@ private struct NotesList: View {
                     VStack(alignment: .leading, spacing: 5) {
                         NotesText(text: item.text)
                         ForEach(Array(item.children.enumerated()), id: \.offset) { _, child in
-                            NotesList(list: child, depth: depth + 1)
+                            switch child {
+                            case .list(let nested): NotesList(list: nested, depth: depth + 1)
+                            case .code(let code): NotesCode(code: code)
+                            default: EmptyView()
+                            }
                         }
                     }
                 }

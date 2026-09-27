@@ -28,10 +28,13 @@ final class LevelMeter: @unchecked Sendable {
         var eqExponent: Float = 0.55
         /// Voice gate: opens this far above the gate's own floor estimate (and above `gateMinimumDBFS`) ...
         var gateOpenMargin: Float = 9
-        /// ... for this many consecutive windows, so a key click or a desk tap never opens it ...
-        var gateSustain = 3
-        /// ... and closes after `gateHangover` below this margin, so gaps between syllables don't flicker.
+        /// ... for this many consecutive windows (60 ms, half a short syllable), so a key click, even one that
+        /// rings, or a desk tap never opens it ...
+        var gateSustain = 6
+        /// ... and closes after `gateHangover` with the mean of the last `gateCloseWindows` windows below this
+        /// margin, so gaps between syllables don't flicker and a rumbling noise can't hold it open window by window.
         var gateCloseMargin: Float = 6
+        var gateCloseWindows = 5
         var gateHangover: TimeInterval = 0.2
         var gateMinimumDBFS: Float = -55
         /// The gate's floor is a minimum tracker: it falls quickly into every pause but rises only
@@ -41,6 +44,10 @@ final class LevelMeter: @unchecked Sendable {
         var gateFloorRise: Float = 2.5
         var gateWarmup: TimeInterval = 0.5
         var gateWarmupRise: Float = 30
+        /// Speech always dips within a second, a fan that just switched on never does: the floor is kept at most
+        /// `gateSteadyOffset` under the quietest window of the last `gateSteadyWindow` seconds.
+        var gateSteadyWindow: TimeInterval = 1.0
+        var gateSteadyOffset: Float = 1.5
     }
 
     let tuning: Tuning
@@ -288,6 +295,9 @@ final class LevelMeter: @unchecked Sendable {
                     let rise = time - gate.floorSince < tuning.gateWarmup ? tuning.gateWarmupRise : tuning.gateFloorRise
                     gate.floorDB = min(db, floor + rise * Float(dt))
                 }
+                if let quietest = steadyMinimumLocked(at: time) {
+                    gate.floorDB = max(gate.floorDB ?? quietest, quietest - tuning.gateSteadyOffset)
+                }
             } else {
                 gate.floorDB = db
                 gate.floorSince = time
@@ -295,7 +305,14 @@ final class LevelMeter: @unchecked Sendable {
         }
         let floor = gate.floorDB ?? -160
         if gate.isOpen {
-            if db >= max(floor + tuning.gateCloseMargin, tuning.gateMinimumDBFS - 3) {
+            // This window and the ones before it, as one level.
+            var power = pow(10, db / 10)
+            let previous = min(tuning.gateCloseWindows - 1, windows.count)
+            for back in stride(from: 1, through: previous, by: 1) {
+                power += windows[windows.count - back].power
+            }
+            let recentLevel = 10 * log10(max(power / Float(previous + 1), 1e-16))
+            if recentLevel >= max(floor + tuning.gateCloseMargin, tuning.gateMinimumDBFS - 3) {
                 gate.lastAbove = time
             } else if time - gate.lastAbove > tuning.gateHangover {
                 gate.isOpen = false
@@ -314,6 +331,18 @@ final class LevelMeter: @unchecked Sendable {
             }
         }
         windows.append(Window(time: time, power: pow(10, db / 10), voiced: gate.isOpen))
+    }
+
+    /// The quietest non-silent window of the last `gateSteadyWindow` seconds; nil until that much audio arrived.
+    private func steadyMinimumLocked(at time: TimeInterval) -> Float? {
+        guard recentDB.count > 0, recentDB[0].time <= time - tuning.gateSteadyWindow else { return nil }
+        var quietest: Float?
+        for index in stride(from: recentDB.count - 1, through: 0, by: -1) {
+            let entry = recentDB[index]
+            if time - entry.time > tuning.gateSteadyWindow { break }
+            if entry.db > -100 { quietest = min(quietest ?? entry.db, entry.db) }
+        }
+        return quietest
     }
 
     private func resetLocked() {
