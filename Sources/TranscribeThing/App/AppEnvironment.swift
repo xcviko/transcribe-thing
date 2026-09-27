@@ -222,16 +222,10 @@ final class AppEnvironment {
         updates.stop()
     }
 
-    /// The pill's "Update" and the menu: Software Update shows the download and the restart.
+    /// The pill's "Update": Software Update shows the download and the restart.
     func installUpdate() {
         windows.showHub(.softwareUpdate)
         updates.installUpdate()
-    }
-
-    /// "Check for Updates…": the page, and a fresh check whatever the setting.
-    func checkForUpdates() {
-        windows.showHub(.softwareUpdate)
-        updates.checkNow()
     }
 
     /// The event tap needs Accessibility; until it's granted, PermissionsCenter polls and calls back here.

@@ -132,8 +132,7 @@ Successful dictations keep only their text; the audio is discarded.
 | Hands-free | **fn Space** | Also: press Space while holding fn, double-press fn, or click the pill. |
 | Finish hands-free | **fn**, **fn Space** or the Stop button | Reaching the length limit (20 min by default) finishes too. |
 | Cancel | **esc** | Works while recording or transcribing; Undo brings it back. |
-| Paste last transcript | **⌘ fn V** | |
-| Copy last transcript | **⌘ left⌃ C** | |
+| Paste last transcript | **⌘ fn V** | Also leaves it on the clipboard, even with "Restore the clipboard after pasting" on. |
 
 Everything is rebindable under transcribe-thing → Shortcuts. With secure typing on (password fields, some terminals),
 only hold-to-talk and double-press work until it's off.

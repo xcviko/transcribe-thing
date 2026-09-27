@@ -69,7 +69,8 @@ enum MainMenu {
         hideOthers.keyEquivalentModifierMask = [.command, .option]
         app.addItem(withTitle: "Show All", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: "")
         app.addItem(.separator())
-        app.addItem(withTitle: "Quit transcribe-thing", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        // No ⌘Q, as in the status menu: quitting takes a deliberate click.
+        app.addItem(withTitle: "Quit transcribe-thing", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
         addSubmenu(app, to: main)
 
         let edit = NSMenu(title: "Edit")

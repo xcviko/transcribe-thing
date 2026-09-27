@@ -264,12 +264,14 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
         #expect(!v.swallow)
     }
 
-    @Test func copyLastNeedsLeftControl() {
-        var kb = Keyboard()
+    @Test func aSidedKeyShortcutNeedsItsSide() {
+        var bindings = ShortcutBindings.defaults
+        bindings[.pasteLast] = Shortcut(modifiers: [.init(.command), .init(.control, .left)], keyCode: KeyCode.ansiC)
+        var kb = Keyboard(bindings: bindings)
         kb.press(.leftControl)
         kb.press(.leftCommand)
         let c = kb.down(kVK_ANSI_C)
-        #expect(c.events == [.copyLast])
+        #expect(c.events == [.pasteLast])
         #expect(c.swallow)
         kb.up(kVK_ANSI_C)
         kb.release(.leftControl)
@@ -786,6 +788,46 @@ private final class PasteLog: @unchecked Sendable {
         #expect(!types.contains(PasteboardSnapshot.transientType))
     }
 
+    /// Paste last is copy and paste in one: the transcript stays whatever "Restore the clipboard" says.
+    @Test func keepOnClipboardLeavesAPlainCopyWithRestoreOn() async throws {
+        let rig = rig()
+        defer { rig.pasteboard.releaseGlobally() }
+        rig.pasteboard.clearContents()
+        rig.pasteboard.setString("original", forType: .string)
+        #expect(await rig.inserter.insert("again", expectedPID: nil, keepOnClipboard: true) == .pasted)
+        #expect(rig.log.codes == [9])
+        try await settle()
+        #expect(rig.pasteboard.string(forType: .string) == "again")
+        let types = rig.pasteboard.pasteboardItems?.first?.types ?? []
+        #expect(!types.contains(PasteboardSnapshot.transientType))
+        #expect(!types.contains(PasteboardSnapshot.concealedType))
+    }
+
+    @Test func keepOnClipboardLeavesTheTranscriptWithoutTheSmartSpace() async throws {
+        let rig = rig(focus: FocusInfo(pid: 42, editability: .editable, precedingCharacter: "d"))
+        defer { rig.pasteboard.releaseGlobally() }
+        rig.pasteboard.clearContents()
+        rig.pasteboard.setString("original", forType: .string)
+        #expect(await rig.inserter.insert("again", expectedPID: nil, keepOnClipboard: true) == .pasted)
+        #expect(rig.pasteboard.string(forType: .string) == " again", "what ⌘V pastes")
+        try await settle()
+        #expect(rig.pasteboard.string(forType: .string) == "again")
+        let types = rig.pasteboard.pasteboardItems?.first?.types ?? []
+        #expect(!types.contains(PasteboardSnapshot.transientType))
+    }
+
+    @Test func keepOnClipboardWinsOverAPendingRestore() async throws {
+        let rig = rig()
+        defer { rig.pasteboard.releaseGlobally() }
+        rig.pasteboard.clearContents()
+        rig.pasteboard.setString("original", forType: .string)
+        rig.inserter.restoreDelay = .milliseconds(120)
+        #expect(await rig.inserter.insert("dictated", expectedPID: 42) == .pasted)
+        #expect(await rig.inserter.insert("dictated", expectedPID: nil, keepOnClipboard: true) == .pasted)
+        try await Task.sleep(for: .milliseconds(250))
+        #expect(rig.pasteboard.string(forType: .string) == "dictated")
+    }
+
     @Test func secureFieldIsRefusedAndTheClipboardLeftAlone() async {
         let rig = rig(focus: FocusInfo(pid: 42, subrole: "AXSecureTextField", editability: .editable, isSecure: true))
         defer { rig.pasteboard.releaseGlobally() }
@@ -1075,12 +1117,12 @@ private final class PasteLog: @unchecked Sendable {
     }
 
     @Test func noSwapWhenTheOtherActionCantTakeOurs() {
-        // Copy last is ⌃, hands-free ⌃⌥: paste last taking ⌃ would go off on the way to hands-free.
+        // Paste last is ⌃, hands-free ⌃⌥: cancel taking ⌃ would go off on the way to hands-free.
         var bindings = defaults
         bindings[.handsFree] = Shortcut(modifiers: [.init(.control), .init(.option)])
-        bindings[.copyLast] = Shortcut(modifiers: [.init(.control)])
-        #expect(evaluate(.commandFnV, for: .copyLast, bindings: bindings)
-            == .reject("Paste last transcript already uses this shortcut."))
+        bindings[.pasteLast] = Shortcut(modifiers: [.init(.control)])
+        #expect(evaluate(.escape, for: .pasteLast, bindings: bindings)
+            == .reject("Cancel already uses this shortcut."))
     }
 
     @Test func swapWarnsAboutEitherNewBinding() {
@@ -1099,10 +1141,12 @@ private final class PasteLog: @unchecked Sendable {
             == .pushToTalk)
         #expect(ShortcutValidator.validate(Shortcut(modifiers: [.init(.option, .left)]), for: .handsFree,
                                            bindings: rightOptionPTT, system: quiet).conflict == nil)
-        // ⌃⌘C (either side) would make copy last (⌘ left⌃ C) unreachable.
+        // ⌃⌘C (either side) would make a ⌘ left⌃ C paste last unreachable.
+        let sidedPasteLast = bindings([.pasteLast: Shortcut(modifiers: [.init(.command), .init(.control, .left)],
+                                                            keyCode: KeyCode.ansiC)])
         let controlCommandC = Shortcut(modifiers: [.init(.control), .init(.command)], keyCode: KeyCode.ansiC)
-        #expect(ShortcutValidator.validate(controlCommandC, for: .pasteLast, bindings: defaults, system: quiet).conflict
-            == .copyLast)
+        #expect(ShortcutValidator.validate(controlCommandC, for: .handsFree, bindings: sidedPasteLast, system: quiet).conflict
+            == .pasteLast)
     }
 
     @Test func aChordMustNotStartAnotherModifierOnlyBinding() {

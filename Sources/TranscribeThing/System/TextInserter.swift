@@ -75,9 +75,11 @@ final class TextInserter {
         system.frontmostPID()
     }
 
-    /// Pastes into the app that was frontmost when the recording stopped (`expectedPID`).
-    func insert(_ text: String, expectedPID: pid_t?) async -> InsertionOutcome {
-        await serialized { await self.performInsert(text, expectedPID: expectedPID) }
+    /// Pastes into the app that was frontmost when the recording stopped (`expectedPID`). With `keepOnClipboard`
+    /// (paste last: copy and paste in one) the text stays on the clipboard as a normal copy, whatever
+    /// `restoreClipboard` says.
+    func insert(_ text: String, expectedPID: pid_t?, keepOnClipboard: Bool = false) async -> InsertionOutcome {
+        await serialized { await self.performInsert(text, expectedPID: expectedPID, keepOnClipboard: keepOnClipboard) }
     }
 
     /// "Paste here": paste into whatever has focus now, without focus or target checks.
@@ -85,7 +87,7 @@ final class TextInserter {
         await serialized { await self.performPasteNow(text) }
     }
 
-    private func performInsert(_ text: String, expectedPID: pid_t?) async -> InsertionOutcome {
+    private func performInsert(_ text: String, expectedPID: pid_t?, keepOnClipboard: Bool) async -> InsertionOutcome {
         guard !text.isEmpty else { return .failed("There was no text to paste.") }
         if let outcome = await checkPermission(for: text) { return outcome }
         if let expectedPID, system.frontmostPID() != expectedPID { return .targetChanged }
@@ -105,7 +107,7 @@ final class TextInserter {
         if let previous = focus.precedingCharacter, Self.needsLeadingSpace(after: previous, before: text) {
             final = " " + text
         }
-        return await paste(final)
+        return await paste(final, keeping: keepOnClipboard ? text : nil)
     }
 
     private func performPasteNow(_ text: String) async -> InsertionOutcome {
@@ -149,8 +151,16 @@ final class TextInserter {
         return nil
     }
 
-    private func paste(_ text: String) async -> InsertionOutcome {
-        let original = takeOriginalClipboard()
+    /// Pastes `text`, then puts back the clipboard it replaced, or leaves `kept` on it (the transcript itself,
+    /// without the smart leading space the paste may have added).
+    private func paste(_ text: String, keeping kept: String? = nil) async -> InsertionOutcome {
+        let original: PasteboardSnapshot?
+        if let kept {
+            cancelPendingRestore()
+            original = kept == text ? nil : Self.plainCopy(kept)
+        } else {
+            original = takeOriginalClipboard()
+        }
         let transient = original != nil
 
         if transient {
@@ -218,6 +228,13 @@ final class TextInserter {
             }
         }
         pendingRestore = PendingRestore(original: original, ourChangeCount: ourChangeCount, task: task)
+    }
+
+    /// What `copy(_:)` leaves on the clipboard, as a snapshot to restore.
+    private static func plainCopy(_ text: String) -> PasteboardSnapshot {
+        PasteboardSnapshot(items: [PasteboardSnapshot.Item(entries: [(.string, Data(text.utf8)),
+                                                                     (PasteboardSnapshot.sourceType, Data(bundleID.utf8))])],
+                           containsConcealed: false)
     }
 
     private func cancelPendingRestore() {

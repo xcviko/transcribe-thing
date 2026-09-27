@@ -34,13 +34,14 @@ import Testing
     }
 
     @Test func exactMatchingRespectsSides() {
+        let commandLeftControlC = Shortcut(modifiers: [.init(.command), .init(.control, .left)], keyCode: KeyCode.ansiC)
         var snapshot = ModifierSnapshot()
         snapshot.leftControl = true
         snapshot.leftCommand = true
-        #expect(Shortcut.commandLeftControlC.modifiersMatchExactly(snapshot))
+        #expect(commandLeftControlC.modifiersMatchExactly(snapshot))
         snapshot.rightControl = true
-        #expect(!Shortcut.commandLeftControlC.modifiersMatchExactly(snapshot))
-        #expect(Shortcut.commandLeftControlC.requiredModifiersHeld(snapshot))
+        #expect(!commandLeftControlC.modifiersMatchExactly(snapshot))
+        #expect(commandLeftControlC.requiredModifiersHeld(snapshot))
 
         var fnOnly = ModifierSnapshot()
         fnOnly.function = true
@@ -82,10 +83,14 @@ import Testing
         #expect(paste.compactDescription == "fn ⌘ V")
         #expect(paste.spokenDescription == "Fn + Command + V")
 
-        let copy = try #require(b[.copyLast])
-        #expect(copy.displayTokens == ["Left ⌃", "⌘", "C"])
-        #expect(copy.compactDescription == "Left ⌃ ⌘ C")
-        #expect(copy.spokenDescription == "Left Control + Command + C")
+    }
+
+    @Test func sidedModifiersNameTheirSide() {
+        let leftControl = Shortcut(modifiers: [.init(.command), .init(.control, .left)], keyCode: KeyCode.ansiC)
+        #expect(leftControl.displayTokens == ["Left ⌃", "⌘", "C"])
+        #expect(leftControl.compactDescription == "Left ⌃ ⌘ C")
+        #expect(leftControl.spokenDescription == "Left Control + Command + C")
+        #expect(leftControl.keycaps.first?.sideCaption == "left")
     }
 
     @Test func symbolOnlyCombosAreCompact() {
@@ -100,7 +105,6 @@ import Testing
             Keycap(label: "fn", systemImage: "globe"),
             Keycap(label: "space", isWide: true),
         ])
-        #expect(Shortcut.commandLeftControlC.keycaps.first?.sideCaption == "left")
         #expect(Shortcut.escape.keycaps.map(\.label) == ["esc"])
     }
 
@@ -128,10 +132,10 @@ import Testing
 
     @Test func unboundActionsSurviveAndMissingKeysGetDefaults() throws {
         var bindings = ShortcutBindings.defaults
-        bindings[.copyLast] = nil
+        bindings[.pasteLast] = nil
         let data = try JSONEncoder().encode(bindings)
         let json = String(decoding: data, as: UTF8.self)
-        #expect(json.contains(#""copyLast":null"#))
+        #expect(json.contains(#""pasteLast":null"#))
         #expect(try JSONDecoder().decode(ShortcutBindings.self, from: data) == bindings)
 
         let partial = #"{"pushToTalk":{"modifiers":[{"modifier":"option","side":"right"}]}}"#
@@ -140,6 +144,31 @@ import Testing
         #expect(decoded[.handsFree] == .fnSpace)
         #expect(decoded[.cancel] == .escape)
     }
+
+    /// Copy last transcript is gone (paste last copies too), but bindings saved while it existed still carry it.
+    @Test(arguments: [Self.storedCopyLast, #""copyLast":null"#])
+    func aRetiredCopyLastKeyKeepsEveryOtherBinding(_ copyLast: String) throws {
+        let stored = Self.storedBindings(copyLast: copyLast)
+        let decoded = try JSONDecoder().decode(ShortcutBindings.self, from: Data(stored.utf8))
+        #expect(decoded == Self.customized)
+        let reencoded = String(decoding: try JSONEncoder().encode(decoded), as: UTF8.self)
+        #expect(!reencoded.contains("copyLast"))
+    }
+
+    static let storedCopyLast = #""copyLast":{"keyCode":8,"modifiers":[{"modifier":"command","side":"either"},{"modifier":"control","side":"left"}]}"#
+
+    /// What an earlier build saved (sorted keys): custom push to talk and hands-free, paste last unbound.
+    static func storedBindings(copyLast: String) -> String {
+        #"{"cancel":{"keyCode":53,"modifiers":[]},"# + copyLast
+            + #","handsFree":{"keyCode":49,"modifiers":[{"modifier":"control","side":"either"},{"modifier":"option","side":"either"}]},"#
+            + #""pasteLast":null,"pushToTalk":{"modifiers":[{"modifier":"option","side":"right"}]}}"#
+    }
+
+    static let customized = ShortcutBindings(bindings: [
+        .pushToTalk: .rightOption,
+        .handsFree: Shortcut(modifiers: [.init(.control), .init(.option)], keyCode: KeyCode.space),
+        .cancel: .escape,
+    ])
 
     @Test func conflictsAndSwap() {
         var bindings = ShortcutBindings.defaults
@@ -221,12 +250,12 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         Case(name: "⌘Space, Spotlight off", shortcut: combo(kVK_Space, .command), action: .pushToTalk, expected: .clean),
         Case(name: "⌃⌥Space, on", shortcut: combo(kVK_Space, .control, .option), action: .handsFree,
              system: stock(), expected: .warning(.systemShortcut)),
-        Case(name: "⇧⌘4, on", shortcut: combo(kVK_ANSI_4, .shift, .command), action: .copyLast,
+        Case(name: "⇧⌘4, on", shortcut: combo(kVK_ANSI_4, .shift, .command), action: .pasteLast,
              system: stock(), expected: .warning(.systemShortcut)),
-        Case(name: "⇧⌘4, off", shortcut: combo(kVK_ANSI_4, .shift, .command), action: .copyLast, expected: .clean),
-        Case(name: "⌃← (Spaces), on", shortcut: combo(kVK_LeftArrow, .control), action: .copyLast,
+        Case(name: "⇧⌘4, off", shortcut: combo(kVK_ANSI_4, .shift, .command), action: .pasteLast, expected: .clean),
+        Case(name: "⌃← (Spaces), on", shortcut: combo(kVK_LeftArrow, .control), action: .pasteLast,
              system: stock(), expected: .warning(.systemShortcut)),
-        Case(name: "⌃← (Spaces), off", shortcut: combo(kVK_LeftArrow, .control), action: .copyLast, expected: .clean),
+        Case(name: "⌃← (Spaces), off", shortcut: combo(kVK_LeftArrow, .control), action: .pasteLast, expected: .clean),
         Case(name: "F11 (Show Desktop), on", shortcut: combo(kVK_F11), action: .pushToTalk,
              system: stock(), expected: .warning(.systemShortcut)),
 
@@ -236,7 +265,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
              expected: .warning(.systemShortcut)),
         Case(name: "⌥⌘Esc", shortcut: combo(kVK_Escape, .option, .command), action: .cancel,
              expected: .warning(.systemShortcut)),
-        Case(name: "⌘Q", shortcut: combo(kVK_ANSI_Q, .command), action: .copyLast, expected: .warning(.systemShortcut)),
+        Case(name: "⌘Q", shortcut: combo(kVK_ANSI_Q, .command), action: .pasteLast, expected: .warning(.systemShortcut)),
         Case(name: "⌘V", shortcut: combo(kVK_ANSI_V, .command), action: .pasteLast, expected: .warning(.systemShortcut)),
         Case(name: "⌘K (any ⌘ letter)", shortcut: combo(kVK_ANSI_K, .command), action: .pasteLast,
              expected: .warning(.systemShortcut)),
@@ -324,7 +353,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         let typing = ShortcutValidator.validate(combo(kVK_ANSI_V), for: .pasteLast, system: Self.quiet)
         #expect(typing.warnings.first?.text == "This will fire while you type.")
         #expect(typing.warnings.first?.detail == "Apps won’t get V while it’s bound here.")
-        let quit = ShortcutValidator.validate(combo(kVK_ANSI_Q, .command), for: .copyLast, system: Self.quiet)
+        let quit = ShortcutValidator.validate(combo(kVK_ANSI_Q, .command), for: .pasteLast, system: Self.quiet)
         #expect(quit.warnings.first?.text == "Apps use ⌘Q for Quit.")
         let tab = ShortcutValidator.validate(combo(kVK_Tab, .command), for: .handsFree, system: Self.quiet)
         #expect(tab.warnings.first?.text == "macOS also uses ⌘⇥ for the app switcher.")
@@ -691,6 +720,22 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
 
         settings.microphoneUID = nil
         #expect(AppSettings(defaults: defaults).microphoneUID == nil)
+    }
+
+    /// Shortcuts saved by a build that still had Copy last transcript load as they were, minus that one.
+    @Test func storedShortcutsWithCopyLastStillLoad() throws {
+        let suite = NSTemporaryDirectory() + "transcribe-thing-tests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(atPath: suite + ".plist")
+        }
+        let stored = ShortcutBindingsTests.storedBindings(copyLast: ShortcutBindingsTests.storedCopyLast)
+        defaults.set(Data(stored.utf8), forKey: "tt.shortcuts")
+
+        let settings = AppSettings(defaults: defaults)
+        #expect(settings.shortcuts == ShortcutBindingsTests.customized)
+        #expect(settings.shortcuts != .defaults)
     }
 
     @Test(arguments: ["whisper", "whisperCloud", "someFutureEngine"])

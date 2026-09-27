@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import TranscribeThing
@@ -1159,6 +1160,39 @@ final class FakeRecorder: DictationRecorder {
         #expect(h.toasts.notices.first?.title == "Nothing to paste yet")
     }
 
+    /// Paste last is copy and paste in one: the inserter keeps it on the clipboard, so no copy or card here.
+    @Test func pasteLastPastesTheLatestTranscript() async throws {
+        let h = Self.make()
+        h.history.upsert(TranscriptEntry(text: "last words", engine: .parakeet, audioDuration: 1, voicedSeconds: 1))
+        var pasted: [String] = [], copied: [String] = []
+        h.controller.pasteLastOverride = { text in
+            pasted.append(text)
+            return .pasted
+        }
+        h.controller.copyOverride = { copied.append($0) }
+        h.controller.pasteLast()
+        try await waitUntil { !pasted.isEmpty }
+        #expect(pasted == ["last words"])
+        #expect(copied.isEmpty)
+        #expect(h.toasts.notices.isEmpty)
+    }
+
+    @Test(arguments: [(InsertionOutcome.noEditableTarget, "Nowhere to paste"), (.failed("no ⌘V"), "Couldn’t paste")])
+    func pasteLastWithNowhereToPasteLeavesItOnTheClipboard(_ outcome: InsertionOutcome, _ title: String) async throws {
+        let h = Self.make()
+        h.history.upsert(TranscriptEntry(text: "last words", engine: .parakeet, audioDuration: 1, voicedSeconds: 1))
+        var copied: [String] = []
+        h.controller.pasteLastOverride = { _ in outcome }
+        h.controller.copyOverride = { copied.append($0) }
+        h.controller.pasteLast()
+        try await waitUntil { !h.toasts.notices.isEmpty }
+        #expect(copied == ["last words"])
+        let notice = try #require(h.toasts.notices.first)
+        #expect(notice.title == title)
+        #expect(notice.body == "Your text is on the clipboard.")
+        #expect(notice.transcript == nil, "a short notice, not a transcript card")
+    }
+
     @Test func grantingTheMicDismissesTheStickyToast() throws {
         let h = Self.make(mic: .denied)
         h.controller.send(.handsFreeToggle)
@@ -1275,15 +1309,33 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
 
 @MainActor
 @Suite struct MenuBuilderTests {
+    private static func titles(_ menu: NSMenu) -> [String] {
+        menu.items.map { $0.isSeparatorItem ? "—" : $0.title }
+    }
+
+    /// No section is empty: separators only ever sit between items.
+    private static func expectTidySeparators(_ menu: NSMenu, _ state: String) {
+        let titles = titles(menu)
+        #expect(titles.first != "—" && titles.last != "—", "\(state): \(titles)")
+        #expect(!zip(titles, titles.dropFirst()).contains { $0 == "—" && $1 == "—" }, "\(state): \(titles)")
+    }
+
+    /// The preview environment with a capture that never touches the microphone.
+    private static func dictatingEnvironment() -> AppEnvironment {
+        let env = AppEnvironment.preview()
+        env.dictation.captureDevice = FakeRecorder()
+        env.dictation.microphoneAuthorizedNow = { true }
+        return env
+    }
+
     @Test func statusMenuFollowsTheSpecOrder() {
         let env = AppEnvironment.preview()
         let menu = env.menuBar.builder.makeMenu(includeQuit: true)
-        let titles = menu.items.map { $0.isSeparatorItem ? "—" : $0.title }
-        #expect(titles == [
+        #expect(Self.titles(menu) == [
             "Parakeet v3 · Ready", "—",
-            "Start Hands-free Dictation", "Paste Last Transcript", "Copy Last Transcript", "—",
-            "Model", "Microphone", "Show Pill", "—",
-            "Open transcribe-thing…", "Settings…", "Check for Updates…", "—", "Quit transcribe-thing",
+            "Paste Last Transcript", "—",
+            "Model", "Microphone", "—",
+            "Settings…", "—", "Quit",
         ])
         #expect(menu.items.first?.isEnabled == false)
     }
@@ -1291,26 +1343,83 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
     @Test func pillMenuHasNoQuit() {
         let env = AppEnvironment.preview()
         let menu = env.menuBar.builder.makeMenu(includeQuit: false)
-        #expect(!menu.items.contains { $0.title == "Quit transcribe-thing" })
-        #expect(menu.items.last?.title == "Check for Updates…")
+        #expect(!menu.items.contains { $0.title == "Quit" })
+        #expect(menu.items.last?.title == "Settings…")
     }
 
-    @Test func updateItemCarriesABadgeWhileAnUpdateWaits() throws {
+    /// ⌘, and ⌘Q are gone (no quitting by accident), and paste last's ⌘ fn V can't be drawn faithfully.
+    @Test func noMisleadingKeyEquivalents() throws {
+        let env = AppEnvironment.preview()
+        let menu = env.menuBar.builder.makeMenu(includeQuit: true)
+        for title in ["Settings…", "Quit", "Paste Last Transcript"] {
+            let item = try #require(menu.items.first { $0.title == title })
+            #expect(item.keyEquivalent.isEmpty, "\(title)")
+        }
+        // A shortcut the menu can draw is shown.
+        env.settings.shortcuts[.pasteLast] = Shortcut(modifiers: [.init(.control), .init(.command)], keyCode: KeyCode.ansiV)
+        let paste = try #require(env.menuBar.builder.makeMenu(includeQuit: true).items.first { $0.title == "Paste Last Transcript" })
+        #expect(paste.keyEquivalent == "v" && paste.keyEquivalentModifierMask == [.control, .command])
+    }
+
+    @Test func pasteLastIsDisabledWithoutHistory() throws {
+        let env = AppEnvironment.preview()
+        env.history.clearAll()
+        let menu = env.menuBar.builder.makeMenu(includeQuit: true)
+        let paste = try #require(menu.items.first { $0.title == "Paste Last Transcript" })
+        #expect(!paste.isEnabled)
+        Self.expectTidySeparators(menu, "no history")
+    }
+
+    @Test func holdingToTalkOffersCancel() throws {
+        let env = Self.dictatingEnvironment()
+        env.dictation.send(.pttDown)
+        defer { env.dictation.send(.pillCancel) }
+        // Still arming: the mic runs while the UI (and the status line) waits.
+        #expect(env.dictation.machine.isRecording)
+        let menu = env.menuBar.builder.makeMenu(includeQuit: true)
+        #expect(Array(Self.titles(menu).dropFirst().prefix(4)) == [
+            "—", "Cancel Dictation", "Paste Last Transcript", "—",
+        ])
+        let cancel = try #require(menu.items.first { $0.title == "Cancel Dictation" })
+        #expect(cancel.keyEquivalent == "\u{1b}" && cancel.keyEquivalentModifierMask.isEmpty, "esc draws as ⎋")
+        Self.expectTidySeparators(menu, "recording")
+    }
+
+    @Test func handsFreeOffersFinishAndCancel() throws {
+        let env = Self.dictatingEnvironment()
+        env.dictation.send(.handsFreeToggle)
+        defer { env.dictation.send(.pillCancel) }
+        for includeQuit in [true, false] {
+            let menu = env.menuBar.builder.makeMenu(includeQuit: includeQuit)
+            #expect(Array(Self.titles(menu).prefix(6)) == [
+                "Parakeet v3 · Listening…", "—", "Finish Dictation", "Cancel Dictation", "Paste Last Transcript", "—",
+            ])
+            Self.expectTidySeparators(menu, "hands-free")
+        }
+        let finish = try #require(env.menuBar.builder.makeMenu(includeQuit: true).items.first { $0.title == "Finish Dictation" })
+        #expect(finish.keyEquivalent.isEmpty, "fn Space has no faithful menu form")
+    }
+
+    @Test func updateItemAppearsOnlyWhileAnUpdateWaits() throws {
         let current = AppEnvironment.preview()
-        let plain = try #require(current.menuBar.builder.makeMenu(includeQuit: true).items.first { $0.title == "Check for Updates…" })
-        #expect(plain.badge == nil)
+        #expect(!current.menuBar.builder.makeMenu(includeQuit: true).items.contains { $0.title.hasPrefix("Update") })
+        #expect(!current.menuBar.builder.makeMenu(includeQuit: true).items.contains { $0.title.contains("Check for Updates") })
 
         // The preview runs 0.2.0; the full feed has 0.3.0.
         let env = AppEnvironment.preview(releases: PreviewFixtures.releases())
-        let titles = env.menuBar.builder.makeMenu(includeQuit: true).items.map(\.title)
-        #expect(!titles.contains("Check for Updates…"))
+        for includeQuit in [true, false] {
+            let menu = env.menuBar.builder.makeMenu(includeQuit: includeQuit)
+            let titles = Self.titles(menu)
+            let settings = try #require(titles.firstIndex(of: "Settings…"))
+            #expect(titles[settings + 1] == "Update to 0.3.0…")
+            Self.expectTidySeparators(menu, "update available")
+        }
         let update = try #require(env.menuBar.builder.makeMenu(includeQuit: true).items.first { $0.title == "Update to 0.3.0…" })
         #expect(update.badge != nil)
 
-        // Updates ignored: back to the plain item, no badge.
+        // Updates ignored: no item, no badge.
         env.settings.checkForUpdatesAutomatically = false
-        let ignored = try #require(env.menuBar.builder.makeMenu(includeQuit: true).items.first { $0.title == "Check for Updates…" })
-        #expect(ignored.badge == nil)
+        #expect(!env.menuBar.builder.makeMenu(includeQuit: true).items.contains { $0.title.hasPrefix("Update") })
     }
 
     @Test func modelSubmenuMarksTheSelection() throws {
@@ -1348,21 +1457,21 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
         }
     }
 
-    @Test func pillSubmenuReflectsTheMode() throws {
-        let env = AppEnvironment.preview()
-        env.settings.pillMode = .always
-        let menu = env.menuBar.builder.makeMenu(includeQuit: true)
-        let pill = try #require(menu.items.first { $0.title == "Show Pill" }?.submenu)
-        #expect(pill.items.map(\.title) == ["Always", "While Dictating", "Never"])
-        #expect(pill.items.map(\.state) == [.on, .off, .off])
+    @Test func shortcutHintsBecomeKeyEquivalents() throws {
+        let controlCommandV = Shortcut(modifiers: [.init(.control), .init(.command)], keyCode: KeyCode.ansiV)
+        let paste = try #require(MenuActionItem.keyEquivalent(for: controlCommandV))
+        #expect(paste.key == "v")
+        #expect(paste.modifiers == [.control, .command])
+        let escape = try #require(MenuActionItem.keyEquivalent(for: .escape))
+        #expect(escape.key == "\u{1b}" && escape.modifiers.isEmpty)
+        #expect(MenuActionItem.keyEquivalent(for: .fn) == nil, "modifier-only shortcuts have no menu form")
     }
 
-    @Test func shortcutHintsBecomeKeyEquivalents() throws {
-        let paste = try #require(MenuActionItem.keyEquivalent(for: .commandFnV))
-        #expect(paste.key == "v")
-        #expect(paste.modifiers == [.command, .function])
-        let handsFree = try #require(MenuActionItem.keyEquivalent(for: .fnSpace))
-        #expect(handsFree.key == " " && handsFree.modifiers == [.function])
-        #expect(MenuActionItem.keyEquivalent(for: .fn) == nil, "modifier-only shortcuts have no menu form")
+    /// The menu drops fn and sides: ⌘ fn V would read as a plain ⌘V, so no hint beats a wrong one.
+    @Test func unfaithfulShortcutsGetNoHint() {
+        #expect(MenuActionItem.keyEquivalent(for: .commandFnV) == nil)
+        #expect(MenuActionItem.keyEquivalent(for: .fnSpace) == nil)
+        let leftControlC = Shortcut(modifiers: [.init(.command), .init(.control, .left)], keyCode: KeyCode.ansiC)
+        #expect(MenuActionItem.keyEquivalent(for: leftControlC) == nil)
     }
 }

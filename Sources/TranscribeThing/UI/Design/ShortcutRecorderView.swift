@@ -679,8 +679,9 @@ private struct RecorderGallery: View {
                     ShortcutRecorderView(shortcut: .constant(.rightOption), action: .handsFree,
                                          previewState: .message(.swapped(.pushToTalk, warning: nil)))
                 }
-                row(.copyLast) {
-                    ShortcutRecorderView(shortcut: .constant(nil), action: .copyLast)
+                // Unbound: paste last still works from the menu.
+                row(.pasteLast) {
+                    ShortcutRecorderView(shortcut: .constant(nil), action: .pasteLast)
                 }
             }
         }

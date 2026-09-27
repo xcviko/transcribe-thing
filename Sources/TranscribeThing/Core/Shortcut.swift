@@ -183,7 +183,6 @@ struct Shortcut: Codable, Hashable, Sendable {
     static let fnSpace = Shortcut(modifiers: [.init(.function)], keyCode: KeyCode.space)
     static let escape = Shortcut(modifiers: [], keyCode: KeyCode.escape)
     static let commandFnV = Shortcut(modifiers: [.init(.command), .init(.function)], keyCode: KeyCode.ansiV)
-    static let commandLeftControlC = Shortcut(modifiers: [.init(.command), .init(.control, .left)], keyCode: KeyCode.ansiC)
     static let rightOption = Shortcut(modifiers: [.init(.option, .right)])
     static let rightCommand = Shortcut(modifiers: [.init(.command, .right)])
     static let f13 = Shortcut(modifiers: [], keyCode: KeyCode.f13)
@@ -257,7 +256,7 @@ struct Shortcut: Codable, Hashable, Sendable {
 // MARK: - Actions and bindings
 
 enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, CodingKeyRepresentable {
-    case pushToTalk, handsFree, cancel, pasteLast, copyLast
+    case pushToTalk, handsFree, cancel, pasteLast
 
     var id: String { rawValue }
 
@@ -267,7 +266,6 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
         case .handsFree: "Hands-free"
         case .cancel: "Cancel"
         case .pasteLast: "Paste last transcript"
-        case .copyLast: "Copy last transcript"
         }
     }
 
@@ -276,8 +274,7 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
         case .pushToTalk: "Hold to record, let go to paste."
         case .handsFree: "Tap to start. Tap again to finish."
         case .cancel: "Discard the current recording."
-        case .pasteLast: "Paste your most recent transcript again."
-        case .copyLast: "Copy your most recent transcript."
+        case .pasteLast: "Paste your most recent transcript again. It stays on the clipboard."
         }
     }
 
@@ -287,7 +284,6 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
         case .handsFree: "lock.fill"
         case .cancel: "xmark"
         case .pasteLast: "doc.on.clipboard"
-        case .copyLast: "doc.on.doc"
         }
     }
 
@@ -296,7 +292,8 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
 
 /// Action → shortcut map. Encodes as a flat JSON object keyed by action in declaration order,
 /// with `null` for a deliberately unbound action. A missing key decodes to the default, so new
-/// actions added later get their default binding instead of silently being unbound.
+/// actions added later get their default binding instead of silently being unbound. A key for an action
+/// that no longer exists (copyLast, retired for paste last) is ignored, and the other bindings survive.
 struct ShortcutBindings: Codable, Equatable, Sendable {
     var bindings: [ShortcutAction: Shortcut]
 
@@ -310,7 +307,6 @@ struct ShortcutBindings: Codable, Equatable, Sendable {
         .handsFree: .fnSpace,
         .cancel: .escape,
         .pasteLast: .commandFnV,
-        .copyLast: .commandLeftControlC,
     ])
 
     subscript(_ action: ShortcutAction) -> Shortcut? {
