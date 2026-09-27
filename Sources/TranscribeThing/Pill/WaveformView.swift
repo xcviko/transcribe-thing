@@ -38,6 +38,9 @@ final class WaveformEngine {
     static let staticTime: TimeInterval = 4.2
     /// One column per bar slot; the oldest slides out past the left edge while the next one lands.
     static var columnCount: Int { PillMetrics.barCount }
+    /// Columns kept: one more than the slots, so a row that trails its slide (see `slideLag`) still has its
+    /// oldest dot standing at the left edge when the next column lands, instead of dropping it in view.
+    static var storedCount: Int { columnCount + 1 }
     /// A row that starts sliding between landings eases into the pace over this long (see `slideLag`).
     static let lagDuration: TimeInterval = 0.4
 
@@ -47,11 +50,11 @@ final class WaveformEngine {
     }
 
     /// Amplitudes 0...1, newest first.
-    private(set) var columns = [CGFloat](repeating: 0, count: WaveformEngine.columnCount)
+    private(set) var columns = [CGFloat](repeating: 0, count: WaveformEngine.storedCount)
     /// How each column's height eases toward its amplitude, newest first. A new column grows from a dot at its
     /// landing; one whose audio fills in or changes later eases from where it stands at that frame, so no bar
     /// ever pops.
-    private var eases = [Ease](repeating: Ease(from: 0, start: -.infinity), count: WaveformEngine.columnCount)
+    private var eases = [Ease](repeating: Ease(from: 0, start: -.infinity), count: WaveformEngine.storedCount)
     /// Meter time at which the newest column's audio ends (and it landed).
     private(set) var newestEnd: TimeInterval?
     /// Whether the columns slide this interval: only while a voiced column is on screen, so silence is a
@@ -81,9 +84,9 @@ final class WaveformEngine {
         guard let end = newestEnd, now >= end - 0.5, now - end < interval * Double(Self.columnCount) else {
             newestEnd = now
             unsettled = Self.columnCount
-            eases = (0..<Self.columnCount).map { Ease(from: 0, start: now - Double($0) * interval) }
+            eases = (0..<Self.storedCount).map { Ease(from: 0, start: now - Double($0) * interval) }
             settle(meter: meter, now: now, landed: Self.columnCount)
-            isScrolling = columns.contains { $0 > 0 }
+            isScrolling = hasVoiceInView
             slideLag = 0
             return
         }
@@ -102,7 +105,7 @@ final class WaveformEngine {
             newestEnd = newest
             settle(meter: meter, now: now, landed: landed)
             // Stopping waits for the lag to run out, so the row comes to rest exactly on the slots.
-            isScrolling = columns.contains { $0 > 0 } || lag(at: newest) > 0
+            isScrolling = hasVoiceInView || lag(at: newest) > 0
         } else if settle(meter: meter, now: now, landed: 0), !isScrolling {
             // Voice filled in a still row between landings: slide from now on, from where the row stands.
             isScrolling = true
@@ -110,6 +113,9 @@ final class WaveformEngine {
             slideLagStart = now
         }
     }
+
+    /// A voiced column in one of the slots: the extra one is past the left edge whenever the row keeps pace.
+    private var hasVoiceInView: Bool { columns.prefix(Self.columnCount).contains { $0 > 0 } }
 
     /// Reads the unsettled columns; true when one of them rose from a dot. A column already on screen (not one
     /// of the `landed` newest) that changes eases from its height at `now`.
@@ -139,12 +145,12 @@ final class WaveformEngine {
         return eases[k].from + (columns[k] - eases[k].from) * (1 - pow(1 - p, 3))
     }
 
-    /// Steps the row still trails its nominal slide at `now`: the lag eases out quadratically, so the row
-    /// speeds up a little at first and then settles into the normal pace without a kink.
+    /// Steps the row still trails its nominal slide at `now`: the lag runs out along a smoothstep, so the row
+    /// sets off at the normal pace like after a landing, speeds up a little mid-way and settles without a kink.
     private func lag(at now: TimeInterval) -> CGFloat {
         guard slideLag > 0 else { return 0 }
         let u = CGFloat(min(1, max(0, (now - slideLagStart) / Self.lagDuration)))
-        return slideLag * (1 - u) * (1 - u)
+        return slideLag * (1 - u * u * (3 - 2 * u))
     }
 
     /// Bar geometry at `now` for a field of `size`. Column k sits k + offset steps left of the rightmost slot,
@@ -224,12 +230,13 @@ struct ProcessingWaveView: View {
     }
 
     /// Glide from `startOffset` to the center: it waits out the crossfade's first 60 ms, then eases over 0.4 s
-    /// while the wave swells in. Reduce Motion keeps the dots where they appeared.
+    /// while the wave swells in.
     static let glide: ClosedRange<TimeInterval> = 0.06 ... 0.46
 
-    /// X center of the dot row, `time` seconds after the view appeared in a field `width` wide.
+    /// X center of the dot row, `time` seconds after the view appeared in a field `width` wide. Reduce Motion
+    /// crossfades straight to the center (an opacity-only swap), so the dots never sit off-center.
     static func dotsCenterX(width: CGFloat, time: TimeInterval, startOffset: CGFloat, reduceMotion: Bool) -> CGFloat {
-        guard !reduceMotion else { return width / 2 + startOffset }
+        guard !reduceMotion else { return width / 2 }
         let u = CGFloat(min(1, max(0, (time - glide.lowerBound) / (glide.upperBound - glide.lowerBound))))
         return width / 2 + startOffset * (1 - u * u * (3 - 2 * u))
     }

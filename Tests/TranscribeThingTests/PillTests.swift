@@ -390,7 +390,11 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
             previous = x
         }
         #expect(previous == width / 2)
-        #expect(center(at: 1, reduceMotion: true) == barsCenter)
+        // Reduce Motion has no glide: the crossfade swaps the bars for centered dots.
+        #expect(center(at: 0, reduceMotion: true) == width / 2 && center(at: 1, reduceMotion: true) == width / 2)
+        // The dots also scale in around where the bars were, not around the pill's center.
+        #expect(abs(processing.barsAnchor.x * width - barsCenter) < 1e-9)
+        #expect(PillVisual.processing(wide: false).barsAnchor == .center)
         // Push-to-talk never offsets them.
         #expect(PillVisual.listening.barsOffset == 0 && PillVisual.processing(wide: false).barsOffset == 0)
     }
@@ -616,6 +620,48 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
             x = bars[k].rect.minX
         }
         #expect(x < after[0].rect.minX - 2 * step)
+    }
+
+    @Test func aRowCatchingUpKeepsItsLeftEdgeThroughEachLanding() throws {
+        let clock = Clock()
+        let meter = LevelMeter(clock: { clock.now })
+        let engine = WaveformEngine()
+        let onset = clock.now + 1
+        ingest(meter, from: clock.now, seconds: 1) { _ in -50 }
+        engine.advance(meter: meter, to: onset - 0.2)
+        ingest(meter, from: onset, seconds: 0.05) { _ in -22 }
+        engine.advance(meter: meter, to: onset - 0.2 + 3 * WaveformEngine.columnInterval)
+        let end = try #require(engine.newestEnd)
+        // The onset is confirmed late in the step, so the row sets off trailing its slide by most of a step.
+        ingest(meter, from: onset + 0.05, seconds: 0.03) { _ in -22 }
+        var now = end + 0.07
+        engine.advance(meter: meter, to: now)
+        #expect(engine.columns[0] > 0.5)
+        let pace = (PillMetrics.barWidth + PillMetrics.barGap) / WaveformEngine.columnInterval / 60
+        var x = engine.bars(size: Self.size, now: now, reduceMotion: false, isStatic: false)[0].rect.minX
+        var landings = 0
+        for frame in 0..<30 {
+            let previousEnd = try #require(engine.newestEnd)
+            let landing = previousEnd + WaveformEngine.columnInterval
+            let before = engine.bars(size: Self.size, now: landing, reduceMotion: false, isStatic: false)
+            now += 1.0 / 60
+            engine.advance(meter: meter, to: now)
+            let newestEnd = try #require(engine.newestEnd)
+            if newestEnd > previousEnd {
+                // A landing changes nothing at its own instant but the new column at the right: the leftmost
+                // dot, still in view while the row trails, slides out instead of vanishing where it stands.
+                landings += 1
+                let after = engine.bars(size: Self.size, now: landing, reduceMotion: false, isStatic: false)
+                let (was, landed) = (before.map(\.rect.minX), after.dropFirst().map(\.rect.minX))
+                #expect(was.count == landed.count && zip(was, landed).allSatisfy { abs($0 - $1) < 1e-9 }, "\(was) -> \(landed)")
+            }
+            // The voiced column sets off at the normal pace, like after a landing, and never runs much faster.
+            let k = Int(((newestEnd - end) / WaveformEngine.columnInterval).rounded())
+            let dx = x - engine.bars(size: Self.size, now: now, reduceMotion: false, isStatic: false)[k].rect.minX
+            #expect(dx <= pace * (frame == 0 ? 1.05 : 1.3), "frame \(frame) moved \(dx / pace)x the pace")
+            x -= dx
+        }
+        #expect(landings >= 4)
     }
 
     @Test func aLateChunkFillsInInsteadOfLeavingDots() {

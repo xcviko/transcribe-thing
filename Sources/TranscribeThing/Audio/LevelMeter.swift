@@ -39,11 +39,14 @@ final class LevelMeter: @unchecked Sendable {
         var gateMinimumDBFS: Float = -55
         /// A breath of 0.25 s or more still closes the gate, and the syllables right after it are often only
         /// 40-50 ms loud: within `gateReopenWindow` of closing the same margin reopens it after `gateReopenSustain`
-        /// windows instead, if the stretch before held `gateReopenMinRun` windows in a row `gateCloseMargin` above
-        /// the floor. That is voice: a key click never rings that long, even when typing holds the gate open.
+        /// windows instead, if the stretch before held `gateReopenSteadyWindows` windows in a row `gateCloseMargin`
+        /// above the floor and within `gateReopenSteadyRange` dB of each other. That is a voice holding a vowel: a
+        /// struck key rings down several dB every 10 ms and the next click jumps far above the tail of the last,
+        /// so even typing that rings long enough to hold the gate open never arms it.
         var gateReopenSustain = 4
         var gateReopenWindow: TimeInterval = 0.5
-        var gateReopenMinRun = 9
+        var gateReopenSteadyWindows = 6
+        var gateReopenSteadyRange: Float = 4
         /// The gate's floor is a minimum tracker: it falls quickly into every pause but rises only
         /// `gateFloorRise` dB/s, so continuous speech can't drag it up. The first `gateWarmup` seconds rise
         /// faster, in case the stream opened on a transient.
@@ -337,7 +340,9 @@ final class LevelMeter: @unchecked Sendable {
         if gate.isOpen {
             let voiceLevel = max(floor + tuning.gateCloseMargin, tuning.gateMinimumDBFS - 3)
             gate.voiceRun = db >= voiceLevel ? gate.voiceRun + 1 : 0
-            if gate.voiceRun >= tuning.gateReopenMinRun { gate.reopenArmed = true }
+            if !gate.reopenArmed, gate.voiceRun >= tuning.gateReopenSteadyWindows, isSteadyLocked(db: db) {
+                gate.reopenArmed = true
+            }
             // This window and the ones before it, as one level.
             var power = pow(10, db / 10)
             let previous = min(tuning.gateCloseWindows - 1, windows.count)
@@ -371,6 +376,20 @@ final class LevelMeter: @unchecked Sendable {
             }
         }
         windows.append(Window(time: time, power: pow(10, db / 10), voiced: gate.isOpen))
+    }
+
+    /// Whether the window at `db` and the `gateReopenSteadyWindows - 1` before it lie within
+    /// `gateReopenSteadyRange` dB of each other.
+    private func isSteadyLocked(db: Float) -> Bool {
+        let previous = tuning.gateReopenSteadyWindows - 1
+        guard windows.count >= previous else { return false }
+        var low = db, high = db
+        for back in stride(from: 1, through: previous, by: 1) {
+            let level = 10 * log10(max(windows[windows.count - back].power, 1e-16))
+            low = min(low, level)
+            high = max(high, level)
+        }
+        return high - low <= tuning.gateReopenSteadyRange
     }
 
     /// The quietest non-silent window of the last `gateSteadyWindow` seconds; nil until that much audio arrived.

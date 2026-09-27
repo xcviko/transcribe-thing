@@ -766,6 +766,40 @@ private final class MeterTestClock: @unchecked Sendable {
         #expect(taps.allSatisfy { $0.amplitude == 0 })
     }
 
+    @Test func aKeyThatRingsAsLongAsASyllableNeverArmsTheQuickReopen() {
+        let clock = MeterTestClock()
+        let meter = LevelMeter(clock: { clock.now })
+        var noise = Noise(state: 18)
+        feed(meter, clock: clock, seconds: 1) { _ in noise.db(-50, 2) }
+        // A struck key rings down 2 dB every 10 ms: it opens the gate and stays 6 dB over the floor for 120 ms,
+        // as long as a syllable, but never holds its level the way a vowel does ...
+        let ring = feed(meter, clock: clock, seconds: 0.14) { t in Self.mix(noise.db(-50, 2), -20 - 200 * Float(t)) }
+        #expect(ring.contains { $0.amplitude > 0 })
+        feed(meter, clock: clock, seconds: 0.3) { _ in noise.db(-50, 2) }
+        // ... so 40 ms taps right after it stay out.
+        let taps = feed(meter, clock: clock, seconds: 0.5) { t in
+            t.truncatingRemainder(dividingBy: 0.1) < 0.04 ? -25 : noise.db(-50, 2)
+        }
+        #expect(taps.allSatisfy { $0.amplitude == 0 }, "\(taps.filter { $0.amplitude > 0 }.count) windows drawn")
+    }
+
+    @Test func oneShortSteadyVowelArmsTheQuickReopen() {
+        let clock = MeterTestClock()
+        let meter = LevelMeter(clock: { clock.now })
+        var noise = Noise(state: 19)
+        feed(meter, clock: clock, seconds: 1) { _ in noise.db(-60, 2) }
+        // A quiet speaker's one-syllable word: 80 ms, holding its level within a couple of dB ...
+        feed(meter, clock: clock, seconds: 0.08) { _ in noise.db(-40, 1) }
+        // ... a breath that closes the gate ...
+        let breath = feed(meter, clock: clock, seconds: 0.3) { _ in noise.db(-60, 2) }
+        #expect(breath.suffix(3).allSatisfy { $0.amplitude == 0 })
+        // ... then syllables only 50 ms loud each, too short for a cold onset.
+        let syllables = feed(meter, clock: clock, seconds: 0.64) { t in
+            t.truncatingRemainder(dividingBy: 0.08) < 0.05 ? noise.db(-40, 1) : noise.db(-60, 2)
+        }
+        #expect(syllables.allSatisfy { $0.amplitude > 0 }, "\(syllables.filter { $0.amplitude == 0 }.count) windows dropped")
+    }
+
     @Test func typingThatHeldTheGateOpenNeverArmsTheQuickReopen() {
         let clock = MeterTestClock()
         let meter = LevelMeter(clock: { clock.now })

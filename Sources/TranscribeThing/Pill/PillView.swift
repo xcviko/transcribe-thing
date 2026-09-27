@@ -112,6 +112,10 @@ enum PillVisual: Equatable, Sendable {
         default: 0
         }
     }
+
+    /// The bars' center as a point of the capsule: processing content scales in around it, so dots that start
+    /// where the hands-free bars were don't also drift toward the pill's center while they grow in.
+    var barsAnchor: UnitPoint { UnitPoint(x: 0.5 + barsOffset / size.width, y: 0.5) }
 }
 
 // MARK: - Pill
@@ -196,19 +200,19 @@ struct PillView: View {
         case .peek:
             PeekDots()
                 .id(PillVisual.Content.peek)
-                .transition(contentTransition)
+                .transition(contentTransition())
         case .hello:
             HelloRipple()
                 .id(PillVisual.Content.hello)
-                .transition(contentTransition)
+                .transition(contentTransition())
         case .recording:
             RecordingContent(model: model, timer: visual.timer, barsOffset: visual.barsOffset, regions: regions)
                 .id(PillVisual.Content.recording)
-                .transition(contentTransition)
+                .transition(contentTransition())
         case .processing:
             ProcessingWaveView(startOffset: visual.barsOffset)
                 .id(PillVisual.Content.processing)
-                .transition(contentTransition)
+                .transition(contentTransition(anchor: visual.barsAnchor))
         case .success:
             Image(systemName: "checkmark")
                 .font(.system(size: 13, weight: .bold))
@@ -220,14 +224,15 @@ struct PillView: View {
         case .error:
             ErrorGlyph()
                 .id(PillVisual.Content.error)
-                .transition(contentTransition)
+                .transition(contentTransition())
         }
     }
 
-    private var contentTransition: AnyTransition {
+    private func contentTransition(anchor: UnitPoint = .center) -> AnyTransition {
         if reduceMotion { return .opacity.animation(.easeInOut(duration: 0.15)) }
         return .asymmetric(
-            insertion: .opacity.combined(with: .scale(scale: 0.85)).animation(.easeOut(duration: 0.18).delay(0.06)),
+            insertion: .opacity.combined(with: .scale(scale: 0.85, anchor: anchor))
+                .animation(.easeOut(duration: 0.18).delay(0.06)),
             removal: .opacity.animation(.easeIn(duration: 0.1)))
     }
 
