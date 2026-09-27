@@ -136,6 +136,10 @@ struct PillView: View {
     var context: Context = .standalone
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// What is still leaving: the last pill while it exits, the last content while it shrinks into the rest shape.
+    @State private var stage = PillStage()
+    /// 0 → 1 as the pill leaves (`PillExitEffect`).
+    @State private var exitProgress: CGFloat = 0
 
     init(model: PillModel) {
         self.model = model
@@ -177,69 +181,48 @@ struct PillView: View {
 
     var body: some View {
         let visual = self.visual
-        let size = visual.size
         let shown = visual != .hidden
-        ZStack {
-            PillCapsule(quiet: visual.isQuiet, glow: visual == .error ? PillPalette.error : nil)
-            content(for: visual)
-        }
-        .frame(width: size.width, height: size.height)
-        .scaleEffect(shown || reduceMotion ? 1 : 0.6, anchor: .bottom)
-        // Appearing, the fade runs ahead of the spring: a spring starts from rest and would keep the capsule
-        // nearly transparent for its first 50 ms. The scale still blooms with the spring.
-        .animation(fadeAnimation(shown: shown, to: visual)) { $0.opacity(shown ? 1 : 0) }
-        .modifier(PillShake(trigger: model.shakeCount, enabled: !reduceMotion))
-        .animation(animation(to: visual), value: visual)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(accessibilityLabel(for: visual))
-        .accessibilityHidden(!shown)
+        let frame = stage.frame(for: visual)
+        PillFace(model: model, regions: regions, capsule: frame.capsule, content: frame.content, morph: frame.morph)
+            // Capsule and content leave together, as one composited piece.
+            .modifier(PillExitEffect(progress: exitProgress, reduceMotion: reduceMotion))
+            .scaleEffect(frame.collapsed && !reduceMotion ? 0.6 : 1, anchor: .bottom)
+            // Appearing, the fade runs ahead of the spring: a spring starts from rest and would keep the capsule
+            // nearly transparent for its first 50 ms. The scale still blooms with the spring.
+            .animation(fadeAnimation(shown: shown, to: visual)) { $0.opacity(frame.collapsed ? 0 : 1) }
+            .modifier(PillShake(trigger: model.shakeCount, enabled: !reduceMotion))
+            .animation(animation(to: visual), value: visual)
+            .onChange(of: visual, initial: true) { _, new in
+                // Its own transaction, so the exit's timing never reaches the capsule's springs (nor the reverse).
+                let exit = stage.frame(for: new).exit
+                let animation = stage.exitAnimation(to: new, reduceMotion: reduceMotion)
+                stage.record(new)
+                if exitProgress != exit { withAnimation(animation) { exitProgress = exit } }
+            }
+            .task(id: stage.generation) {
+                let generation = stage.generation
+                try? await Task.sleep(for: .seconds(PillMotion.settleDelay))
+                guard !Task.isCancelled else { return }
+                // Parking and dropping the shrunk content happen out of sight: nothing may animate.
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { stage.settle(generation, visual: self.visual) }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(accessibilityLabel(for: visual))
+            .accessibilityHidden(!shown)
     }
 
-    @ViewBuilder
-    private func content(for visual: PillVisual) -> some View {
-        switch visual.content {
-        case .empty:
-            Color.clear
-                .id(PillVisual.Content.empty)
-        case .peek:
-            PeekDots()
-                .id(PillVisual.Content.peek)
-                .transition(contentTransition())
-        case .hello:
-            HelloRipple()
-                .id(PillVisual.Content.hello)
-                .transition(contentTransition())
-        case .recording:
-            RecordingContent(model: model, timer: visual.timer, barsOffset: visual.barsOffset, regions: regions)
-                .id(PillVisual.Content.recording)
-                .transition(contentTransition())
-        case .processing:
-            ProcessingWaveView(startOffset: visual.barsOffset)
-                .id(PillVisual.Content.processing)
-                .transition(contentTransition(anchor: visual.barsAnchor))
-        case .error:
-            ErrorGlyph()
-                .id(PillVisual.Content.error)
-                .transition(contentTransition())
-        }
-    }
-
-    private func contentTransition(anchor: UnitPoint = .center) -> AnyTransition {
-        if reduceMotion { return .opacity.animation(.easeInOut(duration: 0.15)) }
-        return .asymmetric(
-            insertion: .opacity.combined(with: .scale(scale: 0.85, anchor: anchor))
-                .animation(.easeOut(duration: 0.18).delay(0.06)),
-            removal: .opacity.animation(.easeIn(duration: 0.1)))
-    }
-
-    private func fadeAnimation(shown: Bool, to visual: PillVisual) -> Animation {
-        shown && !reduceMotion ? .easeOut(duration: 0.12) : animation(to: visual)
+    /// Hiding needs none: the exit fades the pill out and parking it collapsed happens out of sight.
+    private func fadeAnimation(shown: Bool, to visual: PillVisual) -> Animation? {
+        guard shown else { return nil }
+        return reduceMotion ? animation(to: visual) : .easeOut(duration: 0.12)
     }
 
     private func animation(to visual: PillVisual) -> Animation {
         if reduceMotion { return .easeInOut(duration: 0.15) }
         switch visual {
-        case .hidden, .rest: return .spring(duration: 0.28, bounce: 0)
+        case .hidden, .rest: return .spring(duration: PillMotion.morphDuration, bounce: 0)
         case .peek: return .spring(duration: 0.22, bounce: 0.15)
         case .hello: return .spring(duration: 0.42, bounce: 0.3)
         case .listening: return .spring(duration: 0.32, bounce: 0.26)
@@ -258,6 +241,238 @@ struct PillView: View {
         case .processing: "transcribe-thing is transcribing"
         case .error: "Dictation failed"
         }
+    }
+}
+
+// MARK: - Leaving
+
+/// How the pill leaves: it never drops its content first. Hiding, the whole pill (capsule, content, shadows)
+/// sinks a little, shrinks toward its bottom edge and fades as one piece; morphing into the resting capsule, the
+/// content shrinks and fades with the capsule. Both are pure functions of a progress, so snapshots can render
+/// any frame.
+enum PillMotion {
+    /// The exit runs linearly in time; `exitPose` shapes each property.
+    static let exitDuration: TimeInterval = 0.26
+    /// Reduce Motion: a plain crossfade of the whole pill.
+    static let reducedExitDuration: TimeInterval = 0.15
+    /// The spring into the resting capsule (and the entry from it).
+    static let morphDuration: TimeInterval = 0.28
+    /// After this the hidden pill is parked collapsed and the content left in the resting capsule is dropped:
+    /// both are invisible by then (the spring is 99% there at 0.3 s).
+    static let settleDelay: TimeInterval = 0.34
+
+    static func exitAnimation(reduceMotion: Bool) -> Animation {
+        .linear(duration: reduceMotion ? reducedExitDuration : exitDuration)
+    }
+
+    struct ExitPose: Equatable {
+        var scale: CGFloat
+        /// Downward drift, in points.
+        var drop: CGFloat
+        var blur: CGFloat
+        var opacity: Double
+    }
+
+    /// The exiting pill at `progress` (0…1, linear in time): it eases down to 86% toward its bottom edge and
+    /// 3 pt lower while the fade, slow to start, takes it away; a last hint of blur softens the final frames.
+    static func exitPose(at progress: CGFloat, reduceMotion: Bool) -> ExitPose {
+        let p = min(1, max(0, progress))
+        let fade = Double(p * p * (3 - 2 * p))
+        if reduceMotion { return ExitPose(scale: 1, drop: 0, blur: 0, opacity: 1 - fade) }
+        let settle = 1 - pow(1 - p, 3)
+        return ExitPose(scale: 1 - 0.14 * settle, drop: 3 * settle, blur: 1.5 * p * p, opacity: 1 - fade)
+    }
+
+    struct MorphPose: Equatable {
+        /// The capsule at this point of the morph.
+        var size: CGSize
+        /// The content's scale: it shrinks with the capsule and always fits inside it.
+        var scale: CGFloat
+        var opacity: Double
+    }
+
+    /// Content of a `from`-sized pill while its capsule morphs into a `to`-sized one, at `progress` 0…1 of
+    /// the capsule's own spring. The content keeps its proportions inside the capsule and fades over the whole
+    /// morph, so it is gone exactly as the capsule reaches rest and never leaves a large capsule empty.
+    static func morphPose(at progress: CGFloat, from: CGSize, to: CGSize) -> MorphPose {
+        let p = min(1, max(0, progress))
+        let size = CGSize(width: from.width + (to.width - from.width) * p,
+                          height: from.height + (to.height - from.height) * p)
+        let scale = min(1, size.width / from.width, size.height / from.height)
+        let u = Double(p)
+        return MorphPose(size: size, scale: scale, opacity: 1 - u * u * (3 - 2 * u))
+    }
+}
+
+/// Which pill to draw around a change of visual. The view asks for the frame of each new visual first and
+/// records it right after (`onChange`), so the first frame of an exit still knows the pill that was on screen.
+struct PillStage: Equatable {
+    /// The last visual on screen: an exiting pill keeps drawing it, size and content, until it has faded out.
+    private(set) var lastShown: PillVisual = .rest
+    /// The last visual with content: the resting capsule shrinks it away while morphing; `nil` once it's gone.
+    private(set) var lingering: PillVisual?
+    /// The exit is over: hidden, the pill waits collapsed at rest size, so the next appearance blooms as before.
+    private(set) var parked = true
+    /// Bumped at every change; the view settles `PillMotion.settleDelay` after the last one.
+    private(set) var generation = 0
+
+    struct Frame: Equatable {
+        /// Shape, style and size of the capsule.
+        var capsule: PillVisual
+        /// Whose content to draw: `capsule`'s own, or the content still shrinking into the resting capsule.
+        var content: PillVisual
+        /// Target of the exit progress (`PillExitEffect`): 1 while hidden.
+        var exit: CGFloat
+        /// Target of the morph progress: 1 while `content` shrinks into `capsule`.
+        var morph: CGFloat
+        /// Parked: at rest size, scaled to 0.6 and transparent, ready to bloom.
+        var collapsed: Bool
+    }
+
+    func frame(for visual: PillVisual) -> Frame {
+        let shown = visual != .hidden
+        let capsule = shown ? visual : (parked ? .hidden : lastShown)
+        let content = capsule.content == .empty ? (lingering ?? capsule) : capsule
+        return Frame(capsule: capsule, content: content, exit: shown ? 0 : 1, morph: content == capsule ? 0 : 1,
+                     collapsed: !shown && parked)
+    }
+
+    mutating func record(_ visual: PillVisual) {
+        generation &+= 1
+        if visual != .hidden {
+            lastShown = visual
+            parked = false
+        }
+        if visual.content != .empty { lingering = visual }
+    }
+
+    /// The last change (`generation`) has played out: an empty capsule drops the content it shrank, a hidden
+    /// pill parks. A settle from before a newer change does nothing.
+    mutating func settle(_ generation: Int, visual: PillVisual) {
+        guard generation == self.generation, visual.content == .empty else { return }
+        lingering = nil
+        if visual == .hidden { parked = true }
+    }
+
+    /// Animation of the exit progress on the way to `visual`. Back before the exit finished, the pill comes
+    /// back at the entry's quick fade; parked, there is nothing to exit or undo: it simply blooms.
+    func exitAnimation(to visual: PillVisual, reduceMotion: Bool) -> Animation? {
+        if parked { return nil }
+        if visual == .hidden { return PillMotion.exitAnimation(reduceMotion: reduceMotion) }
+        return reduceMotion ? .easeInOut(duration: 0.15) : .easeOut(duration: 0.12)
+    }
+}
+
+/// The pill leaving: capsule and content composited, then scaled, dropped, blurred and faded together.
+struct PillExitEffect: ViewModifier, Animatable {
+    var progress: CGFloat
+    var reduceMotion = false
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        let pose = PillMotion.exitPose(at: progress, reduceMotion: reduceMotion)
+        content
+            .compositingGroup()
+            .blur(radius: pose.blur)
+            .scaleEffect(pose.scale, anchor: .bottom)
+            .offset(y: pose.drop)
+            .opacity(pose.opacity)
+    }
+}
+
+/// Content shrinking with its capsule into the resting one; `progress` runs on the capsule's own spring.
+private struct PillMorphEffect: ViewModifier, Animatable {
+    var progress: CGFloat
+    let from: CGSize
+    let to: CGSize
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        let pose = PillMotion.morphPose(at: progress, from: from, to: to)
+        content
+            .scaleEffect(pose.scale)
+            .opacity(pose.opacity)
+    }
+}
+
+// MARK: - Face
+
+/// One frame of the pill: the capsule of `capsule` with the content of `content`, shrunk by `morph` when that
+/// is a different visual. `PillView` animates it; film-strip snapshots pin every value, `size` included.
+struct PillFace: View {
+    let model: PillModel
+    var regions: PillHitRegions?
+    let capsule: PillVisual
+    let content: PillVisual
+    var morph: CGFloat = 0
+    /// The capsule's size when it isn't `capsule.size` (a snapshot mid-morph).
+    var size: CGSize?
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let size = self.size ?? capsule.size
+        // An overlay, so content larger than the capsule (shrinking into it) never sizes the pill.
+        PillCapsule(quiet: capsule.isQuiet, glow: capsule == .error ? PillPalette.error : nil)
+            .frame(width: size.width, height: size.height)
+            .overlay { contentView }
+    }
+
+    /// Every content keeps its own pill's size, so content shrinking into a smaller capsule stays laid out as
+    /// it was and only scales.
+    @ViewBuilder
+    private var contentView: some View {
+        let visual = content
+        let morph = PillMorphEffect(progress: content == capsule ? 0 : morph, from: visual.size,
+                                    to: size ?? capsule.size)
+        switch visual.content {
+        case .empty:
+            Color.clear
+                .id(PillVisual.Content.empty)
+        case .peek:
+            PeekDots()
+                .modifier(morph)
+                .id(PillVisual.Content.peek)
+                .transition(contentTransition())
+        case .hello:
+            HelloRipple()
+                .modifier(morph)
+                .id(PillVisual.Content.hello)
+                .transition(contentTransition())
+        case .recording:
+            RecordingContent(model: model, timer: visual.timer, barsOffset: visual.barsOffset, regions: regions)
+                .frame(width: visual.size.width, height: visual.size.height)
+                .modifier(morph)
+                .id(PillVisual.Content.recording)
+                .transition(contentTransition())
+        case .processing:
+            ProcessingWaveView(startOffset: visual.barsOffset)
+                .frame(width: visual.size.width, height: visual.size.height)
+                .modifier(morph)
+                .id(PillVisual.Content.processing)
+                .transition(contentTransition(anchor: visual.barsAnchor))
+        case .error:
+            ErrorGlyph()
+                .modifier(morph)
+                .id(PillVisual.Content.error)
+                .transition(contentTransition())
+        }
+    }
+
+    private func contentTransition(anchor: UnitPoint = .center) -> AnyTransition {
+        if reduceMotion { return .opacity.animation(.easeInOut(duration: 0.15)) }
+        return .asymmetric(
+            insertion: .opacity.combined(with: .scale(scale: 0.85, anchor: anchor))
+                .animation(.easeOut(duration: 0.18).delay(0.06)),
+            removal: .opacity.animation(.easeIn(duration: 0.1)))
     }
 }
 

@@ -22,6 +22,33 @@ enum PillSnapshots {
             SnapshotEntry("pill-hello", width: 640, height: 150) { _ in
                 CanvasScene(model: helloModel(), notices: [])
             },
+            // Film strips of the pill leaving (`--only pill-exit`).
+            SnapshotEntry("pill-exit", width: PillFilmSheet.width(cell: 132, columns: 11), height: 452) { _ in
+                PillFilmSheet(cell: 132, columns: 11, strips: [
+                    .exit("Processing → hidden", .processing(wide: false), model: .preview(phase: .processing)),
+                    .exit("Error → hidden", .error, model: .preview(phase: .error)),
+                    .exit("Listening → hidden (Esc)", .listening, model: .preview(phase: .listening, level: 0.7)),
+                    .exit("Reduce Motion", .processing(wide: false), model: .preview(phase: .processing),
+                          reduceMotion: true),
+                ])
+            },
+            SnapshotEntry("pill-exit-wide", width: PillFilmSheet.width(cell: 226, columns: 6), height: 630) { _ in
+                PillFilmSheet(cell: 226, columns: 6, strips: [
+                    .exit("Processing after hands-free → hidden", .processing(wide: true),
+                          model: PillStateSheet.processingAfterLocked()),
+                    .handsFreeToHidden(),
+                    .morph("Processing after hands-free → rest (Always)", from: .processing(wide: true),
+                           model: PillStateSheet.processingAfterLocked()),
+                ])
+            },
+            SnapshotEntry("pill-exit-rest", width: PillFilmSheet.width(cell: 132, columns: 11), height: 452) { _ in
+                PillFilmSheet(cell: 132, columns: 11, strips: [
+                    .morph("Processing → rest (Always)", from: .processing(wide: false), model: .preview(phase: .processing)),
+                    .morph("Error → rest", from: .error, model: .preview(phase: .error)),
+                    .morph("Listening → rest (Esc)", from: .listening, model: .preview(phase: .listening, level: 0.7)),
+                    .morph("Hover ends", from: .peek, model: .preview(phase: .rest, isHovering: true)),
+                ])
+            },
             SnapshotEntry("pill-toast-info", width: 640, height: 250) { _ in
                 CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.canceled])
             },
@@ -250,6 +277,115 @@ private struct CanvasScene: View {
         }
         .clipped()
         .environment(\.pillStaticRendering, true)
+    }
+}
+
+/// Film strips: each frame of a pill leaving, pinned at its progress, on a document (light) or a dark editor.
+private struct PillFilmSheet: View {
+    struct Frame {
+        let caption: String
+        let face: @MainActor (PillModel) -> AnyView
+    }
+
+    struct Strip {
+        let title: String
+        let model: PillModel
+        let frames: [Frame]
+
+        /// Hidden: the whole pill leaves, t = 0, 0.1 … 1 of the exit.
+        @MainActor static func exit(_ title: String, _ visual: PillVisual, model: PillModel,
+                                    reduceMotion: Bool = false) -> Strip {
+            Strip(title: title, model: model, frames: exitFrames(visual, reduceMotion: reduceMotion,
+                                                                 steps: Array(0...10)))
+        }
+
+        /// Always mode: the content shrinks with the capsule into the resting one, every 30 ms of the spring.
+        @MainActor static func morph(_ title: String, from visual: PillVisual, model: PillModel) -> Strip {
+            let frames = (0...10).map { i in
+                let time = Double(i) * 0.03
+                let progress = CGFloat(Spring(duration: PillMotion.morphDuration, bounce: 0).value(target: 1.0, time: time))
+                let pose = PillMotion.morphPose(at: progress, from: visual.size, to: PillVisual.rest.size)
+                return Frame(caption: "\(Int((time * 1000).rounded())) ms") { model in
+                    AnyView(PillFace(model: model, capsule: .rest, content: visual, morph: progress, size: pose.size))
+                }
+            }
+            return Strip(title: title, model: model, frames: frames)
+        }
+
+        /// Hands-free, Stop, then the wide processing pill leaving.
+        @MainActor static func handsFreeToHidden() -> Strip {
+            let locked = PillVisual.locked(.elapsed), processing = PillVisual.processing(wide: true)
+            let model = PillModel.preview(phase: .locked, level: 0.5)
+            let stills = [Frame(caption: "hands-free") { model in
+                AnyView(PillFace(model: model, capsule: locked, content: locked))
+            }, Frame(caption: "Stop → processing") { model in
+                AnyView(PillFace(model: model, capsule: processing, content: processing))
+            }]
+            return Strip(title: "Hands-free → processing → hidden", model: model,
+                         frames: stills + exitFrames(processing, reduceMotion: false, steps: [0, 3, 5, 7, 9, 10]))
+        }
+
+        @MainActor private static func exitFrames(_ visual: PillVisual, reduceMotion: Bool, steps: [Int]) -> [Frame] {
+            let duration = reduceMotion ? PillMotion.reducedExitDuration : PillMotion.exitDuration
+            return steps.map { i in
+                let progress = CGFloat(i) / 10
+                return Frame(caption: "\(Int((Double(progress) * duration * 1000).rounded())) ms") { model in
+                    AnyView(PillFace(model: model, capsule: visual, content: visual)
+                        .modifier(PillExitEffect(progress: progress, reduceMotion: reduceMotion)))
+                }
+            }
+        }
+    }
+
+    let cell: CGFloat
+    let columns: Int
+    let strips: [Strip]
+
+    @Environment(\.colorScheme) private var scheme
+
+    static let padding: CGFloat = 20
+    static func width(cell: CGFloat, columns: Int) -> CGFloat { CGFloat(columns) * cell + 2 * padding }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            ForEach(Array(strips.enumerated()), id: \.offset) { _, strip in
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(strip.title)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.inkSecondary)
+                    let rows = stride(from: 0, to: strip.frames.count, by: columns).map {
+                        Array(strip.frames[$0 ..< min($0 + columns, strip.frames.count)])
+                    }
+                    ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                        HStack(spacing: 0) {
+                            ForEach(Array(row.enumerated()), id: \.offset) { _, frame in
+                                cellView(frame, model: strip.model)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .padding(Self.padding)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color.bgCanvas)
+        .environment(\.pillStaticRendering, true)
+    }
+
+    private func cellView(_ frame: Frame, model: PillModel) -> some View {
+        VStack(spacing: 3) {
+            ZStack(alignment: .bottom) {
+                SnapshotPage(dark: scheme == .dark)
+                frame.face(model)
+                    .padding(.bottom, 14)
+            }
+            .frame(width: cell - 4, height: 62)
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            Text(frame.caption)
+                .font(.system(size: 10, weight: .medium).monospacedDigit())
+                .foregroundStyle(.inkTertiary)
+        }
+        .frame(width: cell)
     }
 }
 

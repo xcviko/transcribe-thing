@@ -149,11 +149,15 @@ final class PillController {
         }
     }
 
-    /// Lets the collapse animation finish, then removes the window and all pointer tracking.
+    /// How long the panel stays up once nothing needs it: the pill's exit (and a toast's removal) plays out first.
+    static let orderOutDelay: TimeInterval = 0.45
+
+    /// Lets the pill's exit finish, then removes the window and all pointer tracking. Anything shown meanwhile
+    /// cancels it (`show`), and the pill comes back from wherever its exit had got to.
     private func scheduleHide() {
         guard let panel, panel.isVisible, hideTask == nil else { return }
         hideTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(0.45))
+            try? await Task.sleep(for: .seconds(Self.orderOutDelay))
             guard !Task.isCancelled, let self, let panel = self.panel else { return }
             self.hideTask = nil
             panel.orderOut(nil)

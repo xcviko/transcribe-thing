@@ -517,6 +517,152 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
     }
 }
 
+// MARK: - Leaving
+
+@Suite @MainActor struct PillExitTests {
+    /// A stage that has shown `visuals`, in order, the way the view records them.
+    private func stage(after visuals: [PillVisual]) -> PillStage {
+        var stage = PillStage()
+        for visual in visuals { stage.record(visual) }
+        return stage
+    }
+
+    @Test(arguments: [
+        [PillVisual.listening, .processing(wide: false)],
+        [PillVisual.locked(.elapsed), .processing(wide: true)],
+        [PillVisual.listening, .error],
+        [PillVisual.rest, .listening],
+    ])
+    func theExitKeepsTheWholePillUntilItHasFaded(shown: [PillVisual]) {
+        var stage = stage(after: shown)
+        let last = shown.last!
+        // The first frame of the exit, before the view records `.hidden`, and every frame after it.
+        let exiting = stage.frame(for: .hidden)
+        #expect(exiting == PillStage.Frame(capsule: last, content: last, exit: 1, morph: 0, collapsed: false))
+        stage.record(.hidden)
+        #expect(stage.frame(for: .hidden) == exiting)
+        // A settle from before the exit started can't cut it short.
+        stage.settle(stage.generation - 1, visual: .hidden)
+        #expect(stage.frame(for: .hidden) == exiting)
+        // Once it has played out, the pill parks collapsed at rest size, ready to bloom as before.
+        stage.settle(stage.generation, visual: .hidden)
+        #expect(stage.frame(for: .hidden)
+                == PillStage.Frame(capsule: .hidden, content: .hidden, exit: 1, morph: 0, collapsed: true))
+    }
+
+    @Test func theExitShrinksAndFadesInOnePieceToNothing() {
+        #expect(PillMotion.exitPose(at: 0, reduceMotion: false)
+                == PillMotion.ExitPose(scale: 1, drop: 0, blur: 0, opacity: 1))
+        var previous = PillMotion.exitPose(at: 0, reduceMotion: false)
+        for step in 1...100 {
+            let pose = PillMotion.exitPose(at: CGFloat(step) / 100, reduceMotion: false)
+            #expect(pose.scale < previous.scale && pose.scale >= 0.8)
+            #expect(pose.drop >= previous.drop && pose.drop <= 4)
+            #expect(pose.blur <= 2)
+            #expect(pose.opacity < previous.opacity)
+            if step < 100 { #expect(pose.opacity > 0) }
+            previous = pose
+        }
+        #expect(previous.opacity == 0)
+        // A soft start: the pill is still nearly solid a fifth of the way in.
+        #expect(PillMotion.exitPose(at: 0.2, reduceMotion: false).opacity > 0.85)
+    }
+
+    @Test func reduceMotionOnlyCrossfades() {
+        for step in 0...10 {
+            let pose = PillMotion.exitPose(at: CGFloat(step) / 10, reduceMotion: true)
+            #expect(pose.scale == 1 && pose.drop == 0 && pose.blur == 0)
+        }
+        #expect(PillMotion.exitPose(at: 1, reduceMotion: true).opacity == 0)
+        #expect(PillMotion.reducedExitDuration < PillMotion.exitDuration)
+        let stage = stage(after: [.listening])
+        #expect(stage.exitAnimation(to: .hidden, reduceMotion: true) == .linear(duration: PillMotion.reducedExitDuration))
+        #expect(stage.exitAnimation(to: .hidden, reduceMotion: false) == .linear(duration: PillMotion.exitDuration))
+    }
+
+    @Test(arguments: [PillVisual.processing(wide: false), .processing(wide: true), .error, .listening,
+                      .locked(.elapsed), .peek, .hello])
+    func morphingToRestShrinksTheContentWithTheCapsule(from visual: PillVisual) {
+        var stage = stage(after: [visual])
+        let morphing = stage.frame(for: .rest)
+        #expect(morphing == PillStage.Frame(capsule: .rest, content: visual, exit: 0, morph: 1, collapsed: false))
+        stage.record(.rest)
+        #expect(stage.frame(for: .rest) == morphing)
+
+        let rest = PillMetrics.restSize
+        var previous = PillMotion.morphPose(at: 0, from: visual.size, to: rest)
+        #expect(previous.size == visual.size && previous.scale == 1 && previous.opacity == 1)
+        for step in 1...100 {
+            let p = CGFloat(step) / 100
+            let pose = PillMotion.morphPose(at: p, from: visual.size, to: rest)
+            // Same point of the same spring as the capsule, whose size it reports.
+            #expect(abs(pose.size.width - (visual.size.width + (rest.width - visual.size.width) * p)) < 1e-9)
+            #expect(abs(pose.size.height - (visual.size.height + (rest.height - visual.size.height) * p)) < 1e-9)
+            // The content's own pill, scaled, always fits the capsule: it never overflows nor floats in a big one.
+            #expect(visual.size.width * pose.scale <= pose.size.width + 1e-9)
+            #expect(visual.size.height * pose.scale <= pose.size.height + 1e-9)
+            #expect(abs(visual.size.width * pose.scale - pose.size.width) < 1e-9
+                    || abs(visual.size.height * pose.scale - pose.size.height) < 1e-9)
+            #expect(pose.scale < previous.scale && pose.opacity < previous.opacity)
+            previous = pose
+        }
+        #expect(previous.size == rest && previous.opacity == 0)
+
+        // The shrunk content is dropped once the spring has settled.
+        stage.settle(stage.generation, visual: .rest)
+        #expect(stage.frame(for: .rest) == PillStage.Frame(capsule: .rest, content: .rest, exit: 0, morph: 0,
+                                                           collapsed: false))
+    }
+
+    @Test func newContentReplacesTheShrinkingOne() {
+        var stage = stage(after: [.processing(wide: false), .rest])
+        #expect(stage.frame(for: .peek).content == .peek)
+        stage.record(.peek)
+        // Hovering out again shrinks the peek dots, not the old processing wave.
+        #expect(stage.frame(for: .rest).content == .peek)
+    }
+
+    @Test func showingAgainDuringTheExitCancelsIt() {
+        var stage = stage(after: [.listening, .processing(wide: false)])
+        stage.record(.hidden)
+        let exitGeneration = stage.generation
+        // A new dictation mid-exit: the pill is the new one at once, and fades back in at the entry's pace.
+        let back = stage.frame(for: .listening)
+        #expect(back == PillStage.Frame(capsule: .listening, content: .listening, exit: 0, morph: 0, collapsed: false))
+        #expect(stage.exitAnimation(to: .listening, reduceMotion: false) == .easeOut(duration: 0.12))
+        stage.record(.listening)
+        // The exit's settle arrives late: it must neither park nor drop anything.
+        stage.settle(exitGeneration, visual: .hidden)
+        stage.settle(stage.generation, visual: .listening)
+        #expect(stage.frame(for: .listening) == back)
+        // Hiding again starts a fresh exit of the current pill; the stale settle still can't park it.
+        #expect(stage.frame(for: .hidden).capsule == .listening)
+        stage.record(.hidden)
+        stage.settle(exitGeneration, visual: .hidden)
+        #expect(!stage.frame(for: .hidden).collapsed)
+    }
+
+    @Test func aParkedPillBloomsAsBefore() {
+        let stage = PillStage()
+        // Hidden from the start (While dictating, Never): parked, nothing to exit.
+        #expect(stage.frame(for: .hidden).collapsed)
+        // Appearing, the exit has nothing to undo: no animation, so only the tuned bloom runs.
+        #expect(stage.exitAnimation(to: .listening, reduceMotion: false) == nil)
+        #expect(stage.frame(for: .listening)
+                == PillStage.Frame(capsule: .listening, content: .listening, exit: 0, morph: 0, collapsed: false))
+    }
+
+    @Test func thePanelStaysUpUntilThePillHasLeft() {
+        #expect(PillController.orderOutDelay >= PillMotion.exitDuration + 0.1)
+        #expect(PillMotion.settleDelay >= PillMotion.exitDuration)
+        // The pill parks before the panel goes, so the next appearance blooms from rest.
+        #expect(PillMotion.settleDelay < PillController.orderOutDelay)
+        // The rest morph's spring is all but done when the shrunk content is dropped.
+        let spring = Spring(duration: PillMotion.morphDuration, bounce: 0)
+        #expect(spring.value(target: 1.0, time: PillMotion.settleDelay) > 0.99)
+    }
+}
+
 // MARK: - Waveform
 
 @Suite struct WaveformEngineTests {
