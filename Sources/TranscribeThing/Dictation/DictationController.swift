@@ -62,6 +62,8 @@ final class DictationController {
     @ObservationIgnored var providerLookupOverride: (@MainActor (String) async -> String?)?
     /// TCC's answer right now (about 25 ms), asked only while the cached permission isn't granted.
     @ObservationIgnored var microphoneAuthorizedNow: () -> Bool = { AudioRecorder.isMicrophoneAuthorized }
+    /// Replaces the sound player for the dictation cues.
+    @ObservationIgnored var playCueOverride: (@MainActor (SoundEffect) -> Void)?
 
     private(set) var machine = DictationMachine()
     private(set) var activity: DictationActivity = .idle
@@ -308,6 +310,9 @@ final class DictationController {
             try captureDevice.start(preferredDeviceUID: settings.microphoneUID, continuing: prefix)
             continuing = prefix
             deviceNoticeDue = captureDevice === recorder
+            // The recorder trusts the cached permission (TCC costs ~25 ms here); re-probe it off the main
+            // thread, so access turned off since is refused at the next press.
+            permissions.refresh()
             return nil
         } catch let error as AppError {
             return error
@@ -494,7 +499,7 @@ final class DictationController {
     }
 
     private func playCue(_ sound: SoundEffect) {
-        sounds.play(sound)
+        if let playCueOverride { playCueOverride(sound) } else { sounds.play(sound) }
         // Cues that play while the mic is open (start/lock pings, a "1 minute left" alert) stay out of
         // what the engine hears.
         guard captureDevice.isCapturing else { return }
@@ -1244,7 +1249,7 @@ final class DictationController {
     private func flash(_ phase: PillPhase) {
         lastFlash = (phase, clock())
         if phase == .error { onDictationFailed?() }
-        guard !machine.capture.isListeningOrLocked else { return }
+        guard machine.capture == .idle else { return }
         // Leave any recording phase first, so the shake lands on the idle/processing pill.
         refreshPill()
         if phase == .error {
@@ -1258,11 +1263,12 @@ final class DictationController {
     private func refreshPill() {
         let phase: PillPhase
         switch machine.capture {
-        case .listening:
+        case .arming, .listening, .tapPending:
+            // From key-down on: the "connecting" dots until the first buffer, then the voice.
             phase = .listening
         case .locked, .lockedStopPending:
             phase = .locked
-        case .idle, .arming, .tapPending:
+        case .idle:
             phase = hasPendingWork ? .processing : .rest
         }
         // An idle request doesn't cut a success/error flourish short: PillModel holds it for its minimum time.
@@ -1305,7 +1311,8 @@ extension DictationMachine.Capture {
         if case .arming = self { true } else { false }
     }
 
-    /// Recording with the UI showing (arming is still invisible).
+    /// Recording past the confirm delay. Arming already shows the pill, but its sound, notices and the menu bar
+    /// state wait, so fn combos and quick taps stay quiet.
     var isListeningOrLocked: Bool {
         switch self {
         case .listening, .locked, .lockedStopPending: true

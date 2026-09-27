@@ -162,6 +162,11 @@ final class AppEnvironment {
         let builder = menuBar.builder
         pillModel.contextMenuProvider = { builder.makeMenu(includeQuit: false) }
         inserter.eventTapActive = { [weak hotkeys] in hotkeys?.isTapActive ?? false }
+        // Key-down doesn't wait ~25 ms for TCC: the permissions center probes it off the main thread (again at
+        // every capture start); only a state that isn't granted asks TCC here.
+        recorder.isMicrophoneAllowed = { [weak permissions] in
+            permissions?.microphone == .granted || AudioRecorder.isMicrophoneAuthorized
+        }
     }
 
     /// Starts services in the SPEC §4.14 order.

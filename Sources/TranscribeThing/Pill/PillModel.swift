@@ -62,6 +62,9 @@ final class PillModel {
     @ObservationIgnored var onStop: (() -> Void)?
     @ObservationIgnored var onCancel: (() -> Void)?
     @ObservationIgnored var contextMenuProvider: (() -> NSMenu)?
+    /// Called as soon as `visiblePhase` changes, in the same turn (observation only reports it on the next one),
+    /// so the panel can be on screen before whatever the caller does next, such as opening the mic.
+    @ObservationIgnored var onVisiblePhaseChange: (() -> Void)?
 
     /// Durations of the automatic transitions; tests shorten them.
     @ObservationIgnored var timing = PillTiming()
@@ -150,6 +153,7 @@ final class PillModel {
             holdUntil = nil
         }
         scheduleFinalMinute()
+        if target != previous { onVisiblePhaseChange?() }
     }
 
     private func scheduleSettle(at date: Date) {

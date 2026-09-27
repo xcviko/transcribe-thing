@@ -52,6 +52,9 @@ final class PillController {
         host.onPointerActivity = { [weak self] in self?.updatePointer() }
         host.onRightMouseDown = { [weak self] event in self?.showContextMenu(for: event) ?? false }
         regions.onChange = { [weak self] in self?.updatePointer() }
+        // Key-down orders the panel front at once: waiting for the observation's next turn would put the mic
+        // open (and whatever else that turn holds) before the pill's first frame.
+        model.onVisiblePhaseChange = { [weak self] in self?.update() }
         observeEnvironment()
         track()
         update()

@@ -7,15 +7,17 @@ struct DictationMachine: Equatable {
 
     enum Capture: Equatable {
         case idle
-        /// Mic already capturing, UI hidden (confirm delay).
+        /// Key down: the pill is up and the mic is opening, but the start sound, the limit timers and any refusal
+        /// wait for the confirm delay, so a quick tap or an fn combo (fn+←) stays quiet.
         case arming(downAt: TimeInterval)
-        /// PTT held, UI shown.
+        /// PTT held past the confirm delay.
         case listening(downAt: TimeInterval)
         /// Hands-free.
         case locked(startedAt: TimeInterval)
         /// Hands-free + PTT key went down: stop on clean release, resume if it was a combo (fn+←).
         case lockedStopPending(startedAt: TimeInterval)
-        /// Quick tap; waiting for a second press (double-press → hands-free).
+        /// Quick tap; waiting for a second press (double-press → hands-free). The mic is off but the pill stays up
+        /// until the window closes, so a double-press grows straight into hands-free instead of blinking.
         case tapPending(firstDownAt: TimeInterval)
     }
 
@@ -139,8 +141,7 @@ struct DictationMachine: Equatable {
     private mutating func handleIdle(_ input: Input, now: TimeInterval) -> [Effect] {
         switch input {
         case .pttDown:
-            capture = .arming(downAt: now)
-            return [.startCapture, .schedule(.arming, after: config.armingDelay)]
+            return arm(now: now)
         case .handsFreeToggle, .pillClick:
             return lockFromRest(now: now)
         case .resume(let prefix):
@@ -155,15 +156,14 @@ struct DictationMachine: Equatable {
     private mutating func handleArming(_ input: Input, downAt: TimeInterval, now: TimeInterval) -> [Effect] {
         switch input {
         case .timer(.arming):
+            // The pill has been up since key-down; the sound confirms a real hold.
             capture = .listening(downAt: downAt)
-            return [.showPill(.listening), .playSound(.start)] + limitTimers(startedAt: downAt, now: now)
+            return [.playSound(.start)] + limitTimers(startedAt: downAt, now: now)
         case .pttUp:
-            capture = .tapPending(firstDownAt: downAt)
-            return [.cancelTimer(.arming), .cancelCapture(keepForUndo: false, notify: false),
-                    .schedule(.doublePressWindow, after: doublePressRemaining(firstDownAt: downAt, now: now))]
+            return [.cancelTimer(.arming)] + releaseTap(firstDownAt: downAt, now: now)
         case .pttInterrupted:
             capture = .idle
-            return [.cancelTimer(.arming), .cancelCapture(keepForUndo: false, notify: false)]
+            return [.cancelTimer(.arming), .cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)]
         case .handsFreeToggle:
             capture = .locked(startedAt: downAt)
             // Limit timers only start once arming confirms, so a lock straight from arming schedules them here.
@@ -172,7 +172,7 @@ struct DictationMachine: Equatable {
             return cancelRecording()
         case .deviceLost:
             capture = .idle
-            return [.cancelTimer(.arming), .cancelCapture(keepForUndo: false, notify: false)]
+            return [.cancelTimer(.arming), .cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)]
         case .captureFailed(let error):
             return failCapture(error)
         default:
@@ -184,9 +184,7 @@ struct DictationMachine: Equatable {
         let held = now - downAt
         switch input {
         case .pttUp where held < config.tapThreshold:
-            capture = .tapPending(firstDownAt: downAt)
-            return cancelLimitTimers + [.cancelCapture(keepForUndo: false, notify: false), .showPill(.rest),
-                                        .schedule(.doublePressWindow, after: doublePressRemaining(firstDownAt: downAt, now: now))]
+            return cancelLimitTimers + releaseTap(firstDownAt: downAt, now: now)
         case .pttUp:
             capture = .idle
             return cancelLimitTimers + [.stopCaptureAndTranscribe(mode: .pushToTalk), .playSound(.stop)]
@@ -280,11 +278,10 @@ struct DictationMachine: Equatable {
             return [.cancelTimer(.doublePressWindow), .startCapture, .showPill(.locked), .playSound(.lock)]
                 + limitTimers(startedAt: now, now: now)
         case .pttDown:
-            capture = .arming(downAt: now)
-            return [.cancelTimer(.doublePressWindow), .startCapture, .schedule(.arming, after: config.armingDelay)]
+            return [.cancelTimer(.doublePressWindow)] + arm(now: now)
         case .timer(.doublePressWindow):
             capture = .idle
-            return []
+            return [.showPill(.rest)]
         case .handsFreeToggle, .pillClick:
             return lockFromRest(now: now)
         case .resume(let prefix):
@@ -295,6 +292,24 @@ struct DictationMachine: Equatable {
     }
 
     // MARK: - Shared transitions
+
+    /// Key down: the pill comes first, in this very turn, so the mic open never delays its first frame.
+    private mutating func arm(now: TimeInterval) -> [Effect] {
+        capture = .arming(downAt: now)
+        return [.showPill(.listening), .startCapture, .schedule(.arming, after: config.armingDelay)]
+    }
+
+    /// A quick tap: the mic closes without a sound. With double-press on, the pill stays up for the rest of the
+    /// window (a second press locks it where it is); otherwise it folds away at once.
+    private mutating func releaseTap(firstDownAt: TimeInterval, now: TimeInterval) -> [Effect] {
+        guard config.doublePressEnabled else {
+            capture = .idle
+            return [.cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)]
+        }
+        capture = .tapPending(firstDownAt: firstDownAt)
+        return [.cancelCapture(keepForUndo: false, notify: false),
+                .schedule(.doublePressWindow, after: doublePressRemaining(firstDownAt: firstDownAt, now: now))]
+    }
 
     private mutating func lockFromRest(now: TimeInterval) -> [Effect] {
         capture = .locked(startedAt: now)

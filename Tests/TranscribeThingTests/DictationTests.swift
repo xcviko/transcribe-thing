@@ -63,11 +63,12 @@ import Testing
         }
     }
 
-    @Test func idlePTTDownStartsCaptureAndArms() {
+    @Test func idlePTTDownShowsThePillThenStartsCaptureAndArms() {
         var m = M()
         let effects = m.handle(.pttDown, now: Self.t0)
         #expect(m.capture == .arming(downAt: Self.t0))
-        #expect(effects == [.startCapture, .schedule(.arming, after: 0.12)])
+        #expect(effects == [.showPill(.listening), .startCapture, .schedule(.arming, after: 0.12)],
+                "the pill first, so the mic open never delays it; no sound yet")
         #expect(m.isRecording && m.isBusy)
     }
 
@@ -75,7 +76,7 @@ import Testing
         var m = Self.arming()
         let effects = m.handle(.timer(.arming), now: Self.armedAt)
         #expect(m.capture == .listening(downAt: Self.t0))
-        #expect(effects == [.showPill(.listening), .playSound(.start)] + Self.limitTimers(elapsed: 0.125))
+        #expect(effects == [.playSound(.start)] + Self.limitTimers(elapsed: 0.125), "the pill is already up")
     }
 
     @Test func releaseDuringArmingIsATap() {
@@ -83,15 +84,15 @@ import Testing
         let effects = m.handle(.pttUp, now: 10.0625)
         #expect(m.capture == .tapPending(firstDownAt: Self.t0))
         #expect(effects == [.cancelTimer(.arming), .cancelCapture(keepForUndo: false, notify: false),
-                            .schedule(.doublePressWindow, after: 0.4375)])
+                            .schedule(.doublePressWindow, after: 0.4375)], "the pill stays up for a second press")
         #expect(!m.isRecording)
     }
 
-    @Test func interruptionDuringArmingIsSilent() {
+    @Test func interruptionDuringArmingFoldsThePillSilently() {
         var m = Self.arming()
         let effects = m.handle(.pttInterrupted, now: 10.0625)
         #expect(m.capture == .idle)
-        #expect(effects == [.cancelTimer(.arming), .cancelCapture(keepForUndo: false, notify: false)])
+        #expect(effects == [.cancelTimer(.arming), .cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)])
     }
 
     @Test func handsFreeFromArmingLocksAndSchedulesLimits() {
@@ -113,7 +114,7 @@ import Testing
         var m = Self.listening()
         let effects = m.handle(.pttUp, now: 10.25)
         #expect(m.capture == .tapPending(firstDownAt: Self.t0))
-        #expect(effects == Self.cancelLimits + [.cancelCapture(keepForUndo: false, notify: false), .showPill(.rest),
+        #expect(effects == Self.cancelLimits + [.cancelCapture(keepForUndo: false, notify: false),
                                                 .schedule(.doublePressWindow, after: 0.25)])
     }
 
@@ -151,23 +152,35 @@ import Testing
         var m = Self.tapPending()
         let effects = m.handle(.pttDown, now: 10.625)
         #expect(m.capture == .arming(downAt: 10.625))
-        #expect(effects == [.cancelTimer(.doublePressWindow), .startCapture, .schedule(.arming, after: 0.12)])
+        #expect(effects == [.cancelTimer(.doublePressWindow), .showPill(.listening), .startCapture,
+                            .schedule(.arming, after: 0.12)])
     }
 
-    @Test func doublePressDisabledArmsAgain() {
+    @Test func doublePressDisabledFoldsTheTapAwayAndArmsAgain() {
         var m = DictationMachine(config: .init(doublePressEnabled: false))
         _ = m.handle(.pttDown, now: Self.t0)
-        _ = m.handle(.pttUp, now: 10.0625)
+        let tap = m.handle(.pttUp, now: 10.0625)
+        #expect(m.capture == .idle, "nothing to wait for")
+        #expect(tap == [.cancelTimer(.arming), .cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)])
         let effects = m.handle(.pttDown, now: 10.25)
         #expect(m.capture == .arming(downAt: 10.25))
-        #expect(effects == [.cancelTimer(.doublePressWindow), .startCapture, .schedule(.arming, after: 0.12)])
+        #expect(effects == [.showPill(.listening), .startCapture, .schedule(.arming, after: 0.12)])
     }
 
-    @Test func doublePressWindowExpires() {
+    @Test func doublePressDisabledShortListeningReleaseFoldsAway() {
+        var m = DictationMachine(config: .init(doublePressEnabled: false))
+        _ = m.handle(.pttDown, now: Self.t0)
+        _ = m.handle(.timer(.arming), now: Self.armedAt)
+        let effects = m.handle(.pttUp, now: 10.25)
+        #expect(m.capture == .idle)
+        #expect(effects == Self.cancelLimits + [.cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)])
+    }
+
+    @Test func doublePressWindowExpiresAndThePillFolds() {
         var m = Self.tapPending()
         let effects = m.handle(.timer(.doublePressWindow), now: 10.5)
         #expect(m.capture == .idle)
-        #expect(effects.isEmpty)
+        #expect(effects == [.showPill(.rest)])
     }
 
     @Test(arguments: ["idle", "tapPending"], [DictationMachine.Input.handsFreeToggle, .pillClick])
@@ -324,7 +337,7 @@ import Testing
         var m = Self.arming()
         let effects = m.handle(.deviceLost, now: 10.0625)
         #expect(m.capture == .idle)
-        #expect(effects == [.cancelTimer(.arming), .cancelCapture(keepForUndo: false, notify: false)])
+        #expect(effects == [.cancelTimer(.arming), .cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)])
     }
 
     @Test(arguments: ["arming", "listening", "locked", "lockedStopPending"])
@@ -373,7 +386,7 @@ import Testing
 
     @Test func fnSpaceFromIdleLocksThenFnTapStops() {
         var m = M()
-        #expect(m.handle(.pttDown, now: 10) == [.startCapture, .schedule(.arming, after: 0.12)])
+        #expect(m.handle(.pttDown, now: 10) == [.showPill(.listening), .startCapture, .schedule(.arming, after: 0.12)])
         let lock = m.handle(.handsFreeToggle, now: 10.0625)
         #expect(lock.contains(.playSound(.lock)))
         #expect(!lock.contains(.startCapture), "the mic is already live since key-down")
@@ -403,6 +416,32 @@ import Testing
         #expect(second.contains(.startCapture))
         #expect(m.handle(.pttUp, now: 10.375).isEmpty)
         #expect(m.capture == .locked(startedAt: 10.3125))
+    }
+
+    @Test func quickTapIsSilentAndFoldsWhenTheWindowCloses() {
+        var m = M()
+        var effects = m.handle(.pttDown, now: 10)
+        effects += m.handle(.pttUp, now: 10.0625)
+        #expect(m.capture == .tapPending(firstDownAt: 10))
+        #expect(!effects.contains(.showPill(.rest)), "up until the double-press window closes")
+        effects += m.handle(.timer(.doublePressWindow), now: 10.5)
+        #expect(m.capture == .idle)
+        #expect(effects.last == .showPill(.rest))
+        #expect(!effects.contains { if case .playSound = $0 { true } else { false } })
+        #expect(!effects.contains { if case .notice = $0 { true } else { false } })
+    }
+
+    @Test func doublePressLocksWithOneLockSoundAndNoStartSound() {
+        var m = M()
+        var effects = m.handle(.pttDown, now: 10)
+        effects += m.handle(.pttUp, now: 10.0625)
+        effects += m.handle(.pttDown, now: 10.25)
+        effects += m.handle(.pttUp, now: 10.3125)
+        #expect(m.capture == .locked(startedAt: 10.25))
+        let sounds = effects.compactMap { if case .playSound(let s) = $0 { s } else { nil } }
+        #expect(sounds == [.lock])
+        let pills = effects.compactMap { if case .showPill(let p) = $0 { p } else { nil } }
+        #expect(pills == [.listening, .locked], "the pill grows into hands-free without folding in between")
     }
 
     @Test func fnTapThenFnSpaceLocksOnce() {
@@ -451,7 +490,7 @@ import Testing
         var m = Self.listening()
         _ = m.handle(.pttUp, now: 12)
         _ = m.handle(.jobStarted, now: 12)
-        #expect(m.handle(.pttDown, now: 13) == [.startCapture, .schedule(.arming, after: 0.12)])
+        #expect(m.handle(.pttDown, now: 13) == [.showPill(.listening), .startCapture, .schedule(.arming, after: 0.12)])
         #expect(m.activeJobs == 1 && m.isRecording)
     }
 
@@ -653,12 +692,15 @@ final class FakeRecorder: DictationRecorder {
     var lastPrefix: Recording?
     /// Thrown by the next starts (a mic that can't start).
     var startError: AppError?
+    /// Called as each start begins (to see what is already on screen when the mic opens).
+    var onStart: (() -> Void)?
     /// What the capture in progress records; a start that continues a recording puts that one first.
     var next = Recording(samples: Array(repeating: 0.1, count: 16_000 * 2),
                          speech: SpeechStats(voicedSeconds: 1.5, peakDBFS: -12, isSilent: false))
     private var prefix: Recording?
 
     func start(preferredDeviceUID: String?, continuing prefix: Recording?) throws {
+        onStart?()
         if let startError { throw startError }
         starts += 1
         isCapturing = true
@@ -858,13 +900,17 @@ final class FakeRecorder: DictationRecorder {
         var pasted: [String] = []
         h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "dictated", engine: engine, processingTime: 0.2) }
         h.controller.insertOverride = { text, _ in pasted.append(text); return .pasted }
+        var cues: [SoundEffect] = []
+        h.controller.playCueOverride = { cues.append($0) }
         var now: TimeInterval = 100
         h.controller.clock = { now }
         h.controller.handle(.pttDown)
         #expect(h.recorder.starts == 1)
-        #expect(h.pill.phase != .listening, "the pill waits for the arming delay")
+        #expect(h.pill.phase == .listening, "the pill answers the key at once")
+        #expect(cues.isEmpty, "the start sound waits for the arming delay")
         h.controller.send(.timer(.arming))
         #expect(h.pill.phase == .listening)
+        #expect(cues == [.start])
         now = 102
         h.controller.handle(.pttUp)
         #expect(!h.recorder.isCapturing)
@@ -954,14 +1000,122 @@ final class FakeRecorder: DictationRecorder {
 
     @Test func refusalWhileArmingStaysSilentForFnCombos() {
         let h = Self.make(mic: .denied)
+        var cues: [SoundEffect] = []
+        h.controller.playCueOverride = { cues.append($0) }
         h.controller.handle(.pttDown)
+        #expect(h.pill.visiblePhase == .listening, "the refusal waits: this may be fn+←")
         h.controller.handle(.pttInterrupted)
         #expect(h.toasts.notices.isEmpty)
+        #expect(h.pill.visiblePhase == .rest, "folded away without a shake")
         #expect(h.recorder.starts == 0)
+        #expect(cues.isEmpty)
         h.controller.handle(.pttDown)
         h.controller.send(.timer(.arming))
         #expect(h.controller.machine.capture == .idle)
         #expect(h.toasts.notices.first?.dedupeKey == "error.microphonePermissionDenied")
+        #expect(h.pill.visiblePhase == .error, "the pill that came up at key-down shakes, with the notice above it")
+        #expect(!cues.contains(.start))
+    }
+
+    @Test func refusedQuickTapFoldsAwaySilently() {
+        let h = Self.make(mic: .denied)
+        var cues: [SoundEffect] = []
+        h.controller.playCueOverride = { cues.append($0) }
+        h.controller.handle(.pttDown)
+        h.controller.handle(.pttUp)
+        h.controller.send(.timer(.doublePressWindow))
+        #expect(h.controller.machine.capture == .idle)
+        #expect(h.pill.visiblePhase == .rest)
+        #expect(h.pill.shakeCount == 0)
+        #expect(h.toasts.notices.isEmpty)
+        #expect(cues.isEmpty)
+    }
+
+    @Test func captureFailureWhileArmingExplainsThePill() {
+        let h = Self.make()
+        h.controller.handle(.pttDown)
+        #expect(h.pill.visiblePhase == .listening)
+        h.controller.send(.captureFailed(.microphoneNotResponding("HAL error")))
+        #expect(h.controller.machine.capture == .idle)
+        #expect(!h.recorder.isCapturing)
+        #expect(h.pill.visiblePhase == .error)
+        #expect(h.toasts.notices.contains { $0.dedupeKey == "error.microphoneNotResponding" })
+    }
+
+    // MARK: Instant pill
+
+    @Test func thePillIsOnScreenBeforeTheMicOpens() {
+        let h = Self.make()
+        var order: [String] = []
+        h.pill.onVisiblePhaseChange = { order.append("pill \(h.pill.visiblePhase)") }
+        h.recorder.onStart = { order.append("mic") }
+        h.controller.handle(.pttDown)
+        #expect(order == ["pill listening", "mic"])
+        #expect(h.controller.machine.capture.isArming)
+    }
+
+    @Test func aQuickTapStaysUpForTheDoublePressWindowThenFoldsSilently() {
+        let h = Self.make()
+        var cues: [SoundEffect] = []
+        h.controller.playCueOverride = { cues.append($0) }
+        var phases: [PillPhase] = []
+        h.pill.onVisiblePhaseChange = { phases.append(h.pill.visiblePhase) }
+        h.controller.handle(.pttDown)
+        h.controller.handle(.pttUp)
+        #expect(!h.recorder.isCapturing)
+        #expect(h.pill.visiblePhase == .listening, "a second press may still come")
+        h.controller.send(.timer(.doublePressWindow))
+        #expect(phases == [.listening, .rest])
+        #expect(cues.isEmpty)
+        #expect(h.pill.shakeCount == 0)
+        #expect(h.toasts.notices.isEmpty)
+        #expect(h.controller.activity == .idle)
+    }
+
+    @Test func withoutDoublePressATapFoldsAtOnce() {
+        let h = Self.make()
+        h.settings.doublePressForHandsFree = false
+        h.controller.handle(.pttDown)
+        #expect(h.pill.visiblePhase == .listening)
+        h.controller.handle(.pttUp)
+        #expect(h.controller.machine.capture == .idle)
+        #expect(h.pill.visiblePhase == .rest)
+    }
+
+    @Test func doublePressGrowsIntoHandsFreeWithOneLockCue() {
+        let h = Self.make()
+        var cues: [SoundEffect] = []
+        h.controller.playCueOverride = { cues.append($0) }
+        var phases: [PillPhase] = []
+        h.pill.onVisiblePhaseChange = { phases.append(h.pill.visiblePhase) }
+        h.controller.handle(.pttDown)
+        h.controller.handle(.pttUp)
+        h.controller.handle(.pttDown)
+        h.controller.handle(.pttUp)
+        #expect(h.controller.machine.capture.isListeningOrLocked)
+        #expect(h.controller.machine.mode == .handsFree)
+        #expect(h.recorder.starts == 2 && h.recorder.isCapturing)
+        #expect(cues == [.lock])
+        #expect(phases == [.listening, .locked], "never folds in between")
+    }
+
+    @Test(arguments: PillMode.allCases)
+    func everyPillModeFollowsTheKey(_ mode: PillMode) {
+        let h = Self.make()
+        h.settings.pillMode = mode
+        var shown: [Bool] = []
+        h.pill.onVisiblePhaseChange = {
+            shown.append(PillVisibility.showsPill(phase: h.pill.visiblePhase, mode: mode))
+        }
+        h.controller.handle(.pttDown)
+        h.controller.handle(.pttUp)
+        h.controller.send(.timer(.doublePressWindow))
+        #expect(h.pill.visiblePhase == .rest, "never stuck after a tap")
+        switch mode {
+        case .always: #expect(shown == [true, true])
+        case .whileDictating: #expect(shown == [true, false])
+        case .never: #expect(shown == [false, false], "no pill at all")
+        }
     }
 
     @Test func micTurnedOnInSettingsIsNoticedAtTheNextPress() {
