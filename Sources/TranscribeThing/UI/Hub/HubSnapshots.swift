@@ -87,7 +87,10 @@ enum HubSnapshots {
             hub("hub-microphone", .microphone),
             hub("hub-microphone-bluetooth", .microphone) { c in
                 c.settings.microphoneUID = "preview-airpods"
-                c.settings.preferBuiltInMicOverBluetooth = false
+            },
+            // Automatic with AirPods as the macOS default: Automatic means them now, and the hint offers the built-in mic.
+            hub("hub-microphone-automatic-airpods", .microphone) { c in
+                c.devices = .preview(devices: AudioDeviceCatalog.preview().devices, defaultUID: "preview-airpods")
             },
 
             hub("hub-general", .general, height: 1080),

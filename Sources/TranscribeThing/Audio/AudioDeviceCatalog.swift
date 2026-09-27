@@ -74,8 +74,6 @@ struct InputDeviceChoice: Equatable, Sendable {
         case selected
         /// Automatic: the system default input.
         case systemDefault
-        /// Automatic: the default is Bluetooth, so the built-in mic is used instead.
-        case builtInInsteadOfBluetooth
         /// The picked device (or the system default) is unavailable, so another one is used.
         case fallback(unavailableUID: String?)
     }
@@ -85,11 +83,11 @@ struct InputDeviceChoice: Equatable, Sendable {
 }
 
 /// Pure device-selection policy (SPEC §5.2), shared by the recorder, the Microphone page and tests.
+/// A picked mic that is present is always the answer, whatever the system default is; Automatic is the
+/// system default (a Bluetooth one included). Capture then opens exactly the chosen device.
 enum InputDevicePolicy {
-    static func choose(preferredUID: String?, defaultUID: String?, devices: [AudioInputDevice],
-                       preferBuiltInOverBluetooth: Bool) -> InputDeviceChoice? {
+    static func choose(preferredUID: String?, defaultUID: String?, devices: [AudioInputDevice]) -> InputDeviceChoice? {
         let available = devices.filter(\.isAvailable)
-        let builtIn = available.first(where: \.isBuiltIn)
 
         if let preferredUID, let picked = available.first(where: { $0.id == preferredUID }) {
             return InputDeviceChoice(device: picked, reason: .selected)
@@ -97,10 +95,6 @@ enum InputDevicePolicy {
         let missedPreferred = preferredUID
 
         if let defaultUID, let def = available.first(where: { $0.id == defaultUID }), !def.isVirtual {
-            if def.isBluetooth, preferBuiltInOverBluetooth, let builtIn {
-                return InputDeviceChoice(device: builtIn, reason: missedPreferred.map { .fallback(unavailableUID: $0) }
-                    ?? .builtInInsteadOfBluetooth)
-            }
             return InputDeviceChoice(device: def, reason: missedPreferred.map { .fallback(unavailableUID: $0) }
                 ?? .systemDefault)
         }
@@ -184,9 +178,8 @@ final class AudioDeviceCatalog {
     var builtInDevice: AudioInputDevice? { devices.first(where: \.isBuiltIn) }
 
     /// What a dictation would use right now (for "Automatic · Currently: MacBook Pro Microphone").
-    func resolve(preferredUID: String?, preferBuiltInOverBluetooth: Bool) -> InputDeviceChoice? {
-        InputDevicePolicy.choose(preferredUID: preferredUID, defaultUID: defaultDeviceUID, devices: devices,
-                                 preferBuiltInOverBluetooth: preferBuiltInOverBluetooth)
+    func resolve(preferredUID: String?) -> InputDeviceChoice? {
+        InputDevicePolicy.choose(preferredUID: preferredUID, defaultUID: defaultDeviceUID, devices: devices)
     }
 
     static func preview() -> AudioDeviceCatalog {

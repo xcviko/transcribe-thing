@@ -316,3 +316,16 @@ import Testing
         #expect(ExtraModels.setting(.geminiPro, on: false, in: [.geminiPro]).isEmpty)
     }
 }
+
+@Suite struct MicrophonePageTests {
+    /// The meter reopens when the pick changes, and on Automatic when macOS's default does (it meters that one).
+    @Test func monitorFollowsThePickAndAutomaticsDefault() {
+        let automatic = MicrophonePage.monitorKey(uid: nil, defaultUID: "airpods", shouldRun: true)
+        #expect(automatic != MicrophonePage.monitorKey(uid: nil, defaultUID: "builtin", shouldRun: true))
+        let picked = MicrophonePage.monitorKey(uid: "builtin", defaultUID: "airpods", shouldRun: true)
+        #expect(picked == MicrophonePage.monitorKey(uid: "builtin", defaultUID: "usb", shouldRun: true),
+                "a picked mic ignores the default")
+        #expect(picked != automatic)
+        #expect(picked != MicrophonePage.monitorKey(uid: "builtin", defaultUID: "airpods", shouldRun: false))
+    }
+}

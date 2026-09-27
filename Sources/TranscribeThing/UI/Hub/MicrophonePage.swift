@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Input device choice with a live level on the active row, the Bluetooth hint and the built-in preference.
+/// Input device choice with a live level on the active row and the Bluetooth hint. The picked mic is the only one
+/// dictation opens, so there is no separate built-in-over-AirPods switch.
 struct MicrophonePage: View {
     @Environment(HubContext.self) private var hub
     @Environment(AppSettings.self) private var settings
@@ -49,17 +50,6 @@ struct MicrophonePage: View {
                 }
                 .transition(.opacity)
             }
-            HubGroup("Bluetooth") {
-                SettingsGroup {
-                    SettingsRow(title: "Use the built-in mic even when AirPods are connected",
-                                subtitle: "Your AirPods keep playing audio. The built-in mic starts faster and catches more words.",
-                                systemImage: "laptopcomputer", iconTint: .inkSecondary) {
-                        Toggle("", isOn: $settings.preferBuiltInMicOverBluetooth)
-                            .toggleStyle(.appSwitch)
-                            .labelsHidden()
-                    }
-                }
-            }
         }
         .animation(Theme.Motion.fade, value: effectiveDevice?.id)
         .onAppear { updateMonitor() }
@@ -79,15 +69,20 @@ struct MicrophonePage: View {
         return (hub.microphoneMonitor.meter, hub.microphoneMonitor.isRunning)
     }
 
-    private struct MonitorKey: Equatable {
+    struct MonitorKey: Equatable {
         var uid: String?
-        var preferBuiltIn: Bool
+        /// Automatic meters the system default, so a new default reopens the meter on it.
+        var automaticDevice: String?
         var shouldRun: Bool
     }
 
+    static func monitorKey(uid: String?, defaultUID: String?, shouldRun: Bool) -> MonitorKey {
+        MonitorKey(uid: uid, automaticDevice: uid == nil ? defaultUID : nil, shouldRun: shouldRun)
+    }
+
     private var monitorKey: MonitorKey {
-        MonitorKey(uid: settings.microphoneUID, preferBuiltIn: settings.preferBuiltInMicOverBluetooth,
-                   shouldRun: appearsActive && !isDictating && permissions.microphone == .granted)
+        Self.monitorKey(uid: settings.microphoneUID, defaultUID: devices.defaultDeviceUID,
+                        shouldRun: appearsActive && !isDictating && permissions.microphone == .granted)
     }
 
     private func updateMonitor() {
@@ -95,7 +90,7 @@ struct MicrophonePage: View {
         let monitor = hub.microphoneMonitor
         guard !hub.isPreview else { return }
         if key.shouldRun {
-            monitor.start(deviceUID: key.uid, preferBuiltInOverBluetooth: key.preferBuiltIn)
+            monitor.start(deviceUID: key.uid)
         } else {
             monitor.stop()
         }

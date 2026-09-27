@@ -4,7 +4,7 @@ import Testing
 @testable import TranscribeThing
 
 // No test here opens a microphone: capture is exercised with synthetic buffers fed straight into the
-// same state machine the tap uses.
+// same state machine the device input feeds.
 
 // MARK: - Signal helpers
 
@@ -969,7 +969,7 @@ private final class MeterTestClock: @unchecked Sendable {
     }
 }
 
-// MARK: - Capture session (tap path driven with synthetic buffers; the engine is never started)
+// MARK: - Capture session (buffers fed straight in; no device is ever opened)
 
 private final class EventLog: @unchecked Sendable {
     private let lock = NSLock()
@@ -1107,8 +1107,8 @@ private final class EventLog: @unchecked Sendable {
     private let usb = AudioInputDevice(id: "usb", name: "Shure MV7+", transport: .usb, isAvailable: true)
     private let blackHole = AudioInputDevice(id: "blackhole", name: "BlackHole 2ch", transport: .virtual, isAvailable: true)
 
-    private func choose(_ preferred: String?, _ def: String?, _ devices: [AudioInputDevice], preferBuiltIn: Bool = true) -> InputDeviceChoice? {
-        InputDevicePolicy.choose(preferredUID: preferred, defaultUID: def, devices: devices, preferBuiltInOverBluetooth: preferBuiltIn)
+    private func choose(_ preferred: String?, _ def: String?, _ devices: [AudioInputDevice]) -> InputDeviceChoice? {
+        InputDevicePolicy.choose(preferredUID: preferred, defaultUID: def, devices: devices)
     }
 
     @Test func savedDeviceWins() {
@@ -1121,9 +1121,16 @@ private final class EventLog: @unchecked Sendable {
         #expect(choose("usb", "builtin", [builtIn]) == InputDeviceChoice(device: builtIn, reason: .fallback(unavailableUID: "usb")))
     }
 
-    @Test func bluetoothDefaultPrefersBuiltIn() {
-        #expect(choose(nil, "airpods", [builtIn, airPods]) == InputDeviceChoice(device: builtIn, reason: .builtInInsteadOfBluetooth))
-        #expect(choose(nil, "airpods", [builtIn, airPods], preferBuiltIn: false)?.device == airPods)
+    /// A picked mic is the answer whatever macOS's default is, AirPods included.
+    @Test func aPickedMicIgnoresTheDefault() {
+        for def in ["airpods", "usb", "builtin", nil] {
+            #expect(choose("builtin", def, [builtIn, airPods, usb]) == InputDeviceChoice(device: builtIn, reason: .selected))
+        }
+    }
+
+    /// Automatic means the system default, a Bluetooth one too: the built-in mic is a pick, not a hidden rule.
+    @Test func automaticFollowsABluetoothDefault() {
+        #expect(choose(nil, "airpods", [builtIn, airPods]) == InputDeviceChoice(device: airPods, reason: .systemDefault))
         #expect(choose(nil, "airpods", [airPods])?.device == airPods)
     }
 
@@ -1179,7 +1186,7 @@ private final class EventLog: @unchecked Sendable {
         catalog.refresh()
         #expect(changes <= 1)
         if catalog.devices.contains(where: { $0.isAvailable && !$0.isVirtual }) {
-            #expect(catalog.resolve(preferredUID: nil, preferBuiltInOverBluetooth: true) != nil)
+            #expect(catalog.resolve(preferredUID: nil) != nil)
         }
     }
 

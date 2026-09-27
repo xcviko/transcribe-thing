@@ -27,8 +27,9 @@ final class MicrophoneMonitor {
         return monitor
     }
 
-    /// `deviceUID` nil = what dictation would use automatically.
-    func start(deviceUID: String?, preferBuiltInOverBluetooth: Bool = true) {
+    /// `deviceUID` nil = what dictation would use automatically (the system default input). Opens only that
+    /// device, like dictation does.
+    func start(deviceUID: String?) {
         guard !isPreview else { return }
         stop()
         problem = nil
@@ -38,8 +39,7 @@ final class MicrophoneMonitor {
         }
         let records = CoreAudioHAL.inputRecords()
         guard let choice = InputDevicePolicy.choose(preferredUID: deviceUID, defaultUID: CoreAudioHAL.defaultInputUID(),
-                                                    devices: records.map(\.device),
-                                                    preferBuiltInOverBluetooth: preferBuiltInOverBluetooth),
+                                                    devices: records.map(\.device)),
               let record = records.first(where: { $0.device.id == choice.device.id })
         else {
             problem = .noMicrophone
@@ -47,7 +47,7 @@ final class MicrophoneMonitor {
         }
         generation += 1
         meter.reset()
-        var options = CaptureSession.Options(preferredUID: deviceUID, preferBuiltInOverBluetooth: preferBuiltInOverBluetooth)
+        var options = CaptureSession.Options(preferredUID: deviceUID)
         options.keepsSamples = false
         options.firstBufferTimeout = 4
         let session = CaptureSession(device: record, options: options, meter: meter,

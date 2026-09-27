@@ -43,6 +43,39 @@ enum CoreAudioHAL {
         return status == noErr && id != kAudioObjectUnknown ? id : nil
     }
 
+    static func uid(of id: AudioDeviceID) -> String? {
+        string(id, kAudioDevicePropertyDeviceUID)
+    }
+
+    /// The Mac's own microphone (the lid's mic array rather than a headset on the combo jack), available or not.
+    static func builtInMicrophoneUID() -> String? {
+        let builtIn = allDeviceIDs().filter { id in
+            var transport: UInt32 = 0
+            return inputChannelCount(id) > 0 && read(id, kAudioDevicePropertyTransportType, into: &transport)
+                && transport == kAudioDeviceTransportTypeBuiltIn
+        }
+        let uids = builtIn.compactMap { id in uid(of: id).map { (id, $0) } }
+        return (uids.first { isInternalMicrophone($0.0, uid: $0.1) } ?? uids.first)?.1
+    }
+
+    /// Input streams of a device, in the order its IOProc receives their buffers.
+    static func inputStreamIDs(_ id: AudioDeviceID) -> [AudioStreamID] {
+        objectList(id, kAudioDevicePropertyStreams, scope: kAudioObjectPropertyScopeInput)
+    }
+
+    /// The input devices this process is doing IO with right now, as the HAL itself sees it: the check that
+    /// capture opened only the device it meant to.
+    static func processInputDeviceIDs() -> [AudioDeviceID] {
+        var address = propertyAddress(kAudioHardwarePropertyTranslatePIDToProcessObject)
+        var pid = getpid()
+        var process = AudioObjectID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        let status = AudioObjectGetPropertyData(systemObject, &address, UInt32(MemoryLayout<pid_t>.size), &pid,
+                                                &size, &process)
+        guard status == noErr, process != kAudioObjectUnknown else { return [] }
+        return objectList(process, kAudioProcessPropertyDevices, scope: kAudioObjectPropertyScopeInput)
+    }
+
     static func isAlive(_ id: AudioDeviceID) -> Bool {
         var alive: UInt32 = 0
         return read(id, kAudioDevicePropertyDeviceIsAlive, into: &alive) && alive != 0
@@ -143,12 +176,17 @@ enum CoreAudioHAL {
     // MARK: Low-level helpers
 
     static func allDeviceIDs() -> [AudioDeviceID] {
-        var address = propertyAddress(kAudioHardwarePropertyDevices)
+        objectList(systemObject, kAudioHardwarePropertyDevices)
+    }
+
+    static func objectList(_ id: AudioObjectID, _ selector: AudioObjectPropertySelector,
+                           scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> [AudioObjectID] {
+        var address = propertyAddress(selector, scope: scope)
         var size: UInt32 = 0
-        guard AudioObjectGetPropertyDataSize(systemObject, &address, 0, nil, &size) == noErr, size > 0 else { return [] }
-        var ids = [AudioDeviceID](repeating: 0, count: Int(size) / MemoryLayout<AudioDeviceID>.size)
-        guard AudioObjectGetPropertyData(systemObject, &address, 0, nil, &size, &ids) == noErr else { return [] }
-        return ids
+        guard AudioObjectGetPropertyDataSize(id, &address, 0, nil, &size) == noErr, size > 0 else { return [] }
+        var ids = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
+        guard AudioObjectGetPropertyData(id, &address, 0, nil, &size, &ids) == noErr else { return [] }
+        return Array(ids.prefix(Int(size) / MemoryLayout<AudioObjectID>.size))
     }
 
     static func inputChannelCount(_ id: AudioDeviceID) -> Int {

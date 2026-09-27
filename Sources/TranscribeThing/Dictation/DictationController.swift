@@ -601,8 +601,6 @@ final class DictationController {
                           body: "The built-in mic starts faster and catches more words.",
                           actions: [NoticeAction(title: "Use Built-in Mic", kind: .useBuiltInMicrophone, isPrimary: true)],
                           lifetime: .seconds(10), sound: .alert)
-        case .builtInInsteadOfBluetooth:
-            return nil
         }
     }
 
