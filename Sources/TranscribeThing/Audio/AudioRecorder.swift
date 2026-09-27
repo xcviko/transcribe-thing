@@ -7,9 +7,9 @@ enum AudioRecorderEvent: Sendable {
 
 /// Dictation capture (SPEC §4.8, §5.2): 16 kHz mono Float32 from the resolved input device.
 ///
-/// `start` resolves the device (a HAL scan, 1-3 ms on the main thread) and returns; the engine starts on a
-/// background queue, so the mic is usually hot ~50-150 ms later (Bluetooth: up to 2 s, after which `.failed`
-/// fires). Levels flow into the shared `LevelMeter`. Device loss, reconfiguration and stalls are healed inside
+/// `start` resolves the device (a HAL scan, 1-3 ms on the main thread) and returns; capture opens exactly that
+/// device (never the system default input unless it is the one) on a background queue, so the mic is usually hot
+/// ~50-150 ms later (Bluetooth: up to 2 s, after which `.failed` fires). Levels flow into the shared `LevelMeter`. Device loss, reconfiguration and stalls are healed inside
 /// the session; only a device that is gone for good surfaces as `.deviceLost` (the audio so far is kept for
 /// `stop`).
 @MainActor
@@ -28,8 +28,6 @@ final class AudioRecorder {
 
     var onEvent: ((AudioRecorderEvent) -> Void)?
     private(set) var isCapturing = false
-    /// Used when no `AppSettings` was injected.
-    var preferBuiltInMicOverBluetooth = true
     /// Whether `start` may open the mic. The TCC probe blocks the calling thread (the main one, at key-down) for
     /// about 25 ms; the app answers from `PermissionsCenter`'s cached state first.
     var isMicrophoneAllowed: () -> Bool = { AudioRecorder.isMicrophoneAuthorized }
@@ -68,18 +66,16 @@ final class AudioRecorder {
         }
         guard isMicrophoneAllowed() else { throw AppError.microphonePermissionDenied }
 
-        let preferBuiltIn = settings?.preferBuiltInMicOverBluetooth ?? preferBuiltInMicOverBluetooth
         let records = CoreAudioHAL.inputRecords()
         guard let choice = InputDevicePolicy.choose(preferredUID: preferredDeviceUID,
                                                     defaultUID: CoreAudioHAL.defaultInputUID(),
-                                                    devices: records.map(\.device),
-                                                    preferBuiltInOverBluetooth: preferBuiltIn),
+                                                    devices: records.map(\.device)),
               let record = records.first(where: { $0.device.id == choice.device.id })
         else { throw AppError.noMicrophone }
 
         generation += 1
         levelMeter.reset()
-        let options = CaptureSession.Options(preferredUID: preferredDeviceUID, preferBuiltInOverBluetooth: preferBuiltIn)
+        let options = CaptureSession.Options(preferredUID: preferredDeviceUID)
         let session = CaptureSession(device: record, options: options, meter: levelMeter,
                                      onEvent: Self.makeEventHandler(for: self, generation: generation))
         self.session = session
@@ -90,7 +86,7 @@ final class AudioRecorder {
         hasFailed = false
         isCapturing = true
         session.start()
-        // Time the main thread spent here, at key-down (the engine itself starts on the session's queue).
+        // Time the main thread spent here, at key-down (the device itself starts on the session's queue).
         let blocked = (AudioClock.now() - began) * 1000
         Log.audio.info("Capture started in \(blocked, format: .fixed(precision: 1), privacy: .public) ms on \(record.device.name, privacy: .public)")
     }

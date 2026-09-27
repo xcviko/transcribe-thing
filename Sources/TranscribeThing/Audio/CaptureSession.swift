@@ -1,10 +1,9 @@
 import AVFAudio
-import AudioToolbox
 import CoreAudio
 import Foundation
 
-/// What a capture session reports. Delivered on the session's control queue or the tap thread, never
-/// on the main actor: owners hop themselves.
+/// What a capture session reports. Delivered on the session's control queue or the input's delivery
+/// thread, never on the main actor: owners hop themselves.
 enum CaptureSessionEvent: Sendable {
     case firstBuffer
     case switchedDevice(AudioInputDevice)
@@ -13,18 +12,19 @@ enum CaptureSessionEvent: Sendable {
     case noAudio(String)
 }
 
-/// One microphone capture: a fresh input-only `AVAudioEngine`, a tap that resamples to 16 kHz mono and
-/// feeds the level meter, and self-healing across configuration changes, dead devices and stalls
-/// (the recording keeps growing across engine rebuilds).
+/// One microphone capture: a `CaptureInput` opened on exactly the chosen device (nothing else, the system
+/// default input included), audio resampled to 16 kHz mono and fed to the level meter, and self-healing
+/// across format changes, dead devices and stalls (the recording keeps growing across rebuilds).
 ///
-/// Threading: engine work runs on a private serial queue (Bluetooth starts can block for seconds);
-/// the tap runs on AVAudioEngine's own thread and only holds `box`'s lock briefly; public methods are
-/// safe from any thread. Nothing here is main-actor isolated, so no closure built here can trap when
+/// Threading: device work runs on a private serial queue (Bluetooth starts can block for seconds);
+/// buffers arrive on the input's delivery thread, which only holds `box`'s lock briefly; public methods
+/// are safe from any thread. Nothing here is main-actor isolated, so no closure built here can trap when
 /// CoreAudio calls it on its threads.
 final class CaptureSession: @unchecked Sendable {
     struct Options: Sendable {
+        /// The user's pick (nil = Automatic); a rebuild re-resolves it, so it only matters once the opened
+        /// device is gone.
         var preferredUID: String?
-        var preferBuiltInOverBluetooth = true
         /// false = level monitoring only (samples are discarded after metering).
         var keepsSamples = true
         var firstBufferTimeout: TimeInterval = 2.0
@@ -34,11 +34,23 @@ final class CaptureSession: @unchecked Sendable {
         var rebuildWindow: TimeInterval = 15
     }
 
+    /// Everything the session asks of the hardware, replaceable in tests (no real mic).
+    struct Hardware: Sendable {
+        var inputRecords: @Sendable () -> [CoreAudioHAL.InputRecord] = { CoreAudioHAL.inputRecords() }
+        var defaultInputID: @Sendable () -> AudioDeviceID? = { CoreAudioHAL.defaultInputDeviceID() }
+        var isAlive: @Sendable (AudioDeviceID) -> Bool = { CoreAudioHAL.isAlive($0) }
+        var processInputDeviceIDs: @Sendable () -> [AudioDeviceID] = { CoreAudioHAL.processInputDeviceIDs() }
+        var makeInput: @Sendable () -> any CaptureInput = { HALDeviceInput() }
+
+        static let live = Hardware()
+    }
+
     let options: Options
     /// `AudioClock` time at which `start()` was requested.
     let startedAt: TimeInterval
 
     private let meter: LevelMeter?
+    private let hardware: Hardware
     private let onEvent: @Sendable (CaptureSessionEvent) -> Void
     private let control = DispatchQueue(label: "dev.transcribe-thing.audio.capture", qos: .userInitiated)
     private let listenerQueue = DispatchQueue(label: "dev.transcribe-thing.audio.capture.listeners", qos: .userInitiated)
@@ -46,19 +58,20 @@ final class CaptureSession: @unchecked Sendable {
 
     // Control-queue state.
     private var initialRecord: CoreAudioHAL.InputRecord
-    private var engine: AVAudioEngine?
-    private var configObserver: (any NSObjectProtocol)?
-    private var deviceListeners: HALListenerSet?
+    private var input: (any CaptureInput)?
+    private var openRecord: CoreAudioHAL.InputRecord?
     private var watchdog: DispatchSourceTimer?
     private var isRunning = false
     private var lastRebuildAt: TimeInterval
     private var rebuildTimes: [TimeInterval] = []
     private var rebuildScheduled = false
+    private var rebuildForced = false
 
-    init(device: CoreAudioHAL.InputRecord, options: Options, meter: LevelMeter?,
+    init(device: CoreAudioHAL.InputRecord, options: Options, meter: LevelMeter?, hardware: Hardware = .live,
          onEvent: @escaping @Sendable (CaptureSessionEvent) -> Void) {
         self.options = options
         self.meter = meter
+        self.hardware = hardware
         self.onEvent = onEvent
         self.initialRecord = device
         let now = AudioClock.now()
@@ -75,7 +88,7 @@ final class CaptureSession: @unchecked Sendable {
     }
 
     /// Reports `.noAudio` if no buffer arrives within `firstBufferTimeout`. Timed on another queue: a
-    /// Bluetooth engine start can block `control` past the deadline.
+    /// Bluetooth device start can block `control` past the deadline.
     func armStartTimeout() {
         listenerQueue.asyncAfter(deadline: .now() + options.firstBufferTimeout) { [weak self] in
             self?.checkFirstBuffer()
@@ -97,8 +110,8 @@ final class CaptureSession: @unchecked Sendable {
         return samples
     }
 
-    /// Keeps capturing until the audio covers `tail` seconds past now (taps deliver ~100 ms chunks, so
-    /// this usually takes 150-250 ms), then finalizes and calls `completion` on a background thread.
+    /// Keeps capturing until the audio covers `tail` seconds past now (the device delivers ~10 ms IO
+    /// cycles, so this takes little more than `tail`), then finalizes and calls `completion` on a background thread.
     func finish(tail: TimeInterval, completion: @escaping @Sendable ([Float]) -> Void) {
         let until = AudioClock.now() + max(0, tail)
         let finishedEarly: [Float]? = box.withLock { state in
@@ -124,12 +137,12 @@ final class CaptureSession: @unchecked Sendable {
         box.withLock { $0.addDuck(DuckWindow(start: start, end: end, gain: gain)) }
     }
 
-    // MARK: Engine lifecycle (control queue)
+    // MARK: Input lifecycle (control queue)
 
     private func startOnQueue() {
         guard box.withLock({ $0.phase != .finished }) else { return }
         do {
-            try buildEngine(on: initialRecord)
+            try openInput(on: initialRecord)
         } catch {
             let (shouldReport, pending) = box.withLock { state -> (Bool, CaptureState.Completion?) in
                 guard state.phase != .finished else { return (false, nil) }
@@ -141,7 +154,7 @@ final class CaptureSession: @unchecked Sendable {
             return
         }
         // Stopped, canceled or timed out while a slow device was starting.
-        guard box.withLock({ $0.phase != .finished }) else { return teardownEngineOnQueue() }
+        guard box.withLock({ $0.phase != .finished }) else { return teardownInputOnQueue() }
         isRunning = true
         startWatchdog()
     }
@@ -159,89 +172,102 @@ final class CaptureSession: @unchecked Sendable {
         control.async { self.shutdownOnQueue() }
     }
 
-    private func buildEngine(on record: CoreAudioHAL.InputRecord) throws {
-        let engine = AVAudioEngine()
-        let input = engine.inputNode
-        // Only redirect the input unit when the device isn't already the system default.
-        if record.audioID != CoreAudioHAL.defaultInputDeviceID() {
-            guard let unit = input.audioUnit else { throw CaptureFailure.cannotSelectDevice(noErr) }
-            var id = record.audioID
-            let status = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
-                                              &id, UInt32(MemoryLayout<AudioDeviceID>.size))
-            guard status == noErr else { throw CaptureFailure.cannotSelectDevice(status) }
-        }
-        let format = input.outputFormat(forBus: 0)
-        guard format.sampleRate > 0, format.channelCount > 0 else { throw CaptureFailure.noFormat }
-
-        // `format: nil` taps whatever the hardware delivers; the resampler adapts to each buffer's format.
-        input.installTap(onBus: 0, bufferSize: 1_024, format: nil, block: makeTapBlock())
-        engine.prepare()
-        do {
-            try engine.start()
-        } catch {
-            input.removeTap(onBus: 0)
-            throw CaptureFailure.startFailed(error as NSError)
-        }
-        self.engine = engine
+    /// Opens exactly `record`'s device, by id. Nothing here resolves, binds or starts the system default
+    /// input, so AirPods set as the macOS default stay untouched while the built-in mic records.
+    private func openInput(on record: CoreAudioHAL.InputRecord) throws {
+        let input = hardware.makeInput()
+        try input.start(device: record.audioID, deliver: { [weak self] buffer, chunkStart in
+            self?.receive(buffer, chunkStart: chunkStart, arrival: AudioClock.now())
+        }, onChange: { [weak self] change in
+            self?.scheduleRebuild(force: change == .format)
+        })
+        self.input = input
+        openRecord = record
         box.withLock {
             $0.device = record.device
             $0.isLive = true
         }
-        observe(engine, deviceID: record.audioID)
+        let defaultID = hardware.defaultInputID()
+        let role = defaultID == record.audioID ? "it is the system default input"
+            : "the system default input (\(defaultID.flatMap(CoreAudioHAL.name(of:)) ?? "none")) is left alone"
+        Log.audio.info("Capture opened \(record.device.name, privacy: .public) (\(record.device.id, privacy: .public)) by id; \(role, privacy: .public)")
     }
 
-    private func teardownEngineOnQueue() {
-        if let engine {
-            engine.stop()
-            engine.inputNode.removeTap(onBus: 0)
-        }
-        engine = nil
-        if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
-        configObserver = nil
-        deviceListeners?.invalidate()
-        deviceListeners = nil
+    private func teardownInputOnQueue() {
+        input?.stop()
+        input = nil
+        openRecord = nil
     }
 
     private func shutdownOnQueue() {
         isRunning = false
         watchdog?.cancel()
         watchdog = nil
-        teardownEngineOnQueue()
+        teardownInputOnQueue()
     }
 
-    private func observe(_ engine: AVAudioEngine, deviceID: AudioDeviceID) {
-        // Posted after the engine has already stopped itself (format change, AirPods profile switch...).
-        configObserver = NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
-        ) { [weak self] _ in
-            self?.scheduleRebuild()
+    /// Once audio flows, asks the HAL which inputs this process has open: only the opened device should be
+    /// there, never the system default input when that is another device.
+    private func verifyOpenInputsOnQueue() {
+        guard let record = openRecord else { return }
+        let defaultID = hardware.defaultInputID()
+        switch Self.inputIsolation(opened: record.audioID, defaultInput: defaultID,
+                                   processInputs: hardware.processInputDeviceIDs()) {
+        case .isolated:
+            Log.audio.info("Input check: only \(record.device.name, privacy: .public) is open for input")
+        case .defaultAlsoOpen:
+            let name = defaultID.flatMap(CoreAudioHAL.name(of:)) ?? "?"
+            Log.audio.error("Input check: the system default input \(name, privacy: .public) is open besides \(record.device.name, privacy: .public)")
+        case .othersOpen(let others):
+            // Usually a session still shutting down (the Microphone page's meter as a dictation starts).
+            let names = others.map { CoreAudioHAL.name(of: $0) ?? "\($0)" }.joined(separator: ", ")
+            Log.audio.debug("Input check: \(names, privacy: .public) open besides \(record.device.name, privacy: .public)")
+        case .unknown:
+            Log.audio.debug("Input check: the HAL lists no inputs for this process")
         }
-        let listeners = HALListenerSet(queue: listenerQueue)
-        listeners.add(deviceID, kAudioDevicePropertyDeviceIsAlive) { [weak self] in
-            self?.scheduleRebuild()
-        }
-        deviceListeners = listeners
     }
 
-    /// Coalesces bursts of change notifications into one rebuild.
-    private func scheduleRebuild() {
+    enum InputIsolation: Equatable {
+        /// The opened device is the only input in use.
+        case isolated
+        /// The system default input, a different device, is in use too.
+        case defaultAlsoOpen
+        case othersOpen([AudioDeviceID])
+        /// The HAL reported no inputs at all.
+        case unknown
+    }
+
+    static func inputIsolation(opened: AudioDeviceID, defaultInput: AudioDeviceID?,
+                               processInputs: [AudioDeviceID]) -> InputIsolation {
+        guard !processInputs.isEmpty else { return .unknown }
+        let others = processInputs.filter { $0 != opened }
+        if let defaultInput, defaultInput != opened, others.contains(defaultInput) { return .defaultAlsoOpen }
+        return others.isEmpty ? .isolated : .othersOpen(others)
+    }
+
+    /// Coalesces bursts of change notifications into one rebuild (forced if any of them was).
+    private func scheduleRebuild(force: Bool) {
         control.async {
-            guard self.isRunning, !self.rebuildScheduled else { return }
+            guard self.isRunning else { return }
+            self.rebuildForced = self.rebuildForced || force
+            guard !self.rebuildScheduled else { return }
             self.rebuildScheduled = true
             self.control.asyncAfter(deadline: .now() + 0.05) {
+                let force = self.rebuildForced
                 self.rebuildScheduled = false
-                self.rebuildOnQueue(force: false)
+                self.rebuildForced = false
+                self.rebuildOnQueue(force: force)
             }
         }
     }
 
-    /// Rebuilds the engine on the device the policy picks now and keeps appending to the same recording.
-    /// Unforced rebuilds (notifications) are skipped while the engine still runs on a live device, so
-    /// spurious notifications and default-device changes never interrupt a dictation.
+    /// Reopens capture on the device the policy picks now and keeps appending to the same recording: the
+    /// chosen mic while it exists, the system default only for Automatic or once the chosen one is gone.
+    /// Unforced rebuilds (alive-flag notifications) are skipped while the input still runs on a live
+    /// device, so spurious notifications never interrupt a dictation.
     private func rebuildOnQueue(force: Bool) {
         guard isRunning, box.withLock({ $0.phase != .finished }) else { return }
-        if !force, let engine, engine.isRunning,
-           let id = CoreAudioHAL.deviceID(forUID: box.withLock({ $0.device.id })), CoreAudioHAL.isAlive(id) {
+        if !force, let input, input.isRunning, let openRecord, hardware.isAlive(openRecord.audioID) {
             return
         }
         let now = AudioClock.now()
@@ -249,19 +275,19 @@ final class CaptureSession: @unchecked Sendable {
         guard rebuildTimes.count <= options.maxRebuilds else { return loseDevice() }
 
         let previous = box.withLock { $0.device }
-        teardownEngineOnQueue()
+        teardownInputOnQueue()
         lastRebuildAt = now
 
-        let records = CoreAudioHAL.inputRecords()
+        let records = hardware.inputRecords()
+        let defaultID = hardware.defaultInputID()
         guard let choice = InputDevicePolicy.choose(preferredUID: options.preferredUID,
-                                                    defaultUID: CoreAudioHAL.defaultInputUID(),
-                                                    devices: records.map(\.device),
-                                                    preferBuiltInOverBluetooth: options.preferBuiltInOverBluetooth),
+                                                    defaultUID: records.first { $0.audioID == defaultID }?.device.id,
+                                                    devices: records.map(\.device)),
               let record = records.first(where: { $0.device.id == choice.device.id })
         else { return loseDevice() }
 
         do {
-            try buildEngine(on: record)
+            try openInput(on: record)
             Log.audio.info("Capture rebuilt on \(record.device.name, privacy: .public)")
             if record.device.id != previous.id { onEvent(.switchedDevice(record.device)) }
         } catch {
@@ -276,7 +302,7 @@ final class CaptureSession: @unchecked Sendable {
         Log.audio.error("Capture lost its device")
         watchdog?.cancel()
         watchdog = nil
-        teardownEngineOnQueue()
+        teardownInputOnQueue()
         isRunning = false
         let pending = box.withLock { state -> (CaptureState.Completion, [Float])? in
             state.isLive = false
@@ -323,26 +349,18 @@ final class CaptureSession: @unchecked Sendable {
         }
     }
 
-    // MARK: Tap (AVAudioEngine's thread)
+    // MARK: Buffers (the input's delivery thread)
 
-    private func makeTapBlock() -> AVAudioNodeTapBlock {
-        { [weak self] buffer, when in
-            let rate = buffer.format.sampleRate
-            guard let self, buffer.frameLength > 0, rate > 0 else { return }
-            let arrival = AudioClock.now()
-            let chunkStart = when.isHostTimeValid
-                ? AudioClock.seconds(hostTime: when.hostTime)
-                : arrival - Double(buffer.frameLength) / rate
-            self.receive(buffer, chunkStart: chunkStart, arrival: arrival)
-        }
-    }
-
-    /// Everything the tap does with one buffer (callable directly with synthetic buffers).
+    /// Everything done with one captured buffer (callable directly with synthetic buffers).
     func receive(_ buffer: AVAudioPCMBuffer, chunkStart: TimeInterval, arrival: TimeInterval) {
+        guard buffer.frameLength > 0, buffer.format.sampleRate > 0 else { return }
         let outcome = box.withLock { state in
             state.ingest(buffer, chunkStart: chunkStart, arrival: arrival)
         }
-        if outcome.isFirstBuffer { onEvent(.firstBuffer) }
+        if outcome.isFirstBuffer {
+            onEvent(.firstBuffer)
+            control.async { self.verifyOpenInputsOnQueue() }
+        }
         if let meter, !outcome.levels.isEmpty {
             for point in outcome.levels { meter.ingest(rmsDBFS: point.db, at: point.time, ducked: point.ducked) }
         }
@@ -386,7 +404,7 @@ struct DuckWindow: Sendable {
 
 // MARK: - Lock-protected capture state
 
-/// NSLock box rather than `Mutex`: region isolation refuses to move the non-Sendable tap buffer into a
+/// NSLock box rather than `Mutex`: region isolation refuses to move the non-Sendable captured buffer into a
 /// Mutex's `inout sending` state.
 final class CaptureBox: @unchecked Sendable {
     private let lock = NSLock()
@@ -426,7 +444,7 @@ struct CaptureState {
     var device: AudioInputDevice
     let keepsSamples: Bool
     var phase: Phase = .capturing
-    /// An engine is delivering (or starting to deliver) audio.
+    /// An input is delivering (or starting to deliver) audio.
     var isLive = true
     var feedsMeter = true
     var samples: [Float] = []
@@ -598,7 +616,7 @@ struct CaptureState {
         return points
     }
 
-    /// A copy of the first `frames` frames (the tap's own buffer is not ours to shorten).
+    /// A copy of the first `frames` frames (the delivered buffer is not ours to shorten).
     static func prefix(of buffer: AVAudioPCMBuffer, frames: AVAudioFrameCount) -> AVAudioPCMBuffer? {
         frames < buffer.frameLength ? buffer.copyFrames(0..<frames) : buffer
     }

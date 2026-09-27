@@ -829,6 +829,61 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         #expect(defaults.object(forKey: SettingsKey.pillHiddenUntil.defaultsKey) == nil)
     }
 
+    // MARK: The removed "Use the built-in mic even when AirPods are connected"
+
+    private func withSuite(_ body: (UserDefaults) throws -> Void) throws {
+        let suite = NSTemporaryDirectory() + "transcribe-thing-tests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(atPath: suite + ".plist")
+        }
+        try body(defaults)
+    }
+
+    /// (stored switch, onboarding done, stored mic) -> mic after the migration.
+    @Test(arguments: [
+        (true as Bool?, true, nil as String?, "BuiltInMicrophoneDevice" as String?),
+        (true, false, nil, "BuiltInMicrophoneDevice"),
+        (nil, true, nil, "BuiltInMicrophoneDevice"),   // on by default for an existing install
+        (nil, false, nil, nil),                         // a fresh install stays Automatic
+        (false, true, nil, nil),                        // turned off: Automatic, as it behaved
+        (true, true, "usb-mic", "usb-mic"),             // an explicit pick is kept
+    ])
+    func theOldBuiltInSwitchBecomesAMicChoiceOnce(_ stored: Bool?, onboarded: Bool, mic: String?, expected: String?) throws {
+        try withSuite { defaults in
+            if let stored { defaults.set(stored, forKey: SettingsKey.preferBuiltInMicOverBluetooth.defaultsKey) }
+            defaults.set(onboarded, forKey: SettingsKey.onboardingCompleted.defaultsKey)
+            if let mic { defaults.set(mic, forKey: SettingsKey.microphoneUID.defaultsKey) }
+            var lookups = 0
+            let settings = AppSettings(defaults: defaults, builtInMicrophoneUID: {
+                lookups += 1
+                return "BuiltInMicrophoneDevice"
+            })
+            #expect(settings.microphoneUID == expected)
+            #expect(lookups == (expected == "BuiltInMicrophoneDevice" ? 1 : 0), "the HAL is asked only when needed")
+            #expect(defaults.string(forKey: SettingsKey.microphoneUID.defaultsKey) == expected)
+            #expect(defaults.object(forKey: SettingsKey.preferBuiltInMicOverBluetooth.defaultsKey) == nil)
+
+            // Once: going back to Automatic afterwards sticks.
+            settings.microphoneUID = nil
+            let reloaded = AppSettings(defaults: defaults, builtInMicrophoneUID: {
+                lookups += 100
+                return "BuiltInMicrophoneDevice"
+            })
+            #expect(reloaded.microphoneUID == nil)
+            #expect(lookups < 100)
+        }
+    }
+
+    @Test func noBuiltInMicLeavesAutomatic() throws {
+        try withSuite { defaults in
+            defaults.set(true, forKey: SettingsKey.preferBuiltInMicOverBluetooth.defaultsKey)
+            #expect(AppSettings(defaults: defaults, builtInMicrophoneUID: { nil }).microphoneUID == nil)
+            #expect(defaults.object(forKey: SettingsKey.preferBuiltInMicOverBluetooth.defaultsKey) == nil)
+        }
+    }
+
     @Test func inMemorySettingsAreIndependent() {
         let a = AppSettings.inMemory()
         let b = AppSettings.inMemory()

@@ -59,9 +59,9 @@ final class AppSettings {
     var switchHintShownCount: Int = 0 { didSet { store.set(switchHintShownCount, .switchHintShownCount) } }
     var pillMode: PillMode = .whileDictating { didSet { store.set(pillMode.rawValue, .pillMode) } }
     var soundsEnabled: Bool = true { didSet { store.set(soundsEnabled, .soundsEnabled) } }
-    /// nil = follow the system default input.
+    /// The only mic dictation opens while it is connected. nil = Automatic: the system default input (Bluetooth
+    /// included) at the moment a dictation starts.
     var microphoneUID: String? = nil { didSet { store.set(microphoneUID, .microphoneUID) } }
-    var preferBuiltInMicOverBluetooth: Bool = true { didSet { store.set(preferBuiltInMicOverBluetooth, .preferBuiltInMicOverBluetooth) } }
     var showDockIcon: Bool = false { didSet { store.set(showDockIcon, .showDockIcon) } }
     /// Empty by default: Gemini then receives only the audio.
     var geminiSystemPrompt: String = "" { didSet { store.set(geminiSystemPrompt, .geminiSystemPrompt) } }
@@ -84,14 +84,21 @@ final class AppSettings {
     var lastLaunchedVersion: String? = nil { didSet { store.set(lastLaunchedVersion, .lastLaunchedVersion) } }
 
     @ObservationIgnored private let store: SettingsStore
+    /// Read once at most, by the migration of the removed built-in-over-Bluetooth switch.
+    @ObservationIgnored private let builtInMicrophoneUID: () -> String?
 
-    init(defaults: UserDefaults = .standard) {
+    /// `builtInMicrophoneUID` is asked only when an older build's "Use the built-in mic even when AirPods are
+    /// connected" has to become an explicit mic choice.
+    init(defaults: UserDefaults = .standard,
+         builtInMicrophoneUID: @escaping () -> String? = { CoreAudioHAL.builtInMicrophoneUID() }) {
         store = SettingsStore(defaults: defaults)
+        self.builtInMicrophoneUID = builtInMicrophoneUID
         load()
     }
 
     private init(store: SettingsStore) {
         self.store = store
+        builtInMicrophoneUID = { nil }
         load()
     }
 
@@ -166,7 +173,7 @@ final class AppSettings {
             store.remove(.soundVolume)
         }
         microphoneUID = store.string(.microphoneUID)
-        if let v = store.bool(.preferBuiltInMicOverBluetooth) { preferBuiltInMicOverBluetooth = v }
+        migrateBuiltInOverBluetoothOnce()
         if let v = store.bool(.showDockIcon) { showDockIcon = v }
         if let v = store.string(.geminiSystemPrompt) { geminiSystemPrompt = v }
         if let v = store.int(.maxRecordingMinutes), v > 0 { maxRecordingMinutes = v }
@@ -181,18 +188,49 @@ final class AppSettings {
     }
 }
 
+// MARK: - Migrations
+
+extension AppSettings {
+    /// Older builds had "Use the built-in mic even when AirPods are connected", on by default: with the mic on
+    /// Automatic and a Bluetooth default, dictation used the built-in mic. The picked mic is now the only choice,
+    /// so where that switch was on (explicitly, or by default on an install past onboarding) and the mic was
+    /// Automatic, the built-in mic becomes the pick. Once: the old key goes and a marker stays.
+    nonisolated static func migratedMicrophoneUID(current: String?, storedPreferBuiltIn: Bool?,
+                                                  onboardingCompleted: Bool,
+                                                  builtInMicrophoneUID: () -> String?) -> String? {
+        guard current == nil, storedPreferBuiltIn ?? onboardingCompleted else { return current }
+        return builtInMicrophoneUID()
+    }
+
+    fileprivate func migrateBuiltInOverBluetoothOnce() {
+        guard store.bool(.microphoneChoiceMigrated) != true else { return }
+        let uid = Self.migratedMicrophoneUID(current: microphoneUID,
+                                             storedPreferBuiltIn: store.bool(.preferBuiltInMicOverBluetooth),
+                                             onboardingCompleted: onboardingCompleted,
+                                             builtInMicrophoneUID: builtInMicrophoneUID)
+        if uid != microphoneUID {
+            microphoneUID = uid
+            store.set(uid, .microphoneUID)
+        }
+        store.remove(.preferBuiltInMicOverBluetooth)
+        store.set(true, .microphoneChoiceMigrated)
+    }
+}
+
 // MARK: - Storage
 
 enum SettingsKey: String, CaseIterable {
     /// `onboardingStep` holds a six-step index from older builds, read once and moved to `onboardingResumeStep`.
     /// `soundVolume` is the removed volume slider's, read once (zero turns sounds off) and removed.
     /// `pillHiddenUntil` is the removed "Hide Pill for 1 Hour" deadline, removed at load.
+    /// `preferBuiltInMicOverBluetooth` is the removed built-in-over-AirPods switch, turned into a mic choice once
+    /// (`microphoneChoiceMigrated` records that) and removed.
     case onboardingCompleted, onboardingStep, onboardingResumeStep, selectedEngine, pillMode, pillHiddenUntil
     case soundsEnabled, soundVolume, microphoneUID, preferBuiltInMicOverBluetooth, showDockIcon
     case geminiSystemPrompt, maxRecordingMinutes, doublePressForHandsFree
     case restoreClipboard, keepFailedRecordingsDays, shortcuts, hasShownWelcomeHello
     case checkForUpdatesAutomatically, announcedUpdateVersion, lastLaunchedVersion
-    case switchEngines, switchHintShownCount
+    case switchEngines, switchHintShownCount, microphoneChoiceMigrated
 
     var defaultsKey: String { "tt.\(rawValue)" }
 }
