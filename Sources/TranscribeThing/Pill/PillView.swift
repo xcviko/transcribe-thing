@@ -8,8 +8,8 @@ enum PillMetrics {
     static let restSize = CGSize(width: 40, height: 10)
     static let peekSize = CGSize(width: 76, height: 24)
     static let listeningSize = CGSize(width: 104, height: 32)
-    /// Hands-free always carries the timer, so hovering never resizes it.
-    static let lockedSize = CGSize(width: 204, height: 36)
+    /// Hands-free always carries the timer, so hovering never resizes it (nor does the timer reaching 10:00).
+    static let lockedSize = CGSize(width: 198, height: 36)
     static let successSize = CGSize(width: 32, height: 32)
     static let errorSize = CGSize(width: 104, height: 32)
     /// Tallest state; toasts sit 10 pt above it so they never move while the pill changes shape.
@@ -24,11 +24,19 @@ enum PillMetrics {
 
     static let buttonSize: CGFloat = 22
     static let buttonInset: CGFloat = 7
-    /// Fits "29:59": the longest recording limit is 30 min.
-    static let timerWidth: CGFloat = 34
-    static let timerSpacing: CGFloat = 5
-    /// Hands-free centers the bars between X and the timer, this far left of the pill's center.
-    static let lockedBarsOffset: CGFloat = -(timerWidth + timerSpacing) / 2
+    /// Monospaced digits, so the timer never jitters as it counts.
+    static let timerFont = Font.system(size: 11, weight: .medium, design: .rounded).monospacedDigit()
+    /// Fits "29:59" in `timerFont`: the longest recording limit is 30 min.
+    static let timerWidth: CGFloat = 33
+    /// "9:59", the timer's width for most recordings.
+    static let shortTimerWidth: CGFloat = 26
+    /// Hands-free spaces X, the bars, the timer and Stop by one even gap, 15 pt. That holds for a "9:59"
+    /// timer, which sits centered in the timer's column; "29:59" fills the column, taking 3.5 pt from each side.
+    static let lockedGap: CGFloat = (lockedSize.width - 2 * (buttonInset + buttonSize) - barFieldWidth - shortTimerWidth) / 3
+    /// Space between the timer's column and Stop.
+    static let timerTrailing: CGFloat = lockedGap - (timerWidth - shortTimerWidth) / 2
+    /// How far left of the pill's center hands-free draws the bars: one gap right of X.
+    static let lockedBarsOffset: CGFloat = buttonInset + buttonSize + lockedGap + barFieldWidth / 2 - lockedSize.width / 2
     static let tooltipHeight: CGFloat = 28
     /// Invisible margin around the pill that counts as hovering it (and clicking it).
     static let hoverMargin: CGFloat = 12
@@ -402,7 +410,7 @@ private struct ErrorGlyph: View {
 }
 
 /// Bars while recording; in hands-free, X and Stop slide out from under the bars and the timer sits left
-/// of Stop.
+/// of Stop, all four evenly spaced (`PillMetrics.lockedGap`).
 private struct RecordingContent: View {
     let model: PillModel
     /// Set in hands-free only.
@@ -428,8 +436,8 @@ private struct RecordingContent: View {
                 Spacer(minLength: 0)
                 if let timer {
                     PillTimerLabel(model: model, mode: timer)
-                        .frame(width: PillMetrics.timerWidth, alignment: .trailing)
-                        .padding(.trailing, PillMetrics.timerSpacing)
+                        .frame(width: PillMetrics.timerWidth)
+                        .padding(.trailing, PillMetrics.timerTrailing)
                         .transition(.opacity.animation(.easeOut(duration: 0.16).delay(0.08)))
                 }
                 if locked {
@@ -518,7 +526,7 @@ private struct PillTimerLabel: View {
             let remaining = max(0, model.limitSeconds - elapsed)
             let seconds = mode == .remaining ? remaining.rounded(.up) : elapsed.rounded(.down)
             Text(Fmt.duration(seconds))
-                .font(.system(size: 11, weight: .medium, design: .rounded).monospacedDigit())
+                .font(PillMetrics.timerFont)
                 .foregroundStyle(mode == .remaining && remaining <= 10 ? PillPalette.warning : .white.opacity(0.7))
                 .lineLimit(1)
                 .contentTransition(.numericText(countsDown: mode == .remaining))

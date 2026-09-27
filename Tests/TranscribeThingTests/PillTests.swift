@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import Testing
 @testable import TranscribeThing
 
@@ -390,7 +391,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
     @Test func processingDotsStartWhereTheHandsFreeBarsWere() {
         let locked = PillVisual.locked(.elapsed), processing = PillVisual.processing(wide: true)
         let barsCenter = locked.size.width / 2 + locked.barsOffset
-        #expect(barsCenter == 102 - 19.5)
+        #expect(barsCenter == 99 - 20.5)
         let width = processing.size.width
         func center(at time: Double, reduceMotion: Bool = false) -> CGFloat {
             ProcessingWaveView.dotsCenterX(width: width, time: time, startOffset: processing.barsOffset,
@@ -424,13 +425,42 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(PillVisual.rest.size == CGSize(width: 40, height: 10))
         #expect(PillVisual.peek.size == CGSize(width: 76, height: 24))
         #expect(PillVisual.listening.size == CGSize(width: 104, height: 32))
-        #expect(PillVisual.locked(.elapsed).size == CGSize(width: 204, height: 36))
-        #expect(PillVisual.locked(.remaining).size == CGSize(width: 204, height: 36))
-        #expect(PillVisual.processing(wide: true).size == CGSize(width: 204, height: 32))
+        #expect(PillVisual.locked(.elapsed).size == CGSize(width: 198, height: 36))
+        #expect(PillVisual.locked(.remaining).size == CGSize(width: 198, height: 36))
+        #expect(PillVisual.processing(wide: true).size == CGSize(width: 198, height: 32))
         #expect(PillVisual.processing(wide: false).size == CGSize(width: 104, height: 32))
         #expect(PillVisual.success.size == CGSize(width: 32, height: 32))
         #expect(PillVisual.error.size == CGSize(width: 104, height: 32))
         #expect(PillMetrics.barFieldWidth == 69)
+    }
+
+    /// X | bars | timer | Stop, left to right, with the same gap between each for a "9:59" timer, and a
+    /// "29:59" one still clear of the bars and Stop.
+    @Test func handsFreeSpacesItsControlsEvenly() {
+        let width = PillMetrics.lockedSize.width
+        let cancelRight = PillMetrics.buttonInset + PillMetrics.buttonSize
+        let stopLeft = width - cancelRight
+        let barsLeft = width / 2 + PillVisual.locked(.elapsed).barsOffset - PillMetrics.barFieldWidth / 2
+        let barsRight = barsLeft + PillMetrics.barFieldWidth
+        let timerCenter = stopLeft - PillMetrics.timerTrailing - PillMetrics.timerWidth / 2
+        func gaps(timer: CGFloat) -> [CGFloat] {
+            [barsLeft - cancelRight, timerCenter - timer / 2 - barsRight, stopLeft - (timerCenter + timer / 2)]
+        }
+        #expect(gaps(timer: PillMetrics.shortTimerWidth) == [15, 15, 15])
+        #expect(gaps(timer: PillMetrics.timerWidth) == [15, 11.5, 11.5])
+        #expect(PillMetrics.lockedGap == 15)
+    }
+
+    @MainActor @Test func timerWidthsFitTheirText() {
+        func width(_ text: String) -> CGFloat {
+            NSHostingView(rootView: Text(text).font(PillMetrics.timerFont).fixedSize()).fittingSize.width
+        }
+        for text in ["0:05", "0:14", "8:88", "9:59"] {
+            #expect(abs(width(text) - PillMetrics.shortTimerWidth) <= 1, "\(text)")
+        }
+        for text in ["10:00", "28:48", "29:59"] {
+            #expect(width(text) <= PillMetrics.timerWidth, "\(text)")
+        }
     }
 
     @Test func panelViewResolvesPresentation() {
