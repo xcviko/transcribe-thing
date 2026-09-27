@@ -24,6 +24,18 @@ enum HubSnapshots {
             hub("hub-home-search", .home) { c in
                 c.initialSearch = "zzz"
             },
+            // The newest row hovered: Copy, the "…" row menu (Transcribe Again With, Restore Previous Text) and Delete.
+            hub("hub-home-row-menu", .home, height: 900) { c in
+                c.previewHoveredEntry = c.history.entries.first?.id
+            },
+            // Transcribe Again with Gemini Flash under way on the second row, a Retry on the failed one.
+            hub("hub-home-transcribing", .home, height: 900) { c in
+                let entries = c.history.entries
+                var transcribing: [UUID: EngineID] = [:]
+                if entries.count > 1 { transcribing[entries[1].id] = .geminiFlash }
+                if let failed = entries.first(where: { $0.status == .failed }) { transcribing[failed.id] = .parakeet }
+                c.previewTranscribing = transcribing
+            },
 
             hub("hub-models", .models),
             hub("hub-models-full", .models, height: 1320),

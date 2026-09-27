@@ -71,6 +71,9 @@ final class DictationController {
     private(set) var activity: DictationActivity = .idle
     /// Recordings waiting to be transcribed or delivered, oldest first.
     private(set) var pendingJobCount = 0
+    /// The engine each recording being transcribed or delivered right now uses, by recording id: History shows
+    /// those rows as transcribing and keeps them from being sent again.
+    private(set) var transcribingEngines: [UUID: EngineID] = [:]
     /// The shortcut's event tap has been down for longer than `shortcutNoticeGrace`: fn does nothing.
     private(set) var isShortcutUnavailable = false
     /// The extra model this dictation uses instead of the main one (Switch model); nil for the main model. It lasts
@@ -114,6 +117,9 @@ final class DictationController {
     @ObservationIgnored private var failureCueTimes: [String: TimeInterval] = [:]
     /// Retained recordings whose job came from the Hub: their Retry and Undo update history, never paste.
     @ObservationIgnored private var historyOnlyIDs: Set<UUID> = []
+    /// The engine a failed Transcribe Again used, which its notice's Retry uses again (the entry keeps the engine
+    /// of the text it still shows).
+    @ObservationIgnored private var retryEngines: [UUID: EngineID] = [:]
     @ObservationIgnored private var historyHintQuota = DailyQuota(limit: 3)
     @ObservationIgnored private var didShowSecureInputNotice = false
     /// The mic was opened for this recording: its device notice ("Using X instead", the AirPods hint) is
@@ -520,14 +526,16 @@ final class DictationController {
     }
 
     /// Keeps a canceled recording for Undo (and in history when it's long). `historyOnly`: it was a Hub
-    /// transcription, which Undo transcribes after all instead of recording on.
-    private func keepCancelled(_ recording: Recording, engine: EngineID, notify: Bool, historyOnly: Bool = false) {
+    /// transcription, which Undo transcribes after all instead of recording on. `keepsEntry`: it was Transcribe
+    /// Again, whose entry keeps its text instead of turning into a canceled row.
+    private func keepCancelled(_ recording: Recording, engine: EngineID, notify: Bool, historyOnly: Bool = false,
+                               keepsEntry: Bool = false) {
         guard recording.duration >= Self.undoMinimumDuration else { return }
         retain(recording)
         cancelledEngines[recording.id] = engine
         if historyOnly { historyOnlyIDs.insert(recording.id) }
         lastCancelledID = recording.id
-        let saved = recording.duration >= Self.saveCancelledMinimumDuration
+        let saved = !keepsEntry && recording.duration >= Self.saveCancelledMinimumDuration
         if saved {
             let file = history.saveAudio(recording)
             history.upsert(TranscriptEntry(
@@ -655,6 +663,9 @@ final class DictationController {
         var generation = 0
         var playsStopCue = false
         var isCancelled = false
+        /// Transcribe Again of a successful entry: the result replaces its text in place, and a failure or a
+        /// cancel leaves the entry as it is.
+        var replacesTranscript = false
         private let placeholderID: UUID
 
         /// `id`: the id the recording will have (a resumed dictation's), when it is known before the audio is.
@@ -679,6 +690,7 @@ final class DictationController {
     func enqueue(_ recording: Recording, engine: EngineID, delivery: Delivery) {
         guard !isInFlight(recording.id) else { return }
         let job = Job(recording: recording, engine: engine, delivery: delivery)
+        job.replacesTranscript = delivery == .historyOnly && history.entry(id: recording.id)?.status == .success
         queue.append(job)
         _ = machine.handle(.jobStarted, now: clock())
         run(job)
@@ -791,7 +803,8 @@ final class DictationController {
         dismissSlowNotice(for: job.id)
         _ = machine.handle(.jobEnded, now: clock())
         if let recording = job.recording {
-            keepCancelled(recording, engine: job.engine, notify: true, historyOnly: job.delivery == .historyOnly)
+            keepCancelled(recording, engine: job.engine, notify: true, historyOnly: job.delivery == .historyOnly,
+                          keepsEntry: job.replacesTranscript)
         }
         drain()
         return true
@@ -812,11 +825,19 @@ final class DictationController {
                 return
             }
             forget(job.id)
+            if job.replacesTranscript {
+                deliverTranscriptAgain(job, result, text: text)
+                return
+            }
+            // Kept a while so History can transcribe it again with another model. Saved again even when a failed or
+            // canceled row had it: an Undo-resumed dictation's file holds only the part before the cancel.
+            let file = settings.keepSuccessfulRecordingsDays > 0 ? history.saveAudio(recording) : nil
             history.upsert(TranscriptEntry(
                 id: job.id, createdAt: recording.startedAt, text: text, engine: result.engine,
                 status: .success, audioDuration: recording.duration,
                 voicedSeconds: recording.speech.voicedSeconds,
-                processingTime: result.processingTime, costUSD: result.costUSD, provider: result.provider))
+                processingTime: result.processingTime, costUSD: result.costUSD, audioFileName: file,
+                provider: result.provider))
             if result.provider == nil, let generationID = result.generationID {
                 resolveProvider(entryID: job.id, generationID: generationID, engine: result.engine, text: text)
             }
@@ -832,6 +853,22 @@ final class DictationController {
                 handleInsertion(insertion, text: text, isDictation: true)
             }
         }
+    }
+
+    /// Transcribe Again: the new text takes the entry's place (same row, date and audio; the old text stays for
+    /// Restore Previous Text) and a card offers it for pasting wherever the user wants. Never pasted by itself: the
+    /// user is in the Hub. An entry deleted meanwhile isn't brought back; the card still has the text.
+    private func deliverTranscriptAgain(_ job: Job, _ result: TranscriptResult, text: String) {
+        if var entry = history.entry(id: job.id), entry.status == .success {
+            entry.replaceTranscript(with: TranscriptVersion(text: text, engine: result.engine, provider: result.provider,
+                                                            costUSD: result.costUSD, processingTime: result.processingTime))
+            history.upsert(entry)
+            if result.provider == nil, let generationID = result.generationID {
+                resolveProvider(entryID: job.id, generationID: generationID, engine: result.engine, text: text)
+            }
+        }
+        toasts.post(transcriptCard(text, title: "Transcribed with \(result.engine.shortName)",
+                                   body: "Updated in History. Paste here, or copy it.", pasteHere: true))
     }
 
     /// Asks OpenRouter who served a delivered cloud transcript, in the background, and records it on the history
@@ -865,6 +902,10 @@ final class DictationController {
 
     private func deliverFailure(_ job: Job, _ error: AppError) {
         guard let recording = job.recording else { return }
+        if job.replacesTranscript {
+            deliverTranscriptAgainFailure(job, recording, error)
+            return
+        }
         let file = history.saveAudio(recording)
         retain(recording)
         if job.delivery == .historyOnly { historyOnlyIDs.insert(job.id) }
@@ -877,6 +918,18 @@ final class DictationController {
             errorMessage: notice.title, audioFileName: file ?? history.entry(id: job.id)?.audioFileName))
         Log.engine.error("Transcription failed: \(error.code, privacy: .public)")
         postFailure(notice)
+        flashError()
+    }
+
+    /// A failed Transcribe Again leaves the entry and its text alone; the notice's Retry uses the same engine, and
+    /// its "Retry with" never offers the engine that wrote the text.
+    private func deliverTranscriptAgainFailure(_ job: Job, _ recording: Recording, _ error: AppError) {
+        retain(recording)
+        historyOnlyIDs.insert(job.id)
+        retryEngines[job.id] = job.engine
+        let fallback = usableFallback(excluding: job.engine, after: error, alsoExcluding: history.entry(id: job.id)?.engine)
+        Log.engine.error("Transcribe again failed: \(error.code, privacy: .public)")
+        postFailure(error.notice(recordingID: job.id, fallbackEngine: fallback, engine: job.engine))
         flashError()
     }
 
@@ -1027,7 +1080,8 @@ final class DictationController {
         }
     }
 
-    /// Hub history "Retry" (failed or canceled rows) with any engine.
+    /// Hub history: "Retry" of a failed or canceled row, or "Transcribe Again" of a transcript, with any engine.
+    /// Only into history, never pasted.
     func retry(_ entry: TranscriptEntry, with engine: EngineID) {
         guard !isInFlight(entry.id) else { return }
         guard let recording = recording(for: entry.id) else {
@@ -1044,6 +1098,7 @@ final class DictationController {
             if let engine, engine != waiting.engine, waiting.outcome == nil {
                 waiting.engine = engine
                 run(waiting)
+                stateDidChange()
             }
             return
         }
@@ -1052,7 +1107,7 @@ final class DictationController {
             postRecordingGone()
             return
         }
-        let chosen = engine ?? history.entry(id: id)?.engine ?? settings.selectedEngine
+        let chosen = engine ?? retryEngines[id] ?? history.entry(id: id)?.engine ?? settings.selectedEngine
         enqueue(recording, engine: chosen, delivery: redeliveryTarget(for: id))
     }
 
@@ -1130,7 +1185,7 @@ final class DictationController {
     private func postRecordingGone() {
         toasts.post(Notice(dedupeKey: "recording.gone", style: .warning, symbol: "waveform.slash",
                            title: "That recording is gone",
-                           body: "\(Brand.name) keeps audio only for failed or canceled dictations, and only for a while.",
+                           body: "\(Brand.name) keeps recordings only for a while. Choose how long in General → History.",
                            lifetime: .seconds(5), sound: .alert))
     }
 
@@ -1274,8 +1329,11 @@ final class DictationController {
     /// An engine other than `engine` that can start at once, offered as "Retry with …" for a saved recording: a
     /// loaded local model, or a cloud one while the key is valid, unless `error` (the key's, the credit's, the
     /// connection's) would stop it too.
-    private func readyFallback(excluding engine: EngineID, after error: AppError? = nil) -> EngineID? {
+    /// `alsoExcluding`: an engine not worth offering either (the one that wrote the text being transcribed again).
+    private func readyFallback(excluding engine: EngineID, after error: AppError? = nil,
+                               alsoExcluding other: EngineID? = nil) -> EngineID? {
         Self.fallbackCandidates(for: engine).first { candidate in
+            guard candidate != other else { return false }
             if candidate.isLocal { return models.state(of: candidate) == .ready }
             guard case .valid = account.status else { return false }
             return error?.stopsEveryCloudModel != true
@@ -1284,9 +1342,10 @@ final class DictationController {
 
     /// `readyFallback`, else a downloaded local model that isn't loaded yet (it loads for the retry), also
     /// offered as "Use …" when nothing was recorded.
-    private func usableFallback(excluding engine: EngineID, after error: AppError? = nil) -> EngineID? {
-        readyFallback(excluding: engine, after: error) ?? Self.fallbackCandidates(for: engine).first {
-            guard $0.isLocal else { return false }
+    private func usableFallback(excluding engine: EngineID, after error: AppError? = nil,
+                                alsoExcluding other: EngineID? = nil) -> EngineID? {
+        readyFallback(excluding: engine, after: error, alsoExcluding: other) ?? Self.fallbackCandidates(for: engine).first {
+            guard $0.isLocal, $0 != other else { return false }
             switch models.state(of: $0) {
             case .installed, .preparing: return true
             default: return false
@@ -1303,6 +1362,7 @@ final class DictationController {
             retained[evicted] = nil
             historyOnlyIDs.remove(evicted)
             cancelledEngines[evicted] = nil
+            retryEngines[evicted] = nil
         }
     }
 
@@ -1311,6 +1371,7 @@ final class DictationController {
         retainedOrder.removeAll { $0 == id }
         historyOnlyIDs.remove(id)
         cancelledEngines[id] = nil
+        retryEngines[id] = nil
     }
 
     // MARK: - Switch model
@@ -1544,6 +1605,11 @@ final class DictationController {
         updateSwitchHint()
         let count = queue.count + (isDelivering ? 1 : 0)
         if pendingJobCount != count { pendingJobCount = count }
+        var transcribing: [UUID: EngineID] = [:]
+        for job in (deliveringJob.map { [$0] } ?? []) + queue where job.recording != nil {
+            transcribing[job.id] = job.engine
+        }
+        if transcribingEngines != transcribing { transcribingEngines = transcribing }
         refreshPill()
         replayDeferredErrorFlash()
         showSecureInputNoticeIfNeeded()

@@ -201,6 +201,7 @@ final class AppEnvironment {
             windows.showOnboarding()
         }
         history.pruneOldRecordings()
+        observeRecordingRetention()
         scheduleMaintenance()
         updates.start()
         activationObserver = MainNotificationObserver(center: .default, name: NSApplication.didBecomeActiveNotification) {
@@ -254,6 +255,20 @@ final class AppEnvironment {
             Task { @MainActor [weak self] in
                 self?.windows.updateActivationPolicy()
                 self?.observeDockIconSetting()
+            }
+        }
+    }
+
+    /// A shorter "Keep failed recordings" or "Keep audio to transcribe again" drops the audio it no longer
+    /// covers right away, not at the next maintenance pass.
+    private func observeRecordingRetention() {
+        withObservationTracking {
+            _ = settings.keepFailedRecordingsDays
+            _ = settings.keepSuccessfulRecordingsDays
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.history.pruneOldRecordings()
+                self?.observeRecordingRetention()
             }
         }
     }

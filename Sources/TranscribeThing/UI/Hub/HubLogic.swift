@@ -180,6 +180,56 @@ enum EngineReadiness: Equatable {
     }
 }
 
+// MARK: - Transcribe again
+
+/// What a History row offers for transcribing its recording again: every engine for a failed or canceled
+/// dictation (Retry), every engine but the one that wrote the text for a transcript. Unavailable engines stay
+/// listed, disabled, with the reason in their title.
+struct TranscribeAgainMenu: Equatable {
+    struct Item: Equatable, Identifiable {
+        var engine: EngineID
+        /// "Needs key", "Too long for Gemini"; nil when it can be picked.
+        var unavailableReason: String?
+
+        var id: EngineID { engine }
+        var isEnabled: Bool { unavailableReason == nil }
+        /// "Gemini 3.8 Flash", "Gemini 3.1 Pro · Needs key".
+        var title: String { unavailableReason.map { "\(engine.displayName) · \($0)" } ?? engine.displayName }
+    }
+
+    /// "Transcribe Again With" for a transcript, "Retry With" for a failed or canceled dictation.
+    var title: String
+    /// Stands in for the whole submenu when nothing can be picked: "Transcribing with Gemini Flash…",
+    /// "Transcribe Again · Recording no longer kept".
+    var unavailableTitle: String?
+    var items: [Item]
+
+    static let recordingGone = "Recording no longer kept"
+    static let tooLongForGemini = "Too long for Gemini"
+
+    /// `transcribingWith`: the engine the recording is being transcribed with right now, if it is.
+    static func make(for entry: TranscriptEntry, transcribingWith: EngineID?,
+                     readiness: (EngineID) -> EngineReadiness) -> TranscribeAgainMenu {
+        let isTranscript = entry.status == .success
+        let title = isTranscript ? "Transcribe Again With" : "Retry With"
+        let unavailable: String?
+        if let transcribingWith {
+            unavailable = "Transcribing with \(transcribingWith.shortName)…"
+        } else if entry.audioFileName == nil {
+            unavailable = "\(isTranscript ? "Transcribe Again" : "Retry") · \(recordingGone)"
+        } else {
+            unavailable = nil
+        }
+        let engines = EngineID.allCases.filter { !isTranscript || $0 != entry.engine }
+        let items = engines.map { engine in
+            Item(engine: engine, unavailableReason: readiness(engine).unavailableReason
+                 ?? (engine.cloudAPI == .chatCompletions && !OpenRouterClient.fitsOneChatRequest(duration: entry.audioDuration)
+                     ? tooLongForGemini : nil))
+        }
+        return TranscribeAgainMenu(title: title, unavailableTitle: unavailable, items: items)
+    }
+}
+
 /// The sidebar footer chip for the main model: "Parakeet v3 · Ready", "Parakeet v3 · Optimizing…",
 /// "Parakeet v3 · Cloud · Needs key".
 struct EngineSummary: Equatable {
@@ -433,6 +483,13 @@ enum RetentionChoice {
         case 1: "1 day"
         default: "\(days) days"
         }
+    }
+
+    /// Days of audio kept for successful dictations (Transcribe Again); 0 = off.
+    static let transcribeAgainDays = [0, 1, 7]
+
+    static func transcribeAgainLabel(_ days: Int) -> String {
+        days == 0 ? "Off" : label(days)
     }
 }
 

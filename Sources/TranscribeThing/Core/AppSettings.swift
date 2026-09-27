@@ -69,8 +69,13 @@ final class AppSettings {
     var maxRecordingMinutes: Int = 20 { didSet { store.set(maxRecordingMinutes, .maxRecordingMinutes) } }
     var doublePressForHandsFree: Bool = true { didSet { store.set(doublePressForHandsFree, .doublePressForHandsFree) } }
     var restoreClipboard: Bool = true { didSet { store.set(restoreClipboard, .restoreClipboard) } }
-    /// Audio is kept only for failed or canceled dictations.
+    /// Days the audio of failed or canceled dictations is kept, for Retry.
     var keepFailedRecordingsDays: Int = 14 { didSet { store.set(keepFailedRecordingsDays, .keepFailedRecordingsDays) } }
+    /// Days the audio of successful dictations is kept, so History can transcribe them again with another model;
+    /// 0 = not kept.
+    var keepSuccessfulRecordingsDays: Int = 1 {
+        didSet { store.set(keepSuccessfulRecordingsDays, .keepSuccessfulRecordingsDays) }
+    }
     var shortcuts: ShortcutBindings = .defaults { didSet { store.setJSON(shortcuts, .shortcuts) } }
     var hasShownWelcomeHello: Bool = false { didSet { store.set(hasShownWelcomeHello, .hasShownWelcomeHello) } }
     /// Checks GitHub in the background and announces new versions. Off: no reminders and no badges, though the
@@ -180,6 +185,7 @@ final class AppSettings {
         if let v = store.bool(.doublePressForHandsFree) { doublePressForHandsFree = v }
         if let v = store.bool(.restoreClipboard) { restoreClipboard = v }
         if let v = store.int(.keepFailedRecordingsDays), v >= 0 { keepFailedRecordingsDays = v }
+        if let v = store.int(.keepSuccessfulRecordingsDays), v >= 0 { keepSuccessfulRecordingsDays = v }
         if let v: ShortcutBindings = store.json(.shortcuts) { shortcuts = v }
         if let v = store.bool(.hasShownWelcomeHello) { hasShownWelcomeHello = v }
         if let v = store.bool(.checkForUpdatesAutomatically) { checkForUpdatesAutomatically = v }
@@ -258,7 +264,7 @@ enum SettingsKey: String, CaseIterable {
     case onboardingCompleted, onboardingStep, onboardingResumeStep, selectedEngine, pillMode, pillHiddenUntil
     case soundsEnabled, soundVolume, microphoneUID, preferBuiltInMicOverBluetooth, showDockIcon
     case geminiSystemPrompt, maxRecordingMinutes, doublePressForHandsFree
-    case restoreClipboard, keepFailedRecordingsDays, shortcuts, hasShownWelcomeHello
+    case restoreClipboard, keepFailedRecordingsDays, keepSuccessfulRecordingsDays, shortcuts, hasShownWelcomeHello
     case checkForUpdatesAutomatically, announcedUpdateVersion, lastLaunchedVersion
     case switchEngines, switchHintShownCount, microphoneChoiceMigrated
 

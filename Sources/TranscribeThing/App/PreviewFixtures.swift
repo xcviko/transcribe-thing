@@ -61,24 +61,28 @@ enum PreviewFixtures {
     }
 
     /// Newest first, spread across the past week, English, Russian and German, incl. one failed and one canceled
-    /// entry and cloud transcripts that record who served them.
+    /// entry, cloud transcripts that record who served them, today's audio kept for Transcribe Again and one
+    /// transcript already transcribed again with Gemini.
     static func history(now: Date = Date()) -> [TranscriptEntry] {
         func ago(_ minutes: Double) -> Date { now.addingTimeInterval(-minutes * 60) }
         return [
             TranscriptEntry(
                 createdAt: ago(8),
                 text: "Let's move the design review to Thursday afternoon. Could you send me the updated mockups before then? I'd like to walk through the onboarding flow one more time.",
-                engine: .parakeet, audioDuration: 11.2, voicedSeconds: 9.6, processingTime: 0.41),
+                engine: .parakeet, audioDuration: 11.2, voicedSeconds: 9.6, processingTime: 0.41,
+                audioFileName: "preview-recent-1.wav"),
             TranscriptEntry(
                 createdAt: ago(31),
                 text: "Can you add the Q3 numbers to the deck and flag anything that looks off? I'll go through it tonight.",
                 engine: .parakeetCloud, audioDuration: 14.6, voicedSeconds: 12.8, processingTime: 1.1, costUSD: 0.00037,
-                provider: "Together"),
+                audioFileName: "preview-recent-2.wav", provider: "Together"),
             TranscriptEntry(
                 createdAt: ago(52),
                 text: "Привет, созвонимся завтра в десять утра. Я пришлю ссылку на встречу и короткую повестку, если что-то поменяется, напиши.",
                 engine: .geminiFlash, audioDuration: 9.8, voicedSeconds: 8.7, processingTime: 2.6, costUSD: 0.0021,
-                provider: "Google AI Studio"),
+                audioFileName: "preview-recent-3.wav", provider: "Google AI Studio",
+                previous: TranscriptVersion(text: "Привет, созвонимся завтра в 10 утра. Я пришлю ссылку на встречу и короткую повестку.",
+                                            engine: .parakeet, processingTime: 0.35)),
             TranscriptEntry(
                 createdAt: ago(135),
                 text: "", engine: .geminiPro, status: .failed, audioDuration: 23.4, voicedSeconds: 19.8,

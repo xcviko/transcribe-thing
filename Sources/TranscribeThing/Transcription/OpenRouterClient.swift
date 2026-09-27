@@ -56,6 +56,12 @@ final class OpenRouterClient: Sendable {
 
     static func base64Length(ofByteCount count: Int) -> Int { (count + 2) / 3 * 4 }
 
+    /// A recording this long can go to Gemini in one request (its 16 kHz WAV fits under `maxBase64Bytes`).
+    static func fitsOneChatRequest(duration: TimeInterval) -> Bool {
+        let samples = Int((max(0, duration) * Recording.sampleRate).rounded(.up))
+        return base64Length(ofByteCount: 44 + samples * 2) <= maxBase64Bytes
+    }
+
     static func engine(forModel model: String) -> EngineID {
         EngineID.allCases.first { $0.openRouterModelID == model } ?? .geminiFlash
     }

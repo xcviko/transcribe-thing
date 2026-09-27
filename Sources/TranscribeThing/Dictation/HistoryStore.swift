@@ -16,16 +16,20 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
     var processingTime: TimeInterval?
     var costUSD: Double?
     var errorMessage: String?
-    /// Present only for failed/canceled entries; pruned after `keepFailedRecordingsDays`.
+    /// The recording, for Retry and Transcribe Again: failed/canceled entries keep it for
+    /// `keepFailedRecordingsDays`, successful ones for `keepSuccessfulRecordingsDays`. nil once pruned.
     var audioFileName: String?
     /// OpenRouter provider that served a cloud transcript ("Together", "Google AI Studio"). Filled in shortly
     /// after delivery; absent from older history files.
     var provider: String?
+    /// The transcript this one replaced when the recording was transcribed again with another model, so Restore
+    /// Previous Text can bring it back. Absent from older history files.
+    var previous: TranscriptVersion?
 
     init(id: UUID = UUID(), createdAt: Date = Date(), text: String, engine: EngineID,
          status: TranscriptStatus = .success, audioDuration: TimeInterval, voicedSeconds: TimeInterval,
          processingTime: TimeInterval? = nil, costUSD: Double? = nil, errorMessage: String? = nil,
-         audioFileName: String? = nil, provider: String? = nil) {
+         audioFileName: String? = nil, provider: String? = nil, previous: TranscriptVersion? = nil) {
         self.id = id
         self.createdAt = createdAt
         self.text = text
@@ -38,6 +42,7 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
         self.errorMessage = errorMessage
         self.audioFileName = audioFileName
         self.provider = provider
+        self.previous = previous
     }
 
     /// Decodes like the synthesized conformance, except that an engine older builds offered and this one doesn't
@@ -48,12 +53,7 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
         id = try c.decode(UUID.self, forKey: .id)
         createdAt = try c.decode(Date.self, forKey: .createdAt)
         text = try c.decode(String.self, forKey: .text)
-        let rawEngine = try c.decode(String.self, forKey: .engine)
-        guard let engine = EngineID(rawValue: rawEngine) ?? Self.retiredEngines[rawEngine] else {
-            throw DecodingError.dataCorruptedError(forKey: .engine, in: c,
-                                                   debugDescription: "Unknown engine \(rawEngine)")
-        }
-        self.engine = engine
+        engine = try Self.decodeEngine(from: c, forKey: .engine)
         status = try c.decode(TranscriptStatus.self, forKey: .status)
         audioDuration = try c.decode(TimeInterval.self, forKey: .audioDuration)
         voicedSeconds = try c.decode(TimeInterval.self, forKey: .voicedSeconds)
@@ -62,6 +62,16 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
         errorMessage = try c.decodeIfPresent(String.self, forKey: .errorMessage)
         audioFileName = try c.decodeIfPresent(String.self, forKey: .audioFileName)
         provider = try c.decodeIfPresent(String.self, forKey: .provider)
+        // A previous transcript this build can't read (an engine from a newer build) is dropped, not the entry.
+        previous = try? c.decodeIfPresent(TranscriptVersion.self, forKey: .previous)
+    }
+
+    fileprivate static func decodeEngine<Key: CodingKey>(from c: KeyedDecodingContainer<Key>, forKey key: Key) throws -> EngineID {
+        let rawEngine = try c.decode(String.self, forKey: key)
+        guard let engine = EngineID(rawValue: rawEngine) ?? retiredEngines[rawEngine] else {
+            throw DecodingError.dataCorruptedError(forKey: key, in: c, debugDescription: "Unknown engine \(rawEngine)")
+        }
+        return engine
     }
 
     /// Removed engines by raw value → the engine their entries read as now: Whisper Large V3 Turbo on this Mac
@@ -69,6 +79,16 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
     static let retiredEngines: [String: EngineID] = ["whisper": .parakeet, "whisperCloud": .parakeetCloud]
 
     var wordCount: Int { Self.countWords(text) }
+
+    /// Puts `version` in place of the current transcript, which becomes `previous`. Same row, same date and audio.
+    mutating func replaceTranscript(with version: TranscriptVersion) {
+        previous = TranscriptVersion(of: self)
+        text = version.text
+        engine = version.engine
+        provider = version.provider
+        costUSD = version.costUSD
+        processingTime = version.processingTime
+    }
 
     /// Whitespace-separated tokens; tokens made only of punctuation (a lone "—" or "…") don't count.
     static func countWords(_ text: String) -> Int {
@@ -78,6 +98,40 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
             count += 1
         }
         return count
+    }
+}
+
+/// One transcript of an entry's recording: what it says, which engine wrote it and what that cost. An entry
+/// transcribed again with another model keeps the version it had as `previous`.
+struct TranscriptVersion: Codable, Equatable, Sendable {
+    var text: String
+    var engine: EngineID
+    var provider: String?
+    var costUSD: Double?
+    var processingTime: TimeInterval?
+
+    init(text: String, engine: EngineID, provider: String? = nil, costUSD: Double? = nil,
+         processingTime: TimeInterval? = nil) {
+        self.text = text
+        self.engine = engine
+        self.provider = provider
+        self.costUSD = costUSD
+        self.processingTime = processingTime
+    }
+
+    init(of entry: TranscriptEntry) {
+        self.init(text: entry.text, engine: entry.engine, provider: entry.provider, costUSD: entry.costUSD,
+                  processingTime: entry.processingTime)
+    }
+
+    /// Retired engines map like the entry's own (`TranscriptEntry.retiredEngines`).
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        text = try c.decode(String.self, forKey: .text)
+        engine = try TranscriptEntry.decodeEngine(from: c, forKey: .engine)
+        provider = try c.decodeIfPresent(String.self, forKey: .provider)
+        costUSD = try c.decodeIfPresent(Double.self, forKey: .costUSD)
+        processingTime = try c.decodeIfPresent(TimeInterval.self, forKey: .processingTime)
     }
 }
 
@@ -123,8 +177,8 @@ struct HistoryStats: Equatable, Sendable {
     }
 }
 
-/// Transcript history: JSON on disk (read and written off the main thread), plus WAV files for failed or
-/// canceled dictations so they can be retried.
+/// Transcript history: JSON on disk (read and written off the main thread), plus WAV files so failed or canceled
+/// dictations can be retried and recent ones transcribed again with another model.
 @MainActor @Observable
 final class HistoryStore {
     static let maxEntries = 2000
@@ -153,17 +207,18 @@ final class HistoryStore {
         self.persists = true
     }
 
-    private init(previewEntries: [TranscriptEntry]) {
+    private init(previewEntries: [TranscriptEntry], settings: AppSettings) {
         self.paths = .temporary()
-        self.settings = .inMemory()
+        self.settings = settings
         self.persists = false
         self.entries = Self.normalized(previewEntries)
         self.isLoaded = true
         self.didLoad = true
     }
 
-    static func preview(entries: [TranscriptEntry]) -> HistoryStore {
-        HistoryStore(previewEntries: entries)
+    /// `settings`: whose retention `pruneOldRecordings` follows.
+    static func preview(entries: [TranscriptEntry], settings: AppSettings? = nil) -> HistoryStore {
+        HistoryStore(previewEntries: entries, settings: settings ?? .inMemory())
     }
 
     // MARK: - Derived
@@ -261,6 +316,13 @@ final class HistoryStore {
         changed()
     }
 
+    /// Swaps the entry's transcript with the one it replaced (Restore Previous Text); again swaps back.
+    func restorePreviousText(_ id: UUID) {
+        guard var entry = entry(id: id), let previous = entry.previous else { return }
+        entry.replaceTranscript(with: previous)
+        upsert(entry)
+    }
+
     func delete(_ id: UUID) {
         guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
         if let file = entries[i].audioFileName { removeAudioFileLater(file) }
@@ -328,13 +390,16 @@ final class HistoryStore {
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
-    /// Drops audio of failed/canceled dictations older than `keepFailedRecordingsDays`, plus orphaned files.
+    /// Drops audio of failed/canceled dictations older than `keepFailedRecordingsDays` and of successful ones older
+    /// than `keepSuccessfulRecordingsDays` (the rows stay), plus orphaned files.
     func pruneOldRecordings(now: Date = Date()) {
-        let days = max(0, settings.keepFailedRecordingsDays)
-        let cutoff = now.addingTimeInterval(-Double(days) * 86_400)
+        func cutoff(days: Int) -> Date { now.addingTimeInterval(-Double(max(0, days)) * 86_400) }
+        let failedCutoff = cutoff(days: settings.keepFailedRecordingsDays)
+        let successCutoff = cutoff(days: settings.keepSuccessfulRecordingsDays)
         var didChange = false
         for i in entries.indices {
-            guard let file = entries[i].audioFileName, entries[i].createdAt < cutoff else { continue }
+            let limit = entries[i].status == .success ? successCutoff : failedCutoff
+            guard let file = entries[i].audioFileName, entries[i].createdAt < limit else { continue }
             removeAudioFile(file)
             entries[i].audioFileName = nil
             didChange = true

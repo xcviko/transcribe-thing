@@ -75,10 +75,17 @@ struct GeneralPage: View {
             HubGroup("History") {
                 SettingsGroup {
                     SettingsRow(title: "Keep failed recordings",
-                                subtitle: "Audio is saved only when a dictation fails or is canceled, so you can retry it.",
+                                subtitle: "Audio of dictations that fail or are canceled, so you can retry them.",
                                 systemImage: "waveform.badge.exclamationmark", iconTint: .inkSecondary) {
                         HubMenuPicker(options: RetentionChoice.days, selection: $settings.keepFailedRecordingsDays,
                                       label: RetentionChoice.label)
+                    }
+                    SettingsRow(title: "Keep audio to transcribe again",
+                                subtitle: "Send a recent dictation to another model from History. Audio stays on this Mac.",
+                                systemImage: "arrow.triangle.2.circlepath", iconTint: .inkSecondary) {
+                        HubMenuPicker(options: RetentionChoice.transcribeAgainDays,
+                                      selection: $settings.keepSuccessfulRecordingsDays,
+                                      label: RetentionChoice.transcribeAgainLabel)
                     }
                     SettingsRow(title: "Clear history",
                                 subtitle: history.entries.isEmpty

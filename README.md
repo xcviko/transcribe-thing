@@ -117,12 +117,12 @@ The zip's name (`transcribe-thing-<version>.zip`) and the tag (`v<version>`) are
 |---|---|
 | Parakeet model | `~/Library/Application Support/transcribe-thing/Models/parakeet-tdt-0.6b-v3` |
 | History | `~/Library/Application Support/transcribe-thing/history.json` (last 2,000 dictations) |
-| Audio of failed or canceled dictations | `~/Library/Application Support/transcribe-thing/Recordings` (kept 14 days by default, for Retry and Undo) |
+| Recordings | `~/Library/Application Support/transcribe-thing/Recordings`: failed or canceled dictations for 14 days by default (Retry and Undo), successful ones for 1 day (Transcribe Again) |
 | Release feed cache | `~/Library/Application Support/transcribe-thing/updates.json` (what the last update check saw) |
 | Settings | `defaults read dev.transcribe-thing.app` |
 | OpenRouter key | login Keychain, service `dev.transcribe-thing.app` |
 
-Successful dictations keep only their text; the audio is discarded.
+Successful dictations keep their audio for a day by default, so History can send one to another model (Transcribe Again With, say Gemini after a long dictation went to Parakeet); set General → History → Keep audio to transcribe again to Off to keep only the text.
 
 ## Shortcuts
 

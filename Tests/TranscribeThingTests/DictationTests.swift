@@ -739,18 +739,21 @@ final class FakeRecorder: DictationRecorder {
         let pill: PillModel
         let hotkeys: HotkeyMonitor
         let meter: LevelMeter
+        /// Where a history that writes its recordings to disk keeps them (`persistsHistory`).
+        var paths: AppPaths?
     }
 
     static func make(models: [EngineID: LocalModelState] = [.parakeet: .ready],
                      modelErrors: [EngineID: AppError] = [:], store: ModelStore? = nil,
                      mic: PermissionState = .granted, micLive: Bool = false, keyStatus: KeyStatus = .missing,
-                     meter: LevelMeter = .preview(level: 0)) -> Harness {
+                     meter: LevelMeter = .preview(level: 0), persistsHistory: Bool = false) -> Harness {
         let settings = AppSettings.inMemory()
+        let paths: AppPaths? = persistsHistory ? .temporary() : nil
         let devices = AudioDeviceCatalog.preview()
         let store = store ?? ModelStore.preview(states: models, lastErrors: modelErrors)
         let account = OpenRouterAccount.preview(status: keyStatus)
         let client = OpenRouterClient()
-        let history = HistoryStore.preview(entries: [])
+        let history = paths.map { HistoryStore(paths: $0, settings: settings) } ?? .preview(entries: [], settings: settings)
         let toasts = ToastCenter()
         let pill = PillModel(settings: settings, levelMeter: meter)
         let hotkeys = HotkeyMonitor.preview()
@@ -765,7 +768,7 @@ final class FakeRecorder: DictationRecorder {
         controller.copyOverride = { _ in }
         controller.microphoneAuthorizedNow = { micLive }
         return Harness(controller: controller, recorder: recorder, history: history, toasts: toasts,
-                       settings: settings, pill: pill, hotkeys: hotkeys, meter: meter)
+                       settings: settings, pill: pill, hotkeys: hotkeys, meter: meter, paths: paths)
     }
 
     static func recording() -> Recording {

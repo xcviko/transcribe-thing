@@ -71,6 +71,9 @@ struct HistoryRow: View {
 
     private var hasAudio: Bool { entry.audioFileName != nil }
     private var isEmptySuccess: Bool { entry.status == .success && entry.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    /// The engine the recording is being transcribed with right now (Retry, Transcribe Again).
+    private var transcribing: EngineID? { hub.transcribingEngine(for: entry.id) }
+    private var showsActions: Bool { hovering || hub.previewHoveredEntry == entry.id }
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -89,15 +92,16 @@ struct HistoryRow: View {
         .padding(.trailing, 12)
         .padding(.vertical, 11)
         .frame(minHeight: 44)
-        .background(hovering ? Color.hover.opacity(0.7) : .clear)
+        .background(showsActions ? Color.hover.opacity(0.7) : .clear)
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture {
             guard entry.status == .success, !isEmptySuccess else { return }
             withAnimation(.easeInOut(duration: 0.25)) { expanded.toggle() }
         }
-        .contextMenu { contextMenu }
+        .contextMenu { rowMenu }
         .animation(Theme.Motion.hover, value: hovering)
+        .animation(Theme.Motion.expand, value: transcribing)
         .accessibilityElement(children: .contain)
     }
 
@@ -110,12 +114,18 @@ struct HistoryRow: View {
                 .font(.system(size: 13))
                 .foregroundStyle(.inkTertiary)
         case .success:
-            Text(entry.text)
-                .font(.system(size: 13))
-                .lineSpacing(2.5)
-                .foregroundStyle(.ink)
-                .lineLimit(expanded ? nil : 3)
-                .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 7) {
+                Text(entry.text)
+                    .font(.system(size: 13))
+                    .lineSpacing(2.5)
+                    .foregroundStyle(.ink)
+                    .lineLimit(expanded ? nil : 3)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let transcribing {
+                    TranscribingLine(engine: transcribing)
+                        .transition(.opacity)
+                }
+            }
         case .failed:
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .firstTextBaseline, spacing: 7) {
@@ -147,9 +157,12 @@ struct HistoryRow: View {
     }
 
     @ViewBuilder private func inlineRetry(title: String, symbol: String) -> some View {
-        if hasAudio {
+        if let transcribing {
+            TranscribingLine(engine: transcribing)
+                .padding(.vertical, 4)
+        } else if hasAudio {
             Menu {
-                RetryMenuItems(entry: entry)
+                TranscribeAgainItems(entry: entry)
             } label: {
                 Label(title, systemImage: symbol)
             }
@@ -171,11 +184,11 @@ struct HistoryRow: View {
         ZStack(alignment: .topTrailing) {
             meta
                 .padding(.top, 0.5)
-                .opacity(hovering ? 0 : 1)
+                .opacity(showsActions ? 0 : 1)
             actions
                 .padding(.top, -4)
-                .opacity(hovering ? 1 : 0)
-                .allowsHitTesting(hovering)
+                .opacity(showsActions ? 1 : 0)
+                .allowsHitTesting(showsActions)
         }
         .frame(minWidth: 88, alignment: .topTrailing)
     }
@@ -214,9 +227,9 @@ struct HistoryRow: View {
             if entry.status == .success && !isEmptySuccess {
                 CopyButton(text: entry.text) { hub.copy($0) }
             }
-            if entry.status != .success && hasAudio {
+            if entry.status != .success && hasAudio && transcribing == nil {
                 Menu {
-                    RetryMenuItems(entry: entry)
+                    TranscribeAgainItems(entry: entry)
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
@@ -226,6 +239,17 @@ struct HistoryRow: View {
                 .fixedSize()
                 .help("Retry with…")
             }
+            Menu {
+                rowMenu
+            } label: {
+                Image(systemName: "ellipsis")
+            }
+            .menuStyle(.button)
+            .menuIndicator(.hidden)
+            .buttonStyle(IconButtonStyle(size: 26))
+            .fixedSize()
+            .help("More")
+            .accessibilityLabel("More actions")
             Button {
                 onDelete(entry)
             } label: {
@@ -237,46 +261,70 @@ struct HistoryRow: View {
         }
     }
 
-    @ViewBuilder private var contextMenu: some View {
+    /// The right-click menu and the hover "…" menu.
+    @ViewBuilder private var rowMenu: some View {
         if entry.status == .success && !isEmptySuccess {
             Button("Copy") { hub.copy(entry.text) }
         }
-        if hasAudio {
-            Menu(entry.status == .success ? "Transcribe Again With" : "Retry With") {
-                RetryMenuItems(entry: entry, includesHeader: false)
+        let menu = hub.transcribeAgainMenu(for: entry)
+        if let unavailable = menu.unavailableTitle {
+            Button(unavailable) {}
+                .disabled(true)
+        } else {
+            Menu(menu.title) {
+                TranscribeAgainItems(entry: entry, includesHeader: false)
             }
+        }
+        if entry.status == .success && entry.previous != nil {
+            Button("Restore Previous Text") { hub.history.restorePreviousText(entry.id) }
+                .disabled(transcribing != nil)
         }
         Divider()
         Button("Delete", role: .destructive) { onDelete(entry) }
     }
 }
 
-/// "Transcribe with" → every engine, the extra models included (a retry picks the model for that one recording),
-/// grouped by where it runs (on this Mac, cloud speech, Gemini); unavailable ones are disabled with the reason.
-struct RetryMenuItems: View {
+/// "Transcribing with Gemini Flash…" under a row whose recording is being transcribed.
+private struct TranscribingLine: View {
+    var engine: EngineID
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ShimmerBar(height: 3)
+                .frame(width: 40)
+            Text("Transcribing with \(engine.shortName)…")
+                .font(.system(size: 11.5))
+                .foregroundStyle(.inkSecondary)
+                .lineLimit(1)
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// "Transcribe with" → the engines a row's recording can go to (`TranscribeAgainMenu`): every engine for a retry,
+/// the extra models included (a retry picks the model for that one recording), every other engine for a
+/// transcript, grouped by where it runs (on this Mac, cloud speech, Gemini); unavailable ones are disabled with
+/// the reason. One disabled line instead while the recording is being transcribed or is gone.
+struct TranscribeAgainItems: View {
     var entry: TranscriptEntry
     var includesHeader = true
     @Environment(HubContext.self) private var hub
 
     var body: some View {
-        let engines = EngineID.allCases
-        let items = ForEach(Array(engines.enumerated()), id: \.element) { index, engine in
-            if index > 0, engines[index - 1].cloudAPI != engine.cloudAPI {
+        let menu = hub.transcribeAgainMenu(for: entry)
+        let items = ForEach(Array(menu.items.enumerated()), id: \.element.id) { index, item in
+            if index > 0, menu.items[index - 1].engine.cloudAPI != item.engine.cloudAPI {
                 Divider()
             }
-            let readiness = hub.readiness(of: engine)
-            Button {
-                hub.dictation.retry(entry, with: engine)
-            } label: {
-                if let reason = readiness.unavailableReason {
-                    Text("\(engine.displayName) · \(reason)")
-                } else {
-                    Text(engine.displayName)
-                }
+            Button(item.title) {
+                hub.dictation.retry(entry, with: item.engine)
             }
-            .disabled(!readiness.isUsable)
+            .disabled(!item.isEnabled)
         }
-        if includesHeader {
+        if let unavailable = menu.unavailableTitle {
+            Button(unavailable) {}
+                .disabled(true)
+        } else if includesHeader {
             Section("Transcribe with") { items }
         } else {
             items
