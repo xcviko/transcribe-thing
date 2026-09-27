@@ -168,7 +168,9 @@ struct PillView: View {
         }
         .frame(width: size.width, height: size.height)
         .scaleEffect(shown || reduceMotion ? 1 : 0.6, anchor: .bottom)
-        .opacity(shown ? 1 : 0)
+        // Appearing, the fade runs ahead of the spring: a spring starts from rest and would keep the capsule
+        // nearly transparent for its first 50 ms. The scale still blooms with the spring.
+        .animation(fadeAnimation(shown: shown, to: visual)) { $0.opacity(shown ? 1 : 0) }
         .modifier(PillShake(trigger: model.shakeCount, enabled: !reduceMotion))
         .animation(animation(to: visual), value: visual)
         .accessibilityElement(children: .contain)
@@ -218,6 +220,10 @@ struct PillView: View {
         return .asymmetric(
             insertion: .opacity.combined(with: .scale(scale: 0.85)).animation(.easeOut(duration: 0.18).delay(0.06)),
             removal: .opacity.animation(.easeIn(duration: 0.1)))
+    }
+
+    private func fadeAnimation(shown: Bool, to visual: PillVisual) -> Animation {
+        shown && !reduceMotion ? .easeOut(duration: 0.12) : animation(to: visual)
     }
 
     private func animation(to visual: PillVisual) -> Animation {

@@ -274,6 +274,21 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         try await waitUntil { model.visiblePhase == .processing }
     }
 
+    @Test func visiblePhaseChangesAreReportedInTheSameTurn() async throws {
+        let model = makeModel()
+        model.timing.successHold = 0.1
+        var seen: [PillPhase] = []
+        model.onVisiblePhaseChange = { seen.append(model.visiblePhase) }
+        model.phase = .listening
+        #expect(seen == [.listening], "before the caller's next statement")
+        model.phase = .listening
+        model.phase = .success
+        model.phase = .rest
+        #expect(seen == [.listening, .success], "held: the check mark is still showing")
+        try await waitUntil { model.visiblePhase == .rest }
+        #expect(seen == [.listening, .success, .rest])
+    }
+
     @Test func aNewRecordingInterruptsTheFlourish() {
         let model = makeModel()
         model.phase = .error

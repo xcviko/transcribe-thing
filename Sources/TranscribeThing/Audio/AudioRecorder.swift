@@ -7,10 +7,11 @@ enum AudioRecorderEvent: Sendable {
 
 /// Dictation capture (SPEC §4.8, §5.2): 16 kHz mono Float32 from the resolved input device.
 ///
-/// `start` resolves the device and returns at once; the engine starts on a background queue, so the
-/// mic is usually hot ~50-150 ms later (Bluetooth: up to 2 s, after which `.failed` fires). Levels flow
-/// into the shared `LevelMeter`. Device loss, reconfiguration and stalls are healed inside the session;
-/// only a device that is gone for good surfaces as `.deviceLost` (the audio so far is kept for `stop`).
+/// `start` resolves the device (a HAL scan, 1-3 ms on the main thread) and returns; the engine starts on a
+/// background queue, so the mic is usually hot ~50-150 ms later (Bluetooth: up to 2 s, after which `.failed`
+/// fires). Levels flow into the shared `LevelMeter`. Device loss, reconfiguration and stalls are healed inside
+/// the session; only a device that is gone for good surfaces as `.deviceLost` (the audio so far is kept for
+/// `stop`).
 @MainActor
 final class AudioRecorder {
     /// Audio kept after a stop request, so the last syllable isn't clipped when the key goes up early.
@@ -29,6 +30,9 @@ final class AudioRecorder {
     private(set) var isCapturing = false
     /// Used when no `AppSettings` was injected.
     var preferBuiltInMicOverBluetooth = true
+    /// Whether `start` may open the mic. The TCC probe blocks the calling thread (the main one, at key-down) for
+    /// about 25 ms; the app answers from `PermissionsCenter`'s cached state first.
+    var isMicrophoneAllowed: () -> Bool = { AudioRecorder.isMicrophoneAuthorized }
     /// The device choice of the current (or last) capture, including why it was picked.
     private(set) var lastChoice: InputDeviceChoice?
 
@@ -57,11 +61,12 @@ final class AudioRecorder {
     /// through `onEvent`. With `prefix`, the capture continues that recording: the result starts with its audio
     /// and keeps its id and start time.
     func start(preferredDeviceUID: String?, continuing prefix: Recording? = nil) throws {
+        let began = AudioClock.now()
         if let session {
             _ = session.finishNow(discard: true)
             endSession()
         }
-        guard Self.isMicrophoneAuthorized else { throw AppError.microphonePermissionDenied }
+        guard isMicrophoneAllowed() else { throw AppError.microphonePermissionDenied }
 
         let preferBuiltIn = settings?.preferBuiltInMicOverBluetooth ?? preferBuiltInMicOverBluetooth
         let records = CoreAudioHAL.inputRecords()
@@ -84,8 +89,10 @@ final class AudioRecorder {
         self.prefix = prefix
         hasFailed = false
         isCapturing = true
-        Log.audio.info("Capture starting on \(record.device.name, privacy: .public)")
         session.start()
+        // Time the main thread spent here, at key-down (the engine itself starts on the session's queue).
+        let blocked = (AudioClock.now() - began) * 1000
+        Log.audio.info("Capture started in \(blocked, format: .fixed(precision: 1), privacy: .public) ms on \(record.device.name, privacy: .public)")
     }
 
     /// Stops right away and returns everything captured so far, with `SpeechStats`.
@@ -186,6 +193,10 @@ final class AudioRecorder {
         guard generation == self.generation, isCapturing, !hasFailed else { return }
         switch event {
         case .firstBuffer:
+            if let session {
+                let wait = (AudioClock.now() - session.startedAt) * 1000
+                Log.audio.info("First audio \(wait, format: .fixed(precision: 0), privacy: .public) ms after start")
+            }
             onEvent?(.firstBuffer)
         case .switchedDevice(let device):
             lastDeviceName = device.name
