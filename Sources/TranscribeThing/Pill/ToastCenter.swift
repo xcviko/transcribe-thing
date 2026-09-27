@@ -76,6 +76,14 @@ final class ToastCenter {
         dismiss(notice.id)
     }
 
+    /// Every notice about one recording (its failure's Retry, its cancel's Undo), once it has been transcribed.
+    func dismiss(recordingID: UUID) {
+        guard notices.contains(where: { $0.recordingID == recordingID }) else { return }
+        for notice in notices where notice.recordingID == recordingID { countdowns[notice.id] = nil }
+        notices.removeAll { $0.recordingID == recordingID }
+        rescheduleExpiry()
+    }
+
     func dismissAll() {
         notices.removeAll()
         countdowns.removeAll()

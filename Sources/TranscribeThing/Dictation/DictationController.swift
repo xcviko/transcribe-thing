@@ -825,6 +825,8 @@ final class DictationController {
                 return
             }
             forget(job.id)
+            // An older notice's Retry or Undo would transcribe it yet again, or record on, now that its audio is kept.
+            toasts.dismiss(recordingID: job.id)
             if job.replacesTranscript {
                 deliverTranscriptAgain(job, result, text: text)
                 return
@@ -1111,9 +1113,11 @@ final class DictationController {
         enqueue(recording, engine: chosen, delivery: redeliveryTarget(for: id))
     }
 
-    /// Where a retried or undone recording goes: back to history for Hub jobs, else the cursor now.
+    /// Where a retried or undone recording goes: back to history for Hub jobs, else the cursor now. A recording
+    /// already transcribed (its audio kept for Transcribe Again) goes back to its row, which keeps the old text.
     private func redeliveryTarget(for id: UUID) -> Delivery {
-        historyOnlyIDs.contains(id) ? .historyOnly : .paste(targetPID: inserter.frontmostPID())
+        historyOnlyIDs.contains(id) || history.entry(id: id)?.status == .success
+            ? .historyOnly : .paste(targetPID: inserter.frontmostPID())
     }
 
     /// Undo of a cancel: the dictation picks up again hands-free, its kept audio first, and nothing is transcribed
@@ -1129,6 +1133,8 @@ final class DictationController {
             enqueue(recording, engine: engine ?? settings.selectedEngine, delivery: .historyOnly)
             return
         }
+        // Transcribed since (from History): there's no dictation left to pick up, and its text is in History.
+        guard history.entry(id: id)?.status != .success else { return }
         // Already being transcribed (a Hub retry of it) or recorded on.
         guard !isInFlight(id) else { return }
         let saved = history.entry(id: id)?.status == .cancelled
