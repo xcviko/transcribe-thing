@@ -382,9 +382,10 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(PillVisual.rest.size == CGSize(width: 40, height: 10))
         #expect(PillVisual.peek.size == CGSize(width: 76, height: 24))
         #expect(PillVisual.listening.size == CGSize(width: 104, height: 32))
-        #expect(PillVisual.locked(.none).size == CGSize(width: 168, height: 36))
+        #expect(PillVisual.locked(.elapsed).size == CGSize(width: 204, height: 36))
         #expect(PillVisual.locked(.remaining).size == CGSize(width: 204, height: 36))
-        #expect(PillVisual.processing(wide: true).size == CGSize(width: 168, height: 32))
+        #expect(PillVisual.processing(wide: true).size == CGSize(width: 204, height: 32))
+        #expect(PillVisual.processing(wide: false).size == CGSize(width: 104, height: 32))
         #expect(PillVisual.success.size == CGSize(width: 32, height: 32))
         #expect(PillVisual.error.size == CGSize(width: 104, height: 32))
         #expect(PillMetrics.barFieldWidth == 69)
@@ -398,8 +399,38 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(PillView(model: model, context: .panel(nil)).visual == .rest)
         #expect(PillView(model: PillModel.preview(phase: .hidden)).visual == .hidden)
         #expect(PillView(model: PillModel.preview(phase: .hidden), context: .panel(nil)).visual == .rest)
-        let hover = PillModel.preview(phase: .locked, isHovering: true)
-        #expect(PillView(model: hover).visual == .locked(.elapsed))
+    }
+
+    @Test func handsFreeAlwaysShowsTheTimer() {
+        for context in [PillView.Context.standalone, .panel(nil)] {
+            let model = PillModel.preview(phase: .locked, recordingFor: 42)
+            #expect(PillView(model: model, context: context).visual == .locked(.elapsed))
+            model.isHovering = true
+            #expect(PillView(model: model, context: context).visual == .locked(.elapsed))
+        }
+        #expect(PillView(model: .preview(phase: .locked, recordingFor: 1190, limitSeconds: 1200)).visual
+                == .locked(.remaining))
+        #expect(PillVisual.listening.timer == nil)
+    }
+
+    @Test func hoverNeverResizesHandsFree() {
+        let model = PillModel.preview(phase: .locked, recordingFor: 42)
+        let resting = PillView(model: model).visual.size
+        model.isHovering = true
+        #expect(PillView(model: model).visual.size == resting)
+        #expect(resting == PillMetrics.lockedSize)
+    }
+
+    @Test func processingAfterHandsFreeKeepsItsWidth() {
+        let model = PillModel.preview(phase: .locked)
+        let locked = PillView(model: model).visual.size
+        model.phase = .processing
+        let processing = PillView(model: model).visual
+        #expect(processing == .processing(wide: true))
+        #expect(processing.size.width == locked.width)
+        let pushToTalk = PillModel.preview(phase: .listening)
+        pushToTalk.phase = .processing
+        #expect(PillView(model: pushToTalk).visual.size.width == PillMetrics.listeningSize.width)
     }
 
     @Test func helloBloomsToListeningSize() {

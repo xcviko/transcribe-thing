@@ -270,8 +270,10 @@ private struct PillStateSheet: View {
             Row(id: "connecting", caption: "Connecting") { .preview(phase: .listening, levelMeter: LevelMeter()) },
             Row(id: "listening", caption: "Listening · 104×32") { .preview(phase: .listening, level: 0.7) },
             Row(id: "silence", caption: "Listening · silence") { .preview(phase: .listening, level: 0) },
-            Row(id: "locked", caption: "Hands-free · 168×36") { .preview(phase: .locked, level: 0.5) },
-            Row(id: "locked-hover", caption: "Hands-free · hover") { .preview(phase: .locked, level: 0.62, isHovering: true, recordingFor: 83) },
+            Row(id: "locked", caption: "Hands-free · 204×36") { .preview(phase: .locked, level: 0.5) },
+            Row(id: "locked-long", caption: "Hands-free · 28 min") {
+                .preview(phase: .locked, level: 0.62, recordingFor: 1728, limitSeconds: 1800)
+            },
             Row(id: "locked-last", caption: "Hands-free · last minute") {
                 .preview(phase: .locked, level: 0.4, recordingFor: 1193, limitSeconds: 1200)
             },

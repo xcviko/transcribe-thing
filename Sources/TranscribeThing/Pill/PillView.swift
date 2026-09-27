@@ -8,8 +8,8 @@ enum PillMetrics {
     static let restSize = CGSize(width: 40, height: 10)
     static let peekSize = CGSize(width: 76, height: 24)
     static let listeningSize = CGSize(width: 104, height: 32)
-    static let lockedSize = CGSize(width: 168, height: 36)
-    static let lockedTimerSize = CGSize(width: 204, height: 36)
+    /// Hands-free always carries the timer, so hovering never resizes it.
+    static let lockedSize = CGSize(width: 204, height: 36)
     static let successSize = CGSize(width: 32, height: 32)
     static let errorSize = CGSize(width: 104, height: 32)
     /// Tallest state; toasts sit 10 pt above it so they never move while the pill changes shape.
@@ -24,7 +24,8 @@ enum PillMetrics {
 
     static let buttonSize: CGFloat = 22
     static let buttonInset: CGFloat = 7
-    static let timerWidth: CGFloat = 30
+    /// Fits "29:59": the longest recording limit is 30 min.
+    static let timerWidth: CGFloat = 34
     static let timerSpacing: CGFloat = 5
     static let tooltipHeight: CGFloat = 28
     /// Invisible margin around the pill that counts as hovering it (and clicking it).
@@ -50,7 +51,7 @@ extension EnvironmentValues {
 // MARK: - Visual state
 
 enum PillTimerMode: Equatable, Sendable {
-    case none, elapsed, remaining
+    case elapsed, remaining
 }
 
 /// What the capsule looks like: the phase plus hover, presentation and the recording timer.
@@ -59,6 +60,7 @@ enum PillVisual: Equatable, Sendable {
     /// One-time post-onboarding bloom: listening size, bars ripple once, then rest as dots.
     case hello
     case locked(PillTimerMode)
+    /// `wide` after hands-free: keeps the hands-free width, so stopping doesn't shrink the pill.
     case processing(wide: Bool)
     case success, error
 
@@ -69,7 +71,7 @@ enum PillVisual: Equatable, Sendable {
         case .hidden, .rest: PillMetrics.restSize
         case .peek: PillMetrics.peekSize
         case .listening, .hello: PillMetrics.listeningSize
-        case .locked(let timer): timer == .none ? PillMetrics.lockedSize : PillMetrics.lockedTimerSize
+        case .locked: PillMetrics.lockedSize
         case .processing(let wide): CGSize(width: wide ? PillMetrics.lockedSize.width : PillMetrics.listeningSize.width,
                                            height: PillMetrics.listeningSize.height)
         case .success: PillMetrics.successSize
@@ -97,9 +99,8 @@ enum PillVisual: Equatable, Sendable {
         }
     }
 
-    var isLocked: Bool { if case .locked = self { true } else { false } }
-
-    var timer: PillTimerMode { if case .locked(let t) = self { t } else { .none } }
+    /// Only hands-free shows the timer.
+    var timer: PillTimerMode? { if case .locked(let t) = self { t } else { nil } }
 }
 
 // MARK: - Pill
@@ -147,8 +148,7 @@ struct PillView: View {
         case .listening:
             return .listening
         case .locked:
-            let timer: PillTimerMode = model.isInFinalMinute ? .remaining : (model.isHovering ? .elapsed : .none)
-            return .locked(timer)
+            return .locked(model.isInFinalMinute ? .remaining : .elapsed)
         case .processing:
             return .processing(wide: model.processingOrigin == .locked)
         case .success:
@@ -191,7 +191,7 @@ struct PillView: View {
                 .id(PillVisual.Content.hello)
                 .transition(contentTransition)
         case .recording:
-            RecordingContent(model: model, locked: visual.isLocked, timer: visual.timer, regions: regions)
+            RecordingContent(model: model, timer: visual.timer, regions: regions)
                 .id(PillVisual.Content.recording)
                 .transition(contentTransition)
         case .processing:
@@ -379,20 +379,21 @@ private struct ErrorGlyph: View {
     }
 }
 
-/// Bars while recording; in hands-free, X and Stop slide out from under the bars and an optional timer
-/// sits left of Stop.
+/// Bars while recording; in hands-free, X and Stop slide out from under the bars and the timer sits left
+/// of Stop.
 private struct RecordingContent: View {
     let model: PillModel
-    let locked: Bool
-    let timer: PillTimerMode
+    /// Set in hands-free only.
+    let timer: PillTimerMode?
     let regions: PillHitRegions?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// With the timer showing, the bars center between X and the timer instead of in the pill.
+    private var locked: Bool { timer != nil }
+
+    /// In hands-free the bars center between X and the timer instead of in the pill.
     private var barsOffset: CGFloat {
-        guard locked, timer != .none else { return 0 }
-        return -(PillMetrics.timerWidth + PillMetrics.timerSpacing) / 2
+        locked ? -(PillMetrics.timerWidth + PillMetrics.timerSpacing) / 2 : 0
     }
 
     var body: some View {
@@ -407,7 +408,7 @@ private struct RecordingContent: View {
                         .transition(buttonTransition(from: 1, delay: 0))
                 }
                 Spacer(minLength: 0)
-                if locked, timer != .none {
+                if let timer {
                     PillTimerLabel(model: model, mode: timer)
                         .frame(width: PillMetrics.timerWidth, alignment: .trailing)
                         .padding(.trailing, PillMetrics.timerSpacing)
@@ -487,7 +488,7 @@ private struct PillControlButton: View {
     }
 }
 
-/// "0:42" while hovering, or the countdown in the last minute (amber in the last 10 s).
+/// Elapsed "0:42", or the countdown in the last minute (amber in the last 10 s).
 private struct PillTimerLabel: View {
     let model: PillModel
     let mode: PillTimerMode
