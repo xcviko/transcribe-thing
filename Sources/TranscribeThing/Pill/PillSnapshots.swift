@@ -90,8 +90,8 @@ enum PillSnapshots {
 
 enum PillSnapshotFixtures {
     static let canceled = Notice(
-        dedupeKey: "dictation.canceled", style: .info, symbol: "arrow.uturn.backward",
-        title: "Dictation canceled", body: "Saved in History for 14 days.",
+        dedupeKey: "dictation.canceled", style: .info, symbol: "xmark.circle",
+        title: "Dictation canceled", body: "\(DictationController.undoResumesHint) Saved in History for 14 days.",
         actions: [NoticeAction(title: "Undo", kind: .undoCancel, isPrimary: true),
                   NoticeAction(title: "Open History", kind: .openHub(.home))],
         lifetime: .seconds(6), sound: .cancel)

@@ -847,6 +847,24 @@ private final class EventLog: @unchecked Sendable {
         #expect(recorder.currentDeviceName == nil)
     }
 
+    @Test func aResumedCaptureComesAfterTheKeptRecording() {
+        let kept = Recording(samples: [0.1, 0.2], startedAt: Date(timeIntervalSince1970: 100),
+                             speech: SpeechStats(voicedSeconds: 0.5, peakDBFS: -30, isSilent: false), deviceName: "AirPods")
+        let next = Recording(samples: [0.3], startedAt: Date(timeIntervalSince1970: 200),
+                             speech: SpeechStats(voicedSeconds: 1.25, peakDBFS: -12, isSilent: false),
+                             deviceName: "MacBook Pro Microphone")
+        let whole = AudioRecorder.joined(kept, next)
+        #expect(whole.id == kept.id, "the same dictation for history, Retry and Undo")
+        #expect(whole.startedAt == kept.startedAt)
+        #expect(whole.samples == [0.1, 0.2, 0.3])
+        #expect(whole.speech == SpeechStats(voicedSeconds: 1.75, peakDBFS: -12, isSilent: false))
+        #expect(whole.deviceName == "MacBook Pro Microphone")
+        #expect(AudioRecorder.joined(nil, next) == next)
+        let silentThenEmpty = AudioRecorder.joined(Recording(samples: [0, 0], speech: .empty), Recording(samples: []))
+        #expect(silentThenEmpty.speech.isSilent)
+        #expect(!AudioRecorder.joined(kept, Recording(samples: [])).speech.isSilent)
+    }
+
     @Test func idleFinishReturnsEmptyRecording() async {
         let recorder = AudioRecorder(levelMeter: LevelMeter(), devices: .preview())
         let recording = await recorder.finish()

@@ -1,31 +1,68 @@
 import SwiftUI
 
-/// A pretend conversation with a real, focused text field: the actual dictation pipeline pastes into it.
+/// A pretend conversation with a real, focused text field (the actual dictation pipeline pastes into it), over
+/// the keys that drive it.
 struct PracticeChat: View {
     let model: OnboardingModel
 
     @FocusState private var composerFocused: Bool
+    @FocusState private var stageFocused: Bool
     @Environment(\.onboardingStillTime) private var stillTime
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Rectangle().fill(Color.stroke).frame(height: 1)
-            messages
-            composerArea
+        VStack(spacing: 14) {
+            VStack(spacing: 0) {
+                header
+                Rectangle().fill(Color.stroke).frame(height: 1)
+                messages
+                composerArea
+            }
+            .background(Color.bgSurface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay { RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.stroke, lineWidth: 1) }
+            .cardShadow(elevated: true)
+            keys
         }
-        .background(Color.bgSurface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay { RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.stroke, lineWidth: 1) }
-        .cardShadow(elevated: true)
-        .padding(18)
+        .padding([.horizontal, .top], 16)
+        .padding(.bottom, 14)
+        // With no message box yet (model downloading, say), trying fn + space or esc here shouldn't beep.
+        .focusable(!model.practiceReadiness.allowsPractice)
+        .focusEffectDisabled()
+        .focused($stageFocused)
+        .onKeyPress(keys: [.space, .escape]) { _ in model.practiceReadiness.allowsPractice ? .ignored : .handled }
         .onAppear {
             guard stillTime == nil, !model.ctx.isPreview else { return }
             Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(350))
-                composerFocused = true
+                takeFocus()
             }
         }
+        .onChange(of: model.practiceReadiness.allowsPractice) {
+            guard !model.ctx.isPreview else { return }
+            takeFocus()
+        }
+        // A shortcut recorder on the left may have kept focus: take it back so the words land here.
+        .onChange(of: model.ctx.pillModel.phase.isRecording) { _, recording in
+            if recording, !model.ctx.isPreview { takeFocus() }
+        }
+    }
+
+    private func takeFocus() {
+        if model.practiceReadiness.allowsPractice { composerFocused = true } else { stageFocused = true }
+    }
+
+    // MARK: Keys
+
+    private var keys: some View {
+        KeyboardIllustration(pressed: model.pressedKeys, emphasized: model.practiceKeys)
+            .fixedSize()
+            // An intentional crop: the space bar runs on and fades before the stage edge.
+            .frame(width: OnboardingLayout.stageWidth - 32, alignment: .leading)
+            .mask {
+                LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.72),
+                                       .init(color: .black.opacity(0), location: 0.97)],
+                               startPoint: .leading, endPoint: .trailing)
+            }
     }
 
     // MARK: Header
@@ -115,9 +152,11 @@ struct PracticeChat: View {
         let readiness = model.practiceReadiness
         VStack(spacing: 0) {
             if case .warmingUp(let engine) = readiness {
-                Text("\(engine.shortName) is getting ready. The first reply may take a moment.")
+                Label("\(engine.shortName) is warming up. The first reply may be slow.", systemImage: "hourglass")
                     .font(.system(size: 11))
                     .foregroundStyle(.inkTertiary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
                     .padding(.bottom, 8)
             }
             if readiness.allowsPractice {
@@ -130,9 +169,31 @@ struct PracticeChat: View {
         .animation(Theme.Motion.fade, value: readiness)
     }
 
+    /// The placeholder coaches: what to press for the current lesson, then what's happening.
+    private var prompt: String {
+        let settings = model.ctx.settings
+        let ptt = model.pushToTalkLabel
+        switch model.livePhase {
+        case .listening:
+            return "Listening…"
+        case .locked:
+            return "Listening, hands-free…"
+        case .processing:
+            return "Getting your words…"
+        case .hidden, .rest, .success, .error:
+            switch model.currentLesson {
+            case .handsFree?:
+                return "Press \(settings.shortcuts[.handsFree]?.compactDescription ?? "fn Space") and answer out loud…"
+            case .cancel?:
+                return "Start talking, then press \(settings.shortcuts[.cancel]?.compactDescription ?? "esc")…"
+            case .pushToTalk?, nil:
+                return "Hold \(ptt) and answer out loud…"
+            }
+        }
+    }
+
     private var composer: some View {
-        let phase = model.ctx.pillModel.phase
-        let prompt = "Hold \(model.pushToTalkLabel) and answer out loud…"
+        let phase = model.livePhase
         return HStack(alignment: .bottom, spacing: 8) {
             HStack(alignment: .center, spacing: 8) {
                 TextField("", text: Binding(get: { model.draft }, set: { model.updateDraft($0) }), axis: .vertical)
@@ -146,7 +207,11 @@ struct PracticeChat: View {
                     .accessibilityLabel("Message to Alex")
                 if phase.isRecording {
                     StageClock(paused: reduceMotion) { t in
-                        PillBars(level: Double(model.ctx.levelMeter.level), time: t, color: .accent, maxHeight: 14)
+                        let meter = model.ctx.levelMeter
+                        // The keys can run ahead of the recorder: breathe until real audio arrives.
+                        let live = model.ctx.pillModel.phase.isRecording && meter.hasReceivedAudio
+                        let level = live ? Double(meter.level) : 0.4 + 0.4 * HeroTimeline.voice(t * 0.8)
+                        PillBars(level: level, time: t, color: .accent, maxHeight: 14)
                             .scaleEffect(0.8)
                     }
                     .frame(width: 58, height: 16)
@@ -331,7 +396,7 @@ private struct ReadinessBanner: View {
         case .needsAccessibility:
             "Turn on Accessibility so \(Brand.name) can hear your shortcut and paste into this box."
         case .downloading(let engine, let fraction):
-            "\(engine.shortName) is still downloading (\(Fmt.percent(fraction))). You can practice as soon as it’s ready."
+            "\(engine.shortName) is still downloading (\(Fmt.percent(fraction))). Try the keys for now, then talk to Alex once it’s ready."
         case .notDownloaded(let engine):
             "\(engine.shortName) isn’t downloaded yet. Download it, or pick another model."
         case .needsKey(let engine):

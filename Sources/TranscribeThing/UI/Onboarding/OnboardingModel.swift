@@ -4,8 +4,10 @@ import SwiftUI
 
 // MARK: - Steps
 
+/// Raw values are what `settings.onboardingStep` stores. `tryIt` teaches the shortcuts and runs the practice chat;
+/// they used to be two steps (see `AppSettings.onboardingStep(fromSixStepIndex:)` for saved progress).
 enum OnboardingStep: Int, CaseIterable, Comparable, Identifiable, Sendable {
-    case welcome, permissions, model, shortcuts, tryIt, done
+    case welcome, permissions, model, tryIt, done
 
     var id: Int { rawValue }
 
@@ -16,7 +18,6 @@ enum OnboardingStep: Int, CaseIterable, Comparable, Identifiable, Sendable {
         case .welcome: "Welcome"
         case .permissions: "Permissions"
         case .model: "Model"
-        case .shortcuts: "Shortcuts"
         case .tryIt: "Try it"
         case .done: "Done"
         }
@@ -30,7 +31,7 @@ enum OnboardingStep: Int, CaseIterable, Comparable, Identifiable, Sendable {
         OnboardingStep(rawValue: min(max(stored, 0), OnboardingStep.allCases.count - 1)) ?? .welcome
     }
 
-    /// Model and permissions steps get the full window width; the rest pair copy with a live stage.
+    /// The model step gets the full window width; the rest pair copy with a live stage.
     var usesStage: Bool { self != .model }
 }
 
@@ -48,7 +49,7 @@ enum OnboardingGate {
 
     static func canContinue(_ step: OnboardingStep, _ inputs: Inputs) -> Bool {
         switch step {
-        case .welcome, .shortcuts, .tryIt, .done:
+        case .welcome, .tryIt, .done:
             true
         case .permissions:
             inputs.microphone == .granted && inputs.accessibility == .granted
@@ -92,7 +93,7 @@ enum OnboardingGate {
         case .done:
             return "Start Dictating"
         // While a model downloads, the note under the cards says the download keeps going.
-        case .permissions, .model, .shortcuts:
+        case .permissions, .model:
             return "Continue"
         }
     }
@@ -232,6 +233,8 @@ struct PracticeStat: Equatable {
 enum PracticeHint: Equatable {
     case noSpeech
     case typedInstead
+    /// Another push-to-talk message while the hands-free lesson is still open.
+    case tryHandsFree
 }
 
 // MARK: - Dependencies
@@ -309,7 +312,7 @@ final class OnboardingModel {
     /// Engines whose download started while this window was open: their Ready check draws on.
     private(set) var celebrateReady: Set<EngineID> = []
 
-    // Shortcuts
+    // Try it: the keys
     private(set) var pressedKeys: Set<IllustratedKey> = []
     private(set) var heldPushToTalk = false
     private(set) var triedHandsFree = false
@@ -317,7 +320,7 @@ final class OnboardingModel {
     private(set) var sawPushToTalkKey = false
     private(set) var showKeyboardHint = false
 
-    // Try it
+    // Try it: the practice chat
     private(set) var messages: [ChatMessage] = [ChatMessage(sender: .alex, text: OnboardingModel.alexOpening)]
     private(set) var completedLessons: Set<PracticeLesson> = []
     private(set) var alexIsTyping = false
@@ -341,13 +344,19 @@ final class OnboardingModel {
     @ObservationIgnored private var stopArmed = false
     @ObservationIgnored private var recordingStartedAt: Date?
     @ObservationIgnored private var lastRecordingSpan: (start: Date, end: Date)?
+    /// The recording under way went hands-free at some point (fn + space, a double press, or Undo resuming it).
+    @ObservationIgnored private var recordingWentHandsFree = false
+    @ObservationIgnored private var lastRecordingWasHandsFree = false
+    @ObservationIgnored private var dictatedMessages = 0
     @ObservationIgnored private var historyBaseline: Set<UUID> = []
     @ObservationIgnored private var permissionsWereComplete = false
 
     static let alexOpening = "hey! quick one: what are you up to this afternoon?"
     static let alexAfterFirst = "sounds good. and what’s the plan for tomorrow?"
     static let alexAfterSecond = "perfect, thanks!"
-    static let cancelNote = "Nothing sent. Undo is right there if you need it."
+    static let alexAfterThird = "ha, love it. talk soon!"
+    /// True whatever Undo does next: at this point nothing has been typed.
+    static let cancelNote = "Canceled. Nothing was typed."
 
     init(context: OnboardingContext) {
         ctx = context
@@ -390,11 +399,15 @@ final class OnboardingModel {
     var pushToTalkKeys: Set<IllustratedKey> { IllustratedKey.keys(for: ctx.settings.shortcuts[.pushToTalk]) }
     var handsFreeKeys: Set<IllustratedKey> { IllustratedKey.keys(for: ctx.settings.shortcuts[.handsFree]) }
     var isHoldingPushToTalk: Bool { !pushToTalkKeys.isEmpty && pushToTalkKeys.isSubset(of: pressedKeys) }
+    /// Keys the lessons use, tinted on the keyboard strip.
+    var practiceKeys: Set<IllustratedKey> {
+        pushToTalkKeys.union(handsFreeKeys).union(IllustratedKey.keys(for: ctx.settings.shortcuts[.cancel]))
+    }
 
     var pushToTalkLabel: String { ctx.settings.shortcuts[.pushToTalk]?.compactDescription ?? "fn" }
 
-    /// The shortcuts stage mirrors the real pill while a dictation runs, else follows the keys.
-    var shortcutsPillPhase: PillPhase {
+    /// The practice stage mirrors the real pill while a dictation runs, else follows the keys.
+    var livePhase: PillPhase {
         let real = ctx.pillModel.phase
         if real.isActive { return real }
         if handsFreeLatched { return .locked }
@@ -416,6 +429,10 @@ final class OnboardingModel {
 
     /// Return sends the chat message on the practice step instead of leaving it.
     var primaryUsesReturn: Bool { step != .tryIt || currentLesson == nil }
+
+    /// Lessons tick from real dictations. While there's no dictating yet (the model still downloading, no key,
+    /// a missing permission), the keys alone tick the first two, so the step still teaches something.
+    var lessonsFollowKeys: Bool { !practiceReadiness.allowsPractice }
 
     // MARK: Lifecycle
 
@@ -515,12 +532,11 @@ final class OnboardingModel {
             if ctx.permissions.accessibility != .granted { scheduleAccessibilityHelp(after: 20) }
         case .model:
             freeDiskBytes = ctx.freeDiskBytes()
-        case .shortcuts:
+        case .tryIt:
+            historyBaseline = Set(ctx.history.entries.prefix(50).map(\.id))
             schedule("keyboardHint", after: 25) { model in
                 if !model.sawPushToTalkKey { model.showKeyboardHint = true }
             }
-        case .tryIt:
-            historyBaseline = Set(ctx.history.entries.prefix(50).map(\.id))
         case .done:
             confettiBurst += 1
         case .welcome:
@@ -689,7 +705,7 @@ final class OnboardingModel {
     /// Shows the key field (instead of the stored masked key).
     var showsKeyField: Bool { isReplacingKey || ctx.account.maskedKey == nil }
 
-    // MARK: Keys (shortcuts + practice)
+    // MARK: Keys
 
     private func installKeyHandlers() {
         let ref = WeakModelRef(model: self)
@@ -749,18 +765,18 @@ final class OnboardingModel {
             guard pressedKeys.contains(key) else { return }
             pressedKeys.remove(key)
         }
+        guard step == .tryIt else { return }
         let holdingPTT = isHoldingPushToTalk
         let holdingHandsFree = !handsFreeKeys.isEmpty && handsFreeKeys.isSubset(of: pressedKeys)
 
-        if step == .tryIt, key == .escape, event.isDown,
+        if key == .escape, event.isDown,
            recordingInProgress || ctx.pillModel.phase.isRecording || holdingPTT || handsFreeLatched {
             completeCancelLesson()
         }
-        guard step == .shortcuts || step == .tryIt else { return }
 
         if holdingHandsFree && !wasHoldingHandsFree {
             handsFreeLatched.toggle()
-            if handsFreeLatched { triedHandsFree = true }
+            if handsFreeLatched { markTriedHandsFree() }
             stopArmed = false
             return
         }
@@ -772,17 +788,17 @@ final class OnboardingModel {
                 stopArmed = true
             } else if ctx.settings.doublePressForHandsFree, let tap = lastPTTTapAt, now.timeIntervalSince(tap) <= 0.5 {
                 handsFreeLatched = true
-                triedHandsFree = true
+                markTriedHandsFree()
                 lastPTTTapAt = nil
             } else {
                 schedule("hold", after: 0.45) { model in
-                    if model.isHoldingPushToTalk { model.heldPushToTalk = true }
+                    if model.isHoldingPushToTalk { model.markHeldPushToTalk() }
                 }
             }
         } else if !holdingPTT && wasHoldingPTT {
             tasks["hold"]?.cancel()
             let held = pttDownAt.map { now.timeIntervalSince($0) } ?? 0
-            if held >= 0.45 { heldPushToTalk = true }
+            if held >= 0.45 { markHeldPushToTalk() }
             if handsFreeLatched && stopArmed {
                 handsFreeLatched = false
                 stopArmed = false
@@ -793,36 +809,54 @@ final class OnboardingModel {
         }
     }
 
+    private func markHeldPushToTalk() {
+        heldPushToTalk = true
+        if lessonsFollowKeys { completedLessons.insert(.pushToTalk) }
+    }
+
+    private func markTriedHandsFree() {
+        triedHandsFree = true
+        if recordingInProgress { recordingWentHandsFree = true }
+        if lessonsFollowKeys { completedLessons.insert(.handsFree) }
+    }
+
     /// Called by the view when the real pill changes phase.
     func pillPhaseChanged(from old: PillPhase, to new: PillPhase, now: Date = Date()) {
         if new.isRecording && !old.isRecording {
             recordingInProgress = true
             recordingStartedAt = now
+            recordingWentHandsFree = handsFreeLatched
         }
-        if new == .locked, step == .shortcuts || step == .tryIt {
-            triedHandsFree = true
+        if new == .locked, step == .tryIt {
             handsFreeLatched = true
+            recordingWentHandsFree = true
+            markTriedHandsFree()
         }
         if old.isRecording && !new.isRecording {
             recordingInProgress = false
             if let start = recordingStartedAt { lastRecordingSpan = (start, now) }
             recordingStartedAt = nil
+            lastRecordingWasHandsFree = recordingWentHandsFree || old == .locked
+            recordingWentHandsFree = false
             if old == .locked {
                 handsFreeLatched = false
                 stopArmed = false
                 lastPTTTapAt = nil
             }
         }
-        if new == .listening, step == .shortcuts, isHoldingPushToTalk == false {
-            // Tap-less keyboards (PTT arrived only via the event tap): count the real pill as a hold.
-            schedule("hold", after: 0.45) { model in
-                if model.ctx.pillModel.phase == .listening { model.heldPushToTalk = true }
+        guard step == .tryIt else { return }
+        if new == .listening {
+            sawPushToTalkKey = true
+            showKeyboardHint = false
+            if !isHoldingPushToTalk {
+                // Keys that only reach the event tap (another app in front): count the real pill as a hold.
+                schedule("hold", after: 0.45) { model in
+                    if model.ctx.pillModel.phase == .listening { model.markHeldPushToTalk() }
+                }
             }
         }
-        if step == .tryIt {
-            if new == .error { practiceHint = .noSpeech }
-            if new.isRecording { practiceHint = nil }
-        }
+        if new == .error { practiceHint = .noSpeech }
+        if new.isRecording, practiceHint != .tryHandsFree { practiceHint = nil }
     }
 
     // MARK: Practice
@@ -879,10 +913,14 @@ final class OnboardingModel {
         practiceHint = nil
         recordStat(for: text, now: now)
         if let entry = newSuccessEntry(within: 300, now: now) { historyBaseline.insert(entry.id) }
-        let lesson = [PracticeLesson.pushToTalk, .handsFree].first { !completedLessons.contains($0) }
-        guard let lesson else { return }
+        // The lesson this dictation actually practiced, so "Go hands-free" never ticks for a held key.
+        let lesson: PracticeLesson = lastRecordingWasHandsFree ? .handsFree : .pushToTalk
+        let repeated = completedLessons.contains(lesson)
         completedLessons.insert(lesson)
-        alexReplies(lesson == .pushToTalk ? Self.alexAfterFirst : Self.alexAfterSecond)
+        if repeated, lesson == .pushToTalk, !completedLessons.contains(.handsFree) { practiceHint = .tryHandsFree }
+        dictatedMessages += 1
+        let script = [Self.alexAfterFirst, Self.alexAfterSecond, Self.alexAfterThird]
+        if dictatedMessages <= script.count { alexReplies(script[dictatedMessages - 1]) }
     }
 
     private func recordStat(for text: String, now: Date) {
@@ -978,6 +1016,10 @@ final class OnboardingModel {
         practiceHint = hint
         alexIsTyping = alexTyping
         self.draft = draft
+    }
+
+    func stageKeyboardHint(_ visible: Bool) {
+        showKeyboardHint = visible
     }
 
     func stageKey(draft: String, formatError: String? = nil, replacing: Bool) {

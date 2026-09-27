@@ -197,8 +197,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         let center = ToastCenter()
         center.post(notice("a", lifetime: .seconds(0.1)))
         #expect(center.notices.count == 1)
-        try await Task.sleep(for: .seconds(0.35))
-        #expect(center.notices.isEmpty)
+        try await waitUntil { center.notices.isEmpty }
     }
 }
 
@@ -268,9 +267,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         model.phase = .processing
         model.phase = .success
         #expect(model.visiblePhase == .success)
-        try await Task.sleep(for: .seconds(0.2))
-        #expect(model.phase == .rest)
-        #expect(model.visiblePhase == .rest)
+        try await waitUntil { model.phase == .rest && model.visiblePhase == .rest }
     }
 
     @Test func earlyRestWaitsForTheCheckMark() async throws {
@@ -279,8 +276,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         model.phase = .success
         model.phase = .rest
         #expect(model.visiblePhase == .success)
-        try await Task.sleep(for: .seconds(0.35))
-        #expect(model.visiblePhase == .rest)
+        try await waitUntil { model.visiblePhase == .rest }
     }
 
     @Test func theNextQueuedJobWaitsForTheCheckMark() async throws {
@@ -291,8 +287,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         // Job 2 is still transcribing: the controller asks for processing in the same turn.
         model.phase = .processing
         #expect(model.visiblePhase == .success)
-        try await Task.sleep(for: .seconds(0.35))
-        #expect(model.visiblePhase == .processing)
+        try await waitUntil { model.visiblePhase == .processing }
     }
 
     @Test func aNewRecordingInterruptsTheFlourish() {
@@ -306,8 +301,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         let model = makeModel()
         model.phase = .error
         #expect(model.shakeCount == 1)
-        try await Task.sleep(for: .seconds(0.3))
-        #expect(model.visiblePhase == .rest)
+        try await waitUntil { model.visiblePhase == .rest }
     }
 
     @Test func shakingAnIdlePillFlashesTheError() {
@@ -370,13 +364,11 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         let model = makeModel()
         model.setPointerInside(true)
         #expect(!model.isHovering)
-        try await Task.sleep(for: .seconds(0.15))
-        #expect(model.isHovering)
-        #expect(model.showsTooltip)
+        // Polled rather than slept: the whole suite runs in parallel and can hold the main actor for a while.
+        try await waitUntil { model.isHovering && model.showsTooltip }
         model.setPointerInside(false)
         #expect(!model.showsTooltip)
-        try await Task.sleep(for: .seconds(0.1))
-        #expect(!model.isHovering)
+        try await waitUntil { !model.isHovering }
     }
 
     @Test func slowProcessingIsFlaggedAndClearedWhenDone() async throws {
@@ -384,8 +376,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         model.timing.slowProcessing = 0.05
         model.phase = .processing
         #expect(!model.isProcessingSlow)
-        try await Task.sleep(for: .seconds(0.2))
-        #expect(model.isProcessingSlow)
+        try await waitUntil { model.isProcessingSlow }
         model.phase = .success
         #expect(!model.isProcessingSlow)
     }

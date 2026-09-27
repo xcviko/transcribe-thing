@@ -80,34 +80,3 @@ import Testing
         #expect(store.pendingSelection == nil)
     }
 }
-
-@MainActor
-@Suite(.serialized) struct QuietDeliveryTests {
-    @Test func keyPracticeDictationsGoToHistoryWithoutPasting() async throws {
-        let h = DictationControllerTests.make()
-        h.controller.deliversQuietly = { true }
-        h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "practice", engine: engine, processingTime: 0.1) }
-        h.controller.insertOverride = { _, _ in Issue.record("nothing should be pasted"); return .pasted }
-        var now: TimeInterval = 50
-        h.controller.clock = { now }
-        h.controller.handle(.pttDown)
-        h.controller.send(.timer(.arming))
-        now = 52
-        h.controller.handle(.pttUp)
-        try await waitUntil { h.controller.machine.activeJobs == 0 }
-        #expect(h.history.entries.first?.text == "practice")
-        #expect(h.toasts.notices.isEmpty, "no transcript card, no notice")
-        #expect(h.pill.visiblePhase == .success)
-    }
-
-    @Test func normalDeliveryStillPastes() async throws {
-        let h = DictationControllerTests.make()
-        h.controller.deliversQuietly = { false }
-        var pasted: [String] = []
-        h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "hello", engine: engine, processingTime: 0.1) }
-        h.controller.insertOverride = { text, _ in pasted.append(text); return .pasted }
-        h.controller.send(.handsFreeToggle)
-        h.controller.send(.pillStop)
-        try await waitUntil { pasted == ["hello"] }
-    }
-}

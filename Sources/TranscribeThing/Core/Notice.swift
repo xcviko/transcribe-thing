@@ -22,7 +22,8 @@ enum NoticeActionKind: Sendable, Equatable {
     case retryWith(EngineID)
     /// Switch the selected engine when there is no recording to retry.
     case selectEngine(EngineID)
-    /// Transcribe the canceled recording after all.
+    /// Undo a cancel: the dictation picks up again hands-free, its kept audio first (a canceled Hub transcription
+    /// is transcribed after all).
     case undoCancel
     case copyText(String)
     case pasteText(String)
@@ -220,10 +221,13 @@ enum AppError: Error, Equatable, Sendable {
     /// Re-running the same recording on the same engine could succeed.
     var isRetryable: Bool {
         switch self {
+        case .emptyResult(let engine):
+            // A local model is deterministic: the same audio gives the same nothing. A cloud one may not.
+            engine.isCloud
         case .microphoneDisconnected,
              .modelDownloading, .modelPreparing, .modelLoadFailed,
              .openRouterRateLimited, .openRouterProviderUnavailable, .openRouterServer, .openRouterTruncated,
-             .timeout, .offline, .emptyResult, .engineFailed:
+             .timeout, .offline, .engineFailed:
             true
         case .microphonePermissionDenied, .noMicrophone, .microphoneNotResponding, .microphoneSilent,
              .accessibilityMissing, .modelNotDownloaded, .downloadFailed, .notEnoughDisk,
@@ -346,7 +350,8 @@ extension AppError {
         let canRetry = hasAudio && isRetryable
         let retryTitle = if case .microphoneDisconnected = self { "Transcribe It" } else { "Retry" }
         let retryWith: (String, NoticeActionKind)? = if hasAudio, fallbackCanHelp, let fallback {
-            ("Retry with \(fallback.shortName)", .retryWith(fallback))
+            (isLocalEmptyResult && fallback.isCloud ? "Try in the cloud" : "Retry with \(fallback.shortName)",
+             .retryWith(fallback))
         } else { nil }
         let switchEngine: (String, NoticeActionKind)? = if !hasAudio, copy.offersSwitch, let fallback {
             ("Use \(fallback.shortName)", .selectEngine(fallback))
@@ -396,6 +401,11 @@ extension AppError {
             sound: copy.sound,
             recordingID: recordingID
         )
+    }
+
+    /// The model on this Mac heard audio and returned no text: retrying it can't help, only another model can.
+    private var isLocalEmptyResult: Bool {
+        if case .emptyResult(let engine) = self { engine.isLocal } else { false }
     }
 
     /// Text that came back but wasn't pasted, shown in the notice so it can still be copied.
@@ -618,10 +628,11 @@ extension AppError {
                         body: "\(cloud.service) needs the internet.",
                         order: .fallbackFirst, offersSwitch: true)
         case .emptyResult(let e):
+            // On this Mac only the cloud model is worth a try (offered when the key works); otherwise it's just news.
             return Copy(style: .warning, symbol: "text.badge.xmark",
                         title: "No text came back",
                         body: "\(e.displayName) returned nothing.",
-                        fixes: [Fix(title: "Try Another Model", kind: .openHub(.models))],
+                        fixes: e.isLocal ? [] : [Fix(title: "Try Another Model", kind: .openHub(.models))],
                         sound: .alert)
         case .noSpeech:
             return Copy(style: .info, symbol: "waveform",

@@ -148,12 +148,6 @@ final class AppEnvironment {
         dictation.secureInput = secureInput
         dictation.openHub = { [weak self] section in self?.windows.showHub(section) }
         dictation.onActivityChanged = { [weak self] activity in self?.menuBar.show(activity) }
-        // Before "Try it", onboarding has no text field: holding fn there is key practice, not dictation.
-        // Dictating into another app meanwhile still pastes there.
-        dictation.deliversQuietly = { [weak self] in
-            guard let self, self.windows.isOnboardingFocused else { return false }
-            return self.settings.onboardingStep < OnboardingStep.tryIt.rawValue
-        }
         let builder = menuBar.builder
         pillModel.contextMenuProvider = { builder.makeMenu(includeQuit: false) }
         inserter.eventTapActive = { [weak hotkeys] in hotkeys?.isTapActive ?? false }

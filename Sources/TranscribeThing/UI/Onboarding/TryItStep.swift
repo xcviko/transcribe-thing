@@ -1,5 +1,7 @@
 import SwiftUI
 
+/// Shortcuts and practice in one step: each lesson row carries the shortcut it teaches (with Change), the stage
+/// runs the practice chat above a keyboard strip that lights up with the real keys.
 struct TryItStep: View {
     let model: OnboardingModel
 
@@ -9,50 +11,77 @@ struct TryItStep: View {
         VStack(alignment: .leading, spacing: 0) {
             StepHeader(title: "Try it out",
                        subtitle: "Answer Alex out loud. Your words land in the message box, just like they will in any app.")
-                .padding(.bottom, 18)
+                .padding(.bottom, 16)
 
-            VStack(spacing: 8) {
-                LessonRow(number: 1, title: "Hold to talk", detail: "Hold it, answer Alex, then let go.",
-                          keys: settings.shortcuts[.pushToTalk], state: state(of: .pushToTalk))
-                LessonRow(number: 2, title: "Go hands-free", detail: "Press once, talk as long as you like, press again.",
-                          keys: settings.shortcuts[.handsFree], state: state(of: .handsFree))
-                LessonRow(number: 3, title: "Change your mind", detail: "Start talking, then cancel. Nothing gets sent.",
-                          keys: settings.shortcuts[.cancel], state: state(of: .cancel))
+            VStack(spacing: 2) {
+                LessonRow(number: 1, title: "Hold to talk",
+                          detail: model.lessonsFollowKeys
+                              ? "Hold \(model.pushToTalkLabel) for a moment, then let go."
+                              : "Hold \(model.pushToTalkLabel), answer Alex, then let go.",
+                          action: .pushToTalk, state: state(of: .pushToTalk), settings: settings)
+                LessonRow(number: 2, title: "Go hands-free", detail: handsFreeDetail,
+                          action: .handsFree, state: state(of: .handsFree), settings: settings)
+                LessonRow(number: 3, title: "Change your mind",
+                          detail: "Start talking, then press \(label(.cancel, fallback: "esc")). Nothing gets typed.",
+                          action: .cancel, state: state(of: .cancel), settings: settings)
+                RowDivider(inset: 44)
+                    .padding(.vertical, 2)
+                LessonRow(number: 0, title: "Paste last", detail: nil, action: .pasteLast, state: .extra,
+                          settings: settings)
             }
             .animation(Theme.Motion.expand, value: model.completedLessons)
 
-            Group {
-                if let hint = model.practiceHint {
-                    hintView(hint)
-                        .padding(.top, 14)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                } else if let stat = model.practiceStat {
-                    SpeedFlash(stat: stat)
-                        .padding(.top, 14)
-                        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
-                }
-            }
-            .animation(Theme.Motion.expand, value: model.practiceHint)
-            .animation(Theme.Motion.expand, value: model.practiceStat)
-
-            if model.currentLesson == nil {
-                HStack(spacing: 8) {
-                    DrawOnCheck(size: 16)
-                    Text("Practice complete. It works like this in every app.")
-                        .font(.system(size: 12.5, weight: .medium))
-                        .foregroundStyle(.inkSecondary)
-                }
-                .padding(.top, 14)
-                .padding(.leading, 12)
-                .transition(.opacity)
-            }
+            footnote
+                .animation(Theme.Motion.expand, value: model.practiceHint)
+                .animation(Theme.Motion.expand, value: model.practiceStat)
+                .animation(Theme.Motion.expand, value: model.showKeyboardHint)
+                .animation(Theme.Motion.fade, value: model.currentLesson)
         }
-        .animation(Theme.Motion.fade, value: model.currentLesson)
+    }
+
+    private var handsFreeDetail: String {
+        let base = "Press once, talk as long as you like, press \(model.pushToTalkLabel) to finish."
+        return settings.doublePressForHandsFree ? base + " Or double-press \(model.pushToTalkLabel)." : base
+    }
+
+    /// "fn Space" stays on one line inside running copy.
+    private func label(_ action: ShortcutAction, fallback: String) -> String {
+        (settings.shortcuts[action]?.compactDescription ?? fallback).replacingOccurrences(of: " ", with: "\u{00A0}")
     }
 
     private func state(of lesson: PracticeLesson) -> LessonRow.State {
         if model.completedLessons.contains(lesson) { return .done }
         return model.currentLesson == lesson ? .current : .upcoming
+    }
+
+    /// One thing under the lessons at a time: a hint that needs acting on, else the speed flash, else the wrap-up.
+    @ViewBuilder private var footnote: some View {
+        if let hint = model.practiceHint {
+            hintView(hint)
+                .padding(.top, 12)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+        } else if model.showKeyboardHint {
+            StepNote(symbol: "keyboard", tint: .accent,
+                     text: Text("\(model.pushToTalkLabel) not lighting up? Some external keyboards keep fn to themselves. You can pick another key, like right ⌥.")) {
+                Button("Use Right ⌥ to Talk") {
+                    settings.shortcuts[.pushToTalk] = .rightOption
+                }
+                .buttonStyle(QuietButtonStyle(tint: .accent, size: .small))
+                .padding(.leading, -8)
+                .frame(height: 20)
+            }
+            .padding(.top, 12)
+            .transition(.opacity.combined(with: .move(edge: .top)))
+        } else if let stat = model.practiceStat {
+            SpeedFlash(stat: stat, complete: model.currentLesson == nil)
+                .padding(.top, 12)
+                .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
+        } else if model.currentLesson == nil {
+            PracticeComplete()
+                .padding(.top, 14)
+                .padding(.leading, 12)
+                .transition(.opacity)
+        }
     }
 
     @ViewBuilder private func hintView(_ hint: PracticeHint) -> some View {
@@ -65,43 +94,57 @@ struct TryItStep: View {
         case .typedInstead:
             StepNote(symbol: "keyboard", tint: .accent,
                      text: Text("That one was typed. Try saying it: hold \(model.pushToTalkLabel) and talk."))
+        case .tryHandsFree:
+            StepNote(symbol: "hand.raised", tint: .accent,
+                     text: Text("That one was push to talk. For hands-free, press \(label(.handsFree, fallback: "fn Space")), then talk."))
         }
     }
 }
 
+// MARK: - Rows
+
+/// A lesson and the shortcut it teaches. The current lesson lifts into a card with its instructions.
 private struct LessonRow: View {
-    enum State { case done, current, upcoming }
+    enum State { case done, current, upcoming, extra }
 
     var number: Int
     var title: String
-    var detail: String
-    var keys: Shortcut?
+    var detail: String?
+    var action: ShortcutAction
     var state: State
+    let settings: AppSettings
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             marker
-                .padding(.top, 1)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 8) {
+                .frame(height: 30)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(alignment: .center, spacing: 8) {
                     Text(title)
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(state == .upcoming ? Color.inkSecondary : Color.ink)
-                    Spacer(minLength: 0)
-                    ShortcutChips(shortcut: keys, size: .small)
-                        .opacity(state == .upcoming ? 0.6 : 1)
+                        .foregroundStyle(titleColor)
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                    Spacer(minLength: 4)
+                    ShortcutRecorderView(shortcut: binding, action: action)
+                        .opacity(state == .upcoming || state == .extra ? 0.8 : 1)
+                        .layoutPriority(2)
                 }
-                if state == .current {
+                .frame(minHeight: 30)
+                if state == .current, let detail {
                     Text(detail)
                         .font(.system(size: 12))
+                        .lineSpacing(1.5)
                         .foregroundStyle(.inkSecondary)
                         .fixedSize(horizontal: false, vertical: true)
+                        .padding(.bottom, 2)
                         .transition(.opacity)
                 }
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, state == .current ? 12 : 9)
+        .padding(.leading, 12)
+        .padding(.trailing, 10)
+        .padding(.vertical, state == .current ? 9 : 3)
         .background {
             if state == .current {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -110,10 +153,25 @@ private struct LessonRow: View {
                         RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.accentRing, lineWidth: 1)
                     }
                     .cardShadow()
+                    .transition(.opacity)
             }
         }
-        .accessibilityElement(children: .combine)
+        .padding(.vertical, state == .current ? 3 : 0)
+        .accessibilityElement(children: .contain)
         .accessibilityValue(state == .done ? "Done" : (state == .current ? "Current" : ""))
+    }
+
+    private var titleColor: Color {
+        switch state {
+        case .done, .current: .ink
+        case .upcoming, .extra: .inkSecondary
+        }
+    }
+
+    private var binding: Binding<Shortcut?> {
+        let settings = settings
+        let action = action
+        return Binding(get: { settings.shortcuts[action] }, set: { settings.shortcuts[action] = $0 })
     }
 
     @ViewBuilder private var marker: some View {
@@ -132,6 +190,22 @@ private struct LessonRow: View {
                 .foregroundStyle(.inkTertiary)
                 .frame(width: 20, height: 20)
                 .overlay { Circle().strokeBorder(Color.strokeStrong, lineWidth: 1) }
+        case .extra:
+            Image(systemName: action.symbolName)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.inkTertiary)
+                .frame(width: 20, height: 20)
+        }
+    }
+}
+
+private struct PracticeComplete: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            DrawOnCheck(size: 16)
+            Text("All set. It works like this in every app.")
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(.inkSecondary)
         }
     }
 }
@@ -139,6 +213,8 @@ private struct LessonRow: View {
 /// "207 wpm" moment after the first dictation: you vs typing.
 private struct SpeedFlash: View {
     var stat: PracticeStat
+    /// All three lessons done: the card carries the wrap-up line too.
+    var complete = false
 
     private static let typingWPM = 40
 
@@ -162,6 +238,11 @@ private struct SpeedFlash: View {
             VStack(alignment: .leading, spacing: 5) {
                 bar(label: "You", number: wpm, value: Double(wpm) / scaleMax, tint: .accent)
                 bar(label: "Typing", number: Self.typingWPM, value: Double(Self.typingWPM) / scaleMax, tint: .inkTertiary)
+            }
+            if complete {
+                RowDivider(inset: 0)
+                PracticeComplete()
+                    .transition(.opacity)
             }
         }
         .padding(14)

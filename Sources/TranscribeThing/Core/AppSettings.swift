@@ -29,8 +29,8 @@ final class AppSettings {
     static let maxRecordingChoices = [5, 10, 20, 30]
 
     var onboardingCompleted: Bool = false { didSet { store.set(onboardingCompleted, .onboardingCompleted) } }
-    /// Resume point for onboarding.
-    var onboardingStep: Int = 0 { didSet { store.set(onboardingStep, .onboardingStep) } }
+    /// Resume point for onboarding: an `OnboardingStep` raw value (five steps).
+    var onboardingStep: Int = 0 { didSet { store.set(onboardingStep, .onboardingResumeStep) } }
     var selectedEngine: EngineID = .default { didSet { store.set(selectedEngine.rawValue, .selectedEngine) } }
     var pillMode: PillMode = .whileDictating { didSet { store.set(pillMode.rawValue, .pillMode) } }
     var pillHiddenUntil: Date? = nil { didSet { store.set(pillHiddenUntil, .pillHiddenUntil) } }
@@ -89,10 +89,27 @@ final class AppSettings {
         pillHiddenUntil = now.addingTimeInterval(interval)
     }
 
+    /// Onboarding had six steps (welcome, permissions, model, shortcuts, try it, done) until shortcuts and try it
+    /// became one: someone who quit on either of them comes back to the merged step.
+    nonisolated static func onboardingStep(fromSixStepIndex index: Int) -> Int {
+        switch index {
+        case ..<0: 0
+        case 0...3: index
+        default: index - 1
+        }
+    }
+
     /// Initial values come from the store; property observers don't fire inside `init`.
     private func load() {
         if let v = store.bool(.onboardingCompleted) { onboardingCompleted = v }
-        if let v = store.int(.onboardingStep) { onboardingStep = max(0, v) }
+        if let v = store.int(.onboardingResumeStep) {
+            onboardingStep = max(0, v)
+        } else if let legacy = store.int(.onboardingStep) {
+            // Saved by a six-step build: move it over once, under the new key.
+            onboardingStep = Self.onboardingStep(fromSixStepIndex: legacy)
+            store.set(onboardingStep, .onboardingResumeStep)
+            store.remove(.onboardingStep)
+        }
         // An engine this build doesn't offer (one since removed) leaves the default selected.
         if let v = store.string(.selectedEngine).flatMap(EngineID.init(rawValue:)) { selectedEngine = v }
         if let v = store.string(.pillMode).flatMap(PillMode.init(rawValue:)) { pillMode = v }
@@ -115,7 +132,8 @@ final class AppSettings {
 // MARK: - Storage
 
 enum SettingsKey: String, CaseIterable {
-    case onboardingCompleted, onboardingStep, selectedEngine, pillMode, pillHiddenUntil
+    /// `onboardingStep` holds a six-step index from older builds, read once and moved to `onboardingResumeStep`.
+    case onboardingCompleted, onboardingStep, onboardingResumeStep, selectedEngine, pillMode, pillHiddenUntil
     case soundsEnabled, soundVolume, microphoneUID, preferBuiltInMicOverBluetooth, showDockIcon
     case geminiSystemPrompt, maxRecordingMinutes, doublePressForHandsFree
     case restoreClipboard, keepFailedRecordingsDays, shortcuts, hasShownWelcomeHello
@@ -152,6 +170,7 @@ private final class SettingsStore {
     func set(_ value: Double, _ key: SettingsKey) { write(value, key) }
     func set(_ value: String?, _ key: SettingsKey) { write(value, key) }
     func set(_ value: Date?, _ key: SettingsKey) { write(value, key) }
+    func remove(_ key: SettingsKey) { write(nil, key) }
 
     func setJSON<T: Encodable>(_ value: T, _ key: SettingsKey) {
         let encoder = JSONEncoder()

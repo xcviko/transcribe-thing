@@ -9,7 +9,9 @@ enum DictationActivity: Equatable, Sendable { case idle, recording, processing }
 @MainActor
 protocol DictationRecorder: AnyObject {
     var isCapturing: Bool { get }
-    func start(preferredDeviceUID: String?) throws
+    /// `prefix`: the canceled recording this capture continues (Undo). What `finish` and `cancel` return then
+    /// starts with its audio and keeps its id and start time.
+    func start(preferredDeviceUID: String?, continuing prefix: Recording?) throws
     /// Ends capture after `tail` more seconds of audio; `isCapturing` turns false at once.
     func finish(tail: TimeInterval) async -> Recording
     func cancel() -> Recording?
@@ -41,9 +43,6 @@ final class DictationController {
     @ObservationIgnored var secureInput: SecureInputMonitor?
     @ObservationIgnored var openHub: ((HubSection) -> Void)?
     @ObservationIgnored var onActivityChanged: ((DictationActivity) -> Void)?
-    /// True while a finished dictation has nowhere sensible to go (onboarding's key-practice steps): it is
-    /// kept in history and the pill flashes success, but nothing is pasted.
-    @ObservationIgnored var deliversQuietly: (() -> Bool)?
 
     // Seams for tests: time, capture, transcription and insertion can be replaced.
     @ObservationIgnored var clock: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
@@ -68,7 +67,8 @@ final class DictationController {
 
     @ObservationIgnored private var timers: [DictationMachine.TimerID: (token: UUID, task: Task<Void, Never>)] = [:]
     @ObservationIgnored private var queue: [Job] = []
-    @ObservationIgnored private var isDelivering = false
+    /// The job whose result is being delivered right now (it has already left `queue`).
+    @ObservationIgnored private var deliveringJob: Job?
     /// A refusal found at key-down, reported only if the user commits to dictating (fn+← must stay silent).
     @ObservationIgnored private var pendingRefusal: AppError?
     /// When the last success/error flourish was requested (pill clicks during it don't start a recording).
@@ -76,6 +76,12 @@ final class DictationController {
     @ObservationIgnored private var retained: [UUID: Recording] = [:]
     @ObservationIgnored private var retainedOrder: [UUID] = []
     @ObservationIgnored private var lastCancelledID: UUID?
+    /// The canceled recording the capture in progress continues (Undo), while that capture runs.
+    @ObservationIgnored private var continuing: Recording?
+    /// The recording the next `.resumeCapture` effect continues.
+    @ObservationIgnored private var resumeRequest: Recording?
+    /// When each failure notice (by dedupe key) last played its sound.
+    @ObservationIgnored private var failureCueTimes: [String: TimeInterval] = [:]
     /// Retained recordings whose job came from the Hub: their Retry and Undo update history, never paste.
     @ObservationIgnored private var historyOnlyIDs: Set<UUID> = []
     @ObservationIgnored private var noSpeechQuota = DailyQuota(limit: 3)
@@ -97,6 +103,10 @@ final class DictationController {
     private static let undoMinimumDuration: TimeInterval = 1
     private static let saveCancelledMinimumDuration: TimeInterval = 20
     private static let minimumVoicedSeconds = 0.25
+    /// The same failure again within this long updates its notice silently.
+    static let repeatedFailureQuietPeriod: TimeInterval = 2
+    /// What Undo does after a cancel, in the cancel notices.
+    nonisolated static let undoResumesHint = "Undo keeps recording, hands-free."
 
     init(settings: AppSettings, recorder: AudioRecorder, transcription: TranscriptionService,
          models: ModelStore, account: OpenRouterAccount, history: HistoryStore, inserter: TextInserter,
@@ -240,8 +250,10 @@ final class DictationController {
         var nothingCancelled = false
         for effect in effects {
             switch effect {
-            case .startCapture:
-                guard let failure = beginCapture() else { continue }
+            case .startCapture, .resumeCapture:
+                guard let failure = beginCapture(continuing: effect == .resumeCapture ? resumeRequest : nil) else {
+                    continue
+                }
                 if machine.capture.isArming {
                     pendingRefusal = failure
                     continue
@@ -277,12 +289,18 @@ final class DictationController {
         }
     }
 
-    /// Returns the reason capture can't start, or nil once the mic is live.
-    private func beginCapture() -> AppError? {
+    /// Returns the reason capture can't start, or nil once the mic is live. `prefix`: the canceled recording
+    /// this capture continues (Undo).
+    private func beginCapture(continuing prefix: Recording? = nil) -> AppError? {
         if let refusal = captureRefusal() { return refusal }
-        guard !captureDevice.isCapturing else { return nil }
+        if captureDevice.isCapturing {
+            guard prefix != nil else { return nil }
+            // A stray capture would leave the kept audio out; start over with it.
+            _ = captureDevice.cancel()
+        }
         do {
-            try captureDevice.start(preferredDeviceUID: settings.microphoneUID)
+            try captureDevice.start(preferredDeviceUID: settings.microphoneUID, continuing: prefix)
+            continuing = prefix
             deviceNoticeDue = captureDevice === recorder
             return nil
         } catch let error as AppError {
@@ -341,9 +359,12 @@ final class DictationController {
 
     /// Queues the job right away (FIFO order is decided at release), then waits for the recorder's tail.
     private func finishCapture(tail: TimeInterval) {
+        let resumedID = continuing?.id
+        continuing = nil
         guard captureDevice.isCapturing else { return }
-        let delivery: Delivery = deliversQuietly?() == true ? .quiet : .paste(targetPID: inserter.frontmostPID())
-        let job = Job(recording: nil, engine: settings.selectedEngine, delivery: delivery)
+        let delivery: Delivery = .paste(targetPID: inserter.frontmostPID())
+        // A resumed dictation keeps the canceled recording's id, already while its tail is captured.
+        let job = Job(recording: nil, engine: settings.selectedEngine, delivery: delivery, id: resumedID)
         queue.append(job)
         _ = machine.handle(.jobStarted, now: clock())
         finishingJob = job
@@ -378,13 +399,13 @@ final class DictationController {
     /// Rejects flat or speechless recordings before any engine (or Gemini bill) sees them.
     private func passesPreflight(_ recording: Recording) -> Bool {
         if recording.speech.isSilent {
-            toasts.post(AppError.microphoneSilent.notice(recordingID: nil, fallbackEngine: nil))
+            postFailure(AppError.microphoneSilent.notice(recordingID: nil, fallbackEngine: nil))
             flash(.error)
             return false
         }
         if recording.speech.voicedSeconds < Self.minimumVoicedSeconds {
             if noSpeechQuota.take() {
-                toasts.post(AppError.noSpeech.notice(recordingID: nil, fallbackEngine: nil))
+                postFailure(AppError.noSpeech.notice(recordingID: nil, fallbackEngine: nil))
             }
             flash(.error)
             return false
@@ -395,15 +416,24 @@ final class DictationController {
     private func cancelCapture(keepForUndo: Bool, notify: Bool) {
         // "Dictation stopped · Undo" offers this recording or nothing, never an older one still retained.
         if keepForUndo { lastCancelledID = nil }
-        guard captureDevice.isCapturing else { return }
-        let recording = captureDevice.cancel()
-        guard keepForUndo, let recording else { return }
-        keepCancelled(recording, engine: settings.selectedEngine, notify: notify)
+        let resumed = continuing
+        continuing = nil
+        let recording = captureDevice.isCapturing ? captureDevice.cancel() : nil
+        if keepForUndo {
+            guard let recording else { return }
+            keepCancelled(recording, engine: settings.selectedEngine, notify: notify)
+        } else if let resumed {
+            // A resumed dictation whose mic failed: its audio (the kept part at least) stays for another Undo.
+            keepCancelled(recording ?? resumed, engine: settings.selectedEngine, notify: true)
+        }
     }
 
-    private func keepCancelled(_ recording: Recording, engine: EngineID, notify: Bool) {
+    /// Keeps a canceled recording for Undo (and in history when it's long). `historyOnly`: it was a Hub
+    /// transcription, which Undo transcribes after all instead of recording on.
+    private func keepCancelled(_ recording: Recording, engine: EngineID, notify: Bool, historyOnly: Bool = false) {
         guard recording.duration >= Self.undoMinimumDuration else { return }
         retain(recording)
+        if historyOnly { historyOnlyIDs.insert(recording.id) }
         lastCancelledID = recording.id
         let saved = recording.duration >= Self.saveCancelledMinimumDuration
         if saved {
@@ -414,18 +444,41 @@ final class DictationController {
                 audioFileName: file))
         }
         guard notify else { return }
+        postCanceled(recording, saved: saved)
+    }
+
+    /// "Dictation canceled · Undo" for a kept recording. `note` replaces the line about what Undo does.
+    private func postCanceled(_ recording: Recording, saved: Bool, note: String? = nil) {
+        let isHubJob = historyOnlyIDs.contains(recording.id)
         var actions = [NoticeAction(title: "Undo", kind: .undoCancel, isPrimary: true)]
-        var body: String?
+        var lines = [note ?? (isHubJob ? nil : Self.undoResumesHint)]
         if saved {
             let days = settings.keepFailedRecordingsDays
-            body = days > 0 ? "Saved in History for \(days) \(days == 1 ? "day" : "days")." : nil
-            if historyHintQuota.take() {
+            if days > 0 { lines.append("Saved in History for \(days) \(days == 1 ? "day" : "days").") }
+            if note == nil, historyHintQuota.take() {
                 actions.append(NoticeAction(title: "Open History", kind: .openHub(.home)))
             }
         }
+        let body = lines.compactMap { $0 }.joined(separator: " ")
         toasts.post(Notice(dedupeKey: "dictation.canceled", style: .info, symbol: "xmark.circle",
-                           title: "Dictation canceled", body: body, actions: actions,
-                           lifetime: .seconds(6), recordingID: recording.id))
+                           title: isHubJob ? "Transcription canceled" : "Dictation canceled",
+                           body: body.isEmpty ? nil : body, actions: actions,
+                           lifetime: .seconds(note == nil ? 6 : 10), recordingID: recording.id))
+    }
+
+    /// Posts a failure notice; the same failure again within `repeatedFailureQuietPeriod` of its last sound
+    /// replaces the notice without replaying the sound.
+    private func postFailure(_ notice: Notice) {
+        var notice = notice
+        if notice.sound != nil {
+            let now = clock()
+            if let last = failureCueTimes[notice.dedupeKey], now - last < Self.repeatedFailureQuietPeriod {
+                notice.sound = nil
+            } else {
+                failureCueTimes[notice.dedupeKey] = now
+            }
+        }
+        toasts.post(notice)
     }
 
     private func playCue(_ sound: SoundEffect) {
@@ -492,8 +545,6 @@ final class DictationController {
         case paste(targetPID: pid_t?)
         /// Hub retries: update history only.
         case historyOnly
-        /// History and a success flash, no paste and no notice.
-        case quiet
     }
 
     fileprivate enum Outcome {
@@ -513,12 +564,14 @@ final class DictationController {
         var generation = 0
         var playsStopCue = false
         var isCancelled = false
-        private let placeholderID = UUID()
+        private let placeholderID: UUID
 
-        init(recording: Recording?, engine: EngineID, delivery: Delivery) {
+        /// `id`: the id the recording will have (a resumed dictation's), when it is known before the audio is.
+        init(recording: Recording?, engine: EngineID, delivery: Delivery, id: UUID? = nil) {
             self.recording = recording
             self.engine = engine
             self.delivery = delivery
+            self.placeholderID = id ?? UUID()
         }
 
         /// The recording's id once it exists (history, retry and undo all key on it).
@@ -530,9 +583,10 @@ final class DictationController {
         }
     }
 
-    /// Starts transcribing right away; the result is delivered after every older job's.
+    /// Starts transcribing right away; the result is delivered after every older job's. A recording that is
+    /// already queued, being delivered or being recorded on is never queued twice.
     func enqueue(_ recording: Recording, engine: EngineID, delivery: Delivery) {
-        guard !queue.contains(where: { $0.id == recording.id }) else { return }
+        guard !isInFlight(recording.id) else { return }
         let job = Job(recording: recording, engine: engine, delivery: delivery)
         queue.append(job)
         _ = machine.handle(.jobStarted, now: clock())
@@ -618,15 +672,22 @@ final class DictationController {
     private func drain() {
         defer { stateDidChange() }
         guard !isDelivering, let head = queue.first, let outcome = head.outcome else { return }
-        isDelivering = true
+        deliveringJob = head
         queue.removeFirst()
         Task { [weak self] in
             guard let self else { return }
             await self.deliver(head, outcome)
-            self.isDelivering = false
+            self.deliveringJob = nil
             _ = self.machine.handle(.jobEnded, now: self.clock())
             self.drain()
         }
+    }
+
+    private var isDelivering: Bool { deliveringJob != nil }
+
+    /// Queued, being delivered, or being recorded on again (Undo).
+    private func isInFlight(_ id: UUID) -> Bool {
+        queue.contains { $0.id == id } || deliveringJob?.id == id || continuing?.id == id
     }
 
     /// False when there was nothing left to cancel (the last result is already being delivered).
@@ -639,8 +700,7 @@ final class DictationController {
         dismissSlowNotice(for: job.id)
         _ = machine.handle(.jobEnded, now: clock())
         if let recording = job.recording {
-            keepCancelled(recording, engine: job.engine, notify: true)
-            if job.delivery == .historyOnly, retained[recording.id] != nil { historyOnlyIDs.insert(recording.id) }
+            keepCancelled(recording, engine: job.engine, notify: true, historyOnly: job.delivery == .historyOnly)
         }
         drain()
         return true
@@ -676,8 +736,6 @@ final class DictationController {
             case .paste(let target):
                 let insertion = await insert(text, expectedPID: target)
                 handleInsertion(insertion, text: text, celebrate: true)
-            case .quiet:
-                flash(.success)
             }
         }
     }
@@ -713,7 +771,7 @@ final class DictationController {
             audioDuration: recording.duration, voicedSeconds: recording.speech.voicedSeconds,
             errorMessage: notice.title, audioFileName: file ?? history.entry(id: job.id)?.audioFileName))
         Log.engine.error("Transcription failed: \(error.code, privacy: .public)")
-        toasts.post(notice)
+        postFailure(notice)
         flash(.error)
     }
 
@@ -852,7 +910,7 @@ final class DictationController {
 
     /// Hub history "Retry" (failed or canceled rows) with any engine.
     func retry(_ entry: TranscriptEntry, with engine: EngineID) {
-        guard !queue.contains(where: { $0.id == entry.id }) else { return }
+        guard !isInFlight(entry.id) else { return }
         guard let recording = recording(for: entry.id) else {
             postRecordingGone()
             return
@@ -870,6 +928,7 @@ final class DictationController {
             }
             return
         }
+        guard !isInFlight(id) else { return }
         guard let recording = recording(for: id) else {
             postRecordingGone()
             return
@@ -883,14 +942,32 @@ final class DictationController {
         historyOnlyIDs.contains(id) ? .historyOnly : .paste(targetPID: inserter.frontmostPID())
     }
 
-    /// Transcribes a canceled recording after all and pastes it wherever the cursor is now.
+    /// Undo of a cancel: the dictation picks up again hands-free, its kept audio first, and nothing is transcribed
+    /// or pasted until the user stops (Esc cancels it again, all of it). A canceled Hub transcription is
+    /// transcribed after all, into history.
     private func undo(recordingID: UUID?) {
         guard let id = recordingID, let recording = recording(for: id) else {
             postRecordingGone()
             return
         }
-        guard passesPreflight(recording) else { return }
-        enqueue(recording, engine: settings.selectedEngine, delivery: redeliveryTarget(for: id))
+        if historyOnlyIDs.contains(id) {
+            enqueue(recording, engine: settings.selectedEngine, delivery: .historyOnly)
+            return
+        }
+        // Already being transcribed (a Hub retry of it) or recorded on.
+        guard !isInFlight(id) else { return }
+        let saved = history.entry(id: id)?.status == .cancelled
+        guard !machine.isRecording else {
+            postCanceled(recording, saved: saved, note: "Finish this dictation first, then Undo.")
+            return
+        }
+        resumeRequest = recording
+        send(.resume(prefix: recording.duration))
+        resumeRequest = nil
+        if continuing?.id != id {
+            // The mic didn't start (its error is showing): the audio stays for another Undo.
+            postCanceled(recording, saved: saved, note: Self.undoResumesHint)
+        }
     }
 
     private func startDownload(_ engine: EngineID) {
@@ -914,7 +991,7 @@ final class DictationController {
     /// their failures surface as notices. A failed dictation's notice for the same error shares the dedupe key.
     private func modelFailed(_ engine: EngineID, _ error: AppError) {
         if case .modelLoadFailed = error, engine != settings.selectedEngine { return }
-        toasts.post(error.notice(recordingID: nil, fallbackEngine: usableFallback(excluding: engine, after: error),
+        postFailure(error.notice(recordingID: nil, fallbackEngine: usableFallback(excluding: engine, after: error),
                                  engine: engine))
     }
 
@@ -954,7 +1031,7 @@ final class DictationController {
             guard let id = lastCancelledID, retained[id] != nil else { return }
             toasts.post(Notice(dedupeKey: "dictation.canceled", style: .info, symbol: "keyboard",
                                title: "Dictation stopped",
-                               body: "You pressed another key while holding \(pttHint).",
+                               body: "You pressed another key while holding \(pttHint). \(Self.undoResumesHint)",
                                actions: [NoticeAction(title: "Undo", kind: .undoCancel, isPrimary: true)],
                                lifetime: .seconds(6), recordingID: id))
         case .deviceLostTranscribing:
@@ -978,7 +1055,7 @@ final class DictationController {
                                lifetime: .seconds(8)))
         } else {
             let engine = settings.selectedEngine
-            toasts.post(error.notice(recordingID: nil, fallbackEngine: usableFallback(excluding: engine, after: error),
+            postFailure(error.notice(recordingID: nil, fallbackEngine: usableFallback(excluding: engine, after: error),
                                      engine: engine))
         }
         flash(.error)

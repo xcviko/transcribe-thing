@@ -33,6 +33,9 @@ final class AudioRecorder {
     private(set) var lastChoice: InputDeviceChoice?
 
     private var session: CaptureSession?
+    /// The canceled recording this capture continues (Undo): its audio comes first in what `finish`, `stop` and
+    /// `cancel` return.
+    private var prefix: Recording?
     private var generation = 0
     private var startedAt = Date()
     private var lastDeviceName: String?
@@ -51,12 +54,12 @@ final class AudioRecorder {
     // MARK: Capture
 
     /// Throws `AppError` (`.microphonePermissionDenied`, `.noMicrophone`). Later failures arrive
-    /// through `onEvent`.
-    func start(preferredDeviceUID: String?) throws {
+    /// through `onEvent`. With `prefix`, the capture continues that recording: the result starts with its audio
+    /// and keeps its id and start time.
+    func start(preferredDeviceUID: String?, continuing prefix: Recording? = nil) throws {
         if let session {
             _ = session.finishNow(discard: true)
-            self.session = nil
-            isCapturing = false
+            endSession()
         }
         guard Self.isMicrophoneAuthorized else { throw AppError.microphonePermissionDenied }
 
@@ -78,6 +81,7 @@ final class AudioRecorder {
         lastChoice = choice
         lastDeviceName = record.device.name
         startedAt = Date()
+        self.prefix = prefix
         hasFailed = false
         isCapturing = true
         Log.audio.info("Capture starting on \(record.device.name, privacy: .public)")
@@ -89,8 +93,9 @@ final class AudioRecorder {
     func stop() -> Recording {
         guard let session else { return makeRecording([]) }
         let samples = session.finishNow(discard: false)
+        let prefix = prefix
         endSession()
-        return makeRecording(samples)
+        return Self.joined(prefix, makeRecording(samples))
     }
 
     /// Ends the capture after `tail` more seconds of audio (the pill can show processing at once), then
@@ -98,22 +103,34 @@ final class AudioRecorder {
     func finish(tail: TimeInterval = AudioRecorder.stopTail) async -> Recording {
         guard let session else { return makeRecording([]) }
         let startedAt = startedAt
+        let prefix = prefix
         let name = session.device.name
         endSession()
         let samples = await withCheckedContinuation { (continuation: CheckedContinuation<[Float], Never>) in
             session.finish(tail: tail) { continuation.resume(returning: $0) }
         }
-        let speech = await Task.detached(priority: .userInitiated) { SpeechAnalyzer.stats(for: samples) }.value
-        return Recording(samples: samples, startedAt: startedAt, speech: speech, deviceName: name)
+        // Analysis and the join (up to 20 minutes of audio) stay off the main thread.
+        return await Task.detached(priority: .userInitiated) {
+            let own = Recording(samples: samples, startedAt: startedAt, speech: SpeechAnalyzer.stats(for: samples),
+                                deviceName: name)
+            return AudioRecorder.joined(prefix, own)
+        }.value
     }
 
-    /// Stops; returns the captured audio for Undo, or nil when it is shorter than 0.3 s.
+    /// Stops; returns the captured audio for Undo (with any resumed prefix), or nil when it is shorter than 0.3 s.
     func cancel() -> Recording? {
         guard let session else { return nil }
         let samples = session.finishNow(discard: false)
+        let prefix = prefix
         endSession()
-        guard Double(samples.count) / Recording.sampleRate >= Self.minimumUndoDuration else { return nil }
-        return makeRecording(samples)
+        let count = samples.count + (prefix?.samples.count ?? 0)
+        guard Double(count) / Recording.sampleRate >= Self.minimumUndoDuration else { return nil }
+        return Self.joined(prefix, makeRecording(samples))
+    }
+
+    /// `recording` after the resumed `prefix`, if any.
+    nonisolated static func joined(_ prefix: Recording?, _ recording: Recording) -> Recording {
+        prefix.map { $0.continued(with: recording) } ?? recording
     }
 
     /// Attenuates the recording by 30 dB over `[from, from + duration + 50 ms]` so a UI sound played
@@ -156,6 +173,7 @@ final class AudioRecorder {
 
     private func endSession() {
         session = nil
+        prefix = nil
         isCapturing = false
     }
 
@@ -190,5 +208,17 @@ final class AudioRecorder {
                 MainActor.assumeIsolated { recorder?.handle(event, generation: generation) }
             }
         }
+    }
+}
+
+extension Recording {
+    /// This (canceled) recording followed by `next`, as one recording that keeps this one's id and start time: a
+    /// dictation resumed with Undo stays the same dictation in history, retries and Undo.
+    func continued(with next: Recording) -> Recording {
+        Recording(id: id, samples: samples + next.samples, startedAt: startedAt,
+                  speech: SpeechStats(voicedSeconds: speech.voicedSeconds + next.speech.voicedSeconds,
+                                      peakDBFS: max(speech.peakDBFS, next.speech.peakDBFS),
+                                      isSilent: speech.isSilent && next.speech.isSilent),
+                  deviceName: next.deviceName ?? deviceName)
     }
 }

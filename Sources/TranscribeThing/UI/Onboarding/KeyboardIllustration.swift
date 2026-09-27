@@ -1,43 +1,39 @@
 import SwiftUI
 
-/// The bottom-left corner of a Mac keyboard, drawn in code. Keys sink and glow while physically held.
+/// The corner of a Mac keyboard the shortcuts live on (esc above, fn to ⌘ and the space bar below), drawn in
+/// code. Keys sink and glow while physically held.
 struct KeyboardIllustration: View {
     var pressed: Set<IllustratedKey>
     /// Keys used by the current bindings: their legends are tinted so the eye finds them.
     var emphasized: Set<IllustratedKey>
-    var unit: CGFloat = 40
-    var gap: CGFloat = 5
+    var unit: CGFloat = 30
+    var gap: CGFloat = 4
 
     var body: some View {
         VStack(alignment: .leading, spacing: gap) {
             HStack(spacing: gap) {
-                cap(.escape, width: unit * 1.5, height: unit * 0.6, bottomLeft: "esc")
+                cap(.escape, width: unit * 1.5, height: unit * 0.56, bottomLeft: "esc")
                 ForEach(Self.functionIcons, id: \.self) { icon in
-                    DecorKeycap(width: unit, height: unit * 0.6, symbol: icon)
-                }
-            }
-            HStack(spacing: gap) {
-                cap(.shift, width: unit * 2.3, height: unit, topLeft: "⇧", bottomLeft: "shift")
-                ForEach(["Z", "X", "C", "V", "B", "N"], id: \.self) { letter in
-                    DecorKeycap(width: unit, height: unit, letter: letter)
+                    DecorKeycap(width: unit, height: unit * 0.56, symbol: icon)
                 }
             }
             HStack(spacing: gap) {
                 cap(.fn, width: unit, height: unit, topRight: "fn", bottomLeftSymbol: "globe")
-                cap(.control, width: unit, height: unit, topRight: "⌃", bottomLeft: "control")
-                cap(.option, width: unit, height: unit, topRight: "⌥", bottomLeft: "option")
-                cap(.command, width: unit * 1.25, height: unit, topRight: "⌘", bottomLeft: "command")
-                cap(.space, width: unit * 4.8, height: unit)
-                DecorKeycap(width: unit * 1.25, height: unit, letter: "⌘")
+                cap(.control, width: unit, height: unit, topRight: "⌃")
+                cap(.option, width: unit, height: unit, topRight: "⌥")
+                cap(.command, width: unit * 1.25, height: unit, topRight: "⌘")
+                // Runs on past the crop: the host fades it out.
+                cap(.space, width: unit * 6.5, height: unit)
             }
         }
-        .padding(12)
+        .padding(9)
         .background(KeyboardDeck())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityDescription)
     }
 
-    private static let functionIcons = ["sun.min", "sun.max", "rectangle.3.group", "magnifyingglass", "mic", "moon"]
+    private static let functionIcons = ["sun.min", "sun.max", "rectangle.3.group", "magnifyingglass", "mic", "moon",
+                                        "backward", "playpause", "forward"]
 
     private func cap(_ key: IllustratedKey, width: CGFloat, height: CGFloat, topLeft: String? = nil,
                      topRight: String? = nil, bottomLeft: String? = nil, bottomLeftSymbol: String? = nil) -> some View {
@@ -58,7 +54,7 @@ private struct KeyboardDeck: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: 13, style: .continuous)
         let dark = scheme == .dark
         shape
             .fill(LinearGradient(colors: dark ? [Color(nsColor: .hex(0x242321)), Color(nsColor: .hex(0x1B1A19))]

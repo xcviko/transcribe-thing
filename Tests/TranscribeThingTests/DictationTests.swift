@@ -224,6 +224,62 @@ import Testing
         #expect(effects == Self.cancelAll + [.cancelCapture(keepForUndo: true, notify: true), .playSound(.cancel)])
     }
 
+    // MARK: Undo resumes
+
+    @Test(arguments: ["idle", "tapPending"])
+    func resumeLocksWithTheKeptAudioCounted(_ from: String) {
+        var m = Self.state(from)
+        let effects = m.handle(.resume(prefix: 2.5), now: 20)
+        #expect(m.capture == .locked(startedAt: 17.5), "the timer counts from the canceled dictation's start")
+        #expect(m.mode == .handsFree)
+        #expect(effects == [.cancelTimer(.doublePressWindow), .resumeCapture, .showPill(.locked), .playSound(.lock)]
+            + Self.limitTimers(elapsed: 2.5))
+    }
+
+    @Test func resumeWhileAJobRunsStillRecords() {
+        var m = M()
+        _ = m.handle(.jobStarted, now: 1)
+        let effects = m.handle(.resume(prefix: 1), now: 2)
+        #expect(effects.contains(.resumeCapture))
+        #expect(m.isRecording && m.activeJobs == 1)
+    }
+
+    @Test(arguments: ["arming", "listening", "locked", "lockedStopPending"])
+    func resumeWhileRecordingIsIgnored(_ from: String) {
+        var m = Self.state(from)
+        let before = m
+        #expect(m.handle(.resume(prefix: 3), now: 40).isEmpty)
+        #expect(m == before)
+    }
+
+    @Test(arguments: [DictationMachine.Input.handsFreeToggle, .pillStop])
+    func resumedDictationFinishesLikeHandsFree(_ input: DictationMachine.Input) {
+        var m = M()
+        _ = m.handle(.resume(prefix: 4), now: 20)
+        #expect(m.handle(input, now: 30) == Self.cancelLimits + [.stopCaptureAndTranscribe(mode: .handsFree), .playSound(.stop)])
+        #expect(m.capture == .idle)
+    }
+
+    @Test func resumedDictationStopsWithAnFnTapAndCancelsAgainWithEsc() {
+        var m = M()
+        _ = m.handle(.resume(prefix: 4), now: 20)
+        #expect(m.handle(.pttDown, now: 25).isEmpty, "not the key that locked it: waits for the release")
+        #expect(m.handle(.pttUp, now: 25.125) == Self.cancelLimits + [.stopCaptureAndTranscribe(mode: .handsFree), .playSound(.stop)])
+
+        var again = M()
+        _ = again.handle(.resume(prefix: 4), now: 20)
+        #expect(again.handle(.cancel, now: 22) == Self.cancelAll + [.cancelCapture(keepForUndo: true, notify: true), .playSound(.cancel)])
+        #expect(again.handle(.resume(prefix: 6), now: 23).contains(.resumeCapture), "and Undo resumes it again")
+    }
+
+    @Test func resumedLimitIncludesTheKeptAudio() {
+        var m = DictationMachine(config: .init(maxDuration: 300))
+        #expect(m.handle(.resume(prefix: 280), now: 1000).suffix(2) == [.schedule(.limitWarning, after: 0), .schedule(.limit, after: 20)])
+        var over = DictationMachine(config: .init(maxDuration: 300))
+        #expect(over.handle(.resume(prefix: 400), now: 1000).suffix(2) == [.schedule(.limitWarning, after: 0), .schedule(.limit, after: 0)],
+                "kept audio past a limit lowered since: stops and transcribes at once")
+    }
+
     @Test func escWhileProcessingCancelsNewestJob() {
         var m = M()
         _ = m.handle(.jobStarted, now: 1)
@@ -592,23 +648,38 @@ import Testing
 final class FakeRecorder: DictationRecorder {
     var isCapturing = false
     var starts = 0
+    /// The recording the last successful start continued (Undo), if any.
+    var lastPrefix: Recording?
+    /// Thrown by the next starts (a mic that can't start).
+    var startError: AppError?
+    /// What the capture in progress records; a start that continues a recording puts that one first.
     var next = Recording(samples: Array(repeating: 0.1, count: 16_000 * 2),
                          speech: SpeechStats(voicedSeconds: 1.5, peakDBFS: -12, isSilent: false))
+    private var prefix: Recording?
 
-    func start(preferredDeviceUID: String?) throws {
+    func start(preferredDeviceUID: String?, continuing prefix: Recording?) throws {
+        if let startError { throw startError }
         starts += 1
         isCapturing = true
+        self.prefix = prefix
+        lastPrefix = prefix
     }
 
     func finish(tail: TimeInterval) async -> Recording {
         isCapturing = false
         defer { next = Recording(samples: next.samples, speech: next.speech) }
-        return next
+        return take()
     }
 
     func cancel() -> Recording? {
         isCapturing = false
-        return next
+        return take()
+    }
+
+    private func take() -> Recording {
+        let recording = AudioRecorder.joined(prefix, next)
+        prefix = nil
+        return recording
     }
 
     func duckRecording(from: TimeInterval, duration: TimeInterval) {}
@@ -1000,7 +1071,13 @@ final class FakeRecorder: DictationRecorder {
         try await Task.sleep(for: .milliseconds(300))
         #expect(pasted.isEmpty)
 
+        // Undo records on, hands-free, after the kept audio; only stopping transcribes (and pastes) it all.
         h.controller.perform(undo.actions[0], from: undo)
+        #expect(h.controller.machine.capture.isListeningOrLocked)
+        #expect(h.recorder.lastPrefix?.id == long.id)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(pasted.isEmpty)
+        h.controller.send(.pillStop)
         try await waitUntil { pasted == ["text"] }
     }
 

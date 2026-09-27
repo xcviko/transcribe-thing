@@ -189,7 +189,8 @@ import Testing
         .openRouterRateLimited(retryAfter: nil), .openRouterNoRoute("No endpoints found"),
         .openRouterProviderUnavailable("Provider returned error"), .openRouterRefused("Content blocked by the provider"),
         .openRouterBadRequest("Invalid audio format"), .openRouterServer("Internal server error"),
-        .timeout(.geminiFlash), .timeout(.parakeetCloud), .timeout(.parakeet), .offline, .emptyResult(.geminiPro), .noSpeech,
+        .timeout(.geminiFlash), .timeout(.parakeetCloud), .timeout(.parakeet), .offline, .emptyResult(.geminiPro),
+        .emptyResult(.parakeet), .emptyResult(.parakeetCloud), .noSpeech,
         .engineFailed(.parakeet, "CoreML error"), .recordingTooLarge,
         .openRouterKeyUnreadable, .openRouterKeyLimit("Key limit exceeded"),
         .openRouterTruncated("So the plan is so the plan is so the plan is"),
@@ -220,7 +221,11 @@ import Testing
                         #expect(recordingID != nil && error.isRetryable, "\(error): Retry without retained audio")
                     case .retryWith(let engine):
                         #expect(recordingID != nil && fallback == engine, "\(error): Retry with unexpected engine")
-                        #expect(action.title == "Retry with \(engine.shortName)")
+                        if case .emptyResult(let failed) = error, failed.isLocal, engine.isCloud {
+                            #expect(action.title == "Try in the cloud")
+                        } else {
+                            #expect(action.title == "Retry with \(engine.shortName)")
+                        }
                     case .selectEngine(let engine):
                         #expect(recordingID == nil && fallback == engine)
                     default:
@@ -247,6 +252,26 @@ import Testing
         #expect(notice.style == .error)
         #expect(notice.sound == .error)
         #expect(notice.lifetime == .seconds(10))
+    }
+
+    /// The same audio through the same model on this Mac gives the same nothing: no Retry, only the cloud model.
+    @Test func noTextFromTheModelOnThisMacIsNeverRetriedAsIs() {
+        let local = AppError.emptyResult(.parakeet)
+        #expect(!local.isRetryable)
+        let withKey = local.notice(recordingID: UUID(), fallbackEngine: .parakeetCloud, engine: .parakeet)
+        #expect(withKey.actions.map(\.title) == ["Try in the cloud"])
+        #expect(withKey.actions.map(\.kind) == [.retryWith(.parakeetCloud)])
+        #expect(withKey.body == "\(EngineID.parakeet.displayName) returned nothing. Your recording is saved.")
+        let alone = local.notice(recordingID: UUID(), fallbackEngine: nil, engine: .parakeet)
+        #expect(alone.actions.isEmpty, "nothing to do but dismiss it")
+        #expect(alone.body == "\(EngineID.parakeet.displayName) returned nothing.")
+        #expect(alone.lifetime == .seconds(5))
+
+        #expect(AppError.emptyResult(.parakeetCloud).isRetryable)
+        let cloud = AppError.emptyResult(.parakeetCloud).notice(recordingID: UUID(), fallbackEngine: .parakeet)
+        #expect(cloud.actions.map(\.kind) == [.retry, .retryWith(.parakeet)])
+        let gemini = AppError.emptyResult(.geminiFlash).notice(recordingID: UUID(), fallbackEngine: nil)
+        #expect(gemini.actions.map(\.kind) == [.retry, .openHub(.models)])
     }
 
     @Test func truncatedTranscriptIsShownNotPasted() {

@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Six-step first-run flow (wispr-ux.md §4, SPEC §7.1). 820×600, copy on the left, a live stage on the right.
+/// Five-step first-run flow (wispr-ux.md §4, SPEC §7.1; shortcuts and practice share one step). 820×600, copy on
+/// the left, a live stage on the right.
 struct OnboardingView: View {
     @State private var model: OnboardingModel
 
@@ -100,7 +101,6 @@ private struct OnboardingRoot: View {
         case .welcome: WelcomeStep(model: model)
         case .permissions: PermissionsStep(model: model)
         case .model: ModelStep(model: model)
-        case .shortcuts: ShortcutsStep(model: model)
         case .tryIt: TryItStep(model: model)
         case .done: DoneStep(model: model)
         }
@@ -111,7 +111,6 @@ private struct OnboardingRoot: View {
         case .welcome: WelcomeStage(shortcut: model.ctx.settings.shortcuts[.pushToTalk])
         case .permissions: PermissionsStage(model: model)
         case .model: EmptyView()
-        case .shortcuts: ShortcutsStage(model: model)
         case .tryIt: PracticeChat(model: model)
         case .done: DoneStage(model: model)
         }

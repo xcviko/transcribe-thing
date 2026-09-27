@@ -74,39 +74,71 @@ enum OnboardingSnapshots {
                 model.stageKey(draft: "sk-or-v1-...", replacing: true)
             },
 
-            entry("onboarding-4-shortcuts", still: 0.4) { model in model.stage(step: .shortcuts) },
-            entry("onboarding-4-shortcuts-fn", still: 1.3) { model in
-                model.stage(step: .shortcuts)
+            entry("onboarding-4-tryit") { model in model.stage(step: .tryIt) },
+            entry("onboarding-4-tryit-fn", still: 1.3) { model in
+                model.stage(step: .tryIt)
                 model.stagePressed([.fn], heldPTT: true)
             },
-            entry("onboarding-4-shortcuts-handsfree", still: 1.7) { model in
-                model.stage(step: .shortcuts)
+            entry("onboarding-4-tryit-success") { model in
+                model.stage(step: .tryIt)
+                model.stagePractice(messages: firstExchange, completed: [.pushToTalk],
+                                    stat: PracticeStat(words: 18, seconds: 6.2))
+            },
+            entry("onboarding-4-tryit-handsfree", still: 1.7) { model in
+                model.stage(step: .tryIt)
+                model.stagePractice(messages: firstExchange, completed: [.pushToTalk],
+                                    stat: PracticeStat(words: 18, seconds: 6.2))
                 model.stagePressed([.fn, .space], heldPTT: true, triedHandsFree: true, latched: true)
             },
-
-            entry("onboarding-5-tryit") { model in model.stage(step: .tryIt) },
-            entry("onboarding-5-tryit-success") { model in
+            entry("onboarding-4-tryit-complete") { model in
                 model.stage(step: .tryIt)
                 model.stagePractice(
-                    messages: [
-                        ChatMessage(sender: .alex, text: OnboardingModel.alexOpening),
-                        ChatMessage(sender: .me, text: "Heading to the studio to finish the onboarding designs, then a quick run before dinner."),
-                        ChatMessage(sender: .alex, text: OnboardingModel.alexAfterFirst),
+                    messages: firstExchange + [
+                        ChatMessage(sender: .me, text: "Probably the farmers market in the morning and then a long lunch with Sam."),
+                        ChatMessage(sender: .alex, text: OnboardingModel.alexAfterSecond),
+                        ChatMessage(sender: .note, text: OnboardingModel.cancelNote),
                     ],
-                    completed: [.pushToTalk],
-                    stat: PracticeStat(words: 18, seconds: 6.2))
+                    completed: [.pushToTalk, .handsFree, .cancel],
+                    stat: PracticeStat(words: 16, seconds: 4.9))
             },
-            entry("onboarding-5-tryit-downloading", context: { ctx in
+            entry("onboarding-4-tryit-hands-free-hint") { model in
+                model.stage(step: .tryIt)
+                model.stagePractice(
+                    messages: firstExchange + [
+                        ChatMessage(sender: .me, text: "Probably the farmers market in the morning."),
+                        ChatMessage(sender: .alex, text: OnboardingModel.alexAfterSecond),
+                    ],
+                    completed: [.pushToTalk], stat: PracticeStat(words: 7, seconds: 2.4), hint: .tryHandsFree)
+            },
+            entry("onboarding-4-tryit-keyboard-hint") { model in
+                model.stage(step: .tryIt)
+                model.stageKeyboardHint(true)
+            },
+            entry("onboarding-4-tryit-preparing", context: { ctx in
+                ctx.models = .preview(states: [.parakeet: .preparing(since: Date().addingTimeInterval(-12))])
+            }) { model in model.stage(step: .tryIt) },
+            entry("onboarding-4-tryit-downloading", context: { ctx in
                 ctx.models = .preview(states: [
                     .parakeet: .downloading(DownloadProgress(fraction: 0.62, bytesReceived: 392_000_000,
                                                              totalBytes: 632_321_326, secondsRemaining: 18)),
                 ])
-            }) { model in model.stage(step: .tryIt) },
+            }) { model in
+                model.stage(step: .tryIt)
+                model.stagePressed([.fn], heldPTT: true)
+            },
 
-            entry("onboarding-6-done", still: 0.42) { model in model.stage(step: .done) },
-            entry("onboarding-6-done-cloud", still: 0.42, context: { ctx in
+            entry("onboarding-5-done", still: 0.42) { model in model.stage(step: .done) },
+            entry("onboarding-5-done-cloud", still: 0.42, context: { ctx in
                 ctx.settings.selectedEngine = .parakeetCloud
             }) { model in model.stage(step: .done) },
+        ]
+    }
+
+    @MainActor private static var firstExchange: [ChatMessage] {
+        [
+            ChatMessage(sender: .alex, text: OnboardingModel.alexOpening),
+            ChatMessage(sender: .me, text: "Heading to the studio to finish the onboarding designs, then a quick run before dinner."),
+            ChatMessage(sender: .alex, text: OnboardingModel.alexAfterFirst),
         ]
     }
 

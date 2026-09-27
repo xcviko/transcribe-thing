@@ -12,14 +12,27 @@ import Testing
                               keyStatus: key, hasStoredKey: stored)
     }
 
-    @Test(arguments: [(-3, OnboardingStep.welcome), (0, .welcome), (2, .model), (5, .done), (99, .done)])
+    @Test(arguments: [(-3, OnboardingStep.welcome), (0, .welcome), (2, .model), (3, .tryIt), (4, .done), (99, .done)])
     func resumeClampsTheStoredStep(_ stored: Int, _ expected: OnboardingStep) {
         #expect(OnboardingStep.resuming(from: stored) == expected)
     }
 
+    @Test func fiveSteps() {
+        #expect(OnboardingStep.allCases == [.welcome, .permissions, .model, .tryIt, .done])
+        #expect(OnboardingStepIndex.tryIt == OnboardingStep.tryIt.rawValue, "the Hub's Practice button lands on the chat")
+        #expect(OnboardingStepIndex.welcome == OnboardingStep.welcome.rawValue)
+    }
+
+    /// Old layout: welcome, permissions, model, shortcuts, try it, done.
+    @Test(arguments: [(-1, OnboardingStep.welcome), (0, .welcome), (1, .permissions), (2, .model),
+                      (3, .tryIt), (4, .tryIt), (5, .done), (9, .done)])
+    func sixStepProgressMapsOntoFiveSteps(_ old: Int, _ expected: OnboardingStep) {
+        #expect(OnboardingStep.resuming(from: AppSettings.onboardingStep(fromSixStepIndex: old)) == expected)
+    }
+
     @Test func freeStepsNeverBlock() {
         let blocked = inputs(mic: .denied, ax: .denied, local: .notInstalled)
-        for step in [OnboardingStep.welcome, .shortcuts, .tryIt, .done] {
+        for step in [OnboardingStep.welcome, .tryIt, .done] {
             #expect(OnboardingGate.canContinue(step, blocked))
         }
     }
@@ -145,17 +158,49 @@ import Testing
     }
 
     @Test func resumesAtTheSavedStepAndPersistsNavigation() {
-        let model = makeModel(step: 3)
-        #expect(model.step == .shortcuts)
+        let model = makeModel(step: 2)
+        #expect(model.step == .model)
         model.goNext()
         #expect(model.step == .tryIt)
-        #expect(model.ctx.settings.onboardingStep == OnboardingStep.tryIt.rawValue)
+        #expect(model.ctx.settings.onboardingStep == 3)
         #expect(model.movingForward)
+        model.goNext()
+        #expect(model.step == .done)
+        #expect(model.ctx.settings.onboardingStep == 4)
         model.goBack()
         model.goBack()
         #expect(model.step == .model)
         #expect(!model.movingForward)
         #expect(model.ctx.settings.onboardingStep == 2)
+    }
+
+    /// Someone who quit a six-step build on Shortcuts or Try it comes back to the merged step, once.
+    @Test(arguments: [(3, OnboardingStep.tryIt), (4, .tryIt), (5, .done), (2, .model)])
+    func resumesSixStepProgressSavedByAnOlderBuild(_ old: Int, _ expected: OnboardingStep) throws {
+        let suite = NSTemporaryDirectory() + "transcribe-thing-tests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(atPath: suite + ".plist")
+        }
+        defaults.set(old, forKey: SettingsKey.onboardingStep.defaultsKey)
+
+        let settings = AppSettings(defaults: defaults)
+        #expect(settings.onboardingStep == expected.rawValue)
+        #expect(defaults.object(forKey: SettingsKey.onboardingStep.defaultsKey) == nil, "the six-step value is moved, not kept")
+        #expect(defaults.integer(forKey: SettingsKey.onboardingResumeStep.defaultsKey) == expected.rawValue)
+        let model = makeModel { ctx in ctx.settings = settings }
+        #expect(model.step == expected)
+
+        // Five-step values saved from now on are read as they are, never migrated again.
+        settings.onboardingStep = OnboardingStep.done.rawValue
+        #expect(AppSettings(defaults: defaults).onboardingStep == OnboardingStep.done.rawValue)
+    }
+
+    @Test func hubPracticeLinkOpensTheMergedStep() {
+        let model = makeModel(step: 0)
+        model.externalStepChanged(OnboardingStepIndex.tryIt)
+        #expect(model.step == .tryIt)
     }
 
     @Test func primaryActionRespectsTheGate() {
@@ -233,16 +278,44 @@ import Testing
         #expect(model.celebrateReady.contains(.parakeet))
     }
 
-    @Test func holdingFnTicksTheFirstChip() {
+    @Test func holdingFnLightsTheKeysWithoutTickingALesson() {
         let model = makeModel(step: 3)
         let t0 = Date()
         model.handleRawKey(RawKeyEvent(key: .fn, isDown: true), now: t0)
         #expect(model.isHoldingPushToTalk)
-        #expect(model.shortcutsPillPhase == .listening)
+        #expect(model.livePhase == .listening)
         model.handleRawKey(RawKeyEvent(key: .fn, isDown: false), now: t0.addingTimeInterval(0.8))
         #expect(model.heldPushToTalk)
         #expect(!model.triedHandsFree)
-        #expect(model.shortcutsPillPhase == .rest)
+        #expect(model.livePhase == .rest)
+        #expect(model.completedLessons.isEmpty, "with a model ready, only words in the chat count")
+    }
+
+    @Test func keysTickTheLessonsWhileTheModelDownloads() {
+        let model = makeModel(step: 3) { ctx in
+            ctx.models = .preview(states: [.parakeet: .downloading(DownloadProgress(fraction: 0.4))])
+        }
+        #expect(model.lessonsFollowKeys)
+        let t0 = Date()
+        model.handleRawKey(RawKeyEvent(key: .fn, isDown: true), now: t0)
+        model.handleRawKey(RawKeyEvent(key: .fn, isDown: false), now: t0.addingTimeInterval(0.8))
+        #expect(model.completedLessons == [.pushToTalk])
+        #expect(model.currentLesson == .handsFree)
+        model.handleRawKey(RawKeyEvent(key: .fn, isDown: true), now: t0.addingTimeInterval(2))
+        model.handleRawKey(RawKeyEvent(key: .space, isDown: true), now: t0.addingTimeInterval(2.1))
+        #expect(model.completedLessons == [.pushToTalk, .handsFree])
+        model.handleRawKey(RawKeyEvent(key: .escape, isDown: true), now: t0.addingTimeInterval(2.5))
+        #expect(model.currentLesson == nil)
+        #expect(model.primaryTitle == "Continue")
+    }
+
+    @Test func keysOutsideThePracticeStepOnlyLightUp() {
+        let model = makeModel(step: 1)
+        model.handleRawKey(RawKeyEvent(key: .fn, isDown: true))
+        model.handleRawKey(RawKeyEvent(key: .escape, isDown: true))
+        #expect(model.pressedKeys == [.fn, .escape])
+        #expect(model.completedLessons.isEmpty)
+        #expect(!model.handsFreeLatched)
     }
 
     @Test func fnSpaceLatchesAndFnFinishes() {
@@ -255,7 +328,7 @@ import Testing
         model.handleRawKey(RawKeyEvent(key: .space, isDown: false), now: t0.addingTimeInterval(0.2))
         model.handleRawKey(RawKeyEvent(key: .fn, isDown: false), now: t0.addingTimeInterval(0.25))
         #expect(model.handsFreeLatched)
-        #expect(model.shortcutsPillPhase == .locked)
+        #expect(model.livePhase == .locked)
         model.handleRawKey(RawKeyEvent(key: .fn, isDown: true), now: t0.addingTimeInterval(3))
         model.handleRawKey(RawKeyEvent(key: .fn, isDown: false), now: t0.addingTimeInterval(3.1))
         #expect(!model.handsFreeLatched)
@@ -281,7 +354,7 @@ import Testing
     }
 
     @Test func dictatedTextSendsAndCompletesTheFirstLesson() {
-        let model = makeModel(step: 4)
+        let model = makeModel(step: 3)
         let t0 = Date()
         model.pillPhaseChanged(from: .hidden, to: .listening, now: t0)
         model.pillPhaseChanged(from: .listening, to: .processing, now: t0.addingTimeInterval(4))
@@ -294,8 +367,47 @@ import Testing
         #expect(model.primaryTitle == "Continue")
     }
 
+    /// Pretends the pipeline recorded (hands-free or held) and pasted `text` into the practice field.
+    private func dictate(_ text: String, handsFree: Bool, into model: OnboardingModel, at t0: Date) {
+        model.pillPhaseChanged(from: .hidden, to: handsFree ? .locked : .listening, now: t0)
+        model.pillPhaseChanged(from: handsFree ? .locked : .listening, to: .processing, now: t0.addingTimeInterval(4))
+        model.updateDraft(text, now: t0.addingTimeInterval(4.6))
+        model.pillPhaseChanged(from: .processing, to: .hidden, now: t0.addingTimeInterval(5))
+    }
+
+    @Test func eachLessonTicksForTheWayItWasDictated() {
+        let model = makeModel(step: 3)
+        let t0 = Date()
+        dictate("Heading to the gym at four, then dinner.", handsFree: false, into: model, at: t0)
+        #expect(model.completedLessons == [.pushToTalk])
+
+        // Holding the key again doesn't pass for hands-free: a hint says how.
+        dictate("Probably the farmers market in the morning.", handsFree: false, into: model, at: t0.addingTimeInterval(10))
+        #expect(model.completedLessons == [.pushToTalk])
+        #expect(model.practiceHint == .tryHandsFree)
+        #expect(model.currentLesson == .handsFree)
+
+        dictate("And then a long lunch with Sam, if the weather holds.", handsFree: true, into: model, at: t0.addingTimeInterval(20))
+        #expect(model.completedLessons == [.pushToTalk, .handsFree])
+        #expect(model.practiceHint == nil)
+        #expect(model.currentLesson == .cancel)
+        #expect(model.messages.map(\.sender) == [.alex, .me, .alex, .me, .alex, .me, .alex])
+    }
+
+    @Test func doublePressingIntoHandsFreeCountsAsHandsFree() {
+        let model = makeModel(step: 3)
+        let t0 = Date()
+        // The pill starts held, then the second press latches it.
+        model.pillPhaseChanged(from: .hidden, to: .listening, now: t0)
+        model.pillPhaseChanged(from: .listening, to: .locked, now: t0.addingTimeInterval(0.4))
+        model.pillPhaseChanged(from: .locked, to: .processing, now: t0.addingTimeInterval(5))
+        model.updateDraft("Long answer, spoken with my hands off the keyboard.", now: t0.addingTimeInterval(5.5))
+        #expect(model.completedLessons == [.handsFree])
+        #expect(model.currentLesson == .pushToTalk)
+    }
+
     @Test func typedTextDoesNotCountAsDictation() {
-        let model = makeModel(step: 4)
+        let model = makeModel(step: 3)
         model.updateDraft("h")
         model.updateDraft("hi")
         model.submitDraft()
@@ -305,21 +417,41 @@ import Testing
     }
 
     @Test func escWhileRecordingCompletesTheCancelLesson() {
-        let model = makeModel(step: 4)
+        let model = makeModel(step: 3)
         model.pillPhaseChanged(from: .hidden, to: .listening)
         model.handleRawKey(RawKeyEvent(key: .escape, isDown: true))
         #expect(model.completedLessons.contains(.cancel))
         #expect(model.messages.last?.sender == .note)
+        #expect(model.messages.last?.text == OnboardingModel.cancelNote)
+    }
+
+    /// Undo after a cancel picks the recording back up hands-free; what it then pastes is a hands-free answer.
+    @Test func undoResumingHandsFreeFinishesTheHandsFreeLesson() {
+        let model = makeModel(step: 3)
+        let t0 = Date()
+        dictate("Heading to the gym at four, then dinner.", handsFree: false, into: model, at: t0)
+        model.pillPhaseChanged(from: .hidden, to: .listening, now: t0.addingTimeInterval(10))
+        model.handleRawKey(RawKeyEvent(key: .escape, isDown: true), now: t0.addingTimeInterval(12))
+        model.handleRawKey(RawKeyEvent(key: .escape, isDown: false), now: t0.addingTimeInterval(12.1))
+        model.pillPhaseChanged(from: .listening, to: .hidden, now: t0.addingTimeInterval(12.1))
+        #expect(model.completedLessons == [.pushToTalk, .cancel])
+        #expect(model.draft.isEmpty, "nothing pasted on cancel")
+
+        model.pillPhaseChanged(from: .hidden, to: .locked, now: t0.addingTimeInterval(14))
+        model.pillPhaseChanged(from: .locked, to: .processing, now: t0.addingTimeInterval(20))
+        model.updateDraft("Actually, the plan is a long walk and then pizza.", now: t0.addingTimeInterval(20.5))
+        #expect(model.completedLessons == [.pushToTalk, .handsFree, .cancel])
+        #expect(model.currentLesson == nil)
     }
 
     @Test func escWhileIdleDoesNothing() {
-        let model = makeModel(step: 4)
+        let model = makeModel(step: 3)
         model.handleRawKey(RawKeyEvent(key: .escape, isDown: true))
         #expect(model.completedLessons.isEmpty)
     }
 
     @Test func noSpeechShowsTheMicHint() {
-        let model = makeModel(step: 4)
+        let model = makeModel(step: 3)
         model.pillPhaseChanged(from: .processing, to: .error)
         #expect(model.practiceHint == .noSpeech)
         model.pillPhaseChanged(from: .error, to: .listening)
@@ -327,7 +459,8 @@ import Testing
     }
 
     @Test func finishCompletesOnboardingAndAppliesPreferences() {
-        let model = makeModel(step: 5)
+        let model = makeModel(step: 4)
+        #expect(model.step == .done)
         #expect(model.openAtLogin)
         model.finish()
         #expect(model.ctx.settings.onboardingCompleted)

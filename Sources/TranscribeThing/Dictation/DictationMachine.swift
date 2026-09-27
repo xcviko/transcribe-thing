@@ -23,6 +23,8 @@ struct DictationMachine: Equatable {
         /// `pttInterrupted`: another key, extra modifier or mouse click while the PTT key is held.
         case pttDown, pttUp, pttInterrupted
         case handsFreeToggle, cancel, pillClick, pillStop, pillCancel
+        /// Undo of a canceled dictation: record on, hands-free, after `prefix` seconds of kept audio.
+        case resume(prefix: TimeInterval)
         case timer(TimerID)
         case captureFailed(AppError), deviceLost
         /// Bookkeeping for `isBusy`.
@@ -33,6 +35,8 @@ struct DictationMachine: Equatable {
 
     enum Effect: Equatable {
         case startCapture
+        /// Start capture continuing the kept recording being resumed: its audio comes first.
+        case resumeCapture
         case stopCaptureAndTranscribe(mode: Mode)
         case cancelCapture(keepForUndo: Bool, notify: Bool)
         /// .listening / .locked / .rest (rest or hidden per pill mode).
@@ -139,6 +143,8 @@ struct DictationMachine: Equatable {
             return [.startCapture, .schedule(.arming, after: config.armingDelay)]
         case .handsFreeToggle, .pillClick:
             return lockFromRest(now: now)
+        case .resume(let prefix):
+            return resumeFromRest(prefix: prefix, now: now)
         case .cancel where activeJobs > 0:
             return [.cancelNewestJob, .playSound(.cancel)]
         default:
@@ -281,6 +287,8 @@ struct DictationMachine: Equatable {
             return []
         case .handsFreeToggle, .pillClick:
             return lockFromRest(now: now)
+        case .resume(let prefix):
+            return resumeFromRest(prefix: prefix, now: now)
         default:
             return []
         }
@@ -292,6 +300,14 @@ struct DictationMachine: Equatable {
         capture = .locked(startedAt: now)
         return [.cancelTimer(.doublePressWindow), .startCapture, .showPill(.locked), .playSound(.lock)]
             + limitTimers(startedAt: now, now: now)
+    }
+
+    /// Hands-free again, as if recording had never stopped: the timer and the limit count the kept audio too.
+    private mutating func resumeFromRest(prefix: TimeInterval, now: TimeInterval) -> [Effect] {
+        let startedAt = now - max(0, prefix)
+        capture = .locked(startedAt: startedAt)
+        return [.cancelTimer(.doublePressWindow), .resumeCapture, .showPill(.locked), .playSound(.lock)]
+            + limitTimers(startedAt: startedAt, now: now)
     }
 
     private mutating func finishHandsFree() -> [Effect] {

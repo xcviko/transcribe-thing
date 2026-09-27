@@ -329,10 +329,10 @@ private struct HistoryEmptyState: View {
     }
 }
 
-/// Onboarding step indices the Hub deep-links into (0-based, SPEC §7.1 order).
+/// Onboarding steps the Hub deep-links into, as stored in `settings.onboardingStep`.
 enum OnboardingStepIndex {
-    static let welcome = 0
-    static let tryIt = 4
+    static let welcome = OnboardingStep.welcome.rawValue
+    static let tryIt = OnboardingStep.tryIt.rawValue
 }
 
 private struct NoMatches: View {
