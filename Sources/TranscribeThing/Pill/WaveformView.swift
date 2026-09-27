@@ -219,6 +219,8 @@ struct ProcessingWaveView: View {
     var startOffset: CGFloat = 0
     /// The dots' color: white, or an extra model's tint. The shimmer stays white.
     var tint: Color = .white
+    /// Slow processing fades the dots out under "Still transcribing…"; the shimmer keeps sweeping.
+    var showsDots = true
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.pillStaticRendering) private var isStatic
@@ -227,8 +229,15 @@ struct ProcessingWaveView: View {
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 60, paused: isStatic)) { timeline in
             let date = timeline.date
-            Canvas(rendersAsynchronously: false) { context, size in
-                draw(in: &context, size: size, date: date)
+            ZStack {
+                Canvas(rendersAsynchronously: false) { context, size in
+                    drawShimmer(in: &context, size: size, time: time(at: date))
+                }
+                Canvas(rendersAsynchronously: false) { context, size in
+                    drawDots(in: &context, size: size, time: time(at: date))
+                }
+                .opacity(showsDots ? 1 : 0)
+                .animation(reduceMotion ? .easeInOut(duration: 0.15) : .easeOut(duration: 0.16), value: showsDots)
             }
         }
         .onAppear { appearedAt = Date() }
@@ -247,41 +256,49 @@ struct ProcessingWaveView: View {
         return width / 2 + startOffset * (1 - u * u * (3 - 2 * u))
     }
 
-    private func draw(in context: inout GraphicsContext, size: CGSize, date: Date) {
-        // Static snapshots freeze a pleasant mid-wave moment.
-        let t = isStatic ? 0.62 : date.timeIntervalSince(appearedAt)
-        // Bars settle into dots over 140 ms, then the wave swells in.
-        let ramp = isStatic ? 1 : min(1, max(0, (t - 0.14) / 0.3))
+    /// Seconds since the view appeared; static snapshots freeze a pleasant mid-wave moment.
+    private func time(at date: Date) -> TimeInterval {
+        isStatic ? 0.62 : date.timeIntervalSince(appearedAt)
+    }
 
+    /// Bars settle into dots over 140 ms, then the wave (and the shimmer) swells in.
+    private func ramp(at t: TimeInterval) -> Double {
+        isStatic ? 1 : min(1, max(0, (t - 0.14) / 0.3))
+    }
+
+    private func drawShimmer(in context: inout GraphicsContext, size: CGSize, time t: TimeInterval) {
+        guard !reduceMotion else { return }
+        let ramp = ramp(at: t)
+        // A glint travels along the lit upper rim every 1.4 s, with the faintest wash inside.
+        let phase = (t.truncatingRemainder(dividingBy: 1.4)) / 1.4
+        let band = size.width * 0.42
+        let centerX = -band / 2 + (size.width + band) * phase
+        let bounds = CGRect(origin: .zero, size: size)
+        func sweep(_ peak: Double) -> GraphicsContext.Shading {
+            .linearGradient(Gradient(stops: [
+                .init(color: .white.opacity(0), location: 0),
+                .init(color: .white.opacity(peak * ramp), location: 0.5),
+                .init(color: .white.opacity(0), location: 1),
+            ]), startPoint: CGPoint(x: centerX - band / 2, y: 0), endPoint: CGPoint(x: centerX + band / 2, y: 0))
+        }
+        var rim = Path()
+        rim.addPath(Capsule(style: .continuous).path(in: bounds))
+        rim.addPath(Capsule(style: .continuous).path(in: bounds.insetBy(dx: 0.8, dy: 0.8)))
+        var upper = context
+        upper.clip(to: Path(CGRect(x: 0, y: 0, width: size.width, height: size.height * 0.62)))
+        upper.fill(rim, with: sweep(0.5), style: FillStyle(eoFill: true))
+        var inside = context
+        inside.clip(to: Capsule(style: .continuous).path(in: bounds))
+        inside.fill(Path(bounds), with: sweep(0.035))
+    }
+
+    private func drawDots(in context: inout GraphicsContext, size: CGSize, time t: TimeInterval) {
+        let ramp = ramp(at: t)
         let w = PillMetrics.barWidth
         let step = w + PillMetrics.barGap
         let originX = Self.dotsCenterX(width: size.width, time: t, startOffset: startOffset, reduceMotion: reduceMotion)
             - PillMetrics.barFieldWidth / 2
         let midY = size.height / 2
-
-        if !reduceMotion {
-            // A glint travels along the lit upper rim every 1.4 s, with the faintest wash inside.
-            let phase = (t.truncatingRemainder(dividingBy: 1.4)) / 1.4
-            let band = size.width * 0.42
-            let centerX = -band / 2 + (size.width + band) * phase
-            let bounds = CGRect(origin: .zero, size: size)
-            func sweep(_ peak: Double) -> GraphicsContext.Shading {
-                .linearGradient(Gradient(stops: [
-                    .init(color: .white.opacity(0), location: 0),
-                    .init(color: .white.opacity(peak * ramp), location: 0.5),
-                    .init(color: .white.opacity(0), location: 1),
-                ]), startPoint: CGPoint(x: centerX - band / 2, y: 0), endPoint: CGPoint(x: centerX + band / 2, y: 0))
-            }
-            var rim = Path()
-            rim.addPath(Capsule(style: .continuous).path(in: bounds))
-            rim.addPath(Capsule(style: .continuous).path(in: bounds.insetBy(dx: 0.8, dy: 0.8)))
-            var upper = context
-            upper.clip(to: Path(CGRect(x: 0, y: 0, width: size.width, height: size.height * 0.62)))
-            upper.fill(rim, with: sweep(0.5), style: FillStyle(eoFill: true))
-            var inside = context
-            inside.clip(to: Capsule(style: .continuous).path(in: bounds))
-            inside.fill(Path(bounds), with: sweep(0.035))
-        }
 
         for i in 0..<PillMetrics.barCount {
             let x = originX + CGFloat(i) * step

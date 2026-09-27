@@ -506,6 +506,54 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(PillView(model: pushToTalk).visual.size.width == PillMetrics.listeningSize.width)
     }
 
+    /// "Still transcribing…" replaces the dots inside the capsule, which widens just enough to fit it.
+    @Test func slowProcessingWidensThePillToFitItsText() {
+        let model = PillModel.preview(phase: .processing)
+        #expect(PillView(model: model).visual == .processing(afterHandsFree: false))
+        let slow = PillView(model: model.previewSlowProcessing()).visual
+        #expect(slow == .processing(afterHandsFree: false, slow: true) && slow.isSlow)
+        #expect(!PillVisual.processing(afterHandsFree: false).isSlow && !PillVisual.listening.isSlow)
+        // Push-to-talk height, wider than the dots' pill and still narrower than hands-free.
+        let size = slow.size
+        #expect(size == PillMetrics.slowProcessingSize && size.height == PillMetrics.listeningSize.height)
+        #expect(size.width > PillMetrics.listeningSize.width && size.width < PillMetrics.lockedSize.width)
+        // The text and the usual padding on both sides, rounded up to whole points.
+        let text = PillMetrics.textWidth(PillMetrics.slowText, size: PillMetrics.slowFontSize, weight: .medium,
+                                         rounded: true)
+        #expect(text > 80)
+        #expect(size.width >= text + 2 * PillMetrics.slowPadding && size.width < text + 2 * PillMetrics.slowPadding + 1)
+        // After hands-free it's the same pill; the dots' start offset doesn't change its size.
+        let afterHandsFree = PillModel.preview(phase: .locked)
+        afterHandsFree.phase = .processing
+        #expect(PillView(model: afterHandsFree.previewSlowProcessing()).visual
+                == .processing(afterHandsFree: true, slow: true))
+        #expect(PillVisual.processing(afterHandsFree: true, slow: true).size == size)
+        #expect(PillVisual.processing(afterHandsFree: true, slow: true).barsOffset == PillMetrics.lockedBarsOffset)
+        // The panel's pill says it too (no floating caption above it any more).
+        #expect(PillView(model: model, context: .panel(nil)).visual.isSlow)
+    }
+
+    @Test func slowProcessingOnlyAppliesWhileProcessing() {
+        #expect(!PillView(model: PillModel.preview(phase: .listening).previewSlowProcessing()).visual.isSlow)
+        #expect(!PillView(model: PillModel.preview(phase: .error).previewSlowProcessing()).visual.isSlow)
+    }
+
+    /// Going slow keeps the pill's content (same wave, same shimmer) and its chip: only the capsule and what it says
+    /// change.
+    @Test func goingSlowKeepsTheContentAndTheModel() {
+        var stage = PillStage()
+        stage.record(.processing(afterHandsFree: false), engine: .geminiFlash)
+        let slow = PillVisual.processing(afterHandsFree: false, slow: true)
+        let frame = stage.frame(for: slow, engine: .geminiFlash)
+        #expect(frame == PillStage.Frame(capsule: slow, content: slow, exit: 0, morph: 0, collapsed: false,
+                                         engine: .geminiFlash))
+        #expect(frame.content.content == PillVisual.processing(afterHandsFree: false).content)
+        stage.record(slow, engine: .geminiFlash)
+        // Leaving, the wide pill exits whole, chip and text included.
+        let exiting = stage.frame(for: .hidden)
+        #expect(exiting.capsule == slow && exiting.content == slow && exiting.engine == .geminiFlash)
+    }
+
     @Test func helloBloomsToListeningSize() {
         let model = PillModel.preview(phase: .rest, isHovering: true)
         model.beginHello(duration: 60)
@@ -531,6 +579,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
     @Test(arguments: [
         [PillVisual.listening, .processing(afterHandsFree: false)],
         [PillVisual.locked(.elapsed), .processing(afterHandsFree: true)],
+        [PillVisual.listening, .processing(afterHandsFree: false), .processing(afterHandsFree: false, slow: true)],
         [PillVisual.listening, .error],
         [PillVisual.rest, .listening],
     ])
@@ -581,8 +630,9 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(stage.exitAnimation(to: .hidden, reduceMotion: false) == .linear(duration: PillMotion.exitDuration))
     }
 
-    @Test(arguments: [PillVisual.processing(afterHandsFree: false), .processing(afterHandsFree: true), .error, .listening,
-                      .locked(.elapsed), .peek, .hello])
+    @Test(arguments: [PillVisual.processing(afterHandsFree: false), .processing(afterHandsFree: true),
+                      .processing(afterHandsFree: false, slow: true), .processing(afterHandsFree: true, slow: true),
+                      .error, .listening, .locked(.elapsed), .peek, .hello])
     func morphingToRestShrinksTheContentWithTheCapsule(from visual: PillVisual) {
         var stage = stage(after: [visual])
         let morphing = stage.frame(for: .rest)

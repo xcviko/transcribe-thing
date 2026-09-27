@@ -44,6 +44,28 @@ enum PillMetrics {
     static let chipHeight: CGFloat = 22
     /// From the pill's top edge to the chip's.
     static let chipLift: CGFloat = chipGap + chipHeight
+
+    /// Slow processing trades the dots for this, inside the capsule.
+    static let slowText = "Still transcribing…"
+    static let slowFontSize: CGFloat = 12
+    /// The timer's rounded face, a size up so a sentence reads at a glance.
+    static let slowFont = Font.system(size: slowFontSize, weight: .medium, design: .rounded)
+    /// Between the text and the capsule's ends: the push-to-talk pill's own margin around its bars, less the
+    /// capsule's rounding the text doesn't need.
+    static let slowPadding: CGFloat = 15
+    /// Slow processing: the push-to-talk height, just wide enough for `slowText` and its padding.
+    static let slowProcessingSize = CGSize(
+        width: (textWidth(slowText, size: slowFontSize, weight: .medium, rounded: true) + 2 * slowPadding).rounded(.up),
+        height: listeningSize.height)
+
+    /// Width of a single line of `text` in the system font, as SwiftUI's `Font.system` draws it.
+    static func textWidth(_ text: String, size: CGFloat, weight: NSFont.Weight, rounded: Bool) -> CGFloat {
+        var font = NSFont.systemFont(ofSize: size, weight: weight)
+        if rounded, let descriptor = font.fontDescriptor.withDesign(.rounded) {
+            font = NSFont(descriptor: descriptor, size: size) ?? font
+        }
+        return ceil(NSAttributedString(string: text, attributes: [.font: font]).size().width)
+    }
 }
 
 /// The pill is always dark, in both appearances; these colors never adapt.
@@ -91,9 +113,10 @@ enum PillVisual: Equatable, Sendable {
     /// One-time post-onboarding bloom: listening size, bars ripple once, then rest as dots.
     case hello
     case locked(PillTimerMode)
-    /// Always the push-to-talk size: stopping hands-free shrinks the pill. `afterHandsFree` only starts the dots
+    /// The push-to-talk size: stopping hands-free shrinks the pill. `afterHandsFree` only starts the dots
     /// where the hands-free bars stood, so they glide to the center as the pill narrows instead of hopping.
-    case processing(afterHandsFree: Bool)
+    /// `slow`: processing has run long, and the capsule widens to say "Still transcribing…" instead of the dots.
+    case processing(afterHandsFree: Bool, slow: Bool = false)
     case error
 
     enum Content: Hashable { case empty, peek, hello, recording, processing, error }
@@ -102,6 +125,7 @@ enum PillVisual: Equatable, Sendable {
         switch self {
         case .hidden, .rest: PillMetrics.restSize
         case .peek: PillMetrics.peekSize
+        case .processing(_, slow: true): PillMetrics.slowProcessingSize
         case .listening, .hello, .processing: PillMetrics.listeningSize
         case .locked: PillMetrics.lockedSize
         case .error: PillMetrics.errorSize
@@ -133,11 +157,14 @@ enum PillVisual: Equatable, Sendable {
     /// Only hands-free shows the timer.
     var timer: PillTimerMode? { if case .locked(let t) = self { t } else { nil } }
 
+    /// Processing that has run long: "Still transcribing…" in place of the dots.
+    var isSlow: Bool { if case .processing(_, slow: true) = self { true } else { false } }
+
     /// Horizontal offset of the bars from the pill's center. Hands-free centers them between X and the timer;
     /// processing after it starts its dots there too, so they don't hop sideways when Stop is pressed.
     var barsOffset: CGFloat {
         switch self {
-        case .locked, .processing(afterHandsFree: true): PillMetrics.lockedBarsOffset
+        case .locked, .processing(afterHandsFree: true, _): PillMetrics.lockedBarsOffset
         default: 0
         }
     }
@@ -198,7 +225,7 @@ struct PillView: View {
         case .locked:
             return .locked(model.isInFinalMinute ? .remaining : .elapsed)
         case .processing:
-            return .processing(afterHandsFree: model.processingOrigin == .locked)
+            return .processing(afterHandsFree: model.processingOrigin == .locked, slow: model.isProcessingSlow)
         case .error:
             return .error
         }
@@ -267,6 +294,7 @@ struct PillView: View {
         case .rest, .peek, .hello: "transcribe-thing. Click to start hands-free dictation"
         case .listening: "transcribe-thing is listening"
         case .locked: "transcribe-thing is listening, hands-free"
+        case .processing(_, slow: true): "transcribe-thing is still transcribing"
         case .processing: "transcribe-thing is transcribing"
         case .error: "Dictation failed"
         }
@@ -549,7 +577,7 @@ struct PillFace: View {
                 .id(PillVisual.Content.recording)
                 .transition(contentTransition())
         case .processing:
-            ProcessingWaveView(startOffset: visual.barsOffset, tint: accent?.mark ?? .white)
+            ProcessingContent(startOffset: visual.barsOffset, tint: accent?.mark ?? .white, isSlow: visual.isSlow)
                 .frame(width: visual.size.width, height: visual.size.height)
                 .modifier(morph)
                 .id(PillVisual.Content.processing)
@@ -699,6 +727,38 @@ private struct HelloRipple: View {
                              with: .color(.white.opacity(0.5 + 0.46 * lift)))
             }
         }
+    }
+}
+
+/// The processing wave, and once processing runs long, "Still transcribing…": the dots fade out as the capsule
+/// widens and the text fades in while the shimmer keeps sweeping over it. Same content either way, so going slow
+/// never restarts the wave or the shimmer.
+private struct ProcessingContent: View {
+    var startOffset: CGFloat
+    var tint: Color
+    var isSlow: Bool
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        ZStack {
+            if isSlow {
+                Text(PillMetrics.slowText)
+                    .font(PillMetrics.slowFont)
+                    .foregroundStyle(.white.opacity(0.85))
+                    .lineLimit(1)
+                    .fixedSize()
+                    .transition(textTransition)
+            }
+            ProcessingWaveView(startOffset: startOffset, tint: tint, showsDots: !isSlow)
+        }
+    }
+
+    /// The text follows the dots out, so the two never overlap at full strength.
+    private var textTransition: AnyTransition {
+        if reduceMotion { return .opacity.animation(.easeInOut(duration: 0.15)) }
+        return .opacity.combined(with: .scale(scale: 0.96))
+            .animation(.easeOut(duration: 0.22).delay(0.08))
     }
 }
 

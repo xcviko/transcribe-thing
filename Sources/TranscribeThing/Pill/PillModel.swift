@@ -38,7 +38,7 @@ final class PillModel {
     }
     /// True during the last 60 s before the recording limit.
     private(set) var isInFinalMinute = false
-    /// Processing has run longer than `timing.slowProcessing`: the pill says "Still transcribing…".
+    /// Processing has run longer than `timing.slowProcessing`: the pill widens to say "Still transcribing…".
     private(set) var isProcessingSlow = false
 
     /// The extra model this dictation uses (Gemini Flash, Gemini Pro), set by the controller while it records and
@@ -120,6 +120,12 @@ final class PillModel {
         if phase.isRecording { model.recordingStartedAt = Date().addingTimeInterval(-(elapsed ?? 14)) }
         model.isHovering = isHovering
         return model
+    }
+
+    /// Snapshots: processing that has already run long enough to say "Still transcribing…".
+    func previewSlowProcessing() -> PillModel {
+        isProcessingSlow = visiblePhase == .processing
+        return self
     }
 
     // MARK: Phase

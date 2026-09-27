@@ -4,7 +4,7 @@ import SwiftUI
 enum PillSnapshots {
     @MainActor static var entries: [SnapshotEntry] {
         [
-            SnapshotEntry("pill-states", width: 760, height: 812) { _ in PillStateSheet() },
+            SnapshotEntry("pill-states", width: 760, height: 948) { _ in PillStateSheet() },
             SnapshotEntry("pill-tooltip", width: 640, height: 140) { _ in
                 SideBySide { _ in
                     PillView(model: .preview(phase: .rest, isHovering: true))
@@ -41,6 +41,18 @@ enum PillSnapshots {
                            model: PillStateSheet.processingAfterLocked()),
                 ])
             },
+            // Slow processing: the capsule widens to say "Still transcribing…", then leaves as one piece.
+            SnapshotEntry("pill-exit-slow", width: PillFilmSheet.width(cell: 176, columns: 6), height: 940) { _ in
+                PillFilmSheet(cell: 176, columns: 6, cellHeight: 92, strips: [
+                    .slow(),
+                    .exit("Still transcribing → hidden", .processing(afterHandsFree: false, slow: true),
+                          model: PillModel.preview(phase: .processing).previewSlowProcessing()),
+                    .morph("Still transcribing → rest (Always)", from: .processing(afterHandsFree: false, slow: true),
+                           model: PillModel.preview(phase: .processing).previewSlowProcessing()),
+                    .exit("Still transcribing · Gemini Flash → hidden", .processing(afterHandsFree: false, slow: true),
+                          model: PillModel.preview(phase: .processing).previewSlowProcessing(), engine: .geminiFlash),
+                ])
+            },
             SnapshotEntry("pill-exit-rest", width: PillFilmSheet.width(cell: 132, columns: 11), height: 452) { _ in
                 PillFilmSheet(cell: 132, columns: 11, strips: [
                     .morph("Processing → rest (Always)", from: .processing(afterHandsFree: false), model: .preview(phase: .processing)),
@@ -61,7 +73,7 @@ enum PillSnapshots {
                 ])
             },
             // Extra models (`--only pill-models`): the chip, the tint, the hint and the no-key notice.
-            SnapshotEntry("pill-models", width: 760, height: 44 + 8 * 92) { _ in PillModelSheet() },
+            SnapshotEntry("pill-models", width: 760, height: 44 + 10 * 92) { _ in PillModelSheet() },
             SnapshotEntry("pill-models-hint", width: 640, height: 150) { _ in
                 CanvasScene(model: hintModel(), notices: [])
             },
@@ -363,6 +375,24 @@ private struct PillFilmSheet: View {
                          frames: stills + exitFrames(processing, reduceMotion: false, steps: [0, 3, 5, 7, 9, 10]))
         }
 
+        /// Processing runs long: the capsule widens as the dots give way to "Still transcribing…" (the capsule's
+        /// spring, every 50 ms; the content's crossfade is pinned at each end).
+        @MainActor static func slow() -> Strip {
+            let from = PillVisual.processing(afterHandsFree: false), to = PillVisual.processing(afterHandsFree: false, slow: true)
+            let model = PillModel.preview(phase: .processing)
+            let slowModel = PillModel.preview(phase: .processing).previewSlowProcessing()
+            let frames = [0, 1, 2, 3, 4, 6].map { i in
+                let time = Double(i) * 0.05
+                let p = CGFloat(Spring(duration: 0.3, bounce: 0.12).value(target: 1.0, time: time))
+                let size = CGSize(width: from.size.width + (to.size.width - from.size.width) * p, height: to.size.height)
+                return Frame(caption: "\(Int((time * 1000).rounded())) ms") { _ in
+                    AnyView(PillFace(model: i < 2 ? model : slowModel, capsule: i < 2 ? from : to,
+                                     content: i < 2 ? from : to, size: size))
+                }
+            }
+            return Strip(title: "Processing → still transcribing", model: model, frames: frames)
+        }
+
         @MainActor private static func exitFrames(_ visual: PillVisual, reduceMotion: Bool, steps: [Int],
                                                   engine: EngineID? = nil) -> [Frame] {
             let duration = reduceMotion ? PillMotion.reducedExitDuration : PillMotion.exitDuration
@@ -462,6 +492,12 @@ private struct PillModelSheet: View {
             },
             Row(id: "processing-flash", caption: "Processing · Gemini Flash") { Self.model(.processing, engine: .geminiFlash) },
             Row(id: "processing-pro", caption: "Processing · Gemini Pro") { Self.model(.processing, engine: .geminiPro) },
+            Row(id: "processing-slow-flash", caption: "Processing · slow · Flash") {
+                Self.model(.processing, engine: .geminiFlash).previewSlowProcessing()
+            },
+            Row(id: "processing-slow-pro", caption: "Processing · slow · Pro") {
+                Self.model(.processing, engine: .geminiPro).previewSlowProcessing()
+            },
         ]
     }
 
@@ -530,6 +566,10 @@ private struct PillStateSheet: View {
             },
             Row(id: "processing", caption: "Processing") { .preview(phase: .processing) },
             Row(id: "processing-wide", caption: "Processing · after hands-free") { PillStateSheet.processingAfterLocked() },
+            Row(id: "processing-slow", caption: "Processing · slow") { PillModel.preview(phase: .processing).previewSlowProcessing() },
+            Row(id: "processing-slow-wide", caption: "Slow · after hands-free") {
+                PillStateSheet.processingAfterLocked().previewSlowProcessing()
+            },
             Row(id: "error", caption: "Error") { .preview(phase: .error) },
         ]
     }

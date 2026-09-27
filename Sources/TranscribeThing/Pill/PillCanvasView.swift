@@ -61,17 +61,13 @@ struct PillCanvasView: View {
         return model.showsTooltip || model.isHelloActive
     }
 
-    private var showsSlowTooltip: Bool {
-        model.isPresented && model.visiblePhase == .processing && model.isProcessingSlow && toasts.notices.isEmpty
-    }
-
     /// The Switch model hint over a long push-to-talk hold (the controller decides when).
     private var showsSwitchHint: Bool {
         model.isPresented && model.visiblePhase == .listening && model.showsTabHint
             && model.settings.shortcuts[.switchModel] != nil
     }
 
-    /// An extra model's chip floats above the pill: toasts and the slow tooltip make room for it.
+    /// An extra model's chip floats above the pill: toasts make room for it.
     private var showsChip: Bool {
         model.isPresented && model.isPillAllowed && model.sessionEngine != nil
             && (model.visiblePhase.isRecording || model.visiblePhase == .processing)
@@ -109,12 +105,6 @@ struct PillCanvasView: View {
                         .offset(y: -(PillMetrics.tooltipHeight + 8))
                         .transition(tooltipTransition)
                         .allowsHitTesting(false)
-                } else if showsSlowTooltip {
-                    PillTooltipBubble { Text("Still transcribing…") }
-                        .fixedSize()
-                        .offset(y: -(PillMetrics.tooltipHeight + 8 + (showsChip ? PillCanvasMetrics.chipLift : 0)))
-                        .transition(tooltipTransition)
-                        .allowsHitTesting(false)
                 } else if showsSwitchHint {
                     PillSwitchHint(model: model)
                         .offset(y: -PillMetrics.chipLift)
@@ -123,7 +113,6 @@ struct PillCanvasView: View {
                 }
             }
             .animation(.easeOut(duration: 0.16), value: showsRestTooltip)
-            .animation(.easeOut(duration: 0.2), value: showsSlowTooltip)
             .animation(.easeOut(duration: 0.2), value: showsSwitchHint)
             .padding(PillMetrics.hoverMargin)
             .contentShape(Rectangle())
