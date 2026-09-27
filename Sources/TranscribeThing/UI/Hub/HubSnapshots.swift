@@ -62,6 +62,12 @@ enum HubSnapshots {
             },
 
             hub("hub-shortcuts", .shortcuts, height: 860),
+            // Hands-free just recorded as ⌃⌥Space: saved, with macOS's input-source shortcut as the warning.
+            hub("hub-shortcuts-warning", .shortcuts, height: 940,
+                recorderMessages: ShortcutRecorderSnapshots.message(
+                    recording: ShortcutRecorderSnapshots.controlOptionSpace, for: .handsFree).map { [.handsFree: $0] } ?? [:]) { c in
+                c.settings.shortcuts[.handsFree] = ShortcutRecorderSnapshots.controlOptionSpace
+            },
             // Also a customized binding, so "Restore Defaults" shows in the header.
             hub("hub-shortcuts-secure", .shortcuts) { c in
                 c.secureInput = .preview(active: true, owningAppName: "1Password")
@@ -95,7 +101,9 @@ enum HubSnapshots {
         ]
     }
 
+    /// `recorderMessages`: what shortcut recorders show, as if a shortcut had just been recorded.
     private static func hub(_ name: String, _ section: HubSection, width: CGFloat = 980, height: CGFloat = 680,
+                            recorderMessages: [ShortcutAction: RecorderMessage] = [:],
                             configure: @escaping @MainActor (HubContext) -> Void = { _ in }) -> SnapshotEntry {
         SnapshotEntry(name: name, size: CGSize(width: width, height: height)) { env in
             env.windows.hubSection = section
@@ -103,7 +111,8 @@ enum HubSnapshots {
             context.drawsWindowControls = true
             context.firstName = "Sam"
             configure(context)
-            return AnyView(HubView(context: context))
+            return AnyView(HubView(context: context)
+                .environment(\.shortcutRecorderPreviewMessages, recorderMessages))
         }
     }
 

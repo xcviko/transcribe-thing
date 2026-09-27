@@ -541,6 +541,9 @@ enum KeyNames {
         kVK_PageUp, kVK_PageDown, kVK_ForwardDelete, kVK_Help,
     ].map { UInt16($0) })
 
+    /// Letters, digits and punctuation: keys that type a character.
+    static func isCharacterKey(_ keyCode: UInt16) -> Bool { ansiFallback[keyCode] != nil }
+
     static func name(for keyCode: UInt16) -> String {
         if let s = special[keyCode] { return s.symbol }
         return printable(keyCode)?.uppercased() ?? "Key \(keyCode)"
@@ -593,145 +596,313 @@ enum KeyboardLayout {
 
 // MARK: - Validation
 
+/// Why a binding may get in the way. It never blocks saving: the recorder saves the shortcut and shows
+/// this underneath, one line plus an optional second.
+struct ShortcutWarning: Equatable, Sendable {
+    enum Kind: Equatable, Sendable {
+        /// macOS or apps react to the same combination (only symbolic hot keys that are on right now).
+        case systemShortcut
+        /// Pressed while typing: a plain key, ⇧ or ⌥ with a key, or ⇧ alone.
+        case typing
+        /// Esc for something other than cancel: apps stop getting it.
+        case escape
+        /// F1–F12 control brightness and volume on Apple keyboards.
+        case mediaKey
+        /// A lone ⌘, ⌥ or ⌃ is part of other shortcuts; the right-hand key rarely is.
+        case loneModifier
+        /// "Press 🌐 key to" also does something when fn is pressed on its own.
+        case globeKey
+    }
+
+    var kind: Kind
+    var text: String
+    var detail: String?
+
+    init(_ kind: Kind, _ text: String, detail: String? = nil) {
+        self.kind = kind
+        self.text = text
+        self.detail = detail
+    }
+}
+
 struct ShortcutValidation: Equatable, Sendable {
+    /// Why it can't work at all: nothing was pressed, or another action uses it (or starts with it).
     var errors: [String] = []
-    var warnings: [String] = []
+    /// Why it may get in the way, most specific first. Never blocks saving.
+    var warnings: [ShortcutWarning] = []
     /// Another action already bound to this shortcut (offer "Swap").
     var conflict: ShortcutAction?
 
     var isAcceptable: Bool { errors.isEmpty }
 }
 
-enum ShortcutValidator {
-    /// Well-known system combos. Not exhaustive; `SystemSymbolicHotKeys` covers the user's enabled ones.
-    static let reserved: [(Shortcut, String)] = [
-        (Shortcut(modifiers: [.init(.command)], keyCode: UInt16(kVK_Space)), "Spotlight"),
-        (Shortcut(modifiers: [.init(.control)], keyCode: UInt16(kVK_Space)), "switching input sources"),
-        (Shortcut(modifiers: [.init(.control), .init(.option)], keyCode: UInt16(kVK_Space)), "switching input sources"),
-        (Shortcut(modifiers: [.init(.control), .init(.command)], keyCode: UInt16(kVK_Space)), "Emoji & Symbols"),
-        (Shortcut(modifiers: [.init(.command)], keyCode: UInt16(kVK_Tab)), "the app switcher"),
-        (Shortcut(modifiers: [.init(.command)], keyCode: UInt16(kVK_ANSI_Grave)), "cycling windows"),
-        (Shortcut(modifiers: [.init(.command)], keyCode: UInt16(kVK_ANSI_Q)), "Quit"),
-        (Shortcut(modifiers: [.init(.command)], keyCode: UInt16(kVK_ANSI_W)), "Close Window"),
-        (Shortcut(modifiers: [.init(.command)], keyCode: UInt16(kVK_ANSI_H)), "Hide"),
-        (Shortcut(modifiers: [.init(.command)], keyCode: UInt16(kVK_ANSI_M)), "Minimize"),
-        (Shortcut(modifiers: [.init(.command)], keyCode: UInt16(kVK_ANSI_V)), "Paste"),
-        (Shortcut(modifiers: [.init(.command)], keyCode: UInt16(kVK_ANSI_C)), "Copy"),
-        (Shortcut(modifiers: [.init(.command), .init(.option)], keyCode: UInt16(kVK_Escape)), "Force Quit"),
-        (Shortcut(modifiers: [.init(.control), .init(.command)], keyCode: UInt16(kVK_ANSI_Q)), "Lock Screen"),
-        (Shortcut(modifiers: [.init(.shift), .init(.command)], keyCode: UInt16(kVK_ANSI_3)), "screenshots"),
-        (Shortcut(modifiers: [.init(.shift), .init(.command)], keyCode: UInt16(kVK_ANSI_4)), "screenshots"),
-        (Shortcut(modifiers: [.init(.shift), .init(.command)], keyCode: UInt16(kVK_ANSI_5)), "the screenshot toolbar"),
-        (Shortcut(modifiers: [.init(.function)], keyCode: UInt16(kVK_ANSI_E)), "Emoji & Symbols"),
-        (Shortcut(modifiers: [.init(.function)], keyCode: UInt16(kVK_ANSI_F)), "full screen"),
-        (Shortcut(modifiers: [.init(.function)], keyCode: UInt16(kVK_ANSI_Q)), "Quick Note"),
-        (Shortcut(modifiers: [.init(.function)], keyCode: UInt16(kVK_ANSI_N)), "Notification Center"),
-        (Shortcut(modifiers: [.init(.function)], keyCode: UInt16(kVK_ANSI_C)), "Control Center"),
-        (Shortcut(modifiers: [.init(.function)], keyCode: UInt16(kVK_ANSI_A)), "the Dock"),
-    ]
+/// The keyboard settings that decide which warnings apply.
+struct SystemKeyboardState: Equatable, Sendable {
+    /// Keyboard Settings › Keyboard Shortcuts entries that are on right now.
+    var hotKeys: [SystemSymbolicHotKeys.HotKey]
+    /// "Press 🌐 key to"; nil when never changed (behaves like Emoji & Symbols).
+    var fnUsage: FnKeyAdvisor.Usage?
+    /// "Use F1, F2, etc. keys as standard function keys".
+    var functionKeysAreStandard: Bool
 
-    /// `bindings` supplies the other actions for duplicate detection.
-    static func validate(_ s: Shortcut, for action: ShortcutAction,
-                         bindings: ShortcutBindings = .defaults) -> ShortcutValidation {
+    /// This Mac's settings, read on every call: they can change while the app runs.
+    static var current: SystemKeyboardState {
+        SystemKeyboardState(hotKeys: SystemSymbolicHotKeys.active(in: SystemSymbolicHotKeys.readPreferences()),
+                            fnUsage: FnKeyAdvisor.usage,
+                            functionKeysAreStandard: FnKeyAdvisor.functionKeysAreStandard)
+    }
+}
+
+/// Anything can be bound. Only an empty shortcut and a clash with another transcribe-thing action are errors
+/// (the recorder offers Swap for a duplicate); everything else that may get in the way is a warning.
+enum ShortcutValidator {
+    /// Who else reacts to a combination Keyboard Settings can't turn off.
+    enum Owner: Sendable { case macOS, apps }
+
+    /// Combinations macOS or apps always react to. Not exhaustive. Those Keyboard Settings can turn off are
+    /// `SystemSymbolicHotKeys` and warn only while they are on (⌘Space, ⌃Space, screenshots, …).
+    static let fixedShortcuts: [(shortcut: Shortcut, owner: Owner, purpose: String)] = {
+        func combo(_ modifiers: [Shortcut.Modifier], _ key: Int) -> Shortcut {
+            Shortcut(modifiers: modifiers.map { .init($0) }, keyCode: UInt16(key))
+        }
+        return [
+            (combo([.command], kVK_Tab), .macOS, "the app switcher"),
+            (combo([.control, .command], kVK_Space), .macOS, "Emoji & Symbols"),
+            (combo([.option, .command], kVK_Escape), .macOS, "Force Quit"),
+            (combo([.control, .command], kVK_ANSI_Q), .macOS, "locking the screen"),
+            (combo([.function], kVK_ANSI_E), .macOS, "Emoji & Symbols"),
+            (combo([.function], kVK_ANSI_F), .macOS, "full screen"),
+            (combo([.function], kVK_ANSI_Q), .macOS, "Quick Note"),
+            (combo([.function], kVK_ANSI_N), .macOS, "Notification Center"),
+            (combo([.function], kVK_ANSI_C), .macOS, "Control Center"),
+            (combo([.function], kVK_ANSI_A), .macOS, "the Dock"),
+            (combo([.command], kVK_ANSI_Q), .apps, "Quit"),
+            (combo([.command], kVK_ANSI_W), .apps, "Close Window"),
+            (combo([.command], kVK_ANSI_H), .apps, "Hide"),
+            (combo([.command], kVK_ANSI_M), .apps, "Minimize"),
+            (combo([.command], kVK_ANSI_C), .apps, "Copy"),
+            (combo([.command], kVK_ANSI_V), .apps, "Paste"),
+            (combo([.command], kVK_ANSI_X), .apps, "Cut"),
+            (combo([.command], kVK_ANSI_Z), .apps, "Undo"),
+            (combo([.command], kVK_ANSI_A), .apps, "Select All"),
+            (combo([.command], kVK_ANSI_S), .apps, "Save"),
+        ]
+    }()
+
+    /// `bindings` supplies the other actions for duplicate detection; `system` decides which warnings apply.
+    static func validate(_ s: Shortcut, for action: ShortcutAction, bindings: ShortcutBindings = .defaults,
+                         system: SystemKeyboardState = .current) -> ShortcutValidation {
         var v = ShortcutValidation()
         if s.isEmpty {
             v.errors.append("Press a key or a key combination.")
             return v
         }
+        v.warnings = warnings(for: s, action: action, system: system)
 
+        if let other = bindings.conflict(for: s, excluding: action) {
+            v.conflict = other
+            v.errors.append("Already used for \(other.title.lowercased()).")
+        } else if let clash = bindings.prefixClash(for: s, as: action), let theirs = bindings[clash.other] {
+            // The PTT modifiers being a prefix of the hands-free chord is intended (fn / fn+Space).
+            let name = "\(clash.other.title.lowercased()) (\(theirs.compactDescription))"
+            v.errors.append(clash.isShorter
+                ? "This is part of \(name) and would go off every time you press that."
+                : "This starts with \(name), which would go off first.")
+        }
+        return v
+    }
+
+    /// Everything that may get in the way, most specific first. The router swallows a bound key everywhere
+    /// (Esc for cancel only while busy), so "apps won't get it" is literal.
+    static func warnings(for s: Shortcut, action: ShortcutAction, system: SystemKeyboardState) -> [ShortcutWarning] {
+        var out: [ShortcutWarning] = []
         let mods = Set(s.modifiers.map(\.modifier))
-        let hasCommandOrControl = mods.contains(.command) || mods.contains(.control)
+        let combo = s.compactDescription
+        let appsLoseIt = "Apps won’t get \(combo) while it’s bound here."
+
+        if let hotKey = system.hotKeys.first(where: { $0.matches(s) }) {
+            let text = hotKey.purpose.map { "macOS also uses \(combo) for \($0)." }
+                ?? "macOS also uses \(combo) for a shortcut in Keyboard Settings."
+            out.append(ShortcutWarning(.systemShortcut, text,
+                                       detail: "Turn it off in Keyboard Settings › Keyboard Shortcuts if you don’t use it."))
+        } else if let fixed = fixedShortcuts.first(where: { $0.shortcut.keyCode == s.keyCode && $0.shortcut.modifiers == s.modifiers }) {
+            switch fixed.owner {
+            case .macOS:
+                out.append(ShortcutWarning(.systemShortcut, "macOS also uses \(combo) for \(fixed.purpose)."))
+            case .apps:
+                out.append(ShortcutWarning(.systemShortcut, "Apps use \(combo) for \(fixed.purpose).", detail: appsLoseIt))
+            }
+        } else if let key = s.keyCode, s.modifiers == [.init(.command)], KeyNames.isCharacterKey(key) {
+            out.append(ShortcutWarning(.systemShortcut, "Apps often use \(combo) for their own commands.", detail: appsLoseIt))
+        }
 
         if let key = s.keyCode {
-            let isFunctionKey = KeyNames.functionKeys.contains(key)
-            let isBareEscape = key == KeyCode.escape && mods.isEmpty
-            if key == KeyCode.escape && action != .cancel {
-                v.errors.append("Esc is reserved for canceling a recording.")
-            } else if mods.isEmpty && !isFunctionKey && !isBareEscape {
-                v.errors.append("A single key would get in the way of typing. Add ⌃ or ⌘, or use F13–F20.")
-            } else if !mods.isEmpty && !hasCommandOrControl && !mods.contains(.function) && !isFunctionKey {
-                // ⌥ is a dead-key/diacritic layer in many layouts and ⇧ types capitals.
-                v.errors.append("⇧ or ⌥ with a key types characters. Add ⌃, ⌘ or fn.")
+            let typesText = mods.isDisjoint(with: [.control, .command, .function])
+            if key == KeyCode.escape {
+                if mods.isEmpty && action != .cancel {
+                    out.append(ShortcutWarning(.escape, "Apps won’t get Esc while it’s bound here."))
+                }
+            } else if typesText && !KeyNames.functionKeys.contains(key) {
+                out.append(ShortcutWarning(.typing, "This will fire while you type.", detail: appsLoseIt))
             }
-            if mods.isEmpty && KeyNames.mediaFunctionKeys.contains(key) {
-                v.warnings.append("On Apple keyboards F1–F12 control brightness and volume unless “Use F1, F2, etc. keys as standard function keys” is on.")
+            if KeyNames.mediaFunctionKeys.contains(key), !mods.contains(.function), !system.functionKeysAreStandard {
+                out.append(ShortcutWarning(.mediaKey, "On Apple keyboards \(KeyNames.name(for: key)) is a media key.",
+                                           detail: "Turn on “Use F1, F2, etc. keys as standard function keys” in Keyboard Settings."))
             }
         } else if s.modifiers.count == 1, let only = s.modifiers.first {
             switch (only.modifier, only.side) {
             case (.shift, _):
-                v.errors.append("Shift alone is pressed all the time while typing.")
+                out.append(ShortcutWarning(.typing, "⇧ alone is pressed all the time while typing."))
             case (.command, .either), (.command, .left):
-                v.warnings.append("⌘ alone is part of most shortcuts. Right ⌘ is rarely used and works better.")
+                out.append(ShortcutWarning(.loneModifier, "⌘ alone is part of most shortcuts.",
+                                           detail: "Right ⌘ is rarely used and works better."))
             case (.option, .either), (.option, .left):
-                v.warnings.append("⌥ alone types special characters. Right ⌥ works better.")
+                out.append(ShortcutWarning(.loneModifier, "⌥ alone types special characters.",
+                                           detail: "Right ⌥ works better."))
             case (.control, .either), (.control, .left):
-                v.warnings.append("⌃ alone is common in terminals and editors. Try Right ⌃ or fn.")
+                out.append(ShortcutWarning(.loneModifier, "⌃ alone is common in terminals and editors.",
+                                           detail: "Right ⌃ or fn works better."))
             default:
                 break
             }
         }
 
         if s.isModifierOnly && mods.contains(.function) {
-            v.warnings.append(contentsOf: FnKeyAdvisor.warnings())
+            out.append(contentsOf: FnKeyAdvisor.warnings(for: system.fnUsage))
         }
-
-        if let hit = reserved.first(where: { $0.0.keyCode == s.keyCode && $0.0.modifiers == s.modifiers }) {
-            v.errors.append("macOS already uses this for \(hit.1).")
-        } else if !SystemSymbolicHotKeys.conflicts(with: s).isEmpty {
-            v.warnings.append("This may clash with a shortcut that’s turned on in Keyboard Settings.")
-        }
-
-        if let other = bindings.conflict(for: s, excluding: action) {
-            v.conflict = other
-            v.errors.append("Already used for \(other.title.lowercased()).")
-        } else if let clash = bindings.prefixClash(for: s, as: action), let theirs = bindings[clash.other] {
-            let name = "\(clash.other.title.lowercased()) (\(theirs.compactDescription))"
-            v.errors.append(clash.isShorter
-                ? "This is part of \(name) and would go off every time you press that."
-                : "This starts with \(name), which would go off first.")
-        }
-        // The PTT modifiers being a prefix of the hands-free chord is intended (fn / fn+Space).
-        return v
+        return out
     }
 }
 
-/// Reads ~/Library/Preferences/com.apple.symbolichotkeys.plist (undocumented format:
-/// parameters = [asciiCode, virtualKeyCode, NSEvent-style modifier mask], 65535 = unset).
+/// Keyboard Settings › Keyboard Shortcuts, from ~/Library/Preferences/com.apple.symbolichotkeys.plist.
+/// Undocumented format: `AppleSymbolicHotKeys` maps an id to `enabled` and `value.parameters` =
+/// [character, virtual key code, NSEvent-style modifier mask], 65535 = none. An id the plist doesn't list,
+/// or lists as on without a value, uses its macOS default.
 enum SystemSymbolicHotKeys {
-    static func conflicts(with s: Shortcut) -> [String] {
-        guard let key = s.keyCode,
-              let dict = CFPreferencesCopyAppValue("AppleSymbolicHotKeys" as CFString,
-                                                   "com.apple.symbolichotkeys" as CFString) as? [String: Any]
-        else { return [] }
-        let relevantMask = CGEventFlags.maskShift.rawValue | CGEventFlags.maskControl.rawValue
-            | CGEventFlags.maskAlternate.rawValue | CGEventFlags.maskCommand.rawValue
+    struct HotKey: Equatable, Sendable {
+        var id: Int
+        var keyCode: UInt16
+        /// ⇧⌃⌥⌘ plus the function bit, which macOS stores for arrows and F-keys (and for fn combos).
+        var modifierMask: UInt64
+
+        init(id: Int, keyCode: UInt16, modifierMask: UInt64) {
+            self.id = id
+            self.keyCode = keyCode
+            self.modifierMask = modifierMask & SystemSymbolicHotKeys.relevantMask
+        }
+
+        /// What it does, for "macOS also uses ⌃Space for input sources."; nil for ids we don't know.
+        var purpose: String? { SystemSymbolicHotKeys.purpose(of: id) }
+
+        func matches(_ s: Shortcut) -> Bool {
+            s.keyCode == keyCode && SystemSymbolicHotKeys.modifierMask(for: s) == modifierMask
+        }
+    }
+
+    private static let shift = CGEventFlags.maskShift.rawValue
+    private static let control = CGEventFlags.maskControl.rawValue
+    private static let option = CGEventFlags.maskAlternate.rawValue
+    private static let command = CGEventFlags.maskCommand.rawValue
+    private static let function = CGEventFlags.maskSecondaryFn.rawValue
+    static let relevantMask = shift | control | option | command | function
+
+    /// macOS defaults (all on out of the box) for the ids that commonly meet a dictation shortcut.
+    static let defaults: [HotKey] = [
+        HotKey(id: 27, keyCode: UInt16(kVK_ANSI_Grave), modifierMask: command),
+        HotKey(id: 28, keyCode: UInt16(kVK_ANSI_3), modifierMask: shift | command),
+        HotKey(id: 29, keyCode: UInt16(kVK_ANSI_3), modifierMask: shift | control | command),
+        HotKey(id: 30, keyCode: UInt16(kVK_ANSI_4), modifierMask: shift | command),
+        HotKey(id: 31, keyCode: UInt16(kVK_ANSI_4), modifierMask: shift | control | command),
+        HotKey(id: 32, keyCode: UInt16(kVK_UpArrow), modifierMask: control | function),
+        HotKey(id: 33, keyCode: UInt16(kVK_DownArrow), modifierMask: control | function),
+        HotKey(id: 36, keyCode: UInt16(kVK_F11), modifierMask: function),
+        HotKey(id: 52, keyCode: UInt16(kVK_ANSI_D), modifierMask: option | command),
+        HotKey(id: 60, keyCode: UInt16(kVK_Space), modifierMask: control),
+        HotKey(id: 61, keyCode: UInt16(kVK_Space), modifierMask: control | option),
+        HotKey(id: 64, keyCode: UInt16(kVK_Space), modifierMask: command),
+        HotKey(id: 65, keyCode: UInt16(kVK_Space), modifierMask: option | command),
+        HotKey(id: 79, keyCode: UInt16(kVK_LeftArrow), modifierMask: control | function),
+        HotKey(id: 81, keyCode: UInt16(kVK_RightArrow), modifierMask: control | function),
+        HotKey(id: 98, keyCode: UInt16(kVK_ANSI_Slash), modifierMask: shift | command),
+        HotKey(id: 184, keyCode: UInt16(kVK_ANSI_5), modifierMask: shift | command),
+    ]
+
+    static func purpose(of id: Int) -> String? {
+        switch id {
+        case 7...13, 57: "keyboard navigation"
+        case 27: "switching windows"
+        case 28...31, 184: "screenshots"
+        case 32: "Mission Control"
+        case 33: "app windows"
+        case 36: "Show Desktop"
+        case 52: "hiding the Dock"
+        case 59: "VoiceOver"
+        case 60, 61: "input sources"
+        case 64: "Spotlight"
+        case 65: "Finder search"
+        case 79...82, 118...133: "switching Spaces"
+        case 98: "the Help menu"
+        default: nil
+        }
+    }
+
+    /// The `AppleSymbolicHotKeys` dictionary; nil when it can't be read (then every default applies).
+    static func readPreferences() -> [String: Any]? {
+        let domain = "com.apple.symbolichotkeys" as CFString
+        CFPreferencesAppSynchronize(domain)
+        return CFPreferencesCopyAppValue("AppleSymbolicHotKeys" as CFString, domain) as? [String: Any]
+    }
+
+    /// The hot keys that are on, from `preferences` laid over the macOS defaults, in id order.
+    static func active(in preferences: [String: Any]?) -> [HotKey] {
+        var result: [HotKey] = []
+        var listed = Set<Int>()
+        for (key, value) in preferences ?? [:] {
+            guard let id = Int(key), let entry = value as? [String: Any] else { continue }
+            listed.insert(id)
+            guard bool(entry["enabled"]) == true else { continue }
+            let parameters = (entry["value"] as? [String: Any])?["parameters"] as? [Int]
+            if let parameters, parameters.count >= 3 {
+                let code = parameters[1]
+                guard code != 65535, (0...Int(UInt16.max)).contains(code) else { continue }
+                result.append(HotKey(id: id, keyCode: UInt16(code), modifierMask: UInt64(truncatingIfNeeded: parameters[2])))
+            } else if let fallback = defaults.first(where: { $0.id == id }) {
+                result.append(fallback)
+            }
+        }
+        result += defaults.filter { !listed.contains($0.id) }
+        return result.sorted { $0.id < $1.id }
+    }
+
+    /// The mask macOS would store for `s`: the function bit comes with fn itself and with the keys that
+    /// always report it (arrows, F-keys, navigation keys).
+    static func modifierMask(for s: Shortcut) -> UInt64 {
         var mask: UInt64 = 0
-        for mk in s.modifiers {
-            switch mk.modifier {
-            case .shift: mask |= CGEventFlags.maskShift.rawValue
-            case .control: mask |= CGEventFlags.maskControl.rawValue
-            case .option: mask |= CGEventFlags.maskAlternate.rawValue
-            case .command: mask |= CGEventFlags.maskCommand.rawValue
-            case .function: break
+        for key in s.modifiers {
+            switch key.modifier {
+            case .shift: mask |= shift
+            case .control: mask |= control
+            case .option: mask |= option
+            case .command: mask |= command
+            case .function: mask |= function
             }
         }
-        var hits: [String] = []
-        for (id, value) in dict {
-            guard let entry = value as? [String: Any],
-                  (entry["enabled"] as? Bool) == true,
-                  let v = entry["value"] as? [String: Any],
-                  let params = v["parameters"] as? [Int], params.count >= 3,
-                  params[1] != 65535, params[1] >= 0, params[1] <= Int(UInt16.max)
-            else { continue }
-            if UInt16(params[1]) == key && UInt64(truncatingIfNeeded: params[2]) & relevantMask == mask {
-                hits.append(id)
-            }
+        if let code = s.keyCode, KeyNames.fnFlaggedKeys.contains(code) { mask |= function }
+        return mask
+    }
+
+    /// Settings written by different macOS versions store `enabled` as a boolean or as 0/1.
+    private static func bool(_ value: Any?) -> Bool? {
+        switch value {
+        case let b as Bool: b
+        case let n as NSNumber: n.boolValue
+        case let i as Int: i != 0
+        default: nil
         }
-        return hits.sorted()
     }
 }
 
-/// Globe/Fn key system behavior (com.apple.HIToolbox AppleFnUsageType).
+/// Globe/Fn key system behavior (com.apple.HIToolbox AppleFnUsageType) and the F-key mode.
 enum FnKeyAdvisor {
     enum Usage: Int, Sendable {
         case doNothing = 0, changeInputSource = 1, showEmojiAndSymbols = 2, startDictation = 3
@@ -765,18 +936,25 @@ enum FnKeyAdvisor {
         return Usage(rawValue: v)
     }
 
-    static func warnings() -> [String] { warnings(for: usage) }
+    /// "Use F1, F2, etc. keys as standard function keys" (global com.apple.keyboard.fnState, off by default).
+    static var functionKeysAreStandard: Bool {
+        CFPreferencesAppSynchronize(kCFPreferencesAnyApplication)
+        return CFPreferencesCopyAppValue("com.apple.keyboard.fnState" as CFString, kCFPreferencesAnyApplication)
+            as? Bool ?? false
+    }
 
-    static func warnings(for usage: Usage?) -> [String] {
+    /// For a binding that is fn on its own (or fn with other modifiers): what else pressing fn does.
+    static func warnings(for usage: Usage?) -> [ShortcutWarning] {
+        let fix = "Set “Press 🌐 key to” to Do Nothing in Keyboard Settings."
         switch usage {
         case .doNothing?:
             return []
         case .changeInputSource?:
-            return ["“Press 🌐 key to” is set to Change Input Source, so every fn press also switches your keyboard layout. Set it to Do Nothing in Keyboard Settings."]
+            return [ShortcutWarning(.globeKey, "The 🌐 key also switches input sources.", detail: fix)]
         case .showEmojiAndSymbols?, nil:
-            return ["“Press 🌐 key to” may open Emoji & Symbols after you dictate. Set it to Do Nothing in Keyboard Settings."]
+            return [ShortcutWarning(.globeKey, "The 🌐 key may also open Emoji & Symbols.", detail: fix)]
         case .startDictation?:
-            return ["“Press 🌐 key to” is set to Start Dictation, so quick repeated dictations may open Apple Dictation. Set it to Do Nothing in Keyboard Settings."]
+            return [ShortcutWarning(.globeKey, "Pressing 🌐 twice may also start Apple Dictation.", detail: fix)]
         }
     }
 }

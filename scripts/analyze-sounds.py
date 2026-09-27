@@ -1,9 +1,19 @@
 #!/usr/bin/env python3
 """analyze-sounds.py: check transcribe-thing's UI sounds against their recipes (standard library only).
 
-Usage: python3 scripts/analyze-sounds.py [sounds_dir] [--png out.png]      (default dir: Resources/Sounds)
+Usage:
+  python3 scripts/analyze-sounds.py [--set NAME] [sounds_dir] [--png out.png]   check mode (dir: Resources/Sounds)
+  python3 scripts/analyze-sounds.py --measure [--recursive] PATH ...   measurement tables for any WAVs / folders
+  python3 scripts/analyze-sounds.py [--ref LABEL=DIR ...] --compare LABEL=DIR ...
+                                                                       the same tables grouped by cue, a row per set
 
-Per WAV it reports:
+Measurement mode (--measure / --compare) reads any PCM WAV (16/24/32-bit int or 32-bit float, any rate, stereo is
+mixed to mono) and prints Markdown tables; nothing but numbers is written. See measure() for the definitions.
+--measure lists identical files once. --compare looks each cue up as DIR/<cue>.wav; --ref sets (someone else's
+sounds, measured for comparison only) also try the file names in ALIASES. --compare sets get generic checks
+(48 kHz mono 16-bit, target peak, click-free end, start <= 120 ms) and set the exit status.
+
+Check mode, per WAV, reports:
   len       duration (ms)                     peak   sample peak (dBFS)
   rms10     loudest 10 ms RMS (dBFS)          LUFS   max momentary loudness (BS.1770 K-weighting, 400 ms)
   cent      spectral centroid of the whole-file magnitude spectrum (bins > 80 dB down ignored)
@@ -12,38 +22,98 @@ Per WAV it reports:
   tau       each hit's effective decay time constant (exp(-t/tau) fitted to the first 30 dB of its decay)
   tail      level of the last 25 ms relative to the peak (the natural decay is over before the fade)
   dominant  the three strongest spectral peaks (Hz, dB relative to the strongest)
-plus a pitch track at recipe-specific windows. Everything is checked against EXPECT below; the exit status
+plus a pitch track at recipe-specific windows. Everything is checked against EXPECT_SETS[set] below, where set is
+--set NAME or else gen-sounds.py's DEFAULT_SET (so switching the shipped set is one line there); the exit status
 is non-zero when any check fails. With --png, it also renders waveform + dB envelope and a log-frequency
 spectrogram per sound into one PNG (written with zlib, no third-party modules).
 """
 import cmath
+import hashlib
 import math
 import os
+import re
 import struct
 import sys
 import wave
 import zlib
 
-# name: max length (ms), target peak (dBFS), max centroid (Hz), hit onsets (ms), max tau per hit (ms),
-#       pitch checks (window start ms, expected Hz, window ms), falls (early window ms, late window ms, window ms):
-#       the dominant pitch in the early window must be >= 6 % above the late one.
-EXPECT = {
-    "start": dict(max_ms=150, peak=-11, cent=700, hits=(0,), tau=45, pitch=((25, 470, 25),), note="one woody tok"),
-    "stop": dict(max_ms=170, peak=-11, cent=700, hits=(0,), tau=45, pitch=((25, 340, 25),),
-                 falls=((2, 50, 14),), note="duller tok, sagging"),
-    "lock": dict(max_ms=180, peak=-11, cent=700, hits=(0, 70), tau=40, pitch=((25, 440, 25), (95, 523, 25)),
-                 note="tok-tok, second higher"),
-    "paste": dict(max_ms=50, peak=-19, cent=900, hits=(0,), tau=20, pitch=(), falls=((0, 12, 8),),
-                  note="tiny mouth pop, quietest"),
-    "cancel": dict(max_ms=160, peak=-17, cent=700, hits=(0,), tau=45, pitch=(), falls=((0, 40, 16),),
-                   note="low tuk gliding down"),
-    "alert": dict(max_ms=450, peak=-11, cent=900, hits=(0, 140), tau=130, pitch=((10, 262, 40), (160, 330, 40)),
-                  note="two soft wood notes up"),
-    "error": dict(max_ms=350, peak=-13, cent=700, hits=(0, 125), tau=50, pitch=((25, 233, 40), (150, 196, 40)),
-                  note="two muted knocks down"),
-    "success": dict(max_ms=500, peak=-11, cent=900, hits=(0, 65, 130), tau=130,
-                    pitch=((8, 262, 40), (75, 330, 40), (150, 392, 40)), note="low wood arpeggio C E G"),
+# Per set (gen-sounds.py --set), per sound: max length (ms), target peak (dBFS), max centroid (Hz), hit onsets (ms),
+#       max tau per hit (ms), pitch checks (window start ms, expected Hz, window ms), falls (early window ms, late
+#       window ms, window ms): the dominant pitch in the early window must be >= 6 % above the late one.
+EXPECT_SETS = {
+    "current": {
+        "start": dict(max_ms=150, peak=-11, cent=700, hits=(0,), tau=45, pitch=((25, 470, 25),), note="one woody tok"),
+        "stop": dict(max_ms=170, peak=-11, cent=700, hits=(0,), tau=45, pitch=((25, 340, 25),),
+                     falls=((2, 50, 14),), note="duller tok, sagging"),
+        "lock": dict(max_ms=180, peak=-11, cent=700, hits=(0, 70), tau=40, pitch=((25, 440, 25), (95, 523, 25)),
+                     note="tok-tok, second higher"),
+        "paste": dict(max_ms=50, peak=-19, cent=900, hits=(0,), tau=20, pitch=(), falls=((0, 12, 8),),
+                      note="tiny mouth pop, quietest"),
+        "cancel": dict(max_ms=160, peak=-17, cent=700, hits=(0,), tau=45, pitch=(), falls=((0, 40, 16),),
+                       note="low tuk gliding down"),
+        "alert": dict(max_ms=450, peak=-11, cent=900, hits=(0, 140), tau=130,
+                      pitch=((10, 262, 40), (160, 330, 40)), note="two soft wood notes up"),
+        "error": dict(max_ms=350, peak=-13, cent=700, hits=(0, 125), tau=50, pitch=((25, 233, 40), (150, 196, 40)),
+                      note="two muted knocks down"),
+        "success": dict(max_ms=500, peak=-11, cent=900, hits=(0, 65, 130), tau=130,
+                        pitch=((8, 262, 40), (75, 330, 40), (150, 392, 40)), note="low wood arpeggio C E G"),
+    },
+    "A": {
+        "start": dict(max_ms=90, peak=-11, cent=450, hits=(0,), tau=20, pitch=((25, 175, 20),),
+                      falls=((0, 25, 10),), note="tongue tok 250->175"),
+        "stop": dict(max_ms=100, peak=-11, cent=400, hits=(0,), tau=22, pitch=((30, 135, 20),),
+                     falls=((0, 30, 10),), note="lower tongue tok 200->135"),
+        "lock": dict(max_ms=140, peak=-11, cent=450, hits=(0, 55), tau=15, pitch=((20, 160, 20), (80, 185, 20)),
+                     note="tk-tok, second higher"),
+        "paste": dict(max_ms=50, peak=-19, cent=500, hits=(0,), tau=10, pitch=(), falls=((0, 14, 10),),
+                      note="tiny pop 280->150, quietest"),
+        "cancel": dict(max_ms=110, peak=-17, cent=450, hits=(0,), tau=30, pitch=(), falls=((0, 40, 16),),
+                       note="pop sliding 230->120"),
+        "alert": dict(max_ms=280, peak=-11, cent=450, hits=(0, 110), tau=35,
+                      pitch=((20, 196, 40), (130, 247, 40)), note="two pitched pops G3 B3"),
+        "error": dict(max_ms=240, peak=-13, cent=400, hits=(0, 105), tau=25, pitch=((20, 140, 40), (125, 124, 40)),
+                      note="two low pops down"),
+        "success": dict(max_ms=300, peak=-11, cent=450, hits=(0, 60, 120), tau=40,
+                        pitch=((10, 196, 40), (70, 247, 40), (130, 294, 40)), note="pops G3 B3 D4"),
+    },
+    "B": {
+        "start": dict(max_ms=100, peak=-11, cent=450, hits=(0,), tau=25, pitch=((20, 280, 25),),
+                      note="low wood block 280 Hz"),
+        "stop": dict(max_ms=120, peak=-11, cent=400, hits=(0,), tau=25, pitch=((30, 199, 25),),
+                     note="duller block 215 Hz, sagging"),
+        "lock": dict(max_ms=150, peak=-11, cent=450, hits=(0, 60), tau=20, pitch=((20, 245, 25), (80, 290, 25)),
+                     note="tok-tok, second higher"),
+        "paste": dict(max_ms=50, peak=-19, cent=500, hits=(0,), tau=10, pitch=((3, 240, 15),),
+                      note="tiny wood tick, quietest"),
+        "cancel": dict(max_ms=120, peak=-17, cent=400, hits=(0,), tau=30, pitch=(), falls=((0, 40, 16),),
+                       note="soft knock sagging down"),
+        "alert": dict(max_ms=320, peak=-11, cent=400, hits=(0, 130), tau=60,
+                      pitch=((20, 175, 40), (150, 220, 40)), note="two low wood notes F3 A3"),
+        "error": dict(max_ms=260, peak=-13, cent=400, hits=(0, 115), tau=30, pitch=((20, 185, 40), (135, 156, 40)),
+                      note="two muted knocks down"),
+        "success": dict(max_ms=340, peak=-11, cent=400, hits=(0, 60, 120), tau=60,
+                        pitch=((10, 175, 40), (70, 220, 40), (130, 262, 40)), note="wood arpeggio F3 A3 C4"),
+    },
+    "C": {
+        "start": dict(max_ms=120, peak=-11, cent=450, hits=(0, 20), tau=20, pitch=((25, 350, 20),),
+                      note="grace, then tok 350 Hz"),
+        "stop": dict(max_ms=160, peak=-11, cent=400, hits=(0, 36), tau=20, pitch=((40, 233, 25),),
+                     note="grace, then tok 233 Hz"),
+        "lock": dict(max_ms=150, peak=-11, cent=600, hits=(0, 60), tau=15, pitch=(), falls=((60, 80, 10),),
+                     note="two falling mouth pops"),
+        "paste": dict(max_ms=50, peak=-19, cent=550, hits=(0,), tau=10, pitch=(), falls=((0, 12, 8),),
+                      note="tiny pop 330->140, quietest"),
+        "cancel": dict(max_ms=110, peak=-17, cent=500, hits=(0,), tau=25, pitch=(), falls=((0, 40, 16),),
+                       note="pop sliding 360->130"),
+        "alert": dict(max_ms=340, peak=-11, cent=400, hits=(0, 60), tau=90,
+                      pitch=((10, 196, 40), (90, 294, 40)), note="two toks up G3 D4"),
+        "error": dict(max_ms=310, peak=-13, cent=400, hits=(0, 125), tau=60, pitch=((20, 220, 40), (150, 147, 40)),
+                      note="two toks down A3 D3"),
+        "success": dict(max_ms=420, peak=-11, cent=400, hits=(0, 70, 140), tau=110,
+                        pitch=((10, 196, 40), (80, 247, 40), (150, 294, 40)), note="toks G3 B3 D4"),
+    },
 }
+EXPECT = EXPECT_SETS["current"]
 HF_LIMIT_DB = -24.0
 TAIL_LIMIT_DB = -24.0
 ATTACK_LIMIT_MS = 5.0
@@ -55,6 +125,49 @@ def read(path):
         raw = w.readframes(n)
     samples = [v / 32768 for v in struct.unpack("<%dh" % (len(raw) // 2), raw)]
     return sr, ch, width, samples
+
+
+def read_any(path):
+    """Any RIFF/WAVE PCM file (16/24/32-bit int, 32-bit float, plain or WAVE_FORMAT_EXTENSIBLE) ->
+    (sample rate, channels, bits, 'int'|'float', mono samples in -1..1). Stereo is averaged to mono."""
+    with open(path, "rb") as f:
+        data = f.read()
+    if data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+        raise ValueError(f"{path}: not a RIFF/WAVE file")
+    pos, fmt, pcm = 12, None, None
+    while pos + 8 <= len(data):
+        tag, size = data[pos:pos + 4], struct.unpack("<I", data[pos + 4:pos + 8])[0]
+        body = data[pos + 8:pos + 8 + size]
+        if tag == b"fmt ":
+            fmt = body
+        elif tag == b"data":
+            pcm = body
+        pos += 8 + size + (size & 1)
+    if fmt is None or pcm is None:
+        raise ValueError(f"{path}: missing fmt or data chunk")
+    code, ch, sr = struct.unpack("<HHI", fmt[:8])
+    bits = struct.unpack("<H", fmt[14:16])[0]
+    if code == 0xFFFE:
+        code = struct.unpack("<H", fmt[24:26])[0]
+    kind = "float" if code == 3 else "int"
+    width = bits // 8
+    count = len(pcm) // width
+    if kind == "float" and bits == 32:
+        vals = struct.unpack("<%df" % count, pcm[:count * 4])
+    elif bits == 16:
+        vals = [v / 32768 for v in struct.unpack("<%dh" % count, pcm[:count * 2])]
+    elif bits == 24:
+        vals = []
+        for i in range(0, count * 3, 3):
+            v = pcm[i] | (pcm[i + 1] << 8) | (pcm[i + 2] << 16)
+            vals.append((v - (1 << 24) if v & 0x800000 else v) / 8388608)
+    elif bits == 32:
+        vals = [v / 2147483648 for v in struct.unpack("<%di" % count, pcm[:count * 4])]
+    else:
+        raise ValueError(f"{path}: unsupported format {code}/{bits}-bit")
+    frames = len(vals) // ch
+    mono = [sum(vals[i * ch:(i + 1) * ch]) / ch for i in range(frames)] if ch > 1 else list(vals)
+    return sr, ch, bits, kind, mono
 
 
 def db(x):
@@ -150,9 +263,8 @@ def dominant_hz(samples, sr, start_ms, window_ms=20, size=8192, lo_hz=100):
 
 
 def k_weighted_momentary_max(samples, sr):
-    """Max momentary loudness (LUFS): BS.1770 K-weighting (48 kHz coefficients), 400 ms windows, 10 ms hop."""
-    if sr != 48000:
-        return None
+    """Max momentary loudness (LUFS): BS.1770 K-weighting, 400 ms windows, 10 ms hop. The two filter stages are
+    designed for `sr` from their analog prototypes (at 48 kHz this reproduces the published coefficients)."""
 
     def biquad(x, b, a):
         x1 = x2 = y1 = y2 = 0.0
@@ -164,9 +276,17 @@ def k_weighted_momentary_max(samples, sr):
         return out
 
     padded = samples + [0.0] * int(0.4 * sr)
-    y = biquad(padded, (1.53512485958697, -2.69169618940638, 1.19839281085285),
-               (1.0, -1.69065929318241, 0.73248077421585))
-    y = biquad(y, (1.0, -2.0, 1.0), (1.0, -1.99004745483398, 0.99007225036621))
+    k = math.tan(math.pi * 1681.974450955533 / sr)  # stage 1: high shelf, +4 dB
+    q, vh = 0.7071752369554196, 10 ** (3.999843853973347 / 20)
+    vb = vh ** 0.4996667741545416
+    a0 = 1 + k / q + k * k
+    shelf_b = ((vh + vb * k / q + k * k) / a0, 2 * (k * k - vh) / a0, (vh - vb * k / q + k * k) / a0)
+    shelf_a = (1.0, 2 * (k * k - 1) / a0, (1 - k / q + k * k) / a0)
+    k = math.tan(math.pi * 38.13547087602444 / sr)  # stage 2: RLB high-pass
+    q = 0.5003270373238773
+    a0 = 1 + k / q + k * k
+    y = biquad(padded, shelf_b, shelf_a)
+    y = biquad(y, (1.0, -2.0, 1.0), (1.0, 2 * (k * k - 1) / a0, (1 - k / q + k * k) / a0))
     sq = [v * v for v in y]
     win, hop = int(0.4 * sr), int(0.01 * sr)
     prefix = [0.0]
@@ -225,7 +345,8 @@ def analyze(samples, sr, spec_cfg):
         # notes that are still ringing doesn't count as a slow attack.
         search = range(o, min(end, o + int(12 * ms)))
         top = max(env[i] for i in search)
-        p = next(i for i in search if env[i] >= top * 10 ** (-1.5 / 20) and env[i] >= env[i + 1])
+        p = next((i for i in search if env[i] >= top * 10 ** (-1.5 / 20) and env[i] >= env[i + 1]),
+                 max(search, key=lambda i: env[i]))
         pv = env[p]
         base = env[o] if o > 0 else 0.0
         t10 = next(i for i in range(o, p + 1) if env[i] >= base + 0.1 * (pv - base))
@@ -246,6 +367,350 @@ def analyze(samples, sr, spec_cfg):
     tail = db(max(abs(v) for v in samples[-int(0.025 * sr):]) / pk)
     return dict(length_ms=n / ms, peak=db(pk), rms10=db(rms10), lufs=k_weighted_momentary_max(samples, sr),
                 centroid=centroid, hf_db=hf_db, peak_band=peak_fc, dominant=dominant, hits=hits, tail=tail, env=env)
+
+
+# ----------------------------------------------------------------------------------------- measurement
+
+CUES = tuple(EXPECT)
+TARGET_PEAK = {"paste": -19.0, "cancel": -17.0, "error": -13.0}  # everything else -11 dBFS
+START_MAX_MS = 120.0
+OCTAVES = (63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000)
+
+# Other apps' file names for the same cues, tried by --ref after <cue>.wav. Wispr Flow's default set
+# (selectedSoundFolder = null) is the bundle's root dictation-*/popo-lock/paste files plus notifv1/ notifications.
+ALIASES = {
+    "start": ("dictation-start.wav",),
+    "stop": ("dictation-stop.wav",),
+    "lock": ("popo-lock.wav",),
+    "paste": ("paste.wav",),
+    "cancel": (),
+    "alert": ("notifv1/alert.wav", "alert.wav"),
+    "error": ("notifv1/error.wav", "error.wav"),
+    "success": ("notifv1/success.wav", "success.wav"),
+}
+
+
+def hann(n):
+    return [0.5 - 0.5 * math.cos(2 * math.pi * i / (n - 1)) for i in range(n)] if n > 1 else [1.0] * n
+
+
+def windowed_power(seg, sr, min_size=4096):
+    """Hann-windowed power spectrum of `seg`, zero-padded to a power of two >= min_size -> (power, Hz per bin)."""
+    size = max(min_size, next_pow2(len(seg)))
+    w = hann(len(seg))
+    spec = fft([a * b for a, b in zip(seg, w)] + [0.0] * (size - len(seg)))
+    return [abs(v) ** 2 for v in spec[: size // 2]], sr / size
+
+
+def centroid_of(power, df, floor_db=-80.0):
+    """Magnitude-weighted spectral centroid above 20 Hz, ignoring bins more than 80 dB below the strongest."""
+    mags = [math.sqrt(p) for p in power]
+    top = max(mags) or 1e-12
+    floor = top * 10 ** (floor_db / 20)
+    num = den = 0.0
+    for k, m in enumerate(mags):
+        f = k * df
+        if f >= 20 and m >= floor:
+            num += f * m
+            den += m
+    return num / den if den else 0.0
+
+
+def flatness_db(seg, sr, lo=100.0, hi=8000.0):
+    """Spectral flatness (geometric / arithmetic mean of power, lo..hi Hz, bins floored 60 dB below the top) in
+    dB: about -2.5 for white noise (a click, breath, contact noise), -25 or less for a clear tone."""
+    if len(seg) < 48:
+        return None
+    power, df = windowed_power(seg, sr)
+    band = power[int(lo / df) + 1:int(min(hi, sr / 2 - 1) / df) + 1]
+    top = max(band)
+    if top <= 0:
+        return None
+    vals = [max(v, top * 1e-6) for v in band]
+    geo = math.exp(sum(math.log(v) for v in vals) / len(vals))
+    return 10 * math.log10(geo / (sum(vals) / len(vals)))
+
+
+def detect_hits(env, sr, floor_db=-35.0, rise_db=4.0, rise_ms=5.0, look_ms=30.0, gap_ms=20.0):
+    """Onsets: the envelope rises >= rise_db within rise_ms, the new peak is within 35 dB of the file's maximum and
+    >= 2 dB above everything in the preceding 3..look_ms ms (so beating between ringing modes isn't a hit).
+    Returns [(onset index at 10 % of the rise, index of the hit's maximum)]."""
+    ms = sr / 1000
+    n = len(env)
+    gmax = max(env) or 1e-12
+    level = [db(v / gmax) for v in env]
+    r, hop = int(rise_ms * ms), max(1, int(0.25 * ms))
+    hits = []
+    i = 0
+    while i < n:
+        before = level[i - r] if i >= r else -120.0
+        if level[i] >= floor_db and level[i] - before >= rise_db:
+            end = min(n, i + int(15 * ms))
+            p = max(range(i, end), key=lambda k: env[k])
+            while p + 1 < n and env[p + 1] >= env[p]:
+                p += 1
+            lo, hi = max(0, i - int(look_ms * ms)), i - int(3 * ms)
+            prev = max(level[lo:hi]) if hi > lo else -120.0
+            if level[p] >= prev + 2.0:
+                b = min(range(max(0, i - r), i + 1), key=lambda k: env[k])
+                t10 = next(k for k in range(b, p + 1) if env[k] >= env[b] + 0.1 * (env[p] - env[b]))
+                hits.append((t10, p))
+                i = p + int(gap_ms * ms)
+                continue
+        i += hop
+    return hits
+
+
+def measure(samples, sr):
+    """Everything the tables print, for one mono signal:
+      len     file length (ms)                      lead    silence before the first onset (ms)
+      dur40   first onset -> last moment the envelope is within 40 dB of its maximum (ms)
+      peak    sample peak (dBFS)                    rms10   loudest 10 ms RMS (dBFS)
+      LUFS    max momentary loudness of the mono mix (BS.1770, 400 ms windows)
+      cent    spectral centroid of the whole sound  cent20  centroid of the first 20 ms after the first onset
+      roll85  frequency below which 85 % of the power lies
+      oct     power per octave band (63 Hz .. 16 kHz), dB relative to the total
+      hits    auto-detected onsets (ms after the first); per hit: atk = 10-90 % rise (ms), tau = exp decay constant
+              fitted to the first 30 dB of the decay (ms), t40 = peak -> -40 dB (ms; '>' = next hit or file end first)
+      flat    spectral flatness of the first 5 ms after the first onset / of 5-50 ms (dB; near -3 = noisy click,
+              below -25 = tonal ring)
+      dom     three strongest spectral peaks, Hz (dB relative to the strongest)
+      pitch   dominant frequency (20 ms Hann) every `step` ms from the first onset while within 30 dB of the max"""
+    ms = sr / 1000
+    n_total = len(samples)
+    pk = max(abs(v) for v in samples) or 1e-12
+    # Trim to the audible part (-60 dB) plus 5 ms so long, padded files stay cheap for the pure-Python FFT.
+    first = next(i for i, v in enumerate(samples) if abs(v) >= pk * 1e-3)
+    last = n_total - 1 - next(i for i, v in enumerate(reversed(samples)) if abs(v) >= pk * 1e-3)
+    t0 = max(0, first - int(5 * ms))
+    s = samples[t0:min(n_total, last + int(5 * ms))]
+    n = len(s)
+    env = envelope(s, sr)
+    gmax = max(env) or 1e-12
+    hits = detect_hits(env, sr) or [(0, max(range(n), key=lambda k: env[k]))]
+    onset = hits[0][0]
+    active_end = max(i for i in range(n) if env[i] >= gmax * 0.01)
+    win = int(0.010 * sr)
+    rms10 = max(math.sqrt(sum(v * v for v in s[i:i + win]) / win) for i in range(0, max(1, n - win), max(1, win // 4)))
+
+    mags, df = spectrum(s, sr)
+    power = [m * m for m in mags]
+    total = sum(power[int(20 / df) + 1:]) or 1e-30
+    centroid = centroid_of(power, df)
+    acc, roll85 = 0.0, 0.0
+    for k in range(int(20 / df) + 1, len(power)):
+        acc += power[k]
+        if acc >= 0.85 * total:
+            roll85 = k * df
+            break
+    octs = []
+    for fc in OCTAVES:
+        lo, hi = fc / math.sqrt(2), min(fc * math.sqrt(2), sr / 2)
+        e = sum(power[int(lo / df) + 1:int(hi / df) + 1]) if lo < sr / 2 else 0.0
+        octs.append(10 * math.log10(max(e, 1e-30) / total))
+    p20, df20 = windowed_power(s[onset:onset + int(20 * ms)], sr)
+    cent20 = centroid_of(p20, df20)
+    maxima = [k for k in range(int(60 / df) + 1, len(mags) - 1) if mags[k] >= mags[k - 1] and mags[k] > mags[k + 1]]
+    maxima.sort(key=lambda k: -mags[k])
+    chosen = []
+    for k in maxima:
+        if all(abs(math.log2(k / c)) > 0.25 for c in chosen):
+            chosen.append(k)
+        if len(chosen) == 3:
+            break
+    top = max(mags) or 1e-12
+    dominant = [(k * df, db(mags[k] / top)) for k in chosen]
+
+    per_hit = []
+    for idx, (t10, p_max) in enumerate(hits):
+        end = hits[idx + 1][0] if idx + 1 < len(hits) else n
+        window_top = max(env[t10:min(end, t10 + int(12 * ms))])
+        p = next((i for i in range(t10, end - 1) if env[i] >= window_top * 10 ** (-1.5 / 20) and env[i] >= env[i + 1]),
+                 p_max)
+        lo_v = min(env[max(0, t10 - int(2 * ms)):t10 + 1])
+        t_a = next(i for i in range(t10 - int(2 * ms) if t10 >= int(2 * ms) else 0, p + 1)
+                   if env[i] >= lo_v + 0.1 * (env[p] - lo_v))
+        t_b = next(i for i in range(t_a, p + 1) if env[i] >= lo_v + 0.9 * (env[p] - lo_v))
+        pv = env[p_max]
+        xs, ys = [], []
+        t40 = None
+        for i in range(p_max + int(1 * ms), end):
+            lvl = db(env[i] / pv)
+            if lvl < -40:
+                t40 = (i - p_max) / ms
+                break
+            if lvl >= -30:
+                xs.append(i / ms)
+                ys.append(lvl)
+        tau = None
+        if len(xs) > int(3 * ms):
+            mx, my = sum(xs) / len(xs), sum(ys) / len(ys)
+            slope = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sum((x - mx) ** 2 for x in xs)
+            tau = -20 / math.log(10) / slope if slope < 0 else float("inf")
+        per_hit.append(dict(at=(t10 - onset) / ms, attack=(t_b - t_a) / ms, tau=tau, t40=t40,
+                            t40_cut=(end - p_max) / ms))
+    next_on = hits[1][0] if len(hits) > 1 else n
+    flat5 = flatness_db(s[onset:onset + int(5 * ms)], sr)
+    flat_late = flatness_db(s[onset + int(5 * ms):min(next_on, onset + int(50 * ms))], sr)
+
+    dur = (active_end - onset) / ms
+    step = 10 if dur <= 150 else 20 if dur <= 400 else 50
+    frame_len = int(20 * ms)
+    frame_rms = []
+    for t in range(onset, active_end, int(step * ms)):
+        seg = s[t:t + frame_len]
+        frame_rms.append((t, math.sqrt(sum(v * v for v in seg) / max(1, len(seg)))))
+    best = max(r for _, r in frame_rms) if frame_rms else 0.0
+    track = []
+    for t, r in frame_rms:
+        if r < best * 10 ** (-30 / 20) or len(track) >= 14:
+            continue
+        f = dominant_hz(s, sr, t / ms, window_ms=20, lo_hz=60)
+        if f:
+            track.append(((t - onset) / ms, f))
+    return dict(length_ms=n_total / ms, lead_ms=(t0 + onset) / ms, dur40=dur, peak=db(pk), rms10=db(rms10),
+                lufs=k_weighted_momentary_max(s, sr), centroid=centroid, cent20=cent20, roll85=roll85, octaves=octs,
+                hits=per_hit, flat5=flat5, flat_late=flat_late, dominant=dominant, pitch=track, last=samples[-24:])
+
+
+def _f(v, fmt="{:.0f}", none="-"):
+    return none if v is None else fmt.format(v)
+
+
+def generic_problems(cue, fmt, m):
+    """Checks for our own sets: format, level target, click-free ends, start length."""
+    problems = []
+    sr, ch, bits, kind = fmt
+    if (sr, ch, bits, kind) != (48000, 1, 16, "int"):
+        problems.append(f"format {sr}/{ch}ch/{bits}bit")
+    want = TARGET_PEAK.get(cue, -11.0)
+    if abs(m["peak"] - want) > 0.6:
+        problems.append(f"peak {m['peak']:.1f} != {want:.0f}")
+    if cue == "start" and m["length_ms"] > START_MAX_MS:
+        problems.append(f"start {m['length_ms']:.0f} > {START_MAX_MS:.0f} ms")
+    if max(abs(v) for v in m["last"]) > 0.01:
+        problems.append("end click risk")
+    return problems
+
+
+def md_tables(rows, first_col="sound"):
+    """rows: [(label, fmt, measurement, status or None)] -> three Markdown tables as one string."""
+    out = []
+    has_status = any(r[3] is not None for r in rows)
+    head = (f"| {first_col} | format | len ms | lead | dur40 | peak | rms10 | LUFS | cent | cent20 | roll85 | "
+            "hits @ms | atk ms | tau ms | t40 ms | flat 0-5/5-50 ms | dominant Hz (dB) |" + (" check |" if has_status else ""))
+    out.append(head)
+    out.append("|" + "---|" * (head.count("|") - 1))
+    for label, fmt, m, status in rows:
+        if m is None:
+            out.append(f"| {label} | {status} |")
+            continue
+        sr, ch, bits, kind = fmt
+        hits = m["hits"]
+        t40 = "/".join((f"{h['t40']:.0f}" if h["t40"] is not None else f">{h['t40_cut']:.0f}") for h in hits)
+        cells = [label, f"{sr / 1000:g}k/{ch}ch/{bits}{'f' if kind == 'float' else ''}", f"{m['length_ms']:.0f}",
+                 f"{m['lead_ms']:.0f}", f"{m['dur40']:.0f}", f"{m['peak']:.1f}", f"{m['rms10']:.1f}",
+                 _f(m["lufs"], "{:.1f}"), f"{m['centroid']:.0f}", f"{m['cent20']:.0f}", f"{m['roll85']:.0f}",
+                 f"{len(hits)}: " + "/".join(f"{h['at']:.0f}" for h in hits),
+                 "/".join(f"{h['attack']:.1f}" for h in hits),
+                 "/".join(_f(h["tau"] if h["tau"] is None else min(h["tau"], 9999)) for h in hits), t40,
+                 f"{_f(m['flat5'])}/{_f(m['flat_late'])}",
+                 " ".join(f"{f:.0f}({d:.0f})" for f, d in m["dominant"])]
+        if has_status:
+            cells.append(status or "")
+        out.append("| " + " | ".join(cells) + " |")
+    out.append("")
+    head = f"| {first_col} | " + " | ".join(f"{fc // 1000}k" if fc >= 1000 else str(fc) for fc in OCTAVES) + " |"
+    out.append("Octave-band power, dB relative to the whole sound:")
+    out.append("")
+    out.append(head)
+    out.append("|" + "---|" * (len(OCTAVES) + 1))
+    for label, fmt, m, status in rows:
+        if m is not None:
+            out.append(f"| {label} | " + " | ".join(f"{v:.0f}" if v > -99 else "-" for v in m["octaves"]) + " |")
+    out.append("")
+    out.append("Pitch track (dominant Hz at ms after the first onset):")
+    out.append("")
+    out.append(f"| {first_col} | track |")
+    out.append("|---|---|")
+    for label, fmt, m, status in rows:
+        if m is not None:
+            out.append(f"| {label} | " + " ".join(f"{t:.0f}:{f:.0f}" for t, f in m["pitch"]) + " |")
+    return "\n".join(out)
+
+
+def natural_key(text):
+    return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", text)]
+
+
+def wav_paths(target, recursive):
+    """(label, path) for a file, or for every WAV in a folder (our cues first, in cue order; subfolders after,
+    naturally sorted, when `recursive`)."""
+    if os.path.isfile(target):
+        return [(os.path.basename(target), target)]
+    order = {f"{c}.wav": i for i, c in enumerate(CUES)}
+    found = []
+    for dirpath, dirnames, filenames in os.walk(target):
+        dirnames.sort(key=natural_key)
+        names = sorted((f for f in filenames if f.lower().endswith(".wav")), key=lambda f: (order.get(f, 99), f))
+        found += [(os.path.relpath(os.path.join(dirpath, f), target), os.path.join(dirpath, f)) for f in names]
+        if not recursive:
+            break
+    return found
+
+
+def run_measure(targets, recursive):
+    rows = []
+    seen = {}
+    for target in targets:
+        for rel, path in wav_paths(target, recursive):
+            label = rel if len(targets) == 1 else os.path.join(os.path.basename(os.path.normpath(target)), rel)
+            with open(path, "rb") as f:
+                digest = hashlib.sha256(f.read()).hexdigest()
+            if digest in seen:
+                rows.append((label, None, None, f"identical to {seen[digest]}"))
+                continue
+            seen[digest] = label
+            sr, ch, bits, kind, mono = read_any(path)
+            rows.append((label, (sr, ch, bits, kind), measure(mono, sr), None))
+            print(f"measured {label}", file=sys.stderr)
+    print(md_tables(rows, first_col="file"))
+    return 0
+
+
+def find_cue(folder, cue, aliases):
+    for name in (f"{cue}.wav",) + (ALIASES.get(cue, ()) if aliases else ()):
+        path = os.path.join(folder, name)
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def run_compare(refs, ours):
+    """refs/ours: [(label, folder)]; references may use ALIASES, ours get generic_problems() checks."""
+    rows = []
+    failures = 0
+    for cue in CUES:
+        for label, folder, is_ref in [(lbl, d, True) for lbl, d in refs] + [(lbl, d, False) for lbl, d in ours]:
+            path = find_cue(folder, cue, aliases=is_ref)
+            tag = f"{cue} · {label}"
+            if path is None:
+                rows.append((tag, None, None, "(no such cue)" if is_ref else "MISSING"))
+                failures += not is_ref
+                continue
+            sr, ch, bits, kind, mono = read_any(path)
+            m = measure(mono, sr)
+            status = None
+            if not is_ref:
+                problems = generic_problems(cue, (sr, ch, bits, kind), m)
+                failures += bool(problems)
+                status = "ok" if not problems else "; ".join(problems)
+            else:
+                status = os.path.relpath(path, folder)
+            rows.append((tag, (sr, ch, bits, kind), m, status))
+            print(f"measured {tag}", file=sys.stderr)
+    print(md_tables(rows, first_col="cue · set"))
+    return 1 if failures else 0
 
 
 # ------------------------------------------------------------------------------------------------- PNG
@@ -418,21 +883,65 @@ def render_png(path, rows, sr=48000):
 
 # ------------------------------------------------------------------------------------------------ main
 
+def shipped_set(gen_path):
+    """DEFAULT_SET from gen-sounds.py (the set Resources/Sounds is generated from), or "current"."""
+    try:
+        with open(gen_path) as f:
+            m = re.search(r'^DEFAULT_SET = "([^"]+)"', f.read(), re.M)
+        return m.group(1) if m else "current"
+    except OSError:
+        return "current"
+
+
+def parse_sets(tokens):
+    sets = []
+    for tok in tokens:
+        label, sep, folder = tok.partition("=")
+        if not sep:
+            label, folder = os.path.basename(os.path.normpath(tok)), tok
+        sets.append((label, folder))
+    return sets
+
+
 def main():
     args = sys.argv[1:]
+    if "--measure" in args:
+        recursive = "--recursive" in args
+        targets = [a for a in args if a not in ("--measure", "--recursive")]
+        return run_measure(targets, recursive)
+    if "--compare" in args or "--ref" in args:
+        refs, ours, current = [], [], None
+        for a in args:
+            if a in ("--compare", "--ref"):
+                current = ours if a == "--compare" else refs
+            elif current is not None:
+                current.append(a)
+        return run_compare(parse_sets(refs), parse_sets(ours))
     png = None
     if "--png" in args:
         i = args.index("--png")
         png = args[i + 1]
         del args[i:i + 2]
+    chosen = None
+    if "--set" in args:
+        i = args.index("--set")
+        chosen = args[i + 1] if i + 1 < len(args) else ""
+        del args[i:i + 2]
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if chosen is None:
+        chosen = shipped_set(os.path.join(root, "scripts", "gen-sounds.py"))
+    if chosen not in EXPECT_SETS:
+        print(f"unknown set {chosen!r}; choose one of: {', '.join(EXPECT_SETS)}")
+        return 2
+    expect = EXPECT_SETS[chosen]
     folder = args[0] if args else os.path.join(root, "Resources", "Sounds")
     failures = 0
     rows = []
+    print(f"set {chosen}: {folder}")
     print(f"{'sound':8s} {'len':>6s} {'peak':>6s} {'rms10':>6s} {'LUFS':>6s} {'cent':>5s} {'>3k':>6s} "
           f"{'atk ms':>9s} {'tau ms':>13s} {'tail':>5s}  {'dominant Hz (dB)':30s} status")
     details = []
-    for name, cfg in EXPECT.items():
+    for name, cfg in expect.items():
         path = os.path.join(folder, f"{name}.wav")
         if not os.path.exists(path):
             print(f"{name:8s} MISSING")

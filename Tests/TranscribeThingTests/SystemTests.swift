@@ -134,6 +134,61 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
         #expect(kb.release(.fn).events.isEmpty)
     }
 
+    /// A combination macOS also listens to (input sources) works like any other once it's bound: the session
+    /// tap sees the chord key first and swallows it.
+    @Test func controlSpaceAsHandsFreeTogglesAndSwallowsSpace() {
+        var kb = Keyboard(bindings: bindings([.handsFree: Shortcut(modifiers: [.init(.control)], keyCode: KeyCode.space)]))
+        #expect(kb.press(.leftControl).events.isEmpty)
+        let space = kb.down(kVK_Space)
+        #expect(space.events == [.handsFreeToggle])
+        #expect(space.swallow)
+        let repeated = kb.down(kVK_Space, isRepeat: true)
+        #expect(repeated.events.isEmpty)
+        #expect(repeated.swallow)
+        #expect(kb.up(kVK_Space).swallow)
+        #expect(kb.release(.leftControl).events.isEmpty)
+        // Combinations ignore sides: Right ⌃ Space toggles it again.
+        kb.press(.rightControl)
+        #expect(kb.down(kVK_Space).events == [.handsFreeToggle])
+        kb.up(kVK_Space)
+        kb.release(.rightControl)
+        // A plain Space still types, and fn Space is no longer hands-free.
+        let plain = kb.down(kVK_Space)
+        #expect(plain.events.isEmpty)
+        #expect(!plain.swallow)
+        kb.up(kVK_Space)
+        #expect(kb.press(.fn).events == [.pttDown])
+        let fnSpace = kb.down(kVK_Space)
+        #expect(fnSpace.events == [.pttInterrupted])
+        #expect(!fnSpace.swallow)
+    }
+
+    @Test func commandSpaceAsPushToTalkHoldsUntilSpaceIsReleased() {
+        var kb = Keyboard(bindings: bindings([.pushToTalk: Shortcut(modifiers: [.init(.command)], keyCode: KeyCode.space)]))
+        #expect(kb.press(.leftCommand).events.isEmpty)
+        let down = kb.down(kVK_Space)
+        #expect(down.events == [.pttDown])
+        #expect(down.swallow)
+        let repeated = kb.down(kVK_Space, isRepeat: true)
+        #expect(repeated.events.isEmpty)
+        #expect(repeated.swallow)
+        // Letting go of ⌘ first doesn't end it; Space does.
+        #expect(kb.release(.leftCommand).events.isEmpty)
+        #expect(kb.down(kVK_Space, isRepeat: true).swallow)
+        let up = kb.up(kVK_Space)
+        #expect(up.events == [.pttUp])
+        #expect(up.swallow)
+        // Other ⌘ shortcuts pass through, and it works again.
+        kb.press(.leftCommand)
+        let copy = kb.down(kVK_ANSI_C)
+        #expect(copy.events.isEmpty)
+        #expect(!copy.swallow)
+        kb.up(kVK_ANSI_C)
+        #expect(kb.down(kVK_Space).events == [.pttDown])
+        kb.release(.leftCommand)
+        #expect(kb.up(kVK_Space).events == [.pttUp])
+    }
+
     @Test func spaceWhileHoldingFnTogglesAgainWithoutReleasingFn() {
         var kb = Keyboard()
         kb.press(.fn)
@@ -939,24 +994,34 @@ private final class PasteLog: @unchecked Sendable {
 
 @Suite struct ShortcutEditTests {
     private let defaults = ShortcutBindings.defaults
+    /// Every macOS shortcut off, 🌐 does nothing.
+    private let quiet = SystemKeyboardState(hotKeys: [], fnUsage: .doNothing, functionKeysAreStandard: false)
+    /// Every default macOS shortcut on.
+    private let stock = SystemKeyboardState(hotKeys: SystemSymbolicHotKeys.active(in: nil), fnUsage: .doNothing,
+                                            functionKeysAreStandard: false)
+
+    private func evaluate(_ shortcut: Shortcut, for action: ShortcutAction, bindings: ShortcutBindings? = nil,
+                          swapAllowed: Bool = true, system: SystemKeyboardState? = nil) -> ShortcutEdit.Outcome {
+        ShortcutEdit.evaluate(shortcut, for: action, bindings: bindings ?? defaults, swapAllowed: swapAllowed,
+                              system: system ?? quiet)
+    }
 
     @Test func sameShortcutIsUnchanged() {
-        #expect(ShortcutEdit.evaluate(.fn, for: .pushToTalk, bindings: defaults, swapAllowed: true) == .unchanged)
+        #expect(evaluate(.fn, for: .pushToTalk) == .unchanged)
     }
 
     @Test func rightOptionIsAppliedCleanly() {
-        #expect(ShortcutEdit.evaluate(.rightOption, for: .pushToTalk, bindings: defaults, swapAllowed: true)
-            == .apply(warning: nil))
+        #expect(evaluate(.rightOption, for: .pushToTalk) == .apply(warning: nil))
     }
 
     @Test func plainOptionAppliesWithAWarning() {
-        let outcome = ShortcutEdit.evaluate(Shortcut(modifiers: [.init(.option)]), for: .pushToTalk,
-                                            bindings: defaults, swapAllowed: true)
+        let outcome = evaluate(Shortcut(modifiers: [.init(.option)]), for: .pushToTalk)
         guard case .apply(let warning?) = outcome else {
             Issue.record("Expected a warning, got \(outcome)")
             return
         }
-        #expect(warning.contains("Right ⌥"))
+        #expect(warning.kind == .loneModifier)
+        #expect(warning.detail?.contains("Right ⌥") == true)
     }
 
     @Test func loneModifiersSuggestTheRightHandKey() {
@@ -973,44 +1038,71 @@ private final class PasteLog: @unchecked Sendable {
         #expect(ShortcutEdit.betterSide(for: .fnSpace) == nil)
     }
 
-    @Test func systemComboIsRejected() {
+    @Test func systemCombosAreSavedAndWarnOnlyWhileMacOSUsesThem() {
+        let controlSpace = Shortcut(modifiers: [.init(.control)], keyCode: KeyCode.space)
+        #expect(evaluate(controlSpace, for: .handsFree, system: quiet) == .apply(warning: nil))
+        guard case .apply(let warning?) = evaluate(controlSpace, for: .handsFree, system: stock) else {
+            Issue.record("⌃Space must be saved with a warning while input-source switching is on")
+            return
+        }
+        #expect(warning.kind == .systemShortcut)
+        #expect(warning.text == "macOS also uses ⌃Space for input sources.")
+
         let spotlight = Shortcut(modifiers: [.init(.command)], keyCode: KeyCode.space)
-        guard case .reject = ShortcutEdit.evaluate(spotlight, for: .handsFree, bindings: defaults, swapAllowed: true) else {
-            Issue.record("⌘Space must be rejected")
+        #expect(evaluate(spotlight, for: .pushToTalk, system: quiet) == .apply(warning: nil))
+        guard case .apply(.some) = evaluate(spotlight, for: .pushToTalk, system: stock) else {
+            Issue.record("⌘Space must be saved with a warning while Spotlight uses it")
             return
         }
     }
 
-    @Test func escapeOnlyForCancel() {
-        guard case .reject = ShortcutEdit.evaluate(.escape, for: .pasteLast, bindings: defaults, swapAllowed: true) else {
-            Issue.record("Esc must be rejected outside cancel")
+    @Test func escapeOutsideCancelIsSavedWithAWarning() {
+        var bindings = defaults
+        bindings[.cancel] = .f13
+        guard case .apply(let warning?) = evaluate(.escape, for: .pasteLast, bindings: bindings) else {
+            Issue.record("Esc outside cancel must be saved with a warning")
             return
         }
+        #expect(warning.kind == .escape)
     }
 
     @Test func conflictOffersSwapWhenTheOtherActionCanTakeOurs() {
-        #expect(ShortcutEdit.evaluate(.fnSpace, for: .pasteLast, bindings: defaults, swapAllowed: true)
-            == .offerSwap(.handsFree))
-        #expect(ShortcutEdit.evaluate(.fnSpace, for: .pasteLast, bindings: defaults, swapAllowed: false)
+        #expect(evaluate(.fnSpace, for: .pasteLast) == .offerSwap(.handsFree))
+        #expect(evaluate(.fnSpace, for: .pasteLast, swapAllowed: false)
             == .reject("Hands-free already uses this shortcut."))
+        // Push to talk may take Esc: a warning, not a reason to refuse.
+        #expect(evaluate(.fn, for: .cancel) == .offerSwap(.pushToTalk))
     }
 
     @Test func noSwapWhenTheOtherActionCantTakeOurs() {
-        // Push to talk would receive Esc, which is reserved for cancel.
-        #expect(ShortcutEdit.evaluate(.fn, for: .cancel, bindings: defaults, swapAllowed: true)
-            == .reject("Push to talk already uses this shortcut."))
+        // Copy last is ⌃, hands-free ⌃⌥: paste last taking ⌃ would go off on the way to hands-free.
+        var bindings = defaults
+        bindings[.handsFree] = Shortcut(modifiers: [.init(.control), .init(.option)])
+        bindings[.copyLast] = Shortcut(modifiers: [.init(.control)])
+        #expect(evaluate(.commandFnV, for: .copyLast, bindings: bindings)
+            == .reject("Paste last transcript already uses this shortcut."))
+    }
+
+    @Test func swapWarnsAboutEitherNewBinding() {
+        // Cancel takes fn, push to talk gets Esc.
+        let swapped = ShortcutEdit.swapping(defaults, action: .cancel, to: .fn, with: .pushToTalk)
+        #expect(ShortcutEdit.warningAfterSwap(swapped, action: .cancel, other: .pushToTalk, system: quiet)?.kind == .escape)
+        let clean = ShortcutEdit.swapping(defaults, action: .pasteLast, to: .fnSpace, with: .handsFree)
+        #expect(ShortcutEdit.warningAfterSwap(clean, action: .pasteLast, other: .handsFree, system: quiet) == nil)
     }
 
     @Test func sidesThatCanMeetConflict() {
         // Right ⌥ push to talk (onboarding's alternative) and a lone ⌥ recorded for hands-free.
         let rightOptionPTT = bindings([.pushToTalk: .rightOption])
         let option = Shortcut(modifiers: [.init(.option)])
-        #expect(ShortcutValidator.validate(option, for: .handsFree, bindings: rightOptionPTT).conflict == .pushToTalk)
+        #expect(ShortcutValidator.validate(option, for: .handsFree, bindings: rightOptionPTT, system: quiet).conflict
+            == .pushToTalk)
         #expect(ShortcutValidator.validate(Shortcut(modifiers: [.init(.option, .left)]), for: .handsFree,
-                                           bindings: rightOptionPTT).conflict == nil)
+                                           bindings: rightOptionPTT, system: quiet).conflict == nil)
         // ⌃⌘C (either side) would make copy last (⌘ left⌃ C) unreachable.
         let controlCommandC = Shortcut(modifiers: [.init(.control), .init(.command)], keyCode: KeyCode.ansiC)
-        #expect(ShortcutValidator.validate(controlCommandC, for: .pasteLast, bindings: defaults).conflict == .copyLast)
+        #expect(ShortcutValidator.validate(controlCommandC, for: .pasteLast, bindings: defaults, system: quiet).conflict
+            == .copyLast)
     }
 
     @Test func aChordMustNotStartAnotherModifierOnlyBinding() {
@@ -1018,19 +1110,19 @@ private final class PasteLog: @unchecked Sendable {
         let control = Shortcut(modifiers: [.init(.control, .right)])
         // Hands-free ⌃ would fire on the way to a ⌃⌥ push to talk.
         let ptt = bindings([.pushToTalk: controlOption])
-        guard case .reject = ShortcutEdit.evaluate(control, for: .handsFree, bindings: ptt, swapAllowed: true) else {
+        guard case .reject = evaluate(control, for: .handsFree, bindings: ptt) else {
             Issue.record("a prefix of push to talk must be rejected")
             return
         }
         // And the other way round: push to talk ⌃⌥ while hands-free is ⌃.
         let handsFree = bindings([.handsFree: control])
-        guard case .reject = ShortcutEdit.evaluate(controlOption, for: .pushToTalk, bindings: handsFree, swapAllowed: true) else {
+        guard case .reject = evaluate(controlOption, for: .pushToTalk, bindings: handsFree) else {
             Issue.record("push to talk must not start with another modifier-only binding")
             return
         }
         // Push to talk as the start of a modifier-only hands-free is intended.
         let fnControl = Shortcut(modifiers: [.init(.function), .init(.control)])
-        guard case .apply = ShortcutEdit.evaluate(fnControl, for: .handsFree, bindings: defaults, swapAllowed: true) else {
+        guard case .apply = evaluate(fnControl, for: .handsFree) else {
             Issue.record("fn ⌃ for hands-free next to an fn push to talk must be accepted")
             return
         }

@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """gen-sounds.py: synthesize transcribe-thing's eight original UI sounds (standard library only).
 
-Usage: python3 scripts/gen-sounds.py [out_dir]        (default: Resources/Sounds)
+Usage: python3 scripts/gen-sounds.py [--set current|A|B|C] [out_dir]      (default: DEFAULT_SET, Resources/Sounds)
 
-Every file is 48 kHz, mono, 16-bit PCM. The family is low, woody and percussive: knocks, a mouth pop
-and soft marimba notes instead of glassy tones, so the cues feel physical and never bright.
+Every file is 48 kHz, mono, 16-bit PCM, peak-normalized to -11 dBFS (paste -19, cancel -17, error -13). There are
+four sets; DEFAULT_SET (below) is the one Resources/Sounds holds, and analyze-sounds.py checks against the same
+set's expectations, so shipping another set is a one-line change plus `make sounds`.
 
+current: low, woody and percussive (knocks, a mouth pop, soft marimba notes).
   start    one soft woody "tok", 470 Hz, 100 ms
   stop     one duller "tok", 370 Hz sagging 2 semitones, 130 ms
   lock     "tok-tok" 70 ms apart, 440 -> 523 Hz (second higher, a latch), 160 ms
@@ -15,20 +17,44 @@ and soft marimba notes instead of glassy tones, so the cues feel physical and ne
   error    two muted knocks 233 -> 196 Hz, 280 ms
   success  a small low wooden arpeggio C4 E4 G4, 380 ms
 
+A "tongue click": pitch-dropping mouth pops (tongue voice), bodies 120-260 Hz, 1-2 kHz ceiling, almost no ring.
+  start    pop 250 -> 175 Hz, tau 11 ms, 70 ms          stop     pop 200 -> 135 Hz, tau 13 ms, 85 ms
+  lock     pops 225 -> 160 and 260 -> 185 Hz, 55 ms apart, 125 ms
+  paste    tiny pop 280 -> 150 Hz, tau 5 ms, 45 ms      cancel   pop sliding 230 -> 120 Hz over ~45 ms, 95 ms
+  alert    two pitched pops G3 -> B3, 110 ms apart      error    two low pops 140 -> 124 Hz, 105 ms apart
+  success  pops G3 B3 D4, 60 ms apart, 270 ms
+
+B "low wood block": modal knocks, fundamentals 155-290 Hz, tau 11-19 ms, low-passed at 1.5-2 kHz, a faint sub thump.
+  start    block 280 Hz, 90 ms                          stop     duller block 215 Hz sagging 1.5 semitones, 105 ms
+  lock     245 -> 290 Hz, 60 ms apart, 135 ms           paste    tiny tick 240 Hz, tau 5 ms, 40 ms
+  cancel   knock 250 Hz sagging 6 semitones, 110 ms     alert    two wood-bar notes F3 -> A3, 130 ms apart, 300 ms
+  error    two muted knocks 185 -> 156 Hz, 240 ms       success  wood-bar arpeggio F3 A3 C4, 320 ms
+
+C "matched": built from scratch to the measured shape of Wispr Flow's default cues (their audio is only measured by
+  analyze-sounds.py, never used), 3-6 semitones lower. A near-pure "tok" (2nd mode 1.89x at -30 dB, 3-3.5 ms mallet
+  so a ~2.5 ms attack, tau 6-8 ms into a faint room tail), led by a soft grace hit 17-22 dB down.
+  start    grace 235 Hz, then tok 350 Hz 20 ms later, 115 ms
+  stop     grace 350 Hz, then tok 233 Hz 36 ms later, 150 ms
+  lock     mouth pops 330 -> 150 Hz and 520 -> 175 Hz, 60 ms apart, 140 ms
+  paste    tiny pop 330 -> 140 Hz, tau 4 ms, 40 ms      cancel   pop sliding 360 -> 130 Hz, 100 ms
+  alert    toks G3 -> D4, 60 ms apart, 330 ms           error    toks A3 -> D3, 125 ms apart, 300 ms
+  success  toks G3 B3 D4, 70 ms apart, 400 ms
+
 Voices:
-  knock   modal synthesis. A 1-3 ms mallet strike (raised-cosine force pulse with a little grain) drives
+  knock   modal synthesis. A 1-3.5 ms mallet strike (raised-cosine force pulse with a little grain) drives
           2-3 two-pole resonators, one per vibrational mode, at inharmonic ratios (wood block ~1 : 2.32 :
           4.08, marimba bar ~1 : 3.93). Upper modes are quieter and die faster, like a real struck object.
           The strike itself is heard as a tiny low-passed contact noise, and some knocks get a short sub
           "thump" (a sine sliding down from ~150 Hz, gone within 22 ms) for body.
   pop     a mouth "tsk-pop": a sine burst whose pitch drops fast, plus a soft 2 ms band-limited transient.
-  finish  4th-order Butterworth low-pass (nothing bright), 40 Hz high-pass (no DC), a 1.5 ms fade-in, a
-          raised-cosine fade-out to exact zero after the natural decay, and peak normalization
-          (-11 dBFS; paste -19, cancel -17, error -13). At equal peaks these low, soft-edged knocks
-          measure 2-4 dB quieter than the earlier bright tones, so every peak sits 3 dB above that set's.
+  tongue  a tongue click: a pitch-dropping sine body with a faster-dying 2nd harmonic (so a 150 Hz body still
+          reads on laptop speakers), an oral-cavity resonance that falls with it, and a soft release tick.
+  finish  4th-order Butterworth low-pass (nothing bright), 2nd-order high-pass (40 Hz: no DC; set C uses
+          90-130 Hz to drop the mallet's sub bump), a 1.5 ms fade-in, a raised-cosine fade-out to exact zero
+          after the natural decay, and peak normalization.
 
 scripts/analyze-sounds.py checks the result (level, spectral centroid, energy above 3 kHz, attack, decay,
-pitch). Output is deterministic (fixed noise seeds).
+pitch) and, with --compare, measures any set next to another. Output is deterministic (fixed noise seeds).
 """
 import math
 import os
@@ -259,14 +285,45 @@ def pop(f_start, f_end, glide_s, tau, seconds, attack_s=0.001, contact_db=-14.0,
     return out
 
 
+def tongue(f_start, f_end, glide_s, tau, seconds, attack_s=0.0008, h2_db=-16.0, cavity=None, click_db=-20.0,
+           click_lp=1500.0, seed=5):
+    """Tongue click / mouth "tok" (the tongue leaving the palate): a sine body whose pitch drops from f_start to
+    f_end (about 95 % of the way after `glide_s`) under exp(-t/tau), a 2nd harmonic `h2_db` down that dies twice as
+    fast (so a 150 Hz body still reads on laptop speakers), an optional oral-cavity resonance `cavity` = (ratio to
+    the body pitch, dB, tau) rung by the release and falling with the body, and a soft band-limited release tick."""
+    n = int(round(seconds * SR))
+    tc = glide_s / 3
+
+    def pitch(t):
+        return f_end + (f_start - f_end) * math.exp(-t / tc)
+
+    h2 = gain_db(h2_db) if h2_db is not None else 0.0
+    phase = 0.0
+    out = []
+    for i in range(n):
+        t = i / SR
+        phase += TWO_PI * pitch(t) / SR
+        a = 0.5 - 0.5 * math.cos(math.pi * min(1.0, t / attack_s))
+        out.append(a * (math.sin(phase) * math.exp(-t / tau) + h2 * math.sin(2 * phase) * math.exp(-2 * t / tau)))
+    if cavity is not None:
+        ratio, level, c_tau = cavity
+        ring = resonate(strike(0.8, seed), f_start * ratio, c_tau, seconds, glide=lambda t: pitch(t) / f_start)
+        out = [a + b for a, b in zip(out, scaled(ring, gain_db(level)))]
+    if click_db is not None:
+        tick = scaled(contact(1.2, seed + 100, lowpass_hz=click_lp, highpass_hz=250.0), gain_db(click_db))
+        for i in range(min(n, len(tick))):
+            out[i] += tick[i]
+    return out
+
+
 def sag(semis, time_s):
     """Pitch multiplier that sags by `semis` semitones (exponential approach, ~95 % after `time_s`)."""
     return lambda t: 2 ** (semis / 12 * (1 - math.exp(-t / (time_s / 3))))
 
 
-def finish(samples, peak_dbfs, lowpass_hz=3000.0, room=0.0, fade_in_ms=1.5, fade_out_ms=15.0):
+def finish(samples, peak_dbfs, lowpass_hz=3000.0, room=0.0, fade_in_ms=1.5, fade_out_ms=15.0, highpass_hz=40.0):
     out = butterworth(samples, "lowpass", lowpass_hz, 4)
-    out = butterworth(out, "highpass", 40.0, 2)
+    out = butterworth(out, "highpass", highpass_hz, 2)
     out = small_room(out, room)
     n = len(out)
     fade_in = int(fade_in_ms * SR / 1000)
@@ -346,16 +403,227 @@ def make_success():
     return finish(c.buf, -11, lowpass_hz=3000, room=0.06, fade_out_ms=40)
 
 
-SOUNDS = {
-    "start": make_start,
-    "stop": make_stop,
-    "lock": make_lock,
-    "paste": make_paste,
-    "cancel": make_cancel,
-    "alert": make_alert,
-    "error": make_error,
-    "success": make_success,
+# --------------------------------------------------------------------------------- candidate set A: tongue
+
+def a_start():
+    c = Canvas(0.070)
+    c.add(0.0, tongue(250.0, 175.0, glide_s=0.014, tau=0.011, seconds=0.070, h2_db=-14.0, cavity=(2.4, -8.0, 0.003),
+                      click_db=-20.0, seed=101))
+    return finish(c.buf, -11, lowpass_hz=1800, fade_out_ms=12)
+
+
+def a_stop():
+    c = Canvas(0.085)
+    c.add(0.0, tongue(200.0, 135.0, glide_s=0.018, tau=0.013, seconds=0.085, h2_db=-12.0, cavity=(2.3, -12.0, 0.003),
+                      click_db=-24.0, seed=103))
+    return finish(c.buf, -11, lowpass_hz=1400, fade_out_ms=15)
+
+
+def a_lock():
+    c = Canvas(0.125)
+    c.add(0.000, tongue(225.0, 160.0, glide_s=0.010, tau=0.008, seconds=0.065, h2_db=-14.0,
+                        cavity=(2.4, -9.0, 0.0025), click_db=-20.0, seed=105), gain=0.85)
+    c.add(0.055, tongue(260.0, 185.0, glide_s=0.010, tau=0.009, seconds=0.070, h2_db=-14.0,
+                        cavity=(2.4, -9.0, 0.0025), click_db=-20.0, seed=107))
+    return finish(c.buf, -11, lowpass_hz=1800, fade_out_ms=12)
+
+
+def a_paste():
+    c = Canvas(0.045)
+    c.add(0.0, tongue(280.0, 150.0, glide_s=0.016, tau=0.005, seconds=0.045, h2_db=-12.0, cavity=(2.5, -8.0, 0.002),
+                      click_db=-16.0, seed=109))
+    return finish(c.buf, -19, lowpass_hz=1800, fade_out_ms=8)
+
+
+def a_cancel():
+    c = Canvas(0.095)
+    c.add(0.0, tongue(230.0, 120.0, glide_s=0.045, tau=0.018, seconds=0.095, h2_db=-12.0, cavity=(2.3, -12.0, 0.003),
+                      click_db=-22.0, seed=111))
+    return finish(c.buf, -17, lowpass_hz=1400, fade_out_ms=18)
+
+
+def a_alert():
+    c = Canvas(0.250)
+    c.add(0.000, tongue(215.0, 196.0, glide_s=0.010, tau=0.022, seconds=0.140, h2_db=-16.0,
+                        cavity=(2.4, -18.0, 0.003), click_db=-26.0, seed=113))
+    c.add(0.110, tongue(270.0, 247.0, glide_s=0.010, tau=0.024, seconds=0.140, h2_db=-16.0,
+                        cavity=(2.4, -18.0, 0.003), click_db=-26.0, seed=115), gain=0.95)
+    return finish(c.buf, -11, lowpass_hz=1400, fade_out_ms=25)
+
+
+def a_error():
+    c = Canvas(0.210)
+    c.add(0.000, tongue(175.0, 140.0, glide_s=0.012, tau=0.014, seconds=0.105, h2_db=-12.0,
+                        cavity=(2.3, -16.0, 0.003), click_db=-26.0, seed=117))
+    c.add(0.105, tongue(155.0, 124.0, glide_s=0.012, tau=0.014, seconds=0.105, h2_db=-12.0,
+                        cavity=(2.3, -16.0, 0.003), click_db=-26.0, seed=119), gain=0.95)
+    return finish(c.buf, -13, lowpass_hz=1200, fade_out_ms=20)
+
+
+def a_success():
+    c = Canvas(0.270)
+    for k, (f, g) in enumerate(((196.0, 0.85), (246.94, 0.92), (293.66, 1.0))):
+        onset = 0.060 * k
+        c.add(onset, tongue(f * 1.12, f, glide_s=0.010, tau=0.024, seconds=0.270 - onset, h2_db=-16.0,
+                            cavity=(2.4, -18.0, 0.003), click_db=-26.0, seed=121 + k), gain=g)
+    return finish(c.buf, -11, lowpass_hz=1400, fade_out_ms=30)
+
+
+# ----------------------------------------------------------------------------- candidate set B: low wood block
+
+def b_start():
+    c = Canvas(0.090)
+    c.add(0.0, knock(280.0, tau=0.014, seconds=0.090, modes=WOOD, strike_ms=1.4, seed=201, contact_lp=1500.0,
+                     sub=(110.0, 70.0, -14.0), grain_db=-24.0))
+    return finish(c.buf, -11, lowpass_hz=1800, fade_out_ms=12)
+
+
+def b_stop():
+    c = Canvas(0.105)
+    c.add(0.0, knock(215.0, tau=0.016, seconds=0.105, modes=WOOD_DULL, strike_ms=2.0, seed=203, contact_lp=1300.0,
+                     glide=sag(-1.5, 0.040), sub=(95.0, 60.0, -12.0), grain_db=-26.0))
+    return finish(c.buf, -11, lowpass_hz=1500, fade_out_ms=15)
+
+
+def b_lock():
+    c = Canvas(0.135)
+    c.add(0.000, knock(245.0, tau=0.011, seconds=0.075, modes=WOOD, strike_ms=1.2, seed=205, contact_lp=1500.0,
+                       sub=(110.0, 70.0, -14.0), grain_db=-24.0), gain=0.85)
+    c.add(0.060, knock(290.0, tau=0.011, seconds=0.075, modes=WOOD, strike_ms=1.2, seed=207, contact_lp=1500.0,
+                       grain_db=-24.0))
+    return finish(c.buf, -11, lowpass_hz=1800, fade_out_ms=12)
+
+
+def b_paste():
+    c = Canvas(0.040)
+    c.add(0.0, knock(240.0, tau=0.005, seconds=0.040, modes=WOOD, strike_ms=0.8, seed=209, contact_db=-18.0,
+                     contact_lp=1800.0, grain_db=-22.0))
+    return finish(c.buf, -19, lowpass_hz=2000, fade_out_ms=8)
+
+
+def b_cancel():
+    c = Canvas(0.110)
+    c.add(0.0, knock(250.0, tau=0.018, seconds=0.110, modes=WOOD_DULL, strike_ms=1.8, seed=211, contact_lp=1300.0,
+                     glide=sag(-6.0, 0.050), sub=(100.0, 60.0, -14.0), grain_db=-26.0))
+    return finish(c.buf, -17, lowpass_hz=1500, fade_out_ms=20)
+
+
+def b_alert():
+    c = Canvas(0.300)
+    c.add(0.000, knock(174.61, tau=0.035, seconds=0.300, modes=MARIMBA, strike_ms=2.5, seed=213, contact_db=-24.0,
+                       contact_lp=1300.0, grain_db=-28.0))
+    c.add(0.130, knock(220.00, tau=0.035, seconds=0.170, modes=MARIMBA, strike_ms=2.5, seed=215, contact_db=-24.0,
+                       contact_lp=1300.0, grain_db=-28.0), gain=0.9)
+    return finish(c.buf, -11, lowpass_hz=2000, room=0.05, fade_out_ms=30)
+
+
+def b_error():
+    c = Canvas(0.240)
+    c.add(0.000, knock(185.0, tau=0.018, seconds=0.125, modes=WOOD_KNOCK, strike_ms=2.5, seed=217, contact_lp=1200.0,
+                       sub=(100.0, 60.0, -12.0), grain_db=-24.0))
+    c.add(0.115, knock(155.6, tau=0.018, seconds=0.125, modes=WOOD_KNOCK, strike_ms=2.5, seed=219, contact_lp=1200.0,
+                       sub=(90.0, 55.0, -12.0), grain_db=-24.0), gain=0.92)
+    return finish(c.buf, -13, lowpass_hz=1500, room=0.03, fade_out_ms=25)
+
+
+def b_success():
+    c = Canvas(0.320)
+    for k, (f, g) in enumerate(((174.61, 0.85), (220.00, 0.92), (261.63, 1.0))):
+        onset = 0.060 * k
+        c.add(onset, knock(f, tau=0.040, seconds=0.320 - onset, modes=MARIMBA, strike_ms=2.2, seed=221 + k,
+                           contact_db=-24.0, contact_lp=1300.0, grain_db=-28.0), gain=g)
+    return finish(c.buf, -11, lowpass_hz=2000, room=0.05, fade_out_ms=35)
+
+
+# ------------------------------------------------------------ candidate set C: matched to Wispr Flow's default
+# Synthesized from scratch to the *measured* character of the reference (see analyze-sounds.py --compare): a
+# near-pure "tok" (2nd mode ~1.9x, -30 dB) with a ~2.5 ms attack and a fast ~7 ms decay into a faint room tail,
+# preceded by a soft grace hit (start: lower grace, then the main tok 20 ms later; stop: the reverse, 36 ms
+# apart), and pitch-dropping mouth pops for lock. Everything sits 3-6 semitones below the reference.
+
+TOK = ((1.0, 1.0, 1.0), (1.89, 0.035, 0.6))
+
+
+def c_start():
+    c = Canvas(0.115)
+    c.add(0.000, knock(235.0, tau=0.008, seconds=0.050, modes=TOK, strike_ms=3.0, seed=301, contact_db=None), gain=0.08)
+    c.add(0.020, knock(350.0, tau=0.007, seconds=0.095, modes=TOK, strike_ms=3.5, seed=303, contact_db=-30.0,
+                       contact_lp=1500.0, glide=sag(-0.5, 0.020)))
+    return finish(c.buf, -11, lowpass_hz=2200, room=0.10, fade_out_ms=15, highpass_hz=130.0)
+
+
+def c_stop():
+    c = Canvas(0.150)
+    c.add(0.000, knock(350.0, tau=0.008, seconds=0.060, modes=TOK, strike_ms=3.0, seed=305, contact_db=None), gain=0.13)
+    c.add(0.036, knock(233.08, tau=0.006, seconds=0.114, modes=TOK, strike_ms=3.5, seed=307, contact_db=-30.0,
+                       contact_lp=1300.0, glide=sag(-0.7, 0.025)))
+    return finish(c.buf, -11, lowpass_hz=1800, room=0.07, fade_out_ms=20, highpass_hz=110.0)
+
+
+def c_lock():
+    c = Canvas(0.140)
+    c.add(0.000, tongue(330.0, 150.0, glide_s=0.012, tau=0.005, seconds=0.050, h2_db=None, cavity=(2.2, -12.0, 0.002),
+                        click_db=-22.0, click_lp=1800.0, seed=309))
+    c.add(0.060, tongue(520.0, 175.0, glide_s=0.018, tau=0.009, seconds=0.080, h2_db=-18.0, cavity=(2.2, -12.0, 0.002),
+                        click_db=-16.0, click_lp=2000.0, seed=311), gain=0.75)
+    return finish(c.buf, -11, lowpass_hz=2000, room=0.04, fade_out_ms=15, highpass_hz=100.0)
+
+
+def c_paste():
+    c = Canvas(0.040)
+    c.add(0.0, tongue(330.0, 140.0, glide_s=0.010, tau=0.004, seconds=0.040, h2_db=None, cavity=(2.2, -12.0, 0.002),
+                      click_db=-20.0, click_lp=1800.0, seed=313))
+    return finish(c.buf, -19, lowpass_hz=2000, fade_out_ms=8, highpass_hz=100.0)
+
+
+def c_cancel():
+    c = Canvas(0.100)
+    c.add(0.0, tongue(360.0, 130.0, glide_s=0.025, tau=0.014, seconds=0.100, h2_db=-18.0, cavity=(2.2, -16.0, 0.002),
+                      click_db=-22.0, click_lp=1400.0, seed=315))
+    return finish(c.buf, -17, lowpass_hz=1400, room=0.04, fade_out_ms=18, highpass_hz=90.0)
+
+
+def c_alert():
+    c = Canvas(0.330)
+    c.add(0.000, knock(196.0, tau=0.025, seconds=0.200, modes=TOK, strike_ms=3.0, seed=317, contact_db=-30.0,
+                       contact_lp=1300.0))
+    c.add(0.060, knock(293.66, tau=0.055, seconds=0.270, modes=TOK, strike_ms=3.0, seed=319, contact_db=-30.0,
+                       contact_lp=1300.0), gain=0.9)
+    return finish(c.buf, -11, lowpass_hz=2000, room=0.07, fade_out_ms=35, highpass_hz=100.0)
+
+
+def c_error():
+    c = Canvas(0.300)
+    c.add(0.000, knock(220.00, tau=0.040, seconds=0.200, modes=TOK, strike_ms=3.5, seed=321, contact_db=-30.0,
+                       contact_lp=1200.0))
+    c.add(0.125, knock(146.83, tau=0.040, seconds=0.175, modes=TOK, strike_ms=3.5, seed=323, contact_db=-30.0,
+                       contact_lp=1200.0), gain=0.95)
+    return finish(c.buf, -13, lowpass_hz=1600, room=0.06, fade_out_ms=35, highpass_hz=90.0)
+
+
+def c_success():
+    c = Canvas(0.400)
+    for k, (f, tau, g) in enumerate(((196.0, 0.055, 0.8), (246.94, 0.055, 0.9), (293.66, 0.075, 1.0))):
+        onset = 0.070 * k
+        c.add(onset, knock(f, tau=tau, seconds=0.400 - onset, modes=TOK, strike_ms=3.0, seed=325 + k,
+                           contact_db=-30.0, contact_lp=1300.0), gain=g)
+    return finish(c.buf, -11, lowpass_hz=2000, room=0.07, fade_out_ms=45, highpass_hz=100.0)
+
+
+# --------------------------------------------------------------------------------------------------- sets
+
+SETS = {
+    "current": {"start": make_start, "stop": make_stop, "lock": make_lock, "paste": make_paste,
+                "cancel": make_cancel, "alert": make_alert, "error": make_error, "success": make_success},
+    "A": {"start": a_start, "stop": a_stop, "lock": a_lock, "paste": a_paste,
+          "cancel": a_cancel, "alert": a_alert, "error": a_error, "success": a_success},
+    "B": {"start": b_start, "stop": b_stop, "lock": b_lock, "paste": b_paste,
+          "cancel": b_cancel, "alert": b_alert, "error": b_error, "success": b_success},
+    "C": {"start": c_start, "stop": c_stop, "lock": c_lock, "paste": c_paste,
+          "cancel": c_cancel, "alert": c_alert, "error": c_error, "success": c_success},
 }
+DEFAULT_SET = "current"
+SOUNDS = SETS[DEFAULT_SET]
 
 
 def write_wav(path, samples):
@@ -368,10 +636,18 @@ def write_wav(path, samples):
 
 
 def main():
+    args = sys.argv[1:]
+    chosen = DEFAULT_SET
+    if "--set" in args:
+        i = args.index("--set")
+        chosen = args[i + 1] if i + 1 < len(args) else ""
+        del args[i:i + 2]
+    if chosen not in SETS:
+        sys.exit(f"unknown set {chosen!r}; choose one of: {', '.join(SETS)}")
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(root, "Resources", "Sounds")
+    out = args[0] if args else os.path.join(root, "Resources", "Sounds")
     os.makedirs(out, exist_ok=True)
-    for name, make in SOUNDS.items():
+    for name, make in SETS[chosen].items():
         samples = make()
         path = os.path.join(out, f"{name}.wav")
         write_wav(path, samples)

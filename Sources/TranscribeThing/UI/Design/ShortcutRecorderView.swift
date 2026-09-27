@@ -16,10 +16,20 @@ private struct ShortcutRecordingContextKey: EnvironmentKey {
     static let defaultValue: ShortcutRecordingContext? = nil
 }
 
+private struct ShortcutRecorderPreviewMessagesKey: EnvironmentKey {
+    static let defaultValue: [ShortcutAction: RecorderMessage] = [:]
+}
+
 extension EnvironmentValues {
     var shortcutRecordingContext: ShortcutRecordingContext? {
         get { self[ShortcutRecordingContextKey.self] }
         set { self[ShortcutRecordingContextKey.self] = newValue }
+    }
+
+    /// Snapshots of whole pages: the message each action's recorder shows as if a shortcut was just recorded.
+    var shortcutRecorderPreviewMessages: [ShortcutAction: RecorderMessage] {
+        get { self[ShortcutRecorderPreviewMessagesKey.self] }
+        set { self[ShortcutRecorderPreviewMessagesKey.self] = newValue }
     }
 }
 
@@ -36,8 +46,9 @@ extension View {
 // MARK: - Recorder
 
 /// Shows a shortcut as key caps with a "Change" action; while recording it becomes a dashed iris field that
-/// captures modifier-only chords and combinations. Validator errors, warnings and conflicts (with Swap)
-/// appear inline underneath.
+/// captures modifier-only chords and combinations. Any shortcut is saved; why it may get in the way (a macOS
+/// shortcut that is on, a typing key) appears inline underneath as a warning. Only a clash with another action
+/// is refused, with Swap offered for a duplicate.
 struct ShortcutRecorderView: View {
     enum PreviewState {
         case recording(held: Shortcut?)
@@ -56,6 +67,7 @@ struct ShortcutRecorderView: View {
     private let isLive: Bool
 
     @Environment(\.shortcutRecordingContext) private var context
+    @Environment(\.shortcutRecorderPreviewMessages) private var previewMessages
     @State private var isRecording: Bool
     @State private var held: Shortcut?
     @State private var message: RecorderMessage?
@@ -120,14 +132,14 @@ struct ShortcutRecorderView: View {
             if isRecording {
                 RecordingHint(action: action)
                     .transition(.opacity.combined(with: .move(edge: .top)))
-            } else if let message {
+            } else if let message = shownMessage {
                 RecorderMessageView(message: message, alignment: alignment, onSwap: swap, onUse: apply,
                                     onDismiss: { self.message = nil })
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .animation(Theme.Motion.snappy, value: isRecording)
-        .animation(Theme.Motion.snappy, value: message)
+        .animation(Theme.Motion.snappy, value: shownMessage)
         // Rows size to the message underneath, and the message gets room before a row's subtitle does.
         .fixedSize(horizontal: false, vertical: true)
         .layoutPriority(1)
@@ -155,6 +167,8 @@ struct ShortcutRecorderView: View {
     }
 
     // MARK: State
+
+    private var shownMessage: RecorderMessage? { message ?? previewMessages[action] }
 
     private var currentShortcut: Shortcut? {
         switch source {
@@ -203,17 +217,9 @@ struct ShortcutRecorderView: View {
     }
 
     private func apply(_ shortcut: Shortcut) {
-        switch ShortcutEdit.evaluate(shortcut, for: action, bindings: allBindings, swapAllowed: settings != nil) {
-        case .unchanged:
-            message = nil
-        case .apply(let warning):
-            write(shortcut)
-            message = warning.map { .warning($0, suggestion: ShortcutEdit.betterSide(for: shortcut)) }
-        case .reject(let reason):
-            message = .error(reason, attempted: shortcut)
-        case .offerSwap(let other):
-            message = .conflict(other, attempted: shortcut)
-        }
+        let outcome = ShortcutEdit.evaluate(shortcut, for: action, bindings: allBindings, swapAllowed: settings != nil)
+        if case .apply = outcome { write(shortcut) }
+        message = RecorderMessage(outcome, recording: shortcut)
     }
 
     private func swap() {
@@ -221,8 +227,7 @@ struct ShortcutRecorderView: View {
         let swapped = ShortcutEdit.swapping(allBindings, action: action, to: attempted, with: other)
         settings.shortcuts[other] = swapped[other]
         write(attempted)
-        let warning = ShortcutValidator.validate(attempted, for: action, bindings: swapped).warnings.first
-        message = .swapped(other, warning: warning)
+        message = .swapped(other, warning: ShortcutEdit.warningAfterSwap(swapped, action: action, other: other))
     }
 
     private func write(_ shortcut: Shortcut?) {
@@ -236,11 +241,27 @@ struct ShortcutRecorderView: View {
 // MARK: - Messages
 
 enum RecorderMessage: Equatable {
+    /// Not saved: it can't work next to another action's shortcut.
     case error(String, attempted: Shortcut)
-    /// `suggestion`: a binding that avoids the problem (Right ⌥ for ⌥), offered as a one-click fix.
-    case warning(String, suggestion: Shortcut?)
+    /// Saved, and it may get in the way. `suggestion`: a binding that avoids the problem (Right ⌥ for ⌥),
+    /// offered as a one-click fix.
+    case warning(ShortcutWarning, suggestion: Shortcut?)
     case conflict(ShortcutAction, attempted: Shortcut)
-    case swapped(ShortcutAction, warning: String?)
+    case swapped(ShortcutAction, warning: ShortcutWarning?)
+
+    /// What the recorder says after recording `shortcut`; nil when there is nothing to say.
+    init?(_ outcome: ShortcutEdit.Outcome, recording shortcut: Shortcut) {
+        switch outcome {
+        case .unchanged, .apply(warning: nil):
+            return nil
+        case .apply(let warning?):
+            self = .warning(warning, suggestion: ShortcutEdit.betterSide(for: shortcut))
+        case .reject(let reason):
+            self = .error(reason, attempted: shortcut)
+        case .offerSwap(let other):
+            self = .conflict(other, attempted: shortcut)
+        }
+    }
 }
 
 private struct RecorderMessageView: View {
@@ -265,9 +286,9 @@ private struct RecorderMessageView: View {
                 }
                 Text(text).foregroundStyle(.inkSecondary)
             }
-        case .warning(let text, let suggestion):
+        case .warning(let warning, let suggestion):
             MessageBubble(symbol: "exclamationmark.triangle.fill", tint: .warning) {
-                Text(text).foregroundStyle(.inkSecondary)
+                WarningLines(warning: warning)
                 if let suggestion {
                     Button("Use \(suggestion.compactDescription)") { onUse(suggestion) }
                         .buttonStyle(SecondaryButtonStyle(size: .small))
@@ -294,13 +315,26 @@ private struct RecorderMessageView: View {
             if let warning {
                 MessageBubble(symbol: "exclamationmark.triangle.fill", tint: .warning) {
                     Text("Swapped with \(other.title.lowercased()).").foregroundStyle(.ink).fontWeight(.medium)
-                    Text(warning).foregroundStyle(.inkSecondary)
+                    Text(warning.text).foregroundStyle(.inkSecondary)
                 }
             } else {
                 MessageBubble(symbol: "checkmark.circle.fill", tint: .success) {
                     Text("Swapped with \(other.title.lowercased()).").foregroundStyle(.inkSecondary)
                 }
             }
+        }
+    }
+}
+
+/// A saved shortcut's warning: what else reacts to it, then (quieter) what to do about it.
+private struct WarningLines: View {
+    let warning: ShortcutWarning
+
+    var body: some View {
+        Text(warning.text).foregroundStyle(.ink).fontWeight(.medium)
+        if let detail = warning.detail {
+            Text(detail).foregroundStyle(.inkSecondary)
+                .padding(.top, -3)
         }
     }
 }
@@ -587,8 +621,20 @@ final class ShortcutCaptureNSView: NSView {
 /// when `TRANSCRIBE_THING_SNAPSHOT_DIR` is set, and available for the catalog as `ShortcutRecorderSnapshots.entries`.
 enum ShortcutRecorderSnapshots {
     @MainActor static var entries: [SnapshotEntry] {
-        [SnapshotEntry("system-shortcut-recorder", width: 640, height: 1180) { _ in RecorderGallery() },
+        [SnapshotEntry("system-shortcut-recorder", width: 640, height: 1420) { _ in RecorderGallery() },
          SnapshotEntry("system-shortcut-recorder-leading", width: 520, height: 420) { _ in RecorderLeadingDemo() }]
+    }
+
+    /// macOS's default shortcuts all on and 🌐 set to Do Nothing, so snapshots don't depend on this Mac.
+    static let system = SystemKeyboardState(hotKeys: SystemSymbolicHotKeys.active(in: nil), fnUsage: .doNothing,
+                                            functionKeysAreStandard: false)
+    static let controlOptionSpace = Shortcut(modifiers: [.init(.control), .init(.option)], keyCode: KeyCode.space)
+
+    /// What the recorder shows right after recording `shortcut`, with the real validator's copy.
+    static func message(recording shortcut: Shortcut, for action: ShortcutAction,
+                        bindings: ShortcutBindings = .defaults) -> RecorderMessage? {
+        RecorderMessage(ShortcutEdit.evaluate(shortcut, for: action, bindings: bindings, swapAllowed: true, system: system),
+                        recording: shortcut)
     }
 }
 
@@ -616,20 +662,19 @@ private struct RecorderGallery: View {
                     ShortcutRecorderView(shortcut: .constant(.fn), action: .pushToTalk,
                                          previewState: .recording(held: Shortcut(modifiers: [.init(.control), .init(.option, .right)])))
                 }
-                row(.handsFree) {
-                    ShortcutRecorderView(shortcut: .constant(.fnSpace), action: .handsFree,
-                                         previewState: .message(.error("macOS already uses this for Spotlight.",
-                                                                       attempted: Shortcut(modifiers: [.init(.command)], keyCode: KeyCode.space))))
-                }
+                // Saved with a warning: a macOS shortcut that is on.
+                saved(ShortcutRecorderSnapshots.controlOptionSpace, for: .handsFree)
+                // Saved with a warning: a key that types.
+                saved(Shortcut(modifiers: [], keyCode: KeyCode.space), for: .handsFree)
+                // Saved with a warning and a one-click fix.
+                saved(Shortcut(modifiers: [.init(.option)]), for: .pushToTalk)
                 row(.pasteLast) {
                     ShortcutRecorderView(shortcut: .constant(.commandFnV), action: .pasteLast,
                                          previewState: .message(.conflict(.handsFree, attempted: .fnSpace)))
                 }
-                row(.pushToTalk) {
-                    ShortcutRecorderView(shortcut: .constant(Shortcut(modifiers: [.init(.option)])), action: .pushToTalk,
-                                         previewState: .message(.warning("⌥ alone types special characters. Right ⌥ works better.",
-                                                                         suggestion: .rightOption)))
-                }
+                // Not saved: it would go off on the way to push to talk.
+                recorded(Shortcut(modifiers: [.init(.control, .right)]), for: .handsFree, current: .fnSpace,
+                         bindings: bindings([.pushToTalk: Shortcut(modifiers: [.init(.control), .init(.option)])]))
                 row(.handsFree) {
                     ShortcutRecorderView(shortcut: .constant(.rightOption), action: .handsFree,
                                          previewState: .message(.swapped(.pushToTalk, warning: nil)))
@@ -642,6 +687,28 @@ private struct RecorderGallery: View {
         .padding(Theme.Spacing.page)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(.bgCanvas)
+    }
+
+    /// `shortcut` recorded over the defaults and saved: the row shows it with its warning.
+    private func saved(_ shortcut: Shortcut, for action: ShortcutAction) -> some View {
+        recorded(shortcut, for: action, current: shortcut, bindings: defaults)
+    }
+
+    /// `shortcut` recorded over `bindings`; the row shows `current` (the new value when saved).
+    @ViewBuilder
+    private func recorded(_ shortcut: Shortcut, for action: ShortcutAction, current: Shortcut?,
+                          bindings: ShortcutBindings) -> some View {
+        if let message = ShortcutRecorderSnapshots.message(recording: shortcut, for: action, bindings: bindings) {
+            row(action) {
+                ShortcutRecorderView(shortcut: .constant(current), action: action, previewState: .message(message))
+            }
+        }
+    }
+
+    private func bindings(_ changes: [ShortcutAction: Shortcut]) -> ShortcutBindings {
+        var result = defaults
+        for (action, shortcut) in changes { result[action] = shortcut }
+        return result
     }
 
     private func row<Trailing: View>(_ action: ShortcutAction, @ViewBuilder trailing: () -> Trailing) -> some View {

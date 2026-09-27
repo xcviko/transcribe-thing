@@ -83,11 +83,13 @@ struct ShortcutCaptureEngine: Equatable, Sendable {
     }
 }
 
-/// What the recorder does with a captured shortcut: apply it (maybe with a warning), reject it, or offer Swap.
+/// What the recorder does with a captured shortcut: save it (maybe with a warning), offer Swap, or, when it
+/// can't work (another action uses it or starts with it), keep the old one.
 enum ShortcutEdit {
     enum Outcome: Equatable, Sendable {
         case unchanged
-        case apply(warning: String?)
+        /// Saved; `warning` is why it may get in the way.
+        case apply(warning: ShortcutWarning?)
         case reject(String)
         /// Another action uses it and could take this action's current shortcut instead.
         case offerSwap(ShortcutAction)
@@ -96,9 +98,9 @@ enum ShortcutEdit {
     /// `bindings` holds every action's saved shortcut; `swapAllowed` is false when the other binding can't be
     /// written (no settings) or this action has nothing to give back.
     static func evaluate(_ shortcut: Shortcut, for action: ShortcutAction, bindings: ShortcutBindings,
-                         swapAllowed: Bool) -> Outcome {
+                         swapAllowed: Bool, system: SystemKeyboardState = .current) -> Outcome {
         guard shortcut != bindings[action] else { return .unchanged }
-        let validation = ShortcutValidator.validate(shortcut, for: action, bindings: bindings)
+        let validation = ShortcutValidator.validate(shortcut, for: action, bindings: bindings, system: system)
         guard let other = validation.conflict else {
             if let error = validation.errors.first { return .reject(error) }
             return .apply(warning: validation.warnings.first)
@@ -106,7 +108,7 @@ enum ShortcutEdit {
         // Validate again without the clashing binding to see whether anything else is wrong.
         var withoutOther = bindings
         withoutOther[other] = nil
-        if let error = ShortcutValidator.validate(shortcut, for: action, bindings: withoutOther).errors.first {
+        if let error = ShortcutValidator.validate(shortcut, for: action, bindings: withoutOther, system: system).errors.first {
             return .reject(error)
         }
         guard swapAllowed, let mine = bindings[action] else {
@@ -114,10 +116,22 @@ enum ShortcutEdit {
         }
         var afterSwap = withoutOther
         afterSwap[action] = shortcut
-        guard ShortcutValidator.validate(mine, for: other, bindings: afterSwap).errors.isEmpty else {
+        guard ShortcutValidator.validate(mine, for: other, bindings: afterSwap, system: system).errors.isEmpty else {
             return .reject("\(other.title) already uses this shortcut.")
         }
         return .offerSwap(other)
+    }
+
+    /// The warning to show once Swap is done: this action's new shortcut first, then the one `other` received.
+    static func warningAfterSwap(_ swapped: ShortcutBindings, action: ShortcutAction, other: ShortcutAction,
+                                 system: SystemKeyboardState = .current) -> ShortcutWarning? {
+        for owner in [action, other] {
+            guard let shortcut = swapped[owner] else { continue }
+            if let warning = ShortcutValidator.validate(shortcut, for: owner, bindings: swapped, system: system).warnings.first {
+                return warning
+            }
+        }
+        return nil
     }
 
     /// A lone ⌘, ⌥ or ⌃ (either side, or the left one) gets in the way of typing; the right-hand key

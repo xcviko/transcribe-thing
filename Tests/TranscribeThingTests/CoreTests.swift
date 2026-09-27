@@ -1,5 +1,6 @@
 import AVFAudio
 import AppKit
+import Carbon.HIToolbox
 import Foundation
 import Testing
 @testable import TranscribeThing
@@ -149,30 +150,268 @@ import Testing
         #expect(bindings[.handsFree] == .fn)
     }
 
-    @Test func escapeIsOnlyForCancel() {
-        #expect(ShortcutValidator.validate(.escape, for: .cancel).isAcceptable)
-        #expect(!ShortcutValidator.validate(.escape, for: .pushToTalk).isAcceptable)
-    }
-
-    @Test func validatorRejectsTypingKeysSystemCombosAndDuplicates() {
-        let plainV = Shortcut(modifiers: [], keyCode: KeyCode.ansiV)
-        #expect(!ShortcutValidator.validate(plainV, for: .pasteLast).isAcceptable)
-        let shiftV = Shortcut(modifiers: [.init(.shift)], keyCode: KeyCode.ansiV)
-        #expect(!ShortcutValidator.validate(shiftV, for: .pasteLast).isAcceptable)
-        let commandV = Shortcut(modifiers: [.init(.command)], keyCode: KeyCode.ansiV)
-        #expect(!ShortcutValidator.validate(commandV, for: .pasteLast).isAcceptable)
-        let duplicate = ShortcutValidator.validate(.fnSpace, for: .pasteLast)
-        #expect(duplicate.conflict == .handsFree)
-        #expect(!duplicate.isAcceptable)
-        #expect(ShortcutValidator.validate(.f13, for: .pushToTalk).isAcceptable)
-        #expect(ShortcutValidator.validate(.rightOption, for: .pushToTalk).isAcceptable)
-        #expect(!ShortcutValidator.validate(Shortcut(modifiers: [.init(.shift)]), for: .pushToTalk).isAcceptable)
-    }
-
     @Test(arguments: ShortcutAction.allCases)
     func defaultsValidateCleanly(_ action: ShortcutAction) throws {
         let shortcut = try #require(ShortcutBindings.defaults[action])
-        #expect(ShortcutValidator.validate(shortcut, for: action, bindings: .defaults).errors.isEmpty)
+        let validation = ShortcutValidator.validate(shortcut, for: action, bindings: .defaults,
+                                                    system: ShortcutPolicyTests.stock(fnUsage: .doNothing))
+        #expect(validation.errors.isEmpty)
+        #expect(validation.warnings.isEmpty)
+    }
+}
+
+// MARK: - Shortcut policy
+
+private func combo(_ key: Int, _ modifiers: Shortcut.Modifier...) -> Shortcut {
+    Shortcut(modifiers: modifiers.map { .init($0) }, keyCode: UInt16(key))
+}
+
+private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
+    Shortcut(modifiers: keys)
+}
+
+/// Any shortcut can be bound. Errors are only an empty shortcut and a clash with another action; everything
+/// else that used to be refused is a warning, and macOS shortcuts warn only while they are on.
+@Suite struct ShortcutPolicyTests {
+    enum Expected: Equatable, Sendable {
+        case clean
+        /// Saved; the first (shown) warning is of this kind.
+        case warning(ShortcutWarning.Kind)
+        case error
+    }
+
+    struct Case: Sendable, CustomTestStringConvertible {
+        var name: String
+        var shortcut: Shortcut
+        var action: ShortcutAction
+        var system: SystemKeyboardState = ShortcutPolicyTests.quiet
+        var bindings: ShortcutBindings = .defaults
+        var expected: Expected
+
+        var testDescription: String { name }
+    }
+
+    /// Every macOS shortcut off, 🌐 does nothing, F-keys are media keys.
+    static let quiet = SystemKeyboardState(hotKeys: [], fnUsage: .doNothing, functionKeysAreStandard: false)
+
+    /// A Mac nobody has customized: every default macOS shortcut on.
+    static func stock(fnUsage: FnKeyAdvisor.Usage? = nil) -> SystemKeyboardState {
+        SystemKeyboardState(hotKeys: SystemSymbolicHotKeys.active(in: nil), fnUsage: fnUsage, functionKeysAreStandard: false)
+    }
+
+    static let controlOptionPTT = {
+        var bindings = ShortcutBindings.defaults
+        bindings[.pushToTalk] = chord(.init(.control), .init(.option))
+        return bindings
+    }()
+
+    static let cases: [Case] = [
+        // Errors: can't work at all.
+        Case(name: "nothing pressed", shortcut: Shortcut(modifiers: []), action: .pushToTalk, expected: .error),
+        Case(name: "duplicate of hands-free", shortcut: .fnSpace, action: .pasteLast, expected: .error),
+        Case(name: "Right ⌃ fires on the way to a ⌃⌥ push to talk", shortcut: chord(.init(.control, .right)),
+             action: .handsFree, bindings: controlOptionPTT, expected: .error),
+
+        // macOS shortcuts Keyboard Settings can turn off: a warning only while on.
+        Case(name: "⌃Space, input sources on", shortcut: combo(kVK_Space, .control), action: .handsFree,
+             system: stock(), expected: .warning(.systemShortcut)),
+        Case(name: "⌃Space, input sources off", shortcut: combo(kVK_Space, .control), action: .handsFree, expected: .clean),
+        Case(name: "⌘Space, Spotlight on", shortcut: combo(kVK_Space, .command), action: .pushToTalk,
+             system: stock(), expected: .warning(.systemShortcut)),
+        Case(name: "⌘Space, Spotlight off", shortcut: combo(kVK_Space, .command), action: .pushToTalk, expected: .clean),
+        Case(name: "⌃⌥Space, on", shortcut: combo(kVK_Space, .control, .option), action: .handsFree,
+             system: stock(), expected: .warning(.systemShortcut)),
+        Case(name: "⇧⌘4, on", shortcut: combo(kVK_ANSI_4, .shift, .command), action: .copyLast,
+             system: stock(), expected: .warning(.systemShortcut)),
+        Case(name: "⇧⌘4, off", shortcut: combo(kVK_ANSI_4, .shift, .command), action: .copyLast, expected: .clean),
+        Case(name: "⌃← (Spaces), on", shortcut: combo(kVK_LeftArrow, .control), action: .copyLast,
+             system: stock(), expected: .warning(.systemShortcut)),
+        Case(name: "⌃← (Spaces), off", shortcut: combo(kVK_LeftArrow, .control), action: .copyLast, expected: .clean),
+        Case(name: "F11 (Show Desktop), on", shortcut: combo(kVK_F11), action: .pushToTalk,
+             system: stock(), expected: .warning(.systemShortcut)),
+
+        // Combinations nothing can turn off: always a light warning.
+        Case(name: "⌘Tab", shortcut: combo(kVK_Tab, .command), action: .handsFree, expected: .warning(.systemShortcut)),
+        Case(name: "⌃⌘Space", shortcut: combo(kVK_Space, .control, .command), action: .handsFree,
+             expected: .warning(.systemShortcut)),
+        Case(name: "⌥⌘Esc", shortcut: combo(kVK_Escape, .option, .command), action: .cancel,
+             expected: .warning(.systemShortcut)),
+        Case(name: "⌘Q", shortcut: combo(kVK_ANSI_Q, .command), action: .copyLast, expected: .warning(.systemShortcut)),
+        Case(name: "⌘V", shortcut: combo(kVK_ANSI_V, .command), action: .pasteLast, expected: .warning(.systemShortcut)),
+        Case(name: "⌘K (any ⌘ letter)", shortcut: combo(kVK_ANSI_K, .command), action: .pasteLast,
+             expected: .warning(.systemShortcut)),
+        Case(name: "fn E (Globe letter)", shortcut: combo(kVK_ANSI_E, .function), action: .pasteLast,
+             expected: .warning(.systemShortcut)),
+
+        // Keys that type.
+        Case(name: "plain V", shortcut: combo(kVK_ANSI_V), action: .pasteLast, expected: .warning(.typing)),
+        Case(name: "plain Space", shortcut: combo(kVK_Space), action: .handsFree, expected: .warning(.typing)),
+        Case(name: "⇧V", shortcut: combo(kVK_ANSI_V, .shift), action: .pasteLast, expected: .warning(.typing)),
+        Case(name: "⌥V", shortcut: combo(kVK_ANSI_V, .option), action: .pasteLast, expected: .warning(.typing)),
+        Case(name: "⇧ alone", shortcut: chord(.init(.shift)), action: .pushToTalk, expected: .warning(.typing)),
+        Case(name: "Right ⇧ alone", shortcut: chord(.init(.shift, .right)), action: .pushToTalk,
+             expected: .warning(.typing)),
+
+        // Esc.
+        Case(name: "Esc for cancel", shortcut: .escape, action: .cancel, expected: .clean),
+        Case(name: "Esc for push to talk", shortcut: .escape, action: .pushToTalk,
+             bindings: { var b = ShortcutBindings.defaults; b[.cancel] = .f13; return b }(), expected: .warning(.escape)),
+
+        // F-keys.
+        Case(name: "F5, media keys", shortcut: combo(kVK_F5), action: .pushToTalk, expected: .warning(.mediaKey)),
+        Case(name: "F5, standard F-keys",
+             shortcut: combo(kVK_F5), action: .pushToTalk,
+             system: SystemKeyboardState(hotKeys: [], fnUsage: .doNothing, functionKeysAreStandard: true), expected: .clean),
+        Case(name: "fn F5", shortcut: combo(kVK_F5, .function), action: .pushToTalk, expected: .clean),
+        Case(name: "F13", shortcut: .f13, action: .pushToTalk, expected: .clean),
+
+        // Lone modifiers.
+        Case(name: "⌥ alone", shortcut: chord(.init(.option)), action: .pushToTalk, expected: .warning(.loneModifier)),
+        Case(name: "Left ⌘ alone", shortcut: chord(.init(.command, .left)), action: .pushToTalk,
+             expected: .warning(.loneModifier)),
+        Case(name: "⌃ alone", shortcut: chord(.init(.control)), action: .pushToTalk, expected: .warning(.loneModifier)),
+        Case(name: "Right ⌥ alone", shortcut: .rightOption, action: .pushToTalk, expected: .clean),
+        Case(name: "⌃⌥ chord", shortcut: chord(.init(.control), .init(.option)), action: .pushToTalk, expected: .clean),
+
+        // The 🌐 key on its own.
+        Case(name: "fn, 🌐 switches input sources", shortcut: .fn, action: .pushToTalk,
+             system: SystemKeyboardState(hotKeys: [], fnUsage: .changeInputSource, functionKeysAreStandard: false),
+             expected: .warning(.globeKey)),
+        Case(name: "fn, 🌐 never set", shortcut: .fn, action: .pushToTalk,
+             system: SystemKeyboardState(hotKeys: [], fnUsage: nil, functionKeysAreStandard: false),
+             expected: .warning(.globeKey)),
+        Case(name: "fn, 🌐 does nothing", shortcut: .fn, action: .pushToTalk, expected: .clean),
+        Case(name: "fn Space, 🌐 switches input sources", shortcut: .fnSpace, action: .handsFree,
+             system: SystemKeyboardState(hotKeys: [], fnUsage: .changeInputSource, functionKeysAreStandard: false),
+             expected: .clean),
+    ]
+
+    @Test(arguments: cases)
+    func policy(_ c: Case) {
+        let validation = ShortcutValidator.validate(c.shortcut, for: c.action, bindings: c.bindings, system: c.system)
+        switch c.expected {
+        case .clean:
+            #expect(validation.errors.isEmpty)
+            #expect(validation.warnings.isEmpty, "\(validation.warnings.map(\.text))")
+        case .warning(let kind):
+            #expect(validation.errors.isEmpty, "\(validation.errors)")
+            #expect(validation.warnings.first?.kind == kind, "\(validation.warnings.map(\.text))")
+        case .error:
+            #expect(!validation.errors.isEmpty)
+        }
+    }
+
+    /// A warning never stops the recorder from saving.
+    @Test(arguments: cases.filter { if case .warning = $0.expected { true } else { false } })
+    func warningsAreSaved(_ c: Case) {
+        // Recording what is already bound changes nothing, so start from an unbound action.
+        var bindings = c.bindings
+        if bindings[c.action] == c.shortcut { bindings[c.action] = nil }
+        let outcome = ShortcutEdit.evaluate(c.shortcut, for: c.action, bindings: bindings, swapAllowed: true,
+                                            system: c.system)
+        guard case .apply(let warning?) = outcome else {
+            Issue.record("expected a save with a warning, got \(outcome)")
+            return
+        }
+        #expect(!warning.text.isEmpty)
+    }
+
+    @Test func copyIsShortAndNamesTheCombination() {
+        let stock = Self.stock()
+        let inputSources = ShortcutValidator.validate(combo(kVK_Space, .control, .option), for: .handsFree, system: stock)
+        #expect(inputSources.warnings.first?.text == "macOS also uses ⌃⌥Space for input sources.")
+        #expect(inputSources.warnings.first?.detail?.contains("Keyboard Settings") == true)
+        let typing = ShortcutValidator.validate(combo(kVK_ANSI_V), for: .pasteLast, system: Self.quiet)
+        #expect(typing.warnings.first?.text == "This will fire while you type.")
+        #expect(typing.warnings.first?.detail == "Apps won’t get V while it’s bound here.")
+        let quit = ShortcutValidator.validate(combo(kVK_ANSI_Q, .command), for: .copyLast, system: Self.quiet)
+        #expect(quit.warnings.first?.text == "Apps use ⌘Q for Quit.")
+        let tab = ShortcutValidator.validate(combo(kVK_Tab, .command), for: .handsFree, system: Self.quiet)
+        #expect(tab.warnings.first?.text == "macOS also uses ⌘⇥ for the app switcher.")
+        #expect(tab.warnings.first?.detail == nil)
+    }
+}
+
+// MARK: - Keyboard Settings › Keyboard Shortcuts
+
+@Suite struct SystemSymbolicHotKeysTests {
+    private static func entry(_ enabled: Any, _ parameters: [Int]? = nil) -> [String: Any] {
+        var entry: [String: Any] = ["enabled": enabled]
+        if let parameters { entry["value"] = ["parameters": parameters, "type": "standard"] }
+        return entry
+    }
+
+    /// This Mac as probed: Spotlight (64) off, "select previous input source" (60) moved to ⌘Space and off,
+    /// "select next source" (61) on, screenshots rearranged, Spaces (79) on with no value, 164 unset.
+    private static var probed: [String: Any] {
+        [
+            "28": entry(true, [52, 21, 655360]),     // ⌥⇧4
+            "29": entry(true, [52, 21, 1179648]),    // ⇧⌘4
+            "30": entry(true, [51, 20, 655360]),     // ⌥⇧3
+            "31": entry(true, [51, 20, 1179648]),    // ⇧⌘3
+            "60": entry(false, [32, 49, 1048576]),   // ⌘Space, off
+            "61": entry(true, [32, 49, 786432]),     // ⌃⌥Space
+            "64": entry(false, [32, 49, 1048576]),   // ⌘Space, off
+            "65": entry(false, [32, 49, 1572864]),   // ⌥⌘Space, off
+            "79": entry(true),
+            "164": entry(true, [65535, 65535, 0]),
+            "184": entry(false, [53, 23, 1179648]),  // ⇧⌘5, off
+        ]
+    }
+
+    private func hit(_ s: Shortcut, in preferences: [String: Any]?) -> SystemSymbolicHotKeys.HotKey? {
+        SystemSymbolicHotKeys.active(in: preferences).first { $0.matches(s) }
+    }
+
+    @Test func switchedOffShortcutsDontWarn() {
+        #expect(hit(combo(kVK_Space, .control), in: Self.probed) == nil)
+        #expect(hit(combo(kVK_Space, .command), in: Self.probed) == nil)
+        #expect(hit(combo(kVK_Space, .option, .command), in: Self.probed) == nil)
+        #expect(hit(combo(kVK_ANSI_5, .shift, .command), in: Self.probed) == nil)
+        let system = SystemKeyboardState(hotKeys: SystemSymbolicHotKeys.active(in: Self.probed), fnUsage: .doNothing,
+                                         functionKeysAreStandard: false)
+        #expect(ShortcutValidator.validate(combo(kVK_Space, .control), for: .handsFree, system: system).warnings.isEmpty)
+        #expect(ShortcutValidator.validate(combo(kVK_Space, .command), for: .pushToTalk, system: system).warnings.isEmpty)
+    }
+
+    @Test func switchedOnShortcutsWarnWithTheirPurpose() {
+        let next = hit(combo(kVK_Space, .control, .option), in: Self.probed)
+        #expect(next?.id == 61)
+        #expect(next?.purpose == "input sources")
+    }
+
+    @Test func remappedShortcutsWarnOnTheirNewCombination() {
+        #expect(hit(combo(kVK_ANSI_4, .option, .shift), in: Self.probed)?.id == 28)
+        #expect(hit(combo(kVK_ANSI_4, .shift, .command), in: Self.probed)?.purpose == "screenshots")
+        // ⌃⇧⌘4 is 31's default, but 31 now lives on ⇧⌘3.
+        #expect(hit(combo(kVK_ANSI_4, .control, .shift, .command), in: Self.probed) == nil)
+        // An input-source shortcut moved to ⌘Space and left on.
+        let moved: [String: Any] = ["60": Self.entry(true, [32, 49, 1048576]), "64": Self.entry(false)]
+        #expect(hit(combo(kVK_Space, .command), in: moved)?.purpose == "input sources")
+        #expect(hit(combo(kVK_Space, .control), in: moved) == nil)
+    }
+
+    @Test func onWithoutAValueOrNotListedMeansTheMacOSDefault() {
+        // 79 is listed as on without parameters: ⌃← (arrows carry the function bit).
+        #expect(hit(combo(kVK_LeftArrow, .control), in: Self.probed)?.id == 79)
+        // 32 isn't listed at all: Mission Control keeps ⌃↑.
+        #expect(hit(combo(kVK_UpArrow, .control), in: Self.probed)?.id == 32)
+        // Unreadable preferences: every default is on.
+        #expect(SystemSymbolicHotKeys.active(in: nil) == SystemSymbolicHotKeys.defaults)
+    }
+
+    @Test func unsetEntriesAndNumericFlagsAreHandled() {
+        #expect(!SystemSymbolicHotKeys.active(in: Self.probed).contains { $0.id == 164 })
+        let numeric: [String: Any] = ["61": Self.entry(NSNumber(value: 0)), "60": Self.entry(NSNumber(value: 1))]
+        #expect(hit(combo(kVK_Space, .control, .option), in: numeric) == nil)
+        #expect(hit(combo(kVK_Space, .control), in: numeric)?.id == 60)
+    }
+
+    @Test func fnCombinationsNeedTheFunctionBit() {
+        let custom: [String: Any] = ["300": Self.entry(true, [101, 14, 8388608])]   // fn E
+        #expect(hit(combo(kVK_ANSI_E, .function), in: custom)?.id == 300)
+        #expect(hit(combo(kVK_ANSI_E), in: custom) == nil)
+        #expect(hit(combo(kVK_ANSI_E, .function), in: custom)?.purpose == nil)
     }
 }
 
