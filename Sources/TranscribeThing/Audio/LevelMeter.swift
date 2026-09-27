@@ -1,11 +1,13 @@
 import Foundation
 
-/// Microphone level for the pill waveform (wispr-ux §1.4).
+/// Microphone level for the pill waveform (wispr-ux §1.4) and the input meters.
 ///
 /// The capture thread ingests one RMS value per 10 ms window with its capture timestamp. Readers get a
 /// perceptual 0...1 level (adaptive noise floor, attack/release smoothing) as it was `readBehind` seconds
 /// ago: taps deliver audio in ~100 ms chunks, so reading slightly in the past yields a smooth envelope
-/// instead of a staircase. All state sits behind one lock; neither side is a realtime thread.
+/// instead of a staircase. The pill's equalizer reads `voiceAmplitude(from:to:)` instead: the same windows
+/// behind a voice gate, so room noise, fans and keyboard clicks draw nothing at all. All state sits behind
+/// one lock; neither side is a realtime thread.
 final class LevelMeter: @unchecked Sendable {
     struct Tuning: Sendable {
         var attack: TimeInterval = 0.040
@@ -19,6 +21,26 @@ final class LevelMeter: @unchecked Sendable {
         var exponent: Float = 0.7
         /// A window counts as voice when it is this far above the noise floor.
         var voiceMargin: Float = 8
+
+        /// Equalizer amplitude: min(1, (rms · gain)^exponent) on linear RMS (the debilgpt composer's curve), with
+        /// the gain raised from 9 so conversational speech on a Mac mic (-35 dBFS) lands near half height.
+        var eqGain: Float = 12
+        var eqExponent: Float = 0.55
+        /// Voice gate: opens this far above the gate's own floor estimate (and above `gateMinimumDBFS`) ...
+        var gateOpenMargin: Float = 9
+        /// ... for this many consecutive windows, so a key click or a desk tap never opens it ...
+        var gateSustain = 3
+        /// ... and closes after `gateHangover` below this margin, so gaps between syllables don't flicker.
+        var gateCloseMargin: Float = 6
+        var gateHangover: TimeInterval = 0.2
+        var gateMinimumDBFS: Float = -55
+        /// The gate's floor is a minimum tracker: it falls quickly into every pause but rises only
+        /// `gateFloorRise` dB/s, so continuous speech can't drag it up. The first `gateWarmup` seconds rise
+        /// faster, in case the stream opened on a transient.
+        var gateFloorFall: TimeInterval = 0.12
+        var gateFloorRise: Float = 2.5
+        var gateWarmup: TimeInterval = 0.5
+        var gateWarmupRise: Float = 30
     }
 
     let tuning: Tuning
@@ -34,6 +56,25 @@ final class LevelMeter: @unchecked Sendable {
     private var lastTime: TimeInterval?
     private var lastVoiceTime: TimeInterval?
     private var preview: Preview?
+
+    /// 2.56 s of windows for the equalizer: its visible history plus the read-behind.
+    private var windows = AudioRing<Window>(capacity: 256)
+    private var gate = VoiceGate()
+
+    private struct Window {
+        var time: TimeInterval
+        /// Linear mean square (rms²).
+        var power: Float
+        var voiced: Bool
+    }
+
+    private struct VoiceGate {
+        var floorDB: Float?
+        var floorSince: TimeInterval = 0
+        var isOpen = false
+        var run = 0
+        var lastAbove: TimeInterval = 0
+    }
 
     private struct Preview {
         var level: Float
@@ -74,6 +115,7 @@ final class LevelMeter: @unchecked Sendable {
             if firstTime == nil { firstTime = time }
             lastTime = max(lastTime ?? time, time)
             if db >= floorDB + tuning.voiceMargin { lastVoiceTime = time }
+            gateLocked(db: db, at: time, dt: dt)
         }
     }
 
@@ -98,6 +140,29 @@ final class LevelMeter: @unchecked Sendable {
 
     /// Current adaptive noise floor in dBFS (diagnostics and tests).
     var noiseFloorDBFS: Float { lock.withLock { floorDB } }
+
+    /// The moment readers look at: now minus `readBehind`, on the meter's clock.
+    var readTime: TimeInterval { clock() - tuning.readBehind }
+
+    /// Equalizer amplitude 0...1 of the audio captured in `start..<end`: the RMS of its windows with every
+    /// window outside the voice gate counted as silence. Exactly 0 unless someone spoke.
+    func voiceAmplitude(from start: TimeInterval, to end: TimeInterval) -> Float {
+        lock.withLock {
+            if let preview { return Self.previewAmplitude(preview, from: start, to: end) }
+            var voiced: Float = 0
+            var count = 0
+            for index in stride(from: windows.count - 1, through: 0, by: -1) {
+                let window = windows[index]
+                if window.time >= end { continue }
+                if window.time < start { break }
+                count += 1
+                if window.voiced { voiced += window.power }
+            }
+            guard count > 0, voiced > 0 else { return 0 }
+            return Self.eqAmplitude(rms: (voiced / Float(count)).squareRoot(), gain: tuning.eqGain,
+                                    exponent: tuning.eqExponent)
+        }
+    }
 
     func level(at time: TimeInterval) -> Float {
         lock.withLock {
@@ -138,10 +203,16 @@ final class LevelMeter: @unchecked Sendable {
         return pow(x, exponent)
     }
 
+    /// Linear RMS → 0...1 bar height.
+    static func eqAmplitude(rms: Float, gain: Float = 12, exponent: Float = 0.55) -> Float {
+        guard rms > 0 else { return 0 }
+        return min(1, pow(rms * gain, exponent))
+    }
+
     // MARK: Preview
 
-    /// A meter that ignores input and reports a gently moving level around `level` (for snapshots and
-    /// illustrations).
+    /// A meter that ignores input and reports a gently moving level around `level`, plus speech-like bursts
+    /// and pauses for the equalizer, louder as `level` rises (for snapshots and illustrations).
     static func preview(level: Float) -> LevelMeter {
         preview(level: level, animated: true)
     }
@@ -163,7 +234,87 @@ final class LevelMeter: @unchecked Sendable {
         return min(1, preview.level * Float(motion))
     }
 
+    /// Equalizer preview: `previewVoice` through the same RMS-and-curve path as live audio, scaled so a
+    /// `level` of 0.6 is an ordinary speaking voice.
+    private static func previewAmplitude(_ preview: Preview, from start: TimeInterval, to end: TimeInterval) -> Float {
+        guard preview.level > 0 else { return 0 }
+        guard preview.animated else { return preview.level }
+        let samples = 4
+        var power: Float = 0
+        for index in 0..<samples {
+            let voice = previewVoice(at: start + (end - start) * (Double(index) + 0.5) / Double(samples))
+            power += voice * voice
+        }
+        guard power > 0 else { return 0 }
+        return min(1, preview.level / 0.6 * pow(power / Float(samples), 0.275))
+    }
+
+    /// Deterministic speech, 0...1: phrases of ~2.4 s every 3.4 s; inside a phrase, syllables of 120-250 ms
+    /// with 60-120 ms gaps and varied stress, each rising quickly and trailing off.
+    private static func previewVoice(at time: TimeInterval) -> Float {
+        let period = 3.4
+        let phrase = (time / period).rounded(.down)
+        let local = time - phrase * period
+        // Stable pseudo-random 0...1 per (phrase, syllable, property).
+        func hash(_ syllable: Int, _ property: Int) -> Double {
+            let x = sin(phrase * 12.9898 + Double(syllable) * 78.233 + Double(property) * 37.719) * 43_758.5453
+            return x - x.rounded(.down)
+        }
+        var cursor = 0.0
+        for syllable in 0..<16 {
+            let length = 0.12 + 0.13 * hash(syllable, 0)
+            if cursor + length > 2.4 { return 0 }
+            if local < cursor + length {
+                guard local >= cursor else { return 0.02 }   // breath between syllables: the gate holds
+                let x = (local - cursor) / length
+                let peak = 0.2 + 0.8 * hash(syllable, 1)
+                return Float(peak * pow(sin(.pi * pow(x, 0.7)), 0.6))
+            }
+            cursor += length + 0.06 + 0.06 * hash(syllable, 2)
+        }
+        return 0
+    }
+
     // MARK: Private
+
+    /// One window through the voice gate; `dt` is the time since the previous window.
+    private func gateLocked(db: Float, at time: TimeInterval, dt: TimeInterval) {
+        // Digital silence (a device still warming up) says nothing about the room.
+        if db > -100 {
+            if let floor = gate.floorDB {
+                if db < floor {
+                    gate.floorDB = floor + (db - floor) * Float(1 - exp(-dt / tuning.gateFloorFall))
+                } else {
+                    let rise = time - gate.floorSince < tuning.gateWarmup ? tuning.gateWarmupRise : tuning.gateFloorRise
+                    gate.floorDB = min(db, floor + rise * Float(dt))
+                }
+            } else {
+                gate.floorDB = db
+                gate.floorSince = time
+            }
+        }
+        let floor = gate.floorDB ?? -160
+        if gate.isOpen {
+            if db >= max(floor + tuning.gateCloseMargin, tuning.gateMinimumDBFS - 3) {
+                gate.lastAbove = time
+            } else if time - gate.lastAbove > tuning.gateHangover {
+                gate.isOpen = false
+            }
+        }
+        if !gate.isOpen {
+            gate.run = db >= max(floor + tuning.gateOpenMargin, tuning.gateMinimumDBFS) ? gate.run + 1 : 0
+            if gate.run >= tuning.gateSustain {
+                gate.isOpen = true
+                gate.run = 0
+                gate.lastAbove = time
+                // The windows that proved the onset are voice too.
+                for back in stride(from: 1, to: min(tuning.gateSustain, windows.count + 1), by: 1) {
+                    windows[windows.count - back].voiced = true
+                }
+            }
+        }
+        windows.append(Window(time: time, power: pow(10, db / 10), voiced: gate.isOpen))
+    }
 
     private func resetLocked() {
         history.removeAll()
@@ -174,6 +325,8 @@ final class LevelMeter: @unchecked Sendable {
         firstTime = nil
         lastTime = nil
         lastVoiceTime = nil
+        windows.removeAll()
+        gate = VoiceGate()
     }
 
     private func adaptiveFloorLocked(now: TimeInterval) -> Float {
@@ -204,7 +357,8 @@ struct AudioRing<Element> {
     var last: Element? { count == 0 ? nil : self[count - 1] }
 
     subscript(index: Int) -> Element {
-        storage[(head + index) % storage.count]!
+        get { storage[(head + index) % storage.count]! }
+        set { storage[(head + index) % storage.count] = newValue }
     }
 
     mutating func append(_ element: Element) {

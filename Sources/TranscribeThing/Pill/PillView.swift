@@ -337,6 +337,12 @@ private struct HelloRipple: View {
         .accessibilityHidden(true)
     }
 
+    /// Center weighting: env(i) = 0.35 + 0.65 · cos²(π(i − 6)/14).
+    private static func envelope(_ i: Int) -> CGFloat {
+        let c = cos(Double.pi * Double(i - PillMetrics.barCount / 2) / 14)
+        return CGFloat(0.35 + 0.65 * c * c)
+    }
+
     private static func draw(in context: inout GraphicsContext, size: CGSize, time t: Double) {
         let w = PillMetrics.barWidth
         let step = w + PillMetrics.barGap
@@ -346,7 +352,7 @@ private struct HelloRipple: View {
             let local = (t - start - stagger * Double(i)) / swell
             // 0 → 1 → 0 over the swell: sin(πx), eased so the rise is quicker than the fall.
             let lift = local <= 0 || local >= 1 ? 0 : sin(.pi * pow(local, 0.8))
-            let h = minH + (size.height - minH) * WaveformEngine.envelope(i) * CGFloat(lift) * 0.85
+            let h = minH + (size.height - minH) * Self.envelope(i) * CGFloat(lift) * 0.85
             let x = CGFloat(i) * step
             if h <= minH + 0.4 {
                 let rect = CGRect(x: x, y: midY - minH / 2, width: w, height: minH)

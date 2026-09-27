@@ -413,3 +413,99 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(PillView(model: model, context: .panel(nil)).visual == .listening)
     }
 }
+
+// MARK: - Waveform
+
+@Suite struct WaveformEngineTests {
+    private final class Clock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: TimeInterval = 500
+        var now: TimeInterval {
+            get { lock.withLock { value } }
+            set { lock.withLock { value = newValue } }
+        }
+    }
+
+    private static let size = CGSize(width: PillMetrics.barFieldWidth, height: PillMetrics.barMaxHeight)
+
+    /// Feeds `seconds` of 10 ms windows, drawing a 60 fps frame after every 1.67 windows' worth of time.
+    private func run(_ meter: LevelMeter, _ engine: WaveformEngine, clock: Clock, seconds: Double,
+                     db: (Double) -> Float) -> [[WaveformEngine.Bar]] {
+        var frames: [[WaveformEngine.Bar]] = []
+        var nextFrame = clock.now
+        for step in 0..<Int((seconds * 100).rounded()) {
+            clock.now += 0.01
+            meter.ingest(rmsDBFS: db(Double(step) * 0.01), at: clock.now)
+            while nextFrame <= clock.now {
+                let now = nextFrame - meter.tuning.readBehind
+                engine.advance(meter: meter, to: now)
+                frames.append(engine.bars(size: Self.size, now: now, reduceMotion: false, isStatic: false))
+                nextFrame += 1.0 / 60
+            }
+        }
+        return frames
+    }
+
+    @Test func silenceIsPerfectlyStill() {
+        let clock = Clock()
+        let meter = LevelMeter(clock: { clock.now })
+        let engine = WaveformEngine()
+        var seed: UInt64 = 9
+        let noise: (Double) -> Float = { _ in
+            seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            return -50 + 8 * Float(Double(seed >> 11) / Double(1 << 53)) - 4
+        }
+        _ = run(meter, engine, clock: clock, seconds: 1, db: noise)
+        let frames = run(meter, engine, clock: clock, seconds: 3, db: noise)
+        #expect(frames.count > 150)
+        #expect(frames.allSatisfy { $0 == frames[0] })
+        #expect(frames[0].count == PillMetrics.barCount)
+        #expect(frames[0].allSatisfy { $0.rect.height == PillMetrics.barMinHeight })
+    }
+
+    @Test func speechScrollsLeftAndGrowsIn() {
+        let clock = Clock()
+        let meter = LevelMeter(clock: { clock.now })
+        let engine = WaveformEngine()
+        _ = run(meter, engine, clock: clock, seconds: 1) { _ in -50 }
+        let frames = run(meter, engine, clock: clock, seconds: 1.5) { _ in -22 }
+        let last = frames[frames.count - 1]
+        #expect(last.filter { $0.rect.height > 12 }.count >= 8)
+        // Between landings the newest bar drifts left a fraction of a step per frame instead of jumping.
+        let step = PillMetrics.barWidth + PillMetrics.barGap
+        let shifts = zip(frames.dropFirst(), frames).compactMap { next, previous -> CGFloat? in
+            guard let a = next.first?.rect.minX, let b = previous.first?.rect.minX, a < b else { return nil }
+            return b - a
+        }
+        #expect(shifts.count > 40 && shifts.allSatisfy { $0 < step * 0.25 })
+        #expect(last.allSatisfy { $0.rect.minX > -PillMetrics.barWidth && $0.rect.maxX <= Self.size.width })
+    }
+
+    @Test func newestColumnGrowsFromADot() throws {
+        let clock = Clock()
+        let meter = LevelMeter(clock: { clock.now })
+        let engine = WaveformEngine()
+        _ = run(meter, engine, clock: clock, seconds: 2) { t in t < 0.5 ? -50 : -20 }
+        let end = try #require(engine.newestEnd)
+        #expect(engine.columns.allSatisfy { $0 > 0.5 })
+        func newest(at time: TimeInterval, reduceMotion: Bool = false) -> CGFloat {
+            engine.bars(size: Self.size, now: time, reduceMotion: reduceMotion, isStatic: false)[0].rect.height
+        }
+        #expect(newest(at: end) == PillMetrics.barMinHeight)
+        #expect(newest(at: end + 0.03) > PillMetrics.barMinHeight)
+        #expect(newest(at: end + 0.03) < newest(at: end + 0.06))
+        #expect(newest(at: end + WaveformEngine.growDuration) == newest(at: end, reduceMotion: true))
+    }
+
+    @Test func staticRenderingIsDeterministic() {
+        let a = WaveformEngine(), b = WaveformEngine()
+        let meter = LevelMeter.preview(level: 0.7)
+        a.advance(meter: meter, to: WaveformEngine.staticTime)
+        b.advance(meter: meter, to: WaveformEngine.staticTime)
+        let barsA = a.bars(size: Self.size, now: WaveformEngine.staticTime, reduceMotion: false, isStatic: true)
+        #expect(barsA == b.bars(size: Self.size, now: WaveformEngine.staticTime, reduceMotion: false, isStatic: true))
+        #expect(barsA.count == PillMetrics.barCount)
+        #expect(barsA.contains { $0.rect.height == PillMetrics.barMinHeight })   // a pause before the phrase
+        #expect(barsA.filter { $0.rect.height > 10 }.count >= 5)
+    }
+}

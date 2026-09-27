@@ -507,6 +507,186 @@ private final class MeterTestClock: @unchecked Sendable {
         meter.reset()
         #expect(meter.hasReceivedAudio)
     }
+
+    @Test func previewSpeaksInBurstsWithPauses() {
+        let meter = LevelMeter.preview(level: 0.6)
+        let columns = stride(from: 0.0, to: 6.8, by: 0.087).map { meter.voiceAmplitude(from: $0, to: $0 + 0.087) }
+        #expect(columns.contains(0))                      // pauses between phrases
+        #expect(columns.filter { $0 >= 0.5 }.count > 20)  // and plenty of voice
+        #expect(Set(columns.map { ($0 * 20).rounded() }).count > 6)
+        #expect(columns == stride(from: 0.0, to: 6.8, by: 0.087).map { meter.voiceAmplitude(from: $0, to: $0 + 0.087) })
+        #expect(LevelMeter.preview(level: 0).voiceAmplitude(from: 1, to: 2) == 0)
+        #expect(LevelMeter.preview(level: 0.5, animated: false).voiceAmplitude(from: 1, to: 2) == 0.5)
+    }
+}
+
+// MARK: - Voice gate (pill equalizer)
+
+@Suite struct VoiceGateTests {
+    /// Seeded LCG so "random" fluctuation is the same on every run.
+    private struct Noise {
+        var state: UInt64
+        mutating func next() -> Double {
+            state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            return Double(state >> 11) / Double(1 << 53)
+        }
+        /// Uniform in `center ± spread`.
+        mutating func db(_ center: Float, _ spread: Float) -> Float {
+            center + spread * Float(2 * next() - 1)
+        }
+    }
+
+    /// Feeds 10 ms windows and returns each window's gated amplitude as the UI reads it, 100 ms later (so the
+    /// gate's onset back-fill counts, as it does behind the read-behind).
+    @discardableResult
+    private func feed(_ meter: LevelMeter, clock: MeterTestClock, seconds: Double,
+                      db: (_ elapsed: Double) -> Float) -> [(elapsed: Double, amplitude: Float)] {
+        var pending: [(elapsed: Double, time: Double)] = []
+        var read: [(elapsed: Double, amplitude: Float)] = []
+        func readOldest() {
+            let window = pending.removeFirst()
+            read.append((window.elapsed, meter.voiceAmplitude(from: window.time - 0.005, to: window.time + 0.005)))
+        }
+        for step in 0..<Int((seconds * 100).rounded()) {
+            clock.now += 0.01
+            meter.ingest(rmsDBFS: db(Double(step) * 0.01), at: clock.now)
+            pending.append((Double(step) * 0.01, clock.now))
+            if pending.count > 10 { readOldest() }
+        }
+        while !pending.isEmpty { readOldest() }
+        return read
+    }
+
+    /// Syllables of 120-250 ms at `loud` dBFS with 60-120 ms gaps of `quiet` noise.
+    private struct Speech {
+        struct Syllable { var start: Double; var end: Double; var db: Float }
+        var syllables: [Syllable] = []
+        var gaps: [(start: Double, end: Double)] = []
+        let length: Double
+
+        init(seconds: Double, loud: ClosedRange<Float>, noise: inout Noise) {
+            var cursor = 0.0
+            while cursor < seconds {
+                let length = 0.12 + 0.13 * noise.next()
+                let db = loud.lowerBound + (loud.upperBound - loud.lowerBound) * Float(noise.next())
+                syllables.append(Syllable(start: cursor, end: min(seconds, cursor + length), db: db))
+                cursor += length
+                let gap = 0.06 + 0.06 * noise.next()
+                if cursor < seconds { gaps.append((cursor, min(seconds, cursor + gap))) }
+                cursor += gap
+            }
+            self.length = seconds
+        }
+
+        func db(at t: Double) -> Float? {
+            syllables.first { t >= $0.start && t < $0.end }?.db
+        }
+    }
+
+    @Test func steadyRoomNoiseNeverOpensTheGate() {
+        let clock = MeterTestClock()
+        let meter = LevelMeter(clock: { clock.now })
+        var noise = Noise(state: 1)
+        let windows = feed(meter, clock: clock, seconds: 5) { _ in noise.db(-50, 4) }
+        #expect(windows.allSatisfy { $0.amplitude == 0 })
+        #expect(meter.voiceAmplitude(from: clock.now - 1.3, to: clock.now) == 0)
+    }
+
+    @Test func fanNoiseNeverOpensTheGate() {
+        let clock = MeterTestClock()
+        let meter = LevelMeter(clock: { clock.now })
+        var noise = Noise(state: 2)
+        let windows = feed(meter, clock: clock, seconds: 5) { _ in noise.db(-42, 3) }
+        #expect(windows.allSatisfy { $0.amplitude == 0 })
+    }
+
+    @Test func keyboardClicksDontOpenTheGate() {
+        let clock = MeterTestClock()
+        let meter = LevelMeter(clock: { clock.now })
+        var noise = Noise(state: 3)
+        feed(meter, clock: clock, seconds: 1) { _ in noise.db(-50, 2) }
+        // A 10 or 20 ms click every 170-330 ms, like typing.
+        var clicks: [(start: Double, end: Double)] = []
+        var cursor = 0.05
+        while cursor < 4 {
+            clicks.append((cursor, cursor + (noise.next() < 0.5 ? 0.01 : 0.02) - 0.001))
+            cursor += 0.17 + 0.16 * noise.next()
+        }
+        let windows = feed(meter, clock: clock, seconds: 4) { t in
+            clicks.contains { t >= $0.start && t < $0.end } ? -25 : noise.db(-50, 2)
+        }
+        #expect(windows.allSatisfy { $0.amplitude == 0 })
+    }
+
+    @Test func speechOpensTheGateAndHoldsThroughSyllableGaps() {
+        let clock = MeterTestClock()
+        let meter = LevelMeter(clock: { clock.now })
+        var noise = Noise(state: 4)
+        feed(meter, clock: clock, seconds: 1) { _ in noise.db(-50, 2) }
+        let speech = Speech(seconds: 3, loud: -28 ... -18, noise: &noise)
+        let windows = feed(meter, clock: clock, seconds: 3) { t in speech.db(at: t) ?? noise.db(-50, 2) }
+        for window in windows {
+            let t = window.elapsed
+            if speech.db(at: t) != nil {
+                #expect(window.amplitude >= 0.4, "syllable at \(t) s drew \(window.amplitude)")
+            } else {
+                #expect(window.amplitude > 0, "the gate closed in a syllable gap at \(t) s")
+            }
+        }
+        // After the speech, the hangover runs out and the bars fall back to dots.
+        let tail = feed(meter, clock: clock, seconds: 1) { _ in noise.db(-50, 2) }
+        #expect(tail.suffix(70).allSatisfy { $0.amplitude == 0 })
+    }
+
+    @Test func longSpeechNeverClosesTheGate() {
+        let clock = MeterTestClock()
+        let meter = LevelMeter(clock: { clock.now })
+        var noise = Noise(state: 5)
+        feed(meter, clock: clock, seconds: 1) { _ in noise.db(-50, 2) }
+        let speech = Speech(seconds: 20, loud: -28 ... -18, noise: &noise)
+        let windows = feed(meter, clock: clock, seconds: 20) { t in speech.db(at: t) ?? noise.db(-50, 2) }
+        #expect(windows.allSatisfy { $0.amplitude > 0 })
+    }
+
+    @Test func quietSpeechOverAQuietRoomIsVisible() {
+        let clock = MeterTestClock()
+        let meter = LevelMeter(clock: { clock.now })
+        var noise = Noise(state: 6)
+        feed(meter, clock: clock, seconds: 1) { _ in noise.db(-60, 2) }
+        let speech = Speech(seconds: 3, loud: -40 ... -40, noise: &noise)
+        let windows = feed(meter, clock: clock, seconds: 3) { t in speech.db(at: t) ?? noise.db(-60, 2) }
+        for window in windows where speech.db(at: window.elapsed) != nil {
+            #expect(window.amplitude >= 0.25)
+        }
+    }
+
+    @Test func typicalSpeechLandsInTheUpperHalf() {
+        #expect(abs(LevelMeter.eqAmplitude(rms: pow(10, -35 / 20)) - 0.43) < 0.02)
+        #expect(LevelMeter.eqAmplitude(rms: pow(10, -15 / 20)) == 1)
+        #expect(LevelMeter.eqAmplitude(rms: 0) == 0)
+        // debilgpt's original curve.
+        #expect(abs(LevelMeter.eqAmplitude(rms: 0.05, gain: 9) - pow(0.45, 0.55)) < 1e-6)
+    }
+
+    @Test func digitalSilenceAtStartDoesNotPinTheFloor() {
+        let clock = MeterTestClock()
+        let meter = LevelMeter(clock: { clock.now })
+        var noise = Noise(state: 7)
+        // A device that opens on zeros, then settles into ordinary room noise.
+        feed(meter, clock: clock, seconds: 0.3) { _ in -160 }
+        let windows = feed(meter, clock: clock, seconds: 3) { _ in noise.db(-48, 3) }
+        #expect(windows.allSatisfy { $0.amplitude == 0 })
+    }
+
+    @Test func resetForgetsTheGate() {
+        let clock = MeterTestClock()
+        let meter = LevelMeter(clock: { clock.now })
+        feed(meter, clock: clock, seconds: 0.5) { _ in -55 }
+        feed(meter, clock: clock, seconds: 0.5) { _ in -20 }
+        #expect(meter.voiceAmplitude(from: clock.now - 0.3, to: clock.now + 0.01) > 0.5)
+        meter.reset()
+        #expect(meter.voiceAmplitude(from: clock.now - 0.3, to: clock.now + 0.01) == 0)
+    }
 }
 
 // MARK: - Capture pipeline (synthetic buffers)
