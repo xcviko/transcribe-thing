@@ -622,7 +622,7 @@ SETS = {
     "C": {"start": c_start, "stop": c_stop, "lock": c_lock, "paste": c_paste,
           "cancel": c_cancel, "alert": c_alert, "error": c_error, "success": c_success},
 }
-DEFAULT_SET = "current"
+DEFAULT_SET = "A"
 SOUNDS = SETS[DEFAULT_SET]
 
 

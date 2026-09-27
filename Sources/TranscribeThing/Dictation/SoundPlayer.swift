@@ -17,8 +17,8 @@ final class SoundPlayer {
 
     /// Lengths of the bundled WAVs (scripts/gen-sounds.py); used until the files are loaded.
     static let nominalDurations: [SoundEffect: TimeInterval] = [
-        .start: 0.10, .stop: 0.13, .lock: 0.16, .paste: 0.045,
-        .cancel: 0.13, .alert: 0.35, .error: 0.28, .success: 0.38,
+        .start: 0.07, .stop: 0.085, .lock: 0.125, .paste: 0.045,
+        .cancel: 0.095, .alert: 0.25, .error: 0.21, .success: 0.27,
     ]
 
     init(settings: AppSettings) {
