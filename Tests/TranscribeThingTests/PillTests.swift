@@ -203,7 +203,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(!PillVisibility.showsPill(phase: phase, mode: .never))
     }
 
-    @Test(arguments: [PillPhase.listening, .locked, .processing, .success, .error])
+    @Test(arguments: [PillPhase.listening, .locked, .processing, .error])
     func activePhasesShowUnlessNever(_ phase: PillPhase) {
         #expect(PillVisibility.showsPill(phase: phase, mode: .always))
         #expect(PillVisibility.showsPill(phase: phase, mode: .whileDictating))
@@ -233,7 +233,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
 @Suite @MainActor struct PillModelTests {
     private func makeModel() -> PillModel {
         let model = PillModel(settings: .inMemory(), levelMeter: .preview(level: 0.5))
-        model.timing = PillTiming(successHold: 0.05, errorHold: 0.08, hoverIn: 0.01, hoverOut: 0.01,
+        model.timing = PillTiming(errorHold: 0.08, hoverIn: 0.01, hoverOut: 0.01,
                                   tooltipDelay: 0.02, controlTooltipDelay: 0.02, slowProcessing: 5)
         return model
     }
@@ -248,47 +248,47 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(model.shortcutHint == "fn")
     }
 
-    @Test func successSettlesBackToRest() async throws {
+    /// A delivered dictation has no flourish: the pasted text is the confirmation.
+    @Test func finishedProcessingGoesStraightBackToRest() {
         let model = makeModel()
         model.phase = .processing
-        model.phase = .success
-        #expect(model.visiblePhase == .success)
-        try await waitUntil { model.phase == .rest && model.visiblePhase == .rest }
+        model.phase = .rest
+        #expect(model.visiblePhase == .rest)
     }
 
-    @Test func earlyRestWaitsForTheCheckMark() async throws {
+    @Test func earlyRestWaitsForTheErrorFlash() async throws {
         let model = makeModel()
-        model.timing.successHold = 0.15
-        model.phase = .success
+        model.timing.errorHold = 0.15
+        model.phase = .error
         model.phase = .rest
-        #expect(model.visiblePhase == .success)
+        #expect(model.visiblePhase == .error)
         try await waitUntil { model.visiblePhase == .rest }
     }
 
-    @Test func theNextQueuedJobWaitsForTheCheckMark() async throws {
+    @Test func theNextQueuedJobWaitsForTheErrorFlash() async throws {
         let model = makeModel()
-        model.timing.successHold = 0.15
+        model.timing.errorHold = 0.15
         model.phase = .processing
-        model.phase = .success
+        model.phase = .error
         // Job 2 is still transcribing: the controller asks for processing in the same turn.
         model.phase = .processing
-        #expect(model.visiblePhase == .success)
+        #expect(model.visiblePhase == .error)
         try await waitUntil { model.visiblePhase == .processing }
     }
 
     @Test func visiblePhaseChangesAreReportedInTheSameTurn() async throws {
         let model = makeModel()
-        model.timing.successHold = 0.1
+        model.timing.errorHold = 0.1
         var seen: [PillPhase] = []
         model.onVisiblePhaseChange = { seen.append(model.visiblePhase) }
         model.phase = .listening
         #expect(seen == [.listening], "before the caller's next statement")
         model.phase = .listening
-        model.phase = .success
+        model.phase = .error
         model.phase = .rest
-        #expect(seen == [.listening, .success], "held: the check mark is still showing")
+        #expect(seen == [.listening, .error], "held: the error flash is still showing")
         try await waitUntil { model.visiblePhase == .rest }
-        #expect(seen == [.listening, .success, .rest])
+        #expect(seen == [.listening, .error, .rest])
     }
 
     @Test func aNewRecordingInterruptsTheFlourish() {
@@ -378,15 +378,15 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         model.phase = .processing
         #expect(!model.isProcessingSlow)
         try await waitUntil { model.isProcessingSlow }
-        model.phase = .success
+        model.phase = .rest
         #expect(!model.isProcessingSlow)
     }
 
     @Test func previewsHoldTheirPhase() async throws {
-        let model = PillModel.preview(phase: .success)
-        #expect(model.visiblePhase == .success)
-        try await Task.sleep(for: .seconds(0.9))
-        #expect(model.visiblePhase == .success)
+        let model = PillModel.preview(phase: .error)
+        #expect(model.visiblePhase == .error)
+        try await Task.sleep(for: .seconds(1.8))
+        #expect(model.visiblePhase == .error)
     }
 
     @Test func processingDotsStartWhereTheHandsFreeBarsWere() {
@@ -430,7 +430,6 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(PillVisual.locked(.remaining).size == CGSize(width: 198, height: 36))
         #expect(PillVisual.processing(wide: true).size == CGSize(width: 198, height: 32))
         #expect(PillVisual.processing(wide: false).size == CGSize(width: 104, height: 32))
-        #expect(PillVisual.success.size == CGSize(width: 32, height: 32))
         #expect(PillVisual.error.size == CGSize(width: 104, height: 32))
         #expect(PillMetrics.barFieldWidth == 69)
     }

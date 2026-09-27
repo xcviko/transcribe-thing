@@ -1138,7 +1138,8 @@ final class FakeRecorder: DictationRecorder {
         #expect(h.controller.committedPillPhase == .locked)
     }
 
-    /// A job lands while a quick tap holds the pill up: its check mark (or shake) plays once the pill folds.
+    /// A job lands while a quick tap holds the pill up: its shake plays once the pill folds. A paste has no
+    /// flourish (the pasted text is the confirmation), so the pill just folds to rest.
     @Test(arguments: [true, false])
     func aFlourishDuringATapPlaysWhenThePillFolds(_ succeeds: Bool) async throws {
         let h = Self.make()
@@ -1155,7 +1156,7 @@ final class FakeRecorder: DictationRecorder {
         #expect(h.pill.visiblePhase == .listening, "the tap's pill holds until the window closes")
         #expect(h.pill.shakeCount == 0)
         h.controller.send(.timer(.doublePressWindow))
-        #expect(h.pill.visiblePhase == (succeeds ? .success : .error))
+        #expect(h.pill.visiblePhase == (succeeds ? .rest : .error))
         #expect(h.pill.shakeCount == (succeeds ? 0 : 1))
     }
 
@@ -1165,8 +1166,8 @@ final class FakeRecorder: DictationRecorder {
         h.controller.runsTimers = false
         var now: TimeInterval = 100
         h.controller.clock = { now }
-        h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "dictated", engine: engine, processingTime: 0.1) }
-        h.controller.insertOverride = { _, _ in .pasted }
+        // No text: the job ends with a shake, held back while the press is arming.
+        h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "", engine: engine, processingTime: 0.1) }
         h.controller.handle(.pttDown)
         h.controller.enqueue(Self.recording(), engine: .parakeet, delivery: .paste(targetPID: nil))
         try await waitUntil { h.controller.machine.activeJobs == 0 }
@@ -1174,7 +1175,8 @@ final class FakeRecorder: DictationRecorder {
         h.controller.send(.timer(.arming))
         now = 102
         h.controller.handle(.pttUp)
-        #expect(h.pill.visiblePhase == .processing, "the old check mark doesn't come back after the recording")
+        #expect(h.pill.visiblePhase == .processing, "the old shake doesn't come back after the recording")
+        #expect(h.pill.shakeCount == 0)
     }
 
     /// An fn tap or an fn combo while a job is in flight doesn't touch the processing pill: not its width, not
@@ -1222,9 +1224,8 @@ final class FakeRecorder: DictationRecorder {
         try await waitUntil { h.controller.machine.activeJobs == 0 }
     }
 
-    /// The job under a held press ends without a flourish (nowhere to paste) before the press commits: the pill
-    /// goes straight to the press's dots, never to rest (hidden while dictating) in between. One that ends
-    /// with a check keeps it on screen until the press commits.
+    /// The job under a held press ends without a flourish (pasted, or nowhere to paste) before the press commits:
+    /// the pill goes straight to the press's dots, never to rest (hidden while dictating) in between.
     @Test(arguments: [false, true])
     func aJobEndingUnderAHeldPressHandsThePillToThePress(pastes: Bool) async throws {
         let h = Self.make()
@@ -1244,21 +1245,23 @@ final class FakeRecorder: DictationRecorder {
         release = true
         try await waitUntil { h.controller.machine.activeJobs == 0 && h.pill.visiblePhase != .processing }
         #expect(h.controller.machine.capture.isArming)
-        #expect(h.pill.visiblePhase == (pastes ? .success : .listening))
+        #expect(h.pill.visiblePhase == .listening)
         #expect(!phases.contains(.rest))
         h.controller.send(.timer(.arming))
         #expect(h.pill.visiblePhase == .listening)
         h.controller.handle(.cancel)
     }
 
-    /// The job finishes while a tap over its processing pill is still in the double-press window: the check shows.
-    @Test func aJobFinishingDuringATapOverProcessingShowsItsCheck() async throws {
+    /// The job finishes while a tap over its processing pill is still in the double-press window: a paste folds
+    /// the pill to rest, a failure shows its shake at once.
+    @Test(arguments: [true, false])
+    func aJobFinishingDuringATapOverProcessingSettlesAtOnce(pastes: Bool) async throws {
         let h = Self.make()
         h.controller.runsTimers = false
         var release = false
         h.controller.transcribeOverride = { _, engine in
             while !release { try await Task.sleep(for: .milliseconds(5)) }
-            return TranscriptResult(text: "dictated", engine: engine, processingTime: 0.1)
+            return TranscriptResult(text: pastes ? "dictated" : "", engine: engine, processingTime: 0.1)
         }
         var pasted: [String] = []
         h.controller.insertOverride = { text, _ in pasted.append(text); return .pasted }
@@ -1268,11 +1271,33 @@ final class FakeRecorder: DictationRecorder {
         h.controller.handle(.pttUp)
         release = true
         try await waitUntil { h.controller.machine.activeJobs == 0 }
-        #expect(pasted == ["dictated"])
+        #expect(pasted == (pastes ? ["dictated"] : []))
         #expect(h.controller.machine.capture.isUncommittedPress)
-        #expect(h.pill.visiblePhase == .success)
+        #expect(h.pill.visiblePhase == (pastes ? .rest : .error))
         h.controller.send(.timer(.doublePressWindow))
-        #expect(h.pill.visiblePhase == .success, "held for its minimum time")
+        #expect(h.pill.visiblePhase == (pastes ? .rest : .error), "an error is held for its minimum time")
+    }
+
+    /// Right after a paste the pill is back at rest, so clicking it starts hands-free at once. Only the error
+    /// shake swallows clicks (they open the Hub instead).
+    @Test(arguments: [true, false])
+    func clickingThePillRightAfterAJobRecordsOnlyAfterAPaste(pastes: Bool) async throws {
+        let h = Self.make()
+        h.controller.start()
+        var now: TimeInterval = 100
+        h.controller.clock = { now }
+        h.controller.transcribeOverride = { _, engine in
+            TranscriptResult(text: pastes ? "dictated" : "", engine: engine, processingTime: 0.1)
+        }
+        h.controller.insertOverride = { _, _ in .pasted }
+        h.controller.enqueue(Self.recording(), engine: .parakeet, delivery: .paste(targetPID: nil))
+        try await waitUntil { h.controller.machine.activeJobs == 0 }
+        #expect(h.pill.visiblePhase == (pastes ? .rest : .error))
+        now = 100.5
+        h.pill.onClick?()
+        #expect(h.controller.machine.isRecording == pastes)
+        #expect(h.pill.phase.isRecording == pastes)
+        h.controller.handle(.cancel)
     }
 
     /// Every press starts from an empty equalizer, even one refused before the mic opens (whose start would

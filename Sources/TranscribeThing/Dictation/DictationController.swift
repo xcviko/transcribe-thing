@@ -82,11 +82,11 @@ final class DictationController {
     @ObservationIgnored private var deliveringJob: Job?
     /// A refusal found at key-down, reported only if the user commits to dictating (fn+← must stay silent).
     @ObservationIgnored private var pendingRefusal: AppError?
-    /// When the last success/error flourish was requested (pill clicks during it don't start a recording).
-    @ObservationIgnored private var lastFlash: (phase: PillPhase, at: TimeInterval)?
-    /// A flourish that came while the pill showed a press that hasn't committed (arming, the tap window). It
+    /// When the last error shake was requested (pill clicks during it open the Hub instead of recording).
+    @ObservationIgnored private var lastErrorFlashAt: TimeInterval?
+    /// A shake that came while the pill showed a press that hasn't committed (arming, the tap window). It
     /// plays when the press folds away; a press that commits drops it, as a recording cuts one on screen.
-    @ObservationIgnored private var deferredFlourish: PillPhase?
+    @ObservationIgnored private var isErrorFlashDeferred = false
     /// The press under way began while a job was in flight: until it commits, the processing pill stays exactly
     /// as it is (its width, "Still transcribing…"), so an fn tap or an fn combo doesn't disturb it.
     @ObservationIgnored private var pressKeepsProcessing = false
@@ -245,8 +245,8 @@ final class DictationController {
     }
 
     private func pillClicked() {
-        if let flash = lastFlash, clock() - flash.at < 1.5 {
-            if flash.phase == .error, toasts.notices.isEmpty { openHub?(.home) }
+        if let flashedAt = lastErrorFlashAt, clock() - flashedAt < 1.5 {
+            if toasts.notices.isEmpty { openHub?(.home) }
             return
         }
         guard pillModel.phase != .processing else { return }
@@ -431,7 +431,7 @@ final class DictationController {
     private func passesPreflight(_ recording: Recording) -> Bool {
         if recording.speech.isSilent {
             postFailure(AppError.microphoneSilent.notice(recordingID: nil, fallbackEngine: nil))
-            flash(.error)
+            flashError()
             return false
         }
         if recording.speech.voicedSeconds < Self.minimumVoicedSeconds {
@@ -447,7 +447,7 @@ final class DictationController {
         if always || noSpeechQuota.take() {
             postFailure(AppError.noSpeech.notice(recordingID: nil, fallbackEngine: nil))
         }
-        flash(.error)
+        flashError()
     }
 
     private func cancelCapture(keepForUndo: Bool, notify: Bool) {
@@ -776,7 +776,7 @@ final class DictationController {
                                    lifetime: .seconds(5)))
             case .paste(let target):
                 let insertion = await insert(text, expectedPID: target)
-                handleInsertion(insertion, text: text, celebrate: true)
+                handleInsertion(insertion, text: text, isDictation: true)
             }
         }
     }
@@ -824,7 +824,7 @@ final class DictationController {
             errorMessage: notice.title, audioFileName: file ?? history.entry(id: job.id)?.audioFileName))
         Log.engine.error("Transcription failed: \(error.code, privacy: .public)")
         postFailure(notice)
-        flash(.error)
+        flashError()
     }
 
     // MARK: - Insertion
@@ -838,16 +838,15 @@ final class DictationController {
         if let copyOverride { copyOverride(text) } else { inserter.copy(text) }
     }
 
-    private func handleInsertion(_ outcome: InsertionOutcome, text: String, celebrate: Bool) {
+    /// `isDictation`: a dictation's own delivery, not paste-last or a toast's Paste Here. The pasted text is the
+    /// confirmation; the pill just goes back to rest.
+    private func handleInsertion(_ outcome: InsertionOutcome, text: String, isDictation: Bool) {
         Log.app.notice("Insertion outcome: \(String(describing: outcome), privacy: .public)")
         switch outcome {
         case .pasted:
             // A paste landing mid-recording must not leak its tick into the new recording.
             if !machine.isRecording { sounds.play(.paste) }
-            if celebrate {
-                flash(.success)
-                onDictationDelivered?()
-            }
+            if isDictation { onDictationDelivered?() }
         case .noEditableTarget:
             toasts.post(transcriptCard(text, title: "Nowhere to paste",
                                        body: "Or click a text field and press \(pasteLastHint).", pasteHere: false))
@@ -899,7 +898,7 @@ final class DictationController {
             switch outcome {
             case .pasted, .accessibilityMissing:
                 // Without Accessibility the inserter has already copied it, and the notice says so.
-                self.handleInsertion(outcome, text: text, celebrate: false)
+                self.handleInsertion(outcome, text: text, isDictation: false)
             case .noEditableTarget, .targetChanged:
                 self.leaveOnClipboard(text, title: "Nowhere to paste")
             case .failed(let reason):
@@ -934,7 +933,7 @@ final class DictationController {
                     outcome = await self.inserter.pasteNow(text)
                 }
                 // Anything but a paste brings the text back (a card, or the Accessibility notice).
-                self.handleInsertion(outcome, text: text, celebrate: false)
+                self.handleInsertion(outcome, text: text, isDictation: false)
             }
             return
         default:
@@ -1125,7 +1124,7 @@ final class DictationController {
             postFailure(error.notice(recordingID: nil, fallbackEngine: usableFallback(excluding: engine, after: error),
                                      engine: engine))
         }
-        flash(.error)
+        flashError()
     }
 
     private func postSlowNotice(for job: Job) {
@@ -1274,41 +1273,37 @@ final class DictationController {
         return pendingJobCount > 0 ? .processing : .rest
     }
 
-    /// A one-shot success check or error shake. PillModel keeps the flourish on screen for its minimum time
-    /// and settles back by itself, even when the next `refreshPill` already asks for rest.
-    private func flash(_ phase: PillPhase) {
-        lastFlash = (phase, clock())
-        if phase == .error { onDictationFailed?() }
-        showFlourish(phase)
+    /// A one-shot error shake. PillModel keeps the flourish on screen for its minimum time and settles back by
+    /// itself, even when the next `refreshPill` already asks for rest.
+    private func flashError() {
+        lastErrorFlashAt = clock()
+        onDictationFailed?()
+        showErrorFlash()
     }
 
-    /// Only a real recording suppresses the flourish. The dots of a press that hasn't committed hold it back
-    /// until the press folds away (a quick tap, an fn combo), so the check or the shake is never lost to it.
-    private func showFlourish(_ phase: PillPhase) {
+    /// Only a real recording suppresses the shake. The dots of a press that hasn't committed hold it back
+    /// until the press folds away (a quick tap, an fn combo), so the shake is never lost to it.
+    private func showErrorFlash() {
         guard !machine.capture.isListeningOrLocked else { return }
         if machine.capture.isUncommittedPress, !pressKeepsProcessing {
-            deferredFlourish = phase
+            isErrorFlashDeferred = true
             return
         }
-        deferredFlourish = nil
+        isErrorFlashDeferred = false
         // Leave any recording phase first, so the shake lands on the idle/processing pill.
         refreshPill()
-        if phase == .error {
-            // Turns an idle or processing pill into the error flash, or re-shakes one already showing.
-            pillModel.shakeTrigger += 1
-        } else {
-            pillModel.phase = phase
-        }
+        // Turns an idle or processing pill into the error flash, or re-shakes one already showing.
+        pillModel.shakeTrigger += 1
     }
 
-    /// Plays the flourish held back during a press once the press has folded away, or drops it if the press
+    /// Plays the shake held back during a press once the press has folded away, or drops it if the press
     /// committed.
-    private func replayDeferredFlourish() {
-        guard let flourish = deferredFlourish, !machine.capture.isUncommittedPress else { return }
-        deferredFlourish = nil
+    private func replayDeferredErrorFlash() {
+        guard isErrorFlashDeferred, !machine.capture.isUncommittedPress else { return }
+        isErrorFlashDeferred = false
         guard machine.capture == .idle else { return }
-        lastFlash = (flourish, clock())
-        showFlourish(flourish)
+        lastErrorFlashAt = clock()
+        showErrorFlash()
     }
 
     private func refreshPill() {
@@ -1318,9 +1313,9 @@ final class DictationController {
         case .arming:
             // From key-down on: an empty equalizer until the first buffer, then the voice. Over a job in
             // flight, the processing pill (already on screen) waits for the press to commit; once the job is
-            // gone, the held key shows its dots again unless the job's check or shake is still on screen.
-            let showsFlourish = pillModel.visiblePhase == .success || pillModel.visiblePhase == .error
-            phase = pressKeepsProcessing && (hasPendingWork || showsFlourish) ? idle : .listening
+            // gone, the held key shows its dots again unless the job's shake is still on screen.
+            let showsShake = pillModel.visiblePhase == .error
+            phase = pressKeepsProcessing && (hasPendingWork || showsShake) ? idle : .listening
         case .tapPending:
             phase = pressKeepsProcessing ? idle : .listening
         case .listening:
@@ -1330,7 +1325,7 @@ final class DictationController {
         case .idle:
             phase = idle
         }
-        // An idle request doesn't cut a success/error flourish short: PillModel holds it for its minimum time.
+        // An idle request doesn't cut the error flourish short: PillModel holds it for its minimum time.
         if pillModel.phase != phase { pillModel.phase = phase }
 
         if phase.isRecording, let started = machine.recordingStartedAt {
@@ -1350,7 +1345,7 @@ final class DictationController {
         let count = queue.count + (isDelivering ? 1 : 0)
         if pendingJobCount != count { pendingJobCount = count }
         refreshPill()
-        replayDeferredFlourish()
+        replayDeferredErrorFlash()
         showSecureInputNoticeIfNeeded()
         if !machine.isRecording {
             deviceNoticeDue = false

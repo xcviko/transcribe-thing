@@ -245,7 +245,6 @@ private struct DesignGallery: View {
                     MiniPill(phase: .listening)
                     MiniPill(phase: .locked, level: 0.8)
                     MiniPill(phase: .processing)
-                    MiniPill(phase: .success)
                     MiniPill(phase: .error)
                 }
                 .frame(maxWidth: .infinity)

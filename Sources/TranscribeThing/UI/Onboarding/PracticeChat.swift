@@ -180,7 +180,7 @@ struct PracticeChat: View {
             return "Listening, hands-free…"
         case .processing:
             return "Getting your words…"
-        case .hidden, .rest, .success, .error:
+        case .hidden, .rest, .error:
             switch model.currentLesson {
             case .handsFree?:
                 return "Press \(settings.shortcuts[.handsFree]?.compactDescription ?? "fn Space") and answer out loud…"

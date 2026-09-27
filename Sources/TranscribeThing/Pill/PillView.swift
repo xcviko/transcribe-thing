@@ -10,7 +10,6 @@ enum PillMetrics {
     static let listeningSize = CGSize(width: 104, height: 32)
     /// Hands-free always carries the timer, so hovering never resizes it (nor does the timer reaching 10:00).
     static let lockedSize = CGSize(width: 198, height: 36)
-    static let successSize = CGSize(width: 32, height: 32)
     static let errorSize = CGSize(width: 104, height: 32)
     /// Tallest state; toasts sit 10 pt above it so they never move while the pill changes shape.
     static let maxHeight: CGFloat = 36
@@ -47,7 +46,6 @@ enum PillPalette {
     static let fill = Color(nsColor: Palette.pillFill)
     static let bar = Color.white.opacity(0.96)
     static let stop = Color(nsColor: .hex(0xFF453A))
-    static let success = Color(nsColor: .hex(0x34C759))
     static let warning = Color(nsColor: .hex(0xFFB340))
     static let error = Color(nsColor: .hex(0xFF6B5E))
     static let tooltipFill = Color(nsColor: .hex(0x151517, alpha: 0.96))
@@ -72,9 +70,9 @@ enum PillVisual: Equatable, Sendable {
     case locked(PillTimerMode)
     /// `wide` after hands-free: keeps the hands-free width, so stopping doesn't shrink the pill.
     case processing(wide: Bool)
-    case success, error
+    case error
 
-    enum Content: Hashable { case empty, peek, hello, recording, processing, success, error }
+    enum Content: Hashable { case empty, peek, hello, recording, processing, error }
 
     var size: CGSize {
         switch self {
@@ -84,7 +82,6 @@ enum PillVisual: Equatable, Sendable {
         case .locked: PillMetrics.lockedSize
         case .processing(let wide): CGSize(width: wide ? PillMetrics.lockedSize.width : PillMetrics.listeningSize.width,
                                            height: PillMetrics.listeningSize.height)
-        case .success: PillMetrics.successSize
         case .error: PillMetrics.errorSize
         }
     }
@@ -96,7 +93,6 @@ enum PillVisual: Equatable, Sendable {
         case .hello: .hello
         case .listening, .locked: .recording
         case .processing: .processing
-        case .success: .success
         case .error: .error
         }
     }
@@ -174,8 +170,6 @@ struct PillView: View {
             return .locked(model.isInFinalMinute ? .remaining : .elapsed)
         case .processing:
             return .processing(wide: model.processingOrigin == .locked)
-        case .success:
-            return .success
         case .error:
             return .error
         }
@@ -223,14 +217,6 @@ struct PillView: View {
             ProcessingWaveView(startOffset: visual.barsOffset)
                 .id(PillVisual.Content.processing)
                 .transition(contentTransition(anchor: visual.barsAnchor))
-        case .success:
-            Image(systemName: "checkmark")
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(PillPalette.success)
-                .shadow(color: PillPalette.success.opacity(0.45), radius: 5)
-                .id(PillVisual.Content.success)
-                .transition(reduceMotion ? AnyTransition.opacity
-                            : AnyTransition(.symbolEffect(.drawOn)).combined(with: .opacity.animation(.easeOut(duration: 0.12))))
         case .error:
             ErrorGlyph()
                 .id(PillVisual.Content.error)
@@ -259,7 +245,7 @@ struct PillView: View {
         case .listening: return .spring(duration: 0.32, bounce: 0.26)
         case .locked: return .spring(duration: 0.34, bounce: 0.3)
         case .processing: return .spring(duration: 0.3, bounce: 0.12)
-        case .success, .error: return .spring(duration: 0.3, bounce: 0.2)
+        case .error: return .spring(duration: 0.3, bounce: 0.2)
         }
     }
 
@@ -270,7 +256,6 @@ struct PillView: View {
         case .listening: "transcribe-thing is listening"
         case .locked: "transcribe-thing is listening, hands-free"
         case .processing: "transcribe-thing is transcribing"
-        case .success: "Transcript pasted"
         case .error: "Dictation failed"
         }
     }

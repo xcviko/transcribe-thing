@@ -4,7 +4,7 @@ import SwiftUI
 enum PillSnapshots {
     @MainActor static var entries: [SnapshotEntry] {
         [
-            SnapshotEntry("pill-states", width: 760, height: 880) { _ in PillStateSheet() },
+            SnapshotEntry("pill-states", width: 760, height: 812) { _ in PillStateSheet() },
             SnapshotEntry("pill-tooltip", width: 640, height: 140) { _ in
                 SideBySide { _ in
                     PillView(model: .preview(phase: .rest, isHovering: true))
@@ -35,8 +35,6 @@ enum PillSnapshots {
             SnapshotEntry("pill-toast-cloud-speech", width: 640, height: 270) { _ in
                 CanvasScene(model: .preview(phase: .error), notices: [PillSnapshotFixtures.cloudSpeechRateLimited])
             },
-            // Nothing was pasted in either case, so no check mark (DictationController flashes success only
-            // after a paste lands).
             SnapshotEntry("pill-toast-transcript", width: 640, height: 340) { _ in
                 CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.switchedApps])
             },
@@ -54,7 +52,7 @@ enum PillSnapshots {
                                                                              PillSnapshotFixtures.noSpeech])
             },
             SnapshotEntry("pill-toast-update", width: 640, height: 270) { _ in
-                CanvasScene(model: .preview(phase: .success), notices: [PillSnapshotFixtures.updateAvailable])
+                CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.updateAvailable])
             },
             SnapshotEntry("pill-toast-updated", width: 640, height: 220) { _ in
                 CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.updated])
@@ -279,7 +277,6 @@ private struct PillStateSheet: View {
             },
             Row(id: "processing", caption: "Processing") { .preview(phase: .processing) },
             Row(id: "processing-wide", caption: "Processing · after hands-free") { PillStateSheet.processingAfterLocked() },
-            Row(id: "success", caption: "Done") { .preview(phase: .success) },
             Row(id: "error", caption: "Error") { .preview(phase: .error) },
         ]
     }

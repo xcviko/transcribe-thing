@@ -85,11 +85,9 @@ struct HeroFrame: Equatable {
     var textOpacity: Double
     var caretOpacity: Double
     var pillPhase: PillPhase
-    var pillSize: CGSize
     var pillScale: Double
     var pillOpacity: Double
     var level: Double
-    var checkProgress: Double
     var fnPressed: Bool
     var glow: Double
     var time: Double
@@ -117,9 +115,8 @@ enum HeroTimeline {
     private static let bloom = (0.34, 0.66)
     private static let typing = (0.72, 3.0)
     private static let releaseAt = 3.12
-    private static let shrink = (3.52, 3.74)
-    private static let draw = (3.68, 3.94)
-    private static let collapse = (4.36, 4.64)
+    /// The pasted text is the confirmation: processing folds straight away, like the real pill.
+    private static let collapse = (3.52, 3.8)
     private static let fade = (5.05, 5.45)
 
     static func frame(at t: Double) -> HeroFrame {
@@ -134,18 +131,11 @@ enum HeroTimeline {
         let typed = Int((Double(count) * Ease.clamp(bursty)).rounded(.down))
 
         let listening = lt >= bloom.0 && lt < releaseAt
-        let processing = lt >= releaseAt && lt < shrink.0
-        let success = lt >= shrink.0
+        let processing = lt >= releaseAt
 
         var phase: PillPhase = .hidden
-        var size = StagePill.size(for: .listening)
         if listening { phase = .listening }
         if processing { phase = .processing }
-        if success {
-            phase = .success
-            let p = Ease.smooth(Ease.progress(lt, shrink.0, shrink.1))
-            size = CGSize(width: Ease.lerp(104, 32, p), height: 32)
-        }
 
         let bloomProgress = Ease.progress(lt, bloom.0, bloom.1)
         let collapseProgress = Ease.progress(lt, collapse.0, collapse.1)
@@ -168,13 +158,11 @@ enum HeroTimeline {
             textOpacity: textOpacity,
             caretOpacity: caret * textOpacity,
             pillPhase: phase,
-            pillSize: size,
             pillScale: scale,
             pillOpacity: max(0, opacity),
             level: level,
-            checkProgress: Ease.progress(lt, draw.0, draw.1),
             fnPressed: lt >= pressAt && lt < releaseAt,
-            glow: listening ? 0.55 + 0.45 * level : (processing ? 0.4 : max(0, 0.4 * (1 - collapseProgress))),
+            glow: listening ? 0.55 + 0.45 * level : (processing ? max(0, 0.4 * (1 - collapseProgress)) : 0),
             time: t)
     }
 
@@ -202,8 +190,7 @@ private struct WelcomeScene: View {
             ZStack {
                 StageGlow(color: .accent, radius: 110, opacity: 0.20 * frame.glow)
                 StagePill(phase: frame.pillPhase == .hidden ? .listening : frame.pillPhase,
-                          level: frame.level, time: frame.time, checkProgress: frame.checkProgress,
-                          size: frame.pillSize)
+                          level: frame.level, time: frame.time)
                     .scaleEffect(frame.pillScale, anchor: .bottom)
                     .opacity(frame.pillOpacity)
             }

@@ -2,15 +2,15 @@ import AppKit
 import Observation
 
 /// State the pill draws. The dictation controller writes `phase`; the pill view reads `visiblePhase`,
-/// which follows `phase` but keeps the success and error flourishes on screen for their minimum time.
+/// which follows `phase` but keeps the error flourish on screen for its minimum time.
 @MainActor @Observable
 final class PillModel {
     @ObservationIgnored let settings: AppSettings
     @ObservationIgnored let levelMeter: LevelMeter
 
     /// Requested phase. `.rest` and `.hidden` both mean "idle": the resting capsule in Always mode, nothing otherwise.
-    /// `.success` and `.error` are transient: after their flourish the model returns to `.rest` (or to a
-    /// `.processing` requested meanwhile) by itself.
+    /// `.error` is transient: after its flourish the model returns to `.rest` (or to a `.processing` requested
+    /// meanwhile) by itself.
     var phase: PillPhase = .rest {
         didSet { if phase != oldValue { phaseDidChange() } }
     }
@@ -43,7 +43,7 @@ final class PillModel {
 
     /// Key-chip text for the tooltip, from `settings.shortcuts[.pushToTalk]`.
     var shortcutHint: String = "fn"
-    /// Increment to shake. Shaking an idle, processing or finished pill turns it into a brief error flash
+    /// Increment to shake. Shaking an idle or processing pill turns it into a brief error flash
     /// so the feedback is visible even when the pill would otherwise be hidden.
     var shakeTrigger = 0 {
         didSet { if shakeTrigger != oldValue { shakeRequested() } }
@@ -68,7 +68,7 @@ final class PillModel {
 
     /// Durations of the automatic transitions; tests shorten them.
     @ObservationIgnored var timing = PillTiming()
-    /// Previews render one phase forever; live models settle success/error back to rest.
+    /// Previews render one phase forever; live models settle an error back to rest.
     @ObservationIgnored var autoSettles = true
 
     @ObservationIgnored private var holdUntil: Date?
@@ -106,9 +106,9 @@ final class PillModel {
     private func phaseDidChange() {
         let target = phase
         let now = Date()
-        // A new idle (or processing: the next dictation is still queued) request must not cut the check
-        // mark or the error flash short. A new recording does.
-        if target.isIdle || target == .processing, visiblePhase == .success || visiblePhase == .error,
+        // A new idle (or processing: the next dictation is still queued) request must not cut the error
+        // flash short. A new recording does.
+        if target.isIdle || target == .processing, visiblePhase == .error,
            let holdUntil, holdUntil > now, autoSettles {
             scheduleSettle(at: holdUntil)
             return
@@ -142,14 +142,10 @@ final class PillModel {
             if isProcessingSlow { isProcessingSlow = false }
         }
 
-        switch target {
-        case .success:
-            holdUntil = now.addingTimeInterval(timing.successHold)
-            if autoSettles { scheduleSettle(at: holdUntil!) }
-        case .error:
+        if target == .error {
             holdUntil = now.addingTimeInterval(timing.errorHold)
             if autoSettles { scheduleSettle(at: holdUntil!) }
-        default:
+        } else {
             holdUntil = nil
         }
         scheduleFinalMinute()
@@ -169,7 +165,7 @@ final class PillModel {
     private func settle() {
         settleTask = nil
         holdUntil = nil
-        if phase == .success || phase == .error {
+        if phase == .error {
             phase = .rest   // didSet applies it: the hold is over
         } else {
             apply(phase, now: Date())
@@ -184,7 +180,7 @@ final class PillModel {
                 holdUntil = Date().addingTimeInterval(timing.errorHold)
                 scheduleSettle(at: holdUntil!)
             }
-        case .rest, .hidden, .processing, .success:
+        case .rest, .hidden, .processing:
             phase = .error
         }
     }
@@ -287,8 +283,6 @@ enum PillControl: Equatable, Sendable {
 }
 
 struct PillTiming: Equatable, Sendable {
-    /// Check mark: draw 250 ms, hold 200 ms, then collapse.
-    var successHold: TimeInterval = 0.75
     var errorHold: TimeInterval = 1.6
     var hoverIn: TimeInterval = 0.08
     var hoverOut: TimeInterval = 0.15

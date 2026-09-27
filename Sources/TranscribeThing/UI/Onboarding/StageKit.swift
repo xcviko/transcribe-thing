@@ -70,10 +70,6 @@ struct StagePill: View {
     var level: Double = 0.6
     /// Scene time in seconds (bar wobble, processing wave).
     var time: Double = 0
-    /// 0...1 for the success check.
-    var checkProgress: Double = 1
-    /// Overrides the phase geometry while a scene morphs between states.
-    var size: CGSize?
 
     static let barCount = 13
 
@@ -82,12 +78,11 @@ struct StagePill: View {
         case .hidden, .rest: CGSize(width: 40, height: 10)
         case .listening, .processing, .error: CGSize(width: 104, height: 32)
         case .locked: CGSize(width: 168, height: 36)
-        case .success: CGSize(width: 32, height: 32)
         }
     }
 
     var body: some View {
-        let frame = size ?? Self.size(for: phase)
+        let frame = Self.size(for: phase)
         ZStack {
             PillSurface(isResting: phase == .rest || phase == .hidden)
             content
@@ -114,11 +109,6 @@ struct StagePill: View {
             .padding(.horizontal, 7)
         case .processing:
             PillProcessingDots(time: time)
-        case .success:
-            CheckmarkShape()
-                .trim(from: 0, to: checkProgress)
-                .stroke(Color(nsColor: .hex(0x34C759)), style: StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round))
-                .frame(width: 12, height: 10)
         case .error:
             Image(systemName: "exclamationmark")
                 .font(.system(size: 14, weight: .bold))
