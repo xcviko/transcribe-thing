@@ -180,7 +180,8 @@ enum EngineReadiness: Equatable {
     }
 }
 
-/// The sidebar footer chip: "Parakeet v3 · Ready", "Parakeet v3 · Optimizing…", "Gemini Flash · Needs key".
+/// The sidebar footer chip for the main model: "Parakeet v3 · Ready", "Parakeet v3 · Optimizing…",
+/// "Parakeet v3 · Cloud · Needs key".
 struct EngineSummary: Equatable {
     var name: String
     var status: String
@@ -218,6 +219,48 @@ enum ProviderNote {
     static func text(_ engine: EngineID) -> String? {
         guard let provider = engine.provider else { return nil }
         return engine.cloudAPI == .chatCompletions ? "Served by \(provider) only." : "Served by \(provider)."
+    }
+}
+
+// MARK: - Extra models
+
+/// What the Models page says about the extra models: the Switch model shortcut steps through the ones switched on,
+/// for one dictation at a time.
+enum ExtraModels {
+    enum Status: Equatable {
+        /// The shortcut switches between the main model and the enabled extra models.
+        case ready(Shortcut)
+        /// Every extra model is off: the shortcut isn't intercepted, even while dictating.
+        case noneEnabled(Shortcut?)
+        /// Switch model has no shortcut, so nothing switches.
+        case unbound
+    }
+
+    static func status(binding: Shortcut?, enabled: [EngineID]) -> Status {
+        guard !enabled.isEmpty else { return .noneEnabled(binding) }
+        guard let binding, !binding.isEmpty else { return .unbound }
+        return .ready(binding)
+    }
+
+    /// One line under the "Extra models" heading, with the user's own binding: "Press fn ⇥ while dictating to use
+    /// one for that dictation."
+    static func explanation(_ status: Status) -> String {
+        switch status {
+        case .ready(let binding):
+            "Press \(binding.compactDescription) while dictating to use one for that dictation."
+        case .noneEnabled(let binding?) where !binding.isEmpty:
+            "Turn one on to use it when you press \(binding.compactDescription) while dictating."
+        case .noneEnabled:
+            "Turn one on and give Switch model a shortcut to use it while dictating."
+        case .unbound:
+            "Switch model has no shortcut yet. Set one to use these while dictating."
+        }
+    }
+
+    /// `enabled` with `engine` switched on or off, in the order the shortcut steps through them.
+    static func setting(_ engine: EngineID, on: Bool, in enabled: [EngineID]) -> [EngineID] {
+        let others = enabled.filter { $0 != engine }
+        return AppSettings.normalizedSwitchEngines(on ? others + [engine] : others)
     }
 }
 

@@ -28,6 +28,12 @@ struct TryItStep: View {
                     .padding(.vertical, 2)
                 LessonRow(number: 0, title: "Paste last", detail: nil, action: .pasteLast, state: .extra,
                           settings: settings)
+                if model.showsSwitchModelLesson {
+                    LessonRow(number: 0, title: "Switch to Gemini", detail: nil, action: .switchModel, state: .extra,
+                              settings: settings)
+                        .help("While dictating, press it to use Gemini for that dictation.")
+                        .transition(.opacity)
+                }
             }
             .animation(Theme.Motion.expand, value: model.completedLessons)
 

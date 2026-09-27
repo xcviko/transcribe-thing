@@ -54,7 +54,12 @@ enum OnboardingSnapshots {
             },
             entry("onboarding-3-model-cloud-valid", context: { ctx in
                 ctx.models = .preview(states: [.parakeet: .ready])
-                ctx.settings.selectedEngine = .geminiFlash
+                ctx.settings.selectedEngine = .parakeetCloud
+            }) { model in model.stage(step: .model) },
+            // Switch model rebound to right ⌘: the Gemini line names it.
+            entry("onboarding-3-model-custom-switch", context: { ctx in
+                ctx.models = .preview(states: [.parakeet: .ready])
+                ctx.settings.shortcuts[.switchModel] = .rightCommand
             }) { model in model.stage(step: .model) },
             entry("onboarding-3-model-cloud-stt", context: { ctx in
                 ctx.models = .preview(states: [.parakeet: .ready])
@@ -67,7 +72,7 @@ enum OnboardingSnapshots {
             }) { model in model.stage(step: .model) },
             entry("onboarding-3-model-cloud-invalid", context: { ctx in
                 ctx.models = .preview(states: [.parakeet: .notInstalled])
-                ctx.settings.selectedEngine = .geminiPro
+                ctx.settings.selectedEngine = .parakeetCloud
                 ctx.account = .preview(status: .invalid("401"))
             }) { model in
                 model.stage(step: .model)
@@ -75,6 +80,10 @@ enum OnboardingSnapshots {
             },
 
             entry("onboarding-4-tryit") { model in model.stage(step: .tryIt) },
+            // No working key: the optional "Switch to Gemini" row stays hidden.
+            entry("onboarding-4-tryit-no-key", context: { ctx in
+                ctx.account = .preview(status: .missing)
+            }) { model in model.stage(step: .tryIt) },
             entry("onboarding-4-tryit-fn", still: 1.3) { model in
                 model.stage(step: .tryIt)
                 model.stagePressed([.fn], heldPTT: true)
