@@ -372,6 +372,29 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(model.visiblePhase == .success)
     }
 
+    @Test func processingDotsStartWhereTheHandsFreeBarsWere() {
+        let locked = PillVisual.locked(.elapsed), processing = PillVisual.processing(wide: true)
+        let barsCenter = locked.size.width / 2 + locked.barsOffset
+        #expect(barsCenter == 102 - 19.5)
+        let width = processing.size.width
+        func center(at time: Double, reduceMotion: Bool = false) -> CGFloat {
+            ProcessingWaveView.dotsCenterX(width: width, time: time, startOffset: processing.barsOffset,
+                                           reduceMotion: reduceMotion)
+        }
+        #expect(center(at: 0) == barsCenter)
+        // Then they glide to the center, never more than 1.5 pt per 60 fps frame.
+        var previous = center(at: 0)
+        for frame in 1...60 {
+            let x = center(at: Double(frame) / 60)
+            #expect(x >= previous && x - previous < 1.5)
+            previous = x
+        }
+        #expect(previous == width / 2)
+        #expect(center(at: 1, reduceMotion: true) == barsCenter)
+        // Push-to-talk never offsets them.
+        #expect(PillVisual.listening.barsOffset == 0 && PillVisual.processing(wide: false).barsOffset == 0)
+    }
+
     @Test func previewInTheLastMinuteShowsTheCountdown() {
         let model = PillModel.preview(phase: .locked, recordingFor: 1190, limitSeconds: 1200)
         #expect(model.isInFinalMinute)
@@ -556,6 +579,43 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         // The row starts sliding at once instead of waiting for the next column.
         let bars = engine.bars(size: Self.size, now: end + 0.034, reduceMotion: false, isStatic: false)
         #expect(bars[0].rect.minX < Self.size.width - PillMetrics.barWidth)
+    }
+
+    @Test func aFillInBetweenLandingsSetsOffWithoutAJump() throws {
+        let clock = Clock()
+        let meter = LevelMeter(clock: { clock.now })
+        let engine = WaveformEngine()
+        let onset = clock.now + 1
+        ingest(meter, from: clock.now, seconds: 1) { _ in -50 }
+        engine.advance(meter: meter, to: onset - 0.2)
+        ingest(meter, from: onset, seconds: 0.05) { _ in -22 }
+        engine.advance(meter: meter, to: onset - 0.2 + 3 * WaveformEngine.columnInterval)
+        let end = try #require(engine.newestEnd)
+        #expect(engine.columns.allSatisfy { $0 == 0 })
+        // The window that confirms the onset arrives 50 ms after the column landed, well into the slide's step.
+        ingest(meter, from: onset + 0.05, seconds: 0.03) { _ in -22 }
+        var now = end + 0.05
+        let before = engine.bars(size: Self.size, now: now, reduceMotion: false, isStatic: false)
+        engine.advance(meter: meter, to: now)
+        #expect(engine.columns[0] > 0.5)
+        // At that instant nothing moves or pops: the row sets off from where it stands and the bar grows from a dot.
+        let after = engine.bars(size: Self.size, now: now, reduceMotion: false, isStatic: false)
+        #expect(zip(before, after).allSatisfy { abs($0.rect.minX - $1.rect.minX) < 1e-9 && $0.rect.height == $1.rect.height })
+        // Then the voiced column only ever drifts left, a fraction of a step per frame.
+        let step = PillMetrics.barWidth + PillMetrics.barGap
+        let voicedEnd = end
+        var x = after[0].rect.minX
+        for _ in 0..<40 {
+            now += 1.0 / 60
+            engine.advance(meter: meter, to: now)
+            let k = Int(((try #require(engine.newestEnd) - voicedEnd) / WaveformEngine.columnInterval).rounded())
+            let bars = engine.bars(size: Self.size, now: now, reduceMotion: false, isStatic: false)
+            guard k < bars.count else { break }
+            let dx = x - bars[k].rect.minX
+            #expect(dx >= 0 && dx < step * 0.3, "moved \(dx) pt in one frame")
+            x = bars[k].rect.minX
+        }
+        #expect(x < after[0].rect.minX - 2 * step)
     }
 
     @Test func aLateChunkFillsInInsteadOfLeavingDots() {

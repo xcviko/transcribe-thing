@@ -766,6 +766,22 @@ private final class MeterTestClock: @unchecked Sendable {
         #expect(taps.allSatisfy { $0.amplitude == 0 })
     }
 
+    @Test func typingThatHeldTheGateOpenNeverArmsTheQuickReopen() {
+        let clock = MeterTestClock()
+        let meter = LevelMeter(clock: { clock.now })
+        var noise = Noise(state: 17)
+        feed(meter, clock: clock, seconds: 1) { _ in noise.db(-50, 2) }
+        // A ringing key fools the gate, and the clicks after it hold it open for half a second ...
+        feed(meter, clock: clock, seconds: 0.06) { _ in -25 }
+        feed(meter, clock: clock, seconds: 0.48) { t in t.truncatingRemainder(dividingBy: 0.12) >= 0.08 ? -25 : noise.db(-50, 2) }
+        // ... then a pause closes it: the next burst of 40 ms clicks must not reopen it.
+        feed(meter, clock: clock, seconds: 0.3) { _ in noise.db(-50, 2) }
+        let clicks = feed(meter, clock: clock, seconds: 0.5) { t in
+            t.truncatingRemainder(dividingBy: 0.1) < 0.04 ? -25 : noise.db(-50, 2)
+        }
+        #expect(clicks.allSatisfy { $0.amplitude == 0 }, "\(clicks.filter { $0.amplitude > 0 }.count) windows drawn")
+    }
+
     @Test func aCueDuckedOverSpeechKeepsTheBars() {
         let clock = MeterTestClock()
         let meter = LevelMeter(clock: { clock.now })

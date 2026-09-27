@@ -27,6 +27,8 @@ enum PillMetrics {
     /// Fits "29:59": the longest recording limit is 30 min.
     static let timerWidth: CGFloat = 34
     static let timerSpacing: CGFloat = 5
+    /// Hands-free centers the bars between X and the timer, this far left of the pill's center.
+    static let lockedBarsOffset: CGFloat = -(timerWidth + timerSpacing) / 2
     static let tooltipHeight: CGFloat = 28
     /// Invisible margin around the pill that counts as hovering it (and clicking it).
     static let hoverMargin: CGFloat = 12
@@ -101,6 +103,15 @@ enum PillVisual: Equatable, Sendable {
 
     /// Only hands-free shows the timer.
     var timer: PillTimerMode? { if case .locked(let t) = self { t } else { nil } }
+
+    /// Horizontal offset of the bars from the pill's center. Hands-free centers them between X and the timer;
+    /// processing after it starts its dots there too, so they don't hop sideways when Stop is pressed.
+    var barsOffset: CGFloat {
+        switch self {
+        case .locked, .processing(wide: true): PillMetrics.lockedBarsOffset
+        default: 0
+        }
+    }
 }
 
 // MARK: - Pill
@@ -191,11 +202,11 @@ struct PillView: View {
                 .id(PillVisual.Content.hello)
                 .transition(contentTransition)
         case .recording:
-            RecordingContent(model: model, timer: visual.timer, regions: regions)
+            RecordingContent(model: model, timer: visual.timer, barsOffset: visual.barsOffset, regions: regions)
                 .id(PillVisual.Content.recording)
                 .transition(contentTransition)
         case .processing:
-            ProcessingWaveView()
+            ProcessingWaveView(startOffset: visual.barsOffset)
                 .id(PillVisual.Content.processing)
                 .transition(contentTransition)
         case .success:
@@ -385,16 +396,12 @@ private struct RecordingContent: View {
     let model: PillModel
     /// Set in hands-free only.
     let timer: PillTimerMode?
+    let barsOffset: CGFloat
     let regions: PillHitRegions?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var locked: Bool { timer != nil }
-
-    /// In hands-free the bars center between X and the timer instead of in the pill.
-    private var barsOffset: CGFloat {
-        locked ? -(PillMetrics.timerWidth + PillMetrics.timerSpacing) / 2 : 0
-    }
 
     var body: some View {
         ZStack {

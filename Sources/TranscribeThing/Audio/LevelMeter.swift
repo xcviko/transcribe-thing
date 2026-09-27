@@ -38,11 +38,12 @@ final class LevelMeter: @unchecked Sendable {
         var gateHangover: TimeInterval = 0.2
         var gateMinimumDBFS: Float = -55
         /// A breath of 0.25 s or more still closes the gate, and the syllables right after it are often only
-        /// 40-50 ms loud: within `gateReopenWindow` of closing after at least `gateReopenMinOpen` of voice (speech,
-        /// not a click) the same margin reopens it after `gateReopenSustain` windows instead.
+        /// 40-50 ms loud: within `gateReopenWindow` of closing the same margin reopens it after `gateReopenSustain`
+        /// windows instead, if the stretch before held `gateReopenMinRun` windows in a row `gateCloseMargin` above
+        /// the floor. That is voice: a key click never rings that long, even when typing holds the gate open.
         var gateReopenSustain = 4
         var gateReopenWindow: TimeInterval = 0.5
-        var gateReopenMinOpen: TimeInterval = 0.3
+        var gateReopenMinRun = 9
         /// The gate's floor is a minimum tracker: it falls quickly into every pause but rises only
         /// `gateFloorRise` dB/s, so continuous speech can't drag it up. The first `gateWarmup` seconds rise
         /// faster, in case the stream opened on a transient.
@@ -87,9 +88,10 @@ final class LevelMeter: @unchecked Sendable {
         var isOpen = false
         var run = 0
         var lastAbove: TimeInterval = 0
-        var openedAt: TimeInterval = 0
         var closedAt: TimeInterval = 0
-        /// The last close ended a stretch of voice, so a quick reopen is allowed.
+        /// Consecutive windows `gateCloseMargin` above the floor since the gate opened.
+        var voiceRun = 0
+        /// This open stretch held voice (a reopen counts only what came after it), so a quick reopen is allowed.
         var reopenArmed = false
     }
 
@@ -333,6 +335,9 @@ final class LevelMeter: @unchecked Sendable {
         }
         let floor = gate.floorDB ?? -160
         if gate.isOpen {
+            let voiceLevel = max(floor + tuning.gateCloseMargin, tuning.gateMinimumDBFS - 3)
+            gate.voiceRun = db >= voiceLevel ? gate.voiceRun + 1 : 0
+            if gate.voiceRun >= tuning.gateReopenMinRun { gate.reopenArmed = true }
             // This window and the ones before it, as one level.
             var power = pow(10, db / 10)
             let previous = min(tuning.gateCloseWindows - 1, windows.count)
@@ -340,13 +345,11 @@ final class LevelMeter: @unchecked Sendable {
                 power += windows[windows.count - back].power
             }
             let recentLevel = 10 * log10(max(power / Float(previous + 1), 1e-16))
-            if recentLevel >= max(floor + tuning.gateCloseMargin, tuning.gateMinimumDBFS - 3) {
+            if recentLevel >= voiceLevel {
                 gate.lastAbove = time
             } else if time - gate.lastAbove > tuning.gateHangover {
                 gate.isOpen = false
                 gate.closedAt = time
-                // A key click that slipped through never arms it, so typing can't chain reopens.
-                gate.reopenArmed = time - gate.openedAt >= tuning.gateReopenMinOpen
             }
         }
         if !gate.isOpen {
@@ -357,7 +360,10 @@ final class LevelMeter: @unchecked Sendable {
                 gate.isOpen = true
                 gate.run = 0
                 gate.lastAbove = time
-                gate.openedAt = time
+                // The windows that proved the onset start the run; a click that slipped through (or a reopen on
+                // one) must still show voice of its own to arm the next reopen, so typing can't chain them.
+                gate.voiceRun = sustain
+                gate.reopenArmed = false
                 // The windows that proved the onset are voice too.
                 for back in stride(from: 1, to: min(sustain, windows.count + 1), by: 1) {
                     windows[windows.count - back].voiced = true
