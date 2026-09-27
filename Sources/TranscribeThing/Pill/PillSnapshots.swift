@@ -25,25 +25,25 @@ enum PillSnapshots {
             // Film strips of the pill leaving (`--only pill-exit`).
             SnapshotEntry("pill-exit", width: PillFilmSheet.width(cell: 132, columns: 11), height: 452) { _ in
                 PillFilmSheet(cell: 132, columns: 11, strips: [
-                    .exit("Processing → hidden", .processing(wide: false), model: .preview(phase: .processing)),
+                    .exit("Processing → hidden", .processing(afterHandsFree: false), model: .preview(phase: .processing)),
                     .exit("Error → hidden", .error, model: .preview(phase: .error)),
                     .exit("Listening → hidden (Esc)", .listening, model: .preview(phase: .listening, level: 0.7)),
-                    .exit("Reduce Motion", .processing(wide: false), model: .preview(phase: .processing),
+                    .exit("Reduce Motion", .processing(afterHandsFree: false), model: .preview(phase: .processing),
                           reduceMotion: true),
                 ])
             },
             SnapshotEntry("pill-exit-wide", width: PillFilmSheet.width(cell: 226, columns: 6), height: 630) { _ in
                 PillFilmSheet(cell: 226, columns: 6, strips: [
-                    .exit("Processing after hands-free → hidden", .processing(wide: true),
+                    .exit("Processing after hands-free → hidden", .processing(afterHandsFree: true),
                           model: PillStateSheet.processingAfterLocked()),
                     .handsFreeToHidden(),
-                    .morph("Processing after hands-free → rest (Always)", from: .processing(wide: true),
+                    .morph("Processing after hands-free → rest (Always)", from: .processing(afterHandsFree: true),
                            model: PillStateSheet.processingAfterLocked()),
                 ])
             },
             SnapshotEntry("pill-exit-rest", width: PillFilmSheet.width(cell: 132, columns: 11), height: 452) { _ in
                 PillFilmSheet(cell: 132, columns: 11, strips: [
-                    .morph("Processing → rest (Always)", from: .processing(wide: false), model: .preview(phase: .processing)),
+                    .morph("Processing → rest (Always)", from: .processing(afterHandsFree: false), model: .preview(phase: .processing)),
                     .morph("Error → rest", from: .error, model: .preview(phase: .error)),
                     .morph("Listening → rest (Esc)", from: .listening, model: .preview(phase: .listening, level: 0.7)),
                     .morph("Hover ends", from: .peek, model: .preview(phase: .rest, isHovering: true)),
@@ -312,9 +312,9 @@ private struct PillFilmSheet: View {
             return Strip(title: title, model: model, frames: frames)
         }
 
-        /// Hands-free, Stop, then the wide processing pill leaving.
+        /// Hands-free, Stop (the pill narrows to the push-to-talk size), then the processing pill leaving.
         @MainActor static func handsFreeToHidden() -> Strip {
-            let locked = PillVisual.locked(.elapsed), processing = PillVisual.processing(wide: true)
+            let locked = PillVisual.locked(.elapsed), processing = PillVisual.processing(afterHandsFree: true)
             let model = PillModel.preview(phase: .locked, level: 0.5)
             let stills = [Frame(caption: "hands-free") { model in
                 AnyView(PillFace(model: model, capsule: locked, content: locked))

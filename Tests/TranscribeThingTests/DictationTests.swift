@@ -1197,7 +1197,7 @@ final class FakeRecorder: DictationRecorder {
         now = 104
         h.controller.send(.pillStop)
         #expect(h.pill.visiblePhase == .processing)
-        #expect(h.pill.processingOrigin == .locked, "wide, like the hands-free pill it came from")
+        #expect(h.pill.processingOrigin == .locked, "its dots start where the hands-free bars stood")
         try await waitUntil { h.pill.isProcessingSlow }
 
         var phases: [PillPhase] = []

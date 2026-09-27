@@ -390,10 +390,12 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
     }
 
     @Test func processingDotsStartWhereTheHandsFreeBarsWere() {
-        let locked = PillVisual.locked(.elapsed), processing = PillVisual.processing(wide: true)
-        let barsCenter = locked.size.width / 2 + locked.barsOffset
-        #expect(barsCenter == 99 - 20.5)
+        let locked = PillVisual.locked(.elapsed), processing = PillVisual.processing(afterHandsFree: true)
+        // Both pills share their center on screen while the hands-free one narrows, so the dots start at the
+        // bars' offset from that center.
+        #expect(locked.barsOffset == -20.5)
         let width = processing.size.width
+        let barsCenter = width / 2 + locked.barsOffset
         func center(at time: Double, reduceMotion: Bool = false) -> CGFloat {
             ProcessingWaveView.dotsCenterX(width: width, time: time, startOffset: processing.barsOffset,
                                            reduceMotion: reduceMotion)
@@ -411,9 +413,9 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(center(at: 0, reduceMotion: true) == width / 2 && center(at: 1, reduceMotion: true) == width / 2)
         // The dots also scale in around where the bars were, not around the pill's center.
         #expect(abs(processing.barsAnchor.x * width - barsCenter) < 1e-9)
-        #expect(PillVisual.processing(wide: false).barsAnchor == .center)
+        #expect(PillVisual.processing(afterHandsFree: false).barsAnchor == .center)
         // Push-to-talk never offsets them.
-        #expect(PillVisual.listening.barsOffset == 0 && PillVisual.processing(wide: false).barsOffset == 0)
+        #expect(PillVisual.listening.barsOffset == 0 && PillVisual.processing(afterHandsFree: false).barsOffset == 0)
     }
 
     @Test func previewInTheLastMinuteShowsTheCountdown() {
@@ -428,8 +430,8 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(PillVisual.listening.size == CGSize(width: 104, height: 32))
         #expect(PillVisual.locked(.elapsed).size == CGSize(width: 198, height: 36))
         #expect(PillVisual.locked(.remaining).size == CGSize(width: 198, height: 36))
-        #expect(PillVisual.processing(wide: true).size == CGSize(width: 198, height: 32))
-        #expect(PillVisual.processing(wide: false).size == CGSize(width: 104, height: 32))
+        #expect(PillVisual.processing(afterHandsFree: true).size == CGSize(width: 104, height: 32))
+        #expect(PillVisual.processing(afterHandsFree: false).size == CGSize(width: 104, height: 32))
         #expect(PillVisual.error.size == CGSize(width: 104, height: 32))
         #expect(PillMetrics.barFieldWidth == 69)
     }
@@ -493,13 +495,12 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(resting == PillMetrics.lockedSize)
     }
 
-    @Test func processingAfterHandsFreeKeepsItsWidth() {
+    @Test func processingAfterHandsFreeShrinksToThePushToTalkSize() {
         let model = PillModel.preview(phase: .locked)
-        let locked = PillView(model: model).visual.size
         model.phase = .processing
         let processing = PillView(model: model).visual
-        #expect(processing == .processing(wide: true))
-        #expect(processing.size.width == locked.width)
+        #expect(processing == .processing(afterHandsFree: true))
+        #expect(processing.size == PillMetrics.listeningSize)
         let pushToTalk = PillModel.preview(phase: .listening)
         pushToTalk.phase = .processing
         #expect(PillView(model: pushToTalk).visual.size.width == PillMetrics.listeningSize.width)
@@ -528,8 +529,8 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
     }
 
     @Test(arguments: [
-        [PillVisual.listening, .processing(wide: false)],
-        [PillVisual.locked(.elapsed), .processing(wide: true)],
+        [PillVisual.listening, .processing(afterHandsFree: false)],
+        [PillVisual.locked(.elapsed), .processing(afterHandsFree: true)],
         [PillVisual.listening, .error],
         [PillVisual.rest, .listening],
     ])
@@ -580,7 +581,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(stage.exitAnimation(to: .hidden, reduceMotion: false) == .linear(duration: PillMotion.exitDuration))
     }
 
-    @Test(arguments: [PillVisual.processing(wide: false), .processing(wide: true), .error, .listening,
+    @Test(arguments: [PillVisual.processing(afterHandsFree: false), .processing(afterHandsFree: true), .error, .listening,
                       .locked(.elapsed), .peek, .hello])
     func morphingToRestShrinksTheContentWithTheCapsule(from visual: PillVisual) {
         var stage = stage(after: [visual])
@@ -615,7 +616,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
     }
 
     @Test func newContentReplacesTheShrinkingOne() {
-        var stage = stage(after: [.processing(wide: false), .rest])
+        var stage = stage(after: [.processing(afterHandsFree: false), .rest])
         #expect(stage.frame(for: .peek).content == .peek)
         stage.record(.peek)
         // Hovering out again shrinks the peek dots, not the old processing wave.
@@ -623,7 +624,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
     }
 
     @Test func showingAgainDuringTheExitCancelsIt() {
-        var stage = stage(after: [.listening, .processing(wide: false)])
+        var stage = stage(after: [.listening, .processing(afterHandsFree: false)])
         stage.record(.hidden)
         let exitGeneration = stage.generation
         // A new dictation mid-exit: the pill is the new one at once, and fades back in at the entry's pace.

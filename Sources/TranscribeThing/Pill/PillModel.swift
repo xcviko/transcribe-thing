@@ -17,7 +17,7 @@ final class PillModel {
 
     /// What is on screen right now.
     private(set) var visiblePhase: PillPhase = .rest
-    /// The recording phase that preceded `.processing`; processing keeps its width.
+    /// The recording phase that preceded `.processing`: after hands-free the dots start where its bars stood.
     private(set) var processingOrigin: PillPhase = .listening
 
     /// Pointer over the pill (plus its 12 pt hover margin). Written by the controller with enter/exit delays.

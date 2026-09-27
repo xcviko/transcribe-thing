@@ -68,8 +68,9 @@ enum PillVisual: Equatable, Sendable {
     /// One-time post-onboarding bloom: listening size, bars ripple once, then rest as dots.
     case hello
     case locked(PillTimerMode)
-    /// `wide` after hands-free: keeps the hands-free width, so stopping doesn't shrink the pill.
-    case processing(wide: Bool)
+    /// Always the push-to-talk size: stopping hands-free shrinks the pill. `afterHandsFree` only starts the dots
+    /// where the hands-free bars stood, so they glide to the center as the pill narrows instead of hopping.
+    case processing(afterHandsFree: Bool)
     case error
 
     enum Content: Hashable { case empty, peek, hello, recording, processing, error }
@@ -78,10 +79,8 @@ enum PillVisual: Equatable, Sendable {
         switch self {
         case .hidden, .rest: PillMetrics.restSize
         case .peek: PillMetrics.peekSize
-        case .listening, .hello: PillMetrics.listeningSize
+        case .listening, .hello, .processing: PillMetrics.listeningSize
         case .locked: PillMetrics.lockedSize
-        case .processing(let wide): CGSize(width: wide ? PillMetrics.lockedSize.width : PillMetrics.listeningSize.width,
-                                           height: PillMetrics.listeningSize.height)
         case .error: PillMetrics.errorSize
         }
     }
@@ -112,7 +111,7 @@ enum PillVisual: Equatable, Sendable {
     /// processing after it starts its dots there too, so they don't hop sideways when Stop is pressed.
     var barsOffset: CGFloat {
         switch self {
-        case .locked, .processing(wide: true): PillMetrics.lockedBarsOffset
+        case .locked, .processing(afterHandsFree: true): PillMetrics.lockedBarsOffset
         default: 0
         }
     }
@@ -173,7 +172,7 @@ struct PillView: View {
         case .locked:
             return .locked(model.isInFinalMinute ? .remaining : .elapsed)
         case .processing:
-            return .processing(wide: model.processingOrigin == .locked)
+            return .processing(afterHandsFree: model.processingOrigin == .locked)
         case .error:
             return .error
         }
