@@ -1,6 +1,7 @@
 import Foundation
 
 struct TranscriptResult: Sendable, Equatable {
+    /// Trimmed. Empty when the engine heard no speech: silence, not a failure.
     var text: String
     var engine: EngineID
     var processingTime: TimeInterval
@@ -12,7 +13,8 @@ struct TranscriptResult: Sendable, Equatable {
     var generationID: String? = nil
 }
 
-/// Routes a recording to the local model, Gemini, or OpenRouter speech-to-text, and returns non-empty, trimmed text.
+/// Routes a recording to the local model, Gemini, or OpenRouter speech-to-text, and returns trimmed text. An engine
+/// that answers with no text heard no speech, so that comes back as an empty result, never as an error.
 @MainActor
 final class TranscriptionService {
     private let models: ModelStore
@@ -46,7 +48,6 @@ final class TranscriptionService {
                 result.generationID = cloud.generationID
             }
             result.text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !result.text.isEmpty else { throw await emptyResultError(for: recording.samples, engine: engine) }
             result.processingTime = Self.seconds(started.duration(to: .now))
             return result
         } catch let error as AppError {
@@ -129,12 +130,5 @@ final class TranscriptionService {
     nonisolated static func seconds(_ duration: Duration) -> TimeInterval {
         let parts = duration.components
         return TimeInterval(parts.seconds) + TimeInterval(parts.attoseconds) / 1e18
-    }
-
-    /// Silence that slipped past the recorder's gate reads as "no speech"; voice that produced no text is an
-    /// engine problem worth retrying elsewhere.
-    private func emptyResultError(for samples: [Float], engine: EngineID) async -> AppError {
-        let voiced = await Task.detached(priority: .userInitiated) { SilenceGuard.voicedSeconds(samples) }.value
-        return voiced < SilenceGuard.minimumVoicedSeconds ? .noSpeech : .emptyResult(engine)
     }
 }

@@ -422,14 +422,11 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
             == "Thanks for watching!")
     }
 
-    @Test func noTextOnSpeechIsEmptyResultAndOnSilenceNoSpeech() async throws {
-        let (service, _, _) = makeService([speechReply(""), speechReply("")])
-        await #expect(throws: AppError.emptyResult(.parakeetCloud)) {
-            try await service.transcribe(speech(2), engine: .parakeetCloud)
-        }
-        await #expect(throws: AppError.noSpeech) {
-            try await service.transcribe(Recording(samples: silence(2)), engine: .parakeetCloud)
-        }
+    /// No text back means no speech heard, on speech-like audio as on silence: an empty result, not an error.
+    @Test func noTextIsAnEmptyResultNotAnError() async throws {
+        let (service, _, _) = makeService([speechReply(""), speechReply("  ")])
+        #expect(try await service.transcribe(speech(2), engine: .parakeetCloud).text.isEmpty)
+        #expect(try await service.transcribe(Recording(samples: silence(2)), engine: .parakeetCloud).text.isEmpty)
     }
 
     @Test func missingKeyStopsBeforeTheNetwork() async throws {

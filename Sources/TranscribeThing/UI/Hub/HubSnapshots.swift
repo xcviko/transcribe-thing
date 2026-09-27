@@ -68,24 +68,27 @@ enum HubSnapshots {
                 c.settings.shortcuts[.pushToTalk] = .rightOption
             },
 
-            hub("hub-pill", .pillAndSounds, height: 860),
-            hub("hub-pill-handsfree", .pillAndSounds) { c in
-                c.initialPillPreview = .locked
-            },
-            hub("hub-pill-hidden", .pillAndSounds, height: 860) { c in
-                c.settings.pillMode = .always
-                c.settings.hidePill(now: Date())
-                c.settings.soundsEnabled = false
-            },
-
             hub("hub-microphone", .microphone),
             hub("hub-microphone-bluetooth", .microphone) { c in
                 c.settings.microphoneUID = "preview-airpods"
                 c.settings.preferBuiltInMicOverBluetooth = false
             },
 
-            hub("hub-general", .general, height: 1060),
-            hub("hub-general-permissions", .general, height: 1060) { c in
+            hub("hub-general", .general, height: 1080),
+            // A pill hidden from the menu bar ("Show Now"), sounds off.
+            hub("hub-general-pill-hidden", .general) { c in
+                c.fixedNow = Samples.now
+                c.settings.pillMode = .always
+                c.settings.hidePill(now: Samples.now)
+                c.settings.soundsEnabled = false
+            },
+            // The narrowest window: "Show Now" + the segmented control leave the least room for the caption.
+            hub("hub-general-pill-hidden-compact", .general, width: 820, height: 560) { c in
+                c.fixedNow = Samples.now
+                c.settings.pillMode = .always
+                c.settings.hidePill(now: Samples.now)
+            },
+            hub("hub-general-permissions", .general, height: 1080) { c in
                 c.permissions = .preview(mic: .granted, ax: .denied)
                 c.launchAtLogin = .preview()
             },
@@ -105,6 +108,10 @@ enum HubSnapshots {
     }
 
     private enum Samples {
+        /// 2:40 PM today, so the hidden pill reads "Back at 3:40 PM".
+        static var now: Date {
+            Calendar.current.date(bySettingHour: 14, minute: 40, second: 0, of: Date()) ?? Date()
+        }
         static let downloading = DownloadProgress(fraction: 0.42, bytesReceived: 265_600_000, totalBytes: 632_321_326,
                                                   bytesPerSecond: 9_800_000, secondsRemaining: 38)
     }

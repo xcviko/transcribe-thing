@@ -5,6 +5,8 @@ import Foundation
 /// transcribe-thing's UI sounds: one prepared `AVAudioPlayer` per effect so playback starts within a few ms.
 /// Not AVAudioEngine (it must never share an engine with capture, and a running engine keeps the output
 /// device busy) and not system sounds (alert volume, muted by the "UI sound effects" setting).
+/// Players stay at their full volume (1.0): each cue's level is baked into its file (scripts/gen-sounds.py),
+/// and "Play sounds" in General is the only switch.
 @MainActor
 final class SoundPlayer {
     private let settings: AppSettings
@@ -14,9 +16,9 @@ final class SoundPlayer {
     private var isPreloaded = false
 
     /// Lengths of the bundled WAVs (scripts/gen-sounds.py); used until the files are loaded.
-    private static let nominalDurations: [SoundEffect: TimeInterval] = [
-        .start: 0.11, .stop: 0.17, .lock: 0.18, .paste: 0.045,
-        .cancel: 0.16, .alert: 0.42, .error: 0.32, .success: 0.60,
+    static let nominalDurations: [SoundEffect: TimeInterval] = [
+        .start: 0.10, .stop: 0.13, .lock: 0.16, .paste: 0.045,
+        .cancel: 0.13, .alert: 0.35, .error: 0.28, .success: 0.38,
     ]
 
     init(settings: AppSettings) {
@@ -32,34 +34,20 @@ final class SoundPlayer {
     }
 
     func play(_ effect: SoundEffect) {
-        play(effect, force: false)
-    }
-
-    /// Plays even when sounds are off (the volume slider's preview in Pill & Sounds).
-    func preview(_ effect: SoundEffect) {
-        if !isPreloaded { preload() }
-        play(effect, force: true)
+        guard settings.soundsEnabled, let player = players[effect] else { return }
+        if player.isPlaying { player.stop() }
+        player.currentTime = 0
+        if !player.play() {
+            // A player bound to a vanished output device refuses to play; rebuild once.
+            reload()
+            players[effect]?.play()
+        }
     }
 
     var startSoundDuration: TimeInterval { duration(of: .start) }
 
     func duration(of effect: SoundEffect) -> TimeInterval {
         durations[effect] ?? Self.nominalDurations[effect] ?? 0.2
-    }
-
-    private func play(_ effect: SoundEffect, force: Bool) {
-        guard force || settings.soundsEnabled else { return }
-        let volume = Float(min(max(settings.soundVolume, 0), 1))
-        guard volume > 0, let player = players[effect] else { return }
-        player.volume = volume
-        if player.isPlaying { player.stop() }
-        player.currentTime = 0
-        if !player.play() {
-            // A player bound to a vanished output device refuses to play; rebuild once.
-            reload()
-            players[effect]?.volume = volume
-            players[effect]?.play()
-        }
     }
 
     private func loadPlayers() {

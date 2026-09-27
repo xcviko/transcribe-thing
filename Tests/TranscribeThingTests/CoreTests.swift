@@ -1,3 +1,4 @@
+import AVFAudio
 import AppKit
 import Foundation
 import Testing
@@ -189,11 +190,10 @@ import Testing
         .openRouterRateLimited(retryAfter: nil), .openRouterNoRoute("No endpoints found"),
         .openRouterProviderUnavailable("Provider returned error"), .openRouterRefused("Content blocked by the provider"),
         .openRouterBadRequest("Invalid audio format"), .openRouterServer("Internal server error"),
-        .timeout(.geminiFlash), .timeout(.parakeetCloud), .timeout(.parakeet), .offline, .emptyResult(.geminiPro),
-        .emptyResult(.parakeet), .emptyResult(.parakeetCloud), .noSpeech,
+        .timeout(.geminiFlash), .timeout(.parakeetCloud), .timeout(.parakeet), .offline, .noSpeech,
         .engineFailed(.parakeet, "CoreML error"), .recordingTooLarge,
         .openRouterKeyUnreadable, .openRouterKeyLimit("Key limit exceeded"),
-        .openRouterTruncated("So the plan is so the plan is so the plan is"),
+        .openRouterTruncated("So the plan is so the plan is so the plan is"), .openRouterTruncated(""),
     ]
 
     static let fallbacks: [EngineID?] = [nil, .parakeet, .parakeetCloud]
@@ -221,11 +221,7 @@ import Testing
                         #expect(recordingID != nil && error.isRetryable, "\(error): Retry without retained audio")
                     case .retryWith(let engine):
                         #expect(recordingID != nil && fallback == engine, "\(error): Retry with unexpected engine")
-                        if case .emptyResult(let failed) = error, failed.isLocal, engine.isCloud {
-                            #expect(action.title == "Try in the cloud")
-                        } else {
-                            #expect(action.title == "Retry with \(engine.shortName)")
-                        }
+                        #expect(action.title == "Retry with \(engine.shortName)")
                     case .selectEngine(let engine):
                         #expect(recordingID == nil && fallback == engine)
                     default:
@@ -254,24 +250,25 @@ import Testing
         #expect(notice.lifetime == .seconds(10))
     }
 
-    /// The same audio through the same model on this Mac gives the same nothing: no Retry, only the cloud model.
-    @Test func noTextFromTheModelOnThisMacIsNeverRetriedAsIs() {
-        let local = AppError.emptyResult(.parakeet)
-        #expect(!local.isRetryable)
-        let withKey = local.notice(recordingID: UUID(), fallbackEngine: .parakeetCloud, engine: .parakeet)
-        #expect(withKey.actions.map(\.title) == ["Try in the cloud"])
-        #expect(withKey.actions.map(\.kind) == [.retryWith(.parakeetCloud)])
-        #expect(withKey.body == "\(EngineID.parakeet.displayName) returned nothing. Your recording is saved.")
-        let alone = local.notice(recordingID: UUID(), fallbackEngine: nil, engine: .parakeet)
-        #expect(alone.actions.isEmpty, "nothing to do but dismiss it")
-        #expect(alone.body == "\(EngineID.parakeet.displayName) returned nothing.")
-        #expect(alone.lifetime == .seconds(5))
+    /// No speech is news, not a failure: the quiet info notice, nothing to retry.
+    @Test func noSpeechIsAQuietInfoNotice() {
+        let notice = AppError.noSpeech.notice(recordingID: nil, fallbackEngine: .parakeetCloud, engine: .parakeet)
+        #expect(notice.style == .info)
+        #expect(notice.title == "No speech detected")
+        #expect(notice.sound == nil)
+        #expect(notice.lifetime == .seconds(4))
+        #expect(notice.actions.isEmpty)
+        #expect(!AppError.noSpeech.isRetryable)
+    }
 
-        #expect(AppError.emptyResult(.parakeetCloud).isRetryable)
-        let cloud = AppError.emptyResult(.parakeetCloud).notice(recordingID: UUID(), fallbackEngine: .parakeet)
-        #expect(cloud.actions.map(\.kind) == [.retry, .retryWith(.parakeet)])
-        let gemini = AppError.emptyResult(.geminiFlash).notice(recordingID: UUID(), fallbackEngine: nil)
-        #expect(gemini.actions.map(\.kind) == [.retry, .openHub(.models)])
+    /// Gemini's reasoning used every output token before any text: a real failure, retryable, never silence.
+    @Test func runningOutOfTokensBeforeAnyTextIsAFailure() {
+        let notice = AppError.openRouterTruncated("").notice(recordingID: UUID(), fallbackEngine: .parakeet)
+        #expect(notice.title == "Gemini stopped before finishing")
+        #expect(notice.body == "It ran out of room before writing any text. Your recording is saved.")
+        #expect(notice.transcript == nil)
+        #expect(notice.actions.map(\.kind) == [.retry, .retryWith(.parakeet)])
+        #expect(notice.sound == .alert)
     }
 
     @Test func truncatedTranscriptIsShownNotPasted() {
@@ -337,6 +334,27 @@ import Testing
 
     @Test func errorDescriptionCombinesTitleAndBody() {
         #expect(AppError.offline.localizedDescription == "You’re offline. Gemini needs the internet.")
+    }
+}
+
+// MARK: - Sounds
+
+@Suite @MainActor struct SoundFileTests {
+    /// scripts/build-app.sh copies every Resources/Sounds/*.wav into the app: exactly one file per effect.
+    @Test func theSoundsFolderHoldsOneFilePerEffect() throws {
+        let folder = try #require(AppResources.developmentRoot).appendingPathComponent("Sounds", isDirectory: true)
+        let files = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasSuffix(".wav") }
+        #expect(Set(files) == Set(SoundEffect.allCases.map { "\($0.fileName).\(SoundEffect.fileExtension)" }))
+    }
+
+    /// SoundPlayer ducks the mic for a cue's length before the players load; that length must be the file's.
+    @Test(arguments: SoundEffect.allCases)
+    func nominalDurationMatchesTheFile(_ effect: SoundEffect) throws {
+        let url = try #require(AppResources.url(effect.fileName, ext: SoundEffect.fileExtension, subdirectory: "Sounds"))
+        let file = try AVAudioFile(forReading: url)
+        let seconds = Double(file.length) / file.fileFormat.sampleRate
+        let nominal = try #require(SoundPlayer.nominalDurations[effect])
+        #expect(abs(seconds - nominal) < 0.002, "\(effect.rawValue).wav is \(seconds) s")
     }
 }
 
@@ -418,7 +436,7 @@ import Testing
         settings.selectedEngine = .geminiPro
         settings.pillMode = .always
         settings.microphoneUID = "usb-mic"
-        settings.soundVolume = 0.25
+        settings.soundsEnabled = false
         settings.maxRecordingMinutes = 10
         var bindings = ShortcutBindings.defaults
         bindings[.pushToTalk] = .rightOption
@@ -428,7 +446,7 @@ import Testing
         #expect(reloaded.selectedEngine == .geminiPro)
         #expect(reloaded.pillMode == .always)
         #expect(reloaded.microphoneUID == "usb-mic")
-        #expect(reloaded.soundVolume == 0.25)
+        #expect(!reloaded.soundsEnabled)
         #expect(reloaded.maxRecordingMinutes == 10)
         #expect(reloaded.shortcuts[.pushToTalk] == .rightOption)
 
@@ -448,6 +466,21 @@ import Testing
         #expect(AppSettings(defaults: defaults).selectedEngine == .default)
         defaults.set(EngineID.geminiFlash.rawValue, forKey: SettingsKey.selectedEngine.defaultsKey)
         #expect(AppSettings(defaults: defaults).selectedEngine == .geminiFlash)
+    }
+
+    /// The removed volume slider: left at zero it meant no sounds; any other level now plays at full volume.
+    @Test(arguments: [(0.0, false), (0.4, true)])
+    func anOldVolumeSettingIsReadOnceThenRemoved(_ volume: Double, soundsOn: Bool) throws {
+        let suite = NSTemporaryDirectory() + "transcribe-thing-tests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(atPath: suite + ".plist")
+        }
+        defaults.set(volume, forKey: SettingsKey.soundVolume.defaultsKey)
+        #expect(AppSettings(defaults: defaults).soundsEnabled == soundsOn)
+        #expect(defaults.object(forKey: SettingsKey.soundVolume.defaultsKey) == nil)
+        #expect(AppSettings(defaults: defaults).soundsEnabled == soundsOn)
     }
 
     @Test func inMemorySettingsAreIndependent() {

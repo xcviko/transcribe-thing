@@ -31,8 +31,6 @@ final class HubContext: Observable {
     var fixedNow: Date?
     /// Pre-filled history search (snapshots of the "no matches" state).
     var initialSearch = ""
-    /// Phase the Pill & Sounds preview starts in.
-    var initialPillPreview: PillPhase = .listening
 
     init(env: AppEnvironment) {
         settings = env.settings
@@ -161,7 +159,6 @@ private struct HubRoot: View {
         case .home: HomePage()
         case .models: ModelsPage()
         case .shortcuts: ShortcutsPage()
-        case .pillAndSounds: PillSoundsPage()
         case .microphone: MicrophonePage()
         case .general: GeneralPage()
         }
@@ -195,7 +192,7 @@ private struct HubSidebar: View {
             .padding(.bottom, 18)
 
             VStack(alignment: .leading, spacing: 2) {
-                item(.home, shortcut: "1")
+                item(.home)
                 Text("SETTINGS")
                     .font(.system(size: 10.5, weight: .semibold))
                     .tracking(0.6)
@@ -203,11 +200,9 @@ private struct HubSidebar: View {
                     .padding(.horizontal, 10)
                     .padding(.top, 16)
                     .padding(.bottom, 4)
-                item(.models, shortcut: "2")
-                item(.shortcuts, shortcut: "3")
-                item(.pillAndSounds, shortcut: "4")
-                item(.microphone, shortcut: "5")
-                item(.general, shortcut: "6")
+                ForEach(HubSection.sidebar.filter { $0 != .home }) { section in
+                    item(section)
+                }
             }
             .padding(.horizontal, 10)
 
@@ -221,11 +216,12 @@ private struct HubSidebar: View {
         .background(HubPalette.sidebar)
     }
 
-    private func item(_ section: HubSection, shortcut: KeyEquivalent) -> some View {
+    /// ⌘1…⌘N follow `HubSection.sidebar`.
+    private func item(_ section: HubSection) -> some View {
         SidebarItem(section: section, isSelected: windows.hubSection == section, namespace: selection) {
             hub.show(section)
         }
-        .keyboardShortcut(shortcut, modifiers: .command)
+        .keyboardShortcut(section.shortcutDigit.map { KeyboardShortcut(KeyEquivalent($0), modifiers: .command) })
     }
 
     private var footer: some View {

@@ -63,8 +63,8 @@ import Testing
 
     // MARK: The reported loop
 
-    /// Esc before saying anything, then Undo: it used to transcribe the noise, fail with "No text came back ·
-    /// Retry", and every Retry click failed the same way under the pointer. Undo now records on instead.
+    /// Esc before saying anything, then Undo: it used to transcribe the noise, fail with an error offering Retry,
+    /// and every Retry click failed the same way under the pointer. Undo now records on instead.
     @Test func undoAfterEscWithNothingSaidRecordsOnInsteadOfTranscribing() async throws {
         let rig = Rig()
         let kept = Self.roomNoise()
@@ -88,7 +88,7 @@ import Testing
         try await Task.sleep(for: .milliseconds(200))
         #expect(rig.transcribed.isEmpty, "Undo itself never transcribes")
         #expect(rig.pasted.isEmpty)
-        #expect(rig.notice("error.emptyResult.parakeet") == nil)
+        #expect(rig.notice("error.noSpeech") == nil)
 
         // The user talks now and stops: the whole thing is transcribed once and pasted once.
         let rest = Self.speech(seconds: 2)
@@ -104,47 +104,43 @@ import Testing
         #expect(whole.speech.voicedSeconds == kept.speech.voicedSeconds + rest.speech.voicedSeconds)
     }
 
-    /// Parakeet on this Mac gives the same nothing for the same audio: no Retry, only the cloud model when the
-    /// key works.
-    @Test func noTextFromTheLocalModelOffersNoRetry() async throws {
-        for (key, expected) in [(KeyStatus.valid(KeyInfo()), [NoticeActionKind.retryWith(.parakeetCloud)]),
-                                (.missing, []), (.invalid("401"), [])] {
+    /// No text from any model means the user was silent: "No speech detected", with nothing to retry and
+    /// nothing kept, whichever model and whatever the key.
+    @Test func noTextFromAnyModelIsSilenceNotAFailure() async throws {
+        for (engine, key) in [(EngineID.parakeet, KeyStatus.valid(KeyInfo())), (.parakeet, .missing),
+                              (.parakeetCloud, .valid(KeyInfo())), (.geminiFlash, .valid(KeyInfo()))] {
             let rig = Rig(keyStatus: key)
             let r = Self.roomNoise()
-            rig.h.controller.enqueue(r, engine: .parakeet, delivery: .paste(targetPID: nil))
+            rig.h.controller.enqueue(r, engine: engine, delivery: .paste(targetPID: nil))
             try await waitUntil { rig.h.controller.machine.activeJobs == 0 }
-            let notice = try #require(rig.notice("error.emptyResult.parakeet"))
-            #expect(notice.actions.map(\.kind) == expected, "\(key)")
-            #expect(notice.actions.first.map(\.title) == (expected.isEmpty ? nil : "Try in the cloud"))
+            let notice = try #require(rig.notice("error.noSpeech"), "\(engine)")
+            #expect(notice.actions.isEmpty, "\(engine)")
+            #expect(notice.sound == nil)
+            #expect(rig.h.toasts.notices.count == 1, "no failure notice besides it")
             #expect(rig.transcribed.count == 1)
-            #expect(rig.h.history.entry(id: r.id)?.status == .failed, "kept in history for the Hub's Retry With")
+            #expect(rig.h.history.entries.isEmpty, "\(engine): silence isn't kept in history")
+            #expect(rig.pasted.isEmpty)
         }
-    }
-
-    @Test func noTextFromACloudModelStillOffersRetry() async throws {
-        let rig = Rig(keyStatus: .valid(KeyInfo()))
-        rig.h.controller.enqueue(Self.roomNoise(), engine: .parakeetCloud, delivery: .paste(targetPID: nil))
-        try await waitUntil { rig.h.controller.machine.activeJobs == 0 }
-        let notice = try #require(rig.notice("error.emptyResult.parakeetCloud"))
-        #expect(notice.actions.first?.kind == .retry)
     }
 
     /// Clicking Retry again and again on a failure that comes straight back plays its sound once per 2 s.
     @Test func aRepeatedFailureReplaysItsSoundAtMostEveryTwoSeconds() async throws {
         let rig = Rig(keyStatus: .valid(KeyInfo()))
-        rig.h.controller.enqueue(Self.roomNoise(), engine: .geminiFlash, delivery: .paste(targetPID: nil))
-        try await waitUntil { rig.notice("error.emptyResult.geminiFlash") != nil }
-        #expect(rig.notice("error.emptyResult.geminiFlash")?.sound == .alert)
+        rig.result = { _, engine in throw AppError.timeout(engine) }
+        let key = "error.timeout.geminiFlash"
+        rig.h.controller.enqueue(Self.speech(seconds: 1), engine: .geminiFlash, delivery: .paste(targetPID: nil))
+        try await waitUntil { rig.notice(key) != nil }
+        #expect(rig.notice(key)?.sound == .error)
 
         var sounds: [SoundEffect?] = []
         for step in [0.3, 0.3, 0.3, 1.5, 0.3] {
             rig.now += step
-            let before = try #require(rig.notice("error.emptyResult.geminiFlash")).id
-            try rig.click(.retry, in: "error.emptyResult.geminiFlash")
-            try await waitUntil { rig.notice("error.emptyResult.geminiFlash").map { $0.id != before } ?? false }
-            sounds.append(rig.notice("error.emptyResult.geminiFlash")?.sound)
+            let before = try #require(rig.notice(key)).id
+            try rig.click(.retry, in: key)
+            try await waitUntil { rig.notice(key).map { $0.id != before } ?? false }
+            sounds.append(rig.notice(key)?.sound)
         }
-        #expect(sounds == [nil, nil, nil, .alert, nil], "quiet until 2 s after the last sound")
+        #expect(sounds == [nil, nil, nil, .error, nil], "quiet until 2 s after the last sound")
         #expect(rig.transcribed.count == 6, "one transcription per click, never more")
     }
 
@@ -321,7 +317,7 @@ import Testing
     // MARK: Sequences that used to (or could) loop
 
     /// Esc before saying anything, Undo, Esc again, Undo again: nothing is transcribed until the user stops, and
-    /// the empty result from the model on this Mac then offers nothing to click again.
+    /// the model's empty answer then reads as no speech, with nothing to click again.
     @Test func escUndoEscUndoWithNothingSaidNeverTranscribesUntilStopped() async throws {
         let rig = Rig()
         let first = Self.roomNoise()
@@ -343,10 +339,11 @@ import Testing
         rig.h.recorder.next = Self.roomNoise(seconds: 1)
         rig.now += 1
         rig.h.controller.send(.pillStop)
-        try await waitUntil { rig.notice("error.emptyResult.parakeet") != nil && rig.h.controller.machine.activeJobs == 0 }
+        try await waitUntil { rig.notice("error.noSpeech") != nil && rig.h.controller.machine.activeJobs == 0 }
         #expect(rig.transcribed.count == 1)
         #expect(rig.transcribed.first?.duration == 2.5)
-        #expect(rig.notice("error.emptyResult.parakeet")?.actions.isEmpty == true)
+        #expect(rig.notice("error.noSpeech")?.actions.isEmpty == true)
+        #expect(rig.h.history.entries.isEmpty)
         try await Task.sleep(for: .milliseconds(300))
         #expect(rig.transcribed.count == 1, "nothing re-queues it on its own")
         #expect(rig.pasted.isEmpty)
@@ -355,9 +352,10 @@ import Testing
     /// Two quick clicks on the same Retry (the toast hasn't gone yet): one retry.
     @Test func doubleClickingRetryOnACloudFailureRetriesOnce() async throws {
         let rig = Rig(keyStatus: .valid(KeyInfo()))
-        rig.h.controller.enqueue(Self.roomNoise(), engine: .geminiFlash, delivery: .paste(targetPID: nil))
-        try await waitUntil { rig.notice("error.emptyResult.geminiFlash") != nil && rig.h.controller.machine.activeJobs == 0 }
-        let failed = try #require(rig.notice("error.emptyResult.geminiFlash"))
+        rig.result = { _, _ in throw AppError.openRouterServer("HTTP 500") }
+        rig.h.controller.enqueue(Self.speech(seconds: 1), engine: .geminiFlash, delivery: .paste(targetPID: nil))
+        try await waitUntil { rig.notice("error.openRouterServer") != nil && rig.h.controller.machine.activeJobs == 0 }
+        let failed = try #require(rig.notice("error.openRouterServer"))
         let retry = try #require(failed.actions.first { $0.kind == .retry })
         rig.result = { _, _ in
             try await Task.sleep(for: .milliseconds(100))
@@ -369,6 +367,49 @@ import Testing
         try await Task.sleep(for: .milliseconds(200))
         #expect(rig.transcribed.count == 2, "the failure and one retry")
         #expect(rig.pasted == ["second time lucky"])
+    }
+
+    /// A retry (from the notice or the Hub) that hears no speech takes the failed row and its audio along, and
+    /// says so even after the day's quiet "No speech detected" notices are used up.
+    @Test func aRetryThatHearsNoSpeechTakesItsFailedRowAlong() async throws {
+        for fromHub in [false, true] {
+            let rig = Rig(keyStatus: .valid(KeyInfo()))
+            let failing = Self.speech(seconds: 1)
+            rig.result = { recording, engine in
+                if recording.id == failing.id, rig.transcribed.count == 1 { throw AppError.timeout(engine) }
+                return ""
+            }
+            rig.h.controller.enqueue(failing, engine: .geminiFlash, delivery: .paste(targetPID: nil))
+            try await waitUntil { rig.h.history.entry(id: failing.id)?.status == .failed && rig.h.controller.machine.activeJobs == 0 }
+            let failed = try #require(rig.notice("error.timeout.geminiFlash"))
+
+            // Three silent dictations use up the day's quiet notices.
+            for _ in 0..<3 {
+                rig.h.toasts.dismiss(dedupeKey: "error.noSpeech")
+                rig.h.controller.enqueue(Self.roomNoise(), engine: .parakeet, delivery: .paste(targetPID: nil))
+                try await waitUntil { rig.notice("error.noSpeech") != nil && rig.h.controller.machine.activeJobs == 0 }
+            }
+            rig.h.toasts.dismiss(dedupeKey: "error.noSpeech")
+            rig.h.controller.enqueue(Self.roomNoise(), engine: .parakeet, delivery: .paste(targetPID: nil))
+            try await waitUntil { rig.h.controller.machine.activeJobs == 0 }
+            #expect(rig.notice("error.noSpeech") == nil, "a fourth silent dictation today stays quiet")
+
+            if fromHub {
+                let entry = try #require(rig.h.history.entry(id: failing.id))
+                rig.h.controller.retry(entry, with: .parakeetCloud)
+            } else {
+                let retry = try #require(failed.actions.first { $0.kind == .retry })
+                rig.h.toasts.perform(retry, on: failed)
+            }
+            try await waitUntil { rig.h.history.entry(id: failing.id) == nil && rig.h.controller.machine.activeJobs == 0 }
+            #expect(rig.notice("error.noSpeech") != nil, "fromHub \(fromHub): the row went, so say why")
+            #expect(rig.h.history.entries.isEmpty)
+            #expect(rig.pasted.isEmpty)
+
+            // Its audio is gone too: nothing left to retry.
+            rig.h.controller.perform(NoticeAction(title: "Retry", kind: .retry), from: failed)
+            #expect(rig.notice("recording.gone") != nil)
+        }
     }
 
     /// Two quick clicks on Undo: one resumed recording.

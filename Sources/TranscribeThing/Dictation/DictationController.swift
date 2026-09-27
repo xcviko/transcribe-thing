@@ -404,13 +404,19 @@ final class DictationController {
             return false
         }
         if recording.speech.voicedSeconds < Self.minimumVoicedSeconds {
-            if noSpeechQuota.take() {
-                postFailure(AppError.noSpeech.notice(recordingID: nil, fallbackEngine: nil))
-            }
-            flash(.error)
+            reportNoSpeech()
             return false
         }
         return true
+    }
+
+    /// "No speech detected": an info notice without a sound (at most `noSpeechQuota` a day, unless `always`) and
+    /// the pill's shake. Shared by recordings the recorder finds speechless and engines that answer with no text.
+    private func reportNoSpeech(always: Bool = false) {
+        if always || noSpeechQuota.take() {
+            postFailure(AppError.noSpeech.notice(recordingID: nil, fallbackEngine: nil))
+        }
+        flash(.error)
     }
 
     private func cancelCapture(keepForUndo: Bool, notify: Bool) {
@@ -709,12 +715,15 @@ final class DictationController {
     private func deliver(_ job: Job, _ outcome: Outcome) async {
         guard let recording = job.recording else { return }
         switch outcome {
+        case .failure(.noSpeech):
+            deliverSilence(job)
         case .failure(let error):
             deliverFailure(job, error)
         case .success(let result):
             let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            // The engine answered and heard nothing: the user was silent. Not an error.
             guard !text.isEmpty else {
-                deliverFailure(job, .emptyResult(result.engine))
+                deliverSilence(job)
                 return
             }
             forget(job.id)
@@ -756,6 +765,17 @@ final class DictationController {
             entry.provider = name
             self.history.upsert(entry)
         }
+    }
+
+    /// A recording that turned out to be silence leaves nothing behind: no history entry, no kept audio, no
+    /// Retry. One that already had a failed or canceled row (a retry, a resumed dictation) takes the row and its
+    /// audio along, and always gets the notice, so a row never vanishes without a word.
+    private func deliverSilence(_ job: Job) {
+        forget(job.id)
+        let hadRow = history.entry(id: job.id).map { $0.status != .success } ?? false
+        if hadRow { history.delete(job.id) }
+        Log.engine.info("No speech from \(job.engine.rawValue, privacy: .public)")
+        reportNoSpeech(always: hadRow)
     }
 
     private func deliverFailure(_ job: Job, _ error: AppError) {

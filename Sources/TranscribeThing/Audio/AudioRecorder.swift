@@ -142,7 +142,7 @@ final class AudioRecorder {
     func duckRecording(from: TimeInterval, duration: TimeInterval) {
         guard let session, duration > 0 else { return }
         // No ping plays, so there is nothing to keep out; never dull the user's first words for nothing.
-        if let settings, !settings.soundsEnabled || settings.soundVolume <= 0 { return }
+        if let settings, !settings.soundsEnabled { return }
         guard CoreAudioHAL.isDefaultOutputBuiltInSpeaker() else { return }
         let now = AudioClock.now()
         let start: TimeInterval

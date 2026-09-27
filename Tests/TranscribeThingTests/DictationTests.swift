@@ -778,15 +778,66 @@ final class FakeRecorder: DictationRecorder {
         #expect(notice.actions.contains { $0.kind == .retryWith(.parakeet) })
     }
 
-    @Test func emptyTextBecomesAnError() async throws {
+    /// An engine that answers with no text heard no speech: exactly what a speechless recording gets before any
+    /// engine (the quiet notice and the pill's shake), and nothing is kept.
+    @Test func emptyTextIsSilenceNotAnError() async throws {
+        let preflight = Self.make()
+        preflight.recorder.next = Recording(samples: Array(repeating: 0.01, count: 32_000),
+                                            speech: SpeechStats(voicedSeconds: 0.1, peakDBFS: -40, isSilent: false))
+        preflight.controller.send(.handsFreeToggle)
+        preflight.controller.send(.pillStop)
+        try await waitUntil { preflight.controller.machine.activeJobs == 0 && !preflight.toasts.notices.isEmpty }
+        let expected = try #require(preflight.toasts.notices.first)
+        #expect(preflight.pill.visiblePhase == .error)
+
+        for engine in [EngineID.parakeet, .parakeetCloud, .geminiFlash, .geminiPro] {
+            let h = Self.make(keyStatus: .valid(KeyInfo()))
+            h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "  \n", engine: engine, processingTime: 0.1) }
+            h.controller.insertOverride = { _, _ in Issue.record("nothing should be pasted"); return .pasted }
+            let r = Self.recording()
+            h.controller.enqueue(r, engine: engine, delivery: .paste(targetPID: nil))
+            try await waitUntil { h.controller.machine.activeJobs == 0 }
+            #expect(h.history.entries.isEmpty, "\(engine): silence leaves no history entry")
+            #expect(h.toasts.notices.count == 1)
+            let notice = try #require(h.toasts.notices.first)
+            #expect(notice.dedupeKey == expected.dedupeKey && notice.title == expected.title && notice.body == expected.body)
+            #expect(notice.style == .info && notice.sound == nil && notice.lifetime == expected.lifetime)
+            #expect(notice.actions.isEmpty && notice.recordingID == nil, "no Retry")
+            #expect(h.pill.visiblePhase == .error, "the same shake as a recording with no speech")
+
+            // No audio was kept: a Retry for it finds nothing.
+            h.controller.perform(NoticeAction(title: "Retry", kind: .retry),
+                                 from: Notice(dedupeKey: "test", style: .error, symbol: "x", title: "x", recordingID: r.id))
+            #expect(h.toasts.notices.contains { $0.dedupeKey == "recording.gone" })
+        }
+    }
+
+    /// An engine error is still an error: kept for Retry, in history, with its own notice.
+    @Test func anEngineErrorIsNotTakenForSilence() async throws {
         let h = Self.make()
-        h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "  \n", engine: engine, processingTime: 0.1) }
-        h.controller.insertOverride = { _, _ in Issue.record("nothing should be pasted"); return .pasted }
+        h.controller.transcribeOverride = { _, engine in throw AppError.engineFailed(engine, "CoreML error") }
         let r = Self.recording()
         h.controller.enqueue(r, engine: .parakeet, delivery: .paste(targetPID: nil))
         try await waitUntil { h.controller.machine.activeJobs == 0 }
         #expect(h.history.entry(id: r.id)?.status == .failed)
-        #expect(h.toasts.notices.contains { $0.dedupeKey == "error.emptyResult.parakeet" })
+        let notice = try #require(h.toasts.notices.first { $0.dedupeKey == "error.engineFailed.parakeet" })
+        #expect(notice.actions.first?.kind == .retry)
+        #expect(!h.toasts.notices.contains { $0.dedupeKey == "error.noSpeech" })
+    }
+
+    /// Engine silence and speechless recordings share the day's three quiet notices; the shake always comes.
+    @Test func engineSilenceSharesTheNoSpeechQuota() async throws {
+        let h = Self.make()
+        h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "", engine: engine, processingTime: 0.1) }
+        var shown: [Bool] = []
+        for _ in 0..<4 {
+            h.toasts.dismissAll()
+            h.controller.enqueue(Self.recording(), engine: .parakeet, delivery: .paste(targetPID: nil))
+            try await waitUntil { h.controller.machine.activeJobs == 0 }
+            shown.append(h.toasts.notices.contains { $0.dedupeKey == "error.noSpeech" })
+        }
+        #expect(shown == [true, true, true, false])
+        #expect(h.history.entries.isEmpty)
     }
 
     @Test func noEditableTargetShowsTheTranscriptCard() async throws {

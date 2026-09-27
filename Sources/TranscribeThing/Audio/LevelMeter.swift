@@ -141,7 +141,7 @@ final class LevelMeter: @unchecked Sendable {
     // MARK: Preview
 
     /// A meter that ignores input and reports a gently moving level around `level` (for snapshots and
-    /// the Pill & Sounds preview stage).
+    /// illustrations).
     static func preview(level: Float) -> LevelMeter {
         preview(level: level, animated: true)
     }

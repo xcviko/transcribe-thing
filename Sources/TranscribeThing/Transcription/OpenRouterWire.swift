@@ -345,7 +345,8 @@ enum OpenRouterErrorMapper {
     }
 
     /// Interprets a 200 response. Failures can still arrive with 200: a top-level `error`, an error in the
-    /// choice, or a finish reason of error / content_filter / length.
+    /// choice, or a finish reason of error / content_filter / length. Empty text on a normal finish is returned
+    /// as is: Gemini heard no speech.
     static func success(data: Data, engine: EngineID) throws -> CloudResult {
         let decoded: OpenRouterChatResponse
         do {
@@ -366,10 +367,9 @@ enum OpenRouterErrorMapper {
         case "content_filter":
             let reason = choice.message?.refusal ?? choice.nativeFinishReason.map { "Stopped by the safety filter (\($0))." }
             throw AppError.openRouterRefused(reason ?? "Stopped by the safety filter.")
-        case "length" where text.isEmpty:
-            throw AppError.emptyResult(engine)
         case "length":
-            // Out of output tokens mid-transcript: a repetition loop or a cut-off ending. Never pasted as if whole.
+            // Out of output tokens: a repetition loop, a cut-off ending, or reasoning that used every token before
+            // any text (empty `text`). Never pasted as if whole, and never taken for silence.
             throw AppError.openRouterTruncated(text)
         default:
             break

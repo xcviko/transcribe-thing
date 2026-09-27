@@ -35,8 +35,6 @@ final class AppSettings {
     var pillMode: PillMode = .whileDictating { didSet { store.set(pillMode.rawValue, .pillMode) } }
     var pillHiddenUntil: Date? = nil { didSet { store.set(pillHiddenUntil, .pillHiddenUntil) } }
     var soundsEnabled: Bool = true { didSet { store.set(soundsEnabled, .soundsEnabled) } }
-    /// 0...1
-    var soundVolume: Double = 0.6 { didSet { store.set(min(max(soundVolume, 0), 1), .soundVolume) } }
     /// nil = follow the system default input.
     var microphoneUID: String? = nil { didSet { store.set(microphoneUID, .microphoneUID) } }
     var preferBuiltInMicOverBluetooth: Bool = true { didSet { store.set(preferBuiltInMicOverBluetooth, .preferBuiltInMicOverBluetooth) } }
@@ -115,7 +113,15 @@ final class AppSettings {
         if let v = store.string(.pillMode).flatMap(PillMode.init(rawValue:)) { pillMode = v }
         pillHiddenUntil = store.date(.pillHiddenUntil)
         if let v = store.bool(.soundsEnabled) { soundsEnabled = v }
-        if let v = store.double(.soundVolume) { soundVolume = min(max(v, 0), 1) }
+        // Older builds had a volume slider; sounds now play at their files' own level. A slider left at zero
+        // meant no sounds, so it turns "Play sounds" off once, and the old key goes.
+        if let volume = store.double(.soundVolume) {
+            if volume <= 0, soundsEnabled {
+                soundsEnabled = false
+                store.set(false, .soundsEnabled)
+            }
+            store.remove(.soundVolume)
+        }
         microphoneUID = store.string(.microphoneUID)
         if let v = store.bool(.preferBuiltInMicOverBluetooth) { preferBuiltInMicOverBluetooth = v }
         if let v = store.bool(.showDockIcon) { showDockIcon = v }
@@ -133,6 +139,7 @@ final class AppSettings {
 
 enum SettingsKey: String, CaseIterable {
     /// `onboardingStep` holds a six-step index from older builds, read once and moved to `onboardingResumeStep`.
+    /// `soundVolume` is the removed volume slider's, read once (zero turns sounds off) and removed.
     case onboardingCompleted, onboardingStep, onboardingResumeStep, selectedEngine, pillMode, pillHiddenUntil
     case soundsEnabled, soundVolume, microphoneUID, preferBuiltInMicOverBluetooth, showDockIcon
     case geminiSystemPrompt, maxRecordingMinutes, doublePressForHandsFree

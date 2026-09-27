@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Startup, recording limits, history retention, permissions and About.
+/// Startup, the pill and sounds, recording limits, history retention, permissions and About.
 struct GeneralPage: View {
     @Environment(HubContext.self) private var hub
     @Environment(AppSettings.self) private var settings
@@ -13,7 +13,7 @@ struct GeneralPage: View {
 
     var body: some View {
         @Bindable var settings = settings
-        HubPage("General", subtitle: "Startup, recording, history and permissions.") {
+        HubPage("General", subtitle: "Startup, pill and sounds, recording, history and permissions.") {
             HubGroup("Startup") {
                 SettingsGroup {
                     SettingsRow(title: "Open \(Brand.name) at login", subtitle: loginSubtitle, systemImage: "power",
@@ -32,6 +32,18 @@ struct GeneralPage: View {
                                 subtitle: "\(Brand.name) always stays in the menu bar.",
                                 systemImage: "dock.rectangle", iconTint: .inkSecondary) {
                         Toggle("", isOn: showInDock)
+                            .toggleStyle(.appSwitch)
+                            .labelsHidden()
+                    }
+                }
+            }
+            HubGroup("Pill & Sounds") {
+                SettingsGroup {
+                    pillRow
+                    SettingsRow(title: "Play sounds", subtitle: "Soft clicks when recording starts, stops and pastes.",
+                                systemImage: settings.soundsEnabled ? "speaker.wave.2" : "speaker.slash",
+                                iconTint: .inkSecondary) {
+                        Toggle("", isOn: playSounds)
                             .toggleStyle(.appSwitch)
                             .labelsHidden()
                     }
@@ -109,6 +121,38 @@ struct GeneralPage: View {
         } message: {
             Text("This can’t be undone.")
         }
+    }
+
+    /// "Hide for 1 Hour" lives in the menu bar and the pill's menu; here a hidden pill only gets "Show Now".
+    @ViewBuilder private var pillRow: some View {
+        let hidden = settings.pillMode != .never && settings.isPillTemporarilyHidden(now: hub.now)
+        SettingsRow(title: "Show the pill",
+                    subtitle: PillCaption.text(settings.pillMode, hiddenUntil: settings.pillHiddenUntil, now: hub.now),
+                    systemImage: hidden ? "eye.slash" : "capsule", iconTint: .inkSecondary) {
+            HStack(spacing: 10) {
+                if hidden {
+                    Button("Show Now") {
+                        withAnimation(Theme.Motion.snappy) { settings.pillHiddenUntil = nil }
+                    }
+                    .buttonStyle(.appQuiet)
+                    .fixedSize()
+                }
+                HubSegmentedPicker(options: PillMode.allCases, selection: settings.pillMode, label: \.title) { mode in
+                    // Like the menu: choosing a mode, even the current one, brings a hidden pill back.
+                    settings.pillMode = mode
+                    settings.pillHiddenUntil = nil
+                }
+                .accessibilityLabel("Show the pill")
+            }
+        }
+    }
+
+    private var playSounds: Binding<Bool> {
+        Binding(get: { settings.soundsEnabled }, set: { on in
+            settings.soundsEnabled = on
+            // Turning sounds on plays one, so you hear what you chose.
+            if on, !hub.isPreview { hub.sounds.play(.start) }
+        })
     }
 
     private var openAtLogin: Binding<Bool> {

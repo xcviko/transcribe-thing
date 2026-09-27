@@ -85,7 +85,7 @@ final class PillModel {
         self.shortcutHint = settings.shortcuts[.pushToTalk]?.compactDescription ?? "fn"
     }
 
-    /// A model frozen in one phase, for snapshots and illustrations (onboarding, Pill & Sounds preview).
+    /// A model frozen in one phase, for snapshots and illustrations (onboarding).
     static func preview(phase: PillPhase, level: Float = 0.55, isHovering: Bool = false,
                         recordingFor elapsed: TimeInterval? = nil, limitSeconds: TimeInterval? = nil,
                         levelMeter: LevelMeter? = nil) -> PillModel {

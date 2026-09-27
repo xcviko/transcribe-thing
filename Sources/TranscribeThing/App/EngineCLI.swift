@@ -17,6 +17,8 @@ import Foundation
 /// (ModelStore → InferenceGate → engine, or OpenRouterClient). Cloud engines read the key from
 /// OPENROUTER_API_KEY, else from the Keychain; cloud Parakeet also prints the provider that served the request.
 /// `--prompt` applies to Gemini only. Settings are in-memory: the CLI never changes the app's.
+/// An engine that answers with no text heard no speech: that prints `NO SPEECH` instead of `TEXT:` and exits 0,
+/// like any other answer. Only real failures print `ERROR:` and exit non-zero.
 enum EngineCLI {
     static func handles(_ arguments: [String]) -> Bool {
         arguments.contains("--transcribe") || arguments.contains("--model-status")
@@ -183,7 +185,7 @@ enum EngineCLI {
                 let expected = options.engine.provider.map { " · expected \($0)" } ?? ""
                 print("PROVIDER: \(provider ?? "unknown")\(expected)")
             }
-            print("TEXT: \(last.text)")
+            print(last.text.isEmpty ? "NO SPEECH" : "TEXT: \(last.text)")
             if let best = runTimes.min() { print("TRANSCRIBE: first \(format(runTimes[0], digits: 3)) s · best \(format(best, digits: 3)) s") }
         }
         return ExitCode.ok

@@ -392,3 +392,31 @@ enum RetentionChoice {
         }
     }
 }
+
+// MARK: - Sidebar
+
+extension HubSection {
+    /// Sidebar pages, top to bottom. ⌘1…⌘N follow this order.
+    static let sidebar: [HubSection] = [.home, .models, .shortcuts, .microphone, .general]
+
+    /// The digit of the ⌘-shortcut that opens this page ("1" for Home), or nil when it has no sidebar item.
+    var shortcutDigit: Character? {
+        HubSection.sidebar.firstIndex(of: self).map { Character(String($0 + 1)) }
+    }
+}
+
+// MARK: - Pill
+
+enum PillCaption {
+    /// The line under "Show the pill" in General: what the chosen mode does, or when a hidden pill comes back.
+    static func text(_ mode: PillMode, hiddenUntil: Date?, now: Date) -> String {
+        if mode != .never, let hiddenUntil, hiddenUntil > now {
+            return "Hidden for now. Back at \(Fmt.time(hiddenUntil))."
+        }
+        return switch mode {
+        case .always: "A slim bar waits at the bottom of the screen."
+        case .whileDictating: "Appears when you start talking, then steps aside."
+        case .never: "Nothing on screen while you dictate. Notices still appear."
+        }
+    }
+}

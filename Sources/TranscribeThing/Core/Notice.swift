@@ -143,7 +143,7 @@ enum SettingsPane: String, Sendable {
 }
 
 enum HubSection: String, CaseIterable, Sendable, Identifiable {
-    case home, models, shortcuts, pillAndSounds, microphone, general
+    case home, models, shortcuts, microphone, general
 
     var id: String { rawValue }
 
@@ -152,7 +152,6 @@ enum HubSection: String, CaseIterable, Sendable, Identifiable {
         case .home: "Home"
         case .models: "Models"
         case .shortcuts: "Shortcuts"
-        case .pillAndSounds: "Pill & Sounds"
         case .microphone: "Microphone"
         case .general: "General"
         }
@@ -163,7 +162,6 @@ enum HubSection: String, CaseIterable, Sendable, Identifiable {
         case .home: "house"
         case .models: "square.stack.3d.up"
         case .shortcuts: "keyboard"
-        case .pillAndSounds: "capsule"
         case .microphone: "mic"
         case .general: "gearshape"
         }
@@ -209,11 +207,13 @@ enum AppError: Error, Equatable, Sendable {
     /// 400, 413, 422.
     case openRouterBadRequest(String)
     case openRouterServer(String)
-    /// Gemini ran out of output tokens mid-transcript (a repetition loop or a cut-off ending); the partial text.
+    /// Gemini ran out of output tokens (a repetition loop, a cut-off ending, or reasoning that used them all);
+    /// the partial text, empty when it wrote none.
     case openRouterTruncated(String)
     case timeout(EngineID)
     case offline
-    case emptyResult(EngineID)
+    /// Not a failure: the recording had no speech (too little voice for the recorder, or an engine that answered
+    /// with no text). An info notice, never a history entry or a retry.
     case noSpeech
     case engineFailed(EngineID, String)
     case recordingTooLarge
@@ -221,9 +221,6 @@ enum AppError: Error, Equatable, Sendable {
     /// Re-running the same recording on the same engine could succeed.
     var isRetryable: Bool {
         switch self {
-        case .emptyResult(let engine):
-            // A local model is deterministic: the same audio gives the same nothing. A cloud one may not.
-            engine.isCloud
         case .microphoneDisconnected,
              .modelDownloading, .modelPreparing, .modelLoadFailed,
              .openRouterRateLimited, .openRouterProviderUnavailable, .openRouterServer, .openRouterTruncated,
@@ -265,7 +262,7 @@ enum AppError: Error, Equatable, Sendable {
              .openRouterMissingKey, .openRouterKeyUnreadable, .openRouterInvalidKey, .openRouterNoCredits,
              .openRouterKeyLimit, .openRouterRateLimited, .openRouterNoRoute, .openRouterProviderUnavailable,
              .openRouterRefused, .openRouterBadRequest, .openRouterServer, .openRouterTruncated, .timeout, .offline,
-             .emptyResult, .engineFailed, .recordingTooLarge:
+             .engineFailed, .recordingTooLarge:
             true
         case .microphonePermissionDenied, .noMicrophone, .microphoneNotResponding, .microphoneDisconnected,
              .microphoneSilent, .accessibilityMissing, .downloadFailed, .notEnoughDisk, .noSpeech:
@@ -302,7 +299,6 @@ enum AppError: Error, Equatable, Sendable {
         case .openRouterTruncated: "openRouterTruncated"
         case .timeout(let e): "timeout.\(e.rawValue)"
         case .offline: "offline"
-        case .emptyResult(let e): "emptyResult.\(e.rawValue)"
         case .noSpeech: "noSpeech"
         case .engineFailed(let e, _): "engineFailed.\(e.rawValue)"
         case .recordingTooLarge: "recordingTooLarge"
@@ -350,8 +346,7 @@ extension AppError {
         let canRetry = hasAudio && isRetryable
         let retryTitle = if case .microphoneDisconnected = self { "Transcribe It" } else { "Retry" }
         let retryWith: (String, NoticeActionKind)? = if hasAudio, fallbackCanHelp, let fallback {
-            (isLocalEmptyResult && fallback.isCloud ? "Try in the cloud" : "Retry with \(fallback.shortName)",
-             .retryWith(fallback))
+            ("Retry with \(fallback.shortName)", .retryWith(fallback))
         } else { nil }
         let switchEngine: (String, NoticeActionKind)? = if !hasAudio, copy.offersSwitch, let fallback {
             ("Use \(fallback.shortName)", .selectEngine(fallback))
@@ -403,11 +398,6 @@ extension AppError {
         )
     }
 
-    /// The model on this Mac heard audio and returned no text: retrying it can't help, only another model can.
-    private var isLocalEmptyResult: Bool {
-        if case .emptyResult(let engine) = self { engine.isLocal } else { false }
-    }
-
     /// Text that came back but wasn't pasted, shown in the notice so it can still be copied.
     private var partialTranscript: String? {
         if case .openRouterTruncated(let text) = self, !text.isEmpty { text } else { nil }
@@ -416,8 +406,7 @@ extension AppError {
     private var failingEngine: EngineID? {
         switch self {
         case .modelNotDownloaded(let e), .modelDownloading(let e, _), .modelPreparing(let e),
-             .modelLoadFailed(let e, _), .downloadFailed(let e, _), .timeout(let e),
-             .emptyResult(let e), .engineFailed(let e, _):
+             .modelLoadFailed(let e, _), .downloadFailed(let e, _), .timeout(let e), .engineFailed(let e, _):
             e
         case .openRouterMissingKey, .openRouterKeyUnreadable, .openRouterInvalidKey, .openRouterNoCredits,
              .openRouterKeyLimit, .openRouterRateLimited, .openRouterNoRoute, .openRouterProviderUnavailable,
@@ -612,7 +601,8 @@ extension AppError {
         case .openRouterTruncated:
             return Copy(style: .warning, symbol: "text.badge.xmark",
                         title: "\(cloud.service) stopped before finishing",
-                        body: "The text may be cut off or repeat itself, so it wasn’t pasted.",
+                        body: partialTranscript == nil ? "It ran out of room before writing any text."
+                            : "The text may be cut off or repeat itself, so it wasn’t pasted.",
                         fixes: partialTranscript.map { [Fix(title: "Copy", kind: .copyText($0))] } ?? [],
                         sound: .alert)
         case .timeout(let e):
@@ -627,13 +617,6 @@ extension AppError {
                         title: "You’re offline",
                         body: "\(cloud.service) needs the internet.",
                         order: .fallbackFirst, offersSwitch: true)
-        case .emptyResult(let e):
-            // On this Mac only the cloud model is worth a try (offered when the key works); otherwise it's just news.
-            return Copy(style: .warning, symbol: "text.badge.xmark",
-                        title: "No text came back",
-                        body: "\(e.displayName) returned nothing.",
-                        fixes: e.isLocal ? [] : [Fix(title: "Try Another Model", kind: .openHub(.models))],
-                        sound: .alert)
         case .noSpeech:
             return Copy(style: .info, symbol: "waveform",
                         title: "No speech detected",

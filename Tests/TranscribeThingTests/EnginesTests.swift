@@ -187,7 +187,7 @@ struct OKBodyCase: Sendable, CustomTestStringConvertible {
                    expected: .openRouterRefused("I can't help with that.")),
         OKBodyCase(name: "reasoning used every token",
                    body: #"{"choices":[{"finish_reason":"length","message":{"content":""}}]}"#,
-                   expected: .emptyResult(.geminiPro)),
+                   expected: .openRouterTruncated("")),
         OKBodyCase(name: "no choices", body: #"{"id":"gen-2"}"#,
                    expected: .openRouterServer("OpenRouter sent no transcript.")),
         OKBodyCase(name: "not JSON", body: "<html>oops</html>",
@@ -217,9 +217,11 @@ struct OKBodyCase: Sendable, CustomTestStringConvertible {
     }
 
     @Test func emptyTranscriptFromStopReadsAsEmpty() throws {
-        let result = try OpenRouterErrorMapper.success(
-            data: Data(#"{"choices":[{"finish_reason":"stop","message":{"content":"   "}}]}"#.utf8), engine: .geminiFlash)
-        #expect(result.text.isEmpty, "TranscriptionService turns empty text into noSpeech or emptyResult")
+        for content in [#""   ""#, "null"] {
+            let body = #"{"choices":[{"finish_reason":"stop","message":{"content":"# + content + "}}]}"
+            let result = try OpenRouterErrorMapper.success(data: Data(body.utf8), engine: .geminiFlash)
+            #expect(result.text.isEmpty, "Gemini finished normally and heard no speech: silence, not a failure")
+        }
     }
 
     @Test func contentAsPartsIsJoined() throws {
@@ -799,30 +801,6 @@ enum Fixtures {
     }
 }
 
-// MARK: - Silence check
-
-@Suite struct SilenceGuardTests {
-    private func tone(seconds: Double, amplitude: Float = 0.1) -> [Float] {
-        (0..<Int(seconds * 16_000)).map { amplitude * sin(Float($0) * 2 * .pi * 220 / 16_000) }
-    }
-
-    @Test func voicedSecondsOfSilenceToneAndNoise() {
-        #expect(SilenceGuard.voicedSeconds([Float](repeating: 0, count: 16_000)) == 0)
-        #expect(SilenceGuard.voicedSeconds([]) == 0)
-
-        let speech = [Float](repeating: 0, count: 16_000) + tone(seconds: 1) + [Float](repeating: 0, count: 8_000)
-        #expect(abs(SilenceGuard.voicedSeconds(speech) - 1.0) < 0.05)
-
-        var generator = SystemRandomNumberGenerator()
-        let hiss = (0..<32_000).map { _ in Float.random(in: -0.002...0.002, using: &generator) }
-        #expect(SilenceGuard.voicedSeconds(hiss) < 0.1, "a quiet noise floor isn't voice")
-        let hissAndSpeech = hiss + tone(seconds: 0.5) + hiss
-        #expect(abs(SilenceGuard.voicedSeconds(hissAndSpeech) - 0.5) < 0.06)
-
-        #expect(abs(SilenceGuard.voicedSeconds(tone(seconds: 2)) - 2) < 0.05, "speech without a single pause")
-    }
-}
-
 // MARK: - Inference gate
 
 actor ConcurrencyProbe {
@@ -900,7 +878,7 @@ actor FakeEngine: LocalEngine {
     nonisolated let installed: Flag
     var loadDelay: Duration = .milliseconds(10)
     var loadError: Error?
-    var transcript = "hello from the fake"
+    var transcript: String
     var downloadSteps: [Double] = [0.25, 0.5, 0.75]
     var downloadStepDelay: Duration = .milliseconds(20)
     var downloadError: Error?
@@ -908,9 +886,10 @@ actor FakeEngine: LocalEngine {
     private(set) var loadCount = 0
     private(set) var transcribeCount = 0
 
-    init(_ id: EngineID, installed: Bool) {
+    init(_ id: EngineID, installed: Bool, transcript: String = "hello from the fake") {
         engineID = id
         self.installed = Flag(installed)
+        self.transcript = transcript
     }
 
     func configure(loadDelay: Duration? = nil, loadError: Error? = nil, downloadError: Error? = nil,
@@ -1191,12 +1170,13 @@ struct FakeFailure: Error, LocalizedError {
     }
 
     private func makeServiceAndAccount(replies: [StubURLProtocol.Reply] = [], key: String? = "sk-or-v1-test",
-                                       prompt: String = "", keychainFailure: OSStatus? = nil)
+                                       prompt: String = "", keychainFailure: OSStatus? = nil,
+                                       localTranscript: String = "hello from the fake")
         -> (TranscriptionService, ModelStore, OpenRouterAccount) {
         let settings = AppSettings.inMemory()
         settings.geminiSystemPrompt = prompt
         let store = ModelStore(paths: .temporary(), settings: settings,
-                               engines: [.parakeet: FakeEngine(.parakeet, installed: true)],
+                               engines: [.parakeet: FakeEngine(.parakeet, installed: true, transcript: localTranscript)],
                                gate: InferenceGate(), freeDiskBytes: { 50_000_000_000 })
         let client = StubURLProtocol.client(replies).0
         let keychain = KeychainStore.inMemory(key.map { [KeychainStore.openRouterAccount: $0] } ?? [:])
@@ -1234,20 +1214,25 @@ struct FakeFailure: Error, LocalizedError {
         }
     }
 
-    @Test func emptyCloudTextOnSilenceIsNoSpeech() async throws {
-        let empty = StubURLProtocol.Reply(body: #"{"choices":[{"finish_reason":"stop","message":{"content":""}}]}"#)
-        let (service, _) = makeService(replies: [empty])
-        await #expect(throws: AppError.noSpeech) {
-            try await service.transcribe(Recording(samples: [Float](repeating: 0, count: 16_000)), engine: .geminiFlash)
+    /// Whatever the audio sounded like, an answer with no text means Gemini heard no speech: an empty result,
+    /// never an error.
+    @Test func emptyCloudTextIsAnEmptyResult() async throws {
+        for recording in [Recording(samples: [Float](repeating: 0, count: 16_000)), speech()] {
+            let empty = StubURLProtocol.Reply(body: #"{"choices":[{"finish_reason":"stop","message":{"content":" \n"}}],"usage":{"cost":0.0002}}"#)
+            let (service, _) = makeService(replies: [empty])
+            let result = try await service.transcribe(recording, engine: .geminiFlash)
+            #expect(result.text.isEmpty)
+            #expect(result.engine == .geminiFlash)
+            #expect(result.costUSD == 0.0002)
         }
     }
 
-    @Test func emptyCloudTextOnSpeechIsEmptyResult() async throws {
-        let empty = StubURLProtocol.Reply(body: #"{"choices":[{"finish_reason":"stop","message":{"content":" "}}]}"#)
-        let (service, _) = makeService(replies: [empty])
-        await #expect(throws: AppError.emptyResult(.geminiFlash)) {
-            try await service.transcribe(speech(), engine: .geminiFlash)
-        }
+    @Test func emptyLocalTextIsAnEmptyResult() async throws {
+        let (service, store, _) = makeServiceAndAccount(localTranscript: "  \n ")
+        await store.refreshFromDisk()
+        let result = try await service.transcribe(speech(), engine: .parakeet)
+        #expect(result.text.isEmpty)
+        #expect(result.engine == .parakeet)
     }
 
     @Test func tooLongForGeminiIsRefusedBeforeEncoding() async throws {

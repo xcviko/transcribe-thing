@@ -173,72 +173,53 @@ struct HubMenuPicker<Value: Hashable>: View {
     }
 }
 
-/// Iris slider drawn in SwiftUI so it renders identically in windows and snapshots.
-struct HubSlider: View {
-    @Binding var value: Double
-    var range: ClosedRange<Double> = 0...1
-    var onEditingChanged: (Bool) -> Void = { _ in }
-    @State private var isDragging = false
-
-    private let trackHeight: CGFloat = 4
-    private let knob: CGFloat = 16
+/// A few mutually exclusive choices in a sunken capsule; the chosen one sits raised on a white chip.
+/// Picking the current option again still calls `onPick`, so it can undo a side state (a pill hidden for an hour).
+struct HubSegmentedPicker<Value: Hashable>: View {
+    var options: [Value]
+    var selection: Value
+    var label: (Value) -> String
+    var onPick: (Value) -> Void
+    @Namespace private var chip
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        GeometryReader { geo in
-            let width = max(geo.size.width - knob, 1)
-            let fraction = (value - range.lowerBound) / (range.upperBound - range.lowerBound)
-            let x = CGFloat(min(max(fraction, 0), 1)) * width
-            ZStack(alignment: .leading) {
-                Capsule(style: .continuous)
-                    .fill(Color.ink.opacity(0.10))
-                    .frame(height: trackHeight)
-                    .padding(.horizontal, knob / 2)
-                Capsule(style: .continuous)
-                    .fill(Color.accentFill)
-                    .frame(width: x + trackHeight, height: trackHeight)
-                    .padding(.leading, knob / 2 - trackHeight / 2)
-                Circle()
-                    .fill(.white)
-                    .shadow(color: .black.opacity(0.22), radius: 1, x: 0, y: 0.5)
-                    .shadow(color: .black.opacity(0.10), radius: 3, x: 0, y: 1.5)
-                    .overlay { Circle().strokeBorder(Color.black.opacity(0.06), lineWidth: 0.5) }
-                    .frame(width: knob, height: knob)
-                    .scaleEffect(isDragging ? 1.08 : 1)
-                    .offset(x: x)
+        HStack(spacing: 2) {
+            ForEach(options, id: \.self) { option in
+                segment(option)
             }
-            .frame(height: geo.size.height)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { drag in
-                        if !isDragging {
-                            isDragging = true
-                            onEditingChanged(true)
-                        }
-                        let f = min(max((drag.location.x - knob / 2) / width, 0), 1)
-                        value = range.lowerBound + Double(f) * (range.upperBound - range.lowerBound)
-                    }
-                    .onEnded { _ in
-                        isDragging = false
-                        onEditingChanged(false)
-                    }
-            )
-            .animation(Theme.Motion.hover, value: isDragging)
         }
-        .frame(height: 20)
-        // No dimming of its own: the row it sits in dims as a whole when disabled.
-        .accessibilityElement()
-        .accessibilityLabel("Volume")
-        .accessibilityValue(Fmt.percent((value - range.lowerBound) / (range.upperBound - range.lowerBound)))
-        .accessibilityAdjustableAction { direction in
-            let step = (range.upperBound - range.lowerBound) / 10
-            switch direction {
-            case .increment: value = min(range.upperBound, value + step)
-            case .decrement: value = max(range.lowerBound, value - step)
-            @unknown default: break
-            }
-            onEditingChanged(false)
+        .padding(2)
+        .background(Color.bgSunken, in: Capsule(style: .continuous))
+        .overlay { Capsule(style: .continuous).ring(1).fill(Color.stroke, style: FillStyle(eoFill: true)) }
+        .fixedSize()
+        .accessibilityElement(children: .contain)
+    }
+
+    private func segment(_ option: Value) -> some View {
+        let selected = option == selection
+        return Button {
+            withAnimation(Theme.Motion.snappy) { onPick(option) }
+        } label: {
+            Text(label(option))
+                .font(.system(size: 12, weight: selected ? .semibold : .medium))
+                .foregroundStyle(selected ? Color.ink : Color.inkSecondary)
+                .lineLimit(1)
+                .padding(.horizontal, 11)
+                .frame(height: Theme.Metrics.smallButtonHeight - 4)
+                .background {
+                    if selected {
+                        Capsule(style: .continuous)
+                            .fill(HubPalette.sidebarSelection)
+                            .overlay { Capsule(style: .continuous).strokeBorder(Color.stroke, lineWidth: scheme == .dark ? 1 : 0) }
+                            .shadow(color: .black.opacity(scheme == .dark ? 0.3 : 0.08), radius: 1.5, y: 1)
+                            .matchedGeometryEffect(id: "chip", in: chip)
+                    }
+                }
+                .contentShape(Capsule())
         }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
     }
 }
 
