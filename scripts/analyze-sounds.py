@@ -57,6 +57,8 @@ EXPECT_SETS = {
                       note="two muted knocks down"),
         "success": dict(max_ms=500, peak=-11, cent=900, hits=(0, 65, 130), tau=130,
                         pitch=((8, 262, 40), (75, 330, 40), (150, 392, 40)), note="low wood arpeggio C E G"),
+        "modelSwitch": dict(max_ms=80, peak=-19, cent=900, hits=(0, 28), tau=15, pitch=(), falls=((28, 45, 8),),
+                            note="two tiny pops, second higher"),
     },
     "A": {
         "start": dict(max_ms=90, peak=-11, cent=450, hits=(0,), tau=20, pitch=((25, 175, 20),),
@@ -75,6 +77,8 @@ EXPECT_SETS = {
                       note="two low pops down"),
         "success": dict(max_ms=300, peak=-11, cent=450, hits=(0, 60, 120), tau=40,
                         pitch=((10, 196, 40), (70, 247, 40), (130, 294, 40)), note="pops G3 B3 D4"),
+        "modelSwitch": dict(max_ms=80, peak=-19, cent=500, hits=(0, 28), tau=10, pitch=(), falls=((28, 45, 8),),
+                            note="two tiny ticks, second higher"),
     },
     "B": {
         "start": dict(max_ms=100, peak=-11, cent=450, hits=(0,), tau=25, pitch=((20, 280, 25),),
@@ -93,6 +97,8 @@ EXPECT_SETS = {
                       note="two muted knocks down"),
         "success": dict(max_ms=340, peak=-11, cent=400, hits=(0, 60, 120), tau=60,
                         pitch=((10, 175, 40), (70, 220, 40), (130, 262, 40)), note="wood arpeggio F3 A3 C4"),
+        "modelSwitch": dict(max_ms=75, peak=-19, cent=500, hits=(0, 28), tau=10, pitch=(),
+                            note="two tiny wood ticks, second higher"),
     },
     "C": {
         "start": dict(max_ms=120, peak=-11, cent=450, hits=(0, 20), tau=20, pitch=((25, 350, 20),),
@@ -111,6 +117,8 @@ EXPECT_SETS = {
                       note="two toks down A3 D3"),
         "success": dict(max_ms=420, peak=-11, cent=400, hits=(0, 70, 140), tau=110,
                         pitch=((10, 196, 40), (80, 247, 40), (150, 294, 40)), note="toks G3 B3 D4"),
+        "modelSwitch": dict(max_ms=75, peak=-19, cent=550, hits=(0, 28), tau=10, pitch=(), falls=((28, 45, 8),),
+                            note="two tiny pops, second higher"),
     },
 }
 EXPECT = EXPECT_SETS["current"]
@@ -372,7 +380,7 @@ def analyze(samples, sr, spec_cfg):
 # ----------------------------------------------------------------------------------------- measurement
 
 CUES = tuple(EXPECT)
-TARGET_PEAK = {"paste": -19.0, "cancel": -17.0, "error": -13.0}  # everything else -11 dBFS
+TARGET_PEAK = {"paste": -19.0, "modelSwitch": -19.0, "cancel": -17.0, "error": -13.0}  # everything else -11 dBFS
 START_MAX_MS = 120.0
 OCTAVES = (63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000)
 
@@ -387,6 +395,7 @@ ALIASES = {
     "alert": ("notifv1/alert.wav", "alert.wav"),
     "error": ("notifv1/error.wav", "error.wav"),
     "success": ("notifv1/success.wav", "success.wav"),
+    "modelSwitch": (),
 }
 
 
@@ -938,13 +947,13 @@ def main():
     failures = 0
     rows = []
     print(f"set {chosen}: {folder}")
-    print(f"{'sound':8s} {'len':>6s} {'peak':>6s} {'rms10':>6s} {'LUFS':>6s} {'cent':>5s} {'>3k':>6s} "
+    print(f"{'sound':11s} {'len':>6s} {'peak':>6s} {'rms10':>6s} {'LUFS':>6s} {'cent':>5s} {'>3k':>6s} "
           f"{'atk ms':>9s} {'tau ms':>13s} {'tail':>5s}  {'dominant Hz (dB)':30s} status")
     details = []
     for name, cfg in expect.items():
         path = os.path.join(folder, f"{name}.wav")
         if not os.path.exists(path):
-            print(f"{name:8s} MISSING")
+            print(f"{name:11s} MISSING")
             failures += 1
             continue
         sr, ch, width, s = read(path)
@@ -991,9 +1000,9 @@ def main():
         tau = "/".join(f"{min(h['tau'], 9999):.0f}" if h["tau"] is not None else "-" for h in res["hits"])
         dom = " ".join(f"{f:.0f}({d:.0f})" for f, d in res["dominant"])
         lufs = f"{res['lufs']:.1f}" if res["lufs"] is not None else "-"
-        print(f"{name:8s} {res['length_ms']:4.0f}ms {res['peak']:6.1f} {res['rms10']:6.1f} {lufs:>6s} "
+        print(f"{name:11s} {res['length_ms']:4.0f}ms {res['peak']:6.1f} {res['rms10']:6.1f} {lufs:>6s} "
               f"{res['centroid']:5.0f} {res['hf_db']:6.1f} {atk:>9s} {tau:>13s} {res['tail']:5.0f}  {dom:30s} {status}")
-        details.append(f"  {name:8s} {cfg['note']:26s} peak band {res['peak_band']:.0f} Hz; pitch {' '.join(track)}")
+        details.append(f"  {name:11s} {cfg['note']:26s} peak band {res['peak_band']:.0f} Hz; pitch {' '.join(track)}")
     print("\n".join(details))
     if png:
         render_png(png, rows)

@@ -1034,3 +1034,147 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(a.frame(size: Self.size, meter: LevelMeter(), now: now, reduceMotion: false, isStatic: true).isEmpty)
     }
 }
+
+// MARK: - Extra models
+
+@Suite @MainActor struct PillModelChipTests {
+    private func makeModel(hold: TimeInterval = 0.05) -> PillModel {
+        let model = PillModel(settings: .inMemory(), levelMeter: .preview(level: 0.5))
+        model.timing.mainChipHold = hold
+        return model
+    }
+
+    @Test func theChipNamesTheExtraModelAndNothingForTheMainOne() {
+        let model = makeModel()
+        #expect(model.chipEngine == nil, "a clean pill on the main model")
+        model.engineChipPulse += 1
+        model.sessionEngine = .geminiFlash
+        #expect(model.chipEngine == .geminiFlash && !model.showsMainChip)
+        model.engineChipPulse += 1
+        model.sessionEngine = .geminiPro
+        #expect(model.chipEngine == .geminiPro && !model.showsMainChip)
+    }
+
+    @Test func switchingBackFlashesTheMainModelThenFades() async throws {
+        let model = makeModel()
+        model.settings.selectedEngine = .parakeetCloud
+        model.sessionEngine = .geminiFlash
+        model.engineChipPulse += 1
+        model.sessionEngine = nil
+        #expect(model.showsMainChip && model.chipEngine == .parakeetCloud)
+        try await waitUntil { !model.showsMainChip }
+        #expect(model.chipEngine == nil)
+    }
+
+    @Test func aSwitchMeanwhileRestartsTheMainChip() async throws {
+        let model = makeModel(hold: 0.3)
+        model.engineChipPulse += 1
+        #expect(model.showsMainChip)
+        // To an extra model and back before the hold is over: the second flash runs its own hold.
+        model.engineChipPulse += 1
+        model.sessionEngine = .geminiPro
+        #expect(!model.showsMainChip)
+        model.engineChipPulse += 1
+        model.sessionEngine = nil
+        #expect(model.showsMainChip)
+        try await waitUntil { !model.showsMainChip }
+    }
+
+    @Test func previewsKeepTheMainChip() async throws {
+        let model = PillModel.preview(phase: .listening)
+        model.flashMainChip()
+        try await Task.sleep(for: .seconds(model.timing.mainChipHold + 0.1))
+        #expect(model.showsMainChip)
+    }
+
+    @Test func theMenuOffersTheMainModelThenTheEnabledExtraModels() {
+        let model = makeModel()
+        #expect(model.menuEngines == [.parakeet, .geminiFlash, .geminiPro])
+        model.settings.switchEngines = [.geminiPro]
+        #expect(model.menuEngines == [.parakeet, .geminiPro])
+    }
+
+    @Test func extraModelsTintThePillAndTheMainModelDoesNot() {
+        #expect(PillPalette.accent(for: .geminiFlash) == PillAccent(ringHex: 0x7F77DD, markHex: 0xAFA9EC))
+        #expect(PillPalette.accent(for: .geminiPro) == PillAccent(ringHex: 0xD4537E, markHex: 0xED93B1))
+        for engine in [EngineID.parakeet, .parakeetCloud, nil] { #expect(PillPalette.accent(for: engine) == nil) }
+        // Every extra model has its own color.
+        let accents = EngineID.switchCandidates.compactMap { PillPalette.accent(for: $0) }
+        #expect(Set(accents.map(\.ringHex)).count == EngineID.switchCandidates.count)
+    }
+
+    @Test func theChipsHitRegionReportsItsChanges() {
+        let regions = PillHitRegions()
+        var changes = 0
+        regions.onChange = { changes += 1 }
+        let rect = CGRect(x: 180, y: 380, width: 110, height: PillMetrics.chipHeight)
+        regions.setChip(rect)
+        regions.setChip(rect)
+        #expect(regions.chip == rect && changes == 1)
+        regions.setChip(nil)
+        #expect(regions.chip == nil && changes == 2)
+    }
+
+    @Test func theEngineMenuChecksTheCurrentModelAndPicksOne() throws {
+        var picked: [EngineID] = []
+        let menu = PillController.engineMenu(engines: [.parakeet, .geminiFlash, .geminiPro], current: .geminiFlash) {
+            picked.append($0)
+        }
+        #expect(menu.items.map(\.title) == ["Parakeet v3", "Gemini Flash", "Gemini Pro"])
+        #expect(menu.items.map(\.state) == [.off, .on, .off])
+        let pro = try #require(menu.items.last)
+        menu.performActionForItem(at: menu.index(of: pro))
+        #expect(picked == [.geminiPro])
+    }
+
+    @Test func theHintNamesTheOneExtraModelOrGemini() {
+        #expect(PillSwitchHint.label(for: [.geminiFlash, .geminiPro]) == "Gemini")
+        #expect(PillSwitchHint.label(for: [.geminiPro]) == "Gemini Pro")
+    }
+
+    @Test func toastsClearTheChip() {
+        #expect(PillCanvasMetrics.chipLift == PillMetrics.chipGap + PillMetrics.chipHeight)
+        // The lifted toast stack sits above the chip over the tallest pill.
+        #expect(PillCanvasMetrics.toastLift + PillCanvasMetrics.chipLift
+                >= PillCanvasMetrics.pillBottomInset + PillMetrics.maxHeight + PillMetrics.chipLift + 8)
+    }
+}
+
+@Suite @MainActor struct PillStageEngineTests {
+    @Test func theExitKeepsTheExtraModelUntilThePillHasLeft() {
+        var stage = PillStage()
+        stage.record(.listening, engine: .geminiFlash)
+        stage.record(.processing(afterHandsFree: false), engine: .geminiFlash)
+        // The text lands: the controller drops the engine in the same update that hides the pill.
+        let exiting = stage.frame(for: .hidden, engine: nil)
+        #expect(exiting.engine == .geminiFlash && exiting.content == .processing(afterHandsFree: false))
+        stage.record(.hidden, engine: nil)
+        #expect(stage.frame(for: .hidden, engine: nil).engine == .geminiFlash)
+        stage.settle(stage.generation, visual: .hidden)
+        #expect(stage.frame(for: .hidden, engine: nil).engine == nil)
+        #expect(stage.lastShownEngine == nil)
+    }
+
+    @Test func theRestMorphShrinksTheChipWithTheContent() {
+        var stage = PillStage()
+        stage.record(.processing(afterHandsFree: false), engine: .geminiPro)
+        let morphing = stage.frame(for: .rest, engine: nil)
+        #expect(morphing.engine == .geminiPro && morphing.morph == 1)
+        stage.record(.rest, engine: nil)
+        #expect(stage.frame(for: .rest, engine: nil).engine == .geminiPro)
+        stage.settle(stage.generation, visual: .rest)
+        #expect(stage.frame(for: .rest, engine: nil).engine == nil)
+    }
+
+    @Test func aShownPillFollowsTheCurrentEngine() {
+        var stage = PillStage()
+        stage.record(.listening, engine: nil)
+        #expect(stage.frame(for: .listening, engine: .geminiFlash).engine == .geminiFlash)
+        stage.record(.listening, engine: .geminiFlash)
+        // The next queued job is on the main model: its processing pill drops the chip.
+        #expect(stage.frame(for: .processing(afterHandsFree: false), engine: nil).engine == nil)
+        // Contents without a dictation never carry one.
+        #expect(stage.frame(for: .error, engine: .geminiFlash).engine == nil)
+        #expect(stage.frame(for: .peek, engine: .geminiFlash).engine == nil)
+    }
+}

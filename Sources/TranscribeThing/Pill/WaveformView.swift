@@ -10,6 +10,8 @@ import SwiftUI
 struct WaveformView: View {
     let meter: LevelMeter
     var maxBarHeight: CGFloat = PillMetrics.barMaxHeight
+    /// The bars' color: white, or an extra model's tint.
+    var tint: Color = .white
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.pillStaticRendering) private var isStatic
@@ -22,7 +24,8 @@ struct WaveformView: View {
             Canvas(rendersAsynchronously: false) { context, size in
                 // Capturing the date redraws the canvas every frame; the engine itself runs on the meter's clock.
                 _ = date
-                engine.draw(in: &context, size: size, meter: meter, reduceMotion: reduceMotion, isStatic: isStatic)
+                engine.draw(in: &context, size: size, meter: meter, reduceMotion: reduceMotion, isStatic: isStatic,
+                            tint: tint)
             }
         }
         .frame(width: PillMetrics.barFieldWidth, height: maxBarHeight)
@@ -197,12 +200,13 @@ final class WaveformEngine {
         return bars(size: size, now: now, reduceMotion: reduceMotion, isStatic: isStatic)
     }
 
-    func draw(in context: inout GraphicsContext, size: CGSize, meter: LevelMeter, reduceMotion: Bool, isStatic: Bool) {
+    func draw(in context: inout GraphicsContext, size: CGSize, meter: LevelMeter, reduceMotion: Bool, isStatic: Bool,
+              tint: Color = .white) {
         let now = isStatic ? Self.staticTime : meter.readTime
         let radius = PillMetrics.barWidth / 2
         context.clip(to: Path(CGRect(origin: .zero, size: size)))
         for bar in frame(size: size, meter: meter, now: now, reduceMotion: reduceMotion, isStatic: isStatic) {
-            context.fill(Path(roundedRect: bar.rect, cornerRadius: radius), with: .color(.white.opacity(bar.opacity)))
+            context.fill(Path(roundedRect: bar.rect, cornerRadius: radius), with: .color(tint.opacity(bar.opacity)))
         }
     }
 }
@@ -213,6 +217,8 @@ struct ProcessingWaveView: View {
     /// Where the recording bars stood, relative to the center (hands-free keeps them left of the timer): the
     /// dots appear there, so they don't hop sideways in the crossfade, then glide to the center.
     var startOffset: CGFloat = 0
+    /// The dots' color: white, or an extra model's tint. The shimmer stays white.
+    var tint: Color = .white
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.pillStaticRendering) private var isStatic
@@ -289,7 +295,7 @@ struct ProcessingWaveView: View {
                 opacity = 0.5 + 0.46 * lift
             }
             let rect = CGRect(x: x, y: midY - w / 2 - 3 * lift, width: w, height: w)
-            context.fill(Path(ellipseIn: rect), with: .color(.white.opacity(opacity)))
+            context.fill(Path(ellipseIn: rect), with: .color(tint.opacity(opacity)))
         }
     }
 }

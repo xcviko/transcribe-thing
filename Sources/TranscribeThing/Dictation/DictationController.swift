@@ -164,6 +164,7 @@ final class DictationController {
         pillModel.onClick = { [weak self] in self?.pillClicked() }
         pillModel.onStop = { [weak self] in self?.send(.pillStop) }
         pillModel.onCancel = { [weak self] in self?.send(.pillCancel) }
+        pillModel.onSelectEngine = { [weak self] engine in self?.selectEngineForCurrentDictation(engine) }
         toasts.onAction = { [weak self] notice, action in self?.perform(action, from: notice) }
         toasts.onSound = { [weak self] sound in self?.playCue(sound) }
         let previous = models.onDownloadFinished
@@ -1368,26 +1369,27 @@ final class DictationController {
     /// No usable OpenRouter key: the engine stays, the pill shakes and a notice says what Gemini needs.
     private func rejectSwitchWithoutKey() {
         pillModel.shakeTrigger += 1
-        let notice: Notice
-        switch account.status {
-        case .noCredit:
-            notice = Notice(dedupeKey: Self.switchModelNoticeKey, style: .warning, symbol: "creditcard",
-                            title: "Gemini needs OpenRouter credit", body: "Add credit to use extra models.",
-                            actions: [NoticeAction(title: "Add Credit", kind: .openURL(OpenRouterLinks.credits), isPrimary: true)],
-                            lifetime: .seconds(8))
-        default:
-            if case .invalid = account.status { account.refreshIfStale(maxAge: 30) }
-            let body = switch account.status {
-            case .invalid: "OpenRouter rejected yours. Update it to use extra models."
-            case .failed: "\(Brand.name) can’t read yours. Check it to use extra models."
-            default: "Add one to use extra models."
-            }
-            notice = Notice(dedupeKey: Self.switchModelNoticeKey, style: .warning, symbol: "key.fill",
-                            title: "Gemini needs an OpenRouter key", body: body,
-                            actions: [NoticeAction(title: "Add Key", kind: .openHub(.models), isPrimary: true)],
-                            lifetime: .seconds(8))
+        if case .invalid = account.status { account.refreshIfStale(maxAge: 30) }
+        toasts.post(Self.switchWithoutKeyNotice(account.status))
+    }
+
+    /// What a switch to an extra model says when the OpenRouter key can't pay for it.
+    static func switchWithoutKeyNotice(_ status: KeyStatus) -> Notice {
+        if case .noCredit = status {
+            return Notice(dedupeKey: switchModelNoticeKey, style: .warning, symbol: "creditcard",
+                          title: "Gemini needs OpenRouter credit", body: "Add credit to use extra models.",
+                          actions: [NoticeAction(title: "Add Credit", kind: .openURL(OpenRouterLinks.credits), isPrimary: true)],
+                          lifetime: .seconds(8))
         }
-        toasts.post(notice)
+        let body = switch status {
+        case .invalid: "OpenRouter rejected yours. Update it to use extra models."
+        case .failed: "\(Brand.name) can’t read yours. Check it to use extra models."
+        default: "Add one to use extra models."
+        }
+        return Notice(dedupeKey: switchModelNoticeKey, style: .warning, symbol: "key.fill",
+                      title: "Gemini needs an OpenRouter key", body: body,
+                      actions: [NoticeAction(title: "Add Key", kind: .openHub(.models), isPrimary: true)],
+                      lifetime: .seconds(8))
     }
 
     /// Every extra model's limit is (nearly) used up by this recording.

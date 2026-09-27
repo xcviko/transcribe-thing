@@ -51,6 +51,7 @@ final class PillController {
 
         host.onPointerActivity = { [weak self] in self?.updatePointer() }
         host.onRightMouseDown = { [weak self] event in self?.showContextMenu(for: event) ?? false }
+        model.onEngineChipClick = { [weak self] in self?.showEngineMenu() }
         regions.onChange = { [weak self] in self?.updatePointer() }
         // Key-down orders the panel front at once: waiting for the observation's next turn would put the mic
         // open (and whatever else that turn holds) before the pill's first frame.
@@ -304,8 +305,10 @@ final class PillController {
         let point = NSEvent.mouseLocation
 
         let overPill = model.isPresented && (regions.pill.flatMap(screenRect)?.contains(point) ?? false)
+        let overChip = model.isPresented && model.visiblePhase == .locked
+            && (regions.chip.flatMap(screenRect)?.contains(point) ?? false)
         let overToast = regions.toasts.values.contains { screenRect($0)?.contains(point) ?? false }
-        let interactive = overPill || overToast
+        let interactive = overPill || overChip || overToast
         if panel.ignoresMouseEvents == interactive { panel.ignoresMouseEvents = !interactive }
 
         model.setPointerInside(overPill)
@@ -314,6 +317,37 @@ final class PillController {
         toasts.setPaused(overToast)
 
         followPointer(to: point)
+    }
+
+    /// The hands-free chip's model menu, just above the chip: the main model and the extra models, the current
+    /// one checked. Picking one switches this dictation's model.
+    private func showEngineMenu() {
+        guard let host, model.isPresented, model.visiblePhase == .locked, let chip = regions.chip else { return }
+        let menu = Self.engineMenu(engines: model.menuEngines, current: model.sessionEngine ?? model.settings.selectedEngine) {
+            [weak model] engine in model?.onSelectEngine?(engine)
+        }
+        // Canvas coordinates have a top-left origin; the menu's top-left goes where its bottom clears the chip.
+        let top = chip.minY - 6 - menu.size.height
+        let point = host.isFlipped ? CGPoint(x: chip.minX, y: top) : CGPoint(x: chip.minX, y: host.bounds.height - top)
+        menu.popUp(positioning: nil, at: point, in: host)
+        updatePointer()
+    }
+
+    /// One item per model, titled by its short name with its symbol; `current` is checked.
+    static func engineMenu(engines: [EngineID], current: EngineID,
+                           select: @escaping @MainActor (EngineID) -> Void) -> NSMenu {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        for engine in engines {
+            let item = MenuActionItem(title: engine.shortName) { select(engine) }
+            item.state = engine == current ? .on : .off
+            let image = NSImage(systemSymbolName: engine.isSwitchModel ? "sparkles" : engine.symbolName,
+                                accessibilityDescription: nil)
+            image?.isTemplate = true
+            item.image = image
+            menu.addItem(item)
+        }
+        return menu
     }
 
     private func showContextMenu(for event: NSEvent) -> Bool {

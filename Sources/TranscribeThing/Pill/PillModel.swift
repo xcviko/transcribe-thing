@@ -43,10 +43,17 @@ final class PillModel {
 
     /// The extra model this dictation uses (Gemini Flash, Gemini Pro), set by the controller while it records and
     /// until its text lands; nil for the main model.
-    var sessionEngine: EngineID?
+    var sessionEngine: EngineID? {
+        didSet { if sessionEngine != nil, showsMainChip { hideMainChip() } }
+    }
     /// Bumped on every switch of the dictation's engine, back to the main model too, so the view can show the
     /// model chip (and fade a main-model one out).
-    var engineChipPulse = 0
+    var engineChipPulse = 0 {
+        didSet { if engineChipPulse != oldValue { flashMainChip() } }
+    }
+    /// The main model's chip, briefly, after a switch back to it. Every switch raises it: the controller sets
+    /// `sessionEngine` right after bumping the pulse, and an extra model's chip takes its place.
+    private(set) var showsMainChip = false
     /// The Switch model discovery hint next to a long push-to-talk hold (its first few times).
     var showsTabHint = false
 
@@ -71,6 +78,10 @@ final class PillModel {
     @ObservationIgnored var onStop: (() -> Void)?
     @ObservationIgnored var onCancel: (() -> Void)?
     @ObservationIgnored var contextMenuProvider: (() -> NSMenu)?
+    /// The hands-free model chip was clicked: the controller opens the model menu under it.
+    @ObservationIgnored var onEngineChipClick: (() -> Void)?
+    /// A model picked from that menu, for the dictation being recorded.
+    @ObservationIgnored var onSelectEngine: ((EngineID) -> Void)?
     /// Called as soon as `visiblePhase` changes, in the same turn (observation only reports it on the next one),
     /// so the panel can be on screen before whatever the caller does next, such as opening the mic.
     @ObservationIgnored var onVisiblePhaseChange: (() -> Void)?
@@ -88,6 +99,7 @@ final class PillModel {
     @ObservationIgnored private var tooltipTask: Task<Void, Never>?
     @ObservationIgnored private var controlTooltipTask: Task<Void, Never>?
     @ObservationIgnored private var helloTask: Task<Void, Never>?
+    @ObservationIgnored private var mainChipTask: Task<Void, Never>?
     @ObservationIgnored private var pointerInside = false
 
     init(settings: AppSettings, levelMeter: LevelMeter) {
@@ -269,6 +281,32 @@ final class PillModel {
         setHoveredControl(nil)
     }
 
+    // MARK: Model chip
+
+    /// The engine the chip above the pill names right now: the dictation's extra model, or the main model for a
+    /// moment after switching back to it; nil for a clean pill.
+    var chipEngine: EngineID? {
+        sessionEngine ?? (showsMainChip ? settings.selectedEngine : nil)
+    }
+
+    /// Shows the main model's chip for `timing.mainChipHold`; a switch meanwhile starts it over.
+    func flashMainChip() {
+        mainChipTask?.cancel()
+        showsMainChip = true
+        if autoSettles { mainChipTask = delayed(timing.mainChipHold) { $0.hideMainChip() } }
+    }
+
+    private func hideMainChip() {
+        mainChipTask?.cancel()
+        mainChipTask = nil
+        if showsMainChip { showsMainChip = false }
+    }
+
+    /// Models the hands-free chip's menu offers, in order: the main model, then every extra model that takes part.
+    var menuEngines: [EngineID] {
+        [settings.selectedEngine] + settings.switchEngines
+    }
+
     // MARK: Hello
 
     func beginHello(duration: TimeInterval) {
@@ -298,6 +336,8 @@ struct PillTiming: Equatable, Sendable {
     var tooltipDelay: TimeInterval = 0.35
     var controlTooltipDelay: TimeInterval = 0.5
     var slowProcessing: TimeInterval = 6
+    /// How long the main model's chip stays after a switch back to it, before it fades.
+    var mainChipHold: TimeInterval = 0.55
 }
 
 extension PillPhase {

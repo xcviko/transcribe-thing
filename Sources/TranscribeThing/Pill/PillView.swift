@@ -39,6 +39,11 @@ enum PillMetrics {
     static let tooltipHeight: CGFloat = 28
     /// Invisible margin around the pill that counts as hovering it (and clicking it).
     static let hoverMargin: CGFloat = 12
+    /// The model chip (and the Switch model hint) floats this far above the pill's top edge.
+    static let chipGap: CGFloat = 6
+    static let chipHeight: CGFloat = 22
+    /// From the pill's top edge to the chip's.
+    static let chipLift: CGFloat = chipGap + chipHeight
 }
 
 /// The pill is always dark, in both appearances; these colors never adapt.
@@ -49,6 +54,24 @@ enum PillPalette {
     static let warning = Color(nsColor: .hex(0xFFB340))
     static let error = Color(nsColor: .hex(0xFF6B5E))
     static let tooltipFill = Color(nsColor: .hex(0x151517, alpha: 0.96))
+
+    /// An extra model's color: Gemini Flash violet, Gemini Pro pink. The main model keeps the plain pill.
+    static func accent(for engine: EngineID?) -> PillAccent? {
+        switch engine {
+        case .geminiFlash: PillAccent(ringHex: 0x7F77DD, markHex: 0xAFA9EC)
+        case .geminiPro: PillAccent(ringHex: 0xD4537E, markHex: 0xED93B1)
+        case .parakeet, .parakeetCloud, nil: nil
+        }
+    }
+}
+
+/// An extra model's tint: the capsule's ring, and the bars and processing dots (lighter, so they read on the fill).
+struct PillAccent: Equatable, Sendable {
+    let ringHex: UInt32
+    let markHex: UInt32
+
+    var ring: Color { Color(nsColor: .hex(ringHex)) }
+    var mark: Color { Color(nsColor: .hex(markHex)) }
 }
 
 extension EnvironmentValues {
@@ -95,6 +118,9 @@ enum PillVisual: Equatable, Sendable {
         case .error: .error
         }
     }
+
+    /// Recording and processing show a dictation, so they carry its model (chip and tint); nothing else does.
+    var carriesModel: Bool { content == .recording || content == .processing }
 
     /// Resting shapes cast half the shadow.
     var isQuiet: Bool {
@@ -178,11 +204,15 @@ struct PillView: View {
         }
     }
 
+    /// The extra model the stage keeps with each visual, so its chip and tint leave with the pill.
+    private var engine: EngineID? { model.sessionEngine }
+
     var body: some View {
         let visual = self.visual
         let shown = visual != .hidden
-        let frame = stage.frame(for: visual)
-        PillFace(model: model, regions: regions, capsule: frame.capsule, content: frame.content, morph: frame.morph)
+        let frame = stage.frame(for: visual, engine: engine)
+        PillFace(model: model, regions: regions, capsule: frame.capsule, content: frame.content, morph: frame.morph,
+                 engine: frame.engine)
             // Capsule and content leave together, as one composited piece.
             .modifier(PillExitEffect(progress: exitProgress, reduceMotion: reduceMotion))
             .scaleEffect(frame.collapsed && !reduceMotion ? 0.6 : 1, anchor: .bottom)
@@ -191,11 +221,11 @@ struct PillView: View {
             .animation(fadeAnimation(shown: shown, to: visual)) { $0.opacity(frame.collapsed ? 0 : 1) }
             .modifier(PillShake(trigger: model.shakeCount, enabled: !reduceMotion))
             .animation(animation(to: visual), value: visual)
-            .onChange(of: visual, initial: true) { _, new in
+            .onChange(of: PillStage.Key(visual: visual, engine: engine), initial: true) { _, new in
                 // Its own transaction, so the exit's timing never reaches the capsule's springs (nor the reverse).
-                let exit = stage.frame(for: new).exit
-                let animation = stage.exitAnimation(to: new, reduceMotion: reduceMotion)
-                stage.record(new)
+                let exit = stage.frame(for: new.visual, engine: new.engine).exit
+                let animation = stage.exitAnimation(to: new.visual, reduceMotion: reduceMotion)
+                stage.record(new.visual, engine: new.engine)
                 if exitProgress != exit { withAnimation(animation) { exitProgress = exit } }
             }
             .task(id: stage.generation) {
@@ -232,7 +262,7 @@ struct PillView: View {
     }
 
     private func accessibilityLabel(for visual: PillVisual) -> String {
-        switch visual {
+        let label = switch visual {
         case .hidden: "transcribe-thing"
         case .rest, .peek, .hello: "transcribe-thing. Click to start hands-free dictation"
         case .listening: "transcribe-thing is listening"
@@ -240,6 +270,8 @@ struct PillView: View {
         case .processing: "transcribe-thing is transcribing"
         case .error: "Dictation failed"
         }
+        guard let engine, visual.carriesModel else { return label }
+        return "\(label) with \(engine.shortName)"
     }
 }
 
@@ -314,6 +346,15 @@ struct PillStage: Equatable {
     private(set) var parked = true
     /// Bumped at every change; the view settles `PillMotion.settleDelay` after the last one.
     private(set) var generation = 0
+    /// The extra models of `lastShown` and `lingering`: an exiting or shrinking pill keeps its chip and tint.
+    private(set) var lastShownEngine: EngineID?
+    private(set) var lingeringEngine: EngineID?
+
+    /// What the view records at every change: the visual, and the extra model of the dictation it shows.
+    struct Key: Equatable {
+        var visual: PillVisual
+        var engine: EngineID?
+    }
 
     struct Frame: Equatable {
         /// Shape, style and size of the capsule.
@@ -326,23 +367,31 @@ struct PillStage: Equatable {
         var morph: CGFloat
         /// Parked: at rest size, scaled to 0.6 and transparent, ready to bloom.
         var collapsed: Bool
+        /// The extra model of `content`'s dictation (its chip and tint); nil for the main model.
+        var engine: EngineID? = nil
     }
 
-    func frame(for visual: PillVisual) -> Frame {
+    /// `engine` is the extra model of the dictation `visual` shows (the model's `sessionEngine`).
+    func frame(for visual: PillVisual, engine: EngineID? = nil) -> Frame {
         let shown = visual != .hidden
         let capsule = shown ? visual : (parked ? .hidden : lastShown)
         let content = capsule.content == .empty ? (lingering ?? capsule) : capsule
+        let contentEngine = content != capsule ? lingeringEngine : (shown ? engine : lastShownEngine)
         return Frame(capsule: capsule, content: content, exit: shown ? 0 : 1, morph: content == capsule ? 0 : 1,
-                     collapsed: !shown && parked)
+                     collapsed: !shown && parked, engine: content.carriesModel ? contentEngine : nil)
     }
 
-    mutating func record(_ visual: PillVisual) {
+    mutating func record(_ visual: PillVisual, engine: EngineID? = nil) {
         generation &+= 1
         if visual != .hidden {
             lastShown = visual
+            lastShownEngine = engine
             parked = false
         }
-        if visual.content != .empty { lingering = visual }
+        if visual.content != .empty {
+            lingering = visual
+            lingeringEngine = engine
+        }
     }
 
     /// The last change (`generation`) has played out: an empty capsule drops the content it shrank, a hidden
@@ -350,7 +399,11 @@ struct PillStage: Equatable {
     mutating func settle(_ generation: Int, visual: PillVisual) {
         guard generation == self.generation, visual.content == .empty else { return }
         lingering = nil
-        if visual == .hidden { parked = true }
+        lingeringEngine = nil
+        if visual == .hidden {
+            parked = true
+            lastShownEngine = nil
+        }
     }
 
     /// Animation of the exit progress on the way to `visual`. Back before the exit finished, the pill comes
@@ -388,6 +441,8 @@ private struct PillMorphEffect: ViewModifier, Animatable {
     var progress: CGFloat
     let from: CGSize
     let to: CGSize
+    /// The model chip shrinks toward the capsule below it.
+    var anchor: UnitPoint = .center
 
     var animatableData: CGFloat {
         get { progress }
@@ -397,7 +452,7 @@ private struct PillMorphEffect: ViewModifier, Animatable {
     func body(content: Content) -> some View {
         let pose = PillMotion.morphPose(at: progress, from: from, to: to)
         content
-            .scaleEffect(pose.scale)
+            .scaleEffect(pose.scale, anchor: anchor)
             .opacity(pose.opacity)
     }
 }
@@ -414,21 +469,61 @@ struct PillFace: View {
     var morph: CGFloat = 0
     /// The capsule's size when it isn't `capsule.size` (a snapshot mid-morph).
     var size: CGSize?
+    /// The extra model of `content`'s dictation: the chip above the pill and the tint.
+    var engine: EngineID?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    private var carriesModel: Bool { content.carriesModel }
+
+    /// The extra model's tint while the content carries one; a capsule shrinking to rest lets its ring go.
+    private var accent: PillAccent? { carriesModel ? PillPalette.accent(for: engine) : nil }
+
+    /// What the chip names: the extra model, or the main model for a moment after switching back to it.
+    private var chipEngine: EngineID? {
+        guard carriesModel else { return nil }
+        if let engine { return engine }
+        return model.showsMainChip && content == capsule ? model.settings.selectedEngine : nil
+    }
+
     var body: some View {
         let size = self.size ?? capsule.size
+        let accent = self.accent
         // An overlay, so content larger than the capsule (shrinking into it) never sizes the pill.
-        PillCapsule(quiet: capsule.isQuiet, glow: capsule == .error ? PillPalette.error : nil)
+        PillCapsule(quiet: capsule.isQuiet, glow: capsule == .error ? PillPalette.error : nil,
+                    accent: capsule.content == .empty ? nil : accent)
             .frame(width: size.width, height: size.height)
-            .overlay { contentView }
+            .overlay { contentView(accent: accent) }
+            // Above the pill and part of it: it springs in on a switch, shrinks into the resting capsule with the
+            // content and leaves with the pill in one piece.
+            .overlay(alignment: .top) {
+                if let chipEngine {
+                    PillEngineChip(model: model, engine: chipEngine, regions: regions,
+                                   isInteractive: capsule == content && capsule.timer != nil)
+                        .modifier(PillMorphEffect(progress: content == capsule ? 0 : morph, from: content.size,
+                                                  to: size, anchor: .bottom))
+                        .offset(y: -PillMetrics.chipLift)
+                        .id(chipEngine)
+                        .transition(chipTransition)
+                }
+            }
+            .animation(reduceMotion ? .easeInOut(duration: 0.15) : .spring(duration: 0.3, bounce: 0.3),
+                       value: chipEngine)
+            .animation(.easeOut(duration: 0.2), value: accent)
+    }
+
+    /// A chip springs up out of the pill; the main model's goes quietly (it only confirms the way back).
+    private var chipTransition: AnyTransition {
+        if reduceMotion { return .opacity }
+        return .asymmetric(
+            insertion: .opacity.combined(with: .scale(scale: 0.7, anchor: .bottom)).combined(with: .offset(y: 5)),
+            removal: .opacity.animation(.easeIn(duration: 0.25)))
     }
 
     /// Every content keeps its own pill's size, so content shrinking into a smaller capsule stays laid out as
     /// it was and only scales.
     @ViewBuilder
-    private var contentView: some View {
+    private func contentView(accent: PillAccent?) -> some View {
         let visual = content
         let morph = PillMorphEffect(progress: content == capsule ? 0 : morph, from: visual.size,
                                     to: size ?? capsule.size)
@@ -447,13 +542,14 @@ struct PillFace: View {
                 .id(PillVisual.Content.hello)
                 .transition(contentTransition())
         case .recording:
-            RecordingContent(model: model, timer: visual.timer, barsOffset: visual.barsOffset, regions: regions)
+            RecordingContent(model: model, timer: visual.timer, barsOffset: visual.barsOffset, regions: regions,
+                             tint: accent?.mark ?? .white)
                 .frame(width: visual.size.width, height: visual.size.height)
                 .modifier(morph)
                 .id(PillVisual.Content.recording)
                 .transition(contentTransition())
         case .processing:
-            ProcessingWaveView(startOffset: visual.barsOffset)
+            ProcessingWaveView(startOffset: visual.barsOffset, tint: accent?.mark ?? .white)
                 .frame(width: visual.size.width, height: visual.size.height)
                 .modifier(morph)
                 .id(PillVisual.Content.processing)
@@ -482,6 +578,8 @@ struct PillFace: View {
 struct PillCapsule: View {
     var quiet = false
     var glow: Color?
+    /// An extra model's ring, with a faint halo of its color.
+    var accent: PillAccent?
 
     var body: some View {
         let shape = Capsule(style: .continuous)
@@ -508,6 +606,15 @@ struct PillCapsule: View {
                 // Faint outer edge: lost on light documents, it outlines the dark capsule on dark editors.
                 shape.inset(by: -0.5).ring(0.5)
                     .fill(.white.opacity(0.11), style: FillStyle(eoFill: true))
+            }
+            .overlay {
+                if let accent {
+                    shape.ring(1.25)
+                        .fill(LinearGradient(colors: [accent.mark.opacity(0.95), accent.ring.opacity(0.9)],
+                                             startPoint: .top, endPoint: .bottom), style: FillStyle(eoFill: true))
+                        .shadow(color: accent.ring.opacity(0.55), radius: 4)
+                        .transition(.opacity)
+                }
             }
             .shadow(color: .black.opacity(quiet ? 0.11 : 0.22), radius: 1, x: 0, y: 1)
             .shadow(color: .black.opacity(quiet ? 0.14 : 0.28), radius: 9, x: 0, y: 6)
@@ -616,6 +723,7 @@ private struct RecordingContent: View {
     let timer: PillTimerMode?
     let barsOffset: CGFloat
     let regions: PillHitRegions?
+    var tint: Color = .white
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -623,7 +731,7 @@ private struct RecordingContent: View {
 
     var body: some View {
         ZStack {
-            WaveformView(meter: model.levelMeter)
+            WaveformView(meter: model.levelMeter, tint: tint)
                 .offset(x: barsOffset)
             // Each piece is inserted on its own so its transition runs (a transition only applies to the
             // outermost view being inserted).
@@ -710,6 +818,108 @@ private struct PillControlButton: View {
         }
         .onDisappear { regions?.setControl(control, rect: nil) }
         .accessibilityLabel(control == .cancel ? "Cancel dictation" : "Finish dictation")
+    }
+}
+
+/// The dictation's model, floating above the pill: sparkles and "Gemini Flash" in its color, or a bolt and the main
+/// model for a moment after switching back. In hands-free it opens the model menu (the controller pops it up).
+private struct PillEngineChip: View {
+    let model: PillModel
+    let engine: EngineID
+    let regions: PillHitRegions?
+    /// Hands-free only: push-to-talk holds a key, and processing is past choosing.
+    let isInteractive: Bool
+
+    var body: some View {
+        let accent = PillPalette.accent(for: engine)
+        Button { model.onEngineChipClick?() } label: {
+            PillChipCapsule(accent: accent) {
+                Image(systemName: engine.isSwitchModel ? "sparkles" : engine.symbolName)
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(accent?.mark ?? .white.opacity(0.75))
+                Text(engine.shortName)
+                    .foregroundStyle(.white.opacity(0.92))
+                if isInteractive {
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 7.5, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.45))
+                }
+            }
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .allowsHitTesting(isInteractive)
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(PillCanvasMetrics.space)) } action: { rect in
+            regions?.setChip(isInteractive ? rect : nil)
+        }
+        .onChange(of: isInteractive) { _, interactive in if !interactive { regions?.setChip(nil) } }
+        .onDisappear { regions?.setChip(nil) }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Model: \(engine.shortName)")
+        .accessibilityAddTraits(isInteractive ? .isButton : [])
+    }
+}
+
+/// The small dark capsule of the model chip and the Switch model hint: the pill's fill, its lit hairline, and an
+/// extra model's ring.
+struct PillChipCapsule<Content: View>: View {
+    var accent: PillAccent?
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        let shape = Capsule(style: .continuous)
+        HStack(spacing: 4) { content }
+            .font(.system(size: 11, weight: .semibold))
+            .lineLimit(1)
+            .padding(.horizontal, 9)
+            .frame(height: PillMetrics.chipHeight)
+            .background {
+                shape.fill(PillPalette.fill)
+                    .overlay {
+                        shape.ring(0.5)
+                            .fill(LinearGradient(colors: [.white.opacity(0.24), .white.opacity(0.07)],
+                                                 startPoint: .top, endPoint: .bottom), style: FillStyle(eoFill: true))
+                    }
+                    .overlay {
+                        if let accent {
+                            shape.ring(1)
+                                .fill(accent.ring.opacity(0.85), style: FillStyle(eoFill: true))
+                        }
+                    }
+                    .overlay {
+                        shape.inset(by: -0.5).ring(0.5)
+                            .fill(.white.opacity(0.11), style: FillStyle(eoFill: true))
+                    }
+                    .shadow(color: .black.opacity(0.2), radius: 1, x: 0, y: 1)
+                    .shadow(color: .black.opacity(0.24), radius: 6, x: 0, y: 3)
+            }
+            .environment(\.colorScheme, .dark)
+    }
+}
+
+/// "[fn][tab] · Gemini": the Switch model shortcut, shown faintly above a long push-to-talk hold its first few times.
+/// The keys follow the user's binding.
+struct PillSwitchHint: View {
+    let model: PillModel
+
+    /// The one extra model by name; with several, what they share.
+    static func label(for extras: [EngineID]) -> String {
+        extras.count == 1 ? extras[0].shortName : "Gemini"
+    }
+
+    var body: some View {
+        let shortcut = model.settings.shortcuts[.switchModel]
+        PillChipCapsule {
+            PillShortcutChips(shortcut: shortcut, fallback: shortcut?.compactDescription ?? "")
+                .scaleEffect(0.9)
+            Text("·").foregroundStyle(.white.opacity(0.35))
+            Text(Self.label(for: model.settings.switchEngines))
+                .foregroundStyle(.white.opacity(0.7))
+        }
+        .fixedSize()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Press \(shortcut?.spokenDescription ?? "the Switch model shortcut") to use \(Self.label(for: model.settings.switchEngines))")
     }
 }
 

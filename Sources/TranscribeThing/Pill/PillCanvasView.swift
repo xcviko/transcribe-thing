@@ -7,6 +7,8 @@ enum PillCanvasMetrics {
     static let pillBottomInset: CGFloat = 24
     /// Toasts sit 10 pt above the pill's tallest state, so they never move while the pill changes shape.
     static let toastLift: CGFloat = pillBottomInset + PillMetrics.maxHeight + 10
+    /// While the model chip floats above the pill, toasts step up by its height and gap.
+    static let chipLift: CGFloat = PillMetrics.chipLift
     static let space = "tt.pill.canvas"
 }
 
@@ -16,6 +18,8 @@ enum PillCanvasMetrics {
 final class PillHitRegions {
     private(set) var pill: CGRect?
     private(set) var controls: [PillControl: CGRect] = [:]
+    /// The model chip above the pill, while it opens the model menu (hands-free).
+    private(set) var chip: CGRect?
     private(set) var toasts: [String: CGRect] = [:]
     var onChange: (() -> Void)?
 
@@ -28,6 +32,12 @@ final class PillHitRegions {
     func setControl(_ control: PillControl, rect: CGRect?) {
         guard controls[control] != rect else { return }
         controls[control] = rect
+        onChange?()
+    }
+
+    func setChip(_ rect: CGRect?) {
+        guard rect != chip else { return }
+        chip = rect
         onChange?()
     }
 
@@ -55,12 +65,28 @@ struct PillCanvasView: View {
         model.isPresented && model.visiblePhase == .processing && model.isProcessingSlow && toasts.notices.isEmpty
     }
 
+    /// The Switch model hint over a long push-to-talk hold (the controller decides when).
+    private var showsSwitchHint: Bool {
+        model.isPresented && model.visiblePhase == .listening && model.showsTabHint
+            && model.settings.shortcuts[.switchModel] != nil
+    }
+
+    /// An extra model's chip floats above the pill: toasts and the slow tooltip make room for it.
+    private var showsChip: Bool {
+        model.isPresented && model.isPillAllowed && model.sessionEngine != nil
+            && (model.visiblePhase.isRecording || model.visiblePhase == .processing)
+    }
+
     var body: some View {
         ZStack(alignment: .bottom) {
             ToastStack(center: toasts, pasteShortcut: model.settings.shortcuts[.pasteLast], regions: regions)
-                .padding(.bottom, model.isPillAllowed ? PillCanvasMetrics.toastLift : PillCanvasMetrics.pillBottomInset)
+                .padding(.bottom, model.isPillAllowed
+                         ? PillCanvasMetrics.toastLift + (showsChip ? PillCanvasMetrics.chipLift : 0)
+                         : PillCanvasMetrics.pillBottomInset)
                 .animation(reduceMotion ? .easeInOut(duration: 0.15) : .spring(duration: 0.32, bounce: 0.15),
                            value: model.isPillAllowed)
+                .animation(reduceMotion ? .easeInOut(duration: 0.15) : .spring(duration: 0.32, bounce: 0.15),
+                           value: showsChip)
             pillArea
                 .padding(.bottom, PillCanvasMetrics.pillBottomInset - PillMetrics.hoverMargin)
         }
@@ -86,13 +112,19 @@ struct PillCanvasView: View {
                 } else if showsSlowTooltip {
                     PillTooltipBubble { Text("Still transcribing…") }
                         .fixedSize()
-                        .offset(y: -(PillMetrics.tooltipHeight + 8))
+                        .offset(y: -(PillMetrics.tooltipHeight + 8 + (showsChip ? PillCanvasMetrics.chipLift : 0)))
+                        .transition(tooltipTransition)
+                        .allowsHitTesting(false)
+                } else if showsSwitchHint {
+                    PillSwitchHint(model: model)
+                        .offset(y: -PillMetrics.chipLift)
                         .transition(tooltipTransition)
                         .allowsHitTesting(false)
                 }
             }
             .animation(.easeOut(duration: 0.16), value: showsRestTooltip)
             .animation(.easeOut(duration: 0.2), value: showsSlowTooltip)
+            .animation(.easeOut(duration: 0.2), value: showsSwitchHint)
             .padding(PillMetrics.hoverMargin)
             .contentShape(Rectangle())
             .onTapGesture {

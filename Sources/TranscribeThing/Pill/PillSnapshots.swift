@@ -49,6 +49,34 @@ enum PillSnapshots {
                     .morph("Hover ends", from: .peek, model: .preview(phase: .rest, isHovering: true)),
                 ])
             },
+            // Film strips of a Gemini pill leaving: the chip and the tint go with it.
+            SnapshotEntry("pill-exit-models", width: PillFilmSheet.width(cell: 132, columns: 11), height: 480) { _ in
+                PillFilmSheet(cell: 132, columns: 11, cellHeight: 92, strips: [
+                    .exit("Processing · Gemini Flash → hidden", .processing(afterHandsFree: false),
+                          model: .preview(phase: .processing), engine: .geminiFlash),
+                    .exit("Processing · Gemini Pro → hidden", .processing(afterHandsFree: false),
+                          model: .preview(phase: .processing), engine: .geminiPro),
+                    .morph("Processing · Gemini Flash → rest (Always)", from: .processing(afterHandsFree: false),
+                           model: .preview(phase: .processing), engine: .geminiFlash),
+                ])
+            },
+            // Extra models (`--only pill-models`): the chip, the tint, the hint and the no-key notice.
+            SnapshotEntry("pill-models", width: 760, height: 44 + 8 * 92) { _ in PillModelSheet() },
+            SnapshotEntry("pill-models-hint", width: 640, height: 150) { _ in
+                CanvasScene(model: hintModel(), notices: [])
+            },
+            SnapshotEntry("pill-models-hint-custom", width: 640, height: 150) { _ in
+                CanvasScene(model: hintModel(binding: Shortcut(modifiers: [.init(.control), .init(.option)],
+                                                               keyCode: KeyCode.space)), notices: [])
+            },
+            SnapshotEntry("pill-models-no-key", width: 640, height: 270) { _ in
+                CanvasScene(model: .preview(phase: .listening, level: 0.7),
+                            notices: [DictationController.switchWithoutKeyNotice(.missing)])
+            },
+            SnapshotEntry("pill-models-toast", width: 640, height: 290) { _ in
+                CanvasScene(model: PillModelSheet.model(.locked, engine: .geminiFlash, recordingFor: 362, limitSeconds: 420),
+                            notices: [PillSnapshotFixtures.oneMinuteLeft])
+            },
             SnapshotEntry("pill-toast-info", width: 640, height: 250) { _ in
                 CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.canceled])
             },
@@ -94,6 +122,14 @@ enum PillSnapshots {
     @MainActor private static func helloModel() -> PillModel {
         let model = PillModel.preview(phase: .rest)
         model.beginHello(duration: 60)
+        return model
+    }
+
+    /// A long push-to-talk hold showing the Switch model hint, with the default binding or `binding`.
+    @MainActor private static func hintModel(binding: Shortcut? = nil) -> PillModel {
+        let model = PillModel.preview(phase: .listening, level: 0.7)
+        if let binding { model.settings.shortcuts[.switchModel] = binding }
+        model.showsTabHint = true
         return model
     }
 
@@ -294,19 +330,21 @@ private struct PillFilmSheet: View {
 
         /// Hidden: the whole pill leaves, t = 0, 0.1 … 1 of the exit.
         @MainActor static func exit(_ title: String, _ visual: PillVisual, model: PillModel,
-                                    reduceMotion: Bool = false) -> Strip {
+                                    reduceMotion: Bool = false, engine: EngineID? = nil) -> Strip {
             Strip(title: title, model: model, frames: exitFrames(visual, reduceMotion: reduceMotion,
-                                                                 steps: Array(0...10)))
+                                                                 steps: Array(0...10), engine: engine))
         }
 
         /// Always mode: the content shrinks with the capsule into the resting one, every 30 ms of the spring.
-        @MainActor static func morph(_ title: String, from visual: PillVisual, model: PillModel) -> Strip {
+        @MainActor static func morph(_ title: String, from visual: PillVisual, model: PillModel,
+                                     engine: EngineID? = nil) -> Strip {
             let frames = (0...10).map { i in
                 let time = Double(i) * 0.03
                 let progress = CGFloat(Spring(duration: PillMotion.morphDuration, bounce: 0).value(target: 1.0, time: time))
                 let pose = PillMotion.morphPose(at: progress, from: visual.size, to: PillVisual.rest.size)
                 return Frame(caption: "\(Int((time * 1000).rounded())) ms") { model in
-                    AnyView(PillFace(model: model, capsule: .rest, content: visual, morph: progress, size: pose.size))
+                    AnyView(PillFace(model: model, capsule: .rest, content: visual, morph: progress, size: pose.size,
+                                     engine: engine))
                 }
             }
             return Strip(title: title, model: model, frames: frames)
@@ -325,12 +363,13 @@ private struct PillFilmSheet: View {
                          frames: stills + exitFrames(processing, reduceMotion: false, steps: [0, 3, 5, 7, 9, 10]))
         }
 
-        @MainActor private static func exitFrames(_ visual: PillVisual, reduceMotion: Bool, steps: [Int]) -> [Frame] {
+        @MainActor private static func exitFrames(_ visual: PillVisual, reduceMotion: Bool, steps: [Int],
+                                                  engine: EngineID? = nil) -> [Frame] {
             let duration = reduceMotion ? PillMotion.reducedExitDuration : PillMotion.exitDuration
             return steps.map { i in
                 let progress = CGFloat(i) / 10
                 return Frame(caption: "\(Int((Double(progress) * duration * 1000).rounded())) ms") { model in
-                    AnyView(PillFace(model: model, capsule: visual, content: visual)
+                    AnyView(PillFace(model: model, capsule: visual, content: visual, engine: engine)
                         .modifier(PillExitEffect(progress: progress, reduceMotion: reduceMotion)))
                 }
             }
@@ -339,6 +378,8 @@ private struct PillFilmSheet: View {
 
     let cell: CGFloat
     let columns: Int
+    /// Taller for a pill with its model chip.
+    var cellHeight: CGFloat = 62
     let strips: [Strip]
 
     @Environment(\.colorScheme) private var scheme
@@ -379,13 +420,89 @@ private struct PillFilmSheet: View {
                 frame.face(model)
                     .padding(.bottom, 14)
             }
-            .frame(width: cell - 4, height: 62)
+            .frame(width: cell - 4, height: cellHeight)
             .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             Text(frame.caption)
                 .font(.system(size: 10, weight: .medium).monospacedDigit())
                 .foregroundStyle(.inkTertiary)
         }
         .frame(width: cell)
+    }
+}
+
+/// The pill with each model, on a white document and on a dark editor: the chip above it, the tint, and hands-free's
+/// clickable chip.
+private struct PillModelSheet: View {
+    private struct Row: Identifiable {
+        let id: String
+        let caption: String
+        let make: @MainActor () -> PillModel
+    }
+
+    @MainActor static func model(_ phase: PillPhase, engine: EngineID?, level: Float = 0.7,
+                                 recordingFor elapsed: TimeInterval? = nil, limitSeconds: TimeInterval? = nil) -> PillModel {
+        let model = PillModel.preview(phase: phase, level: level, recordingFor: elapsed, limitSeconds: limitSeconds)
+        model.sessionEngine = engine
+        return model
+    }
+
+    private var rows: [Row] {
+        [
+            Row(id: "main", caption: "Push-to-talk · main model") { Self.model(.listening, engine: nil) },
+            Row(id: "flash", caption: "Push-to-talk · Gemini Flash") { Self.model(.listening, engine: .geminiFlash) },
+            Row(id: "pro", caption: "Push-to-talk · Gemini Pro") { Self.model(.listening, engine: .geminiPro) },
+            Row(id: "back", caption: "Back to the main model") {
+                let model = Self.model(.listening, engine: nil)
+                model.flashMainChip()
+                return model
+            },
+            Row(id: "locked-flash", caption: "Hands-free · Gemini Flash") { Self.model(.locked, engine: .geminiFlash, level: 0.5) },
+            Row(id: "locked-pro", caption: "Hands-free · Gemini Pro") {
+                Self.model(.locked, engine: .geminiPro, level: 0.5, recordingFor: 372, limitSeconds: 420)
+            },
+            Row(id: "processing-flash", caption: "Processing · Gemini Flash") { Self.model(.processing, engine: .geminiFlash) },
+            Row(id: "processing-pro", caption: "Processing · Gemini Pro") { Self.model(.processing, engine: .geminiPro) },
+        ]
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 0) {
+                Text("Extra models").frame(width: 200, alignment: .leading)
+                Text("On a document").frame(maxWidth: .infinity)
+                Text("On a dark editor").frame(maxWidth: .infinity)
+            }
+            .font(.system(size: 11, weight: .semibold))
+            .textCase(.uppercase)
+            .tracking(0.6)
+            .foregroundStyle(.inkTertiary)
+            .padding(.horizontal, 24)
+            .frame(height: 44)
+
+            ForEach(rows) { row in
+                HStack(spacing: 0) {
+                    Text(row.caption)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.inkSecondary)
+                        .frame(width: 200, alignment: .leading)
+                        .padding(.leading, 24)
+                    ForEach([false, true], id: \.self) { dark in
+                        ZStack(alignment: .bottom) {
+                            SnapshotPage(dark: dark)
+                            PillView(model: row.make())
+                                .padding(.bottom, 16)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .clipped()
+                    }
+                }
+                .frame(height: 92)
+                .overlay(alignment: .bottom) { Rectangle().fill(Color.stroke).frame(height: 1) }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Color.bgCanvas)
+        .environment(\.pillStaticRendering, true)
     }
 }
 

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""gen-sounds.py: synthesize transcribe-thing's eight original UI sounds (standard library only).
+"""gen-sounds.py: synthesize transcribe-thing's nine original UI sounds (standard library only).
 
 Usage: python3 scripts/gen-sounds.py [--set current|A|B|C] [out_dir]      (default: DEFAULT_SET, Resources/Sounds)
 
-Every file is 48 kHz, mono, 16-bit PCM, peak-normalized to -11 dBFS (paste -19, cancel -17, error -13). There are
+Every file is 48 kHz, mono, 16-bit PCM, peak-normalized to -11 dBFS (paste and modelSwitch -19, cancel -17,
+error -13). There are
 four sets; DEFAULT_SET (below) is the one Resources/Sounds holds, and analyze-sounds.py checks against the same
 set's expectations, so shipping another set is a one-line change plus `make sounds`.
 
@@ -16,6 +17,7 @@ current: low, woody and percussive (knocks, a mouth pop, soft marimba notes).
   alert    two soft wooden marimba notes 262 -> 330 Hz, 350 ms
   error    two muted knocks 233 -> 196 Hz, 280 ms
   success  a small low wooden arpeggio C4 E4 G4, 380 ms
+  modelSwitch  two tiny mouth pops 28 ms apart, the second higher, 70 ms, as quiet as paste
 
 A "tongue click": pitch-dropping mouth pops (tongue voice), bodies 120-260 Hz, 1-2 kHz ceiling, almost no ring.
   start    pop 250 -> 175 Hz, tau 11 ms, 70 ms          stop     pop 200 -> 135 Hz, tau 13 ms, 85 ms
@@ -23,12 +25,14 @@ A "tongue click": pitch-dropping mouth pops (tongue voice), bodies 120-260 Hz, 1
   paste    tiny pop 280 -> 150 Hz, tau 5 ms, 45 ms      cancel   pop sliding 230 -> 120 Hz over ~45 ms, 95 ms
   alert    two pitched pops G3 -> B3, 110 ms apart      error    two low pops 140 -> 124 Hz, 105 ms apart
   success  pops G3 B3 D4, 60 ms apart, 270 ms
+  modelSwitch  two tiny tongue ticks 280 -> 190 and 330 -> 220 Hz, 28 ms apart, 70 ms, as quiet as paste
 
 B "low wood block": modal knocks, fundamentals 155-290 Hz, tau 11-19 ms, low-passed at 1.5-2 kHz, a faint sub thump.
   start    block 280 Hz, 90 ms                          stop     duller block 215 Hz sagging 1.5 semitones, 105 ms
   lock     245 -> 290 Hz, 60 ms apart, 135 ms           paste    tiny tick 240 Hz, tau 5 ms, 40 ms
   cancel   knock 250 Hz sagging 6 semitones, 110 ms     alert    two wood-bar notes F3 -> A3, 130 ms apart, 300 ms
   error    two muted knocks 185 -> 156 Hz, 240 ms       success  wood-bar arpeggio F3 A3 C4, 320 ms
+  modelSwitch  two tiny ticks 240 -> 290 Hz, 28 ms apart, 75 ms
 
 C "matched": built from scratch to the measured shape of Wispr Flow's default cues (their audio is only measured by
   analyze-sounds.py, never used), 3-6 semitones lower. A near-pure "tok" (2nd mode 1.89x at -30 dB, 3-3.5 ms mallet
@@ -39,6 +43,7 @@ C "matched": built from scratch to the measured shape of Wispr Flow's default cu
   paste    tiny pop 330 -> 140 Hz, tau 4 ms, 40 ms      cancel   pop sliding 360 -> 130 Hz, 100 ms
   alert    toks G3 -> D4, 60 ms apart, 330 ms           error    toks A3 -> D3, 125 ms apart, 300 ms
   success  toks G3 B3 D4, 70 ms apart, 400 ms
+  modelSwitch  two tiny pops 330 -> 160 and 400 -> 190 Hz, 28 ms apart, 65 ms
 
 Voices:
   knock   modal synthesis. A 1-3.5 ms mallet strike (raised-cosine force pulse with a little grain) drives
@@ -374,6 +379,13 @@ def make_cancel():
     return finish(c.buf, -17, lowpass_hz=2200, fade_out_ms=20)
 
 
+def make_model_switch():
+    c = Canvas(0.070)
+    c.add(0.000, pop(470.0, 250.0, glide_s=0.010, tau=0.004, seconds=0.035, contact_db=-12.0, seed=41), gain=0.7)
+    c.add(0.028, pop(560.0, 300.0, glide_s=0.010, tau=0.0045, seconds=0.042, contact_db=-12.0, seed=43))
+    return finish(c.buf, -19, lowpass_hz=2500, fade_out_ms=8)
+
+
 def make_alert():
     c = Canvas(0.350)
     c.add(0.000, knock(261.63, tau=0.055, seconds=0.350, modes=MARIMBA, strike_ms=2.5, seed=61, contact_db=-22.0,
@@ -442,6 +454,15 @@ def a_cancel():
     return finish(c.buf, -17, lowpass_hz=1400, fade_out_ms=18)
 
 
+def a_model_switch():
+    c = Canvas(0.070)
+    c.add(0.000, tongue(280.0, 190.0, glide_s=0.008, tau=0.004, seconds=0.035, h2_db=-14.0, cavity=(2.5, -10.0, 0.002),
+                        click_db=-18.0, seed=131), gain=0.7)
+    c.add(0.028, tongue(330.0, 220.0, glide_s=0.008, tau=0.0045, seconds=0.042, h2_db=-14.0,
+                        cavity=(2.5, -10.0, 0.002), click_db=-18.0, seed=133))
+    return finish(c.buf, -19, lowpass_hz=1500, fade_out_ms=8)
+
+
 def a_alert():
     c = Canvas(0.250)
     c.add(0.000, tongue(215.0, 196.0, glide_s=0.010, tau=0.022, seconds=0.140, h2_db=-16.0,
@@ -506,6 +527,15 @@ def b_cancel():
     c.add(0.0, knock(250.0, tau=0.018, seconds=0.110, modes=WOOD_DULL, strike_ms=1.8, seed=211, contact_lp=1300.0,
                      glide=sag(-6.0, 0.050), sub=(100.0, 60.0, -14.0), grain_db=-26.0))
     return finish(c.buf, -17, lowpass_hz=1500, fade_out_ms=20)
+
+
+def b_model_switch():
+    c = Canvas(0.075)
+    c.add(0.000, knock(240.0, tau=0.004, seconds=0.030, modes=WOOD, strike_ms=0.8, seed=231, contact_db=-18.0,
+                       contact_lp=1800.0, grain_db=-22.0), gain=0.7)
+    c.add(0.028, knock(290.0, tau=0.0045, seconds=0.047, modes=WOOD, strike_ms=0.8, seed=233, contact_db=-18.0,
+                       contact_lp=1800.0, grain_db=-22.0))
+    return finish(c.buf, -19, lowpass_hz=2000, fade_out_ms=8)
 
 
 def b_alert():
@@ -583,6 +613,15 @@ def c_cancel():
     return finish(c.buf, -17, lowpass_hz=1400, room=0.04, fade_out_ms=18, highpass_hz=90.0)
 
 
+def c_model_switch():
+    c = Canvas(0.065)
+    c.add(0.000, tongue(330.0, 160.0, glide_s=0.008, tau=0.0035, seconds=0.030, h2_db=None, cavity=(2.2, -12.0, 0.002),
+                        click_db=-20.0, click_lp=1800.0, seed=331), gain=0.7)
+    c.add(0.028, tongue(400.0, 190.0, glide_s=0.008, tau=0.004, seconds=0.037, h2_db=None, cavity=(2.2, -12.0, 0.002),
+                        click_db=-20.0, click_lp=1800.0, seed=333))
+    return finish(c.buf, -19, lowpass_hz=2000, fade_out_ms=8, highpass_hz=100.0)
+
+
 def c_alert():
     c = Canvas(0.330)
     c.add(0.000, knock(196.0, tau=0.025, seconds=0.200, modes=TOK, strike_ms=3.0, seed=317, contact_db=-30.0,
@@ -614,13 +653,17 @@ def c_success():
 
 SETS = {
     "current": {"start": make_start, "stop": make_stop, "lock": make_lock, "paste": make_paste,
-                "cancel": make_cancel, "alert": make_alert, "error": make_error, "success": make_success},
+                "cancel": make_cancel, "alert": make_alert, "error": make_error, "success": make_success,
+                "modelSwitch": make_model_switch},
     "A": {"start": a_start, "stop": a_stop, "lock": a_lock, "paste": a_paste,
-          "cancel": a_cancel, "alert": a_alert, "error": a_error, "success": a_success},
+          "cancel": a_cancel, "alert": a_alert, "error": a_error, "success": a_success,
+          "modelSwitch": a_model_switch},
     "B": {"start": b_start, "stop": b_stop, "lock": b_lock, "paste": b_paste,
-          "cancel": b_cancel, "alert": b_alert, "error": b_error, "success": b_success},
+          "cancel": b_cancel, "alert": b_alert, "error": b_error, "success": b_success,
+          "modelSwitch": b_model_switch},
     "C": {"start": c_start, "stop": c_stop, "lock": c_lock, "paste": c_paste,
-          "cancel": c_cancel, "alert": c_alert, "error": c_error, "success": c_success},
+          "cancel": c_cancel, "alert": c_alert, "error": c_error, "success": c_success,
+          "modelSwitch": c_model_switch},
 }
 DEFAULT_SET = "A"
 SOUNDS = SETS[DEFAULT_SET]
@@ -651,7 +694,7 @@ def main():
         samples = make()
         path = os.path.join(out, f"{name}.wav")
         write_wav(path, samples)
-        print(f"{name:8s} {len(samples) / SR * 1000:5.0f} ms  peak {20 * math.log10(peak(samples)):6.1f} dBFS  -> {path}")
+        print(f"{name:11s} {len(samples) / SR * 1000:5.0f} ms  peak {20 * math.log10(peak(samples)):6.1f} dBFS  -> {path}")
 
 
 if __name__ == "__main__":
