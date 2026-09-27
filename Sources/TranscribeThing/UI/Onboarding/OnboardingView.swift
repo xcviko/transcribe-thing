@@ -61,7 +61,7 @@ private struct OnboardingRoot: View {
         .onHover { model.isPointerInside = $0 }
         .onChange(of: ctx.permissions.microphone) { model.permissionsChanged() }
         .onChange(of: ctx.permissions.accessibility) { model.permissionsChanged() }
-        .onChange(of: ctx.pillModel.phase) { old, new in model.pillPhaseChanged(from: old, to: new) }
+        .onChange(of: model.dictationPhase) { old, new in model.pillPhaseChanged(from: old, to: new) }
         .onChange(of: ctx.history.entries.first) { model.historyChanged() }
         .onChange(of: ctx.settings.onboardingStep) { _, stored in model.externalStepChanged(stored) }
     }

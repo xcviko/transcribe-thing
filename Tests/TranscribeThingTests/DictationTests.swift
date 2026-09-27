@@ -738,13 +738,14 @@ final class FakeRecorder: DictationRecorder {
         let settings: AppSettings
         let pill: PillModel
         let hotkeys: HotkeyMonitor
+        let meter: LevelMeter
     }
 
     static func make(models: [EngineID: LocalModelState] = [.parakeet: .ready],
                      modelErrors: [EngineID: AppError] = [:], store: ModelStore? = nil,
-                     mic: PermissionState = .granted, micLive: Bool = false, keyStatus: KeyStatus = .missing) -> Harness {
+                     mic: PermissionState = .granted, micLive: Bool = false, keyStatus: KeyStatus = .missing,
+                     meter: LevelMeter = .preview(level: 0)) -> Harness {
         let settings = AppSettings.inMemory()
-        let meter = LevelMeter.preview(level: 0)
         let devices = AudioDeviceCatalog.preview()
         let store = store ?? ModelStore.preview(states: models, lastErrors: modelErrors)
         let account = OpenRouterAccount.preview(status: keyStatus)
@@ -764,7 +765,7 @@ final class FakeRecorder: DictationRecorder {
         controller.copyOverride = { _ in }
         controller.microphoneAuthorizedNow = { micLive }
         return Harness(controller: controller, recorder: recorder, history: history, toasts: toasts,
-                       settings: settings, pill: pill, hotkeys: hotkeys)
+                       settings: settings, pill: pill, hotkeys: hotkeys, meter: meter)
     }
 
     static func recording() -> Recording {
@@ -1116,6 +1117,155 @@ final class FakeRecorder: DictationRecorder {
         case .whileDictating: #expect(shown == [true, false])
         case .never: #expect(shown == [false, false], "no pill at all")
         }
+    }
+
+    /// Onboarding counts recordings by this: the pill is up from key-down, but only a committed press records.
+    @Test func aPressCountsAsARecordingOnlyOnceItCommits() {
+        let h = Self.make()
+        h.controller.handle(.pttDown)
+        #expect(h.pill.phase == .listening)
+        #expect(h.controller.committedPillPhase == .rest, "arming isn't a recording yet")
+        h.controller.handle(.pttUp)
+        #expect(h.pill.phase == .listening)
+        #expect(h.controller.committedPillPhase == .rest, "nor is the tap window")
+        h.controller.send(.timer(.doublePressWindow))
+        #expect(h.controller.committedPillPhase == .rest)
+
+        h.controller.handle(.pttDown)
+        h.controller.send(.timer(.arming))
+        #expect(h.controller.committedPillPhase == .listening)
+        h.controller.handle(.handsFreeToggle)
+        #expect(h.controller.committedPillPhase == .locked)
+    }
+
+    /// A job lands while a quick tap holds the pill up: its check mark (or shake) plays once the pill folds.
+    @Test(arguments: [true, false])
+    func aFlourishDuringATapPlaysWhenThePillFolds(_ succeeds: Bool) async throws {
+        let h = Self.make()
+        h.controller.runsTimers = false
+        h.controller.transcribeOverride = { _, engine in
+            TranscriptResult(text: succeeds ? "dictated" : "", engine: engine, processingTime: 0.1)
+        }
+        h.controller.insertOverride = { _, _ in .pasted }
+        h.controller.handle(.pttDown)
+        h.controller.handle(.pttUp)
+        // A Hub retry, say, finishes inside the double-press window.
+        h.controller.enqueue(Self.recording(), engine: .parakeet, delivery: .paste(targetPID: nil))
+        try await waitUntil { h.controller.machine.activeJobs == 0 }
+        #expect(h.pill.visiblePhase == .listening, "the tap's pill holds until the window closes")
+        #expect(h.pill.shakeCount == 0)
+        h.controller.send(.timer(.doublePressWindow))
+        #expect(h.pill.visiblePhase == (succeeds ? .success : .error))
+        #expect(h.pill.shakeCount == (succeeds ? 0 : 1))
+    }
+
+    /// A press that commits drops the held-back flourish, as a recording cuts one already on screen.
+    @Test func aFlourishHeldDuringArmingIsDroppedWhenThePressCommits() async throws {
+        let h = Self.make()
+        h.controller.runsTimers = false
+        var now: TimeInterval = 100
+        h.controller.clock = { now }
+        h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "dictated", engine: engine, processingTime: 0.1) }
+        h.controller.insertOverride = { _, _ in .pasted }
+        h.controller.handle(.pttDown)
+        h.controller.enqueue(Self.recording(), engine: .parakeet, delivery: .paste(targetPID: nil))
+        try await waitUntil { h.controller.machine.activeJobs == 0 }
+        #expect(h.pill.visiblePhase == .listening)
+        h.controller.send(.timer(.arming))
+        now = 102
+        h.controller.handle(.pttUp)
+        #expect(h.pill.visiblePhase == .processing, "the old check mark doesn't come back after the recording")
+    }
+
+    /// An fn tap or an fn combo while a job is in flight doesn't touch the processing pill: not its width, not
+    /// "Still transcribing…" and its timer. A real hold takes over once it commits.
+    @Test func pressesThatDontCommitLeaveTheProcessingPillAlone() async throws {
+        let h = Self.make()
+        h.controller.runsTimers = false
+        h.pill.timing.slowProcessing = 0.05
+        var release = false
+        h.controller.transcribeOverride = { _, engine in
+            while !release { try await Task.sleep(for: .milliseconds(5)) }
+            return TranscriptResult(text: "dictated", engine: engine, processingTime: 0.1)
+        }
+        h.controller.insertOverride = { _, _ in .pasted }
+        var now: TimeInterval = 100
+        h.controller.clock = { now }
+        h.controller.send(.handsFreeToggle)
+        now = 104
+        h.controller.send(.pillStop)
+        #expect(h.pill.visiblePhase == .processing)
+        #expect(h.pill.processingOrigin == .locked, "wide, like the hands-free pill it came from")
+        try await waitUntil { h.pill.isProcessingSlow }
+
+        var phases: [PillPhase] = []
+        h.pill.onVisiblePhaseChange = { phases.append(h.pill.visiblePhase) }
+        now = 105
+        h.controller.handle(.pttDown)
+        h.controller.handle(.pttUp)
+        #expect(h.controller.machine.capture == .tapPending(firstDownAt: 105))
+        h.controller.send(.timer(.doublePressWindow))
+        now = 106
+        h.controller.handle(.pttDown)
+        h.controller.handle(.pttInterrupted)
+        #expect(phases.isEmpty, "the processing pill never moved")
+        #expect(h.pill.processingOrigin == .locked)
+        #expect(h.pill.isProcessingSlow)
+
+        now = 107
+        h.controller.handle(.pttDown)
+        #expect(h.pill.visiblePhase == .processing, "until the press commits")
+        h.controller.send(.timer(.arming))
+        #expect(h.pill.visiblePhase == .listening)
+        h.controller.handle(.cancel)
+        release = true
+        try await waitUntil { h.controller.machine.activeJobs == 0 }
+    }
+
+    /// The job finishes while a tap over its processing pill is still in the double-press window: the check shows.
+    @Test func aJobFinishingDuringATapOverProcessingShowsItsCheck() async throws {
+        let h = Self.make()
+        h.controller.runsTimers = false
+        var release = false
+        h.controller.transcribeOverride = { _, engine in
+            while !release { try await Task.sleep(for: .milliseconds(5)) }
+            return TranscriptResult(text: "dictated", engine: engine, processingTime: 0.1)
+        }
+        var pasted: [String] = []
+        h.controller.insertOverride = { text, _ in pasted.append(text); return .pasted }
+        h.controller.enqueue(Self.recording(), engine: .parakeet, delivery: .paste(targetPID: nil))
+        #expect(h.pill.visiblePhase == .processing)
+        h.controller.handle(.pttDown)
+        h.controller.handle(.pttUp)
+        release = true
+        try await waitUntil { h.controller.machine.activeJobs == 0 }
+        #expect(pasted == ["dictated"])
+        #expect(h.controller.machine.capture.isUncommittedPress)
+        #expect(h.pill.visiblePhase == .success)
+        h.controller.send(.timer(.doublePressWindow))
+        #expect(h.pill.visiblePhase == .success, "held for its minimum time")
+    }
+
+    /// Every press starts from the "connecting" dots, even one refused before the mic opens (whose start would
+    /// clear the meter): never the still bars of the last recording.
+    @Test func everyPressStartsFromTheConnectingDots() {
+        let meter = LevelMeter()
+        let h = Self.make(mic: .denied, meter: meter)
+        for index in 0..<30 { meter.ingest(rmsDBFS: -30, at: Double(index) * 0.01) }
+        #expect(meter.hasReceivedAudio, "levels left over from the last dictation")
+        h.controller.handle(.pttDown)
+        #expect(h.pill.visiblePhase == .listening)
+        #expect(!meter.hasReceivedAudio)
+        h.controller.handle(.pttInterrupted)
+
+        // A press while hands-free (stop pending) leaves the live meter alone.
+        let live = LevelMeter()
+        let locked = Self.make(meter: live)
+        locked.controller.send(.handsFreeToggle)
+        for index in 0..<30 { live.ingest(rmsDBFS: -30, at: Double(index) * 0.01) }
+        locked.controller.handle(.pttDown)
+        #expect(locked.controller.machine.mode == .handsFree)
+        #expect(live.hasReceivedAudio)
     }
 
     @Test func micTurnedOnInSettingsIsNoticedAtTheNextPress() {

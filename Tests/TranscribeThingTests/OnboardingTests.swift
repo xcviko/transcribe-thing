@@ -444,6 +444,60 @@ import Testing
         #expect(model.currentLesson == nil)
     }
 
+    /// Stands in for `DictationController.committedPillPhase` while the real pill shows a press that never commits.
+    private final class DictationPhaseBox {
+        var phase: PillPhase = .rest
+    }
+
+    /// A quick fn tap brings the pill up for the double-press window, but it isn't a recording: a paste or an
+    /// autocorrect right after it isn't taken for dictation.
+    @Test func aTapThatShowsThePillIsNotARecording() {
+        let committed = DictationPhaseBox()
+        let model = makeModel(step: 3) { ctx in ctx.dictationPhase = { committed.phase } }
+        model.ctx.pillModel.phase = .listening
+        model.updateDraft("Sounds good", now: Date())
+        #expect(!model.isSendingDictation)
+        #expect(model.draft == "Sounds good")
+        #expect(model.messages.map(\.sender) == [.alex])
+        #expect(model.livePhase == .rest, "the stage follows what was committed (and the keys)")
+    }
+
+    /// Keys that only reach the event tap: the real pill stands in for a hold only while it really records, not
+    /// while it waits out the double-press window after a short press.
+    @Test func theFallbackHoldCheckIgnoresTheTapWindow() async throws {
+        let committed = DictationPhaseBox()
+        let model = makeModel(step: 3) { ctx in
+            ctx.dictationPhase = { committed.phase }
+            ctx.isPreview = false
+        }
+        committed.phase = .listening
+        model.pillPhaseChanged(from: .rest, to: .listening)
+        // Released right after the confirm: the pill stays up for a second press, but nothing records.
+        model.ctx.pillModel.phase = .listening
+        committed.phase = .rest
+        model.pillPhaseChanged(from: .listening, to: .rest)
+        try await Task.sleep(for: .milliseconds(600))
+        #expect(!model.heldPushToTalk)
+
+        committed.phase = .listening
+        model.pillPhaseChanged(from: .rest, to: .listening)
+        try await Task.sleep(for: .milliseconds(600))
+        #expect(model.heldPushToTalk, "a real hold still counts")
+    }
+
+    @Test func escInTheTapWindowDoesntCompleteTheCancelLesson() {
+        let committed = DictationPhaseBox()
+        let model = makeModel(step: 3) { ctx in ctx.dictationPhase = { committed.phase } }
+        model.ctx.pillModel.phase = .listening
+        model.handleRawKey(RawKeyEvent(key: .escape, isDown: true))
+        #expect(!model.completedLessons.contains(.cancel), "nothing was recording")
+        model.handleRawKey(RawKeyEvent(key: .escape, isDown: false))
+
+        committed.phase = .listening
+        model.handleRawKey(RawKeyEvent(key: .escape, isDown: true))
+        #expect(model.completedLessons.contains(.cancel))
+    }
+
     @Test func escWhileIdleDoesNothing() {
         let model = makeModel(step: 3)
         model.handleRawKey(RawKeyEvent(key: .escape, isDown: true))

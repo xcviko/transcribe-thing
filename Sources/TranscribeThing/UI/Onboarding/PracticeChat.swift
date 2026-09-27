@@ -42,7 +42,7 @@ struct PracticeChat: View {
             takeFocus()
         }
         // A shortcut recorder on the left may have kept focus: take it back so the words land here.
-        .onChange(of: model.ctx.pillModel.phase.isRecording) { _, recording in
+        .onChange(of: model.dictationPhase.isRecording) { _, recording in
             if recording, !model.ctx.isPreview { takeFocus() }
         }
     }
@@ -209,7 +209,7 @@ struct PracticeChat: View {
                     StageClock(paused: reduceMotion) { t in
                         let meter = model.ctx.levelMeter
                         // The keys can run ahead of the recorder: breathe until real audio arrives.
-                        let live = model.ctx.pillModel.phase.isRecording && meter.hasReceivedAudio
+                        let live = model.dictationPhase.isRecording && meter.hasReceivedAudio
                         let level = live ? Double(meter.level) : 0.4 + 0.4 * HeroTimeline.voice(t * 0.8)
                         PillBars(level: level, time: t, color: .accent, maxHeight: 14)
                             .scaleEffect(0.8)
