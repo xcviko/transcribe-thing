@@ -33,6 +33,9 @@ import Testing
 
         func notice(_ key: String) -> Notice? { h.toasts.notices.first { $0.dedupeKey == key } }
 
+        /// "No speech detected": inside the pill, or the notice when there is no pill.
+        var saidNoSpeech: Bool { h.pill.errorMessage == PillMetrics.noSpeechText || notice("error.noSpeech") != nil }
+
         /// Clicks the notice's button the way the toast does.
         func click(_ kind: NoticeActionKind, in key: String) throws {
             let notice = try #require(notice(key), "no \(key) notice")
@@ -110,6 +113,7 @@ import Testing
         for (engine, key) in [(EngineID.parakeet, KeyStatus.valid(KeyInfo())), (.parakeet, .missing),
                               (.parakeetCloud, .valid(KeyInfo())), (.geminiFlash, .valid(KeyInfo()))] {
             let rig = Rig(keyStatus: key)
+            rig.h.settings.pillMode = .never   // the notice itself is what's checked here
             let r = Self.roomNoise()
             rig.h.controller.enqueue(r, engine: engine, delivery: .paste(targetPID: nil))
             try await waitUntil { rig.h.controller.machine.activeJobs == 0 }
@@ -339,10 +343,10 @@ import Testing
         rig.h.recorder.next = Self.roomNoise(seconds: 1)
         rig.now += 1
         rig.h.controller.send(.pillStop)
-        try await waitUntil { rig.notice("error.noSpeech") != nil && rig.h.controller.machine.activeJobs == 0 }
+        try await waitUntil { rig.saidNoSpeech && rig.h.controller.machine.activeJobs == 0 }
         #expect(rig.transcribed.count == 1)
         #expect(rig.transcribed.first?.duration == 2.5)
-        #expect(rig.notice("error.noSpeech")?.actions.isEmpty == true)
+        #expect(rig.h.toasts.notices.allSatisfy { $0.actions.allSatisfy { $0.kind != .retry } })
         #expect(rig.h.history.entries.isEmpty)
         try await Task.sleep(for: .milliseconds(300))
         #expect(rig.transcribed.count == 1, "nothing re-queues it on its own")
@@ -370,7 +374,7 @@ import Testing
     }
 
     /// A retry (from the notice or the Hub) that hears no speech takes the failed row and its audio along, and
-    /// says so even after the day's quiet "No speech detected" notices are used up.
+    /// says why.
     @Test func aRetryThatHearsNoSpeechTakesItsFailedRowAlong() async throws {
         for fromHub in [false, true] {
             let rig = Rig(keyStatus: .valid(KeyInfo()))
@@ -383,17 +387,6 @@ import Testing
             try await waitUntil { rig.h.history.entry(id: failing.id)?.status == .failed && rig.h.controller.machine.activeJobs == 0 }
             let failed = try #require(rig.notice("error.timeout.geminiFlash"))
 
-            // Three silent dictations use up the day's quiet notices.
-            for _ in 0..<3 {
-                rig.h.toasts.dismiss(dedupeKey: "error.noSpeech")
-                rig.h.controller.enqueue(Self.roomNoise(), engine: .parakeet, delivery: .paste(targetPID: nil))
-                try await waitUntil { rig.notice("error.noSpeech") != nil && rig.h.controller.machine.activeJobs == 0 }
-            }
-            rig.h.toasts.dismiss(dedupeKey: "error.noSpeech")
-            rig.h.controller.enqueue(Self.roomNoise(), engine: .parakeet, delivery: .paste(targetPID: nil))
-            try await waitUntil { rig.h.controller.machine.activeJobs == 0 }
-            #expect(rig.notice("error.noSpeech") == nil, "a fourth silent dictation today stays quiet")
-
             if fromHub {
                 let entry = try #require(rig.h.history.entry(id: failing.id))
                 rig.h.controller.retry(entry, with: .parakeetCloud)
@@ -402,7 +395,7 @@ import Testing
                 rig.h.toasts.perform(retry, on: failed)
             }
             try await waitUntil { rig.h.history.entry(id: failing.id) == nil && rig.h.controller.machine.activeJobs == 0 }
-            #expect(rig.notice("error.noSpeech") != nil, "fromHub \(fromHub): the row went, so say why")
+            #expect(rig.saidNoSpeech, "fromHub \(fromHub): the row went, so say why")
             #expect(rig.h.history.entries.isEmpty)
             #expect(rig.pasted.isEmpty)
 

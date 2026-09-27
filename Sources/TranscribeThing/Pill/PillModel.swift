@@ -59,6 +59,9 @@ final class PillModel {
 
     /// Key-chip text for the tooltip, from `settings.shortcuts[.pushToTalk]`.
     var shortcutHint: String = "fn"
+    /// Set before an error flash to say it in words inside the capsule ("No speech detected") instead of the
+    /// glyph and the shake. Cleared when the flash settles.
+    var errorMessage: String?
     /// Increment to shake. Shaking an idle or processing pill turns it into a brief error flash
     /// so the feedback is visible even when the pill would otherwise be hidden.
     var shakeTrigger = 0 {
@@ -155,7 +158,8 @@ final class PillModel {
         } else if !target.isRecording, previous.isRecording {
             recordingStartedAt = nil
         }
-        if target == .error, previous != .error { shakeCount &+= 1 }
+        if target == .error, previous != .error, errorMessage == nil { shakeCount &+= 1 }
+        if target != .error { errorMessage = nil }
         visiblePhase = target
         if !target.isIdle { showsTooltip = false }
         if !target.isRecording { setHoveredControl(nil) }
@@ -202,7 +206,8 @@ final class PillModel {
     private func shakeRequested() {
         switch visiblePhase {
         case .listening, .locked, .error:
-            shakeCount &+= 1
+            // A worded flash ("No speech detected") holds on without the shake.
+            if !(visiblePhase == .error && errorMessage != nil) { shakeCount &+= 1 }
             if visiblePhase == .error, autoSettles {
                 holdUntil = Date().addingTimeInterval(timing.errorHold)
                 scheduleSettle(at: holdUntil!)

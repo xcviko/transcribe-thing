@@ -54,9 +54,15 @@ enum PillMetrics {
     /// capsule's rounding the text doesn't need.
     static let slowPadding: CGFloat = 15
     /// Slow processing: the push-to-talk height, just wide enough for `slowText` and its padding.
-    static let slowProcessingSize = CGSize(
-        width: (textWidth(slowText, size: slowFontSize, weight: .medium, rounded: true) + 2 * slowPadding).rounded(.up),
-        height: listeningSize.height)
+    static let slowProcessingSize = captionSize(for: slowText)
+    /// A dictation with no words says so inside the capsule, in the same face as "Still transcribing…".
+    static let noSpeechText = "No speech detected"
+
+    /// A sentence inside the capsule: the push-to-talk height, just wide enough for `text` and its padding.
+    static func captionSize(for text: String) -> CGSize {
+        CGSize(width: (textWidth(text, size: slowFontSize, weight: .medium, rounded: true) + 2 * slowPadding).rounded(.up),
+               height: listeningSize.height)
+    }
 
     /// Width of a single line of `text` in the system font, as SwiftUI's `Font.system` draws it.
     static func textWidth(_ text: String, size: CGFloat, weight: NSFont.Weight, rounded: Bool) -> CGFloat {
@@ -118,8 +124,10 @@ enum PillVisual: Equatable, Sendable {
     /// `slow`: processing has run long, and the capsule widens to say "Still transcribing…" instead of the dots.
     case processing(afterHandsFree: Bool, slow: Bool = false)
     case error
+    /// The error flash as a sentence instead of the glyph ("No speech detected"): no red, no shake.
+    case message(String)
 
-    enum Content: Hashable { case empty, peek, hello, recording, processing, error }
+    enum Content: Hashable { case empty, peek, hello, recording, processing, error, message }
 
     var size: CGSize {
         switch self {
@@ -129,6 +137,7 @@ enum PillVisual: Equatable, Sendable {
         case .listening, .hello, .processing: PillMetrics.listeningSize
         case .locked: PillMetrics.lockedSize
         case .error: PillMetrics.errorSize
+        case .message(let text): PillMetrics.captionSize(for: text)
         }
     }
 
@@ -140,6 +149,7 @@ enum PillVisual: Equatable, Sendable {
         case .listening, .locked: .recording
         case .processing: .processing
         case .error: .error
+        case .message: .message
         }
     }
 
@@ -227,6 +237,7 @@ struct PillView: View {
         case .processing:
             return .processing(afterHandsFree: model.processingOrigin == .locked, slow: model.isProcessingSlow)
         case .error:
+            if let text = model.errorMessage { return .message(text) }
             return .error
         }
     }
@@ -285,6 +296,7 @@ struct PillView: View {
         case .locked: return .spring(duration: 0.34, bounce: 0.3)
         case .processing: return .spring(duration: 0.3, bounce: 0.12)
         case .error: return .spring(duration: 0.3, bounce: 0.2)
+        case .message: return .spring(duration: 0.3, bounce: 0.12)
         }
     }
 
@@ -297,6 +309,7 @@ struct PillView: View {
         case .processing(_, slow: true): "transcribe-thing is still transcribing"
         case .processing: "transcribe-thing is transcribing"
         case .error: "Dictation failed"
+        case .message(let text): text
         }
         guard let engine, visual.carriesModel else { return label }
         return "\(label) with \(engine.shortName)"
@@ -587,6 +600,13 @@ struct PillFace: View {
                 .modifier(morph)
                 .id(PillVisual.Content.error)
                 .transition(contentTransition())
+        case .message:
+            if case .message(let text) = visual {
+                PillCaptionText(text: text)
+                    .modifier(morph)
+                    .id(PillVisual.Content.message)
+                    .transition(contentTransition())
+            }
         }
     }
 
@@ -730,6 +750,19 @@ private struct HelloRipple: View {
     }
 }
 
+/// A sentence inside the capsule ("Still transcribing…", "No speech detected"), in the timer's rounded face.
+private struct PillCaptionText: View {
+    var text: String
+
+    var body: some View {
+        Text(text)
+            .font(PillMetrics.slowFont)
+            .foregroundStyle(.white.opacity(0.85))
+            .lineLimit(1)
+            .fixedSize()
+    }
+}
+
 /// The processing wave, and once processing runs long, "Still transcribing…": the dots fade out as the capsule
 /// widens and the text fades in while the shimmer keeps sweeping over it. Same content either way, so going slow
 /// never restarts the wave or the shimmer.
@@ -743,11 +776,7 @@ private struct ProcessingContent: View {
     var body: some View {
         ZStack {
             if isSlow {
-                Text(PillMetrics.slowText)
-                    .font(PillMetrics.slowFont)
-                    .foregroundStyle(.white.opacity(0.85))
-                    .lineLimit(1)
-                    .fixedSize()
+                PillCaptionText(text: PillMetrics.slowText)
                     .transition(textTransition)
             }
             ProcessingWaveView(startOffset: startOffset, tint: tint, showsDots: !isSlow)

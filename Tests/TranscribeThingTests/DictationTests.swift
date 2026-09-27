@@ -823,9 +823,10 @@ final class FakeRecorder: DictationRecorder {
     }
 
     /// An engine that answers with no text heard no speech: exactly what a speechless recording gets before any
-    /// engine (the quiet notice and the pill's shake), and nothing is kept.
+    /// engine, and nothing is kept. Compared through the Never-mode notice (the pill's words are covered above).
     @Test func emptyTextIsSilenceNotAnError() async throws {
         let preflight = Self.make()
+        preflight.settings.pillMode = .never
         preflight.recorder.next = Recording(samples: Array(repeating: 0.01, count: 32_000),
                                             speech: SpeechStats(voicedSeconds: 0.1, peakDBFS: -40, isSilent: false))
         preflight.controller.send(.handsFreeToggle)
@@ -836,6 +837,7 @@ final class FakeRecorder: DictationRecorder {
 
         for engine in [EngineID.parakeet, .parakeetCloud, .geminiFlash, .geminiPro] {
             let h = Self.make(keyStatus: .valid(KeyInfo()))
+            h.settings.pillMode = .never
             h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "  \n", engine: engine, processingTime: 0.1) }
             h.controller.insertOverride = { _, _ in Issue.record("nothing should be pasted"); return .pasted }
             let r = Self.recording()
@@ -847,7 +849,7 @@ final class FakeRecorder: DictationRecorder {
             #expect(notice.dedupeKey == expected.dedupeKey && notice.title == expected.title && notice.body == expected.body)
             #expect(notice.style == .info && notice.sound == nil && notice.lifetime == expected.lifetime)
             #expect(notice.actions.isEmpty && notice.recordingID == nil, "no Retry")
-            #expect(h.pill.visiblePhase == .error, "the same shake as a recording with no speech")
+            #expect(h.pill.visiblePhase == .error, "the same flash as a recording with no speech")
 
             // No audio was kept: a Retry for it finds nothing.
             h.controller.perform(NoticeAction(title: "Retry", kind: .retry),
@@ -869,18 +871,28 @@ final class FakeRecorder: DictationRecorder {
         #expect(!h.toasts.notices.contains { $0.dedupeKey == "error.noSpeech" })
     }
 
-    /// Engine silence and speechless recordings share the day's three quiet notices; the shake always comes.
-    @Test func engineSilenceSharesTheNoSpeechQuota() async throws {
+    /// Every silent result says "No speech detected" inside the pill, with no toast and no shake; with no pill
+    /// (Never mode) it is the quiet notice instead, every time.
+    @Test func engineSilenceSaysNoSpeechEveryTime() async throws {
         let h = Self.make()
         h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "", engine: engine, processingTime: 0.1) }
-        var shown: [Bool] = []
+        for _ in 0..<4 {
+            h.pill.errorMessage = nil
+            let shakes = h.pill.shakeCount
+            h.controller.enqueue(Self.recording(), engine: .parakeet, delivery: .paste(targetPID: nil))
+            try await waitUntil { h.controller.machine.activeJobs == 0 }
+            #expect(h.pill.errorMessage == PillMetrics.noSpeechText)
+            #expect(PillView(model: h.pill).visual == .message(PillMetrics.noSpeechText))
+            #expect(h.pill.shakeCount == shakes, "a worded flash doesn't shake")
+            #expect(!h.toasts.notices.contains { $0.dedupeKey == "error.noSpeech" })
+        }
+        h.settings.pillMode = .never
         for _ in 0..<4 {
             h.toasts.dismissAll()
             h.controller.enqueue(Self.recording(), engine: .parakeet, delivery: .paste(targetPID: nil))
             try await waitUntil { h.controller.machine.activeJobs == 0 }
-            shown.append(h.toasts.notices.contains { $0.dedupeKey == "error.noSpeech" })
+            #expect(h.toasts.notices.contains { $0.dedupeKey == "error.noSpeech" })
         }
-        #expect(shown == [true, true, true, false])
         #expect(h.history.entries.isEmpty)
     }
 
@@ -939,8 +951,9 @@ final class FakeRecorder: DictationRecorder {
                                     speech: SpeechStats(voicedSeconds: 0.1, peakDBFS: -40, isSilent: false))
         h.controller.send(.handsFreeToggle)
         h.controller.send(.pillStop)
-        try await waitUntil { h.controller.machine.activeJobs == 0 && !h.toasts.notices.isEmpty }
-        #expect(h.toasts.notices.contains { $0.dedupeKey == "error.noSpeech" })
+        try await waitUntil { h.controller.machine.activeJobs == 0 && h.pill.errorMessage != nil }
+        #expect(h.pill.errorMessage == PillMetrics.noSpeechText)
+        #expect(!h.toasts.notices.contains { $0.dedupeKey == "error.noSpeech" })
         #expect(h.history.entries.isEmpty)
     }
 
@@ -1138,8 +1151,8 @@ final class FakeRecorder: DictationRecorder {
         #expect(h.controller.committedPillPhase == .locked)
     }
 
-    /// A job lands while a quick tap holds the pill up: its shake plays once the pill folds. A paste has no
-    /// flourish (the pasted text is the confirmation), so the pill just folds to rest.
+    /// A job lands while a quick tap holds the pill up: its flash plays once the pill folds. A paste has no
+    /// flourish (the pasted text is the confirmation), so the pill just folds to rest; no speech says so in words.
     @Test(arguments: [true, false])
     func aFlourishDuringATapPlaysWhenThePillFolds(_ succeeds: Bool) async throws {
         let h = Self.make()
@@ -1157,7 +1170,8 @@ final class FakeRecorder: DictationRecorder {
         #expect(h.pill.shakeCount == 0)
         h.controller.send(.timer(.doublePressWindow))
         #expect(h.pill.visiblePhase == (succeeds ? .rest : .error))
-        #expect(h.pill.shakeCount == (succeeds ? 0 : 1))
+        #expect(h.pill.shakeCount == 0, "a worded flash doesn't shake")
+        #expect(h.pill.errorMessage == (succeeds ? nil : PillMetrics.noSpeechText))
     }
 
     /// A press that commits drops the held-back flourish, as a recording cuts one already on screen.

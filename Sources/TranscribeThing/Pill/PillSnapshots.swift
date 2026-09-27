@@ -571,6 +571,11 @@ private struct PillStateSheet: View {
                 PillStateSheet.processingAfterLocked().previewSlowProcessing()
             },
             Row(id: "error", caption: "Error") { .preview(phase: .error) },
+            Row(id: "no-speech", caption: "No speech") {
+                let model = PillModel.preview(phase: .error)
+                model.errorMessage = PillMetrics.noSpeechText
+                return model
+            },
         ]
     }
 
