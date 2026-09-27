@@ -85,20 +85,20 @@ final class AppSettings {
 
     @ObservationIgnored private let store: SettingsStore
     /// Read once at most, by the migration of the removed built-in-over-Bluetooth switch.
-    @ObservationIgnored private let builtInMicrophoneUID: () -> String?
+    @ObservationIgnored private let microphoneProbe: () -> MicrophoneMigrationProbe
 
-    /// `builtInMicrophoneUID` is asked only when an older build's "Use the built-in mic even when AirPods are
-    /// connected" has to become an explicit mic choice.
+    /// `microphoneProbe` is asked only when an older build's "Use the built-in mic even when AirPods are
+    /// connected" may have to become an explicit mic choice.
     init(defaults: UserDefaults = .standard,
-         builtInMicrophoneUID: @escaping () -> String? = { CoreAudioHAL.builtInMicrophoneUID() }) {
+         microphoneProbe: @escaping () -> MicrophoneMigrationProbe = { .current() }) {
         store = SettingsStore(defaults: defaults)
-        self.builtInMicrophoneUID = builtInMicrophoneUID
+        self.microphoneProbe = microphoneProbe
         load()
     }
 
     private init(store: SettingsStore) {
         self.store = store
-        builtInMicrophoneUID = { nil }
+        microphoneProbe = { MicrophoneMigrationProbe() }
         load()
     }
 
@@ -192,14 +192,24 @@ final class AppSettings {
 
 extension AppSettings {
     /// Older builds had "Use the built-in mic even when AirPods are connected", on by default: with the mic on
-    /// Automatic and a Bluetooth default, dictation used the built-in mic. The picked mic is now the only choice,
-    /// so where that switch was on (explicitly, or by default on an install past onboarding) and the mic was
-    /// Automatic, the built-in mic becomes the pick. Once: the old key goes and a marker stays.
+    /// Automatic and a Bluetooth default, dictation used the built-in mic, and otherwise the switch did nothing.
+    /// The picked mic is now the only choice, so the built-in mic becomes the pick only where the switch was on
+    /// (explicitly, or by default on an install past onboarding), the mic was Automatic, the built-in mic can
+    /// record, and the switch was doing something right now: the default input is Bluetooth. A switch the user
+    /// turned on explicitly also pins the built-in mic while it is the default anyway (nothing changes today, and
+    /// AirPods later still don't take over). A USB or other wired default, or a closed lid, stays Automatic.
+    /// Once: the old key goes and a marker stays.
     nonisolated static func migratedMicrophoneUID(current: String?, storedPreferBuiltIn: Bool?,
                                                   onboardingCompleted: Bool,
-                                                  builtInMicrophoneUID: () -> String?) -> String? {
+                                                  probe: () -> MicrophoneMigrationProbe) -> String? {
         guard current == nil, storedPreferBuiltIn ?? onboardingCompleted else { return current }
-        return builtInMicrophoneUID()
+        let inputs = probe()
+        guard let builtIn = inputs.availableBuiltInUID else { return current }
+        switch inputs.defaultInput {
+        case .bluetooth: return builtIn
+        case .builtInMicrophone where storedPreferBuiltIn == true: return builtIn
+        default: return current
+        }
     }
 
     fileprivate func migrateBuiltInOverBluetoothOnce() {
@@ -207,13 +217,33 @@ extension AppSettings {
         let uid = Self.migratedMicrophoneUID(current: microphoneUID,
                                              storedPreferBuiltIn: store.bool(.preferBuiltInMicOverBluetooth),
                                              onboardingCompleted: onboardingCompleted,
-                                             builtInMicrophoneUID: builtInMicrophoneUID)
+                                             probe: microphoneProbe)
         if uid != microphoneUID {
             microphoneUID = uid
             store.set(uid, .microphoneUID)
         }
         store.remove(.preferBuiltInMicOverBluetooth)
         store.set(true, .microphoneChoiceMigrated)
+    }
+}
+
+/// The inputs at the moment the removed switch is migrated: what that switch was deciding then.
+struct MicrophoneMigrationProbe: Sendable, Equatable {
+    enum DefaultInput: Sendable, Equatable { case bluetooth, builtInMicrophone, other }
+    /// The macOS default input's kind; nil when there is none.
+    var defaultInput: DefaultInput?
+    /// The Mac's own mic, only when it can record now (not with the lid closed).
+    var availableBuiltInUID: String?
+
+    static func current() -> Self {
+        let records = CoreAudioHAL.inputRecords()
+        let builtIn = CoreAudioHAL.builtInMicrophoneUID()
+        let defaultID = CoreAudioHAL.defaultInputDeviceID()
+        let defaultDevice = records.first { $0.audioID == defaultID }?.device
+        return Self(defaultInput: defaultDevice.map { device in
+                        device.isBluetooth ? .bluetooth : device.id == builtIn ? .builtInMicrophone : .other
+                    },
+                    availableBuiltInUID: records.first { $0.device.id == builtIn && $0.device.isAvailable }?.device.id)
     }
 }
 

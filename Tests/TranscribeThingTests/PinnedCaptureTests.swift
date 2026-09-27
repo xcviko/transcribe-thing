@@ -280,6 +280,97 @@ private final class Events: @unchecked Sendable {
         }
     }
 
+    /// Buffers are stamped with the layout read before the device started: a rate or channel change means reopen.
+    @Test func layoutsCompareByRateAndChannels() throws {
+        let mono48 = try #require(HALInputLayout(streams: [float32(channels: 1)]))
+        #expect(mono48 == HALInputLayout(streams: [float32(channels: 1)]))
+        #expect(mono48 != HALInputLayout(streams: [float32(rate: 24_000, channels: 1)]))
+        #expect(mono48 != HALInputLayout(streams: [float32(channels: 2)]))
+        #expect(mono48.sampleRate == 48_000)
+        #expect(mono48.channelCount == 1)
+    }
+
+    // MARK: Ring between the IO thread and delivery
+
+    private func drain(_ ring: HALCaptureRing) -> [(samples: [Float], time: TimeInterval)] {
+        var out: [(samples: [Float], time: TimeInterval)] = []
+        ring.drain { buffer, time in
+            let data = buffer.floatChannelData![0]
+            out.append((Array(UnsafeBufferPointer(start: data, count: Int(buffer.frameLength))), time))
+        }
+        return out
+    }
+
+    @Test func ringDeliversCyclesInOrderWithTheirCaptureTimes() throws {
+        let layout = try #require(HALInputLayout(streams: [float32(channels: 2)]))
+        let ring = try #require(HALCaptureRing(layout: layout, slotFrames: 64, slotCount: 4))
+        withList([[1, -1, 2, -2, 3, -3]], channels: [2]) { #expect(ring.write($0, chunkStart: 1.0)) }
+        withList([[4, -4, 5, -5]], channels: [2]) { #expect(ring.write($0, chunkStart: 2.0)) }
+        var cycles: [([Float], [Float], TimeInterval)] = []
+        ring.drain { buffer, time in
+            let data = buffer.floatChannelData!
+            let n = Int(buffer.frameLength)
+            #expect(buffer.format.channelCount == 2)
+            cycles.append((Array(UnsafeBufferPointer(start: data[0], count: n)),
+                           Array(UnsafeBufferPointer(start: data[1], count: n)), time))
+        }
+        #expect(cycles.map(\.0) == [[1, 2, 3], [4, 5]])
+        #expect(cycles.map(\.1) == [[-1, -2, -3], [-4, -5]])
+        #expect(cycles.map(\.2) == [1.0, 2.0])
+        #expect(drain(ring).isEmpty, "a drained slot is delivered once")
+    }
+
+    /// A cycle longer than a slot spans several, each stamped where its first frame falls.
+    @Test func longCyclesSpanSlots() throws {
+        let layout = try #require(HALInputLayout(streams: [float32(channels: 1)]))
+        let ring = try #require(HALCaptureRing(layout: layout, slotFrames: 64, slotCount: 8))
+        let samples = (0..<150).map(Float.init)
+        withList([samples], channels: [1]) { #expect(ring.write($0, chunkStart: 10)) }
+        let slots = drain(ring)
+        #expect(slots.map(\.samples.count) == [64, 64, 22])
+        #expect(slots.flatMap(\.samples) == samples)
+        let expectedTimes: [TimeInterval] = [10, 10 + 64.0 / 48_000, 10 + 128.0 / 48_000]
+        #expect(slots.map(\.time) == expectedTimes)
+    }
+
+    /// A stalled delivery queue drops (and counts) cycles instead of overwriting ones not yet delivered.
+    @Test func aFullRingDropsNewCyclesAndCountsThem() throws {
+        let layout = try #require(HALInputLayout(streams: [float32(channels: 1)]))
+        let ring = try #require(HALCaptureRing(layout: layout, slotFrames: 64, slotCount: 2))
+        for value: Float in [1, 2] {
+            withList([[value, value]], channels: [1]) { #expect(ring.write($0, chunkStart: Double(value))) }
+        }
+        withList([[3, 3]], channels: [1]) { #expect(!ring.write($0, chunkStart: 3)) }
+        #expect(ring.takeDroppedCycles() == 1)
+        #expect(ring.takeDroppedCycles() == 0)
+        #expect(drain(ring).map(\.samples) == [[1, 1], [2, 2]])
+        withList([[4, 4]], channels: [1]) { #expect(ring.write($0, chunkStart: 4)) }
+        #expect(drain(ring).map(\.samples) == [[4, 4]])
+    }
+
+    /// The session may keep delivered buffers (the undo-resume prefix): reusing a slot must not change them.
+    @Test func deliveredBuffersAreCopiesOfTheirSlot() throws {
+        let layout = try #require(HALInputLayout(streams: [float32(channels: 1)]))
+        let ring = try #require(HALCaptureRing(layout: layout, slotFrames: 64, slotCount: 1))
+        var kept: [AVAudioPCMBuffer] = []
+        withList([[7, 7]], channels: [1]) { ring.write($0, chunkStart: 0) }
+        ring.drain { buffer, _ in kept.append(buffer) }
+        withList([[9, 9]], channels: [1]) { ring.write($0, chunkStart: 1) }
+        ring.drain { buffer, _ in kept.append(buffer) }
+        #expect(kept.map { $0.floatChannelData![0][0] } == [7, 9])
+    }
+
+    /// About a second of slack at any IO size, and slot sizes stay sane.
+    @Test func ringSizingCoversASecond() throws {
+        let layout = try #require(HALInputLayout(streams: [float32(channels: 1)]))
+        for frames in [16, 128, 480, 4_096, 100_000] {
+            let ring = try #require(HALCaptureRing(layout: layout, slotFrames: frames))
+            #expect((64...4_096).contains(ring.slotFrames))
+            #expect(ring.slotCount * ring.slotFrames >= 48_000)
+            #expect(ring.slotCount >= 64)
+        }
+    }
+
     @Test func onlyFloatStreamsAreAccepted() {
         var integer = float32(channels: 2)
         integer.mFormatFlags = kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked

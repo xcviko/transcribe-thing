@@ -841,7 +841,10 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         try body(defaults)
     }
 
-    /// (stored switch, onboarding done, stored mic) -> mic after the migration.
+    private static let airPodsDefault = MicrophoneMigrationProbe(defaultInput: .bluetooth,
+                                                                 availableBuiltInUID: "BuiltInMicrophoneDevice")
+
+    /// (stored switch, onboarding done, stored mic) -> mic after the migration, with AirPods as the default input.
     @Test(arguments: [
         (true as Bool?, true, nil as String?, "BuiltInMicrophoneDevice" as String?),
         (true, false, nil, "BuiltInMicrophoneDevice"),
@@ -856,9 +859,9 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
             defaults.set(onboarded, forKey: SettingsKey.onboardingCompleted.defaultsKey)
             if let mic { defaults.set(mic, forKey: SettingsKey.microphoneUID.defaultsKey) }
             var lookups = 0
-            let settings = AppSettings(defaults: defaults, builtInMicrophoneUID: {
+            let settings = AppSettings(defaults: defaults, microphoneProbe: {
                 lookups += 1
-                return "BuiltInMicrophoneDevice"
+                return Self.airPodsDefault
             })
             #expect(settings.microphoneUID == expected)
             #expect(lookups == (expected == "BuiltInMicrophoneDevice" ? 1 : 0), "the HAL is asked only when needed")
@@ -867,19 +870,48 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
 
             // Once: going back to Automatic afterwards sticks.
             settings.microphoneUID = nil
-            let reloaded = AppSettings(defaults: defaults, builtInMicrophoneUID: {
+            let reloaded = AppSettings(defaults: defaults, microphoneProbe: {
                 lookups += 100
-                return "BuiltInMicrophoneDevice"
+                return Self.airPodsDefault
             })
             #expect(reloaded.microphoneUID == nil)
             #expect(lookups < 100)
         }
     }
 
+    /// The switch only ever acted on a Bluetooth default: where it wasn't acting, Automatic stays, and a closed
+    /// lid never pins a mic that can't record (which would warn about a fallback on every launch).
+    /// (stored switch, default input, built-in mic available) -> mic after the migration.
+    @Test(arguments: [
+        (nil as Bool?, MicrophoneMigrationProbe.DefaultInput.other as MicrophoneMigrationProbe.DefaultInput?,
+         true, nil as String?),                                 // USB default, never touched: keeps the USB mic
+        (true, .other, true, nil),                              // USB default, turned on: the USB mic, as before
+        (nil, .bluetooth, false, nil),                          // lid closed, AirPods default
+        (true, .bluetooth, false, nil),
+        (nil, .other, false, nil),                              // clamshell with a USB mic
+        (nil, .builtInMicrophone, true, nil),                   // untouched, built-in default: stays Automatic
+        (true, .builtInMicrophone, true, "BuiltInMicrophoneDevice"), // turned on: AirPods later still don't win
+        (nil, nil, true, nil),                                  // no default input at all
+    ])
+    func theOldSwitchMigratesOnlyWhereItActed(_ stored: Bool?, defaultInput: MicrophoneMigrationProbe.DefaultInput?,
+                                              builtInAvailable: Bool, expected: String?) throws {
+        try withSuite { defaults in
+            if let stored { defaults.set(stored, forKey: SettingsKey.preferBuiltInMicOverBluetooth.defaultsKey) }
+            defaults.set(true, forKey: SettingsKey.onboardingCompleted.defaultsKey)
+            let probe = MicrophoneMigrationProbe(defaultInput: defaultInput,
+                                                 availableBuiltInUID: builtInAvailable ? "BuiltInMicrophoneDevice" : nil)
+            let settings = AppSettings(defaults: defaults, microphoneProbe: { probe })
+            #expect(settings.microphoneUID == expected)
+            #expect(defaults.string(forKey: SettingsKey.microphoneUID.defaultsKey) == expected)
+            #expect(defaults.object(forKey: SettingsKey.preferBuiltInMicOverBluetooth.defaultsKey) == nil)
+        }
+    }
+
     @Test func noBuiltInMicLeavesAutomatic() throws {
         try withSuite { defaults in
             defaults.set(true, forKey: SettingsKey.preferBuiltInMicOverBluetooth.defaultsKey)
-            #expect(AppSettings(defaults: defaults, builtInMicrophoneUID: { nil }).microphoneUID == nil)
+            let probe = MicrophoneMigrationProbe(defaultInput: .bluetooth, availableBuiltInUID: nil)
+            #expect(AppSettings(defaults: defaults, microphoneProbe: { probe }).microphoneUID == nil)
             #expect(defaults.object(forKey: SettingsKey.preferBuiltInMicOverBluetooth.defaultsKey) == nil)
         }
     }
