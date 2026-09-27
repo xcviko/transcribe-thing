@@ -499,12 +499,29 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         }
     }
 
+    private struct Frame {
+        var now: TimeInterval
+        var bars: [WaveformEngine.Bar]
+        var track: [WaveformEngine.Bar] { bars.filter(\.isTrack) }
+        var flowing: [WaveformEngine.Bar] { bars.filter { !$0.isTrack } }
+    }
+
     private static let size = CGSize(width: PillMetrics.barFieldWidth, height: PillMetrics.barMaxHeight)
+    private static let step = PillMetrics.barWidth + PillMetrics.barGap
+    /// Where the rightmost slot's dot (and a landing column) stands.
+    private static let slot0 = size.width - PillMetrics.barWidth
+    /// The track: a fixed dot per slot.
+    private static let slots = (0..<PillMetrics.barCount).map {
+        CGRect(x: slot0 - CGFloat($0) * step, y: (size.height - PillMetrics.barMinHeight) / 2,
+               width: PillMetrics.barWidth, height: PillMetrics.barMinHeight)
+    }
+    /// Points a bar glides per second: one slot per column.
+    private static let pace = step / WaveformEngine.columnInterval
 
     /// Feeds `seconds` of 10 ms windows, drawing a 60 fps frame after every 1.67 windows' worth of time.
     private func run(_ meter: LevelMeter, _ engine: WaveformEngine, clock: Clock, seconds: Double,
-                     db: (Double) -> Float) -> [[WaveformEngine.Bar]] {
-        var frames: [[WaveformEngine.Bar]] = []
+                     reduceMotion: Bool = false, db: (Double) -> Float) -> [Frame] {
+        var frames: [Frame] = []
         var nextFrame = clock.now
         for step in 0..<Int((seconds * 100).rounded()) {
             clock.now += 0.01
@@ -512,65 +529,139 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
             while nextFrame <= clock.now {
                 let now = nextFrame - meter.tuning.readBehind
                 engine.advance(meter: meter, to: now)
-                frames.append(engine.bars(size: Self.size, now: now, reduceMotion: false, isStatic: false))
+                frames.append(Frame(now: now, bars: engine.bars(size: Self.size, now: now, reduceMotion: reduceMotion,
+                                                                isStatic: false)))
                 nextFrame += 1.0 / 60
             }
         }
         return frames
     }
 
+    /// Speech with a short dip every 300 ms: a level that never dips for a second is noise to the gate.
+    private static func speech(_ t: Double) -> Float { t.truncatingRemainder(dividingBy: 0.3) < 0.24 ? -20 : -40 }
+
+    /// Room noise around -50 dBFS.
+    private static func noise() -> (Double) -> Float {
+        var seed: UInt64 = 9
+        return { _ in
+            seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            return -50 + 8 * Float(Double(seed >> 11) / Double(1 << 53)) - 4
+        }
+    }
+
+    /// A phrase, a pause, a second phrase and silence, after a second of room noise.
+    private func conversation(reduceMotion: Bool = false) -> [Frame] {
+        let clock = Clock()
+        let meter = LevelMeter(clock: { clock.now })
+        let engine = WaveformEngine()
+        let noise = Self.noise()
+        _ = run(meter, engine, clock: clock, seconds: 1, reduceMotion: reduceMotion, db: noise)
+        return run(meter, engine, clock: clock, seconds: 5, reduceMotion: reduceMotion) { t in
+            t < 1.2 ? Self.speech(t) : (t >= 1.8 && t < 2.4 ? Self.speech(t - 1.8) : noise(t))
+        }
+    }
+
     @Test func silenceIsPerfectlyStill() {
         let clock = Clock()
         let meter = LevelMeter(clock: { clock.now })
         let engine = WaveformEngine()
-        var seed: UInt64 = 9
-        let noise: (Double) -> Float = { _ in
-            seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
-            return -50 + 8 * Float(Double(seed >> 11) / Double(1 << 53)) - 4
-        }
+        let noise = Self.noise()
         _ = run(meter, engine, clock: clock, seconds: 1, db: noise)
         let frames = run(meter, engine, clock: clock, seconds: 3, db: noise)
         #expect(frames.count > 150)
-        #expect(frames.allSatisfy { $0 == frames[0] })
-        #expect(frames[0].count == PillMetrics.barCount)
-        #expect(frames[0].allSatisfy { $0.rect.height == PillMetrics.barMinHeight })
+        #expect(frames.allSatisfy { $0.bars == frames[0].bars })
+        #expect(frames[0].bars.map(\.rect) == Self.slots)
+        #expect(frames[0].bars.allSatisfy { $0.isTrack && $0.opacity > 0 })
     }
 
-    @Test func speechScrollsLeftAndGrowsIn() {
+    @Test func theTrackNeverMoves() {
+        for reduceMotion in [false, true] {
+            let frames = conversation(reduceMotion: reduceMotion)
+            #expect(frames.contains { $0.flowing.count >= 8 })
+            #expect(frames.allSatisfy { $0.track.map(\.rect) == Self.slots })
+        }
+    }
+
+    @Test func barsGlideAtOnePaceUntilTheyLeave() throws {
+        let frames = conversation()
+        for (previous, frame) in zip(frames, frames.dropFirst()) {
+            let dx = Self.pace * CGFloat(frame.now - previous.now)
+            // Every bar is one that stood exactly one frame's glide to the right, or one just rising out of the
+            // rightmost dot: nothing waits, catches up or jumps.
+            for bar in frame.flowing {
+                let from = bar.rect.minX + dx
+                #expect(from > Self.slot0 - dx || previous.flowing.contains { abs($0.rect.minX - from) < 1e-6 },
+                        "a bar at \(bar.rect.minX) came from nowhere")
+            }
+            // And every bar keeps going until it has left past the left edge.
+            for bar in previous.flowing where bar.rect.minX - dx > -PillMetrics.barWidth {
+                #expect(frame.flowing.contains { abs($0.rect.minX - (bar.rect.minX - dx)) < 1e-6 },
+                        "the bar at \(bar.rect.minX) stopped or vanished")
+            }
+        }
+        // The second phrase's last bars glide out after it ends, then the track is left as still as before.
+        let lastBar = try #require(frames.lastIndex { !$0.flowing.isEmpty })
+        let voiceEnd = frames[0].now + 2.4
+        #expect(frames[lastBar].now > voiceEnd + Double(PillMetrics.barCount - 1) * WaveformEngine.columnInterval)
+        let rest = frames[(lastBar + 1)...]
+        #expect(rest.count > 30 && rest.allSatisfy { $0.bars == rest.first?.bars && $0.bars.map(\.rect) == Self.slots })
+    }
+
+    @Test func dotsUnderBarsGiveWayWithoutFlicker() {
+        let frames = conversation()
+        let full = (0.45 + 0.51) * 0.999
+        for (previous, frame) in zip(frames, frames.dropFirst()) {
+            for (dot, was) in zip(frame.track, previous.track) {
+                // A dot fades as a bar passes over it, never in one frame ...
+                #expect(abs(dot.opacity - was.opacity) < 0.35)
+                // ... and one between two full bars stays hidden at every phase instead of showing in the gap.
+                let left = frame.flowing.contains {
+                    $0.opacity >= full && $0.rect.minX <= dot.rect.minX && dot.rect.minX - $0.rect.minX < Self.step
+                }
+                let right = frame.flowing.contains {
+                    $0.opacity >= full && $0.rect.minX >= dot.rect.minX && $0.rect.minX - dot.rect.minX < Self.step
+                }
+                if left && right { #expect(dot.opacity < 1e-3) }
+                // A dot a full bar covers doesn't show through it.
+                if frame.flowing.contains(where: { $0.opacity >= full && abs($0.rect.minX - dot.rect.minX) <= 1.5 }) {
+                    #expect(dot.opacity < 1e-3)
+                }
+            }
+            // A column barely taller than a dot merges into the track rather than drifting between its dots.
+            #expect(frame.flowing.allSatisfy { $0.rect.height > PillMetrics.barMinHeight + 0.5 || $0.opacity < 0.01 })
+        }
+    }
+
+    @Test func aVoicedColumnRisesOutOfTheRightmostDot() throws {
         let clock = Clock()
         let meter = LevelMeter(clock: { clock.now })
         let engine = WaveformEngine()
-        _ = run(meter, engine, clock: clock, seconds: 1) { _ in -50 }
-        let frames = run(meter, engine, clock: clock, seconds: 1.5) { _ in -22 }
-        let last = frames[frames.count - 1]
-        #expect(last.filter { $0.rect.height > 12 }.count >= 8)
-        // Between landings the newest bar drifts left a fraction of a step per frame instead of jumping.
-        let step = PillMetrics.barWidth + PillMetrics.barGap
-        let shifts = zip(frames.dropFirst(), frames).compactMap { next, previous -> CGFloat? in
-            guard let a = next.first?.rect.minX, let b = previous.first?.rect.minX, a < b else { return nil }
-            return b - a
-        }
-        #expect(shifts.count > 40 && shifts.allSatisfy { $0 < step * 0.25 })
-        #expect(last.allSatisfy { $0.rect.minX > -PillMetrics.barWidth && $0.rect.maxX <= Self.size.width })
-    }
-
-    @Test func newestColumnGrowsFromADot() throws {
-        let clock = Clock()
-        let meter = LevelMeter(clock: { clock.now })
-        let engine = WaveformEngine()
-        // Speech with a short dip every 300 ms: a level that never dips for a second is noise to the gate.
-        _ = run(meter, engine, clock: clock, seconds: 2) { t in
-            t < 0.5 ? -50 : (t.truncatingRemainder(dividingBy: 0.3) < 0.24 ? -20 : -40)
-        }
+        _ = run(meter, engine, clock: clock, seconds: 2) { t in t < 0.5 ? -50 : Self.speech(t) }
         let end = try #require(engine.newestEnd)
         #expect(engine.columns.allSatisfy { $0 > 0.5 })
-        func newest(at time: TimeInterval, reduceMotion: Bool = false) -> CGFloat {
-            engine.bars(size: Self.size, now: time, reduceMotion: reduceMotion, isStatic: false)[0].rect.height
+        // Fully grown and standing on the rightmost slot, as Reduce Motion draws it.
+        let settled = try #require(engine.bars(size: Self.size, now: end, reduceMotion: true, isStatic: false)
+            .first { !$0.isTrack })
+        #expect(settled.rect.minX == Self.slot0)
+        func frame(at time: TimeInterval) -> Frame {
+            engine.advance(meter: meter, to: time)
+            return Frame(now: time, bars: engine.bars(size: Self.size, now: time, reduceMotion: false, isStatic: false))
         }
-        #expect(newest(at: end) == PillMetrics.barMinHeight)
-        #expect(newest(at: end + 0.03) > PillMetrics.barMinHeight)
-        #expect(newest(at: end + 0.03) < newest(at: end + 0.06))
-        #expect(newest(at: end + WaveformEngine.growDuration) == newest(at: end, reduceMotion: true))
+        /// The column that landed at `end`, where it has glided to by then.
+        func column(_ frame: Frame) -> WaveformEngine.Bar? {
+            frame.flowing.first { abs($0.rect.minX - (Self.slot0 - Self.pace * CGFloat(frame.now - end))) < 1e-6 }
+        }
+        // At its landing the column is still the rightmost dot ...
+        let landing = frame(at: end)
+        #expect(column(landing) == nil && landing.track[0].opacity > 0.4)
+        // ... which then grows into a bar that brightens as it sets off at the row's pace, the dot giving way.
+        let (a, b) = (frame(at: end + 0.03), frame(at: end + 0.06))
+        let (barA, barB) = (try #require(column(a)), try #require(column(b)))
+        #expect(barA.rect.height > PillMetrics.barMinHeight && barA.rect.height < barB.rect.height)
+        #expect(barA.opacity > 0 && barA.opacity < barB.opacity)
+        #expect(a.track[0].opacity < landing.track[0].opacity)
+        let grown = try #require(column(frame(at: end + WaveformEngine.growDuration)))
+        #expect(grown.rect.height == settled.rect.height && grown.opacity == settled.opacity)
     }
 
     /// 10 ms windows ending at `start + 0.01`, `start + 0.02`, ...
@@ -595,12 +686,13 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         ingest(meter, from: onset + 0.05, seconds: 0.03) { _ in -22 }
         engine.advance(meter: meter, to: end + 0.017)
         #expect(engine.columns[0] > 0.5)
-        // The row starts sliding at once instead of waiting for the next column.
-        let bars = engine.bars(size: Self.size, now: end + 0.034, reduceMotion: false, isStatic: false)
-        #expect(bars[0].rect.minX < Self.size.width - PillMetrics.barWidth)
+        // Its bar rises where the column has glided to by then.
+        let bars = engine.bars(size: Self.size, now: end + 0.034, reduceMotion: false, isStatic: false).filter { !$0.isTrack }
+        #expect(bars.count == 1 && abs(bars[0].rect.minX - (Self.slot0 - Self.pace * 0.034)) < 1e-9)
+        #expect(bars[0].rect.height > PillMetrics.barMinHeight && bars[0].opacity > 0)
     }
 
-    @Test func aFillInBetweenLandingsSetsOffWithoutAJump() throws {
+    @Test func aFillInBetweenLandingsNeverPops() throws {
         let clock = Clock()
         let meter = LevelMeter(clock: { clock.now })
         let engine = WaveformEngine()
@@ -611,72 +703,35 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         engine.advance(meter: meter, to: onset - 0.2 + 3 * WaveformEngine.columnInterval)
         let end = try #require(engine.newestEnd)
         #expect(engine.columns.allSatisfy { $0 == 0 })
-        // The window that confirms the onset arrives 50 ms after the column landed, well into the slide's step.
+        // The window that confirms the onset arrives 50 ms after the column landed, well into its glide.
         ingest(meter, from: onset + 0.05, seconds: 0.03) { _ in -22 }
         var now = end + 0.05
         let before = engine.bars(size: Self.size, now: now, reduceMotion: false, isStatic: false)
         engine.advance(meter: meter, to: now)
         #expect(engine.columns[0] > 0.5)
-        // At that instant nothing moves or pops: the row sets off from where it stands and the bar grows from a dot.
-        let after = engine.bars(size: Self.size, now: now, reduceMotion: false, isStatic: false)
-        #expect(zip(before, after).allSatisfy { abs($0.rect.minX - $1.rect.minX) < 1e-9 && $0.rect.height == $1.rect.height })
-        // Then the voiced column only ever drifts left, a fraction of a step per frame.
-        let step = PillMetrics.barWidth + PillMetrics.barGap
-        let voicedEnd = end
-        var x = after[0].rect.minX
-        for _ in 0..<40 {
+        // At that instant nothing changes; from then on the bar grows and fades in a step at a time, in stride.
+        var previous = engine.bars(size: Self.size, now: now, reduceMotion: false, isStatic: false)
+        #expect(previous == before)
+        /// The filled-in column, where it has glided to by `time`.
+        func column(_ bars: [WaveformEngine.Bar], at time: TimeInterval) -> WaveformEngine.Bar? {
+            bars.first { !$0.isTrack && abs($0.rect.minX - (Self.slot0 - Self.pace * CGFloat(time - end))) < 1e-6 }
+        }
+        var shown = false
+        for _ in 0..<12 {
+            let was = column(previous, at: now)
             now += 1.0 / 60
             engine.advance(meter: meter, to: now)
-            let k = Int(((try #require(engine.newestEnd) - voicedEnd) / WaveformEngine.columnInterval).rounded())
             let bars = engine.bars(size: Self.size, now: now, reduceMotion: false, isStatic: false)
-            guard k < bars.count else { break }
-            let dx = x - bars[k].rect.minX
-            #expect(dx >= 0 && dx < step * 0.3, "moved \(dx) pt in one frame")
-            x = bars[k].rect.minX
-        }
-        #expect(x < after[0].rect.minX - 2 * step)
-    }
-
-    @Test func aRowCatchingUpKeepsItsLeftEdgeThroughEachLanding() throws {
-        let clock = Clock()
-        let meter = LevelMeter(clock: { clock.now })
-        let engine = WaveformEngine()
-        let onset = clock.now + 1
-        ingest(meter, from: clock.now, seconds: 1) { _ in -50 }
-        engine.advance(meter: meter, to: onset - 0.2)
-        ingest(meter, from: onset, seconds: 0.05) { _ in -22 }
-        engine.advance(meter: meter, to: onset - 0.2 + 3 * WaveformEngine.columnInterval)
-        let end = try #require(engine.newestEnd)
-        // The onset is confirmed late in the step, so the row sets off trailing its slide by most of a step.
-        ingest(meter, from: onset + 0.05, seconds: 0.03) { _ in -22 }
-        var now = end + 0.07
-        engine.advance(meter: meter, to: now)
-        #expect(engine.columns[0] > 0.5)
-        let pace = (PillMetrics.barWidth + PillMetrics.barGap) / WaveformEngine.columnInterval / 60
-        var x = engine.bars(size: Self.size, now: now, reduceMotion: false, isStatic: false)[0].rect.minX
-        var landings = 0
-        for frame in 0..<30 {
-            let previousEnd = try #require(engine.newestEnd)
-            let landing = previousEnd + WaveformEngine.columnInterval
-            let before = engine.bars(size: Self.size, now: landing, reduceMotion: false, isStatic: false)
-            now += 1.0 / 60
-            engine.advance(meter: meter, to: now)
-            let newestEnd = try #require(engine.newestEnd)
-            if newestEnd > previousEnd {
-                // A landing changes nothing at its own instant but the new column at the right: the leftmost
-                // dot, still in view while the row trails, slides out instead of vanishing where it stands.
-                landings += 1
-                let after = engine.bars(size: Self.size, now: landing, reduceMotion: false, isStatic: false)
-                let (was, landed) = (before.map(\.rect.minX), after.dropFirst().map(\.rect.minX))
-                #expect(was.count == landed.count && zip(was, landed).allSatisfy { abs($0 - $1) < 1e-9 }, "\(was) -> \(landed)")
+            let bar = try #require(column(bars, at: now))
+            #expect(bar.opacity - (was?.opacity ?? 0) < 0.4)
+            #expect(bar.rect.height - (was?.rect.height ?? PillMetrics.barMinHeight) < 8)
+            for (dot, wasDot) in zip(bars.prefix(PillMetrics.barCount), previous) {
+                #expect(abs(dot.opacity - wasDot.opacity) < 0.35)
             }
-            // The voiced column sets off at the normal pace, like after a landing, and never runs much faster.
-            let k = Int(((newestEnd - end) / WaveformEngine.columnInterval).rounded())
-            let dx = x - engine.bars(size: Self.size, now: now, reduceMotion: false, isStatic: false)[k].rect.minX
-            #expect(dx <= pace * (frame == 0 ? 1.05 : 1.3), "frame \(frame) moved \(dx / pace)x the pace")
-            x -= dx
+            shown = shown || bar.opacity > 0.9
+            previous = bars
         }
-        #expect(landings >= 4)
+        #expect(shown)
     }
 
     @Test func aLateChunkFillsInInsteadOfLeavingDots() {
@@ -696,6 +751,18 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(engine.columns.prefix(5).allSatisfy { $0 > 0.5 }, "\(engine.columns)")
     }
 
+    @Test func reduceMotionStepsAWholeSlotPerColumn() {
+        let frames = conversation(reduceMotion: true)
+        let steps = zip(frames, frames.dropFirst()).filter { $0.flowing != $1.flowing }.count
+        #expect(frames.contains { $0.flowing.count >= 8 })
+        // No gliding and no growing: every bar stands on a slot, fully grown, and the row changes once a column.
+        for frame in frames {
+            #expect(frame.flowing.allSatisfy { bar in Self.slots.contains { $0.minX == bar.rect.minX } })
+        }
+        let columns = (frames[frames.count - 1].now - frames[0].now) / WaveformEngine.columnInterval
+        #expect(steps > 20 && Double(steps) <= columns + 1)
+    }
+
     @Test func staticRenderingIsDeterministic() {
         let a = WaveformEngine(), b = WaveformEngine()
         let meter = LevelMeter.preview(level: 0.7)
@@ -703,8 +770,11 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         b.advance(meter: meter, to: WaveformEngine.staticTime)
         let barsA = a.bars(size: Self.size, now: WaveformEngine.staticTime, reduceMotion: false, isStatic: true)
         #expect(barsA == b.bars(size: Self.size, now: WaveformEngine.staticTime, reduceMotion: false, isStatic: true))
-        #expect(barsA.count == PillMetrics.barCount)
-        #expect(barsA.contains { $0.rect.height == PillMetrics.barMinHeight })   // a pause before the phrase
-        #expect(barsA.filter { $0.rect.height > 10 }.count >= 5)
+        #expect(barsA.filter(\.isTrack).map(\.rect) == Self.slots)
+        let flowing = barsA.filter { !$0.isTrack }
+        #expect(flowing.filter { $0.rect.height > 10 }.count >= 5)
+        // A pause before the phrase: dots show where no bar stands.
+        #expect(barsA.contains { $0.isTrack && $0.opacity > 0.4 })
+        #expect(flowing.allSatisfy { bar in Self.slots.contains { $0.minX == bar.rect.minX } })
     }
 }

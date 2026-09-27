@@ -1,10 +1,12 @@
 import SwiftUI
 
-/// The voice as a Telegram-style scrolling amplitude history (wispr-ux §1.4): every 87 ms the
-/// voice-gated amplitude becomes a new bar that grows in at the right edge while older ones drift left and
-/// fade out. Honest by design: before the first audio buffer the bars are dim "connecting" dots, and anything
-/// that isn't speech (room noise, a fan, a key click) is perfectly still dots. The timeline only exists while
-/// this view is on screen, so an idle pill costs nothing.
+/// The voice as a Telegram-style scrolling amplitude history (wispr-ux §1.4) over a still dotted track: every
+/// 87 ms the voice-gated amplitude becomes a new column, and each voiced one is a bar that rises out of the
+/// rightmost dot and glides left at one slot per column for as long as audio flows, fading out past the left
+/// edge. The track never moves, so anything that isn't speech (room noise, a fan, a key click) is a perfectly
+/// still row of dots, and the end of a phrase is its bars leaving, never the row stopping. Honest by design:
+/// before the first audio buffer the dots are a dim "connecting" ripple. The timeline only exists while this
+/// view is on screen, so an idle pill costs nothing.
 struct WaveformView: View {
     let meter: LevelMeter
     var maxBarHeight: CGFloat = PillMetrics.barMaxHeight
@@ -32,40 +34,28 @@ struct WaveformView: View {
 final class WaveformEngine {
     /// A new column every 87 ms: ~11 bars a second reads as speech, not as a meter.
     static let columnInterval: TimeInterval = 0.087
-    /// A new column lands at the right edge as a dot and grows to its height over this long (ease-out).
+    /// A voiced column rises out of the rightmost dot to its height over this long (ease-out).
     static let growDuration: TimeInterval = 0.1
     /// Static snapshots freeze the preview voice at this moment: a pause, then a phrase.
     static let staticTime: TimeInterval = 4.2
-    /// One column per bar slot; the oldest slides out past the left edge while the next one lands.
+    /// One column per slot; the oldest glides out past the left edge while the next one lands.
     static var columnCount: Int { PillMetrics.barCount }
-    /// Columns kept: one more than the slots, so a row that trails its slide (see `slideLag`) still has its
-    /// oldest dot standing at the left edge when the next column lands, instead of dropping it in view.
-    static var storedCount: Int { columnCount + 1 }
-    /// A row that starts sliding between landings eases into the pace over this long (see `slideLag`).
-    static let lagDuration: TimeInterval = 0.4
 
     struct Bar: Equatable {
         var rect: CGRect
         var opacity: Double
+        /// One of the track's fixed dots rather than a column's bar.
+        var isTrack: Bool
     }
 
     /// Amplitudes 0...1, newest first.
-    private(set) var columns = [CGFloat](repeating: 0, count: WaveformEngine.storedCount)
+    private(set) var columns = [CGFloat](repeating: 0, count: WaveformEngine.columnCount)
     /// How each column's height eases toward its amplitude, newest first. A new column grows from a dot at its
     /// landing; one whose audio fills in or changes later eases from where it stands at that frame, so no bar
     /// ever pops.
-    private var eases = [Ease](repeating: Ease(from: 0, start: -.infinity), count: WaveformEngine.storedCount)
+    private var eases = [Ease](repeating: Ease(from: 0, start: -.infinity), count: WaveformEngine.columnCount)
     /// Meter time at which the newest column's audio ends (and it landed).
     private(set) var newestEnd: TimeInterval?
-    /// Whether the columns slide this interval: only while a voiced column is on screen, so silence is a
-    /// fixed row of dots rather than a drifting one. Decided when a column lands, where the slide offset is 0
-    /// either way, so starting or stopping never jumps; a late fill-in starts it in between (see `slideLag`).
-    private var isScrolling = false
-    /// A late fill-in starts the slide mid-interval, where the offset is already part of a step: the row trails
-    /// its nominal position by `slideLag` steps then, easing it out over `lagDuration` from `slideLagStart`, so
-    /// it sets off from where it stands instead of jumping sideways.
-    private var slideLag: CGFloat = 0
-    private var slideLagStart: TimeInterval = 0
     /// The newest columns whose audio isn't final yet (a late chunk, or an onset the gate hasn't confirmed):
     /// they are read again every frame until the meter settles them, instead of freezing as dots.
     private var unsettled = 0
@@ -84,10 +74,8 @@ final class WaveformEngine {
         guard let end = newestEnd, now >= end - 0.5, now - end < interval * Double(Self.columnCount) else {
             newestEnd = now
             unsettled = Self.columnCount
-            eases = (0..<Self.storedCount).map { Ease(from: 0, start: now - Double($0) * interval) }
+            eases = (0..<Self.columnCount).map { Ease(from: 0, start: now - Double($0) * interval) }
             settle(meter: meter, now: now, landed: Self.columnCount)
-            isScrolling = hasVoiceInView
-            slideLag = 0
             return
         }
         var newest = end
@@ -101,82 +89,97 @@ final class WaveformEngine {
             eases.insert(Ease(from: 0, start: newest), at: 0)
             unsettled = min(Self.columnCount, unsettled + 1)
         }
-        if landed > 0 {
-            newestEnd = newest
-            settle(meter: meter, now: now, landed: landed)
-            // Stopping waits for the lag to run out, so the row comes to rest exactly on the slots.
-            isScrolling = hasVoiceInView || lag(at: newest) > 0
-        } else if settle(meter: meter, now: now, landed: 0), !isScrolling {
-            // Voice filled in a still row between landings: slide from now on, from where the row stands.
-            isScrolling = true
-            slideLag = CGFloat(min(1, max(0, (now - end) / interval)))
-            slideLagStart = now
-        }
+        newestEnd = newest
+        settle(meter: meter, now: now, landed: landed)
     }
 
-    /// A voiced column in one of the slots: the extra one is past the left edge whenever the row keeps pace.
-    private var hasVoiceInView: Bool { columns.prefix(Self.columnCount).contains { $0 > 0 } }
-
-    /// Reads the unsettled columns; true when one of them rose from a dot. A column already on screen (not one
-    /// of the `landed` newest) that changes eases from its height at `now`.
-    @discardableResult
-    private func settle(meter: LevelMeter, now: TimeInterval, landed: Int) -> Bool {
-        guard unsettled > 0, let newest = newestEnd else { return false }
+    /// Reads the unsettled columns. A column already on screen (not one of the `landed` newest) that changes
+    /// eases from its height at `now`.
+    private func settle(meter: LevelMeter, now: TimeInterval, landed: Int) {
+        guard unsettled > 0, let newest = newestEnd else { return }
         let settledTime = meter.settledTime ?? -.infinity
-        var rose = false
         var open = 0
         for k in 0..<unsettled {
             let end = newest - Double(k) * Self.columnInterval
             let value = CGFloat(meter.voiceAmplitude(from: end - Self.columnInterval, to: end))
             if value != columns[k] {
-                if value > 0, columns[k] == 0 { rose = true }
                 if k >= landed { eases[k] = Ease(from: amplitude(k, at: now), start: now) }
                 columns[k] = value
             }
             if end > settledTime { open = k + 1 }
         }
         unsettled = open
-        return rose
+    }
+
+    /// How far column k's ease has run at `now`, 0...1.
+    private func progress(_ k: Int, at now: TimeInterval) -> CGFloat {
+        CGFloat(min(1, max(0, (now - eases[k].start) / Self.growDuration)))
     }
 
     /// Column k's drawn amplitude at `now`: its ease, cubic ease-out over `growDuration`.
     private func amplitude(_ k: Int, at now: TimeInterval) -> CGFloat {
-        let p = CGFloat(min(1, max(0, (now - eases[k].start) / Self.growDuration)))
-        return eases[k].from + (columns[k] - eases[k].from) * (1 - pow(1 - p, 3))
+        eases[k].from + (columns[k] - eases[k].from) * (1 - pow(1 - progress(k, at: now), 3))
     }
 
-    /// Steps the row still trails its nominal slide at `now`: the lag runs out along a smoothstep, so the row
-    /// sets off at the normal pace like after a landing, speeds up a little mid-way and settles without a kink.
-    private func lag(at now: TimeInterval) -> CGFloat {
-        guard slideLag > 0 else { return 0 }
-        let u = CGFloat(min(1, max(0, (now - slideLagStart) / Self.lagDuration)))
-        return slideLag * (1 - u * u * (3 - 2 * u))
+    private static func smoothstep(_ u: CGFloat) -> CGFloat {
+        let u = min(1, max(0, u))
+        return u * u * (3 - 2 * u)
     }
 
-    /// Bar geometry at `now` for a field of `size`. Column k sits k + offset steps left of the rightmost slot,
-    /// the offset running 0 → 1 between landings, so the history drifts left at one step per column.
+    /// How much of a track dot a bar `distance` pt away hides: all of it within half a bar, none once the bar
+    /// is clear of it, eased in between. Two neighbours a slot apart always add up to exactly 1, so a run of
+    /// bars keeps every dot under it hidden at any phase instead of letting them flicker through the gaps.
+    private static func occlusion(_ distance: CGFloat) -> CGFloat {
+        let near = PillMetrics.barWidth / 2
+        let far = PillMetrics.barWidth + PillMetrics.barGap - near
+        return smoothstep((far - distance) / (far - near))
+    }
+
+    /// Geometry at `now` for a field of `size`: the track's dots first, one per fixed slot, then a bar for each
+    /// voiced column. Column k sits k + phase slots left of the rightmost one, the phase running 0 → 1 between
+    /// landings, so the bars glide left at one slot per column and never stop while audio flows; Reduce Motion
+    /// and snapshots step a whole slot at a time, fully grown. The dots a bar passes over give way to it.
     func bars(size: CGSize, now: TimeInterval, reduceMotion: Bool, isStatic: Bool) -> [Bar] {
         let w = PillMetrics.barWidth
         let step = w + PillMetrics.barGap
         let minH = PillMetrics.barMinHeight
         let midY = size.height / 2
-        let end = newestEnd ?? now
-        // Reduce Motion and snapshots step a whole column at a time, fully grown.
+        let slots = Self.columnCount
         let settled = reduceMotion || isStatic
-        let phase = CGFloat(min(1, max(0, (now - end) / Self.columnInterval)))
-        let offset: CGFloat = settled || !isScrolling ? 0 : phase - lag(at: now)
+        let phase = settled ? 0 : CGFloat(min(1, max(0, (now - (newestEnd ?? now)) / Self.columnInterval)))
+        // The history dissolves over its last two steps on the left.
+        func tail(_ x: CGFloat) -> CGFloat { min(1, max(0, (x + step) / (2 * step))) }
+        func slotX(_ slot: CGFloat) -> CGFloat { size.width - w - slot * step }
 
         var bars: [Bar] = []
-        bars.reserveCapacity(columns.count)
+        bars.reserveCapacity(2 * slots)
+        // Each dot's opacity field first sums how much of it the bars hide (see below).
+        for i in 0..<slots {
+            bars.append(Bar(rect: CGRect(x: slotX(CGFloat(i)), y: midY - minH / 2, width: w, height: minH),
+                            opacity: 0, isTrack: true))
+        }
         for k in columns.indices {
-            let x = size.width - w - (CGFloat(k) + offset) * step
-            guard x > -w else { continue }
-            let h = minH + (size.height - minH) * (settled ? columns[k] : amplitude(k, at: now))
+            let slot = CGFloat(k) + phase
+            let x = slotX(slot)
+            let a = settled ? columns[k] : amplitude(k, at: now)
+            guard x > -w, a > 0 else { continue }
+            let h = minH + (size.height - minH) * a
             let lift = min(1, (h - minH) / 5)
-            // The history dissolves over its last two steps on the left.
-            let tail = min(1, max(0, (x + step) / (2 * step)))
-            let opacity = (0.45 + 0.51 * Double(lift)) * Double(tail)
-            bars.append(Bar(rect: CGRect(x: x, y: midY - h / 2, width: w, height: h), opacity: opacity))
+            // A column barely taller than a dot fades into the track instead of drifting between its dots, and
+            // one rising from nothing (a new column, or audio that filled in late) fades in over the first half of
+            // its growth, so it never pops up between them.
+            let fadeIn = settled || eases[k].from > 0 ? 1 : min(1, 2 * progress(k, at: now))
+            let presence = Self.smoothstep((lift - 0.1) / 0.4) * fadeIn * tail(x)
+            guard presence > 0 else { continue }
+            bars.append(Bar(rect: CGRect(x: x, y: midY - h / 2, width: w, height: h),
+                            opacity: (0.45 + 0.51 * Double(lift)) * Double(presence), isTrack: false))
+            let right = Int(slot)
+            let f = slot - CGFloat(right)
+            bars[right].opacity += Double(presence * Self.occlusion(f * step))
+            if right + 1 < slots { bars[right + 1].opacity += Double(presence * Self.occlusion((1 - f) * step)) }
+        }
+        for i in 0..<slots {
+            bars[i].opacity = 0.45 * Double(tail(bars[i].rect.minX)) * max(0, 1 - bars[i].opacity)
         }
         return bars
     }
@@ -201,7 +204,7 @@ final class WaveformEngine {
         if isStatic { newestEnd = nil }
         advance(meter: meter, to: now)
         context.clip(to: Path(CGRect(origin: .zero, size: size)))
-        for bar in bars(size: size, now: now, reduceMotion: reduceMotion, isStatic: isStatic) {
+        for bar in bars(size: size, now: now, reduceMotion: reduceMotion, isStatic: isStatic) where bar.opacity > 0 {
             context.fill(Path(roundedRect: bar.rect, cornerRadius: w / 2), with: .color(.white.opacity(bar.opacity)))
         }
     }
