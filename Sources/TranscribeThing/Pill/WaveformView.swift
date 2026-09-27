@@ -36,6 +36,8 @@ final class WaveformEngine {
     static let columnInterval: TimeInterval = 0.087
     /// A voiced column rises out of the rightmost dot to its height over this long (ease-out).
     static let growDuration: TimeInterval = 0.1
+    /// A bar rising out of the track fades in over the first half of its growth.
+    static let fadeDuration: TimeInterval = growDuration / 2
     /// Static snapshots freeze the preview voice at this moment: a pause, then a phrase.
     static let staticTime: TimeInterval = 4.2
     /// One column per slot; the oldest glides out past the left edge while the next one lands.
@@ -53,7 +55,8 @@ final class WaveformEngine {
     /// How each column's height eases toward its amplitude, newest first. A new column grows from a dot at its
     /// landing; one whose audio fills in or changes later eases from where it stands at that frame, so no bar
     /// ever pops.
-    private var eases = [Ease](repeating: Ease(from: 0, start: -.infinity), count: WaveformEngine.columnCount)
+    private var eases = [Ease](repeating: Ease(from: 0, start: -.infinity, appear: -.infinity),
+                               count: WaveformEngine.columnCount)
     /// Meter time at which the newest column's audio ends (and it landed).
     private(set) var newestEnd: TimeInterval?
     /// The newest columns whose audio isn't final yet (a late chunk, or an onset the gate hasn't confirmed):
@@ -65,6 +68,14 @@ final class WaveformEngine {
         var from: CGFloat
         /// Meter time it starts.
         var start: TimeInterval
+        /// When the column rose out of the track (its landing, or late audio filling in a dot): its bar fades
+        /// in from then, however often its height re-eases meanwhile.
+        var appear: TimeInterval
+        /// After a re-ease, the bar and the dot under it carry on from what was on screen, the bar brightening
+        /// and the dot fading out no faster than a fade-in: these are the moments such fades would have started
+        /// from nothing. So audio filling in a faint column never makes it (or the dot) jump.
+        var brighten = -TimeInterval.infinity
+        var hide = -TimeInterval.infinity
     }
 
     /// Records the columns whose audio has ended by `now` (meter time). Rebuilds the history from the meter
@@ -74,7 +85,10 @@ final class WaveformEngine {
         guard let end = newestEnd, now >= end - 0.5, now - end < interval * Double(Self.columnCount) else {
             newestEnd = now
             unsettled = Self.columnCount
-            eases = (0..<Self.columnCount).map { Ease(from: 0, start: now - Double($0) * interval) }
+            eases = (0..<Self.columnCount).map {
+                let landed = now - Double($0) * interval
+                return Ease(from: 0, start: landed, appear: landed)
+            }
             settle(meter: meter, now: now, landed: Self.columnCount)
             return
         }
@@ -86,7 +100,7 @@ final class WaveformEngine {
             columns.removeLast()
             columns.insert(0, at: 0)
             eases.removeLast()
-            eases.insert(Ease(from: 0, start: newest), at: 0)
+            eases.insert(Ease(from: 0, start: newest, appear: newest), at: 0)
             unsettled = min(Self.columnCount, unsettled + 1)
         }
         newestEnd = newest
@@ -103,7 +117,14 @@ final class WaveformEngine {
             let end = newest - Double(k) * Self.columnInterval
             let value = CGFloat(meter.voiceAmplitude(from: end - Self.columnInterval, to: end))
             if value != columns[k] {
-                if k >= landed { eases[k] = Ease(from: amplitude(k, at: now), start: now) }
+                if k >= landed {
+                    let from = amplitude(k, at: now)
+                    let lift = Self.lift(from)
+                    let shown = Double(presence(k, lift: lift, at: now))
+                    let hidden = Double(cover(k, lift: lift, at: now))
+                    eases[k] = Ease(from: from, start: now, appear: from > 0 ? eases[k].appear : now,
+                                    brighten: now - shown * Self.fadeDuration, hide: now - hidden * Self.fadeDuration)
+                }
                 columns[k] = value
             }
             if end > settledTime { open = k + 1 }
@@ -124,6 +145,34 @@ final class WaveformEngine {
     private static func smoothstep(_ u: CGFloat) -> CGFloat {
         let u = min(1, max(0, u))
         return u * u * (3 - 2 * u)
+    }
+
+    /// How far a bar of `amplitude` stands above a dot, 0...1 over its first 5 pt in the pill's field.
+    private static func lift(_ amplitude: CGFloat) -> CGFloat {
+        min(1, amplitude * (PillMetrics.barMaxHeight - PillMetrics.barMinHeight) / 5)
+    }
+
+    /// A column barely taller than a dot fades into the track instead of drifting between its dots.
+    private static func shows(_ lift: CGFloat) -> CGFloat { smoothstep((lift - 0.15) / 0.4) }
+
+    /// The dot a bar passes over gives way sooner than the bar shows, so a faint bar and a dot never read as a
+    /// doubled dot.
+    private static func covers(_ lift: CGFloat) -> CGFloat { smoothstep((lift - 0.15) / 0.12) }
+
+    /// A fade from nothing that started at `start`.
+    private static func fade(since start: TimeInterval, at now: TimeInterval) -> CGFloat {
+        CGFloat(min(1, max(0, (now - start) / fadeDuration)))
+    }
+
+    /// How much of column k's bar shows at `lift`: one barely taller than a dot fades into the track, and one
+    /// rising out of it fades in, so it never pops up between the dots.
+    private func presence(_ k: Int, lift: CGFloat, at now: TimeInterval) -> CGFloat {
+        min(Self.shows(lift) * Self.fade(since: eases[k].appear, at: now), Self.fade(since: eases[k].brighten, at: now))
+    }
+
+    /// How much column k's bar at `lift` hides the track dots it covers, fading in with it.
+    private func cover(_ k: Int, lift: CGFloat, at now: TimeInterval) -> CGFloat {
+        min(Self.covers(lift) * Self.fade(since: eases[k].appear, at: now), Self.fade(since: eases[k].hide, at: now))
     }
 
     /// How much of a track dot a bar `distance` pt away hides: all of it within half a bar, none once the bar
@@ -164,19 +213,18 @@ final class WaveformEngine {
             let a = settled ? columns[k] : amplitude(k, at: now)
             guard x > -w, a > 0 else { continue }
             let h = minH + (size.height - minH) * a
-            let lift = min(1, (h - minH) / 5)
-            // A column barely taller than a dot fades into the track instead of drifting between its dots, and
-            // one rising from nothing (a new column, or audio that filled in late) fades in over the first half of
-            // its growth, so it never pops up between them.
-            let fadeIn = settled || eases[k].from > 0 ? 1 : min(1, 2 * progress(k, at: now))
-            let presence = Self.smoothstep((lift - 0.1) / 0.4) * fadeIn * tail(x)
+            let lift = Self.lift(a)
+            let shown = settled ? Self.shows(lift) : presence(k, lift: lift, at: now)
+            // The dot it covers. The left edge fades the dots on their own, so it stays out of this.
+            let cover = settled ? Self.covers(lift) : cover(k, lift: lift, at: now)
+            let presence = shown * tail(x)
             guard presence > 0 else { continue }
             bars.append(Bar(rect: CGRect(x: x, y: midY - h / 2, width: w, height: h),
                             opacity: (0.45 + 0.51 * Double(lift)) * Double(presence), isTrack: false))
             let right = Int(slot)
             let f = slot - CGFloat(right)
-            bars[right].opacity += Double(presence * Self.occlusion(f * step))
-            if right + 1 < slots { bars[right + 1].opacity += Double(presence * Self.occlusion((1 - f) * step)) }
+            bars[right].opacity += Double(cover * Self.occlusion(f * step))
+            if right + 1 < slots { bars[right + 1].opacity += Double(cover * Self.occlusion((1 - f) * step)) }
         }
         for i in 0..<slots {
             bars[i].opacity = 0.45 * Double(tail(bars[i].rect.minX)) * max(0, 1 - bars[i].opacity)

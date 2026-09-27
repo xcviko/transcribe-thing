@@ -586,12 +586,14 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         let frames = conversation()
         for (previous, frame) in zip(frames, frames.dropFirst()) {
             let dx = Self.pace * CGFloat(frame.now - previous.now)
-            // Every bar is one that stood exactly one frame's glide to the right, or one just rising out of the
-            // rightmost dot: nothing waits, catches up or jumps.
+            // Every bar is one that stood exactly one frame's glide to the right, one just rising out of the
+            // rightmost dot, or a faint one fading in as its column grows out of the track: nothing waits, catches
+            // up or jumps.
             for bar in frame.flowing {
                 let from = bar.rect.minX + dx
-                #expect(from > Self.slot0 - dx || previous.flowing.contains { abs($0.rect.minX - from) < 1e-6 },
-                        "a bar at \(bar.rect.minX) came from nowhere")
+                #expect(from > Self.slot0 - dx || bar.opacity < 0.35
+                            || previous.flowing.contains { abs($0.rect.minX - from) < 1e-6 },
+                        "a bar at \(bar.rect.minX) (\(bar.rect.height) pt, \(bar.opacity)) came from nowhere")
             }
             // And every bar keeps going until it has left past the left edge.
             for bar in previous.flowing where bar.rect.minX - dx > -PillMetrics.barWidth {
@@ -622,9 +624,12 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
                     $0.opacity >= full && $0.rect.minX >= dot.rect.minX && $0.rect.minX - dot.rect.minX < Self.step
                 }
                 if left && right { #expect(dot.opacity < 1e-3) }
-                // A dot a full bar covers doesn't show through it.
-                if frame.flowing.contains(where: { $0.opacity >= full && abs($0.rect.minX - dot.rect.minX) <= 1.5 }) {
-                    #expect(dot.opacity < 1e-3)
+                // A dot a grown bar covers doesn't show through it, even as the bar fades out past the left edge
+                // (the rightmost dot fades out as a bar rises out of it).
+                let grown = PillMetrics.barMinHeight + 5
+                if dot.rect.minX < Self.slot0,
+                   frame.flowing.contains(where: { $0.rect.height >= grown && abs($0.rect.minX - dot.rect.minX) <= 1.5 }) {
+                    #expect(dot.opacity < 1e-3, "a dot at \(dot.rect.minX) inside a bar")
                 }
             }
             // A column barely taller than a dot merges into the track rather than drifting between its dots.
@@ -732,6 +737,79 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
             previous = bars
         }
         #expect(shown)
+    }
+
+    /// A quiet voice (about -45 dBFS) makes many columns barely taller than a dot. Their bars stay faint, and
+    /// the dots they glide over give way, so the pair never reads as a doubled dot drifting along the track.
+    @Test func aQuietVoiceNeverDoublesTheDots() {
+        let clock = Clock()
+        let meter = LevelMeter(clock: { clock.now })
+        let engine = WaveformEngine()
+        var seed: UInt64 = 5
+        func random() -> Float {
+            seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            return Float(Double(seed >> 11) / Double(1 << 53))
+        }
+        _ = run(meter, engine, clock: clock, seconds: 1) { _ in -62 + 4 * random() }
+        let frames = run(meter, engine, clock: clock, seconds: 4) { t in
+            t.truncatingRemainder(dividingBy: 0.3) < 0.24 ? -47 + 8 * random() : -60
+        }
+        #expect(frames.filter { !$0.flowing.isEmpty }.count > 100)
+        for frame in frames {
+            // A bar rising out of the rightmost dot starts on it; past that, a short bar never sits half on a dot.
+            for bar in frame.flowing where bar.rect.minX < Self.slot0 - 1.5 && bar.rect.height < 5.5 && bar.opacity > 0.15 {
+                for dot in frame.track where dot.opacity > 0.25 {
+                    let overlap = min(bar.rect.maxX, dot.rect.maxX) - max(bar.rect.minX, dot.rect.minX)
+                    #expect(overlap <= 0.5 || overlap >= 2.5,
+                            "a \(bar.rect.height) pt bar at \(bar.rect.minX) half over a lit dot at \(dot.rect.minX)")
+                }
+            }
+        }
+    }
+
+    /// The newest column lands with part of its audio, and the rest arrives 20 ms later, while its bar is still
+    /// fading in: the bar keeps fading in rather than jumping to full brightness.
+    @Test func aColumnFilledInWhileFadingInNeverJumps() throws {
+        let clock = Clock()
+        let meter = LevelMeter(clock: { clock.now })
+        let engine = WaveformEngine()
+        let start = clock.now
+        ingest(meter, from: start, seconds: 1) { _ in -50 }
+        ingest(meter, from: start + 1, seconds: 0.6) { _ in -24 }
+        let audioEnd = start + 1.6
+        var now = start + 1.2
+        engine.advance(meter: meter, to: now)
+        while (engine.newestEnd ?? 0) <= audioEnd {
+            now += 1.0 / 60
+            engine.advance(meter: meter, to: now)
+        }
+        let end = try #require(engine.newestEnd)
+        #expect(engine.columns[0] > 0, "the column holds part of its audio")
+        /// The newest column, where it has glided to by `time`.
+        func column(_ bars: [WaveformEngine.Bar], at time: TimeInterval) -> WaveformEngine.Bar? {
+            bars.first { !$0.isTrack && abs($0.rect.minX - (Self.slot0 - Self.pace * CGFloat(time - end))) < 1e-6 }
+        }
+        now = end + 0.02
+        engine.advance(meter: meter, to: now)
+        var previous = engine.bars(size: Self.size, now: now, reduceMotion: false, isStatic: false)
+        let fading = try #require(column(previous, at: now))
+        #expect(fading.opacity > 0 && fading.opacity < 0.6, "still fading in")
+        // The rest of its audio arrives, louder.
+        ingest(meter, from: audioEnd, seconds: 0.3) { _ in -16 }
+        let partial = engine.columns[0]
+        for _ in 0..<8 {
+            let was = try #require(column(previous, at: now))
+            now += 1.0 / 60
+            engine.advance(meter: meter, to: now)
+            let bars = engine.bars(size: Self.size, now: now, reduceMotion: false, isStatic: false)
+            let bar = try #require(column(bars, at: now))
+            #expect(abs(bar.opacity - was.opacity) < 0.4, "\(was.opacity) → \(bar.opacity)")
+            for (dot, wasDot) in zip(bars.prefix(PillMetrics.barCount), previous) {
+                #expect(abs(dot.opacity - wasDot.opacity) < 0.35)
+            }
+            previous = bars
+        }
+        #expect(engine.columns[0] > partial, "the rest of the audio filled it in")
     }
 
     @Test func aLateChunkFillsInInsteadOfLeavingDots() {

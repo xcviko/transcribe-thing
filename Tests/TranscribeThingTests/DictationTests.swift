@@ -1222,6 +1222,35 @@ final class FakeRecorder: DictationRecorder {
         try await waitUntil { h.controller.machine.activeJobs == 0 }
     }
 
+    /// The job under a held press ends without a flourish (nowhere to paste) before the press commits: the pill
+    /// goes straight to the press's dots, never to rest (hidden while dictating) in between. One that ends
+    /// with a check keeps it on screen until the press commits.
+    @Test(arguments: [false, true])
+    func aJobEndingUnderAHeldPressHandsThePillToThePress(pastes: Bool) async throws {
+        let h = Self.make()
+        h.controller.runsTimers = false
+        var release = false
+        h.controller.transcribeOverride = { _, engine in
+            while !release { try await Task.sleep(for: .milliseconds(5)) }
+            return TranscriptResult(text: "dictated", engine: engine, processingTime: 0.1)
+        }
+        h.controller.insertOverride = { _, _ in pastes ? .pasted : .noEditableTarget }
+        h.controller.enqueue(Self.recording(), engine: .parakeet, delivery: .paste(targetPID: nil))
+        #expect(h.pill.visiblePhase == .processing)
+        var phases: [PillPhase] = []
+        h.pill.onVisiblePhaseChange = { phases.append(h.pill.visiblePhase) }
+        h.controller.handle(.pttDown)
+        #expect(h.pill.visiblePhase == .processing, "until the press commits")
+        release = true
+        try await waitUntil { h.controller.machine.activeJobs == 0 && h.pill.visiblePhase != .processing }
+        #expect(h.controller.machine.capture.isArming)
+        #expect(h.pill.visiblePhase == (pastes ? .success : .listening))
+        #expect(!phases.contains(.rest))
+        h.controller.send(.timer(.arming))
+        #expect(h.pill.visiblePhase == .listening)
+        h.controller.handle(.cancel)
+    }
+
     /// The job finishes while a tap over its processing pill is still in the double-press window: the check shows.
     @Test func aJobFinishingDuringATapOverProcessingShowsItsCheck() async throws {
         let h = Self.make()

@@ -1315,9 +1315,13 @@ final class DictationController {
         let idle: PillPhase = hasPendingWork ? .processing : .rest
         let phase: PillPhase
         switch machine.capture {
-        case .arming, .tapPending:
+        case .arming:
             // From key-down on: the "connecting" dots until the first buffer, then the voice. Over a job in
-            // flight, the processing pill (already on screen) waits for the press to commit.
+            // flight, the processing pill (already on screen) waits for the press to commit; once the job is
+            // gone, the held key shows its dots again unless the job's check or shake is still on screen.
+            let showsFlourish = pillModel.visiblePhase == .success || pillModel.visiblePhase == .error
+            phase = pressKeepsProcessing && (hasPendingWork || showsFlourish) ? idle : .listening
+        case .tapPending:
             phase = pressKeepsProcessing ? idle : .listening
         case .listening:
             phase = .listening
