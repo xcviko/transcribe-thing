@@ -73,14 +73,26 @@ struct PillCanvasView: View {
             && (model.visiblePhase.isRecording || model.visiblePhase == .processing)
     }
 
+    /// With no pill on screen (hidden until the next dictation, or Never mode) toasts drop into its slot, bottoms
+    /// aligned, instead of hovering over an empty gap.
+    static func toastBottomPadding(pillOnScreen: Bool, showsChip: Bool) -> CGFloat {
+        guard pillOnScreen else { return PillCanvasMetrics.pillBottomInset }
+        return PillCanvasMetrics.toastLift + (showsChip ? PillCanvasMetrics.chipLift : 0)
+    }
+
+    /// Toasts rise with the pill at once, and settle into its slot only once its exit has played out, so they
+    /// never slide over the fading pill.
+    private var slotAnimation: Animation {
+        let move: Animation = reduceMotion ? .easeInOut(duration: 0.15) : .spring(duration: 0.32, bounce: 0.15)
+        guard !model.isPresented else { return move }
+        return move.delay(reduceMotion ? PillMotion.reducedExitDuration : PillMotion.exitDuration)
+    }
+
     var body: some View {
         ZStack(alignment: .bottom) {
             ToastStack(center: toasts, pasteShortcut: model.settings.shortcuts[.pasteLast], regions: regions)
-                .padding(.bottom, model.isPillAllowed
-                         ? PillCanvasMetrics.toastLift + (showsChip ? PillCanvasMetrics.chipLift : 0)
-                         : PillCanvasMetrics.pillBottomInset)
-                .animation(reduceMotion ? .easeInOut(duration: 0.15) : .spring(duration: 0.32, bounce: 0.15),
-                           value: model.isPillAllowed)
+                .padding(.bottom, Self.toastBottomPadding(pillOnScreen: model.isPresented, showsChip: showsChip))
+                .animation(slotAnimation, value: model.isPresented)
                 .animation(reduceMotion ? .easeInOut(duration: 0.15) : .spring(duration: 0.32, bounce: 0.15),
                            value: showsChip)
             pillArea

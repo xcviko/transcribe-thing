@@ -69,7 +69,7 @@ final class PillModel {
 
     /// Resolved by `PillController` from the pill mode. Standalone previews keep `true`.
     var isPresented = true
-    /// False in Never mode: toasts then sit where the pill would be.
+    /// False in Never mode. Toasts follow `isPresented`: with no pill on screen they sit in its slot.
     var isPillAllowed = true
     /// Post-onboarding hello: the pill blooms with its tooltip for a few seconds, whatever the mode.
     private(set) var isHelloActive = false

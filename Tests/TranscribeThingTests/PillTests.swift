@@ -1228,3 +1228,14 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(stage.frame(for: .peek, engine: .geminiFlash).engine == nil)
     }
 }
+
+@Suite struct ToastSlotTests {
+    /// A hidden pill (While dictating, between dictations) or Never mode: the toast's bottom meets the pill's.
+    @Test func toastsDropIntoThePillSlotWhenNoPillIsShown() {
+        #expect(PillCanvasView.toastBottomPadding(pillOnScreen: false, showsChip: false) == PillCanvasMetrics.pillBottomInset)
+        #expect(PillCanvasView.toastBottomPadding(pillOnScreen: false, showsChip: true) == PillCanvasMetrics.pillBottomInset)
+        #expect(PillCanvasView.toastBottomPadding(pillOnScreen: true, showsChip: false) == PillCanvasMetrics.toastLift)
+        #expect(PillCanvasView.toastBottomPadding(pillOnScreen: true, showsChip: true)
+                == PillCanvasMetrics.toastLift + PillCanvasMetrics.chipLift)
+    }
+}
