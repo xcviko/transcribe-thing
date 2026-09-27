@@ -170,7 +170,7 @@ struct HotkeyRouter: Equatable, Sendable {
 
     /// A non-PTT binding that is modifier-only and matches the held set exactly.
     private func modifierChordMatch(_ config: Config) -> ShortcutAction? {
-        let candidates: [ShortcutAction] = [.handsFree, .pasteLast, .copyLast, .cancel]
+        let candidates: [ShortcutAction] = [.handsFree, .pasteLast, .cancel]
         return candidates.first { action in
             guard let shortcut = config.bindings[action], shortcut.isModifierOnly,
                   shortcut.modifiersMatchExactly(modifiers) else { return false }
@@ -222,10 +222,9 @@ struct HotkeyRouter: Equatable, Sendable {
             if !input.isRepeat { fireChord(.handsFree, into: &decision) }
             return decision
         }
-        for action in [ShortcutAction.pasteLast, .copyLast] {
-            guard let shortcut = bindings[action], shortcut.matches(keyCode: key, modifiers: modifiers) else { continue }
+        if let pasteLast = bindings[.pasteLast], pasteLast.matches(keyCode: key, modifiers: modifiers) {
             consume(key, into: &decision)
-            if !input.isRepeat { fireChord(action, into: &decision) }
+            if !input.isRepeat { fireChord(.pasteLast, into: &decision) }
             return decision
         }
         if let ptt = bindings[.pushToTalk], ptt.keyCode == key, ptt.modifiersMatchExactly(modifiers) {
@@ -320,10 +319,9 @@ struct HotkeyRouter: Equatable, Sendable {
         case .handsFree: event = .handsFreeToggle
         case .cancel: event = .cancel
         case .pasteLast: event = .pasteLast
-        case .copyLast: event = .copyLast
         case .pushToTalk: return
         }
-        if gesture != .idle, action == .pasteLast || action == .copyLast {
+        if gesture != .idle, action == .pasteLast {
             decision.events.append(.pttInterrupted)
         }
         if gesture != .idle { gesture = .idle }

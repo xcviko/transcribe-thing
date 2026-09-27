@@ -1,7 +1,7 @@
 import AppKit
 
-/// Builds transcribe-thing's menu (SPEC §4.14). The status item shows it with "Quit transcribe-thing"; the pill's right-click
-/// menu is the same menu without it.
+/// Builds transcribe-thing's menu (SPEC §4.14). The status item shows it with "Quit"; the pill's right-click menu is the
+/// same menu without it.
 @MainActor
 final class MenuBuilder {
     weak var environment: AppEnvironment?
@@ -26,44 +26,35 @@ final class MenuBuilder {
         menu.addItem(statusItem(env))
         menu.addItem(.separator())
 
-        let isHandsFree = isLocked(env.dictation.machine.capture)
-        menu.addItem(MenuActionItem(title: isHandsFree ? "Finish Dictation" : "Start Hands-free Dictation",
-                                    shortcut: settings.shortcuts[.handsFree]) { [weak env] in
-            env?.dictation.toggleHandsFree()
-        })
+        // The only menu way to stop a dictation, so these show up while one runs.
+        if isLocked(env.dictation.machine.capture) {
+            menu.addItem(MenuActionItem(title: "Finish Dictation", shortcut: settings.shortcuts[.handsFree]) { [weak env] in
+                env?.dictation.toggleHandsFree()
+            })
+        }
         if env.dictation.machine.isRecording {
             menu.addItem(MenuActionItem(title: "Cancel Dictation", shortcut: settings.shortcuts[.cancel]) { [weak env] in
                 env?.dictation.cancelCurrent()
             })
         }
-        let hasLast = env.history.lastSuccessfulText != nil
         let paste = MenuActionItem(title: "Paste Last Transcript", shortcut: settings.shortcuts[.pasteLast]) { [weak env] in
             env?.dictation.pasteLast()
         }
-        paste.isEnabled = hasLast
+        paste.isEnabled = env.history.lastSuccessfulText != nil
         menu.addItem(paste)
-        let copy = MenuActionItem(title: "Copy Last Transcript", shortcut: settings.shortcuts[.copyLast]) { [weak env] in
-            env?.dictation.copyLast()
-        }
-        copy.isEnabled = hasLast
-        menu.addItem(copy)
         menu.addItem(.separator())
 
         menu.addItem(submenuItem("Model", symbol: "square.stack.3d.up", modelMenu(env)))
         menu.addItem(submenuItem("Microphone", symbol: "mic", microphoneMenu(env)))
-        menu.addItem(submenuItem("Show Pill", symbol: "capsule", pillMenu(env)))
         menu.addItem(.separator())
 
-        menu.addItem(MenuActionItem(title: "Open transcribe-thing…") { [weak env] in env?.windows.showHub(.home) })
-        let prefs = MenuActionItem(title: "Settings…") { [weak env] in env?.windows.showHub(.general) }
-        prefs.keyEquivalent = ","
-        prefs.keyEquivalentModifierMask = [.command]
-        menu.addItem(prefs)
-        menu.addItem(updateItem(env))
+        menu.addItem(MenuActionItem(title: "Settings…") { [weak env] in env?.windows.showHub(.general) })
+        if let update = updateItem(env) { menu.addItem(update) }
 
         if includeQuit {
             menu.addItem(.separator())
-            let quit = NSMenuItem(title: "Quit transcribe-thing", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+            // No ⌘Q: quitting takes a deliberate click.
+            let quit = NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "")
             quit.target = NSApp
             menu.addItem(quit)
         }
@@ -78,12 +69,10 @@ final class MenuBuilder {
 
     // MARK: - Updates
 
-    /// "Check for Updates…", or "Update to 0.3.0…" with a badge while an update waits (and reminders are on).
-    private func updateItem(_ env: AppEnvironment) -> NSMenuItem {
+    /// "Update to 0.3.0…" with a badge while an update waits (and reminders are on); nothing otherwise.
+    private func updateItem(_ env: AppEnvironment) -> NSMenuItem? {
         let updates = env.updates
-        guard updates.showsBadge, let available = updates.availableUpdate else {
-            return MenuActionItem(title: "Check for Updates…") { [weak env] in env?.checkForUpdates() }
-        }
+        guard updates.showsBadge, let available = updates.availableUpdate else { return nil }
         let item = MenuActionItem(title: "Update to \(available.version)…") { [weak env] in
             env?.windows.showHub(.softwareUpdate)
         }
@@ -206,18 +195,6 @@ final class MenuBuilder {
         return menu
     }
 
-    private func pillMenu(_ env: AppEnvironment) -> NSMenu {
-        let menu = NSMenu()
-        menu.autoenablesItems = false
-        let titles: [(PillMode, String)] = [(.always, "Always"), (.whileDictating, "While Dictating"), (.never, "Never")]
-        for (mode, title) in titles {
-            let item = MenuActionItem(title: title) { [weak env] in env?.settings.pillMode = mode }
-            item.state = env.settings.pillMode == mode ? .on : .off
-            menu.addItem(item)
-        }
-        return menu
-    }
-
     // MARK: - Helpers
 
     private func submenuItem(_ title: String, symbol: String, _ submenu: NSMenu) -> NSMenuItem {
@@ -288,9 +265,12 @@ final class MenuActionItem: NSMenuItem {
         MainActor.assumeIsolated { handler() }
     }
 
-    /// NSMenu can draw fn (globe), ⌘ ⌥ ⌃ ⇧ with a key; modifier-only shortcuts have no menu form.
+    /// The hint only when the menu draws the shortcut faithfully: ⌘ ⌥ ⌃ ⇧ with a key. The menu drops fn
+    /// (⌘ fn V would read "⌘V", which is a normal paste) and can't tell left from right, and modifier-only
+    /// shortcuts have no menu form: those get no hint rather than a wrong one.
     static func keyEquivalent(for shortcut: Shortcut) -> (key: String, modifiers: NSEvent.ModifierFlags)? {
-        guard let code = shortcut.keyCode else { return nil }
+        guard let code = shortcut.keyCode, !shortcut.usesFunctionKey,
+              shortcut.modifiers.allSatisfy({ $0.side == .either }) else { return nil }
         let key: String
         switch code {
         case KeyCode.space: key = " "

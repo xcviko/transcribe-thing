@@ -5,7 +5,7 @@ import Observation
 import os
 
 enum HotkeyEvent: Equatable, Sendable {
-    case pttDown, pttUp, pttInterrupted, handsFreeToggle, cancel, pasteLast, copyLast
+    case pttDown, pttUp, pttInterrupted, handsFreeToggle, cancel, pasteLast
 }
 
 /// Marker written into `kCGEventSourceUserData` of every event transcribe-thing synthesizes (the ⌘V paste),

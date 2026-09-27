@@ -57,6 +57,7 @@ final class DictationController {
     @ObservationIgnored var insertOverride: (@MainActor (String, pid_t?) async -> InsertionOutcome)?
     @ObservationIgnored var copyOverride: (@MainActor (String) -> Void)?
     @ObservationIgnored var pasteNowOverride: (@MainActor (String) async -> InsertionOutcome)?
+    @ObservationIgnored var pasteLastOverride: (@MainActor (String) async -> InsertionOutcome)?
     /// Replaces the OpenRouter generation lookup that fills in a delivered cloud transcript's provider.
     @ObservationIgnored var providerLookupOverride: (@MainActor (String) async -> String?)?
     /// TCC's answer right now (about 25 ms), asked only while the cached permission isn't granted.
@@ -189,11 +190,10 @@ final class DictationController {
         case .handsFreeToggle: send(.handsFreeToggle)
         case .cancel: send(.cancel)
         case .pasteLast: pasteLast()
-        case .copyLast: copyLast()
         }
     }
 
-    /// Menu bar "Start Hands-free Dictation" / "Finish Dictation".
+    /// The pill's click, and the menu's "Finish Dictation" while hands-free.
     func toggleHandsFree() {
         switch machine.capture {
         case .locked, .lockedStopPending: send(.pillStop)
@@ -852,8 +852,10 @@ final class DictationController {
         settings.shortcuts[.pasteLast]?.compactDescription ?? "⌘ fn V"
     }
 
-    // MARK: - Paste / copy last
+    // MARK: - Paste last
 
+    /// Copy and paste in one: the last transcript goes on the clipboard (it stays there even with "Restore the
+    /// clipboard after pasting" on) and is pasted where the user is typing, if anywhere.
     func pasteLast() {
         guard let text = history.lastSuccessfulText else {
             toasts.post(Notice(dedupeKey: "pasteLast.empty", style: .info, symbol: "text.badge.xmark",
@@ -862,20 +864,30 @@ final class DictationController {
         }
         Task { [weak self] in
             guard let self else { return }
-            let outcome = await self.insert(text, expectedPID: nil)
-            self.handleInsertion(outcome, text: text, celebrate: false)
+            let outcome: InsertionOutcome
+            if let override = self.pasteLastOverride {
+                outcome = await override(text)
+            } else {
+                outcome = await self.inserter.insert(text, expectedPID: nil, keepOnClipboard: true)
+            }
+            switch outcome {
+            case .pasted, .accessibilityMissing:
+                // Without Accessibility the inserter has already copied it, and the notice says so.
+                self.handleInsertion(outcome, text: text, celebrate: false)
+            case .noEditableTarget, .targetChanged:
+                self.leaveOnClipboard(text, title: "Nowhere to paste")
+            case .failed(let reason):
+                Log.app.error("Paste last failed: \(reason, privacy: .public)")
+                self.leaveOnClipboard(text, title: "Couldn’t paste")
+            }
         }
     }
 
-    func copyLast() {
-        guard let text = history.lastSuccessfulText else {
-            toasts.post(Notice(dedupeKey: "copyLast.empty", style: .info, symbol: "text.badge.xmark",
-                               title: "Nothing to copy yet", body: "Dictate something first.", lifetime: .seconds(3)))
-            return
-        }
+    /// Paste last's "copy" half when the paste can't happen.
+    private func leaveOnClipboard(_ text: String, title: String) {
         copy(text)
-        toasts.post(Notice(dedupeKey: "copyLast", style: .success, symbol: "doc.on.doc",
-                           title: "Copied last transcript", lifetime: .seconds(1.5)))
+        toasts.post(Notice(dedupeKey: "pasteLast.copied", style: .info, symbol: "doc.on.clipboard",
+                           title: title, body: "Your text is on the clipboard.", lifetime: .seconds(3)))
     }
 
     // MARK: - Notice actions

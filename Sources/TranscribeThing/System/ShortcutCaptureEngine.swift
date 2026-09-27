@@ -25,7 +25,7 @@ struct ShortcutCaptureEngine: Equatable, Sendable {
     /// Actions that still work without a shortcut (pill click, menu bar).
     static func canClear(_ action: ShortcutAction) -> Bool {
         switch action {
-        case .handsFree, .pasteLast, .copyLast: true
+        case .handsFree, .pasteLast: true
         case .pushToTalk, .cancel: false
         }
     }

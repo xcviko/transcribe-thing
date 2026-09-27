@@ -40,7 +40,6 @@ struct ShortcutsPage: View {
             HubGroup("Transcripts") {
                 SettingsGroup {
                     row(.pasteLast)
-                    row(.copyLast)
                 }
             }
             HubGroup("Good to know") {

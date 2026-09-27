@@ -232,7 +232,7 @@ final class UpdateCenter {
 
     // MARK: Checking
 
-    /// "Check Now" and the menu: always checks, whatever the setting.
+    /// "Check Now": always checks, whatever the setting.
     func checkNow() {
         Task { await check() }
     }
@@ -438,7 +438,7 @@ final class UpdateCenter {
 
 // MARK: - Formatting
 
-/// Copy for the Software Update page, its General row and the menu.
+/// Copy for the Software Update page and its General row.
 enum UpdateFormat {
     private static let locale = Locale(identifier: "en_US")
 
