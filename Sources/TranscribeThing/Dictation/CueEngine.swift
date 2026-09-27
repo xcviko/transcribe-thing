@@ -7,17 +7,21 @@ import os
 /// `AVCueOutput` is the real one; tests substitute a fake, so nothing ever plays.
 protocol CueOutput: AnyObject {
     /// The output must be rebuilt (the engine's configuration or the default output device changed). May be
-    /// called on any thread; the engine hops to its queue.
+    /// called on any thread; the engine hops to its queue. The output marks its graph stale before calling it, so
+    /// a `start` that runs before the engine gets there already builds for the new device.
     var onChange: (() -> Void)? { get set }
+    /// Started, and on the current device: false once a change made the graph stale.
     var isRunning: Bool { get }
     /// Reads the sound files and starts watching the default output; returns each loaded cue's length in seconds.
     func load() -> [SoundEffect: TimeInterval]
-    /// Builds the graph for the current output device if there is none, then starts it.
+    /// Builds the graph for the current output device if there is none (or it went stale), then starts it.
     func start() throws
     /// Stops the device (AirPods leave their playback state) and keeps the graph for the next start.
     func stop()
     /// Drops the graph: the next `start` builds one for whatever device is the default then.
     func reset()
+    /// Drops the graph if a change made it stale and no `start` has rebuilt it since; true when it dropped one.
+    func resetIfStale() -> Bool
     /// Plays `effect` from its start, cutting off an earlier play of the same cue (other cues keep playing).
     /// False when it isn't loaded or the output isn't running.
     func play(_ effect: SoundEffect) -> Bool
@@ -54,6 +58,9 @@ final class CueEngine: @unchecked Sendable {
     private var output: CueOutput?
     /// A dictation is under way: the output stays up however long ago the last cue was.
     private var isHeld = false
+    /// A cue or warm-up started the output and it hasn't idled out since. Only then does a device change start
+    /// it again: a hold alone (a dictation with "Play sounds" off) never wakes AirPods.
+    private var isUp = false
     private var idleTimer: DispatchWorkItem?
 
     init(idleRelease: TimeInterval = CueEngine.idleRelease,
@@ -158,12 +165,14 @@ final class CueEngine: @unchecked Sendable {
         for attempt in 1...2 {
             do {
                 try output.start()
+                isUp = true
                 return true
             } catch {
                 Log.app.error("Cue output didn't start (attempt \(attempt)): \(error.localizedDescription, privacy: .public)")
                 output.reset()
             }
         }
+        isUp = false
         return false
     }
 
@@ -180,20 +189,21 @@ final class CueEngine: @unchecked Sendable {
     private func releaseIfIdle() {
         Self.checkOffMain("releaseIfIdle")
         idleTimer = nil
-        guard !isHeld, let output, output.isRunning else { return }
+        guard !isHeld else { return }
+        isUp = false
+        guard let output, output.isRunning else { return }
         output.stop()
         Log.app.debug("Cue output stopped after \(self.idleDelay) s idle")
     }
 
-    /// AirPods connected or left, the route changed format: rebuild for the new default output, right away if the
-    /// output should be up (a dictation holds it, or a cue played moments ago), else at the next cue.
+    /// AirPods connected or left, the route changed format: rebuild for the new default output, right away if a
+    /// cue or warm-up had it up, else at the next cue. A cue that got here first already started on a fresh
+    /// graph; dropping that one would cut it off.
     private func outputChanged() {
         Self.checkOffMain("outputChanged")
-        guard let output else { return }
-        let wantsRunning = isHeld || idleTimer != nil
-        output.reset()
+        guard let output, output.resetIfStale() else { return }
         Log.app.debug("Cue output rebuilt after a device change")
-        if wantsRunning { ensureRunning() }
+        if isUp { ensureRunning() }
     }
 
     private static func milliseconds(since start: UInt64) -> Int {
@@ -231,6 +241,8 @@ final class AVCueOutput: CueOutput {
     private var buffers: [SoundEffect: AVAudioPCMBuffer] = [:]
     private var configurationObserver: NSObjectProtocol?
     private var outputListener: AudioObjectPropertyListenerBlock?
+    /// Set on the notifying thread the moment the device changes, read on the queue.
+    private let isStale = OSAllocatedUnfairLock(initialState: false)
 
     private static var defaultOutputAddress = AudioObjectPropertyAddress(
         mSelector: kAudioHardwarePropertyDefaultOutputDevice,
@@ -245,7 +257,8 @@ final class AVCueOutput: CueOutput {
         if let configurationObserver { NotificationCenter.default.removeObserver(configurationObserver) }
     }
 
-    var isRunning: Bool { engine?.isRunning ?? false }
+    /// Running on the current device: a stale graph counts as stopped, so the next cue rebuilds before it plays.
+    var isRunning: Bool { engine?.isRunning == true && !isStale.withLock { $0 } }
 
     func load() -> [SoundEffect: TimeInterval] {
         CueEngine.checkOffMain("AVCueOutput.load")
@@ -272,6 +285,8 @@ final class AVCueOutput: CueOutput {
 
     func start() throws {
         CueEngine.checkOffMain("AVCueOutput.start")
+        // The engine stops itself on a configuration change; restarting that graph would play on the old format.
+        _ = resetIfStale()
         let engine = try engine ?? build()
         if !engine.isRunning { try engine.start() }
     }
@@ -290,6 +305,20 @@ final class AVCueOutput: CueOutput {
         players = [:]
         buffers = [:]
         engine = nil
+    }
+
+    func resetIfStale() -> Bool {
+        let wasStale = isStale.withLock { stale in
+            defer { stale = false }
+            return stale
+        }
+        if wasStale { reset() }
+        return wasStale
+    }
+
+    private func changed() {
+        isStale.withLock { $0 = true }
+        onChange?()
     }
 
     func play(_ effect: SoundEffect) -> Bool {
@@ -320,7 +349,7 @@ final class AVCueOutput: CueOutput {
         // The engine stops itself when the output's format changes (AirPods switching to their headset profile).
         configurationObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
-        ) { [weak self] _ in self?.onChange?() }
+        ) { [weak self] _ in self?.changed() }
         self.engine = engine
         return engine
     }
@@ -330,7 +359,7 @@ final class AVCueOutput: CueOutput {
     /// thread; `onChange` hops to the engine's queue.
     private func observeDefaultOutput() {
         guard outputListener == nil else { return }
-        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.onChange?() }
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.changed() }
         let status = AudioObjectAddPropertyListenerBlock(
             AudioObjectID(kAudioObjectSystemObject), &Self.defaultOutputAddress, nil, block)
         if status == noErr { outputListener = block }

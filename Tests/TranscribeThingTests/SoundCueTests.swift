@@ -12,6 +12,8 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
         var calls: [Call] = []
         var isRunning = false
         var calledOnMain = false
+        /// A device change made the graph stale and nothing has rebuilt it yet.
+        var isStale = false
         /// Starts that throw before one succeeds.
         var failingStarts = 0
     }
@@ -48,6 +50,7 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
     }
 
     func start() throws {
+        _ = resetIfStale()
         record(.start)
         startGate?.wait()
         let fails = state.withLock { state -> Bool in
@@ -71,6 +74,15 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
         state.withLock { $0.isRunning = false }
     }
 
+    func resetIfStale() -> Bool {
+        let wasStale = state.withLock { state in
+            defer { state.isStale = false }
+            return state.isStale
+        }
+        if wasStale { reset() }
+        return wasStale
+    }
+
     func play(_ effect: SoundEffect) -> Bool {
         record(.play(effect))
         return isRunning
@@ -78,7 +90,17 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
 
     /// What AirPods connecting (or `AVAudioEngineConfigurationChange`) does, from a CoreAudio thread.
     func simulateDeviceChange() {
+        markDeviceChanged()
         DispatchQueue.global().async { self.onChange?() }
+    }
+
+    /// The first half of a change, as `AVCueOutput` does it on the notifying thread: the engine has stopped itself
+    /// and the graph is stale, but `onChange` hasn't reached the engine's queue yet.
+    func markDeviceChanged() {
+        state.withLock {
+            $0.isStale = true
+            $0.isRunning = false
+        }
     }
 }
 
@@ -99,14 +121,15 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
         let output = FakeCueOutput(startGate: gate)
         let (player, engine) = Self.make(output)
         let clock = ContinuousClock()
-        let elapsed = clock.measure { player.play(.start) }
+        // A notice cue: it plays however long the gate holds it (a key-feedback cue would be dropped as late).
+        let elapsed = clock.measure { player.play(.alert) }
         // The output is still "waking" (start blocks on the gate), yet the main thread is free.
         #expect(elapsed < .milliseconds(20))
         #expect(output.played.isEmpty)
         try await waitUntil { output.calls.contains(.start) }
         gate.signal()
         engine.flush()
-        #expect(output.played == [.start])
+        #expect(output.played == [.alert])
         #expect(!output.calledOnMain)
     }
 
@@ -140,7 +163,7 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
 
     @Test func warmUpStartsTheOutputAndIdleReleaseStopsIt() async throws {
         let output = FakeCueOutput()
-        let (player, engine) = Self.make(output, idle: 0.15)
+        let (player, engine) = Self.make(output, idle: 0.5)
         player.warmUp()
         engine.flush()
         #expect(output.isRunning)
@@ -162,10 +185,11 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
 
     @Test func eachCuePushesTheIdleReleaseBack() async throws {
         let output = FakeCueOutput()
-        let (player, engine) = Self.make(output, idle: 0.5)
+        // Gaps far shorter than the idle window, adding up to more than it.
+        let (player, engine) = Self.make(output, idle: 1)
         player.warmUp()
-        for _ in 0..<4 {
-            try await Task.sleep(for: .milliseconds(120))
+        for _ in 0..<5 {
+            try await Task.sleep(for: .milliseconds(300))
             player.play(.lock)
         }
         engine.flush()
@@ -230,6 +254,42 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
         #expect(output.played == [.paste])
     }
 
+    @Test func aDeviceChangeNeverWakesAnOutputNoCueStarted() async throws {
+        // "Play sounds" off: a dictation holds the engine, but nothing ever started the output.
+        let output = FakeCueOutput()
+        let (player, engine) = Self.make(output, idle: 0.05, soundsOn: false)
+        player.setDictationActive(true)
+        output.simulateDeviceChange()
+        try await waitUntil { output.count(.reset) == 1 }
+        engine.flush()
+        // Just after the dictation (the idle window still open).
+        player.setDictationActive(false)
+        output.simulateDeviceChange()
+        try await waitUntil { output.count(.reset) == 2 }
+        engine.flush()
+        #expect(output.count(.start) == 0)
+        #expect(!output.isRunning)
+    }
+
+    @Test func aCueAheadOfTheChangeNoticePlaysOnAFreshGraphThatTheNoticeKeeps() {
+        let output = FakeCueOutput()
+        let (player, engine) = Self.make(output)
+        player.play(.start)
+        engine.flush()
+        // The engine stopped itself; the cue reaches the queue before `onChange` does.
+        output.markDeviceChanged()
+        player.play(.lock)
+        engine.flush()
+        #expect(output.calls.suffix(3) == [.reset, .start, .play(.lock)])
+        output.onChange?()
+        engine.flush()
+        // The late notice finds nothing stale: no second reset cuts the cue off.
+        #expect(output.count(.reset) == 1)
+        #expect(output.count(.start) == 2)
+        #expect(output.isRunning)
+        #expect(output.played == [.start, .lock])
+    }
+
     @Test func aFailedStartRebuildsOnceAndNeverCrashes() {
         let once = FakeCueOutput(failingStarts: 1)
         let (player, engine) = Self.make(once)
@@ -275,12 +335,12 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
 
 @MainActor
 @Suite(.serialized) struct DictationCueWarmUpTests {
-    static func make(_ output: FakeCueOutput) -> (DictationController, CueEngine) {
+    static func make(_ output: FakeCueOutput, idle: TimeInterval = 1) -> (DictationController, CueEngine) {
         let settings = AppSettings.inMemory()
         let meter = LevelMeter.preview(level: 0)
         let store = ModelStore.preview(states: [.parakeet: .ready], lastErrors: [:])
         let account = OpenRouterAccount.preview(status: .missing)
-        let engine = CueEngine(idleRelease: 0.1, makeOutput: { output })
+        let engine = CueEngine(idleRelease: idle, makeOutput: { output })
         let sounds = SoundPlayer(settings: settings, engine: engine)
         sounds.preload()
         let controller = DictationController(
@@ -320,7 +380,7 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
 
     @Test func theOutputStaysUpWhileRecordingAndIdlesOutAfter() async throws {
         let output = FakeCueOutput()
-        let (controller, engine) = Self.make(output)
+        let (controller, engine) = Self.make(output, idle: 0.1)
         controller.send(.handsFreeToggle)
         #expect(controller.activity == .recording)
         try await Task.sleep(for: .milliseconds(300))
