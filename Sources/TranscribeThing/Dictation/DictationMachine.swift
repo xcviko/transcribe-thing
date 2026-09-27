@@ -73,6 +73,9 @@ struct DictationMachine: Equatable {
     /// press before it can know a chord follows, so fn tap, then fn+Space arrives as pttDown (locks) and then
     /// handsFreeToggle, which only confirms the lock.
     private(set) var lockingPressHeld = false
+    /// The push-to-talk press switched the model: a quick release is then not a tap (a double-press would lock
+    /// hands-free on the main model, the choice already dropped) but a quiet cancel.
+    private(set) var switchedDuringPress = false
     var config: Config
 
     init(config: Config = Config()) {
@@ -122,6 +125,10 @@ struct DictationMachine: Equatable {
 
         let effects = reduce(input, now: now)
         if case .locked = capture {} else { lockingPressHeld = false }
+        switch capture {
+        case .arming, .listening: break
+        default: switchedDuringPress = false
+        }
         return effects
     }
 
@@ -163,6 +170,9 @@ struct DictationMachine: Equatable {
             // The pill has been up since key-down; the sound confirms a real hold.
             capture = .listening(downAt: downAt)
             return [.playSound(.start)] + limitTimers(startedAt: downAt, now: now)
+        case .pttUp where switchedDuringPress:
+            capture = .idle
+            return [.cancelTimer(.arming), .cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)]
         case .pttUp:
             return [.cancelTimer(.arming)] + releaseTap(firstDownAt: downAt, now: now)
         case .pttInterrupted:
@@ -175,6 +185,7 @@ struct DictationMachine: Equatable {
         case .cancel, .pillCancel:
             return cancelRecording()
         case .cycleEngine:
+            switchedDuringPress = true
             return [.cycleEngine]
         case .deviceLost:
             capture = .idle
@@ -189,6 +200,9 @@ struct DictationMachine: Equatable {
     private mutating func handleListening(_ input: Input, downAt: TimeInterval, now: TimeInterval) -> [Effect] {
         let held = now - downAt
         switch input {
+        case .pttUp where held < config.tapThreshold && switchedDuringPress:
+            capture = .idle
+            return cancelLimitTimers + [.cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)]
         case .pttUp where held < config.tapThreshold:
             return cancelLimitTimers + releaseTap(firstDownAt: downAt, now: now)
         case .pttUp:
@@ -207,6 +221,7 @@ struct DictationMachine: Equatable {
         case .cancel, .pillCancel:
             return cancelRecording()
         case .cycleEngine:
+            switchedDuringPress = true
             return [.cycleEngine]
         case .timer(.limitWarning):
             return [.notice(.oneMinuteLeft)]

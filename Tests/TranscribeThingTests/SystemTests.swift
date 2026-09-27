@@ -1319,6 +1319,27 @@ private final class PasteLog: @unchecked Sendable {
         #expect(kb.release(.rightOption).events == [.pttUp])
     }
 
+    /// A switch key without modifiers still leaves fn+Space to hands-free: the exact match wins over the loose one
+    /// that sets the held fn aside.
+    @Test func aPlainSwitchKeyLeavesTheHandsFreeChordAlone() {
+        let space = Shortcut(modifiers: [], keyCode: KeyCode.space)
+        #expect(ShortcutValidator.validate(space, for: .switchModel).errors.isEmpty, "the validator accepts it")
+        var kb = Keyboard(bindings: bindings([.switchModel: space]))
+        #expect(kb.press(.fn).events == [.pttDown])
+        #expect(kb.down(kVK_Space).events == [.handsFreeToggle], "fn+Space while holding fn locks hands-free")
+        kb.up(kVK_Space)
+        kb.release(.fn)
+
+        // Hands-free: a plain Space steps, fn+Space still stops.
+        kb.config.isRecording = true
+        let plain = kb.down(kVK_Space)
+        #expect(plain.events == [.cycleEngine])
+        #expect(plain.swallow)
+        kb.up(kVK_Space)
+        #expect(kb.press(.fn).events == [.pttDown])
+        #expect(kb.down(kVK_Space).events == [.handsFreeToggle])
+    }
+
     @Test func nothingFiresWhileTheRecorderCaptures() {
         var kb = Keyboard()
         kb.config.isRecording = true

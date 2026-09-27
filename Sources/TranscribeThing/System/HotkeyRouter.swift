@@ -227,18 +227,8 @@ struct HotkeyRouter: Equatable, Sendable {
         }
 
         let bindings = config.bindings
-        if isBusy(config), let cancel = bindings[.cancel], cancel.keyCode == key, matchesDuringDictation(cancel, bindings) {
-            consume(key, into: &decision)
-            if !input.isRepeat { fireChord(.cancel, into: &decision) }
-            return decision
-        }
-        if let switchModel = liveSwitchModel(config), switchModel.keyCode == key,
-           matchesDuringDictation(switchModel, bindings) {
-            // Not a PTT-ending combo: the hold (and hands-free's stop-on-release) goes on.
-            consume(key, into: &decision)
-            if !input.isRepeat { decision.events.append(.cycleEngine) }
-            return decision
-        }
+        // Exact matches first: cancel and switch model also match with the PTT's and hands-free's modifiers still
+        // held, so a switch model bound to plain Space would otherwise take fn+Space from hands-free.
         if let handsFree = bindings[.handsFree], handsFree.matches(keyCode: key, modifiers: modifiers) {
             consume(key, into: &decision)
             if !input.isRepeat { fireChord(.handsFree, into: &decision) }
@@ -255,6 +245,18 @@ struct HotkeyRouter: Equatable, Sendable {
                 gesture = .holdingKey(key)
                 decision.events.append(.pttDown)
             }
+            return decision
+        }
+        if isBusy(config), let cancel = bindings[.cancel], cancel.keyCode == key, matchesDuringDictation(cancel, bindings) {
+            consume(key, into: &decision)
+            if !input.isRepeat { fireChord(.cancel, into: &decision) }
+            return decision
+        }
+        if let switchModel = liveSwitchModel(config), switchModel.keyCode == key,
+           matchesDuringDictation(switchModel, bindings) {
+            // Not a PTT-ending combo: the hold (and hands-free's stop-on-release) goes on.
+            consume(key, into: &decision)
+            if !input.isRepeat { decision.events.append(.cycleEngine) }
             return decision
         }
 

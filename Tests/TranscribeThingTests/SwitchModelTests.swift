@@ -29,6 +29,33 @@ import Testing
         #expect(m.handle(.pttUp, now: 40.1).contains(.stopCaptureAndTranscribe(mode: .handsFree)))
     }
 
+    /// A quick fn+Tab isn't a tap: the model it chose would be dropped, and a following fn press would lock
+    /// hands-free on the main model. It cancels quietly instead, like fn+←.
+    @Test func aQuickReleaseAfterSwitchingCancelsQuietly() {
+        var m = T.arming()
+        #expect(m.handle(.cycleEngine, now: 10.0625) == [.cycleEngine])
+        #expect(m.handle(.pttUp, now: 10.09375)
+            == [.cancelTimer(.arming), .cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)])
+        #expect(m.capture == .idle)
+        #expect(m.handle(.pttDown, now: 10.25).contains(.startCapture), "no double-press: a fresh hold")
+        #expect(m.capture == .arming(downAt: 10.25))
+
+        var listening = T.listening()
+        _ = listening.handle(.cycleEngine, now: 10.1875)
+        #expect(listening.handle(.pttUp, now: 10.25)
+            == T.cancelLimits + [.cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)])
+        #expect(listening.capture == .idle)
+    }
+
+    @Test func aHoldAfterSwitchingStillTranscribesAndTheNextTapIsATap() {
+        var m = T.listening()
+        _ = m.handle(.cycleEngine, now: 10.5)
+        #expect(m.handle(.pttUp, now: 12).contains(.stopCaptureAndTranscribe(mode: .pushToTalk)))
+        _ = m.handle(.pttDown, now: 20)
+        _ = m.handle(.pttUp, now: 20.0625)
+        #expect(m.capture == .tapPending(firstDownAt: 20), "the switch belonged to the last press only")
+    }
+
     @Test(arguments: ["idle", "tapPending"])
     func withoutARecordingNothingHappens(_ name: String) {
         var m = T.state(name)
@@ -53,6 +80,13 @@ import Testing
 
 @Suite struct SwitchModelShortcutTests {
     static let quiet = ShortcutPolicyTests.stock(fnUsage: .doNothing)
+
+    @Test func theChipCallsTheMainModelJustParakeet() {
+        #expect(EngineID.parakeet.chipName == "Parakeet")
+        #expect(EngineID.parakeetCloud.chipName == "Parakeet")
+        #expect(EngineID.geminiFlash.chipName == "Gemini Flash")
+        #expect(EngineID.geminiPro.chipName == "Gemini Pro")
+    }
 
     @Test func itIsARebindableActionWithFnTabByDefault() {
         #expect(ShortcutAction.switchModel.title == "Switch model")

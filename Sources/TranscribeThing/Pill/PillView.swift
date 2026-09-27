@@ -837,7 +837,7 @@ private struct PillEngineChip: View {
                 Image(systemName: engine.isSwitchModel ? "sparkles" : engine.symbolName)
                     .font(.system(size: 9.5, weight: .semibold))
                     .foregroundStyle(accent?.mark ?? .white.opacity(0.75))
-                Text(engine.shortName)
+                Text(engine.chipName)
                     .foregroundStyle(.white.opacity(0.92))
                 if isInteractive {
                     Image(systemName: "chevron.up.chevron.down")

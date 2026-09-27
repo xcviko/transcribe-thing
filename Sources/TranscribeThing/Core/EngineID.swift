@@ -98,6 +98,12 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    /// The pill's model chip: an extra model by its short name, the main model as just "Parakeet" (the chip only
+    /// flashes it for a moment after switching back).
+    var chipName: String {
+        isSwitchModel ? shortName : "Parakeet"
+    }
+
     var providerLine: String {
         switch self {
         case .parakeet: "NVIDIA · on your Mac"
