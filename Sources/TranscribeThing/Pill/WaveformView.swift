@@ -1,8 +1,10 @@
 import SwiftUI
 
-/// Thirteen center-weighted bars driven by the live level (wispr-ux §1.4). Honest by design: before the first
-/// audio buffer the bars are dim "connecting" dots, and after 1.5 s of silence they breathe instead of faking
-/// a waveform. The timeline only exists while this view is on screen, so an idle pill costs nothing.
+/// The voice as a Telegram-style scrolling amplitude history (wispr-ux §1.4): every 87 ms the
+/// voice-gated amplitude becomes a new bar that grows in at the right edge while older ones drift left and
+/// fade out. Honest by design: before the first audio buffer the bars are dim "connecting" dots, and anything
+/// that isn't speech (room noise, a fan, a key click) is perfectly still dots. The timeline only exists while
+/// this view is on screen, so an idle pill costs nothing.
 struct WaveformView: View {
     let meter: LevelMeter
     var maxBarHeight: CGFloat = PillMetrics.barMaxHeight
@@ -25,89 +27,110 @@ struct WaveformView: View {
     }
 }
 
-/// Per-frame state lives in a reference type so advancing it never invalidates the view.
+/// History state lives in a reference type so advancing it never invalidates the view. The geometry is a pure
+/// function of the meter's clock and the recorded columns, so a dropped frame never makes the bars jump.
 final class WaveformEngine {
-    private var smoothed: CGFloat = 0
-    private var silenceBlend: CGFloat = 0
-    private var lastTime: TimeInterval?
-    private let f1: [Double]
-    private let f2: [Double]
-    private let p1: [Double]
-    private let p2: [Double]
+    /// A new column every 87 ms: ~11 bars a second reads as speech, not as a meter.
+    static let columnInterval: TimeInterval = 0.087
+    /// A new column lands at the right edge as a dot and grows to its height over this long (ease-out).
+    static let growDuration: TimeInterval = 0.1
+    /// Static snapshots freeze the preview voice at this moment: a pause, then a phrase.
+    static let staticTime: TimeInterval = 4.2
+    /// One column per bar slot; the oldest slides out past the left edge while the next one lands.
+    static var columnCount: Int { PillMetrics.barCount }
 
-    init() {
-        // Fixed pseudo-random wobble per bar (1.3–3.1 Hz) so the bars never move in lockstep.
-        var seed: UInt64 = 0x9E37_79B9_7F4A_7C15
-        func next() -> Double {
-            seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
-            return Double(seed >> 11) / Double(1 << 53)
-        }
-        let n = PillMetrics.barCount
-        var f1 = [Double](), f2 = [Double](), p1 = [Double](), p2 = [Double]()
-        for _ in 0..<n {
-            f1.append(1.3 + 1.8 * next())
-            f2.append(1.3 + 1.8 * next())
-            p1.append(2 * .pi * next())
-            p2.append(2 * .pi * next())
-        }
-        (self.f1, self.f2, self.p1, self.p2) = (f1, f2, p1, p2)
+    struct Bar: Equatable {
+        var rect: CGRect
+        var opacity: Double
     }
 
-    /// Center weighting: env(i) = 0.35 + 0.65 · cos²(π(i − 6)/14).
-    static func envelope(_ i: Int) -> CGFloat {
-        let c = cos(Double.pi * Double(i - PillMetrics.barCount / 2) / 14)
-        return CGFloat(0.35 + 0.65 * c * c)
+    /// Amplitudes 0...1, newest first.
+    private(set) var columns = [CGFloat](repeating: 0, count: WaveformEngine.columnCount)
+    /// Meter time at which the newest column's audio ends (and it landed).
+    private(set) var newestEnd: TimeInterval?
+    /// Whether the columns slide this interval: only while a voiced column is on screen, so silence is a
+    /// fixed row of dots rather than a drifting one. Decided when a column lands, where the slide offset is 0
+    /// either way, so starting or stopping never jumps.
+    private var isScrolling = false
+
+    /// Records the columns whose audio has ended by `now` (meter time). Rebuilds the history from the meter
+    /// on the first frame, after a stall longer than the history, or when the clock went backwards.
+    func advance(meter: LevelMeter, to now: TimeInterval) {
+        let interval = Self.columnInterval
+        guard let end = newestEnd, now >= end - 0.5, now - end < interval * Double(Self.columnCount) else {
+            columns = (0..<Self.columnCount).map { k in
+                CGFloat(meter.voiceAmplitude(from: now - interval * Double(k + 1), to: now - interval * Double(k)))
+            }
+            newestEnd = now
+            isScrolling = columns.contains { $0 > 0 }
+            return
+        }
+        var newest = end
+        while now >= newest + interval {
+            newest += interval
+            columns.removeLast()
+            columns.insert(CGFloat(meter.voiceAmplitude(from: newest - interval, to: newest)), at: 0)
+        }
+        if newest != end {
+            newestEnd = newest
+            isScrolling = columns.contains { $0 > 0 }
+        }
+    }
+
+    /// Bar geometry at `now` for a field of `size`. Column k sits k + offset steps left of the rightmost slot,
+    /// the offset running 0 → 1 between landings, so the history drifts left at one step per column.
+    func bars(size: CGSize, now: TimeInterval, reduceMotion: Bool, isStatic: Bool) -> [Bar] {
+        let w = PillMetrics.barWidth
+        let step = w + PillMetrics.barGap
+        let minH = PillMetrics.barMinHeight
+        let midY = size.height / 2
+        let end = newestEnd ?? now
+        // Reduce Motion and snapshots step a whole column at a time, fully grown.
+        let settled = reduceMotion || isStatic
+        let offset: CGFloat = settled || !isScrolling ? 0 : CGFloat(min(1, max(0, (now - end) / Self.columnInterval)))
+
+        var bars: [Bar] = []
+        bars.reserveCapacity(columns.count)
+        for (k, amplitude) in columns.enumerated() {
+            let x = size.width - w - (CGFloat(k) + offset) * step
+            guard x > -w else { continue }
+            var grown: CGFloat = 1
+            if !settled {
+                let p = CGFloat(min(1, max(0, (now - end + Double(k) * Self.columnInterval) / Self.growDuration)))
+                grown = 1 - pow(1 - p, 3)
+            }
+            let h = minH + (size.height - minH) * amplitude * grown
+            let lift = min(1, (h - minH) / 5)
+            // The history dissolves over its last two steps on the left.
+            let tail = min(1, max(0, (x + step) / (2 * step)))
+            let opacity = (0.45 + 0.51 * Double(lift)) * Double(tail)
+            bars.append(Bar(rect: CGRect(x: x, y: midY - h / 2, width: w, height: h), opacity: opacity))
+        }
+        return bars
     }
 
     func draw(in context: inout GraphicsContext, size: CGSize, date: Date, meter: LevelMeter,
               reduceMotion: Bool, isStatic: Bool) {
-        let t = date.timeIntervalSinceReferenceDate
-        let dt = lastTime.map { min(0.1, max(0, t - $0)) } ?? (1.0 / 60)
-        lastTime = t
-
-        let hasAudio = meter.hasReceivedAudio
-        let target = CGFloat(min(max(meter.level, 0), 1))
-        if isStatic {
-            smoothed = target
-        } else {
-            // The meter already smooths (attack 40 ms / release 140 ms); this only interpolates its ~10 Hz steps.
-            let tau: CGFloat = target > smoothed ? 0.025 : 0.08
-            smoothed += (target - smoothed) * (1 - exp(-CGFloat(dt) / tau))
-        }
-        let silent = hasAudio && meter.secondsSinceVoice > 1.5 && smoothed < 0.12
-        let silenceTarget: CGFloat = silent && !reduceMotion ? 1 : 0
-        silenceBlend = isStatic ? silenceTarget : silenceBlend + (silenceTarget - silenceBlend) * (1 - exp(-CGFloat(dt) / 0.3))
-
         let w = PillMetrics.barWidth
-        let step = w + PillMetrics.barGap
-        let minH = PillMetrics.barMinHeight
-        let maxH = size.height
-        let midY = size.height / 2
-
-        for i in 0..<PillMetrics.barCount {
-            let x = CGFloat(i) * step
-            if !hasAudio {
-                // Connecting: a slow ripple of dim dots, never a fake waveform.
+        guard meter.hasReceivedAudio else {
+            // Connecting: a slow ripple of dim dots, never a fake waveform.
+            let t = date.timeIntervalSinceReferenceDate
+            let minH = PillMetrics.barMinHeight
+            for i in 0..<PillMetrics.barCount {
                 let ripple = reduceMotion ? 0.5 : 0.5 + 0.5 * sin(2 * .pi * t / 1.4 - 0.5 * Double(i))
-                let rect = CGRect(x: x, y: midY - minH / 2, width: w, height: minH)
+                let rect = CGRect(x: CGFloat(i) * (w + PillMetrics.barGap), y: size.height / 2 - minH / 2,
+                                  width: w, height: minH)
                 context.fill(Path(ellipseIn: rect), with: .color(.white.opacity(0.24 + 0.3 * ripple)))
-                continue
             }
-            let wobble = reduceMotion ? 1 : 0.78 + 0.22 * (0.5 * sin(2 * .pi * f1[i] * t + p1[i])
-                                                        + 0.5 * sin(2 * .pi * f2[i] * t + p2[i]))
-            let h = minH + (maxH - minH) * smoothed * Self.envelope(i) * CGFloat(wobble)
-            let lift = min(1, (h - minH) / 5)
-            let opacity = 0.45 + 0.51 * Double(lift)
-            if h <= minH + 0.4 {
-                // Silence: dots breathe left to right (scale 1 → 1.3, 2.4 s period) to show the mic is live.
-                let breathe = 0.5 + 0.5 * sin(2 * .pi * t / 2.4 - 0.35 * Double(i))
-                let d = minH * (1 + 0.3 * CGFloat(breathe) * silenceBlend)
-                let rect = CGRect(x: x + w / 2 - d / 2, y: midY - d / 2, width: d, height: d)
-                context.fill(Path(ellipseIn: rect), with: .color(.white.opacity(0.45 + 0.12 * breathe * Double(silenceBlend))))
-            } else {
-                let rect = CGRect(x: x, y: midY - h / 2, width: w, height: h)
-                context.fill(Path(roundedRect: rect, cornerRadius: w / 2), with: .color(.white.opacity(opacity)))
-            }
+            return
+        }
+
+        let now = isStatic ? Self.staticTime : meter.readTime
+        if isStatic { newestEnd = nil }
+        advance(meter: meter, to: now)
+        context.clip(to: Path(CGRect(origin: .zero, size: size)))
+        for bar in bars(size: size, now: now, reduceMotion: reduceMotion, isStatic: isStatic) {
+            context.fill(Path(roundedRect: bar.rect, cornerRadius: w / 2), with: .color(.white.opacity(bar.opacity)))
         }
     }
 }
