@@ -921,8 +921,6 @@ final class DictationController {
             openHub?(.microphone)
         case .useBuiltInMicrophone:
             useBuiltInMicrophone()
-        case .showPillNow:
-            settings.pillHiddenUntil = nil
         case .dismiss, .copyText, .pasteText:
             break
         }

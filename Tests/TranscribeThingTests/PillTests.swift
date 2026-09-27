@@ -169,18 +169,6 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(center.notices.isEmpty)
     }
 
-    @Test func interceptorRunsBeforeTheHandler() {
-        let (center, _) = makeCenter()
-        var order: [String] = []
-        center.actionInterceptor = { _, _ in order.append("pill") }
-        center.onAction = { _, _ in order.append("shell") }
-        let show = NoticeAction(title: "Show Now", kind: .showPillNow, isPrimary: true)
-        let posted = notice("hidden", actions: [show])
-        center.post(posted)
-        center.perform(show, on: posted)
-        #expect(order == ["pill", "shell"])
-    }
-
     @Test func dismissByIdAndKey() {
         let (center, _) = makeCenter()
         let a = notice("a")
@@ -208,31 +196,27 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
 
     @Test(arguments: [PillPhase.hidden, .rest])
     func idleShowsOnlyInAlwaysMode(_ phase: PillPhase) {
-        #expect(PillVisibility.showsPill(phase: phase, mode: .always, hiddenUntil: nil, now: now))
-        #expect(!PillVisibility.showsPill(phase: phase, mode: .whileDictating, hiddenUntil: nil, now: now))
-        #expect(!PillVisibility.showsPill(phase: phase, mode: .never, hiddenUntil: nil, now: now))
+        #expect(PillVisibility.showsPill(phase: phase, mode: .always))
+        #expect(!PillVisibility.showsPill(phase: phase, mode: .whileDictating))
+        #expect(!PillVisibility.showsPill(phase: phase, mode: .never))
     }
 
     @Test(arguments: [PillPhase.listening, .locked, .processing, .success, .error])
-    func activePhasesShowUnlessNeverOrHidden(_ phase: PillPhase) {
-        #expect(PillVisibility.showsPill(phase: phase, mode: .always, hiddenUntil: nil, now: now))
-        #expect(PillVisibility.showsPill(phase: phase, mode: .whileDictating, hiddenUntil: nil, now: now))
-        #expect(!PillVisibility.showsPill(phase: phase, mode: .never, hiddenUntil: nil, now: now))
-        #expect(!PillVisibility.showsPill(phase: phase, mode: .always, hiddenUntil: now.addingTimeInterval(60), now: now))
-        #expect(!PillVisibility.showsPill(phase: phase, mode: .whileDictating, hiddenUntil: now.addingTimeInterval(60), now: now))
+    func activePhasesShowUnlessNever(_ phase: PillPhase) {
+        #expect(PillVisibility.showsPill(phase: phase, mode: .always))
+        #expect(PillVisibility.showsPill(phase: phase, mode: .whileDictating))
+        #expect(!PillVisibility.showsPill(phase: phase, mode: .never))
     }
 
-    @Test func hideForAnHourExpires() {
-        let past = now.addingTimeInterval(-1)
-        #expect(PillVisibility.showsPill(phase: .rest, mode: .always, hiddenUntil: past, now: now))
-        #expect(PillVisibility.isPillAllowed(mode: .whileDictating, hiddenUntil: past, now: now))
-        #expect(!PillVisibility.isPillAllowed(mode: .whileDictating, hiddenUntil: now.addingTimeInterval(3600), now: now))
-        #expect(!PillVisibility.isPillAllowed(mode: .never, hiddenUntil: nil, now: now))
+    @Test func onlyNeverDisallowsThePill() {
+        #expect(PillVisibility.isPillAllowed(mode: .always))
+        #expect(PillVisibility.isPillAllowed(mode: .whileDictating))
+        #expect(!PillVisibility.isPillAllowed(mode: .never))
     }
 
     @Test func helloShowsTheIdlePillInWhileDictatingButNotInNever() {
-        #expect(PillVisibility.showsPill(phase: .rest, mode: .whileDictating, hiddenUntil: nil, now: now, isHelloActive: true))
-        #expect(!PillVisibility.showsPill(phase: .rest, mode: .never, hiddenUntil: nil, now: now, isHelloActive: true))
+        #expect(PillVisibility.showsPill(phase: .rest, mode: .whileDictating, isHelloActive: true))
+        #expect(!PillVisibility.showsPill(phase: .rest, mode: .never, isHelloActive: true))
     }
 
     @Test func panelIsNeededForThePillOrAnyToast() {

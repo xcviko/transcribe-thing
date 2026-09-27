@@ -20,8 +20,6 @@ final class ToastCenter {
 
     @ObservationIgnored var onAction: ((Notice, NoticeAction) -> Void)?
     @ObservationIgnored var onSound: ((SoundEffect) -> Void)?
-    /// Runs before `onAction` for actions the pill handles itself (for example "Show Now").
-    @ObservationIgnored var actionInterceptor: ((Notice, NoticeAction) -> Void)?
 
     @ObservationIgnored private let clock: @MainActor () -> Date
     @ObservationIgnored private let schedulesExpiry: Bool
@@ -86,7 +84,6 @@ final class ToastCenter {
     /// A button in a toast was clicked. Copy keeps the card (its button turns into "Copied"); everything else
     /// dismisses it after the action is handed to `onAction`.
     func perform(_ action: NoticeAction, on notice: Notice) {
-        actionInterceptor?(notice, action)
         onAction?(notice, action)
         switch action.kind {
         case .copyText:

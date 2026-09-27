@@ -53,8 +53,8 @@ enum PillSnapshots {
                 CanvasScene(model: .preview(phase: .processing), notices: [PillSnapshotFixtures.micFallback,
                                                                              PillSnapshotFixtures.noSpeech])
             },
-            SnapshotEntry("pill-toast-hidden", width: 640, height: 200) { _ in
-                CanvasScene(model: hiddenModel(), notices: [PillSnapshotFixtures.hiddenForHour])
+            SnapshotEntry("pill-toast-never", width: 640, height: 200) { _ in
+                CanvasScene(model: neverModel(), notices: [PillSnapshotFixtures.noSpeech])
             },
         ]
     }
@@ -71,8 +71,8 @@ enum PillSnapshots {
         return model
     }
 
-    /// "Never" mode / hidden for an hour: no pill, the toast sits where the pill would be.
-    @MainActor private static func hiddenModel() -> PillModel {
+    /// "Never" mode: no pill, the toast sits where the pill would be.
+    @MainActor private static func neverModel() -> PillModel {
         let model = PillModel.preview(phase: .rest)
         model.isPresented = false
         model.isPillAllowed = false
@@ -139,12 +139,6 @@ enum PillSnapshotFixtures {
         lifetime: .seconds(8), sound: .alert)
 
     static let noSpeech = AppError.noSpeech.notice(recordingID: nil, fallbackEngine: nil)
-
-    static let hiddenForHour = Notice(
-        dedupeKey: "pill.hiddenForHour", style: .info, symbol: "eye.slash",
-        title: "Pill hidden for an hour",
-        actions: [NoticeAction(title: "Show Now", kind: .showPillNow, isPrimary: true)],
-        lifetime: .seconds(5))
 }
 
 // MARK: - Scenes

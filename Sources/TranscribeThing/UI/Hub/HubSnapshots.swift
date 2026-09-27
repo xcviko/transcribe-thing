@@ -81,18 +81,10 @@ enum HubSnapshots {
             },
 
             hub("hub-general", .general, height: 1080),
-            // A pill hidden from the menu bar ("Show Now"), sounds off.
-            hub("hub-general-pill-hidden", .general) { c in
-                c.fixedNow = Samples.now
+            // The narrowest window: the segmented control leaves the least room for the pill caption; sounds off.
+            hub("hub-general-compact", .general, width: 820, height: 560) { c in
                 c.settings.pillMode = .always
-                c.settings.hidePill(now: Samples.now)
                 c.settings.soundsEnabled = false
-            },
-            // The narrowest window: "Show Now" + the segmented control leave the least room for the caption.
-            hub("hub-general-pill-hidden-compact", .general, width: 820, height: 560) { c in
-                c.fixedNow = Samples.now
-                c.settings.pillMode = .always
-                c.settings.hidePill(now: Samples.now)
             },
             hub("hub-general-permissions", .general, height: 1080) { c in
                 c.permissions = .preview(mic: .granted, ax: .denied)

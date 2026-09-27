@@ -52,18 +52,6 @@ final class MenuBuilder {
         menu.addItem(submenuItem("Model", symbol: "square.stack.3d.up", modelMenu(env)))
         menu.addItem(submenuItem("Microphone", symbol: "mic", microphoneMenu(env)))
         menu.addItem(submenuItem("Show Pill", symbol: "capsule", pillMenu(env)))
-        let hidden = settings.isPillTemporarilyHidden()
-        let hide = MenuActionItem(title: hidden ? "Show Pill Now" : "Hide Pill for 1 Hour") { [weak env] in
-            guard let env else { return }
-            if env.settings.isPillTemporarilyHidden() {
-                env.settings.pillHiddenUntil = nil
-            } else {
-                // PillController posts the "Pill hidden for an hour · Show Now" toast itself.
-                env.settings.hidePill()
-            }
-        }
-        hide.isEnabled = settings.pillMode != .never
-        menu.addItem(hide)
         menu.addItem(.separator())
 
         menu.addItem(MenuActionItem(title: "Open transcribe-thing…") { [weak env] in env?.windows.showHub(.home) })
@@ -207,10 +195,7 @@ final class MenuBuilder {
         menu.autoenablesItems = false
         let titles: [(PillMode, String)] = [(.always, "Always"), (.whileDictating, "While Dictating"), (.never, "Never")]
         for (mode, title) in titles {
-            let item = MenuActionItem(title: title) { [weak env] in
-                env?.settings.pillMode = mode
-                env?.settings.pillHiddenUntil = nil
-            }
+            let item = MenuActionItem(title: title) { [weak env] in env?.settings.pillMode = mode }
             item.state = env.settings.pillMode == mode ? .on : .off
             menu.addItem(item)
         }

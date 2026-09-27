@@ -123,27 +123,13 @@ struct GeneralPage: View {
         }
     }
 
-    /// "Hide for 1 Hour" lives in the menu bar and the pill's menu; here a hidden pill only gets "Show Now".
-    @ViewBuilder private var pillRow: some View {
-        let hidden = settings.pillMode != .never && settings.isPillTemporarilyHidden(now: hub.now)
-        SettingsRow(title: "Show the pill",
-                    subtitle: PillCaption.text(settings.pillMode, hiddenUntil: settings.pillHiddenUntil, now: hub.now),
-                    systemImage: hidden ? "eye.slash" : "capsule", iconTint: .inkSecondary) {
-            HStack(spacing: 10) {
-                if hidden {
-                    Button("Show Now") {
-                        withAnimation(Theme.Motion.snappy) { settings.pillHiddenUntil = nil }
-                    }
-                    .buttonStyle(.appQuiet)
-                    .fixedSize()
-                }
-                HubSegmentedPicker(options: PillMode.allCases, selection: settings.pillMode, label: \.title) { mode in
-                    // Like the menu: choosing a mode, even the current one, brings a hidden pill back.
-                    settings.pillMode = mode
-                    settings.pillHiddenUntil = nil
-                }
-                .accessibilityLabel("Show the pill")
+    private var pillRow: some View {
+        SettingsRow(title: "Show the pill", subtitle: PillCaption.text(settings.pillMode),
+                    systemImage: "capsule", iconTint: .inkSecondary) {
+            HubSegmentedPicker(options: PillMode.allCases, selection: settings.pillMode, label: \.title) { mode in
+                settings.pillMode = mode
             }
+            .accessibilityLabel("Show the pill")
         }
     }
 

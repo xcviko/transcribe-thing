@@ -33,7 +33,6 @@ final class AppSettings {
     var onboardingStep: Int = 0 { didSet { store.set(onboardingStep, .onboardingResumeStep) } }
     var selectedEngine: EngineID = .default { didSet { store.set(selectedEngine.rawValue, .selectedEngine) } }
     var pillMode: PillMode = .whileDictating { didSet { store.set(pillMode.rawValue, .pillMode) } }
-    var pillHiddenUntil: Date? = nil { didSet { store.set(pillHiddenUntil, .pillHiddenUntil) } }
     var soundsEnabled: Bool = true { didSet { store.set(soundsEnabled, .soundsEnabled) } }
     /// nil = follow the system default input.
     var microphoneUID: String? = nil { didSet { store.set(microphoneUID, .microphoneUID) } }
@@ -77,16 +76,6 @@ final class AppSettings {
         return min(maxRecordingDuration, OpenRouterClient.maxRecordingDuration)
     }
 
-    /// Pill hidden by "Hide for 1 hour" right now.
-    func isPillTemporarilyHidden(now: Date = Date()) -> Bool {
-        guard let until = pillHiddenUntil else { return false }
-        return until > now
-    }
-
-    func hidePill(for interval: TimeInterval = 3600, now: Date = Date()) {
-        pillHiddenUntil = now.addingTimeInterval(interval)
-    }
-
     /// Onboarding had six steps (welcome, permissions, model, shortcuts, try it, done) until shortcuts and try it
     /// became one: someone who quit on either of them comes back to the merged step.
     nonisolated static func onboardingStep(fromSixStepIndex index: Int) -> Int {
@@ -111,7 +100,8 @@ final class AppSettings {
         // An engine this build doesn't offer (one since removed) leaves the default selected.
         if let v = store.string(.selectedEngine).flatMap(EngineID.init(rawValue:)) { selectedEngine = v }
         if let v = store.string(.pillMode).flatMap(PillMode.init(rawValue:)) { pillMode = v }
-        pillHiddenUntil = store.date(.pillHiddenUntil)
+        // Older builds could hide the pill for an hour; that deadline has no meaning now.
+        store.remove(.pillHiddenUntil)
         if let v = store.bool(.soundsEnabled) { soundsEnabled = v }
         // Older builds had a volume slider; sounds now play at their files' own level. A slider left at zero
         // meant no sounds, so it turns "Play sounds" off once, and the old key goes.
@@ -140,6 +130,7 @@ final class AppSettings {
 enum SettingsKey: String, CaseIterable {
     /// `onboardingStep` holds a six-step index from older builds, read once and moved to `onboardingResumeStep`.
     /// `soundVolume` is the removed volume slider's, read once (zero turns sounds off) and removed.
+    /// `pillHiddenUntil` is the removed "Hide Pill for 1 Hour" deadline, removed at load.
     case onboardingCompleted, onboardingStep, onboardingResumeStep, selectedEngine, pillMode, pillHiddenUntil
     case soundsEnabled, soundVolume, microphoneUID, preferBuiltInMicOverBluetooth, showDockIcon
     case geminiSystemPrompt, maxRecordingMinutes, doublePressForHandsFree
@@ -176,7 +167,6 @@ private final class SettingsStore {
     func set(_ value: Int, _ key: SettingsKey) { write(value, key) }
     func set(_ value: Double, _ key: SettingsKey) { write(value, key) }
     func set(_ value: String?, _ key: SettingsKey) { write(value, key) }
-    func set(_ value: Date?, _ key: SettingsKey) { write(value, key) }
     func remove(_ key: SettingsKey) { write(nil, key) }
 
     func setJSON<T: Encodable>(_ value: T, _ key: SettingsKey) {
@@ -190,7 +180,6 @@ private final class SettingsStore {
     func int(_ key: SettingsKey) -> Int? { (object(key) as? NSNumber)?.intValue }
     func double(_ key: SettingsKey) -> Double? { (object(key) as? NSNumber)?.doubleValue }
     func string(_ key: SettingsKey) -> String? { object(key) as? String }
-    func date(_ key: SettingsKey) -> Date? { object(key) as? Date }
 
     func json<T: Decodable>(_ key: SettingsKey) -> T? {
         guard let data = object(key) as? Data else { return nil }

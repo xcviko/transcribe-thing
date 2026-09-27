@@ -174,7 +174,6 @@ struct HubMenuPicker<Value: Hashable>: View {
 }
 
 /// A few mutually exclusive choices in a sunken capsule; the chosen one sits raised on a white chip.
-/// Picking the current option again still calls `onPick`, so it can undo a side state (a pill hidden for an hour).
 struct HubSegmentedPicker<Value: Hashable>: View {
     var options: [Value]
     var selection: Value

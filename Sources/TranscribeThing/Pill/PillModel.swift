@@ -51,9 +51,9 @@ final class PillModel {
     /// Drives the keyframe shake (explicit shakes plus every entry into `.error`).
     private(set) var shakeCount = 0
 
-    /// Resolved by `PillController` from the pill mode and "Hide for 1 hour". Standalone previews keep `true`.
+    /// Resolved by `PillController` from the pill mode. Standalone previews keep `true`.
     var isPresented = true
-    /// False in Never mode and while hidden for an hour: toasts then sit where the pill would be.
+    /// False in Never mode: toasts then sit where the pill would be.
     var isPillAllowed = true
     /// Post-onboarding hello: the pill blooms with its tooltip for a few seconds, whatever the mode.
     private(set) var isHelloActive = false
@@ -300,18 +300,15 @@ extension PillPhase {
 
 // MARK: - Visibility rules
 
-/// Pure resolution of "is the pill on screen" from the mode, "Hide for 1 hour" and the phase (SPEC §4.13).
+/// Pure resolution of "is the pill on screen" from the mode and the phase (SPEC §4.13).
 enum PillVisibility {
-    /// The mode allows a pill at all (Never and hidden-for-an-hour don't; toasts still appear).
-    static func isPillAllowed(mode: PillMode, hiddenUntil: Date?, now: Date) -> Bool {
-        if mode == .never { return false }
-        if let hiddenUntil, hiddenUntil > now { return false }
-        return true
+    /// The mode allows a pill at all (Never doesn't; toasts still appear).
+    static func isPillAllowed(mode: PillMode) -> Bool {
+        mode != .never
     }
 
-    static func showsPill(phase: PillPhase, mode: PillMode, hiddenUntil: Date?, now: Date,
-                          isHelloActive: Bool = false) -> Bool {
-        guard isPillAllowed(mode: mode, hiddenUntil: hiddenUntil, now: now) else { return false }
+    static func showsPill(phase: PillPhase, mode: PillMode, isHelloActive: Bool = false) -> Bool {
+        guard isPillAllowed(mode: mode) else { return false }
         if phase.isActive { return true }
         return mode == .always || isHelloActive
     }

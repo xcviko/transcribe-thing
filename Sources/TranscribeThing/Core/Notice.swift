@@ -29,7 +29,6 @@ enum NoticeActionKind: Sendable, Equatable {
     case pasteText(String)
     case chooseMicrophone
     case useBuiltInMicrophone
-    case showPillNow
     case dismiss
 }
 

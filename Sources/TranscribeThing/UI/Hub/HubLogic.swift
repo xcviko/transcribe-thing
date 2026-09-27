@@ -408,12 +408,9 @@ extension HubSection {
 // MARK: - Pill
 
 enum PillCaption {
-    /// The line under "Show the pill" in General: what the chosen mode does, or when a hidden pill comes back.
-    static func text(_ mode: PillMode, hiddenUntil: Date?, now: Date) -> String {
-        if mode != .never, let hiddenUntil, hiddenUntil > now {
-            return "Hidden for now. Back at \(Fmt.time(hiddenUntil))."
-        }
-        return switch mode {
+    /// The line under "Show the pill" in General: what the chosen mode does.
+    static func text(_ mode: PillMode) -> String {
+        switch mode {
         case .always: "A slim bar waits at the bottom of the screen."
         case .whileDictating: "Appears when you start talking, then steps aside."
         case .never: "Nothing on screen while you dictate. Notices still appear."

@@ -18,7 +18,6 @@ final class PillController {
     private var globalMonitor: Any?
     private var observers: [(NotificationCenter, any NSObjectProtocol)] = []
     private var hideTask: Task<Void, Never>?
-    private var unhideTask: Task<Void, Never>?
     private var fadeTask: Task<Void, Never>?
 
     /// Display the panel sits on; a dictation pins it there until the session ends.
@@ -26,8 +25,6 @@ final class PillController {
     private var sessionActive = false
     private var lastReposition = Date.distantPast
     private var announcedNotices: Set<UUID> = []
-    /// Last "Hide for 1 hour" deadline seen; `.some(nil)` once the first update ran.
-    private var knownHiddenUntil: Date??
     private var knownMaxMinutes: Int?
     private var lastVisiblePhase: PillPhase = .rest
 
@@ -55,9 +52,6 @@ final class PillController {
         host.onPointerActivity = { [weak self] in self?.updatePointer() }
         host.onRightMouseDown = { [weak self] event in self?.showContextMenu(for: event) ?? false }
         regions.onChange = { [weak self] in self?.updatePointer() }
-        toasts.actionInterceptor = { [weak self] _, action in
-            if case .showPillNow = action.kind { self?.settings.pillHiddenUntil = nil }
-        }
         observeEnvironment()
         track()
         update()
@@ -66,7 +60,7 @@ final class PillController {
     /// One-time post-onboarding bloom: the pill appears with its "Hold fn" tooltip for a few seconds.
     func showHello() {
         settings.hasShownWelcomeHello = true
-        guard PillVisibility.isPillAllowed(mode: settings.pillMode, hiddenUntil: settings.pillHiddenUntil, now: Date()) else {
+        guard PillVisibility.isPillAllowed(mode: settings.pillMode) else {
             toasts.post(Notice(dedupeKey: "pill.hello", style: .info, symbol: "waveform",
                                title: "You’re all set",
                                body: "Hold \(settings.shortcuts[.pushToTalk]?.compactDescription ?? "fn") anywhere to dictate.",
@@ -85,7 +79,6 @@ final class PillController {
             _ = model.isHelloActive
             _ = toasts.notices
             _ = settings.pillMode
-            _ = settings.pillHiddenUntil
             _ = settings.shortcuts
             _ = settings.maxRecordingMinutes
         } onChange: { [weak self] in
@@ -99,7 +92,6 @@ final class PillController {
 
     private func update() {
         guard let panel else { return }
-        let now = Date()
 
         let hint = settings.shortcuts[.pushToTalk]?.compactDescription ?? "fn"
         if model.shortcutHint != hint { model.shortcutHint = hint }
@@ -109,9 +101,8 @@ final class PillController {
             knownMaxMinutes = settings.maxRecordingMinutes
         }
 
-        let allowed = PillVisibility.isPillAllowed(mode: settings.pillMode, hiddenUntil: settings.pillHiddenUntil, now: now)
+        let allowed = PillVisibility.isPillAllowed(mode: settings.pillMode)
         let showsPill = PillVisibility.showsPill(phase: model.visiblePhase, mode: settings.pillMode,
-                                                 hiddenUntil: settings.pillHiddenUntil, now: now,
                                                  isHelloActive: model.isHelloActive)
         if model.isPillAllowed != allowed { model.isPillAllowed = allowed }
 
@@ -137,7 +128,6 @@ final class PillController {
         // Presentation flips after the panel is on screen, so the bloom animation is visible.
         if model.isPresented != showsPill { model.isPresented = showsPill }
 
-        noteHiddenUntilChange(now: now)
         announceNewNotices()
     }
 
@@ -170,35 +160,6 @@ final class PillController {
             self.toasts.setPaused(false)
         }
     }
-
-    /// "Hide for 1 hour": confirm with a toast, and bring the pill back by itself when the hour is up.
-    private func noteHiddenUntilChange(now: Date) {
-        let until = settings.pillHiddenUntil
-        guard knownHiddenUntil != .some(until) else { return }
-        // At launch an hour that is still running only needs its timer, not the toast again.
-        let isLaunch = knownHiddenUntil == nil
-        knownHiddenUntil = .some(until)
-        unhideTask?.cancel()
-        unhideTask = nil
-        guard let until, until > now else {
-            toasts.dismiss(dedupeKey: Self.hiddenNoticeKey)
-            return
-        }
-        if !isLaunch, settings.pillMode != .never {
-            toasts.post(Notice(dedupeKey: Self.hiddenNoticeKey, style: .info, symbol: "eye.slash",
-                               title: "Pill hidden for an hour",
-                               actions: [NoticeAction(title: "Show Now", kind: .showPillNow, isPrimary: true)],
-                               lifetime: .seconds(5)))
-        }
-        unhideTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(until.timeIntervalSinceNow + 0.05))
-            guard !Task.isCancelled, let self else { return }
-            self.unhideTask = nil
-            self.update()
-        }
-    }
-
-    static let hiddenNoticeKey = "pill.hiddenForHour"
 
     private func announceNewNotices() {
         let current = Set(toasts.notices.map(\.id))

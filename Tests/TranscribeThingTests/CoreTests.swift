@@ -722,6 +722,20 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         #expect(AppSettings(defaults: defaults).soundsEnabled == soundsOn)
     }
 
+    /// The removed "Hide Pill for 1 Hour": a deadline left by an older build is dropped, the pill mode kept.
+    @Test func anOldPillHiddenUntilIsRemoved() throws {
+        let suite = NSTemporaryDirectory() + "transcribe-thing-tests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(atPath: suite + ".plist")
+        }
+        defaults.set(Date().addingTimeInterval(3600), forKey: SettingsKey.pillHiddenUntil.defaultsKey)
+        defaults.set(PillMode.always.rawValue, forKey: SettingsKey.pillMode.defaultsKey)
+        #expect(AppSettings(defaults: defaults).pillMode == .always)
+        #expect(defaults.object(forKey: SettingsKey.pillHiddenUntil.defaultsKey) == nil)
+    }
+
     @Test func inMemorySettingsAreIndependent() {
         let a = AppSettings.inMemory()
         let b = AppSettings.inMemory()
@@ -729,14 +743,6 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         #expect(b.selectedEngine == .parakeet)
     }
 
-    @Test func pillTemporaryHide() {
-        let settings = AppSettings.inMemory()
-        let now = Date()
-        #expect(!settings.isPillTemporarilyHidden(now: now))
-        settings.hidePill(for: 3600, now: now)
-        #expect(settings.isPillTemporarilyHidden(now: now.addingTimeInterval(60)))
-        #expect(!settings.isPillTemporarilyHidden(now: now.addingTimeInterval(3601)))
-    }
 
     @Test func inMemoryKeychain() throws {
         let keychain = KeychainStore.inMemory()

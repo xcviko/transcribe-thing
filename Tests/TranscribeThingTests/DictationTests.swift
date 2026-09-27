@@ -1282,7 +1282,7 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
         #expect(titles == [
             "Parakeet v3 · Ready", "—",
             "Start Hands-free Dictation", "Paste Last Transcript", "Copy Last Transcript", "—",
-            "Model", "Microphone", "Show Pill", "Hide Pill for 1 Hour", "—",
+            "Model", "Microphone", "Show Pill", "—",
             "Open transcribe-thing…", "Settings…", "—", "Quit transcribe-thing",
         ])
         #expect(menu.items.first?.isEnabled == false)

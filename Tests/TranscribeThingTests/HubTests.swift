@@ -273,23 +273,9 @@ import Testing
 }
 
 @Suite struct PillCaptionTests {
-    private let now = Date(timeIntervalSince1970: 1_790_000_000)
-
     @Test func describesEachMode() {
-        #expect(PillCaption.text(.always, hiddenUntil: nil, now: now) == "A slim bar waits at the bottom of the screen.")
-        #expect(PillCaption.text(.whileDictating, hiddenUntil: nil, now: now)
-            == "Appears when you start talking, then steps aside.")
-        #expect(PillCaption.text(.never, hiddenUntil: nil, now: now)
-            == "Nothing on screen while you dictate. Notices still appear.")
-    }
-
-    @Test func hiddenPillSaysWhenItComesBack() {
-        let later = now.addingTimeInterval(3600)
-        #expect(PillCaption.text(.always, hiddenUntil: later, now: now) == "Hidden for now. Back at \(Fmt.time(later)).")
-        #expect(PillCaption.text(.whileDictating, hiddenUntil: later, now: now).hasPrefix("Hidden for now."))
-        // An expired hide, or Never (nothing to hide), reads as the plain mode.
-        #expect(PillCaption.text(.always, hiddenUntil: now.addingTimeInterval(-1), now: now)
-            == PillCaption.text(.always, hiddenUntil: nil, now: now))
-        #expect(PillCaption.text(.never, hiddenUntil: later, now: now) == PillCaption.text(.never, hiddenUntil: nil, now: now))
+        #expect(PillCaption.text(.always) == "A slim bar waits at the bottom of the screen.")
+        #expect(PillCaption.text(.whileDictating) == "Appears when you start talking, then steps aside.")
+        #expect(PillCaption.text(.never) == "Nothing on screen while you dictate. Notices still appear.")
     }
 }
