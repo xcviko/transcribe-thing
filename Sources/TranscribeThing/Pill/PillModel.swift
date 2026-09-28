@@ -288,14 +288,22 @@ final class PillModel {
         if isHovering { isHovering = false }
         if showsTooltip { showsTooltip = false }
         setHoveredControl(nil)
+        setPointerOverChip(false)
     }
 
     // MARK: Model chip
 
-    /// The chip above the pill is up: for a moment after every switch, and in hands-free while the pointer is over
-    /// the pill or the chip, where it opens the model menu. The rest of the time the tint alone says the model.
+    /// The chip above the pill is up only for a moment after a switch (Switch model, or the menu), and in
+    /// hands-free while the pointer rests on the chip itself, so a click can open the model menu. Hovering the
+    /// pill never brings it up: the tint alone says the model.
     var showsChip: Bool {
-        isChipFlashing || (visiblePhase == .locked && isHovering)
+        isChipFlashing || (visiblePhase == .locked && isPointerOverChip)
+    }
+    /// The pointer is on the chip (hands-free), set by the controller.
+    private(set) var isPointerOverChip = false
+
+    func setPointerOverChip(_ over: Bool) {
+        if isPointerOverChip != over { isPointerOverChip = over }
     }
 
     /// What the chip above the pill names right now: the dictation's clean-up or extra model, or the main model;

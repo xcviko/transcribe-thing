@@ -1130,20 +1130,20 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         try await waitUntil { !model.showsChip }
     }
 
-    /// Hands-free: hovering the pill (or the chip) brings the chip back, where it opens the model menu.
-    @Test func hoveringHandsFreeBringsTheChipBack() {
-        let model = PillModel.preview(phase: .locked)
+    /// Hovering the pill never brings the chip up: only a switch does. A chip up in hands-free stays while the
+    /// pointer is on it, so its menu can be opened.
+    @Test func onlyASwitchBringsTheChipUp() async throws {
+        let model = PillModel.preview(phase: .locked, isHovering: true)
         model.sessionModel = .engine(.geminiPro)
-        #expect(model.chipModel == nil)
-        model.isHovering = true
-        #expect(model.chipModel == .engine(.geminiPro))
-        model.sessionModel = nil
-        #expect(model.chipModel == .engine(.parakeet), "the main model too, for its menu")
-        model.isHovering = false
+        #expect(model.chipModel == nil, "hovering the pill")
+        model.setPointerOverChip(true)
+        #expect(model.chipModel == .engine(.geminiPro), "resting on the chip after a switch keeps it")
+        model.setPointerOverChip(false)
         #expect(model.chipModel == nil)
 
-        let pushToTalk = PillModel.preview(phase: .listening, isHovering: true)
+        let pushToTalk = PillModel.preview(phase: .listening)
         pushToTalk.sessionModel = .engine(.geminiPro)
+        pushToTalk.setPointerOverChip(true)
         #expect(pushToTalk.chipModel == nil, "a held key has no menu to offer")
     }
 

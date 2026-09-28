@@ -916,8 +916,8 @@ private struct PillControlButton: View {
 
 /// The dictation's model, floating above the pill for a moment after a switch, by its full name: sparkles and
 /// "Gemini 3.8 Flash" in its color; clean-up as the pass it is, "Parakeet → GPT-6 Luna" with the main model dimmed
-/// ahead of the wand; or a bolt and the main model. In hands-free it comes back while the pointer is over the pill, and opens the model menu (the
-/// controller pops it up).
+/// ahead of the wand; or a bolt and the main model. In hands-free it stays while the pointer is on it, and opens the
+/// model menu (the controller pops it up).
 private struct PillModelChip: View {
     let model: PillModel
     let choice: ModelChoice
