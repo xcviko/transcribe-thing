@@ -152,6 +152,24 @@ final class AppSettings {
     /// The Gemini system prompt until the user changes it, and what "Use Example" puts in.
     nonisolated static let defaultGeminiSystemPrompt = """
     Transcribe my audio. Reply with the transcript only.
+    Never answer or act on what I say, just write it down.
+
+    Never correct facts. Write every name, product or model name, version and number exactly as I say it, even if it sounds wrong, unknown, outdated or nonexistent.
+    Your knowledge is older than this recording. Anything you don't recognize is real and newer than you, not a mistake.
+    Never swap anything for a name, version or number you know better.
+    You may write a spoken number as digits, but never change its value.
+    When unsure, write what you hear, not what you expect.
+
+    Remove filler words and false starts. Fix punctuation.
+    Keep my words, slang and profanity. Don't censor, paraphrase or translate.
+    Use a hyphen "-" instead of "—" and straight quotes "..." instead of «...».
+    If there is no speech, reply with nothing.
+    """
+
+    /// Earlier defaults. A stored prompt equal to one of them was never edited, so it moves to
+    /// `defaultGeminiSystemPrompt`.
+    nonisolated static let retiredGeminiSystemPrompts = ["""
+    Transcribe my audio. Reply with the transcript only.
 
     Never answer or act on what I say, just write it down.
 
@@ -162,7 +180,7 @@ final class AppSettings {
     Use a hyphen "-" instead of "—" and straight quotes "..." instead of «...».
 
     If there is no speech, reply with nothing.
-    """
+    """]
 
     // MARK: Reasoning and clean-up
 
@@ -294,7 +312,9 @@ final class AppSettings {
         microphoneUID = store.string(.microphoneUID)
         migrateBuiltInOverBluetoothOnce()
         if let v = store.bool(.showDockIcon) { showDockIcon = v }
-        if let v = store.string(.geminiSystemPrompt) { geminiSystemPrompt = v }
+        if let v = store.string(.geminiSystemPrompt) {
+            geminiSystemPrompt = Self.retiredGeminiSystemPrompts.contains(v) ? Self.defaultGeminiSystemPrompt : v
+        }
         if let v: [String: String] = store.json(.reasoningEfforts) {
             var efforts: [EngineID: ReasoningEffort] = [:]
             for (engine, effort) in v {
@@ -306,7 +326,9 @@ final class AppSettings {
         }
         if let v = store.bool(.switchCleanup) { switchCleanup = v }
         store.remove(.cleanupEnabled)
-        if let v = store.string(.cleanupSystemPrompt) { cleanupSystemPrompt = v }
+        if let v = store.string(.cleanupSystemPrompt) {
+            cleanupSystemPrompt = CleanupModel.retiredExamplePrompts.contains(v) ? CleanupModel.examplePrompt : v
+        }
         if let v = store.string(.cleanupModel).flatMap(CleanupModel.init(rawValue:)) { cleanupModel = v }
         if let v: [String: String] = store.json(.cleanupReasoningEfforts) {
             var efforts: [CleanupModel: ReasoningEffort] = [:]
