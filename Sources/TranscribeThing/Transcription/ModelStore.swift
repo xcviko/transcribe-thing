@@ -184,6 +184,16 @@ final class ModelStore {
         if state(of: id).isDownloading { states[id] = .notInstalled }
     }
 
+    /// Returns once `id` has no download task left, including a cancelled one that is still unwinding (the
+    /// state reads `.notInstalled` as soon as `cancelDownload` returns, before the task has finished).
+    func waitForDownloadToSettle(_ id: EngineID) async {
+        while let task = downloadTasks[id] {
+            await task.value
+            // Only a newer download (a restart) replaces the entry; a finished one clears its own.
+            if downloadTasks[id] == task { return }
+        }
+    }
+
     private func runDownload(_ id: EngineID, engine: any LocalEngine, token: UUID) async {
         defer {
             if downloadTokens[id] == token {

@@ -4,7 +4,7 @@ import Testing
 
 /// Cross-module behavior added while wiring the app together.
 @MainActor
-@Suite struct PendingModelSelectionTests {
+@Suite(.timeLimit(.minutes(1))) struct PendingModelSelectionTests {
     /// Cloud Parakeet in use, Parakeet on this Mac not downloaded (or already on disk).
     private func makeStore(parakeetInstalled: Bool = false) -> (ModelStore, FakeEngine, AppSettings) {
         let settings = AppSettings.inMemory()
@@ -24,7 +24,7 @@ import Testing
         #expect(store.pendingSelection == .parakeet)
         #expect(store.state(of: .parakeet).isDownloading)
         #expect(settings.selectedEngine == .parakeetCloud, "dictation keeps using the working engine meanwhile")
-        try await waitUntil { store.state(of: .parakeet) == .ready }
+        await waitForObserved { store.state(of: .parakeet) == .ready }
         #expect(settings.selectedEngine == .parakeet)
         #expect(selectedWhenFinished == .parakeet, "the ready toast already sees the new selection")
         #expect(store.pendingSelection == nil)
@@ -33,13 +33,16 @@ import Testing
 
     @Test func cancellingTheDownloadDropsThePendingSwitch() async throws {
         let (store, parakeet, settings) = makeStore()
-        await parakeet.configure(downloadStepDelay: .milliseconds(200))
+        let gate = await parakeet.gateDownloads()
         await store.refreshFromDisk()
         store.selectWhenInstalled(.parakeet)
-        try await Task.sleep(for: .milliseconds(30))
+        await gate.arrival(1)
+        // The engine's download is under way, held before its first step.
         store.cancelDownload(.parakeet)
         #expect(store.pendingSelection == nil)
-        try await Task.sleep(for: .milliseconds(700))
+        await store.waitForDownloadToSettle(.parakeet)
+        #expect(gate.cancellations == 1)
+        #expect(store.state(of: .parakeet) == .notInstalled)
         #expect(settings.selectedEngine == .parakeetCloud)
     }
 
@@ -48,19 +51,20 @@ import Testing
         await parakeet.configure(downloadError: URLError(.notConnectedToInternet))
         await store.refreshFromDisk()
         store.selectWhenInstalled(.parakeet)
-        try await waitUntil { if case .failed = store.state(of: .parakeet) { true } else { false } }
+        await waitForObserved { if case .failed = store.state(of: .parakeet) { true } else { false } }
         #expect(store.pendingSelection == nil)
         #expect(settings.selectedEngine == .parakeetCloud)
     }
 
     @Test func choosingSomethingElseWhileDownloadingWins() async throws {
         let (store, parakeet, settings) = makeStore()
-        await parakeet.configure(downloadStepDelay: .milliseconds(40))
+        let gate = await parakeet.gateDownloads()
         await store.refreshFromDisk()
         store.selectWhenInstalled(.parakeet)
         store.select(.parakeetCloud)
+        gate.openForGood()
         #expect(store.pendingSelection == nil)
-        try await waitUntil { store.state(of: .parakeet) == .installed }
+        await waitForObserved { store.state(of: .parakeet) == .installed }
         #expect(settings.selectedEngine == .parakeetCloud)
     }
 
@@ -70,7 +74,7 @@ import Testing
         store.selectWhenInstalled(.parakeet)
         #expect(settings.selectedEngine == .parakeet)
         #expect(store.pendingSelection == nil)
-        try await waitUntil { store.state(of: .parakeet) == .ready }
+        await waitForObserved { store.state(of: .parakeet) == .ready }
     }
 
     @Test func cloudEnginesAreSelectedRightAway() {

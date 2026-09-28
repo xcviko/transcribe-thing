@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import Testing
 @testable import TranscribeThing
 
@@ -872,6 +873,91 @@ final class Flag: @unchecked Sendable {
     func set(_ newValue: Bool) { lock.withLock { value = newValue } }
 }
 
+/// Lets a test drive a fake operation step by step instead of racing it against the clock. The fake calls
+/// `pass()` before each step and is held there until the test opens the gate; cancelling the fake's task
+/// makes a held (or arriving) `pass()` throw `CancellationError`.
+final class StepGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var permits = 0
+    private var isOpen = false
+    private var held: [(id: UUID, continuation: CheckedContinuation<Void, Error>)] = []
+    private var arrivals = 0
+    private var arrivalWaiters: [(count: Int, continuation: CheckedContinuation<Void, Never>)] = []
+    private var cancelled = 0
+
+    /// How many `pass()` calls ended in `CancellationError`.
+    var cancellations: Int { lock.withLock { cancelled } }
+
+    func pass() async throws {
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                let (arrived, outcome) = lock.withLock { () -> ([CheckedContinuation<Void, Never>], Result<Void, Error>?) in
+                    arrivals += 1
+                    let arrived = arrivalWaiters.filter { $0.count <= arrivals }.map(\.continuation)
+                    arrivalWaiters.removeAll { $0.count <= arrivals }
+                    // The cancelled flag is set before `onCancel` runs, and `onCancel` takes the lock: a
+                    // cancellation is either seen here or finds this call in `held`.
+                    if Task.isCancelled {
+                        cancelled += 1
+                        return (arrived, .failure(CancellationError()))
+                    }
+                    if isOpen { return (arrived, .success(())) }
+                    if permits > 0 {
+                        permits -= 1
+                        return (arrived, .success(()))
+                    }
+                    held.append((id, continuation))
+                    return (arrived, nil)
+                }
+                arrived.forEach { $0.resume() }
+                if let outcome { continuation.resume(with: outcome) }
+            }
+        } onCancel: {
+            let continuation = lock.withLock { () -> CheckedContinuation<Void, Error>? in
+                guard let index = held.firstIndex(where: { $0.id == id }) else { return nil }
+                cancelled += 1
+                return held.remove(at: index).continuation
+            }
+            continuation?.resume(throwing: CancellationError())
+        }
+    }
+
+    /// Lets `steps` more `pass()` calls through, releasing held ones first.
+    func open(_ steps: Int = 1) {
+        let released = lock.withLock { () -> [CheckedContinuation<Void, Error>] in
+            let count = min(steps, held.count)
+            let released = held.prefix(count).map(\.continuation)
+            held.removeFirst(count)
+            permits += steps - count
+            return released
+        }
+        released.forEach { $0.resume() }
+    }
+
+    /// Lets every current and future `pass()` through.
+    func openForGood() {
+        let released = lock.withLock { () -> [CheckedContinuation<Void, Error>] in
+            isOpen = true
+            defer { held.removeAll() }
+            return held.map(\.continuation)
+        }
+        released.forEach { $0.resume() }
+    }
+
+    /// Returns once `pass()` has been called `count` times in total (held or not).
+    func arrival(_ count: Int) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let reached = lock.withLock {
+                if arrivals >= count { return true }
+                arrivalWaiters.append((count, continuation))
+                return false
+            }
+            if reached { continuation.resume() }
+        }
+    }
+}
+
 actor FakeEngine: LocalEngine {
     nonisolated let engineID: EngineID
     nonisolated let storageURLs: [URL] = []
@@ -880,8 +966,11 @@ actor FakeEngine: LocalEngine {
     var loadError: Error?
     var transcript: String
     var downloadSteps: [Double] = [0.25, 0.5, 0.75]
-    var downloadStepDelay: Duration = .milliseconds(20)
     var downloadError: Error?
+    /// When set, `download` waits at this gate before each progress step (otherwise it runs straight through).
+    private(set) var downloadGate: StepGate?
+    /// When set, `load` waits at this gate instead of sleeping for `loadDelay`.
+    private(set) var loadGate: StepGate?
     private(set) var loaded = false
     private(set) var loadCount = 0
     private(set) var transcribeCount = 0
@@ -892,12 +981,24 @@ actor FakeEngine: LocalEngine {
         self.transcript = transcript
     }
 
-    func configure(loadDelay: Duration? = nil, loadError: Error? = nil, downloadError: Error? = nil,
-                   downloadStepDelay: Duration? = nil) {
+    func configure(loadDelay: Duration? = nil, loadError: Error? = nil, downloadError: Error? = nil) {
         if let loadDelay { self.loadDelay = loadDelay }
         self.loadError = loadError
         self.downloadError = downloadError
-        if let downloadStepDelay { self.downloadStepDelay = downloadStepDelay }
+    }
+
+    /// From now on every download waits for the test to open the returned gate before each step.
+    func gateDownloads() -> StepGate {
+        let gate = StepGate()
+        downloadGate = gate
+        return gate
+    }
+
+    /// From now on every load waits for the test to open the returned gate.
+    func gateLoads() -> StepGate {
+        let gate = StepGate()
+        loadGate = gate
+        return gate
     }
 
     nonisolated func isInstalled() -> Bool { installed.get() }
@@ -905,7 +1006,7 @@ actor FakeEngine: LocalEngine {
 
     func download(progress: @escaping @Sendable (Double) -> Void) async throws {
         for step in downloadSteps {
-            try await Task.sleep(for: downloadStepDelay)
+            if let downloadGate { try await downloadGate.pass() } else { await Task.yield() }
             progress(step)
         }
         if let downloadError { throw downloadError }
@@ -917,7 +1018,7 @@ actor FakeEngine: LocalEngine {
 
     func load() async throws {
         loadCount += 1
-        try await Task.sleep(for: loadDelay)
+        if let loadGate { try await loadGate.pass() } else { try await Task.sleep(for: loadDelay) }
         if let loadError { throw loadError }
         loaded = true
     }
@@ -941,8 +1042,46 @@ struct FakeFailure: Error, LocalizedError {
     var errorDescription: String? { message }
 }
 
+/// Resumes a continuation at most once, whichever of several racing events comes first.
+private final class ResumeOnce<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Value, Never>?
+    init(_ continuation: CheckedContinuation<Value, Never>) { self.continuation = continuation }
+    func resume(_ value: Value) {
+        lock.withLock { () -> CheckedContinuation<Value, Never>? in
+            defer { continuation = nil }
+            return continuation
+        }?.resume(returning: value)
+    }
+}
+
+/// Waits until `condition` holds, re-evaluating it each time an observable property it read changes, so no
+/// state it passes through is sampled or missed by a timer. Records an issue after `timeout`.
 @MainActor
-@Suite struct ModelStoreTests {
+func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) async {
+    let deadline = ContinuousClock.now + timeout
+    while true {
+        var timer: Task<Void, Never>?
+        let met = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            let once = ResumeOnce(continuation)
+            let met = withObservationTracking(condition, onChange: { once.resume(false) })
+            if met { return once.resume(true) }
+            timer = Task {
+                try? await Task.sleep(until: deadline)
+                once.resume(false)
+            }
+        }
+        timer?.cancel()
+        if met { return }
+        if ContinuousClock.now >= deadline {
+            Issue.record("timed out waiting")
+            return
+        }
+    }
+}
+
+@MainActor
+@Suite(.timeLimit(.minutes(1))) struct ModelStoreTests {
     private func makeStore(installed: Bool = true, freeBytes: Int64 = 50_000_000_000, selected: EngineID = .parakeet)
         -> (ModelStore, FakeEngine, AppSettings) {
         let settings = AppSettings.inMemory()
@@ -953,21 +1092,14 @@ struct FakeFailure: Error, LocalizedError {
         return (store, parakeet, settings)
     }
 
-    private func waitUntil(_ timeout: Duration = .seconds(3), _ condition: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + timeout
-        while !condition() {
-            guard ContinuousClock.now < deadline else {
-                Issue.record("timed out waiting")
-                return
-            }
-            try await Task.sleep(for: .milliseconds(5))
-        }
+    private func waitUntil(_ condition: () -> Bool) async {
+        await waitForObserved(condition)
     }
 
     @Test func startScansAndPreparesTheSelectedModel() async throws {
         let (store, parakeet, _) = makeStore()
         store.start()
-        try await waitUntil { store.state(of: .parakeet) == .ready }
+        await waitUntil { store.state(of: .parakeet) == .ready }
         #expect(await parakeet.isLoaded)
     }
 
@@ -977,17 +1109,17 @@ struct FakeFailure: Error, LocalizedError {
         store.onDownloadFinished = { finished.append($0) }
         await store.refreshFromDisk()
         #expect(store.state(of: .parakeet) == .notInstalled)
+        let gate = await parakeet.gateDownloads()
         store.download(.parakeet)
         #expect(store.state(of: .parakeet).isDownloading)
-        var sawProgress = false
-        try await waitUntil {
-            if let p = store.state(of: .parakeet).downloadProgress, p.fraction > 0 {
-                sawProgress = true
-                #expect(p.totalBytes == 1_000_000)
-            }
-            return store.state(of: .parakeet) == .ready
+        // The fake holds each step until the gate opens, so every fraction stays on screen until it's seen.
+        for fraction in [0.25, 0.5, 0.75] {
+            gate.open()
+            await waitUntil { store.state(of: .parakeet).downloadProgress?.fraction == fraction }
+            #expect(store.state(of: .parakeet).downloadProgress?.totalBytes == 1_000_000)
+            #expect(finished.isEmpty)
         }
-        #expect(sawProgress)
+        await waitUntil { store.state(of: .parakeet) == .ready }
         #expect(finished == [.parakeet])
         #expect(await parakeet.isLoaded)
     }
@@ -995,7 +1127,7 @@ struct FakeFailure: Error, LocalizedError {
     @Test func downloadOfAnUnselectedModelStopsAtInstalled() async throws {
         let (store, _, _) = makeStore(installed: false, selected: .parakeetCloud)
         store.download(.parakeet)
-        try await waitUntil { store.state(of: .parakeet) == .installed }
+        await waitUntil { store.state(of: .parakeet) == .installed }
     }
 
     @Test func notEnoughDiskFailsBeforeDownloading() async throws {
@@ -1003,7 +1135,7 @@ struct FakeFailure: Error, LocalizedError {
         var failures: [AppError] = []
         store.onFailure = { _, error in failures.append(error) }
         store.download(.parakeet)
-        try await waitUntil { if case .failed = store.state(of: .parakeet) { true } else { false } }
+        await waitUntil { if case .failed = store.state(of: .parakeet) { true } else { false } }
         let needed = Int64((Double(EngineID.parakeet.approxDownloadBytes!) * 1.25).rounded(.up))
         #expect(store.lastErrors[.parakeet] == .notEnoughDisk(needed: needed, available: 100_000_000))
         #expect(failures == [.notEnoughDisk(needed: needed, available: 100_000_000)])
@@ -1014,37 +1146,47 @@ struct FakeFailure: Error, LocalizedError {
         let (store, parakeet, _) = makeStore(installed: false)
         await parakeet.configure(downloadError: URLError(.notConnectedToInternet))
         store.download(.parakeet)
-        try await waitUntil { if case .failed = store.state(of: .parakeet) { true } else { false } }
+        await waitUntil { if case .failed = store.state(of: .parakeet) { true } else { false } }
         #expect(store.state(of: .parakeet) == .failed("Download didn’t finish. No internet connection."))
         #expect(store.lastErrors[.parakeet] == .downloadFailed(.parakeet, "No internet connection."))
     }
 
     @Test func cancelledDownloadReturnsQuietly() async throws {
         let (store, parakeet, _) = makeStore(installed: false)
-        await parakeet.configure(downloadStepDelay: .milliseconds(200))
+        let gate = await parakeet.gateDownloads()
         var failures = 0
         store.onFailure = { _, _ in failures += 1 }
         store.download(.parakeet)
-        try await Task.sleep(for: .milliseconds(50))
+        gate.open()
+        await waitUntil { store.state(of: .parakeet).downloadProgress?.fraction == 0.25 }
+        // Mid-download: the fake has reported a step and is held before the next one.
         store.cancelDownload(.parakeet)
         #expect(store.state(of: .parakeet) == .notInstalled)
-        try await Task.sleep(for: .milliseconds(400))
+        await store.waitForDownloadToSettle(.parakeet)
+        #expect(gate.cancellations == 1, "the engine's download saw the cancellation")
         #expect(store.state(of: .parakeet) == .notInstalled)
+        #expect(store.lastErrors[.parakeet] == nil)
         #expect(failures == 0)
         #expect(!parakeet.isInstalled())
     }
 
     @Test func downloadRestartedRightAfterCancelFinishes() async throws {
         let (store, parakeet, _) = makeStore(installed: false, selected: .parakeetCloud)
-        await parakeet.configure(downloadStepDelay: .milliseconds(100))
+        let gate = await parakeet.gateDownloads()
         store.download(.parakeet)
-        try await Task.sleep(for: .milliseconds(30))
+        await gate.arrival(1)
+        // The first run is inside the engine's download, held before its first step.
         store.cancelDownload(.parakeet)
         store.download(.parakeet)
         #expect(store.state(of: .parakeet).isDownloading)
-        try await Task.sleep(for: .milliseconds(60))
+        // The restart reaches the engine only after the cancelled run has fully unwound.
+        await gate.arrival(2)
+        #expect(gate.cancellations == 1)
         #expect(store.state(of: .parakeet).isDownloading, "the cancelled run must not reset the new one")
-        try await waitUntil { store.state(of: .parakeet) == .installed }
+        gate.openForGood()
+        await waitUntil { store.state(of: .parakeet) == .installed }
+        await store.waitForDownloadToSettle(.parakeet)
+        #expect(store.state(of: .parakeet) == .installed)
     }
 
     @Test func transcribeWaitsForPreparing() async throws {
@@ -1078,7 +1220,7 @@ struct FakeFailure: Error, LocalizedError {
         await parakeet.configure(loadError: FakeFailure(message: "corrupt weights"))
         await store.refreshFromDisk()
         store.prepare(.parakeet)
-        try await waitUntil { if case .failed = store.state(of: .parakeet) { true } else { false } }
+        await waitUntil { if case .failed = store.state(of: .parakeet) { true } else { false } }
         #expect(store.lastErrors[.parakeet] == .modelLoadFailed(.parakeet, "corrupt weights"))
         await #expect(throws: AppError.modelLoadFailed(.parakeet, "corrupt weights")) {
             try await store.transcribeLocal(.parakeet, samples: [0])
@@ -1092,11 +1234,11 @@ struct FakeFailure: Error, LocalizedError {
         await parakeet.configure(loadError: FakeFailure(message: "boom"))
         await store.refreshFromDisk()
         store.prepare(.parakeet)
-        try await waitUntil { if case .failed = store.state(of: .parakeet) { true } else { false } }
+        await waitUntil { if case .failed = store.state(of: .parakeet) { true } else { false } }
         await parakeet.configure()
         store.download(.parakeet)
         #expect(store.state(of: .parakeet).isPreparing)
-        try await waitUntil { store.state(of: .parakeet) == .ready }
+        await waitUntil { store.state(of: .parakeet) == .ready }
         #expect(store.lastErrors[.parakeet] == nil)
     }
 
@@ -1104,11 +1246,11 @@ struct FakeFailure: Error, LocalizedError {
         let (store, parakeet, _) = makeStore()
         await parakeet.configure(loadError: FakeFailure(message: "corrupt weights"))
         store.start()
-        try await waitUntil { if case .failed = store.state(of: .parakeet) { true } else { false } }
+        await waitUntil { if case .failed = store.state(of: .parakeet) { true } else { false } }
         await parakeet.configure()
         await store.reinstall(.parakeet)
         #expect(store.state(of: .parakeet).isDownloading)
-        try await waitUntil { store.state(of: .parakeet) == .ready }
+        await waitUntil { store.state(of: .parakeet) == .ready }
         #expect(store.lastErrors[.parakeet] == nil)
         #expect(await parakeet.loadCount == 2)
     }
@@ -1116,7 +1258,7 @@ struct FakeFailure: Error, LocalizedError {
     @Test func selectingACloudEngineKeepsTheLocalModelLoaded() async throws {
         let (store, parakeet, settings) = makeStore()
         store.start()
-        try await waitUntil { store.state(of: .parakeet) == .ready }
+        await waitUntil { store.state(of: .parakeet) == .ready }
         store.select(.parakeetCloud)
         #expect(settings.selectedEngine == .parakeetCloud)
         #expect(store.state(of: .parakeet) == .ready)
@@ -1126,7 +1268,7 @@ struct FakeFailure: Error, LocalizedError {
     @Test func deleteUnloadsAndRemoves() async throws {
         let (store, parakeet, _) = makeStore()
         store.start()
-        try await waitUntil { store.state(of: .parakeet) == .ready }
+        await waitUntil { store.state(of: .parakeet) == .ready }
         await store.delete(.parakeet)
         #expect(store.state(of: .parakeet) == .notInstalled)
         #expect(!parakeet.isInstalled())
@@ -1135,13 +1277,17 @@ struct FakeFailure: Error, LocalizedError {
 
     @Test func cancellingAWaitingJobThrowsCancellation() async throws {
         let (store, parakeet, _) = makeStore()
-        await parakeet.configure(loadDelay: .seconds(2))
+        let gate = await parakeet.gateLoads()
         await store.refreshFromDisk()
         store.prepare(.parakeet)
         let job = Task { try await store.transcribeLocal(.parakeet, samples: [0]) }
-        try await Task.sleep(for: .milliseconds(50))
+        await gate.arrival(1)
+        // The load is held, so the job can only be waiting for it (or not started yet).
         job.cancel()
         await #expect(throws: CancellationError.self) { try await job.value }
+        #expect(store.state(of: .parakeet).isPreparing)
+        gate.openForGood()
+        await waitUntil { store.state(of: .parakeet) == .ready }
     }
 
     @Test func previewStoreNeverTouchesEngines() {
