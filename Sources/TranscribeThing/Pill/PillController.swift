@@ -311,7 +311,8 @@ final class PillController {
         let interactive = overPill || overChip || overToast
         if panel.ignoresMouseEvents == interactive { panel.ignoresMouseEvents = !interactive }
 
-        model.setPointerInside(overPill)
+        // The chip counts as the pill: hovering hands-free brings it up, and moving onto it keeps it there.
+        model.setPointerInside(overPill || overChip)
         let control = overPill ? regions.controls.first { screenRect($0.value)?.contains(point) ?? false }?.key : nil
         model.setHoveredControl(model.visiblePhase == .locked ? control : nil)
         toasts.setPaused(overToast)

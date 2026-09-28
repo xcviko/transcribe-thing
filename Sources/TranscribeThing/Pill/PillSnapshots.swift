@@ -73,7 +73,7 @@ enum PillSnapshots {
                 ])
             },
             // Extra models (`--only pill-models`): the chip, the tint, the hint and the no-key notice.
-            SnapshotEntry("pill-models", width: 760, height: 44 + 13 * 92) { _ in PillModelSheet() },
+            SnapshotEntry("pill-models", width: 760, height: 44 + 15 * 92) { _ in PillModelSheet() },
             SnapshotEntry("pill-models-hint", width: 640, height: 150) { _ in
                 CanvasScene(model: hintModel(), notices: [])
             },
@@ -169,11 +169,8 @@ enum PillSnapshots {
 
 enum PillSnapshotFixtures {
     static let canceled = Notice(
-        dedupeKey: "dictation.canceled", style: .info, symbol: "xmark.circle",
-        title: "Dictation canceled", body: "\(DictationController.undoResumesHint) Saved in History for 14 days.",
-        actions: [NoticeAction(title: "Undo", kind: .undoCancel, isPrimary: true),
-                  NoticeAction(title: "Open History", kind: .openHub(.home))],
-        lifetime: .seconds(6), sound: .cancel)
+        dedupeKey: "dictation.canceled", style: .info, symbol: "xmark.circle", title: "Dictation canceled",
+        lifetime: .seconds(3), sound: .cancel)
 
     static let oneMinuteLeft = Notice(
         dedupeKey: "dictation.limitWarning", style: .warning, symbol: "timer",
@@ -469,10 +466,12 @@ private struct PillModelSheet: View {
         let make: @MainActor () -> PillModel
     }
 
-    @MainActor static func model(_ phase: PillPhase, choice: ModelChoice?, level: Float = 0.7,
+    /// `chip`: right after the switch, the chip still up; else later on, the tint alone.
+    @MainActor static func model(_ phase: PillPhase, choice: ModelChoice?, level: Float = 0.7, chip: Bool = true,
                                  recordingFor elapsed: TimeInterval? = nil, limitSeconds: TimeInterval? = nil) -> PillModel {
         let model = PillModel.preview(phase: phase, level: level, recordingFor: elapsed, limitSeconds: limitSeconds)
         model.sessionModel = choice
+        if chip, choice != nil { model.flashChip() }
         return model
     }
 
@@ -480,11 +479,17 @@ private struct PillModelSheet: View {
         [
             Row(id: "main", caption: "Push-to-talk · main model") { Self.model(.listening, choice: nil) },
             Row(id: "cleanup", caption: "Push-to-talk · Clean-up") { Self.model(.listening, choice: .cleanup) },
+            Row(id: "cleanup-later", caption: "Clean-up · chip gone") {
+                Self.model(.listening, choice: .cleanup, chip: false)
+            },
             Row(id: "flash", caption: "Push-to-talk · Gemini Flash") { Self.model(.listening, choice: .engine(.geminiFlash)) },
+            Row(id: "flash-later", caption: "Gemini Flash · chip gone") {
+                Self.model(.listening, choice: .engine(.geminiFlash), chip: false)
+            },
             Row(id: "pro", caption: "Push-to-talk · Gemini Pro") { Self.model(.listening, choice: .engine(.geminiPro)) },
             Row(id: "back", caption: "Back to the main model") {
                 let model = Self.model(.listening, choice: nil)
-                model.flashMainChip()
+                model.flashChip()
                 return model
             },
             Row(id: "locked-cleanup", caption: "Hands-free · Clean-up") { Self.model(.locked, choice: .cleanup, level: 0.5) },

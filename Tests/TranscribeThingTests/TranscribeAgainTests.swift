@@ -543,7 +543,7 @@ import Testing
         #expect(h.history.entry(id: id)?.version(.transcription(.parakeet))?.text == "parakeet text")
     }
 
-    @Test func aCanceledTranscribeAgainLeavesTheRowAndUndoFinishesIt() async throws {
+    @Test func aCanceledTranscribeAgainLeavesTheRowAndCanRunAgain() async throws {
         let h = H.make(persistsHistory: true)
         defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
         // Long enough that a canceled dictation would get a row of its own.
@@ -560,9 +560,10 @@ import Testing
         h.controller.handle(.cancel)
         #expect(h.controller.machine.activeJobs == 0)
         #expect(h.history.entry(id: id) == original, "still the transcript, not a canceled row")
-        let undo = try #require(h.toasts.notices.first { $0.dedupeKey == "dictation.canceled" })
-        #expect(undo.title == "Transcription canceled")
-        h.controller.perform(try #require(undo.actions.first { $0.kind == .undoCancel }), from: undo)
+        let canceled = try #require(h.toasts.notices.first { $0.dedupeKey == "dictation.canceled" })
+        #expect(canceled.title == "Transcription canceled")
+        #expect(canceled.body == nil && canceled.actions.isEmpty, "it only says so")
+        h.controller.retry(try #require(h.history.entry(id: id)), with: .geminiFlash)
         try await waitUntil { h.history.entry(id: id)?.text == "after undo" }
         #expect(h.history.entry(id: id)?.engine == .geminiFlash)
         #expect(pasted == ["parakeet text"])
@@ -610,7 +611,8 @@ import Testing
         h.controller.retry(try #require(h.history.entry(id: id)), with: .geminiPro)
         h.controller.handle(.cancel)
         let toast = try #require(h.toasts.notices.first { $0.dedupeKey == "dictation.canceled" })
-        let undo = try #require(toast.actions.first { $0.kind == .undoCancel })
+        // The toast offers no Undo any more; one reaching the controller all the same still never opens the mic.
+        let undo = NoticeAction(title: "Undo", kind: .undoCancel, isPrimary: true)
 
         h.controller.retry(try #require(h.history.entry(id: id)), with: .geminiFlash)
         try await waitUntil { h.history.entry(id: id)?.engine == .geminiFlash && h.controller.machine.activeJobs == 0 }

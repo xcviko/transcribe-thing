@@ -269,7 +269,7 @@ import Testing
         #expect(c.effectiveEngine == .parakeet)
 
         rig.now += 1
-        try rig.click(.undoCancel, in: "dictation.canceled")
+        try rig.undo()
         #expect(c.machine.capture.isListeningOrLocked)
         #expect(c.effectiveEngine == .geminiFlash)
         #expect(rig.h.pill.sessionModel == .engine(.geminiFlash))
@@ -348,7 +348,7 @@ import Testing
         #expect(c.modelOverride == nil)
 
         rig.now += 1
-        try rig.click(.undoCancel, in: "dictation.canceled")
+        try rig.undo()
         #expect(c.modelOverride == .cleanup)
         #expect(rig.h.pill.sessionModel == .cleanup)
         rig.h.recorder.next = DictationResumeTests.speech(seconds: 1)

@@ -1485,7 +1485,7 @@ final class FakeRecorder: DictationRecorder {
         #expect(h.history.entry(id: recording.id)?.status == .failed)
     }
 
-    @Test func escCancelsTheNewestJobAndOffersUndo() async throws {
+    @Test func escCancelsTheNewestJobAndKeepsItsAudio() async throws {
         let h = Self.make()
         var pasted: [String] = []
         h.controller.transcribeOverride = { recording, engine in
@@ -1498,14 +1498,15 @@ final class FakeRecorder: DictationRecorder {
         h.controller.enqueue(long, engine: .parakeet, delivery: .paste(targetPID: nil))
         h.controller.handle(.cancel)
         #expect(h.controller.machine.activeJobs == 0)
-        let undo = try #require(h.toasts.notices.first { $0.dedupeKey == "dictation.canceled" })
-        #expect(undo.recordingID == long.id)
-        #expect(undo.actions.first?.kind == .undoCancel)
+        let canceled = try #require(h.toasts.notices.first { $0.dedupeKey == "dictation.canceled" })
+        #expect(canceled.recordingID == long.id)
+        #expect(canceled.actions.isEmpty, "it only says so")
         try await Task.sleep(for: .milliseconds(300))
         #expect(pasted.isEmpty)
 
-        // Undo records on, hands-free, after the kept audio; only stopping transcribes (and pastes) it all.
-        h.controller.perform(undo.actions[0], from: undo)
+        // Undo (as "Dictation stopped" offers it) records on, hands-free, after the kept audio; only stopping
+        // transcribes (and pastes) it all.
+        h.controller.perform(NoticeAction(title: "Undo", kind: .undoCancel, isPrimary: true), from: canceled)
         #expect(h.controller.machine.capture.isListeningOrLocked)
         #expect(h.recorder.lastPrefix?.id == long.id)
         try await Task.sleep(for: .milliseconds(300))

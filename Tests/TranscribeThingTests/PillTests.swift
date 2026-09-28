@@ -1090,51 +1090,68 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
 @Suite @MainActor struct PillModelChipTests {
     private func makeModel(hold: TimeInterval = 0.05) -> PillModel {
         let model = PillModel(settings: .inMemory(), levelMeter: .preview(level: 0.5))
-        model.timing.mainChipHold = hold
+        model.timing.chipHold = hold
         return model
     }
 
-    @Test func theChipNamesTheExtraModelAndNothingForTheMainOne() {
+    /// A switch names the new model for a moment; then the tint alone says it.
+    @Test func eachSwitchFlashesTheChipThenItGoes() async throws {
         let model = makeModel()
         #expect(model.chipModel == nil, "a clean pill on the main model")
         model.engineChipPulse += 1
         model.sessionModel = .engine(.geminiFlash)
-        #expect(model.chipModel == .engine(.geminiFlash) && !model.showsMainChip)
+        #expect(model.chipModel == .engine(.geminiFlash))
         model.engineChipPulse += 1
-        model.sessionModel = .engine(.geminiPro)
-        #expect(model.chipModel == .engine(.geminiPro) && !model.showsMainChip)
+        model.sessionModel = .cleanup
+        #expect(model.chipModel == .cleanup)
+        try await waitUntil { !model.showsChip }
+        #expect(model.chipModel == nil && model.sessionModel == .cleanup, "the dictation stays on clean-up")
     }
 
-    @Test func switchingBackFlashesTheMainModelThenFades() async throws {
+    @Test func switchingBackNamesTheMainModelThenFades() async throws {
         let model = makeModel()
         model.settings.selectedEngine = .parakeetCloud
         model.sessionModel = .engine(.geminiFlash)
         model.engineChipPulse += 1
         model.sessionModel = nil
-        #expect(model.showsMainChip && model.chipModel == .engine(.parakeetCloud))
-        try await waitUntil { !model.showsMainChip }
+        #expect(model.chipModel == .engine(.parakeetCloud))
+        try await waitUntil { !model.showsChip }
         #expect(model.chipModel == nil)
     }
 
-    @Test func aSwitchMeanwhileRestartsTheMainChip() async throws {
+    @Test func aSwitchMeanwhileRestartsTheHold() async throws {
         let model = makeModel(hold: 0.3)
         model.engineChipPulse += 1
-        #expect(model.showsMainChip)
-        // To an extra model and back before the hold is over: the second flash runs its own hold.
+        try await Task.sleep(for: .milliseconds(200))
         model.engineChipPulse += 1
         model.sessionModel = .engine(.geminiPro)
-        #expect(!model.showsMainChip)
-        model.engineChipPulse += 1
-        model.sessionModel = nil
-        #expect(model.showsMainChip)
-        try await waitUntil { !model.showsMainChip }
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(model.chipModel == .engine(.geminiPro), "the second switch runs its own hold")
+        try await waitUntil { !model.showsChip }
     }
 
-    @Test func previewsKeepTheMainChip() async throws {
+    /// Hands-free: hovering the pill (or the chip) brings the chip back, where it opens the model menu.
+    @Test func hoveringHandsFreeBringsTheChipBack() {
+        let model = PillModel.preview(phase: .locked)
+        model.sessionModel = .engine(.geminiPro)
+        #expect(model.chipModel == nil)
+        model.isHovering = true
+        #expect(model.chipModel == .engine(.geminiPro))
+        model.sessionModel = nil
+        #expect(model.chipModel == .engine(.parakeet), "the main model too, for its menu")
+        model.isHovering = false
+        #expect(model.chipModel == nil)
+
+        let pushToTalk = PillModel.preview(phase: .listening, isHovering: true)
+        pushToTalk.sessionModel = .engine(.geminiPro)
+        #expect(pushToTalk.chipModel == nil, "a held key has no menu to offer")
+    }
+
+    @Test func previewsKeepTheChip() async throws {
         let model = PillModel.preview(phase: .listening)
-        model.flashMainChip()
-        try await Task.sleep(for: .seconds(model.timing.mainChipHold + 0.1))
-        #expect(model.showsMainChip)
+        model.flashChip()
+        try await Task.sleep(for: .seconds(model.timing.chipHold + 0.1))
+        #expect(model.showsChip)
     }
 
     @Test func theMenuOffersTheMainModelThenCleanupThenTheEnabledExtraModels() {

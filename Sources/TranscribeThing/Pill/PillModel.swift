@@ -42,18 +42,16 @@ final class PillModel {
     private(set) var isProcessingSlow = false
 
     /// What this dictation goes to past the main model alone (clean-up, Gemini Flash, Gemini Pro), set by the
-    /// controller while it records and until its text lands; nil for the main model.
-    var sessionModel: ModelChoice? {
-        didSet { if sessionModel != nil, showsMainChip { hideMainChip() } }
-    }
-    /// Bumped on every switch of the dictation's engine, back to the main model too, so the view can show the
-    /// model chip (and fade a main-model one out).
+    /// controller while it records and until its text lands; nil for the main model. The pill's tint shows it
+    /// throughout; the chip only now and then (`showsChip`).
+    var sessionModel: ModelChoice?
+    /// Bumped on every switch of the dictation's model, back to the main model too, so the chip names the new one
+    /// for a moment.
     var engineChipPulse = 0 {
-        didSet { if engineChipPulse != oldValue { flashMainChip() } }
+        didSet { if engineChipPulse != oldValue { flashChip() } }
     }
-    /// The main model's chip, briefly, after a switch back to it. Every switch raises it: the controller sets
-    /// `sessionModel` right after bumping the pulse, and clean-up's or an extra model's chip takes its place.
-    private(set) var showsMainChip = false
+    /// The chip after a switch, for `timing.chipHold`; a switch meanwhile starts it over.
+    private(set) var isChipFlashing = false
     /// The Switch model discovery hint next to a long push-to-talk hold (its first few times).
     var showsTabHint = false
 
@@ -102,7 +100,7 @@ final class PillModel {
     @ObservationIgnored private var tooltipTask: Task<Void, Never>?
     @ObservationIgnored private var controlTooltipTask: Task<Void, Never>?
     @ObservationIgnored private var helloTask: Task<Void, Never>?
-    @ObservationIgnored private var mainChipTask: Task<Void, Never>?
+    @ObservationIgnored private var chipTask: Task<Void, Never>?
     @ObservationIgnored private var pointerInside = false
 
     init(settings: AppSettings, levelMeter: LevelMeter) {
@@ -294,23 +292,29 @@ final class PillModel {
 
     // MARK: Model chip
 
-    /// What the chip above the pill names right now: the dictation's clean-up or extra model, or the main model for
-    /// a moment after switching back to it; nil for a clean pill.
+    /// The chip above the pill is up: for a moment after every switch, and in hands-free while the pointer is over
+    /// the pill or the chip, where it opens the model menu. The rest of the time the tint alone says the model.
+    var showsChip: Bool {
+        isChipFlashing || (visiblePhase == .locked && isHovering)
+    }
+
+    /// What the chip above the pill names right now: the dictation's clean-up or extra model, or the main model;
+    /// nil while it's down.
     var chipModel: ModelChoice? {
-        sessionModel ?? (showsMainChip ? .engine(settings.selectedEngine) : nil)
+        showsChip ? sessionModel ?? .engine(settings.selectedEngine) : nil
     }
 
-    /// Shows the main model's chip for `timing.mainChipHold`; a switch meanwhile starts it over.
-    func flashMainChip() {
-        mainChipTask?.cancel()
-        showsMainChip = true
-        if autoSettles { mainChipTask = delayed(timing.mainChipHold) { $0.hideMainChip() } }
+    /// Shows the chip for `timing.chipHold`; a switch meanwhile starts it over.
+    func flashChip() {
+        chipTask?.cancel()
+        isChipFlashing = true
+        if autoSettles { chipTask = delayed(timing.chipHold) { $0.endChipFlash() } }
     }
 
-    private func hideMainChip() {
-        mainChipTask?.cancel()
-        mainChipTask = nil
-        if showsMainChip { showsMainChip = false }
+    private func endChipFlash() {
+        chipTask?.cancel()
+        chipTask = nil
+        if isChipFlashing { isChipFlashing = false }
     }
 
     /// What the hands-free chip's menu offers, in Switch model order: the main model, then clean-up and every extra
@@ -348,8 +352,8 @@ struct PillTiming: Equatable, Sendable {
     var tooltipDelay: TimeInterval = 0.35
     var controlTooltipDelay: TimeInterval = 0.5
     var slowProcessing: TimeInterval = 6
-    /// How long the main model's chip stays after a switch back to it, before it fades.
-    var mainChipHold: TimeInterval = 0.55
+    /// How long the model chip stays after a switch, before it fades and the tint alone says the model.
+    var chipHold: TimeInterval = 1.2
 }
 
 extension PillPhase {

@@ -523,11 +523,12 @@ struct PillFace: View {
     /// The choice's tint while the content carries one; a capsule shrinking to rest lets its ring go.
     private var accent: PillAccent? { carriesModel ? PillPalette.accent(for: choice) : nil }
 
-    /// What the chip names: clean-up or the extra model, or the main model for a moment after switching back to it.
+    /// What the chip names while it's up (`PillModel.showsChip`): clean-up or the extra model, or the main model.
+    /// Content shrinking away keeps its own choice's chip, never the main model's.
     private var chipChoice: ModelChoice? {
-        guard carriesModel else { return nil }
+        guard carriesModel, model.showsChip else { return nil }
         if let choice { return choice }
-        return model.showsMainChip && content == capsule ? .engine(model.settings.selectedEngine) : nil
+        return content == capsule ? .engine(model.settings.selectedEngine) : nil
     }
 
     var body: some View {
@@ -913,9 +914,10 @@ private struct PillControlButton: View {
     }
 }
 
-/// The dictation's model, floating above the pill: sparkles and "Gemini Flash" in its color; clean-up as the pass it
-/// is, "Parakeet → Luna" with the main model dimmed ahead of the wand; or a bolt and the main model for a moment
-/// after switching back. In hands-free it opens the model menu (the controller pops it up).
+/// The dictation's model, floating above the pill for a moment after a switch: sparkles and "Gemini Flash" in its
+/// color; clean-up as the pass it is, "Parakeet → Luna" with the main model dimmed ahead of the wand; or a bolt and
+/// the main model. In hands-free it comes back while the pointer is over the pill, and opens the model menu (the
+/// controller pops it up).
 private struct PillModelChip: View {
     let model: PillModel
     let choice: ModelChoice
@@ -942,11 +944,6 @@ private struct PillModelChip: View {
                     symbol(accent: accent)
                     Text(engine.chipName)
                         .foregroundStyle(.white.opacity(0.92))
-                }
-                if isInteractive {
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.system(size: 7.5, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.45))
                 }
             }
             .contentShape(Capsule())

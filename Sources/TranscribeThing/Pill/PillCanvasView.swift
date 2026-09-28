@@ -67,9 +67,9 @@ struct PillCanvasView: View {
             && model.settings.shortcuts[.switchModel] != nil
     }
 
-    /// Clean-up's or an extra model's chip floats above the pill: toasts make room for it.
+    /// The model chip floats above the pill: toasts make room for it.
     private var showsChip: Bool {
-        model.isPresented && model.isPillAllowed && model.sessionModel != nil
+        model.isPresented && model.isPillAllowed && model.showsChip
             && (model.visiblePhase.isRecording || model.visiblePhase == .processing)
     }
 
