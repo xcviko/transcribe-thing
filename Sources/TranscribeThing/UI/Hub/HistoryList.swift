@@ -202,8 +202,9 @@ struct HistoryRow: View, Equatable {
     // MARK: Trailing
 
     /// The actions are built the first time the row shows them and then kept (hidden, as before): a row's buttons
-    /// were most of what building it cost, and most rows scroll by without ever being hovered. The frame holds the
-    /// room they take (26 pt buttons raised 4 pt), so nothing moves when they come.
+    /// were most of what building it cost, and most rows scroll by without ever being hovered. Hidden, they were
+    /// never in the accessibility tree either (opacity 0); the context menu has the same commands. The frame holds
+    /// the room they take (26 pt buttons raised 4 pt), so nothing moves when they come.
     private var trailing: some View {
         ZStack(alignment: .topTrailing) {
             meta

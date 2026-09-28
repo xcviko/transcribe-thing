@@ -29,6 +29,68 @@ import Testing
         #expect(HistoryRenderCounts.rows < 30, "a 760 pt window shows about 6 rows")
         #expect(HistoryRenderCounts.versionsMenus == 0, "a Versions menu is made when it opens")
     }
+
+    /// A row's hover actions are built when it first shows them. Hidden, they were never in the accessibility tree
+    /// (SwiftUI leaves out views at opacity 0), so nothing is lost there; shown, all of them are.
+    @Test func rowActionsReachAccessibilityWhenShown() {
+        let now = Calendar.current.date(bySettingHour: 23, minute: 0, second: 0, of: Date())!
+        let entries = HomeScrollBenchmark.entries(4, every: 60, before: now)
+        let shown = entries.first { $0.status == .success }!
+        func labels(hovering entry: TranscriptEntry?) -> [String] {
+            let env = AppEnvironment.preview()
+            let context = HubContext(env: env)
+            context.fixedNow = now
+            context.history = .preview(entries: entries)
+            context.previewHoveredEntry = entry?.id
+            env.windows.hubSection = .home
+            return Self.accessibleButtons(HubView(context: context).appTheme())
+        }
+
+        let atRest = labels(hovering: nil)
+        #expect(atRest.contains("Retry"), "a failed row's inline Retry is always there")
+        #expect(!atRest.contains("Delete transcript"))
+        #expect(!atRest.contains("More actions"))
+        let hovered = labels(hovering: shown)
+        #expect(hovered.filter { $0 == "Copy transcript" }.count == 1)
+        #expect(hovered.filter { $0 == "More actions" }.count == 1)
+        #expect(hovered.filter { $0 == "Delete transcript" }.count == 1)
+    }
+
+    /// The labels of the buttons VoiceOver finds in `view`, hosted offscreen. SwiftUI builds its accessibility tree
+    /// only for an assistive client, which `AXEnhancedUserInterface` on the app stands in for.
+    private static func accessibleButtons(_ view: some View) -> [String] {
+        let assistive = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
+        NSApplication.shared.accessibilitySetValue(true, forAttribute: assistive)
+        defer { NSApplication.shared.accessibilitySetValue(false, forAttribute: assistive) }
+        let hosting = NSHostingView(rootView: view.frame(width: 980, height: 760))
+        hosting.frame = NSRect(x: 0, y: 0, width: 980, height: 760)
+        let window = NSWindow(contentRect: hosting.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        defer { window.contentView = nil; window.close() }
+        for _ in 0..<3 {  // Asking for the tree has SwiftUI build it on a later pass.
+            _ = hosting.accessibilityChildren()
+            hosting.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+
+        // SwiftUI's elements answer the NSAccessibility methods without declaring the protocol.
+        func get(_ object: NSObject, _ name: String) -> Any? {
+            let selector = NSSelectorFromString(name)
+            return object.responds(to: selector) ? object.perform(selector)?.takeUnretainedValue() : nil
+        }
+        var labels: [String] = []
+        func walk(_ element: Any, depth: Int) {
+            guard depth < 60, let object = element as? NSObject else { return }
+            let role = get(object, "accessibilityRole") as? String
+            if role == NSAccessibility.Role.button.rawValue || role == NSAccessibility.Role.menuButton.rawValue {
+                labels.append((get(object, "accessibilityLabel") as? String) ?? "")
+            }
+            for child in (get(object, "accessibilityChildren") as? [Any]) ?? [] { walk(child, depth: depth + 1) }
+        }
+        walk(hosting, depth: 0)
+        return labels
+    }
 }
 
 /// Opt-in scroll probe for Home: `HOME_SCROLL_BENCH=1 swift test --filter HomeScrollBenchmark` (or `=150` for one
