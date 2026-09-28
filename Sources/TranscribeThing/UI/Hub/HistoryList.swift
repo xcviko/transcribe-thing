@@ -1,29 +1,48 @@
 import SwiftUI
 
 /// History grouped by relative day, with sticky day headers, search and empty states.
+///
+/// Every row is an item of the lazy stack, so scrolling builds only the rows coming into view. A day's card is
+/// drawn by its rows (`cardSegment`), each painting its own band of it, rather than wrapping the day in a `Card`:
+/// that made a day one item, built (and redrawn) whole, however many dictations it held.
 struct HistorySection: View {
-    var entries: [TranscriptEntry]
+    /// There is no history at all (not just nothing matching the search).
+    var isEmpty: Bool
+    /// The entries matching `query`, by day (`HistoryStore.days(matching:now:)`).
+    var days: [HistoryDay]
     var query: String
-    var now: Date
     var onDelete: (TranscriptEntry) -> Void
     var onClearSearch: () -> Void
 
     var body: some View {
-        let matches = HistoryGrouping.filter(entries, query: query)
-        if entries.isEmpty {
+        if isEmpty {
             HistoryEmptyState()
-        } else if matches.isEmpty {
+        } else if days.isEmpty {
             NoMatches(query: query, onClear: onClearSearch)
         } else {
-            LazyVStack(alignment: .leading, spacing: Theme.Spacing.md, pinnedViews: [.sectionHeaders]) {
-                ForEach(HistoryGrouping.days(matches, now: now)) { day in
+            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                ForEach(days) { day in
                     Section {
-                        DayCard(entries: day.entries, onDelete: onDelete)
+                        ForEach(day.entries) { entry in
+                            let isFirst = entry.id == day.entries.first?.id
+                            let isLast = entry.id == day.entries.last?.id
+                            VStack(spacing: 0) {
+                                if !isFirst {
+                                    RowDivider(inset: 92)
+                                }
+                                HistoryRow(entry: entry, isFirst: isFirst, isLast: isLast, onDelete: onDelete)
+                                    .equatable()
+                            }
+                            .cardSegment(isFirst: isFirst, isLast: isLast)
+                            // The gaps a stack's spacing would leave around the card: under the header, before the next day.
+                            .padding(.top, isFirst ? Theme.Spacing.md : 0)
+                            .padding(.bottom, isLast && day.id != days.last?.id ? Theme.Spacing.md : 0)
+                            .transition(.opacity)
+                        }
                     } header: {
                         SectionHeader(day.title) {
-                            let words = day.entries.reduce(0) { $0 + $1.wordCount }
-                            if words > 0 {
-                                Text(Fmt.words(words))
+                            if day.words > 0 {
+                                Text(Fmt.words(day.words))
                                     .font(.system(size: 11, weight: .medium))
                                     .monospacedDigit()
                                     .foregroundStyle(.inkTertiary)
@@ -40,33 +59,18 @@ struct HistorySection: View {
     }
 }
 
-private struct DayCard: View {
-    var entries: [TranscriptEntry]
-    var onDelete: (TranscriptEntry) -> Void
-
-    var body: some View {
-        Card(padding: 0) {
-            VStack(spacing: 0) {
-                ForEach(entries) { entry in
-                    if entry.id != entries.first?.id {
-                        RowDivider(inset: 92)
-                    }
-                    HistoryRow(entry: entry, onDelete: onDelete)
-                        .transition(.opacity)
-                }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
-        }
-    }
-}
-
 // MARK: - Row
 
-struct HistoryRow: View {
+struct HistoryRow: View, Equatable {
     var entry: TranscriptEntry
+    /// The row's hover fill rounds the card's top corners (first) or bottom corners (last).
+    var isFirst = false
+    var isLast = false
     var onDelete: (TranscriptEntry) -> Void
     @Environment(HubContext.self) private var hub
     @State private var hovering = false
+    /// The row has shown its actions once (`trailing`).
+    @State private var actionsBuilt = false
     @State private var expanded = false
 
     private var hasAudio: Bool { entry.audioFileName != nil }
@@ -76,6 +80,9 @@ struct HistoryRow: View {
     private var showsActions: Bool { hovering || hub.previewHoveredEntry == entry.id }
 
     var body: some View {
+        #if DEBUG
+        let _ = HistoryRenderCounts.rows += 1
+        #endif
         HStack(alignment: .top, spacing: 12) {
             Text(Fmt.time(entry.createdAt))
                 .font(.system(size: 12))
@@ -92,9 +99,18 @@ struct HistoryRow: View {
         .padding(.trailing, 12)
         .padding(.vertical, 11)
         .frame(minHeight: 44)
-        .background(showsActions ? Color.hover.opacity(0.7) : .clear)
+        .background {
+            let radius = Theme.Radius.card
+            UnevenRoundedRectangle(topLeadingRadius: isFirst ? radius : 0, bottomLeadingRadius: isLast ? radius : 0,
+                                   bottomTrailingRadius: isLast ? radius : 0, topTrailingRadius: isFirst ? radius : 0,
+                                   style: .continuous)
+                .fill(showsActions ? Color.hover.opacity(0.7) : .clear)
+        }
         .contentShape(Rectangle())
-        .onHover { hovering = $0 }
+        .onHover { inside in
+            hovering = inside
+            if inside { actionsBuilt = true }
+        }
         .onTapGesture {
             guard entry.status == .success, !isEmptySuccess else { return }
             withAnimation(.easeInOut(duration: 0.25)) { expanded.toggle() }
@@ -103,6 +119,11 @@ struct HistoryRow: View {
         .animation(Theme.Motion.hover, value: hovering)
         .animation(Theme.Motion.expand, value: running)
         .accessibilityElement(children: .contain)
+    }
+
+    /// `onDelete` always deletes through the same store, so a new closure alone doesn't redraw the row.
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.entry == rhs.entry && lhs.isFirst == rhs.isFirst && lhs.isLast == rhs.isLast
     }
 
     // MARK: Content
@@ -180,17 +201,23 @@ struct HistoryRow: View {
 
     // MARK: Trailing
 
+    /// The actions are built the first time the row shows them and then kept (hidden, as before): a row's buttons
+    /// were most of what building it cost, and most rows scroll by without ever being hovered. Hidden, they were
+    /// never in the accessibility tree either (opacity 0); the context menu has the same commands. The frame holds
+    /// the room they take (26 pt buttons raised 4 pt), so nothing moves when they come.
     private var trailing: some View {
         ZStack(alignment: .topTrailing) {
             meta
                 .padding(.top, 0.5)
                 .opacity(showsActions ? 0 : 1)
-            actions
-                .padding(.top, -4)
-                .opacity(showsActions ? 1 : 0)
-                .allowsHitTesting(showsActions)
+            if actionsBuilt || showsActions {
+                actions
+                    .padding(.top, -4)
+                    .opacity(showsActions ? 1 : 0)
+                    .allowsHitTesting(showsActions)
+            }
         }
-        .frame(minWidth: 88, alignment: .topTrailing)
+        .frame(minWidth: 88, minHeight: 26 - 4, alignment: .topTrailing)
     }
 
     /// Gemini is pinned to one provider, so only cloud Parakeet says who answered.
@@ -265,13 +292,13 @@ struct HistoryRow: View {
         }
     }
 
-    /// The right-click menu and the hover "…" menu.
+    /// The right-click menu and the hover "…" menu. Only the submenu's title is worked out here, for every row;
+    /// its items (`VersionsMenuItems`) when it opens.
     @ViewBuilder private var rowMenu: some View {
         if entry.status == .success && !isEmptySuccess {
             Button("Copy") { hub.copy(entry.text) }
         }
-        let menu = hub.versionsMenu(for: entry)
-        Menu(menu.title) {
+        Menu(VersionsMenu.title(for: entry)) {
             VersionsMenuItems(entry: entry)
         }
         Divider()
@@ -325,6 +352,9 @@ struct VersionsMenuItems: View {
     @Environment(HubContext.self) private var hub
 
     var body: some View {
+        #if DEBUG
+        let _ = HistoryRenderCounts.versionsMenus += 1
+        #endif
         let menu = hub.versionsMenu(for: entry)
         if let running = menu.runningTitle {
             Button(running) {}
@@ -354,6 +384,16 @@ struct VersionsMenuItems: View {
         }
     }
 }
+
+#if DEBUG
+/// How often History bodies run, for `HomeScrollBenchmark`.
+@MainActor enum HistoryRenderCounts {
+    static var rows = 0
+    static var versionsMenus = 0
+
+    static func reset() { rows = 0; versionsMenus = 0 }
+}
+#endif
 
 // MARK: - Empty states
 

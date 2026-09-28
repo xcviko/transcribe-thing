@@ -21,9 +21,9 @@ struct HomePage: View {
                 attention
                 StatsRow(stats: history.stats)
                 HistorySection(
-                    entries: history.entries,
+                    isEmpty: history.entries.isEmpty,
+                    days: history.days(matching: query, now: hub.now),
                     query: query,
-                    now: hub.now,
                     onDelete: delete,
                     onClearSearch: { query = "" })
             }

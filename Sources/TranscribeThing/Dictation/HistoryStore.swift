@@ -290,6 +290,7 @@ final class HistoryStore {
     @ObservationIgnored private var didLoad = false
     @ObservationIgnored private var revision = 0
     @ObservationIgnored private var statsCache: (revision: Int, day: Date, stats: HistoryStats)?
+    @ObservationIgnored private var daysCache: (revision: Int, day: Date, query: String, days: [HistoryDay])?
     /// Audio of deleted entries lingers briefly so the Hub's "Undo" can bring the row back intact.
     @ObservationIgnored private var pendingFileRemovals: [String: Task<Void, Never>] = [:]
     static let deletedAudioGrace: Duration = .seconds(15)
@@ -330,6 +331,17 @@ final class HistoryStore {
         let computed = HistoryStats.compute(current, now: now, calendar: .current)
         statsCache = (revision, day, computed)
         return computed
+    }
+
+    /// Home's list: the entries matching the search `query`, grouped by day (`HistoryGrouping`). Cached per revision,
+    /// day and query like `stats`, so a render of Home doesn't filter, sort and count words over the whole history.
+    func days(matching query: String, now: Date) -> [HistoryDay] {
+        let current = entries
+        let day = Calendar.current.startOfDay(for: now)
+        if let cache = daysCache, cache.revision == revision, cache.day == day, cache.query == query { return cache.days }
+        let days = HistoryGrouping.days(HistoryGrouping.filter(current, query: query), now: now)
+        daysCache = (revision, day, query, days)
+        return days
     }
 
     func stats(now: Date, calendar: Calendar) -> HistoryStats {

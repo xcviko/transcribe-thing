@@ -44,6 +44,8 @@ struct HistoryDay: Identifiable, Equatable {
     let id: Date
     let title: String
     var entries: [TranscriptEntry]
+    /// Words in the day's transcripts, for the header.
+    var words = 0
 }
 
 enum HistoryGrouping {
@@ -53,12 +55,12 @@ enum HistoryGrouping {
         var days: [HistoryDay] = []
         for entry in sorted {
             let start = calendar.startOfDay(for: entry.createdAt)
-            if let last = days.indices.last, days[last].id == start {
-                days[last].entries.append(entry)
-            } else {
+            if days.last?.id != start {
                 days.append(HistoryDay(id: start, title: Fmt.relativeDay(entry.createdAt, now: now, calendar: calendar),
-                                       entries: [entry]))
+                                       entries: []))
             }
+            days[days.count - 1].entries.append(entry)
+            days[days.count - 1].words += entry.wordCount
         }
         return days
     }
@@ -290,8 +292,13 @@ struct VersionsMenu: Equatable {
         let runningTitle = running.map { kind in
             kind.isCleanup ? "Cleaning up…" : "Transcribing with \(kind.engine.shortName)…"
         }
-        return VersionsMenu(isRetry: isRetry, title: isRetry ? "Retry With" : "Versions", versions: versions,
-                            actions: actions, runningTitle: runningTitle)
+        return VersionsMenu(isRetry: isRetry, title: title(for: entry), versions: versions, actions: actions,
+                            runningTitle: runningTitle)
+    }
+
+    /// `title` without making the rest of the menu.
+    static func title(for entry: TranscriptEntry) -> String {
+        entry.status == .success ? "Versions" : "Retry With"
     }
 }
 

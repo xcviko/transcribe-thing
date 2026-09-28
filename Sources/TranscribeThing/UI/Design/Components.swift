@@ -28,6 +28,52 @@ struct Card<Content: View>: View {
     }
 }
 
+extension View {
+    /// This row's band of a `Card(padding: 0)` whose rows are separate items of a lazy stack (History): the card's
+    /// fill, shadow and hairline where the row sits, rounded above the first row and below the last. Stacked
+    /// without gaps, the bands draw the same card, but no view holds all the rows.
+    func cardSegment(isFirst: Bool, isLast: Bool) -> some View {
+        modifier(CardSegment(isFirst: isFirst, isLast: isLast))
+    }
+}
+
+private struct CardSegment: ViewModifier {
+    var isFirst: Bool
+    var isLast: Bool
+    /// Beyond the reach of the card's shadow (14 pt blur, 6 pt down).
+    private static let reach: CGFloat = 48
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
+        content
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                band { shape.fill(.bgSurface).cardShadow() }
+            }
+            .overlay {
+                band { shape.strokeBorder(.stroke, lineWidth: Theme.Metrics.hairline) }
+                    .allowsHitTesting(false)
+            }
+    }
+
+    /// `card` runs on well past the row where a neighbour continues it (so neither its rounding nor the fall-off of
+    /// its shadow shows at the join) and is cut at the join; at the card's outer edges the cut leaves room for the
+    /// shadow.
+    private func band(@ViewBuilder _ card: () -> some View) -> some View {
+        let reach = Self.reach
+        let outside = EdgeInsets(top: isFirst ? reach : 0, leading: reach, bottom: isLast ? reach : 0, trailing: reach)
+        return Color.clear
+            .overlay {
+                card()
+                    .padding(.top, isFirst ? 0 : -2 * reach)
+                    .padding(.bottom, isLast ? 0 : -2 * reach)
+            }
+            .padding(outside)
+            .clipped()
+            .padding(EdgeInsets(top: -outside.top, leading: -reach, bottom: -outside.bottom, trailing: -reach))
+    }
+}
+
 /// Rows separated by inset hairlines inside one card (System Settings-style group).
 struct SettingsGroup<Content: View>: View {
     @ViewBuilder var content: Content
