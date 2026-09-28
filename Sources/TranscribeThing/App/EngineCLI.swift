@@ -5,9 +5,9 @@ import Foundation
 /// Headless engine checks, dispatched by TranscribeThingMain before the app starts:
 ///
 ///     transcribe-thing --transcribe <audio file>
-///            --engine parakeet|parakeetCloud|geminiFlash|geminiPro
-///            [--download] [--prompt <text>] [--repeat <n>] [--effort minimal|low|medium|high]
-///            [--clean-up [--clean-up-model geminiFlashLite|gpt6Luna] [--clean-up-prompt <text>]
+///            --engine parakeet|parakeetCloud|geminiFlash
+///            [--download] [--prompt <text>] [--repeat <n>] [--effort low|medium|high]
+///            [--clean-up [--clean-up-model gpt6Luna] [--clean-up-prompt <text>]
 ///                        [--clean-up-effort none|minimal|low|medium|high]]
 ///     transcribe-thing --model-status
 ///
@@ -18,12 +18,12 @@ import Foundation
 /// Uses the real model folder (~/Library/Application Support/transcribe-thing) and the real pipeline
 /// (ModelStore → InferenceGate → engine, or OpenRouterClient). Cloud engines read the key from
 /// OPENROUTER_API_KEY, else from the Keychain; cloud Parakeet also prints the provider that served the request.
-/// `--prompt` and `--effort` apply to Gemini only (the effort moves to the nearest level the model supports). Without
-/// `--prompt` Gemini gets the app's default prompt (`AppSettings.defaultGeminiSystemPrompt`); `--prompt ""` sends
-/// only the audio.
-/// `--clean-up` sends the last transcript to a clean-up model (by default Gemini 3.5 Flash Lite; the effort moves to
-/// the nearest level it offers) with the clean-up prompt (by default `CleanupModel.examplePrompt`) and prints the
-/// cleaned text. Settings are in-memory: the CLI never changes the app's.
+/// `--prompt` and `--effort` apply to Gemini only: `--effort` replaces Gemini 3.8 Flash's fixed medium and is sent as
+/// given. Without `--prompt` Gemini gets the app's default prompt (`AppSettings.defaultGeminiSystemPrompt`);
+/// `--prompt ""` sends only the audio.
+/// `--clean-up` sends the last transcript to the clean-up model (GPT-6 Luna; `--clean-up-effort` replaces its fixed
+/// none) with the clean-up prompt (by default `CleanupModel.examplePrompt`) and prints the cleaned text. Only the
+/// models the app offers are accepted. Settings are in-memory: the CLI never changes the app's.
 /// An engine that answers with no text heard no speech: that prints `NO SPEECH` instead of `TEXT:` and exits 0,
 /// like any other answer. Only real failures print `ERROR:` and exit non-zero.
 ///
@@ -90,9 +90,9 @@ enum EngineCLI {
     private struct Options {
         static let usage = """
         usage: transcribe-thing --transcribe <audio file> \
-        --engine parakeet|parakeetCloud|geminiFlash|geminiPro \
-        [--download] [--prompt <text>] [--repeat <n>] [--effort minimal|low|medium|high] \
-        [--clean-up [--clean-up-model geminiFlashLite|gpt6Luna] [--clean-up-prompt <text>] \
+        --engine parakeet|parakeetCloud|geminiFlash \
+        [--download] [--prompt <text>] [--repeat <n>] [--effort low|medium|high] \
+        [--clean-up [--clean-up-model gpt6Luna] [--clean-up-prompt <text>] \
         [--clean-up-effort none|minimal|low|medium|high]]
                transcribe-thing --model-status
         """
@@ -134,7 +134,8 @@ enum EngineCLI {
                 cleanupEffort = level
             }
             if arguments.contains("--clean-up-model") {
-                guard let model = value("--clean-up-model").flatMap(CleanupModel.init(rawValue:)) else { return nil }
+                guard let name = value("--clean-up-model"),
+                      let model = CleanupModel.offered.first(where: { $0.rawValue == name }) else { return nil }
                 cleanupModel = model
             }
             if arguments.contains("--parakeet-compute") {
@@ -143,13 +144,13 @@ enum EngineCLI {
             }
         }
 
+        /// An engine the app offers, by raw value or a loose spelling of it; nil for a retired one.
         static func engine(named name: String) -> EngineID? {
-            if let id = EngineID(rawValue: name) { return id }
+            if let id = EngineID.offered.first(where: { $0.rawValue == name }) { return id }
             switch name.lowercased().replacingOccurrences(of: "-", with: "").replacingOccurrences(of: "_", with: "") {
             case "parakeet": return .parakeet
             case "parakeetcloud", "cloudparakeet": return .parakeetCloud
             case "geminiflash", "flash": return .geminiFlash
-            case "geminipro", "pro": return .geminiPro
             default: return nil
             }
         }
@@ -182,11 +183,10 @@ enum EngineCLI {
         let settings = AppSettings.inMemory()
         settings.selectedEngine = options.engine
         settings.geminiSystemPrompt = options.prompt ?? AppSettings.defaultGeminiSystemPrompt
-        if let effort = options.effort { settings.setReasoningEffort(effort, for: options.engine) }
         settings.cleanupSystemPrompt = options.cleanupPrompt ?? CleanupModel.examplePrompt
-        if let model = options.cleanupModel { settings.cleanupModel = model }
-        if let effort = options.cleanupEffort { settings.cleanupReasoningEffort = effort }
-        if let effort = settings.reasoningEffort(for: options.engine) { print("EFFORT: \(effort.rawValue)") }
+        // Gemini's own level unless --effort replaces it; nothing for a model that doesn't reason.
+        let effort = options.engine.reasoningEffort.map { options.effort ?? $0 }
+        if let effort { print("EFFORT: \(effort.rawValue)") }
         var engines = ModelStore.makeEngines(paths: paths)
         if options.parakeetCompute == .gpu {
             engines[.parakeet] = ParakeetEncoderOnGPU(modelsRoot: paths.models)
@@ -213,7 +213,7 @@ enum EngineCLI {
         var last: TranscriptResult?
         var runTimes: [TimeInterval] = []
         for run in 1...options.repeatCount {
-            let result = try await service.transcribe(recording, engine: options.engine)
+            let result = try await service.transcribe(recording, engine: options.engine, effort: effort)
             runTimes.append(result.processingTime)
             let speed = result.processingTime > 0 ? audioSeconds / result.processingTime : 0
             var line = "RUN \(run): \(format(result.processingTime, digits: 3)) s · \(format(speed, digits: 1))x real time"
@@ -234,8 +234,11 @@ enum EngineCLI {
             print(last.text.isEmpty ? "NO SPEECH" : "TEXT: \(last.text)")
             if let best = runTimes.min() { print("TRANSCRIBE: first \(format(runTimes[0], digits: 3)) s · best \(format(best, digits: 3)) s") }
             if options.cleanUp, !last.text.isEmpty {
-                let cleaned = try await service.cleanUp(last.text, of: last.engine)
-                var line = "CLEAN-UP: \(settings.cleanupModel.modelName) · \(settings.cleanupReasoningEffort.rawValue) · \(format(cleaned.processingTime, digits: 3)) s"
+                let model = options.cleanupModel ?? .default
+                let route = options.cleanupEffort.map(model.route(effort:))
+                let cleaned = try await service.cleanUp(last.text, of: last.engine, by: model, route: route)
+                let level = cleaned.reasoningEffort?.rawValue ?? "?"
+                var line = "CLEAN-UP: \(model.modelName) · \(level) · \(format(cleaned.processingTime, digits: 3)) s"
                 if let cost = cleaned.costUSD { line += " · $\(String(format: "%.5f", cost))" }
                 if let reasoning = cleaned.usage?.reasoningTokens { line += " · \(reasoning) reasoning tokens" }
                 print(line)
@@ -501,7 +504,7 @@ enum EngineCLI {
                 }
                 let text = parakeet.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !text.isEmpty else { return nil }
-                let cleanup = entry.version(.cleanup(of: .parakeet))
+                let cleanup = entry.version(.cleanup(of: .parakeet, by: .geminiFlashLite))
                 return Item(id: entry.id, createdAt: entry.createdAt, parakeet: text,
                             geminiFlash: entry.version(.transcription(.geminiFlash))?.text,
                             flashLite: cleanup?.text, flashLiteEffort: cleanup?.metadata.reasoningEffort?.rawValue)

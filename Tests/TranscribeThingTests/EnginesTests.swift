@@ -47,7 +47,7 @@ import Testing
     }
 
     @Test func systemPromptComesFirstTrimmed() throws {
-        let body = OpenRouterChatRequest.transcription(model: "google/gemini-3.1-pro-preview", audioBase64: "AA==",
+        let body = OpenRouterChatRequest.transcription(model: "google/gemini-3.8-flash", audioBase64: "AA==",
                                                        systemPrompt: "  Transcribe verbatim.\n", effort: .high)
         let json = try object(body)
         let messages = try #require(json["messages"] as? [[String: Any]])
@@ -137,7 +137,7 @@ struct OKBodyCase: Sendable, CustomTestStringConvertible {
         .init(404, #"{"error":{"code":404,"message":"No endpoints found matching your data policy (Zero data retention)."}}"#,
               .openRouterNoRoute("No endpoints found matching your data policy (Zero data retention). \(hint)")),
         .init(404, #"{"error":{"code":404,"message":"Model not found"}}"#, .openRouterNoRoute("Model not found \(hint)")),
-        .init(408, #"{"error":{"code":408,"message":"Request timed out"}}"#, .timeout(.geminiPro)),
+        .init(408, #"{"error":{"code":408,"message":"Request timed out"}}"#, .timeout(.geminiFlash)),
         .init(413, "", .recordingTooLarge),
         .init(413, #"{"error":{"code":413,"message":"Payload too large","metadata":{"error_type":"payload_too_large"}}}"#,
               .recordingTooLarge),
@@ -155,15 +155,15 @@ struct OKBodyCase: Sendable, CustomTestStringConvertible {
               .openRouterNoRoute("No allowed providers are available for the selected model. \(hint)")),
         .init(503, #"{"error":{"code":503,"message":"Service overloaded","metadata":{"error_type":"provider_overloaded"}}}"#,
               .openRouterProviderUnavailable("Service overloaded")),
-        .init(504, "<html><body>Gateway timeout</body></html>", .timeout(.geminiPro)),
-        .init(524, "", .timeout(.geminiPro)),
+        .init(504, "<html><body>Gateway timeout</body></html>", .timeout(.geminiFlash)),
+        .init(524, "", .timeout(.geminiFlash)),
         .init(529, #"{"error":{"code":529,"message":"Overloaded"}}"#, .openRouterProviderUnavailable("Overloaded")),
     ]
 
     @Test(arguments: httpCases)
     func httpStatusMapsToAppError(_ testCase: HTTPErrorCase) {
         let error = OpenRouterErrorMapper.httpError(status: testCase.status, data: Data(testCase.body.utf8),
-                                                    retryAfter: testCase.retryAfter, engine: .geminiPro)
+                                                    retryAfter: testCase.retryAfter, engine: .geminiFlash)
         #expect(error == testCase.expected)
     }
 
@@ -198,7 +198,7 @@ struct OKBodyCase: Sendable, CustomTestStringConvertible {
     @Test(arguments: okCases)
     func failuresInsideHTTP200(_ testCase: OKBodyCase) {
         #expect(throws: testCase.expected) {
-            try OpenRouterErrorMapper.success(data: Data(testCase.body.utf8), engine: .geminiPro)
+            try OpenRouterErrorMapper.success(data: Data(testCase.body.utf8), engine: .geminiFlash)
         }
     }
 
@@ -433,7 +433,7 @@ enum Fixtures {
 
     @Test func droppedConnectionIsRetried() async throws {
         let (client, host) = StubURLProtocol.client([.init(error: .networkConnectionLost), Fixtures.success])
-        let result = try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.1-pro-preview",
+        let result = try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash",
                                                  systemPrompt: nil, effort: .high, apiKey: "k", timeout: 180)
         #expect(result.text == "Hello there.")
         #expect(StubURLProtocol.registry.requests(for: host).count == 2)
@@ -441,8 +441,8 @@ enum Fixtures {
 
     @Test func timeoutIsNotRetried() async throws {
         let (client, host) = StubURLProtocol.client([.init(error: .timedOut), Fixtures.success])
-        await #expect(throws: AppError.timeout(.geminiPro)) {
-            try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.1-pro-preview", systemPrompt: nil, effort: .high,
+        await #expect(throws: AppError.timeout(.geminiFlash)) {
+            try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil, effort: .high,
                                         apiKey: "k", timeout: 180)
         }
         #expect(StubURLProtocol.registry.requests(for: host).count == 1)
@@ -1382,7 +1382,7 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
     @Test func cloudWithoutKey() async throws {
         let (service, _) = makeService(key: nil)
         await #expect(throws: AppError.openRouterMissingKey) {
-            try await service.transcribe(speech(), engine: .geminiPro)
+            try await service.transcribe(speech(), engine: .geminiFlash)
         }
     }
 
@@ -1411,7 +1411,7 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
         let (service, _) = makeService(replies: [Fixtures.success])
         let long = Recording(samples: [Float](repeating: 0.1, count: 8 * 60 * 16_000))
         await #expect(throws: AppError.recordingTooLarge) {
-            try await service.transcribe(long, engine: .geminiPro)
+            try await service.transcribe(long, engine: .geminiFlash)
         }
     }
 

@@ -693,8 +693,6 @@ final class DictationController {
         var isCleaningUp: Bool { uncleaned != nil }
         /// The finished transcript being cleaned up, kept should the clean-up be canceled.
         var uncleaned: TranscriptResult?
-        /// The clean-up model tidying it: the one selected when the transcript came back.
-        var cleanupModel: CleanupModel?
         private let placeholderID: UUID
 
         /// `id`: the id the recording will have (a resumed dictation's), when it is known before the audio is.
@@ -736,20 +734,17 @@ final class DictationController {
         let generation = job.generation
         let engine = job.engine
         job.uncleaned = nil
-        job.cleanupModel = nil
         job.task = Task { [weak self] in
             guard let self else { return }
             var outcome = await self.transcribe(recording, engine: engine)
             guard !Task.isCancelled, job.generation == generation else { return }
             if case .success(let result, _) = outcome, self.cleansUp(job, result) {
                 // Still processing as far as the pill goes: the text is pasted once it's tidied (or given up on).
-                let model = self.settings.cleanupModel
                 job.uncleaned = result
-                job.cleanupModel = model
                 job.hintTask?.cancel()
                 self.dismissSlowNotice(for: job.id)
                 self.stateDidChange()
-                let cleanup = await self.runCleanup(result.text, of: result.engine, by: model)
+                let cleanup = await self.runCleanup(result.text, of: result.engine, by: .default)
                 guard !Task.isCancelled, job.generation == generation else { return }
                 outcome = .success(result, cleanup: cleanup)
             }
@@ -969,7 +964,7 @@ final class DictationController {
             var delivered = text
             var cleanupFailed = false
             var cleanupError: AppError?
-            let cleanupModel = job.cleanupModel ?? settings.cleanupModel
+            let cleanupModel = CleanupModel.default
             switch cleanup {
             case .cleaned(let cleaned)?:
                 versions.append(cleaned.version(.cleanup(of: result.engine, by: cleanupModel)))
@@ -1515,6 +1510,7 @@ final class DictationController {
     private func postSlowNotice(for job: Job) {
         // Transcribe With never offers a model the transcript already has a version from.
         let used = job.replacesTranscript ? usedEngines(of: job.id) : []
+        // From Gemini: the main model first, Parakeet on this Mac even while it isn't loaded.
         var fallback = usableFallback(excluding: job.engine, alsoExcluding: used)
         var notice: Notice
         switch models.state(of: job.engine) {
@@ -1522,7 +1518,7 @@ final class DictationController {
             notice = AppError.modelDownloading(job.engine, progress.fraction).notice(recordingID: nil, fallbackEngine: nil)
         case .preparing where job.engine.isLocal, .installed where job.engine.isLocal:
             // Only an engine that can start right now is any faster than waiting for this load.
-            fallback = readyFallback(excluding: job.engine, alsoExcluding: used)
+            fallback = usableFallback(excluding: job.engine, alsoExcluding: used, readyNow: true)
             notice = AppError.modelPreparing(job.engine).notice(recordingID: nil, fallbackEngine: nil)
         default:
             guard job.engine.isCloud else { return }
@@ -1591,10 +1587,11 @@ final class DictationController {
     // MARK: - Engines and recordings
 
     /// Engines to fall back to from `engine`, in order: the same model on the other side (Parakeet · Cloud ↔
-    /// Parakeet on this Mac), then Parakeet on this Mac, then Parakeet · Cloud (Gemini's fallbacks).
-    static func fallbackCandidates(for engine: EngineID) -> [EngineID] {
+    /// Parakeet on this Mac); from an extra model (Gemini), the main model `main` first, then Parakeet on the other
+    /// side. Only main models: an extra model is never offered in another's place.
+    static func fallbackCandidates(for engine: EngineID, main: EngineID) -> [EngineID] {
         let ordered = [engine.localCounterpart, engine.cloudCounterpart].compactMap { $0 }
-            + EngineID.localEngines + EngineID.cloudTranscriptionEngines
+            + EngineID.mainCandidates.filter { $0 == main } + EngineID.mainCandidates
         var candidates: [EngineID] = []
         for candidate in ordered where candidate != engine && !candidates.contains(candidate) {
             candidates.append(candidate)
@@ -1608,30 +1605,25 @@ final class DictationController {
         return Set(entry.versions.compactMap { if case .transcription(let engine) = $0.kind { engine } else { nil } })
     }
 
-    /// An engine other than `engine` that can start at once, offered as "Retry with …" for a saved recording: a
-    /// loaded local model, or a cloud one while the key is valid, unless `error` (the key's, the credit's, the
-    /// connection's) would stop it too.
+    /// The engine offered in place of `engine`: "Retry with …" or "Use … Instead" for a saved recording, "Use …"
+    /// when nothing was recorded. The first of `fallbackCandidates` that can run it: a local model once it's
+    /// downloaded (one that isn't loaded yet loads for the retry, so from Gemini the main model on this Mac comes
+    /// before Parakeet · Cloud even then), or only once it's loaded with `readyNow`; a cloud one while the key is
+    /// valid, unless `error` (the key's, the credit's, the connection's) would stop it too.
     /// `alsoExcluding`: engines not worth offering either (those the transcript being made again has versions from).
-    private func readyFallback(excluding engine: EngineID, after error: AppError? = nil,
-                               alsoExcluding others: Set<EngineID> = []) -> EngineID? {
-        Self.fallbackCandidates(for: engine).first { candidate in
+    private func usableFallback(excluding engine: EngineID, after error: AppError? = nil,
+                                alsoExcluding others: Set<EngineID> = [], readyNow: Bool = false) -> EngineID? {
+        Self.fallbackCandidates(for: engine, main: settings.selectedEngine).first { candidate in
             guard !others.contains(candidate) else { return false }
-            if candidate.isLocal { return models.state(of: candidate) == .ready }
+            if candidate.isLocal {
+                switch models.state(of: candidate) {
+                case .ready: return true
+                case .installed, .preparing: return !readyNow
+                case .notInstalled, .downloading, .failed: return false
+                }
+            }
             guard case .valid = account.status else { return false }
             return error?.stopsEveryCloudModel != true
-        }
-    }
-
-    /// `readyFallback`, else a downloaded local model that isn't loaded yet (it loads for the retry), also
-    /// offered as "Use …" when nothing was recorded.
-    private func usableFallback(excluding engine: EngineID, after error: AppError? = nil,
-                                alsoExcluding others: Set<EngineID> = []) -> EngineID? {
-        readyFallback(excluding: engine, after: error, alsoExcluding: others) ?? Self.fallbackCandidates(for: engine).first {
-            guard $0.isLocal, !others.contains($0) else { return false }
-            switch models.state(of: $0) {
-            case .installed, .preparing: return true
-            default: return false
-            }
         }
     }
 
@@ -1913,7 +1905,7 @@ final class DictationController {
         for job in (deliveringJob.map { [$0] } ?? []) + queue where job.recording != nil {
             transcribing[job.id] = job.engine
             running[job.id] = job.isCleaningUp
-                ? .cleanup(of: job.engine, by: job.cleanupModel ?? settings.cleanupModel) : .transcription(job.engine)
+                ? .cleanup(of: job.engine, by: .default) : .transcription(job.engine)
         }
         for (id, kind) in historyCleanups { running[id] = kind }
         if transcribingEngines != transcribing { transcribingEngines = transcribing }

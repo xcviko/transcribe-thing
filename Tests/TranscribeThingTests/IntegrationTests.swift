@@ -83,7 +83,7 @@ import Testing
         store.selectWhenInstalled(.parakeetCloud)
         #expect(settings.selectedEngine == .parakeetCloud)
         #expect(store.pendingSelection == nil)
-        store.selectWhenInstalled(.geminiPro)
+        store.selectWhenInstalled(.geminiFlash)
         #expect(settings.selectedEngine == .parakeetCloud, "extra models are picked per dictation, not selected")
     }
 }

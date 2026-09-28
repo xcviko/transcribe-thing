@@ -227,7 +227,7 @@ struct OpenRouterKeyCard: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.success)
             Text(settings.switchChoices.contains(.cleanup)
-                 ? "Only your audio, and Parakeet’s text for Clean-up by \(settings.cleanupModel.shortName), goes to OpenRouter and the model’s provider."
+                 ? "Only your audio, and Parakeet’s text for Clean-up by \(CleanupModel.default.shortName), goes to OpenRouter and the model’s provider."
                  : "Only your audio is sent, to OpenRouter and the model’s provider.")
                 .typeface(.callout)
                 .foregroundStyle(.inkSecondary)
@@ -354,9 +354,9 @@ struct CleanupPromptCard: View {
                     }
                 }
                 PromptEditor(text: $settings.cleanupSystemPrompt,
-                             placeholder: "Tell \(settings.cleanupModel.shortName) how to tidy a transcript, or start from the example.",
+                             placeholder: "Tell \(CleanupModel.default.shortName) how to tidy a transcript, or start from the example.",
                              height: 150)
-                Text("Sent as the system prompt. The transcript follows as the message, inside <transcript> tags, so \(settings.cleanupModel.shortName) treats it as text to edit rather than a request to answer. Ask for the cleaned text only: whatever comes back is pasted.")
+                Text("Sent as the system prompt. The transcript follows as the message, inside <transcript> tags, so \(CleanupModel.default.shortName) treats it as text to edit rather than a request to answer. Ask for the cleaned text only: whatever comes back is pasted.")
                     .typeface(.callout)
                     .foregroundStyle(.inkSecondary)
                     .fixedSize(horizontal: false, vertical: true)

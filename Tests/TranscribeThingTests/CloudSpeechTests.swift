@@ -93,11 +93,14 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
 
 @Suite struct CloudEngineFactsTests {
     @Test func rawValuesAreStableAndOrderIsLocalThenCloudSpeechThenGemini() {
-        #expect(EngineID.allCases.map(\.rawValue) == ["parakeet", "parakeetCloud", "geminiFlash", "geminiPro"])
+        #expect(EngineID.allCases.map(\.rawValue) == ["parakeet", "parakeetCloud", "geminiFlash", "geminiPro"],
+                "Gemini 3.1 Pro stays readable, retired")
+        #expect(EngineID.offered == [.parakeet, .parakeetCloud, .geminiFlash])
+        #expect(EngineID.allCases.filter(\.isRetired) == [.geminiPro])
         #expect(EngineID.localEngines == [.parakeet])
-        #expect(EngineID.cloudEngines == [.parakeetCloud, .geminiFlash, .geminiPro])
+        #expect(EngineID.cloudEngines == [.parakeetCloud, .geminiFlash])
         #expect(EngineID.cloudTranscriptionEngines == [.parakeetCloud])
-        #expect(EngineID.cloudChatEngines == [.geminiFlash, .geminiPro])
+        #expect(EngineID.cloudChatEngines == [.geminiFlash])
     }
 
     @Test func namesTellLocalAndCloudApart() {
@@ -110,7 +113,7 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
     @Test func cloudSpeechFacts() {
         #expect(EngineID.parakeetCloud.openRouterModelID == "nvidia/parakeet-tdt-0.6b-v3")
         #expect(EngineID.parakeetCloud.provider == "Together")
-        #expect(EngineID.geminiFlash.provider == "Google AI Studio" && EngineID.geminiPro.provider == "Google AI Studio")
+        #expect(EngineID.geminiFlash.provider == "Google AI Studio")
         #expect(EngineID.parakeet.provider == nil)
         for engine in EngineID.cloudTranscriptionEngines {
             #expect(engine.isCloud && !engine.isLocal)

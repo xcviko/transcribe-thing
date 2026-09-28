@@ -34,9 +34,9 @@ struct OpenRouterChatRequest: Encodable, Equatable {
         case maxTokens = "max_tokens"
     }
 
-    /// Gemini via Google AI Studio only, thinking at `effort` with the reasoning text excluded, no temperature
-    /// (Google recommends the default for Gemini 3). The system message exists only for a non-empty prompt,
-    /// and the user message carries ONLY the audio: no text part, ever.
+    /// Gemini via Google AI Studio only, thinking at `effort` (the model's fixed level, `EngineID.reasoningEffort`)
+    /// with the reasoning text excluded, no temperature (Google recommends the default for Gemini 3). The system
+    /// message exists only for a non-empty prompt, and the user message carries ONLY the audio: no text part, ever.
     static func transcription(model: String, audioBase64: String, systemPrompt: String?,
                               effort: ReasoningEffort) -> OpenRouterChatRequest {
         var messages: [OpenRouterMessage] = []
@@ -55,7 +55,7 @@ struct OpenRouterChatRequest: Encodable, Equatable {
 
     /// Clean-up of a transcript: the prompt as the system message, then the transcript as plain user text inside
     /// `<transcript>` tags. `route` names the model, the provider it's pinned to (no fallbacks) and the effort as
-    /// sent (`CleanupModel.route(effort:)`, or any model for `EngineCLI --cleanup-bench`). Reasoning excluded and no
+    /// sent (`CleanupModel.route`, or any model for `EngineCLI --cleanup-bench`). Reasoning excluded and no
     /// temperature like transcription; `max_tokens` grows with the text (`CleanupModel.maxTokens`).
     static func cleanup(route: CleanupRoute, systemPrompt: String, transcript: String) -> OpenRouterChatRequest {
         var messages: [OpenRouterMessage] = []
@@ -79,8 +79,8 @@ struct OpenRouterChatRequest: Encodable, Equatable {
     }
 }
 
-/// Where a clean-up request goes and how hard the model thinks. The app sends the selected clean-up model's
-/// (`CleanupModel.route(effort:)`): Gemini 3.5 Flash Lite on Google AI Studio, or GPT-6 Luna on OpenAI.
+/// Where a clean-up request goes and how hard the model thinks. The app sends the clean-up model's
+/// (`CleanupModel.route`): GPT-6 Luna on OpenAI, thinking off.
 struct CleanupRoute: Equatable, Sendable {
     var model: String
     var provider: OpenRouterChatRequest.Provider
@@ -89,7 +89,7 @@ struct CleanupRoute: Equatable, Sendable {
     /// The level `max_tokens` is sized for (`CleanupModel.maxTokens`).
     var budget: ReasoningEffort
 
-    init(model: String, effort: ReasoningEffort, provider: OpenRouterChatRequest.Provider = .googleAIStudio) {
+    init(model: String, effort: ReasoningEffort, provider: OpenRouterChatRequest.Provider) {
         self.init(model: model, provider: provider, effort: effort.rawValue, budget: effort)
     }
 

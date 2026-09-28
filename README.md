@@ -5,7 +5,7 @@ whatever app you're using. Transcription only, no rewriting.
 
 - **Engines:** Parakeet TDT 0.6B v3 (the default) runs entirely on your Mac and detects any of 25 European
   languages on its own. Through your own OpenRouter key: the same Parakeet v3 (served by Together), Gemini 3.8
-  Flash and Gemini 3.1 Pro.
+  Flash, and clean-up of Parakeet's text by GPT-6 Luna.
 - **Hands-free mode**, a floating pill with a live waveform, a menu bar extra, rebindable shortcuts, soft
   sound cues, history with retry, and Undo for anything you cancel.
 
@@ -34,12 +34,12 @@ Engine checks without the UI:
 ```sh
 .build/debug/transcribe-thing --model-status
 .build/debug/transcribe-thing --transcribe memo.m4a --engine parakeet --download
-OPENROUTER_API_KEY=sk-or-… .build/debug/transcribe-thing --transcribe memo.m4a --engine geminiFlash --effort low
+OPENROUTER_API_KEY=sk-or-… .build/debug/transcribe-thing --transcribe memo.m4a --engine geminiFlash
 OPENROUTER_API_KEY=sk-or-… .build/debug/transcribe-thing --transcribe memo.m4a --engine parakeet --clean-up
 ```
 
-`--effort` sets how long Gemini thinks (3.8 Flash and 3.1 Pro: low, medium or high; thinking can't be turned
-off). `--clean-up` sends the transcript to Gemini 3.5 Flash Lite with the example clean-up prompt
+Gemini 3.8 Flash always thinks at medium and GPT-6 Luna not at all, as in the app; `--effort` (low, medium or high)
+tries Gemini at another level. `--clean-up` sends the transcript to GPT-6 Luna with the example clean-up prompt
 (`--clean-up-prompt` and `--clean-up-effort` change them).
 
 ## Permissions

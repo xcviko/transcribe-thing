@@ -33,7 +33,7 @@ struct ModelsPage: View {
                     SettingsGroup {
                         CleanupStepRow(isOn: cleanupStepBinding) { focusKey(proxy) }
                         ForEach(EngineID.switchCandidates) { engine in
-                            ExtraModelRow(engine: engine, isOn: extraBinding(engine), compact: compactBadges) { focusKey(proxy) }
+                            ExtraModelRow(engine: engine, isOn: extraBinding(engine)) { focusKey(proxy) }
                         }
                     }
                 }
@@ -42,15 +42,7 @@ struct ModelsPage: View {
                 }
                 HubGroup("Clean-up", footer: "For dictations you switch to clean-up. Gemini transcripts aren’t cleaned up: Gemini already punctuates and drops filler words. History keeps the original too.") {
                     SettingsGroup {
-                        ForEach(CleanupModel.allCases) { model in
-                            CleanupModelRow(model: model, isSelected: settings.cleanupModel == model,
-                                            choose: { chooseCleanupModel(model) }) { focusKey(proxy) }
-                        }
-                        SettingsRow(title: "Thinking", subtitle: Self.thinkingAdvice(settings.cleanupModel),
-                                    systemImage: "brain", iconTint: .inkSecondary) {
-                            ThinkingPicker(efforts: settings.cleanupModel.reasoningEfforts, selection: cleanupEffort,
-                                           modelName: settings.cleanupModel.modelName, showsTitle: false)
-                        }
+                        CleanupModelRow(model: .default) { focusKey(proxy) }
                     }
                     CleanupPromptCard()
                 }
@@ -71,7 +63,7 @@ struct ModelsPage: View {
     }
 
     private var extraFooter: String {
-        "The next dictation starts on \(settings.selectedEngine.shortName) again. Gemini takes up to 7 minutes of audio. Less thinking is faster and cheaper; more can help with hard audio."
+        "The next dictation starts on \(settings.selectedEngine.shortName) again. Gemini takes up to 7 minutes of audio."
     }
 
     // MARK: Clean-up
@@ -80,25 +72,6 @@ struct ModelsPage: View {
     private var cleanupStepBinding: Binding<Bool> {
         let settings = settings
         return Binding(get: { settings.switchCleanup && settings.hasCleanupPrompt }, set: { settings.switchCleanup = $0 })
-    }
-
-    /// The selected clean-up model's own level: switching models keeps each one's.
-    private var cleanupEffort: Binding<ReasoningEffort> {
-        let settings = settings
-        return Binding(get: { settings.cleanupReasoningEffort }, set: { settings.cleanupReasoningEffort = $0 })
-    }
-
-    private func chooseCleanupModel(_ model: CleanupModel) {
-        guard settings.cleanupModel != model else { return }
-        withAnimation(Theme.Motion.snappy) { settings.cleanupModel = model }
-    }
-
-    /// The Thinking row's helper text: the lowest level is enough for tidying.
-    static func thinkingAdvice(_ model: CleanupModel) -> String {
-        switch model {
-        case .geminiFlashLite: "Lower is faster and cheaper. Minimal or Low is plenty for tidying."
-        case .gpt6Luna: "Lower is faster and cheaper. None is plenty for tidying: Luna answers without thinking."
-        }
     }
 
     private func extraBinding(_ engine: EngineID) -> Binding<Bool> {
@@ -476,13 +449,10 @@ private struct ExtraModelsLine: View {
 private struct ExtraModelRow: View {
     var engine: EngineID
     @Binding var isOn: Bool
-    /// Narrow window: the Thinking picker moves under the status, leaving the key button and switch room.
-    var compact: Bool
     var focusKey: () -> Void
 
     @Environment(HubContext.self) private var hub
     @Environment(OpenRouterAccount.self) private var account
-    @Environment(AppSettings.self) private var settings
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
@@ -509,10 +479,6 @@ private struct ExtraModelRow: View {
                 }
                 ModelStatusText(keyStatus: account.status)
                     .padding(.top, 2)
-                if compact {
-                    thinking
-                        .padding(.top, 4)
-                }
             }
             Spacer(minLength: 8)
             HStack(spacing: 10) {
@@ -526,9 +492,6 @@ private struct ExtraModelRow: View {
                 case .ready, .warming, .needsDownload, .failed:
                     EmptyView()
                 }
-                if !compact {
-                    thinking
-                }
                 Toggle("", isOn: $isOn)
                     .toggleStyle(.appSwitch)
                     .labelsHidden()
@@ -541,20 +504,6 @@ private struct ExtraModelRow: View {
         .frame(minHeight: 76)
         .animation(Theme.Motion.hover, value: isOn)
         .accessibilityElement(children: .contain)
-    }
-}
-
-extension ExtraModelRow {
-    @ViewBuilder fileprivate var thinking: some View {
-        if !engine.reasoningEfforts.isEmpty {
-            ThinkingPicker(efforts: engine.reasoningEfforts, selection: effort, modelName: engine.modelName)
-        }
-    }
-
-    fileprivate var effort: Binding<ReasoningEffort> {
-        let settings = settings, engine = engine
-        return Binding(get: { settings.reasoningEffort(for: engine) ?? engine.reasoningEfforts[0] },
-                       set: { settings.setReasoningEffort($0, for: engine) })
     }
 }
 
@@ -579,8 +528,7 @@ private struct CleanupIcon: View {
 }
 
 /// Clean-up as a Switch model step, first among the extra models: the main model transcribes and the clean-up model
-/// tidies its words. Named as the pass it is ("Parakeet v3 + GPT-6 Luna"); its model, thinking and prompt are set
-/// under Clean-up.
+/// tidies its words. Named as the pass it is ("Parakeet v3 + GPT-6 Luna"); its prompt is set under Clean-up.
 private struct CleanupStepRow: View {
     @Binding var isOn: Bool
     var focusKey: () -> Void
@@ -590,13 +538,13 @@ private struct CleanupStepRow: View {
     @Environment(AppSettings.self) private var settings
 
     var body: some View {
-        let cleanup = settings.cleanupModel
+        let cleanup = CleanupModel.default
         let hasPrompt = settings.hasCleanupPrompt
         HStack(alignment: .center, spacing: 12) {
             CleanupIcon(size: 36)
                 .opacity(isOn ? 1 : 0.55)
             VStack(alignment: .leading, spacing: 3) {
-                Text(ModelChoice.cleanup.title(main: settings.selectedEngine, cleanup: cleanup))
+                Text(ModelChoice.cleanup.title(main: settings.selectedEngine))
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(isOn ? Color.ink : Color.inkSecondary)
                     .lineLimit(1)
@@ -638,28 +586,25 @@ private struct CleanupStepRow: View {
     }
 }
 
-/// A clean-up model to pick: what it does, who serves it and the OpenRouter key's status, like the extra models.
-/// It reads text, never audio, so it has no place among the models a dictation can go to.
+/// The clean-up model, for information: what it does, who serves it and the OpenRouter key's status, like the
+/// extra models. Nothing to pick: it's the only one. It reads text, never audio, so it has no place among the
+/// models a dictation can go to.
 private struct CleanupModelRow: View {
     var model: CleanupModel
-    var isSelected: Bool
-    var choose: () -> Void
     var focusKey: () -> Void
 
     @Environment(HubContext.self) private var hub
     @Environment(OpenRouterAccount.self) private var account
-    @State private var hovering = false
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
-            RadioDot(isOn: isSelected)
             CleanupIcon(size: 36)
             VStack(alignment: .leading, spacing: 3) {
                 Text(model.modelName)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.ink)
                     .lineLimit(1)
-                Text(model.summary)
+                Text("Tidies punctuation, fillers and false starts · reads text, not audio")
                     .typeface(.callout)
                     .foregroundStyle(.inkSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -690,14 +635,7 @@ private struct CleanupModelRow: View {
         .padding(.horizontal, Theme.Spacing.md)
         .padding(.vertical, 12)
         .frame(minHeight: 76)
-        .background { RowHighlight(isSelected: isSelected, isHovering: hovering) }
-        .contentShape(Rectangle())
-        .onTapGesture(perform: choose)
-        .onHover { hovering = $0 }
-        .animation(Theme.Motion.hover, value: hovering)
         .accessibilityElement(children: .contain)
-        .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
-        .accessibilityAction(named: "Use for Clean-up", choose)
     }
 }
 

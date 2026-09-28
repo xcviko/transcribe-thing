@@ -32,7 +32,7 @@ enum HubSnapshots {
             hub("hub-home-transcribing", .home, height: 900) { c in
                 let entries = c.history.entries
                 var running: [UUID: TranscriptVersionKind] = [:]
-                if let first = entries.first { running[first.id] = .cleanup(of: .parakeet) }
+                if let first = entries.first { running[first.id] = .cleanup(of: .parakeet, by: .default) }
                 if entries.count > 1 { running[entries[1].id] = .transcription(.geminiFlash) }
                 if let failed = entries.first(where: { $0.status == .failed }) { running[failed.id] = .transcription(.parakeet) }
                 c.previewRunning = running
@@ -72,28 +72,21 @@ enum HubSnapshots {
                 c.account = .preview(status: .missing)
                 c.settings.geminiSystemPrompt = "Transcribe the audio verbatim. Output only the transcript."
             },
-            // Switch model rebound to right ⌘, Pro left out: the line under "Extra models" shows the real binding.
+            // Switch model rebound to right ⌘, clean-up left out: the line under "Extra models" shows the real binding.
             hub("hub-models-extra-custom", .models, height: 1100) { c in
                 c.settings.shortcuts[.switchModel] = .rightCommand
-                c.settings.switchEngines = [.geminiFlash]
+                c.settings.switchCleanup = false
             },
-            // Gemini rows with their Thinking pickers, both prompts cleared: Gemini gets only the audio, and the
-            // clean-up step's switch is disabled with the hint.
-            hub("hub-models-cleanup-empty", .models, height: 2000) { c in
+            // Both prompts cleared: Gemini gets only the audio, and the clean-up step's switch is disabled with the hint.
+            hub("hub-models-cleanup-empty", .models, height: 1800) { c in
                 c.settings.geminiSystemPrompt = ""
                 c.settings.cleanupSystemPrompt = ""
             },
-            // The default prompts and the clean-up step off, Flash Lite at Minimal.
-            hub("hub-models-cleanup-off", .models, height: 2000) { c in
+            // The default prompts and the clean-up step off; GPT-6 Luna stays listed under Clean-up.
+            hub("hub-models-cleanup-off", .models, height: 1800) { c in
                 c.settings.switchCleanup = false
-                c.settings.cleanupReasoningEffort = .minimal
-                c.settings.setReasoningEffort(.medium, for: .geminiPro)
             },
-            // GPT-6 Luna picked for Clean-up, thinking None: the step, Thinking and the prompt card name it.
-            hub("hub-models-cleanup-luna", .models, height: 2000) { c in
-                c.settings.cleanupModel = .gpt6Luna
-            },
-            hub("hub-models-cleanup-compact", .models, width: 820, height: 1900) { c in
+            hub("hub-models-cleanup-compact", .models, width: 820, height: 1840) { c in
                 c.account = .preview(status: .missing)
             },
             hub("hub-models-extra-unbound", .models, height: 1100) { c in

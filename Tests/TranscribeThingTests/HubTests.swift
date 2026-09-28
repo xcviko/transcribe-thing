@@ -152,9 +152,9 @@ import Testing
     @Test func cloudStatesIgnoreLocalState() {
         let info = KeyInfo(limitRemaining: 3)
         #expect(EngineReadiness.of(.geminiFlash, localState: .notInstalled, keyStatus: .valid(info)) == .ready)
-        #expect(EngineReadiness.of(.geminiPro, localState: .notInstalled, keyStatus: .missing) == .needsKey)
-        #expect(EngineReadiness.of(.geminiPro, localState: .notInstalled, keyStatus: .invalid("401")).unavailableReason == "Key rejected")
-        #expect(EngineReadiness.of(.geminiPro, localState: .notInstalled, keyStatus: .noCredit(nil)).isUsable == false)
+        #expect(EngineReadiness.of(.geminiFlash, localState: .notInstalled, keyStatus: .missing) == .needsKey)
+        #expect(EngineReadiness.of(.parakeetCloud, localState: .notInstalled, keyStatus: .invalid("401")).unavailableReason == "Key rejected")
+        #expect(EngineReadiness.of(.geminiFlash, localState: .notInstalled, keyStatus: .noCredit(nil)).isUsable == false)
         #expect(EngineReadiness.of(.geminiFlash, localState: .notInstalled, keyStatus: .offline).isUsable)
     }
 
@@ -237,9 +237,9 @@ import Testing
 
     @Test func keyProblemsForCloudEngines() {
         #expect(HubAttention.items(input(engine: .geminiFlash, key: .missing)).first?.actionTitle == "Add Key")
-        #expect(HubAttention.items(input(engine: .geminiPro, key: .invalid("401"))).first?.actionTitle == "Update Key")
-        #expect(HubAttention.items(input(engine: .geminiPro, key: .noCredit(nil))).first?.action == .openURL(OpenRouterLinks.credits))
-        #expect(HubAttention.items(input(engine: .geminiPro, key: .offline)).isEmpty)
+        #expect(HubAttention.items(input(engine: .parakeetCloud, key: .invalid("401"))).first?.actionTitle == "Update Key")
+        #expect(HubAttention.items(input(engine: .parakeetCloud, key: .noCredit(nil))).first?.action == .openURL(OpenRouterLinks.credits))
+        #expect(HubAttention.items(input(engine: .parakeetCloud, key: .offline)).isEmpty)
     }
 
     @Test func keyProblemsNameTheCloudSpeechModel() {
@@ -272,7 +272,6 @@ import Testing
     @Test func providerNotesNameWhoServesEachCloudModel() {
         #expect(ProviderNote.text(.parakeetCloud) == "Served by Together.")
         #expect(ProviderNote.text(.geminiFlash) == "Served by Google AI Studio only.")
-        #expect(ProviderNote.text(.geminiPro) == "Served by Google AI Studio only.")
         #expect(ProviderNote.text(.parakeet) == nil)
     }
 
@@ -324,10 +323,10 @@ import Testing
     private let rightCommand = Shortcut.rightCommand
 
     @Test func statusFollowsTheBindingAndTheToggles() {
-        #expect(ExtraModels.status(binding: .fnTab, enabled: [.engine(.geminiFlash), .engine(.geminiPro)]) == .ready(.fnTab))
+        #expect(ExtraModels.status(binding: .fnTab, enabled: [.cleanup, .engine(.geminiFlash)]) == .ready(.fnTab))
         #expect(ExtraModels.status(binding: .fnTab, enabled: [.cleanup]) == .ready(.fnTab), "clean-up alone is a step")
-        #expect(ExtraModels.status(binding: nil, enabled: [.engine(.geminiPro)]) == .unbound)
-        #expect(ExtraModels.status(binding: Shortcut(modifiers: []), enabled: [.engine(.geminiPro)]) == .unbound)
+        #expect(ExtraModels.status(binding: nil, enabled: [.engine(.geminiFlash)]) == .unbound)
+        #expect(ExtraModels.status(binding: Shortcut(modifiers: []), enabled: [.engine(.geminiFlash)]) == .unbound)
         #expect(ExtraModels.status(binding: .fnTab, enabled: []) == .noneEnabled(.fnTab))
         #expect(ExtraModels.status(binding: nil, enabled: []) == .noneEnabled(nil))
     }
@@ -343,10 +342,10 @@ import Testing
         #expect(ExtraModels.explanation(.unbound).contains("no shortcut"))
     }
 
-    @Test func togglesKeepTheCycleOrder() {
-        #expect(ExtraModels.setting(.geminiFlash, on: false, in: [.geminiFlash, .geminiPro]) == [.geminiPro])
-        #expect(ExtraModels.setting(.geminiFlash, on: true, in: [.geminiPro]) == [.geminiFlash, .geminiPro])
-        #expect(ExtraModels.setting(.geminiPro, on: true, in: [.geminiPro]) == [.geminiPro], "no duplicates")
-        #expect(ExtraModels.setting(.geminiPro, on: false, in: [.geminiPro]).isEmpty)
+    @Test func togglesKeepEachOfferedModelOnce() {
+        #expect(ExtraModels.setting(.geminiFlash, on: false, in: [.geminiFlash]).isEmpty)
+        #expect(ExtraModels.setting(.geminiFlash, on: true, in: []) == [.geminiFlash])
+        #expect(ExtraModels.setting(.geminiFlash, on: true, in: [.geminiFlash]) == [.geminiFlash], "no duplicates")
+        #expect(ExtraModels.setting(.geminiFlash, on: true, in: [.geminiPro]) == [.geminiFlash], "a retired model drops out")
     }
 }

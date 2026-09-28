@@ -1124,9 +1124,9 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         model.engineChipPulse += 1
         try await Task.sleep(for: .milliseconds(200))
         model.engineChipPulse += 1
-        model.sessionModel = .engine(.geminiPro)
+        model.sessionModel = .engine(.geminiFlash)
         try await Task.sleep(for: .milliseconds(200))
-        #expect(model.chipModel == .engine(.geminiPro), "the second switch runs its own hold")
+        #expect(model.chipModel == .engine(.geminiFlash), "the second switch runs its own hold")
         try await waitUntil { !model.showsChip }
     }
 
@@ -1134,15 +1134,15 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
     /// pointer is on it, so its menu can be opened.
     @Test func onlyASwitchBringsTheChipUp() async throws {
         let model = PillModel.preview(phase: .locked, isHovering: true)
-        model.sessionModel = .engine(.geminiPro)
+        model.sessionModel = .engine(.geminiFlash)
         #expect(model.chipModel == nil, "hovering the pill")
         model.setPointerOverChip(true)
-        #expect(model.chipModel == .engine(.geminiPro), "resting on the chip after a switch keeps it")
+        #expect(model.chipModel == .engine(.geminiFlash), "resting on the chip after a switch keeps it")
         model.setPointerOverChip(false)
         #expect(model.chipModel == nil)
 
         let pushToTalk = PillModel.preview(phase: .listening)
-        pushToTalk.sessionModel = .engine(.geminiPro)
+        pushToTalk.sessionModel = .engine(.geminiFlash)
         pushToTalk.setPointerOverChip(true)
         #expect(pushToTalk.chipModel == nil, "a held key has no menu to offer")
     }
@@ -1156,19 +1156,19 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
 
     @Test func theMenuOffersTheMainModelThenCleanupThenTheEnabledExtraModels() {
         let model = makeModel()
-        #expect(model.menuChoices == [.engine(.parakeet), .cleanup, .engine(.geminiFlash), .engine(.geminiPro)])
-        model.settings.switchEngines = [.geminiPro]
-        #expect(model.menuChoices == [.engine(.parakeet), .cleanup, .engine(.geminiPro)])
+        #expect(model.menuChoices == [.engine(.parakeet), .cleanup, .engine(.geminiFlash)])
+        model.settings.switchEngines = []
+        #expect(model.menuChoices == [.engine(.parakeet), .cleanup])
+        model.settings.switchEngines = [.geminiFlash]
         model.settings.switchCleanup = false
-        #expect(model.menuChoices == [.engine(.parakeet), .engine(.geminiPro)])
+        #expect(model.menuChoices == [.engine(.parakeet), .engine(.geminiFlash)])
         model.settings.switchCleanup = true
         model.settings.cleanupSystemPrompt = " "
-        #expect(model.menuChoices == [.engine(.parakeet), .engine(.geminiPro)], "no prompt, no clean-up")
+        #expect(model.menuChoices == [.engine(.parakeet), .engine(.geminiFlash)], "no prompt, no clean-up")
     }
 
     @Test func extraModelsAndCleanupTintThePillAndTheMainModelDoesNot() {
         #expect(PillPalette.accent(for: .engine(.geminiFlash)) == PillAccent(ringHex: 0x7F77DD, markHex: 0xAFA9EC))
-        #expect(PillPalette.accent(for: .engine(.geminiPro)) == PillAccent(ringHex: 0xD4537E, markHex: 0xED93B1))
         #expect(PillPalette.accent(for: .cleanup) == PillAccent(ringHex: 0xE58A5F, markHex: 0xFFB896))
         for choice in [ModelChoice.engine(.parakeet), .engine(.parakeetCloud), nil] {
             #expect(PillPalette.accent(for: choice) == nil)
@@ -1193,30 +1193,28 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
 
     @Test func theModelMenuChecksTheCurrentChoiceAndPicksOne() throws {
         var picked: [ModelChoice] = []
-        let menu = PillController.modelMenu(choices: [.engine(.parakeet), .cleanup, .engine(.geminiFlash), .engine(.geminiPro)],
-                                            current: .cleanup, main: .parakeet, cleanup: .gpt6Luna) {
+        let menu = PillController.modelMenu(choices: [.engine(.parakeet), .cleanup, .engine(.geminiFlash)],
+                                            current: .cleanup, main: .parakeet) {
             picked.append($0)
         }
         // The main model and its clean-up, then the models that hear the audio themselves.
-        #expect(menu.items.map(\.isSeparatorItem) == [false, false, true, false, false])
+        #expect(menu.items.map(\.isSeparatorItem) == [false, false, true, false])
         #expect(menu.items.filter { !$0.isSeparatorItem }.map(\.title)
-            == ["Parakeet v3", "Parakeet v3 + GPT-6 Luna", "Gemini 3.8 Flash", "Gemini 3.1 Pro"])
-        #expect(menu.items.map(\.state) == [.off, .on, .off, .off, .off])
-        let pro = try #require(menu.items.last)
-        menu.performActionForItem(at: menu.index(of: pro))
-        #expect(picked == [.engine(.geminiPro)])
+            == ["Parakeet v3", "Parakeet v3 + GPT-6 Luna", "Gemini 3.8 Flash"])
+        #expect(menu.items.map(\.state) == [.off, .on, .off, .off])
+        let flash = try #require(menu.items.last)
+        menu.performActionForItem(at: menu.index(of: flash))
+        #expect(picked == [.engine(.geminiFlash)])
 
-        let geminiOnly = PillController.modelMenu(choices: [.engine(.parakeet), .engine(.geminiPro)],
-                                                  current: .engine(.parakeet), main: .parakeet, cleanup: .gpt6Luna) { _ in }
+        let geminiOnly = PillController.modelMenu(choices: [.engine(.parakeet), .engine(.geminiFlash)],
+                                                  current: .engine(.parakeet), main: .parakeet) { _ in }
         #expect(geminiOnly.items.map(\.isSeparatorItem) == [false, true, false])
     }
 
     @Test func theHintNamesTheOneChoiceOrWhatTheyShare() {
-        #expect(PillSwitchHint.label(for: [.engine(.geminiFlash), .engine(.geminiPro)], cleanup: .gpt6Luna) == "Gemini")
-        #expect(PillSwitchHint.label(for: [.engine(.geminiPro)], cleanup: .gpt6Luna) == "Gemini 3.1 Pro")
-        #expect(PillSwitchHint.label(for: [.cleanup], cleanup: .gpt6Luna) == "GPT-6 Luna clean-up")
-        #expect(PillSwitchHint.label(for: [.cleanup], cleanup: .geminiFlashLite) == "Flash Lite clean-up")
-        #expect(PillSwitchHint.label(for: [.cleanup, .engine(.geminiFlash)], cleanup: .geminiFlashLite) == "Clean-up, Gemini")
+        #expect(PillSwitchHint.label(for: [.engine(.geminiFlash)]) == "Gemini 3.8 Flash")
+        #expect(PillSwitchHint.label(for: [.cleanup]) == "GPT-6 Luna clean-up")
+        #expect(PillSwitchHint.label(for: [.cleanup, .engine(.geminiFlash)]) == "Clean-up, Gemini")
     }
 
     @Test func toastsClearTheChip() {
@@ -1244,11 +1242,11 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
 
     @Test func theRestMorphShrinksTheChipWithTheContent() {
         var stage = PillStage()
-        stage.record(.processing(afterHandsFree: false), choice: .engine(.geminiPro))
+        stage.record(.processing(afterHandsFree: false), choice: .cleanup)
         let morphing = stage.frame(for: .rest, choice: nil)
-        #expect(morphing.choice == .engine(.geminiPro) && morphing.morph == 1)
+        #expect(morphing.choice == .cleanup && morphing.morph == 1)
         stage.record(.rest, choice: nil)
-        #expect(stage.frame(for: .rest, choice: nil).choice == .engine(.geminiPro))
+        #expect(stage.frame(for: .rest, choice: nil).choice == .cleanup)
         stage.settle(stage.generation, visual: .rest)
         #expect(stage.frame(for: .rest, choice: nil).choice == nil)
     }

@@ -184,10 +184,11 @@ enum EngineReadiness: Equatable {
 
 // MARK: - Versions
 
-/// A History row's Versions menu: the transcripts the recording already has (`versions`, the current one checked)
-/// and what can still make another one (`actions`): each engine not used on it yet, and a clean-up of each Parakeet
-/// version by each clean-up model that hasn't tidied it yet. A model never runs twice on the same text. A failed or canceled dictation has
-/// no versions, and every engine retries it, its own included. Unavailable actions stay listed, disabled, with the
+/// A History row's Versions menu: the transcripts the recording already has (`versions`, the current one checked,
+/// retired models' included) and what can still make another one (`actions`): each offered engine not used on it
+/// yet, and a clean-up of each Parakeet version by each offered clean-up model that hasn't tidied it yet. A model
+/// never runs twice on the same text, and a retired one never runs. A failed or canceled dictation has no versions,
+/// and every offered engine retries it, its own included. Unavailable actions stay listed, disabled, with the
 /// reason; versions can always be switched to, even without the audio.
 struct VersionsMenu: Equatable {
     /// Why an action can't run right now.
@@ -220,7 +221,7 @@ struct VersionsMenu: Equatable {
         var isCurrent: Bool
 
         var id: TranscriptVersionKind { kind }
-        /// "Gemini 3.8 Flash", "Parakeet v3 + Clean-up by Flash Lite".
+        /// "Gemini 3.8 Flash", "Parakeet v3 + Clean-up by GPT-6 Luna".
         var title: String { kind.displayName }
         /// The menu item: `title`, then `summary` set off by an em space: "Gemini 3.8 Flash  76 s · $0.07".
         var itemTitle: String { summary.isEmpty ? title : "\(title)\u{2003}\(summary)" }
@@ -234,7 +235,7 @@ struct VersionsMenu: Equatable {
 
         var id: TranscriptVersionKind { kind }
         var isEnabled: Bool { blocker == nil }
-        /// "Gemini 3.1 Pro", "Clean Up with GPT-6 Luna", "Clean Up Parakeet v3 · Cloud with Gemini 3.5 Flash Lite".
+        /// "Gemini 3.8 Flash", "Clean Up with GPT-6 Luna", "Clean Up Parakeet v3 · Cloud with GPT-6 Luna".
         var name: String {
             switch kind {
             case .transcription(let engine): engine.displayName
@@ -242,7 +243,7 @@ struct VersionsMenu: Equatable {
                 namesSource ? "Clean Up \(source.displayName) with \(model.modelName)" : "Clean Up with \(model.modelName)"
             }
         }
-        /// `name`, with the reason when it can't run: "Gemini 3.1 Pro · Needs key".
+        /// `name`, with the reason when it can't run: "Gemini 3.8 Flash · Needs key".
         var title: String {
             blocker.map { "\(name) · \($0.label)" } ?? name
         }
@@ -254,9 +255,9 @@ struct VersionsMenu: Equatable {
     var title: String
     /// Oldest first.
     var versions: [Version]
-    /// Engines in `EngineID` order, then clean-ups: by source, each in `CleanupModel` order.
+    /// Engines in `EngineID.offered` order, then clean-ups: by source, each in `CleanupModel.offered` order.
     var actions: [Action]
-    /// What is running for the recording right now: "Transcribing with Gemini Flash…", "Cleaning up with Flash Lite…".
+    /// What is running for the recording right now: "Transcribing with Gemini Flash…", "Cleaning up with GPT-6 Luna…".
     var runningTitle: String?
 
     static let versionsSectionTitle = "Versions"
@@ -272,7 +273,7 @@ struct VersionsMenu: Equatable {
             Version(kind: $0.kind, summary: $0.metadata.summary, isCurrent: $0.kind == entry.currentKind)
         }
         let busy = running.map(Blocker.running)
-        var actions = EngineID.allCases.filter { isRetry || !entry.hasVersion(.transcription($0)) }.map { engine in
+        var actions = EngineID.offered.filter { isRetry || !entry.hasVersion(.transcription($0)) }.map { engine in
             let tooLong = engine.cloudAPI == .chatCompletions
                 && !OpenRouterClient.fitsOneChatRequest(duration: entry.audioDuration)
             let blocker = busy ?? (hasAudio ? nil : .recordingGone)
@@ -282,7 +283,7 @@ struct VersionsMenu: Equatable {
         if !isRetry {
             for version in entry.versions {
                 guard case .transcription(let source) = version.kind, CleanupModel.canClean(source) else { continue }
-                for model in CleanupModel.allCases where !entry.hasVersion(.cleanup(of: source, by: model)) {
+                for model in CleanupModel.offered where !entry.hasVersion(.cleanup(of: source, by: model)) {
                     let blocker = busy ?? (hasCleanupPrompt ? nil : .cleanupPromptEmpty)
                         ?? readiness(.geminiFlash).unavailableReason.map(Blocker.engine)
                     actions.append(Action(kind: .cleanup(of: source, by: model), blocker: blocker))

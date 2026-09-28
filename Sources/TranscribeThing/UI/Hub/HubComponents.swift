@@ -216,51 +216,6 @@ struct HubMenuPicker<Value: Hashable>: View {
     }
 }
 
-/// "Thinking  Low ⌃⌄": a menu of the reasoning levels a model supports and nothing else. Gemini has no None:
-/// every Gemini model here thinks at least a little (`ReasoningEffort`); only GPT-6 Luna as Clean-up offers it.
-/// Each level carries a one-line description.
-struct ThinkingPicker: View {
-    /// Least thinking first (`EngineID.reasoningEfforts`, `CleanupModel.reasoningEfforts`).
-    var efforts: [ReasoningEffort]
-    @Binding var selection: ReasoningEffort
-    /// "Gemini 3.8 Flash", for the tooltip and VoiceOver.
-    var modelName: String
-    /// "Thinking" before the level; off where the row's own title already says it.
-    var showsTitle = true
-
-    var body: some View {
-        Menu {
-            Picker(selection: $selection) {
-                ForEach(efforts) { effort in
-                    Text("\(effort.title)\u{2003}\(effort.detail)").tag(effort)
-                }
-            } label: {
-                EmptyView()
-            }
-            .pickerStyle(.inline)
-            .labelsHidden()
-        } label: {
-            HStack(spacing: 5) {
-                if showsTitle {
-                    Text("Thinking").foregroundStyle(.inkSecondary)
-                }
-                Text(selection.title)
-                    .fontWeight(showsTitle ? .semibold : nil)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.inkTertiary)
-            }
-        }
-        .menuStyle(.button)
-        .menuIndicator(.hidden)
-        .buttonStyle(SecondaryButtonStyle(size: .small))
-        .fixedSize()
-        .help("How long \(modelName) thinks before it answers. Lower is faster and cheaper.")
-        .accessibilityLabel("\(modelName) thinking")
-        .accessibilityValue(selection.title)
-    }
-}
-
 /// A monospaced prompt field on the sunken field color, with a placeholder while it's empty (Gemini's instructions,
 /// the clean-up prompt).
 struct PromptEditor: View {

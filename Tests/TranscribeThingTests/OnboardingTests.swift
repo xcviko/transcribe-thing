@@ -103,7 +103,7 @@ import Testing
     @Test func diskHeadroomIsTwentyFivePercent() throws {
         let needed = try #require(OnboardingGate.requiredDiskBytes(for: .parakeet))
         #expect(needed == Int64((Double(632_321_326) * 1.25).rounded(.up)))
-        #expect(OnboardingGate.requiredDiskBytes(for: .geminiPro) == nil)
+        #expect(OnboardingGate.requiredDiskBytes(for: .geminiFlash) == nil)
     }
 
     @Test func practiceReadinessOrder() {
@@ -120,7 +120,7 @@ import Testing
         #expect(eval(local: .downloading(DownloadProgress(fraction: 0.62))) == .downloading(.parakeet, 0.62))
         #expect(eval(local: .failed("x")) == .notDownloaded(.parakeet))
         #expect(eval(engine: .geminiFlash, key: .missing) == .needsKey(.geminiFlash))
-        #expect(eval(engine: .geminiPro, key: .valid(KeyInfo()), stored: true) == .ready)
+        #expect(eval(engine: .parakeetCloud, key: .valid(KeyInfo()), stored: true) == .ready)
         #expect(eval(local: .downloading(DownloadProgress(fraction: 0.1))).allowsPractice == false)
         #expect(eval(local: .installed).allowsPractice)
     }
@@ -609,9 +609,9 @@ import Testing
         let valid = KeyStatus.valid(KeyInfo(limitRemaining: 3))
         #expect(OnboardingGate.extraModelsUsable(enabled: [.engine(.geminiFlash)], keyStatus: valid, hasStoredKey: true))
         #expect(!OnboardingGate.extraModelsUsable(enabled: [], keyStatus: valid, hasStoredKey: true))
-        #expect(!OnboardingGate.extraModelsUsable(enabled: [.engine(.geminiPro)], keyStatus: .missing, hasStoredKey: false))
-        #expect(!OnboardingGate.extraModelsUsable(enabled: [.engine(.geminiPro)], keyStatus: .invalid("401"), hasStoredKey: true))
-        #expect(OnboardingGate.extraModelsUsable(enabled: [.engine(.geminiPro)], keyStatus: .offline, hasStoredKey: true))
+        #expect(!OnboardingGate.extraModelsUsable(enabled: [.cleanup], keyStatus: .missing, hasStoredKey: false))
+        #expect(!OnboardingGate.extraModelsUsable(enabled: [.engine(.geminiFlash)], keyStatus: .invalid("401"), hasStoredKey: true))
+        #expect(OnboardingGate.extraModelsUsable(enabled: [.engine(.geminiFlash)], keyStatus: .offline, hasStoredKey: true))
     }
 
     @Test func noteNamesTheActualSwitchModelBinding() {

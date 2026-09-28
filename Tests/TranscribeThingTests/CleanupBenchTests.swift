@@ -59,14 +59,14 @@ private func entry(minutesAgo: Double, status: TranscriptStatus = .success,
         #expect(options.route.budget == .off, "no thinking gets the smallest max_tokens")
         #expect(CleanupModel.maxTokens(forCharacterCount: 10, effort: .off)
                 == CleanupModel.maxTokens(forCharacterCount: 10, effort: .minimal))
-        #expect(options.route == CleanupModel.gpt6Luna.route(effort: .off), "what the app sends for Luna")
+        #expect(options.route == CleanupModel.gpt6Luna.route, "what the app sends for Luna")
         #expect(options.route.provider == .init(only: ["openai"], allowFallbacks: false))
     }
 
     @Test func pinsEachModelToItsOwnProviderUnlessToldOtherwise() throws {
         let gemini = try #require(Bench.Options(arguments("--model", "google/gemini-3.5-flash-lite", "--effort", "low")))
-        #expect(gemini.route == CleanupRoute(model: "google/gemini-3.5-flash-lite", effort: .low),
-                "exactly the app's own route")
+        #expect(gemini.route == CleanupRoute(model: "google/gemini-3.5-flash-lite", effort: .low, provider: .googleAIStudio),
+                "pinned to Google AI Studio like every Gemini request")
         #expect(gemini.count == 20 && gemini.out == nil)
         let azure = try #require(Bench.Options(arguments("--model", "openai/gpt-6-luna", "--effort", "none",
                                                          "--provider", "azure")))
@@ -105,7 +105,8 @@ private func entry(minutesAgo: Double, status: TranscriptStatus = .success,
             entry(minutesAgo: 1, [version(.transcription(.geminiFlash), "Only Gemini.")]),
             entry(minutesAgo: 2, [version(.transcription(.parakeet), "  newest  "),
                                   version(.transcription(.geminiFlash), "Newest."),
-                                  version(.cleanup(of: .parakeet), "Newest!", effort: .minimal)]),
+                                  version(.cleanup(of: .parakeet, by: .geminiFlashLite), "Newest!", effort: .minimal),
+                                  version(.cleanup(of: .parakeet, by: .gpt6Luna), "Newest, Luna.", effort: .off)]),
             entry(minutesAgo: 3, status: .failed, []),
             entry(minutesAgo: 4, [version(.transcription(.parakeet), "   ")]),
             entry(minutesAgo: 5, [version(.transcription(.parakeetCloud), "cloud parakeet")]),
@@ -146,7 +147,6 @@ private func entry(minutesAgo: Double, status: TranscriptStatus = .success,
     private func service(_ replies: [StubURLProtocol.Reply]) -> (TranscriptionService, String) {
         let settings = AppSettings.inMemory()
         settings.cleanupSystemPrompt = CleanupModel.examplePrompt
-        settings.cleanupReasoningEffort = .high  // the route's effort wins over the app's setting
         let (client, host) = StubURLProtocol.client(replies)
         let keychain = KeychainStore.inMemory([KeychainStore.openRouterAccount: "sk-or-v1-test"])
         let account = OpenRouterAccount(keychain: keychain, client: client, debounce: .zero)
@@ -202,15 +202,15 @@ private func entry(minutesAgo: Double, status: TranscriptStatus = .success,
         #expect(summary.providers == ["OpenAI"] && summary.serviceTiers == ["default", "flex"])
     }
 
-    @Test func theAppsOwnCleanupStillGoesToFlashLiteAtTheSetLevel() async throws {
-        let (service, host) = service([reply("Ok.", model: "google/gemini-3.5-flash-lite", provider: "Google AI Studio")])
+    @Test func theAppsOwnCleanupGoesToLunaWithoutThinking() async throws {
+        let (service, host) = service([reply("Ok.")])
         let result = try await service.cleanUp("ok", of: .parakeet)
-        #expect(result.reasoningEffort == .high)
+        #expect(result.reasoningEffort == .off)
         let body = try #require(JSONSerialization.jsonObject(with: StubURLProtocol.registry.bodies(for: host)[0])
             as? [String: Any])
-        #expect(body["model"] as? String == CleanupModel.geminiFlashLite.openRouterModelID)
-        #expect(body["reasoning"] as? [String: AnyHashable] == ["effort": "high", "exclude": true])
-        #expect(body["provider"] as? [String: AnyHashable] == ["only": ["google-ai-studio"], "allow_fallbacks": false])
-        #expect(body["max_tokens"] as? Int == CleanupModel.maxTokens(forCharacterCount: 2, effort: .high))
+        #expect(body["model"] as? String == CleanupModel.gpt6Luna.openRouterModelID)
+        #expect(body["reasoning"] as? [String: AnyHashable] == ["effort": "none", "exclude": true])
+        #expect(body["provider"] as? [String: AnyHashable] == ["only": ["openai"], "allow_fallbacks": false])
+        #expect(body["max_tokens"] as? Int == CleanupModel.maxTokens(forCharacterCount: 2, effort: .off))
     }
 }

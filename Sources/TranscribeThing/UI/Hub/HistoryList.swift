@@ -306,7 +306,7 @@ struct HistoryRow: View, Equatable {
     }
 }
 
-/// "Transcribing with Gemini Flash…" or "Cleaning up with Flash Lite…" under a row whose recording is being
+/// "Transcribing with Gemini Flash…" or "Cleaning up with GPT-6 Luna…" under a row whose recording is being
 /// worked on.
 private struct RunningLine: View {
     var kind: TranscriptVersionKind

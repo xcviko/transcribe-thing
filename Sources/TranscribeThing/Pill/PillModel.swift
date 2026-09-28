@@ -41,7 +41,7 @@ final class PillModel {
     /// Processing has run longer than `timing.slowProcessing`: the pill widens to say "Still transcribing…".
     private(set) var isProcessingSlow = false
 
-    /// What this dictation goes to past the main model alone (clean-up, Gemini Flash, Gemini Pro), set by the
+    /// What this dictation goes to past the main model alone (clean-up, Gemini Flash), set by the
     /// controller while it records and until its text lands; nil for the main model. The pill's tint shows it
     /// throughout; the chip only now and then (`showsChip`).
     var sessionModel: ModelChoice?

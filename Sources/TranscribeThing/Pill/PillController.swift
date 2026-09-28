@@ -327,8 +327,8 @@ final class PillController {
         guard let host, model.isPresented, model.visiblePhase == .locked, let chip = regions.chip else { return }
         let settings = model.settings
         let current = model.sessionModel ?? .engine(settings.selectedEngine)
-        let menu = Self.modelMenu(choices: model.menuChoices, current: current, main: settings.selectedEngine,
-                                  cleanup: settings.cleanupModel) { [weak model] choice in model?.onSelectModel?(choice) }
+        let menu = Self.modelMenu(choices: model.menuChoices, current: current,
+                                  main: settings.selectedEngine) { [weak model] choice in model?.onSelectModel?(choice) }
         // Canvas coordinates have a top-left origin; the menu's top-left goes where its bottom clears the chip.
         let top = chip.minY - 6 - menu.size.height
         let point = host.isFlipped ? CGPoint(x: chip.minX, y: top) : CGPoint(x: chip.minX, y: host.bounds.height - top)
@@ -338,7 +338,7 @@ final class PillController {
 
     /// One item per choice, titled like the chip with its symbol; `current` is checked. The main model and its
     /// clean-up come first, the extra models after a separator: those hear the audio themselves.
-    static func modelMenu(choices: [ModelChoice], current: ModelChoice, main: EngineID, cleanup: CleanupModel,
+    static func modelMenu(choices: [ModelChoice], current: ModelChoice, main: EngineID,
                           select: @escaping @MainActor (ModelChoice) -> Void) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
@@ -346,7 +346,7 @@ final class PillController {
             if index > 0, choice.switchEngine != nil, choices[index - 1].switchEngine == nil {
                 menu.addItem(.separator())
             }
-            let item = MenuActionItem(title: choice.title(main: main, cleanup: cleanup)) { select(choice) }
+            let item = MenuActionItem(title: choice.title(main: main)) { select(choice) }
             item.state = choice == current ? .on : .off
             let image = NSImage(systemSymbolName: choice.symbolName, accessibilityDescription: nil)
             image?.isTemplate = true

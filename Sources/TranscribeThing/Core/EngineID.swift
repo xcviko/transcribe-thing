@@ -1,25 +1,34 @@
 import Foundation
 
-/// The transcription engines transcribe-thing offers. Raw values are persisted (settings, history), never rename
+/// The transcription engines transcribe-thing knows. Raw values are persisted (settings, history), never rename
 /// them. Declaration order is display order: the local model, then cloud speech-to-text, then Gemini.
 enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
+    /// `geminiPro` is retired (`isRetired`).
     case parakeet, parakeetCloud, geminiFlash, geminiPro
 
     var id: String { rawValue }
 
     static let `default`: EngineID = .parakeet
 
-    static var localEngines: [EngineID] { allCases.filter(\.isLocal) }
-    static var cloudEngines: [EngineID] { allCases.filter { !$0.isLocal } }
+    /// A model this build no longer offers or runs: Gemini 3.1 Pro. Its case stays so History keeps reading, naming
+    /// and drawing the transcripts it wrote.
+    var isRetired: Bool { self == .geminiPro }
+
+    /// Every engine this build offers and runs, in display order. Every list of models to pick, switch to, fall
+    /// back to or transcribe with comes from here, never from `allCases`.
+    static var offered: [EngineID] { allCases.filter { !$0.isRetired } }
+
+    static var localEngines: [EngineID] { offered.filter(\.isLocal) }
+    static var cloudEngines: [EngineID] { offered.filter { !$0.isLocal } }
     /// Parakeet served through OpenRouter's speech-to-text endpoint.
-    static var cloudTranscriptionEngines: [EngineID] { allCases.filter { $0.cloudAPI == .transcriptions } }
+    static var cloudTranscriptionEngines: [EngineID] { offered.filter { $0.cloudAPI == .transcriptions } }
     /// Gemini through chat completions.
-    static var cloudChatEngines: [EngineID] { allCases.filter { $0.cloudAPI == .chatCompletions } }
+    static var cloudChatEngines: [EngineID] { offered.filter { $0.cloudAPI == .chatCompletions } }
     /// What Settings can select as the main model, the one every dictation starts with.
-    static var mainCandidates: [EngineID] { allCases.filter { !$0.isSwitchModel } }
+    static var mainCandidates: [EngineID] { offered.filter { !$0.isSwitchModel } }
     /// The extra models, in the order the Switch model shortcut steps through them: picked per dictation from the
     /// pill, never selected in Settings.
-    static var switchCandidates: [EngineID] { allCases.filter(\.isSwitchModel) }
+    static var switchCandidates: [EngineID] { offered.filter(\.isSwitchModel) }
 
     /// Which OpenRouter endpoint a cloud engine uses. Routing code switches on this, never on specific cases.
     enum CloudAPI: Sendable, Equatable {

@@ -1,16 +1,14 @@
 import Foundation
 
 /// How long a model thinks before it answers: OpenRouter's `reasoning.effort`. Gemini gets it as `thinkingLevel`
-/// one to one (minimal → minimal … high → high). Raw values go on the wire and are persisted. `off` ("none") is
-/// only for a model that can skip thinking (GPT-6 Luna as Clean-up): every Gemini model here has mandatory
-/// thinking, and OpenRouter says such a model rejects `effort: "none"`, so no Gemini lists it. Declaration order
-/// is from least to most thinking.
-enum ReasoningEffort: String, Codable, CaseIterable, Identifiable, Comparable, Sendable {
+/// one to one (minimal → minimal … high → high). Raw values go on the wire and are persisted (a history version
+/// records the level it was asked for). Each model thinks at one fixed level (`EngineID.reasoningEffort`,
+/// `CleanupModel.reasoningEffort`); `off` ("none") is for a model that can skip thinking (GPT-6 Luna as Clean-up).
+/// Declaration order is from least to most thinking.
+enum ReasoningEffort: String, Codable, CaseIterable, Sendable {
     /// Sent as "none". Not named `none`, which would read as `Optional.none` wherever a level is optional.
     case off = "none"
     case minimal, low, medium, high
-
-    var id: String { rawValue }
 
     var title: String {
         switch self {
@@ -21,71 +19,40 @@ enum ReasoningEffort: String, Codable, CaseIterable, Identifiable, Comparable, S
         case .high: "High"
         }
     }
-
-    /// One line for a picker, after Google's own descriptions of the levels.
-    var detail: String {
-        switch self {
-        case .off: "Doesn’t think · fastest and cheapest"
-        case .minimal: "Barely thinks · fastest and cheapest"
-        case .low: "Thinks briefly · fast"
-        case .medium: "Balanced"
-        case .high: "Thinks longest · slowest, most careful"
-        }
-    }
-
-    static func < (lhs: ReasoningEffort, rhs: ReasoningEffort) -> Bool {
-        allCases.firstIndex(of: lhs)! < allCases.firstIndex(of: rhs)!
-    }
-
-    /// The level in `supported` closest to this one; a tie goes to the higher level, as OpenRouter maps an
-    /// unsupported effort ("minimal" on a model without it becomes "low"). `self` when `supported` is empty.
-    func nearest(in supported: [ReasoningEffort]) -> ReasoningEffort {
-        guard !supported.contains(self), !supported.isEmpty else { return self }
-        let index = Self.allCases.firstIndex(of: self)!
-        return supported.min { a, b in
-            let da = abs(Self.allCases.firstIndex(of: a)! - index), db = abs(Self.allCases.firstIndex(of: b)! - index)
-            return da != db ? da < db : a > b
-        }!
-    }
 }
 
 extension EngineID {
-    /// The reasoning levels this model accepts, from OpenRouter's models API (`reasoning.supported_efforts`,
-    /// 2026-09-28): Gemini 3.8 Flash and 3.1 Pro take low, medium and high, and can't turn thinking off. Empty for
-    /// models that don't reason.
-    var reasoningEfforts: [ReasoningEffort] {
+    /// The level the model thinks at, fixed: Gemini 3.8 Flash at medium (it can't turn thinking off; at high it
+    /// thought for about 18k tokens, 76 s, on a 1:48 recording). nil for models that don't reason, and for a retired
+    /// one, which never runs.
+    var reasoningEffort: ReasoningEffort? {
         switch self {
-        case .parakeet, .parakeetCloud: []
-        case .geminiFlash, .geminiPro: [.low, .medium, .high]
-        }
-    }
-
-    /// Flash thinks little by default: at high it thought for about 18k tokens (76 s) on a 1:48 recording. Pro
-    /// keeps high, what every Gemini request used to send. nil for models that don't reason.
-    var defaultReasoningEffort: ReasoningEffort? {
-        switch self {
-        case .parakeet, .parakeetCloud: nil
-        case .geminiFlash: .low
-        case .geminiPro: .high
+        case .geminiFlash: .medium
+        case .parakeet, .parakeetCloud, .geminiPro: nil
         }
     }
 }
 
 /// The models that clean up Parakeet transcripts, text to text: punctuation, filler words, false starts. Not
 /// `EngineID`s: they never hear audio, so they stay out of the main-model list, Switch model and every list of
-/// engines a recording can go to. Settings picks one (`AppSettings.cleanupModel`), and each keeps its own
-/// reasoning level; both follow the same clean-up prompt. Raw values are persisted (settings, history version
-/// kinds): never rename them. Declaration order is display order.
-enum CleanupModel: String, CaseIterable, Identifiable, Codable, Sendable {
-    /// Gemini 3.5 Flash Lite on Google AI Studio: what Clean-up always used, and still the default.
+/// engines a recording can go to. GPT-6 Luna is the one that runs (`default`); Gemini 3.5 Flash Lite is retired,
+/// kept so History reads and names its clean-ups. Raw values are persisted (history version kinds): never rename
+/// them.
+enum CleanupModel: String, CaseIterable, Codable, Sendable {
+    /// Gemini 3.5 Flash Lite on Google AI Studio: what Clean-up used first. Retired (`isRetired`).
     case geminiFlashLite
-    /// GPT-6 Luna on OpenAI with thinking off: about as fast (1.1 s median in the bench), about 3.5 times cheaper,
-    /// better at spelling English terms, and more willing to rewrite.
+    /// GPT-6 Luna on OpenAI with thinking off: about as fast as Flash Lite (1.1 s median in the bench), about 3.5
+    /// times cheaper, and better at spelling English terms.
     case gpt6Luna
 
-    static let `default`: CleanupModel = .geminiFlashLite
+    /// The model every clean-up goes to, from a dictation or from History.
+    static let `default`: CleanupModel = .gpt6Luna
 
-    var id: String { rawValue }
+    /// A model this build no longer runs: Gemini 3.5 Flash Lite. History still reads and names its clean-ups.
+    var isRetired: Bool { self == .geminiFlashLite }
+
+    /// Every clean-up model this build runs. Lists of clean-ups to make come from here, never from `allCases`.
+    static var offered: [CleanupModel] { allCases.filter { !$0.isRetired } }
 
     var openRouterModelID: String {
         switch self {
@@ -102,19 +69,11 @@ enum CleanupModel: String, CaseIterable, Identifiable, Codable, Sendable {
         }
     }
 
-    /// For sentences: "Flash Lite took too long.", "Cleaning up with GPT-6 Luna…".
+    /// For sentences: "GPT-6 Luna took too long.", "Parakeet v3 + Clean-up by Flash Lite".
     var shortName: String {
         switch self {
         case .geminiFlashLite: "Flash Lite"
         case .gpt6Luna: "GPT-6 Luna"
-        }
-    }
-
-    /// One line under the name on the Models page.
-    var summary: String {
-        switch self {
-        case .geminiFlashLite: "Tidies punctuation, fillers and false starts · reads text, not audio"
-        case .gpt6Luna: "Cheaper, better with English terms · may rewrite a little more"
         }
     }
 
@@ -134,26 +93,21 @@ enum CleanupModel: String, CaseIterable, Identifiable, Codable, Sendable {
         }
     }
 
-    /// The levels offered, from OpenRouter's `supported_efforts` (2026-09-28). Flash Lite: minimal to high, no
-    /// "none" (thinking is mandatory). Luna takes none to max; xhigh and max are left out, far too slow for a
-    /// clean-up that holds up a paste.
-    var reasoningEfforts: [ReasoningEffort] {
+    /// The level the model thinks at, fixed: GPT-6 Luna doesn't think ("none"), plenty for tidying. nil for a
+    /// retired model, which never runs.
+    var reasoningEffort: ReasoningEffort? {
         switch self {
-        case .geminiFlashLite: [.minimal, .low, .medium, .high]
-        case .gpt6Luna: [.off, .low, .medium, .high]
-        }
-    }
-
-    var defaultReasoningEffort: ReasoningEffort {
-        switch self {
-        case .geminiFlashLite: .low
         case .gpt6Luna: .off
+        case .geminiFlashLite: nil
         }
     }
 
-    /// The request for this model at `effort` (moved to the nearest level it offers).
+    /// The request: the model on its provider at its fixed level. nil for a retired model, which never runs.
+    var route: CleanupRoute? { reasoningEffort.map(route(effort:)) }
+
+    /// The request at another level (`EngineCLI --clean-up-effort`).
     func route(effort: ReasoningEffort) -> CleanupRoute {
-        CleanupRoute(model: openRouterModelID, effort: effort.nearest(in: reasoningEfforts), provider: provider)
+        CleanupRoute(model: openRouterModelID, effort: effort, provider: provider)
     }
 
     /// Only transcripts from the main models (Parakeet on this Mac or through OpenRouter) are cleaned up: Gemini

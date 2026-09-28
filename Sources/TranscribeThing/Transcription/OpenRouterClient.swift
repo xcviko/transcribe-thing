@@ -92,7 +92,7 @@ final class OpenRouterClient: Sendable {
     }
 
     static func engine(forModel model: String) -> EngineID {
-        EngineID.allCases.first { $0.openRouterModelID == model } ?? .geminiFlash
+        EngineID.offered.first { $0.openRouterModelID == model } ?? .geminiFlash
     }
 
     // MARK: Transcribe

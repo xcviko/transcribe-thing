@@ -838,7 +838,7 @@ final class FakeRecorder: DictationRecorder {
         let expected = try #require(preflight.toasts.notices.first)
         #expect(preflight.pill.visiblePhase == .error)
 
-        for engine in [EngineID.parakeet, .parakeetCloud, .geminiFlash, .geminiPro] {
+        for engine in EngineID.offered {
             let h = Self.make(keyStatus: .valid(KeyInfo()))
             h.settings.pillMode = .never
             h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "  \n", engine: engine, processingTime: 0.1) }
@@ -977,10 +977,13 @@ final class FakeRecorder: DictationRecorder {
     }
 
     @Test func fallbacksPairParakeetOnThisMacWithParakeetInTheCloud() {
-        #expect(DictationController.fallbackCandidates(for: .parakeet) == [.parakeetCloud])
-        #expect(DictationController.fallbackCandidates(for: .parakeetCloud) == [.parakeet])
-        #expect(DictationController.fallbackCandidates(for: .geminiFlash) == [.parakeet, .parakeetCloud])
-        #expect(DictationController.fallbackCandidates(for: .geminiPro) == [.parakeet, .parakeetCloud])
+        for main in EngineID.mainCandidates {
+            #expect(DictationController.fallbackCandidates(for: .parakeet, main: main) == [.parakeetCloud])
+            #expect(DictationController.fallbackCandidates(for: .parakeetCloud, main: main) == [.parakeet])
+        }
+        #expect(DictationController.fallbackCandidates(for: .geminiFlash, main: .parakeet) == [.parakeet, .parakeetCloud],
+                "Gemini falls back to the main model first")
+        #expect(DictationController.fallbackCandidates(for: .geminiFlash, main: .parakeetCloud) == [.parakeetCloud, .parakeet])
     }
 
     @Test func aFailedLocalDictationOffersParakeetInTheCloudOnlyWithAWorkingKey() async throws {
@@ -995,9 +998,10 @@ final class FakeRecorder: DictationRecorder {
         }
     }
 
-    @Test func aFailedGeminiDictationFallsBackToParakeetHereThenInTheCloud() async throws {
-        func fallback(local: LocalModelState, error: AppError) async throws -> EngineID? {
+    @Test func aFailedGeminiDictationFallsBackToTheMainModel() async throws {
+        func fallback(main: EngineID = .parakeet, local: LocalModelState, error: AppError) async throws -> EngineID? {
             let h = Self.make(models: [.parakeet: local], keyStatus: .valid(KeyInfo()))
+            h.settings.selectedEngine = main
             h.controller.transcribeOverride = { _, _ in throw error }
             let r = Self.recording()
             h.controller.enqueue(r, engine: .geminiFlash, delivery: .paste(targetPID: nil))
@@ -1006,13 +1010,71 @@ final class FakeRecorder: DictationRecorder {
             return notice.actions.lazy.compactMap { if case .retryWith(let e) = $0.kind { e } else { nil } }.first
         }
         let limited = AppError.openRouterRateLimited(retryAfter: nil)
-        #expect(try await fallback(local: .ready, error: limited) == .parakeet, "loaded on this Mac comes first")
-        #expect(try await fallback(local: .notInstalled, error: limited) == .parakeetCloud)
-        #expect(try await fallback(local: .installed, error: limited) == .parakeetCloud,
-                "a model that still has to load waits behind a key that works now")
+        #expect(try await fallback(local: .ready, error: limited) == .parakeet, "the main model, loaded")
+        #expect(try await fallback(local: .installed, error: limited) == .parakeet,
+                "the main model on this Mac loads for the retry: it comes before a key that works now")
+        #expect(try await fallback(local: .preparing(since: .distantPast), error: limited) == .parakeet)
+        #expect(try await fallback(local: .notInstalled, error: limited) == .parakeetCloud, "the main model can't run")
+        #expect(try await fallback(local: .failed("x"), error: limited) == .parakeetCloud)
         #expect(try await fallback(local: .notInstalled, error: .openRouterNoCredits("")) == nil,
                 "no credit stops every cloud model")
         #expect(try await fallback(local: .installed, error: .offline) == .parakeet)
+        // Parakeet · Cloud as the main model comes first; Parakeet on this Mac only when the cloud can't run.
+        #expect(try await fallback(main: .parakeetCloud, local: .ready, error: limited) == .parakeetCloud)
+        #expect(try await fallback(main: .parakeetCloud, local: .installed, error: .offline) == .parakeet)
+    }
+
+    /// "Gemini Flash is taking longer than usual" offers the main model: Parakeet on this Mac while it's the main
+    /// one, even before it's loaded (it loads for the retry), and Parakeet · Cloud while that's the main one.
+    @Test func theSlowGeminiNoticeOffersTheMainModel() async throws {
+        func offered(main: EngineID, local: LocalModelState) async throws -> [NoticeActionKind] {
+            let h = Self.make(models: [.parakeet: local], keyStatus: .valid(KeyInfo()))
+            h.settings.selectedEngine = main
+            h.controller.slowNoticeDelayOverride = 0.05
+            h.controller.transcribeOverride = { _, engine in
+                try await Task.sleep(for: .seconds(5))
+                return TranscriptResult(text: "late", engine: engine, processingTime: 5)
+            }
+            h.controller.insertOverride = { _, _ in Issue.record("canceled, never pasted"); return .pasted }
+            let r = Self.recording()
+            h.controller.enqueue(r, engine: .geminiFlash, delivery: .paste(targetPID: nil))
+            try await waitUntil { h.toasts.notices.contains { $0.dedupeKey == "slow.\(r.id)" } }
+            let slow = try #require(h.toasts.notices.first { $0.dedupeKey == "slow.\(r.id)" })
+            #expect(slow.title == "Gemini Flash is taking longer than usual")
+            h.controller.handle(.cancel)
+            #expect(h.controller.machine.activeJobs == 0)
+            return slow.actions.map(\.kind)
+        }
+        #expect(try await offered(main: .parakeet, local: .installed) == [.retryWith(.parakeet)],
+                "downloaded but not loaded: it loads for the retry")
+        #expect(try await offered(main: .parakeet, local: .ready) == [.retryWith(.parakeet)])
+        #expect(try await offered(main: .parakeet, local: .notInstalled) == [.retryWith(.parakeetCloud)],
+                "the main model can't run")
+        #expect(try await offered(main: .parakeetCloud, local: .ready) == [.retryWith(.parakeetCloud)])
+    }
+
+    @Test func useParakeetInsteadRunsTheSlowGeminiDictationOnTheMainModel() async throws {
+        let h = Self.make(models: [.parakeet: .installed], keyStatus: .valid(KeyInfo()))
+        h.controller.slowNoticeDelayOverride = 0.05
+        var runs: [EngineID] = []
+        h.controller.transcribeOverride = { _, engine in
+            runs.append(engine)
+            if engine == .geminiFlash { try await Task.sleep(for: .seconds(5)) }
+            return TranscriptResult(text: "by \(engine.rawValue)", engine: engine, processingTime: 0.2)
+        }
+        var pasted: [String] = []
+        h.controller.insertOverride = { text, _ in pasted.append(text); return .pasted }
+        let r = Self.recording()
+        h.controller.enqueue(r, engine: .geminiFlash, delivery: .paste(targetPID: nil))
+        try await waitUntil { h.toasts.notices.contains { $0.dedupeKey == "slow.\(r.id)" } }
+        let slow = try #require(h.toasts.notices.first { $0.dedupeKey == "slow.\(r.id)" })
+        let use = try #require(slow.actions.first)
+        #expect(use.title == "Use Parakeet v3 Instead")
+        h.controller.perform(use, from: slow)
+        try await waitUntil { h.controller.machine.activeJobs == 0 && !pasted.isEmpty }
+        #expect(runs == [.geminiFlash, .parakeet])
+        #expect(pasted == ["by parakeet"])
+        #expect(h.history.entry(id: r.id)?.engine == .parakeet)
     }
 
     @Test func refusalWhileArmingStaysSilentForFnCombos() {

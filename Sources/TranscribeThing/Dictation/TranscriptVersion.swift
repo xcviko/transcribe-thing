@@ -2,12 +2,12 @@ import Foundation
 
 /// What wrote a transcript of a recording: an engine hearing the audio, or a clean-up model tidying the text an
 /// engine wrote. An entry has at most one version of each kind, so the same model never runs twice on a recording
-/// (each clean-up model can tidy the same text once).
+/// (each clean-up model can tidy the same text once). Kinds by retired models (Gemini 3.1 Pro, Flash Lite's
+/// clean-ups) are read and named like any other; nothing makes new ones.
 enum TranscriptVersionKind: Hashable, Sendable, Codable {
     case transcription(EngineID)
-    /// `model` over the text of `.transcription(engine)`. Versions from before the choice of clean-up model are
-    /// Flash Lite's, hence the default.
-    case cleanup(of: EngineID, by: CleanupModel = .geminiFlashLite)
+    /// `model` over the text of `.transcription(engine)`.
+    case cleanup(of: EngineID, by: CleanupModel)
 
     /// The engine that heard the audio (for a clean-up, the one whose text was tidied).
     var engine: EngineID {
@@ -47,7 +47,7 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
         }
     }
 
-    /// What is under way while it's being made: "Transcribing with Gemini Flash…", "Cleaning up with Flash Lite…".
+    /// What is under way while it's being made: "Transcribing with Gemini Flash…", "Cleaning up with GPT-6 Luna…".
     var progressTitle: String {
         switch self {
         case .transcription(let engine): "Transcribing with \(engine.shortName)…"
@@ -55,8 +55,8 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
         }
     }
 
-    /// Persisted: "parakeet", "cleanup:parakeet" (Flash Lite's, as older builds wrote it),
-    /// "cleanup:parakeet:gpt6Luna". Never rename. An older build can't read a kind with a model and drops that
+    /// Persisted: "parakeet", "cleanup:parakeet" (Flash Lite's: the form from before the choice of clean-up model,
+    /// which older builds read), "cleanup:parakeet:gpt6Luna". Never rename. An older build can't read a kind with a model and drops that
     /// version, not the entry (`TranscriptEntry.encode(to:)` keeps the text it tidied intact for them).
     var rawValue: String {
         switch self {

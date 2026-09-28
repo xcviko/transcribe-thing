@@ -62,7 +62,7 @@ enum PreviewFixtures {
 
     /// Newest first, spread across the past week, English, Russian and German, incl. one failed and one canceled
     /// entry, cloud transcripts that record who served them, today's audio kept for Transcribe Again, one
-    /// transcript already transcribed again with Gemini and one cleaned up by Flash Lite.
+    /// transcript already transcribed again with Gemini and one cleaned up by GPT-6 Luna.
     static func history(now: Date = Date()) -> [TranscriptEntry] {
         func ago(_ minutes: Double) -> Date { now.addingTimeInterval(-minutes * 60) }
         return [
@@ -87,28 +87,28 @@ enum PreviewFixtures {
                         text: "Привет, созвонимся завтра в десять утра. Я пришлю ссылку на встречу и короткую повестку, если что-то поменяется, напиши.",
                         metadata: TranscriptMetadata(
                             createdAt: ago(50), modelID: "google/gemini-3.8-flash", provider: "Google AI Studio",
-                            generationID: "gen-preview-1", reasoningEffort: .low,
+                            generationID: "gen-preview-1", reasoningEffort: .medium,
                             usage: TokenUsage(promptTokens: 330, audioTokens: 314, completionTokens: 612, reasoningTokens: 540),
                             costUSD: 0.0021, processingTime: 2.6, generationTime: 2.2, usedSystemPrompt: false,
                             finishReason: "stop")),
                 ]),
             TranscriptEntry(
                 createdAt: ago(135),
-                text: "", engine: .geminiPro, status: .failed, audioDuration: 23.4, voicedSeconds: 19.8,
-                errorMessage: "Gemini took too long", audioFileName: "preview-failed.wav"),
+                text: "", engine: .geminiFlash, status: .failed, audioDuration: 23.4, voicedSeconds: 19.8,
+                errorMessage: "Gemini Flash took too long", audioFileName: "preview-failed.wav"),
             TranscriptEntry(
                 createdAt: ago(60 * 26), engine: .parakeet, audioDuration: 10.1, voicedSeconds: 8.9,
                 versions: [
                     TranscriptVersion(text: "Quick note for the release, um, the pill should should collapse a little faster than it, uh, expands and the error toast needs the retry button first.",
                                       engine: .parakeet, processingTime: 0.37, createdAt: ago(60 * 26)),
                     TranscriptVersion(
-                        kind: .cleanup(of: .parakeet),
+                        kind: .cleanup(of: .parakeet, by: .gpt6Luna),
                         text: "Quick note for the release: the pill should collapse a little faster than it expands, and the error toast needs the retry button first.",
                         metadata: TranscriptMetadata(
-                            createdAt: ago(60 * 26), modelID: CleanupModel.geminiFlashLite.openRouterModelID, provider: "Google AI Studio",
-                            generationID: "gen-preview-2", reasoningEffort: .low,
-                            usage: TokenUsage(promptTokens: 410, completionTokens: 198, reasoningTokens: 164),
-                            costUSD: 0.00054, processingTime: 1.4, generationTime: 1.1, usedSystemPrompt: true,
+                            createdAt: ago(60 * 26), modelID: CleanupModel.gpt6Luna.openRouterModelID, provider: "OpenAI",
+                            generationID: "gen-preview-2", reasoningEffort: .off,
+                            usage: TokenUsage(promptTokens: 410, completionTokens: 34),
+                            costUSD: 0.00006, processingTime: 1.1, generationTime: 0.9, usedSystemPrompt: true,
                             finishReason: "stop")),
                 ]),
             TranscriptEntry(
@@ -123,7 +123,7 @@ enum PreviewFixtures {
             TranscriptEntry(
                 createdAt: ago(60 * 24 * 3 + 40),
                 text: "Hi Maya, thanks for the thoughtful feedback on the proposal. I agree the timeline is tight, so I suggest we cut the export feature from the first milestone and focus on getting dictation rock solid. Happy to talk it through on Friday.",
-                engine: .geminiPro, audioDuration: 17.9, voicedSeconds: 15.4, processingTime: 6.8, costUSD: 0.0094),
+                engine: .geminiFlash, audioDuration: 17.9, voicedSeconds: 15.4, processingTime: 4.1, costUSD: 0.0031),
             TranscriptEntry(
                 createdAt: ago(60 * 24 * 4 + 15),
                 text: "", engine: .parakeet, status: .cancelled, audioDuration: 4.2, voicedSeconds: 3.1,

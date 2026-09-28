@@ -83,14 +83,13 @@ enum PillPalette {
     static let error = Color(nsColor: .hex(0xFF6B5E))
     static let tooltipFill = Color(nsColor: .hex(0x151517, alpha: 0.96))
 
-    /// A choice's color: Gemini Flash violet, Gemini Pro pink, and clean-up warm, like its wand in Settings: a pass
-    /// over the main model's words, set apart from the models that hear the audio. The main model keeps the plain pill.
+    /// A choice's color: Gemini Flash violet, and clean-up warm, like its wand in Settings: a pass over the main
+    /// model's words, set apart from the models that hear the audio. The main model keeps the plain pill.
     static func accent(for choice: ModelChoice?) -> PillAccent? {
         switch choice {
         case .cleanup: PillAccent(ringHex: 0xE58A5F, markHex: 0xFFB896)
         case .engine(.geminiFlash): PillAccent(ringHex: 0x7F77DD, markHex: 0xAFA9EC)
-        case .engine(.geminiPro): PillAccent(ringHex: 0xD4537E, markHex: 0xED93B1)
-        case .engine(.parakeet), .engine(.parakeetCloud), nil: nil
+        case .engine(.parakeet), .engine(.parakeetCloud), .engine(.geminiPro), nil: nil
         }
     }
 }
@@ -314,7 +313,7 @@ struct PillView: View {
         case .message(let text): text
         }
         guard let choice, visual.carriesModel else { return label }
-        return "\(label) with \(choice.title(main: model.settings.selectedEngine, cleanup: model.settings.cleanupModel))"
+        return "\(label) with \(choice.title(main: model.settings.selectedEngine))"
     }
 }
 
@@ -938,7 +937,7 @@ private struct PillModelChip: View {
                         .font(.system(size: 7.5, weight: .bold))
                         .foregroundStyle(.white.opacity(0.35))
                     symbol(accent: accent)
-                    Text(settings.cleanupModel.modelName)
+                    Text(CleanupModel.default.modelName)
                         .foregroundStyle(.white.opacity(0.92))
                 case .engine(let engine):
                     symbol(accent: accent)
@@ -957,7 +956,7 @@ private struct PillModelChip: View {
         .onChange(of: isInteractive) { _, interactive in if !interactive { regions?.setChip(nil) } }
         .onDisappear { regions?.setChip(nil) }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Model: \(choice.title(main: settings.selectedEngine, cleanup: settings.cleanupModel))")
+        .accessibilityLabel("Model: \(choice.title(main: settings.selectedEngine))")
         .accessibilityAddTraits(isInteractive ? .isButton : [])
     }
 
@@ -1011,15 +1010,15 @@ struct PillSwitchHint: View {
     let model: PillModel
 
     /// The one choice by name; with several, what they share, or both kinds.
-    static func label(for choices: [ModelChoice], cleanup: CleanupModel) -> String {
+    static func label(for choices: [ModelChoice]) -> String {
         if choices.count == 1, let choice = choices.first {
-            return choice == .cleanup ? "\(cleanup.shortName) clean-up" : choice.title(main: .parakeet, cleanup: cleanup)
+            return choice == .cleanup ? "\(CleanupModel.default.shortName) clean-up" : choice.title(main: .parakeet)
         }
         return choices.contains(.cleanup) ? "Clean-up, Gemini" : "Gemini"
     }
 
     private var label: String {
-        Self.label(for: model.settings.switchChoices, cleanup: model.settings.cleanupModel)
+        Self.label(for: model.settings.switchChoices)
     }
 
     var body: some View {

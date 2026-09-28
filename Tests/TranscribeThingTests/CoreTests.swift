@@ -582,7 +582,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
                       .openRouterNoCredits(""), .openRouterKeyLimit(""), .offline] {
             #expect(error.stopsEveryCloudModel, "\(error.code)")
         }
-        for error in [AppError.openRouterRateLimited(retryAfter: nil), .openRouterNoRoute(""), .timeout(.geminiPro),
+        for error in [AppError.openRouterRateLimited(retryAfter: nil), .openRouterNoRoute(""), .timeout(.geminiFlash),
                       .openRouterProviderUnavailable(""), .recordingTooLarge, .modelNotDownloaded(.parakeet)] {
             #expect(!error.stopsEveryCloudModel, "\(error.code)")
         }
@@ -704,7 +704,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         #expect(settings.shortcuts == .defaults)
 
         settings.selectedEngine = .parakeetCloud
-        settings.switchEngines = [.geminiPro]
+        settings.switchEngines = []
         settings.switchHintShownCount = 2
         settings.pillMode = .always
         settings.microphoneUID = "usb-mic"
@@ -716,7 +716,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
 
         let reloaded = AppSettings(defaults: defaults)
         #expect(reloaded.selectedEngine == .parakeetCloud)
-        #expect(reloaded.switchEngines == [.geminiPro])
+        #expect(reloaded.switchEngines.isEmpty)
         #expect(reloaded.switchHintShownCount == 2)
         #expect(reloaded.pillMode == .always)
         #expect(reloaded.microphoneUID == "usb-mic")
@@ -771,7 +771,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         let settings = AppSettings(defaults: defaults)
         #expect(settings.selectedEngine == .parakeet)
         #expect(defaults.string(forKey: SettingsKey.selectedEngine.defaultsKey) == EngineID.parakeet.rawValue)
-        #expect(settings.switchEngines == [.geminiFlash, .geminiPro], "both extra models take part by default")
+        #expect(settings.switchEngines == [.geminiFlash], "the extra model takes part by default")
     }
 
     @Test func onlyAMainModelCanBeSelected() {
@@ -780,8 +780,8 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         settings.selectedEngine = .geminiFlash
         #expect(settings.selectedEngine == .parakeet)
         #expect(EngineID.mainCandidates == [.parakeet, .parakeetCloud])
-        #expect(EngineID.switchCandidates == [.geminiFlash, .geminiPro])
-        #expect(EngineID.allCases.filter(\.isSwitchModel) == EngineID.switchCandidates)
+        #expect(EngineID.switchCandidates == [.geminiFlash])
+        #expect(EngineID.offered.filter(\.isSwitchModel) == EngineID.switchCandidates)
     }
 
     @Test func switchEnginesKeepExtraModelsInCycleOrder() throws {
@@ -792,12 +792,13 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
             try? FileManager.default.removeItem(atPath: suite + ".plist")
         }
         let settings = AppSettings(defaults: defaults)
-        settings.switchEngines = [.geminiPro, .parakeet, .geminiFlash, .geminiPro]
-        #expect(settings.switchEngines == [.geminiFlash, .geminiPro])
+        settings.switchEngines = [.geminiPro, .parakeet, .geminiFlash, .geminiFlash]
+        #expect(settings.switchEngines == [.geminiFlash], "extra models this build offers, each once")
         settings.switchEngines = []
         #expect(AppSettings(defaults: defaults).switchEngines.isEmpty, "none taking part is remembered too")
-        defaults.set(try JSONEncoder().encode(["geminiPro", "someFutureEngine"]), forKey: SettingsKey.switchEngines.defaultsKey)
-        #expect(AppSettings(defaults: defaults).switchEngines == [.geminiPro])
+        defaults.set(try JSONEncoder().encode(["geminiPro", "geminiFlash", "someFutureEngine"]),
+                     forKey: SettingsKey.switchEngines.defaultsKey)
+        #expect(AppSettings(defaults: defaults).switchEngines == [.geminiFlash])
     }
 
     /// The removed volume slider: left at zero it meant no sounds; any other level now plays at full volume.

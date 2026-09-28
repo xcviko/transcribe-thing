@@ -22,21 +22,44 @@ import Testing
             usage: TokenUsage(completionTokens: 18_000, reasoningTokens: 17_700), costUSD: 0.07, processingTime: 76)))
         let items = menu(entry).versions.map(\.itemTitle)
         #expect(items == ["Parakeet v3\u{2003}0.4 s", "Gemini 3.8 Flash\u{2003}76 s · $0.07 · 17.7k thinking"])
-        let bare = VersionsMenu.Version(kind: .cleanup(of: .parakeet), summary: "", isCurrent: false)
-        #expect(bare.itemTitle == "Parakeet v3 + Clean-up by Flash Lite")
+        let bare = VersionsMenu.Version(kind: .cleanup(of: .parakeet, by: .gpt6Luna), summary: "", isCurrent: false)
+        #expect(bare.itemTitle == "Parakeet v3 + Clean-up by GPT-6 Luna")
     }
 
     @Test func oneTextToCleanUpNamesOnlyTheModelTwoNameTheirText() {
-        #expect(menu(transcript()).actions.filter(\.kind.isCleanup).map(\.name)
-                == ["Clean Up with Gemini 3.5 Flash Lite", "Clean Up with GPT-6 Luna"])
+        #expect(menu(transcript()).actions.filter(\.kind.isCleanup).map(\.name) == ["Clean Up with GPT-6 Luna"])
         var entry = transcript(.parakeet)
         entry.addVersion(TranscriptVersion(text: "cloud", engine: .parakeetCloud))
         let cleanups = menu(entry).actions.filter { $0.kind.isCleanup }
-        #expect(cleanups.map(\.name) == ["Clean Up Parakeet v3 with Gemini 3.5 Flash Lite",
-                                          "Clean Up Parakeet v3 with GPT-6 Luna",
-                                          "Clean Up Parakeet v3 · Cloud with Gemini 3.5 Flash Lite",
+        #expect(cleanups.map(\.name) == ["Clean Up Parakeet v3 with GPT-6 Luna",
                                           "Clean Up Parakeet v3 · Cloud with GPT-6 Luna"])
         #expect(cleanups.map(\.title) == cleanups.map(\.name))
+    }
+
+    /// Gemini 3.1 Pro and Flash Lite's clean-ups stay in the menu as versions, but nothing offers to run them: not
+    /// for a transcript they wrote, not for one they didn't, not for a failed dictation of theirs.
+    @Test func noRetiredModelIsOffered() {
+        let pro = TranscriptEntry(text: "pro", engine: .geminiPro, audioDuration: 20, voicedSeconds: 10,
+                                  audioFileName: "a.wav")
+        let proMenu = menu(pro)
+        #expect(proMenu.versions.map(\.kind) == [.transcription(.geminiPro)])
+        #expect(proMenu.versions.map(\.title) == ["Gemini 3.1 Pro"])
+        #expect(proMenu.actions.map(\.kind) == [.transcription(.parakeet), .transcription(.parakeetCloud),
+                                                .transcription(.geminiFlash)], "Pro's text isn't cleaned up either")
+
+        var tidied = transcript()
+        tidied.addVersion(TranscriptVersion(kind: .cleanup(of: .parakeet, by: .geminiFlashLite), text: "Hello.",
+                                            metadata: TranscriptMetadata()))
+        let tidiedMenu = menu(tidied)
+        #expect(tidiedMenu.versions.map(\.title) == ["Parakeet v3", "Parakeet v3 + Clean-up by Flash Lite"])
+        #expect(tidiedMenu.actions.map(\.kind) == [.transcription(.parakeetCloud), .transcription(.geminiFlash),
+                                                   .cleanup(of: .parakeet, by: .gpt6Luna)])
+
+        var failed = TranscriptEntry(text: "", engine: .geminiPro, status: .failed, audioDuration: 20, voicedSeconds: 10,
+                                     audioFileName: "a.wav")
+        #expect(menu(failed).actions.map(\.kind) == EngineID.offered.map(TranscriptVersionKind.transcription))
+        failed.status = .cancelled
+        #expect(!menu(failed).actions.contains { $0.kind.engine.isRetired || $0.kind.cleanupModel?.isRetired == true })
     }
 
     /// Rows name the submenu without making the menu (`VersionsMenu.title(for:)`).
@@ -51,11 +74,12 @@ import Testing
     @Test func whileSomethingRunsEveryActionIsBusyButVersionsStaySwitchable() {
         var entry = transcript()
         entry.addVersion(TranscriptVersion(text: "g", engine: .geminiFlash))
-        let m = menu(entry, running: .cleanup(of: .parakeet))
-        #expect(m.runningTitle == "Cleaning up with Flash Lite…")
+        let m = menu(entry, running: .cleanup(of: .parakeet, by: .gpt6Luna))
+        #expect(m.runningTitle == "Cleaning up with GPT-6 Luna…")
         #expect(m.actions.allSatisfy { !$0.isEnabled && $0.title.hasSuffix(" · Busy") })
         #expect(m.versions.count == 2)
-        #expect(menu(entry, running: .transcription(.geminiPro)).runningTitle == "Transcribing with Gemini Pro…")
+        #expect(menu(entry, running: .transcription(.parakeetCloud)).runningTitle
+                == "Transcribing with Parakeet v3 · Cloud…")
     }
 
     @Test func aGeminiVersionsTooltipHasEverythingKnown() {
@@ -78,7 +102,7 @@ import Testing
     }
 
     @Test func aCleanUpSaysWhoCleanedItAndACutOffAnswerSaysSo() {
-        let version = TranscriptVersion(kind: .cleanup(of: .parakeet), text: "t", metadata: TranscriptMetadata(
+        let version = TranscriptVersion(kind: .cleanup(of: .parakeet, by: .geminiFlashLite), text: "t", metadata: TranscriptMetadata(
             modelID: CleanupModel.geminiFlashLite.openRouterModelID, reasoningEffort: .minimal, generationTime: 0.8,
             usedSystemPrompt: true, finishReason: "length"))
         #expect(VersionDetails.lines(for: version) == [
@@ -107,6 +131,25 @@ import Testing
                 == "Parakeet v3 + Clean-up by GPT-6 Luna · via OpenAI")
         #expect(EngineGlyph(engine: .parakeet, cleanupModel: .geminiFlashLite).label == "Parakeet v3 + Clean-up by Flash Lite")
         #expect(EngineGlyph(engine: .parakeet).label == "Parakeet v3")
+    }
+
+    /// A retired model's transcript reads as it always did: its name, its glyph and everything recorded about it.
+    @Test func aRetiredModelsVersionKeepsItsNameGlyphAndDetails() {
+        let version = TranscriptVersion(kind: .transcription(.geminiPro), text: "t", metadata: TranscriptMetadata(
+            modelID: "google/gemini-3.1-pro-preview", provider: "Google AI Studio", reasoningEffort: .high,
+            usage: TokenUsage(promptTokens: 900, completionTokens: 4_200, reasoningTokens: 4_000), costUSD: 0.0094,
+            processingTime: 6.8))
+        #expect(VersionDetails.lines(for: version) == [
+            "Gemini 3.1 Pro",
+            "google/gemini-3.1-pro-preview via Google AI Studio",
+            "Thinking: High",
+            "Tokens: 900 in · 200 out · 4k thinking",
+            "Cost: $0.0094",
+            "Took 6.8 s",
+        ])
+        #expect(EngineID.geminiPro.glyph == "Pro" && EngineID.geminiPro.shortName == "Gemini Pro")
+        #expect(EngineGlyph(engine: .geminiPro, provider: "Google AI Studio").label
+                == "Gemini 3.1 Pro · via Google AI Studio")
     }
 
     @Test func aLocalOrOldTranscriptSaysOnlyWhatItKnows() {
