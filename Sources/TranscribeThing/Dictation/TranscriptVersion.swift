@@ -55,6 +55,15 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
         }
     }
 
+    /// What didn't happen when making it failed: "Couldn’t transcribe with Gemini Flash", "Couldn’t clean up with
+    /// GPT-6 Luna".
+    var failureTitle: String {
+        switch self {
+        case .transcription(let engine): "Couldn’t transcribe with \(engine.shortName)"
+        case .cleanup(_, let model): "Couldn’t clean up with \(model.shortName)"
+        }
+    }
+
     /// Persisted: "parakeet", "cleanup:parakeet" (Flash Lite's: the form from before the choice of clean-up model,
     /// which older builds read), "cleanup:parakeet:gpt6Luna". Never rename. An older build can't read a kind with a model and drops that
     /// version, not the entry (`TranscriptEntry.encode(to:)` keeps the text it tidied intact for them).

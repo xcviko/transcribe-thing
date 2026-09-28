@@ -77,6 +77,8 @@ struct HistoryRow: View, Equatable {
     private var isEmptySuccess: Bool { entry.status == .success && entry.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     /// What is being made for the recording right now: a transcription (Retry, Transcribe With) or a clean-up.
     private var running: TranscriptVersionKind? { hub.runningVersion(for: entry.id) }
+    /// Why the last version asked for here didn't come.
+    private var failure: HomeFailure? { hub.homeFailure(for: entry.id) }
     private var showsActions: Bool { hovering || hub.previewHoveredEntry == entry.id }
 
     var body: some View {
@@ -118,6 +120,7 @@ struct HistoryRow: View, Equatable {
         .contextMenu { rowMenu }
         .animation(Theme.Motion.hover, value: hovering)
         .animation(Theme.Motion.expand, value: running)
+        .animation(Theme.Motion.expand, value: failure)
         .accessibilityElement(children: .contain)
     }
 
@@ -143,7 +146,10 @@ struct HistoryRow: View, Equatable {
                     .lineLimit(expanded ? nil : 3)
                     .fixedSize(horizontal: false, vertical: true)
                 if let running {
-                    RunningLine(kind: running)
+                    runningLine(running)
+                        .transition(.opacity)
+                } else if let failure {
+                    failureLine(failure)
                         .transition(.opacity)
                 }
             }
@@ -177,10 +183,14 @@ struct HistoryRow: View, Equatable {
         return "\(entry.engine.shortName) ran into a problem."
     }
 
+    /// A failed or canceled row's Retry, or what runs for it. A retry that fails becomes the row's own failure, so
+    /// a failure line here only says the recording couldn't be read.
     @ViewBuilder private func inlineRetry(title: String, symbol: String) -> some View {
         if let running {
-            RunningLine(kind: running)
-                .padding(.vertical, 4)
+            runningLine(running)
+                .frame(minHeight: Theme.Metrics.smallButtonHeight)
+        } else if let failure {
+            failureLine(failure)
         } else if hasAudio {
             Menu {
                 VersionsMenuItems(entry: entry)
@@ -197,6 +207,22 @@ struct HistoryRow: View, Equatable {
                 .font(.system(size: 11.5))
                 .foregroundStyle(.inkTertiary)
         }
+    }
+
+    /// Home's own work can be canceled right here; a dictation's is Esc's.
+    private func runningLine(_ kind: TranscriptVersionKind) -> some View {
+        let id = entry.id
+        let cancel: (() -> Void)? = hub.runsHomeWork(for: id) ? { hub.dictation.cancelHomeWork(for: id) } : nil
+        return RunningLine(kind: kind, onCancel: cancel)
+    }
+
+    /// Its Retry makes the same version again, as the Versions menu's item would (disabled for the same reason).
+    private func failureLine(_ failure: HomeFailure) -> some View {
+        let entry = entry
+        let retry = hub.versionsMenu(for: entry).actions.first { $0.kind == failure.kind }
+        return FailureLine(failure: failure, retry: retry,
+                           onRetry: { hub.dictation.makeVersion(failure.kind, of: entry) },
+                           onDismiss: { hub.dictation.dismissHomeFailure(for: entry.id) })
     }
 
     // MARK: Trailing
@@ -307,20 +333,71 @@ struct HistoryRow: View, Equatable {
 }
 
 /// "Transcribing with Gemini Flash…" or "Cleaning up with GPT-6 Luna…" under a row whose recording is being
-/// worked on.
+/// worked on, with Cancel when Home started it.
 private struct RunningLine: View {
     var kind: TranscriptVersionKind
+    var onCancel: (() -> Void)?
 
     var body: some View {
         HStack(spacing: 8) {
-            ShimmerBar(height: 3)
-                .frame(width: 40)
-            Text(kind.progressTitle)
-                .font(.system(size: 11.5))
-                .foregroundStyle(.inkSecondary)
-                .lineLimit(1)
+            HStack(spacing: 8) {
+                ShimmerBar(height: 3)
+                    .frame(width: 40)
+                Text(kind.progressTitle)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.inkSecondary)
+                    .lineLimit(1)
+            }
+            .accessibilityElement(children: .combine)
+            if let onCancel {
+                Button("Cancel", action: onCancel)
+                    .buttonStyle(QuietButtonStyle(tint: .inkSecondary, size: .small))
+                    .padding(.leading, -4)
+            }
         }
-        .accessibilityElement(children: .combine)
+    }
+}
+
+/// "Couldn't transcribe with Gemini Flash · Gemini Flash took too long." under a row whose last version asked for
+/// from Home didn't come, with Retry (the same version again) and a way to dismiss it.
+private struct FailureLine: View {
+    var failure: HomeFailure
+    /// The Versions menu's item for the same version; nil when it offers none (no Retry then).
+    var retry: VersionsMenu.Action?
+    var onRetry: () -> Void
+    var onDismiss: () -> Void
+
+    private var reason: String {
+        failure.reason.hasSuffix(".") ? failure.reason : failure.reason + "."
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                // Centered on the cap height of the 11.5 pt label, as on a failed row.
+                Circle().fill(Color.danger).frame(width: 6, height: 6).alignmentGuide(.firstTextBaseline) { $0[.bottom] + 1 }
+                Text("\(Text(failure.kind.failureTitle).fontWeight(.medium).foregroundStyle(Color.ink)) · \(reason)")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Color.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .accessibilityElement(children: .combine)
+            if let retry {
+                Button("Retry", action: onRetry)
+                    .buttonStyle(QuietButtonStyle(size: .small))
+                    .disabled(!retry.isEnabled)
+                    .help(retry.blocker?.label ?? "")
+                    .padding(.leading, -4)
+            }
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+            }
+            .buttonStyle(IconButtonStyle(size: 22, tint: .inkTertiary))
+            .help("Dismiss")
+            .accessibilityLabel("Dismiss")
+            .padding(.leading, retry == nil ? 0 : -6)
+        }
     }
 }
 

@@ -790,7 +790,7 @@ final class FakeRecorder: DictationRecorder {
             return .pasted
         }
         for r in [first, second, third] {
-            h.controller.enqueue(r, engine: .parakeet, delivery: .paste(targetPID: nil))
+            h.controller.enqueue(r, engine: .parakeet, targetPID: nil)
         }
         #expect(h.controller.machine.activeJobs == 3)
         #expect(h.pill.phase == .processing)
@@ -814,7 +814,7 @@ final class FakeRecorder: DictationRecorder {
             pasted.append(text)
             return .pasted
         }
-        for r in [a, b, c] { h.controller.enqueue(r, engine: .geminiFlash, delivery: .paste(targetPID: nil)) }
+        for r in [a, b, c] { h.controller.enqueue(r, engine: .geminiFlash, targetPID: nil) }
         try await waitUntil { pasted.count == 2 && h.controller.machine.activeJobs == 0 }
         #expect(pasted == ["a", "c"])
         let failed = try #require(h.history.entry(id: b.id))
@@ -844,7 +844,7 @@ final class FakeRecorder: DictationRecorder {
             h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "  \n", engine: engine, processingTime: 0.1) }
             h.controller.insertOverride = { _, _ in Issue.record("nothing should be pasted"); return .pasted }
             let r = Self.recording()
-            h.controller.enqueue(r, engine: engine, delivery: .paste(targetPID: nil))
+            h.controller.enqueue(r, engine: engine, targetPID: nil)
             try await waitUntil { h.controller.machine.activeJobs == 0 }
             #expect(h.history.entries.isEmpty, "\(engine): silence leaves no history entry")
             #expect(h.toasts.notices.count == 1)
@@ -866,7 +866,7 @@ final class FakeRecorder: DictationRecorder {
         let h = Self.make()
         h.controller.transcribeOverride = { _, engine in throw AppError.engineFailed(engine, "CoreML error") }
         let r = Self.recording()
-        h.controller.enqueue(r, engine: .parakeet, delivery: .paste(targetPID: nil))
+        h.controller.enqueue(r, engine: .parakeet, targetPID: nil)
         try await waitUntil { h.controller.machine.activeJobs == 0 }
         #expect(h.history.entry(id: r.id)?.status == .failed)
         let notice = try #require(h.toasts.notices.first { $0.dedupeKey == "error.engineFailed.parakeet" })
@@ -882,7 +882,7 @@ final class FakeRecorder: DictationRecorder {
         for _ in 0..<4 {
             h.pill.errorMessage = nil
             let shakes = h.pill.shakeCount
-            h.controller.enqueue(Self.recording(), engine: .parakeet, delivery: .paste(targetPID: nil))
+            h.controller.enqueue(Self.recording(), engine: .parakeet, targetPID: nil)
             try await waitUntil { h.controller.machine.activeJobs == 0 }
             #expect(h.pill.errorMessage == PillMetrics.noSpeechText)
             #expect(PillView(model: h.pill).visual == .message(PillMetrics.noSpeechText))
@@ -892,7 +892,7 @@ final class FakeRecorder: DictationRecorder {
         h.settings.pillMode = .never
         for _ in 0..<4 {
             h.toasts.dismissAll()
-            h.controller.enqueue(Self.recording(), engine: .parakeet, delivery: .paste(targetPID: nil))
+            h.controller.enqueue(Self.recording(), engine: .parakeet, targetPID: nil)
             try await waitUntil { h.controller.machine.activeJobs == 0 }
             #expect(h.toasts.notices.contains { $0.dedupeKey == "error.noSpeech" })
         }
@@ -903,7 +903,7 @@ final class FakeRecorder: DictationRecorder {
         let h = Self.make()
         h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "Hello there", engine: engine, processingTime: 0.1) }
         h.controller.insertOverride = { _, _ in .targetChanged }
-        h.controller.enqueue(Self.recording(), engine: .parakeet, delivery: .paste(targetPID: 42))
+        h.controller.enqueue(Self.recording(), engine: .parakeet, targetPID: 42)
         try await waitUntil { h.controller.machine.activeJobs == 0 }
         let card = try #require(h.toasts.notices.first { $0.transcript != nil })
         #expect(card.transcript == "Hello there")
@@ -991,7 +991,7 @@ final class FakeRecorder: DictationRecorder {
             let h = Self.make(models: [.parakeet: .ready], keyStatus: key)
             h.controller.transcribeOverride = { _, engine in throw AppError.engineFailed(engine, "CoreML error") }
             let r = Self.recording()
-            h.controller.enqueue(r, engine: .parakeet, delivery: .paste(targetPID: nil))
+            h.controller.enqueue(r, engine: .parakeet, targetPID: nil)
             try await waitUntil { h.controller.machine.activeJobs == 0 }
             let notice = try #require(h.toasts.notices.first { $0.recordingID == r.id })
             #expect(notice.actions.contains { $0.kind == .retryWith(.parakeetCloud) } == expected, "\(key)")
@@ -1004,7 +1004,7 @@ final class FakeRecorder: DictationRecorder {
             h.settings.selectedEngine = main
             h.controller.transcribeOverride = { _, _ in throw error }
             let r = Self.recording()
-            h.controller.enqueue(r, engine: .geminiFlash, delivery: .paste(targetPID: nil))
+            h.controller.enqueue(r, engine: .geminiFlash, targetPID: nil)
             try await waitUntil { h.controller.machine.activeJobs == 0 }
             let notice = try #require(h.toasts.notices.first { $0.recordingID == r.id })
             return notice.actions.lazy.compactMap { if case .retryWith(let e) = $0.kind { e } else { nil } }.first
@@ -1037,7 +1037,7 @@ final class FakeRecorder: DictationRecorder {
             }
             h.controller.insertOverride = { _, _ in Issue.record("canceled, never pasted"); return .pasted }
             let r = Self.recording()
-            h.controller.enqueue(r, engine: .geminiFlash, delivery: .paste(targetPID: nil))
+            h.controller.enqueue(r, engine: .geminiFlash, targetPID: nil)
             try await waitUntil { h.toasts.notices.contains { $0.dedupeKey == "slow.\(r.id)" } }
             let slow = try #require(h.toasts.notices.first { $0.dedupeKey == "slow.\(r.id)" })
             #expect(slow.title == "Gemini Flash is taking longer than usual")
@@ -1065,7 +1065,7 @@ final class FakeRecorder: DictationRecorder {
         var pasted: [String] = []
         h.controller.insertOverride = { text, _ in pasted.append(text); return .pasted }
         let r = Self.recording()
-        h.controller.enqueue(r, engine: .geminiFlash, delivery: .paste(targetPID: nil))
+        h.controller.enqueue(r, engine: .geminiFlash, targetPID: nil)
         try await waitUntil { h.toasts.notices.contains { $0.dedupeKey == "slow.\(r.id)" } }
         let slow = try #require(h.toasts.notices.first { $0.dedupeKey == "slow.\(r.id)" })
         let use = try #require(slow.actions.first)
@@ -1228,8 +1228,8 @@ final class FakeRecorder: DictationRecorder {
         h.controller.insertOverride = { _, _ in .pasted }
         h.controller.handle(.pttDown)
         h.controller.handle(.pttUp)
-        // A Hub retry, say, finishes inside the double-press window.
-        h.controller.enqueue(Self.recording(), engine: .parakeet, delivery: .paste(targetPID: nil))
+        // A notice's Retry, say, finishes inside the double-press window.
+        h.controller.enqueue(Self.recording(), engine: .parakeet, targetPID: nil)
         try await waitUntil { h.controller.machine.activeJobs == 0 }
         #expect(h.pill.visiblePhase == .listening, "the tap's pill holds until the window closes")
         #expect(h.pill.shakeCount == 0)
@@ -1248,7 +1248,7 @@ final class FakeRecorder: DictationRecorder {
         // No text: the job ends with a shake, held back while the press is arming.
         h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "", engine: engine, processingTime: 0.1) }
         h.controller.handle(.pttDown)
-        h.controller.enqueue(Self.recording(), engine: .parakeet, delivery: .paste(targetPID: nil))
+        h.controller.enqueue(Self.recording(), engine: .parakeet, targetPID: nil)
         try await waitUntil { h.controller.machine.activeJobs == 0 }
         #expect(h.pill.visiblePhase == .listening)
         h.controller.send(.timer(.arming))
@@ -1315,7 +1315,7 @@ final class FakeRecorder: DictationRecorder {
             return TranscriptResult(text: "dictated", engine: engine, processingTime: 0.1)
         }
         h.controller.insertOverride = { _, _ in pastes ? .pasted : .noEditableTarget }
-        h.controller.enqueue(Self.recording(), engine: .parakeet, delivery: .paste(targetPID: nil))
+        h.controller.enqueue(Self.recording(), engine: .parakeet, targetPID: nil)
         #expect(h.pill.visiblePhase == .processing)
         var phases: [PillPhase] = []
         h.pill.onVisiblePhaseChange = { phases.append(h.pill.visiblePhase) }
@@ -1344,7 +1344,7 @@ final class FakeRecorder: DictationRecorder {
         }
         var pasted: [String] = []
         h.controller.insertOverride = { text, _ in pasted.append(text); return .pasted }
-        h.controller.enqueue(Self.recording(), engine: .parakeet, delivery: .paste(targetPID: nil))
+        h.controller.enqueue(Self.recording(), engine: .parakeet, targetPID: nil)
         #expect(h.pill.visiblePhase == .processing)
         h.controller.handle(.pttDown)
         h.controller.handle(.pttUp)
@@ -1369,7 +1369,7 @@ final class FakeRecorder: DictationRecorder {
             TranscriptResult(text: pastes ? "dictated" : "", engine: engine, processingTime: 0.1)
         }
         h.controller.insertOverride = { _, _ in .pasted }
-        h.controller.enqueue(Self.recording(), engine: .parakeet, delivery: .paste(targetPID: nil))
+        h.controller.enqueue(Self.recording(), engine: .parakeet, targetPID: nil)
         try await waitUntil { h.controller.machine.activeJobs == 0 }
         #expect(h.pill.visiblePhase == (pastes ? .rest : .error))
         now = 100.5
@@ -1473,28 +1473,6 @@ final class FakeRecorder: DictationRecorder {
         #expect(h.toasts.notices.first { $0.title == "Dictation stopped" }?.recordingID == kept.id)
     }
 
-    @Test func retryOfAHubJobStaysInHistory() async throws {
-        let h = Self.make()
-        var fail = true
-        var pasted: [String] = []
-        h.controller.transcribeOverride = { _, engine in
-            if fail { throw AppError.timeout(engine) }
-            return TranscriptResult(text: "retried", engine: engine, processingTime: 0.1)
-        }
-        h.controller.insertOverride = { text, _ in pasted.append(text); return .pasted }
-        let r = Self.recording()
-        h.controller.enqueue(r, engine: .parakeet, delivery: .historyOnly)
-        try await waitUntil { h.controller.machine.activeJobs == 0 }
-        let notice = try #require(h.toasts.notices.first { $0.recordingID == r.id })
-        let retry = try #require(notice.actions.first { $0.kind == .retry })
-        fail = false
-        h.controller.perform(retry, from: notice)
-        try await waitUntil { h.history.entry(id: r.id)?.status == .success }
-        try await waitUntil { h.controller.machine.activeJobs == 0 }
-        #expect(pasted.isEmpty, "a Hub retry never pastes into whatever is frontmost")
-        #expect(h.toasts.notices.contains { $0.dedupeKey == "retry.\(r.id)" })
-    }
-
     @Test func theLimitIsFixedForTheRecordingInProgress() {
         let h = Self.make()
         h.controller.send(.handsFreeToggle)
@@ -1538,7 +1516,7 @@ final class FakeRecorder: DictationRecorder {
         h.controller.transcribeOverride = { _, _ in throw AppError.openRouterTruncated("so the plan is so the plan is") }
         h.controller.insertOverride = { text, _ in pasted.append(text); return .pasted }
         let recording = Self.recording()
-        h.controller.enqueue(recording, engine: .geminiFlash, delivery: .paste(targetPID: nil))
+        h.controller.enqueue(recording, engine: .geminiFlash, targetPID: nil)
         try await waitUntil { h.controller.machine.activeJobs == 0 }
         #expect(pasted.isEmpty)
         let notice = try #require(h.toasts.notices.first { $0.dedupeKey == "error.openRouterTruncated" })
@@ -1557,7 +1535,7 @@ final class FakeRecorder: DictationRecorder {
         h.controller.insertOverride = { text, _ in pasted.append(text); return .pasted }
         let long = Recording(samples: Array(repeating: 0.1, count: 16_000 * 3),
                              speech: SpeechStats(voicedSeconds: 2, peakDBFS: -10, isSilent: false))
-        h.controller.enqueue(long, engine: .parakeet, delivery: .paste(targetPID: nil))
+        h.controller.enqueue(long, engine: .parakeet, targetPID: nil)
         h.controller.handle(.cancel)
         #expect(h.controller.machine.activeJobs == 0)
         let undo = try #require(h.toasts.notices.first { $0.dedupeKey == "dictation.canceled" })
@@ -1654,7 +1632,7 @@ final class FakeRecorder: DictationRecorder {
         let h = Self.make(models: [.parakeet: .installed], keyStatus: .valid(KeyInfo()))
         h.controller.transcribeOverride = { _, _ in throw AppError.offline }
         let r = Self.recording()
-        h.controller.enqueue(r, engine: .geminiFlash, delivery: .paste(targetPID: nil))
+        h.controller.enqueue(r, engine: .geminiFlash, targetPID: nil)
         try await waitUntil { h.controller.machine.activeJobs == 0 }
         let notice = try #require(h.toasts.notices.first { $0.recordingID == r.id })
         #expect(notice.actions.contains { $0.kind == .retryWith(.parakeet) })
@@ -1664,7 +1642,7 @@ final class FakeRecorder: DictationRecorder {
         let h = Self.make()
         h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "Hello there", engine: engine, processingTime: 0.1) }
         h.controller.insertOverride = { _, _ in .failed("no event source") }
-        h.controller.enqueue(Self.recording(), engine: .parakeet, delivery: .paste(targetPID: nil))
+        h.controller.enqueue(Self.recording(), engine: .parakeet, targetPID: nil)
         try await waitUntil { h.controller.machine.activeJobs == 0 }
         let card = try #require(h.toasts.notices.first { $0.transcript == "Hello there" })
         let pasteHere = try #require(card.actions.first { $0.kind == .pasteText("Hello there") })

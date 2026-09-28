@@ -566,7 +566,7 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         }
         h.controller.insertOverride = { _, _ in .pasted }
         let recording = DictationControllerTests.recording()
-        h.controller.enqueue(recording, engine: .parakeetCloud, delivery: .paste(targetPID: nil))
+        h.controller.enqueue(recording, engine: .parakeetCloud, targetPID: nil)
         try await waitUntil { h.history.entry(id: recording.id)?.provider != nil }
         #expect(h.history.entry(id: recording.id)?.provider == "Together")
         #expect(asked == ["gen-1"])
@@ -584,7 +584,7 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         }
         h.controller.insertOverride = { _, _ in .pasted }
         let recording = DictationControllerTests.recording()
-        h.controller.enqueue(recording, engine: .parakeetCloud, delivery: .paste(targetPID: nil))
+        h.controller.enqueue(recording, engine: .parakeetCloud, targetPID: nil)
         try await waitUntil { h.history.entry(id: recording.id) != nil }
         #expect(h.history.entry(id: recording.id)?.provider == "Together")
     }
@@ -605,7 +605,7 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         let h = DictationControllerTests.make(models: [.parakeet: .ready], keyStatus: .valid(KeyInfo()))
         h.controller.transcribeOverride = { _, _ in throw AppError.openRouterRateLimited(retryAfter: nil) }
         let recording = DictationControllerTests.recording()
-        h.controller.enqueue(recording, engine: .parakeetCloud, delivery: .paste(targetPID: nil))
+        h.controller.enqueue(recording, engine: .parakeetCloud, targetPID: nil)
         try await waitUntil { h.history.entry(id: recording.id)?.status == .failed }
         let notice = try #require(h.toasts.notices.first { $0.recordingID == recording.id })
         #expect(notice.title == "Parakeet v3 · Cloud is rate-limited")

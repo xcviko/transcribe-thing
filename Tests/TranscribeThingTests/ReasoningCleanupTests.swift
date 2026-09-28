@@ -373,7 +373,7 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         h.controller.transcribeOverride = { _, engine in TranscriptResult(text: text, engine: engine, processingTime: 0.3) }
         h.controller.insertOverride = { text, _ in pasted(text); return .pasted }
         let r = H.recording()
-        h.controller.enqueue(r, engine: engine, delivery: .paste(targetPID: nil), cleansUp: cleansUp)
+        h.controller.enqueue(r, engine: engine, targetPID: nil, cleansUp: cleansUp)
         try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id) != nil }
         return r.id
     }
@@ -442,7 +442,7 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "raw text", engine: engine, processingTime: 0.3) }
         h.controller.insertOverride = { _, _ in Issue.record("a canceled dictation is never pasted"); return .pasted }
         let r = H.recording()
-        h.controller.enqueue(r, engine: .parakeet, delivery: .paste(targetPID: nil), cleansUp: true)
+        h.controller.enqueue(r, engine: .parakeet, targetPID: nil, cleansUp: true)
         try await waitUntil { h.controller.runningVersions[r.id] == .cleanup(of: .parakeet, by: .gpt6Luna) }
         h.controller.handle(.cancel)
         #expect(h.controller.machine.activeJobs == 0)
@@ -519,7 +519,7 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         }
         h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "parakeet text", engine: engine, processingTime: 0.3) }
         h.controller.makeVersion(.transcription(.parakeet), of: try #require(h.history.entry(id: id)))
-        try await waitUntil { h.history.entry(id: id)?.versions.count == 2 && h.controller.machine.activeJobs == 0 }
+        try await waitUntil { h.history.entry(id: id)?.versions.count == 2 && h.controller.runningVersions.isEmpty }
         #expect(h.history.entry(id: id)?.currentKind == .transcription(.parakeet))
     }
 }
@@ -556,9 +556,7 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         let updated = try #require(h.history.entry(id: entry.id))
         #expect(updated.currentKind == .cleanup(of: .parakeet, by: .gpt6Luna) && updated.text == "Hello.")
         #expect(updated.createdAt == entry.createdAt)
-        let card = try #require(h.toasts.notices.first { $0.transcript == "Hello." })
-        #expect(card.title == "Cleaned up with GPT-6 Luna")
-        #expect(card.actions.map(\.kind) == [.pasteText("Hello."), .copyText("Hello.")])
+        #expect(h.toasts.notices.isEmpty, "the row shows the clean text: no card")
         #expect(h.controller.machine.activeJobs == 0, "a clean-up from History isn't a dictation job")
 
         // Never twice: asking again shows the version it has.
@@ -568,7 +566,7 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         #expect(h.history.entry(id: entry.id)?.currentKind == .cleanup(of: .parakeet, by: .gpt6Luna))
     }
 
-    @Test func aFailedCleanUpFromHistoryLeavesTheRowAndSaysWhy() async throws {
+    @Test func aFailedCleanUpFromHistoryLeavesTheRowAndSaysWhyInIt() async throws {
         let h = H.make(keyStatus: .valid(KeyInfo()))
         h.controller.cleanupTimeoutOverride = 0.1
         let entry = parakeetEntry()
@@ -578,10 +576,12 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
             return TranscriptResult(text: "late", engine: .parakeet, processingTime: 5)
         }
         h.controller.makeVersion(.cleanup(of: .parakeet, by: .gpt6Luna), of: entry)
-        try await waitUntil { h.toasts.notices.contains { $0.title == "Couldn’t clean up" } }
+        try await waitUntil { h.controller.homeFailures[entry.id] != nil }
+        #expect(h.controller.homeFailures[entry.id]
+                == HomeFailure(kind: .cleanup(of: .parakeet, by: .gpt6Luna), reason: "GPT-6 Luna took too long."))
         #expect(h.history.entry(id: entry.id) == entry)
-        #expect(h.toasts.notices.first { $0.title == "Couldn’t clean up" }?.body == "GPT-6 Luna took too long.")
-        try await waitUntil { h.controller.runningVersions.isEmpty }
+        #expect(h.controller.runningVersions.isEmpty)
+        #expect(h.toasts.notices.isEmpty)
     }
 
     @Test func theSameModelNeverTranscribesARecordingTwice() async throws {
@@ -594,42 +594,16 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         }
         h.controller.insertOverride = { _, _ in .pasted }
         let r = H.recording()
-        h.controller.enqueue(r, engine: .parakeet, delivery: .paste(targetPID: nil))
+        h.controller.enqueue(r, engine: .parakeet, targetPID: nil)
         try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id) != nil }
         h.controller.makeVersion(.transcription(.geminiFlash), of: try #require(h.history.entry(id: r.id)))
-        try await waitUntil { h.history.entry(id: r.id)?.versions.count == 2 && h.controller.machine.activeJobs == 0 }
+        try await waitUntil { h.history.entry(id: r.id)?.versions.count == 2 && h.controller.runningVersions.isEmpty }
         h.controller.showVersion(.transcription(.parakeet), of: r.id)
         h.controller.makeVersion(.transcription(.geminiFlash), of: try #require(h.history.entry(id: r.id)))
         h.controller.retry(try #require(h.history.entry(id: r.id)), with: .parakeet)
-        #expect(h.controller.machine.activeJobs == 0)
+        #expect(h.controller.runningVersions.isEmpty)
         #expect(runs == [.parakeet, .geminiFlash])
         #expect(h.history.entry(id: r.id)?.currentKind == .transcription(.parakeet), "the version it has is shown")
-    }
-
-    @Test func theSlowNoticeOfTranscribeWithNeverOffersAModelTheRowHas() async throws {
-        let h = H.make(keyStatus: .valid(KeyInfo()), persistsHistory: true)
-        defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
-        var runs: [EngineID] = []
-        h.controller.transcribeOverride = { _, engine in
-            runs.append(engine)
-            if engine == .geminiFlash { try await Task.sleep(for: .milliseconds(400)) }
-            return TranscriptResult(text: "text by \(engine.rawValue)", engine: engine, processingTime: 0.2)
-        }
-        h.controller.insertOverride = { _, _ in .pasted }
-        let r = H.recording()
-        h.controller.enqueue(r, engine: .parakeet, delivery: .paste(targetPID: nil))
-        try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id) != nil }
-        h.controller.slowNoticeDelayOverride = 0.05
-        h.controller.makeVersion(.transcription(.geminiFlash), of: try #require(h.history.entry(id: r.id)))
-        try await waitUntil { h.toasts.notices.contains { $0.dedupeKey == "slow.\(r.id)" } }
-        let slow = try #require(h.toasts.notices.first { $0.dedupeKey == "slow.\(r.id)" })
-        #expect(!slow.actions.contains { $0.kind == .retryWith(.parakeet) })
-        // Even an action that names it (an older notice) doesn't run Parakeet again on the queued job.
-        h.controller.perform(NoticeAction(title: "Use Parakeet v3 Instead", kind: .retryWith(.parakeet)), from: slow)
-        try await waitUntil { h.history.entry(id: r.id)?.versions.count == 2 && h.controller.machine.activeJobs == 0 }
-        #expect(runs == [.parakeet, .geminiFlash])
-        #expect(h.history.entry(id: r.id)?.version(.transcription(.parakeet))?.text == "text by parakeet")
-        #expect(h.history.entry(id: r.id)?.currentKind == .transcription(.geminiFlash))
     }
 
     @Test func aCloudVersionLearnsItsProviderAndTimingLater() async throws {
@@ -644,7 +618,7 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         }
         h.controller.insertOverride = { _, _ in .pasted }
         let r = H.recording()
-        h.controller.enqueue(r, engine: .parakeetCloud, delivery: .paste(targetPID: nil))
+        h.controller.enqueue(r, engine: .parakeetCloud, targetPID: nil)
         try await waitUntil { h.history.entry(id: r.id)?.provider != nil }
         let meta = try #require(h.history.entry(id: r.id)?.currentVersion?.metadata)
         #expect(meta.provider == "Together" && meta.latency == 0.4 && meta.generationTime == 0.35)

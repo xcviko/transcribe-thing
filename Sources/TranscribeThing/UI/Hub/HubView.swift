@@ -30,8 +30,11 @@ final class HubContext: Observable {
     var fixedNow: Date?
     /// Pre-filled history search (snapshots of the "no matches" state).
     var initialSearch = ""
-    /// History rows shown as being transcribed or cleaned up, in place of the dictation controller's (snapshots).
+    /// History rows shown as being transcribed or cleaned up from Home, in place of the dictation controller's
+    /// (snapshots).
     var previewRunning: [UUID: TranscriptVersionKind]?
+    /// History rows shown with why their last Home work failed, in place of the dictation controller's (snapshots).
+    var previewFailures: [UUID: HomeFailure]?
     /// A History row drawn as hovered, its actions showing (snapshots).
     var previewHoveredEntry: UUID?
 
@@ -80,6 +83,16 @@ final class HubContext: Observable {
     /// What is being made for a History row's recording right now (a transcription or a clean-up), if anything.
     func runningVersion(for id: UUID) -> TranscriptVersionKind? {
         (previewRunning ?? dictation.runningVersions)[id]
+    }
+
+    /// What runs for the row was started from Home, so the row can cancel it (a dictation's has Esc).
+    func runsHomeWork(for id: UUID) -> Bool {
+        (previewRunning ?? dictation.homeWork)[id] != nil
+    }
+
+    /// Why the last version Home asked for the row didn't come, until it's dismissed or new work starts.
+    func homeFailure(for id: UUID) -> HomeFailure? {
+        (previewFailures ?? dictation.homeFailures)[id]
     }
 
     func versionsMenu(for entry: TranscriptEntry) -> VersionsMenu {

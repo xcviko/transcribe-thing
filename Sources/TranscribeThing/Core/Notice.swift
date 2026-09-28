@@ -24,8 +24,7 @@ enum NoticeActionKind: Sendable, Equatable {
     case retryWith(EngineID)
     /// Switch the selected engine when there is no recording to retry.
     case selectEngine(EngineID)
-    /// Undo a cancel: the dictation picks up again hands-free, its kept audio first (a canceled Hub transcription
-    /// is transcribed after all).
+    /// Undo a cancel: the dictation picks up again hands-free, its kept audio first.
     case undoCancel
     case copyText(String)
     case pasteText(String)

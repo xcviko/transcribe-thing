@@ -442,7 +442,7 @@ import Testing
         h.controller.transcribeOverride = { _, engine in TranscriptResult(text: text, engine: engine, processingTime: 0.1) }
         h.controller.insertOverride = { text, _ in pasted(text); return .pasted }
         let r = recording ?? H.recording()
-        h.controller.enqueue(r, engine: .parakeet, delivery: .paste(targetPID: nil))
+        h.controller.enqueue(r, engine: .parakeet, targetPID: nil)
         try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id) != nil }
         return r.id
     }
@@ -478,13 +478,12 @@ import Testing
             return TranscriptResult(text: "  gemini text ", engine: engine, processingTime: 2, costUSD: 0.003)
         }
         h.controller.retry(original, with: .geminiFlash)
-        #expect(h.controller.transcribingEngines[id] == .geminiFlash)
+        #expect(h.controller.runningVersions[id] == .transcription(.geminiFlash))
         // One at a time: a second request while it runs is ignored.
         h.controller.retry(original, with: .parakeetCloud)
-        #expect(h.controller.machine.activeJobs == 1)
+        #expect(h.controller.homeWork == [id: .transcription(.geminiFlash)])
         try await waitUntil { h.history.entry(id: id)?.engine == .geminiFlash }
-        try await waitUntil { h.controller.machine.activeJobs == 0 }
-        #expect(h.controller.transcribingEngines.isEmpty)
+        #expect(h.controller.runningVersions.isEmpty && h.controller.homeWork.isEmpty)
 
         let updated = try #require(h.history.entry(id: id))
         #expect(h.history.entries.count == 1)
@@ -496,17 +495,16 @@ import Testing
         #expect(updated.versions.map(\.kind) == [.transcription(.parakeet), .transcription(.geminiFlash)])
         #expect(updated.currentKind == .transcription(.geminiFlash))
         #expect(pasted == ["parakeet text"], "Transcribe Again never pastes by itself")
-
-        let card = try #require(h.toasts.notices.first { $0.transcript == "gemini text" })
-        #expect(card.title == "Transcribed with Gemini Flash")
-        #expect(card.actions.map(\.kind) == [.pasteText("gemini text"), .copyText("gemini text")])
+        #expect(h.toasts.notices.isEmpty, "the row shows the new text: no card")
 
         h.controller.showVersion(.transcription(.parakeet), of: id)
         #expect(h.history.entry(id: id)?.text == "parakeet text")
         #expect(h.history.entry(id: id)?.version(.transcription(.geminiFlash))?.text == "gemini text")
     }
 
-    @Test func aFailedTranscribeAgainKeepsTheTextAndRetriesWithTheSameEngine() async throws {
+    /// A failed Transcribe Again leaves the row as it was and says why in it; its Retry runs the same model again,
+    /// and the reason goes as that starts.
+    @Test func aFailedTranscribeAgainKeepsTheTextAndSaysWhyInTheRow() async throws {
         let h = H.make(keyStatus: .valid(KeyInfo()), persistsHistory: true)
         defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
         let id = try await dictate(h) { _ in }
@@ -516,146 +514,166 @@ import Testing
         h.controller.transcribeOverride = { _, engine in
             engines.append(engine)
             if fail { throw AppError.timeout(engine) }
+            try await Task.sleep(for: .milliseconds(50))
             return TranscriptResult(text: "second try", engine: engine, processingTime: 1)
         }
-        h.controller.retry(original, with: .geminiFlash)
-        try await waitUntil { h.controller.machine.activeJobs == 0 && !engines.isEmpty }
-        let kept = try #require(h.history.entry(id: id))
-        #expect(kept == original, "the row keeps its text, engine and audio")
-        let notice = try #require(h.toasts.notices.first { $0.recordingID == id })
-        #expect(!notice.actions.contains { $0.kind == .retryWith(.parakeet) },
-                "never offers the engine that wrote the text")
-        let retry = try #require(notice.actions.first { $0.kind == .retry })
+        h.controller.makeVersion(.transcription(.geminiFlash), of: original)
+        try await waitUntil { h.controller.homeFailures[id] != nil }
+        let failure = try #require(h.controller.homeFailures[id])
+        #expect(failure == HomeFailure(kind: .transcription(.geminiFlash), reason: "Gemini Flash took too long"))
+        #expect(h.history.entry(id: id) == original, "the row keeps its text, engine and audio")
+        #expect(h.controller.runningVersions.isEmpty)
+        #expect(h.toasts.notices.isEmpty)
+
         fail = false
-        h.controller.perform(retry, from: notice)
+        h.controller.makeVersion(failure.kind, of: try #require(h.history.entry(id: id)))
+        #expect(h.controller.homeFailures[id] == nil, "new work clears the reason")
         try await waitUntil { h.history.entry(id: id)?.text == "second try" }
         #expect(engines == [.geminiFlash, .geminiFlash])
         #expect(h.history.entry(id: id)?.version(.transcription(.parakeet))?.text == "parakeet text")
+        #expect(h.controller.homeFailures.isEmpty && h.toasts.notices.isEmpty)
     }
 
-    @Test func aCanceledTranscribeAgainLeavesTheRowAndUndoFinishesIt() async throws {
+    /// Cancel in the row stops Transcribe Again: nothing lands, and the row stays as it was (not a canceled row,
+    /// though the recording is long enough for one), with nothing to undo.
+    @Test func cancelingTranscribeAgainLeavesTheRowAsItWas() async throws {
         let h = H.make(persistsHistory: true)
         defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
-        // Long enough that a canceled dictation would get a row of its own.
         let long = Recording(samples: Array(repeating: 0.1, count: 16_000 * 25),
                              speech: SpeechStats(voicedSeconds: 20, peakDBFS: -10, isSilent: false))
         var pasted: [String] = []
         let id = try await dictate(h, long) { pasted.append($0) }
         let original = try #require(h.history.entry(id: id))
+        var finished = false
         h.controller.transcribeOverride = { _, engine in
             try await Task.sleep(for: .milliseconds(150))
-            return TranscriptResult(text: "after undo", engine: engine, processingTime: 1)
+            finished = true
+            return TranscriptResult(text: "too late", engine: engine, processingTime: 1)
         }
         h.controller.retry(original, with: .geminiFlash)
-        h.controller.handle(.cancel)
-        #expect(h.controller.machine.activeJobs == 0)
-        #expect(h.history.entry(id: id) == original, "still the transcript, not a canceled row")
-        let undo = try #require(h.toasts.notices.first { $0.dedupeKey == "dictation.canceled" })
-        #expect(undo.title == "Transcription canceled")
-        h.controller.perform(try #require(undo.actions.first { $0.kind == .undoCancel }), from: undo)
-        try await waitUntil { h.history.entry(id: id)?.text == "after undo" }
-        #expect(h.history.entry(id: id)?.engine == .geminiFlash)
+        #expect(h.controller.homeWork[id] == .transcription(.geminiFlash))
+        h.controller.cancelHomeWork(for: id)
+        #expect(h.controller.runningVersions.isEmpty && h.controller.homeWork.isEmpty)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(!finished, "the transcription itself stopped")
+        #expect(h.history.entry(id: id) == original)
+        #expect(h.controller.homeFailures.isEmpty)
+        #expect(h.toasts.notices.isEmpty)
         #expect(pasted == ["parakeet text"])
     }
 
-    @Test func aTranscribeAgainThatSucceedsClearsTheOlderFailureAndItsRetryNeverPastes() async throws {
+    /// A dictation fails, then Home's Retry transcribes it: the failure notice goes, and its Retry, clicked all the
+    /// same (it was on its way out), never pastes the text or runs a model again.
+    @Test func aRetryFromHomeClearsTheFailureNoticeWhoseRetryThenDoesNothing() async throws {
         let h = H.make(keyStatus: .valid(KeyInfo()), persistsHistory: true)
         defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
+        var runs: [EngineID] = []
         var pasted: [String] = []
-        let id = try await dictate(h) { pasted.append($0) }
         h.controller.transcribeOverride = { _, engine in
+            runs.append(engine)
             if engine == .parakeetCloud { throw AppError.timeout(engine) }
             return TranscriptResult(text: "text by \(engine.rawValue)", engine: engine, processingTime: 1)
         }
-        h.controller.retry(try #require(h.history.entry(id: id)), with: .parakeetCloud)
-        try await waitUntil { h.controller.machine.activeJobs == 0 && h.toasts.notices.contains { $0.recordingID == id } }
-        let failure = try #require(h.toasts.notices.first { $0.recordingID == id })
+        h.controller.insertOverride = { text, _ in pasted.append(text); return .pasted }
+        let r = H.recording()
+        h.controller.enqueue(r, engine: .parakeetCloud, targetPID: nil)
+        try await waitUntil { h.controller.machine.activeJobs == 0 && h.toasts.notices.contains { $0.recordingID == r.id } }
+        let failure = try #require(h.toasts.notices.first { $0.recordingID == r.id })
         let retry = try #require(failure.actions.first { $0.kind == .retry })
 
-        h.controller.retry(try #require(h.history.entry(id: id)), with: .geminiFlash)
-        try await waitUntil { h.history.entry(id: id)?.engine == .geminiFlash && h.controller.machine.activeJobs == 0 }
-        #expect(!h.toasts.notices.contains { $0.recordingID == id }, "the failure notice goes once the row has new text")
+        h.controller.retry(try #require(h.history.entry(id: r.id)), with: .geminiFlash)
+        try await waitUntil { h.history.entry(id: r.id)?.status == .success }
+        #expect(!h.toasts.notices.contains { $0.recordingID == r.id }, "the failure notice goes once the row has text")
 
-        // Clicked all the same (it was on its way out): never pasted, and never Gemini Flash a second time.
         h.controller.perform(retry, from: failure)
-        try await waitUntil { h.controller.machine.activeJobs == 0 }
-        #expect(pasted == ["parakeet text"])
-        let entry = try #require(h.history.entry(id: id))
-        #expect(entry.status == .success && entry.versions.count == 2)
-        #expect(entry.currentKind == .transcription(.geminiFlash))
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(h.controller.machine.activeJobs == 0 && h.controller.runningVersions.isEmpty)
+        #expect(runs == [.parakeetCloud, .geminiFlash])
+        #expect(pasted.isEmpty)
+        let entry = try #require(h.history.entry(id: r.id))
+        #expect(entry.versions.map(\.kind) == [.transcription(.geminiFlash)])
         #expect(h.history.entries.count == 1)
     }
 
-    @Test func aTranscribeAgainThatSucceedsClearsTheOlderUndoWhichNeverOpensTheMic() async throws {
+    /// A long dictation canceled (its row kept, Undo offered), then transcribed from Home: the Undo goes, and
+    /// clicked all the same it never opens the mic.
+    @Test func transcribingACanceledDictationFromHomeClearsItsUndoWhichNeverOpensTheMic() async throws {
         let h = H.make(persistsHistory: true)
         defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
         let long = Recording(samples: Array(repeating: 0.1, count: 16_000 * 25),
                              speech: SpeechStats(voicedSeconds: 20, peakDBFS: -10, isSilent: false))
-        var pasted: [String] = []
-        let id = try await dictate(h, long) { pasted.append($0) }
-        h.controller.transcribeOverride = { _, engine in
-            if engine == .parakeetCloud { try await Task.sleep(for: .milliseconds(150)) }
-            return TranscriptResult(text: "text by \(engine.rawValue)", engine: engine, processingTime: 1)
-        }
-        h.controller.retry(try #require(h.history.entry(id: id)), with: .parakeetCloud)
+        h.recorder.next = long
+        h.controller.send(.handsFreeToggle)
         h.controller.handle(.cancel)
         let toast = try #require(h.toasts.notices.first { $0.dedupeKey == "dictation.canceled" })
         let undo = try #require(toast.actions.first { $0.kind == .undoCancel })
+        let canceled = try #require(h.history.entry(id: long.id))
+        #expect(canceled.status == .cancelled)
 
-        h.controller.retry(try #require(h.history.entry(id: id)), with: .geminiFlash)
-        try await waitUntil { h.history.entry(id: id)?.engine == .geminiFlash && h.controller.machine.activeJobs == 0 }
-        #expect(!h.toasts.notices.contains { $0.recordingID == id }, "the Undo toast goes once the row has new text")
+        h.controller.transcribeOverride = { _, engine in
+            TranscriptResult(text: "text by \(engine.rawValue)", engine: engine, processingTime: 1)
+        }
+        h.controller.retry(canceled, with: .parakeet)
+        try await waitUntil { h.history.entry(id: long.id)?.status == .success }
+        #expect(!h.toasts.notices.contains { $0.recordingID == long.id }, "the Undo toast goes once the row has text")
 
         h.controller.perform(undo, from: toast)
         #expect(!h.controller.machine.isRecording, "Undo never opens the mic for a transcribed recording")
+        #expect(h.recorder.starts == 1)
         #expect(h.controller.machine.activeJobs == 0)
-        #expect(h.history.entry(id: id)?.text == "text by geminiFlash")
-        #expect(h.history.entry(id: id)?.version(.transcription(.parakeet))?.text == "parakeet text")
-        #expect(pasted == ["parakeet text"])
+        #expect(h.history.entry(id: long.id)?.text == "text by parakeet")
     }
 
-    @Test func silenceOnTranscribeAgainKeepsTheText() async throws {
+    /// No text from the model: the row keeps its text, and says there was no speech.
+    @Test func silenceOnTranscribeAgainKeepsTheTextAndSaysSo() async throws {
         let h = H.make(persistsHistory: true)
         defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
         let id = try await dictate(h) { _ in }
         let original = try #require(h.history.entry(id: id))
-        var asked = false
-        h.controller.transcribeOverride = { _, engine in
-            asked = true
-            return TranscriptResult(text: " \n ", engine: engine, processingTime: 1)
-        }
+        h.controller.transcribeOverride = { _, engine in TranscriptResult(text: " \n ", engine: engine, processingTime: 1) }
         h.controller.retry(original, with: .geminiFlash)
-        try await waitUntil { asked && h.controller.machine.activeJobs == 0 }
+        try await waitUntil { h.controller.homeFailures[id] != nil }
+        #expect(h.controller.homeFailures[id] == HomeFailure(kind: .transcription(.geminiFlash), reason: "No speech detected"))
         let kept = try #require(h.history.entry(id: id))
         #expect(kept.text == original.text && kept.engine == original.engine)
         #expect(kept.versions.count == 1)
         #expect(kept.audioFileName == original.audioFileName)
         #expect(h.history.loadRecording(for: kept) != nil)
+        #expect(h.pill.errorMessage == nil && h.toasts.notices.isEmpty)
     }
 
-    @Test func aTranscriptWhoseAudioIsGoneSaysSo() {
+    @Test func aTranscriptWhoseAudioIsGoneSaysSoInItsRow() {
         let h = H.make()
         let entry = TranscriptEntry(text: "hi", engine: .parakeet, audioDuration: 3, voicedSeconds: 2)
         h.history.upsert(entry)
         h.controller.retry(entry, with: .geminiFlash)
-        #expect(h.controller.machine.activeJobs == 0)
-        #expect(!h.toasts.notices.isEmpty)
+        #expect(h.controller.runningVersions.isEmpty)
+        #expect(h.controller.homeFailures[entry.id]
+                == HomeFailure(kind: .transcription(.geminiFlash), reason: DictationController.recordingGoneTitle))
+        #expect(h.toasts.notices.isEmpty)
         #expect(h.history.entry(id: entry.id) == entry)
     }
 
-    @Test func aDeletedRowIsntBroughtBackButTheCardStillHasTheText() async throws {
-        let h = H.make(persistsHistory: true)
+    /// Deleted while Home transcribes it, a transcript or a failed dictation isn't brought back.
+    @Test func aDeletedRowIsntBroughtBack() async throws {
+        let h = H.make(keyStatus: .valid(KeyInfo()), persistsHistory: true)
         defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
         let id = try await dictate(h) { _ in }
-        let original = try #require(h.history.entry(id: id))
+        h.controller.transcribeOverride = { _, engine in throw AppError.timeout(engine) }
+        let failed = H.recording()
+        h.controller.enqueue(failed, engine: .geminiFlash, targetPID: nil)
+        try await waitUntil { h.history.entry(id: failed.id)?.status == .failed && h.controller.machine.activeJobs == 0 }
+
         h.controller.transcribeOverride = { _, engine in
             try await Task.sleep(for: .milliseconds(60))
             return TranscriptResult(text: "late", engine: engine, processingTime: 1)
         }
-        h.controller.retry(original, with: .geminiFlash)
-        h.history.delete(id)
-        try await waitUntil { h.controller.machine.activeJobs == 0 }
-        #expect(h.history.entry(id: id) == nil)
-        #expect(h.toasts.notices.contains { $0.transcript == "late" })
+        for entryID in [id, failed.id] {
+            h.controller.retry(try #require(h.history.entry(id: entryID)), with: .parakeetCloud)
+            h.history.delete(entryID)
+        }
+        try await waitUntil { h.controller.runningVersions.isEmpty }
+        #expect(h.history.entries.isEmpty)
+        #expect(h.controller.homeFailures.isEmpty)
     }
 }

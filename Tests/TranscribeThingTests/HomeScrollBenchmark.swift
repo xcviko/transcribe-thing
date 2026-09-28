@@ -56,6 +56,24 @@ import Testing
         #expect(hovered.filter { $0 == "Delete transcript" }.count == 1)
     }
 
+    /// Home work in a row has Cancel beside it; a failure has Retry and Dismiss beside its reason.
+    @Test func homeWorkCanBeCanceledAndItsFailureRetriedOrDismissedInTheRow() {
+        let now = Calendar.current.date(bySettingHour: 23, minute: 0, second: 0, of: Date())!
+        let entries = HomeScrollBenchmark.entries(4, every: 60, before: now)
+        let env = AppEnvironment.preview()
+        let context = HubContext(env: env)
+        context.fixedNow = now
+        context.history = .preview(entries: entries)
+        context.previewRunning = [entries[0].id: .transcription(.geminiFlash)]
+        context.previewFailures = [entries[1].id: HomeFailure(kind: .cleanup(of: .parakeetCloud, by: .gpt6Luna),
+                                                               reason: "GPT-6 Luna took too long.")]
+        env.windows.hubSection = .home
+        let labels = Self.accessibleButtons(HubView(context: context).appTheme())
+        #expect(labels.filter { $0 == "Cancel" }.count == 1)
+        #expect(labels.filter { $0 == "Retry" }.count == 2, "the failure's, and the failed row's own")
+        #expect(labels.filter { $0 == "Dismiss" }.count == 1)
+    }
+
     /// The labels of the buttons VoiceOver finds in `view`, hosted offscreen. SwiftUI builds its accessibility tree
     /// only for an assistive client, which `AXEnhancedUserInterface` on the app stands in for.
     private static func accessibleButtons(_ view: some View) -> [String] {

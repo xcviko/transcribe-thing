@@ -137,7 +137,7 @@ private func body(_ request: OpenRouterChatRequest) throws -> [String: Any] {
         var pasted: [String] = []
         h.controller.insertOverride = { text, _ in pasted.append(text); return .pasted }
         let r = H.recording()
-        h.controller.enqueue(r, engine: .parakeet, delivery: .paste(targetPID: nil), cleansUp: true)
+        h.controller.enqueue(r, engine: .parakeet, targetPID: nil, cleansUp: true)
         try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id) != nil }
         #expect(pasted == ["Hello there."])
         #expect(running == [.cleanup(of: .parakeet, by: .gpt6Luna)])
@@ -153,7 +153,7 @@ private func body(_ request: OpenRouterChatRequest) throws -> [String: Any] {
         h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "raw", engine: engine, processingTime: 0.3) }
         h.controller.insertOverride = { _, _ in .pasted }
         let r = H.recording()
-        h.controller.enqueue(r, engine: .parakeet, delivery: .paste(targetPID: nil), cleansUp: true)
+        h.controller.enqueue(r, engine: .parakeet, targetPID: nil, cleansUp: true)
         try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id) != nil }
         let notice = try #require(h.toasts.notices.first { $0.dedupeKey == "cleanup.fallback" })
         #expect(notice.title == "Couldn’t clean up · pasted the original")
@@ -197,7 +197,7 @@ private func body(_ request: OpenRouterChatRequest) throws -> [String: Any] {
         let updated = try #require(h.history.entry(id: entry.id))
         #expect(updated.currentKind == luna && updated.text == "Hello.")
         #expect(updated.versions.map(\.kind) == [.transcription(.parakeet), flashLite, luna])
-        #expect(h.toasts.notices.contains { $0.title == "Cleaned up with GPT-6 Luna" })
+        #expect(h.toasts.notices.isEmpty, "the row shows it: no card")
 
         // Luna again only shows its version.
         h.controller.showVersion(.transcription(.parakeet), of: entry.id)
