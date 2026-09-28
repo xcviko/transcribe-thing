@@ -39,7 +39,7 @@ enum HubSnapshots {
             },
 
             hub("hub-models", .models),
-            hub("hub-models-full", .models, height: 1320),
+            hub("hub-models-full", .models, height: 1080),
             hub("hub-models-downloading", .models) { c in
                 c.models = .preview(states: [.parakeet: .downloading(Samples.downloading)])
             },
@@ -70,23 +70,17 @@ enum HubSnapshots {
             },
             hub("hub-models-key-missing", .models, height: 1100) { c in
                 c.account = .preview(status: .missing)
-                c.settings.geminiSystemPrompt = "Transcribe the audio verbatim. Output only the transcript."
             },
             // Switch model rebound to right ⌘, clean-up left out: the line under "Extra models" shows the real binding.
             hub("hub-models-extra-custom", .models, height: 1100) { c in
                 c.settings.shortcuts[.switchModel] = .rightCommand
                 c.settings.switchCleanup = false
             },
-            // Both prompts cleared: Gemini gets only the audio, and the clean-up step's switch is disabled with the hint.
-            hub("hub-models-cleanup-empty", .models, height: 1800) { c in
-                c.settings.geminiSystemPrompt = ""
-                c.settings.cleanupSystemPrompt = ""
-            },
-            // The default prompts and the clean-up step off; GPT-6 Luna stays listed under Clean-up.
-            hub("hub-models-cleanup-off", .models, height: 1800) { c in
+            // The clean-up step off; GPT-6 Luna stays listed under Clean-up.
+            hub("hub-models-cleanup-off", .models, height: 1080) { c in
                 c.settings.switchCleanup = false
             },
-            hub("hub-models-cleanup-compact", .models, width: 820, height: 1840) { c in
+            hub("hub-models-cleanup-compact", .models, width: 820, height: 1140) { c in
                 c.account = .preview(status: .missing)
             },
             hub("hub-models-extra-unbound", .models, height: 1100) { c in

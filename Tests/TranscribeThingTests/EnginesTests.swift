@@ -1310,25 +1310,23 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
 @MainActor
 @Suite struct TranscriptionServiceTests {
     private func makeService(replies: [StubURLProtocol.Reply] = [], key: String? = "sk-or-v1-test",
-                             prompt: String = "", keychainFailure: OSStatus? = nil) -> (TranscriptionService, ModelStore) {
-        let made = makeServiceAndAccount(replies: replies, key: key, prompt: prompt, keychainFailure: keychainFailure)
+                             keychainFailure: OSStatus? = nil) -> (TranscriptionService, ModelStore) {
+        let made = makeServiceAndAccount(replies: replies, key: key, keychainFailure: keychainFailure)
         return (made.0, made.1)
     }
 
     private func makeServiceAndAccount(replies: [StubURLProtocol.Reply] = [], key: String? = "sk-or-v1-test",
-                                       prompt: String = "", keychainFailure: OSStatus? = nil,
+                                       keychainFailure: OSStatus? = nil,
                                        localTranscript: String = "hello from the fake")
         -> (TranscriptionService, ModelStore, OpenRouterAccount) {
-        let settings = AppSettings.inMemory()
-        settings.geminiSystemPrompt = prompt
-        let store = ModelStore(paths: .temporary(), settings: settings,
+        let store = ModelStore(paths: .temporary(), settings: .inMemory(),
                                engines: [.parakeet: FakeEngine(.parakeet, installed: true, transcript: localTranscript)],
                                gate: InferenceGate(), freeDiskBytes: { 50_000_000_000 })
         let client = StubURLProtocol.client(replies).0
         let keychain = KeychainStore.inMemory(key.map { [KeychainStore.openRouterAccount: $0] } ?? [:])
         keychain.simulateReadFailure(keychainFailure)
         let account = OpenRouterAccount(keychain: keychain, client: client, debounce: .zero)
-        return (TranscriptionService(models: store, account: account, client: client, settings: settings), store, account)
+        return (TranscriptionService(models: store, account: account, client: client), store, account)
     }
 
     private func speech(seconds: Double = 1) -> Recording {
@@ -1353,18 +1351,20 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
         #expect(result.costUSD == 0.001)
     }
 
-    /// Settings that were never changed send the default prompt as the system message; cleared, only the audio.
-    @Test func geminiGetsTheDefaultPromptUntilItIsCleared() async throws {
-        for (clear, expected) in [(false, AppSettings.defaultGeminiSystemPrompt as String?), (true, nil)] {
-            let settings = AppSettings.inMemory()
-            if clear { settings.geminiSystemPrompt = "" }
-            let store = ModelStore(paths: .temporary(), settings: settings, engines: [:], gate: InferenceGate(),
+    /// Every Gemini request carries the fixed prompt as the system message. `EngineCLI --prompt` replaces it, and
+    /// `--prompt ""` sends only the audio.
+    @Test func geminiGetsTheFixedPromptUnlessTheCLIReplacesIt() async throws {
+        let cases: [(replacement: String?, expected: String?)] = [
+            (nil, EngineID.geminiSystemPrompt), ("Transcribe verbatim.", "Transcribe verbatim."), ("", nil),
+        ]
+        for (replacement, expected) in cases {
+            let store = ModelStore(paths: .temporary(), settings: .inMemory(), engines: [:], gate: InferenceGate(),
                                    freeDiskBytes: { 50_000_000_000 })
             let (client, host) = StubURLProtocol.client([Fixtures.success])
             let keychain = KeychainStore.inMemory([KeychainStore.openRouterAccount: "sk-or-v1-test"])
             let account = OpenRouterAccount(keychain: keychain, client: client, debounce: .zero)
-            let service = TranscriptionService(models: store, account: account, client: client, settings: settings)
-            let result = try await service.transcribe(speech(), engine: .geminiFlash)
+            let service = TranscriptionService(models: store, account: account, client: client)
+            let result = try await service.transcribe(speech(), engine: .geminiFlash, prompt: replacement)
             #expect(result.usedSystemPrompt == (expected != nil))
             let body = try #require(JSONSerialization.jsonObject(with: StubURLProtocol.registry.bodies(for: host)[0]) as? [String: Any])
             let messages = try #require(body["messages"] as? [[String: Any]])

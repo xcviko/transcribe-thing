@@ -163,14 +163,13 @@ private let historyFile = #"""
             try? FileManager.default.removeItem(atPath: suite + ".plist")
         }
         try storeOldSettings(defaults, switchEngines: ["geminiFlash", "geminiPro"])
-        let settings = load(defaults)
+        _ = load(defaults)
         let replies = [StubURLProtocol.Reply(body: #"{"choices":[{"finish_reason":"stop","message":{"content":"Hallo."}}]}"#),
                        StubURLProtocol.Reply(body: #"{"choices":[{"finish_reason":"stop","message":{"content":"Hallo!"}}]}"#)]
         let (client, host) = StubURLProtocol.client(replies)
         let keychain = KeychainStore.inMemory([KeychainStore.openRouterAccount: "sk-or-v1-test"])
         let account = OpenRouterAccount(keychain: keychain, client: client, debounce: .zero)
-        let service = TranscriptionService(models: ModelStore.preview(states: [:]), account: account, client: client,
-                                           settings: settings)
+        let service = TranscriptionService(models: ModelStore.preview(states: [:]), account: account, client: client)
         let transcribed = try await service.transcribe(Recording(samples: [Float](repeating: 0.1, count: 16_000)),
                                                        engine: .geminiFlash)
         let cleaned = try await service.cleanUp(transcribed.text, of: .parakeet)
@@ -193,8 +192,7 @@ private let historyFile = #"""
         let (client, host) = StubURLProtocol.client([StubURLProtocol.Reply(body: #"{"choices":[]}"#)])
         let keychain = KeychainStore.inMemory([KeychainStore.openRouterAccount: "sk-or-v1-test"])
         let account = OpenRouterAccount(keychain: keychain, client: client, debounce: .zero)
-        let service = TranscriptionService(models: ModelStore.preview(states: [:]), account: account, client: client,
-                                           settings: .inMemory())
+        let service = TranscriptionService(models: ModelStore.preview(states: [:]), account: account, client: client)
         await #expect(throws: AppError.self) {
             try await service.transcribe(Recording(samples: [Float](repeating: 0.1, count: 16_000)), engine: .geminiPro)
         }

@@ -200,8 +200,6 @@ struct VersionsMenu: Equatable {
         case recordingGone
         /// Something is already running for this recording.
         case running(TranscriptVersionKind)
-        /// Clean-up has no prompt to follow.
-        case cleanupPromptEmpty
 
         var label: String {
             switch self {
@@ -209,7 +207,6 @@ struct VersionsMenu: Equatable {
             case .tooLongForGemini: "Too long for Gemini"
             case .recordingGone: "Recording no longer kept"
             case .running: "Busy"
-            case .cleanupPromptEmpty: "Needs a clean-up prompt"
             }
         }
     }
@@ -264,9 +261,9 @@ struct VersionsMenu: Equatable {
     static let actionsSectionTitle = "Transcribe With"
 
     /// `running`: what is being made for this recording right now. `readiness`: each engine's (a clean-up needs the
-    /// OpenRouter key like Gemini, so it goes by Gemini Flash's). `hasCleanupPrompt`: the clean-up prompt isn't empty.
+    /// OpenRouter key like Gemini, so it goes by Gemini Flash's).
     static func make(for entry: TranscriptEntry, running: TranscriptVersionKind?,
-                     readiness: (EngineID) -> EngineReadiness, hasCleanupPrompt: Bool) -> VersionsMenu {
+                     readiness: (EngineID) -> EngineReadiness) -> VersionsMenu {
         let isRetry = entry.status != .success
         let hasAudio = entry.audioFileName != nil
         let versions = entry.versions.map {
@@ -284,8 +281,7 @@ struct VersionsMenu: Equatable {
             for version in entry.versions {
                 guard case .transcription(let source) = version.kind, CleanupModel.canClean(source) else { continue }
                 for model in CleanupModel.offered where !entry.hasVersion(.cleanup(of: source, by: model)) {
-                    let blocker = busy ?? (hasCleanupPrompt ? nil : .cleanupPromptEmpty)
-                        ?? readiness(.geminiFlash).unavailableReason.map(Blocker.engine)
+                    let blocker = busy ?? readiness(.geminiFlash).unavailableReason.map(Blocker.engine)
                     actions.append(Action(kind: .cleanup(of: source, by: model), blocker: blocker))
                 }
             }

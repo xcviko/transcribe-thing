@@ -12,7 +12,7 @@ enum HubPalette {
     static let sidebarSelection = Color(nsColor: Palette.dynamic("hub.sidebarSelection", light: .hex(0xFFFFFF), dark: .hex(0x2A2826)))
     /// Apricot dark enough for text on light surfaces.
     static let apricotInk = Color(nsColor: Palette.dynamic("hub.apricotInk", light: .hex(0xB85A2A), dark: .hex(0xFFB38F)))
-    /// Field fill on cards (search, key field, instructions).
+    /// Field fill on cards (search, key field, code in release notes).
     static let field = Color(nsColor: Palette.dynamic("hub.field", light: .hex(0xF7F4EE), dark: .hex(0x171615)))
 }
 
@@ -213,42 +213,6 @@ struct HubMenuPicker<Value: Hashable>: View {
         .menuIndicator(.hidden)
         .buttonStyle(SecondaryButtonStyle(size: .small))
         .fixedSize()
-    }
-}
-
-/// A monospaced prompt field on the sunken field color, with a placeholder while it's empty (Gemini's instructions,
-/// the clean-up prompt).
-struct PromptEditor: View {
-    @Binding var text: String
-    var placeholder: String
-    var height: CGFloat = 112
-    @FocusState private var focused: Bool
-
-    var body: some View {
-        ZStack(alignment: .topLeading) {
-            TextEditor(text: $text)
-                .typeface(.mono)
-                .foregroundStyle(.ink)
-                .scrollContentBackground(.hidden)
-                .focused($focused)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 8)
-            if text.isEmpty {
-                Text(placeholder)
-                    .typeface(.mono)
-                    .foregroundStyle(.inkTertiary)
-                    .padding(.horizontal, 11)
-                    .padding(.vertical, 8)
-                    .allowsHitTesting(false)
-            }
-        }
-        .frame(height: height)
-        .background(HubPalette.field, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(focused ? Color.accentRing : Color.stroke, lineWidth: focused ? 1.5 : 1)
-        }
-        .animation(Theme.Motion.hover, value: focused)
     }
 }
 

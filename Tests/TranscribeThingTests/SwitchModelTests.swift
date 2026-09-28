@@ -372,20 +372,6 @@ import Testing
         c.send(.pillCancel)
     }
 
-    /// Without a clean-up prompt the step isn't there: the first press goes to Gemini.
-    @Test func withoutAPromptTheCycleSkipsCleanup() {
-        let (rig, _) = Self.make()
-        let c = rig.h.controller
-        rig.h.settings.cleanupSystemPrompt = ""
-        c.send(.handsFreeToggle)
-        c.cycleEngine()
-        #expect(c.modelOverride == .engine(.geminiFlash))
-        c.send(.pillCancel)
-
-        rig.h.settings.switchEngines = []
-        #expect(!c.canSwitchModels, "nothing left to switch to")
-    }
-
     /// Tab held down steps on at every autorepeat of the keyboard, however fast, a tick each time.
     @Test func holdingTheKeyStepsAtEveryAutorepeat() {
         let (rig, cues) = Self.make()

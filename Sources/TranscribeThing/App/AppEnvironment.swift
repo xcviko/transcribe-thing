@@ -128,7 +128,7 @@ final class AppEnvironment {
         let recorder = AudioRecorder(levelMeter: levelMeter, devices: devices, settings: settings)
         let client = OpenRouterClient()
         let account = makeAccount(keychain, client)
-        let transcription = TranscriptionService(models: models, account: account, client: client, settings: settings)
+        let transcription = TranscriptionService(models: models, account: account, client: client)
         let inserter = TextInserter(settings: settings)
         let sounds = SoundPlayer(settings: settings)
         let pillModel = PillModel(settings: settings, levelMeter: levelMeter)

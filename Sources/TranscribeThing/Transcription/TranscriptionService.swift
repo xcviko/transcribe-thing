@@ -48,23 +48,22 @@ final class TranscriptionService {
     private let models: ModelStore
     private let account: OpenRouterAccount
     private let client: OpenRouterClient
-    private let settings: AppSettings
     private let providerLookupDelay: Duration
 
-    init(models: ModelStore, account: OpenRouterAccount, client: OpenRouterClient, settings: AppSettings,
+    init(models: ModelStore, account: OpenRouterAccount, client: OpenRouterClient,
          providerLookupDelay: Duration = .milliseconds(1500)) {
         self.models = models
         self.account = account
         self.client = client
-        self.settings = settings
         self.providerLookupDelay = providerLookupDelay
     }
 
     /// Throws `AppError` only, or `CancellationError` when the calling task is cancelled. A retired model never runs.
     /// `processingTime` covers everything after the recording ended, including any wait for the model.
-    /// `effort` has Gemini think at another level than its own (`EngineCLI --effort`); the app never passes one.
-    func transcribe(_ recording: Recording, engine: EngineID,
-                    effort: ReasoningEffort? = nil) async throws -> TranscriptResult {
+    /// `effort` has Gemini think at another level than its own (`EngineCLI --effort`), and `prompt` replaces its
+    /// fixed `EngineID.geminiSystemPrompt` (`--prompt`; empty sends only the audio); the app never passes either.
+    func transcribe(_ recording: Recording, engine: EngineID, effort: ReasoningEffort? = nil,
+                    prompt: String? = nil) async throws -> TranscriptResult {
         guard !engine.isRetired else {
             throw AppError.engineFailed(engine, "\(engine.displayName) is no longer offered.")
         }
@@ -75,8 +74,7 @@ final class TranscriptionService {
                 result.text = try await models.transcribeLocal(engine, samples: recording.samples)
             } else {
                 let effort = effort ?? engine.reasoningEffort
-                // Read now: the request uses it, whatever Settings says by the time it's answered.
-                let prompt = engine.cloudAPI == .chatCompletions ? settings.geminiSystemPrompt : ""
+                let prompt = engine.cloudAPI == .chatCompletions ? (prompt ?? EngineID.geminiSystemPrompt) : ""
                 let cloud = try await transcribeCloud(recording.samples, engine: engine, effort: effort, prompt: prompt)
                 result.text = cloud.text
                 result.costUSD = cloud.costUSD
@@ -128,7 +126,7 @@ final class TranscriptionService {
         }
     }
 
-    /// Gemini: the whole recording in one request, with the user's system prompt.
+    /// Gemini: the whole recording in one request, with its system prompt.
     private func transcribeWithChat(_ samples: [Float], engine: EngineID, model: String, key: String,
                                     effort: ReasoningEffort, prompt: String) async throws -> CloudResult {
         // Refuse before spending time encoding a recording that can't be sent (the recording limit for Gemini
@@ -153,20 +151,21 @@ final class TranscriptionService {
 
     // MARK: Clean-up
 
-    /// Tidies `transcript` (written by `source`) with the clean-up model `model`, following the clean-up prompt at
-    /// that model's fixed reasoning level (`CleanupModel.route`). The result is a version of kind
-    /// `.cleanup(of: source, by: model)`; its text is empty when the model returned nothing. Gives up after
-    /// `timeout` (by default `CleanupModel.timeout(forCharacterCount:)`) with `AppError.timeout`. Throws `AppError`
-    /// only, or `CancellationError`. A retired model never runs.
-    /// `route` sends it to any other model or level instead (`EngineCLI --cleanup-bench`, `--clean-up-effort`); the
-    /// app never passes one.
+    /// Tidies `transcript` (written by `source`) with the clean-up model `model`, following
+    /// `CleanupModel.systemPrompt` at that model's fixed reasoning level (`CleanupModel.route`). The result is a
+    /// version of kind `.cleanup(of: source, by: model)`; its text is empty when the model returned nothing. Gives up
+    /// after `timeout` (by default `CleanupModel.timeout(forCharacterCount:)`) with `AppError.timeout`. Throws
+    /// `AppError` only, or `CancellationError`. A retired model never runs.
+    /// `route` sends it to any other model or level instead (`EngineCLI --cleanup-bench`, `--clean-up-effort`), and
+    /// `prompt` replaces the fixed prompt (`--clean-up-prompt`); the app never passes either.
     func cleanUp(_ transcript: String, of source: EngineID, by model: CleanupModel = .default,
-                 timeout: TimeInterval? = nil, route: CleanupRoute? = nil) async throws -> TranscriptResult {
+                 timeout: TimeInterval? = nil, route: CleanupRoute? = nil,
+                 prompt: String? = nil) async throws -> TranscriptResult {
         guard let route = route ?? model.route else {
             throw AppError.engineFailed(source, "\(model.modelName) no longer cleans up.")
         }
-        let prompt = settings.cleanupSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        // With no instruction the model would reply to the transcript instead of tidying it.
+        let prompt = (prompt ?? CleanupModel.systemPrompt).trimmingCharacters(in: .whitespacesAndNewlines)
+        // A replacement with no instruction would have the model reply to the transcript instead of tidying it.
         guard !prompt.isEmpty else { throw AppError.engineFailed(source, "The clean-up prompt is empty.") }
         guard let key = account.apiKey() else {
             throw account.isKeyUnreadable ? AppError.openRouterKeyUnreadable : AppError.openRouterMissingKey

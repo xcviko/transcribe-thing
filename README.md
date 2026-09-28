@@ -39,8 +39,9 @@ OPENROUTER_API_KEY=sk-or-… .build/debug/transcribe-thing --transcribe memo.m4a
 ```
 
 Gemini 3.8 Flash always thinks at medium and GPT-6 Luna not at all, as in the app; `--effort` (low, medium or high)
-tries Gemini at another level. `--clean-up` sends the transcript to GPT-6 Luna with the example clean-up prompt
-(`--clean-up-prompt` and `--clean-up-effort` change them).
+tries Gemini at another level. The prompts are fixed in the app and change only with a new version; `--prompt`
+tries Gemini with another one (`--prompt ""` sends only the audio). `--clean-up` sends the transcript to GPT-6 Luna
+with the app's clean-up prompt (`--clean-up-prompt` and `--clean-up-effort` change them).
 
 ## Permissions
 

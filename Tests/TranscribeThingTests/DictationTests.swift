@@ -759,7 +759,7 @@ final class FakeRecorder: DictationRecorder {
         let hotkeys = HotkeyMonitor.preview()
         let controller = DictationController(
             settings: settings, recorder: AudioRecorder(levelMeter: meter, devices: devices),
-            transcription: TranscriptionService(models: store, account: account, client: client, settings: settings),
+            transcription: TranscriptionService(models: store, account: account, client: client),
             models: store, account: account, history: history, inserter: TextInserter(settings: settings),
             hotkeys: hotkeys, permissions: .preview(mic: mic, ax: .granted), sounds: SoundPlayer(settings: settings),
             pillModel: pill, toasts: toasts)

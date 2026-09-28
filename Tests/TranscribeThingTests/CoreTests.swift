@@ -700,7 +700,6 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         let settings = AppSettings(defaults: defaults)
         #expect(settings.selectedEngine == .parakeet)
         #expect(settings.pillMode == .whileDictating)
-        #expect(settings.geminiSystemPrompt == AppSettings.defaultGeminiSystemPrompt)
         #expect(settings.shortcuts == .defaults)
 
         settings.selectedEngine = .parakeetCloud

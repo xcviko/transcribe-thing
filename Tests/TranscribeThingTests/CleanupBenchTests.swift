@@ -145,13 +145,10 @@ private func entry(minutesAgo: Double, status: TranscriptStatus = .success,
 @MainActor
 @Suite struct CleanupBenchRunTests {
     private func service(_ replies: [StubURLProtocol.Reply]) -> (TranscriptionService, String) {
-        let settings = AppSettings.inMemory()
-        settings.cleanupSystemPrompt = CleanupModel.examplePrompt
         let (client, host) = StubURLProtocol.client(replies)
         let keychain = KeychainStore.inMemory([KeychainStore.openRouterAccount: "sk-or-v1-test"])
         let account = OpenRouterAccount(keychain: keychain, client: client, debounce: .zero)
-        let service = TranscriptionService(models: ModelStore.preview(states: [:]), account: account,
-                                           client: client, settings: settings)
+        let service = TranscriptionService(models: ModelStore.preview(states: [:]), account: account, client: client)
         return (service, host)
     }
 
@@ -180,7 +177,7 @@ private func entry(minutesAgo: Double, status: TranscriptStatus = .success,
         #expect(body["provider"] as? [String: AnyHashable] == ["only": ["openai"], "allow_fallbacks": false])
         #expect(body["max_tokens"] as? Int == CleanupModel.maxTokens(forCharacterCount: 18, effort: .minimal))
         let messages = try #require(body["messages"] as? [[String: Any]])
-        #expect(messages[0]["content"] as? String == CleanupModel.examplePrompt)
+        #expect(messages[0]["content"] as? String == CleanupModel.systemPrompt)
         #expect(messages[1]["content"] as? String == "<transcript>\nну короче это тест\n</transcript>")
 
         #expect(rows[0].output == "Короче, это тест." && rows[0].identical == false)

@@ -781,10 +781,10 @@ final class DictationController {
         }
     }
 
-    /// A dictation on clean-up (Switch model) is tidied before it's delivered, while there's a prompt to follow.
-    /// A transcript made again from History (a new version of an existing row) isn't: History offers Clean Up.
+    /// A dictation on clean-up (Switch model) is tidied before it's delivered. A transcript made again from History
+    /// (a new version of an existing row) isn't: History offers Clean Up.
     private func cleansUp(_ job: Job, _ result: TranscriptResult) -> Bool {
-        job.cleansUp && settings.hasCleanupPrompt && CleanupModel.canClean(result.engine) && !job.replacesTranscript
+        job.cleansUp && CleanupModel.canClean(result.engine) && !job.replacesTranscript
             && !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
@@ -1275,13 +1275,6 @@ final class DictationController {
         let kind = TranscriptVersionKind.cleanup(of: source, by: model)
         guard !(history.entry(id: entry.id)?.hasVersion(kind) ?? false) else {
             showVersion(kind, of: entry.id)
-            return
-        }
-        guard settings.hasCleanupPrompt else {
-            toasts.post(Notice(dedupeKey: "cleanup.noPrompt", style: .info, symbol: "wand.and.sparkles",
-                               title: "Clean-up needs a prompt", body: "Write one in Models, or use the example.",
-                               actions: [NoticeAction(title: "Open Models", kind: .openHub(.models), isPrimary: true)],
-                               lifetime: .seconds(6)))
             return
         }
         let id = entry.id

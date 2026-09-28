@@ -8,7 +8,7 @@ import Testing
     private func menu(_ entry: TranscriptEntry, running: TranscriptVersionKind? = nil) -> VersionsMenu {
         VersionsMenu.make(for: entry, running: running, readiness: {
             EngineReadiness.of($0, localState: .ready, keyStatus: .valid(KeyInfo(label: "k")))
-        }, hasCleanupPrompt: true)
+        })
     }
 
     private func transcript(_ engine: EngineID = .parakeet) -> TranscriptEntry {

@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The main model (download, use, delete) and storage, the extra models the Switch model shortcut steps through
-/// with Gemini's instructions, and the OpenRouter key.
+/// The main model (download, use, delete) and storage, the extra models the Switch model shortcut steps through,
+/// the clean-up model, and the OpenRouter key.
 struct ModelsPage: View {
     @Environment(HubContext.self) private var hub
     @Environment(ModelStore.self) private var models
@@ -17,6 +17,7 @@ struct ModelsPage: View {
     static let compactBadgeWidth: CGFloat = 640
 
     var body: some View {
+        @Bindable var settings = settings
         ScrollViewReader { proxy in
             HubPage("Models", subtitle: "Every dictation starts on your main model. Switch to an extra one while you talk.") {
                 HubGroup("Main model") {
@@ -31,20 +32,16 @@ struct ModelsPage: View {
                 HubGroup("Extra models", footer: extraFooter) {
                     ExtraModelsLine(status: extraStatus) { hub.show(.shortcuts) }
                     SettingsGroup {
-                        CleanupStepRow(isOn: cleanupStepBinding) { focusKey(proxy) }
+                        CleanupStepRow(isOn: $settings.switchCleanup) { focusKey(proxy) }
                         ForEach(EngineID.switchCandidates) { engine in
                             ExtraModelRow(engine: engine, isOn: extraBinding(engine)) { focusKey(proxy) }
                         }
                     }
                 }
-                HubGroup("Gemini") {
-                    GeminiInstructionsCard()
-                }
                 HubGroup("Clean-up", footer: "For dictations you switch to clean-up. Gemini transcripts aren’t cleaned up: Gemini already punctuates and drops filler words. History keeps the original too.") {
                     SettingsGroup {
                         CleanupModelRow(model: .default) { focusKey(proxy) }
                     }
-                    CleanupPromptCard()
                 }
                 HubGroup("OpenRouter") {
                     OpenRouterKeyCard(focusRequest: keyFocusRequest)
@@ -64,14 +61,6 @@ struct ModelsPage: View {
 
     private var extraFooter: String {
         "The next dictation starts on \(settings.selectedEngine.shortName) again. Gemini takes up to 7 minutes of audio."
-    }
-
-    // MARK: Clean-up
-
-    /// Off and disabled while there's no prompt; the stored choice comes back once there is one.
-    private var cleanupStepBinding: Binding<Bool> {
-        let settings = settings
-        return Binding(get: { settings.switchCleanup && settings.hasCleanupPrompt }, set: { settings.switchCleanup = $0 })
     }
 
     private func extraBinding(_ engine: EngineID) -> Binding<Bool> {
@@ -528,7 +517,7 @@ private struct CleanupIcon: View {
 }
 
 /// Clean-up as a Switch model step, first among the extra models: the main model transcribes and the clean-up model
-/// tidies its words. Named as the pass it is ("Parakeet v3 + GPT-6 Luna"); its prompt is set under Clean-up.
+/// tidies its words. Named as the pass it is ("Parakeet v3 + GPT-6 Luna").
 private struct CleanupStepRow: View {
     @Binding var isOn: Bool
     var focusKey: () -> Void
@@ -539,7 +528,6 @@ private struct CleanupStepRow: View {
 
     var body: some View {
         let cleanup = CleanupModel.default
-        let hasPrompt = settings.hasCleanupPrompt
         HStack(alignment: .center, spacing: 12) {
             CleanupIcon(size: 36)
                 .opacity(isOn ? 1 : 0.55)
@@ -548,9 +536,7 @@ private struct CleanupStepRow: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(isOn ? Color.ink : Color.inkSecondary)
                     .lineLimit(1)
-                Text(hasPrompt
-                     ? "\(settings.selectedEngine.chipName) transcribes, then \(cleanup.shortName) tidies the text. Set it up under Clean-up."
-                     : "Write a clean-up prompt below first. Without one, \(cleanup.shortName) would reply to your words instead of tidying them.")
+                Text("\(settings.selectedEngine.chipName) transcribes, then \(cleanup.shortName) tidies the text.")
                     .typeface(.callout)
                     .foregroundStyle(.inkSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -573,7 +559,6 @@ private struct CleanupStepRow: View {
                 Toggle("", isOn: $isOn)
                     .toggleStyle(.appSwitch)
                     .labelsHidden()
-                    .disabled(!hasPrompt)
                     .accessibilityLabel("Include clean-up when switching")
                     .help(isOn ? "Included when switching models" : "Not included when switching models")
             }

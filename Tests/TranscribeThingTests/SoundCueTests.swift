@@ -345,7 +345,7 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
         sounds.preload()
         let controller = DictationController(
             settings: settings, recorder: AudioRecorder(levelMeter: meter, devices: .preview()),
-            transcription: TranscriptionService(models: store, account: account, client: OpenRouterClient(), settings: settings),
+            transcription: TranscriptionService(models: store, account: account, client: OpenRouterClient()),
             models: store, account: account, history: .preview(entries: []), inserter: TextInserter(settings: settings),
             hotkeys: .preview(), permissions: .preview(mic: .granted, ax: .granted), sounds: sounds,
             pillModel: PillModel(settings: settings, levelMeter: meter), toasts: ToastCenter())

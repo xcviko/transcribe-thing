@@ -77,19 +77,18 @@ private func body(_ request: OpenRouterChatRequest) throws -> [String: Any] {
 
 @MainActor
 @Suite struct CleanupModelServiceTests {
-    private func makeService(_ replies: [StubURLProtocol.Reply]) -> (TranscriptionService, String, AppSettings) {
-        let settings = AppSettings.inMemory()
+    private func makeService(_ replies: [StubURLProtocol.Reply]) -> (TranscriptionService, String) {
         let store = ModelStore.preview(states: [.parakeet: .ready])
         let (client, host) = StubURLProtocol.client(replies)
         let keychain = KeychainStore.inMemory([KeychainStore.openRouterAccount: "sk-or-v1-test"])
         let account = OpenRouterAccount(keychain: keychain, client: client, debounce: .zero)
-        let service = TranscriptionService(models: store, account: account, client: client, settings: settings,
+        let service = TranscriptionService(models: store, account: account, client: client,
                                            providerLookupDelay: .milliseconds(10))
-        return (service, host, settings)
+        return (service, host)
     }
 
     @Test func lunaGetsTheRequestWithoutThinking() async throws {
-        let (service, host, _) = makeService([lunaReply("Hello.")])
+        let (service, host) = makeService([lunaReply("Hello.")])
         let result = try await service.cleanUp("hello", of: .parakeet)
         #expect(result.text == "Hello.")
         #expect(result.modelID == "openai/gpt-6-luna" && result.provider == "OpenAI")
@@ -101,11 +100,11 @@ private func body(_ request: OpenRouterChatRequest) throws -> [String: Any] {
         #expect((sent["provider"] as? [String: Any])?["allow_fallbacks"] as? Bool == false)
         #expect((sent["reasoning"] as? [String: Any])?["effort"] as? String == "none")
         #expect(sent["max_tokens"] as? Int == CleanupModel.maxTokens(forCharacterCount: 5, effort: .off))
-        #expect((sent["messages"] as? [[String: Any]])?.first?["content"] as? String == CleanupModel.examplePrompt)
+        #expect((sent["messages"] as? [[String: Any]])?.first?["content"] as? String == CleanupModel.systemPrompt)
     }
 
     @Test func aRetiredModelNeverRuns() async throws {
-        let (service, host, _) = makeService([lunaReply("Hi.")])
+        let (service, host) = makeService([lunaReply("Hi.")])
         await #expect(throws: AppError.self) { try await service.cleanUp("hi", of: .parakeet, by: .geminiFlashLite) }
         #expect(StubURLProtocol.registry.requests(for: host).isEmpty)
     }
@@ -129,7 +128,6 @@ private func body(_ request: OpenRouterChatRequest) throws -> [String: Any] {
     @Test func aDictationIsCleanedUpByLuna() async throws {
         let h = H.make(keyStatus: .valid(KeyInfo()), persistsHistory: true)
         defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
-        h.settings.cleanupSystemPrompt = CleanupModel.examplePrompt
         var running: [TranscriptVersionKind] = []
         h.controller.cleanupOverride = { _, _ in
             running.append(contentsOf: h.controller.runningVersions.values)
@@ -151,7 +149,6 @@ private func body(_ request: OpenRouterChatRequest) throws -> [String: Any] {
     @Test func aFailedCleanUpNamesTheModelThatTried() async throws {
         let h = H.make(keyStatus: .valid(KeyInfo()), persistsHistory: true)
         defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
-        h.settings.cleanupSystemPrompt = CleanupModel.examplePrompt
         h.controller.cleanupOverride = { _, _ in throw AppError.openRouterTruncated("") }
         h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "raw", engine: engine, processingTime: 0.3) }
         h.controller.insertOverride = { _, _ in .pasted }
@@ -183,7 +180,6 @@ private func body(_ request: OpenRouterChatRequest) throws -> [String: Any] {
     /// An entry Flash Lite already tidied can still get Luna's clean-up; both stay in its Versions menu.
     @Test func historyCleansUpWithLunaOnceBesideFlashLitesVersion() async throws {
         let h = H.make(keyStatus: .valid(KeyInfo()))
-        h.settings.cleanupSystemPrompt = CleanupModel.examplePrompt
         var entry = TranscriptEntry(text: "um hello", engine: .parakeet, audioDuration: 3, voicedSeconds: 2)
         let flashLite = TranscriptVersionKind.cleanup(of: .parakeet, by: .geminiFlashLite)
         entry.addVersion(TranscriptVersion(kind: flashLite, text: "Hello", metadata: TranscriptMetadata()))

@@ -83,8 +83,7 @@ final class HubContext: Observable {
     }
 
     func versionsMenu(for entry: TranscriptEntry) -> VersionsMenu {
-        VersionsMenu.make(for: entry, running: runningVersion(for: entry.id), readiness: readiness(of:),
-                          hasCleanupPrompt: settings.hasCleanupPrompt)
+        VersionsMenu.make(for: entry, running: runningVersion(for: entry.id), readiness: readiness(of:))
     }
 
     /// "transcribe-thing 0.1.0 (build 42)", or without the build when running the bare binary.

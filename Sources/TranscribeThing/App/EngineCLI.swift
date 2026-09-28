@@ -19,11 +19,12 @@ import Foundation
 /// (ModelStore → InferenceGate → engine, or OpenRouterClient). Cloud engines read the key from
 /// OPENROUTER_API_KEY, else from the Keychain; cloud Parakeet also prints the provider that served the request.
 /// `--prompt` and `--effort` apply to Gemini only: `--effort` replaces Gemini 3.8 Flash's fixed medium and is sent as
-/// given. Without `--prompt` Gemini gets the app's default prompt (`AppSettings.defaultGeminiSystemPrompt`);
-/// `--prompt ""` sends only the audio.
+/// given. Without `--prompt` Gemini gets the app's fixed prompt (`EngineID.geminiSystemPrompt`); `--prompt ""` sends
+/// only the audio.
 /// `--clean-up` sends the last transcript to the clean-up model (GPT-6 Luna; `--clean-up-effort` replaces its fixed
-/// none) with the clean-up prompt (by default `CleanupModel.examplePrompt`) and prints the cleaned text. Only the
-/// models the app offers are accepted. Settings are in-memory: the CLI never changes the app's.
+/// none) with the app's clean-up prompt (`CleanupModel.systemPrompt`, unless `--clean-up-prompt` replaces it) and
+/// prints the cleaned text. Only the models the app offers are accepted. Settings are in-memory: the CLI never
+/// changes the app's.
 /// An engine that answers with no text heard no speech: that prints `NO SPEECH` instead of `TEXT:` and exits 0,
 /// like any other answer. Only real failures print `ERROR:` and exit non-zero.
 ///
@@ -182,8 +183,6 @@ enum EngineCLI {
         let paths = AppPaths.live()
         let settings = AppSettings.inMemory()
         settings.selectedEngine = options.engine
-        settings.geminiSystemPrompt = options.prompt ?? AppSettings.defaultGeminiSystemPrompt
-        settings.cleanupSystemPrompt = options.cleanupPrompt ?? CleanupModel.examplePrompt
         // Gemini's own level unless --effort replaces it; nothing for a model that doesn't reason.
         let effort = options.engine.reasoningEffort.map { options.effort ?? $0 }
         if let effort { print("EFFORT: \(effort.rawValue)") }
@@ -195,7 +194,7 @@ enum EngineCLI {
                                freeDiskBytes: { paths.freeDiskBytes() })
         let client = OpenRouterClient()
         let account = OpenRouterAccount(keychain: .inMemory(), client: client)
-        let service = TranscriptionService(models: store, account: account, client: client, settings: settings)
+        let service = TranscriptionService(models: store, account: account, client: client)
 
         if options.engine.isLocal {
             try paths.ensureDirectories()
@@ -213,7 +212,8 @@ enum EngineCLI {
         var last: TranscriptResult?
         var runTimes: [TimeInterval] = []
         for run in 1...options.repeatCount {
-            let result = try await service.transcribe(recording, engine: options.engine, effort: effort)
+            let result = try await service.transcribe(recording, engine: options.engine, effort: effort,
+                                                      prompt: options.prompt)
             runTimes.append(result.processingTime)
             let speed = result.processingTime > 0 ? audioSeconds / result.processingTime : 0
             var line = "RUN \(run): \(format(result.processingTime, digits: 3)) s · \(format(speed, digits: 1))x real time"
@@ -236,7 +236,8 @@ enum EngineCLI {
             if options.cleanUp, !last.text.isEmpty {
                 let model = options.cleanupModel ?? .default
                 let route = options.cleanupEffort.map(model.route(effort:))
-                let cleaned = try await service.cleanUp(last.text, of: last.engine, by: model, route: route)
+                let cleaned = try await service.cleanUp(last.text, of: last.engine, by: model, route: route,
+                                                        prompt: options.cleanupPrompt)
                 let level = cleaned.reasoningEffort?.rawValue ?? "?"
                 var line = "CLEAN-UP: \(model.modelName) · \(level) · \(format(cleaned.processingTime, digits: 3)) s"
                 if let cost = cleaned.costUSD { line += " · $\(String(format: "%.5f", cost))" }
@@ -364,11 +365,9 @@ enum EngineCLI {
         }
         print("KEY: read from \(keychain.isInMemory ? "OPENROUTER_API_KEY" : "the Keychain")")
 
-        let settings = AppSettings.inMemory()
-        settings.cleanupSystemPrompt = CleanupModel.examplePrompt
-        let store = ModelStore(paths: .temporary(), settings: settings, engines: [:], gate: .shared,
+        let store = ModelStore(paths: .temporary(), settings: .inMemory(), engines: [:], gate: .shared,
                                freeDiskBytes: { 0 })
-        let service = TranscriptionService(models: store, account: account, client: client, settings: settings)
+        let service = TranscriptionService(models: store, account: account, client: client)
         let route = options.route
         print("BENCH: \(route.model) · effort \(route.effort) · provider \(route.provider.only.joined(separator: ",")) · \(items.count) dictations")
 
@@ -385,7 +384,7 @@ enum EngineCLI {
             print(line)
         }
         let report = CleanupBench.Report(model: route.model, provider: route.provider.only, effort: route.effort,
-                                         maxTokensSizedFor: route.budget.rawValue, prompt: "CleanupModel.examplePrompt",
+                                         maxTokensSizedFor: route.budget.rawValue, prompt: "CleanupModel.systemPrompt",
                                          history: options.history.path, startedAt: startedAt, items: rows,
                                          summary: CleanupBench.summarize(rows))
         let summary = report.summary
@@ -410,7 +409,7 @@ enum EngineCLI {
 
     /// `--cleanup-bench`: the most recent Parakeet transcripts of a history file, each cleaned up once by another
     /// model through the app's own clean-up request (`TranscriptionService.cleanUp` with a `CleanupRoute`: the
-    /// example prompt as the system message, the transcript in `<transcript>` tags, reasoning excluded,
+    /// app's clean-up prompt as the system message, the transcript in `<transcript>` tags, reasoning excluded,
     /// `max_tokens` sized like the app's, the provider pinned without fallbacks), one after another. The report
     /// keeps each input and output with its timing, tokens and cost, next to the entry's Gemini 3.8 Flash
     /// transcript and its existing Flash Lite clean-up, when it has them.

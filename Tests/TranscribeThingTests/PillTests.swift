@@ -1162,9 +1162,6 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         model.settings.switchEngines = [.geminiFlash]
         model.settings.switchCleanup = false
         #expect(model.menuChoices == [.engine(.parakeet), .engine(.geminiFlash)])
-        model.settings.switchCleanup = true
-        model.settings.cleanupSystemPrompt = " "
-        #expect(model.menuChoices == [.engine(.parakeet), .engine(.geminiFlash)], "no prompt, no clean-up")
     }
 
     @Test func extraModelsAndCleanupTintThePillAndTheMainModelDoesNot() {

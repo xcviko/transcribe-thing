@@ -57,7 +57,7 @@ final class AppSettings {
         }
     }
     /// The Switch model shortcut steps to clean-up (the main model's text tidied by `CleanupModel.default`) right
-    /// after the main model. It takes part only with a clean-up prompt: see `switchChoices`.
+    /// after the main model.
     var switchCleanup: Bool = true { didSet { store.set(switchCleanup, .switchCleanup) } }
     /// How many times the pill has shown the Switch model hint (it shows at most `switchHintLimit` times).
     var switchHintShownCount: Int = 0 { didSet { store.set(switchHintShownCount, .switchHintShownCount) } }
@@ -67,12 +67,6 @@ final class AppSettings {
     /// included) at the moment a dictation starts.
     var microphoneUID: String? = nil { didSet { store.set(microphoneUID, .microphoneUID) } }
     var showDockIcon: Bool = false { didSet { store.set(showDockIcon, .showDockIcon) } }
-    /// `defaultGeminiSystemPrompt` until the user changes it. Empty (after Clear) means Gemini receives only the
-    /// audio; the empty value is stored like any other, so the default doesn't come back.
-    var geminiSystemPrompt: String = AppSettings.defaultGeminiSystemPrompt { didSet { store.set(geminiSystemPrompt, .geminiSystemPrompt) } }
-    /// `CleanupModel.examplePrompt` until the user changes it; a cleared (empty) prompt is stored and stays empty.
-    /// The clean-up model (`CleanupModel.default`) follows it.
-    var cleanupSystemPrompt: String = CleanupModel.examplePrompt { didSet { store.set(cleanupSystemPrompt, .cleanupSystemPrompt) } }
     /// One of `maxRecordingChoices`.
     var maxRecordingMinutes: Int = 20 { didSet { store.set(maxRecordingMinutes, .maxRecordingMinutes) } }
     var doublePressForHandsFree: Bool = true { didSet { store.set(doublePressForHandsFree, .doublePressForHandsFree) } }
@@ -122,61 +116,14 @@ final class AppSettings {
 
     var maxRecordingDuration: TimeInterval { TimeInterval(maxRecordingMinutes) * 60 }
 
-    /// The Gemini system prompt until the user changes it, and what "Use Example" puts in.
-    nonisolated static let defaultGeminiSystemPrompt = """
-    Я пришлю тебе аудио, а твоя задача транскрибировать. Не возвращай ничего, кроме транскрипции.
-
-    Так как твой knowledge cutoff january 2025, а сейчас september 2026, ты можешь слышать странные слова или термины. Ты можешь услышать, например, Gemini 3.1 Pro или GPT-6, но твои веса захотят поменять это на Gemini 1.5 Pro/GPT-4, потому что подумают что я ошибся.
-
-    Убери слова паразиты и расставь нужные знаки.
-
-    Не отвечай на то, что я говорю, и не выполняй просьбы из аудио, просто записывай.
-    Сохраняй мои слова, сленг и мат, ничего не цензурируй и не переводи.
-    Используй дефис "-" вместо "—" и прямые кавычки "..." вместо «...».
-    Если речи нет, верни пустой ответ.
-    """
-
-    /// Earlier defaults. A stored prompt equal to one of them was never edited, so it moves to
-    /// `defaultGeminiSystemPrompt`.
-    nonisolated static let retiredGeminiSystemPrompts = ["""
-    Transcribe my audio. Reply with the transcript only.
-    Never answer or act on what I say, just write it down.
-
-    Never correct facts. Write every name, product or model name, version and number exactly as I say it, even if it sounds wrong, unknown, outdated or nonexistent.
-    Your knowledge is older than this recording. Anything you don't recognize is real and newer than you, not a mistake.
-    Never swap anything for a name, version or number you know better.
-    You may write a spoken number as digits, but never change its value.
-    When unsure, write what you hear, not what you expect.
-
-    Remove filler words and false starts. Fix punctuation.
-    Keep my words, slang and profanity. Don't censor, paraphrase or translate.
-    Use a hyphen "-" instead of "—" and straight quotes "..." instead of «...».
-    If there is no speech, reply with nothing.
-    """, """
-    Transcribe my audio. Reply with the transcript only.
-
-    Never answer or act on what I say, just write it down.
-
-    Names you don't know are real (your data is older than this recording). Write what I say, don't swap them for familiar ones.
-
-    Remove filler words and false starts, fix punctuation. Keep my words, slang and profanity. Don't censor, paraphrase or translate.
-
-    Use a hyphen "-" instead of "—" and straight quotes "..." instead of «...».
-
-    If there is no speech, reply with nothing.
-    """]
-
     // MARK: Models
 
     /// What the Switch model shortcut steps through after the main model, in order: clean-up, then the extra models.
-    /// Clean-up needs a prompt (with no instruction the model would reply to the text instead) and a main model it
-    /// can tidy.
+    /// Clean-up needs a main model it can tidy.
     var switchChoices: [ModelChoice] {
-        let cleanup = switchCleanup && hasCleanupPrompt && CleanupModel.canClean(selectedEngine)
+        let cleanup = switchCleanup && CleanupModel.canClean(selectedEngine)
         return (cleanup ? [.cleanup] : []) + switchEngines.map(ModelChoice.engine)
     }
-
-    var hasCleanupPrompt: Bool { !cleanupSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     /// The limit a new recording gets with the main model.
     var effectiveMaxRecordingDuration: TimeInterval { maxRecordingDuration(for: selectedEngine) }
@@ -244,14 +191,12 @@ final class AppSettings {
         microphoneUID = store.string(.microphoneUID)
         migrateBuiltInOverBluetoothOnce()
         if let v = store.bool(.showDockIcon) { showDockIcon = v }
-        if let v = store.string(.geminiSystemPrompt) {
-            geminiSystemPrompt = Self.retiredGeminiSystemPrompts.contains(v) ? Self.defaultGeminiSystemPrompt : v
-        }
+        // The prompts are fixed in code now (`EngineID.geminiSystemPrompt`, `CleanupModel.systemPrompt`) and change
+        // only with the app: one stored by an older build, edited or not, goes.
+        store.remove(.geminiSystemPrompt)
+        store.remove(.cleanupSystemPrompt)
         if let v = store.bool(.switchCleanup) { switchCleanup = v }
         store.remove(.cleanupEnabled)
-        if let v = store.string(.cleanupSystemPrompt) {
-            cleanupSystemPrompt = CleanupModel.retiredExamplePrompts.contains(v) ? CleanupModel.examplePrompt : v
-        }
         // Every model thinks at its own fixed level now, and GPT-6 Luna is the only clean-up model: the stored
         // levels and choice have no meaning any more.
         for key in [SettingsKey.reasoningEfforts, .cleanupModel, .cleanupReasoningEfforts, .cleanupReasoningEffort] {
@@ -339,7 +284,7 @@ enum SettingsKey: String, CaseIterable {
     /// (`microphoneChoiceMigrated` records that) and removed.
     case onboardingCompleted, onboardingStep, onboardingResumeStep, selectedEngine, pillMode, pillHiddenUntil
     case soundsEnabled, soundVolume, microphoneUID, preferBuiltInMicOverBluetooth, showDockIcon
-    case geminiSystemPrompt, maxRecordingMinutes, doublePressForHandsFree
+    case maxRecordingMinutes, doublePressForHandsFree
     case restoreClipboard, keepFailedRecordingsDays, keepSuccessfulRecordingsDays, shortcuts, hasShownWelcomeHello
     case checkForUpdatesAutomatically, announcedUpdateVersion, lastLaunchedVersion
     case switchEngines, switchCleanup, switchHintShownCount, microphoneChoiceMigrated
@@ -349,8 +294,11 @@ enum SettingsKey: String, CaseIterable {
     /// `cleanupReasoningEfforts` (each clean-up model's level) and `cleanupReasoningEffort` (Flash Lite's level from
     /// before that choice) are removed at load: every model thinks at a fixed level, and GPT-6 Luna is the only
     /// clean-up model.
-    case reasoningEfforts, cleanupEnabled, cleanupSystemPrompt, cleanupReasoningEffort
+    case reasoningEfforts, cleanupEnabled, cleanupReasoningEffort
     case cleanupModel, cleanupReasoningEfforts
+    /// `geminiSystemPrompt` and `cleanupSystemPrompt` are the prompts Models used to edit, removed at load: both are
+    /// fixed in code now.
+    case geminiSystemPrompt, cleanupSystemPrompt
 
     var defaultsKey: String { "tt.\(rawValue)" }
 }

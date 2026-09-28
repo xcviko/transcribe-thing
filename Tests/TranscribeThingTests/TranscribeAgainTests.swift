@@ -323,10 +323,10 @@ import Testing
 
 @Suite struct VersionsMenuTests {
     private func menu(_ entry: TranscriptEntry, key: KeyStatus = .valid(KeyInfo()), local: LocalModelState = .ready,
-                      running: TranscriptVersionKind? = nil, prompt: Bool = true) -> VersionsMenu {
+                      running: TranscriptVersionKind? = nil) -> VersionsMenu {
         VersionsMenu.make(for: entry, running: running, readiness: {
             EngineReadiness.of($0, localState: local, keyStatus: key)
-        }, hasCleanupPrompt: prompt)
+        })
     }
 
     private func transcript(_ engine: EngineID = .parakeet, duration: TimeInterval = 90, audio: Bool = true) -> TranscriptEntry {
@@ -407,12 +407,6 @@ import Testing
         #expect(action(m, .transcription(.parakeetCloud))?.blocker == .recordingGone)
         #expect(action(m, .transcription(.parakeetCloud))?.title == "Parakeet v3 · Cloud · Recording no longer kept")
         #expect(action(m, .cleanup(of: .parakeet, by: .gpt6Luna))?.isEnabled == true)
-    }
-
-    @Test func cleanUpNeedsAPrompt() {
-        let m = menu(transcript(.parakeet), prompt: false)
-        #expect(action(m, .cleanup(of: .parakeet, by: .gpt6Luna))?.blocker == .cleanupPromptEmpty)
-        #expect(action(m, .cleanup(of: .parakeet, by: .gpt6Luna))?.title == "Clean Up with GPT-6 Luna · Needs a clean-up prompt")
     }
 
     @Test func somethingRunningBlocksEveryActionButNotSwitching() {

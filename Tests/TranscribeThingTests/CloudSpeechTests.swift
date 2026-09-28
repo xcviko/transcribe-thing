@@ -333,13 +333,11 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
 @Suite struct CloudSpeechServiceTests {
     private func makeService(_ replies: [StubURLProtocol.Reply], key: String? = "sk-or-v1-test")
         -> (TranscriptionService, String, OpenRouterAccount) {
-        let settings = AppSettings.inMemory()
-        settings.geminiSystemPrompt = "Never sent to speech models."
         let store = ModelStore.preview(states: [.parakeet: .ready])
         let (client, host) = StubURLProtocol.client(replies)
         let keychain = KeychainStore.inMemory(key.map { [KeychainStore.openRouterAccount: $0] } ?? [:])
         let account = OpenRouterAccount(keychain: keychain, client: client, debounce: .zero)
-        let service = TranscriptionService(models: store, account: account, client: client, settings: settings,
+        let service = TranscriptionService(models: store, account: account, client: client,
                                            providerLookupDelay: .milliseconds(10))
         return (service, host, account)
     }
@@ -381,6 +379,7 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         let result = try await service.transcribe(speech(3), engine: .parakeetCloud)
         #expect(result.text == "Dzień dobry.")
         #expect(result.provider == "Together")
+        #expect(result.usedSystemPrompt == false, "Gemini's prompt isn't for speech models")
         let body = try json(try #require(StubURLProtocol.registry.bodies(for: host).first))
         #expect(Set(body.keys) == ["model", "input_audio"])
         #expect(body["model"] as? String == "nvidia/parakeet-tdt-0.6b-v3")
