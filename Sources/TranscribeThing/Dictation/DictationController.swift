@@ -573,18 +573,13 @@ final class DictationController {
         postCanceled(recording)
     }
 
-    /// "Dictation canceled", and nothing else: a long enough recording is in History. After an Undo (of "Dictation
-    /// stopped") that couldn't pick the recording up, `note` says why and Undo is offered again.
+    /// "Dictation canceled · Undo", nothing more (a long enough recording is in History too). After an Undo that
+    /// couldn't pick the recording up, `note` says why.
     private func postCanceled(_ recording: Recording, note: String? = nil) {
         let title = historyOnlyIDs.contains(recording.id) ? "Transcription canceled" : "Dictation canceled"
-        guard let note else {
-            toasts.post(Notice(dedupeKey: "dictation.canceled", style: .info, symbol: "xmark.circle", title: title,
-                               lifetime: .seconds(3), recordingID: recording.id))
-            return
-        }
         toasts.post(Notice(dedupeKey: "dictation.canceled", style: .info, symbol: "xmark.circle", title: title,
                            body: note, actions: [NoticeAction(title: "Undo", kind: .undoCancel, isPrimary: true)],
-                           lifetime: .seconds(10), recordingID: recording.id))
+                           lifetime: .seconds(note == nil ? 6 : 10), recordingID: recording.id))
     }
 
     /// Posts a failure notice; the same failure again within `repeatedFailureQuietPeriod` of its last sound

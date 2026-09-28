@@ -43,13 +43,6 @@ import Testing
             h.toasts.perform(action, on: notice)
         }
 
-        /// Undo of the last kept recording, as "Dictation stopped" (another key during a hold) offers it. Esc's
-        /// "Dictation canceled" only says so, but what Undo does with the recording is the same.
-        func undo() throws {
-            let canceled = try #require(notice("dictation.canceled"), "no dictation.canceled notice")
-            h.controller.perform(NoticeAction(title: "Undo", kind: .undoCancel, isPrimary: true), from: canceled)
-        }
-
         /// Push-to-talk held for `seconds`, then Esc.
         func holdThenEsc(_ seconds: TimeInterval) {
             h.controller.handle(.pttDown)
@@ -82,11 +75,11 @@ import Testing
         rig.holdThenEsc(1)
         let canceled = try #require(rig.notice("dictation.canceled"))
         #expect(canceled.title == "Dictation canceled")
-        #expect(canceled.body == nil && canceled.actions.isEmpty, "it only says so")
+        #expect(canceled.body == nil && canceled.actions.map(\.kind) == [.undoCancel], "the title and Undo, nothing more")
         #expect(!rig.h.controller.machine.isRecording)
 
         rig.now += 3
-        try rig.undo()
+        try rig.click(.undoCancel, in: "dictation.canceled")
         #expect(rig.h.controller.machine.capture == .locked(startedAt: rig.now - kept.duration))
         #expect(rig.h.recorder.starts == 2)
         #expect(rig.h.recorder.lastPrefix?.id == kept.id)
@@ -168,7 +161,7 @@ import Testing
         let stopped = try #require(rig.notice("dictation.canceled"))
         #expect(stopped.title == "Dictation stopped")
         #expect(stopped.body?.hasSuffix(DictationController.undoResumesHint) == true)
-        try rig.undo()
+        try rig.click(.undoCancel, in: "dictation.canceled")
         #expect(rig.h.controller.machine.mode == .handsFree)
         #expect(rig.h.recorder.lastPrefix?.id == kept.id)
     }
@@ -189,7 +182,7 @@ import Testing
         #expect(rig.h.controller.machine.activeJobs == 0)
         #expect(rig.notice("dictation.canceled")?.recordingID == kept.id)
 
-        try rig.undo()
+        try rig.click(.undoCancel, in: "dictation.canceled")
         #expect(rig.h.controller.machine.capture.isListeningOrLocked)
         #expect(rig.h.recorder.lastPrefix?.id == kept.id)
         try await Task.sleep(for: .milliseconds(300))
@@ -209,7 +202,7 @@ import Testing
         let kept = Self.speech(seconds: 2)
         rig.h.recorder.next = kept
         rig.holdThenEsc(2)
-        try rig.undo()
+        try rig.click(.undoCancel, in: "dictation.canceled")
 
         rig.h.recorder.next = Self.speech(seconds: 1.5)
         rig.now += 1.5
@@ -218,7 +211,7 @@ import Testing
         let again = try #require(rig.notice("dictation.canceled"))
         #expect(again.recordingID == kept.id)
 
-        try rig.undo()
+        try rig.click(.undoCancel, in: "dictation.canceled")
         #expect(rig.h.recorder.lastPrefix?.duration == 3.5, "the kept part and what came after it")
         #expect(rig.h.controller.machine.recordingStartedAt == rig.now - 3.5)
         rig.h.controller.send(.pillCancel)
@@ -235,7 +228,7 @@ import Testing
         #expect(rig.h.history.entries.map(\.id) == [kept.id])
         #expect(rig.h.history.entries.first?.status == .cancelled)
 
-        try rig.undo()
+        try rig.click(.undoCancel, in: "dictation.canceled")
         rig.h.recorder.next = Self.speech(seconds: 1)
         rig.result = { _, _ in "done" }
         rig.h.controller.send(.pillStop)
@@ -255,14 +248,14 @@ import Testing
         rig.holdThenEsc(2)
 
         rig.h.recorder.startError = .noMicrophone
-        try rig.undo()
+        try rig.click(.undoCancel, in: "dictation.canceled")
         #expect(!rig.h.controller.machine.isRecording)
         #expect(rig.notice("error.noMicrophone") != nil)
         #expect(rig.notice("dictation.canceled")?.recordingID == kept.id, "Undo is still there")
         #expect(rig.transcribed.isEmpty)
 
         rig.h.recorder.startError = nil
-        try rig.undo()
+        try rig.click(.undoCancel, in: "dictation.canceled")
         #expect(rig.h.controller.machine.mode == .handsFree)
         #expect(rig.h.recorder.lastPrefix?.id == kept.id)
         rig.h.controller.send(.pillCancel)
@@ -274,7 +267,7 @@ import Testing
         let kept = Self.speech(seconds: 2)
         rig.h.recorder.next = kept
         rig.holdThenEsc(2)
-        try rig.undo()
+        try rig.click(.undoCancel, in: "dictation.canceled")
         rig.h.toasts.dismissAll()
 
         rig.h.recorder.next = Self.speech(seconds: 0.5)
@@ -283,7 +276,7 @@ import Testing
         #expect(rig.notice("error.microphoneNotResponding") != nil)
         let undo = try #require(rig.notice("dictation.canceled"))
         #expect(undo.recordingID == kept.id)
-        try rig.undo()
+        try rig.click(.undoCancel, in: "dictation.canceled")
         #expect(rig.h.recorder.lastPrefix?.duration == 2.5)
         rig.h.controller.send(.pillCancel)
     }
@@ -297,7 +290,7 @@ import Testing
 
         rig.h.recorder.next = Self.speech(seconds: 1)
         rig.h.controller.send(.handsFreeToggle)
-        rig.h.controller.perform(NoticeAction(title: "Undo", kind: .undoCancel, isPrimary: true), from: canceled)
+        rig.h.toasts.perform(canceled.actions[0], on: canceled)
         #expect(rig.h.recorder.lastPrefix == nil, "the running dictation is left alone")
         #expect(rig.h.controller.machine.mode == .handsFree)
         let offered = try #require(rig.notice("dictation.canceled"))
@@ -319,7 +312,7 @@ import Testing
         let canceled = try #require(rig.notice("dictation.canceled"))
         #expect(canceled.title == "Transcription canceled")
         #expect(canceled.body == nil)
-        try rig.undo()
+        try rig.click(.undoCancel, in: "dictation.canceled")
         #expect(rig.h.recorder.starts == 0, "no microphone")
         try await waitUntil { rig.h.history.entry(id: r.id)?.status == .success }
         #expect(rig.pasted.isEmpty)
@@ -334,14 +327,14 @@ import Testing
         let first = Self.roomNoise()
         rig.h.recorder.next = first
         rig.holdThenEsc(1)
-        try rig.undo()
+        try rig.click(.undoCancel, in: "dictation.canceled")
 
         rig.h.recorder.next = Self.roomNoise(seconds: 0.5)
         rig.now += 0.5
         rig.h.controller.handle(.cancel)
         let again = try #require(rig.notice("dictation.canceled"))
         #expect(again.recordingID == first.id)
-        try rig.undo()
+        try rig.click(.undoCancel, in: "dictation.canceled")
         #expect(rig.h.recorder.lastPrefix?.duration == 1.5)
         try await Task.sleep(for: .milliseconds(200))
         #expect(rig.transcribed.isEmpty)
@@ -412,19 +405,16 @@ import Testing
         }
     }
 
-    /// Two quick clicks on "Dictation stopped · Undo": one resumed recording.
+    /// Two quick clicks on Undo: one resumed recording.
     @Test func doubleClickingUndoResumesOnce() throws {
         let rig = Rig()
         let kept = Self.speech(seconds: 2)
         rig.h.recorder.next = kept
-        rig.h.controller.handle(.pttDown)
-        rig.h.controller.send(.timer(.arming))
-        rig.now += 2
-        rig.h.controller.handle(.pttInterrupted)
-        let stopped = try #require(rig.notice("dictation.canceled"))
-        let undo = try #require(stopped.actions.first { $0.kind == .undoCancel })
-        rig.h.toasts.perform(undo, on: stopped)
-        rig.h.toasts.perform(undo, on: stopped)
+        rig.holdThenEsc(2)
+        let canceled = try #require(rig.notice("dictation.canceled"))
+        let undo = try #require(canceled.actions.first { $0.kind == .undoCancel })
+        rig.h.toasts.perform(undo, on: canceled)
+        rig.h.toasts.perform(undo, on: canceled)
         #expect(rig.h.recorder.starts == 2, "the dictation, then one resume")
         #expect(rig.h.recorder.lastPrefix?.id == kept.id)
         #expect(rig.notice("dictation.canceled") == nil)
@@ -463,7 +453,7 @@ import Testing
         rig.h.recorder.next = kept
         rig.holdThenEsc(21)
         let entry = try #require(rig.h.history.entry(id: kept.id))
-        try rig.undo()
+        try rig.click(.undoCancel, in: "dictation.canceled")
         rig.h.controller.retry(entry, with: .parakeet)
         #expect(rig.h.controller.pendingJobCount == 0)
         rig.h.controller.send(.pillCancel)

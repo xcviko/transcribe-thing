@@ -26,8 +26,13 @@ enum ToastMetrics {
     static let maxWidth: CGFloat = 380
     /// Icon (24) + spacing (10): where the title, body and actions start.
     static let textInset: CGFloat = 34
-    static let padding: CGFloat = 14
+    static let padding: CGFloat = 16
     static let gap: CGFloat = 8
+    /// A one-row toast is a capsule, like the pill: the icon disc and the close ring sit concentric with its ends.
+    static let compactLeading: CGFloat = 12
+    static let compactTrailing: CGFloat = 14
+    static let compactVertical: CGFloat = 12
+    static let compactHeight: CGFloat = 24 + 2 * compactVertical
 }
 
 // MARK: - Stack
@@ -92,11 +97,12 @@ struct ToastCard: View {
     private var showsPasteHint: Bool { isTranscript && notice.style == .info }
     private var tint: Color { ToastPalette.tint(for: notice.style) }
 
-    /// Title with one short action and nothing else: a single compact row.
+    /// Title with at most one short action and nothing else: a single compact row, in a capsule.
     private var isCompact: Bool { Self.isCompact(notice) }
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: Theme.Radius.toast, style: .continuous)
+        let radius = isCompact ? ToastMetrics.compactHeight / 2 : Theme.Radius.toast
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         Group {
             if isCompact {
                 compactRow
@@ -116,7 +122,8 @@ struct ToastCard: View {
                 }
             }
         }
-        .padding(ToastMetrics.padding)
+        .padding(isCompact ? compactInsets : EdgeInsets(top: ToastMetrics.padding, leading: ToastMetrics.padding,
+                                                         bottom: ToastMetrics.padding, trailing: ToastMetrics.padding))
         .frame(width: cardWidth, alignment: .leading)
         .overlay {
             shape.fill(ToastPalette.fill)
@@ -136,13 +143,19 @@ struct ToastCard: View {
 
     private var cardWidth: CGFloat { width ?? Self.preferredWidth(for: notice) }
 
+    private var compactInsets: EdgeInsets {
+        EdgeInsets(top: ToastMetrics.compactVertical, leading: ToastMetrics.compactLeading,
+                   bottom: ToastMetrics.compactVertical, trailing: ToastMetrics.compactTrailing)
+    }
+
     /// 340 pt, widened up to 380 pt so a title stays on one line (wispr-ux §1.7); transcript cards are 380.
     static func preferredWidth(for notice: Notice) -> CGFloat {
         if notice.transcript != nil { return ToastMetrics.transcriptWidth }
         let font = NSFont.systemFont(ofSize: 13, weight: .semibold)
         let title = ceil((notice.title as NSString).size(withAttributes: [.font: font]).width)
         // padding · icon · gap · title · gap · spacer · gap · close
-        var chrome = ToastMetrics.padding * 2 + 24 + 10 + 10 + 4 + 10 + 20
+        let sides = isCompact(notice) ? ToastMetrics.compactLeading + ToastMetrics.compactTrailing : ToastMetrics.padding * 2
+        var chrome = sides + 24 + 10 + 10 + 4 + 10 + 20
         if isCompact(notice), let action = notice.actions.first {
             let label = NSFont.systemFont(ofSize: 12, weight: .semibold)
             // the compact spacer is 8, and the button (label + 24 padding) adds one more gap
@@ -152,7 +165,7 @@ struct ToastCard: View {
     }
 
     static func isCompact(_ notice: Notice) -> Bool {
-        notice.body == nil && notice.transcript == nil && notice.actions.count == 1
+        notice.body == nil && notice.transcript == nil && notice.actions.count <= 1
     }
 
     private var header: some View {
@@ -205,10 +218,10 @@ struct ToastCard: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .background {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(ToastPalette.transcriptFill)
                     .overlay {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
                             .strokeBorder(ToastPalette.stroke, lineWidth: 1)
                     }
             }

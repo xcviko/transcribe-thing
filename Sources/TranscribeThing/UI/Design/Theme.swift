@@ -178,7 +178,7 @@ enum Theme {
         static let row: CGFloat = 12
         static let control: CGFloat = 8
         static let chip: CGFloat = 6
-        static let toast: CGFloat = 18
+        static let toast: CGFloat = 26
     }
 
     enum Spacing {

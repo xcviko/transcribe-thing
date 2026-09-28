@@ -170,7 +170,7 @@ enum PillSnapshots {
 enum PillSnapshotFixtures {
     static let canceled = Notice(
         dedupeKey: "dictation.canceled", style: .info, symbol: "xmark.circle", title: "Dictation canceled",
-        lifetime: .seconds(3), sound: .cancel)
+        actions: [NoticeAction(title: "Undo", kind: .undoCancel, isPrimary: true)], lifetime: .seconds(6), sound: .cancel)
 
     static let oneMinuteLeft = Notice(
         dedupeKey: "dictation.limitWarning", style: .warning, symbol: "timer",
