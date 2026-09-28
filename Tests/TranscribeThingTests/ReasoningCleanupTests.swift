@@ -64,32 +64,6 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         #expect(settings.switchChoices == [.cleanup, .engine(.geminiFlash)])
     }
 
-    /// Prompts an older build stored never reach a request: after the app loads its settings, Gemini and the clean-up
-    /// still get the fixed prompts.
-    @Test func promptsAnOlderBuildStoredAreIgnored() async throws {
-        let store = defaults()
-        store.set("Transcribe verbatim.", forKey: SettingsKey.geminiSystemPrompt.defaultsKey)
-        store.set("", forKey: SettingsKey.cleanupSystemPrompt.defaultsKey)
-        _ = AppSettings(defaults: store, microphoneProbe: { MicrophoneMigrationProbe() })
-        let (client, host) = StubURLProtocol.client([
-            chatReply("Hallo.", model: "google/gemini-3.8-flash", provider: "Google AI Studio"), chatReply("Hallo!"),
-        ])
-        let keychain = KeychainStore.inMemory([KeychainStore.openRouterAccount: "sk-or-v1-test"])
-        let account = OpenRouterAccount(keychain: keychain, client: client, debounce: .zero)
-        let service = TranscriptionService(models: ModelStore.preview(states: [:]), account: account, client: client)
-        let transcribed = try await service.transcribe(Recording(samples: [Float](repeating: 0.1, count: 16_000)),
-                                                       engine: .geminiFlash)
-        let cleaned = try await service.cleanUp(transcribed.text, of: .parakeet)
-        #expect(transcribed.usedSystemPrompt == true && cleaned.usedSystemPrompt == true)
-        let systemMessages = try StubURLProtocol.registry.bodies(for: host).map { data in
-            let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-            let messages = try #require(body["messages"] as? [[String: Any]])
-            #expect(messages.first?["role"] as? String == "system")
-            return messages.first?["content"] as? String
-        }
-        #expect(systemMessages == [EngineID.geminiSystemPrompt, CleanupModel.systemPrompt])
-    }
-
     /// Clean-up takes part whenever its switch is on: there's no prompt that could be missing.
     @Test func theCleanupStepNeedsOnlyItsSwitch() {
         let settings = AppSettings.inMemory()

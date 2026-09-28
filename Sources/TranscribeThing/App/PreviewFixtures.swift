@@ -89,7 +89,7 @@ enum PreviewFixtures {
                             createdAt: ago(50), modelID: "google/gemini-3.8-flash", provider: "Google AI Studio",
                             generationID: "gen-preview-1", reasoningEffort: .medium,
                             usage: TokenUsage(promptTokens: 330, audioTokens: 314, completionTokens: 612, reasoningTokens: 540),
-                            costUSD: 0.0021, processingTime: 2.6, generationTime: 2.2, usedSystemPrompt: false,
+                            costUSD: 0.0021, processingTime: 2.6, generationTime: 2.2, usedSystemPrompt: true,
                             finishReason: "stop")),
                 ]),
             TranscriptEntry(

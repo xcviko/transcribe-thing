@@ -392,7 +392,7 @@ private struct SecondaryButtonBody: View {
     }
 }
 
-/// Text-only action ("Skip for now", "Insert example"): tinted label, hover wash.
+/// Text-only action ("Skip for now"): tinted label, hover wash.
 struct QuietButtonStyle: ButtonStyle {
     var tint: Color = .accent
     var size: ButtonSize = .small
