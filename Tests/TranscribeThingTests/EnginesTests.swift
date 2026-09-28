@@ -1353,6 +1353,32 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
         #expect(result.costUSD == 0.001)
     }
 
+    /// Settings that were never changed send the default prompt as the system message; cleared, only the audio.
+    @Test func geminiGetsTheDefaultPromptUntilItIsCleared() async throws {
+        for (clear, expected) in [(false, AppSettings.defaultGeminiSystemPrompt as String?), (true, nil)] {
+            let settings = AppSettings.inMemory()
+            if clear { settings.geminiSystemPrompt = "" }
+            let store = ModelStore(paths: .temporary(), settings: settings, engines: [:], gate: InferenceGate(),
+                                   freeDiskBytes: { 50_000_000_000 })
+            let (client, host) = StubURLProtocol.client([Fixtures.success])
+            let keychain = KeychainStore.inMemory([KeychainStore.openRouterAccount: "sk-or-v1-test"])
+            let account = OpenRouterAccount(keychain: keychain, client: client, debounce: .zero)
+            let service = TranscriptionService(models: store, account: account, client: client, settings: settings)
+            let result = try await service.transcribe(speech(), engine: .geminiFlash)
+            #expect(result.usedSystemPrompt == (expected != nil))
+            let body = try #require(JSONSerialization.jsonObject(with: StubURLProtocol.registry.bodies(for: host)[0]) as? [String: Any])
+            let messages = try #require(body["messages"] as? [[String: Any]])
+            if let expected {
+                #expect(messages.count == 2)
+                #expect(messages[0]["role"] as? String == "system")
+                #expect(messages[0]["content"] as? String == expected)
+            } else {
+                #expect(messages.count == 1)
+                #expect(messages[0]["role"] as? String == "user")
+            }
+        }
+    }
+
     @Test func cloudWithoutKey() async throws {
         let (service, _) = makeService(key: nil)
         await #expect(throws: AppError.openRouterMissingKey) {

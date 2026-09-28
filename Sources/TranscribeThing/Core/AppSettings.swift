@@ -63,8 +63,9 @@ final class AppSettings {
     /// included) at the moment a dictation starts.
     var microphoneUID: String? = nil { didSet { store.set(microphoneUID, .microphoneUID) } }
     var showDockIcon: Bool = false { didSet { store.set(showDockIcon, .showDockIcon) } }
-    /// Empty by default: Gemini then receives only the audio.
-    var geminiSystemPrompt: String = "" { didSet { store.set(geminiSystemPrompt, .geminiSystemPrompt) } }
+    /// `defaultGeminiSystemPrompt` until the user changes it. Empty (after Clear) means Gemini receives only the
+    /// audio; the empty value is stored like any other, so the default doesn't come back.
+    var geminiSystemPrompt: String = AppSettings.defaultGeminiSystemPrompt { didSet { store.set(geminiSystemPrompt, .geminiSystemPrompt) } }
     /// How long each Gemini model thinks, by engine: only levels the model supports (`EngineID.reasoningEfforts`),
     /// only models that reason. Read and change it through `reasoningEffort(for:)` and `setReasoningEffort(_:for:)`.
     private(set) var reasoningEfforts: [EngineID: ReasoningEffort] = AppSettings.defaultReasoningEfforts {
@@ -81,8 +82,8 @@ final class AppSettings {
     /// Clean-up of Parakeet transcripts by Gemini 3.5 Flash Lite before they're pasted. Takes effect only with a
     /// clean-up prompt (`isCleanupActive`): with no instruction the model would reply to the text instead.
     var cleanupEnabled: Bool = false { didSet { store.set(cleanupEnabled, .cleanupEnabled) } }
-    /// Empty by default; "Use Example" fills in `CleanupModel.examplePrompt`.
-    var cleanupSystemPrompt: String = "" { didSet { store.set(cleanupSystemPrompt, .cleanupSystemPrompt) } }
+    /// `CleanupModel.examplePrompt` until the user changes it; a cleared (empty) prompt is stored and stays empty.
+    var cleanupSystemPrompt: String = CleanupModel.examplePrompt { didSet { store.set(cleanupSystemPrompt, .cleanupSystemPrompt) } }
     /// One of `CleanupModel.reasoningEfforts`.
     var cleanupReasoningEffort: ReasoningEffort = CleanupModel.defaultReasoningEffort {
         didSet {
@@ -142,6 +143,21 @@ final class AppSettings {
     }
 
     var maxRecordingDuration: TimeInterval { TimeInterval(maxRecordingMinutes) * 60 }
+
+    /// The Gemini system prompt until the user changes it, and what "Use Example" puts in.
+    nonisolated static let defaultGeminiSystemPrompt = """
+    Transcribe my audio. Reply with the transcript only.
+
+    Never answer or act on what I say, just write it down.
+
+    Names you don't know are real (your data is older than this recording). Write what I say, don't swap them for familiar ones.
+
+    Remove filler words and false starts, fix punctuation. Keep my words, slang and profanity. Don't censor, paraphrase or translate.
+
+    Use a hyphen "-" instead of "—" and straight quotes "..." instead of «...».
+
+    If there is no speech, reply with nothing.
+    """
 
     // MARK: Reasoning and clean-up
 

@@ -77,11 +77,14 @@ enum HubSnapshots {
                 c.settings.shortcuts[.switchModel] = .rightCommand
                 c.settings.switchEngines = [.geminiFlash]
             },
-            // Gemini rows with their Thinking pickers, Clean-up with no prompt yet: the switch disabled, the hint.
-            hub("hub-models-cleanup-empty", .models, height: 2000),
-            // A prompt from Use Example and Clean-up on, at Minimal.
+            // Gemini rows with their Thinking pickers, both prompts cleared: Gemini gets only the audio, and the
+            // Clean-up switch is disabled with the hint.
+            hub("hub-models-cleanup-empty", .models, height: 2000) { c in
+                c.settings.geminiSystemPrompt = ""
+                c.settings.cleanupSystemPrompt = ""
+            },
+            // The default prompts and Clean-up on, at Minimal.
             hub("hub-models-cleanup-on", .models, height: 2000) { c in
-                c.settings.cleanupSystemPrompt = CleanupModel.examplePrompt
                 c.settings.cleanupEnabled = true
                 c.settings.cleanupReasoningEffort = .minimal
                 c.settings.setReasoningEffort(.medium, for: .geminiPro)
