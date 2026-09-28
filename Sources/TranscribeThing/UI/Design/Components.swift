@@ -48,7 +48,10 @@ private struct CardSegment: ViewModifier {
         content
             .frame(maxWidth: .infinity, alignment: .leading)
             .background {
+                // `clipped()` only clips drawing: without this, the band's hidden run-on past the row would take
+                // the clicks and hovers of the rows it reaches under.
                 band { shape.fill(.bgSurface).cardShadow() }
+                    .allowsHitTesting(false)
             }
             .overlay {
                 band { shape.strokeBorder(.stroke, lineWidth: Theme.Metrics.hairline) }
