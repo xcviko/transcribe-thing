@@ -1158,6 +1158,35 @@ private final class EventLog: @unchecked Sendable {
         #expect(airPods.symbolName == "airpodspro")
         #expect(usb.symbolName == "mic")
     }
+
+    /// A pick stays while its mic is there and can record, or is the Mac's own (a closed lid comes back by itself).
+    /// Gone, or listed as disconnected, it falls back to Automatic.
+    @Test func aPickStaysOnlyWhileItsMicIsThere() {
+        #expect(InputDevicePolicy.keepsPick("airpods", devices: [builtIn, airPods]), "present")
+        var sleepyAirPods = airPods
+        sleepyAirPods.isAvailable = false
+        sleepyAirPods.unavailableReason = "Disconnected"
+        #expect(!InputDevicePolicy.keepsPick("airpods", devices: [builtIn, sleepyAirPods]), "listed, but disconnected")
+        var closedLid = builtIn
+        closedLid.isAvailable = false
+        closedLid.unavailableReason = "Lid is closed"
+        #expect(InputDevicePolicy.keepsPick("builtin", devices: [closedLid, airPods]), "the lid opens again")
+        #expect(!InputDevicePolicy.keepsPick("airpods", devices: [builtIn, usb]), "gone")
+        #expect(InputDevicePolicy.keepsPick(nil, devices: [builtIn]), "Automatic always stays")
+        #expect(InputDevicePolicy.keepsPick("airpods", devices: []), "a scan that lists nothing says nothing")
+    }
+
+    /// AirPods put away: the next scan leaves the pick for Automatic, so a choice is always selected and the next
+    /// dictation uses what macOS offers. Any other change keeps the pick.
+    @Test @MainActor func aVanishedPickFallsBackToAutomatic() {
+        let env = AppEnvironment.preview()
+        env.settings.microphoneUID = "preview-airpods"
+        env.devices.onDevicesChanged?()
+        #expect(env.settings.microphoneUID == "preview-airpods")
+        env.settings.microphoneUID = "gone-usb"
+        env.devices.onDevicesChanged?()
+        #expect(env.settings.microphoneUID == nil)
+    }
 }
 
 @Suite struct AudioDeviceEnumerationTests {

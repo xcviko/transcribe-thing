@@ -112,7 +112,7 @@ final class AudioRecorder {
         let samples = await withCheckedContinuation { (continuation: CheckedContinuation<[Float], Never>) in
             session.finish(tail: tail) { continuation.resume(returning: $0) }
         }
-        // Analysis and the join (up to 20 minutes of audio) stay off the main thread.
+        // Analysis and the join (an hour of audio, or more) stay off the main thread.
         return await Task.detached(priority: .userInitiated) {
             let own = Recording(samples: samples, startedAt: startedAt, speech: SpeechAnalyzer.stats(for: samples),
                                 deviceName: name)

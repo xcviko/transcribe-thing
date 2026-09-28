@@ -240,11 +240,10 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
 
     @Test func startsIdleWithSettingsDerivedHints() {
         let settings = AppSettings.inMemory()
-        settings.maxRecordingMinutes = 10
         let model = PillModel(settings: settings, levelMeter: .preview(level: 0))
         #expect(model.phase == .rest)
         #expect(model.visiblePhase == .rest)
-        #expect(model.limitSeconds == 600)
+        #expect(!model.showsHours)
         #expect(model.shortcutHint == "fn")
     }
 
@@ -350,15 +349,15 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(model.recordingStartedAt == stamp)
     }
 
-    @Test func finalMinuteFollowsTheLimit() {
+    /// A recording has no limit: past its first hour the timer only needs room for the hours.
+    @Test func showsHoursFromTheHourMark() {
         let model = makeModel()
-        model.limitSeconds = 300
         model.phase = .locked
-        #expect(!model.isInFinalMinute)
-        model.recordingStartedAt = Date().addingTimeInterval(-250)
-        #expect(model.isInFinalMinute)
+        #expect(!model.showsHours)
+        model.recordingStartedAt = Date().addingTimeInterval(-3601)
+        #expect(model.showsHours, "an Undo-resumed long dictation is past it at once")
         model.phase = .processing
-        #expect(!model.isInFinalMinute)
+        #expect(!model.showsHours)
     }
 
     @Test func hoverAndTooltipAfterTheirDelays() async throws {
@@ -390,7 +389,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
     }
 
     @Test func processingDotsStartWhereTheHandsFreeBarsWere() {
-        let locked = PillVisual.locked(.elapsed), processing = PillVisual.processing(afterHandsFree: true)
+        let locked = PillVisual.locked(), processing = PillVisual.processing(afterHandsFree: true)
         // Both pills share their center on screen while the hands-free one narrows, so the dots start at the
         // bars' offset from that center.
         #expect(locked.barsOffset == -20.5)
@@ -418,18 +417,12 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(PillVisual.listening.barsOffset == 0 && PillVisual.processing(afterHandsFree: false).barsOffset == 0)
     }
 
-    @Test func previewInTheLastMinuteShowsTheCountdown() {
-        let model = PillModel.preview(phase: .locked, recordingFor: 1190, limitSeconds: 1200)
-        #expect(model.isInFinalMinute)
-        #expect(!PillModel.preview(phase: .locked, recordingFor: 30).isInFinalMinute)
-    }
-
     @Test func visualGeometryMatchesTheSpec() {
         #expect(PillVisual.rest.size == CGSize(width: 40, height: 10))
         #expect(PillVisual.peek.size == CGSize(width: 76, height: 24))
         #expect(PillVisual.listening.size == CGSize(width: 104, height: 32))
-        #expect(PillVisual.locked(.elapsed).size == CGSize(width: 198, height: 36))
-        #expect(PillVisual.locked(.remaining).size == CGSize(width: 198, height: 36))
+        #expect(PillVisual.locked().size == CGSize(width: 198, height: 36))
+        #expect(PillVisual.locked(hours: true).size == CGSize(width: 216, height: 36))
         #expect(PillVisual.processing(afterHandsFree: true).size == CGSize(width: 104, height: 32))
         #expect(PillVisual.processing(afterHandsFree: false).size == CGSize(width: 104, height: 32))
         #expect(PillVisual.error.size == CGSize(width: 104, height: 32))
@@ -437,12 +430,12 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
     }
 
     /// X | bars | timer | Stop, left to right, with the same gap between each for a "9:59" timer, and a
-    /// "29:59" one still clear of the bars and Stop.
+    /// "59:59" one still clear of the bars and Stop.
     @Test func handsFreeSpacesItsControlsEvenly() {
         let width = PillMetrics.lockedSize.width
         let cancelRight = PillMetrics.buttonInset + PillMetrics.buttonSize
         let stopLeft = width - cancelRight
-        let barsLeft = width / 2 + PillVisual.locked(.elapsed).barsOffset - PillMetrics.barFieldWidth / 2
+        let barsLeft = width / 2 + PillVisual.locked().barsOffset - PillMetrics.barFieldWidth / 2
         let barsRight = barsLeft + PillMetrics.barFieldWidth
         let timerCenter = stopLeft - PillMetrics.timerTrailing - PillMetrics.timerWidth / 2
         func gaps(timer: CGFloat) -> [CGFloat] {
@@ -453,6 +446,28 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(PillMetrics.lockedGap == 15)
     }
 
+    /// Past an hour the timer reads "1:02:03": the capsule widens once, to a column that fits it, and keeps its
+    /// even gaps. The dots after Stop still start where the usual hands-free bars stand.
+    @Test func handsFreePastAnHourWidensOnce() {
+        let model = PillModel.preview(phase: .locked, recordingFor: 3733)
+        #expect(model.showsHours)
+        let visual = PillView(model: model).visual
+        #expect(visual == .locked(hours: true))
+        #expect(visual.size == PillMetrics.lockedHoursSize)
+        #expect(!PillModel.preview(phase: .locked, recordingFor: 3599).showsHours)
+
+        let width = PillMetrics.lockedHoursSize.width
+        let cancelRight = PillMetrics.buttonInset + PillMetrics.buttonSize
+        let stopLeft = width - cancelRight
+        let barsLeft = width / 2 + visual.barsOffset - PillMetrics.barFieldWidth / 2
+        let barsRight = barsLeft + PillMetrics.barFieldWidth
+        let timerRight = stopLeft - PillMetrics.lockedGap
+        let timerLeft = timerRight - PillMetrics.hoursTimerWidth
+        #expect([barsLeft - cancelRight, timerLeft - barsRight, stopLeft - timerRight]
+                == [PillMetrics.lockedGap, PillMetrics.lockedGap, PillMetrics.lockedGap])
+        #expect(PillVisual.processing(afterHandsFree: true).barsOffset == PillMetrics.lockedBarsOffset(hours: false))
+    }
+
     @MainActor @Test func timerWidthsFitTheirText() {
         func width(_ text: String) -> CGFloat {
             NSHostingView(rootView: Text(text).font(PillMetrics.timerFont).fixedSize()).fittingSize.width
@@ -460,8 +475,11 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         for text in ["0:05", "0:14", "8:88", "9:59"] {
             #expect(abs(width(text) - PillMetrics.shortTimerWidth) <= 1, "\(text)")
         }
-        for text in ["10:00", "28:48", "29:59"] {
+        for text in ["10:00", "28:48", "29:59", "59:59"] {
             #expect(width(text) <= PillMetrics.timerWidth, "\(text)")
+        }
+        for text in ["1:00:00", "1:02:03", "9:59:59"] {
+            #expect(width(text) <= PillMetrics.hoursTimerWidth, "\(text)")
         }
     }
 
@@ -478,13 +496,11 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
     @Test func handsFreeAlwaysShowsTheTimer() {
         for context in [PillView.Context.standalone, .panel(nil)] {
             let model = PillModel.preview(phase: .locked, recordingFor: 42)
-            #expect(PillView(model: model, context: context).visual == .locked(.elapsed))
+            #expect(PillView(model: model, context: context).visual == .locked())
             model.isHovering = true
-            #expect(PillView(model: model, context: context).visual == .locked(.elapsed))
+            #expect(PillView(model: model, context: context).visual == .locked())
         }
-        #expect(PillView(model: .preview(phase: .locked, recordingFor: 1190, limitSeconds: 1200)).visual
-                == .locked(.remaining))
-        #expect(PillVisual.listening.timer == nil)
+        #expect(PillVisual.locked().isLocked && !PillVisual.listening.isLocked)
     }
 
     @Test func hoverNeverResizesHandsFree() {
@@ -528,7 +544,8 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(PillView(model: afterHandsFree.previewSlowProcessing()).visual
                 == .processing(afterHandsFree: true, slow: true))
         #expect(PillVisual.processing(afterHandsFree: true, slow: true).size == size)
-        #expect(PillVisual.processing(afterHandsFree: true, slow: true).barsOffset == PillMetrics.lockedBarsOffset)
+        #expect(PillVisual.processing(afterHandsFree: true, slow: true).barsOffset
+                == PillMetrics.lockedBarsOffset(hours: false))
         // The panel's pill says it too (no floating caption above it any more).
         #expect(PillView(model: model, context: .panel(nil)).visual.isSlow)
     }
@@ -578,7 +595,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
 
     @Test(arguments: [
         [PillVisual.listening, .processing(afterHandsFree: false)],
-        [PillVisual.locked(.elapsed), .processing(afterHandsFree: true)],
+        [PillVisual.locked(), .processing(afterHandsFree: true)],
         [PillVisual.listening, .processing(afterHandsFree: false), .processing(afterHandsFree: false, slow: true)],
         [PillVisual.listening, .error],
         [PillVisual.rest, .listening],
@@ -632,7 +649,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
 
     @Test(arguments: [PillVisual.processing(afterHandsFree: false), .processing(afterHandsFree: true),
                       .processing(afterHandsFree: false, slow: true), .processing(afterHandsFree: true, slow: true),
-                      .error, .listening, .locked(.elapsed), .peek, .hello])
+                      .error, .listening, .locked(), .locked(hours: true), .peek, .hello])
     func morphingToRestShrinksTheContentWithTheCapsule(from visual: PillVisual) {
         var stage = stage(after: [visual])
         let morphing = stage.frame(for: .rest)

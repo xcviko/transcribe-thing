@@ -43,7 +43,7 @@ import Testing
         var listening = T.listening()
         _ = listening.handle(.cycleEngine, now: 10.1875)
         #expect(listening.handle(.pttUp, now: 10.25)
-            == T.cancelLimits + [.cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)])
+            == [.cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)])
         #expect(listening.capture == .idle)
     }
 
@@ -63,17 +63,6 @@ import Testing
         #expect(m.handle(.cycleEngine, now: 40).isEmpty)
         #expect(m.capture == before)
     }
-
-    @Test func aNewLimitIsMeasuredFromTheRecordingsStart() {
-        var m = T.listening()
-        #expect(m.changeLimit(to: 420, now: 100) == [.schedule(.limitWarning, after: 270), .schedule(.limit, after: 330)])
-        #expect(m.config.maxDuration == 420)
-        #expect(m.changeLimit(to: 420, now: 101).isEmpty, "unchanged")
-
-        var arming = T.arming()
-        #expect(arming.changeLimit(to: 420, now: 10.05).isEmpty, "arming schedules them when it confirms")
-        #expect(arming.handle(.timer(.arming), now: T.armedAt).contains(.schedule(.limit, after: 420 - (T.armedAt - T.t0))))
-    }
 }
 
 // MARK: - Switch model: shortcut model and validation
@@ -91,7 +80,7 @@ import Testing
         #expect(ShortcutAction.switchModel.title == "Switch model")
         #expect(ShortcutAction.switchModel.defaultShortcut == .fnTab)
         #expect(ShortcutBindings.defaults[.switchModel] == Shortcut(modifiers: [.init(.function)], keyCode: KeyCode.tab))
-        #expect(ShortcutAction.switchModel.isDuringDictation && ShortcutAction.cancel.isDuringDictation)
+        #expect(ShortcutAction.switchModel.isDuringDictation)
         #expect(!ShortcutAction.pushToTalk.isDuringDictation)
     }
 
@@ -272,7 +261,6 @@ import Testing
         #expect(c.machine.capture.isListeningOrLocked)
         #expect(c.effectiveEngine == .geminiFlash)
         #expect(rig.h.pill.sessionModel == .engine(.geminiFlash))
-        #expect(rig.h.pill.limitSeconds == 420)
 
         var used: [EngineID] = []
         rig.result = { _, engine in
@@ -312,7 +300,6 @@ import Testing
         c.handle(.cycleEngine)
         #expect(c.modelOverride == .cleanup && c.effectiveEngine == .parakeet)
         #expect(rig.h.pill.sessionModel == .cleanup)
-        #expect(rig.h.pill.limitSeconds == 1200, "the main model's limit")
         rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
         rig.now += 2
         c.handle(.pttUp)
@@ -356,18 +343,17 @@ import Testing
         try await waitUntil { rig.pasted == ["Clean."] && c.machine.activeJobs == 0 }
     }
 
-    /// Too long for Gemini: the shortcut still steps to clean-up (the main model's limit) and back, skipping Gemini.
-    @Test func aRecordingTooLongForGeminiStillStepsToCleanup() {
+    /// A recording has no length limit: an hour in, the shortcut still steps to Gemini like at the start.
+    @Test func anHourLongRecordingStillStepsToGemini() {
         let (rig, _) = Self.make()
         let c = rig.h.controller
         c.runsTimers = false
+        rig.h.settings.switchCleanup = false
         c.send(.handsFreeToggle)
-        rig.now += 415
+        rig.now += 3600
         let shakes = rig.h.pill.shakeCount
         c.cycleEngine()
-        #expect(c.modelOverride == .cleanup)
-        c.cycleEngine()
-        #expect(c.modelOverride == nil)
+        #expect(c.effectiveEngine == .geminiFlash)
         #expect(rig.h.pill.shakeCount == shakes && rig.notice(DictationController.switchModelNoticeKey) == nil)
         c.send(.pillCancel)
     }
@@ -399,14 +385,12 @@ import Testing
         #expect(SoundEffect.allCases.filter { $0 != .modelSwitch }.allSatisfy { AVCueOutput.voices(for: $0) == 1 })
     }
 
-    /// A held key that can't step (too long for Gemini) says so once, at the press.
+    /// A held key that can't step (no usable key) says so once, at the press.
     @Test func aHeldKeyThatCantStepStaysQuiet() {
-        let (rig, cues) = Self.make()
+        let (rig, cues) = Self.make(key: .missing)
         let c = rig.h.controller
         c.runsTimers = false
-        rig.h.settings.switchCleanup = false
         c.send(.handsFreeToggle)
-        rig.now += 415
         let shakes = rig.h.pill.shakeCount
         c.cycleEngine()
         #expect(rig.h.pill.shakeCount == shakes + 1)
@@ -462,30 +446,6 @@ import Testing
         #expect(c.modelOverride == nil)
         #expect(rig.h.pill.engineChipPulse == 3)
         #expect(cues.played.filter { $0 == .modelSwitch }.count == 3)
-        c.send(.pillCancel)
-    }
-
-    /// Gemini takes about 7 minutes per request: switching to it shortens the limit, switching back restores it,
-    /// and a recording already too long for it stays where it is.
-    @Test func theLimitFollowsTheModel() {
-        let (rig, _) = Self.make()
-        let c = rig.h.controller
-        c.runsTimers = false
-        rig.h.settings.switchCleanup = false
-        c.send(.handsFreeToggle)
-        rig.now += 100
-        c.cycleEngine()
-        #expect(rig.h.pill.limitSeconds == 420)
-        c.cycleEngine()
-        #expect(c.effectiveEngine == .parakeet)
-        #expect(rig.h.pill.limitSeconds == 1200)
-
-        rig.now += 315
-        let shakes = rig.h.pill.shakeCount
-        c.cycleEngine()
-        #expect(c.effectiveEngine == .parakeet)
-        #expect(rig.h.pill.shakeCount == shakes + 1)
-        #expect(rig.notice(DictationController.switchModelNoticeKey)?.title == "Too long for Gemini")
         c.send(.pillCancel)
     }
 

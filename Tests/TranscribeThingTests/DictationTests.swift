@@ -13,13 +13,7 @@ import Testing
     static let t0: TimeInterval = 10
     static let armedAt: TimeInterval = 10.125
 
-    static let cancelLimits: [E] = [.cancelTimer(.limitWarning), .cancelTimer(.limit)]
-    static let cancelAll: [E] = [.cancelTimer(.arming), .cancelTimer(.doublePressWindow),
-                                 .cancelTimer(.limitWarning), .cancelTimer(.limit)]
-
-    static func limitTimers(elapsed: TimeInterval) -> [E] {
-        [.schedule(.limitWarning, after: 1140 - elapsed), .schedule(.limit, after: 1200 - elapsed)]
-    }
+    static let cancelAll: [E] = [.cancelTimer(.arming), .cancelTimer(.doublePressWindow)]
 
     // Fixtures for each state.
     static func arming() -> M {
@@ -72,11 +66,11 @@ import Testing
         #expect(m.isRecording && m.isBusy)
     }
 
-    @Test func armingConfirmsIntoListeningWithLimitTimersFromKeyDown() {
+    @Test func armingConfirmsIntoListening() {
         var m = Self.arming()
         let effects = m.handle(.timer(.arming), now: Self.armedAt)
         #expect(m.capture == .listening(downAt: Self.t0))
-        #expect(effects == [.playSound(.start)] + Self.limitTimers(elapsed: 0.125), "the pill is already up")
+        #expect(effects == [.playSound(.start)], "the pill is already up")
     }
 
     @Test func releaseDuringArmingIsATap() {
@@ -95,15 +89,14 @@ import Testing
         #expect(effects == [.cancelTimer(.arming), .cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)])
     }
 
-    @Test func handsFreeFromArmingLocksAndSchedulesLimits() {
+    @Test func handsFreeFromArmingLocks() {
         var m = Self.arming()
         let effects = m.handle(.handsFreeToggle, now: 10.0625)
         #expect(m.capture == .locked(startedAt: Self.t0))
-        #expect(effects == [.cancelTimer(.arming), .showPill(.locked), .playSound(.lock)]
-            + Self.limitTimers(elapsed: 0.0625))
+        #expect(effects == [.cancelTimer(.arming), .showPill(.locked), .playSound(.lock)])
     }
 
-    @Test func handsFreeFromListeningKeepsExistingLimitTimers() {
+    @Test func handsFreeFromListeningLocks() {
         var m = Self.listening()
         let effects = m.handle(.handsFreeToggle, now: 11)
         #expect(m.capture == .locked(startedAt: Self.t0))
@@ -114,7 +107,7 @@ import Testing
         var m = Self.listening()
         let effects = m.handle(.pttUp, now: 10.25)
         #expect(m.capture == .tapPending(firstDownAt: Self.t0))
-        #expect(effects == Self.cancelLimits + [.cancelCapture(keepForUndo: false, notify: false),
+        #expect(effects == [.cancelCapture(keepForUndo: false, notify: false),
                                                 .schedule(.doublePressWindow, after: 0.25)])
     }
 
@@ -122,21 +115,21 @@ import Testing
         var m = Self.listening()
         let effects = m.handle(.pttUp, now: 10.3125)
         #expect(m.capture == .idle)
-        #expect(effects == Self.cancelLimits + [.stopCaptureAndTranscribe(mode: .pushToTalk), .playSound(.stop)])
+        #expect(effects == [.stopCaptureAndTranscribe(mode: .pushToTalk), .playSound(.stop)])
     }
 
     @Test func earlyInterruptionFoldsAwayQuietly() {
         var m = Self.listening()
         let effects = m.handle(.pttInterrupted, now: 11)
         #expect(m.capture == .idle)
-        #expect(effects == Self.cancelLimits + [.cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)])
+        #expect(effects == [.cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)])
     }
 
     @Test func lateInterruptionKeepsAudioAndTellsTheUser() {
         var m = Self.listening()
         let effects = m.handle(.pttInterrupted, now: 11.5)
         #expect(m.capture == .idle)
-        #expect(effects == Self.cancelLimits + [.cancelCapture(keepForUndo: true, notify: false), .showPill(.rest),
+        #expect(effects == [.cancelCapture(keepForUndo: true, notify: false), .showPill(.rest),
                                                 .notice(.stoppedByOtherKey)])
     }
 
@@ -144,8 +137,7 @@ import Testing
         var m = Self.tapPending()
         let effects = m.handle(.pttDown, now: 10.375)
         #expect(m.capture == .locked(startedAt: 10.375))
-        #expect(effects == [.cancelTimer(.doublePressWindow), .startCapture, .showPill(.locked), .playSound(.lock)]
-            + Self.limitTimers(elapsed: 0))
+        #expect(effects == [.cancelTimer(.doublePressWindow), .startCapture, .showPill(.locked), .playSound(.lock)])
     }
 
     @Test func slowSecondPressArmsAgain() {
@@ -173,7 +165,7 @@ import Testing
         _ = m.handle(.timer(.arming), now: Self.armedAt)
         let effects = m.handle(.pttUp, now: 10.25)
         #expect(m.capture == .idle)
-        #expect(effects == Self.cancelLimits + [.cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)])
+        #expect(effects == [.cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)])
     }
 
     @Test func doublePressWindowExpiresAndThePillFolds() {
@@ -188,8 +180,7 @@ import Testing
         var m = Self.state(from)
         let effects = m.handle(input, now: 20)
         #expect(m.capture == .locked(startedAt: 20))
-        #expect(effects == [.cancelTimer(.doublePressWindow), .startCapture, .showPill(.locked), .playSound(.lock)]
-            + Self.limitTimers(elapsed: 0))
+        #expect(effects == [.cancelTimer(.doublePressWindow), .startCapture, .showPill(.locked), .playSound(.lock)])
     }
 
     @Test func pttDownWhileLockedWaitsForRelease() {
@@ -211,7 +202,7 @@ import Testing
         var m = Self.stopPending()
         let effects = m.handle(.pttUp, now: 30.125)
         #expect(m.capture == .idle)
-        #expect(effects == Self.cancelLimits + [.stopCaptureAndTranscribe(mode: .handsFree), .playSound(.stop)])
+        #expect(effects == [.stopCaptureAndTranscribe(mode: .handsFree), .playSound(.stop)])
     }
 
     @Test func comboWhileLockedKeepsRecording() {
@@ -226,7 +217,7 @@ import Testing
         var m = Self.state(from)
         let effects = m.handle(input, now: 40)
         #expect(m.capture == .idle)
-        #expect(effects == Self.cancelLimits + [.stopCaptureAndTranscribe(mode: .handsFree), .playSound(.stop)])
+        #expect(effects == [.stopCaptureAndTranscribe(mode: .handsFree), .playSound(.stop)])
     }
 
     @Test(arguments: ["arming", "listening", "locked", "lockedStopPending"],
@@ -246,8 +237,7 @@ import Testing
         let effects = m.handle(.resume(prefix: 2.5), now: 20)
         #expect(m.capture == .locked(startedAt: 17.5), "the timer counts from the canceled dictation's start")
         #expect(m.mode == .handsFree)
-        #expect(effects == [.cancelTimer(.doublePressWindow), .resumeCapture, .showPill(.locked), .playSound(.lock)]
-            + Self.limitTimers(elapsed: 2.5))
+        #expect(effects == [.cancelTimer(.doublePressWindow), .resumeCapture, .showPill(.locked), .playSound(.lock)])
     }
 
     @Test func resumeWhileAJobRunsStillRecords() {
@@ -270,7 +260,7 @@ import Testing
     func resumedDictationFinishesLikeHandsFree(_ input: DictationMachine.Input) {
         var m = M()
         _ = m.handle(.resume(prefix: 4), now: 20)
-        #expect(m.handle(input, now: 30) == Self.cancelLimits + [.stopCaptureAndTranscribe(mode: .handsFree), .playSound(.stop)])
+        #expect(m.handle(input, now: 30) == [.stopCaptureAndTranscribe(mode: .handsFree), .playSound(.stop)])
         #expect(m.capture == .idle)
     }
 
@@ -278,20 +268,12 @@ import Testing
         var m = M()
         _ = m.handle(.resume(prefix: 4), now: 20)
         #expect(m.handle(.pttDown, now: 25).isEmpty, "not the key that locked it: waits for the release")
-        #expect(m.handle(.pttUp, now: 25.125) == Self.cancelLimits + [.stopCaptureAndTranscribe(mode: .handsFree), .playSound(.stop)])
+        #expect(m.handle(.pttUp, now: 25.125) == [.stopCaptureAndTranscribe(mode: .handsFree), .playSound(.stop)])
 
         var again = M()
         _ = again.handle(.resume(prefix: 4), now: 20)
         #expect(again.handle(.cancel, now: 22) == Self.cancelAll + [.cancelCapture(keepForUndo: true, notify: true), .playSound(.cancel)])
         #expect(again.handle(.resume(prefix: 6), now: 23).contains(.resumeCapture), "and Undo resumes it again")
-    }
-
-    @Test func resumedLimitIncludesTheKeptAudio() {
-        var m = DictationMachine(config: .init(maxDuration: 300))
-        #expect(m.handle(.resume(prefix: 280), now: 1000).suffix(2) == [.schedule(.limitWarning, after: 0), .schedule(.limit, after: 20)])
-        var over = DictationMachine(config: .init(maxDuration: 300))
-        #expect(over.handle(.resume(prefix: 400), now: 1000).suffix(2) == [.schedule(.limitWarning, after: 0), .schedule(.limit, after: 0)],
-                "kept audio past a limit lowered since: stops and transcribes at once")
     }
 
     @Test func escWhileProcessingCancelsNewestJob() {
@@ -308,29 +290,12 @@ import Testing
         #expect(!m.isBusy)
     }
 
-    @Test(arguments: ["listening", "locked", "lockedStopPending"])
-    func limitWarningKeepsRecording(_ from: String) {
-        var m = Self.state(from)
-        let before = m.capture
-        let effects = m.handle(.timer(.limitWarning), now: 1150)
-        #expect(m.capture == before)
-        #expect(effects == [.notice(.oneMinuteLeft)])
-    }
-
-    @Test(arguments: [("listening", DictationMachine.Mode.pushToTalk), ("locked", .handsFree), ("lockedStopPending", .handsFree)])
-    func limitFinishesInTheCurrentMode(_ from: String, _ mode: DictationMachine.Mode) {
-        var m = Self.state(from)
-        let effects = m.handle(.timer(.limit), now: 1210)
-        #expect(m.capture == .idle)
-        #expect(effects == [.stopCaptureAndTranscribe(mode: mode), .notice(.limitReached)])
-    }
-
     @Test(arguments: [("listening", DictationMachine.Mode.pushToTalk), ("locked", .handsFree), ("lockedStopPending", .handsFree)])
     func deviceLostTranscribesWhatWasSaid(_ from: String, _ mode: DictationMachine.Mode) {
         var m = Self.state(from)
         let effects = m.handle(.deviceLost, now: 50)
         #expect(m.capture == .idle)
-        #expect(effects == Self.cancelLimits + [.stopCaptureAndTranscribe(mode: mode), .notice(.deviceLostTranscribing)])
+        #expect(effects == [.stopCaptureAndTranscribe(mode: mode), .notice(.deviceLostTranscribing)])
     }
 
     @Test func deviceLostWhileArmingIsSilent() {
@@ -368,8 +333,8 @@ import Testing
 
     @Test(arguments: [
         ("idle", DictationMachine.Input.pttUp), ("idle", .pttInterrupted), ("idle", .timer(.arming)),
-        ("idle", .timer(.limit)), ("idle", .deviceLost), ("idle", .pillStop), ("idle", .pillCancel),
-        ("arming", .pttDown), ("arming", .pillClick), ("arming", .timer(.limit)),
+        ("idle", .timer(.doublePressWindow)), ("idle", .deviceLost), ("idle", .pillStop), ("idle", .pillCancel),
+        ("arming", .pttDown), ("arming", .pillClick), ("arming", .timer(.doublePressWindow)),
         ("listening", .pttDown), ("listening", .pillClick), ("listening", .pillStop), ("listening", .timer(.arming)),
         ("locked", .pillClick), ("locked", .pttInterrupted), ("locked", .timer(.doublePressWindow)),
         ("lockedStopPending", .pttDown), ("lockedStopPending", .pillClick),
@@ -492,20 +457,6 @@ import Testing
         _ = m.handle(.jobStarted, now: 12)
         #expect(m.handle(.pttDown, now: 13) == [.showPill(.listening), .startCapture, .schedule(.arming, after: 0.12)])
         #expect(m.activeJobs == 1 && m.isRecording)
-    }
-
-    @Test func limitWarningThenLimitInHandsFree() {
-        var m = Self.locked()
-        #expect(m.handle(.timer(.limitWarning), now: 1150) == [.notice(.oneMinuteLeft)])
-        #expect(m.isRecording)
-        #expect(m.handle(.timer(.limit), now: 1210) == [.stopCaptureAndTranscribe(mode: .handsFree), .notice(.limitReached)])
-        #expect(m.handle(.timer(.limit), now: 1211).isEmpty, "a stale limit timer is ignored")
-    }
-
-    @Test func limitsFollowTheConfiguredMaximum() {
-        var m = DictationMachine(config: .init(maxDuration: 300))
-        let effects = m.handle(.handsFreeToggle, now: 0)
-        #expect(effects.suffix(2) == [.schedule(.limitWarning, after: 240), .schedule(.limit, after: 300)])
     }
 
     @Test func deviceLostMidHandsFreeKeepsAudio() {
@@ -637,16 +588,42 @@ import Testing
         #expect(store.entries.first?.text == "n\(HistoryStore.maxEntries + 4)")
     }
 
-    @Test func pruneDropsOldAudioReferences() {
+    @Test func autoDeleteRemovesOldEntriesAndTheirAudio() async throws {
+        let paths = AppPaths.temporary()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let settings = AppSettings.inMemory()
+        let store = HistoryStore(paths: paths, settings: settings)
+        store.load()
+        try await waitUntil { store.isLoaded }
+        try FileManager.default.createDirectory(at: paths.recordings, withIntermediateDirectories: true)
+        for name in ["old.wav", "recent.wav"] { try Data([1, 2]).write(to: paths.recordingURL(fileName: name)) }
+        let now = Date()
+        let old = TranscriptEntry(createdAt: now.addingTimeInterval(-20 * 86_400), text: "old", engine: .parakeet,
+                                  audioDuration: 3, voicedSeconds: 2, audioFileName: "old.wav")
+        let recent = TranscriptEntry(createdAt: now.addingTimeInterval(-2 * 86_400), text: "", engine: .parakeet,
+                                     status: .failed, audioDuration: 3, voicedSeconds: 2, audioFileName: "recent.wav")
+        store.upsert(old)
+        store.upsert(recent)
+        var removed: [UUID] = []
+        store.onRemove = { removed += $0 }
+        settings.autoDeleteHistoryDays = 7
+        store.deleteExpired(now: now)
+        #expect(store.entries.map(\.id) == [recent.id])
+        #expect(removed == [old.id])
+        try await waitUntil { !FileManager.default.fileExists(atPath: paths.recordingURL(fileName: "old.wav").path) }
+        #expect(FileManager.default.fileExists(atPath: paths.recordingURL(fileName: "recent.wav").path))
+    }
+
+    @Test func neverKeepsEverything() {
         let now = Date()
         let store = HistoryStore.preview(entries: [
-            TranscriptEntry(createdAt: now.addingTimeInterval(-20 * 86_400), text: "", engine: .parakeet, status: .failed,
+            TranscriptEntry(createdAt: now.addingTimeInterval(-400 * 86_400), text: "", engine: .parakeet, status: .failed,
                             audioDuration: 3, voicedSeconds: 2, audioFileName: "old.wav"),
-            TranscriptEntry(createdAt: now.addingTimeInterval(-2 * 86_400), text: "", engine: .parakeet, status: .failed,
+            TranscriptEntry(createdAt: now.addingTimeInterval(-2 * 86_400), text: "hi", engine: .parakeet,
                             audioDuration: 3, voicedSeconds: 2, audioFileName: "recent.wav"),
         ])
-        store.pruneOldRecordings(now: now)
-        #expect(store.entries.map(\.audioFileName) == [.some("recent.wav"), nil])
+        store.deleteExpired(now: now)
+        #expect(store.entries.map(\.audioFileName) == ["recent.wav", "old.wav"])
     }
 
     @Test func persistsAndReloads() async throws {
@@ -760,7 +737,7 @@ final class FakeRecorder: DictationRecorder {
         let controller = DictationController(
             settings: settings, recorder: AudioRecorder(levelMeter: meter, devices: devices),
             transcription: TranscriptionService(models: store, account: account, client: client),
-            models: store, account: account, history: history, inserter: TextInserter(settings: settings),
+            models: store, account: account, history: history, inserter: TextInserter(),
             hotkeys: hotkeys, permissions: .preview(mic: mic, ax: .granted), sounds: SoundPlayer(settings: settings),
             pillModel: pill, toasts: toasts)
         let recorder = FakeRecorder()
@@ -799,6 +776,54 @@ final class FakeRecorder: DictationRecorder {
         try await waitUntil { h.controller.machine.activeJobs == 0 }
         #expect(h.history.entries.count == 3)
         #expect(h.history.entries.allSatisfy { $0.status == .success })
+    }
+
+    /// A transcript keeps its recording as long as it's in History, so it can always be transcribed again.
+    @Test func everyTranscriptKeepsItsAudio() async throws {
+        let h = Self.make(persistsHistory: true)
+        defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
+        h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "kept", engine: engine, processingTime: 0.1) }
+        h.controller.insertOverride = { _, _ in .pasted }
+        let r = Self.recording()
+        h.controller.enqueue(r, engine: .parakeet, targetPID: nil)
+        try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id) != nil }
+        let entry = try #require(h.history.entry(id: r.id))
+        #expect(entry.audioFileName == "\(r.id.uuidString).wav")
+        #expect(h.history.loadRecording(for: entry)?.samples.count == r.samples.count)
+    }
+
+    /// General → Pasting shapes only what the app pastes (a dictation, Paste Here, paste last): History, the cards and
+    /// Copy keep the text as the model wrote it.
+    @Test func thePastingSettingsShapeOnlyWhatIsPasted() async throws {
+        let h = Self.make()
+        h.settings.addsSpaceAfterText = true
+        h.settings.removesFinalPeriod = true
+        h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "Hello.", engine: engine, processingTime: 0.1) }
+        var pasted: [String] = []
+        h.controller.insertOverride = { text, _ in pasted.append(text); return .targetChanged }
+        var copied: [String] = []
+        h.controller.copyOverride = { copied.append($0) }
+        var pastedHere: [String] = []
+        h.controller.pasteNowOverride = { pastedHere.append($0); return .pasted }
+        var pastedLast: [String] = []
+        h.controller.pasteLastOverride = { pastedLast.append($0); return .pasted }
+
+        let r = Self.recording()
+        h.controller.enqueue(r, engine: .parakeet, targetPID: nil)
+        try await waitUntil { h.controller.machine.activeJobs == 0 && !pasted.isEmpty }
+        #expect(pasted == ["Hello "])
+        #expect(h.history.entry(id: r.id)?.text == "Hello.")
+
+        let card = try #require(h.toasts.notices.first { $0.transcript == "Hello." }, "the card shows the text as written")
+        h.controller.perform(try #require(card.actions.first { $0.title == "Copy" }), from: card)
+        #expect(copied == ["Hello."])
+        h.controller.perform(try #require(card.actions.first { $0.title == "Paste Here" }), from: card)
+        try await waitUntil { !pastedHere.isEmpty }
+        #expect(pastedHere == ["Hello "])
+
+        h.controller.pasteLast()
+        try await waitUntil { !pastedLast.isEmpty }
+        #expect(pastedLast == ["Hello "])
     }
 
     @Test func aFailureInTheMiddleDoesntBlockTheQueue() async throws {
@@ -1024,57 +1049,51 @@ final class FakeRecorder: DictationRecorder {
         #expect(try await fallback(main: .parakeetCloud, local: .installed, error: .offline) == .parakeet)
     }
 
-    /// "Gemini Flash is taking longer than usual" offers the main model: Parakeet on this Mac while it's the main
-    /// one, even before it's loaded (it loads for the retry), and Parakeet · Cloud while that's the main one.
-    @Test func theSlowGeminiNoticeOffersTheMainModel() async throws {
-        func offered(main: EngineID, local: LocalModelState) async throws -> [NoticeActionKind] {
-            let h = Self.make(models: [.parakeet: local], keyStatus: .valid(KeyInfo()))
-            h.settings.selectedEngine = main
-            h.controller.slowNoticeDelayOverride = 0.05
-            h.controller.transcribeOverride = { _, engine in
-                try await Task.sleep(for: .seconds(5))
-                return TranscriptResult(text: "late", engine: engine, processingTime: 5)
-            }
-            h.controller.insertOverride = { _, _ in Issue.record("canceled, never pasted"); return .pasted }
-            let r = Self.recording()
-            h.controller.enqueue(r, engine: .geminiFlash, targetPID: nil)
-            try await waitUntil { h.toasts.notices.contains { $0.dedupeKey == "slow.\(r.id)" } }
-            let slow = try #require(h.toasts.notices.first { $0.dedupeKey == "slow.\(r.id)" })
-            #expect(slow.title == "Gemini Flash is taking longer than usual")
-            h.controller.handle(.cancel)
-            #expect(h.controller.machine.activeJobs == 0)
-            return slow.actions.map(\.kind)
+    /// A cloud model that takes long is simply at work: no notice says so (Esc cancels it), whatever the model.
+    @Test func aSlowCloudModelPostsNoNotice() async throws {
+        let h = Self.make(keyStatus: .valid(KeyInfo()))
+        h.controller.waitNoticeDelayOverride = 0.02
+        h.controller.transcribeOverride = { _, engine in
+            try await Task.sleep(for: .seconds(5))
+            return TranscriptResult(text: "late", engine: engine, processingTime: 5)
         }
-        #expect(try await offered(main: .parakeet, local: .installed) == [.retryWith(.parakeet)],
-                "downloaded but not loaded: it loads for the retry")
-        #expect(try await offered(main: .parakeet, local: .ready) == [.retryWith(.parakeet)])
-        #expect(try await offered(main: .parakeet, local: .notInstalled) == [.retryWith(.parakeetCloud)],
-                "the main model can't run")
-        #expect(try await offered(main: .parakeetCloud, local: .ready) == [.retryWith(.parakeetCloud)])
+        h.controller.insertOverride = { _, _ in Issue.record("canceled, never pasted"); return .pasted }
+        h.controller.enqueue(Self.recording(), engine: .geminiFlash, targetPID: nil)
+        h.controller.enqueue(Self.recording(), engine: .parakeetCloud, targetPID: nil)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(h.toasts.notices.isEmpty)
+        h.controller.handle(.cancel)
+        h.controller.handle(.cancel)
+        #expect(h.controller.machine.activeJobs == 0)
     }
 
-    @Test func useParakeetInsteadRunsTheSlowGeminiDictationOnTheMainModel() async throws {
-        let h = Self.make(models: [.parakeet: .installed], keyStatus: .valid(KeyInfo()))
-        h.controller.slowNoticeDelayOverride = 0.05
+    /// A dictation waiting for Parakeet on this Mac to download says so, and "Use … Instead" runs it on the model
+    /// that can take it now.
+    @Test func aDictationWaitingForItsDownloadSaysSoAndOffersAnother() async throws {
+        let h = Self.make(models: [.parakeet: .downloading(DownloadProgress(fraction: 0.42))],
+                          keyStatus: .valid(KeyInfo()))
+        h.controller.waitNoticeDelayOverride = 0.05
         var runs: [EngineID] = []
         h.controller.transcribeOverride = { _, engine in
             runs.append(engine)
-            if engine == .geminiFlash { try await Task.sleep(for: .seconds(5)) }
+            if engine == .parakeet { try await Task.sleep(for: .seconds(5)) }
             return TranscriptResult(text: "by \(engine.rawValue)", engine: engine, processingTime: 0.2)
         }
         var pasted: [String] = []
         h.controller.insertOverride = { text, _ in pasted.append(text); return .pasted }
         let r = Self.recording()
-        h.controller.enqueue(r, engine: .geminiFlash, targetPID: nil)
+        h.controller.enqueue(r, engine: .parakeet, targetPID: nil)
         try await waitUntil { h.toasts.notices.contains { $0.dedupeKey == "slow.\(r.id)" } }
-        let slow = try #require(h.toasts.notices.first { $0.dedupeKey == "slow.\(r.id)" })
-        let use = try #require(slow.actions.first)
-        #expect(use.title == "Use Parakeet v3 Instead")
-        h.controller.perform(use, from: slow)
+        let wait = try #require(h.toasts.notices.first { $0.dedupeKey == "slow.\(r.id)" })
+        #expect(wait.title == "Still downloading Parakeet v3 · 42%")
+        let use = try #require(wait.actions.first)
+        #expect(use.title == "Use Parakeet v3 · Cloud Instead")
+        h.controller.perform(use, from: wait)
         try await waitUntil { h.controller.machine.activeJobs == 0 && !pasted.isEmpty }
-        #expect(runs == [.geminiFlash, .parakeet])
-        #expect(pasted == ["by parakeet"])
-        #expect(h.history.entry(id: r.id)?.engine == .parakeet)
+        #expect(runs == [.parakeet, .parakeetCloud])
+        #expect(pasted == ["by parakeetCloud"])
+        #expect(h.history.entry(id: r.id)?.engine == .parakeetCloud)
+        #expect(!h.toasts.notices.contains { $0.dedupeKey == "slow.\(r.id)" })
     }
 
     @Test func refusalWhileArmingStaysSilentForFnCombos() {
@@ -1098,6 +1117,7 @@ final class FakeRecorder: DictationRecorder {
 
     @Test func refusedQuickTapFoldsAwaySilently() {
         let h = Self.make(mic: .denied)
+        h.settings.doublePressForHandsFree = true
         var cues: [SoundEffect] = []
         h.controller.playCueOverride = { cues.append($0) }
         h.controller.handle(.pttDown)
@@ -1135,6 +1155,7 @@ final class FakeRecorder: DictationRecorder {
 
     @Test func aQuickTapStaysUpForTheDoublePressWindowThenFoldsSilently() {
         let h = Self.make()
+        h.settings.doublePressForHandsFree = true
         var cues: [SoundEffect] = []
         h.controller.playCueOverride = { cues.append($0) }
         var phases: [PillPhase] = []
@@ -1163,6 +1184,7 @@ final class FakeRecorder: DictationRecorder {
 
     @Test func doublePressGrowsIntoHandsFreeWithOneLockCue() {
         let h = Self.make()
+        h.settings.doublePressForHandsFree = true
         var cues: [SoundEffect] = []
         h.controller.playCueOverride = { cues.append($0) }
         var phases: [PillPhase] = []
@@ -1181,6 +1203,7 @@ final class FakeRecorder: DictationRecorder {
     @Test(arguments: PillMode.allCases)
     func everyPillModeFollowsTheKey(_ mode: PillMode) {
         let h = Self.make()
+        h.settings.doublePressForHandsFree = true
         h.settings.pillMode = mode
         var shown: [Bool] = []
         h.pill.onVisiblePhaseChange = {
@@ -1200,6 +1223,7 @@ final class FakeRecorder: DictationRecorder {
     /// Onboarding counts recordings by this: the pill is up from key-down, but only a committed press records.
     @Test func aPressCountsAsARecordingOnlyOnceItCommits() {
         let h = Self.make()
+        h.settings.doublePressForHandsFree = true
         h.controller.handle(.pttDown)
         #expect(h.pill.phase == .listening)
         #expect(h.controller.committedPillPhase == .rest, "arming isn't a recording yet")
@@ -1221,6 +1245,7 @@ final class FakeRecorder: DictationRecorder {
     @Test(arguments: [true, false])
     func aFlourishDuringATapPlaysWhenThePillFolds(_ succeeds: Bool) async throws {
         let h = Self.make()
+        h.settings.doublePressForHandsFree = true
         h.controller.runsTimers = false
         h.controller.transcribeOverride = { _, engine in
             TranscriptResult(text: succeeds ? "dictated" : "", engine: engine, processingTime: 0.1)
@@ -1262,6 +1287,7 @@ final class FakeRecorder: DictationRecorder {
     /// "Still transcribing…" and its timer. A real hold takes over once it commits.
     @Test func pressesThatDontCommitLeaveTheProcessingPillAlone() async throws {
         let h = Self.make()
+        h.settings.doublePressForHandsFree = true
         h.controller.runsTimers = false
         h.pill.timing.slowProcessing = 0.05
         var release = false
@@ -1336,6 +1362,7 @@ final class FakeRecorder: DictationRecorder {
     @Test(arguments: [true, false])
     func aJobFinishingDuringATapOverProcessingSettlesAtOnce(pastes: Bool) async throws {
         let h = Self.make()
+        h.settings.doublePressForHandsFree = true
         h.controller.runsTimers = false
         var release = false
         h.controller.transcribeOverride = { _, engine in
@@ -1471,43 +1498,6 @@ final class FakeRecorder: DictationRecorder {
         now = 302
         h.controller.handle(.pttInterrupted)
         #expect(h.toasts.notices.first { $0.title == "Dictation stopped" }?.recordingID == kept.id)
-    }
-
-    @Test func theLimitIsFixedForTheRecordingInProgress() {
-        let h = Self.make()
-        h.controller.send(.handsFreeToggle)
-        #expect(h.pill.limitSeconds == 1200)
-        h.settings.maxRecordingMinutes = 5
-        h.controller.send(.timer(.limitWarning))
-        #expect(h.pill.limitSeconds == 1200)
-        #expect(h.toasts.notices.first { $0.dedupeKey == "limit" }?.body == "Recording stops at 20 min and gets transcribed.")
-        h.controller.send(.pillCancel)
-        h.controller.send(.handsFreeToggle)
-        #expect(h.pill.limitSeconds == 300, "the next recording uses the new limit")
-        h.controller.send(.pillCancel)
-    }
-
-    @Test func geminiRecordingsStopWhileTheyStillFitInOneRequest() {
-        let h = Self.make(keyStatus: .valid(KeyInfo()))
-        h.settings.switchCleanup = false
-        h.controller.send(.handsFreeToggle)
-        #expect(h.controller.machine.capture.isListeningOrLocked)
-        #expect(h.pill.limitSeconds == 1200)
-        h.controller.cycleEngine()
-        #expect(h.controller.effectiveEngine == .geminiFlash)
-        #expect(h.pill.limitSeconds == 420, "Gemini takes about 7.4 minutes per request, not the 20-minute setting")
-        h.controller.send(.timer(.limitWarning))
-        #expect(h.toasts.notices.first { $0.dedupeKey == "limit" }?.body == "Recording stops at 7 min and gets transcribed.")
-        h.controller.send(.pillCancel)
-        h.settings.maxRecordingMinutes = 5
-        h.controller.send(.handsFreeToggle)
-        #expect(h.controller.effectiveEngine == .parakeet, "the next dictation starts on the main model")
-        h.controller.cycleEngine()
-        #expect(h.controller.effectiveEngine == .geminiFlash)
-        #expect(h.pill.limitSeconds == 300, "a shorter setting still wins")
-        h.controller.send(.pillCancel)
-        #expect(OpenRouterClient.base64Length(ofByteCount: 44 + Int(OpenRouterClient.maxRecordingDuration) * 16_000 * 2)
-            <= OpenRouterClient.maxBase64Bytes)
     }
 
     @Test func truncatedGeminiTextIsShownNotPasted() async throws {
@@ -1755,10 +1745,20 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
         #expect(Self.titles(menu) == [
             "Parakeet v3 · Ready", "—",
             "Paste Last Transcript", "—",
-            "Model", "Microphone", "—",
+            "Microphone", "—",
             "Settings…", "—", "Quit",
         ])
         #expect(menu.items.first?.isEnabled == false)
+    }
+
+    /// The model is chosen in Models (and per dictation, from the pill): neither menu offers it.
+    @Test func theMenuHasNoModelItem() {
+        let env = AppEnvironment.preview()
+        for includeQuit in [true, false] {
+            let menu = env.menuBar.builder.makeMenu(includeQuit: includeQuit)
+            #expect(!menu.items.contains { $0.title == "Model" || $0.title == "Manage Models…" })
+            #expect(!menu.items.contains { $0.submenu?.items.contains { $0.title == "Manage Models…" } == true })
+        }
     }
 
     @Test func pillMenuHasNoQuit() {
@@ -1841,42 +1841,6 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
         // Updates ignored: no item, no badge.
         env.settings.checkForUpdatesAutomatically = false
         #expect(!env.menuBar.builder.makeMenu(includeQuit: true).items.contains { $0.title.hasPrefix("Update") })
-    }
-
-    @Test func modelSubmenuMarksTheSelection() throws {
-        let env = AppEnvironment.preview()
-        let menu = env.menuBar.builder.makeMenu(includeQuit: true)
-        let models = try #require(menu.items.first { $0.title == "Model" }?.submenu)
-        let parakeet = try #require(models.items.first { $0.title == "Parakeet v3" })
-        let cloud = try #require(models.items.first { $0.title == "Parakeet v3 · Cloud" })
-        #expect(parakeet.state == .on && parakeet.isEnabled)
-        #expect(cloud.state == .off && cloud.isEnabled, "the preview key is valid")
-        #expect(!models.items.contains { $0.title.hasPrefix("Gemini") }, "extra models are picked per dictation")
-    }
-
-    @Test func modelSubmenuGroupsThisMacThenOpenRouter() throws {
-        let env = AppEnvironment.preview()
-        let menu = env.menuBar.builder.makeMenu(includeQuit: true)
-        let models = try #require(menu.items.first { $0.title == "Model" }?.submenu)
-        // A status suffix follows the name after two spaces ("Parakeet v3  Not downloaded").
-        #expect(models.items.map { $0.isSeparatorItem ? "—" : $0.title.components(separatedBy: "  ")[0] } == [
-            "Parakeet v3", "—",
-            "Parakeet v3 · Cloud", "—", "Manage Models…",
-        ])
-        let cloudEnabled = models.items.filter { $0.title.contains("· Cloud") }.map(\.isEnabled)
-        #expect(cloudEnabled == [true], "the preview key is valid")
-    }
-
-    @Test func cloudModelsNeedTheKey() throws {
-        let env = AppEnvironment.preview()
-        env.account.removeKey()
-        let menu = env.menuBar.builder.makeMenu(includeQuit: true)
-        let models = try #require(menu.items.first { $0.title == "Model" }?.submenu)
-        for engine in EngineID.cloudEngines where !engine.isSwitchModel {
-            let item = try #require(models.items.first { $0.title.hasPrefix(engine.displayName + "  ") })
-            #expect(!item.isEnabled)
-            #expect(item.attributedTitle?.string == "\(engine.displayName)  Needs key")
-        }
     }
 
     @Test func shortcutHintsBecomeKeyEquivalents() throws {

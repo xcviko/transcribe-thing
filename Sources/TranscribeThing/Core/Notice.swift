@@ -634,9 +634,9 @@ extension AppError {
                         fixes: [Fix(title: "Try Another Model", kind: .openHub(.models))])
         case .recordingTooLarge:
             return Copy(symbol: "waveform.badge.exclamationmark",
-                        title: cloud.isSpeech ? "Too large to send to OpenRouter" : "Too long to send to Gemini",
-                        body: cloud.isSpeech ? "OpenRouter refused this audio as too large. A local model has no limit."
-                            : "Gemini takes about 7 minutes of audio at a time. A local model has no limit.",
+                        title: "Too large to send to OpenRouter",
+                        body: "OpenRouter refused this recording as too large. "
+                            + "\(EngineID.parakeet.displayName) on this Mac takes any length.",
                         order: .fallbackFirst)
         }
     }

@@ -74,9 +74,9 @@ import Testing
         #expect(handsFree.compactDescription == "fn Space")
         #expect(handsFree.spokenDescription == "Fn + Space")
 
-        let cancel = try #require(b[.cancel])
-        #expect(cancel.displayTokens == ["Esc"])
-        #expect(cancel.spokenDescription == "Escape")
+        // Cancel isn't bound: it is always Esc.
+        #expect(Shortcut.escape.displayTokens == ["Esc"])
+        #expect(Shortcut.escape.spokenDescription == "Escape")
 
         let paste = try #require(b[.pasteLast])
         #expect(paste.displayTokens == ["fn", "⌘", "V"])
@@ -142,7 +142,18 @@ import Testing
         let decoded = try JSONDecoder().decode(ShortcutBindings.self, from: Data(partial.utf8))
         #expect(decoded[.pushToTalk] == .rightOption)
         #expect(decoded[.handsFree] == .fnSpace)
-        #expect(decoded[.cancel] == .escape)
+    }
+
+    /// Cancel is always Esc now, but bindings saved while it could be changed still carry it (here F13).
+    @Test func storedBindingsWithCancelStillLoad() throws {
+        let stored = #"{"cancel":{"keyCode":105,"modifiers":[]},"handsFree":null,"#
+            + #""pushToTalk":{"modifiers":[{"modifier":"option","side":"right"}]}}"#
+        let decoded = try JSONDecoder().decode(ShortcutBindings.self, from: Data(stored.utf8))
+        #expect(decoded[.pushToTalk] == .rightOption)
+        #expect(decoded[.handsFree] == nil, "deliberately unbound stays unbound")
+        #expect(decoded[.pasteLast] == .commandFnV && decoded[.switchModel] == .fnTab)
+        let reencoded = String(decoding: try JSONEncoder().encode(decoded), as: UTF8.self)
+        #expect(!reencoded.contains("cancel"))
     }
 
     /// Copy last transcript is gone (paste last copies too), but bindings saved while it existed still carry it.
@@ -168,7 +179,6 @@ import Testing
     static let customized = ShortcutBindings(bindings: [
         .pushToTalk: .rightOption,
         .handsFree: Shortcut(modifiers: [.init(.control), .init(.option)], keyCode: KeyCode.space),
-        .cancel: .escape,
         .switchModel: .fnTab,
     ])
 
@@ -265,7 +275,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         Case(name: "⌘Tab", shortcut: combo(kVK_Tab, .command), action: .handsFree, expected: .warning(.systemShortcut)),
         Case(name: "⌃⌘Space", shortcut: combo(kVK_Space, .control, .command), action: .handsFree,
              expected: .warning(.systemShortcut)),
-        Case(name: "⌥⌘Esc", shortcut: combo(kVK_Escape, .option, .command), action: .cancel,
+        Case(name: "⌥⌘Esc", shortcut: combo(kVK_Escape, .option, .command), action: .handsFree,
              expected: .warning(.systemShortcut)),
         Case(name: "⌘Q", shortcut: combo(kVK_ANSI_Q, .command), action: .pasteLast, expected: .warning(.systemShortcut)),
         Case(name: "⌘V", shortcut: combo(kVK_ANSI_V, .command), action: .pasteLast, expected: .warning(.systemShortcut)),
@@ -284,9 +294,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
              expected: .warning(.typing)),
 
         // Esc.
-        Case(name: "Esc for cancel", shortcut: .escape, action: .cancel, expected: .clean),
-        Case(name: "Esc for push to talk", shortcut: .escape, action: .pushToTalk,
-             bindings: { var b = ShortcutBindings.defaults; b[.cancel] = .f13; return b }(), expected: .warning(.escape)),
+        Case(name: "Esc for push to talk", shortcut: .escape, action: .pushToTalk, expected: .warning(.escape)),
 
         // F-keys.
         Case(name: "F5, media keys", shortcut: combo(kVK_F5), action: .pushToTalk, expected: .warning(.mediaKey)),
@@ -708,7 +716,9 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         settings.pillMode = .always
         settings.microphoneUID = "usb-mic"
         settings.soundsEnabled = false
-        settings.maxRecordingMinutes = 10
+        settings.autoDeleteHistoryDays = 30
+        settings.addsSpaceAfterText = true
+        settings.removesFinalPeriod = true
         var bindings = ShortcutBindings.defaults
         bindings[.pushToTalk] = .rightOption
         settings.shortcuts = bindings
@@ -720,11 +730,59 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         #expect(reloaded.pillMode == .always)
         #expect(reloaded.microphoneUID == "usb-mic")
         #expect(!reloaded.soundsEnabled)
-        #expect(reloaded.maxRecordingMinutes == 10)
+        #expect(reloaded.autoDeleteHistoryDays == 30)
+        #expect(reloaded.addsSpaceAfterText && reloaded.removesFinalPeriod)
         #expect(reloaded.shortcuts[.pushToTalk] == .rightOption)
 
         settings.microphoneUID = nil
         #expect(AppSettings(defaults: defaults).microphoneUID == nil)
+    }
+
+    /// The pasting switches and Auto-delete are off (Never) out of the box.
+    @Test func pastingAndAutoDeleteAreOffByDefault() {
+        let settings = AppSettings.inMemory()
+        #expect(!settings.addsSpaceAfterText && !settings.removesFinalPeriod)
+        #expect(settings.autoDeleteHistoryDays == 0)
+    }
+
+    /// "Maximum recording length", "Restore the clipboard after pasting" and the two audio retention choices are
+    /// gone: what an older build stored goes at load.
+    @Test func removedSettingsAreRemovedAtLoad() throws {
+        let suite = NSTemporaryDirectory() + "transcribe-thing-tests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(atPath: suite + ".plist")
+        }
+        let removed: [SettingsKey] = [.maxRecordingMinutes, .restoreClipboard, .keepFailedRecordingsDays,
+                                      .keepSuccessfulRecordingsDays]
+        defaults.set(10, forKey: SettingsKey.maxRecordingMinutes.defaultsKey)
+        defaults.set(false, forKey: SettingsKey.restoreClipboard.defaultsKey)
+        defaults.set(14, forKey: SettingsKey.keepFailedRecordingsDays.defaultsKey)
+        defaults.set(0, forKey: SettingsKey.keepSuccessfulRecordingsDays.defaultsKey)
+        _ = AppSettings(defaults: defaults)
+        for key in removed {
+            #expect(defaults.object(forKey: key.defaultsKey) == nil, "\(key)")
+        }
+    }
+
+    /// Double-press for hands-free is off unless the user turned it on: an install that never touched it gets the
+    /// new default, one that turned it on keeps it.
+    @Test func doublePressIsOffUnlessTheUserTurnedItOn() throws {
+        let suite = NSTemporaryDirectory() + "transcribe-thing-tests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(atPath: suite + ".plist")
+        }
+        let key = SettingsKey.doublePressForHandsFree.defaultsKey
+        #expect(!AppSettings(defaults: defaults).doublePressForHandsFree)
+        #expect(defaults.object(forKey: key) == nil, "nothing is stored until the user flips it")
+        #expect(!AppSettings.inMemory().doublePressForHandsFree)
+        #expect(DictationMachine.Config().doublePressEnabled, "the machine follows the setting, copied by the controller")
+
+        AppSettings(defaults: defaults).doublePressForHandsFree = true
+        #expect(AppSettings(defaults: defaults).doublePressForHandsFree)
     }
 
     /// Shortcuts saved by a build that still had Copy last transcript load as they were, minus that one.

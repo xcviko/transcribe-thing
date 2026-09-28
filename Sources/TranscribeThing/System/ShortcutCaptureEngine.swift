@@ -6,7 +6,7 @@ import Foundation
 ///
 /// - Modifier-only: the largest set held during the gesture is committed once everything is released.
 /// - Combination: committed on the first non-modifier keyDown, with the modifiers held at that moment.
-/// - Bare Esc cancels recording, except for the cancel action, where Esc is the key being recorded.
+/// - Bare Esc cancels recording.
 /// - Bare ⌫ or ⌦ clears the binding for actions that may be left unbound.
 struct ShortcutCaptureEngine: Equatable, Sendable {
     enum Result: Equatable, Sendable { case none, commit(Shortcut), cancel, clear }
@@ -26,7 +26,7 @@ struct ShortcutCaptureEngine: Equatable, Sendable {
     static func canClear(_ action: ShortcutAction) -> Bool {
         switch action {
         case .handsFree, .pasteLast, .switchModel: true
-        case .pushToTalk, .cancel: false
+        case .pushToTalk: false
         }
     }
 
@@ -53,7 +53,7 @@ struct ShortcutCaptureEngine: Equatable, Sendable {
         let snapshot = ModifierSnapshot(rawFlags: rawFlags, functionDown: functionDown)
         if snapshot.isEmpty && keyCode == KeyCode.escape {
             reset()
-            return action == .cancel ? .commit(.escape) : .cancel
+            return .cancel
         }
         if snapshot.isEmpty && (keyCode == KeyCode.delete || keyCode == KeyCode.forwardDelete) && Self.canClear(action) {
             reset()

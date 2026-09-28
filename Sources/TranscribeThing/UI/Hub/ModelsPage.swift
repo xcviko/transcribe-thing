@@ -60,7 +60,7 @@ struct ModelsPage: View {
     }
 
     private var extraFooter: String {
-        "The next dictation starts on \(settings.selectedEngine.shortName) again. Gemini takes up to 7 minutes of audio."
+        "The next dictation starts on \(settings.selectedEngine.shortName) again."
     }
 
     private func extraBinding(_ engine: EngineID) -> Binding<Bool> {

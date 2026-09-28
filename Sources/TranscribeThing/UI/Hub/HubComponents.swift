@@ -184,7 +184,7 @@ struct RadioDot: View {
     }
 }
 
-/// Compact menu that looks like a secondary capsule: "20 min ⌃⌄".
+/// Compact menu that looks like a secondary capsule: "Never ⌃⌄".
 struct HubMenuPicker<Value: Hashable>: View {
     var options: [Value]
     @Binding var selection: Value

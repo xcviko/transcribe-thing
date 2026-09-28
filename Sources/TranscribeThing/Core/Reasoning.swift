@@ -114,16 +114,16 @@ enum CleanupModel: String, CaseIterable, Codable, Sendable {
     /// already punctuates and drops fillers itself.
     static func canClean(_ engine: EngineID) -> Bool { !engine.isSwitchModel }
 
-    /// How long a dictation waits for its clean-up before the original is pasted: 12 s, plus time to write out a
-    /// long transcript (about 1 s per 400 characters), at most 45 s.
+    /// How long a dictation waits for its clean-up before the original is pasted: 12 s, plus time to write out the
+    /// transcript, about 1 s per 200 characters, with no cap: an hour's 60,000 characters get 312 s.
     static func timeout(forCharacterCount count: Int) -> TimeInterval {
-        min(45, 12 + Double(max(0, count)) / 400)
+        12 + Double(max(0, count)) / 200
     }
 
     /// `max_tokens` for cleaning up `count` characters. Reasoning counts against it, and every request in flight
     /// reserves it from OpenRouter's in-flight budget, so it grows with the text instead of being huge: about two
     /// characters per token (a pessimistic figure for Cyrillic) doubled for slack, plus room to think. No thinking
-    /// gets the room of minimal.
+    /// gets the room of minimal. At most 128,000, what GPT-6 Luna allows.
     static func maxTokens(forCharacterCount count: Int, effort: ReasoningEffort) -> Int {
         let headroom = switch effort {
         case .off, .minimal: 1_024
@@ -131,7 +131,7 @@ enum CleanupModel: String, CaseIterable, Codable, Sendable {
         case .medium: 8_192
         case .high: 16_384
         }
-        return min(65_536, max(4_096, max(0, count) + headroom))
+        return min(128_000, max(4_096, max(0, count) + headroom))
     }
 
     /// The transcript goes to the model as data inside tags, so a sentence like "Can you remove…" reads as text to

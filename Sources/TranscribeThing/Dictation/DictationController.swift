@@ -82,8 +82,8 @@ final class DictationController {
     @ObservationIgnored var cleanupOverride: (@MainActor (String, EngineID) async throws -> TranscriptResult)?
     /// Replaces how long a clean-up may take (`CleanupModel.timeout(forCharacterCount:)`).
     @ObservationIgnored var cleanupTimeoutOverride: TimeInterval?
-    /// Replaces how long a job runs before "taking longer than usual" (`slowNoticeDelay(for:)`).
-    @ObservationIgnored var slowNoticeDelayOverride: TimeInterval?
+    /// Replaces how long a job waits for its local model before saying so (`modelWaitNoticeDelay`).
+    @ObservationIgnored var waitNoticeDelayOverride: TimeInterval?
     /// TCC's answer right now (about 25 ms), asked only while the cached permission isn't granted.
     @ObservationIgnored var microphoneAuthorizedNow: () -> Bool = { AudioRecorder.isMicrophoneAuthorized }
     /// Replaces the sound player for the dictation cues.
@@ -111,8 +111,6 @@ final class DictationController {
     private(set) var modelOverride: ModelChoice?
     /// The extra model transcribing this dictation, if `modelOverride` is one.
     var engineOverride: EngineID? { modelOverride?.switchEngine }
-    /// The step under way comes from a held key: a refusal was already said at the press.
-    @ObservationIgnored private var isRepeatingSwitch = false
     /// How long a push-to-talk hold lasts before the pill hints at Switch model.
     @ObservationIgnored var switchHintDelay: TimeInterval = 1.5
     /// How long the tap may stay down before the user is told (its own retries and brief drops stay quiet).
@@ -158,7 +156,8 @@ final class DictationController {
     @ObservationIgnored private var deviceNoticeDue = false
     @ObservationIgnored private var announcedFallbacks: Set<String> = []
     @ObservationIgnored private var bluetoothHintQuota = DailyQuota(limit: 1)
-    @ObservationIgnored private var slowNoticeIDs: [UUID: UUID] = [:]
+    /// The notice of each job waiting for its local model (`postModelWaitNotice`), by job id.
+    @ObservationIgnored private var waitNoticeIDs: [UUID: UUID] = [:]
     @ObservationIgnored private var isStarted = false
     /// The job whose recording is being finished by the current effect batch (its stop cue waits for the tail).
     @ObservationIgnored private var finishingJob: Job?
@@ -268,15 +267,9 @@ final class DictationController {
         guard machine.isRecording else { return }
         let target: ModelChoice? = choice == .engine(settings.selectedEngine) ? nil : choice
         guard target != modelOverride else { return }
-        if let target {
-            guard isCloudKeyUsable else {
-                rejectSwitchWithoutKey()
-                return
-            }
-            guard fits(target) else {
-                rejectSwitchTooLong()
-                return
-            }
+        if target != nil, !isCloudKeyUsable {
+            rejectSwitchWithoutKey()
+            return
         }
         switchModel(to: target)
         stateDidChange()
@@ -357,8 +350,6 @@ final class DictationController {
     }
 
     private func syncConfig() {
-        // The limit is fixed for the recording in progress: its timers, pill and notices all use one value.
-        if !machine.isRecording { machine.config.maxDuration = settings.maxRecordingDuration(for: effectiveEngine) }
         machine.config.doublePressEnabled = settings.doublePressForHandsFree
     }
 
@@ -604,8 +595,8 @@ final class DictationController {
 
     private func playCue(_ sound: SoundEffect) {
         if let playCueOverride { playCueOverride(sound) } else { sounds.play(sound) }
-        // Cues that play while the mic is open (start/lock pings, a "1 minute left" alert) stay out of
-        // what the engine hears.
+        // Cues that play while the mic is open (start/lock pings, a model switch's tick, a notice's alert) stay out
+        // of what the engine hears.
         guard captureDevice.isCapturing else { return }
         captureDevice.duckRecording(from: ProcessInfo.processInfo.systemUptime, duration: sounds.duration(of: sound))
     }
@@ -740,7 +731,7 @@ final class DictationController {
                 // Still processing as far as the pill goes: the text is pasted once it's tidied (or given up on).
                 job.uncleaned = result
                 job.hintTask?.cancel()
-                self.dismissSlowNotice(for: job.id)
+                self.dismissWaitNotice(for: job.id)
                 self.stateDidChange()
                 let cleanup = await self.runCleanup(result.text, of: result.engine, by: .default)
                 guard !Task.isCancelled, job.generation == generation else { return }
@@ -748,15 +739,18 @@ final class DictationController {
             }
             job.outcome = outcome
             job.hintTask?.cancel()
-            self.dismissSlowNotice(for: job.id)
+            self.dismissWaitNotice(for: job.id)
             self.drain()
         }
-        let hintDelay = slowNoticeDelayOverride ?? Self.slowNoticeDelay(for: engine)
+        // A cloud model that takes long is simply at work (Esc cancels it); only a local model that isn't there yet
+        // is worth a word.
+        guard engine.isLocal else { return }
+        let hintDelay = waitNoticeDelayOverride ?? Self.modelWaitNoticeDelay
         job.hintTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(hintDelay))
             guard !Task.isCancelled, let self, job.outcome == nil, !job.isCleaningUp,
                   job.generation == generation else { return }
-            self.postSlowNotice(for: job)
+            self.postModelWaitNotice(for: job)
         }
     }
 
@@ -846,14 +840,9 @@ final class DictationController {
         }
     }
 
-    /// How long a job may run before "taking longer than usual".
-    nonisolated static func slowNoticeDelay(for engine: EngineID) -> TimeInterval {
-        switch engine.cloudAPI {
-        case nil: 3
-        case .transcriptions: 10
-        case .chatCompletions: 12
-        }
-    }
+    /// How long a dictation waits for a local model that is still downloading or loading before a notice says so
+    /// and offers another model.
+    nonisolated static let modelWaitNoticeDelay: TimeInterval = 3
 
     /// A model still downloading can't transcribe yet: wait for it (Esc cancels a dictation, Cancel Home's work).
     private func waitForLocalModel(_ engine: EngineID) async throws {
@@ -906,7 +895,7 @@ final class DictationController {
         queue.removeLast()
         job.stop()
         job.isCancelled = true
-        dismissSlowNotice(for: job.id)
+        dismissWaitNotice(for: job.id)
         _ = machine.handle(.jobEnded, now: clock())
         if let recording = job.recording, let uncleaned = job.uncleaned, job.outcome == nil {
             keepUncleaned(job, recording, uncleaned)
@@ -924,11 +913,10 @@ final class DictationController {
         forget(job.id)
         toasts.dismiss(recordingID: job.id)
         let version = result.version(text: text)
-        let file = settings.keepSuccessfulRecordingsDays > 0 ? history.saveAudio(recording) : nil
         history.upsert(TranscriptEntry(
             id: job.id, createdAt: recording.startedAt, engine: result.engine, status: .success,
             audioDuration: recording.duration, voicedSeconds: recording.speech.voicedSeconds,
-            audioFileName: file, versions: [version]))
+            audioFileName: history.saveAudio(recording), versions: [version]))
         resolveGeneration(of: version, entryID: job.id)
         toasts.post(transcriptCard(text, title: "Clean-up canceled",
                                    body: "The original is in History. Paste it here, or copy it.", pasteHere: true))
@@ -967,15 +955,15 @@ final class DictationController {
             case nil:
                 break
             }
-            // Kept a while so History can transcribe it again with another model. Saved again even when a failed or
-            // canceled row had it: an Undo-resumed dictation's file holds only the part before the cancel.
-            let file = settings.keepSuccessfulRecordingsDays > 0 ? history.saveAudio(recording) : nil
+            // Kept as long as the entry, so History can transcribe it again with another model. Saved again even when
+            // a failed or canceled row had it: an Undo-resumed dictation's file holds only the part before the cancel.
             history.upsert(TranscriptEntry(
                 id: job.id, createdAt: recording.startedAt, engine: result.engine, status: .success,
                 audioDuration: recording.duration, voicedSeconds: recording.speech.voicedSeconds,
-                audioFileName: file, versions: versions))
+                audioFileName: history.saveAudio(recording), versions: versions))
             for version in versions { resolveGeneration(of: version, entryID: job.id) }
-            let insertion = await insert(delivered, expectedPID: job.targetPID)
+            // Only what is pasted follows General → Pasting: History, the cards and Copy keep the text as it came.
+            let insertion = await insert(pasted(delivered), expectedPID: job.targetPID)
             handleInsertion(insertion, text: delivered, isDictation: true)
             if cleanupFailed { postCleanupFallback(error: cleanupError, model: cleanupModel) }
         }
@@ -1064,6 +1052,12 @@ final class DictationController {
         if let copyOverride { copyOverride(text) } else { inserter.copy(text) }
     }
 
+    /// `text` as the app pastes it: with General → Pasting's space after it and without its final period
+    /// (`PastedText`).
+    private func pasted(_ text: String) -> String {
+        PastedText.prepare(text, addsSpace: settings.addsSpaceAfterText, removesFinalPeriod: settings.removesFinalPeriod)
+    }
+
     /// `isDictation`: a dictation's own delivery, not paste-last or a toast's Paste Here. The pasted text is the
     /// confirmation; the pill just goes back to rest.
     private func handleInsertion(_ outcome: InsertionOutcome, text: String, isDictation: Bool) {
@@ -1105,8 +1099,7 @@ final class DictationController {
 
     // MARK: - Paste last
 
-    /// Copy and paste in one: the last transcript goes on the clipboard (it stays there even with "Restore the
-    /// clipboard after pasting" on) and is pasted where the user is typing, if anywhere.
+    /// Copy and paste in one: the last transcript is pasted where the user is typing and stays on the clipboard.
     func pasteLast() {
         guard let text = history.lastSuccessfulText else {
             toasts.post(Notice(dedupeKey: "pasteLast.empty", style: .info, symbol: "text.badge.xmark",
@@ -1116,10 +1109,11 @@ final class DictationController {
         Task { [weak self] in
             guard let self else { return }
             let outcome: InsertionOutcome
+            let pasted = self.pasted(text)
             if let override = self.pasteLastOverride {
-                outcome = await override(text)
+                outcome = await override(pasted)
             } else {
-                outcome = await self.inserter.insert(text, expectedPID: nil, keepOnClipboard: true)
+                outcome = await self.inserter.insert(pasted, expectedPID: nil)
             }
             switch outcome {
             case .pasted, .accessibilityMissing:
@@ -1153,10 +1147,11 @@ final class DictationController {
             Task { [weak self] in
                 guard let self else { return }
                 let outcome: InsertionOutcome
+                let pasted = self.pasted(text)
                 if let override = self.pasteNowOverride {
-                    outcome = await override(text)
+                    outcome = await override(pasted)
                 } else {
-                    outcome = await self.inserter.pasteNow(text)
+                    outcome = await self.inserter.pasteNow(pasted)
                 }
                 // Anything but a paste brings the text back (a card, or the Accessibility notice).
                 self.handleInsertion(outcome, text: text, isDictation: false)
@@ -1293,8 +1288,8 @@ final class DictationController {
         homeFailures[id] = nil
     }
 
-    /// Rows deleted (Delete, Clear All, the oldest past the history's limit) take their Home work along: nothing of
-    /// it would land, and there is no Cancel left to stop it. The Hub's Undo brings the row back as it was.
+    /// Rows deleted (Delete, Clear All, Auto-delete, the oldest past the history's limit) take their Home work along:
+    /// nothing of it would land, and there is no Cancel left to stop it. The Hub's Undo brings the row back as it was.
     private func entriesRemoved(_ ids: [UUID]) {
         for id in ids {
             cancelHomeWork(for: id)
@@ -1342,11 +1337,10 @@ final class DictationController {
                 updated.addVersion(version)
                 history.upsert(updated)
             } else {
-                let file = settings.keepSuccessfulRecordingsDays > 0 ? history.saveAudio(recording) : nil
                 history.upsert(TranscriptEntry(
                     id: id, createdAt: recording.startedAt, engine: result.engine, status: .success,
                     audioDuration: recording.duration, voicedSeconds: recording.speech.voicedSeconds,
-                    audioFileName: file, versions: [version]))
+                    audioFileName: history.saveAudio(recording), versions: [version]))
             }
             resolveGeneration(of: version, entryID: id)
             return
@@ -1464,7 +1458,7 @@ final class DictationController {
         }
         let engine = cancelledEngines[id] ?? history.entry(id: id)?.engine
         resumeRequest = recording
-        // The same dictation goes on, with the model it had (its limit too); `send` drops it if the mic won't start.
+        // The same dictation goes on, with the model it had; `send` drops it if the mic won't start.
         modelOverride = cleanupIDs.contains(id) ? .cleanup : engine.flatMap { $0.isSwitchModel ? .engine($0) : nil }
         send(.resume(prefix: recording.duration))
         resumeRequest = nil
@@ -1515,25 +1509,14 @@ final class DictationController {
     private func postRecordingGone() {
         toasts.post(Notice(dedupeKey: "recording.gone", style: .warning, symbol: "waveform.slash",
                            title: "That recording is gone",
-                           body: "\(Brand.name) keeps recordings only for a while. Choose how long in General → History.",
+                           body: "Its audio isn’t on this Mac any more.",
                            lifetime: .seconds(5), sound: .alert))
     }
 
     // MARK: - Machine notices
 
     private func post(_ kind: DictationMachine.NoticeKind) {
-        let minutes = Int((machine.config.maxDuration / 60).rounded())
         switch kind {
-        case .oneMinuteLeft:
-            toasts.post(Notice(dedupeKey: "limit", style: .warning, symbol: "timer", title: "1 minute left",
-                               body: "Recording stops at \(minutes) min and gets transcribed.",
-                               lifetime: .seconds(6), sound: .alert))
-        case .limitReached:
-            finishingJob?.playsStopCue = true
-            toasts.post(Notice(dedupeKey: "limit", style: .info, symbol: "timer",
-                               title: "Reached the \(minutes)-minute limit",
-                               body: "Transcribing everything so far. Start again anytime.",
-                               lifetime: .seconds(5), sound: finishingJob == nil ? .stop : nil))
         case .stoppedByOtherKey:
             guard let id = lastCancelledID, retained[id] != nil else { return }
             toasts.post(Notice(dedupeKey: "dictation.canceled", style: .info, symbol: "keyboard",
@@ -1568,22 +1551,21 @@ final class DictationController {
         flashError()
     }
 
-    private func postSlowNotice(for job: Job) {
-        // From Gemini: the main model first, Parakeet on this Mac even while it isn't loaded.
+    /// A dictation still waiting for its local model says so: "Still downloading Parakeet v3 · 42%" or "Getting
+    /// Parakeet v3 ready…", with "Use … Instead" when another model could take it now. Nothing once the model is at
+    /// work.
+    private func postModelWaitNotice(for job: Job) {
         var fallback = usableFallback(excluding: job.engine)
         var notice: Notice
         switch models.state(of: job.engine) {
-        case .downloading(let progress) where job.engine.isLocal:
+        case .downloading(let progress):
             notice = AppError.modelDownloading(job.engine, progress.fraction).notice(recordingID: nil, fallbackEngine: nil)
-        case .preparing where job.engine.isLocal, .installed where job.engine.isLocal:
+        case .preparing, .installed:
             // Only an engine that can start right now is any faster than waiting for this load.
             fallback = usableFallback(excluding: job.engine, readyNow: true)
             notice = AppError.modelPreparing(job.engine).notice(recordingID: nil, fallbackEngine: nil)
-        default:
-            guard job.engine.isCloud else { return }
-            notice = Notice(dedupeKey: "slow", style: .info, symbol: "hourglass",
-                            title: "\(job.engine.shortName) is taking longer than usual",
-                            body: "Keep waiting, or press \(cancelHint) to cancel.", lifetime: .seconds(10))
+        case .notInstalled, .ready, .failed:
+            return
         }
         notice.dedupeKey = "slow.\(job.id)"
         notice.recordingID = job.id
@@ -1591,12 +1573,12 @@ final class DictationController {
         notice.actions = fallback.map {
             [NoticeAction(title: "Use \($0.shortName) Instead", kind: .retryWith($0), isPrimary: true)]
         } ?? []
-        slowNoticeIDs[job.id] = notice.id
+        waitNoticeIDs[job.id] = notice.id
         toasts.post(notice)
     }
 
-    private func dismissSlowNotice(for jobID: UUID) {
-        guard let id = slowNoticeIDs.removeValue(forKey: jobID) else { return }
+    private func dismissWaitNotice(for jobID: UUID) {
+        guard let id = waitNoticeIDs.removeValue(forKey: jobID) else { return }
         toasts.dismiss(id)
     }
 
@@ -1641,7 +1623,8 @@ final class DictationController {
     }
 
     private var pttHint: String { settings.shortcuts[.pushToTalk]?.compactDescription ?? "fn" }
-    private var cancelHint: String { settings.shortcuts[.cancel]?.compactDescription ?? "esc" }
+    /// Cancel is always Esc.
+    private var cancelHint: String { Shortcut.escape.compactDescription }
 
     // MARK: - Engines and recordings
 
@@ -1709,31 +1692,15 @@ final class DictationController {
         }
     }
 
-    /// An extra model needs at least this much of its limit left to be switched to.
-    private static let switchMinimumRemaining: TimeInterval = 10
-
-    /// `engine` can still take the whole recording (Gemini stops at 7 minutes).
-    private func fitsRecording(_ engine: EngineID) -> Bool {
-        guard let started = machine.recordingStartedAt else { return true }
-        return settings.maxRecordingDuration(for: engine) - (clock() - started) >= Self.switchMinimumRemaining
-    }
-
-    /// `choice` can still take the whole recording: clean-up has the main model's limit.
-    private func fits(_ choice: ModelChoice) -> Bool {
-        choice.switchEngine.map(fitsRecording) ?? true
-    }
-
     /// The Switch model key held down: a step, with its tick, at every autorepeat of the keyboard, however fast
     /// (the ticks ring over each other). Nothing to switch to, it stays quiet: the press already said why.
     private func repeatCycle() {
         guard machine.isRecording, canSwitchModels else { return }
-        isRepeatingSwitch = true
         send(.cycleEngine)
-        isRepeatingSwitch = false
     }
 
     /// The machine's `.cycleEngine`: main model → clean-up → each extra model (`settings.switchChoices`) → main
-    /// model. Extra models that can't take the recording any more are skipped.
+    /// model.
     private func advanceEngine() {
         let choices = settings.switchChoices
         guard !choices.isEmpty else { return }
@@ -1741,24 +1708,18 @@ final class DictationController {
             rejectSwitchWithoutKey()
             return
         }
-        let cycle: [ModelChoice?] = [nil] + choices.filter(fits).map(Optional.some)
+        let cycle: [ModelChoice?] = [nil] + choices.map(Optional.some)
         let index = cycle.firstIndex(of: modelOverride) ?? 0
-        let next = cycle[(index + 1) % cycle.count]
-        guard next != modelOverride else {
-            if !isRepeatingSwitch { rejectSwitchTooLong() }
-            return
-        }
-        switchModel(to: next)
+        switchModel(to: cycle[(index + 1) % cycle.count])
         // Found it: the hint has nothing left to teach.
         if settings.switchHintShownCount < AppSettings.switchHintLimit {
             settings.switchHintShownCount = AppSettings.switchHintLimit
         }
     }
 
-    /// Another choice for this dictation: its limit (Gemini's is shorter), the pill's chip and a soft tick.
+    /// Another choice for this dictation: the pill's chip and a soft tick.
     private func switchModel(to choice: ModelChoice?) {
         modelOverride = choice
-        execute(machine.changeLimit(to: settings.maxRecordingDuration(for: effectiveEngine), now: clock()))
         pillModel.engineChipPulse &+= 1
         if pillModel.showsTabHint { pillModel.showsTabHint = false }
         playCue(.modelSwitch)
@@ -1791,16 +1752,6 @@ final class DictationController {
                       title: "\(subject) an OpenRouter key", body: body,
                       actions: [NoticeAction(title: "Add Key", kind: .openHub(.models), isPrimary: true)],
                       lifetime: .seconds(8))
-    }
-
-    /// Every extra model's limit is (nearly) used up by this recording.
-    private func rejectSwitchTooLong() {
-        pillModel.shakeTrigger += 1
-        let minutes = Int((OpenRouterClient.maxRecordingDuration / 60).rounded())
-        toasts.post(Notice(dedupeKey: Self.switchModelNoticeKey, style: .info, symbol: "timer",
-                           title: "Too long for Gemini",
-                           body: "Gemini takes up to \(minutes) minutes of audio. This dictation stays on \(settings.selectedEngine.shortName).",
-                           lifetime: .seconds(6)))
     }
 
     static let switchModelNoticeKey = "switchModel"
@@ -1928,8 +1879,6 @@ final class DictationController {
         } else if pillModel.recordingStartedAt != nil {
             pillModel.recordingStartedAt = nil
         }
-        let limit = machine.config.maxDuration
-        if pillModel.limitSeconds != limit { pillModel.limitSeconds = limit }
     }
 
     /// The choice of the newest dictation still being transcribed or pasted: an extra model or clean-up.

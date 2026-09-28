@@ -90,8 +90,8 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
 @Suite struct ReasoningRequestTests {
     @Test(arguments: [ReasoningEffort.low, .medium, .high])
     func transcriptionSendsTheLevel(_ effort: ReasoningEffort) throws {
-        let json = try object(.transcription(model: "google/gemini-3.8-flash", audioBase64: "AA==", systemPrompt: nil,
-                                             effort: effort))
+        let json = try object(.transcription(model: "google/gemini-3.8-flash", audioBase64: "AA==", format: "wav",
+                                             systemPrompt: nil, effort: effort, maxTokens: 32_768))
         let reasoning = try #require(json["reasoning"] as? [String: Any])
         #expect(reasoning["effort"] as? String == effort.rawValue)
         #expect(reasoning["exclude"] as? Bool == true)
@@ -124,10 +124,17 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         #expect(CleanupModel.maxTokens(forCharacterCount: 200, effort: .minimal) == 4_096)
         #expect(CleanupModel.maxTokens(forCharacterCount: 7_000, effort: .low) == 9_048)
         #expect(CleanupModel.maxTokens(forCharacterCount: 7_000, effort: .high) == 23_384)
-        #expect(CleanupModel.maxTokens(forCharacterCount: 200_000, effort: .high) == 65_536)
+        #expect(CleanupModel.maxTokens(forCharacterCount: 100_000, effort: .off) == 101_024)
+        #expect(CleanupModel.maxTokens(forCharacterCount: 200_000, effort: .high) == 128_000, "what GPT-6 Luna allows")
+    }
+
+    /// Time to write the text out, with no cap: an hour's transcript (about 60,000 characters) gets 312 s.
+    @Test func cleanupTimeoutGrowsWithTheText() {
         #expect(CleanupModel.timeout(forCharacterCount: 0) == 12)
-        #expect(CleanupModel.timeout(forCharacterCount: 4_000) == 22)
-        #expect(CleanupModel.timeout(forCharacterCount: 100_000) == 45)
+        #expect(CleanupModel.timeout(forCharacterCount: 400) == 14)
+        #expect(CleanupModel.timeout(forCharacterCount: 4_000) == 32)
+        #expect(CleanupModel.timeout(forCharacterCount: 60_000) == 312)
+        #expect(CleanupModel.timeout(forCharacterCount: 200_000) == 1_012, "no 45 s cap")
     }
 
     @Test func geminiRequestsAskForOpenRouterMetadata() {

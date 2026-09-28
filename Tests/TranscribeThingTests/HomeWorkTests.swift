@@ -74,8 +74,8 @@ import Testing
         let failed = try await failedDictation(h)
         let outside = Outside(h)
         let shakes = h.pill.shakeCount
-        // Slower than the "taking longer than usual" notice would wait.
-        h.controller.slowNoticeDelayOverride = 0.01
+        // Slower than a dictation's wait notice would wait.
+        h.controller.waitNoticeDelayOverride = 0.01
         var fails = true
         h.controller.transcribeOverride = { _, engine in
             try await Task.sleep(for: .milliseconds(80))

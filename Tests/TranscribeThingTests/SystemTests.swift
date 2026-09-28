@@ -298,6 +298,20 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
         #expect(kb.up(kVK_Escape).swallow)
     }
 
+    /// Cancel was once rebindable: a key an older build stored for it (F13) does nothing now, and Esc still cancels.
+    @Test func aStoredCustomCancelDoesNothingEscStillCancels() throws {
+        let stored = #"{"cancel":{"keyCode":105,"modifiers":[]}}"#
+        var kb = Keyboard(bindings: try JSONDecoder().decode(ShortcutBindings.self, from: Data(stored.utf8)))
+        kb.config.isBusy = true
+        let f13 = kb.down(kVK_F13, fnFlagged: true)
+        #expect(f13.events.isEmpty)
+        #expect(!f13.swallow)
+        kb.up(kVK_F13, fnFlagged: true)
+        let esc = kb.down(kVK_Escape)
+        #expect(esc.events == [.cancel])
+        #expect(esc.swallow)
+    }
+
     @Test func escapeWhileHoldingFnCancelsBeforeTheAppReportsBusy() {
         var kb = Keyboard()
         #expect(kb.press(.fn).events == [.pttDown])
@@ -540,11 +554,10 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
             == .commit(.f13))
     }
 
-    @Test func escapeIsRecordableOnlyForCancel() {
-        var cancel = ShortcutCaptureEngine(action: .cancel)
-        #expect(cancel.keyDown(keyCode: KeyCode.escape, rawFlags: 0, isRepeat: false) == .commit(.escape))
-        var ptt = ShortcutCaptureEngine(action: .handsFree)
-        #expect(ptt.keyDown(keyCode: KeyCode.escape, rawFlags: 0, isRepeat: false) == .cancel)
+    @Test(arguments: ShortcutAction.allCases)
+    func bareEscapeStopsRecording(_ action: ShortcutAction) {
+        var engine = ShortcutCaptureEngine(action: action)
+        #expect(engine.keyDown(keyCode: KeyCode.escape, rawFlags: 0, isRepeat: false) == .cancel)
     }
 
     @Test func deleteClearsOnlyOptionalActions() {
@@ -613,73 +626,6 @@ private func privatePasteboard() -> NSPasteboard {
     NSPasteboard(name: NSPasteboard.Name("dev.transcribe-thing.tests.\(UUID().uuidString)"))
 }
 
-@MainActor
-@Suite struct PasteboardSnapshotTests {
-    @Test func roundTripsEveryItemAndType() throws {
-        let pb = privatePasteboard()
-        defer { pb.releaseGlobally() }
-        let first = NSPasteboardItem()
-        first.setString("hello", forType: .string)
-        first.setString("<b>hello</b>", forType: .html)
-        let second = NSPasteboardItem()
-        second.setData(Data([1, 2, 3]), forType: NSPasteboard.PasteboardType("dev.transcribe-thing.test.binary"))
-        pb.clearContents()
-        pb.writeObjects([first, second])
-
-        let snapshot = try #require(PasteboardSnapshot.capture(pb))
-        #expect(snapshot.items.count == 2)
-        #expect(!snapshot.containsConcealed)
-
-        pb.clearContents()
-        pb.setString("transcript", forType: .string)
-        snapshot.restore(to: pb)
-
-        let items = try #require(pb.pasteboardItems)
-        #expect(items.count == 2)
-        #expect(items[0].string(forType: .string) == "hello")
-        #expect(items[0].string(forType: .html) == "<b>hello</b>")
-        #expect(items[1].data(forType: NSPasteboard.PasteboardType("dev.transcribe-thing.test.binary")) == Data([1, 2, 3]))
-    }
-
-    @Test func detectsConcealedContent() throws {
-        let pb = privatePasteboard()
-        defer { pb.releaseGlobally() }
-        let item = NSPasteboardItem()
-        item.setString("s3cret", forType: .string)
-        item.setData(Data(), forType: PasteboardSnapshot.concealedType)
-        pb.clearContents()
-        pb.writeObjects([item])
-        #expect(try #require(PasteboardSnapshot.capture(pb)).containsConcealed)
-    }
-
-    @Test func slowUniversalClipboardIsLeftOut() {
-        let remote = PasteboardSnapshot.remoteClipboardType
-        #expect(PasteboardSnapshot.isSlowRemote(types: [[remote, NSPasteboard.PasteboardType("public.png")]]))
-        #expect(PasteboardSnapshot.isSlowRemote(types: [[remote], [.tiff]]))
-        // Remote text is small: still restored.
-        #expect(!PasteboardSnapshot.isSlowRemote(types: [[remote, .string, .rtf, .html, PasteboardSnapshot.transientType]]))
-        // Local images are read locally.
-        #expect(!PasteboardSnapshot.isSlowRemote(types: [[.png, .tiff]]))
-
-        let pb = privatePasteboard()
-        defer { pb.releaseGlobally() }
-        let item = NSPasteboardItem()
-        item.setData(Data([0x89, 0x50]), forType: .png)
-        item.setData(Data(), forType: remote)
-        pb.clearContents()
-        pb.writeObjects([item])
-        #expect(PasteboardSnapshot.capture(pb) == nil)
-    }
-
-    @Test func refusesOversizedContents() {
-        let pb = privatePasteboard()
-        defer { pb.releaseGlobally() }
-        pb.clearContents()
-        pb.setString(String(repeating: "x", count: 2_000), forType: .string)
-        #expect(PasteboardSnapshot.capture(pb, maxBytes: 1_000) == nil)
-    }
-}
-
 // MARK: - TextInserter pipeline (fake system, private pasteboard)
 
 private final class PasteLog: @unchecked Sendable {
@@ -694,14 +640,13 @@ private final class PasteLog: @unchecked Sendable {
         let inserter: TextInserter
         let pasteboard: NSPasteboard
         let log: PasteLog
-        let settings: AppSettings
     }
 
+    /// After "d": the paste gets a smart leading space.
+    private static let afterAWord = FocusInfo(pid: 42, editability: .editable, precedingCharacter: "d")
+
     private func rig(focus: FocusInfo = FocusInfo(pid: 42, editability: .editable),
-                     frontmost: pid_t? = 42, canPost: Bool = true,
-                     restoreClipboard: Bool = true) -> Rig {
-        let settings = AppSettings.inMemory()
-        settings.restoreClipboard = restoreClipboard
+                     frontmost: pid_t? = 42, canPost: Bool = true) -> Rig {
         let pasteboard = privatePasteboard()
         let log = PasteLog()
         let system = TextInserter.System(
@@ -714,123 +659,83 @@ private final class PasteLog: @unchecked Sendable {
                 log.record(code)
                 return true
             })
-        let inserter = TextInserter(settings: settings, pasteboard: pasteboard, system: system)
-        inserter.restoreDelay = .milliseconds(40)
-        return Rig(inserter: inserter, pasteboard: pasteboard, log: log, settings: settings)
+        let inserter = TextInserter(pasteboard: pasteboard, system: system)
+        inserter.swapDelay = .milliseconds(40)
+        return Rig(inserter: inserter, pasteboard: pasteboard, log: log)
+    }
+
+    private func types(_ rig: Rig) -> [NSPasteboard.PasteboardType] {
+        rig.pasteboard.pasteboardItems?.first?.types ?? []
     }
 
     private func settle() async throws {
         try await Task.sleep(for: .milliseconds(150))
     }
 
-    @Test func pastesWithSmartSpaceThenRestoresTheClipboard() async throws {
-        let rig = rig(focus: FocusInfo(pid: 42, editability: .editable, precedingCharacter: "d"))
-        defer { rig.pasteboard.releaseGlobally() }
-        rig.pasteboard.clearContents()
-        rig.pasteboard.setString("user clipboard", forType: .string)
-
-        let outcome = await rig.inserter.insert("next words", expectedPID: 42)
-        #expect(outcome == .pasted)
-        #expect(rig.log.codes == [9])
-        #expect(rig.pasteboard.string(forType: .string) == " next words")
-        let types = rig.pasteboard.pasteboardItems?.first?.types ?? []
-        #expect(types.contains(PasteboardSnapshot.transientType))
-        #expect(types.contains(PasteboardSnapshot.concealedType))
-
-        try await settle()
-        #expect(rig.pasteboard.string(forType: .string) == "user clipboard")
-    }
-
-    @Test func backToBackPastesRestoreTheUsersClipboardNotTheFirstTranscript() async throws {
+    /// A dictation's paste, and paste last's: the text is on the clipboard afterwards as a normal copy (what the
+    /// user had copied before is replaced, as by any copy).
+    @Test(arguments: [pid_t?.some(42), nil])
+    func everyPasteLeavesTheTextOnTheClipboard(_ expected: pid_t?) async throws {
         let rig = rig()
         defer { rig.pasteboard.releaseGlobally() }
         rig.pasteboard.clearContents()
         rig.pasteboard.setString("original", forType: .string)
-        rig.inserter.restoreDelay = .milliseconds(120)
+        #expect(await rig.inserter.insert("keep me", expectedPID: expected) == .pasted)
+        #expect(rig.log.codes == [9])
+        #expect(rig.pasteboard.string(forType: .string) == "keep me")
+        try await settle()
+        #expect(rig.pasteboard.string(forType: .string) == "keep me")
+        #expect(!types(rig).contains(PasteboardMarkers.transientType))
+        #expect(!types(rig).contains(PasteboardMarkers.concealedType))
+    }
 
+    @Test func pasteHereLeavesTheTextOnTheClipboard() async throws {
+        let rig = rig()
+        defer { rig.pasteboard.releaseGlobally() }
+        rig.pasteboard.clearContents()
+        rig.pasteboard.setString("original", forType: .string)
+        #expect(await rig.inserter.pasteNow("pasted here") == .pasted)
+        try await settle()
+        #expect(rig.pasteboard.string(forType: .string) == "pasted here")
+        #expect(!types(rig).contains(PasteboardMarkers.transientType))
+    }
+
+    /// The smart leading space is only for the paste: ⌘V gets it from a transient item that clipboard managers skip,
+    /// then the text without it takes its place.
+    @Test func thePastedTextStaysOnTheClipboardWithoutTheSmartSpace() async throws {
+        let rig = rig(focus: Self.afterAWord)
+        defer { rig.pasteboard.releaseGlobally() }
+        rig.pasteboard.clearContents()
+        rig.pasteboard.setString("original", forType: .string)
+        #expect(await rig.inserter.insert("next words", expectedPID: 42) == .pasted)
+        #expect(rig.log.codes == [9])
+        #expect(rig.pasteboard.string(forType: .string) == " next words", "what ⌘V pastes")
+        #expect(types(rig).contains(PasteboardMarkers.transientType))
+        #expect(types(rig).contains(PasteboardMarkers.concealedType))
+        try await settle()
+        #expect(rig.pasteboard.string(forType: .string) == "next words")
+        #expect(!types(rig).contains(PasteboardMarkers.transientType))
+    }
+
+    @Test func backToBackPastesLeaveTheLastText() async throws {
+        let rig = rig(focus: Self.afterAWord)
+        defer { rig.pasteboard.releaseGlobally() }
+        rig.inserter.swapDelay = .milliseconds(120)
         #expect(await rig.inserter.insert("first", expectedPID: 42) == .pasted)
         #expect(await rig.inserter.insert("second", expectedPID: 42) == .pasted)
-        #expect(rig.pasteboard.string(forType: .string) == "second")
+        #expect(rig.pasteboard.string(forType: .string) == " second")
         try await Task.sleep(for: .milliseconds(250))
-        #expect(rig.pasteboard.string(forType: .string) == "original")
+        #expect(rig.pasteboard.string(forType: .string) == "second")
     }
 
     @Test func aNewCopyDuringTheDelayWins() async throws {
-        let rig = rig()
+        let rig = rig(focus: Self.afterAWord)
         defer { rig.pasteboard.releaseGlobally() }
-        rig.pasteboard.clearContents()
-        rig.pasteboard.setString("original", forType: .string)
         #expect(await rig.inserter.insert("dictated", expectedPID: 42) == .pasted)
         rig.pasteboard.clearContents()
         rig.pasteboard.setString("copied meanwhile", forType: .string)
         try await settle()
         #expect(rig.pasteboard.string(forType: .string) == "copied meanwhile")
-    }
-
-    @Test func concealedOriginalIsClearedInsteadOfRestored() async throws {
-        let rig = rig()
-        defer { rig.pasteboard.releaseGlobally() }
-        let secret = NSPasteboardItem()
-        secret.setString("hunter2", forType: .string)
-        secret.setData(Data(), forType: PasteboardSnapshot.concealedType)
-        rig.pasteboard.clearContents()
-        rig.pasteboard.writeObjects([secret])
-
-        #expect(await rig.inserter.insert("hello", expectedPID: 42) == .pasted)
-        try await settle()
-        #expect(rig.pasteboard.string(forType: .string) == nil)
-    }
-
-    @Test func restoreClipboardOffLeavesAPlainCopy() async throws {
-        let rig = rig(restoreClipboard: false)
-        defer { rig.pasteboard.releaseGlobally() }
-        rig.pasteboard.clearContents()
-        rig.pasteboard.setString("original", forType: .string)
-        #expect(await rig.inserter.insert("keep me", expectedPID: 42) == .pasted)
-        try await settle()
-        #expect(rig.pasteboard.string(forType: .string) == "keep me")
-        let types = rig.pasteboard.pasteboardItems?.first?.types ?? []
-        #expect(!types.contains(PasteboardSnapshot.transientType))
-    }
-
-    /// Paste last is copy and paste in one: the transcript stays whatever "Restore the clipboard" says.
-    @Test func keepOnClipboardLeavesAPlainCopyWithRestoreOn() async throws {
-        let rig = rig()
-        defer { rig.pasteboard.releaseGlobally() }
-        rig.pasteboard.clearContents()
-        rig.pasteboard.setString("original", forType: .string)
-        #expect(await rig.inserter.insert("again", expectedPID: nil, keepOnClipboard: true) == .pasted)
-        #expect(rig.log.codes == [9])
-        try await settle()
-        #expect(rig.pasteboard.string(forType: .string) == "again")
-        let types = rig.pasteboard.pasteboardItems?.first?.types ?? []
-        #expect(!types.contains(PasteboardSnapshot.transientType))
-        #expect(!types.contains(PasteboardSnapshot.concealedType))
-    }
-
-    @Test func keepOnClipboardLeavesTheTranscriptWithoutTheSmartSpace() async throws {
-        let rig = rig(focus: FocusInfo(pid: 42, editability: .editable, precedingCharacter: "d"))
-        defer { rig.pasteboard.releaseGlobally() }
-        rig.pasteboard.clearContents()
-        rig.pasteboard.setString("original", forType: .string)
-        #expect(await rig.inserter.insert("again", expectedPID: nil, keepOnClipboard: true) == .pasted)
-        #expect(rig.pasteboard.string(forType: .string) == " again", "what ⌘V pastes")
-        try await settle()
-        #expect(rig.pasteboard.string(forType: .string) == "again")
-        let types = rig.pasteboard.pasteboardItems?.first?.types ?? []
-        #expect(!types.contains(PasteboardSnapshot.transientType))
-    }
-
-    @Test func keepOnClipboardWinsOverAPendingRestore() async throws {
-        let rig = rig()
-        defer { rig.pasteboard.releaseGlobally() }
-        rig.pasteboard.clearContents()
-        rig.pasteboard.setString("original", forType: .string)
-        rig.inserter.restoreDelay = .milliseconds(120)
-        #expect(await rig.inserter.insert("dictated", expectedPID: 42) == .pasted)
-        #expect(await rig.inserter.insert("dictated", expectedPID: nil, keepOnClipboard: true) == .pasted)
-        try await Task.sleep(for: .milliseconds(250))
-        #expect(rig.pasteboard.string(forType: .string) == "dictated")
     }
 
     @Test func secureFieldIsRefusedAndTheClipboardLeftAlone() async {
@@ -853,19 +758,17 @@ private final class PasteLog: @unchecked Sendable {
         #expect(rig.pasteboard.string(forType: .string) == "user clipboard")
     }
 
-    @Test func noTargetDoesntCutAPendingRestoreShort() async throws {
-        let rig = rig()
+    @Test func noTargetDoesntCutAPendingSwapShort() async throws {
+        let rig = rig(focus: Self.afterAWord)
         defer { rig.pasteboard.releaseGlobally() }
-        rig.pasteboard.clearContents()
-        rig.pasteboard.setString("original", forType: .string)
         #expect(await rig.inserter.insert("first", expectedPID: 42) == .pasted)
-        let noTarget = TextInserter(settings: rig.settings, pasteboard: rig.pasteboard, system: .init(
+        let noTarget = TextInserter(pasteboard: rig.pasteboard, system: .init(
             frontmostPID: { 42 }, canPostEvents: { true }, modifiersHeld: { false },
             inspectFocus: { FocusInfo(pid: 42, editability: .notEditable) }, pasteKeyCode: { 9 },
             postPaste: { _ in true }))
         #expect(await noTarget.insert("second", expectedPID: 42) == .noEditableTarget)
         try await settle()
-        #expect(rig.pasteboard.string(forType: .string) == "original")
+        #expect(rig.pasteboard.string(forType: .string) == "first")
     }
 
     @Test func unknownFocusPastesAnyway() async {
@@ -1006,8 +909,7 @@ private final class PasteLog: @unchecked Sendable {
 
 @MainActor
 @Suite struct TextInserterOrderingTests {
-    @Test func overlappingInsertionsRunOneAtATimeAndKeepTheOriginalClipboard() async throws {
-        let settings = AppSettings.inMemory()
+    @Test func overlappingInsertionsRunOneAtATimeAndLeaveTheLastText() async throws {
         let pasteboard = NSPasteboard(name: NSPasteboard.Name("dev.transcribe-thing.tests.\(UUID().uuidString)"))
         defer { pasteboard.releaseGlobally() }
         pasteboard.clearContents()
@@ -1026,8 +928,8 @@ private final class PasteLog: @unchecked Sendable {
                 log.record(code)
                 return true
             })
-        let inserter = TextInserter(settings: settings, pasteboard: pasteboard, system: system)
-        inserter.restoreDelay = .milliseconds(60)
+        let inserter = TextInserter(pasteboard: pasteboard, system: system)
+        inserter.swapDelay = .milliseconds(60)
 
         async let first = inserter.insert("first", expectedPID: 42)
         async let second = inserter.insert("second", expectedPID: 42)
@@ -1035,7 +937,7 @@ private final class PasteLog: @unchecked Sendable {
         #expect(outcomes == [.pasted, .pasted])
         #expect(log.codes == [9, 9])
         try await Task.sleep(for: .milliseconds(200))
-        #expect(pasteboard.string(forType: .string) == "original")
+        #expect(pasteboard.string(forType: .string) == "second")
     }
 }
 
@@ -1103,11 +1005,9 @@ private final class PasteLog: @unchecked Sendable {
         }
     }
 
-    @Test func escapeOutsideCancelIsSavedWithAWarning() {
-        var bindings = defaults
-        bindings[.cancel] = .f13
-        guard case .apply(let warning?) = evaluate(.escape, for: .pasteLast, bindings: bindings) else {
-            Issue.record("Esc outside cancel must be saved with a warning")
+    @Test func escapeIsSavedWithAWarning() {
+        guard case .apply(let warning?) = evaluate(.escape, for: .pasteLast) else {
+            Issue.record("Esc must be saved with a warning")
             return
         }
         #expect(warning.kind == .escape)
@@ -1117,23 +1017,26 @@ private final class PasteLog: @unchecked Sendable {
         #expect(evaluate(.fnSpace, for: .pasteLast) == .offerSwap(.handsFree))
         #expect(evaluate(.fnSpace, for: .pasteLast, swapAllowed: false)
             == .reject("Hands-free already uses this shortcut."))
-        // Push to talk may take Esc: a warning, not a reason to refuse.
-        #expect(evaluate(.fn, for: .cancel) == .offerSwap(.pushToTalk))
+        // Paste last may take fn: push to talk gets ⌘ fn V.
+        #expect(evaluate(.fn, for: .pasteLast) == .offerSwap(.pushToTalk))
     }
 
     @Test func noSwapWhenTheOtherActionCantTakeOurs() {
-        // Paste last is ⌃, hands-free ⌃⌥: cancel taking ⌃ would go off on the way to hands-free.
+        // Paste last is ⌃, hands-free ⌃⌥: switch model taking ⌃ would go off on the way to hands-free.
         var bindings = defaults
         bindings[.handsFree] = Shortcut(modifiers: [.init(.control), .init(.option)])
         bindings[.pasteLast] = Shortcut(modifiers: [.init(.control)])
-        #expect(evaluate(.escape, for: .pasteLast, bindings: bindings)
-            == .reject("Cancel already uses this shortcut."))
+        #expect(evaluate(.fnTab, for: .pasteLast, bindings: bindings)
+            == .reject("Switch model already uses this shortcut."))
     }
 
     @Test func swapWarnsAboutEitherNewBinding() {
-        // Cancel takes fn, push to talk gets Esc.
-        let swapped = ShortcutEdit.swapping(defaults, action: .cancel, to: .fn, with: .pushToTalk)
-        #expect(ShortcutEdit.warningAfterSwap(swapped, action: .cancel, other: .pushToTalk, system: quiet)?.kind == .escape)
+        // Paste last, on Esc, takes fn: push to talk gets Esc.
+        var escapePaste = defaults
+        escapePaste[.pasteLast] = .escape
+        let swapped = ShortcutEdit.swapping(escapePaste, action: .pasteLast, to: .fn, with: .pushToTalk)
+        #expect(ShortcutEdit.warningAfterSwap(swapped, action: .pasteLast, other: .pushToTalk, system: quiet)?.kind
+                == .escape)
         let clean = ShortcutEdit.swapping(defaults, action: .pasteLast, to: .fnSpace, with: .handsFree)
         #expect(ShortcutEdit.warningAfterSwap(clean, action: .pasteLast, other: .handsFree, system: quiet) == nil)
     }
@@ -1352,5 +1255,40 @@ private final class PasteLog: @unchecked Sendable {
         kb.press(.fn)
         let tab = kb.down(kVK_Tab)
         #expect(tab.events.isEmpty && !tab.swallow)
+    }
+}
+
+// MARK: - Pasted text
+
+@Suite struct PastedTextTests {
+    private func prepare(_ text: String, space: Bool = false, period: Bool = false) -> String {
+        PastedText.prepare(text, addsSpace: space, removesFinalPeriod: period)
+    }
+
+    @Test func aSingleFinalPeriodGoes() {
+        #expect(prepare("Hello.", period: true) == "Hello")
+        #expect(prepare("Два предложения. Второе.", period: true) == "Два предложения. Второе")
+    }
+
+    /// An ellipsis, a question, an exclamation, a quote closing after the period and a lone period stay.
+    @Test(arguments: ["Wait...", "Wait..", "Really?", "Wow!", "Hi…", ".", "", #"He said "hi.""#])
+    func everythingElseStays(_ text: String) {
+        #expect(prepare(text, period: true) == text)
+    }
+
+    @Test func aSpaceGoesAfterAnyText() {
+        #expect(prepare("Hello", space: true) == "Hello ")
+        #expect(prepare("Hello.", space: true) == "Hello. ")
+        #expect(prepare("", space: true) == "", "nothing to follow")
+    }
+
+    @Test func bothTogether() {
+        #expect(prepare("Hello.", space: true, period: true) == "Hello ")
+        #expect(prepare("Really?", space: true, period: true) == "Really? ")
+    }
+
+    @Test(arguments: ["Hello.", "Wait...", " spaced ", ""])
+    func bothOffChangeNothing(_ text: String) {
+        #expect(prepare(text) == text)
     }
 }

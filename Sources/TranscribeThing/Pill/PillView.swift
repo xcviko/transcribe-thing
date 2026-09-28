@@ -10,6 +10,10 @@ enum PillMetrics {
     static let listeningSize = CGSize(width: 104, height: 32)
     /// Hands-free always carries the timer, so hovering never resizes it (nor does the timer reaching 10:00).
     static let lockedSize = CGSize(width: 198, height: 36)
+    /// Past an hour the timer reads "1:02:03", wider than its column: the capsule widens once, keeping its even gaps.
+    static let lockedHoursSize = CGSize(width: 2 * (buttonInset + buttonSize) + barFieldWidth + hoursTimerWidth
+                                            + 3 * lockedGap,
+                                        height: 36)
     static let errorSize = CGSize(width: 104, height: 32)
     /// Tallest state; toasts sit 10 pt above it so they never move while the pill changes shape.
     static let maxHeight: CGFloat = 36
@@ -25,17 +29,23 @@ enum PillMetrics {
     static let buttonInset: CGFloat = 7
     /// Monospaced digits, so the timer never jitters as it counts.
     static let timerFont = Font.system(size: 11, weight: .medium, design: .rounded).monospacedDigit()
-    /// Fits "29:59" in `timerFont`: the longest recording limit is 30 min.
+    /// Fits "59:59" in `timerFont`.
     static let timerWidth: CGFloat = 33
+    /// Fits "1:02:03" in `timerFont` (measured): the timer's column past an hour.
+    static let hoursTimerWidth: CGFloat = 44
     /// "9:59", the timer's width for most recordings.
     static let shortTimerWidth: CGFloat = 26
     /// Hands-free spaces X, the bars, the timer and Stop by one even gap, 15 pt. That holds for a "9:59"
-    /// timer, which sits centered in the timer's column; "29:59" fills the column, taking 3.5 pt from each side.
+    /// timer, which sits centered in the timer’s column; "59:59" fills the column, taking 3.5 pt from each side.
     static let lockedGap: CGFloat = (lockedSize.width - 2 * (buttonInset + buttonSize) - barFieldWidth - shortTimerWidth) / 3
-    /// Space between the timer's column and Stop.
+    /// Space between the timer's column and Stop. Past an hour it is `lockedGap`: the text fills its column.
     static let timerTrailing: CGFloat = lockedGap - (timerWidth - shortTimerWidth) / 2
-    /// How far left of the pill's center hands-free draws the bars: one gap right of X.
-    static let lockedBarsOffset: CGFloat = buttonInset + buttonSize + lockedGap + barFieldWidth / 2 - lockedSize.width / 2
+    /// How far left of the pill's center hands-free draws the bars: one gap right of X, in the capsule of an hour
+    /// or more (`hours`) or the usual one.
+    static func lockedBarsOffset(hours: Bool) -> CGFloat {
+        let width = hours ? lockedHoursSize.width : lockedSize.width
+        return buttonInset + buttonSize + lockedGap + barFieldWidth / 2 - width / 2
+    }
     static let tooltipHeight: CGFloat = 28
     /// Invisible margin around the pill that counts as hovering it (and clicking it).
     static let hoverMargin: CGFloat = 12
@@ -79,7 +89,6 @@ enum PillPalette {
     static let fill = Color(nsColor: Palette.pillFill)
     static let bar = Color.white.opacity(0.96)
     static let stop = Color(nsColor: .hex(0xFF453A))
-    static let warning = Color(nsColor: .hex(0xFFB340))
     static let error = Color(nsColor: .hex(0xFF6B5E))
     static let tooltipFill = Color(nsColor: .hex(0x151517, alpha: 0.96))
 
@@ -110,16 +119,13 @@ extension EnvironmentValues {
 
 // MARK: - Visual state
 
-enum PillTimerMode: Equatable, Sendable {
-    case elapsed, remaining
-}
-
 /// What the capsule looks like: the phase plus hover, presentation and the recording timer.
 enum PillVisual: Equatable, Sendable {
     case hidden, rest, peek, listening
     /// One-time post-onboarding bloom: listening size, bars ripple once, then rest as dots.
     case hello
-    case locked(PillTimerMode)
+    /// `hours`: the recording has run past an hour, and the capsule is wide enough for "1:02:03".
+    case locked(hours: Bool = false)
     /// The push-to-talk size: stopping hands-free shrinks the pill. `afterHandsFree` only starts the dots
     /// where the hands-free bars stood, so they glide to the center as the pill narrows instead of hopping.
     /// `slow`: processing has run long, and the capsule widens to say "Still transcribing…" instead of the dots.
@@ -136,6 +142,7 @@ enum PillVisual: Equatable, Sendable {
         case .peek: PillMetrics.peekSize
         case .processing(_, slow: true): PillMetrics.slowProcessingSize
         case .listening, .hello, .processing: PillMetrics.listeningSize
+        case .locked(hours: true): PillMetrics.lockedHoursSize
         case .locked: PillMetrics.lockedSize
         case .error: PillMetrics.errorSize
         case .message(let text): PillMetrics.captionSize(for: text)
@@ -165,17 +172,22 @@ enum PillVisual: Equatable, Sendable {
         }
     }
 
-    /// Only hands-free shows the timer.
-    var timer: PillTimerMode? { if case .locked(let t) = self { t } else { nil } }
+    /// Only hands-free shows the timer (and X and Stop).
+    var isLocked: Bool { if case .locked = self { true } else { false } }
+
+    /// Hands-free past an hour: the wider timer.
+    var showsHours: Bool { self == .locked(hours: true) }
 
     /// Processing that has run long: "Still transcribing…" in place of the dots.
     var isSlow: Bool { if case .processing(_, slow: true) = self { true } else { false } }
 
     /// Horizontal offset of the bars from the pill's center. Hands-free centers them between X and the timer;
-    /// processing after it starts its dots there too, so they don't hop sideways when Stop is pressed.
+    /// processing after it starts its dots where the usual hands-free bars stand, so they don't hop sideways when
+    /// Stop is pressed.
     var barsOffset: CGFloat {
         switch self {
-        case .locked, .processing(afterHandsFree: true, _): PillMetrics.lockedBarsOffset
+        case .locked(let hours): PillMetrics.lockedBarsOffset(hours: hours)
+        case .processing(afterHandsFree: true, _): PillMetrics.lockedBarsOffset(hours: false)
         default: 0
         }
     }
@@ -234,7 +246,7 @@ struct PillView: View {
         case .listening:
             return .listening
         case .locked:
-            return .locked(model.isInFinalMinute ? .remaining : .elapsed)
+            return .locked(hours: model.showsHours)
         case .processing:
             return .processing(afterHandsFree: model.processingOrigin == .locked, slow: model.isProcessingSlow)
         case .error:
@@ -543,7 +555,7 @@ struct PillFace: View {
             .overlay(alignment: .top) {
                 if let chipChoice {
                     PillModelChip(model: model, choice: chipChoice, regions: regions,
-                                   isInteractive: capsule == content && capsule.timer != nil)
+                                   isInteractive: capsule == content && capsule.isLocked)
                         .modifier(PillMorphEffect(progress: content == capsule ? 0 : morph, from: content.size,
                                                   to: size, anchor: .bottom))
                         .offset(y: -PillMetrics.chipLift)
@@ -586,8 +598,8 @@ struct PillFace: View {
                 .id(PillVisual.Content.hello)
                 .transition(contentTransition())
         case .recording:
-            RecordingContent(model: model, timer: visual.timer, barsOffset: visual.barsOffset, regions: regions,
-                             tint: accent?.mark ?? .white)
+            RecordingContent(model: model, locked: visual.isLocked, hours: visual.showsHours,
+                             barsOffset: visual.barsOffset, regions: regions, tint: accent?.mark ?? .white)
                 .frame(width: visual.size.width, height: visual.size.height)
                 .modifier(morph)
                 .id(PillVisual.Content.recording)
@@ -811,15 +823,15 @@ private struct ErrorGlyph: View {
 /// of Stop, all four evenly spaced (`PillMetrics.lockedGap`).
 private struct RecordingContent: View {
     let model: PillModel
-    /// Set in hands-free only.
-    let timer: PillTimerMode?
+    /// Hands-free: X, the timer and Stop.
+    let locked: Bool
+    /// Past an hour: the timer's wider column.
+    var hours = false
     let barsOffset: CGFloat
     let regions: PillHitRegions?
     var tint: Color = .white
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private var locked: Bool { timer != nil }
 
     var body: some View {
         ZStack {
@@ -833,10 +845,10 @@ private struct RecordingContent: View {
                         .transition(buttonTransition(from: 1, delay: 0))
                 }
                 Spacer(minLength: 0)
-                if let timer {
-                    PillTimerLabel(model: model, mode: timer)
-                        .frame(width: PillMetrics.timerWidth)
-                        .padding(.trailing, PillMetrics.timerTrailing)
+                if locked {
+                    PillTimerLabel(model: model)
+                        .frame(width: hours ? PillMetrics.hoursTimerWidth : PillMetrics.timerWidth)
+                        .padding(.trailing, hours ? PillMetrics.lockedGap : PillMetrics.timerTrailing)
                         .transition(.opacity.animation(.easeOut(duration: 0.16).delay(0.08)))
                 }
                 if locked {
@@ -1036,22 +1048,19 @@ struct PillSwitchHint: View {
     }
 }
 
-/// Elapsed "0:42", or the countdown in the last minute (amber in the last 10 s).
+/// Elapsed time: "0:42", "12:05", past an hour "1:02:03".
 private struct PillTimerLabel: View {
     let model: PillModel
-    let mode: PillTimerMode
 
     var body: some View {
         let start = model.recordingStartedAt ?? Date()
         TimelineView(.periodic(from: start, by: 1)) { context in
             let elapsed = max(0, context.date.timeIntervalSince(start))
-            let remaining = max(0, model.limitSeconds - elapsed)
-            let seconds = mode == .remaining ? remaining.rounded(.up) : elapsed.rounded(.down)
-            Text(Fmt.duration(seconds))
+            Text(Fmt.duration(elapsed.rounded(.down)))
                 .font(PillMetrics.timerFont)
-                .foregroundStyle(mode == .remaining && remaining <= 10 ? PillPalette.warning : .white.opacity(0.7))
+                .foregroundStyle(.white.opacity(0.7))
                 .lineLimit(1)
-                .contentTransition(.numericText(countsDown: mode == .remaining))
+                .contentTransition(.numericText())
         }
     }
 }
@@ -1169,7 +1178,7 @@ private struct PillControlTooltip: View {
             switch control {
             case .cancel:
                 Text("Cancel")
-                PillShortcutChips(shortcut: settings.shortcuts[.cancel], fallback: "esc")
+                PillShortcutChips(shortcut: .escape, fallback: "esc")
             case .stop:
                 Text("Finish")
                 PillShortcutChips(shortcut: settings.shortcuts[.handsFree], fallback: "fn space")

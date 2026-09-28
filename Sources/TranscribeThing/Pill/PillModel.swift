@@ -29,15 +29,13 @@ final class PillModel {
     /// The hovered button's tooltip (after 500 ms).
     private(set) var controlTooltip: PillControl?
 
-    /// Hands-free timer (shown on hover or in the last 60 s).
+    /// When the recording started: the hands-free timer counts from it.
     var recordingStartedAt: Date? {
-        didSet { if recordingStartedAt != oldValue { scheduleFinalMinute() } }
+        didSet { if recordingStartedAt != oldValue { scheduleHours() } }
     }
-    var limitSeconds: TimeInterval {
-        didSet { if limitSeconds != oldValue { scheduleFinalMinute() } }
-    }
-    /// True during the last 60 s before the recording limit.
-    private(set) var isInFinalMinute = false
+    /// The recording has run past an hour: the hands-free timer reads "1:02:03", and the capsule widens once to fit
+    /// it (`PillMetrics.lockedHoursSize`).
+    private(set) var showsHours = false
     /// Processing has run longer than `timing.slowProcessing`: the pill widens to say "Still transcribing…".
     private(set) var isProcessingSlow = false
 
@@ -94,7 +92,7 @@ final class PillModel {
 
     @ObservationIgnored private var holdUntil: Date?
     @ObservationIgnored private var settleTask: Task<Void, Never>?
-    @ObservationIgnored private var finalMinuteTask: Task<Void, Never>?
+    @ObservationIgnored private var hoursTask: Task<Void, Never>?
     @ObservationIgnored private var slowTask: Task<Void, Never>?
     @ObservationIgnored private var hoverTask: Task<Void, Never>?
     @ObservationIgnored private var tooltipTask: Task<Void, Never>?
@@ -106,17 +104,14 @@ final class PillModel {
     init(settings: AppSettings, levelMeter: LevelMeter) {
         self.settings = settings
         self.levelMeter = levelMeter
-        self.limitSeconds = settings.effectiveMaxRecordingDuration
         self.shortcutHint = settings.shortcuts[.pushToTalk]?.compactDescription ?? "fn"
     }
 
     /// A model frozen in one phase, for snapshots and illustrations (onboarding).
     static func preview(phase: PillPhase, level: Float = 0.55, isHovering: Bool = false,
-                        recordingFor elapsed: TimeInterval? = nil, limitSeconds: TimeInterval? = nil,
-                        levelMeter: LevelMeter? = nil) -> PillModel {
+                        recordingFor elapsed: TimeInterval? = nil, levelMeter: LevelMeter? = nil) -> PillModel {
         let model = PillModel(settings: .inMemory(), levelMeter: levelMeter ?? .preview(level: level))
         model.autoSettles = false
-        if let limitSeconds { model.limitSeconds = limitSeconds }
         model.phase = phase
         if phase.isRecording { model.recordingStartedAt = Date().addingTimeInterval(-(elapsed ?? 14)) }
         model.isHovering = isHovering
@@ -177,7 +172,7 @@ final class PillModel {
         } else {
             holdUntil = nil
         }
-        scheduleFinalMinute()
+        scheduleHours()
         if target != previous { onVisiblePhaseChange?() }
     }
 
@@ -215,27 +210,28 @@ final class PillModel {
         }
     }
 
-    // MARK: Final minute
+    // MARK: Hours
 
-    private func scheduleFinalMinute() {
-        finalMinuteTask?.cancel()
-        finalMinuteTask = nil
-        guard visiblePhase.isRecording, let start = recordingStartedAt, limitSeconds > 60 else {
-            if isInFinalMinute, !visiblePhase.isRecording || recordingStartedAt == nil { isInFinalMinute = false }
+    /// `showsHours` from the hour mark on: at once for a recording already past it (a preview, an Undo-resumed long
+    /// dictation), else when the hour comes; off whenever the pill isn't recording.
+    private func scheduleHours() {
+        hoursTask?.cancel()
+        hoursTask = nil
+        guard visiblePhase.isRecording, let start = recordingStartedAt else {
+            if showsHours { showsHours = false }
             return
         }
-        let fireAt = start.addingTimeInterval(limitSeconds - 60)
-        let delay = fireAt.timeIntervalSinceNow
+        let delay = start.addingTimeInterval(3600).timeIntervalSinceNow
         if delay <= 0 {
-            if !isInFinalMinute { isInFinalMinute = true }
+            if !showsHours { showsHours = true }
             return
         }
-        if isInFinalMinute { isInFinalMinute = false }
+        if showsHours { showsHours = false }
         guard autoSettles else { return }
-        finalMinuteTask = Task { @MainActor [weak self] in
+        hoursTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(delay))
             guard !Task.isCancelled, let self, self.visiblePhase.isRecording else { return }
-            self.isInFinalMinute = true
+            self.showsHours = true
         }
     }
 

@@ -2,57 +2,48 @@ import Foundation
 import Testing
 @testable import TranscribeThing
 
-// MARK: - Keeping the audio of successful dictations
+// MARK: - Auto-delete: an entry and its audio go together
 
 @MainActor
-@Suite struct TranscribeAgainRetentionTests {
+@Suite struct AutoDeleteTests {
     private func entry(_ status: TranscriptStatus, hoursAgo: Double, file: String, now: Date) -> TranscriptEntry {
         TranscriptEntry(createdAt: now.addingTimeInterval(-hoursAgo * 3600), text: status == .success ? "hi" : "",
                         engine: .parakeet, status: status, audioDuration: 3, voicedSeconds: 2, audioFileName: file)
     }
 
-    @Test func successfulAudioIsKeptForADayByDefault() {
+    @Test func neverIsTheDefaultAndKeepsEveryRecording() {
         let settings = AppSettings.inMemory()
-        #expect(settings.keepSuccessfulRecordingsDays == 1)
+        #expect(settings.autoDeleteHistoryDays == 0)
         let now = Date()
         let store = HistoryStore.preview(entries: [
             entry(.success, hoursAgo: 2, file: "recent.wav", now: now),
-            entry(.success, hoursAgo: 30, file: "old.wav", now: now),
-            entry(.failed, hoursAgo: 30, file: "failed.wav", now: now),
-            entry(.cancelled, hoursAgo: 31, file: "canceled.wav", now: now),
+            entry(.success, hoursAgo: 24 * 400, file: "old.wav", now: now),
+            entry(.failed, hoursAgo: 24 * 400, file: "failed.wav", now: now),
         ], settings: settings)
-        store.pruneOldRecordings(now: now)
-        #expect(store.entries.map(\.audioFileName) == ["recent.wav", nil, "failed.wav", "canceled.wav"])
-        #expect(store.entries.count == 4, "a row whose audio is pruned stays")
+        store.deleteExpired(now: now)
+        #expect(store.entries.map(\.audioFileName) == ["recent.wav", "old.wav", "failed.wav"])
     }
 
-    @Test func offKeepsNoSuccessfulAudioAndLeavesFailedRowsAlone() {
+    @Test func sevenDaysDeletesOlderEntriesWhateverTheyAre() {
         let settings = AppSettings.inMemory()
-        settings.keepSuccessfulRecordingsDays = 0
+        settings.autoDeleteHistoryDays = 7
         let now = Date()
-        let store = HistoryStore.preview(entries: [
-            entry(.success, hoursAgo: 0.1, file: "recent.wav", now: now),
-            entry(.failed, hoursAgo: 2, file: "failed.wav", now: now),
-        ], settings: settings)
-        store.pruneOldRecordings(now: now)
-        #expect(store.entries.map(\.audioFileName) == [nil, "failed.wav"])
+        let six = entry(.success, hoursAgo: 24 * 6, file: "six.wav", now: now)
+        let eight = entry(.success, hoursAgo: 24 * 8, file: "eight.wav", now: now)
+        let failed = entry(.failed, hoursAgo: 24 * 9, file: "failed.wav", now: now)
+        let store = HistoryStore.preview(entries: [six, eight, failed], settings: settings)
+        var removed: [UUID] = []
+        store.onRemove = { removed += $0 }
+        store.deleteExpired(now: now)
+        #expect(store.entries.map(\.id) == [six.id])
+        #expect(Set(removed) == [eight.id, failed.id], "Home work for them is canceled too")
+        store.deleteExpired(now: now)
+        #expect(removed.count == 2, "nothing more to delete")
     }
 
-    @Test func sevenDaysKeepsAWeek() {
-        let settings = AppSettings.inMemory()
-        settings.keepSuccessfulRecordingsDays = 7
-        let now = Date()
-        let store = HistoryStore.preview(entries: [
-            entry(.success, hoursAgo: 24 * 6, file: "six.wav", now: now),
-            entry(.success, hoursAgo: 24 * 8, file: "eight.wav", now: now),
-        ], settings: settings)
-        store.pruneOldRecordings(now: now)
-        #expect(store.entries.map(\.audioFileName) == ["six.wav", nil])
-    }
-
-    @Test func theChoicesAreOffADayOrAWeek() {
-        #expect(AppSettings.inMemory().keepSuccessfulRecordingsDays == 1)
-        #expect(RetentionChoice.transcribeAgainDays.map(RetentionChoice.transcribeAgainLabel) == ["Off", "1 day", "7 days"])
+    @Test func theChoicesAreNeverOrADayToThreeMonths() {
+        #expect(AutoDeleteChoice.days.map(AutoDeleteChoice.label)
+                == ["Never", "After 1 day", "After 7 days", "After 30 days", "After 90 days"])
     }
 }
 
@@ -390,13 +381,8 @@ import Testing
         #expect(action(menu(transcript(.parakeetCloud), key: .missing), .transcription(.parakeet))?.isEnabled == true)
     }
 
-    @Test func geminiCantTakeMoreThanOneRequest() {
-        let long = menu(transcript(.parakeet, duration: 8 * 60))
-        #expect(action(long, .transcription(.geminiFlash))?.title == "Gemini 3.8 Flash · Too long for Gemini")
-        #expect(action(long, .transcription(.geminiFlash))?.blocker == .tooLongForGemini)
-        #expect(action(long, .transcription(.parakeetCloud))?.isEnabled == true)
-        #expect(action(long, .cleanup(of: .parakeet, by: .gpt6Luna))?.isEnabled == true, "a clean-up needs only the text")
-        #expect(menu(transcript(.parakeet, duration: 7 * 60 + 1)).actions.allSatisfy { $0.isEnabled })
+    @Test func geminiTakesARecordingOfAnyLength() {
+        #expect(menu(transcript(.parakeet, duration: 60 * 60)).actions.allSatisfy { $0.isEnabled })
     }
 
     @Test func withoutAudioVersionsStaySwitchableAndCleanUpStillWorks() {
@@ -447,24 +433,21 @@ import Testing
         return r.id
     }
 
-    @Test func aSuccessfulDictationKeepsItsAudioUntilItExpires() async throws {
+    @Test func aSuccessfulDictationKeepsItsAudioAsLongAsItsEntry() async throws {
         let h = H.make(persistsHistory: true)
         defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
         let id = try await dictate(h) { _ in }
         let entry = try #require(h.history.entry(id: id))
         #expect(entry.audioFileName == "\(id.uuidString).wav")
         #expect(h.history.loadRecording(for: entry) != nil)
-        h.history.pruneOldRecordings(now: Date().addingTimeInterval(2 * 86_400))
-        #expect(h.history.entry(id: id)?.audioFileName == nil)
-        #expect(h.history.entry(id: id)?.text == "parakeet text")
-    }
+        h.history.deleteExpired(now: Date().addingTimeInterval(400 * 86_400))
+        #expect(h.history.entry(id: id)?.audioFileName == entry.audioFileName, "Never: kept for good")
 
-    @Test func withTheSettingOffNoAudioIsKept() async throws {
-        let h = H.make(persistsHistory: true)
-        defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
-        h.settings.keepSuccessfulRecordingsDays = 0
-        let id = try await dictate(h) { _ in }
-        #expect(h.history.entry(id: id)?.audioFileName == nil)
+        h.settings.autoDeleteHistoryDays = 1
+        h.history.deleteExpired(now: Date().addingTimeInterval(2 * 86_400))
+        #expect(h.history.entry(id: id) == nil, "the entry goes, and its recording with it")
+        let file = try #require(h.paths).recordingURL(fileName: "\(id.uuidString).wav")
+        try await waitUntil { !FileManager.default.fileExists(atPath: file.path) }
     }
 
     @Test func transcribingAgainReplacesTheTextInPlaceAndNeverPastes() async throws {

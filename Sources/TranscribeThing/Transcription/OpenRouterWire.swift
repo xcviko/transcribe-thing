@@ -36,20 +36,21 @@ struct OpenRouterChatRequest: Encodable, Equatable {
 
     /// Gemini via Google AI Studio only, thinking at `effort` (the model's fixed level, `EngineID.reasoningEffort`)
     /// with the reasoning text excluded, no temperature (Google recommends the default for Gemini 3). The system
-    /// message exists only for a non-empty prompt, and the user message carries ONLY the audio: no text part, ever.
-    static func transcription(model: String, audioBase64: String, systemPrompt: String?,
-                              effort: ReasoningEffort) -> OpenRouterChatRequest {
+    /// message exists only for a non-empty prompt, and the user message carries ONLY the audio, in `format` ("wav",
+    /// "m4a"): no text part, ever. `maxTokens` grows with the audio (`OpenRouterClient.transcriptionMaxTokens`).
+    static func transcription(model: String, audioBase64: String, format: String, systemPrompt: String?,
+                              effort: ReasoningEffort, maxTokens: Int) -> OpenRouterChatRequest {
         var messages: [OpenRouterMessage] = []
         if let prompt = systemPrompt?.trimmingCharacters(in: .whitespacesAndNewlines), !prompt.isEmpty {
             messages.append(.system(prompt))
         }
-        messages.append(.userAudio(base64: audioBase64, format: "wav"))
+        messages.append(.userAudio(base64: audioBase64, format: format))
         return OpenRouterChatRequest(
             model: model,
             messages: messages,
             reasoning: Reasoning(effort: effort.rawValue, exclude: true),
             provider: .googleAIStudio,
-            maxTokens: 32_768,
+            maxTokens: maxTokens,
             stream: false)
     }
 
@@ -391,6 +392,9 @@ enum OpenRouterErrorMapper {
         return "No provider of \(engine.modelName) is reachable with your OpenRouter settings. Check openrouter.ai/settings/privacy: your data policy and allowed providers must let \(provider) through."
     }
 
+    /// How a 400 says the request is too large to take (lowercased).
+    static let tooLargePhrases = ["payload size", "request entity too large", "request too large"]
+
     /// Maps a non-200 response (body may be JSON, HTML or empty).
     static func httpError(status: Int, data: Data, retryAfter: Double?, engine: EngineID) -> AppError {
         if let envelope = try? JSONDecoder().decode(OpenRouterErrorEnvelope.self, from: data) {
@@ -416,6 +420,10 @@ enum OpenRouterErrorMapper {
         let noRoute = lowered.hasPrefix("no endpoints") || lowered.hasPrefix("no allowed providers")
             || lowered.contains("no endpoints found")
         if noRoute { return .openRouterNoRoute(join(message, noRouteHint(for: engine))) }
+
+        // A request too large to take, reported as a bad request. Only these phrases: a clean-up's errors come
+        // through here too.
+        if status == 400, Self.tooLargePhrases.contains(where: lowered.contains) { return .recordingTooLarge }
 
         // A 402 says which limit it hit. Only openrouter_credits means the account is out of credit.
         switch limitSource {

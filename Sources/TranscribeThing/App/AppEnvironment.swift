@@ -129,7 +129,7 @@ final class AppEnvironment {
         let client = OpenRouterClient()
         let account = makeAccount(keychain, client)
         let transcription = TranscriptionService(models: models, account: account, client: client)
-        let inserter = TextInserter(settings: settings)
+        let inserter = TextInserter()
         let sounds = SoundPlayer(settings: settings)
         let pillModel = PillModel(settings: settings, levelMeter: levelMeter)
         let toasts = ToastCenter()
@@ -162,6 +162,7 @@ final class AppEnvironment {
         let builder = menuBar.builder
         pillModel.contextMenuProvider = { builder.makeMenu(includeQuit: false) }
         inserter.eventTapActive = { [weak hotkeys] in hotkeys?.isTapActive ?? false }
+        devices.onDevicesChanged = { [weak self] in self?.devicesChanged() }
         // Key-down doesn't wait ~25 ms for TCC: the permissions center probes it off the main thread (again at
         // every capture start); only a state that isn't granted asks TCC here.
         recorder.isMicrophoneAllowed = { [weak permissions] in
@@ -200,8 +201,7 @@ final class AppEnvironment {
         if !settings.onboardingCompleted {
             windows.showOnboarding()
         }
-        history.pruneOldRecordings()
-        observeRecordingRetention()
+        observeAutoDelete()
         scheduleMaintenance()
         updates.start()
         activationObserver = MainNotificationObserver(center: .default, name: NSApplication.didBecomeActiveNotification) {
@@ -259,28 +259,38 @@ final class AppEnvironment {
         }
     }
 
-    /// A shorter "Keep failed recordings" or "Keep audio to transcribe again" drops the audio it no longer
-    /// covers right away, not at the next maintenance pass.
-    private func observeRecordingRetention() {
+    /// A shorter "Auto-delete history" deletes what it no longer keeps right away, not at the next maintenance
+    /// pass.
+    private func observeAutoDelete() {
         withObservationTracking {
-            _ = settings.keepFailedRecordingsDays
-            _ = settings.keepSuccessfulRecordingsDays
+            _ = settings.autoDeleteHistoryDays
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
-                self?.history.pruneOldRecordings()
-                self?.observeRecordingRetention()
+                self?.history.deleteExpired()
+                self?.observeAutoDelete()
             }
         }
     }
 
-    /// transcribe-thing runs for weeks at a time: prune retained audio a few times a day, not only at launch.
+    /// transcribe-thing runs for weeks at a time: Auto-delete runs every hour, not only at launch (loading the
+    /// history runs it too).
     private func scheduleMaintenance() {
         maintenanceTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(6 * 3600))
+                try? await Task.sleep(for: .seconds(3600))
                 guard !Task.isCancelled else { return }
-                self?.history.pruneOldRecordings()
+                self?.history.deleteExpired()
             }
         }
+    }
+
+    /// The device list changed (the catalog calls only after a scan that changed something, the launch scan
+    /// included). A picked mic that is gone (AirPods put away, a USB mic unplugged) falls back to Automatic, so a
+    /// choice always stays selected and the next dictation just works: Automatic follows macOS, which makes the
+    /// AirPods the input again when they reconnect. A capture already running is left alone (`deviceLost` handles
+    /// it).
+    private func devicesChanged() {
+        guard !InputDevicePolicy.keepsPick(settings.microphoneUID, devices: devices.devices) else { return }
+        settings.microphoneUID = nil
     }
 }

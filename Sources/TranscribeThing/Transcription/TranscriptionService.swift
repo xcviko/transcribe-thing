@@ -127,27 +127,53 @@ final class TranscriptionService {
         }
     }
 
-    /// Gemini: the whole recording in one request, with its system prompt.
+    /// Gemini: the whole recording in one request, with its system prompt, whatever its length. Past what its WAV can
+    /// carry it goes as AAC (`CloudAudio.forChat`); the answer's token budget and the wait grow with the audio.
     private func transcribeWithChat(_ samples: [Float], engine: EngineID, model: String, key: String,
                                     effort: ReasoningEffort, prompt: String) async throws -> CloudResult {
-        // Refuse before spending time encoding a recording that can't be sent (the recording limit for Gemini
-        // normally stops it well before this).
-        let wavBytes = 44 + samples.count * 2
-        guard OpenRouterClient.base64Length(ofByteCount: wavBytes) <= OpenRouterClient.maxBase64Bytes else {
-            throw AppError.recordingTooLarge
-        }
-        let wav = await Task.detached(priority: .userInitiated) { WAVEncoder.pcm16(samples) }.value
-        return try await client.transcribe(wav: wav, model: model, systemPrompt: prompt, effort: effort,
-                                           apiKey: key, timeout: engine.cloudTimeout)
+        let encoded = await Task.detached(priority: .userInitiated) { try? CloudAudio.forChat(samples) }.value
+        guard let encoded else { throw AppError.engineFailed(engine, "Couldn’t compress the recording.") }
+        try Task.checkCancellation()
+        let seconds = Double(samples.count) / Recording.sampleRate
+        return try await client.transcribe(audio: encoded.data, format: encoded.format, model: model,
+                                           systemPrompt: prompt, effort: effort,
+                                           maxTokens: OpenRouterClient.transcriptionMaxTokens(audioSeconds: seconds),
+                                           apiKey: key, timeout: engine.cloudTimeout(forAudioSeconds: seconds))
     }
 
-    /// Parakeet over the speech-to-text endpoint: the whole recording in one request. The Gemini system prompt
-    /// doesn't apply, and no language is sent: Parakeet v3 detects it.
+    /// Parakeet over the speech-to-text endpoint: a request per segment of at most 5 minutes, cut in pauses
+    /// (`CloudAudio.speechSegments`; a shorter recording is one), one after another. The texts join with a space;
+    /// the billed seconds and the costs add up, and the first segment's generation stands for the whole. The
+    /// Gemini system prompt doesn't apply, and no language is sent: Parakeet v3 detects it.
     private func transcribeSpeech(_ samples: [Float], engine: EngineID, model: String,
                                   key: String) async throws -> CloudResult {
-        let wav = await Task.detached(priority: .userInitiated) { WAVEncoder.pcm16(samples) }.value
-        try Task.checkCancellation()
-        return try await client.transcribeSpeech(wav: wav, model: model, apiKey: key, timeout: engine.cloudTimeout)
+        let ranges = await Task.detached(priority: .userInitiated) { CloudAudio.speechSegments(samples) }.value
+        var results: [CloudResult] = []
+        for range in ranges {
+            try Task.checkCancellation()
+            let wav = await Task.detached(priority: .userInitiated) { WAVEncoder.pcm16(Array(samples[range])) }.value
+            let seconds = Double(range.count) / Recording.sampleRate
+            results.append(try await client.transcribeSpeech(wav: wav, model: model, apiKey: key,
+                                                             timeout: engine.cloudTimeout(forAudioSeconds: seconds)))
+        }
+        return Self.joined(results)
+    }
+
+    /// Parakeet's segments as one result: the first's, with every text (trimmed, empty ones left out) joined by a
+    /// space, the billed seconds and costs summed (nil when none said), and the first provider any of them named.
+    private nonisolated static func joined(_ results: [CloudResult]) -> CloudResult {
+        guard var combined = results.first else { return CloudResult(text: "") }
+        combined.text = results.map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }.joined(separator: " ")
+        combined.audioSeconds = Self.sum(results.map(\.audioSeconds))
+        combined.costUSD = Self.sum(results.map(\.costUSD))
+        combined.provider = results.lazy.compactMap(\.provider).first
+        return combined
+    }
+
+    private nonisolated static func sum(_ values: [Double?]) -> Double? {
+        let known = values.compactMap { $0 }
+        return known.isEmpty ? nil : known.reduce(0, +)
     }
 
     // MARK: Clean-up

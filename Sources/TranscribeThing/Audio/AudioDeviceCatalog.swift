@@ -105,6 +105,16 @@ enum InputDevicePolicy {
         let fallback = ranked.first ?? available.first(where: { $0.transport == .aggregate })
         return fallback.map { InputDeviceChoice(device: $0, reason: .fallback(unavailableUID: missedPreferred ?? defaultUID)) }
     }
+
+    /// Whether the picked mic `uid` stays picked with `devices` connected. Automatic (nil) always does, and so does
+    /// any pick while the scan lists nothing (that says nothing about the pick). A listed device stays when it can
+    /// record, or when it's the Mac's own: a closed lid or an empty jack comes back by itself. A device that is gone,
+    /// or listed as disconnected, doesn't: the pick falls back to Automatic.
+    static func keepsPick(_ uid: String?, devices: [AudioInputDevice]) -> Bool {
+        guard let uid, !devices.isEmpty else { return true }
+        guard let device = devices.first(where: { $0.id == uid }) else { return false }
+        return device.isAvailable || device.isBuiltIn
+    }
 }
 
 /// Live list of input devices. CoreAudio listeners run on a private queue; scans run off the main

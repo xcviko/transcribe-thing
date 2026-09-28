@@ -3,7 +3,7 @@ import Foundation
 import Testing
 @testable import TranscribeThing
 
-// Parakeet through OpenRouter's speech-to-text endpoint: engine metadata, wire format, one request per recording,
+// Parakeet through OpenRouter’s speech-to-text endpoint: engine metadata, wire format, a request per 5 minutes,
 // provider lookup, history and notices.
 
 private let rate = 16_000
@@ -120,7 +120,7 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
             #expect(engine.cloudAPI == .transcriptions)
             #expect(engine.badges == ["Cloud"])
             #expect(engine.approxDownloadBytes == nil)
-            #expect(engine.cloudTimeout == 180)
+            #expect(engine.cloudTimeout(forAudioSeconds: 300) == 180, "per segment of at most 5 minutes")
             #expect(engine.localCounterpart?.cloudCounterpart == engine)
             #expect(OpenRouterClient.engine(forModel: engine.openRouterModelID!) == engine)
         }
@@ -133,29 +133,18 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         #expect(NSImage(systemSymbolName: engine.symbolName, accessibilityDescription: nil) != nil)
     }
 
-    @Test @MainActor func onlyGeminiShortensTheRecordingLimit() {
-        let settings = AppSettings.inMemory()
-        settings.maxRecordingMinutes = 20
-        for engine in EngineID.allCases {
-            let expected: TimeInterval = engine.cloudAPI == .chatCompletions ? 7 * 60 : 20 * 60
-            #expect(settings.maxRecordingDuration(for: engine) == expected, "\(engine)")
-        }
-        for engine in EngineID.mainCandidates {
-            settings.selectedEngine = engine
-            #expect(settings.effectiveMaxRecordingDuration == 20 * 60, "\(engine)")
-        }
-    }
-
-    @Test func slowNoticeThresholdIsOnePerEngineKind() {
-        #expect(DictationController.slowNoticeDelay(for: .parakeet) == 3)
-        #expect(DictationController.slowNoticeDelay(for: .parakeetCloud) == 10)
-        #expect(DictationController.slowNoticeDelay(for: .geminiFlash) == 12)
+    /// A non-streaming answer comes all at once, so Gemini's wait grows with what it hears: 17 minutes for an hour.
+    @Test func geminisTimeoutGrowsWithTheAudio() {
+        #expect(EngineID.geminiFlash.cloudTimeout(forAudioSeconds: 60) == 135)
+        #expect(EngineID.geminiFlash.cloudTimeout(forAudioSeconds: 3600) == 17 * 60)
+        #expect(EngineID.parakeetCloud.cloudTimeout(forAudioSeconds: 3600) == 180)
+        #expect(EngineID.parakeet.cloudTimeout(forAudioSeconds: 3600) == 0)
     }
 
     @Test func cloudSessionTimeouts() {
         let config = URLSession.openRouterCloud.configuration
         #expect(config.timeoutIntervalForRequest == 180)
-        #expect(config.timeoutIntervalForResource == 330)
+        #expect(config.timeoutIntervalForResource == 10_800, "a backstop: an hour of Gemini waits 17 minutes")
     }
 }
 
@@ -344,14 +333,15 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
 
     private func speech(_ seconds: Double) -> Recording { Recording(samples: tone(seconds)) }
 
-    @Test func aTenMinuteRecordingIsOneRequest() async throws {
-        // 19.2 MB of WAV, more than Gemini's inline limit: the speech endpoint takes it whole, no local cap.
-        let audio = await offMain { babble(600) }
+    @Test func aFiveMinuteRecordingIsOneRequest() async throws {
+        // 9.6 MB of WAV: the speech endpoint takes it whole.
+        let audio = await offMain { babble(300) }
         let (service, host, _) = makeService([speechReply("The whole talk.", cost: 0.004, generation: "gen-1")])
         let result = try await service.transcribe(Recording(samples: audio), engine: .parakeetCloud)
         #expect(result.text == "The whole talk.")
         #expect(result.engine == .parakeetCloud)
         #expect(result.costUSD == 0.004)
+        #expect(result.audioSeconds == 12.5)
         #expect(result.generationID == "gen-1")
         #expect(result.provider == nil)
         #expect(result.processingTime > 0)
@@ -372,6 +362,32 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         #expect(fields.model == "nvidia/parakeet-tdt-0.6b-v3")
         #expect(fields.keys == ["model", "input_audio"], "no language, no provider routing")
         #expect(fields.samples == audio.count)
+    }
+
+    /// Past 5 minutes Parakeet goes in segments cut in pauses, a request each, in order: the texts join with a space
+    /// (a segment with none adds nothing), the billed seconds and costs add up, and the first segment's generation
+    /// stands for the whole.
+    @Test func aTwelveMinuteRecordingGoesInThreeSegments() async throws {
+        let audio = await offMain { babble(288) + silence(2) + babble(290) + silence(2) + babble(138) }
+        let (service, host, _) = makeService([
+            speechReply(" First part. ", cost: 0.002, generation: "gen-1"),
+            speechReply("", cost: 0.001, generation: "gen-2", provider: "Together"),
+            speechReply("Third part.", cost: 0.003, generation: "gen-3"),
+        ])
+        let result = try await service.transcribe(Recording(samples: audio), engine: .parakeetCloud)
+        #expect(result.text == "First part. Third part.")
+        #expect(result.audioSeconds == 37.5)
+        #expect(abs((result.costUSD ?? 0) - 0.006) < 1e-12)
+        #expect(result.generationID == "gen-1")
+        #expect(result.provider == "Together")
+
+        let requests = StubURLProtocol.registry.requests(for: host)
+        #expect(requests.count == 3)
+        #expect(requests.allSatisfy { $0.timeoutInterval == 180 }, "3 minutes per segment")
+        let bodies = StubURLProtocol.registry.bodies(for: host)
+        let counts = await offMain { bodies.map { wavSampleCount(inRequestBody: $0) ?? 0 } }
+        #expect(counts.reduce(0, +) == audio.count, "every sample, once")
+        #expect(counts.allSatisfy { $0 <= 300 * 16_000 })
     }
 
     @Test func parakeetSendsNoLanguageOrPrompt() async throws {
@@ -629,6 +645,17 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
             #expect(!notice.title.hasSuffix("."))
             #expect(notice.title.first?.isUppercase == true || notice.title.hasPrefix("\(Brand.name) "))
         }
+    }
+
+    /// Nothing is refused up front, so "too large" is always OpenRouter's word, for Gemini as for Parakeet, and the
+    /// model on this Mac is offered first.
+    @Test(arguments: [EngineID.geminiFlash, .parakeetCloud])
+    func tooLargeIsWhatOpenRouterSaid(_ engine: EngineID) {
+        let notice = AppError.recordingTooLarge.notice(recordingID: UUID(), fallbackEngine: .parakeet, engine: engine)
+        #expect(notice.title == "Too large to send to OpenRouter")
+        #expect(notice.body?.hasPrefix(
+            "OpenRouter refused this recording as too large. Parakeet v3 on this Mac takes any length.") == true)
+        #expect(notice.primaryAction?.kind == .retryWith(.parakeet))
     }
 
     @Test func geminiCopyIsUnchanged() {

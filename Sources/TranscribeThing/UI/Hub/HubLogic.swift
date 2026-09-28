@@ -195,7 +195,6 @@ struct VersionsMenu: Equatable {
     enum Blocker: Equatable {
         /// The engine or the key isn't ready: "Needs key", "Key rejected", "Not downloaded" (`EngineReadiness`).
         case engine(String)
-        case tooLongForGemini
         /// The audio is no longer kept (a clean-up needs only the text, so never this).
         case recordingGone
         /// Something is already running for this recording.
@@ -204,7 +203,6 @@ struct VersionsMenu: Equatable {
         var label: String {
             switch self {
             case .engine(let reason): reason
-            case .tooLongForGemini: "Too long for Gemini"
             case .recordingGone: "Recording no longer kept"
             case .running: "Busy"
             }
@@ -271,10 +269,8 @@ struct VersionsMenu: Equatable {
         }
         let busy = running.map(Blocker.running)
         var actions = EngineID.offered.filter { isRetry || !entry.hasVersion(.transcription($0)) }.map { engine in
-            let tooLong = engine.cloudAPI == .chatCompletions
-                && !OpenRouterClient.fitsOneChatRequest(duration: entry.audioDuration)
             let blocker = busy ?? (hasAudio ? nil : .recordingGone)
-                ?? readiness(engine).unavailableReason.map(Blocker.engine) ?? (tooLong ? .tooLongForGemini : nil)
+                ?? readiness(engine).unavailableReason.map(Blocker.engine)
             return Action(kind: .transcription(engine), blocker: blocker)
         }
         if !isRetry {
@@ -600,23 +596,18 @@ enum HubAttention {
 
 // MARK: - Choices
 
-enum RetentionChoice {
-    /// Days of audio kept for failed or canceled dictations; 0 = don't keep.
-    static let days = [0, 1, 7, 14, 30]
+/// General → History's "Auto-delete history": how many days a transcript and its recording stay
+/// (`AppSettings.autoDeleteHistoryDays`).
+enum AutoDeleteChoice {
+    /// 0 = Never.
+    static let days = [0, 1, 7, 30, 90]
 
     static func label(_ days: Int) -> String {
         switch days {
-        case 0: "Don’t keep"
-        case 1: "1 day"
-        default: "\(days) days"
+        case 0: "Never"
+        case 1: "After 1 day"
+        default: "After \(days) days"
         }
-    }
-
-    /// Days of audio kept for successful dictations (Transcribe Again); 0 = off.
-    static let transcribeAgainDays = [0, 1, 7]
-
-    static func transcribeAgainLabel(_ days: Int) -> String {
-        days == 0 ? "Off" : label(days)
     }
 }
 

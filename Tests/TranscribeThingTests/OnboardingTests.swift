@@ -336,6 +336,7 @@ import Testing
 
     @Test func doublePressLatchesHandsFree() {
         let model = makeModel(step: 3)
+        model.ctx.settings.doublePressForHandsFree = true
         let t0 = Date()
         model.handleRawKey(RawKeyEvent(key: .fn, isDown: true), now: t0)
         model.handleRawKey(RawKeyEvent(key: .fn, isDown: false), now: t0.addingTimeInterval(0.12))
@@ -396,6 +397,7 @@ import Testing
 
     @Test func doublePressingIntoHandsFreeCountsAsHandsFree() {
         let model = makeModel(step: 3)
+        model.ctx.settings.doublePressForHandsFree = true
         let t0 = Date()
         // The pill starts held, then the second press latches it.
         model.pillPhaseChanged(from: .hidden, to: .listening, now: t0)

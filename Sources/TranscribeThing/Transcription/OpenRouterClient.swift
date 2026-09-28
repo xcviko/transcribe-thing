@@ -3,12 +3,13 @@ import Foundation
 extension URLSession {
     /// Shared session for OpenRouter calls: no cookies or disk cache, fail fast when offline.
     /// Non-streaming requests receive no bytes until the answer is ready, so the per-request (idle)
-    /// timeout is set per call to the engine's full budget; the resource timeout caps one attempt.
+    /// timeout is set per call to the engine's full budget, which grows with the audio
+    /// (`EngineID.cloudTimeout(forAudioSeconds:)`); the resource timeout, 3 hours, is only a backstop.
     static let openRouterCloud: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         config.waitsForConnectivity = false
         config.timeoutIntervalForRequest = 180
-        config.timeoutIntervalForResource = 330
+        config.timeoutIntervalForResource = 10_800
         config.httpMaximumConnectionsPerHost = 2
         config.urlCache = nil
         return URLSession(configuration: config)
@@ -59,10 +60,9 @@ struct TokenUsage: Codable, Equatable, Sendable {
 final class OpenRouterClient: Sendable {
     static let referer = "http://localhost/transcribe-thing"
     static let title = "transcribe-thing"
-    /// Gemini accepts about 20 MB of inline data; stay under it (about 7.4 minutes of 16 kHz WAV).
+    /// The inline-audio budget of one Gemini request, as base64: Gemini accepts about 20 MB of inline data. A 16 kHz
+    /// WAV fits up to about 7.4 minutes; a longer recording goes compressed (`CloudAudio.forChat`).
     static let maxBase64Bytes = 19_000_000
-    /// Recording limit with a Gemini engine selected: a margin under what `maxBase64Bytes` can carry.
-    static let maxRecordingDuration: TimeInterval = 7 * 60
     static let keyCheckTimeout: TimeInterval = 15
     /// Longest server-requested wait worth sitting through during a dictation.
     static let maxRetryWait: TimeInterval = 8
@@ -85,10 +85,12 @@ final class OpenRouterClient: Sendable {
 
     static func base64Length(ofByteCount count: Int) -> Int { (count + 2) / 3 * 4 }
 
-    /// A recording this long can go to Gemini in one request (its 16 kHz WAV fits under `maxBase64Bytes`).
-    static func fitsOneChatRequest(duration: TimeInterval) -> Bool {
-        let samples = Int((max(0, duration) * Recording.sampleRate).rounded(.up))
-        return base64Length(ofByteCount: 44 + samples * 2) <= maxBase64Bytes
+    /// `max_tokens` of a Gemini transcription. Its floor, 32,768, covers the first minute, so short dictations
+    /// ask for what they always have (a 1:48 recording already thought for about 18k tokens at high, and less
+    /// would cut them short); every further minute started adds 600 tokens to write it out, up to 65,536.
+    static func transcriptionMaxTokens(audioSeconds: TimeInterval) -> Int {
+        let minutes = Int((max(0, audioSeconds) / 60).rounded(.up))
+        return min(65_536, 32_768 + 600 * max(0, minutes - 1))
     }
 
     static func engine(forModel model: String) -> EngineID {
@@ -97,20 +99,22 @@ final class OpenRouterClient: Sendable {
 
     // MARK: Transcribe
 
-    /// Gemini over chat completions. `wav` is a complete WAV file. Retries once, only for a transient failure
-    /// (429/500/502/503/529, a 402 from the in-flight budget, a dropped connection, or the same failures reported
-    /// quickly inside a 200) and only when the wait is at most 8 s; never after a timeout (the user already waited).
-    func transcribe(wav: Data, model: String, systemPrompt: String?, effort: ReasoningEffort, apiKey: String,
-                    timeout: TimeInterval) async throws -> CloudResult {
+    /// Gemini over chat completions. `audio` is a complete file in `format` ("wav", "m4a": `CloudAudio.forChat`),
+    /// sent whatever its size: a size OpenRouter refuses comes back as `recordingTooLarge`. Retries once, only for a
+    /// transient failure (429/500/502/503/529, a 402 from the in-flight budget, a dropped connection, or the same
+    /// failures reported quickly inside a 200) and only when the wait is at most 8 s; never after a timeout (the user
+    /// already waited).
+    func transcribe(audio: Data, format: String, model: String, systemPrompt: String?, effort: ReasoningEffort,
+                    maxTokens: Int, apiKey: String, timeout: TimeInterval) async throws -> CloudResult {
         let engine = Self.engine(forModel: model)
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw AppError.openRouterMissingKey }
-        guard Self.base64Length(ofByteCount: wav.count) <= Self.maxBase64Bytes else { throw AppError.recordingTooLarge }
 
         let body: Data
         do {
-            body = try OpenRouterChatRequest.transcription(model: model, audioBase64: wav.base64EncodedString(),
-                                                           systemPrompt: systemPrompt, effort: effort).encoded()
+            body = try OpenRouterChatRequest.transcription(model: model, audioBase64: audio.base64EncodedString(),
+                                                           format: format, systemPrompt: systemPrompt, effort: effort,
+                                                           maxTokens: maxTokens).encoded()
         } catch {
             throw AppError.openRouterBadRequest("Couldn’t build the request.")
         }
@@ -147,9 +151,10 @@ final class OpenRouterClient: Sendable {
         return result
     }
 
-    /// Parakeet over `POST /audio/transcriptions`. `wav` is the whole recording as one WAV file, in one request:
-    /// the provider behind it transcribes many times faster than real time, and a size OpenRouter refuses comes
-    /// back as a 413 (`recordingTooLarge`). Same retry policy as `transcribe(wav:model:systemPrompt:apiKey:timeout:)`.
+    /// Parakeet over `POST /audio/transcriptions`. `wav` is one WAV file in one request: a whole recording up to 5
+    /// minutes, or one segment of a longer one (`CloudAudio.speechSegments`). The provider behind it transcribes many
+    /// times faster than real time, and a size OpenRouter refuses comes back as a 413 (`recordingTooLarge`). Same
+    /// retry policy as `transcribe(audio:format:model:systemPrompt:effort:maxTokens:apiKey:timeout:)`.
     func transcribeSpeech(wav: Data, model: String, apiKey: String, timeout: TimeInterval) async throws -> CloudResult {
         let engine = Self.engine(forModel: model)
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)

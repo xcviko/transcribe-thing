@@ -36,7 +36,9 @@ struct HotkeyInput: Equatable, Sendable {
 ///   modifier is up. The interrupting key passes through, so ⌘C with a Right-⌘ PTT still copies. A mouse click
 ///   doesn't: clicking into another field while holding the key is part of dictating.
 /// - A key-based PTT (F13, ⌃⌥D) is not interrupted by other keys: it is unambiguous.
-/// - Switch model (like cancel) is live only during a dictation, and it never interrupts the PTT hold: it may be
+/// - Esc cancels only while recording or transcribing, even with the PTT's or hands-free's modifiers still held; the
+///   rest of the time it reaches apps.
+/// - Switch model (like Esc) is live only during a dictation, and it never interrupts the PTT hold: it may be
 ///   pressed with the PTT or hands-free modifiers still held (fn+Tab while holding fn), and extra modifiers on
 ///   the way to it (⌘ of ⌘⇧M) don't end the hold. Outside a dictation its keys pass through. Held down, its
 ///   autorepeats step on (`cycleEngineRepeat`).
@@ -44,7 +46,7 @@ struct HotkeyInput: Equatable, Sendable {
 struct HotkeyRouter: Equatable, Sendable {
     struct Config: Equatable, Sendable {
         var bindings: ShortcutBindings = .defaults
-        /// Recording or transcribing: the cancel key is live (and swallowed) only then.
+        /// Recording or transcribing: Esc cancels (and is swallowed) only then.
         var isBusy = false
         /// A dictation is recording: the switch model shortcut is live (and swallowed) only then.
         var isRecording = false
@@ -187,11 +189,10 @@ struct HotkeyRouter: Equatable, Sendable {
 
     /// A non-PTT binding that is modifier-only and matches the held set exactly.
     private func modifierChordMatch(_ config: Config) -> ShortcutAction? {
-        let candidates: [ShortcutAction] = [.handsFree, .pasteLast, .cancel]
+        let candidates: [ShortcutAction] = [.handsFree, .pasteLast]
         return candidates.first { action in
-            guard let shortcut = config.bindings[action], shortcut.isModifierOnly,
-                  shortcut.modifiersMatchExactly(modifiers) else { return false }
-            return action != .cancel || isBusy(config)
+            guard let shortcut = config.bindings[action], shortcut.isModifierOnly else { return false }
+            return shortcut.modifiersMatchExactly(modifiers)
         }
     }
 
@@ -234,7 +235,7 @@ struct HotkeyRouter: Equatable, Sendable {
         }
 
         let bindings = config.bindings
-        // Exact matches first: cancel and switch model also match with the PTT's and hands-free's modifiers still
+        // Exact matches first: Esc and switch model also match with the PTT's and hands-free's modifiers still
         // held, so a switch model bound to plain Space would otherwise take fn+Space from hands-free.
         if let handsFree = bindings[.handsFree], handsFree.matches(keyCode: key, modifiers: modifiers) {
             consume(key, into: &decision)
@@ -254,9 +255,9 @@ struct HotkeyRouter: Equatable, Sendable {
             }
             return decision
         }
-        if isBusy(config), let cancel = bindings[.cancel], cancel.keyCode == key, matchesDuringDictation(cancel, bindings) {
+        if isBusy(config), key == KeyCode.escape, matchesDuringDictation(.escape, bindings) {
             consume(key, into: &decision)
-            if !input.isRepeat { fireChord(.cancel, into: &decision) }
+            if !input.isRepeat { fire(.cancel, into: &decision) }
             return decision
         }
         if let switchModel = liveSwitchModel(config), switchModel.keyCode == key,
@@ -344,13 +345,18 @@ struct HotkeyRouter: Equatable, Sendable {
         let event: HotkeyEvent
         switch action {
         case .handsFree: event = .handsFreeToggle
-        case .cancel: event = .cancel
         case .pasteLast: event = .pasteLast
         case .pushToTalk, .switchModel: return
         }
         if gesture != .idle, action == .pasteLast {
             decision.events.append(.pttInterrupted)
         }
+        fire(event, into: &decision)
+    }
+
+    /// Emits `event` (a chord's, or Esc's cancel), ending the PTT hold: its keys still down start nothing until
+    /// they're released.
+    private mutating func fire(_ event: HotkeyEvent, into decision: inout Decision) {
         if gesture != .idle { gesture = .idle }
         blockedUntilModifiersReleased = !modifiers.isEmpty
         decision.events.append(event)

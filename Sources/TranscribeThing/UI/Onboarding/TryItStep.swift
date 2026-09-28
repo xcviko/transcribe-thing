@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Shortcuts and practice in one step: each lesson row carries the shortcut it teaches (with Change), the stage
-/// runs the practice chat above a keyboard strip that lights up with the real keys.
+/// Shortcuts and practice in one step: each lesson row carries the shortcut it teaches (with Change, except Esc,
+/// which always cancels), the stage runs the practice chat above a keyboard strip that lights up with the real keys.
 struct TryItStep: View {
     let model: OnboardingModel
 
@@ -18,19 +18,19 @@ struct TryItStep: View {
                           detail: model.lessonsFollowKeys
                               ? "Hold \(model.pushToTalkLabel) for a moment, then let go."
                               : "Hold \(model.pushToTalkLabel), answer Alex, then let go.",
-                          action: .pushToTalk, state: state(of: .pushToTalk), settings: settings)
+                          shortcut: .bindable(.pushToTalk), state: state(of: .pushToTalk), settings: settings)
                 LessonRow(number: 2, title: "Go hands-free", detail: handsFreeDetail,
-                          action: .handsFree, state: state(of: .handsFree), settings: settings)
+                          shortcut: .bindable(.handsFree), state: state(of: .handsFree), settings: settings)
                 LessonRow(number: 3, title: "Change your mind",
-                          detail: "Start talking, then press \(label(.cancel, fallback: "esc")). Nothing gets typed.",
-                          action: .cancel, state: state(of: .cancel), settings: settings)
+                          detail: "Start talking, then press esc. Nothing gets typed.",
+                          shortcut: .fixed(.escape), state: state(of: .cancel), settings: settings)
                 RowDivider(inset: 44)
                     .padding(.vertical, 2)
-                LessonRow(number: 0, title: "Paste last", detail: nil, action: .pasteLast, state: .extra,
+                LessonRow(number: 0, title: "Paste last", detail: nil, shortcut: .bindable(.pasteLast), state: .extra,
                           settings: settings)
                 if model.showsSwitchModelLesson {
-                    LessonRow(number: 0, title: "Switch model", detail: nil, action: .switchModel, state: .extra,
-                              settings: settings)
+                    LessonRow(number: 0, title: "Switch model", detail: nil, shortcut: .bindable(.switchModel),
+                              state: .extra, settings: settings)
                         .help("While dictating, press it to clean up the text or use Gemini for that dictation.")
                         .transition(.opacity)
                 }
@@ -113,10 +113,16 @@ struct TryItStep: View {
 private struct LessonRow: View {
     enum State { case done, current, upcoming, extra }
 
+    /// What the row's keys are: an action's binding, which the row can change, or a key that is always the same.
+    enum LessonShortcut {
+        case bindable(ShortcutAction)
+        case fixed(Shortcut)
+    }
+
     var number: Int
     var title: String
     var detail: String?
-    var action: ShortcutAction
+    var shortcut: LessonShortcut
     var state: State
     let settings: AppSettings
 
@@ -132,7 +138,7 @@ private struct LessonRow: View {
                         .lineLimit(1)
                         .layoutPriority(1)
                     Spacer(minLength: 4)
-                    ShortcutRecorderView(shortcut: binding, action: action)
+                    keys
                         .opacity(state == .upcoming || state == .extra ? 0.8 : 1)
                         .layoutPriority(2)
                 }
@@ -174,10 +180,26 @@ private struct LessonRow: View {
         }
     }
 
-    private var binding: Binding<Shortcut?> {
+    @ViewBuilder private var keys: some View {
+        switch shortcut {
+        case .bindable(let action):
+            ShortcutRecorderView(shortcut: binding(for: action), action: action)
+        case .fixed(let shortcut):
+            // The size the recorder shows the others at.
+            ShortcutChips(shortcut: shortcut)
+        }
+    }
+
+    private func binding(for action: ShortcutAction) -> Binding<Shortcut?> {
         let settings = settings
-        let action = action
         return Binding(get: { settings.shortcuts[action] }, set: { settings.shortcuts[action] = $0 })
+    }
+
+    private var extraSymbol: String {
+        switch shortcut {
+        case .bindable(let action): action.symbolName
+        case .fixed: "keyboard"
+        }
     }
 
     @ViewBuilder private var marker: some View {
@@ -197,7 +219,7 @@ private struct LessonRow: View {
                 .frame(width: 20, height: 20)
                 .overlay { Circle().strokeBorder(Color.strokeStrong, lineWidth: 1) }
         case .extra:
-            Image(systemName: action.symbolName)
+            Image(systemName: extraSymbol)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.inkTertiary)
                 .frame(width: 20, height: 20)

@@ -285,10 +285,11 @@ import Testing
     }
 }
 
-@Suite struct HubChoicesTests {
-    @Test func retentionLabels() {
-        #expect(RetentionChoice.days.map(RetentionChoice.label) == ["Don’t keep", "1 day", "7 days", "14 days", "30 days"])
-        #expect(RetentionChoice.days.contains(14))
+@MainActor @Suite struct HubChoicesTests {
+    @Test func autoDeleteLabels() {
+        #expect(AutoDeleteChoice.days.map(AutoDeleteChoice.label)
+                == ["Never", "After 1 day", "After 7 days", "After 30 days", "After 90 days"])
+        #expect(AutoDeleteChoice.days.first == AppSettings.inMemory().autoDeleteHistoryDays, "Never by default")
     }
 }
 

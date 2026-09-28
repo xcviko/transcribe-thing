@@ -11,8 +11,8 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
     var audioDuration: TimeInterval
     var voicedSeconds: TimeInterval
     var errorMessage: String?
-    /// The recording, for Retry and Transcribe With: failed/canceled entries keep it for
-    /// `keepFailedRecordingsDays`, successful ones for `keepSuccessfulRecordingsDays`. nil once pruned.
+    /// The recording, for Retry and Transcribe With, kept as long as the entry (it goes with a delete, Auto-delete and
+    /// the oldest entries past `HistoryStore.maxEntries`). nil only where an older build pruned it or none was saved.
     var audioFileName: String?
     /// Every transcript of the recording, oldest first, at most one of each kind (one per model). Empty for failed
     /// and canceled entries. Change them through `addVersion`, `selectVersion` and `updateMetadata`.
@@ -282,8 +282,10 @@ struct HistoryStats: Equatable, Sendable {
     }
 }
 
-/// Transcript history: JSON on disk (read and written off the main thread), plus WAV files so failed or canceled
-/// dictations can be retried and recent ones transcribed again with another model.
+/// Transcript history: JSON on disk (read and written off the main thread), plus each entry's recording as a WAV
+/// file, so failed or canceled dictations can be retried and any transcript transcribed again with another model.
+/// An entry and its recording go together: deleted, cleared, auto-deleted (`AppSettings.autoDeleteHistoryDays`) or
+/// past `maxEntries`.
 @MainActor @Observable
 final class HistoryStore {
     static let maxEntries = 2000
@@ -301,7 +303,7 @@ final class HistoryStore {
     /// Audio of deleted entries lingers briefly so the Hub's "Undo" can bring the row back intact.
     @ObservationIgnored private var pendingFileRemovals: [String: Task<Void, Never>] = [:]
     static let deletedAudioGrace: Duration = .seconds(15)
-    /// Entries just removed, by id: deleted, cleared, or the oldest past `maxEntries`.
+    /// Entries just removed, by id: deleted, cleared, auto-deleted, or the oldest past `maxEntries`.
     @ObservationIgnored var onRemove: (([UUID]) -> Void)?
 
     /// Newest first, at most `maxEntries`.
@@ -324,7 +326,7 @@ final class HistoryStore {
         self.didLoad = true
     }
 
-    /// `settings`: whose retention `pruneOldRecordings` follows.
+    /// `settings`: whose Auto-delete `deleteExpired` follows.
     static func preview(entries: [TranscriptEntry], settings: AppSettings? = nil) -> HistoryStore {
         HistoryStore(previewEntries: entries, settings: settings ?? .inMemory())
     }
@@ -399,7 +401,7 @@ final class HistoryStore {
             changed(save: !entries.isEmpty)
         }
         isLoaded = true
-        pruneOldRecordings()
+        deleteExpired()
     }
 
     /// Writes immediately (used at quit).
@@ -520,21 +522,38 @@ final class HistoryStore {
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
-    /// Drops audio of failed/canceled dictations older than `keepFailedRecordingsDays` and of successful ones older
-    /// than `keepSuccessfulRecordingsDays` (the rows stay), plus orphaned files.
-    func pruneOldRecordings(now: Date = Date()) {
-        func cutoff(days: Int) -> Date { now.addingTimeInterval(-Double(max(0, days)) * 86_400) }
-        let failedCutoff = cutoff(days: settings.keepFailedRecordingsDays)
-        let successCutoff = cutoff(days: settings.keepSuccessfulRecordingsDays)
-        var didChange = false
-        for i in entries.indices {
-            let limit = entries[i].status == .success ? successCutoff : failedCutoff
-            guard let file = entries[i].audioFileName, entries[i].createdAt < limit else { continue }
-            removeAudioFile(file)
-            entries[i].audioFileName = nil
-            didChange = true
+    /// What the recordings take on disk, in bytes (read on the store's IO queue, after any pending writes); 0 for a
+    /// preview store.
+    func recordingsByteCount() async -> Int64 {
+        guard persists else { return 0 }
+        let dir = paths.recordings
+        return await io.value {
+            let fm = FileManager.default
+            let files = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.fileSizeKey])) ?? []
+            return files.reduce(Int64(0)) { total, url in
+                total + Int64((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+            }
         }
-        if didChange { changed() }
+    }
+
+    /// Auto-delete: with `autoDeleteHistoryDays` set, entries older than that many days go, their recordings at once
+    /// (no Undo brings them back). Then recordings no entry refers to are swept up.
+    func deleteExpired(now: Date = Date()) {
+        let days = settings.autoDeleteHistoryDays
+        if days > 0 {
+            let cutoff = now.addingTimeInterval(-Double(days) * 86_400)
+            let expired = entries.filter { $0.createdAt < cutoff }
+            if !expired.isEmpty {
+                let ids = Set(expired.map(\.id))
+                entries.removeAll { ids.contains($0.id) }
+                for file in expired.compactMap(\.audioFileName) {
+                    pendingFileRemovals.removeValue(forKey: file)?.cancel()
+                    removeAudioFile(file)
+                }
+                changed()
+                onRemove?(expired.map(\.id))
+            }
+        }
 
         guard persists, isLoaded else { return }
         let referenced = Set(entries.compactMap(\.audioFileName))
@@ -611,12 +630,15 @@ private final class HistoryIO: @unchecked Sendable {
         queue.async(execute: work)
     }
 
-    func read(_ url: URL) async -> ReadResult {
+    /// `work`'s result, computed on the queue after everything submitted before it.
+    func value<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
         await withCheckedContinuation { continuation in
-            queue.async {
-                continuation.resume(returning: Self.readNow(url))
-            }
+            queue.async { continuation.resume(returning: work()) }
         }
+    }
+
+    func read(_ url: URL) async -> ReadResult {
+        await value { Self.readNow(url) }
     }
 
     func readSync(_ url: URL) -> Data? {

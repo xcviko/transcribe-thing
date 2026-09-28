@@ -25,7 +25,6 @@ final class PillController {
     private var sessionActive = false
     private var lastReposition = Date.distantPast
     private var announcedNotices: Set<UUID> = []
-    private var knownMaxMinutes: Int?
     private var lastVisiblePhase: PillPhase = .rest
 
     init(model: PillModel, toasts: ToastCenter, settings: AppSettings) {
@@ -84,7 +83,6 @@ final class PillController {
             _ = toasts.notices
             _ = settings.pillMode
             _ = settings.shortcuts
-            _ = settings.maxRecordingMinutes
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -99,11 +97,6 @@ final class PillController {
 
         let hint = settings.shortcuts[.pushToTalk]?.compactDescription ?? "fn"
         if model.shortcutHint != hint { model.shortcutHint = hint }
-        // Follow the setting only when it changes, so a limit the dictation controller sets stays put.
-        if knownMaxMinutes != settings.maxRecordingMinutes {
-            if knownMaxMinutes != nil { model.limitSeconds = settings.effectiveMaxRecordingDuration }
-            knownMaxMinutes = settings.maxRecordingMinutes
-        }
 
         let allowed = PillVisibility.isPillAllowed(mode: settings.pillMode)
         let showsPill = PillVisibility.showsPill(phase: model.visiblePhase, mode: settings.pillMode,

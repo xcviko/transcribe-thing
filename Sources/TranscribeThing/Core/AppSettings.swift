@@ -26,7 +26,6 @@ enum PillMode: String, Codable, CaseIterable, Sendable, Identifiable {
 /// User preferences. Every property writes through to its store the moment it is set.
 @MainActor @Observable
 final class AppSettings {
-    static let maxRecordingChoices = [5, 10, 20, 30]
     static let switchHintLimit = 3
 
     var onboardingCompleted: Bool = false { didSet { store.set(onboardingCompleted, .onboardingCompleted) } }
@@ -64,20 +63,20 @@ final class AppSettings {
     var pillMode: PillMode = .whileDictating { didSet { store.set(pillMode.rawValue, .pillMode) } }
     var soundsEnabled: Bool = true { didSet { store.set(soundsEnabled, .soundsEnabled) } }
     /// The only mic dictation opens while it is connected. nil = Automatic: the system default input (Bluetooth
-    /// included) at the moment a dictation starts.
+    /// included) at the moment a dictation starts. A picked mic that goes away falls back to Automatic
+    /// (`InputDevicePolicy.keepsPick`).
     var microphoneUID: String? = nil { didSet { store.set(microphoneUID, .microphoneUID) } }
     var showDockIcon: Bool = false { didSet { store.set(showDockIcon, .showDockIcon) } }
-    /// One of `maxRecordingChoices`.
-    var maxRecordingMinutes: Int = 20 { didSet { store.set(maxRecordingMinutes, .maxRecordingMinutes) } }
-    var doublePressForHandsFree: Bool = true { didSet { store.set(doublePressForHandsFree, .doublePressForHandsFree) } }
-    var restoreClipboard: Bool = true { didSet { store.set(restoreClipboard, .restoreClipboard) } }
-    /// Days the audio of failed or canceled dictations is kept, for Retry.
-    var keepFailedRecordingsDays: Int = 14 { didSet { store.set(keepFailedRecordingsDays, .keepFailedRecordingsDays) } }
-    /// Days the audio of successful dictations is kept, so History can transcribe them again with another model;
-    /// 0 = not kept.
-    var keepSuccessfulRecordingsDays: Int = 1 {
-        didSet { store.set(keepSuccessfulRecordingsDays, .keepSuccessfulRecordingsDays) }
-    }
+    /// Off by default. Stored only once the user flips it (Shortcuts), so an install that never did gets the
+    /// default of the build it runs.
+    var doublePressForHandsFree: Bool = false { didSet { store.set(doublePressForHandsFree, .doublePressForHandsFree) } }
+    /// What the app pastes ends in one space, so the next dictation doesn't run into it. History and Copy keep the
+    /// text as it was.
+    var addsSpaceAfterText: Bool = false { didSet { store.set(addsSpaceAfterText, .addSpaceAfterText) } }
+    /// What the app pastes loses a single final period (`PastedText`). History and Copy keep the text as it was.
+    var removesFinalPeriod: Bool = false { didSet { store.set(removesFinalPeriod, .removeFinalPeriod) } }
+    /// Days a transcript and its recording stay in History; 0 = Never deleted (`HistoryStore.deleteExpired`).
+    var autoDeleteHistoryDays: Int = 0 { didSet { store.set(autoDeleteHistoryDays, .autoDeleteHistoryDays) } }
     var shortcuts: ShortcutBindings = .defaults { didSet { store.setJSON(shortcuts, .shortcuts) } }
     var hasShownWelcomeHello: Bool = false { didSet { store.set(hasShownWelcomeHello, .hasShownWelcomeHello) } }
     /// Checks GitHub in the background and announces new versions. Off: no reminders and no badges, though the
@@ -114,8 +113,6 @@ final class AppSettings {
         AppSettings(store: SettingsStore(defaults: nil))
     }
 
-    var maxRecordingDuration: TimeInterval { TimeInterval(maxRecordingMinutes) * 60 }
-
     // MARK: Models
 
     /// What the Switch model shortcut steps through after the main model, in order: clean-up, then the extra models.
@@ -123,17 +120,6 @@ final class AppSettings {
     var switchChoices: [ModelChoice] {
         let cleanup = switchCleanup && CleanupModel.canClean(selectedEngine)
         return (cleanup ? [.cleanup] : []) + switchEngines.map(ModelChoice.engine)
-    }
-
-    /// The limit a new recording gets with the main model.
-    var effectiveMaxRecordingDuration: TimeInterval { maxRecordingDuration(for: selectedEngine) }
-
-    /// The limit of a recording transcribed by `engine`: Gemini takes about 7.4 minutes of audio per request, so
-    /// with Gemini a recording stops (and is transcribed) at 7 minutes even when the setting allows more. Parakeet
-    /// keeps the setting.
-    func maxRecordingDuration(for engine: EngineID) -> TimeInterval {
-        guard engine.cloudAPI == .chatCompletions else { return maxRecordingDuration }
-        return min(maxRecordingDuration, OpenRouterClient.maxRecordingDuration)
     }
 
     /// Extra models this build offers, each once, in `EngineID.switchCandidates` order.
@@ -202,11 +188,16 @@ final class AppSettings {
         for key in [SettingsKey.reasoningEfforts, .cleanupModel, .cleanupReasoningEfforts, .cleanupReasoningEffort] {
             store.remove(key)
         }
-        if let v = store.int(.maxRecordingMinutes), v > 0 { maxRecordingMinutes = v }
+        // Recordings have no length limit, the pasted text stays on the clipboard, and a recording's audio lives as
+        // long as its History entry (`autoDeleteHistoryDays`): these settings have no meaning any more.
+        for key in [SettingsKey.maxRecordingMinutes, .restoreClipboard, .keepFailedRecordingsDays,
+                    .keepSuccessfulRecordingsDays] {
+            store.remove(key)
+        }
         if let v = store.bool(.doublePressForHandsFree) { doublePressForHandsFree = v }
-        if let v = store.bool(.restoreClipboard) { restoreClipboard = v }
-        if let v = store.int(.keepFailedRecordingsDays), v >= 0 { keepFailedRecordingsDays = v }
-        if let v = store.int(.keepSuccessfulRecordingsDays), v >= 0 { keepSuccessfulRecordingsDays = v }
+        if let v = store.bool(.addSpaceAfterText) { addsSpaceAfterText = v }
+        if let v = store.bool(.removeFinalPeriod) { removesFinalPeriod = v }
+        if let v = store.int(.autoDeleteHistoryDays), v >= 0 { autoDeleteHistoryDays = v }
         if let v: ShortcutBindings = store.json(.shortcuts) { shortcuts = v }
         if let v = store.bool(.hasShownWelcomeHello) { hasShownWelcomeHello = v }
         if let v = store.bool(.checkForUpdatesAutomatically) { checkForUpdatesAutomatically = v }
@@ -284,6 +275,9 @@ enum SettingsKey: String, CaseIterable {
     /// (`microphoneChoiceMigrated` records that) and removed.
     case onboardingCompleted, onboardingStep, onboardingResumeStep, selectedEngine, pillMode, pillHiddenUntil
     case soundsEnabled, soundVolume, microphoneUID, preferBuiltInMicOverBluetooth, showDockIcon
+    /// `maxRecordingMinutes` (the removed "Maximum recording length"), `restoreClipboard` (the removed "Restore the
+    /// clipboard after pasting"), `keepFailedRecordingsDays` and `keepSuccessfulRecordingsDays` (how long audio was
+    /// kept, now as long as its entry) are removed at load.
     case maxRecordingMinutes, doublePressForHandsFree
     case restoreClipboard, keepFailedRecordingsDays, keepSuccessfulRecordingsDays, shortcuts, hasShownWelcomeHello
     case checkForUpdatesAutomatically, announcedUpdateVersion, lastLaunchedVersion
@@ -299,6 +293,7 @@ enum SettingsKey: String, CaseIterable {
     /// `geminiSystemPrompt` and `cleanupSystemPrompt` are the prompts Models used to edit, removed at load: both are
     /// fixed in code now.
     case geminiSystemPrompt, cleanupSystemPrompt
+    case addSpaceAfterText, removeFinalPeriod, autoDeleteHistoryDays
 
     var defaultsKey: String { "tt.\(rawValue)" }
 }

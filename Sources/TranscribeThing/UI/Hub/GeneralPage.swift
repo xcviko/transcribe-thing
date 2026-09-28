@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Software Update, startup, the pill and sounds, recording limits, history retention, permissions and About.
+/// Software Update, startup, the pill and sounds, how text is pasted, History's Auto-delete, permissions and About.
 struct GeneralPage: View {
     @Environment(HubContext.self) private var hub
     @Environment(AppSettings.self) private var settings
@@ -10,10 +10,12 @@ struct GeneralPage: View {
 
     @State private var loginError: String?
     @State private var confirmingClear = false
+    /// What the recordings take on disk, once measured.
+    @State private var recordingsBytes: Int64?
 
     var body: some View {
         @Bindable var settings = settings
-        HubPage("General", subtitle: "Updates, startup, pill and sounds, recording, history and permissions.") {
+        HubPage("General", subtitle: "Updates, startup, pill and sounds, pasting, history and permissions.") {
             HubGroup("Updates") {
                 SettingsGroup {
                     SoftwareUpdateRow()
@@ -54,19 +56,19 @@ struct GeneralPage: View {
                     }
                 }
             }
-            HubGroup("Recording") {
+            HubGroup("Pasting") {
                 SettingsGroup {
-                    SettingsRow(title: "Maximum recording length",
-                                subtitle: "\(Brand.name) warns you a minute before, then transcribes. Gemini stops at 7 min.",
-                                systemImage: "timer", iconTint: .inkSecondary) {
-                        HubMenuPicker(options: AppSettings.maxRecordingChoices, selection: $settings.maxRecordingMinutes) {
-                            "\($0) min"
-                        }
+                    SettingsRow(title: "Add a space after the text",
+                                subtitle: "So what you say next doesn’t run into it.",
+                                systemImage: "space", iconTint: .inkSecondary) {
+                        Toggle("", isOn: $settings.addsSpaceAfterText)
+                            .toggleStyle(.appSwitch)
+                            .labelsHidden()
                     }
-                    SettingsRow(title: "Restore the clipboard after pasting",
-                                subtitle: "Puts back what you had copied. Turn off to keep the transcript on the clipboard.",
-                                systemImage: "doc.on.clipboard", iconTint: .inkSecondary) {
-                        Toggle("", isOn: $settings.restoreClipboard)
+                    SettingsRow(title: "Remove the final period",
+                                subtitle: "Drops a single period at the end. Keeps …, ? and !",
+                                systemImage: "text.badge.minus", iconTint: .inkSecondary) {
+                        Toggle("", isOn: $settings.removesFinalPeriod)
                             .toggleStyle(.appSwitch)
                             .labelsHidden()
                     }
@@ -74,23 +76,13 @@ struct GeneralPage: View {
             }
             HubGroup("History") {
                 SettingsGroup {
-                    SettingsRow(title: "Keep failed recordings",
-                                subtitle: "Audio of dictations that fail or are canceled, so you can retry them.",
-                                systemImage: "waveform.badge.exclamationmark", iconTint: .inkSecondary) {
-                        HubMenuPicker(options: RetentionChoice.days, selection: $settings.keepFailedRecordingsDays,
-                                      label: RetentionChoice.label)
+                    SettingsRow(title: "Auto-delete history",
+                                subtitle: "Deletes transcripts and their recordings older than this.",
+                                systemImage: "clock.arrow.circlepath", iconTint: .inkSecondary) {
+                        HubMenuPicker(options: AutoDeleteChoice.days, selection: $settings.autoDeleteHistoryDays,
+                                      label: AutoDeleteChoice.label)
                     }
-                    SettingsRow(title: "Keep audio to transcribe again",
-                                subtitle: "Send a recent dictation to another model from History. Audio stays on this Mac.",
-                                systemImage: "arrow.triangle.2.circlepath", iconTint: .inkSecondary) {
-                        HubMenuPicker(options: RetentionChoice.transcribeAgainDays,
-                                      selection: $settings.keepSuccessfulRecordingsDays,
-                                      label: RetentionChoice.transcribeAgainLabel)
-                    }
-                    SettingsRow(title: "Clear history",
-                                subtitle: history.entries.isEmpty
-                                    ? "History is empty."
-                                    : "Deletes \(Fmt.number(history.entries.count)) transcripts and their recordings.",
+                    SettingsRow(title: "Clear history", subtitle: clearSubtitle,
                                 systemImage: "trash", iconTint: .danger) {
                         Button("Delete All…") { confirmingClear = true }
                             .buttonStyle(SecondaryButtonStyle(size: .small, isDestructive: true))
@@ -125,6 +117,7 @@ struct GeneralPage: View {
         }
         // Approval in Login Items (or removal there) happens outside transcribe-thing.
         .onAppear { launchAtLogin.refresh() }
+        .task(id: history.entries.count) { recordingsBytes = await history.recordingsByteCount() }
         .confirmationDialog("Delete all transcripts and recordings?", isPresented: $confirmingClear) {
             Button("Delete Everything", role: .destructive) {
                 withAnimation(Theme.Motion.collapse) { history.clearAll() }
@@ -133,6 +126,13 @@ struct GeneralPage: View {
         } message: {
             Text("This can’t be undone.")
         }
+    }
+
+    /// "Deletes 1,204 transcripts and their recordings (2.3 GB).", the size once it's known.
+    private var clearSubtitle: String {
+        guard !history.entries.isEmpty else { return "History is empty." }
+        let size = recordingsBytes.flatMap { $0 > 0 ? " (\(Fmt.bytes($0)))" : nil } ?? ""
+        return "Deletes \(Fmt.number(history.entries.count)) transcripts and their recordings\(size)."
     }
 
     private var pillRow: some View {

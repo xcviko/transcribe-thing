@@ -123,25 +123,27 @@ The zip's name (`transcribe-thing-<version>.zip`) and the tag (`v<version>`) are
 |---|---|
 | Parakeet model | `~/Library/Application Support/transcribe-thing/Models/parakeet-tdt-0.6b-v3` |
 | History | `~/Library/Application Support/transcribe-thing/history.json` (last 2,000 dictations) |
-| Recordings | `~/Library/Application Support/transcribe-thing/Recordings`: failed or canceled dictations for 14 days by default (Retry and Undo), successful ones for 1 day (Transcribe With) |
+| Recordings | `~/Library/Application Support/transcribe-thing/Recordings`: every transcript keeps its recording while it's in History (Retry, Undo, Transcribe With); General → History → Auto-delete history, Never by default |
 | Release feed cache | `~/Library/Application Support/transcribe-thing/updates.json` (what the last update check saw) |
 | Settings | `defaults read dev.transcribe-thing.app` |
 | OpenRouter key | login Keychain, service `dev.transcribe-thing.app` |
 
-Successful dictations keep their audio for a day by default, so History can send one to another model (Versions →
-Transcribe With, say Gemini after a long dictation went to Parakeet); set General → History → Keep audio to transcribe
-again to Off to keep only the text. Every transcript a recording gets stays in its Versions menu with how it was made
-(model, reasoning level, tokens, cost, time), each model at most once, and switching between them needs no audio.
+Every dictation keeps its audio as long as it stays in History, so History can send any of them to another model
+(Versions → Transcribe With, say Gemini after a long dictation went to Parakeet) and retry a failed one. A deleted
+entry takes its recording along, and General → History → Auto-delete history (Never by default) deletes entries older
+than 1, 7, 30 or 90 days, recordings included. Every transcript a recording gets stays in its Versions menu with how it
+was made (model, reasoning level, tokens, cost, time), each model at most once, and switching between them needs no
+audio.
 
 ## Shortcuts
 
 | Action | Default | Notes |
 |---|---|---|
 | Push to talk | hold **fn** | Let go to paste. A quick tap does nothing. |
-| Hands-free | **fn Space** | Also: press Space while holding fn, double-press fn, or click the pill. |
-| Finish hands-free | **fn**, **fn Space** or the Stop button | Reaching the length limit (20 min by default) finishes too. |
-| Cancel | **esc** | Works while recording or transcribing; Undo brings it back. |
-| Paste last transcript | **⌘ fn V** | Also leaves it on the clipboard, even with "Restore the clipboard after pasting" on. |
+| Hands-free | **fn Space** | Also: press Space while holding fn, double-press fn (turn it on in Shortcuts), or click the pill. |
+| Finish hands-free | **fn**, **fn Space** or the Stop button | |
+| Cancel | **esc**, always | Works while recording or transcribing; Undo brings it back. |
+| Paste last transcript | **⌘ fn V** | Also leaves it on the clipboard, like every paste. |
 
-Everything is rebindable under transcribe-thing → Shortcuts. With secure typing on (password fields, some terminals),
-only hold-to-talk and double-press work until it's off.
+Everything but Cancel is rebindable under transcribe-thing → Shortcuts. With secure typing on (password fields, some
+terminals), only hold-to-talk and double-press work until it's off.

@@ -185,7 +185,7 @@ struct PracticeChat: View {
             case .handsFree?:
                 return "Press \(settings.shortcuts[.handsFree]?.compactDescription ?? "fn Space") and answer out loud…"
             case .cancel?:
-                return "Start talking, then press \(settings.shortcuts[.cancel]?.compactDescription ?? "esc")…"
+                return "Start talking, then press esc…"
             case .pushToTalk?, nil:
                 return "Hold \(ptt) and answer out loud…"
             }

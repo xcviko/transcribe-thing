@@ -11,8 +11,9 @@ import Testing
     }
 
     @Test func emptyPromptSendsOnlyTheAudio() throws {
-        let body = OpenRouterChatRequest.transcription(model: "google/gemini-3.8-flash", audioBase64: "UklG+/==",
-                                                       systemPrompt: "", effort: .high)
+        let body = OpenRouterChatRequest.transcription(
+            model: "google/gemini-3.8-flash", audioBase64: "UklG+/==", format: "wav", systemPrompt: "", effort: .high,
+            maxTokens: OpenRouterClient.transcriptionMaxTokens(audioSeconds: 60))
         let json = try object(body)
         #expect(Set(json.keys) == ["model", "messages", "reasoning", "provider", "max_tokens", "stream"])
         #expect(json["model"] as? String == "google/gemini-3.8-flash")
@@ -42,13 +43,37 @@ import Testing
 
     @Test(arguments: [nil, "", "   \n\t "] as [String?])
     func blankPromptsAddNoSystemMessage(_ prompt: String?) throws {
-        let body = OpenRouterChatRequest.transcription(model: "m", audioBase64: "AA==", systemPrompt: prompt, effort: .high)
+        let body = OpenRouterChatRequest.transcription(model: "m", audioBase64: "AA==", format: "wav", systemPrompt: prompt,
+                                                       effort: .high, maxTokens: 32_768)
         #expect(body.messages == [.userAudio(base64: "AA==", format: "wav")])
     }
 
+    /// A long recording goes compressed, and the answer's budget grows with it: an hour gets the most there is.
+    @Test func theRequestCarriesTheRealFormatAndATokenBudgetForTheAudio() throws {
+        let body = OpenRouterChatRequest.transcription(
+            model: "google/gemini-3.8-flash", audioBase64: "AA==", format: "m4a", systemPrompt: nil, effort: .medium,
+            maxTokens: OpenRouterClient.transcriptionMaxTokens(audioSeconds: 60 * 60))
+        let json = try object(body)
+        #expect(json["max_tokens"] as? Int == 65_536)
+        let messages = try #require(json["messages"] as? [[String: Any]])
+        let content = try #require(messages.first?["content"] as? [[String: Any]])
+        let audio = try #require(content.first?["input_audio"] as? [String: Any])
+        #expect(audio["format"] as? String == "m4a")
+    }
+
+    @Test func theTokenBudgetGrowsWithTheAudio() {
+        #expect(OpenRouterClient.transcriptionMaxTokens(audioSeconds: 0) == 32_768)
+        #expect(OpenRouterClient.transcriptionMaxTokens(audioSeconds: 60) == 32_768, "what short dictations always had")
+        #expect(OpenRouterClient.transcriptionMaxTokens(audioSeconds: 61) == 33_368)
+        #expect(OpenRouterClient.transcriptionMaxTokens(audioSeconds: 10 * 60) == 38_168)
+        #expect(OpenRouterClient.transcriptionMaxTokens(audioSeconds: 60 * 60) == 65_536)
+        #expect(OpenRouterClient.transcriptionMaxTokens(audioSeconds: 3 * 3600) == 65_536)
+    }
+
     @Test func systemPromptComesFirstTrimmed() throws {
-        let body = OpenRouterChatRequest.transcription(model: "google/gemini-3.8-flash", audioBase64: "AA==",
-                                                       systemPrompt: "  Transcribe verbatim.\n", effort: .high)
+        let body = OpenRouterChatRequest.transcription(model: "google/gemini-3.8-flash", audioBase64: "AA==", format: "wav",
+                                                       systemPrompt: "  Transcribe verbatim.\n", effort: .high,
+                                                       maxTokens: 32_768)
         let json = try object(body)
         let messages = try #require(json["messages"] as? [[String: Any]])
         #expect(messages.count == 2)
@@ -62,7 +87,8 @@ import Testing
 
     @Test func slashesInBase64AreNotEscaped() throws {
         let raw = String(decoding: try OpenRouterChatRequest.transcription(
-            model: "google/gemini-3.8-flash", audioBase64: "ab/cd+/ef==", systemPrompt: nil, effort: .high).encoded(), as: UTF8.self)
+            model: "google/gemini-3.8-flash", audioBase64: "ab/cd+/ef==", format: "wav", systemPrompt: nil, effort: .high,
+            maxTokens: 32_768).encoded(), as: UTF8.self)
         #expect(raw.contains("ab/cd+/ef=="))
         #expect(raw.contains("google/gemini-3.8-flash"))
         #expect(!raw.contains("\\/"))
@@ -83,7 +109,7 @@ import Testing
     @Test func payloadLimitMatchesBase64Size() {
         #expect(OpenRouterClient.base64Length(ofByteCount: 3) == 4)
         #expect(OpenRouterClient.base64Length(ofByteCount: 4) == 8)
-        // 7 minutes of 16 kHz WAV fits; 8 minutes doesn't.
+        // 7 minutes of 16 kHz WAV fits the inline budget; 8 minutes doesn't, and goes compressed (`CloudAudio`).
         #expect(OpenRouterClient.base64Length(ofByteCount: 44 + 7 * 60 * 16_000 * 2) <= OpenRouterClient.maxBase64Bytes)
         #expect(OpenRouterClient.base64Length(ofByteCount: 44 + 8 * 60 * 16_000 * 2) > OpenRouterClient.maxBase64Bytes)
     }
@@ -120,6 +146,9 @@ struct OKBodyCase: Sendable, CustomTestStringConvertible {
 
     static let httpCases: [HTTPErrorCase] = [
         .init(400, #"{"error":{"code":400,"message":"Invalid audio format"}}"#, .openRouterBadRequest("Invalid audio format")),
+        .init(400, #"{"error":{"code":400,"message":"Request payload size exceeds the limit: 20971520 bytes."}}"#,
+              .recordingTooLarge),
+        .init(400, #"{"error":{"code":400,"message":"Request Entity Too Large"}}"#, .recordingTooLarge),
         .init(400, #"{"error":{"code":400,"message":"Too long","metadata":{"error_type":"context_length_exceeded"}}}"#,
               .openRouterBadRequest("Too long")),
         .init(401, #"{"error":{"message":"User not found.","code":401}}"#, .openRouterInvalidKey("User not found.")),
@@ -352,7 +381,8 @@ enum Fixtures {
     @Test func invalidKeyIsNotRetried() async throws {
         let (client, host) = StubURLProtocol.client([.init(status: 401, body: #"{"error":{"message":"User not found.","code":401}}"#)])
         await #expect(throws: AppError.openRouterInvalidKey("User not found.")) {
-            try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil, effort: .high,
+            try await client.transcribe(audio: Fixtures.wav, format: "wav", model: "google/gemini-3.8-flash",
+                                        systemPrompt: nil, effort: .high, maxTokens: 32_768,
                                         apiKey: "sk-or-v1-invalid", timeout: 120)
         }
         let requests = StubURLProtocol.registry.requests(for: host)
@@ -365,8 +395,8 @@ enum Fixtures {
         let (client, host) = StubURLProtocol.client([
             .init(status: 503, body: #"{"error":{"code":503,"message":"Overloaded"}}"#), Fixtures.success,
         ])
-        let result = try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash",
-                                                 systemPrompt: "", effort: .high, apiKey: "k", timeout: 120)
+        let result = try await client.transcribe(audio: Fixtures.wav, format: "wav", model: "google/gemini-3.8-flash",
+                                                 systemPrompt: "", effort: .high, maxTokens: 32_768, apiKey: "k", timeout: 120)
         #expect(result.text == "Hello there.")
         #expect(result.costUSD == 0.001)
         #expect(StubURLProtocol.registry.requests(for: host).count == 2)
@@ -376,7 +406,8 @@ enum Fixtures {
         let failure = StubURLProtocol.Reply(status: 500, body: #"{"error":{"code":500,"message":"Internal Server Error"}}"#)
         let (client, host) = StubURLProtocol.client([failure, failure, Fixtures.success])
         await #expect(throws: AppError.openRouterServer("Internal Server Error")) {
-            try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil, effort: .high,
+            try await client.transcribe(audio: Fixtures.wav, format: "wav", model: "google/gemini-3.8-flash",
+                                        systemPrompt: nil, effort: .high, maxTokens: 32_768,
                                         apiKey: "k", timeout: 120)
         }
         #expect(StubURLProtocol.registry.requests(for: host).count == 2)
@@ -386,7 +417,8 @@ enum Fixtures {
         let noRoute = StubURLProtocol.Reply(status: 503, body: #"{"error":{"code":503,"message":"No endpoints found matching your data policy."}}"#)
         let (client, host) = StubURLProtocol.client([noRoute, Fixtures.success])
         await #expect(throws: AppError.openRouterNoRoute("No endpoints found matching your data policy. \(OpenRouterErrorMapper.noRouteHint)")) {
-            try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil, effort: .high,
+            try await client.transcribe(audio: Fixtures.wav, format: "wav", model: "google/gemini-3.8-flash",
+                                        systemPrompt: nil, effort: .high, maxTokens: 32_768,
                                         apiKey: "k", timeout: 120)
         }
         #expect(StubURLProtocol.registry.requests(for: host).count == 1)
@@ -395,7 +427,8 @@ enum Fixtures {
     @Test func upstreamFailureInsideA200IsRetriedOnce() async throws {
         let upstream = StubURLProtocol.Reply(body: #"{"id":"gen-1","error":{"code":502,"message":"Upstream error"}}"#)
         let (client, host) = StubURLProtocol.client([upstream, Fixtures.success])
-        let result = try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil, effort: .high,
+        let result = try await client.transcribe(audio: Fixtures.wav, format: "wav", model: "google/gemini-3.8-flash",
+                                                 systemPrompt: nil, effort: .high, maxTokens: 32_768,
                                                  apiKey: "k", timeout: 120)
         #expect(result.text == "Hello there.")
         #expect(StubURLProtocol.registry.requests(for: host).count == 2)
@@ -406,14 +439,16 @@ enum Fixtures {
             status: 402, headers: ["Retry-After": "0"],
             body: #"{"error":{"code":402,"message":"In flight","metadata":{"limit_source":"openrouter_in_flight_budget"}}}"#)
         let (client, host) = StubURLProtocol.client([inFlight, Fixtures.success])
-        #expect(try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil, effort: .high,
+        #expect(try await client.transcribe(audio: Fixtures.wav, format: "wav", model: "google/gemini-3.8-flash",
+                                            systemPrompt: nil, effort: .high, maxTokens: 32_768,
                                             apiKey: "k", timeout: 120).text == "Hello there.")
         #expect(StubURLProtocol.registry.requests(for: host).count == 2)
 
         let broke = StubURLProtocol.Reply(status: 402, body: #"{"error":{"code":402,"message":"Insufficient credits"}}"#)
         let (second, secondHost) = StubURLProtocol.client([broke, Fixtures.success])
         await #expect(throws: AppError.openRouterNoCredits("Insufficient credits")) {
-            try await second.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil, effort: .high,
+            try await second.transcribe(audio: Fixtures.wav, format: "wav", model: "google/gemini-3.8-flash",
+                                        systemPrompt: nil, effort: .high, maxTokens: 32_768,
                                         apiKey: "k", timeout: 120)
         }
         #expect(StubURLProtocol.registry.requests(for: secondHost).count == 1)
@@ -425,7 +460,8 @@ enum Fixtures {
             Fixtures.success,
         ])
         await #expect(throws: AppError.openRouterRateLimited(retryAfter: 30)) {
-            try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil, effort: .high,
+            try await client.transcribe(audio: Fixtures.wav, format: "wav", model: "google/gemini-3.8-flash",
+                                        systemPrompt: nil, effort: .high, maxTokens: 32_768,
                                         apiKey: "k", timeout: 120)
         }
         #expect(StubURLProtocol.registry.requests(for: host).count == 1)
@@ -433,8 +469,8 @@ enum Fixtures {
 
     @Test func droppedConnectionIsRetried() async throws {
         let (client, host) = StubURLProtocol.client([.init(error: .networkConnectionLost), Fixtures.success])
-        let result = try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash",
-                                                 systemPrompt: nil, effort: .high, apiKey: "k", timeout: 180)
+        let result = try await client.transcribe(audio: Fixtures.wav, format: "wav", model: "google/gemini-3.8-flash",
+                                                 systemPrompt: nil, effort: .high, maxTokens: 32_768, apiKey: "k", timeout: 180)
         #expect(result.text == "Hello there.")
         #expect(StubURLProtocol.registry.requests(for: host).count == 2)
     }
@@ -442,7 +478,8 @@ enum Fixtures {
     @Test func timeoutIsNotRetried() async throws {
         let (client, host) = StubURLProtocol.client([.init(error: .timedOut), Fixtures.success])
         await #expect(throws: AppError.timeout(.geminiFlash)) {
-            try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil, effort: .high,
+            try await client.transcribe(audio: Fixtures.wav, format: "wav", model: "google/gemini-3.8-flash",
+                                        systemPrompt: nil, effort: .high, maxTokens: 32_768,
                                         apiKey: "k", timeout: 180)
         }
         #expect(StubURLProtocol.registry.requests(for: host).count == 1)
@@ -451,25 +488,32 @@ enum Fixtures {
     @Test func offline() async throws {
         let (client, _) = StubURLProtocol.client([.init(error: .notConnectedToInternet)])
         await #expect(throws: AppError.offline) {
-            try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil, effort: .high,
+            try await client.transcribe(audio: Fixtures.wav, format: "wav", model: "google/gemini-3.8-flash",
+                                        systemPrompt: nil, effort: .high, maxTokens: 32_768,
                                         apiKey: "k", timeout: 120)
         }
     }
 
-    @Test func oversizedPayloadNeverLeavesTheMac() async throws {
-        let (client, host) = StubURLProtocol.client([Fixtures.success])
-        let wav = Data(count: 15_000_000)
+    /// Nothing is refused up front, whatever the size: OpenRouter says whether it takes it, and a refusal isn't
+    /// retried.
+    @Test func aLargeRecordingIsSentAndARefusalSaysTooLarge() async throws {
+        let refusal = StubURLProtocol.Reply(
+            status: 400, body: #"{"error":{"code":400,"message":"Request payload size exceeds the limit."}}"#)
+        let (client, host) = StubURLProtocol.client([refusal, Fixtures.success])
         await #expect(throws: AppError.recordingTooLarge) {
-            try await client.transcribe(wav: wav, model: "google/gemini-3.8-flash", systemPrompt: nil, effort: .high,
-                                        apiKey: "k", timeout: 120)
+            try await client.transcribe(audio: Data(count: 15_000_000), format: "m4a", model: "google/gemini-3.8-flash",
+                                        systemPrompt: nil, effort: .medium, maxTokens: 65_536, apiKey: "k", timeout: 1020)
         }
-        #expect(StubURLProtocol.registry.requests(for: host).isEmpty)
+        let requests = StubURLProtocol.registry.requests(for: host)
+        #expect(requests.count == 1)
+        #expect(requests.first?.timeoutInterval == 1020)
     }
 
     @Test func missingKey() async throws {
         let (client, _) = StubURLProtocol.client([])
         await #expect(throws: AppError.openRouterMissingKey) {
-            try await client.transcribe(wav: Fixtures.wav, model: "google/gemini-3.8-flash", systemPrompt: nil, effort: .high,
+            try await client.transcribe(audio: Fixtures.wav, format: "wav", model: "google/gemini-3.8-flash",
+                                        systemPrompt: nil, effort: .high, maxTokens: 32_768,
                                         apiKey: "  ", timeout: 120)
         }
     }
@@ -1349,14 +1393,23 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
                                        keychainFailure: OSStatus? = nil,
                                        localTranscript: String = "hello from the fake")
         -> (TranscriptionService, ModelStore, OpenRouterAccount) {
+        let made = makeServiceAccountAndHost(replies: replies, key: key, keychainFailure: keychainFailure,
+                                             localTranscript: localTranscript)
+        return (made.0, made.1, made.2)
+    }
+
+    private func makeServiceAccountAndHost(replies: [StubURLProtocol.Reply] = [], key: String? = "sk-or-v1-test",
+                                           keychainFailure: OSStatus? = nil,
+                                           localTranscript: String = "hello from the fake")
+        -> (TranscriptionService, ModelStore, OpenRouterAccount, String) {
         let store = ModelStore(paths: .temporary(), settings: .inMemory(),
                                engines: [.parakeet: FakeEngine(.parakeet, installed: true, transcript: localTranscript)],
                                gate: InferenceGate(), freeDiskBytes: { 50_000_000_000 })
-        let client = StubURLProtocol.client(replies).0
+        let (client, host) = StubURLProtocol.client(replies)
         let keychain = KeychainStore.inMemory(key.map { [KeychainStore.openRouterAccount: $0] } ?? [:])
         keychain.simulateReadFailure(keychainFailure)
         let account = OpenRouterAccount(keychain: keychain, client: client, debounce: .zero)
-        return (TranscriptionService(models: store, account: account, client: client), store, account)
+        return (TranscriptionService(models: store, account: account, client: client), store, account, host)
     }
 
     private func speech(seconds: Double = 1) -> Recording {
@@ -1374,11 +1427,44 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
     }
 
     @Test func cloudRoute() async throws {
-        let (service, _) = makeService(replies: [Fixtures.success])
+        let (service, _, _, host) = makeServiceAccountAndHost(replies: [Fixtures.success])
         let result = try await service.transcribe(speech(), engine: .geminiFlash)
         #expect(result.text == "Hello there.")
         #expect(result.engine == .geminiFlash)
         #expect(result.costUSD == 0.001)
+        // A dictation's everyday request is what it always was: WAV, 32,768 tokens, about two minutes.
+        let request = try #require(StubURLProtocol.registry.requests(for: host).first)
+        #expect(request.timeoutInterval == 120.25)
+        let bodies = StubURLProtocol.registry.bodies(for: host)
+        let body = try #require(JSONSerialization.jsonObject(with: bodies[0]) as? [String: Any])
+        #expect(body["max_tokens"] as? Int == 32_768)
+        #expect(Self.audioFormat(body) == "wav")
+    }
+
+    /// Past what its WAV can carry, a recording goes to Gemini as AAC in one request, with a budget and a wait that
+    /// grow with it.
+    @Test func aLongGeminiRecordingGoesCompressedInOneRequest() async throws {
+        let (service, _, _, host) = makeServiceAccountAndHost(replies: [Fixtures.success])
+        let second = speech().samples
+        var samples: [Float] = []
+        samples.reserveCapacity(8 * 60 * second.count)
+        for _ in 0..<(8 * 60) { samples.append(contentsOf: second) }
+        let eightMinutes = Recording(samples: samples)
+        let result = try await service.transcribe(eightMinutes, engine: .geminiFlash)
+        #expect(result.text == "Hello there.")
+        let requests = StubURLProtocol.registry.requests(for: host)
+        #expect(requests.count == 1)
+        #expect(requests.first?.timeoutInterval == 240)
+        let bodies = StubURLProtocol.registry.bodies(for: host)
+        let body = try #require(JSONSerialization.jsonObject(with: bodies[0]) as? [String: Any])
+        #expect(body["max_tokens"] as? Int == OpenRouterClient.transcriptionMaxTokens(audioSeconds: 8 * 60))
+        #expect(Self.audioFormat(body) == "m4a")
+    }
+
+    private static func audioFormat(_ body: [String: Any]) -> String? {
+        let messages = body["messages"] as? [[String: Any]]
+        let content = messages?.last?["content"] as? [[String: Any]]
+        return (content?.first?["input_audio"] as? [String: Any])?["format"] as? String
     }
 
     /// Every Gemini request carries the fixed prompt as the system message. `EngineCLI --prompt` replaces it, and
@@ -1435,14 +1521,6 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
         let result = try await service.transcribe(speech(), engine: .parakeet)
         #expect(result.text.isEmpty)
         #expect(result.engine == .parakeet)
-    }
-
-    @Test func tooLongForGeminiIsRefusedBeforeEncoding() async throws {
-        let (service, _) = makeService(replies: [Fixtures.success])
-        let long = Recording(samples: [Float](repeating: 0.1, count: 8 * 60 * 16_000))
-        await #expect(throws: AppError.recordingTooLarge) {
-            try await service.transcribe(long, engine: .geminiFlash)
-        }
     }
 
     @Test func unreadableKeychainIsNotAMissingKey() async throws {

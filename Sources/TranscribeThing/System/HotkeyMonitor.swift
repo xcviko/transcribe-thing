@@ -29,7 +29,7 @@ final class HotkeyMonitor {
     nonisolated static let syntheticEventTag: Int64 = SyntheticEvent.tag
 
     var onEvent: ((HotkeyEvent) -> Void)?
-    /// Swallow the cancel key only while busy.
+    /// Swallow Esc (cancel) only while busy.
     var isBusy = false {
         didSet { if isBusy != oldValue { pushConfig() } }
     }

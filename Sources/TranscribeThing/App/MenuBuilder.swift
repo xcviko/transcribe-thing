@@ -33,7 +33,7 @@ final class MenuBuilder {
             })
         }
         if env.dictation.machine.isRecording {
-            menu.addItem(MenuActionItem(title: "Cancel Dictation", shortcut: settings.shortcuts[.cancel]) { [weak env] in
+            menu.addItem(MenuActionItem(title: "Cancel Dictation", shortcut: .escape) { [weak env] in
                 env?.dictation.cancelCurrent()
             })
         }
@@ -44,7 +44,6 @@ final class MenuBuilder {
         menu.addItem(paste)
         menu.addItem(.separator())
 
-        menu.addItem(submenuItem("Model", symbol: "square.stack.3d.up", modelMenu(env)))
         menu.addItem(submenuItem("Microphone", symbol: "mic", microphoneMenu(env)))
         menu.addItem(.separator())
 
@@ -99,70 +98,43 @@ final class MenuBuilder {
     struct EngineStatus {
         var text: String
         var color: NSColor
-        /// Can dictate with it now (or it will be ready by the time the recording ends).
-        var isUsable: Bool
     }
 
     static func engineStatus(_ engine: EngineID, models: ModelStore, account: OpenRouterAccount) -> EngineStatus {
         if engine.isLocal {
             switch models.state(of: engine) {
             case .ready, .installed:
-                return EngineStatus(text: "Ready", color: Palette.success, isUsable: true)
+                return EngineStatus(text: "Ready", color: Palette.success)
             case .preparing:
-                return EngineStatus(text: "Optimizing…", color: Palette.warning, isUsable: true)
+                return EngineStatus(text: "Optimizing…", color: Palette.warning)
             case .downloading(let progress):
-                return EngineStatus(text: "Downloading \(progress.percent)%", color: Palette.accent, isUsable: true)
+                return EngineStatus(text: "Downloading \(progress.percent)%", color: Palette.accent)
             case .notInstalled:
-                return EngineStatus(text: "Not downloaded", color: Palette.danger, isUsable: false)
+                return EngineStatus(text: "Not downloaded", color: Palette.danger)
             case .failed:
-                return EngineStatus(text: "Needs attention", color: Palette.danger, isUsable: false)
+                return EngineStatus(text: "Needs attention", color: Palette.danger)
             }
         }
         switch account.status {
         case .valid:
-            return EngineStatus(text: "Ready", color: Palette.success, isUsable: true)
+            return EngineStatus(text: "Ready", color: Palette.success)
         case .checking:
-            return EngineStatus(text: "Checking key…", color: Palette.warning, isUsable: true)
+            return EngineStatus(text: "Checking key…", color: Palette.warning)
         case .missing:
-            return EngineStatus(text: "Needs key", color: Palette.danger, isUsable: false)
+            return EngineStatus(text: "Needs key", color: Palette.danger)
         case .invalid:
-            return EngineStatus(text: "Key rejected", color: Palette.danger, isUsable: false)
+            return EngineStatus(text: "Key rejected", color: Palette.danger)
         case .noCredit:
             return EngineStatus(text: account.status.isKeyLimitReached ? "Key limit reached" : "Out of credit",
-                                color: Palette.danger, isUsable: true)
+                                color: Palette.danger)
         case .offline:
-            return EngineStatus(text: "Offline", color: Palette.warning, isUsable: true)
+            return EngineStatus(text: "Offline", color: Palette.warning)
         case .failed:
-            return EngineStatus(text: "Couldn’t check key", color: Palette.warning, isUsable: true)
+            return EngineStatus(text: "Couldn’t check key", color: Palette.warning)
         }
     }
 
     // MARK: - Submenus
-
-    private func modelMenu(_ env: AppEnvironment) -> NSMenu {
-        let menu = NSMenu()
-        menu.autoenablesItems = false
-        // The main models only: extra models are picked per dictation, from the pill.
-        let engines = EngineID.mainCandidates
-        for (index, engine) in engines.enumerated() {
-            // On this Mac, then through OpenRouter: the grouping the Models page uses.
-            if index > 0, engines[index - 1].isLocal != engine.isLocal { menu.addItem(.separator()) }
-            let status = Self.engineStatus(engine, models: env.models, account: env.account)
-            let item = MenuActionItem(title: engine.displayName) { [weak env] in
-                env?.models.select(engine)
-            }
-            item.state = env.settings.selectedEngine == engine ? .on : .off
-            item.isEnabled = status.isUsable
-            if !status.isUsable || status.text != "Ready" {
-                item.attributedTitle = Self.titleWithSuffix(engine.displayName, suffix: status.text)
-            }
-            item.image = Self.symbol(engine.symbolName)
-            menu.addItem(item)
-        }
-        menu.addItem(.separator())
-        menu.addItem(MenuActionItem(title: "Manage Models…") { [weak env] in env?.windows.showHub(.models) })
-        return menu
-    }
 
     private func microphoneMenu(_ env: AppEnvironment) -> NSMenu {
         let menu = NSMenu()

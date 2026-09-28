@@ -116,9 +116,9 @@ enum HubSnapshots {
                 c.settings.switchEngines = []
             },
 
-            hub("hub-shortcuts", .shortcuts, height: 960),
+            hub("hub-shortcuts", .shortcuts),
             // Hands-free just recorded as ⌃⌥Space: saved, with macOS's input-source shortcut as the warning.
-            hub("hub-shortcuts-warning", .shortcuts, height: 1040,
+            hub("hub-shortcuts-warning", .shortcuts,
                 recorderMessages: ShortcutRecorderSnapshots.message(
                     recording: ShortcutRecorderSnapshots.controlOptionSpace, for: .handsFree).map { [.handsFree: $0] } ?? [:]) { c in
                 c.settings.shortcuts[.handsFree] = ShortcutRecorderSnapshots.controlOptionSpace

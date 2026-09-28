@@ -186,14 +186,16 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// Per request (`URLRequest.timeoutInterval`); `URLSession.openRouterCloud` caps the whole attempt at 330 s.
-    /// A request carries the whole recording, and a non-streaming answer sends no bytes until it's ready.
-    var cloudTimeout: TimeInterval {
+    /// Per request (`URLRequest.timeoutInterval`) for `seconds` of audio; `URLSession.openRouterCloud` only caps
+    /// an attempt at 3 hours. A non-streaming answer sends no bytes until it's ready, so Gemini's wait grows with
+    /// the audio it hears in one request: 2 minutes, plus a quarter of the audio's length (17 minutes for an hour).
+    /// Parakeet through OpenRouter gets 3 minutes per request, each a segment of at most 5 minutes
+    /// (`CloudAudio.speechSegments`).
+    func cloudTimeout(forAudioSeconds seconds: TimeInterval) -> TimeInterval {
         switch self {
         case .parakeet: 0
         case .parakeetCloud: 180
-        case .geminiFlash: 120
-        case .geminiPro: 180
+        case .geminiFlash, .geminiPro: 120 + max(0, seconds) / 4
         }
     }
 

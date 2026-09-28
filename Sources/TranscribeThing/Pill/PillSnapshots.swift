@@ -4,7 +4,7 @@ import SwiftUI
 enum PillSnapshots {
     @MainActor static var entries: [SnapshotEntry] {
         [
-            SnapshotEntry("pill-states", width: 760, height: 948) { _ in PillStateSheet() },
+            SnapshotEntry("pill-states", width: 760, height: 44 + 14 * 68) { _ in PillStateSheet() },
             SnapshotEntry("pill-tooltip", width: 640, height: 140) { _ in
                 SideBySide { _ in
                     PillView(model: .preview(phase: .rest, isHovering: true))
@@ -73,7 +73,7 @@ enum PillSnapshots {
                 ])
             },
             // Extra models (`--only pill-models`): the chip, the tint, the hint and the no-key notice.
-            SnapshotEntry("pill-models", width: 760, height: 44 + 12 * 92) { _ in PillModelSheet() },
+            SnapshotEntry("pill-models", width: 760, height: 44 + 11 * 92) { _ in PillModelSheet() },
             SnapshotEntry("pill-models-hint", width: 640, height: 150) { _ in
                 CanvasScene(model: hintModel(), notices: [])
             },
@@ -86,15 +86,15 @@ enum PillSnapshots {
                             notices: [DictationController.switchWithoutKeyNotice(.missing, choices: [.cleanup, .engine(.geminiFlash)])])
             },
             SnapshotEntry("pill-models-toast", width: 640, height: 290) { _ in
-                CanvasScene(model: PillModelSheet.model(.locked, choice: .engine(.geminiFlash), recordingFor: 362, limitSeconds: 420),
-                            notices: [PillSnapshotFixtures.oneMinuteLeft])
+                CanvasScene(model: PillModelSheet.model(.locked, choice: .engine(.geminiFlash), recordingFor: 362),
+                            notices: [PillSnapshotFixtures.micFallback])
             },
             SnapshotEntry("pill-toast-info", width: 640, height: 250) { _ in
                 CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.canceled])
             },
             SnapshotEntry("pill-toast-warning", width: 640, height: 250) { _ in
-                CanvasScene(model: .preview(phase: .locked, recordingFor: 1142, limitSeconds: 1200),
-                            notices: [PillSnapshotFixtures.oneMinuteLeft])
+                CanvasScene(model: .preview(phase: .locked, recordingFor: 1142),
+                            notices: [PillSnapshotFixtures.secureInput])
             },
             SnapshotEntry("pill-toast-error", width: 640, height: 270) { _ in
                 CanvasScene(model: .preview(phase: .error), notices: [PillSnapshotFixtures.keyRejected])
@@ -172,10 +172,11 @@ enum PillSnapshotFixtures {
         dedupeKey: "dictation.canceled", style: .info, symbol: "xmark.circle", title: "Dictation canceled",
         actions: [NoticeAction(title: "Undo", kind: .undoCancel, isPrimary: true)], lifetime: .seconds(6), sound: .cancel)
 
-    static let oneMinuteLeft = Notice(
-        dedupeKey: "dictation.limitWarning", style: .warning, symbol: "timer",
-        title: "1 minute left", body: "Recording stops at 20 min and gets transcribed.",
-        lifetime: .seconds(6), sound: .alert)
+    /// What DictationController posts when a dictation starts while another app holds Secure Input.
+    static let secureInput = Notice(
+        dedupeKey: "secureInput", style: .warning, symbol: "lock.shield", title: "Secure typing is on in 1Password",
+        body: "Holding fn still works. fn Space and Esc work again once it’s off.",
+        actions: [NoticeAction(title: "Dismiss", kind: .dismiss)], lifetime: .seconds(10), sound: .alert)
 
     static let keyRejected = AppError.openRouterInvalidKey("Invalid API key")
         .notice(recordingID: UUID(), fallbackEngine: .parakeet)
@@ -361,7 +362,7 @@ private struct PillFilmSheet: View {
 
         /// Hands-free, Stop (the pill narrows to the push-to-talk size), then the processing pill leaving.
         @MainActor static func handsFreeToHidden() -> Strip {
-            let locked = PillVisual.locked(.elapsed), processing = PillVisual.processing(afterHandsFree: true)
+            let locked = PillVisual.locked(), processing = PillVisual.processing(afterHandsFree: true)
             let model = PillModel.preview(phase: .locked, level: 0.5)
             let stills = [Frame(caption: "hands-free") { model in
                 AnyView(PillFace(model: model, capsule: locked, content: locked))
@@ -468,8 +469,8 @@ private struct PillModelSheet: View {
 
     /// `chip`: right after the switch, the chip still up; else later on, the tint alone.
     @MainActor static func model(_ phase: PillPhase, choice: ModelChoice?, level: Float = 0.7, chip: Bool = true,
-                                 recordingFor elapsed: TimeInterval? = nil, limitSeconds: TimeInterval? = nil) -> PillModel {
-        let model = PillModel.preview(phase: phase, level: level, recordingFor: elapsed, limitSeconds: limitSeconds)
+                                 recordingFor elapsed: TimeInterval? = nil) -> PillModel {
+        let model = PillModel.preview(phase: phase, level: level, recordingFor: elapsed)
         model.sessionModel = choice
         if chip, choice != nil { model.flashChip() }
         return model
@@ -493,9 +494,6 @@ private struct PillModelSheet: View {
             },
             Row(id: "locked-cleanup", caption: "Hands-free · Clean-up") { Self.model(.locked, choice: .cleanup, level: 0.5) },
             Row(id: "locked-flash", caption: "Hands-free · Gemini Flash") { Self.model(.locked, choice: .engine(.geminiFlash), level: 0.5) },
-            Row(id: "locked-flash-limit", caption: "Hands-free · Flash · limit") {
-                Self.model(.locked, choice: .engine(.geminiFlash), level: 0.5, recordingFor: 372, limitSeconds: 420)
-            },
             Row(id: "processing-cleanup", caption: "Processing · Clean-up") { Self.model(.processing, choice: .cleanup) },
             Row(id: "processing-flash", caption: "Processing · Gemini Flash") { Self.model(.processing, choice: .engine(.geminiFlash)) },
             Row(id: "processing-slow-flash", caption: "Processing · slow · Flash") {
@@ -562,10 +560,10 @@ private struct PillStateSheet: View {
             Row(id: "silence", caption: "Listening · silence") { .preview(phase: .listening, level: 0) },
             Row(id: "locked", caption: "Hands-free · 198×36") { .preview(phase: .locked, level: 0.5) },
             Row(id: "locked-long", caption: "Hands-free · 28 min") {
-                .preview(phase: .locked, level: 0.62, recordingFor: 1728, limitSeconds: 1800)
+                .preview(phase: .locked, level: 0.62, recordingFor: 1728)
             },
-            Row(id: "locked-last", caption: "Hands-free · last minute") {
-                .preview(phase: .locked, level: 0.4, recordingFor: 1193, limitSeconds: 1200)
+            Row(id: "locked-hours", caption: "Hands-free · past an hour") {
+                .preview(phase: .locked, level: 0.4, recordingFor: 3733)
             },
             Row(id: "processing", caption: "Processing") { .preview(phase: .processing) },
             Row(id: "processing-wide", caption: "Processing · after hands-free") { PillStateSheet.processingAfterLocked() },

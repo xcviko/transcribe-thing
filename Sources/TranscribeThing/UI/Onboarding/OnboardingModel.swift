@@ -433,7 +433,7 @@ final class OnboardingModel {
     var isHoldingPushToTalk: Bool { !pushToTalkKeys.isEmpty && pushToTalkKeys.isSubset(of: pressedKeys) }
     /// Keys the lessons use, tinted on the keyboard strip.
     var practiceKeys: Set<IllustratedKey> {
-        pushToTalkKeys.union(handsFreeKeys).union(IllustratedKey.keys(for: ctx.settings.shortcuts[.cancel]))
+        pushToTalkKeys.union(handsFreeKeys).union(IllustratedKey.keys(for: .escape))
     }
 
     /// Gemini on the model step: a key press while dictating, never the main model.

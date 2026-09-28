@@ -256,15 +256,17 @@ struct Shortcut: Codable, Hashable, Sendable {
 
 // MARK: - Actions and bindings
 
+/// What can be bound. Cancel isn't: it is always Esc (`Shortcut.escape`), live only while a dictation records or
+/// transcribes.
 enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, CodingKeyRepresentable {
-    case pushToTalk, handsFree, cancel, pasteLast, switchModel
+    case pushToTalk, handsFree, pasteLast, switchModel
 
     var id: String { rawValue }
 
-    /// Live only while a dictation records (cancel also while one is transcribing): outside one its keys reach apps.
+    /// Live only while a dictation records: outside one its keys reach apps.
     var isDuringDictation: Bool {
         switch self {
-        case .cancel, .switchModel: true
+        case .switchModel: true
         case .pushToTalk, .handsFree, .pasteLast: false
         }
     }
@@ -273,7 +275,6 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
         switch self {
         case .pushToTalk: "Push to talk"
         case .handsFree: "Hands-free"
-        case .cancel: "Cancel"
         case .pasteLast: "Paste last transcript"
         case .switchModel: "Switch model"
         }
@@ -283,7 +284,6 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
         switch self {
         case .pushToTalk: "Hold to record, let go to paste."
         case .handsFree: "Tap to start. Tap again to finish."
-        case .cancel: "Discard the current recording."
         case .pasteLast: "Paste your most recent transcript again. It stays on the clipboard."
         case .switchModel: "While dictating: clean up or use Gemini for this dictation."
         }
@@ -293,7 +293,6 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
         switch self {
         case .pushToTalk: "mic.fill"
         case .handsFree: "lock.fill"
-        case .cancel: "xmark"
         case .pasteLast: "doc.on.clipboard"
         case .switchModel: "sparkles"
         }
@@ -305,7 +304,8 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
 /// Action → shortcut map. Encodes as a flat JSON object keyed by action in declaration order,
 /// with `null` for a deliberately unbound action. A missing key decodes to the default, so new
 /// actions added later get their default binding instead of silently being unbound. A key for an action
-/// that no longer exists (copyLast, retired for paste last) is ignored, and the other bindings survive.
+/// that no longer exists (copyLast, retired for paste last; cancel, which is always Esc now) is ignored, and the
+/// other bindings survive.
 struct ShortcutBindings: Codable, Equatable, Sendable {
     var bindings: [ShortcutAction: Shortcut]
 
@@ -317,7 +317,6 @@ struct ShortcutBindings: Codable, Equatable, Sendable {
     static let defaults = ShortcutBindings(bindings: [
         .pushToTalk: .fn,
         .handsFree: .fnSpace,
-        .cancel: .escape,
         .pasteLast: .commandFnV,
         .switchModel: .fnTab,
     ])
@@ -613,7 +612,7 @@ struct ShortcutWarning: Equatable, Sendable {
         case systemShortcut
         /// Pressed while typing: a plain key, ⇧ or ⌥ with a key, or ⇧ alone.
         case typing
-        /// Esc for something other than cancel: apps stop getting it.
+        /// Esc bound to an action: apps stop getting it.
         case escape
         /// F1–F12 control brightness and volume on Apple keyboards.
         case mediaKey
@@ -722,7 +721,7 @@ enum ShortcutValidator {
     }
 
     /// Everything that may get in the way, most specific first. The router swallows a bound key everywhere
-    /// (cancel's and switch model's only during a dictation), so "apps won't get it" is literal.
+    /// (switch model's only during a dictation), so "apps won't get it" is literal.
     static func warnings(for s: Shortcut, action: ShortcutAction, system: SystemKeyboardState) -> [ShortcutWarning] {
         var out: [ShortcutWarning] = []
         let mods = Set(s.modifiers.map(\.modifier))

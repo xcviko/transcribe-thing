@@ -472,11 +472,7 @@ private struct RecordingHint: View {
         HStack(spacing: 10) {
             Text(action == .pushToTalk ? "Hold keys, then let go" : "Press a combination")
                 .foregroundStyle(.inkTertiary)
-            if action == .cancel {
-                Text("× stops recording").foregroundStyle(.inkTertiary)
-            } else {
-                hint("esc", "cancel")
-            }
+            hint("esc", "cancel")
             if ShortcutCaptureEngine.canClear(action) {
                 hint("delete", "clear")
             }

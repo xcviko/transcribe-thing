@@ -7,8 +7,8 @@ struct DictationMachine: Equatable {
 
     enum Capture: Equatable {
         case idle
-        /// Key down: the pill is up and the mic is opening, but the start sound, the limit timers and any refusal
-        /// wait for the confirm delay, so a quick tap or an fn combo (fn+←) stays quiet.
+        /// Key down: the pill is up and the mic is opening, but the start sound and any refusal wait for the
+        /// confirm delay, so a quick tap or an fn combo (fn+←) stays quiet.
         case arming(downAt: TimeInterval)
         /// PTT held past the confirm delay.
         case listening(downAt: TimeInterval)
@@ -35,7 +35,7 @@ struct DictationMachine: Equatable {
         case jobStarted, jobEnded
     }
 
-    enum TimerID: Equatable, Hashable, CaseIterable { case arming, doublePressWindow, limitWarning, limit }
+    enum TimerID: Equatable, Hashable, CaseIterable { case arming, doublePressWindow }
 
     enum Effect: Equatable {
         case startCapture
@@ -54,7 +54,7 @@ struct DictationMachine: Equatable {
     }
 
     enum NoticeKind: Equatable {
-        case oneMinuteLeft, limitReached, stoppedByOtherKey, deviceLostTranscribing, captureFailed(AppError)
+        case stoppedByOtherKey, deviceLostTranscribing, captureFailed(AppError)
     }
 
     struct Config: Equatable {
@@ -62,8 +62,6 @@ struct DictationMachine: Equatable {
         var tapThreshold = 0.30
         var doublePressWindow = 0.50
         var quietInterruptWindow = 1.5
-        var maxDuration: TimeInterval = 1200
-        var warnBefore: TimeInterval = 60
         var doublePressEnabled = true
     }
 
@@ -169,7 +167,7 @@ struct DictationMachine: Equatable {
         case .timer(.arming):
             // The pill has been up since key-down; the sound confirms a real hold.
             capture = .listening(downAt: downAt)
-            return [.playSound(.start)] + limitTimers(startedAt: downAt, now: now)
+            return [.playSound(.start)]
         case .pttUp where switchedDuringPress:
             capture = .idle
             return [.cancelTimer(.arming), .cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)]
@@ -180,8 +178,7 @@ struct DictationMachine: Equatable {
             return [.cancelTimer(.arming), .cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)]
         case .handsFreeToggle:
             capture = .locked(startedAt: downAt)
-            // Limit timers only start once arming confirms, so a lock straight from arming schedules them here.
-            return [.cancelTimer(.arming), .showPill(.locked), .playSound(.lock)] + limitTimers(startedAt: downAt, now: now)
+            return [.cancelTimer(.arming), .showPill(.locked), .playSound(.lock)]
         case .cancel, .pillCancel:
             return cancelRecording()
         case .cycleEngine:
@@ -202,19 +199,18 @@ struct DictationMachine: Equatable {
         switch input {
         case .pttUp where held < config.tapThreshold && switchedDuringPress:
             capture = .idle
-            return cancelLimitTimers + [.cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)]
+            return [.cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)]
         case .pttUp where held < config.tapThreshold:
-            return cancelLimitTimers + releaseTap(firstDownAt: downAt, now: now)
+            return releaseTap(firstDownAt: downAt, now: now)
         case .pttUp:
             capture = .idle
-            return cancelLimitTimers + [.stopCaptureAndTranscribe(mode: .pushToTalk), .playSound(.stop)]
+            return [.stopCaptureAndTranscribe(mode: .pushToTalk), .playSound(.stop)]
         case .pttInterrupted where held < config.quietInterruptWindow:
             capture = .idle
-            return cancelLimitTimers + [.cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)]
+            return [.cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)]
         case .pttInterrupted:
             capture = .idle
-            return cancelLimitTimers + [.cancelCapture(keepForUndo: true, notify: false), .showPill(.rest),
-                                        .notice(.stoppedByOtherKey)]
+            return [.cancelCapture(keepForUndo: true, notify: false), .showPill(.rest), .notice(.stoppedByOtherKey)]
         case .handsFreeToggle:
             capture = .locked(startedAt: downAt)
             return [.cancelTimer(.arming), .showPill(.locked), .playSound(.lock)]
@@ -223,14 +219,9 @@ struct DictationMachine: Equatable {
         case .cycleEngine:
             switchedDuringPress = true
             return [.cycleEngine]
-        case .timer(.limitWarning):
-            return [.notice(.oneMinuteLeft)]
-        case .timer(.limit):
-            capture = .idle
-            return [.stopCaptureAndTranscribe(mode: .pushToTalk), .notice(.limitReached)]
         case .deviceLost:
             capture = .idle
-            return cancelLimitTimers + [.stopCaptureAndTranscribe(mode: .pushToTalk), .notice(.deviceLostTranscribing)]
+            return [.stopCaptureAndTranscribe(mode: .pushToTalk), .notice(.deviceLostTranscribing)]
         case .captureFailed(let error):
             return failCapture(error)
         default:
@@ -284,14 +275,9 @@ struct DictationMachine: Equatable {
             return cancelRecording()
         case .cycleEngine:
             return [.cycleEngine]
-        case .timer(.limitWarning):
-            return [.notice(.oneMinuteLeft)]
-        case .timer(.limit):
-            capture = .idle
-            return [.stopCaptureAndTranscribe(mode: .handsFree), .notice(.limitReached)]
         case .deviceLost:
             capture = .idle
-            return cancelLimitTimers + [.stopCaptureAndTranscribe(mode: .handsFree), .notice(.deviceLostTranscribing)]
+            return [.stopCaptureAndTranscribe(mode: .handsFree), .notice(.deviceLostTranscribing)]
         case .captureFailed(let error):
             return failCapture(error)
         default:
@@ -305,7 +291,6 @@ struct DictationMachine: Equatable {
             capture = .locked(startedAt: now)
             lockingPressHeld = true
             return [.cancelTimer(.doublePressWindow), .startCapture, .showPill(.locked), .playSound(.lock)]
-                + limitTimers(startedAt: now, now: now)
         case .pttDown:
             return [.cancelTimer(.doublePressWindow)] + arm(now: now)
         case .timer(.doublePressWindow):
@@ -316,19 +301,6 @@ struct DictationMachine: Equatable {
         case .resume(let prefix):
             return resumeFromRest(prefix: prefix, now: now)
         default:
-            return []
-        }
-    }
-
-    /// A new recording limit (the dictation switched to an engine with another one). A running recording's
-    /// timers are measured again from its start; one still arming schedules them when it confirms.
-    mutating func changeLimit(to maxDuration: TimeInterval, now: TimeInterval) -> [Effect] {
-        guard maxDuration != config.maxDuration else { return [] }
-        config.maxDuration = maxDuration
-        switch capture {
-        case .listening(let startedAt), .locked(let startedAt), .lockedStopPending(let startedAt):
-            return limitTimers(startedAt: startedAt, now: now)
-        case .idle, .arming, .tapPending:
             return []
         }
     }
@@ -356,20 +328,18 @@ struct DictationMachine: Equatable {
     private mutating func lockFromRest(now: TimeInterval) -> [Effect] {
         capture = .locked(startedAt: now)
         return [.cancelTimer(.doublePressWindow), .startCapture, .showPill(.locked), .playSound(.lock)]
-            + limitTimers(startedAt: now, now: now)
     }
 
-    /// Hands-free again, as if recording had never stopped: the timer and the limit count the kept audio too.
+    /// Hands-free again, as if recording had never stopped: the timer counts the kept audio too.
     private mutating func resumeFromRest(prefix: TimeInterval, now: TimeInterval) -> [Effect] {
         let startedAt = now - max(0, prefix)
         capture = .locked(startedAt: startedAt)
         return [.cancelTimer(.doublePressWindow), .resumeCapture, .showPill(.locked), .playSound(.lock)]
-            + limitTimers(startedAt: startedAt, now: now)
     }
 
     private mutating func finishHandsFree() -> [Effect] {
         capture = .idle
-        return cancelLimitTimers + [.stopCaptureAndTranscribe(mode: .handsFree), .playSound(.stop)]
+        return [.stopCaptureAndTranscribe(mode: .handsFree), .playSound(.stop)]
     }
 
     private mutating func cancelRecording() -> [Effect] {
@@ -382,16 +352,6 @@ struct DictationMachine: Equatable {
         return cancelAllTimers + [.cancelCapture(keepForUndo: false, notify: false), .showPill(.rest),
                                   .notice(.captureFailed(error))]
     }
-
-    /// Both limit timers, measured from the moment the recording started (not from now).
-    private func limitTimers(startedAt: TimeInterval, now: TimeInterval) -> [Effect] {
-        let elapsed = max(0, now - startedAt)
-        let warnAt = max(0, config.maxDuration - config.warnBefore)
-        return [.schedule(.limitWarning, after: max(0, warnAt - elapsed)),
-                .schedule(.limit, after: max(0, config.maxDuration - elapsed))]
-    }
-
-    private var cancelLimitTimers: [Effect] { [.cancelTimer(.limitWarning), .cancelTimer(.limit)] }
 
     private var cancelAllTimers: [Effect] { TimerID.allCases.map { .cancelTimer($0) } }
 

@@ -1,14 +1,13 @@
 import AppKit
 import SwiftUI
 
-/// The OpenRouter key: masked key with Replace/Remove, or a field to add one; live status; fixed routing facts.
+/// The OpenRouter key: masked key with Replace/Remove, or a field to add one, and its live status.
 struct OpenRouterKeyCard: View {
     /// Incremented by the page to scroll here and focus the field ("Add key", "Update key").
     var focusRequest: Int
 
     @Environment(HubContext.self) private var hub
     @Environment(OpenRouterAccount.self) private var account
-    @Environment(AppSettings.self) private var settings
     @State private var replacing = false
     @State private var draft = ""
     @State private var saving = false
@@ -24,8 +23,6 @@ struct OpenRouterKeyCard: View {
                 header
                 if showsField { field } else { storedKey }
                 statusLine
-                RowDivider(inset: 0)
-                routing
             }
         }
         .onChange(of: focusRequest) {
@@ -217,22 +214,6 @@ struct OpenRouterKeyCard: View {
         }
         if info.isFreeTier { text += " · free tier" }
         return text
-    }
-
-    /// Who hears the audio (and, with clean-up among the Switch model steps, reads the Parakeet text). Each model
-    /// row names its provider; this says nothing else leaves the Mac.
-    private var routing: some View {
-        HStack(alignment: .center, spacing: 8) {
-            Image(systemName: "lock.shield")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.success)
-            Text(settings.switchChoices.contains(.cleanup)
-                 ? "Only your audio, and Parakeet’s text for Clean-up by \(CleanupModel.default.shortName), goes to OpenRouter and the model’s provider."
-                 : "Only your audio is sent, to OpenRouter and the model’s provider.")
-                .typeface(.callout)
-                .foregroundStyle(.inkSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
     }
 
     // MARK: Actions
