@@ -56,6 +56,13 @@ import Testing
         #expect(days[0].entries.map(\.createdAt) == [entries[1].createdAt, entries[2].createdAt])
     }
 
+    @Test func countsEachDaysWords() {
+        let entries = [entry(hoursAgo: 1, text: "one two three"), entry(hoursAgo: 2, text: "four — five"),
+                       entry(hoursAgo: 30, text: "six")]
+        let days = HistoryGrouping.days(entries, now: now, calendar: calendar)
+        #expect(days.map(\.words) == [5, 1])
+    }
+
     @Test func emptyHistoryHasNoDays() {
         #expect(HistoryGrouping.days([], now: now, calendar: calendar).isEmpty)
     }
@@ -68,6 +75,32 @@ import Testing
         #expect(HistoryGrouping.filter(entries, query: "took too").count == 1)
         #expect(HistoryGrouping.filter(entries, query: "   ").count == 3)
         #expect(HistoryGrouping.filter(entries, query: "zebra").isEmpty)
+    }
+}
+
+/// Home's list comes from `HistoryStore.days(matching:now:)`, cached until the history, the day or the search changes.
+@Suite @MainActor struct HistoryDaysCacheTests {
+    private func entry(minutesAgo: Double, text: String) -> TranscriptEntry {
+        TranscriptEntry(createdAt: Date().addingTimeInterval(-minutesAgo * 60), text: text, engine: .parakeet,
+                        status: .success, audioDuration: 4, voicedSeconds: 3)
+    }
+
+    @Test func followsEditsAndSearch() {
+        let store = HistoryStore.preview(entries: [entry(minutesAgo: 1, text: "Café at noon"), entry(minutesAgo: 2, text: "milk")])
+        func uncached(_ query: String) -> [HistoryDay] {
+            HistoryGrouping.days(HistoryGrouping.filter(store.entries, query: query), now: Date())
+        }
+        #expect(store.days(matching: "", now: Date()) == uncached(""))
+        #expect(store.days(matching: "cafe", now: Date()).flatMap(\.entries).map(\.text) == ["Café at noon"])
+
+        let added = entry(minutesAgo: 0.5, text: "another cafe")
+        store.upsert(added)
+        #expect(store.days(matching: "cafe", now: Date()) == uncached("cafe"))
+        #expect(store.days(matching: "cafe", now: Date()).flatMap(\.entries).count == 2)
+
+        store.delete(added.id)
+        #expect(store.days(matching: "", now: Date()) == uncached(""))
+        #expect(store.days(matching: "", now: Date()).map(\.words).reduce(0, +) == 4)
     }
 }
 

@@ -35,6 +35,15 @@ import Testing
         #expect(cleanups.map(\.title) == cleanups.map(\.name))
     }
 
+    /// Rows name the submenu without making the menu (`VersionsMenu.title(for:)`).
+    @Test func theTitleNeedsOnlyTheEntry() {
+        var failed = transcript()
+        failed.status = .failed
+        #expect(VersionsMenu.title(for: transcript()) == "Versions")
+        #expect(VersionsMenu.title(for: failed) == "Retry With")
+        #expect(menu(failed).title == VersionsMenu.title(for: failed))
+    }
+
     @Test func whileSomethingRunsEveryActionIsBusyButVersionsStaySwitchable() {
         var entry = transcript()
         entry.addVersion(TranscriptVersion(text: "g", engine: .geminiFlash))
