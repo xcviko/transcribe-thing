@@ -17,7 +17,9 @@ import Foundation
 /// Uses the real model folder (~/Library/Application Support/transcribe-thing) and the real pipeline
 /// (ModelStore → InferenceGate → engine, or OpenRouterClient). Cloud engines read the key from
 /// OPENROUTER_API_KEY, else from the Keychain; cloud Parakeet also prints the provider that served the request.
-/// `--prompt` and `--effort` apply to Gemini only (the effort moves to the nearest level the model supports).
+/// `--prompt` and `--effort` apply to Gemini only (the effort moves to the nearest level the model supports). Without
+/// `--prompt` Gemini gets the app's default prompt (`AppSettings.defaultGeminiSystemPrompt`); `--prompt ""` sends
+/// only the audio.
 /// `--clean-up` sends the last transcript to Gemini 3.5 Flash Lite with the clean-up prompt (by default
 /// `CleanupModel.examplePrompt`) and prints the cleaned text. Settings are in-memory: the CLI never changes the app's.
 /// An engine that answers with no text heard no speech: that prints `NO SPEECH` instead of `TEXT:` and exits 0,
@@ -160,7 +162,7 @@ enum EngineCLI {
         let paths = AppPaths.live()
         let settings = AppSettings.inMemory()
         settings.selectedEngine = options.engine
-        settings.geminiSystemPrompt = options.prompt ?? ""
+        settings.geminiSystemPrompt = options.prompt ?? AppSettings.defaultGeminiSystemPrompt
         if let effort = options.effort { settings.setReasoningEffort(effort, for: options.engine) }
         settings.cleanupSystemPrompt = options.cleanupPrompt ?? CleanupModel.examplePrompt
         if let effort = options.cleanupEffort { settings.cleanupReasoningEffort = effort }

@@ -257,12 +257,12 @@ struct OpenRouterKeyCard: View {
     }
 }
 
-/// Optional system prompt for Gemini. Empty (the default) means the request carries only the audio. Parakeet
-/// takes no prompt, so the card says it applies to Gemini alone.
+/// Optional system prompt for Gemini, `AppSettings.defaultGeminiSystemPrompt` until the user changes it. Cleared
+/// (empty), the request carries only the audio. Parakeet takes no prompt, so the card says it applies to Gemini alone.
 struct GeminiInstructionsCard: View {
     @Environment(AppSettings.self) private var settings
 
-    static let example = "Transcribe the audio verbatim. Output only the transcript."
+    static let example = AppSettings.defaultGeminiSystemPrompt
 
     private var isEmpty: Bool { settings.geminiSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
@@ -284,8 +284,10 @@ struct GeminiInstructionsCard: View {
                         Badge(text: "Sent as system prompt", tint: .accent, systemImage: "text.bubble")
                     }
                 }
-                PromptEditor(text: $settings.geminiSystemPrompt, placeholder: "Leave empty to send only your audio.")
-                Text("When this is empty, \(Brand.name) sends your recording with no text or system message and pastes Gemini’s reply exactly as it comes back. Anything you write here is sent as a system prompt and can change the output. Only Gemini reads it: Parakeet transcribes without instructions.")
+                PromptEditor(text: $settings.geminiSystemPrompt,
+                             placeholder: "Empty: Gemini gets only your audio.",
+                             height: 150)
+                Text("Sent as a system prompt with your recording, so it shapes the output. Clear it and \(Brand.name) sends your recording with no text or system message and pastes Gemini’s reply exactly as it comes back. Only Gemini reads it: Parakeet transcribes without instructions.")
                     .typeface(.callout)
                     .foregroundStyle(.inkSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -322,9 +324,10 @@ struct GeminiInstructionsCard: View {
     }
 }
 
-/// The prompt Gemini 3.5 Flash Lite follows to tidy a Parakeet transcript. Empty by default, and Clean-up stays off
-/// until it isn't: with no instruction the model would reply to the transcript instead of cleaning it up. "Use
-/// Example" fills in `CleanupModel.examplePrompt`, asking first when it would replace a prompt of the user's own.
+/// The prompt Gemini 3.5 Flash Lite follows to tidy a Parakeet transcript: `CleanupModel.examplePrompt` until the
+/// user changes it. Cleared, Clean-up turns off until there is a prompt again: with no instruction the model would
+/// reply to the transcript instead of cleaning it up. "Use Example" puts the example back, asking first when it
+/// would replace a prompt of the user's own.
 struct CleanupPromptCard: View {
     @Environment(AppSettings.self) private var settings
     @State private var confirmingReplace = false
