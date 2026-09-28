@@ -585,7 +585,7 @@ private struct CleanupModelRow: View {
                 Text("Tidies punctuation, fillers and false starts · reads text, not audio")
                     .typeface(.callout)
                     .foregroundStyle(.inkSecondary)
-                    .lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Image(systemName: "server.rack")
                         .font(.system(size: 9.5, weight: .semibold))

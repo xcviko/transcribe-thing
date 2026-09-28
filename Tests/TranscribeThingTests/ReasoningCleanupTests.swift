@@ -411,6 +411,64 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         #expect(notice.style == .info && notice.sound == nil && notice.actions.isEmpty)
     }
 
+    @Test func cancelingTheCleanUpKeepsTheFinishedTranscriptInHistoryUnpasted() async throws {
+        let h = harness()
+        defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
+        h.controller.cleanupOverride = { _, _ in
+            try await Task.sleep(for: .seconds(5))
+            return self.cleaned("too late")
+        }
+        h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "raw text", engine: engine, processingTime: 0.3) }
+        h.controller.insertOverride = { _, _ in Issue.record("a canceled dictation is never pasted"); return .pasted }
+        let r = H.recording()
+        h.controller.enqueue(r, engine: .parakeet, delivery: .paste(targetPID: nil))
+        try await waitUntil { h.controller.runningVersions[r.id] == .cleanup(of: .parakeet) }
+        h.controller.handle(.cancel)
+        #expect(h.controller.machine.activeJobs == 0)
+        let entry = try #require(h.history.entry(id: r.id))
+        #expect(entry.status == .success && entry.text == "raw text")
+        #expect(entry.versions.map(\.kind) == [.transcription(.parakeet)])
+        let card = try #require(h.toasts.notices.first { $0.transcript == "raw text" })
+        #expect(card.title == "Clean-up canceled")
+        #expect(card.actions.map(\.kind) == [.pasteText("raw text"), .copyText("raw text")])
+        #expect(!h.toasts.notices.contains { $0.dedupeKey == "dictation.canceled" })
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(h.history.entry(id: r.id)?.versions.count == 1)
+    }
+
+    @Test(arguments: [KeyStatus.missing, .invalid("User not found."), .noCredit(nil)])
+    func aKeyThatCantWorkSkipsTheRequestAndPointsToModels(_ key: KeyStatus) async throws {
+        let h = H.make(keyStatus: key, persistsHistory: true)
+        defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
+        h.settings.cleanupEnabled = true
+        h.settings.cleanupSystemPrompt = CleanupModel.examplePrompt
+        h.controller.cleanupOverride = { _, _ in
+            Issue.record("no request with a key that can't work")
+            return self.cleaned("x")
+        }
+        var pasted: [String] = []
+        _ = try await dictate(h) { pasted.append($0) }
+        #expect(pasted == ["um so like hello hello there"])
+        let notice = try #require(h.toasts.notices.first { $0.dedupeKey == "cleanup.fallback" })
+        #expect(notice.title == "Couldn’t clean up · pasted the original")
+        #expect(notice.body == DictationController.cleanupFailureReason(
+            key == .missing ? .openRouterMissingKey : key == .noCredit(nil) ? .openRouterNoCredits("") : .openRouterInvalidKey("")))
+        #expect(notice.actions.map(\.kind) == [.openHub(.models)])
+    }
+
+    @Test func cleanUpFailuresSpeakOfFlashLiteAndTheText() {
+        let reason = DictationController.cleanupFailureReason
+        #expect(reason(.openRouterTruncated("")) == "Flash Lite stopped before finishing.")
+        #expect(reason(.openRouterBadRequest("")) == "Flash Lite couldn’t process the text.")
+        #expect(reason(.openRouterRefused("")) == "Flash Lite couldn’t process the text.")
+        #expect(reason(.openRouterProviderUnavailable("")) == "Google AI Studio is unavailable.")
+        #expect(reason(.openRouterInvalidKey("")) == "Your OpenRouter key was rejected.")
+        for error in [AppError.openRouterTruncated(""), .openRouterBadRequest(""), .openRouterRefused(""),
+                      .openRouterServer(""), .openRouterNoRoute(""), .openRouterRateLimited(retryAfter: nil)] {
+            #expect(!reason(error).contains("Gemini") && !reason(error).contains("recording"), "\(error)")
+        }
+    }
+
     @Test func offOrWithoutAPromptNothingIsCleanedUp() async throws {
         for (enabled, prompt) in [(false, CleanupModel.examplePrompt), (true, ""), (true, "   ")] {
             let h = harness(enabled: enabled, prompt: prompt)
@@ -556,6 +614,32 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         #expect(h.controller.machine.activeJobs == 0)
         #expect(runs == [.parakeet, .geminiFlash])
         #expect(h.history.entry(id: r.id)?.currentKind == .transcription(.parakeet), "the version it has is shown")
+    }
+
+    @Test func theSlowNoticeOfTranscribeWithNeverOffersAModelTheRowHas() async throws {
+        let h = H.make(keyStatus: .valid(KeyInfo()), persistsHistory: true)
+        defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
+        var runs: [EngineID] = []
+        h.controller.transcribeOverride = { _, engine in
+            runs.append(engine)
+            if engine == .geminiPro { try await Task.sleep(for: .milliseconds(400)) }
+            return TranscriptResult(text: "text by \(engine.rawValue)", engine: engine, processingTime: 0.2)
+        }
+        h.controller.insertOverride = { _, _ in .pasted }
+        let r = H.recording()
+        h.controller.enqueue(r, engine: .parakeet, delivery: .paste(targetPID: nil))
+        try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id) != nil }
+        h.controller.slowNoticeDelayOverride = 0.05
+        h.controller.makeVersion(.transcription(.geminiPro), of: try #require(h.history.entry(id: r.id)))
+        try await waitUntil { h.toasts.notices.contains { $0.dedupeKey == "slow.\(r.id)" } }
+        let slow = try #require(h.toasts.notices.first { $0.dedupeKey == "slow.\(r.id)" })
+        #expect(!slow.actions.contains { $0.kind == .retryWith(.parakeet) })
+        // Even an action that names it (an older notice) doesn't run Parakeet again on the queued job.
+        h.controller.perform(NoticeAction(title: "Use Parakeet v3 Instead", kind: .retryWith(.parakeet)), from: slow)
+        try await waitUntil { h.history.entry(id: r.id)?.versions.count == 2 && h.controller.machine.activeJobs == 0 }
+        #expect(runs == [.parakeet, .geminiPro])
+        #expect(h.history.entry(id: r.id)?.version(.transcription(.parakeet))?.text == "text by parakeet")
+        #expect(h.history.entry(id: r.id)?.currentKind == .transcription(.geminiPro))
     }
 
     @Test func aCloudVersionLearnsItsProviderAndTimingLater() async throws {

@@ -290,7 +290,7 @@ struct GeminiInstructionsCard: View {
                     .foregroundStyle(.inkSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 2) {
-                    Button("Insert Example", action: insertExample)
+                    Button("Use Example", action: insertExample)
                         .buttonStyle(.appQuiet)
                         .padding(.leading, -8)
                     Button("Clear") { settings.geminiSystemPrompt = "" }

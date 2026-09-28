@@ -76,7 +76,8 @@ enum EngineCLI {
         static let usage = """
         usage: transcribe-thing --transcribe <audio file> \
         --engine parakeet|parakeetCloud|geminiFlash|geminiPro \
-        [--download] [--prompt <text>] [--repeat <n>] [--effort minimal|low|medium|high]         [--clean-up [--clean-up-prompt <text>] [--clean-up-effort minimal|low|medium|high]]
+        [--download] [--prompt <text>] [--repeat <n>] [--effort minimal|low|medium|high] \
+        [--clean-up [--clean-up-prompt <text>] [--clean-up-effort minimal|low|medium|high]]
                transcribe-thing --model-status
         """
 
