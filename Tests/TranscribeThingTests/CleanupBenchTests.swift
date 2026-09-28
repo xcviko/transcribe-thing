@@ -37,6 +37,21 @@ private func entry(minutesAgo: Double, status: TranscriptStatus = .success,
 }
 
 @Suite struct CleanupBenchOptionsTests {
+    /// "disabled" turns thinking off with `reasoning: {"enabled": false}` and nothing else in it; `--entry` takes
+    /// one entry of the history.
+    @Test func thinkingOffAndOneEntry() throws {
+        let id = UUID()
+        let options = try #require(Bench.Options(["transcribe-thing", "--cleanup-bench", "--history", "/tmp/h.json",
+                                                  "--model", "google/gemini-3-flash-preview", "--effort", "disabled",
+                                                  "--entry", id.uuidString]))
+        #expect(options.entry == id && options.route.effort == CleanupRoute.disabled && options.route.budget == .off)
+        let request = OpenRouterChatRequest.cleanup(route: options.route, systemPrompt: "Tidy it.", transcript: "hi")
+        let json = try #require(JSONSerialization.jsonObject(with: request.encoded()) as? [String: Any])
+        #expect(json["reasoning"] as? [String: Bool] == ["enabled": false])
+        #expect(Bench.Options(["transcribe-thing", "--cleanup-bench", "--history", "/tmp/h.json", "--model",
+                               "google/gemini-3-flash-preview", "--effort", "disabled", "--entry", "nope"]) == nil)
+    }
+
     @Test func parsesAModelEffortCountAndOutput() throws {
         let options = try #require(Bench.Options(arguments("--model", "openai/gpt-6-luna", "--effort", "none",
                                                            "--count", "7", "--out", "/tmp/r.json")))

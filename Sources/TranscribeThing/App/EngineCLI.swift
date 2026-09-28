@@ -29,8 +29,8 @@ import Foundation
 ///
 /// Hidden benchmark (not in the usage text), for comparing clean-up models on real dictations:
 ///
-///     transcribe-thing --cleanup-bench --history <history.json> --model <openrouter slug> --effort <level>
-///            [--count <n>] [--provider <slug>] [--out <report.json>]
+///     transcribe-thing --cleanup-bench --history <history.json> --model <openrouter slug> --effort <level|disabled>
+///            [--count <n> | --entry <id>] [--provider <slug>] [--out <report.json>]
 ///
 /// See `CleanupBench`. It reads the history file only, never the app's settings, and pays for `--count` requests.
 enum EngineCLI {
@@ -336,7 +336,8 @@ enum EngineCLI {
             printError("ERROR: couldn’t read \(options.history.path): \(error.localizedDescription)")
             return ExitCode.failed
         }
-        let items = CleanupBench.select(entries, count: options.count)
+        let items = CleanupBench.select(options.entry.map { id in entries.filter { $0.id == id } } ?? entries,
+                                        count: options.count)
         guard !items.isEmpty else {
             printError("ERROR: no entry in \(options.history.path) has a Parakeet transcript")
             return ExitCode.failed
@@ -416,14 +417,18 @@ enum EngineCLI {
         struct Options: Equatable {
             static let usage = """
             usage: transcribe-thing --cleanup-bench --history <history.json> --model <openrouter slug> \
-            --effort none|minimal|low|medium|high|xhigh|max [--count <n>] [--provider <slug>] [--out <report.json>]
+            --effort none|minimal|low|medium|high|xhigh|max|disabled [--count <n> | --entry <id>] [--provider <slug>] \
+            [--out <report.json>]
             """
-            static let efforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+            /// "disabled" sends `reasoning: {"enabled": false}` instead of a level.
+            static let efforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max", CleanupRoute.disabled]
             static let defaultCount = 20
             static let maxCount = 200
 
             var history: URL
             var count: Int
+            /// Just this entry, whatever its age.
+            var entry: UUID?
             var route: CleanupRoute
             var out: URL?
 
@@ -438,6 +443,10 @@ enum EngineCLI {
                       let effort = value("--effort")?.lowercased(), Self.efforts.contains(effort)
                 else { return nil }
                 history = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+                if arguments.contains("--entry") {
+                    guard let id = value("--entry").flatMap(UUID.init(uuidString:)) else { return nil }
+                    entry = id
+                }
                 if arguments.contains("--count") {
                     guard let count = value("--count").flatMap(Int.init), (1...Self.maxCount).contains(count) else {
                         return nil
@@ -467,10 +476,11 @@ enum EngineCLI {
                 return nil
             }
 
-            /// The `ReasoningEffort` that sizes `max_tokens`: "none" gets the least room (as much as minimal),
-            /// levels above high the most.
+            /// The `ReasoningEffort` that sizes `max_tokens`: "none" and "disabled" get the least room (as much as
+            /// minimal), levels above high the most.
             static func budget(for effort: String) -> ReasoningEffort {
-                ReasoningEffort(rawValue: effort) ?? .high
+                if effort == CleanupRoute.disabled { return .off }
+                return ReasoningEffort(rawValue: effort) ?? .high
             }
         }
 

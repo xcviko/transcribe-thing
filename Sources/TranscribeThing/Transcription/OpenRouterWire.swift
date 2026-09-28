@@ -14,8 +14,22 @@ struct OpenRouterChatRequest: Encodable, Equatable {
     let stream: Bool
 
     struct Reasoning: Encodable, Equatable {
-        let effort: String
+        /// nil sends `{"enabled": false}` and nothing else: thinking off, for a model whose thinking isn't
+        /// mandatory (`CleanupRoute.disabled`, the bench only).
+        let effort: String?
         let exclude: Bool
+
+        enum CodingKeys: String, CodingKey { case effort, exclude, enabled }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            guard let effort else {
+                try container.encode(false, forKey: .enabled)
+                return
+            }
+            try container.encode(effort, forKey: .effort)
+            try container.encode(exclude, forKey: .exclude)
+        }
     }
 
     struct Provider: Encodable, Equatable, Sendable {
@@ -65,7 +79,7 @@ struct OpenRouterChatRequest: Encodable, Equatable {
         return OpenRouterChatRequest(
             model: route.model,
             messages: messages,
-            reasoning: Reasoning(effort: route.effort, exclude: true),
+            reasoning: Reasoning(effort: route.effort == CleanupRoute.disabled ? nil : route.effort, exclude: true),
             provider: route.provider,
             maxTokens: CleanupModel.maxTokens(forCharacterCount: transcript.count, effort: route.budget),
             stream: false)
@@ -84,8 +98,11 @@ struct OpenRouterChatRequest: Encodable, Equatable {
 struct CleanupRoute: Equatable, Sendable {
     var model: String
     var provider: OpenRouterChatRequest.Provider
-    /// `reasoning.effort` as sent: a `ReasoningEffort`, or a level no clean-up model offers ("xhigh", for the bench).
+    /// `reasoning.effort` as sent: a `ReasoningEffort`, or a level no clean-up model offers ("xhigh", for the bench),
+    /// or `disabled`.
     var effort: String
+    /// Thinking off instead of a level: `reasoning: {"enabled": false}` (the bench only).
+    static let disabled = "disabled"
     /// The level `max_tokens` is sized for (`CleanupModel.maxTokens`).
     var budget: ReasoningEffort
 
