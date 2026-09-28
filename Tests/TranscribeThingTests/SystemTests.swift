@@ -368,11 +368,16 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
         #expect(up.swallow)
     }
 
-    @Test func mouseClickWhileHoldingModifierPushToTalkInterrupts() {
+    /// Clicking into another field while holding the key is part of dictating: the hold goes on.
+    @Test func mouseClickWhileHoldingModifierPushToTalkGoesOn() {
         var kb = Keyboard(bindings: bindings([.pushToTalk: .rightCommand]))
         kb.press(.rightCommand)
-        #expect(kb.click().events == [.pttInterrupted])
-        #expect(kb.release(.rightCommand).events.isEmpty)
+        #expect(kb.click().events.isEmpty)
+        #expect(kb.release(.rightCommand).events == [.pttUp])
+        var fn = Keyboard()
+        fn.press(.fn)
+        #expect(fn.click().events.isEmpty)
+        #expect(fn.release(.fn).events == [.pttUp])
     }
 
     @Test func syntheticEventsAreIgnoredEntirely() {
@@ -1191,7 +1196,7 @@ private final class PasteLog: @unchecked Sendable {
         #expect(tab.events == [.cycleEngine])
         #expect(tab.swallow)
         let repeated = kb.down(kVK_Tab, isRepeat: true)
-        #expect(repeated.events.isEmpty, "autorepeat doesn't step again")
+        #expect(repeated.events == [.cycleEngineRepeat], "held down, it keeps stepping (at the controller's pace)")
         #expect(repeated.swallow)
         #expect(kb.up(kVK_Tab).swallow)
         #expect(kb.down(kVK_Tab).events == [.cycleEngine], "every press steps")

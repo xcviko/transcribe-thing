@@ -32,12 +32,14 @@ struct HotkeyInput: Equatable, Sendable {
 ///   on every keyboard event, so an event without it means Fn is up even if its release never arrived.
 /// - A modifier-only PTT arms on a key *press* that produces an exact match, never on the release of an
 ///   extra modifier (⌘ up while fn stays down after ⌘fnV must not start a dictation).
-/// - Anything else while a modifier-only PTT is held interrupts it, and the PTT stays blocked until every
-///   modifier is up. The interrupting key passes through, so ⌘C with a Right-⌘ PTT still copies.
+/// - Any other key while a modifier-only PTT is held interrupts it, and the PTT stays blocked until every
+///   modifier is up. The interrupting key passes through, so ⌘C with a Right-⌘ PTT still copies. A mouse click
+///   doesn't: clicking into another field while holding the key is part of dictating.
 /// - A key-based PTT (F13, ⌃⌥D) is not interrupted by other keys: it is unambiguous.
 /// - Switch model (like cancel) is live only during a dictation, and it never interrupts the PTT hold: it may be
 ///   pressed with the PTT or hands-free modifiers still held (fn+Tab while holding fn), and extra modifiers on
-///   the way to it (⌘ of ⌘⇧M) don't end the hold. Outside a dictation its keys pass through.
+///   the way to it (⌘ of ⌘⇧M) don't end the hold. Outside a dictation its keys pass through. Held down, its
+///   autorepeats step on (`cycleEngineRepeat`).
 /// - Swallowed keys also have their autorepeats and keyUp swallowed.
 struct HotkeyRouter: Equatable, Sendable {
     struct Config: Equatable, Sendable {
@@ -219,6 +221,11 @@ struct HotkeyRouter: Equatable, Sendable {
         }
         if swallowedKeys.contains(key) {
             decision.swallow = true
+            // The switch model key held down keeps stepping; the controller paces the autorepeat.
+            if input.isRepeat, let switchModel = liveSwitchModel(config), switchModel.keyCode == key,
+               matchesDuringDictation(switchModel, config.bindings) {
+                decision.events.append(.cycleEngineRepeat)
+            }
             return decision
         }
         if config.isSuspended {
@@ -289,12 +296,8 @@ struct HotkeyRouter: Equatable, Sendable {
             endGestureForSuspension(&decision)
             return decision
         }
-        // ⌘-click, ⌥-click, ⌃-click with a modifier-only PTT.
-        if gesture == .holdingModifiers {
-            gesture = .idle
-            blockedUntilModifiersReleased = true
-            decision.events.append(.pttInterrupted)
-        }
+        // A click never ends a push-to-talk hold: clicking into another field while holding the key is part of
+        // dictating, and the text goes where the cursor is at release.
         return decision
     }
 

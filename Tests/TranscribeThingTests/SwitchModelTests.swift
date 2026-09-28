@@ -387,6 +387,52 @@ import Testing
         #expect(!c.canSwitchModels, "nothing left to switch to")
     }
 
+    /// Tab held down steps on like a click wheel, a tick each time: not at the system's autorepeat rate.
+    @Test func holdingTheKeyStepsAtAClickWheelsPace() {
+        let (rig, cues) = Self.make()
+        let c = rig.h.controller
+        Self.hold(rig)
+        c.handle(.cycleEngine)
+        #expect(c.modelOverride == .cleanup)
+        c.handle(.cycleEngineRepeat)
+        rig.now += 0.1
+        c.handle(.cycleEngineRepeat)
+        #expect(c.modelOverride == .cleanup, "autorepeats inside the interval do nothing")
+        var steps: [ModelChoice?] = []
+        for _ in 0..<4 {
+            rig.now += DictationController.switchRepeatInterval
+            c.handle(.cycleEngineRepeat)
+            steps.append(c.modelOverride)
+        }
+        #expect(steps == [.engine(.geminiFlash), .engine(.geminiPro), nil, .cleanup])
+        #expect(cues.played.filter { $0 == .modelSwitch }.count == 5)
+        #expect(c.machine.capture.isListeningOrLocked)
+        c.handle(.cancel)
+        rig.now += 1
+        c.handle(.cycleEngineRepeat)
+        #expect(c.modelOverride == nil, "no dictation, nothing to step")
+    }
+
+    /// A held key that can't step (too long for Gemini) says so once, at the press.
+    @Test func aHeldKeyThatCantStepStaysQuiet() {
+        let (rig, cues) = Self.make()
+        let c = rig.h.controller
+        c.runsTimers = false
+        rig.h.settings.switchCleanup = false
+        c.send(.handsFreeToggle)
+        rig.now += 415
+        let shakes = rig.h.pill.shakeCount
+        c.cycleEngine()
+        #expect(rig.h.pill.shakeCount == shakes + 1)
+        for _ in 0..<3 {
+            rig.now += 0.2
+            c.handle(.cycleEngineRepeat)
+        }
+        #expect(rig.h.pill.shakeCount == shakes + 1)
+        #expect(!cues.played.contains(.modelSwitch))
+        c.send(.pillCancel)
+    }
+
     /// Clean-up alone takes part: the notice without a key names it, not Gemini.
     @Test func theKeyNoticeNamesWhatTakesPart() {
         #expect(DictationController.switchWithoutKeyNotice(.missing, choices: [.cleanup]).title
