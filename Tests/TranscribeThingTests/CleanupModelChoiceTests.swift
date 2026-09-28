@@ -34,12 +34,12 @@ private func body(_ request: OpenRouterChatRequest) throws -> [String: Any] {
         #expect(CleanupModel.gpt6Luna.reasoningEfforts.first == .off && CleanupModel.gpt6Luna.defaultReasoningEffort == .off)
         #expect(CleanupModel(rawValue: "geminiFlashLite") == .geminiFlashLite && CleanupModel(rawValue: "gpt6Luna") == .gpt6Luna
                 && CleanupModel(rawValue: "gemini3Flash") == .gemini3Flash, "persisted names")
-        // Gemini 3 Flash at Minimal: as close to no thinking as Gemini 3 goes (OpenRouter offers no "none").
+        // Gemini 3 Flash with thinking off by default (its thinking isn't mandatory on OpenRouter).
         #expect(CleanupModel.gemini3Flash.openRouterModelID == "google/gemini-3-flash-preview")
         #expect(CleanupModel.gemini3Flash.modelName == "Gemini 3 Flash")
         #expect(CleanupModel.gemini3Flash.provider == .googleAIStudio)
-        #expect(CleanupModel.gemini3Flash.reasoningEfforts == [.minimal, .low, .medium, .high])
-        #expect(CleanupModel.gemini3Flash.defaultReasoningEffort == .minimal)
+        #expect(CleanupModel.gemini3Flash.reasoningEfforts == [.off, .minimal, .low, .medium, .high])
+        #expect(CleanupModel.gemini3Flash.defaultReasoningEffort == .off)
     }
 
     @Test(arguments: [(ReasoningEffort.off, "none"), (.low, "low"), (.medium, "medium"), (.high, "high"),
@@ -71,8 +71,9 @@ private func body(_ request: OpenRouterChatRequest) throws -> [String: Any] {
         #expect((json["reasoning"] as? [String: Any])?["effort"] as? String == sent, "Flash Lite never gets none")
     }
 
-    /// Gemini 3 Flash goes to Google AI Studio only, and "no thinking" is sent as Minimal.
-    @Test(arguments: [(ReasoningEffort.off, "minimal"), (.minimal, "minimal"), (.medium, "medium")])
+    /// Gemini 3 Flash goes to Google AI Studio only. Its None is `reasoning: {"enabled": false}` (Google has no
+    /// "none" level for it); the other levels go as usual.
+    @Test(arguments: [(ReasoningEffort.minimal, "minimal"), (.medium, "medium")])
     func gemini3FlashStaysOnGoogleAIStudio(_ effort: ReasoningEffort, _ sent: String) throws {
         let json = try body(.cleanup(route: CleanupModel.gemini3Flash.route(effort: effort), systemPrompt: "Tidy it.",
                                      transcript: "hi"))
@@ -80,6 +81,17 @@ private func body(_ request: OpenRouterChatRequest) throws -> [String: Any] {
         let provider = try #require(json["provider"] as? [String: Any])
         #expect(provider["only"] as? [String] == ["google-ai-studio"] && provider["allow_fallbacks"] as? Bool == false)
         #expect((json["reasoning"] as? [String: Any])?["effort"] as? String == sent)
+    }
+
+    @Test func gemini3FlashNoneTurnsThinkingOff() throws {
+        let route = CleanupModel.gemini3Flash.route(effort: .off)
+        #expect(route.level == .off, "recorded as None")
+        let json = try body(.cleanup(route: route, systemPrompt: "Tidy it.", transcript: "hi"))
+        #expect(json["reasoning"] as? [String: Bool] == ["enabled": false])
+        #expect(json["max_tokens"] as? Int == CleanupModel.maxTokens(forCharacterCount: 2, effort: .off))
+        // Luna's None stays the documented effort "none".
+        let luna = try body(.cleanup(route: CleanupModel.gpt6Luna.route(effort: .off), systemPrompt: "Tidy it.", transcript: "hi"))
+        #expect((luna["reasoning"] as? [String: Any])?["effort"] as? String == "none")
     }
 
     @Test func noThinkingIsSizedLikeMinimal() {

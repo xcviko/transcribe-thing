@@ -165,7 +165,7 @@ final class TranscriptionService {
         }
         let model = model ?? settings.cleanupModel
         let route = route ?? model.route(effort: settings.cleanupReasoningEffort(for: model))
-        let effort = ReasoningEffort(rawValue: route.effort)
+        let effort = route.level
         let limit = timeout ?? CleanupModel.timeout(forCharacterCount: transcript.count)
         let client = client
         let started = ContinuousClock.now

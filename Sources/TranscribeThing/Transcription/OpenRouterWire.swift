@@ -15,7 +15,7 @@ struct OpenRouterChatRequest: Encodable, Equatable {
 
     struct Reasoning: Encodable, Equatable {
         /// nil sends `{"enabled": false}` and nothing else: thinking off, for a model whose thinking isn't
-        /// mandatory (`CleanupRoute.disabled`, the bench only).
+        /// mandatory (`CleanupRoute.disabled`).
         let effort: String?
         let exclude: Bool
 
@@ -101,8 +101,13 @@ struct CleanupRoute: Equatable, Sendable {
     /// `reasoning.effort` as sent: a `ReasoningEffort`, or a level no clean-up model offers ("xhigh", for the bench),
     /// or `disabled`.
     var effort: String
-    /// Thinking off instead of a level: `reasoning: {"enabled": false}` (the bench only).
+    /// Thinking off instead of a level: `reasoning: {"enabled": false}` (Gemini 3 Flash's None, and the bench).
     static let disabled = "disabled"
+
+    /// The level as recorded in a version's metadata: thinking off reads as None.
+    var level: ReasoningEffort? {
+        effort == Self.disabled ? .off : ReasoningEffort(rawValue: effort)
+    }
     /// The level `max_tokens` is sized for (`CleanupModel.maxTokens`).
     var budget: ReasoningEffort
 
