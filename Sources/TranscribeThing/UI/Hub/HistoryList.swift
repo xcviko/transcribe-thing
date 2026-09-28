@@ -107,7 +107,7 @@ struct HistoryRow: View, Equatable {
                 .fill(showsActions ? Color.hover.opacity(0.7) : .clear)
         }
         .contentShape(Rectangle())
-        .onHover { inside in
+        .onSettledHover { inside in
             hovering = inside
             if inside { actionsBuilt = true }
         }

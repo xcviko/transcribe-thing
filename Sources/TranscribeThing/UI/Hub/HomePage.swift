@@ -13,6 +13,7 @@ struct HomePage: View {
     @FocusState private var searchFocused: Bool
     @State private var recentlyDeleted: TranscriptEntry?
     @State private var undoToken = 0
+    @State private var hoverGate = ScrollHoverGate()
 
     var body: some View {
         ScrollView {
@@ -33,6 +34,9 @@ struct HomePage: View {
             .frame(maxWidth: HubLayout.readableWidth, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
+        // Rows passing under a resting pointer don't light up one after another while the page moves.
+        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, _ in hoverGate.scrolled() }
+        .environment(\.scrollHoverGate, hoverGate)
         .overlay(alignment: .bottom) { undoBar }
         .onAppear {
             if query.isEmpty { query = hub.initialSearch }

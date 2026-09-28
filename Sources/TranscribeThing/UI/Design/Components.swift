@@ -341,7 +341,7 @@ private struct PrimaryButtonBody: View {
             .scaleEffect(pressed ? 0.975 : 1)
             .opacity(isEnabled ? 1 : 0.45)
             .contentShape(Capsule())
-            .onHover { hovering = $0 }
+            .onSettledHover { hovering = $0 }
             .animation(Theme.Motion.hover, value: hovering)
             .animation(Theme.Motion.hover, value: pressed)
     }
@@ -386,7 +386,7 @@ private struct SecondaryButtonBody: View {
             .scaleEffect(pressed ? 0.98 : 1)
             .opacity(isEnabled ? 1 : 0.45)
             .contentShape(Capsule())
-            .onHover { hovering = $0 }
+            .onSettledHover { hovering = $0 }
             .animation(Theme.Motion.hover, value: hovering)
             .animation(Theme.Motion.hover, value: pressed)
     }
@@ -421,7 +421,7 @@ private struct QuietButtonBody: View {
             }
             .opacity(isEnabled ? (configuration.isPressed ? 0.8 : 1) : 0.45)
             .contentShape(Rectangle())
-            .onHover { hovering = $0 }
+            .onSettledHover { hovering = $0 }
             .animation(Theme.Motion.hover, value: hovering)
     }
 }
@@ -458,7 +458,7 @@ private struct IconButtonBody: View {
             }
             .opacity(isEnabled ? 1 : 0.4)
             .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous))
-            .onHover { hovering = $0 }
+            .onSettledHover { hovering = $0 }
             .animation(Theme.Motion.hover, value: hovering)
     }
 }
