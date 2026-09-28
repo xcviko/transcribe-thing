@@ -66,8 +66,9 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
         }
     }
 
-    /// Retired engines read as their successors (`TranscriptEntry.retiredEngines`); nil for an engine or a
-    /// clean-up model this build doesn't know.
+    /// Engines removed long ago read as their successors (`TranscriptEntry.retiredEngines`); retired models
+    /// (`EngineID.isRetired`, `CleanupModel.isRetired`) read as themselves. nil for an engine or a clean-up model
+    /// this build doesn't know.
     init?(rawValue: String) {
         func engine(_ raw: Substring) -> EngineID? {
             EngineID(rawValue: String(raw)) ?? TranscriptEntry.retiredEngines[String(raw)]

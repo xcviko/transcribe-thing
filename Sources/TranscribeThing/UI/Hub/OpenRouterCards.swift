@@ -219,8 +219,8 @@ struct OpenRouterKeyCard: View {
         return text
     }
 
-    /// Who hears the audio (and, with clean-up among the Switch model steps, reads the Parakeet text). Each model row names its provider;
-    /// this says nothing else leaves the Mac. How hard Gemini thinks is set on each model's row.
+    /// Who hears the audio (and, with clean-up among the Switch model steps, reads the Parakeet text). Each model
+    /// row names its provider; this says nothing else leaves the Mac.
     private var routing: some View {
         HStack(alignment: .center, spacing: 8) {
             Image(systemName: "lock.shield")
