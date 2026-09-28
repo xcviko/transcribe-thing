@@ -14,22 +14,8 @@ struct OpenRouterChatRequest: Encodable, Equatable {
     let stream: Bool
 
     struct Reasoning: Encodable, Equatable {
-        /// nil sends `{"enabled": false}` and nothing else: thinking off, for a model whose thinking isn't
-        /// mandatory (`CleanupRoute.disabled`).
-        let effort: String?
+        let effort: String
         let exclude: Bool
-
-        enum CodingKeys: String, CodingKey { case effort, exclude, enabled }
-
-        func encode(to encoder: Encoder) throws {
-            var container = encoder.container(keyedBy: CodingKeys.self)
-            guard let effort else {
-                try container.encode(false, forKey: .enabled)
-                return
-            }
-            try container.encode(effort, forKey: .effort)
-            try container.encode(exclude, forKey: .exclude)
-        }
     }
 
     struct Provider: Encodable, Equatable, Sendable {
@@ -79,7 +65,7 @@ struct OpenRouterChatRequest: Encodable, Equatable {
         return OpenRouterChatRequest(
             model: route.model,
             messages: messages,
-            reasoning: Reasoning(effort: route.effort == CleanupRoute.disabled ? nil : route.effort, exclude: true),
+            reasoning: Reasoning(effort: route.effort, exclude: true),
             provider: route.provider,
             maxTokens: CleanupModel.maxTokens(forCharacterCount: transcript.count, effort: route.budget),
             stream: false)
@@ -98,16 +84,8 @@ struct OpenRouterChatRequest: Encodable, Equatable {
 struct CleanupRoute: Equatable, Sendable {
     var model: String
     var provider: OpenRouterChatRequest.Provider
-    /// `reasoning.effort` as sent: a `ReasoningEffort`, or a level no clean-up model offers ("xhigh", for the bench),
-    /// or `disabled`.
+    /// `reasoning.effort` as sent: a `ReasoningEffort`, or a level no clean-up model offers ("xhigh", for the bench).
     var effort: String
-    /// Thinking off instead of a level: `reasoning: {"enabled": false}` (Gemini 3 Flash's None, and the bench).
-    static let disabled = "disabled"
-
-    /// The level as recorded in a version's metadata: thinking off reads as None.
-    var level: ReasoningEffort? {
-        effort == Self.disabled ? .off : ReasoningEffort(rawValue: effort)
-    }
     /// The level `max_tokens` is sized for (`CleanupModel.maxTokens`).
     var budget: ReasoningEffort
 

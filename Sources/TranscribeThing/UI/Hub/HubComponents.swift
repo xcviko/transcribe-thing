@@ -216,8 +216,9 @@ struct HubMenuPicker<Value: Hashable>: View {
     }
 }
 
-/// "Thinking  Low ⌃⌄": a menu of the reasoning levels a model supports and nothing else. None is only for the
-/// clean-up models that can skip thinking (`ReasoningEffort`). Each level carries a one-line description.
+/// "Thinking  Low ⌃⌄": a menu of the reasoning levels a model supports and nothing else. Gemini has no None:
+/// every Gemini model here thinks at least a little (`ReasoningEffort`); only GPT-6 Luna as Clean-up offers it.
+/// Each level carries a one-line description.
 struct ThinkingPicker: View {
     /// Least thinking first (`EngineID.reasoningEfforts`, `CleanupModel.reasoningEfforts`).
     var efforts: [ReasoningEffort]

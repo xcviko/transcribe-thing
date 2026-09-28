@@ -2,8 +2,9 @@ import Foundation
 
 /// How long a model thinks before it answers: OpenRouter's `reasoning.effort`. Gemini gets it as `thinkingLevel`
 /// one to one (minimal → minimal … high → high). Raw values go on the wire and are persisted. `off` ("none") is
-/// only for a model that can skip thinking: GPT-6 Luna and Gemini 3 Flash as Clean-up. OpenRouter rejects turning
-/// thinking off for every other Gemini model here. Declaration order is from least to most thinking.
+/// only for a model that can skip thinking (GPT-6 Luna as Clean-up): every Gemini model here has mandatory
+/// thinking, and OpenRouter says such a model rejects `effort: "none"`, so no Gemini lists it. Declaration order
+/// is from least to most thinking.
 enum ReasoningEffort: String, Codable, CaseIterable, Identifiable, Comparable, Sendable {
     /// Sent as "none". Not named `none`, which would read as `Optional.none` wherever a level is optional.
     case off = "none"
@@ -78,8 +79,6 @@ extension EngineID {
 enum CleanupModel: String, CaseIterable, Identifiable, Codable, Sendable {
     /// Gemini 3.5 Flash Lite on Google AI Studio: what Clean-up always used, and still the default.
     case geminiFlashLite
-    /// Gemini 3 Flash (preview) on Google AI Studio with thinking off: a bigger Flash than Lite, a little pricier.
-    case gemini3Flash
     /// GPT-6 Luna on OpenAI with thinking off: about as fast (1.1 s median in the bench), about 3.5 times cheaper,
     /// better at spelling English terms, and more willing to rewrite.
     case gpt6Luna
@@ -91,16 +90,14 @@ enum CleanupModel: String, CaseIterable, Identifiable, Codable, Sendable {
     var openRouterModelID: String {
         switch self {
         case .geminiFlashLite: "google/gemini-3.5-flash-lite"
-        case .gemini3Flash: "google/gemini-3-flash-preview"
         case .gpt6Luna: "openai/gpt-6-luna"
         }
     }
 
-    /// "Gemini 3.5 Flash Lite", "Gemini 3 Flash", "GPT-6 Luna".
+    /// "Gemini 3.5 Flash Lite", "GPT-6 Luna".
     var modelName: String {
         switch self {
         case .geminiFlashLite: "Gemini 3.5 Flash Lite"
-        case .gemini3Flash: "Gemini 3 Flash"
         case .gpt6Luna: "GPT-6 Luna"
         }
     }
@@ -109,7 +106,6 @@ enum CleanupModel: String, CaseIterable, Identifiable, Codable, Sendable {
     var shortName: String {
         switch self {
         case .geminiFlashLite: "Flash Lite"
-        case .gemini3Flash: "Gemini 3 Flash"
         case .gpt6Luna: "GPT-6 Luna"
         }
     }
@@ -118,7 +114,6 @@ enum CleanupModel: String, CaseIterable, Identifiable, Codable, Sendable {
     var summary: String {
         switch self {
         case .geminiFlashLite: "Tidies punctuation, fillers and false starts · reads text, not audio"
-        case .gemini3Flash: "A bigger Flash, no thinking · a little pricier than Flash Lite"
         case .gpt6Luna: "Cheaper, better with English terms · may rewrite a little more"
         }
     }
@@ -126,7 +121,7 @@ enum CleanupModel: String, CaseIterable, Identifiable, Codable, Sendable {
     /// The provider requests are pinned to, as OpenRouter names it in responses.
     var providerName: String {
         switch self {
-        case .geminiFlashLite, .gemini3Flash: "Google AI Studio"
+        case .geminiFlashLite: "Google AI Studio"
         case .gpt6Luna: "OpenAI"
         }
     }
@@ -134,19 +129,17 @@ enum CleanupModel: String, CaseIterable, Identifiable, Codable, Sendable {
     /// That provider and nothing else, no fallbacks.
     var provider: OpenRouterChatRequest.Provider {
         switch self {
-        case .geminiFlashLite, .gemini3Flash: .googleAIStudio
+        case .geminiFlashLite: .googleAIStudio
         case .gpt6Luna: .openAI
         }
     }
 
     /// The levels offered, from OpenRouter's `supported_efforts` (2026-09-28). Flash Lite: minimal to high, no
-    /// "none" (thinking is mandatory). Gemini 3 Flash: the same, and thinking isn't mandatory there, so None turns
-    /// it off (`route(effort:)`). Luna takes none to max; xhigh and max are left out, far too slow for a clean-up
-    /// that holds up a paste.
+    /// "none" (thinking is mandatory). Luna takes none to max; xhigh and max are left out, far too slow for a
+    /// clean-up that holds up a paste.
     var reasoningEfforts: [ReasoningEffort] {
         switch self {
         case .geminiFlashLite: [.minimal, .low, .medium, .high]
-        case .gemini3Flash: [.off, .minimal, .low, .medium, .high]
         case .gpt6Luna: [.off, .low, .medium, .high]
         }
     }
@@ -154,19 +147,13 @@ enum CleanupModel: String, CaseIterable, Identifiable, Codable, Sendable {
     var defaultReasoningEffort: ReasoningEffort {
         switch self {
         case .geminiFlashLite: .low
-        case .gemini3Flash, .gpt6Luna: .off
+        case .gpt6Luna: .off
         }
     }
 
-    /// The request for this model at `effort` (moved to the nearest level it offers). Gemini 3 Flash's None is
-    /// `reasoning: {"enabled": false}`, OpenRouter's way to turn thinking off: checked on 2026-09-28, it answered
-    /// with 0 reasoning tokens. Google has no "none" level for it.
+    /// The request for this model at `effort` (moved to the nearest level it offers).
     func route(effort: ReasoningEffort) -> CleanupRoute {
-        let level = effort.nearest(in: reasoningEfforts)
-        if self == .gemini3Flash, level == .off {
-            return CleanupRoute(model: openRouterModelID, provider: provider, effort: CleanupRoute.disabled, budget: .off)
-        }
-        return CleanupRoute(model: openRouterModelID, effort: level, provider: provider)
+        CleanupRoute(model: openRouterModelID, effort: effort.nearest(in: reasoningEfforts), provider: provider)
     }
 
     /// Only transcripts from the main models (Parakeet on this Mac or through OpenRouter) are cleaned up: Gemini

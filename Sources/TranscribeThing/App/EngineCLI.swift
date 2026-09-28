@@ -7,7 +7,7 @@ import Foundation
 ///     transcribe-thing --transcribe <audio file>
 ///            --engine parakeet|parakeetCloud|geminiFlash|geminiPro
 ///            [--download] [--prompt <text>] [--repeat <n>] [--effort minimal|low|medium|high]
-///            [--clean-up [--clean-up-model geminiFlashLite|gemini3Flash|gpt6Luna] [--clean-up-prompt <text>]
+///            [--clean-up [--clean-up-model geminiFlashLite|gpt6Luna] [--clean-up-prompt <text>]
 ///                        [--clean-up-effort none|minimal|low|medium|high]]
 ///     transcribe-thing --model-status
 ///
@@ -29,7 +29,7 @@ import Foundation
 ///
 /// Hidden benchmark (not in the usage text), for comparing clean-up models on real dictations:
 ///
-///     transcribe-thing --cleanup-bench --history <history.json> --model <openrouter slug> --effort <level|disabled>
+///     transcribe-thing --cleanup-bench --history <history.json> --model <openrouter slug> --effort <level>
 ///            [--count <n> | --entry <id>] [--provider <slug>] [--out <report.json>]
 ///
 /// See `CleanupBench`. It reads the history file only, never the app's settings, and pays for `--count` requests.
@@ -92,7 +92,7 @@ enum EngineCLI {
         usage: transcribe-thing --transcribe <audio file> \
         --engine parakeet|parakeetCloud|geminiFlash|geminiPro \
         [--download] [--prompt <text>] [--repeat <n>] [--effort minimal|low|medium|high] \
-        [--clean-up [--clean-up-model geminiFlashLite|gemini3Flash|gpt6Luna] [--clean-up-prompt <text>] \
+        [--clean-up [--clean-up-model geminiFlashLite|gpt6Luna] [--clean-up-prompt <text>] \
         [--clean-up-effort none|minimal|low|medium|high]]
                transcribe-thing --model-status
         """
@@ -417,11 +417,10 @@ enum EngineCLI {
         struct Options: Equatable {
             static let usage = """
             usage: transcribe-thing --cleanup-bench --history <history.json> --model <openrouter slug> \
-            --effort none|minimal|low|medium|high|xhigh|max|disabled [--count <n> | --entry <id>] [--provider <slug>] \
+            --effort none|minimal|low|medium|high|xhigh|max [--count <n> | --entry <id>] [--provider <slug>] \
             [--out <report.json>]
             """
-            /// "disabled" sends `reasoning: {"enabled": false}` instead of a level.
-            static let efforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max", CleanupRoute.disabled]
+            static let efforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
             static let defaultCount = 20
             static let maxCount = 200
 
@@ -476,11 +475,10 @@ enum EngineCLI {
                 return nil
             }
 
-            /// The `ReasoningEffort` that sizes `max_tokens`: "none" and "disabled" get the least room (as much as
-            /// minimal), levels above high the most.
+            /// The `ReasoningEffort` that sizes `max_tokens`: "none" gets the least room (as much as minimal),
+            /// levels above high the most.
             static func budget(for effort: String) -> ReasoningEffort {
-                if effort == CleanupRoute.disabled { return .off }
-                return ReasoningEffort(rawValue: effort) ?? .high
+                ReasoningEffort(rawValue: effort) ?? .high
             }
         }
 

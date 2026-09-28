@@ -97,7 +97,6 @@ struct ModelsPage: View {
     static func thinkingAdvice(_ model: CleanupModel) -> String {
         switch model {
         case .geminiFlashLite: "Lower is faster and cheaper. Minimal or Low is plenty for tidying."
-        case .gemini3Flash: "Lower is faster and cheaper. None is plenty for tidying: Gemini 3 Flash answers without thinking."
         case .gpt6Luna: "Lower is faster and cheaper. None is plenty for tidying: Luna answers without thinking."
         }
     }
