@@ -216,6 +216,87 @@ struct HubMenuPicker<Value: Hashable>: View {
     }
 }
 
+/// "Thinking  Low ⌃⌄": a menu of the reasoning levels a model supports and nothing else. There is no Off: every
+/// Gemini model here thinks, and OpenRouter says they reject `effort: "none"`. Each level carries Google's
+/// one-line description.
+struct ThinkingPicker: View {
+    /// Least thinking first (`EngineID.reasoningEfforts`, `CleanupModel.reasoningEfforts`).
+    var efforts: [ReasoningEffort]
+    @Binding var selection: ReasoningEffort
+    /// "Gemini 3.8 Flash", for the tooltip and VoiceOver.
+    var modelName: String
+    /// "Thinking" before the level; off where the row's own title already says it.
+    var showsTitle = true
+
+    var body: some View {
+        Menu {
+            Picker(selection: $selection) {
+                ForEach(efforts) { effort in
+                    Text("\(effort.title)\u{2003}\(effort.detail)").tag(effort)
+                }
+            } label: {
+                EmptyView()
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        } label: {
+            HStack(spacing: 5) {
+                if showsTitle {
+                    Text("Thinking").foregroundStyle(.inkSecondary)
+                }
+                Text(selection.title)
+                    .fontWeight(showsTitle ? .semibold : nil)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.inkTertiary)
+            }
+        }
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
+        .buttonStyle(SecondaryButtonStyle(size: .small))
+        .fixedSize()
+        .help("How long \(modelName) thinks before it answers. Lower is faster and cheaper.")
+        .accessibilityLabel("\(modelName) thinking")
+        .accessibilityValue(selection.title)
+    }
+}
+
+/// A monospaced prompt field on the sunken field color, with a placeholder while it's empty (Gemini's instructions,
+/// the clean-up prompt).
+struct PromptEditor: View {
+    @Binding var text: String
+    var placeholder: String
+    var height: CGFloat = 112
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            TextEditor(text: $text)
+                .typeface(.mono)
+                .foregroundStyle(.ink)
+                .scrollContentBackground(.hidden)
+                .focused($focused)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 8)
+            if text.isEmpty {
+                Text(placeholder)
+                    .typeface(.mono)
+                    .foregroundStyle(.inkTertiary)
+                    .padding(.horizontal, 11)
+                    .padding(.vertical, 8)
+                    .allowsHitTesting(false)
+            }
+        }
+        .frame(height: height)
+        .background(HubPalette.field, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(focused ? Color.accentRing : Color.stroke, lineWidth: focused ? 1.5 : 1)
+        }
+        .animation(Theme.Motion.hover, value: focused)
+    }
+}
+
 /// A few mutually exclusive choices in a sunken capsule; the chosen one sits raised on a white chip.
 struct HubSegmentedPicker<Value: Hashable>: View {
     var options: [Value]
@@ -407,6 +488,10 @@ struct EngineGlyph: View {
     var engine: EngineID
     /// The OpenRouter provider that served the transcript, for the tooltip.
     var provider: String?
+    /// The transcript shown is Flash Lite's clean-up of `engine`'s: a wand follows the letter.
+    var isCleanedUp = false
+    /// The tooltip in full (`VersionDetails`), in place of the engine and provider alone.
+    var details: String?
 
     var body: some View {
         let tint: Color = engine.isLocal ? .accent : HubPalette.apricotInk
@@ -417,18 +502,23 @@ struct EngineGlyph: View {
             }
             Text(engine.glyph)
                 .font(.system(size: 9.5, weight: .bold, design: .rounded))
+            if isCleanedUp {
+                Image(systemName: "wand.and.stars")
+                    .font(.system(size: 7.5, weight: .bold))
+            }
         }
         .foregroundStyle(tint)
         .padding(.horizontal, 4)
         .frame(minWidth: 17, minHeight: 17)
         .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
-        .help(label)
+        .help(details ?? label)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label)
     }
 
     private var label: String {
-        provider.map { "\(engine.displayName) · via \($0)" } ?? engine.displayName
+        let name = isCleanedUp ? "\(engine.displayName) + Clean-up" : engine.displayName
+        return provider.map { "\(name) · via \($0)" } ?? name
     }
 }
 

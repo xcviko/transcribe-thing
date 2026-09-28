@@ -8,6 +8,7 @@ struct OpenRouterKeyCard: View {
 
     @Environment(HubContext.self) private var hub
     @Environment(OpenRouterAccount.self) private var account
+    @Environment(AppSettings.self) private var settings
     @State private var replacing = false
     @State private var draft = ""
     @State private var saving = false
@@ -147,7 +148,7 @@ struct OpenRouterKeyCard: View {
     @ViewBuilder private var statusLine: some View {
         switch account.status {
         case .missing:
-            status("key.slash", .inkTertiary, "No key yet. The three cloud models need one.")
+            status("key.slash", .inkTertiary, "No key yet. The cloud models and Clean-up need one.")
         case .checking:
             HStack(spacing: 7) {
                 ProgressView().controlSize(.mini)
@@ -218,28 +219,19 @@ struct OpenRouterKeyCard: View {
         return text
     }
 
-    /// Who hears the audio. Each model row names its provider; this says nothing else leaves the Mac.
+    /// Who hears the audio (and, with Clean-up on, reads the Parakeet text). Each model row names its provider;
+    /// this says nothing else leaves the Mac. How hard Gemini thinks is set on each model's row.
     private var routing: some View {
         HStack(alignment: .center, spacing: 8) {
             Image(systemName: "lock.shield")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.success)
-            Text("Only your audio is sent, to OpenRouter and the model’s provider.")
+            Text(settings.isCleanupActive
+                 ? "Only your audio, and Parakeet’s text for Clean-up, goes to OpenRouter and the model’s provider."
+                 : "Only your audio is sent, to OpenRouter and the model’s provider.")
                 .typeface(.callout)
                 .foregroundStyle(.inkSecondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 8)
-            HStack(spacing: 4) {
-                Text("Gemini reasoning").foregroundStyle(.inkSecondary)
-                Text("High").fontWeight(.semibold).foregroundStyle(.ink)
-                Image(systemName: "info.circle").font(.system(size: 9.5)).foregroundStyle(.inkTertiary)
-            }
-            .font(.system(size: 11.5, weight: .medium))
-            .padding(.horizontal, 9)
-            .frame(height: 22)
-            .background(Color.ink.opacity(0.05), in: Capsule(style: .continuous))
-            .fixedSize()
-            .help("Set for best accuracy. Parakeet doesn’t reason.")
         }
     }
 
@@ -269,7 +261,6 @@ struct OpenRouterKeyCard: View {
 /// takes no prompt, so the card says it applies to Gemini alone.
 struct GeminiInstructionsCard: View {
     @Environment(AppSettings.self) private var settings
-    @FocusState private var focused: Bool
 
     static let example = "Transcribe the audio verbatim. Output only the transcript."
 
@@ -293,30 +284,7 @@ struct GeminiInstructionsCard: View {
                         Badge(text: "Sent as system prompt", tint: .accent, systemImage: "text.bubble")
                     }
                 }
-                ZStack(alignment: .topLeading) {
-                    TextEditor(text: $settings.geminiSystemPrompt)
-                        .typeface(.mono)
-                        .foregroundStyle(.ink)
-                        .scrollContentBackground(.hidden)
-                        .focused($focused)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 8)
-                    if settings.geminiSystemPrompt.isEmpty {
-                        Text("Leave empty to send only your audio.")
-                            .typeface(.mono)
-                            .foregroundStyle(.inkTertiary)
-                            .padding(.horizontal, 11)
-                            .padding(.vertical, 8)
-                            .allowsHitTesting(false)
-                    }
-                }
-                .frame(height: 112)
-                .background(HubPalette.field, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .strokeBorder(focused ? Color.accentRing : Color.stroke, lineWidth: focused ? 1.5 : 1)
-                }
-                .animation(Theme.Motion.hover, value: focused)
+                PromptEditor(text: $settings.geminiSystemPrompt, placeholder: "Leave empty to send only your audio.")
                 Text("When this is empty, \(Brand.name) sends your recording with no text or system message and pastes Gemini’s reply exactly as it comes back. Anything you write here is sent as a system prompt and can change the output. Only Gemini reads it: Parakeet transcribes without instructions.")
                     .typeface(.callout)
                     .foregroundStyle(.inkSecondary)
@@ -351,5 +319,109 @@ struct GeminiInstructionsCard: View {
         } else if !current.contains(Self.example) {
             settings.geminiSystemPrompt = current.hasSuffix("\n") ? current + Self.example : current + "\n" + Self.example
         }
+    }
+}
+
+/// The prompt Gemini 3.5 Flash Lite follows to tidy a Parakeet transcript. Empty by default, and Clean-up stays off
+/// until it isn't: with no instruction the model would reply to the transcript instead of cleaning it up. "Use
+/// Example" fills in `CleanupModel.examplePrompt`, asking first when it would replace a prompt of the user's own.
+struct CleanupPromptCard: View {
+    @Environment(AppSettings.self) private var settings
+    @State private var confirmingReplace = false
+
+    private var isEmpty: Bool { !settings.hasCleanupPrompt }
+    private var isExample: Bool {
+        settings.cleanupSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+            == CleanupModel.examplePrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var body: some View {
+        @Bindable var settings = settings
+        Card {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .center, spacing: 8) {
+                    Text("Clean-up prompt")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.ink)
+                    Spacer()
+                    if isEmpty {
+                        Badge(text: "Needed for Clean-up", tint: .warning, systemImage: "exclamationmark.triangle.fill")
+                    } else {
+                        Badge(text: "Sent as system prompt", tint: .accent, systemImage: "text.bubble")
+                    }
+                }
+                PromptEditor(text: $settings.cleanupSystemPrompt,
+                             placeholder: "Tell Flash Lite how to tidy a transcript, or start from the example.",
+                             height: 150)
+                Text("Sent as the system prompt. The transcript follows as the message, inside <transcript> tags, so Flash Lite treats it as text to edit rather than a request to answer. Ask for the cleaned text only: whatever comes back is pasted.")
+                    .typeface(.callout)
+                    .foregroundStyle(.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 2) {
+                    Button("Use Example", action: useExample)
+                        .buttonStyle(.appQuiet)
+                        .padding(.leading, -8)
+                        .disabled(isExample)
+                        .popover(isPresented: $confirmingReplace, arrowEdge: .bottom) {
+                            ReplacePromptConfirmation {
+                                confirmingReplace = false
+                                settings.cleanupSystemPrompt = CleanupModel.examplePrompt
+                            } cancel: {
+                                confirmingReplace = false
+                            }
+                        }
+                    Button("Clear") { settings.cleanupSystemPrompt = "" }
+                        .buttonStyle(QuietButtonStyle(tint: .inkSecondary))
+                        .disabled(settings.cleanupSystemPrompt.isEmpty)
+                    Spacer()
+                    Text(characterCount)
+                        .font(.system(size: 11))
+                        .monospacedDigit()
+                        .foregroundStyle(.inkTertiary)
+                        .contentTransition(.numericText())
+                }
+            }
+        }
+    }
+
+    private var characterCount: String {
+        let count = settings.cleanupSystemPrompt.count
+        return count == 1 ? "1 character" : "\(Fmt.number(count)) characters"
+    }
+
+    /// Straight in when the prompt is empty; a prompt of the user's own is replaced only once they confirm.
+    private func useExample() {
+        if isEmpty {
+            settings.cleanupSystemPrompt = CleanupModel.examplePrompt
+        } else {
+            confirmingReplace = true
+        }
+    }
+}
+
+private struct ReplacePromptConfirmation: View {
+    var confirm: () -> Void
+    var cancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Replace your prompt?")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.ink)
+            Text("The example takes the place of what you wrote. Copy your prompt first to keep it.")
+                .typeface(.callout)
+                .foregroundStyle(.inkSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                Spacer()
+                Button("Cancel", action: cancel)
+                    .buttonStyle(SecondaryButtonStyle(size: .small))
+                    .keyboardShortcut(.cancelAction)
+                Button("Replace", action: confirm)
+                    .buttonStyle(PrimaryButtonStyle(size: .small))
+            }
+        }
+        .padding(16)
+        .frame(width: 280)
     }
 }

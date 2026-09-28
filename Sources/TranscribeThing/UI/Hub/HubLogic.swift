@@ -220,21 +220,28 @@ struct VersionsMenu: Equatable {
         var id: TranscriptVersionKind { kind }
         /// "Gemini 3.8 Flash", "Parakeet v3 + Clean-up".
         var title: String { kind.displayName }
+        /// The menu item: `title`, then `summary` set off by an em space: "Gemini 3.8 Flash  76 s · $0.07".
+        var itemTitle: String { summary.isEmpty ? title : "\(title)\u{2003}\(summary)" }
     }
 
     struct Action: Equatable, Identifiable {
         var kind: TranscriptVersionKind
         var blocker: Blocker?
+        /// A clean-up names the text it tidies: the recording has more than one Parakeet version to clean up.
+        var namesSource = false
 
         var id: TranscriptVersionKind { kind }
         var isEnabled: Bool { blocker == nil }
-        /// "Gemini 3.1 Pro", "Clean Up"; with the reason when it can't run: "Gemini 3.1 Pro · Needs key".
-        var title: String {
-            let name = switch kind {
+        /// "Gemini 3.1 Pro", "Clean Up", "Clean Up Parakeet v3 · Cloud".
+        var name: String {
+            switch kind {
             case .transcription(let engine): engine.displayName
-            case .cleanup: "Clean Up"
+            case .cleanup(let source): namesSource ? "Clean Up \(source.displayName)" : "Clean Up"
             }
-            return blocker.map { "\(name) · \($0.label)" } ?? name
+        }
+        /// `name`, with the reason when it can't run: "Gemini 3.1 Pro · Needs key".
+        var title: String {
+            blocker.map { "\(name) · \($0.label)" } ?? name
         }
     }
 
@@ -277,12 +284,72 @@ struct VersionsMenu: Equatable {
                     ?? readiness(.geminiFlash).unavailableReason.map(Blocker.engine)
                 actions.append(Action(kind: .cleanup(of: source), blocker: blocker))
             }
+            let cleanups = actions.indices.filter { actions[$0].kind.isCleanup }
+            if cleanups.count > 1 { for index in cleanups { actions[index].namesSource = true } }
         }
         let runningTitle = running.map { kind in
             kind.isCleanup ? "Cleaning up…" : "Transcribing with \(kind.engine.shortName)…"
         }
         return VersionsMenu(isRetry: isRetry, title: isRetry ? "Retry With" : "Versions", versions: versions,
                             actions: actions, runningTitle: runningTitle)
+    }
+}
+
+/// A History transcript's facts, for the tooltip on its engine badge and the version items of its Versions menu:
+/// which model and provider made it, how hard it thought, its tokens, cost and timing. Lines with nothing known are
+/// left out, so a local transcript says little and an old one only what older builds recorded.
+enum VersionDetails {
+    /// "Gemini 3.8 Flash · Google AI Studio", "Thinking: Low", "Tokens: 330 in (314 audio) · 72 out · 540 thinking",
+    /// "Cost: $0.0021", "Took 2.6 s · model 2.2 s", "System prompt: none".
+    static func lines(for version: TranscriptVersion) -> [String] {
+        let m = version.metadata
+        var lines: [String] = []
+        lines.append(version.kind.displayName)
+        if version.kind.isCleanup {
+            lines.append("Cleaned up by \(CleanupModel.modelName)")
+        }
+        var source: [String] = []
+        if let model = m.modelID, !model.isEmpty { source.append(model) }
+        if let provider = m.provider, !provider.isEmpty { source.append("via \(provider)") }
+        if !source.isEmpty { lines.append(source.joined(separator: " ")) }
+        if let effort = m.reasoningEffort { lines.append("Thinking: \(effort.title)") }
+        if let tokens = m.usage.flatMap(tokenLine) { lines.append("Tokens: \(tokens)") }
+        if let cost = m.costUSD, cost > 0 { lines.append("Cost: \(Fmt.usd(cost))") }
+        if let time = timeLine(m) { lines.append(time) }
+        if let seconds = m.audioSeconds, seconds > 0 { lines.append("Audio billed: \(Fmt.seconds(seconds))") }
+        if let used = m.usedSystemPrompt { lines.append(used ? "System prompt: yes" : "System prompt: none") }
+        if let reason = m.finishReason, !reason.isEmpty, reason != "stop" { lines.append("Finished: \(reason)") }
+        return lines
+    }
+
+    /// The tooltip: `lines` one per line.
+    static func tooltip(for version: TranscriptVersion) -> String {
+        lines(for: version).joined(separator: "\n")
+    }
+
+    /// "330 in (314 audio) · 72 out · 540 thinking"; nil when nothing was counted.
+    static func tokenLine(_ usage: TokenUsage) -> String? {
+        var parts: [String] = []
+        if let prompt = usage.promptTokens {
+            let audio = usage.audioTokens.flatMap { $0 > 0 ? " (\(Fmt.tokens($0)) audio)" : nil } ?? ""
+            parts.append("\(Fmt.tokens(prompt)) in\(audio)")
+        }
+        if let output = usage.outputTokens { parts.append("\(Fmt.tokens(output)) out") }
+        if let reasoning = usage.reasoningTokens, reasoning > 0 { parts.append("\(Fmt.tokens(reasoning)) thinking") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// "Took 76 s · first word 3.1 s · model 70 s": the wall clock on this Mac, then what only the server or a
+    /// stream can tell. OpenRouter's `latency` stays out: what it measures is unverified.
+    private static func timeLine(_ m: TranscriptMetadata) -> String? {
+        var parts: [String] = []
+        if let time = m.processingTime { parts.append("Took \(Fmt.seconds(time))") }
+        if let ttft = m.timeToFirstToken { parts.append("first word \(Fmt.seconds(ttft))") }
+        if let generation = m.generationTime { parts.append("model \(Fmt.seconds(generation))") }
+        guard !parts.isEmpty else { return nil }
+        var line = parts.joined(separator: " · ")
+        if m.processingTime == nil { line = line.prefix(1).uppercased() + line.dropFirst() }
+        return line
     }
 }
 

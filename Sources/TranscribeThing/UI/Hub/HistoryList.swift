@@ -71,8 +71,8 @@ struct HistoryRow: View {
 
     private var hasAudio: Bool { entry.audioFileName != nil }
     private var isEmptySuccess: Bool { entry.status == .success && entry.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-    /// The engine the recording is being transcribed with right now (Retry, Transcribe Again).
-    private var transcribing: EngineID? { hub.transcribingEngine(for: entry.id) }
+    /// What is being made for the recording right now: a transcription (Retry, Transcribe With) or a clean-up.
+    private var running: TranscriptVersionKind? { hub.runningVersion(for: entry.id) }
     private var showsActions: Bool { hovering || hub.previewHoveredEntry == entry.id }
 
     var body: some View {
@@ -101,7 +101,7 @@ struct HistoryRow: View {
         }
         .contextMenu { rowMenu }
         .animation(Theme.Motion.hover, value: hovering)
-        .animation(Theme.Motion.expand, value: transcribing)
+        .animation(Theme.Motion.expand, value: running)
         .accessibilityElement(children: .contain)
     }
 
@@ -121,8 +121,8 @@ struct HistoryRow: View {
                     .foregroundStyle(.ink)
                     .lineLimit(expanded ? nil : 3)
                     .fixedSize(horizontal: false, vertical: true)
-                if let transcribing {
-                    TranscribingLine(engine: transcribing)
+                if let running {
+                    RunningLine(kind: running)
                         .transition(.opacity)
                 }
             }
@@ -157,8 +157,8 @@ struct HistoryRow: View {
     }
 
     @ViewBuilder private func inlineRetry(title: String, symbol: String) -> some View {
-        if let transcribing {
-            TranscribingLine(engine: transcribing)
+        if let running {
+            RunningLine(kind: running)
                 .padding(.vertical, 4)
         } else if hasAudio {
             Menu {
@@ -213,7 +213,11 @@ struct HistoryRow: View {
                     .foregroundStyle(.inkTertiary)
                     .lineLimit(1)
             }
-            EngineGlyph(engine: entry.engine, provider: entry.provider)
+            if entry.versions.count > 1 {
+                VersionCount(count: entry.versions.count)
+            }
+            EngineGlyph(engine: entry.engine, provider: entry.provider, isCleanedUp: entry.currentKind?.isCleanup == true,
+                        details: entry.currentVersion.map(VersionDetails.tooltip))
             Text(Fmt.duration(entry.audioDuration))
                 .font(.system(size: 11.5))
                 .monospacedDigit()
@@ -227,7 +231,7 @@ struct HistoryRow: View {
             if entry.status == .success && !isEmptySuccess {
                 CopyButton(text: entry.text) { hub.copy($0) }
             }
-            if entry.status != .success && hasAudio && transcribing == nil {
+            if entry.status != .success && hasAudio && running == nil {
                 Menu {
                     VersionsMenuItems(entry: entry)
                 } label: {
@@ -275,15 +279,16 @@ struct HistoryRow: View {
     }
 }
 
-/// "Transcribing with Gemini Flash…" under a row whose recording is being transcribed.
-private struct TranscribingLine: View {
-    var engine: EngineID
+/// "Transcribing with Gemini Flash…" or "Cleaning up with Flash Lite…" under a row whose recording is being
+/// worked on.
+private struct RunningLine: View {
+    var kind: TranscriptVersionKind
 
     var body: some View {
         HStack(spacing: 8) {
             ShimmerBar(height: 3)
                 .frame(width: 40)
-            Text("Transcribing with \(engine.shortName)…")
+            Text(kind.isCleanup ? "Cleaning up with \(CleanupModel.shortName)…" : "Transcribing with \(kind.engine.shortName)…")
                 .font(.system(size: 11.5))
                 .foregroundStyle(.inkSecondary)
                 .lineLimit(1)
@@ -292,8 +297,28 @@ private struct TranscribingLine: View {
     }
 }
 
-/// A row's Versions menu (`VersionsMenu`): the versions it has, the current one checked, then "Transcribe With"
-/// the engines (and clean-up) not used on it yet, unavailable ones disabled with the reason. A failed or canceled
+/// "2" on a stack beside the engine badge: the recording has that many versions to switch between (… › Versions).
+private struct VersionCount: View {
+    var count: Int
+
+    var body: some View {
+        HStack(spacing: 2) {
+            Image(systemName: "rectangle.stack")
+                .font(.system(size: 9, weight: .semibold))
+            Text("\(count)")
+                .font(.system(size: 10.5, weight: .semibold))
+                .monospacedDigit()
+        }
+        .foregroundStyle(.inkTertiary)
+        .help("\(count) versions. Switch between them in the … menu.")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(count) versions")
+    }
+}
+
+/// A row's Versions menu (`VersionsMenu`): what is running for it, the versions it has with the current one
+/// checked and each one's time, cost and thinking, then "Transcribe With" the engines not used on it yet and a clean-up
+/// of each Parakeet version. Unavailable items stay listed, disabled, with the reason. A failed or canceled
 /// dictation lists only the engines to retry with.
 struct VersionsMenuItems: View {
     var entry: TranscriptEntry
@@ -310,17 +335,21 @@ struct VersionsMenuItems: View {
                 ForEach(menu.versions) { version in
                     Toggle(isOn: Binding(get: { version.isCurrent },
                                          set: { _ in hub.dictation.showVersion(version.kind, of: entry.id) })) {
-                        Text(version.summary.isEmpty ? version.title : "\(version.title) · \(version.summary)")
+                        Text(version.itemTitle)
                     }
                 }
             }
         }
-        Section(menu.isRetry ? menu.title : VersionsMenu.actionsSectionTitle) {
-            ForEach(menu.actions) { action in
-                Button(action.title) {
-                    hub.dictation.makeVersion(action.kind, of: entry)
+        if !menu.actions.isEmpty {
+            Section(menu.isRetry ? menu.title : VersionsMenu.actionsSectionTitle) {
+                ForEach(menu.actions) { action in
+                    Button {
+                        hub.dictation.makeVersion(action.kind, of: entry)
+                    } label: {
+                        Label(action.title, systemImage: action.kind.isCleanup ? "wand.and.stars" : "waveform")
+                    }
+                    .disabled(!action.isEnabled)
                 }
-                .disabled(!action.isEnabled)
             }
         }
     }

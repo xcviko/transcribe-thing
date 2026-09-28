@@ -61,8 +61,8 @@ enum PreviewFixtures {
     }
 
     /// Newest first, spread across the past week, English, Russian and German, incl. one failed and one canceled
-    /// entry, cloud transcripts that record who served them, today's audio kept for Transcribe Again and one
-    /// transcript already transcribed again with Gemini.
+    /// entry, cloud transcripts that record who served them, today's audio kept for Transcribe Again, one
+    /// transcript already transcribed again with Gemini and one cleaned up by Flash Lite.
     static func history(now: Date = Date()) -> [TranscriptEntry] {
         func ago(_ minutes: Double) -> Date { now.addingTimeInterval(-minutes * 60) }
         return [
@@ -97,9 +97,20 @@ enum PreviewFixtures {
                 text: "", engine: .geminiPro, status: .failed, audioDuration: 23.4, voicedSeconds: 19.8,
                 errorMessage: "Gemini took too long", audioFileName: "preview-failed.wav"),
             TranscriptEntry(
-                createdAt: ago(60 * 26),
-                text: "Quick note for the release: the pill should collapse a little faster than it expands, and the error toast needs the retry button first.",
-                engine: .parakeet, audioDuration: 10.1, voicedSeconds: 8.9, processingTime: 0.37),
+                createdAt: ago(60 * 26), engine: .parakeet, audioDuration: 10.1, voicedSeconds: 8.9,
+                versions: [
+                    TranscriptVersion(text: "Quick note for the release, um, the pill should should collapse a little faster than it, uh, expands and the error toast needs the retry button first.",
+                                      engine: .parakeet, processingTime: 0.37, createdAt: ago(60 * 26)),
+                    TranscriptVersion(
+                        kind: .cleanup(of: .parakeet),
+                        text: "Quick note for the release: the pill should collapse a little faster than it expands, and the error toast needs the retry button first.",
+                        metadata: TranscriptMetadata(
+                            createdAt: ago(60 * 26), modelID: CleanupModel.openRouterModelID, provider: "Google AI Studio",
+                            generationID: "gen-preview-2", reasoningEffort: .low,
+                            usage: TokenUsage(promptTokens: 410, completionTokens: 198, reasoningTokens: 164),
+                            costUSD: 0.00054, processingTime: 1.4, generationTime: 1.1, usedSystemPrompt: true,
+                            finishReason: "stop")),
+                ]),
             TranscriptEntry(
                 createdAt: ago(60 * 27),
                 text: "Ich schicke dir die Unterlagen morgen früh, dann können wir am Nachmittag kurz telefonieren.",

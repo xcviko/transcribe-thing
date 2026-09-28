@@ -24,17 +24,18 @@ enum HubSnapshots {
             hub("hub-home-search", .home) { c in
                 c.initialSearch = "zzz"
             },
-            // The newest row hovered: Copy, the "…" row menu (Transcribe Again With, Restore Previous Text) and Delete.
+            // The newest row hovered: Copy, the "…" row menu (Versions) and Delete.
             hub("hub-home-row-menu", .home, height: 900) { c in
                 c.previewHoveredEntry = c.history.entries.first?.id
             },
-            // Transcribe Again with Gemini Flash under way on the second row, a Retry on the failed one.
+            // A clean-up under way on the newest row, Gemini Flash transcribing the second, a Retry on the failed one.
             hub("hub-home-transcribing", .home, height: 900) { c in
                 let entries = c.history.entries
-                var transcribing: [UUID: EngineID] = [:]
-                if entries.count > 1 { transcribing[entries[1].id] = .geminiFlash }
-                if let failed = entries.first(where: { $0.status == .failed }) { transcribing[failed.id] = .parakeet }
-                c.previewTranscribing = transcribing
+                var running: [UUID: TranscriptVersionKind] = [:]
+                if let first = entries.first { running[first.id] = .cleanup(of: .parakeet) }
+                if entries.count > 1 { running[entries[1].id] = .transcription(.geminiFlash) }
+                if let failed = entries.first(where: { $0.status == .failed }) { running[failed.id] = .transcription(.parakeet) }
+                c.previewRunning = running
             },
 
             hub("hub-models", .models),
@@ -75,6 +76,18 @@ enum HubSnapshots {
             hub("hub-models-extra-custom", .models, height: 1100) { c in
                 c.settings.shortcuts[.switchModel] = .rightCommand
                 c.settings.switchEngines = [.geminiFlash]
+            },
+            // Gemini rows with their Thinking pickers, Clean-up with no prompt yet: the switch disabled, the hint.
+            hub("hub-models-cleanup-empty", .models, height: 2000),
+            // A prompt from Use Example and Clean-up on, at Minimal.
+            hub("hub-models-cleanup-on", .models, height: 2000) { c in
+                c.settings.cleanupSystemPrompt = CleanupModel.examplePrompt
+                c.settings.cleanupEnabled = true
+                c.settings.cleanupReasoningEffort = .minimal
+                c.settings.setReasoningEffort(.medium, for: .geminiPro)
+            },
+            hub("hub-models-cleanup-compact", .models, width: 820, height: 1900) { c in
+                c.account = .preview(status: .missing)
             },
             hub("hub-models-extra-unbound", .models, height: 1100) { c in
                 c.settings.shortcuts[.switchModel] = nil

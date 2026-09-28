@@ -30,8 +30,8 @@ final class HubContext: Observable {
     var fixedNow: Date?
     /// Pre-filled history search (snapshots of the "no matches" state).
     var initialSearch = ""
-    /// History rows shown as being transcribed, in place of the dictation controller's (snapshots).
-    var previewTranscribing: [UUID: EngineID]?
+    /// History rows shown as being transcribed or cleaned up, in place of the dictation controller's (snapshots).
+    var previewRunning: [UUID: TranscriptVersionKind]?
     /// A History row drawn as hovered, its actions showing (snapshots).
     var previewHoveredEntry: UUID?
 
@@ -77,15 +77,9 @@ final class HubContext: Observable {
                            localError: models.lastErrors[engine])
     }
 
-    /// The engine a History row's recording is being transcribed with right now, if it is.
-    func transcribingEngine(for id: UUID) -> EngineID? {
-        (previewTranscribing ?? dictation.transcribingEngines)[id]
-    }
-
     /// What is being made for a History row's recording right now (a transcription or a clean-up), if anything.
     func runningVersion(for id: UUID) -> TranscriptVersionKind? {
-        if let previewTranscribing { return previewTranscribing[id].map { .transcription($0) } }
-        return dictation.runningVersions[id]
+        (previewRunning ?? dictation.runningVersions)[id]
     }
 
     func versionsMenu(for entry: TranscriptEntry) -> VersionsMenu {

@@ -32,12 +32,24 @@ struct ModelsPage: View {
                     ExtraModelsLine(status: extraStatus) { hub.show(.shortcuts) }
                     SettingsGroup {
                         ForEach(EngineID.switchCandidates) { engine in
-                            ExtraModelRow(engine: engine, isOn: extraBinding(engine)) { focusKey(proxy) }
+                            ExtraModelRow(engine: engine, isOn: extraBinding(engine), compact: compactBadges) { focusKey(proxy) }
                         }
                     }
                 }
                 HubGroup("Gemini") {
                     GeminiInstructionsCard()
+                }
+                HubGroup("Clean-up", footer: "Gemini transcripts aren’t cleaned up: Gemini already punctuates and drops filler words. History keeps the original too.") {
+                    SettingsGroup {
+                        CleanupModelRow { focusKey(proxy) }
+                        cleanupToggle
+                        SettingsRow(title: "Thinking", subtitle: "Lower is faster and cheaper. Minimal or Low is plenty for tidying.",
+                                    systemImage: "brain", iconTint: .inkSecondary) {
+                            ThinkingPicker(efforts: CleanupModel.reasoningEfforts, selection: cleanupEffort,
+                                           modelName: CleanupModel.modelName, showsTitle: false)
+                        }
+                    }
+                    CleanupPromptCard()
                 }
                 HubGroup("OpenRouter") {
                     OpenRouterKeyCard(focusRequest: keyFocusRequest)
@@ -56,7 +68,31 @@ struct ModelsPage: View {
     }
 
     private var extraFooter: String {
-        "The next dictation starts on \(settings.selectedEngine.shortName) again. Gemini takes up to 7 minutes of audio."
+        "The next dictation starts on \(settings.selectedEngine.shortName) again. Gemini takes up to 7 minutes of audio. Less thinking is faster and cheaper; more can help with hard audio."
+    }
+
+    // MARK: Clean-up
+
+    /// Off and disabled while there's no prompt; the stored choice comes back once there is one.
+    private var cleanupToggle: some View {
+        let settings = settings
+        let hasPrompt = settings.hasCleanupPrompt
+        return SettingsRow(title: "Clean up Parakeet transcripts",
+                           subtitle: hasPrompt
+                               ? "Flash Lite tidies each dictation before it’s pasted. If it fails or takes too long, you get the original."
+                               : "Write a prompt below or use the example first. Without one, Flash Lite would reply to your words instead of tidying them.",
+                           systemImage: "text.badge.checkmark", iconTint: .inkSecondary) {
+            Toggle("", isOn: Binding(get: { settings.isCleanupActive }, set: { settings.cleanupEnabled = $0 }))
+                .toggleStyle(.appSwitch)
+                .labelsHidden()
+                .disabled(!hasPrompt)
+                .accessibilityLabel("Clean up Parakeet transcripts")
+        }
+    }
+
+    private var cleanupEffort: Binding<ReasoningEffort> {
+        let settings = settings
+        return Binding(get: { settings.cleanupReasoningEffort }, set: { settings.cleanupReasoningEffort = $0 })
     }
 
     private func extraBinding(_ engine: EngineID) -> Binding<Bool> {
@@ -434,10 +470,13 @@ private struct ExtraModelsLine: View {
 private struct ExtraModelRow: View {
     var engine: EngineID
     @Binding var isOn: Bool
+    /// Narrow window: the Thinking picker moves under the status, leaving the key button and switch room.
+    var compact: Bool
     var focusKey: () -> Void
 
     @Environment(HubContext.self) private var hub
     @Environment(OpenRouterAccount.self) private var account
+    @Environment(AppSettings.self) private var settings
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
@@ -464,6 +503,10 @@ private struct ExtraModelRow: View {
                 }
                 ModelStatusText(keyStatus: account.status)
                     .padding(.top, 2)
+                if compact {
+                    thinking
+                        .padding(.top, 4)
+                }
             }
             Spacer(minLength: 8)
             HStack(spacing: 10) {
@@ -477,6 +520,9 @@ private struct ExtraModelRow: View {
                 case .ready, .warming, .needsDownload, .failed:
                     EmptyView()
                 }
+                if !compact {
+                    thinking
+                }
                 Toggle("", isOn: $isOn)
                     .toggleStyle(.appSwitch)
                     .labelsHidden()
@@ -488,6 +534,85 @@ private struct ExtraModelRow: View {
         .padding(.vertical, 12)
         .frame(minHeight: 76)
         .animation(Theme.Motion.hover, value: isOn)
+        .accessibilityElement(children: .contain)
+    }
+}
+
+extension ExtraModelRow {
+    @ViewBuilder fileprivate var thinking: some View {
+        if !engine.reasoningEfforts.isEmpty {
+            ThinkingPicker(efforts: engine.reasoningEfforts, selection: effort, modelName: engine.modelName)
+        }
+    }
+
+    fileprivate var effort: Binding<ReasoningEffort> {
+        let settings = settings, engine = engine
+        return Binding(get: { settings.reasoningEffort(for: engine) ?? engine.reasoningEfforts[0] },
+                       set: { settings.setReasoningEffort($0, for: engine) })
+    }
+}
+
+// MARK: - Clean-up
+
+/// Gemini 3.5 Flash Lite as Clean-up: what it does, who serves it and the OpenRouter key's status, like the extra
+/// models. It reads text, never audio, so it has no place among the models a dictation can go to.
+private struct CleanupModelRow: View {
+    var focusKey: () -> Void
+
+    @Environment(HubContext.self) private var hub
+    @Environment(OpenRouterAccount.self) private var account
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: "wand.and.stars")
+                .font(.system(size: 36 * 0.44, weight: .semibold))
+                .foregroundStyle(Color.warm)
+                .frame(width: 36, height: 36)
+                .background {
+                    RoundedRectangle(cornerRadius: 36 * 0.28, style: .continuous)
+                        .fill(Color.warm.opacity(0.13))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 36 * 0.28, style: .continuous)
+                                .strokeBorder(Color.warm.opacity(0.18), lineWidth: 0.5)
+                        }
+                }
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(CleanupModel.modelName)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.ink)
+                    .lineLimit(1)
+                Text("Tidies punctuation, fillers and false starts · reads text, not audio")
+                    .typeface(.callout)
+                    .foregroundStyle(.inkSecondary)
+                    .lineLimit(1)
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Image(systemName: "server.rack")
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .frame(width: 12)
+                    Text("Served by \(CleanupModel.provider) only.")
+                }
+                .typeface(.callout)
+                .foregroundStyle(.inkTertiary)
+                ModelStatusText(keyStatus: account.status)
+                    .padding(.top, 2)
+            }
+            Spacer(minLength: 8)
+            // The clean-up goes through the same OpenRouter key as Gemini.
+            switch hub.readiness(of: .geminiFlash) {
+            case .needsKey:
+                Button("Add Key", action: focusKey)
+                    .buttonStyle(SecondaryButtonStyle(size: .small))
+            case .keyProblem:
+                Button("Update Key", action: focusKey)
+                    .buttonStyle(SecondaryButtonStyle(size: .small))
+            case .ready, .warming, .needsDownload, .failed:
+                EmptyView()
+            }
+        }
+        .padding(.horizontal, Theme.Spacing.md)
+        .padding(.vertical, 12)
+        .frame(minHeight: 76)
         .accessibilityElement(children: .contain)
     }
 }
