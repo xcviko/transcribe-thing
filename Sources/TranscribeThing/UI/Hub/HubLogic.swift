@@ -307,9 +307,6 @@ enum VersionDetails {
         let m = version.metadata
         var lines: [String] = []
         lines.append(version.kind.displayName)
-        if let model = version.kind.cleanupModel {
-            lines.append("Cleaned up by \(model.modelName)")
-        }
         var source: [String] = []
         if let model = m.modelID, !model.isEmpty { source.append(model) }
         if let provider = m.provider, !provider.isEmpty { source.append("via \(provider)") }

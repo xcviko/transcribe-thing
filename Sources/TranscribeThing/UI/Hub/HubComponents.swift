@@ -488,8 +488,8 @@ struct EngineGlyph: View {
     var engine: EngineID
     /// The OpenRouter provider that served the transcript, for the tooltip.
     var provider: String?
-    /// The transcript shown is a clean-up of `engine`'s: a wand follows the letter.
-    var isCleanedUp = false
+    /// The transcript shown is this model's clean-up of `engine`'s: a wand follows the letter.
+    var cleanupModel: CleanupModel?
     /// The tooltip in full (`VersionDetails`), in place of the engine and provider alone.
     var details: String?
 
@@ -502,7 +502,7 @@ struct EngineGlyph: View {
             }
             Text(engine.glyph)
                 .font(.system(size: 9.5, weight: .bold, design: .rounded))
-            if isCleanedUp {
+            if cleanupModel != nil {
                 Image(systemName: "wand.and.stars")
                     .font(.system(size: 7.5, weight: .bold))
             }
@@ -516,8 +516,9 @@ struct EngineGlyph: View {
         .accessibilityLabel(label)
     }
 
-    private var label: String {
-        let name = isCleanedUp ? "\(engine.displayName) + Clean-up" : engine.displayName
+    /// "Parakeet v3 + Clean-up by GPT-6 Luna · via OpenAI": the accessibility label, and the tooltip without `details`.
+    var label: String {
+        let name = cleanupModel.map { TranscriptVersionKind.cleanup(of: engine, by: $0).displayName } ?? engine.displayName
         return provider.map { "\(name) · via \($0)" } ?? name
     }
 }

@@ -282,6 +282,33 @@ import Testing
         #expect(decoded.version(.cleanup(of: .parakeet, by: .gpt6Luna))?.metadata.reasoningEffort == .off)
     }
 
+    @Test func anOlderBuildKeepsTheTranscriptionACleanUpItCantReadTidied() throws {
+        var entry = TranscriptEntry(text: "raw", engine: .parakeet, audioDuration: 5, voicedSeconds: 4,
+                                    processingTime: 0.4)
+        entry.addVersion(TranscriptVersion(kind: .cleanup(of: .parakeet), text: "Flash.",
+                                           metadata: TranscriptMetadata(costUSD: 0.0002)), makeCurrent: false)
+        entry.addVersion(TranscriptVersion(kind: .cleanup(of: .parakeet, by: .gpt6Luna), text: "Luna.",
+                                           metadata: TranscriptMetadata(provider: "OpenAI", costUSD: 0.0001,
+                                                                        processingTime: 1.1)))
+        let data = try JSONEncoder().encode(entry)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["text"] as? String == "raw" && object["engine"] as? String == "parakeet")
+        #expect(object["provider"] == nil && object["costUSD"] == nil && object["processingTime"] as? Double == 0.4)
+        #expect(try JSONDecoder().decode(TranscriptEntry.self, from: data) == entry, "this build reads Luna's as current")
+
+        // A build that can't read the model (as older builds can't read "gpt6Luna") drops only that version.
+        let older = String(decoding: data, as: UTF8.self).replacingOccurrences(of: "gpt6Luna", with: "futureModel")
+        let decoded = try JSONDecoder().decode(TranscriptEntry.self, from: Data(older.utf8))
+        #expect(decoded.versions.map(\.kind) == [.cleanup(of: .parakeet), .transcription(.parakeet)])
+        #expect(decoded.version(.transcription(.parakeet))?.text == "raw")
+        #expect(decoded.currentKind == .transcription(.parakeet) && decoded.text == "raw")
+
+        // Flash Lite's is read by older builds, so its text stays flat.
+        entry.selectVersion(.cleanup(of: .parakeet))
+        let flash = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(entry)) as? [String: Any])
+        #expect(flash["text"] as? String == "Flash." && flash["costUSD"] as? Double == 0.0002)
+    }
+
     @Test func metadataSummaryIsCompact() {
         #expect(gemini.metadata.summary == "76 s · $0.07 · 17.7k thinking")
         #expect(TranscriptMetadata(processingTime: 0.42).summary == "0.4 s")

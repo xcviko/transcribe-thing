@@ -216,7 +216,7 @@ struct HistoryRow: View {
             if entry.versions.count > 1 {
                 VersionCount(count: entry.versions.count)
             }
-            EngineGlyph(engine: entry.engine, provider: entry.provider, isCleanedUp: entry.currentKind?.isCleanup == true,
+            EngineGlyph(engine: entry.engine, provider: entry.provider, cleanupModel: entry.currentKind?.cleanupModel,
                         details: entry.currentVersion.map(VersionDetails.tooltip))
             Text(Fmt.duration(entry.audioDuration))
                 .font(.system(size: 11.5))

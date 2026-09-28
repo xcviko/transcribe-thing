@@ -74,7 +74,6 @@ import Testing
             usedSystemPrompt: true, finishReason: "length"))
         #expect(VersionDetails.lines(for: version) == [
             "Parakeet v3 + Clean-up by Flash Lite",
-            "Cleaned up by Gemini 3.5 Flash Lite",
             "google/gemini-3.5-flash-lite",
             "Thinking: Minimal",
             "Model 0.8 s",
@@ -85,11 +84,20 @@ import Testing
             modelID: "openai/gpt-6-luna", provider: "OpenAI", reasoningEffort: .off, processingTime: 1.1))
         #expect(VersionDetails.lines(for: luna) == [
             "Parakeet v3 + Clean-up by GPT-6 Luna",
-            "Cleaned up by GPT-6 Luna",
             "openai/gpt-6-luna via OpenAI",
             "Thinking: None",
             "Took 1.1 s",
         ])
+    }
+
+    @Test func theBadgeNamesTheCleanUpModelOnceWithoutDetails() {
+        let luna = TranscriptVersion(kind: .cleanup(of: .parakeet, by: .gpt6Luna), text: "t",
+                                     metadata: TranscriptMetadata(modelID: "openai/gpt-6-luna"))
+        #expect(VersionDetails.lines(for: luna).filter { $0.contains("GPT-6 Luna") }.count == 1)
+        #expect(EngineGlyph(engine: .parakeet, provider: "OpenAI", cleanupModel: .gpt6Luna).label
+                == "Parakeet v3 + Clean-up by GPT-6 Luna · via OpenAI")
+        #expect(EngineGlyph(engine: .parakeet, cleanupModel: .geminiFlashLite).label == "Parakeet v3 + Clean-up by Flash Lite")
+        #expect(EngineGlyph(engine: .parakeet).label == "Parakeet v3")
     }
 
     @Test func aLocalOrOldTranscriptSaysOnlyWhatItKnows() {

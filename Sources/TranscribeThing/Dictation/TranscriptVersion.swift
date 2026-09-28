@@ -20,6 +20,12 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
         if case .cleanup = self { true } else { false }
     }
 
+    /// Builds from before the choice of clean-up model read it: a transcription, or a clean-up by Flash Lite. A
+    /// clean-up by another model has the model in its raw value, which they can't read.
+    var isReadableByOlderBuilds: Bool {
+        cleanupModel.map { $0 == .geminiFlashLite } ?? true
+    }
+
     /// The model that tidied the text; nil for a transcription.
     var cleanupModel: CleanupModel? {
         if case .cleanup(_, let model) = self { model } else { nil }
@@ -51,7 +57,7 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
 
     /// Persisted: "parakeet", "cleanup:parakeet" (Flash Lite's, as older builds wrote it),
     /// "cleanup:parakeet:gpt6Luna". Never rename. An older build can't read a kind with a model and drops that
-    /// version, not the entry.
+    /// version, not the entry (`TranscriptEntry.encode(to:)` keeps the text it tidied intact for them).
     var rawValue: String {
         switch self {
         case .transcription(let engine): engine.rawValue

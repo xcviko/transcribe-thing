@@ -191,11 +191,18 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
         try c.encode(voicedSeconds, forKey: .voicedSeconds)
         try c.encodeIfPresent(errorMessage, forKey: .errorMessage)
         try c.encodeIfPresent(audioFileName, forKey: .audioFileName)
-        try c.encode(text, forKey: .text)
+        // An older build that can't read the current kind takes the flat fields for the current version, as a
+        // transcription by `engine`, in place of that transcription. For a clean-up it can't read, they hold the
+        // transcription the clean-up tidied, so an older build keeps that text rather than the clean-up's under its
+        // name.
+        let flat = currentKind.flatMap { kind in
+            kind.isReadableByOlderBuilds ? nil : version(.transcription(kind.engine))
+        } ?? currentVersion
+        try c.encode(flat?.text ?? "", forKey: .text)
         try c.encode(engine, forKey: .engine)
-        try c.encodeIfPresent(provider, forKey: .provider)
-        try c.encodeIfPresent(costUSD, forKey: .costUSD)
-        try c.encodeIfPresent(processingTime, forKey: .processingTime)
+        try c.encodeIfPresent(flat?.metadata.provider, forKey: .provider)
+        try c.encodeIfPresent(flat?.metadata.costUSD, forKey: .costUSD)
+        try c.encodeIfPresent(flat?.metadata.processingTime, forKey: .processingTime)
         if !versions.isEmpty {
             try c.encode(versions, forKey: .versions)
             try c.encodeIfPresent(currentKind?.rawValue, forKey: .currentKind)
