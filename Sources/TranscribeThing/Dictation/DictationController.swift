@@ -9,8 +9,15 @@ enum DictationActivity: Equatable, Sendable { case idle, recording, processing }
 struct HomeFailure: Equatable, Sendable {
     /// What was being made.
     var kind: TranscriptVersionKind
-    /// In the notices' words: "Gemini Flash took too long", "GPT-6 Luna took too long."
+    /// Said after `kind.failureTitle`, which names the model already: "It took too long.", "OpenAI is unavailable."
     var reason: String
+    /// The recording's audio couldn't be read, so trying again can't help.
+    var isRecordingGone = false
+
+    /// A transcription whose recording couldn't be read.
+    static func recordingGone(_ kind: TranscriptVersionKind) -> HomeFailure {
+        HomeFailure(kind: kind, reason: "Recording no longer kept", isRecordingGone: true)
+    }
 }
 
 /// The capture surface the controller drives. `AudioRecorder` is the real one; tests substitute a fake so
@@ -166,8 +173,6 @@ final class DictationController {
     static let repeatedFailureQuietPeriod: TimeInterval = 2
     /// What Undo does after a cancel, in the cancel notices.
     nonisolated static let undoResumesHint = "Undo keeps recording, hands-free."
-    /// A recording's audio couldn't be read (it's kept only for a while).
-    nonisolated static let recordingGoneTitle = "That recording is gone"
 
     init(settings: AppSettings, recorder: AudioRecorder, transcription: TranscriptionService,
          models: ModelStore, account: OpenRouterAccount, history: HistoryStore, inserter: TextInserter,
@@ -210,6 +215,7 @@ final class DictationController {
             previousFailure?(engine, error)
             self?.modelFailed(engine, error)
         }
+        history.onRemove = { [weak self] ids in self?.entriesRemoved(ids) }
         observeMicrophonePermission()
         stateDidChange()
     }
@@ -754,14 +760,15 @@ final class DictationController {
         }
     }
 
-    private func transcribe(_ recording: Recording, engine: EngineID) async -> Outcome {
+    /// `background`: Home's work, which lets dictations have the local model first.
+    private func transcribe(_ recording: Recording, engine: EngineID, background: Bool = false) async -> Outcome {
         do {
             if engine.isLocal, transcribeOverride == nil { try await waitForLocalModel(engine) }
             let result: TranscriptResult
             if let transcribeOverride {
                 result = try await transcribeOverride(recording, engine)
             } else {
-                result = try await transcription.transcribe(recording, engine: engine)
+                result = try await transcription.transcribe(recording, engine: engine, background: background)
             }
             return .success(result)
         } catch let error as AppError {
@@ -1205,9 +1212,10 @@ final class DictationController {
     /// version the entry already has is shown instead of being made twice.
     ///
     /// Home work stays in Home. It runs in a task of its own beside dictations, never in their queue, so it never
-    /// holds a dictation's paste back, and Esc neither waits for it nor cancels it. No pill, notice or sound: its row
-    /// shows it running (with Cancel, `cancelHomeWork(for:)`), then the new version, or why it didn't come
-    /// (`homeFailures`).
+    /// holds a dictation's paste back, and Esc neither waits for it nor cancels it. The local model still takes one
+    /// recording at a time: Home's waits behind every dictation's, though one it already started finishes first. No
+    /// pill, notice or sound: its row shows it running (with Cancel, `cancelHomeWork(for:)`), then the new version,
+    /// or why it didn't come (`homeFailures`). Deleting the row cancels it.
     func makeVersion(_ kind: TranscriptVersionKind, of entry: TranscriptEntry) {
         switch kind {
         case .transcription(let engine): retry(entry, with: engine)
@@ -1227,24 +1235,26 @@ final class DictationController {
             return
         }
         guard let recording = recording(for: id) else {
-            homeFailures[id] = HomeFailure(kind: kind, reason: Self.recordingGoneTitle)
+            homeFailures[id] = .recordingGone(kind)
             return
         }
         beginHomeWork(kind, for: id)
         homeTasks[id] = Task { [weak self] in
             guard let self else { return }
-            let outcome = await self.transcribe(recording, engine: engine)
+            let outcome = await self.transcribe(recording, engine: engine, background: true)
             guard self.endHomeWork(for: id) else { return }
             self.land(outcome, of: recording, engine: engine)
         }
     }
 
     /// Clean Up from Home: `model` tidies the entry's `source` transcript, which becomes a new version and the
-    /// current one. Works without the audio. Nothing happens while something else runs for the recording.
+    /// current one. Works without the audio. Nothing happens while something else runs for the recording, or for a
+    /// transcript with no text.
     private func cleanUp(_ entry: TranscriptEntry, of source: EngineID, by model: CleanupModel) {
         let id = entry.id
         guard entry.status == .success, CleanupModel.canClean(source), !isInFlight(id),
-              let raw = history.entry(id: id)?.version(.transcription(source)) else { return }
+              let raw = history.entry(id: id)?.version(.transcription(source)),
+              !raw.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         let kind = TranscriptVersionKind.cleanup(of: source, by: model)
         guard !(history.entry(id: id)?.hasVersion(kind) ?? false) else {
             showVersion(kind, of: id)
@@ -1264,7 +1274,7 @@ final class DictationController {
                 self.resolveGeneration(of: version, entryID: id)
             case .failed(let error):
                 guard self.history.entry(id: id) != nil else { return }
-                self.homeFailures[id] = HomeFailure(kind: kind, reason: Self.cleanupFailureReason(error, model: model))
+                self.homeFailures[id] = HomeFailure(kind: kind, reason: Self.homeFailureReason(error, making: kind))
             }
         }
     }
@@ -1281,6 +1291,15 @@ final class DictationController {
     /// The row's failure line, dismissed.
     func dismissHomeFailure(for id: UUID) {
         homeFailures[id] = nil
+    }
+
+    /// Rows deleted (Delete, Clear All, the oldest past the history's limit) take their Home work along: nothing of
+    /// it would land, and there is no Cancel left to stop it. The Hub's Undo brings the row back as it was.
+    private func entriesRemoved(_ ids: [UUID]) {
+        for id in ids {
+            cancelHomeWork(for: id)
+            homeFailures[id] = nil
+        }
     }
 
     /// Home starts making `kind` for the recording: the row shows it running, and its last failure goes.
@@ -1335,45 +1354,71 @@ final class DictationController {
             failure = error
         }
         Log.engine.error("Home transcription failed: \(failure.code, privacy: .public)")
-        let reason = Self.homeFailureReason(failure, engine: engine)
+        let kind = TranscriptVersionKind.transcription(engine)
         guard entry.status != .success else {
-            homeFailures[id] = HomeFailure(kind: .transcription(engine), reason: reason)
+            homeFailures[id] = HomeFailure(kind: kind, reason: Self.homeFailureReason(failure, making: kind))
             return
         }
+        // Its row says why itself, naming the model as a failed dictation's does: the notice's title ("Gemini Flash
+        // took too long"), or for an engine's own failure (titled only "Couldn't transcribe") the line naming it.
+        let notice = failure.notice(recordingID: nil, fallbackEngine: nil, engine: engine)
+        let reason = if case .engineFailed = failure, let body = notice.body { body } else { notice.title }
         history.upsert(TranscriptEntry(
             id: id, createdAt: recording.startedAt, text: "", engine: engine, status: .failed,
             audioDuration: recording.duration, voicedSeconds: recording.speech.voicedSeconds,
             errorMessage: reason, audioFileName: history.saveAudio(recording) ?? entry.audioFileName))
     }
 
-    /// Why a transcription asked for from Home didn't come, in the notices' words: their title ("Gemini Flash took
-    /// too long"), or, for an engine's own failure (titled only "Couldn't transcribe"), the line naming the engine.
-    nonisolated static func homeFailureReason(_ error: AppError, engine: EngineID) -> String {
-        let notice = error.notice(recordingID: nil, fallbackEngine: nil, engine: engine)
-        if case .engineFailed = error, let body = notice.body { return body }
-        return notice.title
+    /// Why a version asked for from Home didn't come, as its row says it after "Couldn't transcribe with Gemini
+    /// Flash" or "Couldn't clean up with GPT-6 Luna": that names the model already, so this says "It". A key, credit
+    /// or connection problem reads the same whichever model it stopped.
+    nonisolated static func homeFailureReason(_ error: AppError?, making kind: TranscriptVersionKind) -> String {
+        switch (error, kind) {
+        case (nil, _): "It returned no text."
+        case (.timeout?, _): "It took too long."
+        case (.openRouterTruncated?, _): "It stopped before finishing."
+        case (.openRouterRefused?, .cleanup), (.openRouterBadRequest?, .cleanup): "It couldn’t process the text."
+        case (let error?, .cleanup(_, let model)): cleanupFailureReason(error, model: model)
+        case (.openRouterRefused?, _), (.openRouterBadRequest?, _): "It couldn’t process this recording."
+        case (.engineFailed?, _): "It ran into a problem."
+        case (.modelNotDownloaded?, _): "It isn’t downloaded yet."
+        case (.modelLoadFailed?, _): "It couldn’t be loaded."
+        case (.openRouterNoRoute?, _): "It isn’t available for your key."
+        case (.openRouterProviderUnavailable?, .transcription(let engine)) where engine.cloudAPI == .transcriptions:
+            "OpenRouter couldn’t reach its provider."
+        case (let error?, .transcription(let engine)):
+            accountFailureReason(error) ?? error.notice(recordingID: nil, fallbackEngine: nil, engine: engine).title
+        }
     }
 
     /// Why a clean-up didn't happen, in a sentence about the text and the clean-up model that tried (the error
     /// notices' own titles speak of Gemini and recordings).
     nonisolated static func cleanupFailureReason(_ error: AppError?, model cleanupModel: CleanupModel) -> String {
+        if let error, let reason = accountFailureReason(error) { return reason }
         let model = cleanupModel.shortName
         return switch error {
         case nil: "\(model) returned no text."
         case .timeout?: "\(model) took too long."
-        case .openRouterMissingKey?: "Add your OpenRouter key in Models."
-        case .openRouterKeyUnreadable?: "Your OpenRouter key couldn’t be read from the Keychain."
-        case .openRouterInvalidKey?: "Your OpenRouter key was rejected."
-        case .openRouterNoCredits?: "You’re out of OpenRouter credit."
-        case .openRouterKeyLimit?: "Your OpenRouter key hit its spending limit."
-        case .openRouterRateLimited?: "OpenRouter is rate-limiting requests. Try again in a moment."
         case .openRouterNoRoute?: "OpenRouter found no \(cleanupModel.providerName) route for your key."
         case .openRouterProviderUnavailable?: "\(cleanupModel.providerName) is unavailable."
-        case .openRouterServer?: "OpenRouter ran into a problem."
         case .openRouterTruncated?: "\(model) stopped before finishing."
         case .openRouterRefused?, .openRouterBadRequest?: "\(model) couldn’t process the text."
-        case .offline?: "You’re offline."
         case let error?: error.notice(recordingID: nil, fallbackEngine: nil).title
+        }
+    }
+
+    /// A key, credit or connection problem, or OpenRouter's own: the same sentence whichever model it stopped.
+    private nonisolated static func accountFailureReason(_ error: AppError) -> String? {
+        switch error {
+        case .openRouterMissingKey: "Add your OpenRouter key in Models."
+        case .openRouterKeyUnreadable: "Your OpenRouter key couldn’t be read from the Keychain."
+        case .openRouterInvalidKey: "Your OpenRouter key was rejected."
+        case .openRouterNoCredits: "You’re out of OpenRouter credit."
+        case .openRouterKeyLimit: "Your OpenRouter key hit its spending limit."
+        case .openRouterRateLimited: "OpenRouter is rate-limiting requests. Try again in a moment."
+        case .openRouterServer: "OpenRouter ran into a problem."
+        case .offline: "You’re offline."
+        default: nil
         }
     }
 
@@ -1450,6 +1495,8 @@ final class DictationController {
     /// their failures surface as notices. A failed dictation's notice for the same error shares the dedupe key.
     private func modelFailed(_ engine: EngineID, _ error: AppError) {
         if case .modelLoadFailed = error, engine != settings.selectedEngine { return }
+        // A load Home work waits for: its row says why. A dictation that needs the model says it in its own notice.
+        if case .modelLoadFailed = error, homeWork.values.contains(.transcription(engine)) { return }
         postFailure(error.notice(recordingID: nil, fallbackEngine: usableFallback(excluding: engine, after: error),
                                  engine: engine))
     }
@@ -1464,10 +1511,10 @@ final class DictationController {
                            title: "Using \(builtIn.name)", lifetime: .seconds(3)))
     }
 
-    /// A notice's Retry or Undo found no audio to use (Home says it in the row: `recordingGoneTitle`).
+    /// A notice's Retry or Undo found no audio to use (Home says it in the row: `HomeFailure.recordingGone`).
     private func postRecordingGone() {
         toasts.post(Notice(dedupeKey: "recording.gone", style: .warning, symbol: "waveform.slash",
-                           title: Self.recordingGoneTitle,
+                           title: "That recording is gone",
                            body: "\(Brand.name) keeps recordings only for a while. Choose how long in General → History.",
                            lifetime: .seconds(5), sound: .alert))
     }

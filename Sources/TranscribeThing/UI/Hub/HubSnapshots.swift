@@ -28,8 +28,8 @@ enum HubSnapshots {
             hub("hub-home-row-menu", .home, height: 900) { c in
                 c.previewHoveredEntry = c.history.entries.first?.id
             },
-            // Home work under way, each with its Cancel: a clean-up on the newest row, Gemini Flash transcribing the
-            // second, a Retry on the failed one.
+            // Home work under way, each with its × to cancel it: a clean-up on the newest row, Gemini Flash
+            // transcribing the second, a Retry on the failed one.
             hub("hub-home-transcribing", .home, height: 900) { c in
                 let entries = c.history.entries
                 var running: [UUID: TranscriptVersionKind] = [:]
@@ -38,8 +38,9 @@ enum HubSnapshots {
                 if let failed = entries.first(where: { $0.status == .failed }) { running[failed.id] = .transcription(.parakeet) }
                 c.previewRunning = running
             },
-            // Home work that didn't come, said in its row with Retry and a way to dismiss it: Gemini Flash took too
-            // long on the newest row, a clean-up failed on the second, the failed row's recording couldn't be read.
+            // Home work that didn't come, said in its row with Retry and a × to dismiss it: Gemini Flash took too long
+            // on the newest row, a clean-up failed on the second. The third's recording couldn't be read (nothing to
+            // retry), nor the failed row's, which says it's no longer kept.
             hub("hub-home-work-failed", .home, height: 900) { c in
                 c.previewFailures = Samples.homeFailures(c.history.entries)
             },
@@ -47,6 +48,20 @@ enum HubSnapshots {
             hub("hub-home-work-failed-key", .home, height: 900) { c in
                 c.account = .preview(status: .missing)
                 c.previewFailures = Samples.homeFailures(c.history.entries, keyMissing: true)
+            },
+            // The narrowest window: a failure's Retry and × stay on its first line when the reason wraps, and a
+            // running line beside a long meta keeps its model's name.
+            hub("hub-home-work-compact", .home, width: 820, height: 900) { c in
+                let entries = c.history.entries
+                guard entries.count > 2 else { return }
+                let cleanUp = TranscriptVersionKind.cleanup(of: .parakeet, by: .default)
+                c.previewFailures = [
+                    entries[0].id: Samples.homeFailure(cleanUp, .openRouterProviderUnavailable("")),
+                    entries[2].id: Samples.homeFailure(.transcription(.parakeetCloud), .timeout(.parakeetCloud)),
+                ]
+                var running = [entries[1].id: TranscriptVersionKind.transcription(.geminiFlash)]
+                if let failed = entries.first(where: { $0.status == .failed }) { running[failed.id] = .transcription(.parakeet) }
+                c.previewRunning = running
             },
 
             hub("hub-models", .models),
@@ -218,24 +233,29 @@ enum HubSnapshots {
         static let downloading = DownloadProgress(fraction: 0.42, bytesReceived: 265_600_000, totalBytes: 632_321_326,
                                                   bytesPerSecond: 9_800_000, secondsRemaining: 38)
 
-        /// Home work that failed on the newest row (Gemini Flash), the second (a clean-up of cloud Parakeet) and the
-        /// failed row (its recording couldn't be read), in the words the controller uses.
+        /// Home work that didn't come, in the words the controller uses: Gemini Flash on the newest row, a clean-up of
+        /// cloud Parakeet on the second, and Parakeet · Cloud on the third and Parakeet on the failed row, whose
+        /// recordings couldn't be read.
         static func homeFailures(_ entries: [TranscriptEntry], keyMissing: Bool = false) -> [UUID: HomeFailure] {
             var failures: [UUID: HomeFailure] = [:]
             if let first = entries.first {
-                let error: AppError = keyMissing ? .openRouterMissingKey : .timeout(.geminiFlash)
-                failures[first.id] = HomeFailure(kind: .transcription(.geminiFlash),
-                                                 reason: DictationController.homeFailureReason(error, engine: .geminiFlash))
+                failures[first.id] = homeFailure(.transcription(.geminiFlash),
+                                                 keyMissing ? .openRouterMissingKey : .timeout(.geminiFlash))
             }
             if entries.count > 1 {
-                let error: AppError = keyMissing ? .openRouterMissingKey : .openRouterProviderUnavailable("")
-                failures[entries[1].id] = HomeFailure(kind: .cleanup(of: .parakeetCloud, by: .default),
-                                                      reason: DictationController.cleanupFailureReason(error, model: .default))
+                failures[entries[1].id] = homeFailure(.cleanup(of: .parakeetCloud, by: .default),
+                                                      keyMissing ? .openRouterMissingKey : .openRouterProviderUnavailable(""))
             }
+            if entries.count > 2 { failures[entries[2].id] = .recordingGone(.transcription(.parakeetCloud)) }
             if let failed = entries.first(where: { $0.status == .failed }) {
-                failures[failed.id] = HomeFailure(kind: .transcription(.parakeet), reason: DictationController.recordingGoneTitle)
+                failures[failed.id] = .recordingGone(.transcription(.parakeet))
             }
             return failures
+        }
+
+        /// `kind` didn't come because of `error`, as the controller says it.
+        static func homeFailure(_ kind: TranscriptVersionKind, _ error: AppError) -> HomeFailure {
+            HomeFailure(kind: kind, reason: DictationController.homeFailureReason(error, making: kind))
         }
     }
 }

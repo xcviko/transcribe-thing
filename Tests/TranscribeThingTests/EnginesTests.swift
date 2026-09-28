@@ -861,6 +861,26 @@ actor ConcurrencyProbe {
         await #expect(throws: Boom.self) { try await gate.run { throw Boom() } }
         #expect(try await gate.run { "ok" } == "ok")
     }
+
+    /// A background caller (Home's work) waits behind every other one, even one that came later; among themselves,
+    /// callers of each kind keep their order. The one running is never interrupted.
+    @Test func backgroundCallersLetEveryOtherCallerGoFirst() async throws {
+        let gate = InferenceGate()
+        let probe = ConcurrencyProbe()
+        let steps = StepGate()
+        let holder = Task { try await gate.run(background: true) { try await steps.pass(); await probe.leave(0) } }
+        await steps.arrival(1)
+        // 1 and 3 are Home's, 2 and 4 dictations'.
+        var waiters: [Task<Void, Error>] = []
+        for id in 1...4 {
+            waiters.append(Task { try await gate.run(background: !id.isMultiple(of: 2)) { await probe.leave(id) } })
+            while await gate.queueLength < id { try await Task.sleep(for: .milliseconds(1)) }
+        }
+        steps.openForGood()
+        try await holder.value
+        for waiter in waiters { try await waiter.value }
+        #expect(await probe.finished == [0, 2, 4, 1, 3])
+    }
 }
 
 // MARK: - ModelStore with fake engines
@@ -971,6 +991,8 @@ actor FakeEngine: LocalEngine {
     private(set) var downloadGate: StepGate?
     /// When set, `load` waits at this gate instead of sleeping for `loadDelay`.
     private(set) var loadGate: StepGate?
+    /// When set, `transcribe` waits at this gate first.
+    private(set) var transcribeGate: StepGate?
     private(set) var loaded = false
     private(set) var loadCount = 0
     private(set) var transcribeCount = 0
@@ -1001,6 +1023,13 @@ actor FakeEngine: LocalEngine {
         return gate
     }
 
+    /// From now on every transcription waits for the test to open the returned gate.
+    func gateTranscriptions() -> StepGate {
+        let gate = StepGate()
+        transcribeGate = gate
+        return gate
+    }
+
     nonisolated func isInstalled() -> Bool { installed.get() }
     func remoteDownloadBytes() async -> Int64 { 1_000_000 }
 
@@ -1027,6 +1056,7 @@ actor FakeEngine: LocalEngine {
 
     func transcribe(_ samples: [Float]) async throws -> String {
         guard loaded else { throw LocalEngineError.notLoaded }
+        if let transcribeGate { try await transcribeGate.pass() }
         transcribeCount += 1
         return transcript
     }

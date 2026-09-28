@@ -520,7 +520,7 @@ import Testing
         h.controller.makeVersion(.transcription(.geminiFlash), of: original)
         try await waitUntil { h.controller.homeFailures[id] != nil }
         let failure = try #require(h.controller.homeFailures[id])
-        #expect(failure == HomeFailure(kind: .transcription(.geminiFlash), reason: "Gemini Flash took too long"))
+        #expect(failure == HomeFailure(kind: .transcription(.geminiFlash), reason: "It took too long."))
         #expect(h.history.entry(id: id) == original, "the row keeps its text, engine and audio")
         #expect(h.controller.runningVersions.isEmpty)
         #expect(h.toasts.notices.isEmpty)
@@ -648,8 +648,9 @@ import Testing
         h.history.upsert(entry)
         h.controller.retry(entry, with: .geminiFlash)
         #expect(h.controller.runningVersions.isEmpty)
-        #expect(h.controller.homeFailures[entry.id]
-                == HomeFailure(kind: .transcription(.geminiFlash), reason: DictationController.recordingGoneTitle))
+        let failure = h.controller.homeFailures[entry.id]
+        #expect(failure == .recordingGone(.transcription(.geminiFlash)))
+        #expect(failure?.isRecordingGone == true && failure?.reason == "Recording no longer kept")
         #expect(h.toasts.notices.isEmpty)
         #expect(h.history.entry(id: entry.id) == entry)
     }

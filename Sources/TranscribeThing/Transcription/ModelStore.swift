@@ -387,8 +387,9 @@ final class ModelStore {
     // MARK: Transcribe
 
     /// Waits while the model downloads or loads, then transcribes. Throws `AppError`, or `CancellationError`
-    /// when the calling task is cancelled.
-    func transcribeLocal(_ id: EngineID, samples: [Float]) async throws -> String {
+    /// when the calling task is cancelled. `background`: Home's work, which lets dictations have the model first
+    /// (`InferenceGate`).
+    func transcribeLocal(_ id: EngineID, samples: [Float], background: Bool = false) async throws -> String {
         guard id.isLocal, let engine = engines[id] else {
             throw AppError.engineFailed(id, "\(id.displayName) doesn’t run on this Mac.")
         }
@@ -398,7 +399,7 @@ final class ModelStore {
             attempts += 1
             try await waitUntilReady(id, engine: engine)
             do {
-                return try await gate.run { try await engine.transcribe(samples) }
+                return try await gate.run(background: background) { try await engine.transcribe(samples) }
             } catch LocalEngineError.notLoaded where attempts < 3 {
                 // Unloaded after it reported ready (a delete queued ahead of this): look at its state again.
                 if state(of: id) == .ready { states[id] = .installed }

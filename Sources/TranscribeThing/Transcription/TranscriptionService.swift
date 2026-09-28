@@ -62,8 +62,9 @@ final class TranscriptionService {
     /// `processingTime` covers everything after the recording ended, including any wait for the model.
     /// `effort` has Gemini think at another level than its own (`EngineCLI --effort`), and `prompt` replaces its
     /// fixed `EngineID.geminiSystemPrompt` (`--prompt`; empty sends only the audio); the app never passes either.
+    /// `background`: Home's work, which lets dictations have the local model first.
     func transcribe(_ recording: Recording, engine: EngineID, effort: ReasoningEffort? = nil,
-                    prompt: String? = nil) async throws -> TranscriptResult {
+                    prompt: String? = nil, background: Bool = false) async throws -> TranscriptResult {
         guard !engine.isRetired else {
             throw AppError.engineFailed(engine, "\(engine.displayName) is no longer offered.")
         }
@@ -71,7 +72,7 @@ final class TranscriptionService {
         do {
             var result = TranscriptResult(text: "", engine: engine, processingTime: 0)
             if engine.isLocal {
-                result.text = try await models.transcribeLocal(engine, samples: recording.samples)
+                result.text = try await models.transcribeLocal(engine, samples: recording.samples, background: background)
             } else {
                 let effort = effort ?? engine.reasoningEffort
                 let prompt = engine.cloudAPI == .chatCompletions ? (prompt ?? EngineID.geminiSystemPrompt) : ""

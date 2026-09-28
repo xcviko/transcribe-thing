@@ -301,6 +301,8 @@ final class HistoryStore {
     /// Audio of deleted entries lingers briefly so the Hub's "Undo" can bring the row back intact.
     @ObservationIgnored private var pendingFileRemovals: [String: Task<Void, Never>] = [:]
     static let deletedAudioGrace: Duration = .seconds(15)
+    /// Entries just removed, by id: deleted, cleared, or the oldest past `maxEntries`.
+    @ObservationIgnored var onRemove: (([UUID]) -> Void)?
 
     /// Newest first, at most `maxEntries`.
     private(set) var entries: [TranscriptEntry] = []
@@ -450,11 +452,13 @@ final class HistoryStore {
         if let file = entries[i].audioFileName { removeAudioFileLater(file) }
         entries.remove(at: i)
         changed()
+        onRemove?([id])
     }
 
     func clearAll() {
         pendingFileRemovals.values.forEach { $0.cancel() }
         pendingFileRemovals.removeAll()
+        let removed = entries.map(\.id)
         entries.removeAll()
         if persists {
             let dir = paths.recordings
@@ -466,14 +470,18 @@ final class HistoryStore {
             }
         }
         changed()
+        onRemove?(removed)
     }
 
     private func trimToLimit() {
         guard entries.count > Self.maxEntries else { return }
-        for dropped in entries[Self.maxEntries...] {
-            if let file = dropped.audioFileName { removeAudioFile(file) }
+        let dropped = entries[Self.maxEntries...]
+        for entry in dropped {
+            if let file = entry.audioFileName { removeAudioFile(file) }
         }
+        let removed = dropped.map(\.id)
         entries.removeLast(entries.count - Self.maxEntries)
+        onRemove?(removed)
     }
 
     // MARK: - Audio

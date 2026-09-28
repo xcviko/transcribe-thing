@@ -1,13 +1,14 @@
 import Foundation
 
-/// Serializes every local model load, unload, delete and inference, in FIFO order. Concurrent Core ML work
-/// can crash inside libBNNS (FluidAudio issue #661), and AsrManager is unsafe to call re-entrantly (it
-/// suspends mid-inference).
+/// Serializes every local model load, unload, delete and inference, in FIFO order, except that a background caller
+/// (Home's work) lets every other caller go first. Concurrent Core ML work can crash inside libBNNS (FluidAudio
+/// issue #661), and AsrManager is unsafe to call re-entrantly (it suspends mid-inference).
 actor InferenceGate {
     static let shared = InferenceGate()
 
     private struct Waiter {
         let id: UUID
+        let isBackground: Bool
         let continuation: CheckedContinuation<Void, Error>
     }
 
@@ -19,14 +20,16 @@ actor InferenceGate {
 
     /// Runs `operation` once every earlier caller has finished. A caller cancelled while waiting
     /// leaves the queue and throws `CancellationError` without running.
-    func run<T: Sendable>(_ operation: @Sendable () async throws -> T) async throws -> T {
-        try await acquire()
+    /// `background`: waits behind every caller that isn't, even one that came later (a dictation goes before Home's
+    /// work). An operation already running is never stopped for one.
+    func run<T: Sendable>(background: Bool = false, _ operation: @Sendable () async throws -> T) async throws -> T {
+        try await acquire(background: background)
         defer { release() }
         try Task.checkCancellation()
         return try await operation()
     }
 
-    private func acquire() async throws {
+    private func acquire(background: Bool) async throws {
         try Task.checkCancellation()
         if !isBusy {
             isBusy = true
@@ -38,7 +41,7 @@ actor InferenceGate {
                 if Task.isCancelled {
                     continuation.resume(throwing: CancellationError())
                 } else {
-                    waiters.append(Waiter(id: id, continuation: continuation))
+                    waiters.append(Waiter(id: id, isBackground: background, continuation: continuation))
                 }
             }
         } onCancel: {
@@ -52,11 +55,11 @@ actor InferenceGate {
     }
 
     private func release() {
-        if waiters.isEmpty {
+        guard let next = waiters.firstIndex(where: { !$0.isBackground }) ?? waiters.indices.first else {
             isBusy = false
-        } else {
-            // Hand the turn straight to the next waiter; the gate stays busy.
-            waiters.removeFirst().continuation.resume()
+            return
         }
+        // Hand the turn straight to the next waiter; the gate stays busy.
+        waiters.remove(at: next).continuation.resume()
     }
 }

@@ -56,32 +56,74 @@ import Testing
         #expect(hovered.filter { $0 == "Delete transcript" }.count == 1)
     }
 
-    /// Home work in a row has Cancel beside it; a failure has Retry and Dismiss beside its reason.
+    /// Home work in a row has a × to cancel it; a failure has Retry and a × to dismiss it beside its reason, and
+    /// no Retry when the recording couldn't be read (a failed row then says it's no longer kept instead of offering
+    /// its own Retry). A transcript with no text ("No speech detected") shows its work like any other.
     @Test func homeWorkCanBeCanceledAndItsFailureRetriedOrDismissedInTheRow() {
         let now = Calendar.current.date(bySettingHour: 23, minute: 0, second: 0, of: Date())!
         let entries = HomeScrollBenchmark.entries(4, every: 60, before: now)
+        let empty = (1...2).map { i in
+            TranscriptEntry(createdAt: now.addingTimeInterval(-Double(i) * 10), text: "", engine: .parakeet,
+                            audioDuration: 5, voicedSeconds: 0, audioFileName: "empty-\(i).wav")
+        }
+        let failed = entries.first { $0.status == .failed }!
         let env = AppEnvironment.preview()
         let context = HubContext(env: env)
         context.fixedNow = now
-        context.history = .preview(entries: entries)
-        context.previewRunning = [entries[0].id: .transcription(.geminiFlash)]
-        context.previewFailures = [entries[1].id: HomeFailure(kind: .cleanup(of: .parakeetCloud, by: .gpt6Luna),
-                                                               reason: "GPT-6 Luna took too long.")]
+        context.history = .preview(entries: empty + entries)
+        context.previewRunning = [entries[0].id: .transcription(.geminiFlash), empty[0].id: .transcription(.geminiFlash)]
+        context.previewFailures = [
+            entries[1].id: HomeFailure(kind: .cleanup(of: .parakeetCloud, by: .gpt6Luna), reason: "It took too long."),
+            empty[1].id: HomeFailure(kind: .transcription(.geminiFlash), reason: "It took too long."),
+            entries[2].id: .recordingGone(.transcription(.parakeetCloud)),
+            failed.id: .recordingGone(.transcription(.parakeet)),
+        ]
+        env.windows.hubSection = .home
+        let labels = Self.accessibleButtons(HubView(context: context).appTheme(), height: 1100)
+        #expect(labels.filter { $0 == "Cancel" }.count == 2)
+        #expect(labels.filter { $0 == "Retry" }.count == 2, "the clean-up's and the empty transcript's failures")
+        #expect(labels.filter { $0 == "Dismiss" }.count == 3)
+    }
+
+    /// Only Home's own work has a × in its row: a dictation being transcribed for a row (a notice's Retry) is
+    /// Esc's to cancel.
+    @Test func onlyHomeWorkCanBeCanceledInTheRow() async throws {
+        let env = AppEnvironment.preview()
+        let entries = env.history.entries
+        let transcript = try #require(entries.first { $0.currentKind == .transcription(.parakeet) })
+        let failed = try #require(entries.first { $0.status == .failed })
+        let dictation = env.dictation
+        var release = false
+        dictation.insertOverride = { _, _ in .pasted }
+        dictation.transcribeOverride = { _, engine in
+            while !release { try await Task.sleep(for: .milliseconds(5)) }
+            return TranscriptResult(text: "retried", engine: engine, processingTime: 1)
+        }
+        dictation.cleanupOverride = { text, source in
+            while !release { try await Task.sleep(for: .milliseconds(5)) }
+            return TranscriptResult(text: text, engine: source, processingTime: 1)
+        }
+        dictation.enqueue(Recording(id: failed.id, samples: Array(repeating: 0.1, count: 16_000)), engine: .geminiFlash,
+                          targetPID: nil)
+        dictation.makeVersion(.cleanup(of: .parakeet, by: .gpt6Luna), of: transcript)
+        #expect(dictation.runningVersions.count == 2 && dictation.homeWork.count == 1)
+        let context = HubContext(env: env)
         env.windows.hubSection = .home
         let labels = Self.accessibleButtons(HubView(context: context).appTheme())
-        #expect(labels.filter { $0 == "Cancel" }.count == 1)
-        #expect(labels.filter { $0 == "Retry" }.count == 2, "the failure's, and the failed row's own")
-        #expect(labels.filter { $0 == "Dismiss" }.count == 1)
+        #expect(labels.filter { $0 == "Cancel" }.count == 1, "the clean-up's")
+        #expect(context.runsHomeWork(for: transcript.id) && !context.runsHomeWork(for: failed.id))
+        release = true
+        try await waitUntil(timeout: .seconds(10)) { dictation.runningVersions.isEmpty }
     }
 
     /// The labels of the buttons VoiceOver finds in `view`, hosted offscreen. SwiftUI builds its accessibility tree
     /// only for an assistive client, which `AXEnhancedUserInterface` on the app stands in for.
-    private static func accessibleButtons(_ view: some View) -> [String] {
+    private static func accessibleButtons(_ view: some View, height: CGFloat = 760) -> [String] {
         let assistive = NSAccessibility.Attribute(rawValue: "AXEnhancedUserInterface")
         NSApplication.shared.accessibilitySetValue(true, forAttribute: assistive)
         defer { NSApplication.shared.accessibilitySetValue(false, forAttribute: assistive) }
-        let hosting = NSHostingView(rootView: view.frame(width: 980, height: 760))
-        hosting.frame = NSRect(x: 0, y: 0, width: 980, height: 760)
+        let hosting = NSHostingView(rootView: view.frame(width: 980, height: height))
+        hosting.frame = NSRect(x: 0, y: 0, width: 980, height: height)
         let window = NSWindow(contentRect: hosting.frame, styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.contentView = hosting

@@ -578,7 +578,7 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         h.controller.makeVersion(.cleanup(of: .parakeet, by: .gpt6Luna), of: entry)
         try await waitUntil { h.controller.homeFailures[entry.id] != nil }
         #expect(h.controller.homeFailures[entry.id]
-                == HomeFailure(kind: .cleanup(of: .parakeet, by: .gpt6Luna), reason: "GPT-6 Luna took too long."))
+                == HomeFailure(kind: .cleanup(of: .parakeet, by: .gpt6Luna), reason: "It took too long."))
         #expect(h.history.entry(id: entry.id) == entry)
         #expect(h.controller.runningVersions.isEmpty)
         #expect(h.toasts.notices.isEmpty)

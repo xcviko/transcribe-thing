@@ -186,10 +186,10 @@ enum EngineReadiness: Equatable {
 
 /// A History row's Versions menu: the transcripts the recording already has (`versions`, the current one checked,
 /// retired models' included) and what can still make another one (`actions`): each offered engine not used on it
-/// yet, and a clean-up of each Parakeet version by each offered clean-up model that hasn't tidied it yet. A model
-/// never runs twice on the same text, and a retired one never runs. A failed or canceled dictation has no versions,
-/// and every offered engine retries it, its own included. Unavailable actions stay listed, disabled, with the
-/// reason; versions can always be switched to, even without the audio.
+/// yet, and a clean-up of each Parakeet version with text by each offered clean-up model that hasn't tidied it yet.
+/// A model never runs twice on the same text, and a retired one never runs. A failed or canceled dictation has no
+/// versions, and every offered engine retries it, its own included. Unavailable actions stay listed, disabled, with
+/// the reason; versions can always be switched to, even without the audio.
 struct VersionsMenu: Equatable {
     /// Why an action can't run right now.
     enum Blocker: Equatable {
@@ -278,7 +278,8 @@ struct VersionsMenu: Equatable {
             return Action(kind: .transcription(engine), blocker: blocker)
         }
         if !isRetry {
-            for version in entry.versions {
+            // A transcript with no text (a legacy "No speech detected" row) has nothing to tidy.
+            for version in entry.versions where !version.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 guard case .transcription(let source) = version.kind, CleanupModel.canClean(source) else { continue }
                 for model in CleanupModel.offered where !entry.hasVersion(.cleanup(of: source, by: model)) {
                     let blocker = busy ?? readiness(.geminiFlash).unavailableReason.map(Blocker.engine)

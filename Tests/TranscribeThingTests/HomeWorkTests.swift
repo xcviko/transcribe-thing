@@ -28,8 +28,17 @@ import Testing
         var sawNothing: Bool { phases.isEmpty && cues.isEmpty && activities.isEmpty && failedDictations == 0 }
     }
 
-    private func harness(_ keyStatus: KeyStatus = .valid(KeyInfo())) -> H.Harness {
-        H.make(keyStatus: keyStatus, persistsHistory: true)
+    /// Started as the app starts it: a notice's sound, a model's failure and a deleted row reach the controller.
+    private func harness(_ keyStatus: KeyStatus = .valid(KeyInfo()), store: ModelStore? = nil) -> H.Harness {
+        let h = H.make(store: store, keyStatus: keyStatus, persistsHistory: true)
+        h.controller.start()
+        return h
+    }
+
+    /// A real model store whose Parakeet is `FakeEngine`, installed; `gate` is its inference gate.
+    private func localStore(_ engine: FakeEngine, gate: InferenceGate = InferenceGate()) -> ModelStore {
+        ModelStore(paths: .temporary(), settings: .inMemory(), engines: [.parakeet: engine], gate: gate,
+                   freeDiskBytes: { 50_000_000_000 })
     }
 
     private func removeFiles(_ h: H.Harness) {
@@ -91,6 +100,7 @@ import Testing
             #expect(h.controller.activity == .idle)
             #expect(h.pill.phase == .rest)
             try await waitUntil { h.controller.homeWork.isEmpty }
+            #expect(h.toasts.notices.isEmpty)
             if failing {
                 #expect(Set(h.controller.homeFailures.keys) == [transcribed, tidied], "why, in each transcript's row")
                 #expect(h.history.entry(id: failed)?.errorMessage == "\(EngineID.parakeetCloud.shortName) took too long",
@@ -238,18 +248,141 @@ import Testing
         h.controller.transcribeOverride = { _, _ in throw AppError.openRouterMissingKey }
         h.controller.makeVersion(.transcription(.geminiFlash), of: try #require(h.history.entry(id: id)))
         try await waitUntil { h.controller.homeFailures[id]?.kind == .transcription(.geminiFlash) }
-        #expect(h.controller.homeFailures[id]?.reason == "Add your OpenRouter key")
+        #expect(h.controller.homeFailures[id]?.reason == "Add your OpenRouter key in Models.", "the same words")
         #expect(h.toasts.notices.isEmpty)
     }
 
-    /// An engine's own failure names the engine: its notice title only says it couldn't transcribe.
-    @Test func reasonsAreTheNoticesWords() {
-        #expect(DictationController.homeFailureReason(.timeout(.geminiFlash), engine: .geminiFlash) == "Gemini Flash took too long")
-        #expect(DictationController.homeFailureReason(.offline, engine: .geminiFlash) == "You’re offline")
-        #expect(DictationController.homeFailureReason(.engineFailed(.parakeet, "CoreML"), engine: .parakeet)
-                == "Parakeet v3 ran into a problem.")
-        #expect(TranscriptVersionKind.transcription(.geminiFlash).failureTitle == "Couldn’t transcribe with Gemini Flash")
-        #expect(TranscriptVersionKind.cleanup(of: .parakeet, by: .gpt6Luna).failureTitle == "Couldn’t clean up with GPT-6 Luna")
+    /// The row's title names the model ("Couldn't transcribe with Gemini Flash"), so the reason after it says "It";
+    /// a key, credit or connection problem reads the same for a transcription and a clean-up.
+    @Test func reasonsDontNameTheModelTwice() {
+        let reason = DictationController.homeFailureReason(_:making:)
+        let flash = TranscriptVersionKind.transcription(.geminiFlash)
+        let luna = TranscriptVersionKind.cleanup(of: .parakeet, by: .gpt6Luna)
+        #expect(flash.failureTitle == "Couldn’t transcribe with Gemini Flash")
+        #expect(luna.failureTitle == "Couldn’t clean up with GPT-6 Luna")
+        #expect(reason(.timeout(.geminiFlash), flash) == "It took too long.")
+        #expect(reason(.timeout(.parakeet), luna) == "It took too long.")
+        #expect(reason(.engineFailed(.parakeet, "CoreML"), .transcription(.parakeet)) == "It ran into a problem.")
+        #expect(reason(.modelLoadFailed(.parakeet, "corrupt"), .transcription(.parakeet)) == "It couldn’t be loaded.")
+        #expect(reason(nil, luna) == "It returned no text.")
+        #expect(reason(.openRouterBadRequest(""), flash) == "It couldn’t process this recording.")
+        #expect(reason(.openRouterBadRequest(""), luna) == "It couldn’t process the text.")
+        #expect(reason(.openRouterProviderUnavailable(""), luna) == "OpenAI is unavailable.")
+        #expect(reason(.openRouterProviderUnavailable(""), flash) == "Google AI Studio is unavailable")
+        #expect(reason(.openRouterProviderUnavailable(""), .transcription(.parakeetCloud))
+                == "OpenRouter couldn’t reach its provider.")
+        #expect(reason(.noSpeech, flash) == "No speech detected")
+        for error: AppError in [.openRouterMissingKey, .openRouterInvalidKey(""), .openRouterNoCredits(""), .offline,
+                                .openRouterRateLimited(retryAfter: nil), .openRouterServer("")] {
+            #expect(reason(error, flash) == reason(error, luna))
+            #expect(reason(error, flash) == DictationController.cleanupFailureReason(error, model: .gpt6Luna))
+        }
+    }
+
+    /// The local model takes one recording at a time, and Home's wait behind a dictation's, even one recorded after
+    /// them: the retry already running finishes, then the dictation is transcribed and pasted while the other Home
+    /// retry still waits.
+    @Test func aDictationGetsTheLocalModelBeforeHomeWorkWaitingForIt() async throws {
+        let engine = FakeEngine(.parakeet, installed: true)
+        let gate = InferenceGate()
+        let store = localStore(engine, gate: gate)
+        store.start()
+        try await waitUntil { store.state(of: .parakeet) == .ready }
+        let h = harness(store: store)
+        defer { removeFiles(h) }
+        let first = try await failedDictation(h), second = try await failedDictation(h)
+        h.controller.transcribeOverride = nil
+        var pasted: [String] = []
+        h.controller.insertOverride = { text, _ in pasted.append(text); return .pasted }
+        func waitForQueue(_ count: Int) async throws {
+            let deadline = ContinuousClock.now + .seconds(3)
+            while await gate.queueLength < count {
+                guard ContinuousClock.now < deadline else {
+                    Issue.record("never \(count) waiting")
+                    return
+                }
+                try await Task.sleep(for: .milliseconds(5))
+            }
+        }
+        let steps = await engine.gateTranscriptions()
+        h.controller.retry(try #require(h.history.entry(id: first)), with: .parakeet)
+        await steps.arrival(1)
+        h.controller.retry(try #require(h.history.entry(id: second)), with: .parakeet)
+        try await waitForQueue(1)
+        h.controller.enqueue(H.recording(), engine: .parakeet, targetPID: nil)
+        try await waitForQueue(2)
+
+        steps.open()
+        await steps.arrival(2)
+        steps.open()
+        try await waitUntil { pasted == ["hello from the fake"] }
+        #expect(h.history.entry(id: first)?.status == .success)
+        #expect(h.controller.homeWork[second] == .transcription(.parakeet), "still waiting for the model")
+        steps.openForGood()
+        try await waitUntil { h.controller.homeWork.isEmpty }
+        #expect(h.history.entry(id: second)?.status == .success)
+        #expect(pasted == ["hello from the fake"])
+    }
+
+    /// A model load only Home work was waiting for fails in the row, never in a notice.
+    @Test func aModelThatWontLoadForHomeWorkSaysSoInTheRow() async throws {
+        let engine = FakeEngine(.parakeet, installed: true)
+        await engine.configure(loadError: FakeFailure(message: "corrupt weights"))
+        let store = localStore(engine)
+        await store.refreshFromDisk()
+        #expect(store.state(of: .parakeet) == .installed)
+        let h = harness(store: store)
+        defer { removeFiles(h) }
+        let failed = try await failedDictation(h)
+        h.controller.transcribeOverride = nil
+        let outside = Outside(h)
+        h.controller.retry(try #require(h.history.entry(id: failed)), with: .parakeet)
+        try await waitUntil { h.controller.homeWork.isEmpty }
+        #expect(await engine.loadCount == 2, "loaded, and tried once more")
+        #expect(h.history.entry(id: failed)?.errorMessage == "Couldn’t load Parakeet v3")
+        #expect(h.toasts.notices.isEmpty)
+        #expect(outside.cues.isEmpty && outside.failedDictations == 0)
+    }
+
+    /// Deleting a row takes its Home work along: the request stops, and nothing is left of it. Clear All clears
+    /// the rows' reasons too.
+    @Test func deletingARowCancelsItsHomeWork() async throws {
+        let h = harness()
+        defer { removeFiles(h) }
+        let transcribed = try await transcript(h), tidied = try await transcript(h)
+        var stopped = 0
+        h.controller.transcribeOverride = { _, engine in
+            do { try await Task.sleep(for: .seconds(5)) } catch { stopped += 1; throw error }
+            return TranscriptResult(text: "late", engine: engine, processingTime: 1)
+        }
+        h.controller.cleanupOverride = { _, _ in throw AppError.openRouterServer("HTTP 500") }
+        h.controller.makeVersion(.cleanup(of: .parakeet, by: .gpt6Luna), of: try #require(h.history.entry(id: tidied)))
+        try await waitUntil { h.controller.homeFailures[tidied] != nil }
+        h.controller.retry(try #require(h.history.entry(id: transcribed)), with: .geminiFlash)
+        #expect(h.controller.homeWork[transcribed] != nil)
+
+        h.history.delete(transcribed)
+        #expect(h.controller.homeWork.isEmpty && h.controller.runningVersions.isEmpty)
+        try await waitUntil { stopped == 1 }
+        h.history.clearAll()
+        #expect(h.controller.homeFailures.isEmpty)
+        #expect(h.toasts.notices.isEmpty)
+    }
+
+    /// A transcript with no text (a legacy "No speech detected" row) has nothing to clean up.
+    @Test func anEmptyTranscriptIsntCleanedUp() {
+        let h = H.make(keyStatus: .valid(KeyInfo()))
+        let entry = TranscriptEntry(text: "", engine: .parakeet, audioDuration: 4, voicedSeconds: 0)
+        h.history.upsert(entry)
+        h.controller.cleanupOverride = { _, source in
+            Issue.record("no request for no text")
+            return TranscriptResult(text: "x", engine: source, processingTime: 1)
+        }
+        h.controller.makeVersion(.cleanup(of: .parakeet, by: .gpt6Luna), of: entry)
+        #expect(h.controller.homeWork.isEmpty && h.controller.homeFailures.isEmpty)
+        let menu = VersionsMenu.make(for: entry, running: nil, readiness: { _ in .ready })
+        #expect(!menu.actions.contains { $0.kind.isCleanup })
+        #expect(menu.actions.contains { $0.kind == .transcription(.geminiFlash) })
     }
 
     /// While Home works, dictations are exactly as before: a failure's notice and shake, Esc canceling the

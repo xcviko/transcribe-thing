@@ -73,7 +73,8 @@ struct HistoryRow: View, Equatable {
     @State private var actionsBuilt = false
     @State private var expanded = false
 
-    private var hasAudio: Bool { entry.audioFileName != nil }
+    /// The recording is kept, and Home hasn't found it unreadable.
+    private var hasAudio: Bool { entry.audioFileName != nil && failure?.isRecordingGone != true }
     private var isEmptySuccess: Bool { entry.status == .success && entry.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     /// What is being made for the recording right now: a transcription (Retry, Transcribe With) or a clean-up.
     private var running: TranscriptVersionKind? { hub.runningVersion(for: entry.id) }
@@ -134,9 +135,12 @@ struct HistoryRow: View, Equatable {
     @ViewBuilder private var content: some View {
         switch entry.status {
         case .success where isEmptySuccess:
-            Text("No speech detected (\(Fmt.duration(entry.audioDuration)))")
-                .font(.system(size: 13))
-                .foregroundStyle(.inkTertiary)
+            VStack(alignment: .leading, spacing: 7) {
+                Text("No speech detected (\(Fmt.duration(entry.audioDuration)))")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.inkTertiary)
+                workLine
+            }
         case .success:
             VStack(alignment: .leading, spacing: 7) {
                 Text(entry.text)
@@ -145,13 +149,7 @@ struct HistoryRow: View, Equatable {
                     .foregroundStyle(.ink)
                     .lineLimit(expanded ? nil : 3)
                     .fixedSize(horizontal: false, vertical: true)
-                if let running {
-                    runningLine(running)
-                        .transition(.opacity)
-                } else if let failure {
-                    failureLine(failure)
-                        .transition(.opacity)
-                }
+                workLine
             }
         case .failed:
             VStack(alignment: .leading, spacing: 6) {
@@ -183,14 +181,23 @@ struct HistoryRow: View, Equatable {
         return "\(entry.engine.shortName) ran into a problem."
     }
 
-    /// A failed or canceled row's Retry, or what runs for it. A retry that fails becomes the row's own failure, so
-    /// a failure line here only says the recording couldn't be read.
+    /// What is being made for a transcript, or why the last version asked for didn't come.
+    @ViewBuilder private var workLine: some View {
+        if let running {
+            runningLine(running)
+                .transition(.opacity)
+        } else if let failure {
+            failureLine(failure)
+                .transition(.opacity)
+        }
+    }
+
+    /// A failed or canceled row's Retry, or what runs for it. A retry that fails becomes the row's own failure, and
+    /// one whose recording couldn't be read leaves the row saying it's no longer kept.
     @ViewBuilder private func inlineRetry(title: String, symbol: String) -> some View {
         if let running {
             runningLine(running)
                 .frame(minHeight: Theme.Metrics.smallButtonHeight)
-        } else if let failure {
-            failureLine(failure)
         } else if hasAudio {
             Menu {
                 VersionsMenuItems(entry: entry)
@@ -216,10 +223,12 @@ struct HistoryRow: View, Equatable {
         return RunningLine(kind: kind, onCancel: cancel)
     }
 
-    /// Its Retry makes the same version again, as the Versions menu's item would (disabled for the same reason).
+    /// Its Retry makes the same version again, as the Versions menu's item would (disabled for the same reason);
+    /// there is none when the recording couldn't be read.
     private func failureLine(_ failure: HomeFailure) -> some View {
         let entry = entry
-        let retry = hub.versionsMenu(for: entry).actions.first { $0.kind == failure.kind }
+        let retry = failure.isRecordingGone
+            ? nil : hub.versionsMenu(for: entry).actions.first { $0.kind == failure.kind }
         return FailureLine(failure: failure, retry: retry,
                            onRetry: { hub.dictation.makeVersion(failure.kind, of: entry) },
                            onDismiss: { hub.dictation.dismissHomeFailure(for: entry.id) })
@@ -333,36 +342,38 @@ struct HistoryRow: View, Equatable {
 }
 
 /// "Transcribing with Gemini Flash…" or "Cleaning up with GPT-6 Luna…" under a row whose recording is being
-/// worked on, with Cancel when Home started it.
+/// worked on, with a × to cancel it when Home started it.
 private struct RunningLine: View {
     var kind: TranscriptVersionKind
     var onCancel: (() -> Void)?
 
     var body: some View {
-        HStack(spacing: 8) {
-            HStack(spacing: 8) {
+        // In a narrow window the title wraps rather than lose the model's name, the × staying on its first line.
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 ShimmerBar(height: 3)
                     .frame(width: 40)
+                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
                 Text(kind.progressTitle)
                     .font(.system(size: 11.5))
                     .foregroundStyle(.inkSecondary)
-                    .lineLimit(1)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .accessibilityElement(children: .combine)
             if let onCancel {
-                Button("Cancel", action: onCancel)
-                    .buttonStyle(QuietButtonStyle(tint: .inkSecondary, size: .small))
+                LineCloseButton(label: "Cancel", action: onCancel)
+                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
                     .padding(.leading, -4)
             }
         }
     }
 }
 
-/// "Couldn't transcribe with Gemini Flash · Gemini Flash took too long." under a row whose last version asked for
-/// from Home didn't come, with Retry (the same version again) and a way to dismiss it.
+/// "Couldn't transcribe with Gemini Flash · It took too long." under a row whose last version asked for from Home
+/// didn't come, with Retry (the same version again) and a × to dismiss it.
 private struct FailureLine: View {
     var failure: HomeFailure
-    /// The Versions menu's item for the same version; nil when it offers none (no Retry then).
+    /// The Versions menu's item for the same version; nil when there is nothing to retry.
     var retry: VersionsMenu.Action?
     var onRetry: () -> Void
     var onDismiss: () -> Void
@@ -372,7 +383,8 @@ private struct FailureLine: View {
     }
 
     var body: some View {
-        HStack(spacing: 8) {
+        // Retry and × stay on the first line when the reason wraps.
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 7) {
                 // Centered on the cap height of the 11.5 pt label, as on a failed row.
                 Circle().fill(Color.danger).frame(width: 6, height: 6).alignmentGuide(.firstTextBaseline) { $0[.bottom] + 1 }
@@ -388,16 +400,31 @@ private struct FailureLine: View {
                     .disabled(!retry.isEnabled)
                     .help(retry.blocker?.label ?? "")
                     .padding(.leading, -4)
+                    // As tall as the line's text, like the ×.
+                    .padding(.vertical, -6)
             }
-            Button(action: onDismiss) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .bold))
-            }
-            .buttonStyle(IconButtonStyle(size: 22, tint: .inkTertiary))
-            .help("Dismiss")
-            .accessibilityLabel("Dismiss")
-            .padding(.leading, retry == nil ? 0 : -6)
+            LineCloseButton(label: "Dismiss", action: onDismiss)
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+                .padding(.leading, retry == nil ? 0 : -6)
         }
+    }
+}
+
+/// The × ending a running or failure line (Cancel, Dismiss). It takes no more height than the line's text, so the
+/// line sits as close under its transcript as the text alone would; its hit area stays whole.
+private struct LineCloseButton: View {
+    var label: String
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "xmark")
+                .font(.system(size: 9, weight: .bold))
+        }
+        .buttonStyle(IconButtonStyle(size: 22, tint: .inkTertiary))
+        .help(label)
+        .accessibilityLabel(label)
+        .padding(.vertical, -4)
     }
 }
 
