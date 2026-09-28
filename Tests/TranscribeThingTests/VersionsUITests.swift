@@ -28,13 +28,15 @@ import Testing
 
     @Test func oneTextToCleanUpNamesOnlyTheModelTwoNameTheirText() {
         #expect(menu(transcript()).actions.filter(\.kind.isCleanup).map(\.name)
-                == ["Clean Up with Gemini 3.5 Flash Lite", "Clean Up with GPT-6 Luna"])
+                == ["Clean Up with Gemini 3.5 Flash Lite", "Clean Up with Gemini 3 Flash", "Clean Up with GPT-6 Luna"])
         var entry = transcript(.parakeet)
         entry.addVersion(TranscriptVersion(text: "cloud", engine: .parakeetCloud))
         let cleanups = menu(entry).actions.filter { $0.kind.isCleanup }
         #expect(cleanups.map(\.name) == ["Clean Up Parakeet v3 with Gemini 3.5 Flash Lite",
+                                          "Clean Up Parakeet v3 with Gemini 3 Flash",
                                           "Clean Up Parakeet v3 with GPT-6 Luna",
                                           "Clean Up Parakeet v3 · Cloud with Gemini 3.5 Flash Lite",
+                                          "Clean Up Parakeet v3 · Cloud with Gemini 3 Flash",
                                           "Clean Up Parakeet v3 · Cloud with GPT-6 Luna"])
         #expect(cleanups.map(\.title) == cleanups.map(\.name))
     }

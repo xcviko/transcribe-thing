@@ -7,7 +7,7 @@ import Foundation
 ///     transcribe-thing --transcribe <audio file>
 ///            --engine parakeet|parakeetCloud|geminiFlash|geminiPro
 ///            [--download] [--prompt <text>] [--repeat <n>] [--effort minimal|low|medium|high]
-///            [--clean-up [--clean-up-model geminiFlashLite|gpt6Luna] [--clean-up-prompt <text>]
+///            [--clean-up [--clean-up-model geminiFlashLite|gemini3Flash|gpt6Luna] [--clean-up-prompt <text>]
 ///                        [--clean-up-effort none|minimal|low|medium|high]]
 ///     transcribe-thing --model-status
 ///
@@ -92,7 +92,7 @@ enum EngineCLI {
         usage: transcribe-thing --transcribe <audio file> \
         --engine parakeet|parakeetCloud|geminiFlash|geminiPro \
         [--download] [--prompt <text>] [--repeat <n>] [--effort minimal|low|medium|high] \
-        [--clean-up [--clean-up-model geminiFlashLite|gpt6Luna] [--clean-up-prompt <text>] \
+        [--clean-up [--clean-up-model geminiFlashLite|gemini3Flash|gpt6Luna] [--clean-up-prompt <text>] \
         [--clean-up-effort none|minimal|low|medium|high]]
                transcribe-thing --model-status
         """

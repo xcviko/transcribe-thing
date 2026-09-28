@@ -342,10 +342,11 @@ import Testing
         #expect(m.versions == [VersionsMenu.Version(kind: .transcription(.parakeet), summary: "0.4 s", isCurrent: true)])
         #expect(m.actions.map(\.kind) == [.transcription(.parakeetCloud), .transcription(.geminiFlash),
                                           .transcription(.geminiPro), .cleanup(of: .parakeet, by: .geminiFlashLite),
-                                          .cleanup(of: .parakeet, by: .gpt6Luna)])
+                                          .cleanup(of: .parakeet, by: .gemini3Flash), .cleanup(of: .parakeet, by: .gpt6Luna)])
         #expect(m.actions.allSatisfy { $0.isEnabled })
         #expect(m.actions.map(\.title) == ["Parakeet v3 · Cloud", "Gemini 3.8 Flash", "Gemini 3.1 Pro",
-                                           "Clean Up with Gemini 3.5 Flash Lite", "Clean Up with GPT-6 Luna"])
+                                           "Clean Up with Gemini 3.5 Flash Lite", "Clean Up with Gemini 3 Flash",
+                                           "Clean Up with GPT-6 Luna"])
     }
 
     @Test func aModelAlreadyUsedIsAVersionNotAnAction() {
@@ -358,8 +359,8 @@ import Testing
         #expect(m.versions.map(\.isCurrent) == [false, true, false])
         #expect(m.versions[1].summary == "3.0 s · $0.002")
         #expect(m.actions.map(\.kind) == [.transcription(.parakeetCloud), .transcription(.geminiPro),
-                                          .cleanup(of: .parakeet, by: .gpt6Luna)],
-                "Flash Lite already cleaned it up; Luna still can")
+                                          .cleanup(of: .parakeet, by: .gemini3Flash), .cleanup(of: .parakeet, by: .gpt6Luna)],
+                "Flash Lite already cleaned it up; the others still can")
     }
 
     @Test func eachCleanUpModelTidiesTheSameTextOnce() {
@@ -367,14 +368,18 @@ import Testing
         entry.addVersion(TranscriptVersion(kind: .cleanup(of: .parakeet, by: .gpt6Luna), text: "l",
                                            metadata: TranscriptMetadata(processingTime: 1.1)))
         var m = menu(entry)
-        #expect(m.actions.filter(\.kind.isCleanup).map(\.kind) == [.cleanup(of: .parakeet, by: .geminiFlashLite)])
-        #expect(m.actions.last?.title == "Clean Up with Gemini 3.5 Flash Lite")
+        #expect(m.actions.filter(\.kind.isCleanup).map(\.kind)
+            == [.cleanup(of: .parakeet, by: .geminiFlashLite), .cleanup(of: .parakeet, by: .gemini3Flash)])
+        #expect(m.actions.last?.title == "Clean Up with Gemini 3 Flash")
         #expect(m.versions.last?.itemTitle == "Parakeet v3 + Clean-up by GPT-6 Luna\u{2003}1.1 s")
         entry.addVersion(TranscriptVersion(kind: .cleanup(of: .parakeet), text: "f", metadata: TranscriptMetadata()))
+        entry.addVersion(TranscriptVersion(kind: .cleanup(of: .parakeet, by: .gemini3Flash), text: "g",
+                                           metadata: TranscriptMetadata()))
         m = menu(entry)
-        #expect(!m.actions.contains { $0.kind.isCleanup }, "both models have tidied it")
+        #expect(!m.actions.contains { $0.kind.isCleanup }, "every model has tidied it")
         #expect(m.versions.map(\.kind) == [.transcription(.parakeet), .cleanup(of: .parakeet, by: .gpt6Luna),
-                                           .cleanup(of: .parakeet, by: .geminiFlashLite)])
+                                           .cleanup(of: .parakeet, by: .geminiFlashLite),
+                                           .cleanup(of: .parakeet, by: .gemini3Flash)])
     }
 
     @Test func geminiTranscriptsAreNeverCleanedUp() {
@@ -386,7 +391,7 @@ import Testing
         let m = menu(transcript(.parakeet), key: .missing)
         #expect(m.actions.map(\.title) == ["Parakeet v3 · Cloud · Needs key", "Gemini 3.8 Flash · Needs key",
                                            "Gemini 3.1 Pro · Needs key", "Clean Up with Gemini 3.5 Flash Lite · Needs key",
-                                           "Clean Up with GPT-6 Luna · Needs key"])
+                                           "Clean Up with Gemini 3 Flash · Needs key", "Clean Up with GPT-6 Luna · Needs key"])
         #expect(action(menu(transcript(.parakeetCloud), key: .invalid("401")), .transcription(.geminiPro))?.title
                 == "Gemini 3.1 Pro · Key rejected")
         #expect(action(menu(transcript(.parakeetCloud), key: .missing), .transcription(.parakeet))?.isEnabled == true)

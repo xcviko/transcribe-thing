@@ -79,6 +79,9 @@ extension EngineID {
 enum CleanupModel: String, CaseIterable, Identifiable, Codable, Sendable {
     /// Gemini 3.5 Flash Lite on Google AI Studio: what Clean-up always used, and still the default.
     case geminiFlashLite
+    /// Gemini 3 Flash (preview) on Google AI Studio at Minimal, as close to no thinking as Gemini 3 goes: a bigger
+    /// Flash than Lite, a little pricier.
+    case gemini3Flash
     /// GPT-6 Luna on OpenAI with thinking off: about as fast (1.1 s median in the bench), about 3.5 times cheaper,
     /// better at spelling English terms, and more willing to rewrite.
     case gpt6Luna
@@ -90,14 +93,16 @@ enum CleanupModel: String, CaseIterable, Identifiable, Codable, Sendable {
     var openRouterModelID: String {
         switch self {
         case .geminiFlashLite: "google/gemini-3.5-flash-lite"
+        case .gemini3Flash: "google/gemini-3-flash-preview"
         case .gpt6Luna: "openai/gpt-6-luna"
         }
     }
 
-    /// "Gemini 3.5 Flash Lite", "GPT-6 Luna".
+    /// "Gemini 3.5 Flash Lite", "Gemini 3 Flash", "GPT-6 Luna".
     var modelName: String {
         switch self {
         case .geminiFlashLite: "Gemini 3.5 Flash Lite"
+        case .gemini3Flash: "Gemini 3 Flash"
         case .gpt6Luna: "GPT-6 Luna"
         }
     }
@@ -106,6 +111,7 @@ enum CleanupModel: String, CaseIterable, Identifiable, Codable, Sendable {
     var shortName: String {
         switch self {
         case .geminiFlashLite: "Flash Lite"
+        case .gemini3Flash: "Gemini 3 Flash"
         case .gpt6Luna: "GPT-6 Luna"
         }
     }
@@ -114,6 +120,7 @@ enum CleanupModel: String, CaseIterable, Identifiable, Codable, Sendable {
     var summary: String {
         switch self {
         case .geminiFlashLite: "Tidies punctuation, fillers and false starts · reads text, not audio"
+        case .gemini3Flash: "A bigger Flash, barely thinking · a little pricier than Flash Lite"
         case .gpt6Luna: "Cheaper, better with English terms · may rewrite a little more"
         }
     }
@@ -121,7 +128,7 @@ enum CleanupModel: String, CaseIterable, Identifiable, Codable, Sendable {
     /// The provider requests are pinned to, as OpenRouter names it in responses.
     var providerName: String {
         switch self {
-        case .geminiFlashLite: "Google AI Studio"
+        case .geminiFlashLite, .gemini3Flash: "Google AI Studio"
         case .gpt6Luna: "OpenAI"
         }
     }
@@ -129,17 +136,17 @@ enum CleanupModel: String, CaseIterable, Identifiable, Codable, Sendable {
     /// That provider and nothing else, no fallbacks.
     var provider: OpenRouterChatRequest.Provider {
         switch self {
-        case .geminiFlashLite: .googleAIStudio
+        case .geminiFlashLite, .gemini3Flash: .googleAIStudio
         case .gpt6Luna: .openAI
         }
     }
 
-    /// The levels offered, from OpenRouter's `supported_efforts` (2026-09-28). Flash Lite: minimal to high, no
-    /// "none" (thinking is mandatory). Luna takes none to max; xhigh and max are left out, far too slow for a
-    /// clean-up that holds up a paste.
+    /// The levels offered, from OpenRouter's `supported_efforts` (2026-09-28). Flash Lite and Gemini 3 Flash:
+    /// minimal to high, no "none" (Gemini 3 always thinks a little). Luna takes none to max; xhigh and max are
+    /// left out, far too slow for a clean-up that holds up a paste.
     var reasoningEfforts: [ReasoningEffort] {
         switch self {
-        case .geminiFlashLite: [.minimal, .low, .medium, .high]
+        case .geminiFlashLite, .gemini3Flash: [.minimal, .low, .medium, .high]
         case .gpt6Luna: [.off, .low, .medium, .high]
         }
     }
@@ -147,6 +154,7 @@ enum CleanupModel: String, CaseIterable, Identifiable, Codable, Sendable {
     var defaultReasoningEffort: ReasoningEffort {
         switch self {
         case .geminiFlashLite: .low
+        case .gemini3Flash: .minimal
         case .gpt6Luna: .off
         }
     }
