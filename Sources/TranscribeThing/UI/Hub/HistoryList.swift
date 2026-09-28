@@ -288,7 +288,7 @@ private struct RunningLine: View {
         HStack(spacing: 8) {
             ShimmerBar(height: 3)
                 .frame(width: 40)
-            Text(kind.isCleanup ? "Cleaning up with \(CleanupModel.shortName)…" : "Transcribing with \(kind.engine.shortName)…")
+            Text(kind.progressTitle)
                 .font(.system(size: 11.5))
                 .foregroundStyle(.inkSecondary)
                 .lineLimit(1)

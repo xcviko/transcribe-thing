@@ -184,7 +184,7 @@ enum EngineReadiness: Equatable {
 
 /// A History row's Versions menu: the transcripts the recording already has (`versions`, the current one checked)
 /// and what can still make another one (`actions`): each engine not used on it yet, and a clean-up of each Parakeet
-/// version not cleaned up yet. A model never runs twice on the same recording. A failed or canceled dictation has
+/// version by each clean-up model that hasn't tidied it yet. A model never runs twice on the same text. A failed or canceled dictation has
 /// no versions, and every engine retries it, its own included. Unavailable actions stay listed, disabled, with the
 /// reason; versions can always be switched to, even without the audio.
 struct VersionsMenu: Equatable {
@@ -218,7 +218,7 @@ struct VersionsMenu: Equatable {
         var isCurrent: Bool
 
         var id: TranscriptVersionKind { kind }
-        /// "Gemini 3.8 Flash", "Parakeet v3 + Clean-up".
+        /// "Gemini 3.8 Flash", "Parakeet v3 + Clean-up by Flash Lite".
         var title: String { kind.displayName }
         /// The menu item: `title`, then `summary` set off by an em space: "Gemini 3.8 Flash  76 s · $0.07".
         var itemTitle: String { summary.isEmpty ? title : "\(title)\u{2003}\(summary)" }
@@ -232,11 +232,12 @@ struct VersionsMenu: Equatable {
 
         var id: TranscriptVersionKind { kind }
         var isEnabled: Bool { blocker == nil }
-        /// "Gemini 3.1 Pro", "Clean Up", "Clean Up Parakeet v3 · Cloud".
+        /// "Gemini 3.1 Pro", "Clean Up with GPT-6 Luna", "Clean Up Parakeet v3 · Cloud with Gemini 3.5 Flash Lite".
         var name: String {
             switch kind {
             case .transcription(let engine): engine.displayName
-            case .cleanup(let source): namesSource ? "Clean Up \(source.displayName)" : "Clean Up"
+            case .cleanup(let source, let model):
+                namesSource ? "Clean Up \(source.displayName) with \(model.modelName)" : "Clean Up with \(model.modelName)"
             }
         }
         /// `name`, with the reason when it can't run: "Gemini 3.1 Pro · Needs key".
@@ -251,9 +252,9 @@ struct VersionsMenu: Equatable {
     var title: String
     /// Oldest first.
     var versions: [Version]
-    /// Engines in `EngineID` order, then clean-ups.
+    /// Engines in `EngineID` order, then clean-ups: by source, each in `CleanupModel` order.
     var actions: [Action]
-    /// What is running for the recording right now: "Transcribing with Gemini Flash…", "Cleaning up…".
+    /// What is running for the recording right now: "Transcribing with Gemini Flash…", "Cleaning up with Flash Lite…".
     var runningTitle: String?
 
     static let versionsSectionTitle = "Versions"
@@ -278,18 +279,19 @@ struct VersionsMenu: Equatable {
         }
         if !isRetry {
             for version in entry.versions {
-                guard case .transcription(let source) = version.kind, CleanupModel.canClean(source),
-                      !entry.hasVersion(.cleanup(of: source)) else { continue }
-                let blocker = busy ?? (hasCleanupPrompt ? nil : .cleanupPromptEmpty)
-                    ?? readiness(.geminiFlash).unavailableReason.map(Blocker.engine)
-                actions.append(Action(kind: .cleanup(of: source), blocker: blocker))
+                guard case .transcription(let source) = version.kind, CleanupModel.canClean(source) else { continue }
+                for model in CleanupModel.allCases where !entry.hasVersion(.cleanup(of: source, by: model)) {
+                    let blocker = busy ?? (hasCleanupPrompt ? nil : .cleanupPromptEmpty)
+                        ?? readiness(.geminiFlash).unavailableReason.map(Blocker.engine)
+                    actions.append(Action(kind: .cleanup(of: source, by: model), blocker: blocker))
+                }
             }
             let cleanups = actions.indices.filter { actions[$0].kind.isCleanup }
-            if cleanups.count > 1 { for index in cleanups { actions[index].namesSource = true } }
+            if Set(cleanups.map { actions[$0].kind.engine }).count > 1 {
+                for index in cleanups { actions[index].namesSource = true }
+            }
         }
-        let runningTitle = running.map { kind in
-            kind.isCleanup ? "Cleaning up…" : "Transcribing with \(kind.engine.shortName)…"
-        }
+        let runningTitle = running.map(\.progressTitle)
         return VersionsMenu(isRetry: isRetry, title: isRetry ? "Retry With" : "Versions", versions: versions,
                             actions: actions, runningTitle: runningTitle)
     }
@@ -305,8 +307,8 @@ enum VersionDetails {
         let m = version.metadata
         var lines: [String] = []
         lines.append(version.kind.displayName)
-        if version.kind.isCleanup {
-            lines.append("Cleaned up by \(CleanupModel.modelName)")
+        if let model = version.kind.cleanupModel {
+            lines.append("Cleaned up by \(model.modelName)")
         }
         var source: [String] = []
         if let model = m.modelID, !model.isEmpty { source.append(model) }

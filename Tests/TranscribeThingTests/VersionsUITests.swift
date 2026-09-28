@@ -23,15 +23,19 @@ import Testing
         let items = menu(entry).versions.map(\.itemTitle)
         #expect(items == ["Parakeet v3\u{2003}0.4 s", "Gemini 3.8 Flash\u{2003}76 s · $0.07 · 17.7k thinking"])
         let bare = VersionsMenu.Version(kind: .cleanup(of: .parakeet), summary: "", isCurrent: false)
-        #expect(bare.itemTitle == "Parakeet v3 + Clean-up")
+        #expect(bare.itemTitle == "Parakeet v3 + Clean-up by Flash Lite")
     }
 
-    @Test func oneCleanUpIsJustCleanUpTwoNameTheirText() {
-        #expect(menu(transcript()).actions.last?.name == "Clean Up")
+    @Test func oneTextToCleanUpNamesOnlyTheModelTwoNameTheirText() {
+        #expect(menu(transcript()).actions.filter(\.kind.isCleanup).map(\.name)
+                == ["Clean Up with Gemini 3.5 Flash Lite", "Clean Up with GPT-6 Luna"])
         var entry = transcript(.parakeet)
         entry.addVersion(TranscriptVersion(text: "cloud", engine: .parakeetCloud))
         let cleanups = menu(entry).actions.filter { $0.kind.isCleanup }
-        #expect(cleanups.map(\.name) == ["Clean Up Parakeet v3", "Clean Up Parakeet v3 · Cloud"])
+        #expect(cleanups.map(\.name) == ["Clean Up Parakeet v3 with Gemini 3.5 Flash Lite",
+                                          "Clean Up Parakeet v3 with GPT-6 Luna",
+                                          "Clean Up Parakeet v3 · Cloud with Gemini 3.5 Flash Lite",
+                                          "Clean Up Parakeet v3 · Cloud with GPT-6 Luna"])
         #expect(cleanups.map(\.title) == cleanups.map(\.name))
     }
 
@@ -39,7 +43,7 @@ import Testing
         var entry = transcript()
         entry.addVersion(TranscriptVersion(text: "g", engine: .geminiFlash))
         let m = menu(entry, running: .cleanup(of: .parakeet))
-        #expect(m.runningTitle == "Cleaning up…")
+        #expect(m.runningTitle == "Cleaning up with Flash Lite…")
         #expect(m.actions.allSatisfy { !$0.isEnabled && $0.title.hasSuffix(" · Busy") })
         #expect(m.versions.count == 2)
         #expect(menu(entry, running: .transcription(.geminiPro)).runningTitle == "Transcribing with Gemini Pro…")
@@ -66,16 +70,25 @@ import Testing
 
     @Test func aCleanUpSaysWhoCleanedItAndACutOffAnswerSaysSo() {
         let version = TranscriptVersion(kind: .cleanup(of: .parakeet), text: "t", metadata: TranscriptMetadata(
-            modelID: CleanupModel.openRouterModelID, reasoningEffort: .minimal, generationTime: 0.8,
+            modelID: CleanupModel.geminiFlashLite.openRouterModelID, reasoningEffort: .minimal, generationTime: 0.8,
             usedSystemPrompt: true, finishReason: "length"))
         #expect(VersionDetails.lines(for: version) == [
-            "Parakeet v3 + Clean-up",
+            "Parakeet v3 + Clean-up by Flash Lite",
             "Cleaned up by Gemini 3.5 Flash Lite",
             "google/gemini-3.5-flash-lite",
             "Thinking: Minimal",
             "Model 0.8 s",
             "System prompt: yes",
             "Finished: length",
+        ])
+        let luna = TranscriptVersion(kind: .cleanup(of: .parakeet, by: .gpt6Luna), text: "t", metadata: TranscriptMetadata(
+            modelID: "openai/gpt-6-luna", provider: "OpenAI", reasoningEffort: .off, processingTime: 1.1))
+        #expect(VersionDetails.lines(for: luna) == [
+            "Parakeet v3 + Clean-up by GPT-6 Luna",
+            "Cleaned up by GPT-6 Luna",
+            "openai/gpt-6-luna via OpenAI",
+            "Thinking: None",
+            "Took 1.1 s",
         ])
     }
 

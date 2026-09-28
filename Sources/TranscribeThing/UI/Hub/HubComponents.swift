@@ -216,9 +216,9 @@ struct HubMenuPicker<Value: Hashable>: View {
     }
 }
 
-/// "Thinking  Low ⌃⌄": a menu of the reasoning levels a model supports and nothing else. There is no Off: every
-/// Gemini model here thinks, and OpenRouter says they reject `effort: "none"`. Each level carries Google's
-/// one-line description.
+/// "Thinking  Low ⌃⌄": a menu of the reasoning levels a model supports and nothing else. Gemini has no None:
+/// every Gemini model here thinks, and OpenRouter says they reject `effort: "none"`; only GPT-6 Luna as Clean-up
+/// offers it. Each level carries a one-line description.
 struct ThinkingPicker: View {
     /// Least thinking first (`EngineID.reasoningEfforts`, `CleanupModel.reasoningEfforts`).
     var efforts: [ReasoningEffort]
@@ -488,7 +488,7 @@ struct EngineGlyph: View {
     var engine: EngineID
     /// The OpenRouter provider that served the transcript, for the tooltip.
     var provider: String?
-    /// The transcript shown is Flash Lite's clean-up of `engine`'s: a wand follows the letter.
+    /// The transcript shown is a clean-up of `engine`'s: a wand follows the letter.
     var isCleanedUp = false
     /// The tooltip in full (`VersionDetails`), in place of the engine and provider alone.
     var details: String?

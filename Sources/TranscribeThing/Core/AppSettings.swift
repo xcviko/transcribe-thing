@@ -79,20 +79,25 @@ final class AppSettings {
                           .reasoningEfforts)
         }
     }
-    /// Clean-up of Parakeet transcripts by Gemini 3.5 Flash Lite before they're pasted. Takes effect only with a
-    /// clean-up prompt (`isCleanupActive`): with no instruction the model would reply to the text instead.
+    /// Clean-up of Parakeet transcripts by `cleanupModel` before they're pasted. Takes effect only with a clean-up
+    /// prompt (`isCleanupActive`): with no instruction the model would reply to the text instead.
     var cleanupEnabled: Bool = false { didSet { store.set(cleanupEnabled, .cleanupEnabled) } }
     /// `CleanupModel.examplePrompt` until the user changes it; a cleared (empty) prompt is stored and stays empty.
+    /// Every clean-up model follows it.
     var cleanupSystemPrompt: String = CleanupModel.examplePrompt { didSet { store.set(cleanupSystemPrompt, .cleanupSystemPrompt) } }
-    /// One of `CleanupModel.reasoningEfforts`.
-    var cleanupReasoningEffort: ReasoningEffort = CleanupModel.defaultReasoningEffort {
+    /// The model that cleans up dictations (and that History's Clean Up offers first). Flash Lite unless changed.
+    var cleanupModel: CleanupModel = .default { didSet { store.set(cleanupModel.rawValue, .cleanupModel) } }
+    /// How long each clean-up model thinks: one of its `reasoningEfforts`, every model listed. Read and change it
+    /// through `cleanupReasoningEffort(for:)` and `setCleanupReasoningEffort(_:for:)`.
+    private(set) var cleanupReasoningEfforts: [CleanupModel: ReasoningEffort] = AppSettings.defaultCleanupReasoningEfforts {
         didSet {
-            let normalized = cleanupReasoningEffort.nearest(in: CleanupModel.reasoningEfforts)
-            guard normalized == cleanupReasoningEffort else {
-                cleanupReasoningEffort = normalized
+            let normalized = Self.normalizedCleanupReasoningEfforts(cleanupReasoningEfforts)
+            guard normalized == cleanupReasoningEfforts else {
+                cleanupReasoningEfforts = normalized
                 return
             }
-            store.set(cleanupReasoningEffort.rawValue, .cleanupReasoningEffort)
+            store.setJSON(Dictionary(uniqueKeysWithValues: cleanupReasoningEfforts.map { ($0.key.rawValue, $0.value.rawValue) }),
+                          .cleanupReasoningEfforts)
         }
     }
     /// One of `maxRecordingChoices`.
@@ -186,6 +191,33 @@ final class AppSettings {
         })
     }
 
+    nonisolated static var defaultCleanupReasoningEfforts: [CleanupModel: ReasoningEffort] {
+        normalizedCleanupReasoningEfforts([:])
+    }
+
+    /// Every clean-up model with a level it offers: missing ones get their default, others the nearest.
+    nonisolated static func normalizedCleanupReasoningEfforts(
+        _ efforts: [CleanupModel: ReasoningEffort]) -> [CleanupModel: ReasoningEffort] {
+        Dictionary(uniqueKeysWithValues: CleanupModel.allCases.map { model in
+            (model, (efforts[model] ?? model.defaultReasoningEffort).nearest(in: model.reasoningEfforts))
+        })
+    }
+
+    func cleanupReasoningEffort(for model: CleanupModel) -> ReasoningEffort {
+        cleanupReasoningEfforts[model] ?? model.defaultReasoningEffort
+    }
+
+    /// Moved to the nearest level `model` offers.
+    func setCleanupReasoningEffort(_ effort: ReasoningEffort, for model: CleanupModel) {
+        cleanupReasoningEfforts[model] = effort.nearest(in: model.reasoningEfforts)
+    }
+
+    /// The selected clean-up model's level (`cleanupModel`).
+    var cleanupReasoningEffort: ReasoningEffort {
+        get { cleanupReasoningEffort(for: cleanupModel) }
+        set { setCleanupReasoningEffort(newValue, for: cleanupModel) }
+    }
+
     /// Dictations by the main model are cleaned up: the switch is on and there is a prompt to follow.
     var isCleanupActive: Bool { cleanupEnabled && hasCleanupPrompt }
 
@@ -269,9 +301,17 @@ final class AppSettings {
         }
         if let v = store.bool(.cleanupEnabled) { cleanupEnabled = v }
         if let v = store.string(.cleanupSystemPrompt) { cleanupSystemPrompt = v }
-        if let v = store.string(.cleanupReasoningEffort).flatMap(ReasoningEffort.init(rawValue:)) {
-            cleanupReasoningEffort = v.nearest(in: CleanupModel.reasoningEfforts)
+        if let v = store.string(.cleanupModel).flatMap(CleanupModel.init(rawValue:)) { cleanupModel = v }
+        if let v: [String: String] = store.json(.cleanupReasoningEfforts) {
+            var efforts: [CleanupModel: ReasoningEffort] = [:]
+            for (model, effort) in v {
+                if let model = CleanupModel(rawValue: model), let effort = ReasoningEffort(rawValue: effort) {
+                    efforts[model] = effort
+                }
+            }
+            cleanupReasoningEfforts = Self.normalizedCleanupReasoningEfforts(efforts)
         }
+        migrateCleanupReasoningEffort()
         if let v = store.int(.maxRecordingMinutes), v > 0 { maxRecordingMinutes = v }
         if let v = store.bool(.doublePressForHandsFree) { doublePressForHandsFree = v }
         if let v = store.bool(.restoreClipboard) { restoreClipboard = v }
@@ -307,6 +347,20 @@ extension AppSettings {
         case .builtInMicrophone where storedPreferBuiltIn == true: return builtIn
         default: return current
         }
+    }
+
+    /// Before there was a choice of clean-up model, one level was stored for Gemini 3.5 Flash Lite alone. It
+    /// becomes Flash Lite's level (unless a newer build already stored one), and the old key goes.
+    fileprivate func migrateCleanupReasoningEffort() {
+        guard let raw = store.string(.cleanupReasoningEffort) else { return }
+        if store.data(.cleanupReasoningEfforts) == nil, let effort = ReasoningEffort(rawValue: raw) {
+            var efforts = cleanupReasoningEfforts
+            efforts[.geminiFlashLite] = effort.nearest(in: CleanupModel.geminiFlashLite.reasoningEfforts)
+            cleanupReasoningEfforts = efforts
+            store.setJSON(Dictionary(uniqueKeysWithValues: efforts.map { ($0.key.rawValue, $0.value.rawValue) }),
+                          .cleanupReasoningEfforts)
+        }
+        store.remove(.cleanupReasoningEffort)
     }
 
     fileprivate func migrateBuiltInOverBluetoothOnce() {
@@ -358,7 +412,10 @@ enum SettingsKey: String, CaseIterable {
     case restoreClipboard, keepFailedRecordingsDays, keepSuccessfulRecordingsDays, shortcuts, hasShownWelcomeHello
     case checkForUpdatesAutomatically, announcedUpdateVersion, lastLaunchedVersion
     case switchEngines, switchHintShownCount, microphoneChoiceMigrated
+    /// `cleanupReasoningEffort` is Flash Lite's level from before the clean-up model choice, moved once into
+    /// `cleanupReasoningEfforts` and removed.
     case reasoningEfforts, cleanupEnabled, cleanupSystemPrompt, cleanupReasoningEffort
+    case cleanupModel, cleanupReasoningEfforts
 
     var defaultsKey: String { "tt.\(rawValue)" }
 }
@@ -404,6 +461,7 @@ private final class SettingsStore {
     func int(_ key: SettingsKey) -> Int? { (object(key) as? NSNumber)?.intValue }
     func double(_ key: SettingsKey) -> Double? { (object(key) as? NSNumber)?.doubleValue }
     func string(_ key: SettingsKey) -> String? { object(key) as? String }
+    func data(_ key: SettingsKey) -> Data? { object(key) as? Data }
 
     func json<T: Decodable>(_ key: SettingsKey) -> T? {
         guard let data = object(key) as? Data else { return nil }

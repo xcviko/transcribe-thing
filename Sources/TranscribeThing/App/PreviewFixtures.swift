@@ -105,7 +105,7 @@ enum PreviewFixtures {
                         kind: .cleanup(of: .parakeet),
                         text: "Quick note for the release: the pill should collapse a little faster than it expands, and the error toast needs the retry button first.",
                         metadata: TranscriptMetadata(
-                            createdAt: ago(60 * 26), modelID: CleanupModel.openRouterModelID, provider: "Google AI Studio",
+                            createdAt: ago(60 * 26), modelID: CleanupModel.geminiFlashLite.openRouterModelID, provider: "Google AI Studio",
                             generationID: "gen-preview-2", reasoningEffort: .low,
                             usage: TokenUsage(promptTokens: 410, completionTokens: 198, reasoningTokens: 164),
                             costUSD: 0.00054, processingTime: 1.4, generationTime: 1.1, usedSystemPrompt: true,

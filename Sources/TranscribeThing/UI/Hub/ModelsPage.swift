@@ -41,12 +41,15 @@ struct ModelsPage: View {
                 }
                 HubGroup("Clean-up", footer: "Gemini transcripts aren’t cleaned up: Gemini already punctuates and drops filler words. History keeps the original too.") {
                     SettingsGroup {
-                        CleanupModelRow { focusKey(proxy) }
+                        ForEach(CleanupModel.allCases) { model in
+                            CleanupModelRow(model: model, isSelected: settings.cleanupModel == model,
+                                            choose: { chooseCleanupModel(model) }) { focusKey(proxy) }
+                        }
                         cleanupToggle
-                        SettingsRow(title: "Thinking", subtitle: "Lower is faster and cheaper. Minimal or Low is plenty for tidying.",
+                        SettingsRow(title: "Thinking", subtitle: Self.thinkingAdvice(settings.cleanupModel),
                                     systemImage: "brain", iconTint: .inkSecondary) {
-                            ThinkingPicker(efforts: CleanupModel.reasoningEfforts, selection: cleanupEffort,
-                                           modelName: CleanupModel.modelName, showsTitle: false)
+                            ThinkingPicker(efforts: settings.cleanupModel.reasoningEfforts, selection: cleanupEffort,
+                                           modelName: settings.cleanupModel.modelName, showsTitle: false)
                         }
                     }
                     CleanupPromptCard()
@@ -77,10 +80,11 @@ struct ModelsPage: View {
     private var cleanupToggle: some View {
         let settings = settings
         let hasPrompt = settings.hasCleanupPrompt
+        let model = settings.cleanupModel.shortName
         return SettingsRow(title: "Clean up Parakeet transcripts",
                            subtitle: hasPrompt
-                               ? "Flash Lite tidies each dictation before it’s pasted. If it fails or takes too long, you get the original."
-                               : "Write a prompt below or use the example first. Without one, Flash Lite would reply to your words instead of tidying them.",
+                               ? "\(model) tidies each dictation before it’s pasted. If it fails or takes too long, you get the original."
+                               : "Write a prompt below or use the example first. Without one, \(model) would reply to your words instead of tidying them.",
                            systemImage: "text.badge.checkmark", iconTint: .inkSecondary) {
             Toggle("", isOn: Binding(get: { settings.isCleanupActive }, set: { settings.cleanupEnabled = $0 }))
                 .toggleStyle(.appSwitch)
@@ -90,9 +94,23 @@ struct ModelsPage: View {
         }
     }
 
+    /// The selected clean-up model's own level: switching models keeps each one's.
     private var cleanupEffort: Binding<ReasoningEffort> {
         let settings = settings
         return Binding(get: { settings.cleanupReasoningEffort }, set: { settings.cleanupReasoningEffort = $0 })
+    }
+
+    private func chooseCleanupModel(_ model: CleanupModel) {
+        guard settings.cleanupModel != model else { return }
+        withAnimation(Theme.Motion.snappy) { settings.cleanupModel = model }
+    }
+
+    /// The Thinking row's helper text: the lowest level is enough for tidying.
+    static func thinkingAdvice(_ model: CleanupModel) -> String {
+        switch model {
+        case .geminiFlashLite: "Lower is faster and cheaper. Minimal or Low is plenty for tidying."
+        case .gpt6Luna: "Lower is faster and cheaper. None is plenty for tidying: Luna answers without thinking."
+        }
     }
 
     private func extraBinding(_ engine: EngineID) -> Binding<Bool> {
@@ -554,16 +572,21 @@ extension ExtraModelRow {
 
 // MARK: - Clean-up
 
-/// Gemini 3.5 Flash Lite as Clean-up: what it does, who serves it and the OpenRouter key's status, like the extra
-/// models. It reads text, never audio, so it has no place among the models a dictation can go to.
+/// A clean-up model to pick: what it does, who serves it and the OpenRouter key's status, like the extra models.
+/// It reads text, never audio, so it has no place among the models a dictation can go to.
 private struct CleanupModelRow: View {
+    var model: CleanupModel
+    var isSelected: Bool
+    var choose: () -> Void
     var focusKey: () -> Void
 
     @Environment(HubContext.self) private var hub
     @Environment(OpenRouterAccount.self) private var account
+    @State private var hovering = false
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
+            RadioDot(isOn: isSelected)
             Image(systemName: "wand.and.stars")
                 .font(.system(size: 36 * 0.44, weight: .semibold))
                 .foregroundStyle(Color.warm)
@@ -578,11 +601,11 @@ private struct CleanupModelRow: View {
                 }
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
-                Text(CleanupModel.modelName)
+                Text(model.modelName)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.ink)
                     .lineLimit(1)
-                Text("Tidies punctuation, fillers and false starts · reads text, not audio")
+                Text(model.summary)
                     .typeface(.callout)
                     .foregroundStyle(.inkSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -590,7 +613,7 @@ private struct CleanupModelRow: View {
                     Image(systemName: "server.rack")
                         .font(.system(size: 9.5, weight: .semibold))
                         .frame(width: 12)
-                    Text("Served by \(CleanupModel.provider) only.")
+                    Text("Served by \(model.providerName) only.")
                 }
                 .typeface(.callout)
                 .foregroundStyle(.inkTertiary)
@@ -613,7 +636,14 @@ private struct CleanupModelRow: View {
         .padding(.horizontal, Theme.Spacing.md)
         .padding(.vertical, 12)
         .frame(minHeight: 76)
+        .background { RowHighlight(isSelected: isSelected, isHovering: hovering) }
+        .contentShape(Rectangle())
+        .onTapGesture(perform: choose)
+        .onHover { hovering = $0 }
+        .animation(Theme.Motion.hover, value: hovering)
         .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
+        .accessibilityAction(named: "Use for Clean-up", choose)
     }
 }
 

@@ -7,7 +7,8 @@ import Foundation
 ///     transcribe-thing --transcribe <audio file>
 ///            --engine parakeet|parakeetCloud|geminiFlash|geminiPro
 ///            [--download] [--prompt <text>] [--repeat <n>] [--effort minimal|low|medium|high]
-///            [--clean-up [--clean-up-prompt <text>] [--clean-up-effort minimal|low|medium|high]]
+///            [--clean-up [--clean-up-model geminiFlashLite|gpt6Luna] [--clean-up-prompt <text>]
+///                        [--clean-up-effort none|minimal|low|medium|high]]
 ///     transcribe-thing --model-status
 ///
 /// Hidden diagnostic (not in the usage text): `--parakeet-compute ane|gpu` loads the local model on other Core ML
@@ -20,8 +21,9 @@ import Foundation
 /// `--prompt` and `--effort` apply to Gemini only (the effort moves to the nearest level the model supports). Without
 /// `--prompt` Gemini gets the app's default prompt (`AppSettings.defaultGeminiSystemPrompt`); `--prompt ""` sends
 /// only the audio.
-/// `--clean-up` sends the last transcript to Gemini 3.5 Flash Lite with the clean-up prompt (by default
-/// `CleanupModel.examplePrompt`) and prints the cleaned text. Settings are in-memory: the CLI never changes the app's.
+/// `--clean-up` sends the last transcript to a clean-up model (by default Gemini 3.5 Flash Lite; the effort moves to
+/// the nearest level it offers) with the clean-up prompt (by default `CleanupModel.examplePrompt`) and prints the
+/// cleaned text. Settings are in-memory: the CLI never changes the app's.
 /// An engine that answers with no text heard no speech: that prints `NO SPEECH` instead of `TEXT:` and exits 0,
 /// like any other answer. Only real failures print `ERROR:` and exit non-zero.
 ///
@@ -90,7 +92,8 @@ enum EngineCLI {
         usage: transcribe-thing --transcribe <audio file> \
         --engine parakeet|parakeetCloud|geminiFlash|geminiPro \
         [--download] [--prompt <text>] [--repeat <n>] [--effort minimal|low|medium|high] \
-        [--clean-up [--clean-up-prompt <text>] [--clean-up-effort minimal|low|medium|high]]
+        [--clean-up [--clean-up-model geminiFlashLite|gpt6Luna] [--clean-up-prompt <text>] \
+        [--clean-up-effort none|minimal|low|medium|high]]
                transcribe-thing --model-status
         """
 
@@ -104,6 +107,7 @@ enum EngineCLI {
         var cleanUp: Bool
         var cleanupPrompt: String?
         var cleanupEffort: ReasoningEffort?
+        var cleanupModel: CleanupModel?
 
         init?(_ arguments: [String]) {
             func value(_ flag: String) -> String? {
@@ -128,6 +132,10 @@ enum EngineCLI {
             if arguments.contains("--clean-up-effort") {
                 guard let level = value("--clean-up-effort").flatMap(ReasoningEffort.init(rawValue:)) else { return nil }
                 cleanupEffort = level
+            }
+            if arguments.contains("--clean-up-model") {
+                guard let model = value("--clean-up-model").flatMap(CleanupModel.init(rawValue:)) else { return nil }
+                cleanupModel = model
             }
             if arguments.contains("--parakeet-compute") {
                 guard let preset = value("--parakeet-compute").flatMap(ParakeetCompute.init(rawValue:)) else { return nil }
@@ -176,6 +184,7 @@ enum EngineCLI {
         settings.geminiSystemPrompt = options.prompt ?? AppSettings.defaultGeminiSystemPrompt
         if let effort = options.effort { settings.setReasoningEffort(effort, for: options.engine) }
         settings.cleanupSystemPrompt = options.cleanupPrompt ?? CleanupModel.examplePrompt
+        if let model = options.cleanupModel { settings.cleanupModel = model }
         if let effort = options.cleanupEffort { settings.cleanupReasoningEffort = effort }
         if let effort = settings.reasoningEffort(for: options.engine) { print("EFFORT: \(effort.rawValue)") }
         var engines = ModelStore.makeEngines(paths: paths)
@@ -226,7 +235,7 @@ enum EngineCLI {
             if let best = runTimes.min() { print("TRANSCRIBE: first \(format(runTimes[0], digits: 3)) s · best \(format(best, digits: 3)) s") }
             if options.cleanUp, !last.text.isEmpty {
                 let cleaned = try await service.cleanUp(last.text, of: last.engine)
-                var line = "CLEAN-UP: \(settings.cleanupReasoningEffort.rawValue) · \(format(cleaned.processingTime, digits: 3)) s"
+                var line = "CLEAN-UP: \(settings.cleanupModel.modelName) · \(settings.cleanupReasoningEffort.rawValue) · \(format(cleaned.processingTime, digits: 3)) s"
                 if let cost = cleaned.costUSD { line += " · $\(String(format: "%.5f", cost))" }
                 if let reasoning = cleaned.usage?.reasoningTokens { line += " · \(reasoning) reasoning tokens" }
                 print(line)
@@ -458,10 +467,10 @@ enum EngineCLI {
                 return nil
             }
 
-            /// The `ReasoningEffort` that sizes `max_tokens`: "none" gets the least room, levels above high the most.
+            /// The `ReasoningEffort` that sizes `max_tokens`: "none" gets the least room (as much as minimal),
+            /// levels above high the most.
             static func budget(for effort: String) -> ReasoningEffort {
-                if let level = ReasoningEffort(rawValue: effort) { return level }
-                return effort == "none" ? .minimal : .high
+                ReasoningEffort(rawValue: effort) ?? .high
             }
         }
 

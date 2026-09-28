@@ -45,7 +45,10 @@ private func entry(minutesAgo: Double, status: TranscriptStatus = .success,
         #expect(options.out?.path == "/tmp/r.json")
         #expect(options.route.model == "openai/gpt-6-luna")
         #expect(options.route.effort == "none")
-        #expect(options.route.budget == .minimal, "no thinking gets the smallest max_tokens")
+        #expect(options.route.budget == .off, "no thinking gets the smallest max_tokens")
+        #expect(CleanupModel.maxTokens(forCharacterCount: 10, effort: .off)
+                == CleanupModel.maxTokens(forCharacterCount: 10, effort: .minimal))
+        #expect(options.route == CleanupModel.gpt6Luna.route(effort: .off), "what the app sends for Luna")
         #expect(options.route.provider == .init(only: ["openai"], allowFallbacks: false))
     }
 
@@ -194,7 +197,7 @@ private func entry(minutesAgo: Double, status: TranscriptStatus = .success,
         #expect(result.reasoningEffort == .high)
         let body = try #require(JSONSerialization.jsonObject(with: StubURLProtocol.registry.bodies(for: host)[0])
             as? [String: Any])
-        #expect(body["model"] as? String == CleanupModel.openRouterModelID)
+        #expect(body["model"] as? String == CleanupModel.geminiFlashLite.openRouterModelID)
         #expect(body["reasoning"] as? [String: AnyHashable] == ["effort": "high", "exclude": true])
         #expect(body["provider"] as? [String: AnyHashable] == ["only": ["google-ai-studio"], "allow_fallbacks": false])
         #expect(body["max_tokens"] as? Int == CleanupModel.maxTokens(forCharacterCount: 2, effort: .high))

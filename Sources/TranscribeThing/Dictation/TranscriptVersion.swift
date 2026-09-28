@@ -1,16 +1,18 @@
 import Foundation
 
-/// What wrote a transcript of a recording: an engine hearing the audio, or the clean-up model tidying the text an
-/// engine wrote. An entry has at most one version of each kind, so the same model never runs twice on a recording.
+/// What wrote a transcript of a recording: an engine hearing the audio, or a clean-up model tidying the text an
+/// engine wrote. An entry has at most one version of each kind, so the same model never runs twice on a recording
+/// (each clean-up model can tidy the same text once).
 enum TranscriptVersionKind: Hashable, Sendable, Codable {
     case transcription(EngineID)
-    /// Gemini 3.5 Flash Lite over the text of `.transcription(engine)`.
-    case cleanup(of: EngineID)
+    /// `model` over the text of `.transcription(engine)`. Versions from before the choice of clean-up model are
+    /// Flash Lite's, hence the default.
+    case cleanup(of: EngineID, by: CleanupModel = .geminiFlashLite)
 
     /// The engine that heard the audio (for a clean-up, the one whose text was tidied).
     var engine: EngineID {
         switch self {
-        case .transcription(let engine), .cleanup(let engine): engine
+        case .transcription(let engine), .cleanup(let engine, _): engine
         }
     }
 
@@ -18,11 +20,16 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
         if case .cleanup = self { true } else { false }
     }
 
-    /// "Parakeet v3", "Parakeet v3 + Clean-up".
+    /// The model that tidied the text; nil for a transcription.
+    var cleanupModel: CleanupModel? {
+        if case .cleanup(_, let model) = self { model } else { nil }
+    }
+
+    /// "Parakeet v3", "Parakeet v3 + Clean-up by GPT-6 Luna".
     var displayName: String {
         switch self {
         case .transcription(let engine): engine.displayName
-        case .cleanup(let engine): "\(engine.displayName) + Clean-up"
+        case .cleanup(let engine, let model): "\(engine.displayName) + Clean-up by \(model.shortName)"
         }
     }
 
@@ -30,27 +37,45 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
     var shortName: String {
         switch self {
         case .transcription(let engine): engine.shortName
-        case .cleanup(let engine): "\(engine.shortName) + Clean-up"
+        case .cleanup(let engine, _): "\(engine.shortName) + Clean-up"
         }
     }
 
-    /// Persisted: "parakeet", "cleanup:parakeet". Never rename.
+    /// What is under way while it's being made: "Transcribing with Gemini Flash…", "Cleaning up with Flash Lite…".
+    var progressTitle: String {
+        switch self {
+        case .transcription(let engine): "Transcribing with \(engine.shortName)…"
+        case .cleanup(_, let model): "Cleaning up with \(model.shortName)…"
+        }
+    }
+
+    /// Persisted: "parakeet", "cleanup:parakeet" (Flash Lite's, as older builds wrote it),
+    /// "cleanup:parakeet:gpt6Luna". Never rename. An older build can't read a kind with a model and drops that
+    /// version, not the entry.
     var rawValue: String {
         switch self {
         case .transcription(let engine): engine.rawValue
-        case .cleanup(let engine): "cleanup:\(engine.rawValue)"
+        case .cleanup(let engine, .geminiFlashLite): "cleanup:\(engine.rawValue)"
+        case .cleanup(let engine, let model): "cleanup:\(engine.rawValue):\(model.rawValue)"
         }
     }
 
-    /// Retired engines read as their successors (`TranscriptEntry.retiredEngines`); nil for an engine this build
-    /// doesn't know.
+    /// Retired engines read as their successors (`TranscriptEntry.retiredEngines`); nil for an engine or a
+    /// clean-up model this build doesn't know.
     init?(rawValue: String) {
         func engine(_ raw: Substring) -> EngineID? {
             EngineID(rawValue: String(raw)) ?? TranscriptEntry.retiredEngines[String(raw)]
         }
         if rawValue.hasPrefix("cleanup:") {
-            guard let source = engine(rawValue.dropFirst("cleanup:".count)) else { return nil }
-            self = .cleanup(of: source)
+            let parts = rawValue.dropFirst("cleanup:".count).split(separator: ":", maxSplits: 1,
+                                                                   omittingEmptySubsequences: false)
+            guard let source = engine(parts[0]) else { return nil }
+            if parts.count == 1 {
+                self = .cleanup(of: source, by: .geminiFlashLite)
+            } else {
+                guard let model = CleanupModel(rawValue: String(parts[1])) else { return nil }
+                self = .cleanup(of: source, by: model)
+            }
         } else {
             guard let source = engine(Substring(rawValue)) else { return nil }
             self = .transcription(source)

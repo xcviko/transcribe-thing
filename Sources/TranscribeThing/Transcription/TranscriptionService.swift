@@ -148,13 +148,14 @@ final class TranscriptionService {
 
     // MARK: Clean-up
 
-    /// Tidies `transcript` (written by `source`) with Gemini 3.5 Flash Lite, following the clean-up prompt at the
-    /// clean-up reasoning level. The result is a version of kind `.cleanup(of: source)`; its text is empty when the
-    /// model returned nothing. Gives up after `timeout` (by default `CleanupModel.timeout(forCharacterCount:)`) with
-    /// `AppError.timeout`. Throws `AppError` only, or `CancellationError`.
-    /// `route` sends it to another model instead, at the route's effort (`EngineCLI --cleanup-bench`); the app
+    /// Tidies `transcript` (written by `source`) with the clean-up model `model` (by default the selected one),
+    /// following the clean-up prompt at that model's reasoning level. The result is a version of kind
+    /// `.cleanup(of: source, by: model)`; its text is empty when the model returned nothing. Gives up after
+    /// `timeout` (by default `CleanupModel.timeout(forCharacterCount:)`) with `AppError.timeout`. Throws `AppError`
+    /// only, or `CancellationError`.
+    /// `route` sends it to any other model instead, at the route's effort (`EngineCLI --cleanup-bench`); the app
     /// never passes one.
-    func cleanUp(_ transcript: String, of source: EngineID, timeout: TimeInterval? = nil,
+    func cleanUp(_ transcript: String, of source: EngineID, by model: CleanupModel? = nil, timeout: TimeInterval? = nil,
                  route: CleanupRoute? = nil) async throws -> TranscriptResult {
         let prompt = settings.cleanupSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         // With no instruction the model would reply to the transcript instead of tidying it.
@@ -162,8 +163,8 @@ final class TranscriptionService {
         guard let key = account.apiKey() else {
             throw account.isKeyUnreadable ? AppError.openRouterKeyUnreadable : AppError.openRouterMissingKey
         }
-        let route = route ?? CleanupRoute(model: CleanupModel.openRouterModelID,
-                                          effort: settings.cleanupReasoningEffort)
+        let model = model ?? settings.cleanupModel
+        let route = route ?? model.route(effort: settings.cleanupReasoningEffort(for: model))
         let effort = ReasoningEffort(rawValue: route.effort)
         let limit = timeout ?? CleanupModel.timeout(forCharacterCount: transcript.count)
         let client = client

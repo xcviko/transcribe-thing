@@ -27,16 +27,21 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
     @Test func levelsAreWhatOpenRouterListsPerModel() {
         #expect(EngineID.geminiFlash.reasoningEfforts == [.low, .medium, .high], "3.8 Flash can't turn thinking off")
         #expect(EngineID.geminiPro.reasoningEfforts == [.low, .medium, .high])
-        #expect(CleanupModel.reasoningEfforts == [.minimal, .low, .medium, .high])
+        #expect(CleanupModel.geminiFlashLite.reasoningEfforts == [.minimal, .low, .medium, .high])
         #expect(EngineID.parakeet.reasoningEfforts.isEmpty && EngineID.parakeetCloud.reasoningEfforts.isEmpty)
-        #expect(ReasoningEffort.allCases.map(\.rawValue) == ["minimal", "low", "medium", "high"], "no none")
+        #expect(CleanupModel.gpt6Luna.reasoningEfforts == [.off, .low, .medium, .high], "no xhigh or max for a clean-up")
+        #expect(ReasoningEffort.allCases.map(\.rawValue) == ["none", "minimal", "low", "medium", "high"])
+        for engine in EngineID.allCases { #expect(!engine.reasoningEfforts.contains(.off), "Gemini can't skip thinking") }
+        #expect(!CleanupModel.geminiFlashLite.reasoningEfforts.contains(.off))
     }
 
     @Test func defaults() {
         #expect(EngineID.geminiFlash.defaultReasoningEffort == .low)
         #expect(EngineID.geminiPro.defaultReasoningEffort == .high)
         #expect(EngineID.parakeet.defaultReasoningEffort == nil)
-        #expect(CleanupModel.defaultReasoningEffort == .low)
+        #expect(CleanupModel.geminiFlashLite.defaultReasoningEffort == .low)
+        #expect(CleanupModel.gpt6Luna.defaultReasoningEffort == .off)
+        #expect(ReasoningEffort.off.title == "None")
     }
 
     @Test func anUnsupportedLevelMovesToTheNearestHigherOnATie() {
@@ -45,6 +50,9 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         #expect(ReasoningEffort.high.nearest(in: [.minimal, .low]) == .low)
         #expect(ReasoningEffort.low.nearest(in: []) == .low)
         #expect(ReasoningEffort.medium.nearest(in: [.low, .medium]) == .medium)
+        #expect(ReasoningEffort.minimal.nearest(in: [.off, .low, .medium, .high]) == .low, "minimal on Luna is low")
+        #expect(ReasoningEffort.off.nearest(in: [.minimal, .low]) == .minimal)
+        #expect(ReasoningEffort.off.nearest(in: [.low, .medium, .high]) == .low)
     }
 }
 
@@ -172,8 +180,9 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
 
     @Test(arguments: ReasoningEffort.allCases)
     func cleanupIsTextInTextOutPinnedToGoogle(_ effort: ReasoningEffort) throws {
-        let json = try object(.cleanup(model: CleanupModel.openRouterModelID, systemPrompt: "  Tidy it.\n",
-                                       transcript: "Можешь, пожалуйста, убрать это?", effort: effort))
+        let effort = effort.nearest(in: CleanupModel.geminiFlashLite.reasoningEfforts)
+        let json = try object(.cleanup(route: CleanupModel.geminiFlashLite.route(effort: effort),
+                                       systemPrompt: "  Tidy it.\n", transcript: "Можешь, пожалуйста, убрать это?"))
         #expect(Set(json.keys) == ["model", "messages", "reasoning", "provider", "max_tokens", "stream"])
         #expect(json["model"] as? String == "google/gemini-3.5-flash-lite")
         #expect(json["temperature"] == nil)
@@ -419,7 +428,7 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
     private func cleaned(_ text: String, cost: Double = 0.0002) -> TranscriptResult {
         var result = TranscriptResult(text: text, engine: .parakeet, processingTime: 0.9, costUSD: cost,
                                       provider: "Google AI Studio", generationID: "gen-c")
-        result.modelID = CleanupModel.openRouterModelID
+        result.modelID = CleanupModel.geminiFlashLite.openRouterModelID
         result.reasoningEffort = .low
         result.usedSystemPrompt = true
         return result
@@ -531,12 +540,13 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         let notice = try #require(h.toasts.notices.first { $0.dedupeKey == "cleanup.fallback" })
         #expect(notice.title == "Couldn’t clean up · pasted the original")
         #expect(notice.body == DictationController.cleanupFailureReason(
-            key == .missing ? .openRouterMissingKey : key == .noCredit(nil) ? .openRouterNoCredits("") : .openRouterInvalidKey("")))
+            key == .missing ? .openRouterMissingKey : key == .noCredit(nil) ? .openRouterNoCredits("") : .openRouterInvalidKey(""),
+            model: .geminiFlashLite))
         #expect(notice.actions.map(\.kind) == [.openHub(.models)])
     }
 
     @Test func cleanUpFailuresSpeakOfFlashLiteAndTheText() {
-        let reason = DictationController.cleanupFailureReason
+        let reason = { (error: AppError?) in DictationController.cleanupFailureReason(error, model: .geminiFlashLite) }
         #expect(reason(.openRouterTruncated("")) == "Flash Lite stopped before finishing.")
         #expect(reason(.openRouterBadRequest("")) == "Flash Lite couldn’t process the text.")
         #expect(reason(.openRouterRefused("")) == "Flash Lite couldn’t process the text.")

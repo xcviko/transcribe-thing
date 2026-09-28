@@ -227,7 +227,7 @@ struct OpenRouterKeyCard: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.success)
             Text(settings.isCleanupActive
-                 ? "Only your audio, and Parakeet’s text for Clean-up, goes to OpenRouter and the model’s provider."
+                 ? "Only your audio, and Parakeet’s text for Clean-up by \(settings.cleanupModel.shortName), goes to OpenRouter and the model’s provider."
                  : "Only your audio is sent, to OpenRouter and the model’s provider.")
                 .typeface(.callout)
                 .foregroundStyle(.inkSecondary)
@@ -324,7 +324,7 @@ struct GeminiInstructionsCard: View {
     }
 }
 
-/// The prompt Gemini 3.5 Flash Lite follows to tidy a Parakeet transcript: `CleanupModel.examplePrompt` until the
+/// The prompt the clean-up model follows to tidy a Parakeet transcript: `CleanupModel.examplePrompt` until the
 /// user changes it. Cleared, Clean-up turns off until there is a prompt again: with no instruction the model would
 /// reply to the transcript instead of cleaning it up. "Use Example" puts the example back, asking first when it
 /// would replace a prompt of the user's own.
@@ -354,9 +354,9 @@ struct CleanupPromptCard: View {
                     }
                 }
                 PromptEditor(text: $settings.cleanupSystemPrompt,
-                             placeholder: "Tell Flash Lite how to tidy a transcript, or start from the example.",
+                             placeholder: "Tell \(settings.cleanupModel.shortName) how to tidy a transcript, or start from the example.",
                              height: 150)
-                Text("Sent as the system prompt. The transcript follows as the message, inside <transcript> tags, so Flash Lite treats it as text to edit rather than a request to answer. Ask for the cleaned text only: whatever comes back is pasted.")
+                Text("Sent as the system prompt. The transcript follows as the message, inside <transcript> tags, so \(settings.cleanupModel.shortName) treats it as text to edit rather than a request to answer. Ask for the cleaned text only: whatever comes back is pasted.")
                     .typeface(.callout)
                     .foregroundStyle(.inkSecondary)
                     .fixedSize(horizontal: false, vertical: true)

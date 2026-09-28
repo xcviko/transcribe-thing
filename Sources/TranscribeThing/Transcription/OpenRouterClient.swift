@@ -124,16 +124,9 @@ final class OpenRouterClient: Sendable {
         return result
     }
 
-    /// Clean-up of `transcript` (Gemini 3.5 Flash Lite over chat completions): text in, text out, with
-    /// `systemPrompt` as the instructions. Same retry policy as transcription; a failure is mapped as a Gemini one.
-    /// The returned text is the model's reply without any tags or quotes it put around it.
-    func cleanUp(transcript: String, model: String, systemPrompt: String, effort: ReasoningEffort, apiKey: String,
-                 timeout: TimeInterval) async throws -> CloudResult {
-        try await cleanUp(transcript: transcript, route: CleanupRoute(model: model, effort: effort),
-                          systemPrompt: systemPrompt, apiKey: apiKey, timeout: timeout)
-    }
-
-    /// The same clean-up with any model, provider and effort (`CleanupRoute`).
+    /// Clean-up of `transcript` over chat completions by the model, provider and effort of `route`: text in, text
+    /// out, with `systemPrompt` as the instructions. Same retry policy as transcription; a failure is mapped as a
+    /// Gemini one. The returned text is the model's reply without any tags or quotes it put around it.
     func cleanUp(transcript: String, route: CleanupRoute, systemPrompt: String, apiKey: String,
                  timeout: TimeInterval) async throws -> CloudResult {
         let engine = EngineID.geminiFlash
