@@ -228,7 +228,8 @@ enum CueOutputError: LocalizedError {
 }
 
 /// The real cue output: one `AVAudioEngine` (output only: its input node is never touched, so it can't open a
-/// mic) with a player node per cue into the main mixer, which lets different cues overlap as before. The cues
+/// mic) with a player node per cue into the main mixer, which lets different cues overlap as before. The Switch
+/// model tick has a few nodes, taken in turn, so ticks at the keyboard's autorepeat ring over each other. The cues
 /// are read once into buffers, then converted to the output's sample rate each time the graph is built.
 /// Confined to `CueEngine`'s queue.
 final class AVCueOutput: CueOutput {
@@ -237,7 +238,9 @@ final class AVCueOutput: CueOutput {
     /// The files as read (the processing format of each WAV).
     private var sources: [SoundEffect: AVAudioPCMBuffer] = [:]
     private var engine: AVAudioEngine?
-    private var players: [SoundEffect: AVAudioPlayerNode] = [:]
+    private var players: [SoundEffect: [AVAudioPlayerNode]] = [:]
+    /// The node each cue plays on next (its voices in turn).
+    private var nextVoice: [SoundEffect: Int] = [:]
     private var buffers: [SoundEffect: AVAudioPCMBuffer] = [:]
     private var configurationObserver: NSObjectProtocol?
     private var outputListener: AudioObjectPropertyListenerBlock?
@@ -293,7 +296,7 @@ final class AVCueOutput: CueOutput {
 
     func stop() {
         CueEngine.checkOffMain("AVCueOutput.stop")
-        for player in players.values { player.stop() }
+        for player in players.values.joined() { player.stop() }
         engine?.stop()
     }
 
@@ -303,6 +306,7 @@ final class AVCueOutput: CueOutput {
         if let configurationObserver { NotificationCenter.default.removeObserver(configurationObserver) }
         configurationObserver = nil
         players = [:]
+        nextVoice = [:]
         buffers = [:]
         engine = nil
     }
@@ -321,9 +325,19 @@ final class AVCueOutput: CueOutput {
         onChange?()
     }
 
+    /// Nodes per cue: one restarts a cue still sounding; the Switch model tick, held down at the keyboard's
+    /// autorepeat (as fast as every 30 ms, the tick lasts 70 ms), gets enough to let every tick ring out.
+    static func voices(for effect: SoundEffect) -> Int {
+        effect == .modelSwitch ? 6 : 1
+    }
+
     func play(_ effect: SoundEffect) -> Bool {
-        guard let engine, engine.isRunning, let player = players[effect], let buffer = buffers[effect] else { return false }
-        // `.interrupts` restarts this cue if it is still sounding; the other nodes keep theirs.
+        guard let engine, engine.isRunning, let voices = players[effect], !voices.isEmpty,
+              let buffer = buffers[effect] else { return false }
+        let index = nextVoice[effect, default: 0] % voices.count
+        nextVoice[effect] = index + 1
+        let player = voices[index]
+        // `.interrupts` restarts this node if it is still sounding; the other nodes keep theirs.
         player.scheduleBuffer(buffer, at: nil, options: .interrupts)
         if !player.isPlaying { player.play() }
         return true
@@ -339,10 +353,12 @@ final class AVCueOutput: CueOutput {
                 Log.app.error("Couldn't convert sound \(effect.rawValue, privacy: .public) to \(rate) Hz")
                 continue
             }
-            let player = AVAudioPlayerNode()
-            engine.attach(player)
-            engine.connect(player, to: engine.mainMixerNode, format: format)
-            players[effect] = player
+            players[effect] = (0..<Self.voices(for: effect)).map { _ in
+                let player = AVAudioPlayerNode()
+                engine.attach(player)
+                engine.connect(player, to: engine.mainMixerNode, format: format)
+                return player
+            }
             buffers[effect] = buffer
         }
         engine.prepare()

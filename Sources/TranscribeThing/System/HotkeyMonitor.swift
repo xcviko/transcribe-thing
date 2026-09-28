@@ -8,7 +8,7 @@ enum HotkeyEvent: Equatable, Sendable {
     case pttDown, pttUp, pttInterrupted, handsFreeToggle, cancel, pasteLast
     /// The switch model shortcut, during a dictation.
     case cycleEngine
-    /// Its key held down: an autorepeat, which steps on at the controller's pace.
+    /// Its key held down: an autorepeat, which steps on too.
     case cycleEngineRepeat
 }
 

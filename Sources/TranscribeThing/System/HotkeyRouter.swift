@@ -221,7 +221,7 @@ struct HotkeyRouter: Equatable, Sendable {
         }
         if swallowedKeys.contains(key) {
             decision.swallow = true
-            // The switch model key held down keeps stepping; the controller paces the autorepeat.
+            // The switch model key held down keeps stepping, at every autorepeat.
             if input.isRepeat, let switchModel = liveSwitchModel(config), switchModel.keyCode == key,
                matchesDuringDictation(switchModel, config.bindings) {
                 decision.events.append(.cycleEngineRepeat)

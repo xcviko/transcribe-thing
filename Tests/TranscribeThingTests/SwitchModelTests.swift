@@ -387,30 +387,31 @@ import Testing
         #expect(!c.canSwitchModels, "nothing left to switch to")
     }
 
-    /// Tab held down steps on like a click wheel, a tick each time: not at the system's autorepeat rate.
-    @Test func holdingTheKeyStepsAtAClickWheelsPace() {
+    /// Tab held down steps on at every autorepeat of the keyboard, however fast, a tick each time.
+    @Test func holdingTheKeyStepsAtEveryAutorepeat() {
         let (rig, cues) = Self.make()
         let c = rig.h.controller
         Self.hold(rig)
         c.handle(.cycleEngine)
         #expect(c.modelOverride == .cleanup)
-        c.handle(.cycleEngineRepeat)
-        rig.now += 0.1
-        c.handle(.cycleEngineRepeat)
-        #expect(c.modelOverride == .cleanup, "autorepeats inside the interval do nothing")
         var steps: [ModelChoice?] = []
-        for _ in 0..<4 {
-            rig.now += DictationController.switchRepeatInterval
+        for _ in 0..<5 {
+            rig.now += 0.03
             c.handle(.cycleEngineRepeat)
             steps.append(c.modelOverride)
         }
-        #expect(steps == [.engine(.geminiFlash), .engine(.geminiPro), nil, .cleanup])
-        #expect(cues.played.filter { $0 == .modelSwitch }.count == 5)
+        #expect(steps == [.engine(.geminiFlash), .engine(.geminiPro), nil, .cleanup, .engine(.geminiFlash)])
+        #expect(cues.played.filter { $0 == .modelSwitch }.count == 6)
         #expect(c.machine.capture.isListeningOrLocked)
         c.handle(.cancel)
-        rig.now += 1
         c.handle(.cycleEngineRepeat)
         #expect(c.modelOverride == nil, "no dictation, nothing to step")
+    }
+
+    /// The tick has voices of its own, so ticks at 30 ms ring over each other; other cues restart.
+    @Test func theTickRingsOverItself() {
+        #expect(Double(AVCueOutput.voices(for: .modelSwitch)) * 0.03 > 0.07, "enough voices for a 70 ms tick every 30 ms")
+        #expect(SoundEffect.allCases.filter { $0 != .modelSwitch }.allSatisfy { AVCueOutput.voices(for: $0) == 1 })
     }
 
     /// A held key that can't step (too long for Gemini) says so once, at the press.

@@ -94,8 +94,6 @@ final class DictationController {
     private(set) var modelOverride: ModelChoice?
     /// The extra model transcribing this dictation, if `modelOverride` is one.
     var engineOverride: EngineID? { modelOverride?.switchEngine }
-    /// When Switch model last stepped (or tried to): a held key's autorepeat waits `switchRepeatInterval` after it.
-    @ObservationIgnored private var lastSwitchAt: TimeInterval = -.infinity
     /// The step under way comes from a held key: a refusal was already said at the press.
     @ObservationIgnored private var isRepeatingSwitch = false
     /// How long a push-to-talk hold lasts before the pill hints at Switch model.
@@ -1686,14 +1684,10 @@ final class DictationController {
         choice.switchEngine.map(fitsRecording) ?? true
     }
 
-    /// How often the Switch model key held down steps on. The system's autorepeat (often every 30 ms) would spin
-    /// past every model; this is a click wheel's pace, each step with its tick.
-    static let switchRepeatInterval: TimeInterval = 0.15
-
-    /// The Switch model key held down: another step every `switchRepeatInterval`. Nothing to switch to, it stays
-    /// quiet: the press already said why.
+    /// The Switch model key held down: a step, with its tick, at every autorepeat of the keyboard, however fast
+    /// (the ticks ring over each other). Nothing to switch to, it stays quiet: the press already said why.
     private func repeatCycle() {
-        guard machine.isRecording, canSwitchModels, clock() - lastSwitchAt >= Self.switchRepeatInterval else { return }
+        guard machine.isRecording, canSwitchModels else { return }
         isRepeatingSwitch = true
         send(.cycleEngine)
         isRepeatingSwitch = false
@@ -1702,7 +1696,6 @@ final class DictationController {
     /// The machine's `.cycleEngine`: main model → clean-up → each extra model (`settings.switchChoices`) → main
     /// model. Extra models that can't take the recording any more are skipped.
     private func advanceEngine() {
-        lastSwitchAt = clock()
         let choices = settings.switchChoices
         guard !choices.isEmpty else { return }
         guard isCloudKeyUsable else {
