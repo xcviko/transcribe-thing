@@ -23,6 +23,8 @@ struct TranscriptResult: Sendable, Equatable {
     var generationTime: TimeInterval? = nil
     /// Seconds of audio the speech endpoint billed.
     var audioSeconds: Double? = nil
+    /// The chat response's `service_tier`, when it names one (set by clean-up only; not kept in history).
+    var serviceTier: String? = nil
 
     /// Everything known about how this result came about, for its history version.
     func metadata(createdAt: Date = Date()) -> TranscriptMetadata {
@@ -146,25 +148,31 @@ final class TranscriptionService {
 
     // MARK: Clean-up
 
-    /// Tidies `transcript` (written by `source`) with Gemini 3.5 Flash Lite, following the clean-up prompt at the
-    /// clean-up reasoning level. The result is a version of kind `.cleanup(of: source)`; its text is empty when the
-    /// model returned nothing. Gives up after `timeout` (by default `CleanupModel.timeout(forCharacterCount:)`) with
-    /// `AppError.timeout`. Throws `AppError` only, or `CancellationError`.
-    func cleanUp(_ transcript: String, of source: EngineID, timeout: TimeInterval? = nil) async throws -> TranscriptResult {
+    /// Tidies `transcript` (written by `source`) with the clean-up model `model` (by default the selected one),
+    /// following the clean-up prompt at that model's reasoning level. The result is a version of kind
+    /// `.cleanup(of: source, by: model)`; its text is empty when the model returned nothing. Gives up after
+    /// `timeout` (by default `CleanupModel.timeout(forCharacterCount:)`) with `AppError.timeout`. Throws `AppError`
+    /// only, or `CancellationError`.
+    /// `route` sends it to any other model instead, at the route's effort (`EngineCLI --cleanup-bench`); the app
+    /// never passes one.
+    func cleanUp(_ transcript: String, of source: EngineID, by model: CleanupModel? = nil, timeout: TimeInterval? = nil,
+                 route: CleanupRoute? = nil) async throws -> TranscriptResult {
         let prompt = settings.cleanupSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         // With no instruction the model would reply to the transcript instead of tidying it.
         guard !prompt.isEmpty else { throw AppError.engineFailed(source, "The clean-up prompt is empty.") }
         guard let key = account.apiKey() else {
             throw account.isKeyUnreadable ? AppError.openRouterKeyUnreadable : AppError.openRouterMissingKey
         }
-        let effort = settings.cleanupReasoningEffort
+        let model = model ?? settings.cleanupModel
+        let route = route ?? model.route(effort: settings.cleanupReasoningEffort(for: model))
+        let effort = ReasoningEffort(rawValue: route.effort)
         let limit = timeout ?? CleanupModel.timeout(forCharacterCount: transcript.count)
         let client = client
         let started = ContinuousClock.now
         do {
             let cloud = try await Self.withTimeout(limit, source: source) {
-                try await client.cleanUp(transcript: transcript, model: CleanupModel.openRouterModelID,
-                                         systemPrompt: prompt, effort: effort, apiKey: key, timeout: limit)
+                try await client.cleanUp(transcript: transcript, route: route, systemPrompt: prompt, apiKey: key,
+                                         timeout: limit)
             }
             account.noteCloudSuccess()
             var result = TranscriptResult(text: cloud.text, engine: source,
@@ -172,12 +180,13 @@ final class TranscriptionService {
             result.costUSD = cloud.costUSD
             result.provider = cloud.provider
             result.generationID = cloud.generationID
-            result.modelID = cloud.model ?? CleanupModel.openRouterModelID
+            result.modelID = cloud.model ?? route.model
             result.reasoningEffort = effort
             result.usage = cloud.usage
             result.usedSystemPrompt = true
             result.finishReason = cloud.finishReason
             result.generationTime = cloud.generationTime
+            result.serviceTier = cloud.serviceTier
             return result
         } catch let error as AppError {
             account.noteCloudFailure(error)

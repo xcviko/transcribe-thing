@@ -18,13 +18,15 @@ struct OpenRouterChatRequest: Encodable, Equatable {
         let exclude: Bool
     }
 
-    struct Provider: Encodable, Equatable {
+    struct Provider: Encodable, Equatable, Sendable {
         let only: [String]
         let allowFallbacks: Bool
         enum CodingKeys: String, CodingKey { case only, allowFallbacks = "allow_fallbacks" }
 
         /// Google AI Studio and nothing else, no fallbacks: every Gemini request.
         static let googleAIStudio = Provider(only: ["google-ai-studio"], allowFallbacks: false)
+        /// OpenAI and nothing else, no fallbacks: GPT-6 Luna as Clean-up.
+        static let openAI = Provider(only: ["openai"], allowFallbacks: false)
     }
 
     enum CodingKeys: String, CodingKey {
@@ -51,21 +53,21 @@ struct OpenRouterChatRequest: Encodable, Equatable {
             stream: false)
     }
 
-    /// Clean-up of a transcript (Gemini 3.5 Flash Lite): the prompt as the system message, then the transcript as
-    /// plain user text inside `<transcript>` tags. Pinned, reasoning excluded and no temperature like transcription;
-    /// `max_tokens` grows with the text (`CleanupModel.maxTokens`).
-    static func cleanup(model: String, systemPrompt: String, transcript: String,
-                        effort: ReasoningEffort) -> OpenRouterChatRequest {
+    /// Clean-up of a transcript: the prompt as the system message, then the transcript as plain user text inside
+    /// `<transcript>` tags. `route` names the model, the provider it's pinned to (no fallbacks) and the effort as
+    /// sent (`CleanupModel.route(effort:)`, or any model for `EngineCLI --cleanup-bench`). Reasoning excluded and no
+    /// temperature like transcription; `max_tokens` grows with the text (`CleanupModel.maxTokens`).
+    static func cleanup(route: CleanupRoute, systemPrompt: String, transcript: String) -> OpenRouterChatRequest {
         var messages: [OpenRouterMessage] = []
         let prompt = systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         if !prompt.isEmpty { messages.append(.system(prompt)) }
         messages.append(.user(CleanupModel.userMessage(for: transcript)))
         return OpenRouterChatRequest(
-            model: model,
+            model: route.model,
             messages: messages,
-            reasoning: Reasoning(effort: effort.rawValue, exclude: true),
-            provider: .googleAIStudio,
-            maxTokens: CleanupModel.maxTokens(forCharacterCount: transcript.count, effort: effort),
+            reasoning: Reasoning(effort: route.effort, exclude: true),
+            provider: route.provider,
+            maxTokens: CleanupModel.maxTokens(forCharacterCount: transcript.count, effort: route.budget),
             stream: false)
     }
 
@@ -74,6 +76,28 @@ struct OpenRouterChatRequest: Encodable, Equatable {
         // Base64 is full of "/"; the default encoder would send every one as "\/".
         encoder.outputFormatting = [.withoutEscapingSlashes]
         return try encoder.encode(self)
+    }
+}
+
+/// Where a clean-up request goes and how hard the model thinks. The app sends the selected clean-up model's
+/// (`CleanupModel.route(effort:)`): Gemini 3.5 Flash Lite on Google AI Studio, or GPT-6 Luna on OpenAI.
+struct CleanupRoute: Equatable, Sendable {
+    var model: String
+    var provider: OpenRouterChatRequest.Provider
+    /// `reasoning.effort` as sent: a `ReasoningEffort`, or a level no clean-up model offers ("xhigh", for the bench).
+    var effort: String
+    /// The level `max_tokens` is sized for (`CleanupModel.maxTokens`).
+    var budget: ReasoningEffort
+
+    init(model: String, effort: ReasoningEffort, provider: OpenRouterChatRequest.Provider = .googleAIStudio) {
+        self.init(model: model, provider: provider, effort: effort.rawValue, budget: effort)
+    }
+
+    init(model: String, provider: OpenRouterChatRequest.Provider, effort: String, budget: ReasoningEffort) {
+        self.model = model
+        self.provider = provider
+        self.effort = effort
+        self.budget = budget
     }
 }
 
@@ -472,7 +496,8 @@ enum OpenRouterErrorMapper {
         return CloudResult(text: text, provider: decoded.provider, costUSD: decoded.usage?.cost,
                            usage: decoded.usage?.tokens, generationID: decoded.id, model: decoded.model,
                            finishReason: choice.finishReason,
-                           generationTime: decoded.openrouterMetadata?.generationTime.map { $0 / 1000 })
+                           generationTime: decoded.openrouterMetadata?.generationTime.map { $0 / 1000 },
+                           serviceTier: decoded.serviceTier)
     }
 
     /// Interprets a 200 from the transcription endpoint. An error object inside it is an upstream failure, mapped

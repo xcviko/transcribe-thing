@@ -31,6 +31,8 @@ struct CloudResult: Sendable, Equatable {
     var generationTime: TimeInterval?
     /// Seconds of audio the speech endpoint billed.
     var audioSeconds: Double?
+    /// The chat response's `service_tier` ("flex", "standard"…), when it names one.
+    var serviceTier: String?
 
     var reasoningTokens: Int? { usage?.reasoningTokens }
 }
@@ -122,18 +124,18 @@ final class OpenRouterClient: Sendable {
         return result
     }
 
-    /// Clean-up of `transcript` (Gemini 3.5 Flash Lite over chat completions): text in, text out, with
-    /// `systemPrompt` as the instructions. Same retry policy as transcription; a failure is mapped as a Gemini one.
-    /// The returned text is the model's reply without any tags or quotes it put around it.
-    func cleanUp(transcript: String, model: String, systemPrompt: String, effort: ReasoningEffort, apiKey: String,
+    /// Clean-up of `transcript` over chat completions by the model, provider and effort of `route`: text in, text
+    /// out, with `systemPrompt` as the instructions. Same retry policy as transcription; a failure is mapped as a
+    /// Gemini one. The returned text is the model's reply without any tags or quotes it put around it.
+    func cleanUp(transcript: String, route: CleanupRoute, systemPrompt: String, apiKey: String,
                  timeout: TimeInterval) async throws -> CloudResult {
         let engine = EngineID.geminiFlash
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw AppError.openRouterMissingKey }
         let body: Data
         do {
-            body = try OpenRouterChatRequest.cleanup(model: model, systemPrompt: systemPrompt, transcript: transcript,
-                                                     effort: effort).encoded()
+            body = try OpenRouterChatRequest.cleanup(route: route, systemPrompt: systemPrompt,
+                                                     transcript: transcript).encoded()
         } catch {
             throw AppError.openRouterBadRequest("Couldn’t build the request.")
         }

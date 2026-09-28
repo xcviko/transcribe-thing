@@ -191,11 +191,18 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
         try c.encode(voicedSeconds, forKey: .voicedSeconds)
         try c.encodeIfPresent(errorMessage, forKey: .errorMessage)
         try c.encodeIfPresent(audioFileName, forKey: .audioFileName)
-        try c.encode(text, forKey: .text)
+        // An older build that can't read the current kind takes the flat fields for the current version, as a
+        // transcription by `engine`, in place of that transcription. For a clean-up it can't read, they hold the
+        // transcription the clean-up tidied, so an older build keeps that text rather than the clean-up's under its
+        // name.
+        let flat = currentKind.flatMap { kind in
+            kind.isReadableByOlderBuilds ? nil : version(.transcription(kind.engine))
+        } ?? currentVersion
+        try c.encode(flat?.text ?? "", forKey: .text)
         try c.encode(engine, forKey: .engine)
-        try c.encodeIfPresent(provider, forKey: .provider)
-        try c.encodeIfPresent(costUSD, forKey: .costUSD)
-        try c.encodeIfPresent(processingTime, forKey: .processingTime)
+        try c.encodeIfPresent(flat?.metadata.provider, forKey: .provider)
+        try c.encodeIfPresent(flat?.metadata.costUSD, forKey: .costUSD)
+        try c.encodeIfPresent(flat?.metadata.processingTime, forKey: .processingTime)
         if !versions.isEmpty {
             try c.encode(versions, forKey: .versions)
             try c.encodeIfPresent(currentKind?.rawValue, forKey: .currentKind)
@@ -357,6 +364,12 @@ final class HistoryStore {
     }
 
     // MARK: - Loading and saving
+
+    /// The entries of a history file, read as `load()` reads them (an entry this build can't read is skipped), but
+    /// only read: nothing is written or moved aside, even when the file is unreadable. For `EngineCLI`.
+    nonisolated static func readEntries(from data: Data) throws -> [TranscriptEntry] {
+        try HistoryIO.decode(data)
+    }
 
     /// Reads history.json off the main thread. Entries added before the read finishes are kept.
     func load() {
@@ -610,19 +623,22 @@ private final class HistoryIO: @unchecked Sendable {
         queue.sync { Self.writeNow(entries, to: url) }
     }
 
+    /// The entries of a history file; a malformed entry is skipped, a malformed file throws.
+    static func decode(_ data: Data) throws -> [TranscriptEntry] {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let raw = try decoder.singleValueContainer().decode(String.self)
+            if let date = try? Date(raw, strategy: Self.dateStyle) { return date }
+            if let date = try? Date(raw, strategy: .iso8601) { return date }
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Bad date \(raw)"))
+        }
+        return try decoder.decode(FileFormat.self, from: data).entries.compactMap(\.value)
+    }
+
     private static func readNow(_ url: URL) -> ReadResult {
         guard FileManager.default.fileExists(atPath: url.path) else { return .missing }
         do {
-            let data = try Data(contentsOf: url)
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .custom { decoder in
-                let raw = try decoder.singleValueContainer().decode(String.self)
-                if let date = try? Date(raw, strategy: Self.dateStyle) { return date }
-                if let date = try? Date(raw, strategy: .iso8601) { return date }
-                throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Bad date \(raw)"))
-            }
-            let file = try decoder.decode(FileFormat.self, from: data)
-            return .loaded(file.entries.compactMap(\.value))
+            return .loaded(try decode(Data(contentsOf: url)))
         } catch {
             let aside = url.deletingLastPathComponent()
                 .appendingPathComponent("history-unreadable-\(Int(Date().timeIntervalSince1970)).json")

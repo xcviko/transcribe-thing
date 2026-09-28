@@ -1,16 +1,20 @@
 import Foundation
 
-/// How long a Gemini model thinks before it answers: OpenRouter's `reasoning.effort`, which it hands to Google as
-/// `thinkingLevel` one to one (minimal → minimal … high → high). Raw values go on the wire and are persisted.
-/// There is no "none": every Gemini model here has mandatory thinking, and OpenRouter says such a model rejects
-/// `effort: "none"`. Declaration order is from least to most thinking.
+/// How long a model thinks before it answers: OpenRouter's `reasoning.effort`. Gemini gets it as `thinkingLevel`
+/// one to one (minimal → minimal … high → high). Raw values go on the wire and are persisted. `off` ("none") is
+/// only for a model that can skip thinking (GPT-6 Luna as Clean-up): every Gemini model here has mandatory
+/// thinking, and OpenRouter says such a model rejects `effort: "none"`, so no Gemini lists it. Declaration order
+/// is from least to most thinking.
 enum ReasoningEffort: String, Codable, CaseIterable, Identifiable, Comparable, Sendable {
+    /// Sent as "none". Not named `none`, which would read as `Optional.none` wherever a level is optional.
+    case off = "none"
     case minimal, low, medium, high
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
+        case .off: "None"
         case .minimal: "Minimal"
         case .low: "Low"
         case .medium: "Medium"
@@ -21,6 +25,7 @@ enum ReasoningEffort: String, Codable, CaseIterable, Identifiable, Comparable, S
     /// One line for a picker, after Google's own descriptions of the levels.
     var detail: String {
         switch self {
+        case .off: "Doesn’t think · fastest and cheapest"
         case .minimal: "Barely thinks · fastest and cheapest"
         case .low: "Thinks briefly · fast"
         case .medium: "Balanced"
@@ -66,18 +71,90 @@ extension EngineID {
     }
 }
 
-/// Gemini 3.5 Flash Lite as a text-to-text clean-up of Parakeet transcripts: punctuation, filler words, false
-/// starts. Not an `EngineID`: it never hears audio, so it stays out of the main-model list, Switch model and every
-/// list of engines a recording can go to.
-enum CleanupModel {
-    static let openRouterModelID = "google/gemini-3.5-flash-lite"
-    static let modelName = "Gemini 3.5 Flash Lite"
-    static let shortName = "Flash Lite"
-    /// Requests are pinned to it like Gemini's.
-    static let provider = "Google AI Studio"
-    /// OpenRouter's `supported_efforts` for it: minimal to high, no "none" (thinking is mandatory).
-    static let reasoningEfforts: [ReasoningEffort] = [.minimal, .low, .medium, .high]
-    static let defaultReasoningEffort: ReasoningEffort = .low
+/// The models that clean up Parakeet transcripts, text to text: punctuation, filler words, false starts. Not
+/// `EngineID`s: they never hear audio, so they stay out of the main-model list, Switch model and every list of
+/// engines a recording can go to. Settings picks one (`AppSettings.cleanupModel`), and each keeps its own
+/// reasoning level; both follow the same clean-up prompt. Raw values are persisted (settings, history version
+/// kinds): never rename them. Declaration order is display order.
+enum CleanupModel: String, CaseIterable, Identifiable, Codable, Sendable {
+    /// Gemini 3.5 Flash Lite on Google AI Studio: what Clean-up always used, and still the default.
+    case geminiFlashLite
+    /// GPT-6 Luna on OpenAI with thinking off: about as fast (1.1 s median in the bench), about 3.5 times cheaper,
+    /// better at spelling English terms, and more willing to rewrite.
+    case gpt6Luna
+
+    static let `default`: CleanupModel = .geminiFlashLite
+
+    var id: String { rawValue }
+
+    var openRouterModelID: String {
+        switch self {
+        case .geminiFlashLite: "google/gemini-3.5-flash-lite"
+        case .gpt6Luna: "openai/gpt-6-luna"
+        }
+    }
+
+    /// "Gemini 3.5 Flash Lite", "GPT-6 Luna".
+    var modelName: String {
+        switch self {
+        case .geminiFlashLite: "Gemini 3.5 Flash Lite"
+        case .gpt6Luna: "GPT-6 Luna"
+        }
+    }
+
+    /// For sentences: "Flash Lite took too long.", "Cleaning up with GPT-6 Luna…".
+    var shortName: String {
+        switch self {
+        case .geminiFlashLite: "Flash Lite"
+        case .gpt6Luna: "GPT-6 Luna"
+        }
+    }
+
+    /// One line under the name on the Models page.
+    var summary: String {
+        switch self {
+        case .geminiFlashLite: "Tidies punctuation, fillers and false starts · reads text, not audio"
+        case .gpt6Luna: "Cheaper, better with English terms · may rewrite a little more"
+        }
+    }
+
+    /// The provider requests are pinned to, as OpenRouter names it in responses.
+    var providerName: String {
+        switch self {
+        case .geminiFlashLite: "Google AI Studio"
+        case .gpt6Luna: "OpenAI"
+        }
+    }
+
+    /// That provider and nothing else, no fallbacks.
+    var provider: OpenRouterChatRequest.Provider {
+        switch self {
+        case .geminiFlashLite: .googleAIStudio
+        case .gpt6Luna: .openAI
+        }
+    }
+
+    /// The levels offered, from OpenRouter's `supported_efforts` (2026-09-28). Flash Lite: minimal to high, no
+    /// "none" (thinking is mandatory). Luna takes none to max; xhigh and max are left out, far too slow for a
+    /// clean-up that holds up a paste.
+    var reasoningEfforts: [ReasoningEffort] {
+        switch self {
+        case .geminiFlashLite: [.minimal, .low, .medium, .high]
+        case .gpt6Luna: [.off, .low, .medium, .high]
+        }
+    }
+
+    var defaultReasoningEffort: ReasoningEffort {
+        switch self {
+        case .geminiFlashLite: .low
+        case .gpt6Luna: .off
+        }
+    }
+
+    /// The request for this model at `effort` (moved to the nearest level it offers).
+    func route(effort: ReasoningEffort) -> CleanupRoute {
+        CleanupRoute(model: openRouterModelID, effort: effort.nearest(in: reasoningEfforts), provider: provider)
+    }
 
     /// Only transcripts from the main models (Parakeet on this Mac or through OpenRouter) are cleaned up: Gemini
     /// already punctuates and drops fillers itself.
@@ -91,10 +168,11 @@ enum CleanupModel {
 
     /// `max_tokens` for cleaning up `count` characters. Reasoning counts against it, and every request in flight
     /// reserves it from OpenRouter's in-flight budget, so it grows with the text instead of being huge: about two
-    /// characters per token (a pessimistic figure for Cyrillic) doubled for slack, plus room to think.
+    /// characters per token (a pessimistic figure for Cyrillic) doubled for slack, plus room to think. No thinking
+    /// gets the room of minimal.
     static func maxTokens(forCharacterCount count: Int, effort: ReasoningEffort) -> Int {
         let headroom = switch effort {
-        case .minimal: 1_024
+        case .off, .minimal: 1_024
         case .low: 2_048
         case .medium: 8_192
         case .high: 16_384

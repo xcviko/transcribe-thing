@@ -83,11 +83,16 @@ enum HubSnapshots {
                 c.settings.geminiSystemPrompt = ""
                 c.settings.cleanupSystemPrompt = ""
             },
-            // The default prompts and Clean-up on, at Minimal.
+            // The default prompts and Clean-up on with Flash Lite, at Minimal.
             hub("hub-models-cleanup-on", .models, height: 2000) { c in
                 c.settings.cleanupEnabled = true
                 c.settings.cleanupReasoningEffort = .minimal
                 c.settings.setReasoningEffort(.medium, for: .geminiPro)
+            },
+            // GPT-6 Luna picked for Clean-up, thinking None: the toggle, Thinking and the prompt card name it.
+            hub("hub-models-cleanup-luna", .models, height: 2000) { c in
+                c.settings.cleanupEnabled = true
+                c.settings.cleanupModel = .gpt6Luna
             },
             hub("hub-models-cleanup-compact", .models, width: 820, height: 1900) { c in
                 c.account = .preview(status: .missing)
