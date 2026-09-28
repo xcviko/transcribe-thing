@@ -25,11 +25,12 @@ enum ModelChoice: Hashable, Sendable, Identifiable {
 }
 
 extension ModelChoice {
-    /// "Gemini Flash", "Parakeet v3", or clean-up as the pass it is: "Parakeet v3 + GPT-6 Luna".
+    /// The full model name, "Gemini 3.8 Flash" or "Parakeet v3", or clean-up as the pass it is:
+    /// "Parakeet v3 + GPT-6 Luna".
     func title(main: EngineID, cleanup: CleanupModel) -> String {
         switch self {
-        case .cleanup: "\(main.modelName) + \(cleanup.shortName)"
-        case .engine(let engine): engine.shortName
+        case .cleanup: "\(main.modelName) + \(cleanup.modelName)"
+        case .engine(let engine): engine.modelName
         }
     }
 

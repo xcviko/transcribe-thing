@@ -98,10 +98,10 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// The pill's model chip: an extra model by its short name, the main model as just "Parakeet" (the chip only
-    /// flashes it for a moment after switching back).
+    /// The pill's model chip: an extra model by its full name, the main model as just "Parakeet" (the chip only
+    /// flashes it for a moment after switching back, and heads clean-up's "Parakeet → GPT-6 Luna").
     var chipName: String {
-        isSwitchModel ? shortName : "Parakeet"
+        isSwitchModel ? modelName : "Parakeet"
     }
 
     var providerLine: String {

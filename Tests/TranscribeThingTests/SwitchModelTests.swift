@@ -84,8 +84,8 @@ import Testing
     @Test func theChipCallsTheMainModelJustParakeet() {
         #expect(EngineID.parakeet.chipName == "Parakeet")
         #expect(EngineID.parakeetCloud.chipName == "Parakeet")
-        #expect(EngineID.geminiFlash.chipName == "Gemini Flash")
-        #expect(EngineID.geminiPro.chipName == "Gemini Pro")
+        #expect(EngineID.geminiFlash.chipName == "Gemini 3.8 Flash")
+        #expect(EngineID.geminiPro.chipName == "Gemini 3.1 Pro")
     }
 
     @Test func itIsARebindableActionWithFnTabByDefault() {

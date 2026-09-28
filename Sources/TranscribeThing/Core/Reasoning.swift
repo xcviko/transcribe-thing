@@ -110,14 +110,6 @@ enum CleanupModel: String, CaseIterable, Identifiable, Codable, Sendable {
         }
     }
 
-    /// On the pill's clean-up chip, after the main model: "Parakeet → Luna".
-    var chipName: String {
-        switch self {
-        case .geminiFlashLite: "Flash Lite"
-        case .gpt6Luna: "Luna"
-        }
-    }
-
     /// One line under the name on the Models page.
     var summary: String {
         switch self {

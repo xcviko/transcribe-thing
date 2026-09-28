@@ -1200,7 +1200,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         // The main model and its clean-up, then the models that hear the audio themselves.
         #expect(menu.items.map(\.isSeparatorItem) == [false, false, true, false, false])
         #expect(menu.items.filter { !$0.isSeparatorItem }.map(\.title)
-            == ["Parakeet v3", "Parakeet v3 + GPT-6 Luna", "Gemini Flash", "Gemini Pro"])
+            == ["Parakeet v3", "Parakeet v3 + GPT-6 Luna", "Gemini 3.8 Flash", "Gemini 3.1 Pro"])
         #expect(menu.items.map(\.state) == [.off, .on, .off, .off, .off])
         let pro = try #require(menu.items.last)
         menu.performActionForItem(at: menu.index(of: pro))
@@ -1213,8 +1213,9 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
 
     @Test func theHintNamesTheOneChoiceOrWhatTheyShare() {
         #expect(PillSwitchHint.label(for: [.engine(.geminiFlash), .engine(.geminiPro)], cleanup: .gpt6Luna) == "Gemini")
-        #expect(PillSwitchHint.label(for: [.engine(.geminiPro)], cleanup: .gpt6Luna) == "Gemini Pro")
-        #expect(PillSwitchHint.label(for: [.cleanup], cleanup: .gpt6Luna) == "Luna clean-up")
+        #expect(PillSwitchHint.label(for: [.engine(.geminiPro)], cleanup: .gpt6Luna) == "Gemini 3.1 Pro")
+        #expect(PillSwitchHint.label(for: [.cleanup], cleanup: .gpt6Luna) == "GPT-6 Luna clean-up")
+        #expect(PillSwitchHint.label(for: [.cleanup], cleanup: .geminiFlashLite) == "Flash Lite clean-up")
         #expect(PillSwitchHint.label(for: [.cleanup, .engine(.geminiFlash)], cleanup: .geminiFlashLite) == "Clean-up, Gemini")
     }
 

@@ -914,9 +914,9 @@ private struct PillControlButton: View {
     }
 }
 
-/// The dictation's model, floating above the pill for a moment after a switch: sparkles and "Gemini Flash" in its
-/// color; clean-up as the pass it is, "Parakeet → Luna" with the main model dimmed ahead of the wand; or a bolt and
-/// the main model. In hands-free it comes back while the pointer is over the pill, and opens the model menu (the
+/// The dictation's model, floating above the pill for a moment after a switch, by its full name: sparkles and
+/// "Gemini 3.8 Flash" in its color; clean-up as the pass it is, "Parakeet → GPT-6 Luna" with the main model dimmed
+/// ahead of the wand; or a bolt and the main model. In hands-free it comes back while the pointer is over the pill, and opens the model menu (the
 /// controller pops it up).
 private struct PillModelChip: View {
     let model: PillModel
@@ -938,7 +938,7 @@ private struct PillModelChip: View {
                         .font(.system(size: 7.5, weight: .bold))
                         .foregroundStyle(.white.opacity(0.35))
                     symbol(accent: accent)
-                    Text(settings.cleanupModel.chipName)
+                    Text(settings.cleanupModel.modelName)
                         .foregroundStyle(.white.opacity(0.92))
                 case .engine(let engine):
                     symbol(accent: accent)
@@ -1013,7 +1013,7 @@ struct PillSwitchHint: View {
     /// The one choice by name; with several, what they share, or both kinds.
     static func label(for choices: [ModelChoice], cleanup: CleanupModel) -> String {
         if choices.count == 1, let choice = choices.first {
-            return choice == .cleanup ? "\(cleanup.chipName) clean-up" : choice.title(main: .parakeet, cleanup: cleanup)
+            return choice == .cleanup ? "\(cleanup.shortName) clean-up" : choice.title(main: .parakeet, cleanup: cleanup)
         }
         return choices.contains(.cleanup) ? "Clean-up, Gemini" : "Gemini"
     }
