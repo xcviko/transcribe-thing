@@ -72,8 +72,9 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         #expect(settings.reasoningEffort(for: .parakeet) == nil)
         #expect(settings.cleanupReasoningEffort == .low)
         #expect(settings.cleanupSystemPrompt == CleanupModel.examplePrompt)
-        #expect(settings.hasCleanupPrompt && !settings.cleanupEnabled && !settings.isCleanupActive,
-                "the default prompt is there, the switch stays off")
+        #expect(settings.hasCleanupPrompt && settings.switchCleanup, "the default prompt is there")
+        #expect(settings.switchChoices == [.cleanup, .engine(.geminiFlash), .engine(.geminiPro)],
+                "clean-up is the first Switch model step")
         #expect(settings.geminiSystemPrompt == AppSettings.defaultGeminiSystemPrompt)
     }
 
@@ -121,17 +122,18 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         #expect(settings.cleanupReasoningEffort == .minimal)
     }
 
-    @Test func cleanUpNeedsTheSwitchAndAPrompt() {
+    @Test func theCleanupStepNeedsItsSwitchAndAPrompt() {
         let settings = AppSettings.inMemory()
         settings.cleanupSystemPrompt = ""
-        settings.cleanupEnabled = true
-        #expect(!settings.isCleanupActive, "an empty prompt would make the model answer the text")
+        #expect(!settings.switchChoices.contains(.cleanup), "an empty prompt would make the model answer the text")
         settings.cleanupSystemPrompt = "  \n "
-        #expect(!settings.isCleanupActive && !settings.hasCleanupPrompt)
+        #expect(!settings.switchChoices.contains(.cleanup) && !settings.hasCleanupPrompt)
         settings.cleanupSystemPrompt = CleanupModel.examplePrompt
-        #expect(settings.isCleanupActive)
-        settings.cleanupEnabled = false
-        #expect(!settings.isCleanupActive)
+        #expect(settings.switchChoices.first == .cleanup)
+        settings.switchCleanup = false
+        #expect(!settings.switchChoices.contains(.cleanup))
+        settings.switchEngines = []
+        #expect(settings.switchChoices.isEmpty)
     }
 
     @Test func everythingPersists() {
@@ -139,13 +141,13 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         let settings = AppSettings(defaults: store, microphoneProbe: { MicrophoneMigrationProbe() })
         settings.setReasoningEffort(.high, for: .geminiFlash)
         settings.setReasoningEffort(.medium, for: .geminiPro)
-        settings.cleanupEnabled = true
+        settings.switchCleanup = false
         settings.cleanupSystemPrompt = "Tidy it."
         settings.cleanupReasoningEffort = .medium
         let reloaded = AppSettings(defaults: store, microphoneProbe: { MicrophoneMigrationProbe() })
         #expect(reloaded.reasoningEffort(for: .geminiFlash) == .high)
         #expect(reloaded.reasoningEffort(for: .geminiPro) == .medium)
-        #expect(reloaded.cleanupEnabled && reloaded.cleanupSystemPrompt == "Tidy it.")
+        #expect(!reloaded.switchCleanup && reloaded.cleanupSystemPrompt == "Tidy it.")
         #expect(reloaded.cleanupReasoningEffort == .medium)
     }
 
@@ -418,9 +420,8 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
 @Suite(.serialized) struct CleanupPipelineTests {
     private typealias H = DictationControllerTests
 
-    private func harness(enabled: Bool = true, prompt: String = CleanupModel.examplePrompt) -> H.Harness {
+    private func harness(prompt: String = CleanupModel.examplePrompt) -> H.Harness {
         let h = H.make(keyStatus: .valid(KeyInfo()), persistsHistory: true)
-        h.settings.cleanupEnabled = enabled
         h.settings.cleanupSystemPrompt = prompt
         return h
     }
@@ -434,13 +435,13 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         return result
     }
 
-    /// Dictates with `engine`, returns the recording's id once the job is done.
+    /// Dictates with `engine`, on clean-up unless `cleansUp` is false; returns the recording's id once the job is done.
     private func dictate(_ h: H.Harness, engine: EngineID = .parakeet, text: String = "um so like hello hello there",
-                         pasted: @escaping (String) -> Void) async throws -> UUID {
+                         cleansUp: Bool = true, pasted: @escaping (String) -> Void) async throws -> UUID {
         h.controller.transcribeOverride = { _, engine in TranscriptResult(text: text, engine: engine, processingTime: 0.3) }
         h.controller.insertOverride = { text, _ in pasted(text); return .pasted }
         let r = H.recording()
-        h.controller.enqueue(r, engine: engine, delivery: .paste(targetPID: nil))
+        h.controller.enqueue(r, engine: engine, delivery: .paste(targetPID: nil), cleansUp: cleansUp)
         try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id) != nil }
         return r.id
     }
@@ -509,7 +510,7 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "raw text", engine: engine, processingTime: 0.3) }
         h.controller.insertOverride = { _, _ in Issue.record("a canceled dictation is never pasted"); return .pasted }
         let r = H.recording()
-        h.controller.enqueue(r, engine: .parakeet, delivery: .paste(targetPID: nil))
+        h.controller.enqueue(r, engine: .parakeet, delivery: .paste(targetPID: nil), cleansUp: true)
         try await waitUntil { h.controller.runningVersions[r.id] == .cleanup(of: .parakeet) }
         h.controller.handle(.cancel)
         #expect(h.controller.machine.activeJobs == 0)
@@ -528,7 +529,6 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
     func aKeyThatCantWorkSkipsTheRequestAndPointsToModels(_ key: KeyStatus) async throws {
         let h = H.make(keyStatus: key, persistsHistory: true)
         defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
-        h.settings.cleanupEnabled = true
         h.settings.cleanupSystemPrompt = CleanupModel.examplePrompt
         h.controller.cleanupOverride = { _, _ in
             Issue.record("no request with a key that can't work")
@@ -558,16 +558,17 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         }
     }
 
-    @Test func offOrWithoutAPromptNothingIsCleanedUp() async throws {
-        for (enabled, prompt) in [(false, CleanupModel.examplePrompt), (true, ""), (true, "   ")] {
-            let h = harness(enabled: enabled, prompt: prompt)
+    /// Only a dictation switched to clean-up is cleaned up, and only with a prompt.
+    @Test func offCleanupOrWithoutAPromptNothingIsCleanedUp() async throws {
+        for (cleansUp, prompt) in [(false, CleanupModel.examplePrompt), (true, ""), (true, "   ")] {
+            let h = harness(prompt: prompt)
             defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
             h.controller.cleanupOverride = { _, _ in
                 Issue.record("no clean-up")
                 return self.cleaned("x")
             }
             var pasted: [String] = []
-            let id = try await dictate(h) { pasted.append($0) }
+            let id = try await dictate(h, cleansUp: cleansUp) { pasted.append($0) }
             #expect(pasted == ["um so like hello hello there"])
             #expect(h.history.entry(id: id)?.versions.count == 1)
             #expect(h.toasts.notices.isEmpty)
@@ -593,10 +594,9 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
     }
 
     @Test func transcribeWithFromHistoryIsNotCleanedUpAutomatically() async throws {
-        let h = harness(enabled: false)
+        let h = harness()
         defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
-        let id = try await dictate(h, engine: .geminiFlash, text: "Gemini text.") { _ in }
-        h.settings.cleanupEnabled = true
+        let id = try await dictate(h, engine: .geminiFlash, text: "Gemini text.", cleansUp: false) { _ in }
         h.controller.cleanupOverride = { _, _ in
             Issue.record("no clean-up for a new version of an existing row")
             return self.cleaned("x")

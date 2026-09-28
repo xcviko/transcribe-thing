@@ -50,7 +50,7 @@ enum PillSnapshots {
                     .morph("Still transcribing → rest (Always)", from: .processing(afterHandsFree: false, slow: true),
                            model: PillModel.preview(phase: .processing).previewSlowProcessing()),
                     .exit("Still transcribing · Gemini Flash → hidden", .processing(afterHandsFree: false, slow: true),
-                          model: PillModel.preview(phase: .processing).previewSlowProcessing(), engine: .geminiFlash),
+                          model: PillModel.preview(phase: .processing).previewSlowProcessing(), choice: .engine(.geminiFlash)),
                 ])
             },
             SnapshotEntry("pill-exit-rest", width: PillFilmSheet.width(cell: 132, columns: 11), height: 452) { _ in
@@ -65,15 +65,15 @@ enum PillSnapshots {
             SnapshotEntry("pill-exit-models", width: PillFilmSheet.width(cell: 132, columns: 11), height: 480) { _ in
                 PillFilmSheet(cell: 132, columns: 11, cellHeight: 92, strips: [
                     .exit("Processing · Gemini Flash → hidden", .processing(afterHandsFree: false),
-                          model: .preview(phase: .processing), engine: .geminiFlash),
+                          model: .preview(phase: .processing), choice: .engine(.geminiFlash)),
                     .exit("Processing · Gemini Pro → hidden", .processing(afterHandsFree: false),
-                          model: .preview(phase: .processing), engine: .geminiPro),
+                          model: .preview(phase: .processing), choice: .engine(.geminiPro)),
                     .morph("Processing · Gemini Flash → rest (Always)", from: .processing(afterHandsFree: false),
-                           model: .preview(phase: .processing), engine: .geminiFlash),
+                           model: .preview(phase: .processing), choice: .engine(.geminiFlash)),
                 ])
             },
             // Extra models (`--only pill-models`): the chip, the tint, the hint and the no-key notice.
-            SnapshotEntry("pill-models", width: 760, height: 44 + 10 * 92) { _ in PillModelSheet() },
+            SnapshotEntry("pill-models", width: 760, height: 44 + 13 * 92) { _ in PillModelSheet() },
             SnapshotEntry("pill-models-hint", width: 640, height: 150) { _ in
                 CanvasScene(model: hintModel(), notices: [])
             },
@@ -83,10 +83,10 @@ enum PillSnapshots {
             },
             SnapshotEntry("pill-models-no-key", width: 640, height: 270) { _ in
                 CanvasScene(model: .preview(phase: .listening, level: 0.7),
-                            notices: [DictationController.switchWithoutKeyNotice(.missing)])
+                            notices: [DictationController.switchWithoutKeyNotice(.missing, choices: [.cleanup, .engine(.geminiFlash)])])
             },
             SnapshotEntry("pill-models-toast", width: 640, height: 290) { _ in
-                CanvasScene(model: PillModelSheet.model(.locked, engine: .geminiFlash, recordingFor: 362, limitSeconds: 420),
+                CanvasScene(model: PillModelSheet.model(.locked, choice: .engine(.geminiFlash), recordingFor: 362, limitSeconds: 420),
                             notices: [PillSnapshotFixtures.oneMinuteLeft])
             },
             SnapshotEntry("pill-toast-info", width: 640, height: 250) { _ in
@@ -342,21 +342,21 @@ private struct PillFilmSheet: View {
 
         /// Hidden: the whole pill leaves, t = 0, 0.1 … 1 of the exit.
         @MainActor static func exit(_ title: String, _ visual: PillVisual, model: PillModel,
-                                    reduceMotion: Bool = false, engine: EngineID? = nil) -> Strip {
+                                    reduceMotion: Bool = false, choice: ModelChoice? = nil) -> Strip {
             Strip(title: title, model: model, frames: exitFrames(visual, reduceMotion: reduceMotion,
-                                                                 steps: Array(0...10), engine: engine))
+                                                                 steps: Array(0...10), choice: choice))
         }
 
         /// Always mode: the content shrinks with the capsule into the resting one, every 30 ms of the spring.
         @MainActor static func morph(_ title: String, from visual: PillVisual, model: PillModel,
-                                     engine: EngineID? = nil) -> Strip {
+                                     choice: ModelChoice? = nil) -> Strip {
             let frames = (0...10).map { i in
                 let time = Double(i) * 0.03
                 let progress = CGFloat(Spring(duration: PillMotion.morphDuration, bounce: 0).value(target: 1.0, time: time))
                 let pose = PillMotion.morphPose(at: progress, from: visual.size, to: PillVisual.rest.size)
                 return Frame(caption: "\(Int((time * 1000).rounded())) ms") { model in
                     AnyView(PillFace(model: model, capsule: .rest, content: visual, morph: progress, size: pose.size,
-                                     engine: engine))
+                                     choice: choice))
                 }
             }
             return Strip(title: title, model: model, frames: frames)
@@ -394,12 +394,12 @@ private struct PillFilmSheet: View {
         }
 
         @MainActor private static func exitFrames(_ visual: PillVisual, reduceMotion: Bool, steps: [Int],
-                                                  engine: EngineID? = nil) -> [Frame] {
+                                                  choice: ModelChoice? = nil) -> [Frame] {
             let duration = reduceMotion ? PillMotion.reducedExitDuration : PillMotion.exitDuration
             return steps.map { i in
                 let progress = CGFloat(i) / 10
                 return Frame(caption: "\(Int((Double(progress) * duration * 1000).rounded())) ms") { model in
-                    AnyView(PillFace(model: model, capsule: visual, content: visual, engine: engine)
+                    AnyView(PillFace(model: model, capsule: visual, content: visual, choice: choice)
                         .modifier(PillExitEffect(progress: progress, reduceMotion: reduceMotion)))
                 }
             }
@@ -469,34 +469,37 @@ private struct PillModelSheet: View {
         let make: @MainActor () -> PillModel
     }
 
-    @MainActor static func model(_ phase: PillPhase, engine: EngineID?, level: Float = 0.7,
+    @MainActor static func model(_ phase: PillPhase, choice: ModelChoice?, level: Float = 0.7,
                                  recordingFor elapsed: TimeInterval? = nil, limitSeconds: TimeInterval? = nil) -> PillModel {
         let model = PillModel.preview(phase: phase, level: level, recordingFor: elapsed, limitSeconds: limitSeconds)
-        model.sessionEngine = engine
+        model.sessionModel = choice
         return model
     }
 
     private var rows: [Row] {
         [
-            Row(id: "main", caption: "Push-to-talk · main model") { Self.model(.listening, engine: nil) },
-            Row(id: "flash", caption: "Push-to-talk · Gemini Flash") { Self.model(.listening, engine: .geminiFlash) },
-            Row(id: "pro", caption: "Push-to-talk · Gemini Pro") { Self.model(.listening, engine: .geminiPro) },
+            Row(id: "main", caption: "Push-to-talk · main model") { Self.model(.listening, choice: nil) },
+            Row(id: "cleanup", caption: "Push-to-talk · Clean-up") { Self.model(.listening, choice: .cleanup) },
+            Row(id: "flash", caption: "Push-to-talk · Gemini Flash") { Self.model(.listening, choice: .engine(.geminiFlash)) },
+            Row(id: "pro", caption: "Push-to-talk · Gemini Pro") { Self.model(.listening, choice: .engine(.geminiPro)) },
             Row(id: "back", caption: "Back to the main model") {
-                let model = Self.model(.listening, engine: nil)
+                let model = Self.model(.listening, choice: nil)
                 model.flashMainChip()
                 return model
             },
-            Row(id: "locked-flash", caption: "Hands-free · Gemini Flash") { Self.model(.locked, engine: .geminiFlash, level: 0.5) },
+            Row(id: "locked-cleanup", caption: "Hands-free · Clean-up") { Self.model(.locked, choice: .cleanup, level: 0.5) },
+            Row(id: "locked-flash", caption: "Hands-free · Gemini Flash") { Self.model(.locked, choice: .engine(.geminiFlash), level: 0.5) },
             Row(id: "locked-pro", caption: "Hands-free · Gemini Pro") {
-                Self.model(.locked, engine: .geminiPro, level: 0.5, recordingFor: 372, limitSeconds: 420)
+                Self.model(.locked, choice: .engine(.geminiPro), level: 0.5, recordingFor: 372, limitSeconds: 420)
             },
-            Row(id: "processing-flash", caption: "Processing · Gemini Flash") { Self.model(.processing, engine: .geminiFlash) },
-            Row(id: "processing-pro", caption: "Processing · Gemini Pro") { Self.model(.processing, engine: .geminiPro) },
+            Row(id: "processing-cleanup", caption: "Processing · Clean-up") { Self.model(.processing, choice: .cleanup) },
+            Row(id: "processing-flash", caption: "Processing · Gemini Flash") { Self.model(.processing, choice: .engine(.geminiFlash)) },
+            Row(id: "processing-pro", caption: "Processing · Gemini Pro") { Self.model(.processing, choice: .engine(.geminiPro)) },
             Row(id: "processing-slow-flash", caption: "Processing · slow · Flash") {
-                Self.model(.processing, engine: .geminiFlash).previewSlowProcessing()
+                Self.model(.processing, choice: .engine(.geminiFlash)).previewSlowProcessing()
             },
             Row(id: "processing-slow-pro", caption: "Processing · slow · Pro") {
-                Self.model(.processing, engine: .geminiPro).previewSlowProcessing()
+                Self.model(.processing, choice: .engine(.geminiPro)).previewSlowProcessing()
             },
         ]
     }

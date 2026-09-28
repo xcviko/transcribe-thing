@@ -324,9 +324,10 @@ import Testing
     private let rightCommand = Shortcut.rightCommand
 
     @Test func statusFollowsTheBindingAndTheToggles() {
-        #expect(ExtraModels.status(binding: .fnTab, enabled: [.geminiFlash, .geminiPro]) == .ready(.fnTab))
-        #expect(ExtraModels.status(binding: nil, enabled: [.geminiPro]) == .unbound)
-        #expect(ExtraModels.status(binding: Shortcut(modifiers: []), enabled: [.geminiPro]) == .unbound)
+        #expect(ExtraModels.status(binding: .fnTab, enabled: [.engine(.geminiFlash), .engine(.geminiPro)]) == .ready(.fnTab))
+        #expect(ExtraModels.status(binding: .fnTab, enabled: [.cleanup]) == .ready(.fnTab), "clean-up alone is a step")
+        #expect(ExtraModels.status(binding: nil, enabled: [.engine(.geminiPro)]) == .unbound)
+        #expect(ExtraModels.status(binding: Shortcut(modifiers: []), enabled: [.engine(.geminiPro)]) == .unbound)
         #expect(ExtraModels.status(binding: .fnTab, enabled: []) == .noneEnabled(.fnTab))
         #expect(ExtraModels.status(binding: nil, enabled: []) == .noneEnabled(nil))
     }

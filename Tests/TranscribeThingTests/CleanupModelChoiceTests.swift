@@ -222,7 +222,6 @@ private func body(_ request: OpenRouterChatRequest) throws -> [String: Any] {
     @Test func aDictationIsCleanedUpByTheSelectedModel() async throws {
         let h = H.make(keyStatus: .valid(KeyInfo()), persistsHistory: true)
         defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
-        h.settings.cleanupEnabled = true
         h.settings.cleanupSystemPrompt = CleanupModel.examplePrompt
         h.settings.cleanupModel = .gpt6Luna
         var running: [TranscriptVersionKind] = []
@@ -234,7 +233,7 @@ private func body(_ request: OpenRouterChatRequest) throws -> [String: Any] {
         var pasted: [String] = []
         h.controller.insertOverride = { text, _ in pasted.append(text); return .pasted }
         let r = H.recording()
-        h.controller.enqueue(r, engine: .parakeet, delivery: .paste(targetPID: nil))
+        h.controller.enqueue(r, engine: .parakeet, delivery: .paste(targetPID: nil), cleansUp: true)
         try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id) != nil }
         #expect(pasted == ["Hello there."])
         #expect(running == [.cleanup(of: .parakeet, by: .gpt6Luna)])
@@ -246,14 +245,13 @@ private func body(_ request: OpenRouterChatRequest) throws -> [String: Any] {
     @Test func aFailedCleanUpNamesTheModelThatTried() async throws {
         let h = H.make(keyStatus: .valid(KeyInfo()), persistsHistory: true)
         defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
-        h.settings.cleanupEnabled = true
         h.settings.cleanupSystemPrompt = CleanupModel.examplePrompt
         h.settings.cleanupModel = .gpt6Luna
         h.controller.cleanupOverride = { _, _ in throw AppError.openRouterTruncated("") }
         h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "raw", engine: engine, processingTime: 0.3) }
         h.controller.insertOverride = { _, _ in .pasted }
         let r = H.recording()
-        h.controller.enqueue(r, engine: .parakeet, delivery: .paste(targetPID: nil))
+        h.controller.enqueue(r, engine: .parakeet, delivery: .paste(targetPID: nil), cleansUp: true)
         try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id) != nil }
         let notice = try #require(h.toasts.notices.first { $0.dedupeKey == "cleanup.fallback" })
         #expect(notice.title == "Couldn’t clean up · pasted the original")

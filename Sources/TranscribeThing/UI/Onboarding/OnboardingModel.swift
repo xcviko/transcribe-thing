@@ -113,18 +113,26 @@ enum OnboardingGate {
         return key.count >= 24 && keyFormatProblem(key) == nil
     }
 
-    /// The Switch model lesson is offered once an extra model can actually answer: one is on and the key works.
-    static func extraModelsUsable(enabled: [EngineID], keyStatus: KeyStatus, hasStoredKey: Bool) -> Bool {
-        guard let engine = enabled.first else { return false }
-        return engineIsUsable(engine, localState: .notInstalled, keyStatus: keyStatus, hasStoredKey: hasStoredKey)
+    /// The Switch model lesson is offered once a step can actually answer: clean-up or an extra model is on and the
+    /// OpenRouter key, which they all go through, works.
+    static func extraModelsUsable(enabled: [ModelChoice], keyStatus: KeyStatus, hasStoredKey: Bool) -> Bool {
+        guard !enabled.isEmpty else { return false }
+        return engineIsUsable(.geminiFlash, localState: .notInstalled, keyStatus: keyStatus, hasStoredKey: hasStoredKey)
     }
 
     /// The model step's line about Gemini, with the user's own Switch model binding.
-    static func extraModelsNote(binding: Shortcut?, enabled: [EngineID]) -> String {
+    static func extraModelsNote(binding: Shortcut?, enabled: [ModelChoice]) -> String {
         switch ExtraModels.status(binding: binding, enabled: enabled) {
         case .ready(let binding):
             // "fn ⇥" stays on one line inside running copy.
             let key = binding.compactDescription.replacingOccurrences(of: " ", with: "\u{00A0}")
+            let gemini = enabled.contains { $0.switchEngine != nil }
+            if enabled.contains(.cleanup) {
+                return gemini
+                    ? "Press \(key) while dictating to have the text cleaned up, or again to use Gemini for a long talk "
+                        + "where every word counts. It uses the same OpenRouter key."
+                    : "Press \(key) while dictating to have the text cleaned up. It uses the same OpenRouter key."
+            }
             return "For a long talk where every word counts, press \(key) while dictating to use Gemini. "
                 + "It uses the same OpenRouter key."
         case .noneEnabled, .unbound:
@@ -430,13 +438,13 @@ final class OnboardingModel {
 
     /// Gemini on the model step: a key press while dictating, never the main model.
     var extraModelsNote: String {
-        OnboardingGate.extraModelsNote(binding: ctx.settings.shortcuts[.switchModel], enabled: ctx.settings.switchEngines)
+        OnboardingGate.extraModelsNote(binding: ctx.settings.shortcuts[.switchModel], enabled: ctx.settings.switchChoices)
     }
 
-    /// The optional "Switch to Gemini" row on the practice step: only when an extra model would answer.
+    /// The optional "Switch model" row on the practice step: only when clean-up or an extra model would answer.
     var showsSwitchModelLesson: Bool {
         let inputs = gateInputs
-        return OnboardingGate.extraModelsUsable(enabled: ctx.settings.switchEngines, keyStatus: inputs.keyStatus,
+        return OnboardingGate.extraModelsUsable(enabled: ctx.settings.switchChoices, keyStatus: inputs.keyStatus,
                                                 hasStoredKey: inputs.hasStoredKey)
     }
 

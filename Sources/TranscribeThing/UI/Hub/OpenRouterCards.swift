@@ -219,14 +219,14 @@ struct OpenRouterKeyCard: View {
         return text
     }
 
-    /// Who hears the audio (and, with Clean-up on, reads the Parakeet text). Each model row names its provider;
+    /// Who hears the audio (and, with clean-up among the Switch model steps, reads the Parakeet text). Each model row names its provider;
     /// this says nothing else leaves the Mac. How hard Gemini thinks is set on each model's row.
     private var routing: some View {
         HStack(alignment: .center, spacing: 8) {
             Image(systemName: "lock.shield")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.success)
-            Text(settings.isCleanupActive
+            Text(settings.switchChoices.contains(.cleanup)
                  ? "Only your audio, and Parakeet’s text for Clean-up by \(settings.cleanupModel.shortName), goes to OpenRouter and the model’s provider."
                  : "Only your audio is sent, to OpenRouter and the model’s provider.")
                 .typeface(.callout)

@@ -83,17 +83,19 @@ enum PillPalette {
     static let error = Color(nsColor: .hex(0xFF6B5E))
     static let tooltipFill = Color(nsColor: .hex(0x151517, alpha: 0.96))
 
-    /// An extra model's color: Gemini Flash violet, Gemini Pro pink. The main model keeps the plain pill.
-    static func accent(for engine: EngineID?) -> PillAccent? {
-        switch engine {
-        case .geminiFlash: PillAccent(ringHex: 0x7F77DD, markHex: 0xAFA9EC)
-        case .geminiPro: PillAccent(ringHex: 0xD4537E, markHex: 0xED93B1)
-        case .parakeet, .parakeetCloud, nil: nil
+    /// A choice's color: Gemini Flash violet, Gemini Pro pink, and clean-up warm, like its wand in Settings: a pass
+    /// over the main model's words, set apart from the models that hear the audio. The main model keeps the plain pill.
+    static func accent(for choice: ModelChoice?) -> PillAccent? {
+        switch choice {
+        case .cleanup: PillAccent(ringHex: 0xE58A5F, markHex: 0xFFB896)
+        case .engine(.geminiFlash): PillAccent(ringHex: 0x7F77DD, markHex: 0xAFA9EC)
+        case .engine(.geminiPro): PillAccent(ringHex: 0xD4537E, markHex: 0xED93B1)
+        case .engine(.parakeet), .engine(.parakeetCloud), nil: nil
         }
     }
 }
 
-/// An extra model's tint: the capsule's ring, and the bars and processing dots (lighter, so they read on the fill).
+/// Clean-up's or an extra model's tint: the capsule's ring, and the bars and processing dots (lighter, so they read on the fill).
 struct PillAccent: Equatable, Sendable {
     let ringHex: UInt32
     let markHex: UInt32
@@ -242,15 +244,15 @@ struct PillView: View {
         }
     }
 
-    /// The extra model the stage keeps with each visual, so its chip and tint leave with the pill.
-    private var engine: EngineID? { model.sessionEngine }
+    /// The clean-up or extra model the stage keeps with each visual, so its chip and tint leave with the pill.
+    private var choice: ModelChoice? { model.sessionModel }
 
     var body: some View {
         let visual = self.visual
         let shown = visual != .hidden
-        let frame = stage.frame(for: visual, engine: engine)
+        let frame = stage.frame(for: visual, choice: choice)
         PillFace(model: model, regions: regions, capsule: frame.capsule, content: frame.content, morph: frame.morph,
-                 engine: frame.engine)
+                 choice: frame.choice)
             // Capsule and content leave together, as one composited piece.
             .modifier(PillExitEffect(progress: exitProgress, reduceMotion: reduceMotion))
             .scaleEffect(frame.collapsed && !reduceMotion ? 0.6 : 1, anchor: .bottom)
@@ -259,11 +261,11 @@ struct PillView: View {
             .animation(fadeAnimation(shown: shown, to: visual)) { $0.opacity(frame.collapsed ? 0 : 1) }
             .modifier(PillShake(trigger: model.shakeCount, enabled: !reduceMotion))
             .animation(animation(to: visual), value: visual)
-            .onChange(of: PillStage.Key(visual: visual, engine: engine), initial: true) { _, new in
+            .onChange(of: PillStage.Key(visual: visual, choice: choice), initial: true) { _, new in
                 // Its own transaction, so the exit's timing never reaches the capsule's springs (nor the reverse).
-                let exit = stage.frame(for: new.visual, engine: new.engine).exit
+                let exit = stage.frame(for: new.visual, choice: new.choice).exit
                 let animation = stage.exitAnimation(to: new.visual, reduceMotion: reduceMotion)
-                stage.record(new.visual, engine: new.engine)
+                stage.record(new.visual, choice: new.choice)
                 if exitProgress != exit { withAnimation(animation) { exitProgress = exit } }
             }
             .task(id: stage.generation) {
@@ -311,8 +313,8 @@ struct PillView: View {
         case .error: "Dictation failed"
         case .message(let text): text
         }
-        guard let engine, visual.carriesModel else { return label }
-        return "\(label) with \(engine.shortName)"
+        guard let choice, visual.carriesModel else { return label }
+        return "\(label) with \(choice.title(main: model.settings.selectedEngine, cleanup: model.settings.cleanupModel))"
     }
 }
 
@@ -387,14 +389,15 @@ struct PillStage: Equatable {
     private(set) var parked = true
     /// Bumped at every change; the view settles `PillMotion.settleDelay` after the last one.
     private(set) var generation = 0
-    /// The extra models of `lastShown` and `lingering`: an exiting or shrinking pill keeps its chip and tint.
-    private(set) var lastShownEngine: EngineID?
-    private(set) var lingeringEngine: EngineID?
+    /// The clean-up or extra models of `lastShown` and `lingering`: an exiting or shrinking pill keeps its chip and
+    /// tint.
+    private(set) var lastShownChoice: ModelChoice?
+    private(set) var lingeringChoice: ModelChoice?
 
-    /// What the view records at every change: the visual, and the extra model of the dictation it shows.
+    /// What the view records at every change: the visual, and the clean-up or extra model of the dictation it shows.
     struct Key: Equatable {
         var visual: PillVisual
-        var engine: EngineID?
+        var choice: ModelChoice?
     }
 
     struct Frame: Equatable {
@@ -408,30 +411,30 @@ struct PillStage: Equatable {
         var morph: CGFloat
         /// Parked: at rest size, scaled to 0.6 and transparent, ready to bloom.
         var collapsed: Bool
-        /// The extra model of `content`'s dictation (its chip and tint); nil for the main model.
-        var engine: EngineID? = nil
+        /// Clean-up or the extra model of `content`'s dictation (its chip and tint); nil for the main model.
+        var choice: ModelChoice? = nil
     }
 
-    /// `engine` is the extra model of the dictation `visual` shows (the model's `sessionEngine`).
-    func frame(for visual: PillVisual, engine: EngineID? = nil) -> Frame {
+    /// `choice` is clean-up or the extra model of the dictation `visual` shows (the model's `sessionModel`).
+    func frame(for visual: PillVisual, choice: ModelChoice? = nil) -> Frame {
         let shown = visual != .hidden
         let capsule = shown ? visual : (parked ? .hidden : lastShown)
         let content = capsule.content == .empty ? (lingering ?? capsule) : capsule
-        let contentEngine = content != capsule ? lingeringEngine : (shown ? engine : lastShownEngine)
+        let contentChoice = content != capsule ? lingeringChoice : (shown ? choice : lastShownChoice)
         return Frame(capsule: capsule, content: content, exit: shown ? 0 : 1, morph: content == capsule ? 0 : 1,
-                     collapsed: !shown && parked, engine: content.carriesModel ? contentEngine : nil)
+                     collapsed: !shown && parked, choice: content.carriesModel ? contentChoice : nil)
     }
 
-    mutating func record(_ visual: PillVisual, engine: EngineID? = nil) {
+    mutating func record(_ visual: PillVisual, choice: ModelChoice? = nil) {
         generation &+= 1
         if visual != .hidden {
             lastShown = visual
-            lastShownEngine = engine
+            lastShownChoice = choice
             parked = false
         }
         if visual.content != .empty {
             lingering = visual
-            lingeringEngine = engine
+            lingeringChoice = choice
         }
     }
 
@@ -440,10 +443,10 @@ struct PillStage: Equatable {
     mutating func settle(_ generation: Int, visual: PillVisual) {
         guard generation == self.generation, visual.content == .empty else { return }
         lingering = nil
-        lingeringEngine = nil
+        lingeringChoice = nil
         if visual == .hidden {
             parked = true
-            lastShownEngine = nil
+            lastShownChoice = nil
         }
     }
 
@@ -510,21 +513,21 @@ struct PillFace: View {
     var morph: CGFloat = 0
     /// The capsule's size when it isn't `capsule.size` (a snapshot mid-morph).
     var size: CGSize?
-    /// The extra model of `content`'s dictation: the chip above the pill and the tint.
-    var engine: EngineID?
+    /// Clean-up or the extra model of `content`'s dictation: the chip above the pill and the tint.
+    var choice: ModelChoice?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var carriesModel: Bool { content.carriesModel }
 
-    /// The extra model's tint while the content carries one; a capsule shrinking to rest lets its ring go.
-    private var accent: PillAccent? { carriesModel ? PillPalette.accent(for: engine) : nil }
+    /// The choice's tint while the content carries one; a capsule shrinking to rest lets its ring go.
+    private var accent: PillAccent? { carriesModel ? PillPalette.accent(for: choice) : nil }
 
-    /// What the chip names: the extra model, or the main model for a moment after switching back to it.
-    private var chipEngine: EngineID? {
+    /// What the chip names: clean-up or the extra model, or the main model for a moment after switching back to it.
+    private var chipChoice: ModelChoice? {
         guard carriesModel else { return nil }
-        if let engine { return engine }
-        return model.showsMainChip && content == capsule ? model.settings.selectedEngine : nil
+        if let choice { return choice }
+        return model.showsMainChip && content == capsule ? .engine(model.settings.selectedEngine) : nil
     }
 
     var body: some View {
@@ -538,18 +541,18 @@ struct PillFace: View {
             // Above the pill and part of it: it springs in on a switch, shrinks into the resting capsule with the
             // content and leaves with the pill in one piece.
             .overlay(alignment: .top) {
-                if let chipEngine {
-                    PillEngineChip(model: model, engine: chipEngine, regions: regions,
+                if let chipChoice {
+                    PillModelChip(model: model, choice: chipChoice, regions: regions,
                                    isInteractive: capsule == content && capsule.timer != nil)
                         .modifier(PillMorphEffect(progress: content == capsule ? 0 : morph, from: content.size,
                                                   to: size, anchor: .bottom))
                         .offset(y: -PillMetrics.chipLift)
-                        .id(chipEngine)
+                        .id(chipChoice)
                         .transition(chipTransition)
                 }
             }
             .animation(reduceMotion ? .easeInOut(duration: 0.15) : .spring(duration: 0.3, bounce: 0.3),
-                       value: chipEngine)
+                       value: chipChoice)
             .animation(.easeOut(duration: 0.2), value: accent)
     }
 
@@ -910,24 +913,36 @@ private struct PillControlButton: View {
     }
 }
 
-/// The dictation's model, floating above the pill: sparkles and "Gemini Flash" in its color, or a bolt and the main
-/// model for a moment after switching back. In hands-free it opens the model menu (the controller pops it up).
-private struct PillEngineChip: View {
+/// The dictation's model, floating above the pill: sparkles and "Gemini Flash" in its color; clean-up as the pass it
+/// is, "Parakeet → Luna" with the main model dimmed ahead of the wand; or a bolt and the main model for a moment
+/// after switching back. In hands-free it opens the model menu (the controller pops it up).
+private struct PillModelChip: View {
     let model: PillModel
-    let engine: EngineID
+    let choice: ModelChoice
     let regions: PillHitRegions?
     /// Hands-free only: push-to-talk holds a key, and processing is past choosing.
     let isInteractive: Bool
 
     var body: some View {
-        let accent = PillPalette.accent(for: engine)
+        let accent = PillPalette.accent(for: choice)
+        let settings = model.settings
         Button { model.onEngineChipClick?() } label: {
             PillChipCapsule(accent: accent) {
-                Image(systemName: engine.isSwitchModel ? "sparkles" : engine.symbolName)
-                    .font(.system(size: 9.5, weight: .semibold))
-                    .foregroundStyle(accent?.mark ?? .white.opacity(0.75))
-                Text(engine.chipName)
-                    .foregroundStyle(.white.opacity(0.92))
+                switch choice {
+                case .cleanup:
+                    Text(settings.selectedEngine.chipName)
+                        .foregroundStyle(.white.opacity(0.5))
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 7.5, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.35))
+                    symbol(accent: accent)
+                    Text(settings.cleanupModel.chipName)
+                        .foregroundStyle(.white.opacity(0.92))
+                case .engine(let engine):
+                    symbol(accent: accent)
+                    Text(engine.chipName)
+                        .foregroundStyle(.white.opacity(0.92))
+                }
                 if isInteractive {
                     Image(systemName: "chevron.up.chevron.down")
                         .font(.system(size: 7.5, weight: .bold))
@@ -945,8 +960,14 @@ private struct PillEngineChip: View {
         .onChange(of: isInteractive) { _, interactive in if !interactive { regions?.setChip(nil) } }
         .onDisappear { regions?.setChip(nil) }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Model: \(engine.shortName)")
+        .accessibilityLabel("Model: \(choice.title(main: settings.selectedEngine, cleanup: settings.cleanupModel))")
         .accessibilityAddTraits(isInteractive ? .isButton : [])
+    }
+
+    private func symbol(accent: PillAccent?) -> some View {
+        Image(systemName: choice.symbolName)
+            .font(.system(size: 9.5, weight: .semibold))
+            .foregroundStyle(accent?.mark ?? .white.opacity(0.75))
     }
 }
 
@@ -992,9 +1013,16 @@ struct PillChipCapsule<Content: View>: View {
 struct PillSwitchHint: View {
     let model: PillModel
 
-    /// The one extra model by name; with several, what they share.
-    static func label(for extras: [EngineID]) -> String {
-        extras.count == 1 ? extras[0].shortName : "Gemini"
+    /// The one choice by name; with several, what they share, or both kinds.
+    static func label(for choices: [ModelChoice], cleanup: CleanupModel) -> String {
+        if choices.count == 1, let choice = choices.first {
+            return choice == .cleanup ? "\(cleanup.chipName) clean-up" : choice.title(main: .parakeet, cleanup: cleanup)
+        }
+        return choices.contains(.cleanup) ? "Clean-up, Gemini" : "Gemini"
+    }
+
+    private var label: String {
+        Self.label(for: model.settings.switchChoices, cleanup: model.settings.cleanupModel)
     }
 
     var body: some View {
@@ -1003,12 +1031,12 @@ struct PillSwitchHint: View {
             PillShortcutChips(shortcut: shortcut, fallback: shortcut?.compactDescription ?? "")
                 .scaleEffect(0.9)
             Text("·").foregroundStyle(.white.opacity(0.35))
-            Text(Self.label(for: model.settings.switchEngines))
+            Text(label)
                 .foregroundStyle(.white.opacity(0.7))
         }
         .fixedSize()
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Press \(shortcut?.spokenDescription ?? "the Switch model shortcut") to use \(Self.label(for: model.settings.switchEngines))")
+        .accessibilityLabel("Press \(shortcut?.spokenDescription ?? "the Switch model shortcut") to use \(label)")
     }
 }
 

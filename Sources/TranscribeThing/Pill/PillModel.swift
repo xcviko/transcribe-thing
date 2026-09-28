@@ -41,10 +41,10 @@ final class PillModel {
     /// Processing has run longer than `timing.slowProcessing`: the pill widens to say "Still transcribing…".
     private(set) var isProcessingSlow = false
 
-    /// The extra model this dictation uses (Gemini Flash, Gemini Pro), set by the controller while it records and
-    /// until its text lands; nil for the main model.
-    var sessionEngine: EngineID? {
-        didSet { if sessionEngine != nil, showsMainChip { hideMainChip() } }
+    /// What this dictation goes to past the main model alone (clean-up, Gemini Flash, Gemini Pro), set by the
+    /// controller while it records and until its text lands; nil for the main model.
+    var sessionModel: ModelChoice? {
+        didSet { if sessionModel != nil, showsMainChip { hideMainChip() } }
     }
     /// Bumped on every switch of the dictation's engine, back to the main model too, so the view can show the
     /// model chip (and fade a main-model one out).
@@ -52,7 +52,7 @@ final class PillModel {
         didSet { if engineChipPulse != oldValue { flashMainChip() } }
     }
     /// The main model's chip, briefly, after a switch back to it. Every switch raises it: the controller sets
-    /// `sessionEngine` right after bumping the pulse, and an extra model's chip takes its place.
+    /// `sessionModel` right after bumping the pulse, and clean-up's or an extra model's chip takes its place.
     private(set) var showsMainChip = false
     /// The Switch model discovery hint next to a long push-to-talk hold (its first few times).
     var showsTabHint = false
@@ -83,8 +83,8 @@ final class PillModel {
     @ObservationIgnored var contextMenuProvider: (() -> NSMenu)?
     /// The hands-free model chip was clicked: the controller opens the model menu under it.
     @ObservationIgnored var onEngineChipClick: (() -> Void)?
-    /// A model picked from that menu, for the dictation being recorded.
-    @ObservationIgnored var onSelectEngine: ((EngineID) -> Void)?
+    /// A choice picked from that menu, for the dictation being recorded.
+    @ObservationIgnored var onSelectModel: ((ModelChoice) -> Void)?
     /// Called as soon as `visiblePhase` changes, in the same turn (observation only reports it on the next one),
     /// so the panel can be on screen before whatever the caller does next, such as opening the mic.
     @ObservationIgnored var onVisiblePhaseChange: (() -> Void)?
@@ -294,10 +294,10 @@ final class PillModel {
 
     // MARK: Model chip
 
-    /// The engine the chip above the pill names right now: the dictation's extra model, or the main model for a
-    /// moment after switching back to it; nil for a clean pill.
-    var chipEngine: EngineID? {
-        sessionEngine ?? (showsMainChip ? settings.selectedEngine : nil)
+    /// What the chip above the pill names right now: the dictation's clean-up or extra model, or the main model for
+    /// a moment after switching back to it; nil for a clean pill.
+    var chipModel: ModelChoice? {
+        sessionModel ?? (showsMainChip ? .engine(settings.selectedEngine) : nil)
     }
 
     /// Shows the main model's chip for `timing.mainChipHold`; a switch meanwhile starts it over.
@@ -313,9 +313,10 @@ final class PillModel {
         if showsMainChip { showsMainChip = false }
     }
 
-    /// Models the hands-free chip's menu offers, in order: the main model, then every extra model that takes part.
-    var menuEngines: [EngineID] {
-        [settings.selectedEngine] + settings.switchEngines
+    /// What the hands-free chip's menu offers, in Switch model order: the main model, then clean-up and every extra
+    /// model that takes part.
+    var menuChoices: [ModelChoice] {
+        [.engine(settings.selectedEngine)] + settings.switchChoices
     }
 
     // MARK: Hello

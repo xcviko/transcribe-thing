@@ -319,13 +319,14 @@ final class PillController {
         followPointer(to: point)
     }
 
-    /// The hands-free chip's model menu, just above the chip: the main model and the extra models, the current
-    /// one checked. Picking one switches this dictation's model.
+    /// The hands-free chip's model menu, just above the chip: the main model, clean-up and the extra models, the
+    /// current one checked. Picking one switches this dictation's model.
     private func showEngineMenu() {
         guard let host, model.isPresented, model.visiblePhase == .locked, let chip = regions.chip else { return }
-        let menu = Self.engineMenu(engines: model.menuEngines, current: model.sessionEngine ?? model.settings.selectedEngine) {
-            [weak model] engine in model?.onSelectEngine?(engine)
-        }
+        let settings = model.settings
+        let current = model.sessionModel ?? .engine(settings.selectedEngine)
+        let menu = Self.modelMenu(choices: model.menuChoices, current: current, main: settings.selectedEngine,
+                                  cleanup: settings.cleanupModel) { [weak model] choice in model?.onSelectModel?(choice) }
         // Canvas coordinates have a top-left origin; the menu's top-left goes where its bottom clears the chip.
         let top = chip.minY - 6 - menu.size.height
         let point = host.isFlipped ? CGPoint(x: chip.minX, y: top) : CGPoint(x: chip.minX, y: host.bounds.height - top)
@@ -333,16 +334,19 @@ final class PillController {
         updatePointer()
     }
 
-    /// One item per model, titled by its short name with its symbol; `current` is checked.
-    static func engineMenu(engines: [EngineID], current: EngineID,
-                           select: @escaping @MainActor (EngineID) -> Void) -> NSMenu {
+    /// One item per choice, titled like the chip with its symbol; `current` is checked. The main model and its
+    /// clean-up come first, the extra models after a separator: those hear the audio themselves.
+    static func modelMenu(choices: [ModelChoice], current: ModelChoice, main: EngineID, cleanup: CleanupModel,
+                          select: @escaping @MainActor (ModelChoice) -> Void) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
-        for engine in engines {
-            let item = MenuActionItem(title: engine.shortName) { select(engine) }
-            item.state = engine == current ? .on : .off
-            let image = NSImage(systemSymbolName: engine.isSwitchModel ? "sparkles" : engine.symbolName,
-                                accessibilityDescription: nil)
+        for (index, choice) in choices.enumerated() {
+            if index > 0, choice.switchEngine != nil, choices[index - 1].switchEngine == nil {
+                menu.addItem(.separator())
+            }
+            let item = MenuActionItem(title: choice.title(main: main, cleanup: cleanup)) { select(choice) }
+            item.state = choice == current ? .on : .off
+            let image = NSImage(systemSymbolName: choice.symbolName, accessibilityDescription: nil)
             image?.isTemplate = true
             item.image = image
             menu.addItem(item)

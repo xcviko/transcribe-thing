@@ -43,8 +43,8 @@ final class AppSettings {
             store.set(selectedEngine.rawValue, .selectedEngine)
         }
     }
-    /// The extra models the Switch model shortcut steps through, in `EngineID.switchCandidates` order. Empty turns
-    /// the shortcut off.
+    /// The extra models the Switch model shortcut steps through, in `EngineID.switchCandidates` order, after
+    /// clean-up (`switchCleanup`). With neither, the shortcut is off.
     var switchEngines: [EngineID] = EngineID.switchCandidates {
         didSet {
             let normalized = Self.normalizedSwitchEngines(switchEngines)
@@ -55,6 +55,9 @@ final class AppSettings {
             store.setJSON(switchEngines.map(\.rawValue), .switchEngines)
         }
     }
+    /// The Switch model shortcut steps to clean-up (the main model's text tidied by `cleanupModel`) right after the
+    /// main model. It takes part only with a clean-up prompt: see `switchChoices`.
+    var switchCleanup: Bool = true { didSet { store.set(switchCleanup, .switchCleanup) } }
     /// How many times the pill has shown the Switch model hint (it shows at most `switchHintLimit` times).
     var switchHintShownCount: Int = 0 { didSet { store.set(switchHintShownCount, .switchHintShownCount) } }
     var pillMode: PillMode = .whileDictating { didSet { store.set(pillMode.rawValue, .pillMode) } }
@@ -79,9 +82,6 @@ final class AppSettings {
                           .reasoningEfforts)
         }
     }
-    /// Clean-up of Parakeet transcripts by `cleanupModel` before they're pasted. Takes effect only with a clean-up
-    /// prompt (`isCleanupActive`): with no instruction the model would reply to the text instead.
-    var cleanupEnabled: Bool = false { didSet { store.set(cleanupEnabled, .cleanupEnabled) } }
     /// `CleanupModel.examplePrompt` until the user changes it; a cleared (empty) prompt is stored and stays empty.
     /// Every clean-up model follows it.
     var cleanupSystemPrompt: String = CleanupModel.examplePrompt { didSet { store.set(cleanupSystemPrompt, .cleanupSystemPrompt) } }
@@ -218,8 +218,13 @@ final class AppSettings {
         set { setCleanupReasoningEffort(newValue, for: cleanupModel) }
     }
 
-    /// Dictations by the main model are cleaned up: the switch is on and there is a prompt to follow.
-    var isCleanupActive: Bool { cleanupEnabled && hasCleanupPrompt }
+    /// What the Switch model shortcut steps through after the main model, in order: clean-up, then the extra models.
+    /// Clean-up needs a prompt (with no instruction the model would reply to the text instead) and a main model it
+    /// can tidy.
+    var switchChoices: [ModelChoice] {
+        let cleanup = switchCleanup && hasCleanupPrompt && CleanupModel.canClean(selectedEngine)
+        return (cleanup ? [.cleanup] : []) + switchEngines.map(ModelChoice.engine)
+    }
 
     var hasCleanupPrompt: Bool { !cleanupSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
@@ -299,7 +304,8 @@ final class AppSettings {
             }
             reasoningEfforts = Self.normalizedReasoningEfforts(efforts)
         }
-        if let v = store.bool(.cleanupEnabled) { cleanupEnabled = v }
+        if let v = store.bool(.switchCleanup) { switchCleanup = v }
+        store.remove(.cleanupEnabled)
         if let v = store.string(.cleanupSystemPrompt) { cleanupSystemPrompt = v }
         if let v = store.string(.cleanupModel).flatMap(CleanupModel.init(rawValue:)) { cleanupModel = v }
         if let v: [String: String] = store.json(.cleanupReasoningEfforts) {
@@ -411,7 +417,9 @@ enum SettingsKey: String, CaseIterable {
     case geminiSystemPrompt, maxRecordingMinutes, doublePressForHandsFree
     case restoreClipboard, keepFailedRecordingsDays, keepSuccessfulRecordingsDays, shortcuts, hasShownWelcomeHello
     case checkForUpdatesAutomatically, announcedUpdateVersion, lastLaunchedVersion
-    case switchEngines, switchHintShownCount, microphoneChoiceMigrated
+    case switchEngines, switchCleanup, switchHintShownCount, microphoneChoiceMigrated
+    /// `cleanupEnabled` is the removed "Clean up Parakeet transcripts" switch (every dictation), removed at load:
+    /// clean-up is a Switch model step now (`switchCleanup`).
     /// `cleanupReasoningEffort` is Flash Lite's level from before the clean-up model choice, moved once into
     /// `cleanupReasoningEfforts` and removed.
     case reasoningEfforts, cleanupEnabled, cleanupSystemPrompt, cleanupReasoningEffort

@@ -31,6 +31,7 @@ struct ModelsPage: View {
                 HubGroup("Extra models", footer: extraFooter) {
                     ExtraModelsLine(status: extraStatus) { hub.show(.shortcuts) }
                     SettingsGroup {
+                        CleanupStepRow(isOn: cleanupStepBinding) { focusKey(proxy) }
                         ForEach(EngineID.switchCandidates) { engine in
                             ExtraModelRow(engine: engine, isOn: extraBinding(engine), compact: compactBadges) { focusKey(proxy) }
                         }
@@ -39,13 +40,12 @@ struct ModelsPage: View {
                 HubGroup("Gemini") {
                     GeminiInstructionsCard()
                 }
-                HubGroup("Clean-up", footer: "Gemini transcripts aren’t cleaned up: Gemini already punctuates and drops filler words. History keeps the original too.") {
+                HubGroup("Clean-up", footer: "For dictations you switch to clean-up. Gemini transcripts aren’t cleaned up: Gemini already punctuates and drops filler words. History keeps the original too.") {
                     SettingsGroup {
                         ForEach(CleanupModel.allCases) { model in
                             CleanupModelRow(model: model, isSelected: settings.cleanupModel == model,
                                             choose: { chooseCleanupModel(model) }) { focusKey(proxy) }
                         }
-                        cleanupToggle
                         SettingsRow(title: "Thinking", subtitle: Self.thinkingAdvice(settings.cleanupModel),
                                     systemImage: "brain", iconTint: .inkSecondary) {
                             ThinkingPicker(efforts: settings.cleanupModel.reasoningEfforts, selection: cleanupEffort,
@@ -67,7 +67,7 @@ struct ModelsPage: View {
     }
 
     private var extraStatus: ExtraModels.Status {
-        ExtraModels.status(binding: settings.shortcuts[.switchModel], enabled: settings.switchEngines)
+        ExtraModels.status(binding: settings.shortcuts[.switchModel], enabled: settings.switchChoices)
     }
 
     private var extraFooter: String {
@@ -77,21 +77,9 @@ struct ModelsPage: View {
     // MARK: Clean-up
 
     /// Off and disabled while there's no prompt; the stored choice comes back once there is one.
-    private var cleanupToggle: some View {
+    private var cleanupStepBinding: Binding<Bool> {
         let settings = settings
-        let hasPrompt = settings.hasCleanupPrompt
-        let model = settings.cleanupModel.shortName
-        return SettingsRow(title: "Clean up Parakeet transcripts",
-                           subtitle: hasPrompt
-                               ? "\(model) tidies each dictation before it’s pasted. If it fails or takes too long, you get the original."
-                               : "Write a prompt below or use the example first. Without one, \(model) would reply to your words instead of tidying them.",
-                           systemImage: "text.badge.checkmark", iconTint: .inkSecondary) {
-            Toggle("", isOn: Binding(get: { settings.isCleanupActive }, set: { settings.cleanupEnabled = $0 }))
-                .toggleStyle(.appSwitch)
-                .labelsHidden()
-                .disabled(!hasPrompt)
-                .accessibilityLabel("Clean up Parakeet transcripts")
-        }
+        return Binding(get: { settings.switchCleanup && settings.hasCleanupPrompt }, set: { settings.switchCleanup = $0 })
     }
 
     /// The selected clean-up model's own level: switching models keeps each one's.
@@ -572,6 +560,84 @@ extension ExtraModelRow {
 
 // MARK: - Clean-up
 
+/// Clean-up's mark: a warm wand, on the Models page and on the pill's clean-up chip.
+private struct CleanupIcon: View {
+    var size: CGFloat
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
+        Image(systemName: ModelChoice.cleanup.symbolName)
+            .font(.system(size: size * 0.44, weight: .semibold))
+            .foregroundStyle(Color.warm)
+            .frame(width: size, height: size)
+            .background {
+                shape.fill(Color.warm.opacity(0.13))
+                    .overlay { shape.strokeBorder(Color.warm.opacity(0.18), lineWidth: 0.5) }
+            }
+            .accessibilityHidden(true)
+    }
+}
+
+/// Clean-up as a Switch model step, first among the extra models: the main model transcribes and the clean-up model
+/// tidies its words. Named as the pass it is ("Parakeet v3 + GPT-6 Luna"); its model, thinking and prompt are set
+/// under Clean-up.
+private struct CleanupStepRow: View {
+    @Binding var isOn: Bool
+    var focusKey: () -> Void
+
+    @Environment(HubContext.self) private var hub
+    @Environment(OpenRouterAccount.self) private var account
+    @Environment(AppSettings.self) private var settings
+
+    var body: some View {
+        let cleanup = settings.cleanupModel
+        let hasPrompt = settings.hasCleanupPrompt
+        HStack(alignment: .center, spacing: 12) {
+            CleanupIcon(size: 36)
+                .opacity(isOn ? 1 : 0.55)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(ModelChoice.cleanup.title(main: settings.selectedEngine, cleanup: cleanup))
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(isOn ? Color.ink : Color.inkSecondary)
+                    .lineLimit(1)
+                Text(hasPrompt
+                     ? "\(settings.selectedEngine.chipName) transcribes, then \(cleanup.shortName) tidies the text. Set it up under Clean-up."
+                     : "Write a clean-up prompt below first. Without one, \(cleanup.shortName) would reply to your words instead of tidying them.")
+                    .typeface(.callout)
+                    .foregroundStyle(.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                ModelStatusText(keyStatus: account.status)
+                    .padding(.top, 2)
+            }
+            Spacer(minLength: 8)
+            HStack(spacing: 10) {
+                // The clean-up goes through the same OpenRouter key as Gemini.
+                switch hub.readiness(of: .geminiFlash) {
+                case .needsKey:
+                    Button("Add Key", action: focusKey)
+                        .buttonStyle(SecondaryButtonStyle(size: .small))
+                case .keyProblem:
+                    Button("Update Key", action: focusKey)
+                        .buttonStyle(SecondaryButtonStyle(size: .small))
+                case .ready, .warming, .needsDownload, .failed:
+                    EmptyView()
+                }
+                Toggle("", isOn: $isOn)
+                    .toggleStyle(.appSwitch)
+                    .labelsHidden()
+                    .disabled(!hasPrompt)
+                    .accessibilityLabel("Include clean-up when switching")
+                    .help(isOn ? "Included when switching models" : "Not included when switching models")
+            }
+        }
+        .padding(.horizontal, Theme.Spacing.md)
+        .padding(.vertical, 12)
+        .frame(minHeight: 76)
+        .animation(Theme.Motion.hover, value: isOn)
+        .accessibilityElement(children: .contain)
+    }
+}
+
 /// A clean-up model to pick: what it does, who serves it and the OpenRouter key's status, like the extra models.
 /// It reads text, never audio, so it has no place among the models a dictation can go to.
 private struct CleanupModelRow: View {
@@ -587,19 +653,7 @@ private struct CleanupModelRow: View {
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
             RadioDot(isOn: isSelected)
-            Image(systemName: "wand.and.stars")
-                .font(.system(size: 36 * 0.44, weight: .semibold))
-                .foregroundStyle(Color.warm)
-                .frame(width: 36, height: 36)
-                .background {
-                    RoundedRectangle(cornerRadius: 36 * 0.28, style: .continuous)
-                        .fill(Color.warm.opacity(0.13))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 36 * 0.28, style: .continuous)
-                                .strokeBorder(Color.warm.opacity(0.18), lineWidth: 0.5)
-                        }
-                }
-                .accessibilityHidden(true)
+            CleanupIcon(size: 36)
             VStack(alignment: .leading, spacing: 3) {
                 Text(model.modelName)
                     .font(.system(size: 13, weight: .semibold))

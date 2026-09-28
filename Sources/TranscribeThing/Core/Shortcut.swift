@@ -285,7 +285,7 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
         case .handsFree: "Tap to start. Tap again to finish."
         case .cancel: "Discard the current recording."
         case .pasteLast: "Paste your most recent transcript again. It stays on the clipboard."
-        case .switchModel: "While dictating: use Gemini for this dictation."
+        case .switchModel: "While dictating: clean up or use Gemini for this dictation."
         }
     }
 

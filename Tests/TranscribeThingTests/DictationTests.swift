@@ -1449,6 +1449,7 @@ final class FakeRecorder: DictationRecorder {
 
     @Test func geminiRecordingsStopWhileTheyStillFitInOneRequest() {
         let h = Self.make(keyStatus: .valid(KeyInfo()))
+        h.settings.switchCleanup = false
         h.controller.send(.handsFreeToggle)
         #expect(h.controller.machine.capture.isListeningOrLocked)
         #expect(h.pill.limitSeconds == 1200)

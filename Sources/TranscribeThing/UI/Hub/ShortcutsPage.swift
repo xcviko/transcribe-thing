@@ -88,10 +88,10 @@ struct ShortcutsPage: View {
 
     private var switchModelTip: String {
         let key = settings.shortcuts[.switchModel]?.compactDescription ?? "Switch model"
-        guard !settings.switchEngines.isEmpty else {
-            return "Turn on an extra model in Models to switch to it with \(key) while you dictate."
+        guard !settings.switchChoices.isEmpty else {
+            return "Turn on clean-up or an extra model in Models to switch to it with \(key) while you dictate."
         }
-        return"\(key) steps through your extra models while you dictate. The next dictation starts on "
+        return "\(key) steps through clean-up and your extra models while you dictate. The next dictation starts on "
             + "\(settings.selectedEngine.shortName) again."
     }
 

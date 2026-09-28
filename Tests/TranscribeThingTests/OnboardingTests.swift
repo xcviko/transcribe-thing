@@ -607,21 +607,25 @@ import Testing
 @Suite struct OnboardingExtraModelsGateTests {
     @Test func extraModelsNeedAnEnabledModelAndAWorkingKey() {
         let valid = KeyStatus.valid(KeyInfo(limitRemaining: 3))
-        #expect(OnboardingGate.extraModelsUsable(enabled: [.geminiFlash], keyStatus: valid, hasStoredKey: true))
+        #expect(OnboardingGate.extraModelsUsable(enabled: [.engine(.geminiFlash)], keyStatus: valid, hasStoredKey: true))
         #expect(!OnboardingGate.extraModelsUsable(enabled: [], keyStatus: valid, hasStoredKey: true))
-        #expect(!OnboardingGate.extraModelsUsable(enabled: [.geminiPro], keyStatus: .missing, hasStoredKey: false))
-        #expect(!OnboardingGate.extraModelsUsable(enabled: [.geminiPro], keyStatus: .invalid("401"), hasStoredKey: true))
-        #expect(OnboardingGate.extraModelsUsable(enabled: [.geminiPro], keyStatus: .offline, hasStoredKey: true))
+        #expect(!OnboardingGate.extraModelsUsable(enabled: [.engine(.geminiPro)], keyStatus: .missing, hasStoredKey: false))
+        #expect(!OnboardingGate.extraModelsUsable(enabled: [.engine(.geminiPro)], keyStatus: .invalid("401"), hasStoredKey: true))
+        #expect(OnboardingGate.extraModelsUsable(enabled: [.engine(.geminiPro)], keyStatus: .offline, hasStoredKey: true))
     }
 
     @Test func noteNamesTheActualSwitchModelBinding() {
-        let fnTab = OnboardingGate.extraModelsNote(binding: .fnTab, enabled: [.geminiFlash])
+        let fnTab = OnboardingGate.extraModelsNote(binding: .fnTab, enabled: [.engine(.geminiFlash)])
         #expect(fnTab.contains(Shortcut.fnTab.compactDescription.replacingOccurrences(of: " ", with: "\u{00A0}")))
-        let custom = OnboardingGate.extraModelsNote(binding: .rightCommand, enabled: [.geminiFlash])
+        let custom = OnboardingGate.extraModelsNote(binding: .rightCommand, enabled: [.engine(.geminiFlash)])
         #expect(custom.contains(Shortcut.rightCommand.compactDescription.replacingOccurrences(of: " ", with: "\u{00A0}")))
         #expect(!custom.contains("fn"))
-        #expect(OnboardingGate.extraModelsNote(binding: nil, enabled: [.geminiFlash]).contains("Settings"))
+        #expect(OnboardingGate.extraModelsNote(binding: nil, enabled: [.engine(.geminiFlash)]).contains("Settings"))
         #expect(OnboardingGate.extraModelsNote(binding: .fnTab, enabled: []).contains("Settings"))
+        let both = OnboardingGate.extraModelsNote(binding: .fnTab, enabled: [.cleanup, .engine(.geminiFlash)])
+        #expect(both.contains("cleaned up") && both.contains("Gemini"))
+        let cleanup = OnboardingGate.extraModelsNote(binding: .fnTab, enabled: [.cleanup])
+        #expect(cleanup.contains("cleaned up") && !cleanup.contains("Gemini"))
     }
 }
 
@@ -645,9 +649,13 @@ import Testing
         }
     }
 
-    @Test func switchModelLessonShowsOnlyWhenGeminiWouldAnswer() {
+    @Test func switchModelLessonShowsOnlyWhenAStepWouldAnswer() {
         #expect(makeModel().showsSwitchModelLesson, "the preview key is valid")
         #expect(!makeModel { ctx in ctx.account = .preview(status: .missing) }.showsSwitchModelLesson)
-        #expect(!makeModel { ctx in ctx.settings.switchEngines = [] }.showsSwitchModelLesson)
+        #expect(makeModel { ctx in ctx.settings.switchEngines = [] }.showsSwitchModelLesson, "clean-up alone")
+        #expect(!makeModel { ctx in
+            ctx.settings.switchEngines = []
+            ctx.settings.switchCleanup = false
+        }.showsSwitchModelLesson)
     }
 }

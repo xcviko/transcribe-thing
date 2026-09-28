@@ -403,19 +403,19 @@ enum ProviderNote {
 
 // MARK: - Extra models
 
-/// What the Models page says about the extra models: the Switch model shortcut steps through the ones switched on,
-/// for one dictation at a time.
+/// What the Models page says about the extra models: the Switch model shortcut steps through the ones switched on
+/// (clean-up among them), for one dictation at a time.
 enum ExtraModels {
     enum Status: Equatable {
-        /// The shortcut switches between the main model and the enabled extra models.
+        /// The shortcut switches between the main model, clean-up and the enabled extra models.
         case ready(Shortcut)
-        /// Every extra model is off: the shortcut isn't intercepted, even while dictating.
+        /// Clean-up and every extra model are off: the shortcut isn't intercepted, even while dictating.
         case noneEnabled(Shortcut?)
         /// Switch model has no shortcut, so nothing switches.
         case unbound
     }
 
-    static func status(binding: Shortcut?, enabled: [EngineID]) -> Status {
+    static func status(binding: Shortcut?, enabled: [ModelChoice]) -> Status {
         guard !enabled.isEmpty else { return .noneEnabled(binding) }
         guard let binding, !binding.isEmpty else { return .unbound }
         return .ready(binding)
