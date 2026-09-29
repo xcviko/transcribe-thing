@@ -181,8 +181,8 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         #expect(raw.contains("ab/cd+/ef==") && raw.contains("nvidia/parakeet-tdt-0.6b-v3") && !raw.contains("\\/"))
     }
 
-    /// However OpenRouter or the provider words it, a 415, or a 400 or 422 that refuses the file's format, type or
-    /// decoding, refuses the upload's format; any other failure is what it always was.
+    /// However OpenRouter or the provider words it, a 415, or a 400, 422, 500 or 502 that refuses the file's format,
+    /// type or decoding, refuses the upload's format; any other failure is what it always was.
     @Test func formatRefusals() {
         let refusals: [(Int, String)] = [
             (415, ""),
@@ -192,6 +192,10 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
             (422, #"{"error":{"code":422,"message":"input_audio.format 'flac' is not supported by this model"}}"#),
             (400, #"{"error":{"code":400,"message":"Provider returned error","metadata":{"raw":"{\"error\":{\"message\":\"Could not decode the audio\"}}","provider_name":"Together"}}}"#),
             (400, "codec not supported"),
+            (400, #"{"error":{"code":400,"message":"FLAC isn’t supported: unsupported file extension"}}"#),
+            (400, #"{"error":{"code":400,"message":"Provider returned error","metadata":{"raw":"Error:\nUnsupported audio: flac"}}}"#),
+            (500, #"{"error":{"code":500,"message":"Provider returned error","metadata":{"error_type":"unmapped","raw":"Unsupported audio format: flac"}}}"#),
+            (502, #"{"error":{"code":502,"message":"Provider could not decode the audio format"}}"#),
         ]
         for (status, body) in refusals {
             #expect(OpenRouterErrorMapper.refusesAudioFormat(status: status, body: Data(body.utf8)), "\(status) \(body)")
@@ -200,13 +204,27 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
             (400, #"{"error":{"code":400,"message":"Invalid audio"}}"#),
             (400, #"{"error":{"code":400,"message":"Invalid request parameters"}}"#),
             (400, #"{"error":{"code":400,"message":"Request payload too large"}}"#),
+            // "format" inside another word, an identifier or an encoding names no file format; "flac" and "invalid"
+            // turn up in errors about anything.
+            (400, #"{"error":{"code":400,"message":"Invalid request: some required information is missing"}}"#),
+            (400, #"{"error":{"code":400,"message":"Invalid value for response_format"}}"#),
+            (400, #"{"error":{"code":400,"message":"Invalid base64 encoding in input_audio.data"}}"#),
+            (400, #"{"error":{"code":400,"message":"Provider returned error","metadata":{"raw":"{\"error\":{\"message\":\"Parameter 'language' is not allowed for audio.flac\",\"type\":\"invalid_request_error\"}}","provider_name":"Together"}}}"#),
             (413, #"{"error":{"code":413,"message":"Unsupported format: too large"}}"#),
-            (502, #"{"error":{"code":502,"message":"Provider could not decode the audio format"}}"#),
+            (500, #"{"error":{"code":500,"message":"Internal Server Error","metadata":{"error_type":"unmapped"}}}"#),
+            (503, #"{"error":{"code":503,"message":"Provider could not decode the audio format"}}"#),
             (401, #"{"error":{"message":"User not found.","code":401}}"#),
         ]
         for (status, body) in others {
             #expect(!OpenRouterErrorMapper.refusesAudioFormat(status: status, body: Data(body.utf8)), "\(status) \(body)")
         }
+    }
+
+    /// Whole words, however the body quotes them: JSON's escapes part words, an apostrophe doesn't.
+    @Test func wordsOfABody() {
+        let body = #"{"message":"Couldn’t read","raw":"{\"error\":\"Error:\\nCan’t decode 'audio.flac'\"}"}"#
+        #expect(OpenRouterErrorMapper.words(of: Data(body.utf8))
+            == " message couldn't read raw error error can't decode audio flac ")
     }
 
     @Test func successDecodesTextAndCost() throws {
@@ -270,6 +288,32 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         let sent = try #require(StubURLProtocol.registry.bodies(for: host).first)
         #expect(upload(inRequestBody: sent)?.format == "flac")
         #expect(upload(inRequestBody: sent)?.samples == rate)
+    }
+
+    /// OpenRouter reports a provider's error it can't classify as a 500, and one it can't read as a 502 or inside a
+    /// 200: one that says the format was refused isn't sent again as it is either. One that doesn't is retried as
+    /// ever.
+    @Test func aRefusalReportedAsAServerErrorSaysSo() async throws {
+        let flac = try CloudAudio.flac(tone(1))
+        let cases: [(StubURLProtocol.Reply, AppError)] = [
+            (.init(status: 500, body: #"{"error":{"code":500,"message":"Provider returned error","metadata":{"error_type":"unmapped","raw":"Unsupported audio format: flac"}}}"#),
+             .openRouterServer("Provider returned error")),
+            (.init(body: #"{"error":{"code":502,"message":"Provider could not decode the audio"}}"#),
+             .openRouterProviderUnavailable("Provider could not decode the audio")),
+        ]
+        for (reply, error) in cases {
+            let (client, host) = StubURLProtocol.client([reply, speechReply("never")])
+            await #expect(throws: OpenRouterClient.AudioFormatRefused(format: "flac", error: error)) {
+                try await client.transcribeSpeech(audio: flac, format: "flac", model: "nvidia/parakeet-tdt-0.6b-v3",
+                                                  apiKey: "sk-or-v1-test", timeout: 180)
+            }
+            #expect(StubURLProtocol.registry.requests(for: host).count == 1, "\(error)")
+        }
+
+        let unmapped = StubURLProtocol.Reply(status: 500, body: #"{"error":{"code":500,"message":"Internal Server Error","metadata":{"error_type":"unmapped"}}}"#)
+        let (client, host) = StubURLProtocol.client([unmapped, speechReply("ok")])
+        #expect(try await call(client).text == "ok")
+        #expect(StubURLProtocol.registry.requests(for: host).count == 2)
     }
 
     @Test func postsToTheTranscriptionEndpoint() async throws {
@@ -487,6 +531,30 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         #expect(result.text == "Hallo." && result.uploads.map(\.format) == [.wav])
         #expect(await uploads(StubURLProtocol.registry.bodies(for: host)).map(\.format) == ["flac", "wav"])
         #expect(service.speechFormat == .wav)
+    }
+
+    /// A refusal OpenRouter reports as a server error (a provider's error it can't classify) falls back the same way,
+    /// at once, instead of sending the same FLAC again and failing the dictation.
+    @Test func aRefusalReportedAsAServerErrorFallsBackToo() async throws {
+        let unmapped = StubURLProtocol.Reply(status: 500, body: #"{"error":{"code":500,"message":"Provider returned error","metadata":{"error_type":"unmapped","raw":"Unsupported audio format: flac"}}}"#)
+        let (service, host, _) = makeService([unmapped, speechReply("Hallo.")])
+        let result = try await service.transcribe(speech(2), engine: .parakeetCloud)
+        #expect(result.text == "Hallo." && result.uploads.map(\.format) == [.wav])
+        #expect(await uploads(StubURLProtocol.registry.bodies(for: host)).map(\.format) == ["flac", "wav"])
+        #expect(service.speechFormat == .wav)
+    }
+
+    /// A bad request that isn't about the format fails the dictation as it is: no WAV sent after it, and FLAC stays.
+    @Test func aBadRequestNotAboutTheFormatFailsAsItIs() async throws {
+        let message = "Invalid request: some required information is missing"
+        let (service, host, _) = makeService([
+            .init(status: 400, body: #"{"error":{"code":400,"message":"\#(message)"}}"#), speechReply("never"),
+        ])
+        await #expect(throws: AppError.openRouterBadRequest(message)) {
+            try await service.transcribe(speech(2), engine: .parakeetCloud)
+        }
+        #expect(await uploads(StubURLProtocol.registry.bodies(for: host)).map(\.format) == ["flac"])
+        #expect(service.speechFormat == .flac)
     }
 
     /// A WAV refused as if for its format has nothing to fall back to: it fails as the bad request it is.

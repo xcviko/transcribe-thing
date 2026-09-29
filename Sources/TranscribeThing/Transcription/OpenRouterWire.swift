@@ -588,23 +588,42 @@ enum OpenRouterErrorMapper {
     /// How a 400 says the request is too large to take (lowercased).
     static let tooLargePhrases = ["payload size", "request entity too large", "request too large"]
 
-    /// What a refusal of an upload's format names (lowercased)…
-    static let audioFormatSubjects = ["format", "file type", "filetype", "media type", "mime", "codec", "flac",
-                                      "extension", "content type", "content-type", "encoding", "decod"]
+    /// What a refusal of an upload's format names (whole words, lowercased)…
+    static let audioFormatSubjects = ["format", "formats", "file type", "filetype", "media type", "mime", "mimetype",
+                                      "content type", "codec", "codecs", "decode", "decoding", "decoded"]
     /// …and the words that refuse it.
-    static let refusalWords = ["unsupported", "not supported", "invalid", "unrecognized", "unrecognised", "unknown",
-                               "not allowed", "not accepted", "cannot", "can't", "can’t", "could not", "couldn't",
-                               "couldn’t", "unable", "failed to"]
+    static let refusalWords = plainRefusals + ["invalid", "unrecognized", "unrecognised", "unknown", "not allowed",
+                                               "cannot", "can't", "could not", "couldn't", "unable", "failed to"]
+    /// What names a format only beside a plain refusal (`plainRefusals`): "flac" and "extension" turn up in many an
+    /// error that isn't about the format ("… for audio.flac").
+    static let audioFormatNames = ["flac", "extension"]
+    static let plainRefusals = ["unsupported", "not supported", "isn't supported", "not accepted"]
 
-    /// Whether the speech-to-text endpoint refused an upload for its format: any 415, or a 400 or 422 whose body names
-    /// a format, file type, codec or decoding (`audioFormatSubjects`) and refuses it (`refusalWords`), however
-    /// OpenRouter or the provider words it; the provider's own error, which OpenRouter passes on in the metadata,
-    /// counts too.
+    /// Whether the speech-to-text endpoint refused an upload for its format: any 415, or a 400, 422, 500 or 502 whose
+    /// words (`words(of:)`) name a format, file type, codec or decoding (`audioFormatSubjects`) and refuse it
+    /// (`refusalWords`), or call FLAC unsupported, however OpenRouter or the provider words it. The provider's own
+    /// error, which OpenRouter passes on in the metadata, counts too; a 500 or 502 is how OpenRouter reports a
+    /// provider's error it can't classify or read.
     static func refusesAudioFormat(status: Int, body: Data) -> Bool {
         if status == 415 { return true }
-        guard status == 400 || status == 422 else { return false }
+        guard [400, 422, 500, 502].contains(status) else { return false }
+        let words = words(of: body)
+        func says(_ phrases: [String]) -> Bool { phrases.contains { words.contains(" \($0) ") } }
+        return says(audioFormatSubjects) && says(refusalWords) || says(audioFormatNames) && says(plainRefusals)
+    }
+
+    /// The words of `body`, lowercased, each with a space either side (" could not decode "). A word is letters,
+    /// digits, `_` and apostrophes, so neither "information" nor "response_format" is "format"; JSON's escapes
+    /// (`\n`, `\"`) part words however deeply the provider's error is quoted.
+    static func words(of body: Data) -> String {
         let text = String(decoding: body.prefix(64 * 1024), as: UTF8.self).lowercased()
-        return audioFormatSubjects.contains(where: text.contains) && refusalWords.contains(where: text.contains)
+            .replacingOccurrences(of: "’", with: "'")
+            .replacingOccurrences(of: #"\\+u2019"#, with: "'", options: .regularExpression)
+            .replacingOccurrences(of: #"\\+(u[0-9a-f]{4}|.)"#, with: " ", options: .regularExpression)
+        let words = text.split { !($0.isLetter || $0.isNumber || $0 == "_" || $0 == "'") }
+            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "'")) }
+            .filter { !$0.isEmpty }
+        return " " + words.joined(separator: " ") + " "
     }
 
     /// Maps a non-200 response (body may be JSON, HTML or empty).

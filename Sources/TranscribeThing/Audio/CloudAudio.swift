@@ -12,10 +12,12 @@ enum UploadFormat: String, CaseIterable, Sendable {
     case flac
 }
 
-/// A file a recording went to OpenRouter as.
+/// A file a recording went to OpenRouter as, and the generation that answered it.
 struct AudioUpload: Equatable, Sendable {
     var format: UploadFormat
     var bytes: Int
+    /// OpenRouter's id of the request that carried it (`CloudResult.generationID`): one of Parakeet's segments each.
+    var generationID: String? = nil
 }
 
 /// How a recording of any length goes to OpenRouter (pure, off the main thread). Gemini hears it in one chat request,

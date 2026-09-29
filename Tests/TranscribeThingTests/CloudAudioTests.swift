@@ -109,15 +109,17 @@ private func format(of data: Data, ext: String) throws -> (codec: AudioFormatID,
     }
 
     /// A recording History keeps goes to Gemini as its own file, byte for byte, whatever its length; it isn't encoded
-    /// a second time unless it's too big for the budget.
+    /// a second time unless it's too big for the budget. (The file here is at 24 kbps, so no encoding of the samples
+    /// at 32 kbps could pass for it.)
     @Test func historysOwnFileGoesAsItIs() throws {
         let samples = tone(10)
         let url = temporaryURL("m4a")
         defer { try? FileManager.default.removeItem(at: url) }
-        try CloudAudio.writeM4A(samples, bitRate: RecordingFile.bitRate, to: url)
+        try CloudAudio.writeM4A(samples, bitRate: 24_000, to: url)
         let stored = try Data(contentsOf: url)
         let budget = OpenRouterClient.base64Length(ofByteCount: stored.count)
 
+        #expect(try CloudAudio.m4a(samples, bitRate: RecordingFile.bitRate) != stored)
         #expect(try CloudAudio.forChat(samples, stored: url) == stored)
         #expect(try CloudAudio.forChat(samples, stored: url, budget: budget) == stored)
         let tighter = try CloudAudio.forChat(samples, stored: url, budget: budget - 4)
@@ -287,5 +289,124 @@ private func format(of data: Data, ext: String) throws -> (codec: AudioFormatID,
         let cut = TranscriptResult(text: "Hi.", engine: .geminiFlash, processingTime: 1)
         #expect(EngineCLI.usageLine(cut)
             .hasPrefix("USAGE: tokens audio ? · prompt ? · completion ? · reasoning ? · cost ?"), "a stream cut short")
+    }
+}
+
+/// What `EngineCLI` finds out about a run beyond its answer: whether an input .m4a is kept as History keeps a
+/// recording, and what OpenRouter's generation record adds to the result.
+@Suite struct UploadInputAndUsageTests {
+    /// Only an .m4a as History keeps it (AAC at 32 kbps, 16 kHz mono) goes to Gemini as it is. The rate is the one its
+    /// encoder aimed at, which even a fifth of a second says exactly.
+    @Test func anInputGoesAsItIsOnlyAtHistorysRate() throws {
+        for (seconds, bitRate) in [(3.0, RecordingFile.bitRate), (0.2, RecordingFile.bitRate), (3, 24_000), (3, 16_000)] {
+            let url = temporaryURL("m4a")
+            defer { try? FileManager.default.removeItem(at: url) }
+            try CloudAudio.writeM4A(tone(seconds), bitRate: bitRate, to: url)
+            #expect(EngineCLI.encodedBitRate(of: url) == bitRate, "\(seconds) s at \(bitRate)")
+            #expect(EngineCLI.isKeptLikeHistory(url) == (bitRate == RecordingFile.bitRate), "\(seconds) s at \(bitRate)")
+        }
+        let wav = temporaryURL("wav")
+        defer { try? FileManager.default.removeItem(at: wav) }
+        try WAVEncoder.pcm16(tone(1)).write(to: wav)
+        #expect(EngineCLI.encodedBitRate(of: wav) == nil)
+        #expect(!EngineCLI.isKeptLikeHistory(wav))
+    }
+
+    /// The decoder configuration of an MPEG-4 ES_Descriptor, as History's .m4a keeps it, and with the optional fields
+    /// its flags announce; anything short or else is nil.
+    @Test func theEncodedRateIsReadFromTheDescriptor() {
+        func bytes(_ hex: String) -> [UInt8] {
+            stride(from: 0, to: hex.count, by: 2).map {
+                UInt8(hex.dropFirst($0).prefix(2), radix: 16)!
+            }
+        }
+        let config = "0480808014" + "40" + "14" + "001800" + "00001e70" + "00007d00" + "05808080021408068080800102"
+        #expect(EngineCLI.averageBitRate(esDescriptor: bytes("0380808022" + "0000" + "00" + config)) == 32_000)
+        // dependsOn_ES_ID, a 3-byte URL and OCR_ES_Id, and a one-byte size.
+        #expect(EngineCLI.averageBitRate(esDescriptor: bytes("0330" + "0000" + "e0" + "0001" + "03616263" + "0002"
+                                                             + config)) == 32_000)
+        #expect(EngineCLI.averageBitRate(esDescriptor: bytes("0380808022" + "0000" + "00" + config.prefix(30))) == nil)
+        #expect(EngineCLI.averageBitRate(esDescriptor: bytes("0580808002" + "1408")) == nil)
+        #expect(EngineCLI.averageBitRate(esDescriptor: []) == nil)
+    }
+
+    @MainActor
+    private func makeService(_ replies: [StubURLProtocol.Reply]) -> (TranscriptionService, String) {
+        let (client, host) = StubURLProtocol.client(replies)
+        let keychain = KeychainStore.inMemory([KeychainStore.openRouterAccount: "sk-or-v1-test"])
+        let account = OpenRouterAccount(keychain: keychain, client: client, debounce: .zero)
+        return (TranscriptionService(models: .preview(states: [:]), account: account, client: client,
+                                     providerLookupDelay: .milliseconds(10)), host)
+    }
+
+    private func record(_ id: String, cost: Double, milliseconds: Double) -> StubURLProtocol.Reply {
+        StubURLProtocol.Reply(body: #"{"data":{"id":"\#(id)","api_type":"stt","model":"nvidia/parakeet-tdt-0.6b-v3","provider_name":"Together","total_cost":\#(cost),"generation_time":\#(milliseconds),"created_at":"2026-09-29T10:00:00Z"}}"#)
+    }
+
+    private let notRecorded = StubURLProtocol.Reply(status: 404, body: #"{"error":{"code":404,"message":"Generation not found"}}"#)
+
+    /// The ids of the generations looked up, in order.
+    private func lookups(_ host: String) -> [String] {
+        StubURLProtocol.registry.requests(for: host).compactMap { request in
+            request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }?
+                .queryItems?.first { $0.name == "id" }?.value
+        }
+    }
+
+    private func parakeet(segments ids: [String?], cost: Double?, provider: String? = nil) -> TranscriptResult {
+        TranscriptResult(text: "Hi.", engine: .parakeetCloud, processingTime: 1, costUSD: cost, provider: provider,
+                         generationID: ids.first ?? nil, audioSeconds: 12.5,
+                         uploads: ids.map { AudioUpload(format: .flac, bytes: 1_000, generationID: $0) })
+    }
+
+    /// A speech-to-text answer never says how long it took to generate: the record is asked even when the response
+    /// named its provider and cost.
+    @MainActor
+    @Test func theGenerationTimeIsAlwaysLookedUpForSpeech() async {
+        let (service, host) = makeService([record("gen-1", cost: 0.0009, milliseconds: 412)])
+        var result = parakeet(segments: ["gen-1"], cost: 0.0001, provider: "Together")
+        await EngineCLI.fillFromGenerationRecord(&result, service: service)
+        #expect(lookups(host) == ["gen-1"])
+        #expect(result.generationTime == 0.412)
+        #expect(result.costUSD == 0.0001 && result.provider == "Together", "what the response said stays")
+    }
+
+    /// A recording in segments asks each segment's generation and adds their times up; a cost the responses gave
+    /// stays theirs.
+    @MainActor
+    @Test func everySegmentsRecordCounts() async throws {
+        let (service, host) = makeService([record("gen-1", cost: 0.001, milliseconds: 200),
+                                           record("gen-2", cost: 0.001, milliseconds: 300),
+                                           record("gen-3", cost: 0.0005, milliseconds: 100)])
+        var result = parakeet(segments: ["gen-1", "gen-2", "gen-3"], cost: 0.003)
+        await EngineCLI.fillFromGenerationRecord(&result, service: service)
+        #expect(lookups(host) == ["gen-1", "gen-2", "gen-3"])
+        #expect(abs(try #require(result.generationTime) - 0.6) < 1e-9)
+        #expect(result.costUSD == 0.003 && result.provider == "Together")
+        #expect(EngineCLI.usageLine(result).contains("provider Together · generation gen-1 · generated in 0.600 s"))
+    }
+
+    /// When a segment's record can't be had, no sum stands for the whole recording: its time and cost stay unknown.
+    @MainActor
+    @Test func aMissingSegmentLeavesTheSumsUnknown() async {
+        let (service, host) = makeService([record("gen-1", cost: 0.001, milliseconds: 200), notRecorded, notRecorded])
+        var result = parakeet(segments: ["gen-1", "gen-2", "gen-3"], cost: nil)
+        await EngineCLI.fillFromGenerationRecord(&result, service: service)
+        #expect(lookups(host) == ["gen-1", "gen-2", "gen-2"], "asked twice, as the app does; never gen-3")
+        #expect(result.generationTime == nil && result.costUSD == nil)
+        #expect(result.provider == "Together")
+    }
+
+    /// A result that already says everything asks for nothing.
+    @MainActor
+    @Test func aCompleteResultAsksNothing() async {
+        let (service, host) = makeService([record("gen-1", cost: 1, milliseconds: 1)])
+        var result = TranscriptResult(text: "Hi.", engine: .geminiFlash, processingTime: 1, costUSD: 0.001,
+                                      provider: "Google AI Studio", generationID: "gen-1", generationTime: 1.9,
+                                      uploads: [AudioUpload(format: .m4a, bytes: 1_000, generationID: "gen-1")])
+        let before = result
+        await EngineCLI.fillFromGenerationRecord(&result, service: service)
+        #expect(lookups(host).isEmpty)
+        #expect(result == before)
     }
 }

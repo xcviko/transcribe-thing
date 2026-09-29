@@ -171,7 +171,7 @@ final class TranscriptionService {
         var result = try await client.transcribe(audio: audio, format: format.rawValue, model: model,
                                                  systemPrompt: prompt, effort: effort, maxTokens: maxTokens,
                                                  apiKey: key, timeout: engine.cloudTimeout, progress: progress)
-        result.uploads = [AudioUpload(format: format, bytes: audio.count)]
+        result.uploads = [AudioUpload(format: format, bytes: audio.count, generationID: result.generationID)]
         return result
     }
 
@@ -209,7 +209,7 @@ final class TranscriptionService {
         }.value
         var result = try await client.transcribeSpeech(audio: file.data, format: file.format.rawValue, model: model,
                                                        apiKey: key, timeout: engine.cloudTimeout)
-        result.uploads = [AudioUpload(format: file.format, bytes: file.data.count)]
+        result.uploads = [AudioUpload(format: file.format, bytes: file.data.count, generationID: result.generationID)]
         return result
     }
 

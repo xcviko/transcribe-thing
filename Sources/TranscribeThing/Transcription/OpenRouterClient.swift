@@ -165,8 +165,9 @@ final class OpenRouterClient: Sendable {
     /// (`CloudAudio.speechSegments`). The provider behind it transcribes many times faster than real time, and a size
     /// OpenRouter refuses comes back as a 413 (`recordingTooLarge`). Not streamed (the endpoint can't), with the same
     /// retry policy as `transcribe(audio:format:model:…)`. A refusal of the file's format
-    /// (`OpenRouterErrorMapper.refusesAudioFormat`) throws `AudioFormatRefused` instead of an `AppError`, so the
-    /// caller can send the audio again as WAV.
+    /// (`OpenRouterErrorMapper.refusesAudioFormat`: a 415, or a 400, 422, 500 or 502, or an error inside a 200, that
+    /// says so) throws `AudioFormatRefused` instead of an `AppError`, and isn't retried, so the caller can send the
+    /// audio again as WAV at once.
     func transcribeSpeech(audio: Data, format: String, model: String, apiKey: String,
                           timeout: TimeInterval) async throws -> CloudResult {
         let engine = Self.engine(forModel: model)
@@ -212,8 +213,9 @@ final class OpenRouterClient: Sendable {
             do {
                 result = try interpret(data)
             } catch let error as AppError {
-                // An upstream failure reported after OpenRouter committed a 200. Retried like its HTTP twin,
+                // An upstream failure reported after OpenRouter committed a 200. Retried like its HTTP twin (a 502),
                 // but only when it came back quickly: after a long wait the user already waited once.
+                if OpenRouterErrorMapper.refusesAudioFormat(status: 502, body: data) { throw refused(error) }
                 let quick = started.duration(to: .now) < Self.quickFailureWindow
                 throw AttemptFailure(error: error, retryable: quick && error.isTransientCloudFailure, retryAfter: nil)
             }

@@ -1804,17 +1804,19 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
         #expect(Self.audioFormat(body) == "m4a")
         let sent = try #require(Self.audio(body))
         #expect(String(decoding: sent[4..<8], as: UTF8.self) == "ftyp", "an MPEG-4 file")
-        #expect(result.uploads == [AudioUpload(format: .m4a, bytes: sent.count)])
+        #expect(result.uploads == [AudioUpload(format: .m4a, bytes: sent.count, generationID: "gen-1")])
         #expect(sent.count < WAVEncoder.pcm16(speech().samples).count / 5)
     }
 
-    /// A recording read back from History goes to Gemini as History's own file, byte for byte.
+    /// A recording read back from History goes to Gemini as History's own file, byte for byte: here one at 24 kbps,
+    /// which no encoding of the samples at 32 kbps could pass for.
     @Test func historysFileGoesToGeminiUnchanged() async throws {
         let (service, _, _, host) = makeServiceAccountAndHost(replies: [Fixtures.success])
         var recording = speech(seconds: 3)
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("stored-\(UUID().uuidString).m4a")
         defer { try? FileManager.default.removeItem(at: url) }
-        try CloudAudio.writeM4A(recording.samples, bitRate: RecordingFile.bitRate, to: url)
+        try CloudAudio.writeM4A(recording.samples, bitRate: 24_000, to: url)
+        #expect(try Data(contentsOf: url) != CloudAudio.m4a(recording.samples, bitRate: RecordingFile.bitRate))
         recording.aacFile = url
         let result = try await service.transcribe(recording, engine: .geminiFlash)
         let body = try #require(JSONSerialization.jsonObject(with: StubURLProtocol.registry.bodies(for: host)[0])
@@ -1836,7 +1838,8 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
         #expect(bodies.map(Self.audioFormat) == ["wav", "flac"])
         #expect(Self.audio(bodies[0]) == WAVEncoder.pcm16(recording.samples))
         #expect(try Self.audio(bodies[1]) == CloudAudio.flac(recording.samples))
-        #expect(wav.uploads == [AudioUpload(format: .wav, bytes: WAVEncoder.pcm16(recording.samples).count)])
+        #expect(wav.uploads == [AudioUpload(format: .wav, bytes: WAVEncoder.pcm16(recording.samples).count,
+                                            generationID: "gen-1")])
         #expect(flac.uploads.map(\.format) == [.flac])
     }
 

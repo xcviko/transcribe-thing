@@ -24,13 +24,13 @@ import Foundation
 /// given. Without `--prompt` Gemini gets the app's fixed prompt (`EngineID.geminiSystemPrompt`); `--prompt ""` sends
 /// only the audio.
 /// The audio file may be anything AVFoundation reads (.wav, .m4a…). A cloud model gets it as the app sends a
-/// recording: Gemini as AAC in an .m4a (an .m4a that is AAC at 16 kHz mono, as History keeps a recording, goes as it
-/// is, like History's own file), cloud Parakeet as FLAC. `--upload` (cloud models only) sends that format instead, for
-/// comparing them: WAV (16-bit), .m4a (AAC at 32 kbps) or FLAC (the WAV's samples, losslessly), all 16 kHz mono; a
-/// refusal of it fails the run instead of going again as WAV. Each run prints, after its `RUN` line, what went up
-/// (`UPLOAD:` format and bytes, per segment for Parakeet) and what the app records of it (`USAGE:` tokens, billed
-/// seconds, cost, provider, generation id, time to first token, generation and total time), asking OpenRouter's
-/// generation record for what the response left out.
+/// recording: Gemini as AAC in an .m4a (an .m4a that is AAC at 32 kbps, 16 kHz mono, as History keeps a recording,
+/// goes as it is, like History's own file), cloud Parakeet as FLAC. `--upload` (cloud models only) sends that format
+/// instead, for comparing them: WAV (16-bit), .m4a (AAC at 32 kbps) or FLAC (the WAV's samples, losslessly), all
+/// 16 kHz mono; a refusal of it fails the run instead of going again as WAV. Each run prints, after its `RUN` line,
+/// what went up (`UPLOAD:` format and bytes, per segment for Parakeet) and what the app records of it (`USAGE:`
+/// tokens, billed seconds, cost, provider, generation id, time to first token, generation and total time), asking
+/// OpenRouter's generation record (every segment's, for Parakeet) for what the response left out.
 /// `--clean-up` sends the last transcript to the clean-up model (GPT-6 Luna; `--clean-up-effort` replaces its fixed
 /// none) with the app's clean-up prompt (`CleanupModel.systemPrompt`, unless `--clean-up-prompt` replaces it) and
 /// prints the cleaned text. Only the models the app offers are accepted. Settings are in-memory: the CLI never
@@ -362,29 +362,85 @@ enum EngineCLI {
         return KeychainStore().read(KeychainStore.openRouterAccount)
     }
 
-    /// An .m4a holding AAC at 16 kHz mono, as History keeps a recording: Gemini gets it as it is, as it gets History's
-    /// own file (`Recording.aacFile`).
-    private static func isKeptLikeHistory(_ url: URL) -> Bool {
+    /// An .m4a holding AAC at 32 kbps, 16 kHz mono, as History keeps a recording (`RecordingFile`): Gemini gets it as
+    /// it is, as it gets History's own file (`Recording.aacFile`). One at another rate is encoded like any other file.
+    static func isKeptLikeHistory(_ url: URL) -> Bool {
         guard RecordingFile.isAAC(url.lastPathComponent), let file = try? AVAudioFile(forReading: url) else {
             return false
         }
         let format = file.fileFormat
         return format.streamDescription.pointee.mFormatID == kAudioFormatMPEG4AAC
             && format.sampleRate == Recording.sampleRate && format.channelCount == 1
+            && encodedBitRate(of: url) == RecordingFile.bitRate
     }
 
-    /// What the app would ask OpenRouter's generation record for (`DictationController`): the provider, the cost, and
-    /// for a chat answer the generation time, when the response left them out.
+    /// The bit rate an .m4a's AAC was encoded at (`averageBitRate(esDescriptor:)` of its magic cookie). The rate
+    /// measured over the file can't tell 24 from 32 kbps in a short one. nil when the file has no such cookie.
+    static func encodedBitRate(of url: URL) -> Int? {
+        var opened: AudioFileID?
+        guard AudioFileOpenURL(url as CFURL, .readPermission, 0, &opened) == noErr, let file = opened else { return nil }
+        defer { AudioFileClose(file) }
+        var size: UInt32 = 0
+        guard AudioFileGetPropertyInfo(file, kAudioFilePropertyMagicCookieData, &size, nil) == noErr, size > 0 else {
+            return nil
+        }
+        var cookie = [UInt8](repeating: 0, count: Int(size))
+        guard AudioFileGetProperty(file, kAudioFilePropertyMagicCookieData, &size, &cookie) == noErr else { return nil }
+        return averageBitRate(esDescriptor: Array(cookie.prefix(Int(size))))
+    }
+
+    /// The `avgBitrate` of an MPEG-4 ES_Descriptor's decoder configuration (ISO/IEC 14496-1), the cookie an .m4a
+    /// keeps its AAC's setup in: the encoder writes its target bit rate there. nil for anything else.
+    static func averageBitRate(esDescriptor bytes: [UInt8]) -> Int? {
+        var at = 0
+        /// The next `count` bytes as a big-endian number, or nil past the end.
+        func read(_ count: Int) -> Int? {
+            guard at + count <= bytes.count else { return nil }
+            defer { at += count }
+            return bytes[at..<at + count].reduce(0) { $0 << 8 | Int($1) }
+        }
+        /// A descriptor's tag, leaving `at` at its contents: its size takes 1 to 4 bytes of 7 bits each.
+        func tag() -> Int? {
+            guard let tag = read(1) else { return nil }
+            for _ in 0..<4 {
+                guard let byte = read(1) else { return nil }
+                if byte & 0x80 == 0 { break }
+            }
+            return tag
+        }
+        // ES_Descriptor: ES_ID, flags, and the fields its flags announce (dependsOn_ES_ID, URL, OCR_ES_Id).
+        guard tag() == 0x03, read(2) != nil, let flags = read(1),
+              flags & 0x80 == 0 || read(2) != nil,
+              flags & 0x40 == 0 || read(1).flatMap(read) != nil,
+              flags & 0x20 == 0 || read(2) != nil else { return nil }
+        // DecoderConfigDescriptor: object type, stream type, buffer size and maxBitrate, then avgBitrate.
+        guard tag() == 0x04, read(1) != nil, read(1) != nil, read(3) != nil, read(4) != nil else { return nil }
+        return read(4)
+    }
+
+    /// Asks OpenRouter's generation record, as the app does (`DictationController`), for what the response left out:
+    /// the provider, the cost, the generation time (which a speech-to-text answer never carries, so Parakeet's is
+    /// always asked). A recording Parakeet heard in segments asks each segment's generation, and adds up their costs
+    /// and times only when every segment's record came with its own.
     @MainActor
-    private static func fillFromGenerationRecord(_ result: inout TranscriptResult,
-                                                 service: TranscriptionService) async {
-        guard let generationID = result.generationID,
-              result.provider == nil || result.costUSD == nil || (result.usage != nil && result.generationTime == nil),
-              let details = await service.generationDetails(generationID: generationID) else { return }
-        result.provider = result.provider ?? details.provider
-        result.costUSD = result.costUSD ?? details.costUSD
-        result.generationTime = result.generationTime ?? details.generationTime
-        if let reasoning = details.reasoningTokens, result.usage?.reasoningTokens == nil {
+    static func fillFromGenerationRecord(_ result: inout TranscriptResult, service: TranscriptionService) async {
+        guard result.provider == nil || result.costUSD == nil || result.generationTime == nil else { return }
+        let ids = result.uploads.count > 1 ? result.uploads.map(\.generationID) : [result.generationID]
+        var records: [GenerationDetails] = []
+        for id in ids {
+            guard let id, let details = await service.generationDetails(generationID: id) else { break }
+            records.append(details)
+        }
+        guard let first = records.first else { return }
+        /// The sum of every segment's value, or nil when one of them is missing.
+        func total(_ values: [Double?]) -> Double? {
+            guard records.count == ids.count, !values.contains(nil) else { return nil }
+            return values.reduce(0) { $0 + ($1 ?? 0) }
+        }
+        result.provider = result.provider ?? records.lazy.compactMap(\.provider).first
+        result.costUSD = result.costUSD ?? total(records.map(\.costUSD))
+        result.generationTime = result.generationTime ?? total(records.map(\.generationTime))
+        if let reasoning = first.reasoningTokens, result.usage?.reasoningTokens == nil {
             var usage = result.usage ?? TokenUsage()
             usage.reasoningTokens = reasoning
             result.usage = usage
