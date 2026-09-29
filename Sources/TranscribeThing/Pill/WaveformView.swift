@@ -219,7 +219,7 @@ struct ProcessingWaveView: View {
     var startOffset: CGFloat = 0
     /// The dots' color: white, or the dictation's model's tint. The shimmer stays white.
     var tint: Color = .white
-    /// Slow processing fades the dots out under "Still transcribing…"; the shimmer keeps sweeping.
+    /// The token count fades the dots out and takes their place; the shimmer keeps sweeping.
     var showsDots = true
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion

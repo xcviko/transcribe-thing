@@ -25,13 +25,19 @@ struct TranscriptResult: Sendable, Equatable {
     var audioSeconds: Double? = nil
     /// The chat response's `service_tier`, when it names one (set by clean-up only; not kept in history).
     var serviceTier: String? = nil
+    /// Characters of reasoning the answer streamed (for Gemini, the summaries of its thoughts).
+    var reasoningCharacters: Int? = nil
+    /// Seconds from sending a streamed request until the first character of the answer.
+    var timeToFirstToken: TimeInterval? = nil
 
     /// Everything known about how this result came about, for its history version.
     func metadata(createdAt: Date = Date()) -> TranscriptMetadata {
         TranscriptMetadata(createdAt: createdAt, modelID: modelID, provider: provider, generationID: generationID,
                            reasoningEffort: reasoningEffort, usage: usage, costUSD: costUSD,
-                           processingTime: processingTime, generationTime: generationTime,
-                           usedSystemPrompt: usedSystemPrompt, finishReason: finishReason, audioSeconds: audioSeconds)
+                           processingTime: processingTime, timeToFirstToken: timeToFirstToken,
+                           generationTime: generationTime, usedSystemPrompt: usedSystemPrompt,
+                           finishReason: finishReason, audioSeconds: audioSeconds,
+                           reasoningCharacters: reasoningCharacters)
     }
 
     /// This result as a history version of `kind` (a transcription by its engine unless said otherwise).
@@ -63,8 +69,10 @@ final class TranscriptionService {
     /// `effort` has Gemini think at another level than its own (`EngineCLI --effort`), and `prompt` replaces its
     /// fixed `EngineID.geminiSystemPrompt` (`--prompt`; empty sends only the audio); the app never passes either.
     /// `background`: Home's work, which lets dictations have the local model first.
+    /// `progress` hears how much of a streamed answer has come (Gemini's reasoning and text); Parakeet has none.
     func transcribe(_ recording: Recording, engine: EngineID, effort: ReasoningEffort? = nil,
-                    prompt: String? = nil, background: Bool = false) async throws -> TranscriptResult {
+                    prompt: String? = nil, background: Bool = false,
+                    progress: (@Sendable (ChatStreamProgress) -> Void)? = nil) async throws -> TranscriptResult {
         guard !engine.isRetired else {
             throw AppError.engineFailed(engine, "\(engine.displayName) is no longer offered.")
         }
@@ -76,7 +84,8 @@ final class TranscriptionService {
             } else {
                 let effort = effort ?? engine.reasoningEffort
                 let prompt = engine.cloudAPI == .chatCompletions ? (prompt ?? EngineID.geminiSystemPrompt) : ""
-                let cloud = try await transcribeCloud(recording.samples, engine: engine, effort: effort, prompt: prompt)
+                let cloud = try await transcribeCloud(recording.samples, engine: engine, effort: effort, prompt: prompt,
+                                                      progress: progress)
                 result.text = cloud.text
                 result.costUSD = cloud.costUSD
                 result.provider = cloud.provider
@@ -88,6 +97,8 @@ final class TranscriptionService {
                 result.finishReason = cloud.finishReason
                 result.generationTime = cloud.generationTime
                 result.audioSeconds = cloud.audioSeconds
+                result.reasoningCharacters = cloud.reasoningCharacters
+                result.timeToFirstToken = cloud.timeToFirstToken
             }
             result.text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
             result.processingTime = Self.seconds(started.duration(to: .now))
@@ -102,8 +113,8 @@ final class TranscriptionService {
         }
     }
 
-    private func transcribeCloud(_ samples: [Float], engine: EngineID, effort: ReasoningEffort?,
-                                 prompt: String) async throws -> CloudResult {
+    private func transcribeCloud(_ samples: [Float], engine: EngineID, effort: ReasoningEffort?, prompt: String,
+                                 progress: (@Sendable (ChatStreamProgress) -> Void)?) async throws -> CloudResult {
         guard let model = engine.openRouterModelID, let api = engine.cloudAPI else {
             throw AppError.engineFailed(engine, "No cloud model for \(engine.displayName).")
         }
@@ -115,7 +126,7 @@ final class TranscriptionService {
             switch api {
             case .chatCompletions:
                 result = try await transcribeWithChat(samples, engine: engine, model: model, key: key,
-                                                      effort: effort ?? .medium, prompt: prompt)
+                                                      effort: effort ?? .medium, prompt: prompt, progress: progress)
             case .transcriptions:
                 result = try await transcribeSpeech(samples, engine: engine, model: model, key: key)
             }
@@ -128,9 +139,11 @@ final class TranscriptionService {
     }
 
     /// Gemini: the whole recording in one request, with its system prompt, whatever its length. Past what its WAV can
-    /// carry it goes as AAC (`CloudAudio.forChat`); the answer's token budget and the wait grow with the audio.
+    /// carry it goes as AAC (`CloudAudio.forChat`); the answer's token budget grows with the audio, and it streams, so
+    /// no wait for it has to.
     private func transcribeWithChat(_ samples: [Float], engine: EngineID, model: String, key: String,
-                                    effort: ReasoningEffort, prompt: String) async throws -> CloudResult {
+                                    effort: ReasoningEffort, prompt: String,
+                                    progress: (@Sendable (ChatStreamProgress) -> Void)?) async throws -> CloudResult {
         let encoded = await Task.detached(priority: .userInitiated) { try? CloudAudio.forChat(samples) }.value
         guard let encoded else { throw AppError.engineFailed(engine, "Couldn’t compress the recording.") }
         try Task.checkCancellation()
@@ -138,7 +151,7 @@ final class TranscriptionService {
         return try await client.transcribe(audio: encoded.data, format: encoded.format, model: model,
                                            systemPrompt: prompt, effort: effort,
                                            maxTokens: OpenRouterClient.transcriptionMaxTokens(audioSeconds: seconds),
-                                           apiKey: key, timeout: engine.cloudTimeout(forAudioSeconds: seconds))
+                                           apiKey: key, timeout: engine.cloudTimeout, progress: progress)
     }
 
     /// Parakeet over the speech-to-text endpoint: a request per segment of at most 5 minutes, cut in pauses
@@ -152,9 +165,8 @@ final class TranscriptionService {
         for range in ranges {
             try Task.checkCancellation()
             let wav = await Task.detached(priority: .userInitiated) { WAVEncoder.pcm16(Array(samples[range])) }.value
-            let seconds = Double(range.count) / Recording.sampleRate
             results.append(try await client.transcribeSpeech(wav: wav, model: model, apiKey: key,
-                                                             timeout: engine.cloudTimeout(forAudioSeconds: seconds)))
+                                                             timeout: engine.cloudTimeout))
         }
         return Self.joined(results)
     }
@@ -184,10 +196,11 @@ final class TranscriptionService {
     /// after `timeout` (by default `CleanupModel.timeout(forCharacterCount:)`) with `AppError.timeout`. Throws
     /// `AppError` only, or `CancellationError`. A retired model never runs.
     /// `route` sends it to any other model or level instead (`EngineCLI --cleanup-bench`, `--clean-up-effort`), and
-    /// `prompt` replaces the fixed prompt (`--clean-up-prompt`); the app never passes either.
+    /// `prompt` replaces the fixed prompt (`--clean-up-prompt`); the app never passes either. `progress` hears how
+    /// much of the answer has streamed in.
     func cleanUp(_ transcript: String, of source: EngineID, by model: CleanupModel = .default,
-                 timeout: TimeInterval? = nil, route: CleanupRoute? = nil,
-                 prompt: String? = nil) async throws -> TranscriptResult {
+                 timeout: TimeInterval? = nil, route: CleanupRoute? = nil, prompt: String? = nil,
+                 progress: (@Sendable (ChatStreamProgress) -> Void)? = nil) async throws -> TranscriptResult {
         guard let route = route ?? model.route else {
             throw AppError.engineFailed(source, "\(model.modelName) no longer cleans up.")
         }
@@ -204,7 +217,7 @@ final class TranscriptionService {
         do {
             let cloud = try await Self.withTimeout(limit, source: source) {
                 try await client.cleanUp(transcript: transcript, route: route, systemPrompt: prompt, apiKey: key,
-                                         timeout: limit)
+                                         timeout: limit, progress: progress)
             }
             account.noteCloudSuccess()
             var result = TranscriptResult(text: cloud.text, engine: source,
@@ -219,6 +232,8 @@ final class TranscriptionService {
             result.finishReason = cloud.finishReason
             result.generationTime = cloud.generationTime
             result.serviceTier = cloud.serviceTier
+            result.reasoningCharacters = cloud.reasoningCharacters
+            result.timeToFirstToken = cloud.timeToFirstToken
             return result
         } catch let error as AppError {
             account.noteCloudFailure(error)

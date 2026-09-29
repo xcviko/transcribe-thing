@@ -234,7 +234,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
     private func makeModel() -> PillModel {
         let model = PillModel(settings: .inMemory(), levelMeter: .preview(level: 0.5))
         model.timing = PillTiming(errorHold: 0.08, hoverIn: 0.01, hoverOut: 0.01,
-                                  tooltipDelay: 0.02, controlTooltipDelay: 0.02, slowProcessing: 5)
+                                  tooltipDelay: 0.02, controlTooltipDelay: 0.02, counterDelay: 5)
         return model
     }
 
@@ -371,14 +371,57 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         try await waitUntil { !model.isHovering }
     }
 
-    @Test func slowProcessingIsFlaggedAndClearedWhenDone() async throws {
+    /// A count shows once it has been there a moment, so a quick answer never flashes a number.
+    @Test func theCounterWaitsItsDelayWhileProcessing() async throws {
         let model = makeModel()
-        model.timing.slowProcessing = 0.05
+        model.timing.counterDelay = 0.05
         model.phase = .processing
-        #expect(!model.isProcessingSlow)
-        try await waitUntil { model.isProcessingSlow }
+        model.tokenCount = PillTokenCount(phase: .thinking, tokens: 120)
+        #expect(!model.showsCounter, "not at once")
+        try await waitUntil { model.showsCounter }
+        // The count moving on, or switching to writing, keeps it up.
+        model.tokenCount = PillTokenCount(phase: .writing, tokens: 3)
+        #expect(model.showsCounter)
+    }
+
+    @Test func aCountThatGoesAwayHidesIt() async throws {
+        let model = makeModel()
+        model.timing.counterDelay = 0.05
+        model.phase = .processing
+        model.tokenCount = PillTokenCount(phase: .writing, tokens: 40)
+        try await waitUntil { model.showsCounter }
+        model.tokenCount = nil
+        #expect(!model.showsCounter)
+        // A count gone before its delay never shows.
+        model.tokenCount = PillTokenCount(phase: .writing, tokens: 40)
+        model.tokenCount = nil
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(!model.showsCounter)
+    }
+
+    @Test func leavingProcessingClearsTheCounter() async throws {
+        let model = makeModel()
+        model.timing.counterDelay = 0.05
+        model.phase = .processing
+        model.tokenCount = PillTokenCount(phase: .thinking, tokens: 2_400)
+        try await waitUntil { model.showsCounter }
         model.phase = .rest
-        #expect(!model.isProcessingSlow)
+        #expect(!model.showsCounter)
+        // Nor does a wait armed before the pill left bring it back.
+        model.phase = .processing
+        model.phase = .listening
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(!model.showsCounter)
+    }
+
+    @Test func aCountWhileRecordingDoesntArmIt() async throws {
+        let model = makeModel()
+        model.timing.counterDelay = 0.05
+        model.phase = .listening
+        model.tokenCount = PillTokenCount(phase: .writing, tokens: 900)
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(!model.showsCounter)
+        #expect(PillView(model: model).visual == .listening)
     }
 
     @Test func previewsHoldTheirPhase() async throws {
@@ -522,53 +565,64 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(PillView(model: pushToTalk).visual.size.width == PillMetrics.listeningSize.width)
     }
 
-    /// "Still transcribing…" replaces the dots inside the capsule, which widens just enough to fit it.
-    @Test func slowProcessingWidensThePillToFitItsText() {
+    /// The count takes the dots' place in a capsule wide enough for the longest it says, and no tick ever resizes it:
+    /// the number isn't part of the visual.
+    @Test func theCounterNeverResizesThePill() throws {
         let model = PillModel.preview(phase: .processing)
         #expect(PillView(model: model).visual == .processing(afterHandsFree: false))
-        let slow = PillView(model: model.previewSlowProcessing()).visual
-        #expect(slow == .processing(afterHandsFree: false, slow: true) && slow.isSlow)
-        #expect(!PillVisual.processing(afterHandsFree: false).isSlow && !PillVisual.listening.isSlow)
+        let visuals = [PillTokenCount(phase: .thinking, tokens: 1), PillTokenCount(phase: .thinking, tokens: 88_800),
+                       PillTokenCount(phase: .writing, tokens: 340)].map {
+            PillView(model: PillModel.preview(phase: .processing).previewCounter($0)).visual
+        }
+        #expect(Set(visuals.map { "\($0)" }).count == 1)
+        let counting = try #require(visuals.first)
+        #expect(counting == .processing(afterHandsFree: false, counting: true) && counting.isCounting)
+        #expect(!PillVisual.processing(afterHandsFree: false).isCounting && !PillVisual.listening.isCounting)
         // Push-to-talk height, wider than the dots' pill and still narrower than hands-free.
-        let size = slow.size
-        #expect(size == PillMetrics.slowProcessingSize && size.height == PillMetrics.listeningSize.height)
+        let size = counting.size
+        #expect(size == PillMetrics.counterSize && size.height == PillMetrics.listeningSize.height)
         #expect(size.width > PillMetrics.listeningSize.width && size.width < PillMetrics.lockedSize.width)
-        // The text and the usual padding on both sides, rounded up to whole points.
-        let text = PillMetrics.textWidth(PillMetrics.slowText, size: PillMetrics.slowFontSize, weight: .medium,
-                                         rounded: true)
-        #expect(text > 80)
-        #expect(size.width >= text + 2 * PillMetrics.slowPadding && size.width < text + 2 * PillMetrics.slowPadding + 1)
+        // Room for "~88.8k thinking", the widest it says, and its dot and padding.
+        let number = PillMetrics.textWidth("~88.8k", size: PillMetrics.counterNumberFontSize, weight: .semibold,
+                                           rounded: true, monospacedDigits: true)
+        let word = PillMetrics.textWidth("thinking", size: PillMetrics.captionFontSize, weight: .medium, rounded: true)
+        #expect(number > 25 && word > 35)
+        #expect(size.width >= 2 * PillMetrics.counterPadding + PillMetrics.counterDotSize + PillMetrics.counterDotGap
+                + number + PillMetrics.counterWordGap + word)
+        #expect(PillTokenCount(phase: .thinking, tokens: 88_849).text == "~88.8k")
         // After hands-free it's the same pill; the dots' start offset doesn't change its size.
         let afterHandsFree = PillModel.preview(phase: .locked)
         afterHandsFree.phase = .processing
-        #expect(PillView(model: afterHandsFree.previewSlowProcessing()).visual
-                == .processing(afterHandsFree: true, slow: true))
-        #expect(PillVisual.processing(afterHandsFree: true, slow: true).size == size)
-        #expect(PillVisual.processing(afterHandsFree: true, slow: true).barsOffset
+        _ = afterHandsFree.previewCounter(PillTokenCount(phase: .writing, tokens: 12))
+        #expect(PillView(model: afterHandsFree).visual == .processing(afterHandsFree: true, counting: true))
+        #expect(PillVisual.processing(afterHandsFree: true, counting: true).size == size)
+        #expect(PillVisual.processing(afterHandsFree: true, counting: true).barsOffset
                 == PillMetrics.lockedBarsOffset(hours: false))
-        // The panel's pill says it too (no floating caption above it any more).
-        #expect(PillView(model: model, context: .panel(nil)).visual.isSlow)
+        // The panel's pill counts too.
+        #expect(PillView(model: PillModel.preview(phase: .processing)
+            .previewCounter(PillTokenCount(phase: .thinking, tokens: 5)), context: .panel(nil)).visual.isCounting)
     }
 
-    @Test func slowProcessingOnlyAppliesWhileProcessing() {
-        #expect(!PillView(model: PillModel.preview(phase: .listening).previewSlowProcessing()).visual.isSlow)
-        #expect(!PillView(model: PillModel.preview(phase: .error).previewSlowProcessing()).visual.isSlow)
+    @Test func theCounterOnlyAppliesWhileProcessing() {
+        let count = PillTokenCount(phase: .thinking, tokens: 500)
+        #expect(!PillView(model: PillModel.preview(phase: .listening).previewCounter(count)).visual.isCounting)
+        #expect(!PillView(model: PillModel.preview(phase: .error).previewCounter(count)).visual.isCounting)
     }
 
-    /// Going slow keeps the pill's content (same wave, same shimmer) and its chip: only the capsule and what it says
-    /// change.
-    @Test func goingSlowKeepsTheContentAndTheModel() {
+    /// Starting to count keeps the pill's content (same wave, same shimmer) and its model: only the capsule and what
+    /// it says change.
+    @Test func countingKeepsTheContentAndTheModel() {
         var stage = PillStage()
         stage.record(.processing(afterHandsFree: false), choice: .gemini)
-        let slow = PillVisual.processing(afterHandsFree: false, slow: true)
-        let frame = stage.frame(for: slow, choice: .gemini)
-        #expect(frame == PillStage.Frame(capsule: slow, content: slow, exit: 0, morph: 0, collapsed: false,
+        let counting = PillVisual.processing(afterHandsFree: false, counting: true)
+        let frame = stage.frame(for: counting, choice: .gemini)
+        #expect(frame == PillStage.Frame(capsule: counting, content: counting, exit: 0, morph: 0, collapsed: false,
                                          choice: .gemini))
         #expect(frame.content.content == PillVisual.processing(afterHandsFree: false).content)
-        stage.record(slow, choice: .gemini)
-        // Leaving, the wide pill exits whole, chip and text included.
+        stage.record(counting, choice: .gemini)
+        // Leaving, the wide pill exits whole, its count and tint included.
         let exiting = stage.frame(for: .hidden)
-        #expect(exiting.capsule == slow && exiting.content == slow && exiting.choice == .gemini)
+        #expect(exiting.capsule == counting && exiting.content == counting && exiting.choice == .gemini)
     }
 
     @Test func helloBloomsToListeningSize() {
@@ -580,6 +634,131 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         // A real dictation takes over from the hello.
         model.phase = .listening
         #expect(PillView(model: model, context: .panel(nil)).visual == .listening)
+    }
+}
+
+// MARK: - Live count
+
+@Suite struct TokenEstimateTests {
+    /// A version by `modelID` that thought `reasoningTokens` for `reasoningCharacters` of summary, and wrote
+    /// `outputTokens` for `text`.
+    private func version(_ modelID: String, reasoningTokens: Int? = nil, reasoningCharacters: Int? = nil,
+                         outputTokens: Int? = nil, text: String = "") -> TranscriptVersion {
+        let usage = TokenUsage(completionTokens: (reasoningTokens ?? 0) + (outputTokens ?? 0),
+                               reasoningTokens: reasoningTokens)
+        return TranscriptVersion(kind: .transcription(.geminiFlash), text: text,
+                                 metadata: TranscriptMetadata(modelID: modelID, usage: usage,
+                                                              reasoningCharacters: reasoningCharacters))
+    }
+
+    private func entry(_ versions: TranscriptVersion...) -> TranscriptEntry {
+        TranscriptEntry(engine: .geminiFlash, audioDuration: 5, voicedSeconds: 4, versions: versions)
+    }
+
+    private static let gemini = "google/gemini-3.8-flash"
+
+    @Test func withoutHistoryReasoningCountsAsVisibleText() {
+        let estimate = TokenEstimate.learned(from: [], modelID: Self.gemini)
+        #expect(estimate == TokenEstimate())
+        #expect(estimate.count(for: ChatStreamProgress(reasoningCharacters: 800))
+                == PillTokenCount(phase: .thinking, tokens: 200))
+        #expect(estimate.count(for: ChatStreamProgress(outputCharacters: 1_000))
+                == PillTokenCount(phase: .writing, tokens: 400))
+        #expect(TokenEstimate.learned(from: [entry(version(Self.gemini, reasoningTokens: 900, reasoningCharacters: 90))],
+                                      modelID: nil) == TokenEstimate(), "the local model streams nothing")
+    }
+
+    /// Gemini streams summaries far shorter than its thinking: past versions say by how much, the median of them.
+    @Test func pastVersionsCalibrateTheEstimate() {
+        let entries = [
+            entry(version(Self.gemini, reasoningTokens: 17_700, reasoningCharacters: 1_770, outputTokens: 200,
+                          text: String(repeating: "a", count: 400))),
+            entry(version(Self.gemini, reasoningTokens: 3_000, reasoningCharacters: 1_000, outputTokens: 300,
+                          text: String(repeating: "b", count: 1_000))),
+            entry(version(Self.gemini, reasoningTokens: 8_000, reasoningCharacters: 1_000, outputTokens: 100,
+                          text: String(repeating: "c", count: 100))),
+        ]
+        let estimate = TokenEstimate.learned(from: entries, modelID: Self.gemini)
+        #expect(estimate.reasoningPerCharacter == 8, "median of 10, 3 and 8")
+        #expect(estimate.outputPerCharacter == 0.5, "median of 0.5, 0.3 and 1")
+        #expect(estimate.count(for: ChatStreamProgress(reasoningCharacters: 150))
+                == PillTokenCount(phase: .thinking, tokens: 1_200))
+        // An even number of samples takes the middle two.
+        let two = TokenEstimate.learned(from: Array(entries.prefix(2)), modelID: Self.gemini)
+        #expect(two.reasoningPerCharacter == 6.5)
+    }
+
+    /// Only the same model calibrates, whether OpenRouter named it with a date or not; at most the newest 20
+    /// versions.
+    @Test func onlyTheSameModelCalibrates() {
+        let luna = version("openai/gpt-6-luna-20260922", outputTokens: 50, text: String(repeating: "a", count: 100))
+        let gemini = version(Self.gemini + "-20260901", reasoningTokens: 5_000, reasoningCharacters: 1_000)
+        let estimate = TokenEstimate.learned(from: [entry(luna), entry(gemini)], modelID: "openai/gpt-6-luna")
+        #expect(estimate.outputPerCharacter == 0.5)
+        #expect(estimate.reasoningPerCharacter == TokenEstimate().reasoningPerCharacter)
+        #expect(TokenEstimate.learned(from: [entry(luna), entry(gemini)], modelID: Self.gemini).reasoningPerCharacter == 5)
+        // The newest 20 decide: 20 at ratio 2, then older ones at 10.
+        let recent = (0..<20).map { _ in entry(version(Self.gemini, reasoningTokens: 200, reasoningCharacters: 100)) }
+        let older = (0..<30).map { _ in entry(version(Self.gemini, reasoningTokens: 1_000, reasoningCharacters: 100)) }
+        #expect(TokenEstimate.learned(from: recent + older, modelID: Self.gemini).reasoningPerCharacter == 2)
+    }
+
+    @Test func versionsWithoutCountsAreIgnored() {
+        let entries = [
+            entry(version(Self.gemini)),
+            entry(version(Self.gemini, reasoningTokens: 9_000)),
+            entry(version(Self.gemini, reasoningTokens: 0, reasoningCharacters: 400)),
+            entry(version(Self.gemini, outputTokens: 50)),
+            entry(version(Self.gemini, reasoningTokens: 4_000, reasoningCharacters: 1_000)),
+        ]
+        let estimate = TokenEstimate.learned(from: entries, modelID: Self.gemini)
+        #expect(estimate.reasoningPerCharacter == 4, "only the version with both counts")
+        #expect(estimate.outputPerCharacter == TokenEstimate().outputPerCharacter, "no text to divide by")
+    }
+
+    @Test func outliersAreClamped() {
+        let huge = TokenEstimate.learned(from: [entry(version(Self.gemini, reasoningTokens: 90_000, reasoningCharacters: 3))],
+                                         modelID: Self.gemini)
+        #expect(huge.reasoningPerCharacter == 20)
+        let tiny = TokenEstimate.learned(from: [entry(version(Self.gemini, outputTokens: 1,
+                                                              text: String(repeating: "a", count: 1_000)))],
+                                         modelID: Self.gemini)
+        #expect(tiny.outputPerCharacter == 0.05)
+    }
+
+    @Test func countIsNilWithoutCharacters() {
+        #expect(TokenEstimate().count(for: ChatStreamProgress()) == nil)
+    }
+
+    /// Once the answer starts, the count is its writing, from its own first tokens, however long it thought.
+    @Test func writingWinsOnceOutputStarts() {
+        let count = TokenEstimate().count(for: ChatStreamProgress(reasoningCharacters: 70_000, outputCharacters: 30))
+        #expect(count == PillTokenCount(phase: .writing, tokens: 12))
+    }
+
+    @Test func everyCharacterCountsAtLeastOneToken() {
+        let sparse = TokenEstimate(reasoningPerCharacter: 0.05, outputPerCharacter: 0.05)
+        #expect(sparse.count(for: ChatStreamProgress(reasoningCharacters: 1)) == PillTokenCount(phase: .thinking, tokens: 1))
+        #expect(sparse.count(for: ChatStreamProgress(outputCharacters: 2)) == PillTokenCount(phase: .writing, tokens: 1))
+    }
+}
+
+@Suite struct PillTokenCountTests {
+    @Test func theCountFormatsCalmly() {
+        let texts = [7, 643, 1_249, 17_700, 123_456].map { PillTokenCount(phase: .thinking, tokens: $0).text }
+        #expect(texts == ["~7", "~640", "~1.2k", "~17.7k", "~123k"])
+        #expect(PillTokenCount(phase: .writing, tokens: 10).text == "~10")
+        #expect(PillTokenCount(phase: .writing, tokens: 999).text == "~990")
+        #expect(PillTokenCount(phase: .writing, tokens: 1_000).text == "~1k")
+        // VoiceOver says the number the pill shows.
+        #expect(PillTokenCount(phase: .thinking, tokens: 1_249).spokenDescription == "Thinking, about 1,200 tokens")
+        #expect(PillTokenCount(phase: .writing, tokens: 343).spokenDescription == "Writing, about 340 tokens")
+        #expect(PillTokenCount(phase: .thinking, tokens: 123_456).spokenDescription == "Thinking, about 123,000 tokens")
+    }
+
+    @Test func theWordSaysThinkingThenWriting() {
+        #expect(PillTokenCount(phase: .thinking, tokens: 5).word == "thinking")
+        #expect(PillTokenCount(phase: .writing, tokens: 5).word == "writing")
     }
 }
 
@@ -596,7 +775,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
     @Test(arguments: [
         [PillVisual.listening, .processing(afterHandsFree: false)],
         [PillVisual.locked(), .processing(afterHandsFree: true)],
-        [PillVisual.listening, .processing(afterHandsFree: false), .processing(afterHandsFree: false, slow: true)],
+        [PillVisual.listening, .processing(afterHandsFree: false), .processing(afterHandsFree: false, counting: true)],
         [PillVisual.listening, .error],
         [PillVisual.rest, .listening],
     ])
@@ -648,7 +827,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
     }
 
     @Test(arguments: [PillVisual.processing(afterHandsFree: false), .processing(afterHandsFree: true),
-                      .processing(afterHandsFree: false, slow: true), .processing(afterHandsFree: true, slow: true),
+                      .processing(afterHandsFree: false, counting: true), .processing(afterHandsFree: true, counting: true),
                       .error, .listening, .locked(), .locked(hours: true), .peek, .hello])
     func morphingToRestShrinksTheContentWithTheCapsule(from visual: PillVisual) {
         var stage = stage(after: [visual])

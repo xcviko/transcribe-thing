@@ -14,14 +14,9 @@ private func arguments(_ extra: String...) -> [String] {
 private func reply(_ content: String, model: String = "openai/gpt-6-luna-20260922", provider: String = "OpenAI",
                    cost: Double = 0.00004, reasoning: Int = 0, tier: String = "default",
                    finish: String = "stop") -> StubURLProtocol.Reply {
-    let escaped = content.replacingOccurrences(of: "\"", with: "\\\"").replacingOccurrences(of: "\n", with: "\\n")
-    return StubURLProtocol.Reply(body: #"""
-    {"id":"gen-b","model":"\#(model)","provider":"\#(provider)","service_tier":"\#(tier)",
-     "choices":[{"finish_reason":"\#(finish)","message":{"content":"\#(escaped)"}}],
-     "usage":{"prompt_tokens":300,"completion_tokens":\#(reasoning + 20),"total_tokens":\#(reasoning + 320),"cost":\#(cost),
-              "completion_tokens_details":{"reasoning_tokens":\#(reasoning)}},
-     "openrouter_metadata":{"generation_time":640}}
-    """#)
+    .stream(SSE.answer(content, finish: finish, id: "gen-b", model: model, provider: provider, serviceTier: tier,
+                       usage: #"{"prompt_tokens":300,"completion_tokens":\#(reasoning + 20),"total_tokens":\#(reasoning + 320),"cost":\#(cost),"completion_tokens_details":{"reasoning_tokens":\#(reasoning)}}"#,
+                       generationTime: 640))
 }
 
 private func version(_ kind: TranscriptVersionKind, _ text: String,

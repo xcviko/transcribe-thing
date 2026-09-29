@@ -131,6 +131,36 @@ import Testing
         #expect(decoded.text == "gemini text")
     }
 
+    /// A streamed version keeps how much of its thinking it showed and when it started writing; files from before
+    /// streaming, or with a value this build can't read, still load.
+    @Test func reasoningCharactersAreKeptInHistory() throws {
+        var metadata = gemini.metadata
+        metadata.reasoningCharacters = 2_345
+        metadata.timeToFirstToken = 61.25
+        var entry = TranscriptEntry(text: "parakeet text", engine: .parakeet, audioDuration: 3, voicedSeconds: 2)
+        entry.addVersion(TranscriptVersion(kind: .transcription(.geminiFlash), text: "gemini text", metadata: metadata))
+        let decoded = try roundTrip(entry)
+        #expect(decoded.version(.transcription(.geminiFlash))?.metadata == metadata)
+        #expect(decoded.currentVersion?.metadata.reasoningCharacters == 2_345)
+        #expect(decoded.currentVersion?.metadata.timeToFirstToken == 61.25)
+
+        let id = UUID().uuidString
+        let old = try decode("""
+        {"audioDuration":4.5,"createdAt":"2026-09-20T10:00:00Z","engine":"geminiFlash","id":"\(id)","status":"success",
+         "voicedSeconds":3,"currentVersion":"geminiFlash",
+         "versions":[{"kind":"geminiFlash","text":"hi","metadata":{"createdAt":"2026-09-20T10:00:00Z","costUSD":0.01}}]}
+        """)
+        #expect(old.currentVersion?.metadata.reasoningCharacters == nil)
+        #expect(old.currentVersion?.metadata.costUSD == 0.01)
+        let odd = try decode("""
+        {"audioDuration":4.5,"createdAt":"2026-09-20T10:00:00Z","engine":"geminiFlash","id":"\(id)","status":"success",
+         "voicedSeconds":3,"currentVersion":"geminiFlash",
+         "versions":[{"kind":"geminiFlash","text":"hi","metadata":{"createdAt":"2026-09-20T10:00:00Z","reasoningCharacters":"lots","costUSD":0.01}}]}
+        """)
+        #expect(odd.currentVersion?.text == "hi" && odd.currentVersion?.metadata.reasoningCharacters == nil)
+        #expect(odd.currentVersion?.metadata.costUSD == 0.01, "only the field it can't read is dropped")
+    }
+
     @Test func theFlatFieldsStayReadableForOlderBuilds() throws {
         var entry = TranscriptEntry(text: "raw", engine: .parakeet, audioDuration: 3, voicedSeconds: 2)
         entry.addVersion(TranscriptVersion(kind: .cleanup(of: .parakeet, by: .geminiFlashLite), text: "Clean.",

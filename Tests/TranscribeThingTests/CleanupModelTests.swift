@@ -6,11 +6,8 @@ import Testing
 // carries, and the dictation and History clean-ups Luna makes.
 
 private func lunaReply(_ content: String) -> StubURLProtocol.Reply {
-    StubURLProtocol.Reply(body: #"""
-    {"id":"gen-luna","model":"openai/gpt-6-luna","provider":"OpenAI","service_tier":"default",
-     "choices":[{"finish_reason":"stop","message":{"content":"\#(content)"}}],
-     "usage":{"prompt_tokens":400,"completion_tokens":20,"total_tokens":420,"cost":0.00006}}
-    """#)
+    .stream(SSE.answer(content, id: "gen-luna", model: "openai/gpt-6-luna", provider: "OpenAI", serviceTier: "default",
+                       usage: #"{"prompt_tokens":400,"completion_tokens":20,"total_tokens":420,"cost":0.00006}"#))
 }
 
 private func body(_ request: OpenRouterChatRequest) throws -> [String: Any] {

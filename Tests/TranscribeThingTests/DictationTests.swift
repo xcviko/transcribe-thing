@@ -1284,15 +1284,18 @@ final class FakeRecorder: DictationRecorder {
         #expect(h.pill.shakeCount == 0)
     }
 
-    /// An fn tap or an fn combo while a job is in flight doesn't touch the processing pill: not its width, not
-    /// "Still transcribing…" and its timer. A real hold takes over once it commits.
+    /// An fn tap or an fn combo while a job is in flight doesn't touch the processing pill: not its width, not its
+    /// count. A real hold takes over once it commits.
     @Test func pressesThatDontCommitLeaveTheProcessingPillAlone() async throws {
-        let h = Self.make()
+        let h = Self.make(keyStatus: .valid(KeyInfo()))
         h.settings.doublePressForHandsFree = true
+        h.settings.lineup.main = .gemini
         h.controller.runsTimers = false
-        h.pill.timing.slowProcessing = 0.05
+        h.pill.timing.counterDelay = 0.05
         var release = false
-        h.controller.transcribeOverride = { _, engine in
+        var jobID: UUID?
+        h.controller.transcribeOverride = { recording, engine in
+            jobID = recording.id
             while !release { try await Task.sleep(for: .milliseconds(5)) }
             return TranscriptResult(text: "dictated", engine: engine, processingTime: 0.1)
         }
@@ -1304,7 +1307,10 @@ final class FakeRecorder: DictationRecorder {
         h.controller.send(.pillStop)
         #expect(h.pill.visiblePhase == .processing)
         #expect(h.pill.processingOrigin == .locked, "its dots start where the hands-free bars stood")
-        try await waitUntil { h.pill.isProcessingSlow }
+        try await waitUntil { jobID != nil }
+        h.controller.streamed(ChatStreamProgress(reasoningCharacters: 4_000), for: try #require(jobID))
+        try await waitUntil { h.pill.showsCounter }
+        let count = h.pill.tokenCount
 
         var phases: [PillPhase] = []
         h.pill.onVisiblePhaseChange = { phases.append(h.pill.visiblePhase) }
@@ -1318,13 +1324,15 @@ final class FakeRecorder: DictationRecorder {
         h.controller.handle(.pttInterrupted)
         #expect(phases.isEmpty, "the processing pill never moved")
         #expect(h.pill.processingOrigin == .locked)
-        #expect(h.pill.isProcessingSlow)
+        #expect(h.pill.showsCounter && h.pill.tokenCount == count)
 
         now = 107
         h.controller.handle(.pttDown)
         #expect(h.pill.visiblePhase == .processing, "until the press commits")
+        #expect(h.pill.showsCounter)
         h.controller.send(.timer(.arming))
         #expect(h.pill.visiblePhase == .listening)
+        #expect(h.pill.tokenCount == nil && !h.pill.showsCounter, "a recording shows no count")
         h.controller.handle(.cancel)
         release = true
         try await waitUntil { h.controller.machine.activeJobs == 0 }
@@ -1691,6 +1699,154 @@ final class FakeRecorder: DictationRecorder {
         let dropped = Notice.shortcutUnavailable(accessibility: .granted, likelyStale: false, shortcut: "fn")
         #expect(dropped.body?.contains("stopped sending key presses") == true)
         #expect(dropped.actions.first?.title == "Open Settings")
+    }
+}
+
+// MARK: - The pill's live count
+
+/// A streamed answer's count reaches the processing pill through `streamed(_:for:)`, the progress every dictation
+/// on a streamed model reports: the newest dictation's, only while it's under way, and never for Home's work.
+@MainActor
+@Suite(.serialized) struct StreamingPillTests {
+    private typealias H = DictationControllerTests
+
+    /// Holds a job's transcription (or clean-up) until opened.
+    @MainActor private final class Gate {
+        var isOpen = false
+        func wait() async throws { while !isOpen { try await Task.sleep(for: .milliseconds(5)) } }
+    }
+
+    private func harness(persistsHistory: Bool = false) -> H.Harness {
+        let h = H.make(keyStatus: .valid(KeyInfo()), persistsHistory: persistsHistory)
+        h.pill.timing.counterDelay = 0.05
+        h.controller.insertOverride = { _, _ in .pasted }
+        return h
+    }
+
+    private func hold(_ h: H.Harness, _ gate: Gate) {
+        h.controller.transcribeOverride = { _, engine in
+            try await gate.wait()
+            return TranscriptResult(text: "dictated", engine: engine, processingTime: 0.1)
+        }
+    }
+
+    @Test func aGeminiJobsCountReachesThePill() async throws {
+        let h = harness()
+        let gate = Gate()
+        hold(h, gate)
+        let r = H.recording()
+        h.controller.enqueue(r, engine: .geminiFlash, targetPID: nil)
+        #expect(h.pill.phase == .processing && h.pill.tokenCount == nil, "nothing to count before the stream starts")
+        // No history yet: the visible text, about 4 characters a token.
+        h.controller.streamed(ChatStreamProgress(reasoningCharacters: 800), for: r.id)
+        #expect(h.pill.tokenCount == PillTokenCount(phase: .thinking, tokens: 200))
+        #expect(h.pill.tokenCount.map { "\($0.text) \($0.word)" } == "~200 thinking")
+        try await waitUntil { h.pill.showsCounter }
+        #expect(PillView(model: h.pill).visual == .processing(afterHandsFree: false, counting: true))
+        // The answer starts: writing, counted from its own first tokens.
+        h.controller.streamed(ChatStreamProgress(reasoningCharacters: 900, outputCharacters: 25), for: r.id)
+        #expect(h.pill.tokenCount == PillTokenCount(phase: .writing, tokens: 10))
+        #expect(h.pill.showsCounter)
+        gate.isOpen = true
+        try await waitUntil { h.controller.machine.activeJobs == 0 }
+        #expect(h.pill.tokenCount == nil && !h.pill.showsCounter)
+    }
+
+    @Test func aParakeetJobHasNoCount() async throws {
+        let h = harness()
+        let gate = Gate()
+        hold(h, gate)
+        for engine in [EngineID.parakeet, .parakeetCloud] {
+            let r = H.recording()
+            h.controller.enqueue(r, engine: engine, targetPID: nil)
+            h.controller.streamed(ChatStreamProgress(reasoningCharacters: 800, outputCharacters: 80), for: r.id)
+            #expect(h.pill.phase == .processing && h.pill.tokenCount == nil, "\(engine): no tokens, only the dots")
+        }
+        gate.isOpen = true
+        try await waitUntil { h.controller.machine.activeJobs == 0 }
+    }
+
+    /// On clean-up, Parakeet's part has nothing to count; GPT-6 Luna's answer does, calibrated by its own history.
+    @Test func aCleanupJobCountsOnlyItsWriting() async throws {
+        let h = harness()
+        // Luna wrote 100 characters for 50 tokens before; Gemini's ratio must not leak into it.
+        let raw = TranscriptResult(text: "raw", engine: .parakeet, processingTime: 1)
+        var luna = TranscriptResult(text: String(repeating: "a", count: 100), engine: .parakeet, processingTime: 1)
+        luna.modelID = "openai/gpt-6-luna-20260922"
+        luna.usage = TokenUsage(completionTokens: 50, reasoningTokens: 0)
+        var gemini = TranscriptResult(text: String(repeating: "b", count: 100), engine: .geminiFlash, processingTime: 1)
+        gemini.modelID = "google/gemini-3.8-flash"
+        gemini.usage = TokenUsage(completionTokens: 900, reasoningTokens: 0)
+        h.history.upsert(TranscriptEntry(engine: .parakeet, audioDuration: 5, voicedSeconds: 4,
+                                         versions: [raw.version(), luna.version(.cleanup(of: .parakeet, by: .gpt6Luna))]))
+        h.history.upsert(TranscriptEntry(engine: .geminiFlash, audioDuration: 5, voicedSeconds: 4,
+                                         versions: [gemini.version()]))
+        let transcription = Gate(), cleanup = Gate()
+        hold(h, transcription)
+        h.controller.cleanupOverride = { text, source in
+            try await cleanup.wait()
+            return TranscriptResult(text: "Dictated.", engine: source, processingTime: 0.2)
+        }
+        let r = H.recording()
+        h.controller.enqueue(r, engine: .parakeet, targetPID: nil, cleansUp: true)
+        h.controller.streamed(ChatStreamProgress(outputCharacters: 40), for: r.id)
+        #expect(h.pill.tokenCount == nil, "Parakeet streams nothing")
+        transcription.isOpen = true
+        try await waitUntil { h.controller.runningVersions[r.id] == .cleanup(of: .parakeet, by: .gpt6Luna) }
+        #expect(h.pill.tokenCount == nil, "the clean-up starts from nothing")
+        h.controller.streamed(ChatStreamProgress(outputCharacters: 40), for: r.id)
+        #expect(h.pill.tokenCount == PillTokenCount(phase: .writing, tokens: 20), "Luna's half a token a character")
+        #expect(h.pill.sessionModel == .cleanup)
+        cleanup.isOpen = true
+        try await waitUntil { h.controller.machine.activeJobs == 0 }
+        #expect(h.pill.tokenCount == nil)
+    }
+
+    /// With several dictations in flight the pill speaks for the newest, its count as its tint.
+    @Test func theCountFollowsTheNewestJob() async throws {
+        let h = harness()
+        let gate = Gate()
+        hold(h, gate)
+        let older = H.recording(), newer = H.recording()
+        h.controller.enqueue(older, engine: .geminiFlash, targetPID: nil)
+        h.controller.enqueue(newer, engine: .geminiFlash, targetPID: nil)
+        h.controller.streamed(ChatStreamProgress(reasoningCharacters: 4_000), for: older.id)
+        #expect(h.pill.tokenCount == nil, "the newest hasn't streamed yet")
+        h.controller.streamed(ChatStreamProgress(reasoningCharacters: 40), for: newer.id)
+        #expect(h.pill.tokenCount == PillTokenCount(phase: .thinking, tokens: 10))
+        h.controller.streamed(ChatStreamProgress(reasoningCharacters: 8_000), for: older.id)
+        #expect(h.pill.tokenCount == PillTokenCount(phase: .thinking, tokens: 10))
+        gate.isOpen = true
+        try await waitUntil { h.controller.machine.activeJobs == 0 }
+    }
+
+    @Test func progressAfterTheTextLandsIsIgnored() async throws {
+        let h = harness()
+        let r = H.recording()
+        h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "dictated", engine: engine, processingTime: 0.1) }
+        h.controller.enqueue(r, engine: .geminiFlash, targetPID: nil)
+        try await waitUntil { h.controller.machine.activeJobs == 0 }
+        h.controller.streamed(ChatStreamProgress(reasoningCharacters: 800, outputCharacters: 80), for: r.id)
+        #expect(h.pill.tokenCount == nil && h.pill.phase == .rest)
+    }
+
+    /// Transcribe With from Home runs beside dictations and never reaches the pill: nor does its stream.
+    @Test func homeWorkNeverCountsInThePill() async throws {
+        let h = harness(persistsHistory: true)
+        defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
+        h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "parakeet text", engine: engine, processingTime: 0.1) }
+        let r = H.recording()
+        h.controller.enqueue(r, engine: .parakeet, targetPID: nil)
+        try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id) != nil }
+        let gate = Gate()
+        hold(h, gate)
+        h.controller.retry(try #require(h.history.entry(id: r.id)), with: .geminiFlash)
+        #expect(h.controller.homeWork[r.id] == .transcription(.geminiFlash))
+        h.controller.streamed(ChatStreamProgress(reasoningCharacters: 800), for: r.id)
+        #expect(h.pill.tokenCount == nil && h.pill.phase == .rest)
+        gate.isOpen = true
+        try await waitUntil { h.controller.homeWork.isEmpty }
+        #expect(h.pill.tokenCount == nil)
     }
 }
 

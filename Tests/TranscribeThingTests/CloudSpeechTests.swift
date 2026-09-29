@@ -120,7 +120,7 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
             #expect(engine.cloudAPI == .transcriptions)
             #expect(engine.badges == ["Cloud"])
             #expect(engine.approxDownloadBytes == nil)
-            #expect(engine.cloudTimeout(forAudioSeconds: 300) == 180, "per segment of at most 5 minutes")
+            #expect(engine.cloudTimeout == 180, "per segment of at most 5 minutes")
             #expect(engine.localCounterpart?.cloudCounterpart == engine)
             #expect(OpenRouterClient.engine(forModel: engine.openRouterModelID!) == engine)
         }
@@ -133,18 +133,18 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         #expect(NSImage(systemSymbolName: engine.symbolName, accessibilityDescription: nil) != nil)
     }
 
-    /// A non-streaming answer comes all at once, so Gemini's wait grows with what it hears: 17 minutes for an hour.
-    @Test func geminisTimeoutGrowsWithTheAudio() {
-        #expect(EngineID.geminiFlash.cloudTimeout(forAudioSeconds: 60) == 135)
-        #expect(EngineID.geminiFlash.cloudTimeout(forAudioSeconds: 3600) == 17 * 60)
-        #expect(EngineID.parakeetCloud.cloudTimeout(forAudioSeconds: 3600) == 180)
-        #expect(EngineID.parakeet.cloudTimeout(forAudioSeconds: 3600) == 0)
+    /// Gemini's answer streams, so its timeout is a stall one, the same for any length of audio: two minutes without a
+    /// byte (OpenRouter's comments keep a busy model's connection alive).
+    @Test func geminisTimeoutIsAStallTimeout() {
+        #expect(EngineID.geminiFlash.cloudTimeout == 120)
+        #expect(EngineID.parakeetCloud.cloudTimeout == 180)
+        #expect(EngineID.parakeet.cloudTimeout == 0)
     }
 
     @Test func cloudSessionTimeouts() {
         let config = URLSession.openRouterCloud.configuration
         #expect(config.timeoutIntervalForRequest == 180)
-        #expect(config.timeoutIntervalForResource == 10_800, "a backstop: an hour of Gemini waits 17 minutes")
+        #expect(config.timeoutIntervalForResource == 10_800, "a whole request, however long its answer streams")
     }
 }
 

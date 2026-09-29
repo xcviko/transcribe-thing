@@ -165,8 +165,7 @@ private let historyFile = #"""
         }
         try storeOldSettings(defaults, switchEngines: ["geminiFlash", "geminiPro"])
         _ = load(defaults)
-        let replies = [StubURLProtocol.Reply(body: #"{"choices":[{"finish_reason":"stop","message":{"content":"Hallo."}}]}"#),
-                       StubURLProtocol.Reply(body: #"{"choices":[{"finish_reason":"stop","message":{"content":"Hallo!"}}]}"#)]
+        let replies = [StubURLProtocol.Reply.stream(SSE.answer("Hallo.")), StubURLProtocol.Reply.stream(SSE.answer("Hallo!"))]
         let (client, host) = StubURLProtocol.client(replies)
         let keychain = KeychainStore.inMemory([KeychainStore.openRouterAccount: "sk-or-v1-test"])
         let account = OpenRouterAccount(keychain: keychain, client: client, debounce: .zero)
@@ -180,7 +179,7 @@ private let historyFile = #"""
         }
         #expect(bodies.map { $0["model"] as? String } == ["google/gemini-3.8-flash", "openai/gpt-6-luna"])
         #expect(bodies.map { $0["reasoning"] as? [String: AnyHashable] }
-                == [["effort": "medium", "exclude": true], ["effort": "none", "exclude": true]])
+                == [["effort": "medium", "exclude": false], ["effort": "none", "exclude": true]])
         #expect((bodies[1]["provider"] as? [String: Any])?["only"] as? [String] == ["openai"])
     }
 }
@@ -190,7 +189,7 @@ private let historyFile = #"""
 @MainActor
 @Suite struct RetiredModelRunTests {
     @Test func gemini31ProNeverRuns() async throws {
-        let (client, host) = StubURLProtocol.client([StubURLProtocol.Reply(body: #"{"choices":[]}"#)])
+        let (client, host) = StubURLProtocol.client([StubURLProtocol.Reply.stream(SSE.answer("Hallo."))])
         let keychain = KeychainStore.inMemory([KeychainStore.openRouterAccount: "sk-or-v1-test"])
         let account = OpenRouterAccount(keychain: keychain, client: client, debounce: .zero)
         let service = TranscriptionService(models: ModelStore.preview(states: [:]), account: account, client: client)

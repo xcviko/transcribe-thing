@@ -1,7 +1,8 @@
 import Foundation
 
-// Wire formats for OpenRouter's chat completions, transcription, generation and key endpoints, and the mapping of every documented
-// failure shape to `AppError`. Pure and synchronous so tests can drive them with canned bodies.
+// Wire formats for OpenRouter's chat completions (streamed), transcription, generation and key endpoints, and the mapping
+// of every documented failure shape to `AppError`. Pure and synchronous so tests can drive them with canned bodies and
+// streams.
 
 // MARK: Request
 
@@ -34,10 +35,12 @@ struct OpenRouterChatRequest: Encodable, Equatable {
         case maxTokens = "max_tokens"
     }
 
-    /// Gemini via Google AI Studio only, thinking at `effort` (the model's fixed level, `EngineID.reasoningEffort`)
-    /// with the reasoning text excluded, no temperature (Google recommends the default for Gemini 3). The system
-    /// message exists only for a non-empty prompt, and the user message carries ONLY the audio, in `format` ("wav",
-    /// "m4a"): no text part, ever. `maxTokens` grows with the audio (`OpenRouterClient.transcriptionMaxTokens`).
+    /// Gemini via Google AI Studio only, streamed, thinking at `effort` (the model's fixed level,
+    /// `EngineID.reasoningEffort`) with its reasoning included: the summaries of its thoughts stream ahead of the
+    /// transcript, so the pill can count them (the bill is the same either way). No temperature (Google recommends the
+    /// default for Gemini 3). The system message exists only for a non-empty prompt, and the user message carries ONLY
+    /// the audio, in `format` ("wav", "m4a"): no text part, ever. `maxTokens` grows with the audio
+    /// (`OpenRouterClient.transcriptionMaxTokens`).
     static func transcription(model: String, audioBase64: String, format: String, systemPrompt: String?,
                               effort: ReasoningEffort, maxTokens: Int) -> OpenRouterChatRequest {
         var messages: [OpenRouterMessage] = []
@@ -48,16 +51,17 @@ struct OpenRouterChatRequest: Encodable, Equatable {
         return OpenRouterChatRequest(
             model: model,
             messages: messages,
-            reasoning: Reasoning(effort: effort.rawValue, exclude: true),
+            reasoning: Reasoning(effort: effort.rawValue, exclude: false),
             provider: .googleAIStudio,
             maxTokens: maxTokens,
-            stream: false)
+            stream: true)
     }
 
     /// Clean-up of a transcript: the prompt as the system message, then the transcript as plain user text inside
     /// `<transcript>` tags. `route` names the model, the provider it's pinned to (no fallbacks) and the effort as
-    /// sent (`CleanupModel.route`, or any model for `EngineCLI --cleanup-bench`). Reasoning excluded and no
-    /// temperature like transcription; `max_tokens` grows with the text (`CleanupModel.maxTokens`).
+    /// sent (`CleanupModel.route`, or any model for `EngineCLI --cleanup-bench`). Streamed like transcription, with no
+    /// temperature; reasoning excluded (GPT-6 Luna doesn't think at "none"). `max_tokens` grows with the text
+    /// (`CleanupModel.maxTokens`).
     static func cleanup(route: CleanupRoute, systemPrompt: String, transcript: String) -> OpenRouterChatRequest {
         var messages: [OpenRouterMessage] = []
         let prompt = systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -69,7 +73,7 @@ struct OpenRouterChatRequest: Encodable, Equatable {
             reasoning: Reasoning(effort: route.effort, exclude: true),
             provider: route.provider,
             maxTokens: CleanupModel.maxTokens(forCharacterCount: transcript.count, effort: route.budget),
-            stream: false)
+            stream: true)
     }
 
     func encoded() throws -> Data {
@@ -223,64 +227,90 @@ struct GenerationDetails: Sendable, Equatable {
     var reasoningTokens: Int?
 }
 
-struct OpenRouterChatResponse: Decodable {
+/// One event of a streamed chat completion (`chat.completion.chunk`), every field optional: most carry a delta of
+/// reasoning or text, the last one before `[DONE]` carries `usage`, and a failure after OpenRouter answered 200
+/// arrives as a chunk with an `error`.
+struct OpenRouterChatChunk: Decodable {
     let id: String?
     let model: String?
     let provider: String?
     let serviceTier: String?
-    let choices: [Choice]?
-    let usage: Usage?
-    let error: OpenRouterAPIError?
     /// Present with the `X-OpenRouter-Metadata: enabled` request header.
     let openrouterMetadata: Metadata?
+    let usage: Usage?
+    let error: OpenRouterAPIError?
+    let choices: [Choice]?
 
-    struct Metadata: Decodable {
+    struct Metadata: Decodable, Equatable {
         /// Milliseconds from dispatching the upstream request until its response body ended.
         let generationTime: Double?
         enum CodingKeys: String, CodingKey { case generationTime = "generation_time" }
     }
 
     struct Choice: Decodable {
+        let delta: Delta?
         let finishReason: String?
         let nativeFinishReason: String?
-        let message: Message?
         let error: OpenRouterAPIError?
         enum CodingKeys: String, CodingKey {
-            case message, error
+            case delta, error
             case finishReason = "finish_reason", nativeFinishReason = "native_finish_reason"
         }
     }
 
-    struct Message: Decodable {
-        let content: Content?
+    /// What one chunk adds. Lenient field by field: a part this build can't read is dropped, not the chunk's text.
+    struct Delta: Decodable {
+        let content: String?
+        /// The reasoning as plain text (for Gemini, a summary of its thoughts).
+        let reasoning: String?
+        /// The same reasoning as typed parts; only `reasoning.text` and `reasoning.summary` hold readable text.
+        let reasoningDetails: [ReasoningDetail]?
         let refusal: String?
-    }
 
-    /// A string, null, or (rarely) an array of parts.
-    enum Content: Decodable {
-        case text(String)
-        case parts([Part])
-        struct Part: Decodable { let type: String?; let text: String? }
+        enum CodingKeys: String, CodingKey {
+            case content, reasoning, refusal
+            case reasoningDetails = "reasoning_details"
+        }
 
         init(from decoder: any Decoder) throws {
-            let container = try decoder.singleValueContainer()
-            if let text = try? container.decode(String.self) {
-                self = .text(text)
-            } else {
-                self = .parts(try container.decode([Part].self))
-            }
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            content = try? c.decodeIfPresent(String.self, forKey: .content)
+            reasoning = try? c.decodeIfPresent(String.self, forKey: .reasoning)
+            reasoningDetails = try? c.decodeIfPresent([ReasoningDetail].self, forKey: .reasoningDetails)
+            refusal = try? c.decodeIfPresent(String.self, forKey: .refusal)
         }
 
-        var text: String {
-            switch self {
-            case .text(let text): text
-            case .parts(let parts): parts.compactMap(\.text).joined()
+        /// Characters of readable reasoning: `reasoning`, else the text of its details. Never an encrypted part
+        /// (`reasoning.encrypted` is an opaque blob, Gemini's thought signature).
+        var reasoningCharacters: Int {
+            if let reasoning, !reasoning.isEmpty { return reasoning.count }
+            return (reasoningDetails ?? []).reduce(0) { sum, detail in
+                switch detail.type {
+                case "reasoning.text": sum + (detail.text?.count ?? 0)
+                case "reasoning.summary": sum + (detail.summary?.count ?? 0)
+                default: sum
+                }
             }
         }
     }
 
-    /// Always included now. `completion_tokens` includes the reasoning tokens.
-    struct Usage: Decodable {
+    struct ReasoningDetail: Decodable {
+        let type: String?
+        let text: String?
+        let summary: String?
+
+        enum CodingKeys: String, CodingKey { case type, text, summary }
+
+        init(from decoder: any Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            type = try? c.decodeIfPresent(String.self, forKey: .type)
+            text = try? c.decodeIfPresent(String.self, forKey: .text)
+            summary = try? c.decodeIfPresent(String.self, forKey: .summary)
+        }
+    }
+
+    /// Sent once, in the chunk just before `[DONE]`. `completion_tokens` includes the reasoning tokens.
+    struct Usage: Decodable, Equatable {
         let promptTokens: Int?
         let completionTokens: Int?
         let totalTokens: Int?
@@ -288,12 +318,12 @@ struct OpenRouterChatResponse: Decodable {
         let isBYOK: Bool?
         let promptTokensDetails: PromptDetails?
         let completionTokensDetails: CompletionDetails?
-        struct PromptDetails: Decodable {
+        struct PromptDetails: Decodable, Equatable {
             let cachedTokens: Int?
             let audioTokens: Int?
             enum CodingKeys: String, CodingKey { case cachedTokens = "cached_tokens", audioTokens = "audio_tokens" }
         }
-        struct CompletionDetails: Decodable {
+        struct CompletionDetails: Decodable, Equatable {
             let reasoningTokens: Int?
             enum CodingKeys: String, CodingKey { case reasoningTokens = "reasoning_tokens" }
         }
@@ -312,9 +342,138 @@ struct OpenRouterChatResponse: Decodable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, model, provider, choices, usage, error
+        case id, model, provider, usage, error, choices
         case serviceTier = "service_tier"
         case openrouterMetadata = "openrouter_metadata"
+    }
+}
+
+/// How much of a streamed answer has come so far, for the pill's live count: characters of reasoning (for Gemini, the
+/// summaries of its thoughts, far shorter than the reasoning it's billed for) and of the answer itself.
+struct ChatStreamProgress: Equatable, Sendable {
+    var reasoningCharacters = 0
+    var outputCharacters = 0
+}
+
+/// A streamed chat completion put together as its lines arrive. OpenRouter sends server-sent events: each event one
+/// `data: {chunk}` line, `: OPENROUTER PROCESSING` comments while it waits (so the connection never idles out), and
+/// `data: [DONE]` last. Pure, so tests feed it canned streams.
+struct OpenRouterChatStream {
+    private(set) var text = ""
+    private(set) var refusal = ""
+    private(set) var progress = ChatStreamProgress()
+    /// The last finish reasons any chunk named (the accounting chunk repeats them).
+    private(set) var finishReason: String?
+    private(set) var nativeFinishReason: String?
+    /// From the accounting chunk just before `[DONE]`.
+    private(set) var usage: OpenRouterChatChunk.Usage?
+    private(set) var id: String?
+    private(set) var model: String?
+    private(set) var provider: String?
+    private(set) var serviceTier: String?
+    private(set) var metadata: OpenRouterChatChunk.Metadata?
+    /// A failure reported inside the stream, at the top level or in the choice.
+    private(set) var error: OpenRouterAPIError?
+    /// `data: [DONE]` arrived: the stream ended as it should.
+    private(set) var isDone = false
+    /// Some chunk carried a choice: a stream with none sent no answer at all.
+    private var sawChoice = false
+    /// A line that isn't server-sent events at all (an HTML page, say).
+    private var sawForeignLine = false
+    private let decoder = JSONDecoder()
+
+    /// Any reasoning or text has come: a failure now is no quick one to send again.
+    var hasOutput: Bool { progress.reasoningCharacters > 0 || progress.outputCharacters > 0 }
+
+    /// Takes one line of the stream; true when `progress` changed. Comments (":"), `event:` and `id:` fields and blank
+    /// lines are skipped, and so is an event this build can't read (logged without its content).
+    mutating func consume(_ line: some StringProtocol) -> Bool {
+        guard line.hasPrefix("data:") else {
+            let field = line.prefix { $0 != ":" }
+            if !line.allSatisfy(\.isWhitespace), !line.hasPrefix(":"), !Self.fields.contains(String(field)) {
+                sawForeignLine = true
+            }
+            return false
+        }
+        let payload = line.dropFirst("data:".count).trimmingCharacters(in: .whitespacesAndNewlines)
+        if payload == "[DONE]" {
+            isDone = true
+            return false
+        }
+        guard let chunk = try? decoder.decode(OpenRouterChatChunk.self, from: Data(payload.utf8)) else {
+            Log.net.warning("Skipped a streamed event that couldn’t be read (\(payload.utf8.count) bytes)")
+            return false
+        }
+        return apply(chunk)
+    }
+
+    private mutating func apply(_ chunk: OpenRouterChatChunk) -> Bool {
+        if let value = chunk.id { id = value }
+        if let value = chunk.model { model = value }
+        if let value = chunk.provider { provider = value }
+        if let value = chunk.serviceTier { serviceTier = value }
+        if let value = chunk.openrouterMetadata { metadata = value }
+        if let value = chunk.usage { usage = value }
+        if let value = chunk.error { error = value }
+        let before = progress
+        for choice in chunk.choices ?? [] {
+            sawChoice = true
+            if let value = choice.error { error = value }
+            if let value = choice.finishReason { finishReason = value }
+            if let value = choice.nativeFinishReason { nativeFinishReason = value }
+            guard let delta = choice.delta else { continue }
+            if let content = delta.content, !content.isEmpty {
+                text += content
+                progress.outputCharacters += content.count
+            }
+            if let value = delta.refusal { refusal += value }
+            progress.reasoningCharacters += delta.reasoningCharacters
+        }
+        return progress != before
+    }
+
+    /// The server-sent event fields besides `data`, which OpenRouter doesn't use.
+    private static let fields: Set<String> = ["event", "id", "retry"]
+
+    /// The answer once the stream has ended, or the failure it carried. Failures can come inside a 200: an `error`
+    /// (the only event, or after some text), or a finish reason of error / content_filter / length. A stream that
+    /// just stops, with no finish reason and no `[DONE]`, lost its connection. Empty text on a normal finish is
+    /// returned as is: Gemini heard no speech.
+    func result(engine: EngineID) throws -> CloudResult {
+        if let error { throw OpenRouterErrorMapper.map(error, status: 502, retryAfter: nil, engine: engine) }
+        guard finishReason != nil || isDone else {
+            if sawForeignLine, !sawChoice {
+                throw AppError.openRouterServer("OpenRouter sent a response \(Brand.name) couldn’t read.")
+            }
+            throw AppError.openRouterServer("The connection to OpenRouter was lost.")
+        }
+        guard sawChoice else { throw AppError.openRouterServer("OpenRouter sent no transcript.") }
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch finishReason {
+        case "error":
+            throw AppError.openRouterProviderUnavailable("Gemini stopped with an error before finishing.")
+        case "content_filter":
+            let reason = refusal.isEmpty ? nativeFinishReason.map { "Stopped by the safety filter (\($0))." } : refusal
+            throw AppError.openRouterRefused(reason ?? "Stopped by the safety filter.")
+        case "length":
+            // Out of output tokens: a repetition loop, a cut-off ending, or reasoning that used every token before
+            // any text (empty `text`). Never pasted as if whole, and never taken for silence.
+            throw AppError.openRouterTruncated(text)
+        default:
+            break
+        }
+        if text.isEmpty, !refusal.isEmpty { throw AppError.openRouterRefused(refusal) }
+        return CloudResult(text: text, provider: provider, costUSD: usage?.cost, usage: usage?.tokens,
+                           generationID: id, model: model, finishReason: finishReason,
+                           generationTime: metadata?.generationTime.map { $0 / 1000 }, serviceTier: serviceTier,
+                           reasoningCharacters: progress.reasoningCharacters > 0 ? progress.reasoningCharacters : nil)
+    }
+
+    /// A whole stream at once (tests, canned answers): every line of `sse`, then the result.
+    static func parse(_ sse: String, engine: EngineID) throws -> CloudResult {
+        var stream = OpenRouterChatStream()
+        for line in sse.split(separator: "\n", omittingEmptySubsequences: false) { _ = stream.consume(line) }
+        return try stream.result(engine: engine)
     }
 }
 
@@ -466,46 +625,6 @@ enum OpenRouterErrorMapper {
         case 400...499: return .openRouterBadRequest(message.isEmpty ? "HTTP \(status)" : message)
         default: return .openRouterServer(message.isEmpty ? "Unexpected HTTP \(status)" : "HTTP \(status): \(message)")
         }
-    }
-
-    /// Interprets a 200 response. Failures can still arrive with 200: a top-level `error`, an error in the
-    /// choice, or a finish reason of error / content_filter / length. Empty text on a normal finish is returned
-    /// as is: Gemini heard no speech.
-    static func success(data: Data, engine: EngineID) throws -> CloudResult {
-        let decoded: OpenRouterChatResponse
-        do {
-            decoded = try JSONDecoder().decode(OpenRouterChatResponse.self, from: data)
-        } catch {
-            throw AppError.openRouterServer("OpenRouter sent a response \(Brand.name) couldn’t read.")
-        }
-        if let error = decoded.error { throw map(error, status: 502, retryAfter: nil, engine: engine) }
-        guard let choice = decoded.choices?.first else {
-            throw AppError.openRouterServer("OpenRouter sent no transcript.")
-        }
-        if let error = choice.error { throw map(error, status: 502, retryAfter: nil, engine: engine) }
-
-        let text = (choice.message?.content?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        switch choice.finishReason {
-        case "error":
-            throw AppError.openRouterProviderUnavailable("Gemini stopped with an error before finishing.")
-        case "content_filter":
-            let reason = choice.message?.refusal ?? choice.nativeFinishReason.map { "Stopped by the safety filter (\($0))." }
-            throw AppError.openRouterRefused(reason ?? "Stopped by the safety filter.")
-        case "length":
-            // Out of output tokens: a repetition loop, a cut-off ending, or reasoning that used every token before
-            // any text (empty `text`). Never pasted as if whole, and never taken for silence.
-            throw AppError.openRouterTruncated(text)
-        default:
-            break
-        }
-        if text.isEmpty, let refusal = choice.message?.refusal, !refusal.isEmpty {
-            throw AppError.openRouterRefused(refusal)
-        }
-        return CloudResult(text: text, provider: decoded.provider, costUSD: decoded.usage?.cost,
-                           usage: decoded.usage?.tokens, generationID: decoded.id, model: decoded.model,
-                           finishReason: choice.finishReason,
-                           generationTime: decoded.openrouterMetadata?.generationTime.map { $0 / 1000 },
-                           serviceTier: decoded.serviceTier)
     }
 
     /// Interprets a 200 from the transcription endpoint. An error object inside it is an upstream failure, mapped

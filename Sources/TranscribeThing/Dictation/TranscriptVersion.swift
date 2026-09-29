@@ -131,7 +131,7 @@ struct TranscriptMetadata: Codable, Equatable, Sendable {
     /// Wall clock on this Mac: for a transcription from the end of recording to the text (encoding and any wait
     /// for the model included), for a clean-up the request alone.
     var processingTime: TimeInterval?
-    /// Until the first word of the answer. Only a streamed request can tell, and none is streamed today.
+    /// Until the first word of the answer, from a streamed request (Gemini, a clean-up).
     var timeToFirstToken: TimeInterval?
     /// Seconds OpenRouter measured for the generation itself.
     var generationTime: TimeInterval?
@@ -143,12 +143,16 @@ struct TranscriptMetadata: Codable, Equatable, Sendable {
     var finishReason: String?
     /// Seconds of audio billed by OpenRouter's speech endpoint.
     var audioSeconds: Double?
+    /// Characters of reasoning the answer streamed: for Gemini a summary of its thoughts, far shorter than the
+    /// reasoning it's billed for (`usage.reasoningTokens`). Their ratio calibrates the pill's live count
+    /// (`TokenEstimate`).
+    var reasoningCharacters: Int?
 
     init(createdAt: Date = Date(), modelID: String? = nil, provider: String? = nil, generationID: String? = nil,
          reasoningEffort: ReasoningEffort? = nil, usage: TokenUsage? = nil, costUSD: Double? = nil,
          processingTime: TimeInterval? = nil, timeToFirstToken: TimeInterval? = nil,
          generationTime: TimeInterval? = nil, latency: TimeInterval? = nil, usedSystemPrompt: Bool? = nil,
-         finishReason: String? = nil, audioSeconds: Double? = nil) {
+         finishReason: String? = nil, audioSeconds: Double? = nil, reasoningCharacters: Int? = nil) {
         self.createdAt = createdAt
         self.modelID = modelID
         self.provider = provider
@@ -163,6 +167,7 @@ struct TranscriptMetadata: Codable, Equatable, Sendable {
         self.usedSystemPrompt = usedSystemPrompt
         self.finishReason = finishReason
         self.audioSeconds = audioSeconds
+        self.reasoningCharacters = reasoningCharacters
     }
 
     /// Lenient: a field this build can't read (a reasoning level from a newer build) is dropped, not the version.
@@ -182,6 +187,7 @@ struct TranscriptMetadata: Codable, Equatable, Sendable {
         usedSystemPrompt = try? c.decodeIfPresent(Bool.self, forKey: .usedSystemPrompt)
         finishReason = try? c.decodeIfPresent(String.self, forKey: .finishReason)
         audioSeconds = try? c.decodeIfPresent(Double.self, forKey: .audioSeconds)
+        reasoningCharacters = try? c.decodeIfPresent(Int.self, forKey: .reasoningCharacters)
     }
 
     /// A compact line for a menu item: "76 s · $0.07 · 17.7k thinking", "0.4 s". Empty when nothing is known.

@@ -10,6 +10,8 @@ whatever app you're using. Transcription only, no rewriting.
   others you switch on, in the order set in Models.
 - **Hands-free mode**, a floating pill with a live waveform, a menu bar extra, rebindable shortcuts, soft
   sound cues, history with retry, and Undo for anything you cancel.
+- **A live count:** while Gemini or clean-up answers, the pill counts the tokens it is thinking or writing
+  ("~1.2k thinking", "~340 writing").
 
 ## Requirements
 

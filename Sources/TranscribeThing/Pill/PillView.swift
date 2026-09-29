@@ -55,28 +55,50 @@ enum PillMetrics {
     /// From the pill's top edge to the chip's.
     static let chipLift: CGFloat = chipGap + chipHeight
 
-    /// Slow processing trades the dots for this, inside the capsule.
-    static let slowText = "Still transcribing…"
-    static let slowFontSize: CGFloat = 12
-    /// The timer's rounded face, a size up so a sentence reads at a glance.
-    static let slowFont = Font.system(size: slowFontSize, weight: .medium, design: .rounded)
-    /// Between the text and the capsule's ends: the push-to-talk pill's own margin around its bars, less the
+    static let captionFontSize: CGFloat = 12
+    /// Words inside the capsule: the timer's rounded face, a size up so they read at a glance.
+    static let captionFont = Font.system(size: captionFontSize, weight: .medium, design: .rounded)
+    /// Between a sentence and the capsule's ends: the push-to-talk pill's own margin around its bars, less the
     /// capsule's rounding the text doesn't need.
-    static let slowPadding: CGFloat = 15
-    /// Slow processing: the push-to-talk height, just wide enough for `slowText` and its padding.
-    static let slowProcessingSize = captionSize(for: slowText)
-    /// A dictation with no words says so inside the capsule, in the same face as "Still transcribing…".
+    static let captionPadding: CGFloat = 15
+    /// A dictation with no words says so inside the capsule, in the caption face.
     static let noSpeechText = "No speech detected"
 
     /// A sentence inside the capsule: the push-to-talk height, just wide enough for `text` and its padding.
     static func captionSize(for text: String) -> CGSize {
-        CGSize(width: (textWidth(text, size: slowFontSize, weight: .medium, rounded: true) + 2 * slowPadding).rounded(.up),
+        CGSize(width: (textWidth(text, size: captionFontSize, weight: .medium, rounded: true) + 2 * captionPadding)
+                .rounded(.up),
                height: listeningSize.height)
     }
 
+    /// The token count's number: the caption's rounded face, semibold, with digits of one width so it never jitters
+    /// as it counts.
+    static let counterNumberFontSize: CGFloat = 12
+    static let counterNumberFont = Font.system(size: counterNumberFontSize, weight: .semibold, design: .rounded)
+        .monospacedDigit()
+    /// The breathing dot at the counter's start.
+    static let counterDotSize: CGFloat = 5
+    /// Between the counter and the capsule's ends.
+    static let counterPadding: CGFloat = 14
+    /// Between the dot and the number at their closest (the widest number), and between the number and its word.
+    static let counterDotGap: CGFloat = 6
+    static let counterWordGap: CGFloat = 4
+    /// The processing pill with its token count: the push-to-talk height, wide enough for "~88.8k thinking", the
+    /// widest it says (a request's `max_tokens` keeps counts under 100k). Fixed, so the capsule never resizes as it
+    /// counts.
+    static let counterSize = CGSize(
+        width: (2 * counterPadding + counterDotSize + counterDotGap
+                + textWidth("~88.8k", size: counterNumberFontSize, weight: .semibold, rounded: true,
+                            monospacedDigits: true)
+                + counterWordGap + textWidth("thinking", size: captionFontSize, weight: .medium, rounded: true))
+            .rounded(.up),
+        height: listeningSize.height)
+
     /// Width of a single line of `text` in the system font, as SwiftUI's `Font.system` draws it.
-    static func textWidth(_ text: String, size: CGFloat, weight: NSFont.Weight, rounded: Bool) -> CGFloat {
-        var font = NSFont.systemFont(ofSize: size, weight: weight)
+    static func textWidth(_ text: String, size: CGFloat, weight: NSFont.Weight, rounded: Bool,
+                          monospacedDigits: Bool = false) -> CGFloat {
+        var font = monospacedDigits ? NSFont.monospacedDigitSystemFont(ofSize: size, weight: weight)
+            : NSFont.systemFont(ofSize: size, weight: weight)
         if rounded, let descriptor = font.fontDescriptor.withDesign(.rounded) {
             font = NSFont(descriptor: descriptor, size: size) ?? font
         }
@@ -128,8 +150,9 @@ enum PillVisual: Equatable, Sendable {
     case locked(hours: Bool = false)
     /// The push-to-talk size: stopping hands-free shrinks the pill. `afterHandsFree` only starts the dots
     /// where the hands-free bars stood, so they glide to the center as the pill narrows instead of hopping.
-    /// `slow`: processing has run long, and the capsule widens to say "Still transcribing…" instead of the dots.
-    case processing(afterHandsFree: Bool, slow: Bool = false)
+    /// `counting`: the model's token count in place of the dots, in a capsule wide enough for it. The number itself is
+    /// never part of the visual, so a tick never springs the capsule.
+    case processing(afterHandsFree: Bool, counting: Bool = false)
     case error
     /// The error flash as a sentence instead of the glyph ("No speech detected"): no red, no shake.
     case message(String)
@@ -140,7 +163,7 @@ enum PillVisual: Equatable, Sendable {
         switch self {
         case .hidden, .rest: PillMetrics.restSize
         case .peek: PillMetrics.peekSize
-        case .processing(_, slow: true): PillMetrics.slowProcessingSize
+        case .processing(_, counting: true): PillMetrics.counterSize
         case .listening, .hello, .processing: PillMetrics.listeningSize
         case .locked(hours: true): PillMetrics.lockedHoursSize
         case .locked: PillMetrics.lockedSize
@@ -178,8 +201,8 @@ enum PillVisual: Equatable, Sendable {
     /// Hands-free past an hour: the wider timer.
     var showsHours: Bool { self == .locked(hours: true) }
 
-    /// Processing that has run long: "Still transcribing…" in place of the dots.
-    var isSlow: Bool { if case .processing(_, slow: true) = self { true } else { false } }
+    /// Processing with the token count in place of the dots.
+    var isCounting: Bool { if case .processing(_, counting: true) = self { true } else { false } }
 
     /// Horizontal offset of the bars from the pill's center. Hands-free centers them between X and the timer;
     /// processing after it starts its dots where the usual hands-free bars stand, so they don't hop sideways when
@@ -248,7 +271,7 @@ struct PillView: View {
         case .locked:
             return .locked(hours: model.showsHours)
         case .processing:
-            return .processing(afterHandsFree: model.processingOrigin == .locked, slow: model.isProcessingSlow)
+            return .processing(afterHandsFree: model.processingOrigin == .locked, counting: model.showsCounter)
         case .error:
             if let text = model.errorMessage { return .message(text) }
             return .error
@@ -319,7 +342,6 @@ struct PillView: View {
         case .rest, .peek, .hello: "transcribe-thing. Click to start hands-free dictation"
         case .listening: "transcribe-thing is listening"
         case .locked: "transcribe-thing is listening, hands-free"
-        case .processing(_, slow: true): "transcribe-thing is still transcribing"
         case .processing: "transcribe-thing is transcribing"
         case .error: "Dictation failed"
         case .message(let text): text
@@ -603,7 +625,8 @@ struct PillFace: View {
                 .id(PillVisual.Content.recording)
                 .transition(contentTransition())
         case .processing:
-            ProcessingContent(startOffset: visual.barsOffset, tint: accent?.mark ?? .white, isSlow: visual.isSlow)
+            ProcessingContent(startOffset: visual.barsOffset, tint: accent?.mark ?? .white, accent: accent,
+                              count: model.tokenCount, isCounting: visual.isCounting)
                 .frame(width: visual.size.width, height: visual.size.height)
                 .modifier(morph)
                 .id(PillVisual.Content.processing)
@@ -763,44 +786,122 @@ private struct HelloRipple: View {
     }
 }
 
-/// A sentence inside the capsule ("Still transcribing…", "No speech detected"), in the timer's rounded face.
+/// A sentence inside the capsule ("No speech detected"), in the caption face.
 private struct PillCaptionText: View {
     var text: String
 
     var body: some View {
         Text(text)
-            .font(PillMetrics.slowFont)
+            .font(PillMetrics.captionFont)
             .foregroundStyle(.white.opacity(0.85))
             .lineLimit(1)
             .fixedSize()
     }
 }
 
-/// The processing wave, and once processing runs long, "Still transcribing…": the dots fade out as the capsule
-/// widens and the text fades in while the shimmer keeps sweeping over it. Same content either way, so going slow
-/// never restarts the wave or the shimmer.
+/// The processing wave, and once the model has streamed for a moment, its token count: the dots fade out as the
+/// capsule widens and the count fades in while the shimmer keeps sweeping. Same content either way, so starting to
+/// count never restarts the wave or the shimmer.
 private struct ProcessingContent: View {
     var startOffset: CGFloat
     var tint: Color
-    var isSlow: Bool
+    var accent: PillAccent?
+    /// The model's count right now; nil once the controller has let it go (the pill leaving with its number).
+    var count: PillTokenCount?
+    var isCounting: Bool
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The last count shown, so a pill that leaves or shrinks after its count went keeps its number to the end.
+    @State private var lastCount: PillTokenCount?
+
+    var body: some View {
+        ZStack {
+            ProcessingWaveView(startOffset: startOffset, tint: tint, showsDots: !isCounting)
+            if isCounting, let shown = count ?? lastCount {
+                PillTokenCounter(count: shown, accent: accent)
+                    .transition(counterTransition)
+            }
+        }
+        .onChange(of: count, initial: true) { _, new in
+            if let new { lastCount = new }
+        }
+    }
+
+    /// The count follows the dots out, so the two never overlap at full strength.
+    private var counterTransition: AnyTransition {
+        if reduceMotion { return .opacity.animation(.easeInOut(duration: 0.15)) }
+        return .opacity.combined(with: .scale(scale: 0.96))
+            .animation(.easeOut(duration: 0.22).delay(0.08))
+    }
+}
+
+/// "● ~1.2k thinking": a breathing dot that says the request is alive, then the count and what the model is doing.
+/// The word's right edge stays put and the number grows leftward; within a phase its digits roll, and from thinking
+/// to writing (which starts again from its first tokens) number and word crossfade instead, so the restart never
+/// reads as a countdown.
+struct PillTokenCounter: View {
+    let count: PillTokenCount
+    var accent: PillAccent?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        ZStack {
-            if isSlow {
-                PillCaptionText(text: PillMetrics.slowText)
-                    .transition(textTransition)
+        HStack(spacing: 0) {
+            BreathingDot(color: accent?.mark ?? .white)
+            Spacer(minLength: PillMetrics.counterDotGap)
+            ZStack(alignment: .trailing) {
+                label
+                    .id(count.phase)
+                    .transition(.opacity.animation(.easeInOut(duration: reduceMotion ? 0.15 : 0.2)))
             }
-            ProcessingWaveView(startOffset: startOffset, tint: tint, showsDots: !isSlow)
+            .animation(.easeInOut(duration: reduceMotion ? 0.15 : 0.2), value: count.phase)
+        }
+        .padding(.horizontal, PillMetrics.counterPadding)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(count.spokenDescription)
+        .accessibilityAddTraits(.updatesFrequently)
+    }
+
+    private var label: some View {
+        HStack(spacing: PillMetrics.counterWordGap) {
+            Text(count.text)
+                .font(PillMetrics.counterNumberFont)
+                .foregroundStyle(.white.opacity(0.92))
+                .contentTransition(reduceMotion ? .identity : .numericText(value: Double(count.tokens)))
+                .animation(reduceMotion ? nil : .snappy(duration: 0.3), value: count.text)
+            Text(count.word)
+                .font(PillMetrics.captionFont)
+                .foregroundStyle(accent?.mark ?? .white.opacity(0.55))
+        }
+        .lineLimit(1)
+        .fixedSize()
+    }
+}
+
+/// The counter's liveness cue: a small dot that breathes between 45% and full, 1.2 s each way. Reduce Motion holds
+/// it still at 80%; static snapshots at full.
+private struct BreathingDot: View {
+    var color: Color
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.pillStaticRendering) private var isStatic
+
+    var body: some View {
+        if isStatic || reduceMotion {
+            dot.opacity(isStatic ? 1 : 0.8)
+        } else {
+            PhaseAnimator([false, true]) { lit in
+                dot.opacity(lit ? 1 : 0.45)
+            } animation: { _ in
+                .easeInOut(duration: 1.2)
+            }
         }
     }
 
-    /// The text follows the dots out, so the two never overlap at full strength.
-    private var textTransition: AnyTransition {
-        if reduceMotion { return .opacity.animation(.easeInOut(duration: 0.15)) }
-        return .opacity.combined(with: .scale(scale: 0.96))
-            .animation(.easeOut(duration: 0.22).delay(0.08))
+    private var dot: some View {
+        Circle()
+            .fill(color)
+            .frame(width: PillMetrics.counterDotSize, height: PillMetrics.counterDotSize)
     }
 }
 

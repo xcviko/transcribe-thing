@@ -36,8 +36,15 @@ final class PillModel {
     /// The recording has run past an hour: the hands-free timer reads "1:02:03", and the capsule widens once to fit
     /// it (`PillMetrics.lockedHoursSize`).
     private(set) var showsHours = false
-    /// Processing has run longer than `timing.slowProcessing`: the pill widens to say "Still transcribing…".
-    private(set) var isProcessingSlow = false
+    /// How many tokens the model of the processing pill's dictation is thinking or writing right now, as far as its
+    /// stream tells (`TokenEstimate`). Set by the controller; nil for Parakeet, and until the first streamed character.
+    var tokenCount: PillTokenCount? {
+        didSet { if tokenCount != oldValue { updateCounter() } }
+    }
+    /// The processing pill shows `tokenCount` in place of its dots. Only once a count has been there for
+    /// `timing.counterDelay`, so a quick answer (the clean-up of a short dictation) never flashes a number; then until
+    /// the count goes or the pill stops processing.
+    private(set) var showsCounter = false
 
     /// The dictation's model from key-down until its text lands, set by the controller; nil at rest. The pill's
     /// tint shows it throughout (`PillPalette.accent`, whichever model is main); the chip only now and then
@@ -96,7 +103,7 @@ final class PillModel {
     @ObservationIgnored private var holdUntil: Date?
     @ObservationIgnored private var settleTask: Task<Void, Never>?
     @ObservationIgnored private var hoursTask: Task<Void, Never>?
-    @ObservationIgnored private var slowTask: Task<Void, Never>?
+    @ObservationIgnored private var counterTask: Task<Void, Never>?
     @ObservationIgnored private var hoverTask: Task<Void, Never>?
     @ObservationIgnored private var tooltipTask: Task<Void, Never>?
     @ObservationIgnored private var controlTooltipTask: Task<Void, Never>?
@@ -121,9 +128,10 @@ final class PillModel {
         return model
     }
 
-    /// Snapshots: processing that has already run long enough to say "Still transcribing…".
-    func previewSlowProcessing() -> PillModel {
-        isProcessingSlow = visiblePhase == .processing
+    /// Snapshots: processing whose model has been streaming long enough to show its count.
+    func previewCounter(_ count: PillTokenCount) -> PillModel {
+        tokenCount = count
+        showsCounter = visiblePhase == .processing
         return self
     }
 
@@ -160,14 +168,7 @@ final class PillModel {
         if !target.isIdle { showsTooltip = false }
         if !target.isRecording { setHoveredControl(nil) }
 
-        if target == .processing, previous != .processing {
-            slowTask?.cancel()
-            if autoSettles { slowTask = delayed(timing.slowProcessing) { $0.isProcessingSlow = true } }
-        } else if target != .processing {
-            slowTask?.cancel()
-            slowTask = nil
-            if isProcessingSlow { isProcessingSlow = false }
-        }
+        updateCounter()
 
         if target == .error {
             holdUntil = now.addingTimeInterval(timing.errorHold)
@@ -210,6 +211,24 @@ final class PillModel {
             }
         case .rest, .hidden, .processing:
             phase = .error
+        }
+    }
+
+    // MARK: Counter
+
+    /// Arms `showsCounter` when a count is there while processing, and drops it (with the wait) when the count goes
+    /// or the pill leaves processing.
+    private func updateCounter() {
+        guard visiblePhase == .processing, tokenCount != nil else {
+            counterTask?.cancel()
+            counterTask = nil
+            if showsCounter { showsCounter = false }
+            return
+        }
+        guard !showsCounter, counterTask == nil, autoSettles else { return }
+        counterTask = delayed(timing.counterDelay) { model in
+            model.counterTask = nil
+            if model.visiblePhase == .processing, model.tokenCount != nil { model.showsCounter = true }
         }
     }
 
@@ -356,7 +375,8 @@ struct PillTiming: Equatable, Sendable {
     var hoverOut: TimeInterval = 0.15
     var tooltipDelay: TimeInterval = 0.35
     var controlTooltipDelay: TimeInterval = 0.5
-    var slowProcessing: TimeInterval = 6
+    /// How long a token count waits before the processing pill shows it (`PillModel.showsCounter`).
+    var counterDelay: TimeInterval = 1.0
     /// How long the model chip stays after a switch, before it fades and the tint alone says the model.
     var chipHold: TimeInterval = 1.2
 }

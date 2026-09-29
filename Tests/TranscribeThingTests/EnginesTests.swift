@@ -19,7 +19,7 @@ import Testing
         #expect(json["model"] as? String == "google/gemini-3.8-flash")
         #expect(json["temperature"] == nil)
         #expect(json["max_tokens"] as? Int == 32_768)
-        #expect(json["stream"] as? Bool == false)
+        #expect(json["stream"] as? Bool == true, "streamed, so the pill can count and the connection never idles")
 
         let messages = try #require(json["messages"] as? [[String: Any]])
         #expect(messages.count == 1)
@@ -34,7 +34,7 @@ import Testing
 
         let reasoning = try #require(json["reasoning"] as? [String: Any])
         #expect(reasoning["effort"] as? String == "high")
-        #expect(reasoning["exclude"] as? Bool == true)
+        #expect(reasoning["exclude"] as? Bool == false, "its thought summaries stream for the pill's count")
         let provider = try #require(json["provider"] as? [String: Any])
         #expect(provider["only"] as? [String] == ["google-ai-studio"])
         #expect(provider["allow_fallbacks"] as? Bool == false)
@@ -197,73 +197,80 @@ struct OKBodyCase: Sendable, CustomTestStringConvertible {
     }
 
     static let okCases: [OKBodyCase] = [
-        OKBodyCase(name: "top-level error, no choices",
-                   body: #"{"id":"gen-1","error":{"code":502,"message":"Upstream error"}}"#,
+        OKBodyCase(name: "an error chunk and nothing else",
+                   body: SSE.stream([#"{"id":"gen-1","error":{"code":502,"message":"Upstream error"}}"#]),
                    expected: .openRouterProviderUnavailable("Upstream error")),
-        OKBodyCase(name: "top-level rate limit",
-                   body: #"{"error":{"code":429,"message":"Resource exhausted","metadata":{"error_type":"rate_limit_exceeded"}}}"#,
+        OKBodyCase(name: "a rate limit reported in the stream",
+                   body: SSE.stream([#"{"error":{"code":429,"message":"Resource exhausted","metadata":{"error_type":"rate_limit_exceeded"}},"choices":[{"delta":{"content":""},"finish_reason":"error"}]}"#], done: false),
                    expected: .openRouterRateLimited(retryAfter: nil)),
-        OKBodyCase(name: "choice error with a string code",
-                   body: #"{"choices":[{"finish_reason":"error","message":{"content":"partial"},"error":{"code":"server_error","message":"Stream broke"}}]}"#,
+        OKBodyCase(name: "an error after some text, with a string code",
+                   body: SSE.stream([SSE.chunk(content: "partial"),
+                                     #"{"error":{"code":"server_error","message":"Stream broke"},"choices":[{"delta":{"content":""},"finish_reason":"error"}]}"#],
+                                    done: false),
                    expected: .openRouterProviderUnavailable("Stream broke")),
         OKBodyCase(name: "finish_reason error without details",
-                   body: #"{"choices":[{"finish_reason":"error","message":{"content":"partial text"}}]}"#,
+                   body: SSE.stream([SSE.chunk(content: "partial text"), SSE.chunk(finish: "error")]),
                    expected: .openRouterProviderUnavailable("Gemini stopped with an error before finishing.")),
         OKBodyCase(name: "content filter",
-                   body: #"{"choices":[{"finish_reason":"content_filter","native_finish_reason":"SAFETY","message":{"content":null}}]}"#,
+                   body: SSE.answer(nil, finish: "content_filter", nativeFinish: "SAFETY"),
                    expected: .openRouterRefused("Stopped by the safety filter (SAFETY).")),
         OKBodyCase(name: "refusal with empty content",
-                   body: #"{"choices":[{"finish_reason":"stop","message":{"content":"","refusal":"I can't help with that."}}]}"#,
+                   body: SSE.answer("", refusal: "I can't help with that."),
                    expected: .openRouterRefused("I can't help with that.")),
         OKBodyCase(name: "reasoning used every token",
-                   body: #"{"choices":[{"finish_reason":"length","message":{"content":""}}]}"#,
+                   body: SSE.answer("", reasoning: "Thinking about the audio.", finish: "length"),
                    expected: .openRouterTruncated("")),
-        OKBodyCase(name: "no choices", body: #"{"id":"gen-2"}"#,
+        OKBodyCase(name: "no choices", body: SSE.stream([#"{"id":"gen-2"}"#]),
                    expected: .openRouterServer("OpenRouter sent no transcript.")),
-        OKBodyCase(name: "not JSON", body: "<html>oops</html>",
+        OKBodyCase(name: "cut off after some text", body: SSE.stream([SSE.chunk(content: "So the plan")], done: false),
+                   expected: .openRouterServer("The connection to OpenRouter was lost.")),
+        OKBodyCase(name: "not a stream", body: "<html>oops</html>",
                    expected: .openRouterServer("OpenRouter sent a response \(Brand.name) couldn’t read.")),
     ]
 
     @Test(arguments: okCases)
     func failuresInsideHTTP200(_ testCase: OKBodyCase) {
         #expect(throws: testCase.expected) {
-            try OpenRouterErrorMapper.success(data: Data(testCase.body.utf8), engine: .geminiFlash)
+            try OpenRouterChatStream.parse(testCase.body, engine: .geminiFlash)
         }
     }
 
     @Test func successIsTrimmedWithCostProviderAndReasoning() throws {
-        let body = #"""
-        {"id":"gen-9","model":"google/gemini-3.8-flash","provider":"Google AI Studio","service_tier":"default",
-         "choices":[{"index":0,"finish_reason":"stop","native_finish_reason":"STOP",
-                     "message":{"role":"assistant","content":"  Привет, это проверка.\n","refusal":null,"reasoning":null}}],
-         "usage":{"prompt_tokens":1925,"completion_tokens":820,"cost":0.0045,
-                  "completion_tokens_details":{"reasoning_tokens":800}}}
-        """#
-        let result = try OpenRouterErrorMapper.success(data: Data(body.utf8), engine: .geminiFlash)
+        let sse = SSE.answer("  Привет, это проверка.\n", reasoning: "**Listening** to the clip.", id: "gen-9",
+                             model: "google/gemini-3.8-flash", provider: "Google AI Studio", serviceTier: "default",
+                             usage: #"{"prompt_tokens":1925,"completion_tokens":820,"cost":0.0045,"completion_tokens_details":{"reasoning_tokens":800}}"#,
+                             generationTime: 3_150)
+        let result = try OpenRouterChatStream.parse(sse, engine: .geminiFlash)
         #expect(result.text == "Привет, это проверка.")
         #expect(result.provider == "Google AI Studio")
+        #expect(result.model == "google/gemini-3.8-flash")
+        #expect(result.generationID == "gen-9")
+        #expect(result.serviceTier == "default")
         #expect(result.costUSD == 0.0045)
         #expect(result.reasoningTokens == 800)
+        #expect(result.usage?.completionTokens == 820)
+        #expect(result.finishReason == "stop")
+        #expect(result.generationTime == 3.15)
+        #expect(result.reasoningCharacters == "**Listening** to the clip.".count)
     }
 
     @Test func emptyTranscriptFromStopReadsAsEmpty() throws {
-        for content in [#""   ""#, "null"] {
-            let body = #"{"choices":[{"finish_reason":"stop","message":{"content":"# + content + "}}]}"
-            let result = try OpenRouterErrorMapper.success(data: Data(body.utf8), engine: .geminiFlash)
+        for content in ["   ", nil] as [String?] {
+            let result = try OpenRouterChatStream.parse(SSE.answer(content), engine: .geminiFlash)
             #expect(result.text.isEmpty, "Gemini finished normally and heard no speech: silence, not a failure")
         }
     }
 
-    @Test func contentAsPartsIsJoined() throws {
-        let body = #"{"choices":[{"finish_reason":"stop","message":{"content":[{"type":"text","text":"Hello "},{"type":"text","text":"world."}]}}]}"#
-        #expect(try OpenRouterErrorMapper.success(data: Data(body.utf8), engine: .geminiFlash).text == "Hello world.")
+    @Test func textSplitAcrossChunksIsJoined() throws {
+        let sse = SSE.stream([SSE.chunk(content: "Hello "), SSE.chunk(content: "wor"), SSE.chunk(content: "ld."),
+                              SSE.chunk(finish: "stop")])
+        #expect(try OpenRouterChatStream.parse(sse, engine: .geminiFlash).text == "Hello world.")
     }
 
     @Test func truncatedTextIsNeverTakenForAWholeTranscript() throws {
         // Out of tokens: a repetition loop or a cut-off ending. The text is kept for the notice, not pasted.
-        let body = #"{"choices":[{"finish_reason":"length","message":{"content":" A long transcript "}}]}"#
         #expect(throws: AppError.openRouterTruncated("A long transcript")) {
-            try OpenRouterErrorMapper.success(data: Data(body.utf8), engine: .geminiFlash)
+            try OpenRouterChatStream.parse(SSE.answer(" A long transcript ", finish: "length"), engine: .geminiFlash)
         }
     }
 
@@ -290,6 +297,27 @@ final class StubURLProtocol: URLProtocol {
         var headers: [String: String] = [:]
         var body = ""
         var error: URLError.Code?
+        /// A streamed body: the response, then each piece with its own load, then the end (unless `staysOpen`).
+        var chunks: [String]?
+        /// The stream never ends by itself: only cancelling the request does.
+        var staysOpen = false
+
+        /// `sse` streamed as OpenRouter does, one event per piece, or in pieces of `pieceLength` characters that cut
+        /// through lines.
+        static func stream(_ sse: String, headers: [String: String] = [:], pieceLength: Int? = nil,
+                           staysOpen: Bool = false) -> Reply {
+            let pieces: [String]
+            if let pieceLength {
+                pieces = stride(from: 0, to: sse.count, by: pieceLength).map { start in
+                    let from = sse.index(sse.startIndex, offsetBy: start)
+                    return String(sse[from ..< (sse.index(from, offsetBy: pieceLength, limitedBy: sse.endIndex) ?? sse.endIndex)])
+                }
+            } else {
+                pieces = sse.components(separatedBy: "\n\n").filter { !$0.isEmpty }.map { $0 + "\n\n" }
+            }
+            return Reply(headers: ["Content-Type": "text/event-stream"].merging(headers) { $1 }, chunks: pieces,
+                         staysOpen: staysOpen)
+        }
     }
 
     final class Registry: @unchecked Sendable {
@@ -346,8 +374,8 @@ final class StubURLProtocol: URLProtocol {
         let response = HTTPURLResponse(url: url, statusCode: reply.status, httpVersion: "HTTP/1.1",
                                        headerFields: reply.headers)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: Data(reply.body.utf8))
-        client?.urlProtocolDidFinishLoading(self)
+        for piece in reply.chunks ?? [reply.body] { client?.urlProtocol(self, didLoad: Data(piece.utf8)) }
+        if !reply.staysOpen { client?.urlProtocolDidFinishLoading(self) }
     }
 
     override func stopLoading() {}
@@ -364,8 +392,77 @@ final class StubURLProtocol: URLProtocol {
     }
 }
 
+/// Canned OpenRouter streams, as its chat completions send them with `stream: true`: every event one `data:` line
+/// (and a blank one), `: OPENROUTER PROCESSING` comments while it waits, `data: [DONE]` last.
+enum SSE {
+    /// `events` (chunk objects) as a stream; `done: false` leaves off the `[DONE]`, as a stream cut short would.
+    static func stream(_ events: [String], done: Bool = true) -> String {
+        (events.map { "data: \($0)\n\n" } + (done ? ["data: [DONE]\n\n"] : [])).joined()
+    }
+
+    /// `string` as a JSON string literal.
+    static func json(_ string: String) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.withoutEscapingSlashes]
+        return String(decoding: try! encoder.encode(string), as: UTF8.self)
+    }
+
+    /// One chunk of choice 0: some text, some reasoning (as `delta.reasoning` and as its `reasoning.text` detail,
+    /// with Gemini's encrypted thought signature beside it, as OpenRouter sends both), a refusal, a finish.
+    static func chunk(id: String? = "gen-1", content: String? = nil, reasoning: String? = nil, refusal: String? = nil,
+                      finish: String? = nil, nativeFinish: String? = nil, extra: String = "") -> String {
+        var delta = [#""role":"assistant""#, #""content":"# + (content.map(json) ?? #""""#)]
+        if let reasoning {
+            delta.append(#""reasoning":"# + json(reasoning))
+            delta.append(#""reasoning_details":[{"type":"reasoning.text","text":"# + json(reasoning)
+                         + #","format":"google-gemini-v1","index":0},{"type":"reasoning.encrypted","data":"Q2lRQkN5cFpXNlhvdGVs","format":"google-gemini-v1","index":0}]"#)
+        }
+        if let refusal { delta.append(#""refusal":"# + json(refusal)) }
+        let choice = #"{"index":0,"delta":{"# + delta.joined(separator: ",") + #"},"finish_reason":"#
+            + (finish.map(json) ?? "null") + #","native_finish_reason":"# + (nativeFinish.map(json) ?? "null") + "}"
+        let head = id.map { #""id":"# + json($0) + "," } ?? ""
+        return "{" + head + #""object":"chat.completion.chunk","created":1790000000,"choices":["# + choice + "]"
+            + extra + "}"
+    }
+
+    /// A whole answer as OpenRouter streams it: a processing comment, the reasoning and then the text, each in two
+    /// chunks, the finish, and the accounting chunk with `usage` (and the model, provider, tier and timing) just
+    /// before `[DONE]`.
+    static func answer(_ content: String?, reasoning: String? = nil, refusal: String? = nil, finish: String = "stop",
+                       nativeFinish: String? = nil, id: String? = "gen-1", model: String? = nil,
+                       provider: String? = nil, serviceTier: String? = nil, usage: String? = nil,
+                       generationTime: Double? = nil) -> String {
+        var events: [String] = []
+        if let reasoning {
+            let (head, tail) = halves(reasoning)
+            events += [chunk(id: id, reasoning: head), chunk(id: id, reasoning: tail)]
+        }
+        if let content, !content.isEmpty {
+            let (head, tail) = halves(content)
+            events += [chunk(id: id, content: head), chunk(id: id, content: tail)]
+        }
+        if let refusal { events.append(chunk(id: id, refusal: refusal)) }
+        let native = nativeFinish ?? (finish == "stop" ? "STOP" : nil)
+        events.append(chunk(id: id, finish: finish, nativeFinish: native))
+        var accounting = ""
+        if let model { accounting += #","model":"# + json(model) }
+        if let provider { accounting += #","provider":"# + json(provider) }
+        if let serviceTier { accounting += #","service_tier":"# + json(serviceTier) }
+        if let usage { accounting += #","usage":"# + usage }
+        if let generationTime { accounting += #","openrouter_metadata":{"generation_time":\#(generationTime)}"# }
+        events.append(chunk(id: id, finish: finish, nativeFinish: native, extra: accounting))
+        return ": OPENROUTER PROCESSING\n\n" + stream(events)
+    }
+
+    private static func halves(_ text: String) -> (String, String) {
+        let middle = text.index(text.startIndex, offsetBy: text.count / 2)
+        return (String(text[..<middle]), String(text[middle...]))
+    }
+}
+
 enum Fixtures {
-    static let success = StubURLProtocol.Reply(body: #"{"provider":"Google AI Studio","choices":[{"finish_reason":"stop","message":{"content":"Hello there."}}],"usage":{"cost":0.001}}"#)
+    static let success = StubURLProtocol.Reply.stream(SSE.answer("Hello there.", provider: "Google AI Studio",
+                                                                 usage: #"{"cost":0.001}"#))
     static let keyInfo = #"""
     {"data":{"label":"sk-or-v1-au7...890","limit":100,"limit_remaining":74.5,"limit_reset":"monthly",
      "include_byok_in_limit":false,"usage":25.5,"usage_daily":25.5,"usage_weekly":25.5,"usage_monthly":25.5,
@@ -425,7 +522,7 @@ enum Fixtures {
     }
 
     @Test func upstreamFailureInsideA200IsRetriedOnce() async throws {
-        let upstream = StubURLProtocol.Reply(body: #"{"id":"gen-1","error":{"code":502,"message":"Upstream error"}}"#)
+        let upstream = StubURLProtocol.Reply.stream(SSE.stream([#"{"id":"gen-1","error":{"code":502,"message":"Upstream error"}}"#]))
         let (client, host) = StubURLProtocol.client([upstream, Fixtures.success])
         let result = try await client.transcribe(audio: Fixtures.wav, format: "wav", model: "google/gemini-3.8-flash",
                                                  systemPrompt: nil, effort: .high, maxTokens: 32_768,
@@ -535,6 +632,201 @@ enum Fixtures {
         await #expect(throws: AppError.openRouterInvalidKey("User not found.")) {
             try await client.keyInfo(apiKey: "sk-or-v1-invalid")
         }
+    }
+}
+
+// MARK: - Streamed answers
+
+/// What a stream's `progress` callback heard, in order.
+final class ProgressLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var reports: [ChatStreamProgress] = []
+
+    var all: [ChatStreamProgress] { lock.withLock { reports } }
+    func record(_ progress: ChatStreamProgress) { lock.withLock { reports.append(progress) } }
+}
+
+@Suite struct OpenRouterStreamTests {
+    private func transcribe(_ client: OpenRouterClient, progress: ProgressLog? = nil) async throws -> CloudResult {
+        try await client.transcribe(audio: Fixtures.wav, format: "wav", model: "google/gemini-3.8-flash",
+                                    systemPrompt: nil, effort: .medium, maxTokens: 32_768, apiKey: "k", timeout: 120,
+                                    progress: progress.map { log in { @Sendable report in log.record(report) } })
+    }
+
+    /// OpenRouter's ": OPENROUTER PROCESSING" comments keep the connection alive and are never taken for the answer,
+    /// however the bytes are cut.
+    @Test func commentsAreIgnored() async throws {
+        let sse = ": OPENROUTER PROCESSING\n\n: OPENROUTER PROCESSING\n\n"
+            + "data: \(SSE.chunk(content: "Hello "))\n\n: OPENROUTER PROCESSING\n\n"
+            + SSE.stream([SSE.chunk(content: "there."), SSE.chunk(finish: "stop")])
+        #expect(try OpenRouterChatStream.parse(sse, engine: .geminiFlash).text == "Hello there.")
+        let (client, _) = StubURLProtocol.client([.stream(sse, pieceLength: 7)])
+        #expect(try await transcribe(client).text == "Hello there.")
+    }
+
+    /// Gemini thinks, then writes: the callback hears the reasoning grow before any of the text.
+    @Test func progressHearsReasoningBeforeText() async throws {
+        let (client, _) = StubURLProtocol.client([.stream(SSE.answer("Привет, это проверка.",
+                                                                     reasoning: "**Transcribing** a short clip."))])
+        let log = ProgressLog()
+        let result = try await transcribe(client, progress: log)
+        let reports = log.all
+        let first = try #require(reports.first)
+        #expect(first.reasoningCharacters > 0 && first.outputCharacters == 0)
+        #expect(reports.contains { $0.outputCharacters > 0 })
+        #expect(reports.last == ChatStreamProgress(reasoningCharacters: "**Transcribing** a short clip.".count,
+                                                   outputCharacters: "Привет, это проверка.".count))
+        // Never backwards.
+        for (earlier, later) in zip(reports, reports.dropFirst()) {
+            #expect(later.reasoningCharacters >= earlier.reasoningCharacters)
+            #expect(later.outputCharacters >= earlier.outputCharacters)
+        }
+        #expect(result.reasoningCharacters == "**Transcribing** a short clip.".count)
+        #expect(result.timeToFirstToken.map { $0 >= 0 } == true)
+    }
+
+    /// The last chunk before [DONE] carries the bill: usage, cost, and who served it.
+    @Test func theAccountingChunkCarriesUsageCostAndProvider() async throws {
+        let usage = #"{"prompt_tokens":1925,"completion_tokens":820,"total_tokens":2745,"cost":0.0045,"is_byok":false,"prompt_tokens_details":{"cached_tokens":0,"audio_tokens":1900},"completion_tokens_details":{"reasoning_tokens":800}}"#
+        let (client, _) = StubURLProtocol.client([.stream(SSE.answer("Текст.", reasoning: "Thinking.", id: "gen-acc",
+                                                                     model: "google/gemini-3.8-flash-20260901",
+                                                                     provider: "Google AI Studio", usage: usage,
+                                                                     generationTime: 2_400))])
+        let result = try await transcribe(client)
+        #expect(result.text == "Текст.")
+        #expect(result.costUSD == 0.0045)
+        #expect(result.provider == "Google AI Studio")
+        #expect(result.model == "google/gemini-3.8-flash-20260901")
+        #expect(result.generationID == "gen-acc")
+        #expect(result.generationTime == 2.4)
+        #expect(result.usage == TokenUsage(promptTokens: 1925, audioTokens: 1900, cachedTokens: 0, completionTokens: 820,
+                                           reasoningTokens: 800, totalTokens: 2745))
+    }
+
+    /// Reasoning that comes only as typed details still counts; Gemini's encrypted thought signature never does.
+    @Test func reasoningDetailsCountButNotTheEncryptedOnes() throws {
+        let details = #"{"id":"gen-d","choices":[{"index":0,"delta":{"content":"","reasoning":null,"reasoning_details":[{"type":"reasoning.text","text":"Heard a voice.","format":"google-gemini-v1","index":0},{"type":"reasoning.summary","summary":"Short.","index":1},{"type":"reasoning.encrypted","data":"Q2lRQkN5cFpXNlhvdGVsbG9uZ2Jsb2I=","index":2}]},"finish_reason":null}]}"#
+        var stream = OpenRouterChatStream()
+        var changed = stream.consume("data: " + details)
+        #expect(changed)
+        #expect(stream.progress == ChatStreamProgress(reasoningCharacters: "Heard a voice.".count + "Short.".count))
+        #expect(stream.hasOutput)
+        // A signature alone adds nothing.
+        let signature = #"{"choices":[{"index":0,"delta":{"reasoning_details":[{"type":"reasoning.encrypted","data":"[REDACTED]"}]}}]}"#
+        changed = stream.consume("data: " + signature)
+        #expect(!changed)
+        // Where `reasoning` is given, it counts once, not again through its details.
+        changed = stream.consume("data: " + SSE.chunk(reasoning: "Again."))
+        #expect(changed)
+        #expect(stream.progress.reasoningCharacters == "Heard a voice.".count + "Short.".count + "Again.".count)
+        // An event that can't be read is skipped, and the stream goes on.
+        changed = stream.consume("data: {not json")
+        #expect(!changed)
+        changed = stream.consume("data: " + SSE.chunk(content: "Text."))
+        #expect(changed)
+        _ = stream.consume("data: " + SSE.chunk(finish: "stop"))
+        _ = stream.consume("data: [DONE]")
+        #expect(stream.isDone)
+        #expect(try stream.result(engine: .geminiFlash).text == "Text.")
+    }
+
+    /// A failure OpenRouter reports inside the stream, right away and before any of the answer, is sent again once.
+    @Test func aQuickErrorChunkBeforeTheAnswerIsRetried() async throws {
+        let limited = StubURLProtocol.Reply.stream(SSE.stream([
+            #"{"id":"gen-e","error":{"code":429,"message":"Resource exhausted","metadata":{"error_type":"rate_limit_exceeded"}},"choices":[{"index":0,"delta":{"content":""},"finish_reason":"error"}]}"#,
+        ]))
+        let (client, host) = StubURLProtocol.client([limited, Fixtures.success])
+        #expect(try await transcribe(client).text == "Hello there.")
+        #expect(StubURLProtocol.registry.requests(for: host).count == 2)
+    }
+
+    /// After some of the answer, a failure is final: the model's work isn't paid for twice.
+    @Test func anErrorChunkAfterTextIsNotRetried() async throws {
+        let broke = StubURLProtocol.Reply.stream(SSE.stream([
+            SSE.chunk(content: "So the plan"),
+            #"{"error":{"code":"server_error","message":"Stream broke"},"choices":[{"index":0,"delta":{"content":""},"finish_reason":"error"}]}"#,
+        ], done: false))
+        let (client, host) = StubURLProtocol.client([broke, Fixtures.success])
+        await #expect(throws: AppError.openRouterProviderUnavailable("Stream broke")) { try await transcribe(client) }
+        #expect(StubURLProtocol.registry.requests(for: host).count == 1)
+    }
+
+    /// A 200 whose only event is an error is a failure, not an empty transcript.
+    @Test func aStreamOfOnlyAnErrorFails() async throws {
+        let broke = StubURLProtocol.Reply.stream(SSE.stream([
+            #"{"error":{"code":402,"message":"Insufficient credits","metadata":{"error_type":"payment_required"}}}"#,
+        ]))
+        let (client, host) = StubURLProtocol.client([broke, Fixtures.success])
+        await #expect(throws: AppError.openRouterNoCredits("Insufficient credits")) { try await transcribe(client) }
+        #expect(StubURLProtocol.registry.requests(for: host).count == 1)
+    }
+
+    /// Refused before it started, OpenRouter answers with a plain JSON error and its status, not a stream.
+    @Test func aJSONErrorBeforeTheStreamMapsByStatus() async throws {
+        let (client, _) = StubURLProtocol.client([.init(status: 400, body: #"{"error":{"code":400,"message":"Invalid audio format"}}"#)])
+        await #expect(throws: AppError.openRouterBadRequest("Invalid audio format")) { try await transcribe(client) }
+    }
+
+    @Test func runningOutOfTokensIsTruncatedAndAFilterIsARefusal() async throws {
+        let (client, _) = StubURLProtocol.client([
+            .stream(SSE.answer(" A long transcript ", reasoning: "Thinking.", finish: "length")),
+            .stream(SSE.answer(nil, finish: "content_filter", nativeFinish: "SAFETY")),
+        ])
+        await #expect(throws: AppError.openRouterTruncated("A long transcript")) { try await transcribe(client) }
+        await #expect(throws: AppError.openRouterRefused("Stopped by the safety filter (SAFETY).")) {
+            try await transcribe(client)
+        }
+    }
+
+    /// A stream that stops mid-answer, with no finish and no [DONE], lost its connection, and isn't sent again.
+    @Test func aStreamCutOffAfterTextIsALostConnection() async throws {
+        let cut = StubURLProtocol.Reply.stream(SSE.stream([SSE.chunk(content: "So the plan for")], done: false))
+        let (client, host) = StubURLProtocol.client([cut, Fixtures.success])
+        await #expect(throws: AppError.openRouterServer("The connection to OpenRouter was lost.")) {
+            try await transcribe(client)
+        }
+        #expect(StubURLProtocol.registry.requests(for: host).count == 1)
+    }
+
+    /// Esc stops the stream where it is.
+    @Test func cancellingStopsTheStream() async throws {
+        let open = StubURLProtocol.Reply.stream(": OPENROUTER PROCESSING\n\n" + SSE.stream([SSE.chunk(reasoning: "Thinking.")], done: false),
+                                                staysOpen: true)
+        let (client, host) = StubURLProtocol.client([open, Fixtures.success])
+        let log = ProgressLog()
+        let task = Task { try await transcribe(client, progress: log) }
+        try await waitUntil(timeout: .seconds(10)) { !log.all.isEmpty }
+        task.cancel()
+        await #expect(throws: CancellationError.self) { try await task.value }
+        #expect(StubURLProtocol.registry.requests(for: host).count == 1)
+    }
+
+    /// What goes on the wire: streamed, Gemini's reasoning included for its count, the clean-up's left out.
+    @Test func theRequestsAskForAStream() async throws {
+        let (client, host) = StubURLProtocol.client([Fixtures.success, .stream(SSE.answer("Tidied."))])
+        _ = try await transcribe(client)
+        let route = try #require(CleanupModel.gpt6Luna.route)
+        let cleaned = try await client.cleanUp(transcript: "raw", route: route, systemPrompt: "Tidy.", apiKey: "k",
+                                               timeout: 12)
+        #expect(cleaned.text == "Tidied.")
+        let bodies = try StubURLProtocol.registry.bodies(for: host).map {
+            try #require(JSONSerialization.jsonObject(with: $0) as? [String: Any])
+        }
+        #expect(bodies.map { $0["stream"] as? Bool } == [true, true])
+        #expect(bodies.map { ($0["reasoning"] as? [String: Any])?["exclude"] as? Bool } == [false, true])
+        let requests = StubURLProtocol.registry.requests(for: host)
+        #expect(requests.map(\.timeoutInterval) == [120, 12], "a stall timeout, and the clean-up's deadline")
+        #expect(requests.allSatisfy { $0.value(forHTTPHeaderField: "X-OpenRouter-Metadata") == "enabled" })
+    }
+
+    /// A stream whose chunks carry no id or provider takes them from the response headers.
+    @Test func theHeadersFillWhatTheChunksDontSay() async throws {
+        let sse = SSE.answer("Hello.", id: nil)
+        let (client, _) = StubURLProtocol.client([.stream(sse, headers: ["X-Generation-Id": "gen-header",
+                                                                         "X-Provider-Name": "Google AI Studio"])])
+        let result = try await transcribe(client)
+        #expect(result.generationID == "gen-header")
+        #expect(result.provider == "Google AI Studio")
     }
 }
 
@@ -1432,17 +1724,17 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
         #expect(result.text == "Hello there.")
         #expect(result.engine == .geminiFlash)
         #expect(result.costUSD == 0.001)
-        // A dictation's everyday request is what it always was: WAV, 32,768 tokens, about two minutes.
+        // A dictation's everyday request is what it always was: WAV and 32,768 tokens, streamed with a stall timeout.
         let request = try #require(StubURLProtocol.registry.requests(for: host).first)
-        #expect(request.timeoutInterval == 120.25)
+        #expect(request.timeoutInterval == 120)
         let bodies = StubURLProtocol.registry.bodies(for: host)
         let body = try #require(JSONSerialization.jsonObject(with: bodies[0]) as? [String: Any])
         #expect(body["max_tokens"] as? Int == 32_768)
         #expect(Self.audioFormat(body) == "wav")
     }
 
-    /// Past what its WAV can carry, a recording goes to Gemini as AAC in one request, with a budget and a wait that
-    /// grow with it.
+    /// Past what its WAV can carry, a recording goes to Gemini as AAC in one request, with a budget that grows with
+    /// it; streamed, its stall timeout stays the same.
     @Test func aLongGeminiRecordingGoesCompressedInOneRequest() async throws {
         let (service, _, _, host) = makeServiceAccountAndHost(replies: [Fixtures.success])
         let second = speech().samples
@@ -1454,7 +1746,7 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
         #expect(result.text == "Hello there.")
         let requests = StubURLProtocol.registry.requests(for: host)
         #expect(requests.count == 1)
-        #expect(requests.first?.timeoutInterval == 240)
+        #expect(requests.first?.timeoutInterval == 120)
         let bodies = StubURLProtocol.registry.bodies(for: host)
         let body = try #require(JSONSerialization.jsonObject(with: bodies[0]) as? [String: Any])
         #expect(body["max_tokens"] as? Int == OpenRouterClient.transcriptionMaxTokens(audioSeconds: 8 * 60))
@@ -1506,7 +1798,7 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
     /// never an error.
     @Test func emptyCloudTextIsAnEmptyResult() async throws {
         for recording in [Recording(samples: [Float](repeating: 0, count: 16_000)), speech()] {
-            let empty = StubURLProtocol.Reply(body: #"{"choices":[{"finish_reason":"stop","message":{"content":" \n"}}],"usage":{"cost":0.0002}}"#)
+            let empty = StubURLProtocol.Reply.stream(SSE.answer(" \n", usage: #"{"cost":0.0002}"#))
             let (service, _) = makeService(replies: [empty])
             let result = try await service.transcribe(recording, engine: .geminiFlash)
             #expect(result.text.isEmpty)

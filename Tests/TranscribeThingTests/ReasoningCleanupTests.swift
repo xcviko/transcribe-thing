@@ -9,17 +9,13 @@ private func object(_ body: OpenRouterChatRequest) throws -> [String: Any] {
     try #require(JSONSerialization.jsonObject(with: body.encoded()) as? [String: Any])
 }
 
-private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int = 0, finish: String = "stop",
-                       id: String = "gen-clean-1", model: String = "openai/gpt-6-luna",
+/// A streamed answer with its usage and timing in the accounting chunk, as OpenRouter sends it.
+private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int = 0, reasoningText: String? = nil,
+                       finish: String = "stop", id: String = "gen-clean-1", model: String = "openai/gpt-6-luna",
                        provider: String = "OpenAI") -> StubURLProtocol.Reply {
-    let escaped = content.replacingOccurrences(of: "\"", with: "\\\"").replacingOccurrences(of: "\n", with: "\\n")
-    return StubURLProtocol.Reply(body: #"""
-    {"id":"\#(id)","model":"\#(model)","provider":"\#(provider)",
-     "choices":[{"finish_reason":"\#(finish)","message":{"content":"\#(escaped)"}}],
-     "usage":{"prompt_tokens":400,"completion_tokens":\#(reasoning + 80),"total_tokens":\#(reasoning + 480),"cost":\#(cost),
-              "completion_tokens_details":{"reasoning_tokens":\#(reasoning)}},
-     "openrouter_metadata":{"generation_time":1850}}
-    """#)
+    .stream(SSE.answer(content, reasoning: reasoningText, finish: finish, id: id, model: model, provider: provider,
+                       usage: #"{"prompt_tokens":400,"completion_tokens":\#(reasoning + 80),"total_tokens":\#(reasoning + 480),"cost":\#(cost),"completion_tokens_details":{"reasoning_tokens":\#(reasoning)}}"#,
+                       generationTime: 1850))
 }
 
 // MARK: - Levels
@@ -93,7 +89,7 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
                                              systemPrompt: nil, effort: effort, maxTokens: 32_768))
         let reasoning = try #require(json["reasoning"] as? [String: Any])
         #expect(reasoning["effort"] as? String == effort.rawValue)
-        #expect(reasoning["exclude"] as? Bool == true)
+        #expect(reasoning["exclude"] as? Bool == false, "its thought summaries stream, for the pill's count")
         #expect(reasoning.count == 2, "effort only: no max_tokens, no enabled")
         #expect(json["reasoning_effort"] == nil)
         let provider = try #require(json["provider"] as? [String: Any])
@@ -106,7 +102,7 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         #expect(Set(json.keys) == ["model", "messages", "reasoning", "provider", "max_tokens", "stream"])
         #expect(json["model"] as? String == "openai/gpt-6-luna")
         #expect(json["temperature"] == nil)
-        #expect(json["stream"] as? Bool == false)
+        #expect(json["stream"] as? Bool == true)
         let messages = try #require(json["messages"] as? [[String: Any]])
         #expect(messages.count == 2)
         #expect(messages[0]["role"] as? String == "system" && messages[0]["content"] as? String == "Tidy it.")
@@ -199,30 +195,31 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
 
 @Suite struct ResponseMetadataTests {
     @Test func chatUsageIsReadInFull() throws {
-        let body = #"""
-        {"id":"gen-17","model":"google/gemini-3.8-flash","provider":"Google AI Studio","service_tier":"standard",
-         "choices":[{"finish_reason":"stop","native_finish_reason":"STOP","message":{"content":"Текст."}}],
-         "usage":{"prompt_tokens":1925,"completion_tokens":17900,"total_tokens":19825,"cost":0.0704,"is_byok":false,
-                  "prompt_tokens_details":{"cached_tokens":0,"audio_tokens":1800},
-                  "completion_tokens_details":{"reasoning_tokens":17700},
-                  "cost_details":{"upstream_inference_cost":null}},
-         "openrouter_metadata":{"generation_time":74512,"attempt":1}}
-        """#
-        let result = try OpenRouterErrorMapper.success(data: Data(body.utf8), engine: .geminiFlash)
+        let usage = #"""
+        {"prompt_tokens":1925,"completion_tokens":17900,"total_tokens":19825,"cost":0.0704,"is_byok":false,
+         "prompt_tokens_details":{"cached_tokens":0,"audio_tokens":1800},
+         "completion_tokens_details":{"reasoning_tokens":17700},
+         "cost_details":{"upstream_inference_cost":null}}
+        """#.replacingOccurrences(of: "\n", with: "")
+        let sse = SSE.answer("Текст.", reasoning: "**Hearing** the words.", id: "gen-17",
+                             model: "google/gemini-3.8-flash", provider: "Google AI Studio", serviceTier: "standard",
+                             usage: usage, generationTime: 74_512)
+        let result = try OpenRouterChatStream.parse(sse, engine: .geminiFlash)
         #expect(result.text == "Текст.")
         #expect(result.generationID == "gen-17" && result.model == "google/gemini-3.8-flash")
         #expect(result.provider == "Google AI Studio" && result.costUSD == 0.0704)
-        #expect(result.finishReason == "stop")
+        #expect(result.finishReason == "stop" && result.serviceTier == "standard")
         #expect(result.generationTime == 74.512)
         #expect(result.usage == TokenUsage(promptTokens: 1925, audioTokens: 1800, cachedTokens: 0,
                                            completionTokens: 17_900, reasoningTokens: 17_700, totalTokens: 19_825))
         #expect(result.usage?.outputTokens == 200)
         #expect(result.reasoningTokens == 17_700)
+        #expect(result.reasoningCharacters == "**Hearing** the words.".count)
     }
 
-    @Test func aBareResponseLeavesTheMetadataEmpty() throws {
-        let body = #"{"choices":[{"finish_reason":"stop","message":{"content":"Hi"}}]}"#
-        let result = try OpenRouterErrorMapper.success(data: Data(body.utf8), engine: .geminiFlash)
+    @Test func aBareStreamLeavesTheMetadataEmpty() throws {
+        let sse = SSE.stream([SSE.chunk(id: nil, content: "Hi"), SSE.chunk(id: nil, finish: "stop")])
+        let result = try OpenRouterChatStream.parse(sse, engine: .geminiFlash)
         #expect(result == CloudResult(text: "Hi", finishReason: "stop"))
     }
 
@@ -247,14 +244,17 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         result.usedSystemPrompt = false
         result.finishReason = "stop"
         result.generationTime = 74
+        result.timeToFirstToken = 61.5
+        result.reasoningCharacters = 2_300
         let date = Date(timeIntervalSince1970: 1_790_000_000)
         let version = result.version(createdAt: date)
         #expect(version.kind == .transcription(.geminiFlash) && version.text == "Hi")
         #expect(version.metadata == TranscriptMetadata(createdAt: date, modelID: "google/gemini-3.8-flash",
                                                        provider: "Google AI Studio", generationID: "gen-1",
                                                        reasoningEffort: .medium, usage: TokenUsage(promptTokens: 10, reasoningTokens: 17_700),
-                                                       costUSD: 0.07, processingTime: 76, generationTime: 74,
-                                                       usedSystemPrompt: false, finishReason: "stop"))
+                                                       costUSD: 0.07, processingTime: 76, timeToFirstToken: 61.5,
+                                                       generationTime: 74, usedSystemPrompt: false,
+                                                       finishReason: "stop", reasoningCharacters: 2_300))
         #expect(result.version(.cleanup(of: .parakeet, by: .gpt6Luna)).kind == .cleanup(of: .parakeet, by: .gpt6Luna))
     }
 }
@@ -335,22 +335,38 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         }
     }
 
-    /// Gemini 3.8 Flash always thinks at medium: there's no setting that could change it.
+    /// Gemini 3.8 Flash always thinks at medium: there's no setting that could change it. Its streamed answer
+    /// leaves the same record History always kept, and now how soon it started writing and how much it showed of
+    /// its thinking.
     @Test func geminiTranscriptionThinksAtMediumAndRecordsItsUsage() async throws {
         let store = ModelStore.preview(states: [.parakeet: .ready])
-        let (client, host) = StubURLProtocol.client([chatReply("Hallo.", cost: 0.01, reasoning: 900, id: "gen-g",
+        let (client, host) = StubURLProtocol.client([chatReply("Hallo.", cost: 0.01, reasoning: 900,
+                                                               reasoningText: "**Listening** for German.", id: "gen-g",
                                                                model: "google/gemini-3.8-flash",
                                                                provider: "Google AI Studio")])
         let keychain = KeychainStore.inMemory([KeychainStore.openRouterAccount: "sk-or-v1-test"])
         let account = OpenRouterAccount(keychain: keychain, client: client, debounce: .zero)
         let service = TranscriptionService(models: store, account: account, client: client)
         let samples = (0..<16_000).map { 0.1 * sin(Float($0) * 0.09) }
-        let result = try await service.transcribe(Recording(samples: samples), engine: .geminiFlash)
+        let log = ProgressLog()
+        let result = try await service.transcribe(Recording(samples: samples), engine: .geminiFlash,
+                                                  progress: { log.record($0) })
         #expect(result.reasoningEffort == .medium && result.usedSystemPrompt == true)
         #expect(result.usage?.reasoningTokens == 900 && result.generationID == "gen-g")
+        #expect(log.all.last == ChatStreamProgress(reasoningCharacters: "**Listening** for German.".count,
+                                                   outputCharacters: "Hallo.".count))
+        let metadata = result.version().metadata
+        #expect(metadata.usage?.reasoningTokens == 900 && metadata.usage?.completionTokens == 980)
+        #expect(metadata.costUSD == 0.01 && metadata.provider == "Google AI Studio")
+        #expect(metadata.generationID == "gen-g" && metadata.generationTime == 1.85)
+        #expect(metadata.modelID == "google/gemini-3.8-flash" && metadata.finishReason == "stop")
+        #expect(metadata.reasoningCharacters == "**Listening** for German.".count)
+        let firstToken = try #require(metadata.timeToFirstToken)
+        #expect(firstToken >= 0 && firstToken <= result.processingTime)
         let body = try #require(JSONSerialization.jsonObject(with: StubURLProtocol.registry.bodies(for: host)[0]) as? [String: Any])
         #expect(body["model"] as? String == "google/gemini-3.8-flash")
-        #expect(body["reasoning"] as? [String: AnyHashable] == ["effort": "medium", "exclude": true])
+        #expect(body["reasoning"] as? [String: AnyHashable] == ["effort": "medium", "exclude": false])
+        #expect(body["stream"] as? Bool == true)
     }
 }
 

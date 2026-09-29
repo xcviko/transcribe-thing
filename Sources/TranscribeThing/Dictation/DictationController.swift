@@ -128,7 +128,7 @@ final class DictationController {
     /// The words the deferred flash carries ("No speech detected"), or nil for the plain shake.
     @ObservationIgnored private var deferredErrorMessage: String?
     /// The press under way began while a job was in flight: until it commits, the processing pill stays exactly
-    /// as it is (its width, "Still transcribing…"), so an fn tap or an fn combo doesn't disturb it.
+    /// as it is (its width, its count), so an fn tap or an fn combo doesn't disturb it.
     @ObservationIgnored private var pressKeepsProcessing = false
     @ObservationIgnored private var retained: [UUID: Recording] = [:]
     @ObservationIgnored private var retainedOrder: [UUID] = []
@@ -692,6 +692,11 @@ final class DictationController {
         var isCleaningUp: Bool { uncleaned != nil }
         /// The finished transcript being cleaned up, kept should the clean-up be canceled.
         var uncleaned: TranscriptResult?
+        /// How many tokens its model is thinking or writing, as far as the stream shows (`streamed(_:for:)`): nil until
+        /// the first streamed character, and always for Parakeet. The processing pill shows the newest job's.
+        var count: PillTokenCount?
+        /// How characters of the stream under way turn into that count, learned from History for its model.
+        var estimate = TokenEstimate()
         private let placeholderID: UUID
 
         /// `id`: the id the recording will have (a resumed dictation's), when it is known before the audio is.
@@ -733,17 +738,25 @@ final class DictationController {
         let generation = job.generation
         let engine = job.engine
         job.uncleaned = nil
+        job.count = nil
+        job.estimate = TokenEstimate.learned(from: history.entries, modelID: engine.openRouterModelID)
+        // Only a streamed answer has tokens to count: Gemini's (Parakeet has none).
+        let progress = engine.cloudAPI == .chatCompletions ? streamProgress(for: job, generation: generation) : nil
         job.task = Task { [weak self] in
             guard let self else { return }
-            var outcome = await self.transcribe(recording, engine: engine)
+            var outcome = await self.transcribe(recording, engine: engine, progress: progress)
             guard !Task.isCancelled, job.generation == generation else { return }
             if case .success(let result, _) = outcome, self.cleansUp(job, result) {
                 // Still processing as far as the pill goes: the text is pasted once it's tidied (or given up on).
                 job.uncleaned = result
+                job.count = nil
+                job.estimate = TokenEstimate.learned(from: self.history.entries,
+                                                     modelID: CleanupModel.default.openRouterModelID)
                 job.hintTask?.cancel()
                 self.dismissWaitNotice(for: job.id)
                 self.stateDidChange()
-                let cleanup = await self.runCleanup(result.text, of: result.engine, by: .default)
+                let cleanup = await self.runCleanup(result.text, of: result.engine, by: .default,
+                                                    progress: self.streamProgress(for: job, generation: generation))
                 guard !Task.isCancelled, job.generation == generation else { return }
                 outcome = .success(result, cleanup: cleanup)
             }
@@ -764,15 +777,39 @@ final class DictationController {
         }
     }
 
-    /// `background`: Home's work, which lets dictations have the local model first.
-    private func transcribe(_ recording: Recording, engine: EngineID, background: Bool = false) async -> Outcome {
+    /// Where a dictation job's stream reports how far it has come: to the main actor, and on to the pill while the
+    /// job still runs this attempt (`generation`).
+    private func streamProgress(for job: Job, generation: Int) -> @Sendable (ChatStreamProgress) -> Void {
+        { [weak self] progress in
+            Task { @MainActor [weak self] in
+                guard let self, job.generation == generation else { return }
+                self.streamed(progress, for: job.id)
+            }
+        }
+    }
+
+    /// A dictation's stream has come this far: its count, for the processing pill. Only a streamed request counts:
+    /// Gemini's, or a clean-up's (not the Parakeet transcript before it). Ignored once the job has its outcome or
+    /// isn't queued any more (canceled, delivered), and for anything else (Home's work never counts).
+    func streamed(_ progress: ChatStreamProgress, for id: UUID) {
+        guard let job = queue.first(where: { $0.id == id }), job.outcome == nil,
+              job.engine.cloudAPI == .chatCompletions || job.isCleaningUp else { return }
+        job.count = job.estimate.count(for: progress)
+        refreshPill()
+    }
+
+    /// `background`: Home's work, which lets dictations have the local model first. `progress`: a dictation's, for
+    /// the pill (Home never passes one).
+    private func transcribe(_ recording: Recording, engine: EngineID, background: Bool = false,
+                            progress: (@Sendable (ChatStreamProgress) -> Void)? = nil) async -> Outcome {
         do {
             if engine.isLocal, transcribeOverride == nil { try await waitForLocalModel(engine) }
             let result: TranscriptResult
             if let transcribeOverride {
                 result = try await transcribeOverride(recording, engine)
             } else {
-                result = try await transcription.transcribe(recording, engine: engine, background: background)
+                result = try await transcription.transcribe(recording, engine: engine, background: background,
+                                                            progress: progress)
             }
             return .success(result)
         } catch let error as AppError {
@@ -791,8 +828,10 @@ final class DictationController {
     }
 
     /// Tidies `text` (written by `source`) with the clean-up model `model`, giving up after its timeout. Never
-    /// throws: a failure, a timeout or an empty answer is `.failed`, and the original text stands.
-    private func runCleanup(_ text: String, of source: EngineID, by model: CleanupModel) async -> CleanupOutcome {
+    /// throws: a failure, a timeout or an empty answer is `.failed`, and the original text stands. `progress`: a
+    /// dictation's, for the pill (Home never passes one).
+    private func runCleanup(_ text: String, of source: EngineID, by model: CleanupModel,
+                            progress: (@Sendable (ChatStreamProgress) -> Void)? = nil) async -> CleanupOutcome {
         // A key already known not to work would fail the request too: no round trip, and the notice says why.
         if let keyProblem = openRouterKeyProblem {
             Log.engine.info("Clean-up skipped: \(keyProblem.code, privacy: .public)")
@@ -806,7 +845,7 @@ final class DictationController {
             } else {
                 let transcription = transcription
                 result = try await Self.within(timeout, source: source) {
-                    try await transcription.cleanUp(text, of: source, by: model, timeout: timeout)
+                    try await transcription.cleanUp(text, of: source, by: model, timeout: timeout, progress: progress)
                 }
             }
             result.text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1922,6 +1961,9 @@ final class DictationController {
             nil
         }
         if pillModel.sessionModel != session { pillModel.sessionModel = session }
+        // The same job's count: with several in flight, the newest one's.
+        let count = phase == .processing ? pillJob?.count : nil
+        if pillModel.tokenCount != count { pillModel.tokenCount = count }
 
         if phase.isRecording, let started = machine.recordingStartedAt {
             let wallStart = Date().addingTimeInterval(started - clock())
