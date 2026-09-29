@@ -127,7 +127,7 @@ The zip's name (`transcribe-thing-<version>.zip`) and the tag (`v<version>`) are
 |---|---|
 | Parakeet model | `~/Library/Application Support/transcribe-thing/Models/parakeet-tdt-0.6b-v3` |
 | History | `~/Library/Application Support/transcribe-thing/history.json` (last 2,000 dictations) |
-| Recordings | `~/Library/Application Support/transcribe-thing/Recordings`: every transcript keeps its recording while it's in History (Retry, Undo, Transcribe With); General → History → Auto-delete history, Never by default |
+| Recordings | `~/Library/Application Support/transcribe-thing/Recordings`: every transcript keeps its recording while it's in History (Retry, Undo, Transcribe With), as AAC in an .m4a (about 16 MB an hour; older builds' WAVs are compressed in the background after launch); General → History → Auto-delete history, Never by default |
 | Release feed cache | `~/Library/Application Support/transcribe-thing/updates.json` (what the last update check saw) |
 | Settings | `defaults read dev.transcribe-thing.app` |
 | OpenRouter key | login Keychain, service `dev.transcribe-thing.app` |

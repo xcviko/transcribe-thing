@@ -54,6 +54,30 @@ private func tone(_ seconds: Double) -> [Float] {
         #expect(abs(Double(decoded.count - samples.count) / Double(rate)) <= 0.1)
     }
 
+    /// The header holds just what the file needs: no 20 KB of padding on every recording History keeps.
+    @Test func anM4AIsNotPadded() throws {
+        #expect(try CloudAudio.m4a(tone(1), bitRate: 32_000).count < 10_000)
+    }
+
+    /// A recording History keeps as AAC goes to Gemini as it is, when it goes compressed and fits; it isn't encoded
+    /// a second time.
+    @Test func historysOwnAACGoesAsItIs() throws {
+        let samples = tone(10)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("cloud-audio-\(UUID().uuidString).m4a")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try CloudAudio.writeM4A(samples, bitRate: 32_000, to: url)
+        let stored = try Data(contentsOf: url)
+        let budget = OpenRouterClient.base64Length(ofByteCount: stored.count)
+
+        #expect(try CloudAudio.forChat(samples, stored: url, budget: budget) == (stored, "m4a"))
+        #expect(try CloudAudio.forChat(samples, stored: url) == (WAVEncoder.pcm16(samples), "wav"), "a WAV that fits")
+        let tighter = try CloudAudio.forChat(samples, stored: url, budget: budget - 4)
+        #expect(tighter.format == "m4a" && tighter.data != stored, "too big for the budget: encoded to fit it")
+        let gone = FileManager.default.temporaryDirectory.appendingPathComponent("gone-\(UUID().uuidString).m4a")
+        let encoded = try CloudAudio.forChat(samples, stored: gone, budget: budget)
+        #expect(encoded.format == "m4a" && !encoded.data.isEmpty)
+    }
+
     @Test func aRecordingUpToFiveMinutesIsOneSegment() {
         #expect(CloudAudio.speechSegments(tone(3)) == [0..<(3 * rate)])
         let five = [Float](repeating: 0.1, count: 300 * rate)

@@ -483,7 +483,7 @@ import Testing
         defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
         let id = try await dictate(h) { _ in }
         let entry = try #require(h.history.entry(id: id))
-        #expect(entry.audioFileName == "\(id.uuidString).wav")
+        #expect(entry.audioFileName == "\(id.uuidString).m4a")
         #expect(h.history.loadRecording(for: entry) != nil)
         h.history.deleteExpired(now: Date().addingTimeInterval(400 * 86_400))
         #expect(h.history.entry(id: id)?.audioFileName == entry.audioFileName, "Never: kept for good")
@@ -491,7 +491,7 @@ import Testing
         h.settings.autoDeleteHistoryDays = 1
         h.history.deleteExpired(now: Date().addingTimeInterval(2 * 86_400))
         #expect(h.history.entry(id: id) == nil, "the entry goes, and its recording with it")
-        let file = try #require(h.paths).recordingURL(fileName: "\(id.uuidString).wav")
+        let file = try #require(h.paths).recordingURL(fileName: "\(id.uuidString).m4a")
         try await waitUntil { !FileManager.default.fileExists(atPath: file.path) }
     }
 

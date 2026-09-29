@@ -10,6 +10,9 @@ struct Recording: Sendable, Identifiable, Equatable {
     /// Filled by the recorder at `stop()`.
     var speech: SpeechStats
     var deviceName: String?
+    /// The .m4a in History these samples were read from (`HistoryStore.loadRecording`). Saved again, the recording
+    /// keeps that file rather than being encoded a second time, and Gemini takes it as it is when it goes compressed.
+    var aacFile: URL?
 
     init(
         id: UUID = UUID(),

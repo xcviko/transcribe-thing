@@ -1,3 +1,4 @@
+import AVFoundation
 import CoreML
 import FluidAudio
 import Foundation
@@ -34,10 +35,20 @@ import Foundation
 ///            [--count <n> | --entry <id>] [--provider <slug>] [--out <report.json>]
 ///
 /// See `CleanupBench`. It reads the history file only, never the app's settings, and pays for `--count` requests.
+///
+/// Hidden check (not in the usage text) of how History keeps a recording, free, with no model and no key:
+///
+///     transcribe-thing --recompress <in.wav | in.m4a> <out.m4a>
+///
+/// Does to `<in>` what converting an older build's WAV does (`RecordingFile.compress`): reads it as History reads a
+/// recording, encodes it as History saves one (AAC-LC, 32 kbps, 16 kHz mono) into `<out.m4a>`, and reads that back.
+/// Prints both lengths, sizes and levels and the output's format; exits 1, with `<out.m4a>` removed, when the lengths
+/// differ by more than `RecordingFile.lengthTolerance`. Writes nothing but `<out.m4a>` (replaced if it's there), and
+/// never reads the app's settings, history or recordings.
 enum EngineCLI {
     static func handles(_ arguments: [String]) -> Bool {
         arguments.contains("--transcribe") || arguments.contains("--model-status")
-            || arguments.contains(CleanupBench.flag)
+            || arguments.contains(CleanupBench.flag) || arguments.contains(Recompress.flag)
     }
 
     /// Runs the CLI mode and exits the process.
@@ -66,6 +77,9 @@ enum EngineCLI {
         }
         if arguments.contains(CleanupBench.flag) {
             return await runCleanupBench(arguments)
+        }
+        if arguments.contains(Recompress.flag) {
+            return await recompress(arguments)
         }
         guard let options = Options(arguments) else {
             printError(Options.usage)
@@ -645,6 +659,68 @@ enum EngineCLI {
         private static func milliseconds(_ duration: Duration) -> Int {
             Int((TranscriptionService.seconds(duration) * 1000).rounded())
         }
+    }
+
+    // MARK: Recompress
+
+    /// `--recompress <in> <out.m4a>`: see the type's comment.
+    enum Recompress {
+        static let flag = "--recompress"
+        static let usage = "usage: transcribe-thing --recompress <in.wav | in.m4a> <out.m4a>"
+
+        /// The input and the output named after the flag; nil unless the output is another file, an .m4a.
+        static func files(_ arguments: [String]) -> (input: URL, output: URL)? {
+            guard let index = arguments.firstIndex(of: flag), index + 2 < arguments.count else { return nil }
+            let paths = arguments[(index + 1)...(index + 2)]
+            guard !paths.contains(where: { $0.hasPrefix("--") }) else { return nil }
+            let urls = paths.map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath).standardizedFileURL }
+            guard urls[1].pathExtension.lowercased() == "m4a", urls[0] != urls[1] else { return nil }
+            return (urls[0], urls[1])
+        }
+    }
+
+    private static func recompress(_ arguments: [String]) async -> Int32 {
+        guard let (input, output) = Recompress.files(arguments) else {
+            printError(Recompress.usage)
+            return ExitCode.usage
+        }
+        guard FileManager.default.fileExists(atPath: input.path) else {
+            printError("ERROR: no such file: \(input.path)")
+            return ExitCode.usage
+        }
+        let started = ContinuousClock.now
+        let check: RecordingFile.Check
+        do {
+            check = try await Task.detached(priority: .userInitiated) {
+                try RecordingFile.compress(input, into: output)
+            }.value
+        } catch {
+            printError("ERROR: \(error.localizedDescription)")
+            return ExitCode.failed
+        }
+        let elapsed = seconds(since: started)
+        func bytes(_ url: URL) -> Int64 {
+            ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber)?.int64Value ?? 0
+        }
+        func line(_ url: URL, samples: Int, rms: Float) -> String {
+            let dbfs = rms > 0 ? 20 * log10(rms) : -160
+            return "\(url.lastPathComponent) · \(format(Double(samples) / Recording.sampleRate, digits: 3)) s · "
+                + "\(samples) samples · \(Fmt.bytes(bytes(url))) · RMS \(format(Double(dbfs), digits: 1)) dBFS"
+        }
+        print("IN: \(line(input, samples: check.sourceSamples, rms: check.sourceRMS))")
+        print("OUT: \(line(output, samples: check.outputSamples, rms: check.outputRMS))")
+        if let file = try? AVAudioFile(forReading: output) {
+            let fileFormat = file.fileFormat
+            let codec = fileFormat.streamDescription.pointee.mFormatID == kAudioFormatMPEG4AAC ? "AAC" : "not AAC"
+            let seconds = Double(check.outputSamples) / Recording.sampleRate
+            let kbps = seconds > 0 ? Double(bytes(output)) * 8 / seconds / 1000 : 0
+            print("FORMAT: \(codec) · \(Int(fileFormat.sampleRate)) Hz · \(fileFormat.channelCount) channel(s) · "
+                  + "\(format(kbps, digits: 1)) kbps with the container")
+        }
+        let tolerance = Int(RecordingFile.lengthTolerance * Recording.sampleRate)
+        print("CHECK: lengths differ by \(abs(check.outputSamples - check.sourceSamples)) samples (at most "
+              + "\(tolerance)) · encoded and read back in \(format(elapsed)) s")
+        return ExitCode.ok
     }
 
     // MARK: Parakeet compute diagnostics

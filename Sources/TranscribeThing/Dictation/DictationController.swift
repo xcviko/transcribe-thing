@@ -937,7 +937,7 @@ final class DictationController {
     private var isDelivering: Bool { deliveringJob != nil }
 
     /// Queued, being delivered, being recorded on again (Undo), or worked on from Home.
-    private func isInFlight(_ id: UUID) -> Bool {
+    func isInFlight(_ id: UUID) -> Bool {
         queue.contains { $0.id == id } || deliveringJob?.id == id || continuing?.id == id || homeWork[id] != nil
     }
 

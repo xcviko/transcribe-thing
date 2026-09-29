@@ -11,7 +11,7 @@ struct AppPaths: Sendable {
 
     /// root/Models (Parakeet lives in Models/parakeet-tdt-0.6b-v3).
     var models: URL { root.appendingPathComponent("Models", isDirectory: true) }
-    /// root/Recordings: WAV files of failed or canceled dictations.
+    /// root/Recordings: each History entry's recording (`RecordingFile`).
     var recordings: URL { root.appendingPathComponent("Recordings", isDirectory: true) }
     /// root/history.json
     var historyFile: URL { root.appendingPathComponent("history.json", isDirectory: false) }

@@ -792,7 +792,7 @@ final class FakeRecorder: DictationRecorder {
         h.controller.enqueue(r, engine: .parakeet, targetPID: nil)
         try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id) != nil }
         let entry = try #require(h.history.entry(id: r.id))
-        #expect(entry.audioFileName == "\(r.id.uuidString).wav")
+        #expect(entry.audioFileName == "\(r.id.uuidString).m4a")
         #expect(h.history.loadRecording(for: entry)?.samples.count == r.samples.count)
     }
 

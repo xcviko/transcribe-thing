@@ -282,10 +282,10 @@ struct HistoryStats: Equatable, Sendable {
     }
 }
 
-/// Transcript history: JSON on disk (read and written off the main thread), plus each entry's recording as a WAV
-/// file, so failed or canceled dictations can be retried and any transcript transcribed again with another model.
-/// An entry and its recording go together: deleted, cleared, auto-deleted (`AppSettings.autoDeleteHistoryDays`) or
-/// past `maxEntries`.
+/// Transcript history: JSON on disk (read and written off the main thread), plus each entry's recording as a file
+/// (`RecordingFile`: AAC, or WAV from older builds until `compressLegacyRecordings` converts it), so failed or
+/// canceled dictations can be retried and any transcript transcribed again with another model. An entry and its
+/// recording go together: deleted, cleared, auto-deleted (`AppSettings.autoDeleteHistoryDays`) or past `maxEntries`.
 @MainActor @Observable
 final class HistoryStore {
     static let maxEntries = 2000
@@ -296,20 +296,31 @@ final class HistoryStore {
     @ObservationIgnored private let persists: Bool
     @ObservationIgnored private let io = HistoryIO()
     @ObservationIgnored private var saveTask: Task<Void, Never>?
+    @ObservationIgnored private var loadTask: Task<Void, Never>?
     @ObservationIgnored private var didLoad = false
     @ObservationIgnored private var revision = 0
     @ObservationIgnored private var statsCache: (revision: Int, day: Date, stats: HistoryStats)?
     @ObservationIgnored private var daysCache: (revision: Int, day: Date, query: String, days: [HistoryDay])?
     /// Audio of deleted entries lingers briefly so the Hub's "Undo" can bring the row back intact.
     @ObservationIgnored private var pendingFileRemovals: [String: Task<Void, Never>] = [:]
-    static let deletedAudioGrace: Duration = .seconds(15)
+    @ObservationIgnored var deletedAudioGrace: Duration = .seconds(15)
+    /// The latest save of each recording still being written, by recording id (`saveAudio`).
+    @ObservationIgnored private var latestSaves: [UUID: UUID] = [:]
+    @ObservationIgnored private var isCompressing = false
     /// Entries just removed, by id: deleted, cleared, auto-deleted, or the oldest past `maxEntries`.
     @ObservationIgnored var onRemove: (([UUID]) -> Void)?
+    /// Whether a dictation or Home is working on the recording right now (`DictationController.isInFlight`):
+    /// `compressLegacyRecordings` leaves its file alone meanwhile.
+    @ObservationIgnored var isInUse: (UUID) -> Bool = { _ in false }
+    /// Replaces the AAC encoder (`RecordingFile.aac`) for saves and conversions: tests.
+    @ObservationIgnored var encodeOverride: RecordingFile.Encoder?
 
     /// Newest first, at most `maxEntries`.
     private(set) var entries: [TranscriptEntry] = []
     /// True once the on-disk history has been read (or there was none).
     private(set) var isLoaded = false
+    /// Recordings `compressLegacyRecordings` has converted so far (General's size line follows it).
+    private(set) var compressedRecordings = 0
 
     init(paths: AppPaths, settings: AppSettings) {
         self.paths = paths
@@ -381,7 +392,7 @@ final class HistoryStore {
         didLoad = true
         let file = paths.historyFile
         let io = io
-        Task { [weak self] in
+        loadTask = Task { [weak self] in
             let result = await io.read(file)
             self?.finishLoading(result)
         }
@@ -430,7 +441,10 @@ final class HistoryStore {
         if let file = entry.audioFileName { pendingFileRemovals.removeValue(forKey: file)?.cancel() }
         if let i = entries.firstIndex(where: { $0.id == entry.id }) {
             let old = entries[i]
-            if let oldFile = old.audioFileName, oldFile != entry.audioFileName {
+            // The same recording in the other format takes over from its own file: the save that wrote it removed
+            // that (`RecordingFile.save`), or it is the WAV a failed encode kept.
+            if let oldFile = old.audioFileName, oldFile != entry.audioFileName,
+               entry.audioFileName != RecordingFile.otherFormat(of: oldFile) {
                 removeAudioFile(oldFile)
             }
             entries[i] = entry
@@ -488,32 +502,50 @@ final class HistoryStore {
 
     // MARK: - Audio
 
-    /// Writes the recording as a 16 kHz WAV into `paths.recordings` (off the main thread) and returns its file name.
+    /// Writes the recording into `paths.recordings` (encoded off the main thread) and returns its file name,
+    /// `<id>.m4a` (`RecordingFile`). Should the encoder fail it's kept as a WAV instead, which the entry then names
+    /// (unless the recording was saved again meanwhile). A recording read back from its .m4a (`Recording.aacFile`)
+    /// keeps that file rather than being encoded a second time.
     func saveAudio(_ recording: Recording) -> String? {
         guard persists, !recording.samples.isEmpty else { return nil }
-        let name = "\(recording.id.uuidString).wav"
+        let id = recording.id
+        let name = RecordingFile.name(for: id)
         let url = paths.recordingURL(fileName: name)
-        let dir = paths.recordings
         let samples = recording.samples
-        io.perform {
-            do {
-                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-                try WAVEncoder.pcm16(samples, sampleRate: Int(Recording.sampleRate)).write(to: url, options: .atomic)
-            } catch {
-                Log.app.error("Couldn't save recording: \(error.localizedDescription, privacy: .public)")
-            }
+        let isStored = recording.aacFile == url
+        let encode = encodeOverride ?? RecordingFile.aac
+        let save = UUID()
+        latestSaves[id] = save
+        io.perform { [weak self] in
+            let saved = isStored && FileManager.default.fileExists(atPath: url.path)
+                ? url : RecordingFile.save(samples, as: url, encode: encode)
+            Task { @MainActor in self?.finishSaving(save, of: id, as: saved?.lastPathComponent) }
         }
         return name
     }
 
+    /// A save of the recording is written. When its encoder failed and no newer save of it is on the way, the entry
+    /// names the WAV it was kept as.
+    private func finishSaving(_ save: UUID, of id: UUID, as saved: String?) {
+        guard latestSaves[id] == save else { return }
+        latestSaves[id] = nil
+        guard let saved, var entry = entry(id: id), let name = entry.audioFileName,
+              saved == RecordingFile.otherFormat(of: name) else { return }
+        entry.audioFileName = saved
+        upsert(entry)
+    }
+
+    /// The entry's recording read back, either format (`RecordingFile`); nil when it has none or it can't be read.
     func loadRecording(for entry: TranscriptEntry) -> Recording? {
         guard let name = entry.audioFileName else { return nil }
         let url = paths.recordingURL(fileName: name)
         // Waits for a pending write of the same file to land first.
-        guard let data = io.readSync(url), let samples = WAVEncoder.decode(data), !samples.isEmpty else { return nil }
+        guard let samples = io.sync({ RecordingFile.read(url) }), !samples.isEmpty else { return nil }
         var speech = SpeechAnalyzer.stats(for: samples)
         if speech.voicedSeconds == 0 && entry.voicedSeconds > 0 { speech.voicedSeconds = entry.voicedSeconds }
-        return Recording(id: entry.id, samples: samples, startedAt: entry.createdAt, speech: speech)
+        var recording = Recording(id: entry.id, samples: samples, startedAt: entry.createdAt, speech: speech)
+        if RecordingFile.isAAC(name) { recording.aacFile = url }
+        return recording
     }
 
     func audioURL(for entry: TranscriptEntry) -> URL? {
@@ -522,15 +554,15 @@ final class HistoryStore {
         return FileManager.default.fileExists(atPath: url.path) ? url : nil
     }
 
-    /// What the recordings take on disk, in bytes (read on the store's IO queue, after any pending writes); 0 for a
-    /// preview store.
+    /// What the recordings take on disk, in bytes (read on the store's IO queue, after any pending writes), either
+    /// format; a partial file being written doesn't count. 0 for a preview store.
     func recordingsByteCount() async -> Int64 {
         guard persists else { return 0 }
         let dir = paths.recordings
         return await io.value {
             let fm = FileManager.default
             let files = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.fileSizeKey])) ?? []
-            return files.reduce(Int64(0)) { total, url in
+            return files.filter { RecordingFile.isRecording($0.lastPathComponent) }.reduce(Int64(0)) { total, url in
                 total + Int64((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
             }
         }
@@ -545,7 +577,8 @@ final class HistoryStore {
     }
 
     /// Auto-delete: with `autoDeleteHistoryDays` set, entries older than that many days go, their recordings at once
-    /// (no Undo brings them back). Then recordings no entry refers to are swept up.
+    /// (no Undo brings them back). Then recordings no entry refers to are swept up, but for one whose entry names it
+    /// in the other format, missing: that entry names it again (`renameRecordings`).
     func deleteExpired(now: Date = Date()) {
         let expired = expiredEntries(afterDays: settings.autoDeleteHistoryDays, now: now)
         if !expired.isEmpty {
@@ -562,23 +595,46 @@ final class HistoryStore {
         guard persists, isLoaded else { return }
         let referenced = Set(entries.compactMap(\.audioFileName))
         let dir = paths.recordings
-        io.perform {
+        io.perform { [weak self] in
             let fm = FileManager.default
             let keys: [URLResourceKey] = [.contentModificationDateKey]
-            for url in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: keys)) ?? []
-            where url.pathExtension == "wav" && !referenced.contains(url.lastPathComponent) {
+            let files = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: keys)) ?? []
+            let present = Set(files.map(\.lastPathComponent))
+            var found: [String: String] = [:]
+            for url in files
+            where RecordingFile.isRecording(url.lastPathComponent) && !referenced.contains(url.lastPathComponent) {
+                // Its entry names it in the other format, which isn't there: the WAV a failed encode kept, the app
+                // gone before the entry heard of it. Still that entry's recording.
+                let named = RecordingFile.otherFormat(of: url.lastPathComponent)
+                if referenced.contains(named) && !present.contains(named) {
+                    found[named] = url.lastPathComponent
+                    continue
+                }
                 // Grace period: a file written moments ago may belong to an entry that isn't upserted yet.
                 let modified = (try? url.resourceValues(forKeys: Set(keys)))?.contentModificationDate ?? .distantPast
                 if modified < now.addingTimeInterval(-3600) { try? fm.removeItem(at: url) }
             }
+            guard !found.isEmpty else { return }
+            Task { @MainActor in self?.renameRecordings(found) }
+        }
+    }
+
+    /// Entries that name a recording kept in the other format (`deleteExpired`: name → file) name the file, unless a
+    /// save of the recording is still on its way.
+    private func renameRecordings(_ found: [String: String]) {
+        for (named, file) in found {
+            guard var entry = entries.first(where: { $0.audioFileName == named }), latestSaves[entry.id] == nil
+            else { continue }
+            entry.audioFileName = file
+            upsert(entry)
         }
     }
 
     private func removeAudioFileLater(_ name: String) {
         guard persists else { return }
         pendingFileRemovals[name]?.cancel()
-        pendingFileRemovals[name] = Task { [weak self] in
-            try? await Task.sleep(for: Self.deletedAudioGrace)
+        pendingFileRemovals[name] = Task { [weak self, deletedAudioGrace] in
+            try? await Task.sleep(for: deletedAudioGrace)
             guard !Task.isCancelled, let self else { return }
             self.pendingFileRemovals[name] = nil
             if !self.entries.contains(where: { $0.audioFileName == name }) { self.removeAudioFile(name) }
@@ -591,6 +647,65 @@ final class HistoryStore {
         io.perform { try? FileManager.default.removeItem(at: url) }
     }
 
+    // MARK: - Compressing older recordings
+
+    /// Converts the WAV recordings older builds kept to AAC (`RecordingFile`, about a seventh of the size), newest
+    /// first, one at a time, off the main thread at background priority. Each is encoded into a partial file beside
+    /// it and read back; only when that is as long as the WAV does it take the recording's name (`<id>.m4a`), then the
+    /// entry names it, history.json is written, and only then the WAV goes. A failure leaves the WAV and its entry as
+    /// they were, and the next one is tried. A recording a dictation or Home is working on (`isInUse`) is left alone,
+    /// until the next launch. An interrupted run is safe to run again: the partial files it left are removed first,
+    /// and a WAV no entry names any more is swept up by `deleteExpired`.
+    func compressLegacyRecordings() async {
+        guard persists, !isCompressing else { return }
+        isCompressing = true
+        defer { isCompressing = false }
+        await loadTask?.value
+        guard isLoaded else { return }
+        let directory = paths.recordings
+        await io.value { RecordingFile.removePartials(in: directory) }
+        var tried: Set<UUID> = []
+        while !Task.isCancelled, let entry = entries.first(where: { entry in
+            !tried.contains(entry.id) && entry.audioFileName.map(RecordingFile.isWAV) == true && !isInUse(entry.id)
+        }) {
+            tried.insert(entry.id)
+            if await compressRecording(of: entry) { compressedRecordings += 1 }
+        }
+    }
+
+    /// One recording of `compressLegacyRecordings`; true once its entry names the new file.
+    private func compressRecording(of entry: TranscriptEntry) async -> Bool {
+        guard let name = entry.audioFileName else { return false }
+        let id = entry.id
+        let wav = paths.recordingURL(fileName: name)
+        let aacName = RecordingFile.otherFormat(of: name)
+        let aac = paths.recordingURL(fileName: aacName)
+        let encode = encodeOverride ?? RecordingFile.aac
+        guard let made = await Task.detached(priority: .background, operation: {
+            RecordingFile.compressLegacy(wav, encode: encode)
+        }).value else { return false }
+
+        // Still the entry's recording and nobody's work: the new file takes its name, on the IO queue after any save
+        // of the recording already on its way (a save that comes later writes over it).
+        let isUnchanged = { self.entry(id: id)?.audioFileName == name && !self.isInUse(id) }
+        guard isUnchanged() else {
+            io.perform { try? FileManager.default.removeItem(at: made.partial) }
+            return false
+        }
+        guard await io.value({ RecordingFile.place(made.partial, at: aac, madeFrom: wav, stamp: made.stamp) }),
+              isUnchanged(), let index = entries.firstIndex(where: { $0.id == id }) else {
+            // Deleted or taken up meanwhile: the WAV stays its recording.
+            if !entries.contains(where: { $0.audioFileName == aacName }) { removeAudioFile(aacName) }
+            return false
+        }
+        entries[index].audioFileName = aacName
+        changed(save: false)
+        // history.json names the new file before the WAV goes: a crash in between loses nothing.
+        io.write(entries, to: paths.historyFile)
+        removeAudioFile(name)
+        return true
+    }
+
     private static func normalized(_ list: [TranscriptEntry]) -> [TranscriptEntry] {
         var seen = Set<UUID>()
         let unique = list.filter { seen.insert($0.id).inserted }
@@ -598,7 +713,7 @@ final class HistoryStore {
     }
 }
 
-/// Serial file IO for the history: JSON reads/writes and WAV files, in submission order.
+/// Serial file IO for the history: JSON reads/writes and recording files, in submission order.
 private final class HistoryIO: @unchecked Sendable {
     enum ReadResult: Sendable {
         case missing
@@ -645,8 +760,9 @@ private final class HistoryIO: @unchecked Sendable {
         await value { Self.readNow(url) }
     }
 
-    func readSync(_ url: URL) -> Data? {
-        queue.sync { try? Data(contentsOf: url) }
+    /// `work`'s result, computed on the queue after everything submitted before it, waiting for it.
+    func sync<T>(_ work: () -> T) -> T {
+        queue.sync(execute: work)
     }
 
     func write(_ entries: [TranscriptEntry], to url: URL) {

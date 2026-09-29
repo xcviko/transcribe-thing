@@ -119,7 +119,9 @@ struct GeneralPage: View {
         }
         // Approval in Login Items (or removal there) happens outside transcribe-thing.
         .onAppear { launchAtLogin.refresh() }
-        .task(id: history.entries.count) { recordingsBytes = await history.recordingsByteCount() }
+        .task(id: [history.entries.count, history.compressedRecordings]) {
+            recordingsBytes = await history.recordingsByteCount()
+        }
         .confirmationDialog("Delete all transcripts and recordings?", isPresented: $confirmingClear) {
             Button("Delete Everything", role: .destructive) {
                 withAnimation(Theme.Motion.collapse) { history.clearAll() }

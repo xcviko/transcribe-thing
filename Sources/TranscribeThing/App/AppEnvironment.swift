@@ -33,6 +33,7 @@ final class AppEnvironment {
 
     private var isStarted = false
     private var maintenanceTask: Task<Void, Never>?
+    private var compressionTask: Task<Void, Never>?
     private var activationObserver: MainNotificationObserver?
 
     init(paths: AppPaths, settings: AppSettings, keychain: KeychainStore, levelMeter: LevelMeter,
@@ -159,6 +160,7 @@ final class AppEnvironment {
         dictation.onDictationFailed = { [weak self] in self?.updates.dictationFailed() }
         dictation.installUpdate = { [weak self] in self?.installUpdate() }
         updates.isDictationActive = { [weak dictation] in (dictation?.activity ?? .idle) != .idle }
+        history.isInUse = { [weak dictation] id in dictation?.isInFlight(id) ?? false }
         let builder = menuBar.builder
         pillModel.contextMenuProvider = { builder.makeMenu(includeQuit: false) }
         inserter.eventTapActive = { [weak hotkeys] in hotkeys?.isTapActive ?? false }
@@ -203,6 +205,7 @@ final class AppEnvironment {
         }
         observeAutoDelete()
         scheduleMaintenance()
+        scheduleCompression()
         updates.start()
         activationObserver = MainNotificationObserver(center: .default, name: NSApplication.didBecomeActiveNotification) {
             [weak self] in self?.didBecomeActive()
@@ -225,6 +228,7 @@ final class AppEnvironment {
         history.flush()
         hotkeys.stop()
         maintenanceTask?.cancel()
+        compressionTask?.cancel()
         updates.stop()
     }
 
@@ -281,6 +285,15 @@ final class AppEnvironment {
                 guard !Task.isCancelled else { return }
                 self?.history.deleteExpired()
             }
+        }
+    }
+
+    /// Once the launch has settled, the recordings older builds kept as WAV are compressed in the background.
+    private func scheduleCompression() {
+        compressionTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(30))
+            guard !Task.isCancelled, let history = self?.history else { return }
+            await history.compressLegacyRecordings()
         }
     }
 

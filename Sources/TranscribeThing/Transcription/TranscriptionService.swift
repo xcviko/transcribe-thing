@@ -85,7 +85,7 @@ final class TranscriptionService {
             } else {
                 let effort = effort ?? engine.reasoningEffort
                 let prompt = engine.cloudAPI == .chatCompletions ? (prompt ?? EngineID.geminiSystemPrompt) : ""
-                let cloud = try await transcribeCloud(recording.samples, engine: engine, effort: effort, prompt: prompt,
+                let cloud = try await transcribeCloud(recording, engine: engine, effort: effort, prompt: prompt,
                                                       progress: progress)
                 result.text = cloud.text
                 result.costUSD = cloud.costUSD
@@ -114,7 +114,7 @@ final class TranscriptionService {
         }
     }
 
-    private func transcribeCloud(_ samples: [Float], engine: EngineID, effort: ReasoningEffort?, prompt: String,
+    private func transcribeCloud(_ recording: Recording, engine: EngineID, effort: ReasoningEffort?, prompt: String,
                                  progress: (@Sendable (ChatStreamProgress) -> Void)?) async throws -> CloudResult {
         guard let model = engine.openRouterModelID, let api = engine.cloudAPI else {
             throw AppError.engineFailed(engine, "No cloud model for \(engine.displayName).")
@@ -126,10 +126,10 @@ final class TranscriptionService {
             let result: CloudResult
             switch api {
             case .chatCompletions:
-                result = try await transcribeWithChat(samples, engine: engine, model: model, key: key,
+                result = try await transcribeWithChat(recording, engine: engine, model: model, key: key,
                                                       effort: effort ?? .medium, prompt: prompt, progress: progress)
             case .transcriptions:
-                result = try await transcribeSpeech(samples, engine: engine, model: model, key: key)
+                result = try await transcribeSpeech(recording.samples, engine: engine, model: model, key: key)
             }
             account.noteCloudSuccess()
             return result
@@ -140,12 +140,15 @@ final class TranscriptionService {
     }
 
     /// Gemini: the whole recording in one request, with its system prompt, whatever its length. Past what its WAV can
-    /// carry it goes as AAC (`CloudAudio.forChat`); the answer's token budget grows with the audio, and it streams, so
-    /// no wait for it has to.
-    private func transcribeWithChat(_ samples: [Float], engine: EngineID, model: String, key: String,
+    /// carry it goes as AAC (`CloudAudio.forChat`; History's own .m4a as it is, when it has one that fits); the
+    /// answer's token budget grows with the audio, and it streams, so no wait for it has to.
+    private func transcribeWithChat(_ recording: Recording, engine: EngineID, model: String, key: String,
                                     effort: ReasoningEffort, prompt: String,
                                     progress: (@Sendable (ChatStreamProgress) -> Void)?) async throws -> CloudResult {
-        let encoded = await Task.detached(priority: .userInitiated) { try? CloudAudio.forChat(samples) }.value
+        let samples = recording.samples, stored = recording.aacFile
+        let encoded = await Task.detached(priority: .userInitiated) {
+            try? CloudAudio.forChat(samples, stored: stored)
+        }.value
         guard let encoded else { throw AppError.engineFailed(engine, "Couldn’t compress the recording.") }
         try Task.checkCancellation()
         let seconds = Double(samples.count) / Recording.sampleRate
