@@ -709,16 +709,17 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         #expect(settings.parakeetEngine == .parakeet)
         #expect(settings.lineup == .default)
         #expect(settings.pillMode == .whileDictating)
-        #expect(settings.pillColor == .graphite)
+        #expect(settings.modelColors == .default)
         #expect(settings.shortcuts == .defaults)
 
         settings.parakeetEngine = .parakeetCloud
         settings.lineup.main = .cleanup
         settings.lineup.setSwitchable(.gemini, false)
         settings.lineup.move(.gemini, to: 0)
+        settings.modelColors[.gemini] = .blue
+        settings.modelColors[.parakeet] = .teal
         settings.switchHintShownCount = 2
         settings.pillMode = .always
-        settings.pillColor = .sapphire
         settings.microphoneUID = "usb-mic"
         settings.soundsEnabled = false
         settings.autoDeleteHistoryDays = 30
@@ -733,9 +734,10 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         #expect(reloaded.lineup == settings.lineup)
         #expect(reloaded.lineup.order == [.gemini, .parakeet, .cleanup] && reloaded.lineup.main == .cleanup)
         #expect(reloaded.lineup.cycle == [.cleanup, .parakeet])
+        #expect(reloaded.modelColors[.gemini] == .blue && reloaded.modelColors[.parakeet] == .teal)
+        #expect(reloaded.modelColors[.cleanup] == .orange)
         #expect(reloaded.switchHintShownCount == 2)
         #expect(reloaded.pillMode == .always)
-        #expect(reloaded.pillColor == .sapphire)
         #expect(reloaded.microphoneUID == "usb-mic")
         #expect(!reloaded.soundsEnabled)
         #expect(reloaded.autoDeleteHistoryDays == 30)
@@ -746,15 +748,48 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         #expect(AppSettings(defaults: defaults).microphoneUID == nil)
     }
 
-    /// A pill color this build doesn't offer (one since removed, or from a newer build) leaves graphite, and stays
-    /// stored as it was.
-    @Test func anUnknownPillColorIsGraphite() throws {
+    /// The removed capsule color (General › Pill color): a color left by an older build is dropped; color means the
+    /// model now.
+    @Test func theRemovedPillColorIsDropped() throws {
         try withSuite { defaults in
-            defaults.set("chartreuse", forKey: SettingsKey.pillColor.defaultsKey)
-            #expect(AppSettings(defaults: defaults).pillColor == .graphite)
-            #expect(defaults.string(forKey: SettingsKey.pillColor.defaultsKey) == "chartreuse")
+            defaults.set("sapphire", forKey: SettingsKey.pillColor.defaultsKey)
+            #expect(AppSettings(defaults: defaults).modelColors == .default)
+            #expect(defaults.object(forKey: "tt.pillColor") == nil)
             #expect(SettingsKey.pillColor.defaultsKey == "tt.pillColor")
         }
+    }
+
+    /// A stored value outlives builds: a color this build doesn't offer, a value of the wrong kind or an unknown model
+    /// leaves the defaults. As with the lineup, a load stores what this build reads.
+    @Test func storedModelColorsDecodeLeniently() throws {
+        let json = #"{"gemini":"blue","cleanup":"chartreuse","whisper":"pink","parakeet":7}"#
+        let decoded = try JSONDecoder().decode(ModelColors.self, from: Data(json.utf8))
+        #expect(decoded[.gemini] == .blue && decoded[.cleanup] == .orange && decoded[.parakeet] == .graphite)
+        #expect(try JSONDecoder().decode(ModelColors.self, from: Data("{}".utf8)) == .default)
+        #expect(SettingsKey.modelColors.defaultsKey == "tt.modelColors")
+
+        try withSuite { defaults in
+            defaults.set(Data(json.utf8), forKey: SettingsKey.modelColors.defaultsKey)
+            let settings = AppSettings(defaults: defaults)
+            #expect(settings.modelColors[.gemini] == .blue && settings.modelColors[.cleanup] == .orange)
+            let stored = defaults.data(forKey: SettingsKey.modelColors.defaultsKey).map { String(decoding: $0, as: UTF8.self) }
+            #expect(stored == #"{"cleanup":"orange","gemini":"blue","parakeet":"graphite"}"#)
+            #expect(AppSettings(defaults: defaults).modelColors == settings.modelColors, "a reload changes nothing")
+            // Not an object at all: the defaults.
+            defaults.set(Data("[]".utf8), forKey: SettingsKey.modelColors.defaultsKey)
+            #expect(AppSettings(defaults: defaults).modelColors == .default)
+        }
+    }
+
+    @Test func modelColorsEncodeStably() throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let json = String(decoding: try encoder.encode(ModelColors.default), as: UTF8.self)
+        #expect(json == #"{"cleanup":"orange","gemini":"violet","parakeet":"graphite"}"#)
+        var colors = ModelColors.default
+        colors[.cleanup] = .violet
+        #expect(try JSONDecoder().decode(ModelColors.self, from: encoder.encode(colors)) == colors)
+        #expect(colors[.cleanup] == colors[.gemini], "two may share one")
     }
 
     /// The pasting switches and Auto-delete are off (Never) out of the box.

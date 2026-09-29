@@ -278,8 +278,9 @@ struct HistoryRow: View, Equatable {
             if entry.versions.count > 1 {
                 VersionCount(count: entry.versions.count)
             }
+            // Observed: a color picked in Models redraws the row, `equatable()` or not.
             EngineGlyph(engine: entry.engine, provider: entry.provider, cleanupModel: entry.currentKind?.cleanupModel,
-                        details: entry.currentVersion.map(VersionDetails.tooltip))
+                        details: entry.currentVersion.map(VersionDetails.tooltip), colors: hub.settings.modelColors)
             Text(Fmt.duration(entry.audioDuration))
                 .font(.system(size: 11.5))
                 .monospacedDigit()

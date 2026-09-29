@@ -94,10 +94,10 @@ enum PillSnapshots {
                 CanvasScene(model: PillModelSheet.model(.locked, choice: .gemini, recordingFor: 362),
                             notices: [PillSnapshotFixtures.micFallback])
             },
-            // Pill colors (`--only pill-colors`): every color with its white content, the model tints and chip, and
-            // the tooltip and hint above it; on a document in light, a dark editor in dark.
-            SnapshotEntry("pill-colors", width: PillColorSheet.width, height: PillColorSheet.height) { _ in
-                PillColorSheet()
+            // Model colors (`--only pill-model-colors`): every color Models offers as a model's tint, on the pill and
+            // in the Hub; on a document in light, a dark editor in dark.
+            SnapshotEntry("pill-model-colors", width: ModelColorSheet.width, height: ModelColorSheet.height) { _ in
+                ModelColorSheet()
             },
             SnapshotEntry("pill-toast-info", width: 640, height: 250) { _ in
                 CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.canceled])
@@ -573,31 +573,30 @@ private struct PillModelSheet: View {
     }
 }
 
-/// Each pill color in a row: the resting and listening pill, a Gemini chip, the clean-up chip over a count, hands-free's
-/// X, timer and Stop, the error, and the tooltip and the Switch model hint above the pill. On a white document in the
-/// light appearance (where a page showing through washes a color out most), on a dark editor in the dark one.
-private struct PillColorSheet: View {
+/// Each model color in a row, as every model's tint: listening, a Gemini chip, the clean-up chip over a count, the
+/// processing dots, hands-free's ring beside Stop, and in the Hub a model's tile and History's mark. On a white
+/// document in the light appearance (where a ring is hardest to see), on a dark editor in the dark one.
+private struct ModelColorSheet: View {
     private struct Column {
         let title: String
         let width: CGFloat
-        let make: @MainActor (PillColor) -> AnyView
+        let make: @MainActor (ModelColor) -> AnyView
     }
 
-    private static let captionWidth: CGFloat = 150
+    private static let captionWidth: CGFloat = 170
     private static let rowHeight: CGFloat = 100
     private static let headerHeight: CGFloat = 44
     /// Canvas bottom → pill bottom, as in the panel (`PillCanvasMetrics.pillBottomInset`).
     private static let pillInset = PillCanvasMetrics.pillBottomInset
 
     static var width: CGFloat { 24 + captionWidth + columns.reduce(0) { $0 + $1.width } + 24 }
-    static var height: CGFloat { headerHeight + CGFloat(PillColor.allCases.count) * rowHeight }
+    static var height: CGFloat { headerHeight + CGFloat(ModelColor.allCases.count) * rowHeight }
 
-    /// The pill in `color`: the preview model's settings carry it, as the app's carry the user's.
-    @MainActor private static func pill(_ color: PillColor, _ phase: PillPhase, choice: ModelChoice? = nil,
-                                        chip: Bool = false, level: Float = 0.7,
-                                        recordingFor elapsed: TimeInterval? = nil) -> PillModel {
+    /// The pill with every model in `color`: the preview model's settings carry it, as the app's carry the user's.
+    @MainActor private static func pill(_ color: ModelColor, _ phase: PillPhase, choice: ModelChoice, chip: Bool = false,
+                                        level: Float = 0.7, recordingFor elapsed: TimeInterval? = nil) -> PillModel {
         let model = PillModelSheet.model(phase, choice: choice, level: level, chip: chip, recordingFor: elapsed)
-        model.settings.pillColor = color
+        for c in ModelChoice.allCases { model.settings.modelColors[c] = color }
         return model
     }
 
@@ -607,35 +606,27 @@ private struct PillColorSheet: View {
     }
 
     private static let columns: [Column] = [
-        Column(title: "Rest", width: 90) { standing(pill($0, .rest)) },
         Column(title: "Listening", width: 140) { standing(pill($0, .listening, choice: .parakeet)) },
         Column(title: "Gemini chip", width: 170) { standing(pill($0, .listening, choice: .gemini, chip: true)) },
-        // The chip's dimmed "Parakeet" is the dimmest text on the fill.
+        // The chip's dimmed "Parakeet" and the counter's word are the dimmest text on the fill.
         Column(title: "Clean-up chip", width: 200) {
             standing(pill($0, .processing, choice: .cleanup, chip: true)
                 .previewCounter(PillTokenCount(phase: .writing, tokens: 340)))
         },
-        Column(title: "Hands-free", width: 230) { standing(pill($0, .locked, level: 0.5, recordingFor: 42)) },
-        Column(title: "Error", width: 130) { standing(pill($0, .error)) },
-        // Drawn beside the canvas, so the tooltip takes the color from the environment, not from the model.
-        Column(title: "Tooltip", width: 320) { color in
-            let peek = pill(color, .rest)
-            peek.isHovering = true
-            return AnyView(PillView(model: peek)
-                .overlay(alignment: .top) {
-                    PillRestTooltip(model: peek).fixedSize()
-                        .alignmentGuide(.top) { $0[.bottom] + 8 }
-                        .environment(\.pillColor, color)
-                }
-                .padding(.bottom, pillInset))
+        Column(title: "Processing", width: 130) { standing(pill($0, .processing, choice: .cleanup)) },
+        Column(title: "Hands-free", width: 230) {
+            standing(pill($0, .locked, choice: .gemini, level: 0.5, recordingFor: 42))
         },
-        // The real panel canvas, which colors the hint from the settings. Bound to right ⌘, so the key's side
-        // caption shows on every color.
-        Column(title: "Switch model hint", width: 230) { color in
-            let hint = pill(color, .listening)
-            hint.settings.shortcuts[.switchModel] = .rightCommand
-            hint.showsTabHint = true
-            return AnyView(PillCanvasView(model: hint, toasts: .preview([])))
+        // The Hub's side: a model's tile (Models, the sidebar) and its mark in History, on a card.
+        Column(title: "Hub", width: 130) { color in
+            var colors = ModelColors.default
+            for c in ModelChoice.allCases { colors[c] = color }
+            return AnyView(HStack(spacing: 12) {
+                ModelChoiceIcon(choice: .gemini, parakeet: .parakeet, color: color, size: 36)
+                EngineGlyph(engine: .geminiFlash, colors: colors)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.bgSurface))
         },
     ]
 
@@ -644,7 +635,7 @@ private struct PillColorSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
-                Text("Pill colors").frame(width: Self.captionWidth, alignment: .leading)
+                Text("Model colors").frame(width: Self.captionWidth, alignment: .leading)
                 ForEach(Array(Self.columns.enumerated()), id: \.offset) { _, column in
                     Text(column.title).frame(width: column.width)
                 }
@@ -656,14 +647,15 @@ private struct PillColorSheet: View {
             .padding(.horizontal, 24)
             .frame(height: Self.headerHeight)
 
-            ForEach(PillColor.allCases) { color in
+            ForEach(ModelColor.allCases) { color in
                 HStack(spacing: 0) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(color.title)
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(.inkSecondary)
-                        let fill = PillPalette.fill(for: color)
-                        Text(String(format: "#%06X · %d%%", fill.hex, Int((fill.alpha * 100).rounded())))
+                        Text(PillPalette.accent(for: color).map {
+                            String(format: "ring #%06X\nmarks #%06X", $0.ringHex, $0.markHex)
+                        } ?? "the plain pill")
                             .font(.system(size: 10, weight: .medium, design: .monospaced))
                             .foregroundStyle(.inkTertiary)
                     }

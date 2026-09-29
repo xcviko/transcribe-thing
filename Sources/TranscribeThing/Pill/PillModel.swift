@@ -47,8 +47,8 @@ final class PillModel {
     private(set) var showsCounter = false
 
     /// The dictation's model from key-down until its text lands, set by the controller; nil at rest. The pill's
-    /// tint shows it throughout (`PillPalette.accent`, whichever model is main); the chip only now and then
-    /// (`showsChip`).
+    /// tint shows it throughout (`PillPalette.accent`, in the color Models gives it, whichever model is main); the
+    /// chip only now and then (`showsChip`).
     var sessionModel: ModelChoice?
     /// Bumped on every switch of the dictation's model, back to the main model too, so the chip names the new one
     /// for a moment.

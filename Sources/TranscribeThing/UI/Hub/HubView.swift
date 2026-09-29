@@ -266,7 +266,9 @@ private struct HubSidebar: View {
         let summary = EngineSummary.make(choice: main, parakeet: parakeet, localState: models.state(of: parakeet),
                                          keyStatus: account.status, localError: models.lastErrors[parakeet])
         return VStack(alignment: .leading, spacing: 10) {
-            EngineStatusChip(summary: summary, choice: main, parakeet: parakeet) { hub.show(.models) }
+            EngineStatusChip(summary: summary, choice: main, parakeet: parakeet, color: settings.modelColors[main]) {
+                hub.show(.models)
+            }
             Text(hub.versionLine)
                 .font(.system(size: 11))
                 .foregroundStyle(.inkTertiary)
@@ -333,6 +335,8 @@ private struct EngineStatusChip: View {
     var summary: EngineSummary
     var choice: ModelChoice
     var parakeet: EngineID
+    /// The main model's color (`AppSettings.modelColors`).
+    var color: ModelColor
     var action: () -> Void
     @State private var hovering = false
     @Environment(\.colorScheme) private var scheme
@@ -340,7 +344,7 @@ private struct EngineStatusChip: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 8) {
-                ModelChoiceIcon(choice: choice, parakeet: parakeet, size: 26)
+                ModelChoiceIcon(choice: choice, parakeet: parakeet, color: color, size: 26)
                 VStack(alignment: .leading, spacing: 1) {
                     nameLine
                     HStack(spacing: 4) {

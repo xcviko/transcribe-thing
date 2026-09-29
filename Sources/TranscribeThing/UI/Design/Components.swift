@@ -840,27 +840,40 @@ struct EngineIcon: View {
 }
 
 /// A model's mark: its symbol (Parakeet's bolt where `parakeet` runs it, clean-up's wand, Gemini's sparkles) in the
-/// model's own color (`ModelChoice.tint`), so a row in Models, the sidebar chip and the pill agree.
+/// model's own color (`AppSettings.modelColors`), so a row in Models, the sidebar chip and the pill agree.
 struct ModelChoiceIcon: View {
     var choice: ModelChoice
     var parakeet: EngineID
+    var color: ModelColor
     var size: CGFloat = 32
 
     var body: some View {
-        ModelTile(symbol: choice.symbolName(parakeet: parakeet), tint: choice.tint, size: size)
+        ModelTile(symbol: choice.symbolName(parakeet: parakeet), tint: color.tint, size: size)
     }
 }
 
-extension ModelChoice {
-    /// The model's color in the Hub, the one the pill wears (`PillPalette.accent(for:)`): Gemini violet, clean-up
-    /// warm, and Parakeet, the plain pill, plain ink wherever it runs.
-    var tint: Color {
+extension ModelColor {
+    /// The model's color in the Hub, the one the pill wears (`PillPalette.accent(for:)`): its tile in Models and the
+    /// sidebar, onboarding's summary. Graphite, the plain pill, is plain ink; orange and violet are the Hub's warm and
+    /// accent.
+    var hubColor: NSColor {
         switch self {
-        case .parakeet: .inkSecondary
-        case .cleanup: .warm
-        case .gemini: .accent
+        case .graphite: Palette.inkSecondary
+        case .orange: Palette.warm
+        case .green: Palette.modelGreen
+        case .teal: Palette.modelTeal
+        case .blue: Palette.modelBlue
+        case .violet: Palette.accent
+        case .purple: Palette.modelPurple
+        case .pink: Palette.modelPink
         }
     }
+
+    var tint: Color { Color(nsColor: hubColor) }
+
+    /// History's marks, text this small: orange deepened (`HubPalette.apricotInk`), as the key card's is; the others
+    /// as `tint`.
+    var markTint: Color { self == .orange ? HubPalette.apricotInk : tint }
 }
 
 /// A symbol on a tile of its tint: `EngineIcon`, `ModelChoiceIcon`.

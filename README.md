@@ -7,7 +7,7 @@ whatever app you're using. Transcription only, no rewriting.
   languages on its own. Through your own OpenRouter key: the same Parakeet v3 (served by Together), Gemini 3.8
   Flash, and clean-up of Parakeet's text by GPT-6 Luna. Any of the three (Parakeet, Parakeet + GPT-6 Luna, Gemini)
   can be your main model, the one every dictation starts on; Switch model (fn ⇥) steps a dictation through the
-  others you switch on, in the order set in Models.
+  others you switch on, in the order set in Models, where each model also gets its own color on the pill.
 - **Hands-free mode**, a floating pill with a live waveform, a menu bar extra, rebindable shortcuts, soft
   sound cues, history with retry, and Undo for anything you cancel.
 - **A live count:** while Gemini or clean-up answers, the pill counts the tokens it is thinking or writing

@@ -2,9 +2,9 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// The three models in the user's order: the main model every dictation starts on (a radio), which others the Switch
-/// model shortcut steps to (a switch each), and the order it steps in (drag a row by its handle). Then where Parakeet
-/// runs (on this Mac: download, use, delete, storage; or through OpenRouter), for Parakeet and clean-up alike, and the
-/// OpenRouter key.
+/// model shortcut steps to (a switch each), the order it steps in (drag a row by its handle), and each one's color on
+/// the pill (its tile). Then where Parakeet runs (on this Mac: download, use, delete, storage; or through OpenRouter),
+/// for Parakeet and clean-up alike, and the OpenRouter key.
 struct ModelsPage: View {
     @Environment(HubContext.self) private var hub
     @Environment(ModelStore.self) private var models
@@ -25,7 +25,7 @@ struct ModelsPage: View {
         ScrollViewReader { proxy in
             HubPage("Models", subtitle: "Every dictation starts on your main model. Switch to another while you talk.") {
                 HubGroup("Your models",
-                         footer: "Drag to change the order. Switch model steps through the ones that are on, starting from your main model.") {
+                         footer: "Drag to change the order. Switch model steps through the ones that are on, starting from your main model. Click a model’s icon to change its color.") {
                     SwitchModelLineView(lineup: settings.lineup, binding: settings.shortcuts[.switchModel],
                                         blocked: settings.lineup.steps.filter { !hub.readiness(of: $0).isUsable }) {
                         hub.show(.shortcuts)
@@ -231,8 +231,9 @@ private extension SwitchModelLine.Status {
     }
 }
 
-/// One model of the lineup: a handle to drag it, a radio that makes it the main model, what it is and how it's
-/// doing, and a switch that includes it in Switch model ("Main" on the main model, which is always included).
+/// One model of the lineup: a handle to drag it, a radio that makes it the main model, its tile (its color), what it
+/// is and how it's doing, and a switch that includes it in Switch model ("Main" on the main model, which is always
+/// included).
 private struct LineupRow: View {
     var choice: ModelChoice
     @Binding var dragged: ModelChoice?
@@ -256,7 +257,7 @@ private struct LineupRow: View {
                 handle
                 RadioDot(isOn: isMain)
             }
-            ModelChoiceIcon(choice: choice, parakeet: parakeet, size: 36)
+            ModelColorButton(choice: choice, parakeet: parakeet)
             VStack(alignment: .leading, spacing: 3) {
                 Text(choice.modelName)
                     .font(.system(size: 13, weight: .semibold))
@@ -297,6 +298,11 @@ private struct LineupRow: View {
                 .disabled(index == 0)
             Button("Move Down") { move(by: 1) }
                 .disabled(isLast)
+            Divider()
+            // A submenu with the color checked: the tile's colors from the keyboard.
+            Picker("Pill Color", selection: color) {
+                ForEach(ModelColor.allCases) { Text($0.title).tag($0) }
+            }
         }
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(isMain ? .isSelected : [])
@@ -416,6 +422,120 @@ private struct LineupRow: View {
         return Binding(get: { settings.lineup.isSwitchable(choice) },
                        set: { on in withAnimation(Theme.Motion.snappy) { settings.lineup.setSwitchable(choice, on) } })
     }
+
+    private var color: Binding<ModelColor> {
+        let settings = settings, choice = choice
+        return Binding(get: { settings.modelColors[choice] },
+                       set: { color in withAnimation(Theme.Motion.snappy) { settings.modelColors[choice] = color } })
+    }
+}
+
+// MARK: - Model colors
+
+/// A lineup row's tile, which opens the model's colors (`ModelColorPopover`). Its click is its own: it never makes the
+/// model main.
+private struct ModelColorButton: View {
+    var choice: ModelChoice
+    var parakeet: EngineID
+
+    @Environment(AppSettings.self) private var settings
+    @State private var picking = false
+    @State private var hovering = false
+
+    private static let size: CGFloat = 36
+
+    var body: some View {
+        let color = settings.modelColors[choice]
+        let tile = RoundedRectangle(cornerRadius: Self.size * 0.28, style: .continuous)
+        Button { picking = true } label: {
+            ModelChoiceIcon(choice: choice, parakeet: parakeet, color: color, size: Self.size)
+                .overlay {
+                    // Hovered or open: a ring 3 pt out says the tile is a control.
+                    RoundedRectangle(cornerRadius: Self.size * 0.28 + 3, style: .continuous).ring(1.5)
+                        .fill(Color.strokeStrong, style: FillStyle(eoFill: true))
+                        .padding(-3)
+                        .opacity(hovering || picking ? 1 : 0)
+                }
+                .contentShape(tile)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(Theme.Motion.hover, value: hovering || picking)
+        .help("Change pill color")
+        .accessibilityLabel("Pill color for \(choice.modelName)")
+        .accessibilityValue(color.title)
+        .popover(isPresented: $picking, arrowEdge: .bottom) {
+            ModelColorPopover(choice: choice, parakeet: parakeet, color: color) { picked in
+                settings.modelColors[choice] = picked
+            }
+        }
+    }
+}
+
+/// A model's colors: its pill in the color, then the swatches. A pick applies at once (the tile behind, the sidebar
+/// chip, History's marks and a pill that is dictating fade to it), and the popover stays open to compare.
+struct ModelColorPopover: View {
+    var choice: ModelChoice
+    var parakeet: EngineID
+    var color: ModelColor
+    var onPick: (ModelColor) -> Void
+
+    /// The swatches' width, and the preview's.
+    static let contentWidth: CGFloat = 236
+    static let width: CGFloat = contentWidth + 2 * 14
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ModelColorPreview(choice: choice, parakeet: parakeet, color: color)
+                .frame(width: Self.contentWidth, height: 84)
+            HStack(spacing: 0) {
+                Text("Pill color")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.ink)
+                Spacer(minLength: 8)
+                Text(color.title)
+                    .typeface(.callout)
+                    .foregroundStyle(.inkSecondary)
+            }
+            ModelColorSwatches(selection: color, onPick: onPick)
+        }
+        .padding(14)
+        .frame(width: Self.width)
+    }
+}
+
+/// A still listening pill with its chip, in `color`: the chip names the model the colors are for.
+private struct ModelColorPreview: View {
+    var choice: ModelChoice
+    var parakeet: EngineID
+    var color: ModelColor
+
+    @State private var model: PillModel
+
+    init(choice: ModelChoice, parakeet: EngineID, color: ModelColor) {
+        self.choice = choice
+        self.parakeet = parakeet
+        self.color = color
+        let model = PillModel.preview(phase: .listening, level: 0.7)
+        model.settings.parakeetEngine = parakeet
+        model.sessionModel = choice
+        // A preview's chip stays up.
+        model.flashChip()
+        _model = State(initialValue: model)
+    }
+
+    var body: some View {
+        ZStack {
+            StageBackground(cornerRadius: 12)
+            // Room above for the chip, so the pill and its chip sit centered together.
+            PillView(model: model)
+                .padding(.top, PillMetrics.chipLift)
+        }
+        .environment(\.pillStaticRendering, true)
+        // The preview's own settings carry the color, as the app's carry the user's.
+        .onChange(of: color, initial: true) { _, color in model.settings.modelColors[choice] = color }
+        .accessibilityHidden(true)
+    }
 }
 
 /// Live reordering: a dragged row takes the place of the row it enters, and the others make room. Only a row's own
@@ -510,8 +630,8 @@ private struct ModelRow: View {
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
             RadioDot(isOn: isSelected)
-            // Parakeet either way, in Parakeet's plain color: the glyph and the title say where.
-            ModelChoiceIcon(choice: .parakeet, parakeet: engine, size: 36)
+            // Parakeet either way, in Parakeet's color: the glyph and the title say where.
+            ModelChoiceIcon(choice: .parakeet, parakeet: engine, color: settings.modelColors[.parakeet], size: 36)
             VStack(alignment: .leading, spacing: 3) {
                 ViewThatFits(in: .horizontal) {
                     titleLine(badges: badges)

@@ -34,12 +34,16 @@ enum Palette {
     /// Deep enough in light mode for warning text (4.4:1 on the canvas).
     static let warning = dynamic("warning", light: .hex(0xA86400), dark: .hex(0xFFB340))
     static let danger = dynamic("danger", light: .hex(0xD93B30), dark: .hex(0xFF6B5E))
+    /// Model colors in the Hub besides warm and accent (`ModelColor.hubColor`): a tile's symbol reads 4.5:1 over 13%
+    /// of itself on the card, light and dark.
+    static let modelGreen = dynamic("modelGreen", light: .hex(0x247804), dark: .hex(0x5AAC46))
+    static let modelTeal = dynamic("modelTeal", light: .hex(0x06756D), dark: .hex(0x08AB9E))
+    static let modelBlue = dynamic("modelBlue", light: .hex(0x036DAA), dark: .hex(0x1A9FF2))
+    static let modelPurple = dynamic("modelPurple", light: .hex(0x9E41AA), dark: .hex(0xCE7AD8))
+    static let modelPink = dynamic("modelPink", light: .hex(0xB9306E), dark: .hex(0xEB709F))
 
-    /// Graphite, the default pill color: the Hub's and onboarding's pill illustrations always wear it.
-    static let pillFill: NSColor = {
-        let graphite = PillPalette.fill(for: .graphite)
-        return .hex(graphite.hex, alpha: graphite.alpha)
-    }()
+    /// The pill is always dark, in both appearances.
+    static let pillFill = NSColor.hex(0x101012, alpha: 0.92)
     static let chipFill = dynamic("chipFill", light: .hex(0xFFFFFF), dark: .hex(0x2A2927))
     static let chipStroke = dynamic("chipStroke", light: .hex(0x1C1A17, alpha: 0.12), dark: .hex(0xFFFFFF, alpha: 0.12))
     static let chipBase = dynamic("chipBase", light: .hex(0x1C1A17, alpha: 0.10), dark: .hex(0x000000, alpha: 0.45))

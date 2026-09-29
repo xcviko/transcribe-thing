@@ -420,11 +420,33 @@ import Testing
         #expect(ModelStatusText.describe(.invalid("401")).tone == .negative)
     }
 
-    /// A model wears one color: its tile in Models and the sidebar, and its pill.
+    /// A model wears one color: its tile in Models and the sidebar, History's marks, and its pill.
     @Test func eachModelWearsThePillsColor() {
-        #expect(ModelChoice.gemini.tint == .accent && PillPalette.accent(for: .gemini) != nil, "violet")
-        #expect(ModelChoice.cleanup.tint == .warm && PillPalette.accent(for: .cleanup) != nil, "warm")
-        #expect(ModelChoice.parakeet.tint == .inkSecondary && PillPalette.accent(for: .parakeet) == nil, "plain")
+        #expect(ModelColor.violet.hubColor == Palette.accent)
+        #expect(ModelColor.orange.hubColor == Palette.warm)
+        #expect(ModelColor.graphite.hubColor == Palette.inkSecondary, "plain")
+        #expect(ModelColor.orange.markTint == HubPalette.apricotInk, "deepened for text this small")
+        for choice in ModelChoice.allCases {
+            #expect((PillPalette.accent(for: choice, in: .default) == nil) == (ModelColors.default[choice] == .graphite),
+                    "\(choice)")
+        }
+    }
+
+    /// Each mark in the color of the model that made it: cloud Parakeet Parakeet's, the retired Gemini 3.1 Pro
+    /// Gemini's.
+    @Test func historyMarksWearTheirModelsColor() {
+        var picked = ModelColors.default
+        picked[.parakeet] = .teal
+        picked[.cleanup] = .pink
+        picked[.gemini] = .blue
+        #expect(EngineGlyph(engine: .parakeet, colors: picked).color == .teal)
+        #expect(EngineGlyph(engine: .parakeetCloud, colors: picked).color == .teal)
+        #expect(EngineGlyph(engine: .parakeet, cleanupModel: .default, colors: picked).color == .pink)
+        #expect(EngineGlyph(engine: .geminiFlash, colors: picked).color == .blue)
+        #expect(EngineGlyph(engine: .geminiPro, colors: picked).color == .blue)
+        #expect(EngineGlyph(engine: .parakeet).color == .graphite)
+        #expect(EngineGlyph(engine: .parakeetCloud, cleanupModel: .default).color == .orange)
+        #expect(EngineGlyph(engine: .geminiFlash).color == .violet)
     }
 
     @Test func aCleanupMainWithoutAKeyShowsTheKeyCard() throws {

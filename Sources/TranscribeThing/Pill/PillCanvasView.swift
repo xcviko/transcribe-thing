@@ -124,8 +124,6 @@ struct PillCanvasView: View {
                         .allowsHitTesting(false)
                 }
             }
-            // The tooltips and the hint wear the pill's color too (`PillView` sets it for what it draws).
-            .environment(\.pillColor, model.settings.pillColor)
             .animation(.easeOut(duration: 0.16), value: showsRestTooltip)
             .animation(.easeOut(duration: 0.2), value: showsSwitchHint)
             .padding(PillMetrics.hoverMargin)

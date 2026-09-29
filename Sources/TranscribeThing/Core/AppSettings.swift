@@ -23,25 +23,6 @@ enum PillMode: String, Codable, CaseIterable, Sendable, Identifiable {
     }
 }
 
-/// The pill's own color (`PillPalette.fill(for:)`): graphite, or one of five jewel tones in the order of the hue
-/// wheel. Dark in every case, so its white content reads the same.
-enum PillColor: String, Codable, CaseIterable, Sendable, Identifiable {
-    case graphite, emerald, teal, sapphire, plum, garnet
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .graphite: "Graphite"
-        case .emerald: "Emerald"
-        case .teal: "Teal"
-        case .sapphire: "Sapphire"
-        case .plum: "Plum"
-        case .garnet: "Garnet"
-        }
-    }
-}
-
 /// User preferences. Every property writes through to its store the moment it is set.
 @MainActor @Observable
 final class AppSettings {
@@ -61,11 +42,12 @@ final class AppSettings {
     /// The three models as Models lists them: their order, the main model every dictation starts on, and which
     /// others the Switch model shortcut steps to.
     var lineup: ModelLineup = .default { didSet { store.setJSON(lineup, .lineup) } }
+    /// Each model's color (Models): the pill wears the dictation's model's, and its tile, the sidebar chip and
+    /// History's marks show it.
+    var modelColors: ModelColors = .default { didSet { store.setJSON(modelColors, .modelColors) } }
     /// How many times the pill has shown the Switch model hint (it shows at most `switchHintLimit` times).
     var switchHintShownCount: Int = 0 { didSet { store.set(switchHintShownCount, .switchHintShownCount) } }
     var pillMode: PillMode = .whileDictating { didSet { store.set(pillMode.rawValue, .pillMode) } }
-    /// The capsule's color, and its chip's and tooltips'. The pill on screen repaints at once.
-    var pillColor: PillColor = .graphite { didSet { store.set(pillColor.rawValue, .pillColor) } }
     var soundsEnabled: Bool = true { didSet { store.set(soundsEnabled, .soundsEnabled) } }
     /// The only mic dictation opens while it is connected. nil = Automatic: the system default input (Bluetooth
     /// included) at the moment a dictation starts. A picked mic that goes away falls back to Automatic
@@ -191,12 +173,14 @@ final class AppSettings {
         if let storedEngine, !storedEngine.isParakeet { store.set(EngineID.default.rawValue, .selectedEngine) }
         store.remove(.switchCleanup)
         store.remove(.switchEngines)
+        if let v: ModelColors = store.json(.modelColors) { modelColors = v }
         if let v = store.int(.switchHintShownCount) { switchHintShownCount = max(0, v) }
         if let v = store.string(.pillMode).flatMap(PillMode.init(rawValue:)) { pillMode = v }
-        // A color this build doesn't offer leaves graphite.
-        if let v = store.string(.pillColor).flatMap(PillColor.init(rawValue:)) { pillColor = v }
         // Older builds could hide the pill for an hour; that deadline has no meaning now.
         store.remove(.pillHiddenUntil)
+        // General had a color for the capsule itself; color means the model now (Models), and the pill is graphite
+        // again.
+        store.remove(.pillColor)
         if let v = store.bool(.soundsEnabled) { soundsEnabled = v }
         // Older builds had a volume slider; sounds now play at their files' own level. A slider left at zero
         // meant no sounds, so it turns "Play sounds" off once, and the old key goes.
@@ -305,6 +289,8 @@ enum SettingsKey: String, CaseIterable {
     /// `onboardingStep` holds a six-step index from older builds, read once and moved to `onboardingResumeStep`.
     /// `soundVolume` is the removed volume slider's, read once (zero turns sounds off) and removed.
     /// `pillHiddenUntil` is the removed "Hide Pill for 1 Hour" deadline, removed at load.
+    /// `pillColor` is the removed capsule color (General › Pill & Sounds), removed at load: color means the model now
+    /// (`modelColors`).
     /// `preferBuiltInMicOverBluetooth` is the removed built-in-over-AirPods switch, turned into a mic choice once
     /// (`microphoneChoiceMigrated` records that) and removed.
     case onboardingCompleted, onboardingStep, onboardingResumeStep, selectedEngine, pillMode, pillColor, pillHiddenUntil
@@ -329,7 +315,7 @@ enum SettingsKey: String, CaseIterable {
     /// `geminiSystemPrompt` and `cleanupSystemPrompt` are the prompts Models used to edit, removed at load: both are
     /// fixed in code now.
     case geminiSystemPrompt, cleanupSystemPrompt
-    case addSpaceAfterText, removeFinalPeriod, autoDeleteHistoryDays, lineup, keychainKeyMigrated
+    case addSpaceAfterText, removeFinalPeriod, autoDeleteHistoryDays, lineup, modelColors, keychainKeyMigrated
 
     var defaultsKey: String { "tt.\(rawValue)" }
 }

@@ -199,3 +199,83 @@ extension ModelLineup: Codable {
         try container.encode(order.filter(switchable.contains), forKey: .switchable)
     }
 }
+
+/// A model's color, picked on its row in Models (`AppSettings.modelColors`): the pill's ring and marks while it
+/// dictates (`PillPalette.accent(for:)`), and its tile and History's marks in the Hub. Graphite is the plain pill. Raw
+/// values are persisted: never rename them. Declaration order is the picker's: graphite, then round the hue wheel.
+enum ModelColor: String, Codable, CaseIterable, Identifiable, Sendable {
+    case graphite, orange, green, teal, blue, violet, purple, pink
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .graphite: "Graphite"
+        case .orange: "Orange"
+        case .green: "Green"
+        case .teal: "Teal"
+        case .blue: "Blue"
+        case .violet: "Violet"
+        case .purple: "Purple"
+        case .pink: "Pink"
+        }
+    }
+}
+
+extension ModelChoice {
+    /// Its color until one is picked, as before colors could be: Parakeet the plain pill, clean-up orange (its wand),
+    /// Gemini violet.
+    var defaultColor: ModelColor {
+        switch self {
+        case .parakeet: .graphite
+        case .cleanup: .orange
+        case .gemini: .violet
+        }
+    }
+}
+
+/// Each model's color; two models may share one. One JSON object under `SettingsKey.modelColors`, keyed by
+/// `ModelChoice` raw value: {"cleanup":"orange","gemini":"violet","parakeet":"graphite"}.
+struct ModelColors: Equatable, Sendable {
+    private var colors: [ModelChoice: ModelColor]
+
+    /// Every model in its `defaultColor`.
+    static let `default` = ModelColors()
+
+    init() {
+        colors = Dictionary(uniqueKeysWithValues: ModelChoice.allCases.map { ($0, $0.defaultColor) })
+    }
+
+    subscript(_ choice: ModelChoice) -> ModelColor {
+        get { colors[choice] ?? choice.defaultColor }
+        set { colors[choice] = newValue }
+    }
+}
+
+extension ModelColors: Codable {
+    private struct ChoiceKey: CodingKey {
+        var stringValue: String
+        var intValue: Int? { nil }
+        init(_ choice: ModelChoice) { stringValue = choice.rawValue }
+        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { nil }
+    }
+
+    /// Lenient, as a stored value outlives builds: a color this build doesn't offer (a newer build's), or a value of
+    /// the wrong kind, leaves that model's default; an unknown model is ignored.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: ChoiceKey.self)
+        self.init()
+        for choice in ModelChoice.allCases {
+            let raw = (try? container.decodeIfPresent(String.self, forKey: ChoiceKey(choice))) ?? nil
+            if let color = raw.flatMap(ModelColor.init(rawValue:)) { self[choice] = color }
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: ChoiceKey.self)
+        for choice in ModelChoice.allCases {
+            try container.encode(self[choice].rawValue, forKey: ChoiceKey(choice))
+        }
+    }
+}

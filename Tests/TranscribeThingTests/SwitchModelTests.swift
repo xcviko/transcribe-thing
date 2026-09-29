@@ -348,7 +348,7 @@ import Testing
         }
         Self.hold(rig)
         #expect(rig.h.pill.sessionModel == .gemini)
-        #expect(PillPalette.accent(for: rig.h.pill.sessionModel) != nil)
+        #expect(PillPalette.accent(for: rig.h.pill.sessionModel, in: rig.h.settings.modelColors) != nil)
         rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
         rig.now += 2
         c.handle(.pttUp)
@@ -360,7 +360,25 @@ import Testing
         Self.hold(rig)
         c.handle(.cycleEngine)
         #expect(c.modelOverride == .parakeet && rig.h.pill.sessionModel == .parakeet)
-        #expect(PillPalette.accent(for: rig.h.pill.sessionModel) == nil)
+        #expect(PillPalette.accent(for: rig.h.pill.sessionModel, in: rig.h.settings.modelColors) == nil)
+        c.handle(.cancel)
+    }
+
+    /// A color picked in Models is the one the pill wears for that model's dictations, whichever is main.
+    @Test func aColorPickedInModelsTintsItsDictations() {
+        let (rig, _) = Self.make()
+        let c = rig.h.controller
+        rig.h.settings.lineup.main = .gemini
+        rig.h.settings.modelColors[.parakeet] = .teal
+        rig.h.settings.modelColors[.gemini] = .graphite
+        Self.hold(rig)
+        #expect(rig.h.pill.sessionModel == .gemini)
+        #expect(PillPalette.accent(for: rig.h.pill.sessionModel, in: rig.h.settings.modelColors) == nil,
+                "graphite is the plain pill")
+        c.handle(.cycleEngine)
+        #expect(rig.h.pill.sessionModel == .parakeet)
+        #expect(PillPalette.accent(for: rig.h.pill.sessionModel, in: rig.h.settings.modelColors)
+                == PillPalette.accent(for: ModelColor.teal))
         c.handle(.cancel)
     }
 

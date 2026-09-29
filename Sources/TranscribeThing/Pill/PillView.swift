@@ -106,35 +106,35 @@ enum PillMetrics {
     }
 }
 
-/// The pill is always dark, in both appearances: its fill is the user's pill color, and nothing else changes with
-/// it or with the appearance.
+/// The pill is always dark, in both appearances; these colors never adapt.
 enum PillPalette {
+    static let fill = Color(nsColor: Palette.pillFill)
     static let bar = Color.white.opacity(0.96)
     static let stop = Color(nsColor: .hex(0xFF453A))
     static let error = Color(nsColor: .hex(0xFF6B5E))
+    static let tooltipFill = Color(nsColor: .hex(0x151517, alpha: 0.96))
 
-    /// Each color is the lightest of its hue that keeps every white on the pill legible over a white page (OKLCH L
-    /// 0.23-0.24, one family). Colors are a touch more opaque than graphite, so a page showing through doesn't wash
-    /// them out to gray.
-    static func fill(for color: PillColor) -> PillFill {
+    /// A model color on the pill; graphite is the plain pill. The new colors sit at one depth (OKLCH L 0.645 for the
+    /// ring, 0.79 for the marks), so each reads on the fill at least as well as violet does; orange and violet are
+    /// clean-up's and Gemini's as they always were, and pink is the retired Gemini 3.1 Pro's.
+    static func accent(for color: ModelColor) -> PillAccent? {
         switch color {
-        case .graphite: PillFill(hex: 0x101012, alpha: 0.92)
-        case .emerald: PillFill(hex: 0x032513, alpha: 0.95)
-        case .teal: PillFill(hex: 0x022329, alpha: 0.95)
-        case .sapphire: PillFill(hex: 0x041F3B, alpha: 0.95)
-        case .plum: PillFill(hex: 0x330A31, alpha: 0.95)
-        case .garnet: PillFill(hex: 0x380912, alpha: 0.95)
+        case .graphite: nil
+        case .orange: PillAccent(ringHex: 0xE58A5F, markHex: 0xFFB896)
+        case .green: PillAccent(ringHex: 0x57A345, markHex: 0x90CE83)
+        case .teal: PillAccent(ringHex: 0x0CA397, markHex: 0x48D3C5)
+        case .blue: PillAccent(ringHex: 0x1E95E1, markHex: 0x77C2FE)
+        case .violet: PillAccent(ringHex: 0x7F77DD, markHex: 0xAFA9EC)
+        case .purple: PillAccent(ringHex: 0xBB68C5, markHex: 0xE39DEB)
+        case .pink: PillAccent(ringHex: 0xD4537E, markHex: 0xED93B1)
         }
     }
 
-    /// Color means the model, whichever is main: Gemini violet, and clean-up warm, like its wand in Settings (a pass
-    /// over Parakeet's words, set apart from the models that hear the audio). Parakeet keeps the plain pill.
-    static func accent(for choice: ModelChoice?) -> PillAccent? {
-        switch choice {
-        case .cleanup: PillAccent(ringHex: 0xE58A5F, markHex: 0xFFB896)
-        case .gemini: PillAccent(ringHex: 0x7F77DD, markHex: 0xAFA9EC)
-        case .parakeet, nil: nil
-        }
+    /// Color means the model, whichever is main: the one Models gives it (`AppSettings.modelColors`). By default
+    /// Gemini violet, clean-up orange (like its wand, a pass over Parakeet's words), and Parakeet graphite, the plain
+    /// pill. nil at rest.
+    static func accent(for choice: ModelChoice?, in colors: ModelColors) -> PillAccent? {
+        choice.flatMap { accent(for: colors[$0]) }
     }
 }
 
@@ -147,29 +147,9 @@ struct PillAccent: Equatable, Sendable {
     var mark: Color { Color(nsColor: .hex(markHex)) }
 }
 
-/// A pill color's fill: the capsule and its chip wear it as is, the tooltips a shade lighter.
-struct PillFill: Equatable, Sendable {
-    let hex: UInt32
-    let alpha: CGFloat
-
-    var color: Color { Color(nsColor: .hex(hex, alpha: alpha)) }
-
-    /// The fill moved 2% toward white, channel by channel (rounded), so a tooltip stands off the pill below it.
-    var tooltipHex: UInt32 {
-        [16, 8, 0].reduce(UInt32(0)) { lifted, shift in
-            let c = (hex >> shift) & 0xFF
-            return lifted | (c + ((255 - c) * 2 + 50) / 100) << shift
-        }
-    }
-
-    var tooltip: Color { Color(nsColor: .hex(tooltipHex, alpha: 0.96)) }
-}
-
 extension EnvironmentValues {
     /// Snapshots set this: animations that start on appear render in their settled state instead.
     @Entry var pillStaticRendering = false
-    /// The capsule's, chip's and tooltips' color: `PillView` and `PillCanvasView` set it from the settings.
-    @Entry var pillColor: PillColor = .graphite
 }
 
 // MARK: - Visual state
@@ -347,7 +327,6 @@ struct PillView: View {
             .accessibilityElement(children: .contain)
             .accessibilityLabel(accessibilityLabel(for: visual))
             .accessibilityHidden(!shown)
-            .environment(\.pillColor, model.settings.pillColor)
     }
 
     /// Hiding needs none: the exit fades the pill out and parking it collapsed happens out of sight.
@@ -594,8 +573,11 @@ struct PillFace: View {
 
     private var carriesModel: Bool { content.carriesModel }
 
-    /// The choice's tint while the content carries one; a capsule shrinking to rest lets its ring go.
-    private var accent: PillAccent? { carriesModel ? PillPalette.accent(for: choice) : nil }
+    /// The choice's tint (its color in Models) while the content carries one; a capsule shrinking to rest lets its
+    /// ring go. A color picked mid-dictation fades in.
+    private var accent: PillAccent? {
+        carriesModel ? PillPalette.accent(for: choice, in: model.settings.modelColors) : nil
+    }
 
     /// What the chip names while it's up (`PillModel.showsChip`): the dictation's model. Content shrinking away
     /// keeps its own choice's chip.
@@ -699,22 +681,18 @@ struct PillFace: View {
 
 // MARK: - Capsule
 
-/// A dark capsule in the user's pill color with a lit hairline (white 24% → 7%) and a two-layer shadow, so it reads
-/// on white documents and on dark desktops alike.
+/// Near-black capsule with a lit hairline (white 24% → 7%) and a two-layer shadow, so it reads on white
+/// documents and on dark desktops alike.
 struct PillCapsule: View {
     var quiet = false
     var glow: Color?
     /// The model's ring (`PillPalette.accent`), with a faint halo of its color.
     var accent: PillAccent?
 
-    @Environment(\.pillColor) private var color
-
     var body: some View {
         let shape = Capsule(style: .continuous)
         shape
-            .fill(PillPalette.fill(for: color).color)
-            // A new color fades in, so the resting pill (Always) changes softly under the settings.
-            .animation(.easeOut(duration: 0.2), value: color)
+            .fill(PillPalette.fill)
             .overlay {
                 if let glow {
                     shape.fill(RadialGradient(colors: [glow.opacity(0.2), glow.opacity(0)],
@@ -1082,7 +1060,7 @@ private struct PillModelChip: View {
     let isInteractive: Bool
 
     var body: some View {
-        let accent = PillPalette.accent(for: choice)
+        let accent = PillPalette.accent(for: model.settings.modelColors[choice])
         let settings = model.settings
         Button { model.onEngineChipClick?() } label: {
             PillChipCapsule(accent: accent) {
@@ -1119,13 +1097,11 @@ private struct PillModelChip: View {
     }
 }
 
-/// The small dark capsule of the model chip and the Switch model hint: the pill's own fill, so chip and pill read as
-/// one object, its lit hairline, and the model's ring.
+/// The small dark capsule of the model chip and the Switch model hint: the pill's fill, its lit hairline, and the
+/// model's ring.
 struct PillChipCapsule<Content: View>: View {
     var accent: PillAccent?
     @ViewBuilder var content: Content
-
-    @Environment(\.pillColor) private var color
 
     var body: some View {
         let shape = Capsule(style: .continuous)
@@ -1135,7 +1111,7 @@ struct PillChipCapsule<Content: View>: View {
             .padding(.horizontal, 9)
             .frame(height: PillMetrics.chipHeight)
             .background {
-                shape.fill(PillPalette.fill(for: color).color)
+                shape.fill(PillPalette.fill)
                     .overlay {
                         shape.ring(0.5)
                             .fill(LinearGradient(colors: [.white.opacity(0.24), .white.opacity(0.07)],
@@ -1208,11 +1184,9 @@ private struct PillTimerLabel: View {
 
 // MARK: - Tooltips
 
-/// Dark tooltip capsule used above the pill, in the pill's color a shade lighter (`PillFill.tooltip`).
+/// Dark tooltip capsule used above the pill.
 struct PillTooltipBubble<Content: View>: View {
     @ViewBuilder var content: Content
-
-    @Environment(\.pillColor) private var color
 
     var body: some View {
         let shape = Capsule(style: .continuous)
@@ -1223,7 +1197,7 @@ struct PillTooltipBubble<Content: View>: View {
             .padding(.trailing, 11)
             .frame(height: PillMetrics.tooltipHeight)
             .background {
-                shape.fill(PillPalette.fill(for: color).tooltip)
+                shape.fill(PillPalette.tooltipFill)
                     .overlay {
                         shape.ring(0.5)
                             .fill(LinearGradient(colors: [.white.opacity(0.2), .white.opacity(0.06)],
@@ -1243,7 +1217,8 @@ struct PillKeyChip: View {
     var body: some View {
         HStack(spacing: 2) {
             if let caption = keycap.sideCaption {
-                // The pill's secondary text (the timer's): "left" at 8.5 pt keeps 4.5:1 on the cap in every color.
+                // The pill's secondary text (the timer's): "left" at 8.5 pt keeps 4.5:1 on the cap, in the tooltip
+                // and on the hint.
                 Text(caption)
                     .font(.system(size: 8.5, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white.opacity(0.7))

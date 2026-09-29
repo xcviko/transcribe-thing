@@ -1376,13 +1376,21 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(model.menuChoices == [.gemini, .parakeet], "from the main model on, wrapping around")
     }
 
-    /// Color means the model, whichever is main: Gemini violet, clean-up warm, Parakeet the plain pill.
+    /// Color means the model, whichever is main: the one Models gives it; today's by default.
     @Test func eachModelKeepsItsColorWhateverTheMainModel() {
-        #expect(PillPalette.accent(for: .gemini) == PillAccent(ringHex: 0x7F77DD, markHex: 0xAFA9EC))
-        #expect(PillPalette.accent(for: .cleanup) == PillAccent(ringHex: 0xE58A5F, markHex: 0xFFB896))
-        #expect(PillPalette.accent(for: .parakeet) == nil && PillPalette.accent(for: nil) == nil)
-        let tinted = [ModelChoice.cleanup, .gemini].compactMap { PillPalette.accent(for: $0) }
-        #expect(Set(tinted.map(\.ringHex)).count == 2, "each its own color")
+        let colors = ModelColors.default
+        #expect(PillPalette.accent(for: .gemini, in: colors) == PillAccent(ringHex: 0x7F77DD, markHex: 0xAFA9EC))
+        #expect(PillPalette.accent(for: .cleanup, in: colors) == PillAccent(ringHex: 0xE58A5F, markHex: 0xFFB896))
+        #expect(PillPalette.accent(for: .parakeet, in: colors) == nil && PillPalette.accent(for: nil, in: colors) == nil)
+
+        var picked = ModelColors.default
+        picked[.parakeet] = .teal
+        picked[.gemini] = .graphite
+        picked[.cleanup] = .teal
+        #expect(PillPalette.accent(for: .parakeet, in: picked) == PillPalette.accent(for: ModelColor.teal))
+        #expect(PillPalette.accent(for: .gemini, in: picked) == nil, "graphite is the plain pill")
+        #expect(PillPalette.accent(for: .cleanup, in: picked) == PillPalette.accent(for: .parakeet, in: picked),
+                "two may share one")
         // The main model changes nothing the pill draws.
         let model = makeModel()
         model.settings.lineup.main = .gemini
@@ -1439,34 +1447,43 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
 
 // MARK: - Colors
 
-@Suite struct PillColorTests {
-    @Test func pillColorsSweepTheHuesFromGraphite() {
-        #expect(PillColor.allCases == [.graphite, .emerald, .teal, .sapphire, .plum, .garnet])
-        #expect(Set(PillColor.allCases.map { PillPalette.fill(for: $0).hex }).count == PillColor.allCases.count)
-        #expect(Set(PillColor.allCases.map(\.title)).count == PillColor.allCases.count)
+@Suite struct ModelColorTests {
+    /// The pill's fill over a white page, where it's lightest; the capsule's text also sits under the top of its
+    /// sheen (2%). The tooltip is a shade lighter.
+    private static let pill = SRGB(0x101012).over(.white, alpha: 0.92)
+    private static let capsule = SRGB.white.over(pill, alpha: 0.02)
+    private static let tooltip = SRGB(0x151517).over(.white, alpha: 0.96)
+    private static let stop = SRGB(0xFF453A)
+    private static let error = SRGB(0xFF6B5E)
+
+    private static let tinted = ModelColor.allCases.filter { $0 != .graphite }
+
+    @Test func modelColorsGoRoundTheHuesFromGraphite() throws {
+        #expect(ModelColor.allCases == [.graphite, .orange, .green, .teal, .blue, .violet, .purple, .pink])
+        #expect(Set(ModelColor.allCases.map(\.title)).count == ModelColor.allCases.count)
+        #expect(PillPalette.accent(for: ModelColor.graphite) == nil)
+        let accents = try Self.tinted.map { try #require(PillPalette.accent(for: $0)) }
+        #expect(Set(accents.map(\.ringHex)).count == Self.tinted.count)
+        #expect(Set(accents.map(\.markHex)).count == Self.tinted.count)
     }
 
-    @Test func graphiteIsTodaysPill() {
-        #expect(PillPalette.fill(for: .graphite) == PillFill(hex: 0x101012, alpha: 0.92))
-        #expect(PillPalette.fill(for: .graphite).tooltipHex == 0x151517)
+    @Test func theDefaultsAreTodaysAndPinkIsTheRetiredOne() {
+        #expect(ModelColors.default[.parakeet] == .graphite)
+        #expect(ModelColors.default[.cleanup] == .orange)
+        #expect(ModelColors.default[.gemini] == .violet)
+        #expect(ModelChoice.allCases.allSatisfy { ModelColors.default[$0] == $0.defaultColor })
+        #expect(PillPalette.accent(for: ModelColor.violet) == PillAccent(ringHex: 0x7F77DD, markHex: 0xAFA9EC))
+        #expect(PillPalette.accent(for: ModelColor.orange) == PillAccent(ringHex: 0xE58A5F, markHex: 0xFFB896))
+        #expect(PillPalette.accent(for: ModelColor.pink) == PillAccent(ringHex: 0xD4537E, markHex: 0xED93B1),
+                "Gemini 3.1 Pro's")
     }
 
-    @Test func eachTooltipIsItsFillTwoPercentLighter() {
-        let tooltips = [PillColor.emerald, .teal, .sapphire, .plum, .garnet].map { PillPalette.fill(for: $0).tooltipHex }
-        #expect(tooltips == [0x082918, 0x07272D, 0x09233F, 0x370F35, 0x3C0E17])
-    }
-
-    /// Where it's hardest: the fill over a white page. Text in the capsule also sits under the top of its sheen (2%);
-    /// the chip has none. Any color added later has to pass too.
-    @Test(arguments: PillColor.allCases)
-    func everyPillColorKeepsThePillLegible(color: PillColor) throws {
-        let fill = PillPalette.fill(for: color)
-        let pill = SRGB(fill.hex).over(.white, alpha: Double(fill.alpha))
-        let capsule = SRGB.white.over(pill, alpha: 0.02)
-        let tooltip = SRGB(fill.tooltipHex).over(.white, alpha: 0.96)
+    /// Whatever the model's color, the fill stays graphite: its whites read as they always have.
+    @Test func thePillKeepsItsWhitesLegible() {
         func white(_ opacity: Double, on background: SRGB) -> Double {
             SRGB.white.over(background, alpha: opacity).contrast(with: background)
         }
+        let (pill, capsule, tooltip) = (Self.pill, Self.capsule, Self.tooltip)
 
         #expect(white(0.96, on: capsule) >= 12, "the bars")
         #expect(white(0.70, on: capsule) >= 7 && white(0.70, on: pill) >= 7 && white(0.70, on: tooltip) >= 7,
@@ -1478,12 +1495,68 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         // A key's "left" or "right", in the tooltip and in the hint.
         let keyCaps = [SRGB.white.over(tooltip, alpha: 0.18), SRGB.white.over(pill, alpha: 0.18)]
         #expect(keyCaps.allSatisfy { white(0.7, on: $0) >= 4.5 }, "a key's side caption")
+        #expect(Self.stop.contrast(with: pill) >= 4, "Stop (PillPalette.stop)")
+    }
 
-        let gemini = try #require(PillPalette.accent(for: .gemini))
-        let cleanup = try #require(PillPalette.accent(for: .cleanup))
-        #expect(SRGB(gemini.ringHex).contrast(with: pill) >= 3.5, "Gemini's ring")
-        #expect(SRGB(cleanup.ringHex).contrast(with: pill) >= 5, "clean-up's ring")
-        #expect(SRGB(0xFF453A).contrast(with: pill) >= 4, "Stop (PillPalette.stop)")
+    /// On the pill over a white page, the hardest case. Any color added later has to pass too.
+    @Test(arguments: ModelColor.allCases.filter { $0 != .graphite })
+    func everyModelColorReadsOnThePill(color: ModelColor) throws {
+        let accent = try #require(PillPalette.accent(for: color))
+        let mark = SRGB(accent.markHex)
+        #expect(mark.over(Self.capsule, alpha: 0.96).contrast(with: Self.capsule) >= 6, "the bars")
+        #expect(mark.contrast(with: Self.pill) >= 6.5, "the count's word and dot, the chip's symbol")
+        #expect(SRGB(accent.ringHex).contrast(with: Self.pill) >= 3.5, "the ring")
+    }
+
+    /// Two colors, or a color and Stop or the error, never read as one.
+    @Test func modelColorsStayApart() throws {
+        let accents = try Self.tinted.map { color in (color, try #require(PillPalette.accent(for: color))) }
+        for (a, b) in pairs(accents) {
+            #expect(SRGB(a.1.ringHex).distance(to: SRGB(b.1.ringHex)) >= 0.10, "\(a.0) and \(b.0)'s rings")
+            #expect(SRGB(a.1.markHex).distance(to: SRGB(b.1.markHex)) >= 0.08, "\(a.0) and \(b.0)'s marks")
+        }
+        for (color, accent) in accents {
+            let ring = SRGB(accent.ringHex), mark = SRGB(accent.markHex)
+            #expect(ring.distance(to: Self.stop) >= 0.11, "\(color)'s ring and Stop")
+            #expect(mark.distance(to: Self.stop) >= 0.11 && mark.distance(to: Self.error) >= 0.11,
+                    "\(color)'s marks and Stop, the error")
+            // Clean-up's ring has always been this close to the error's red.
+            #expect(ring.distance(to: Self.error) >= (color == .orange ? 0.07 : 0.11), "\(color)'s ring and the error")
+        }
+    }
+
+    /// The tile's symbol over 13% of its color on the card (Models, the sidebar), History's mark over 12%, in both
+    /// appearances. Orange (the Hub's warm) and graphite (ink) are as they always were.
+    @Test(arguments: [ModelColor.green, .teal, .blue, .violet, .purple, .pink])
+    func everyModelColorReadsInTheHub(color: ModelColor) throws {
+        for (appearance, card) in [(NSAppearance.Name.aqua, SRGB.white), (.darkAqua, SRGB(0x1F1E1C))] {
+            let tint = try #require(Self.resolved(color, in: appearance))
+            #expect(tint.contrast(with: tint.over(card, alpha: 0.13)) >= 4.5, "\(color)'s tile, \(appearance.rawValue)")
+            #expect(tint.contrast(with: tint.over(card, alpha: 0.12)) >= 4.5, "\(color)'s mark, \(appearance.rawValue)")
+        }
+    }
+
+    @Test func hubColorsStayApart() throws {
+        let colors: [ModelColor] = [.green, .teal, .blue, .violet, .purple, .pink]
+        for (appearance, floor) in [(NSAppearance.Name.aqua, 0.10), (.darkAqua, 0.09)] {
+            let tints = try colors.map { color in (color, try #require(Self.resolved(color, in: appearance))) }
+            for (a, b) in pairs(tints) {
+                #expect(a.1.distance(to: b.1) >= floor, "\(a.0) and \(b.0), \(appearance.rawValue)")
+            }
+        }
+    }
+
+    /// `color.hubColor` as `appearance` draws it.
+    private static func resolved(_ color: ModelColor, in appearance: NSAppearance.Name) -> SRGB? {
+        var resolved: NSColor?
+        NSAppearance(named: appearance)?.performAsCurrentDrawingAppearance {
+            resolved = color.hubColor.usingColorSpace(.sRGB)
+        }
+        return resolved.map { SRGB(r: Double($0.redComponent), g: Double($0.greenComponent), b: Double($0.blueComponent)) }
+    }
+
+    private func pairs<T>(_ items: [T]) -> [(T, T)] {
+        items.indices.flatMap { i in items[(i + 1)...].map { (items[i], $0) } }
     }
 }
 
@@ -1507,15 +1580,33 @@ private struct SRGB {
              b: alpha * b + (1 - alpha) * background.b)
     }
 
+    private static func linear(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+
     /// WCAG 2 relative luminance.
     var luminance: Double {
-        func linear(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
-        return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+        0.2126 * Self.linear(r) + 0.7152 * Self.linear(g) + 0.0722 * Self.linear(b)
     }
 
     /// WCAG 2 contrast ratio, 1…21.
     func contrast(with other: SRGB) -> Double {
         (max(luminance, other.luminance) + 0.05) / (min(luminance, other.luminance) + 0.05)
+    }
+
+    /// OKLab (Björn Ottosson's), where a distance reads as a difference the eye sees.
+    var oklab: (l: Double, a: Double, b: Double) {
+        let (lr, lg, lb) = (Self.linear(r), Self.linear(g), Self.linear(b))
+        let l = cbrt(0.4122214708 * lr + 0.5363325363 * lg + 0.0514459929 * lb)
+        let m = cbrt(0.2119034982 * lr + 0.6806995451 * lg + 0.1073969566 * lb)
+        let s = cbrt(0.0883024619 * lr + 0.2817188376 * lg + 0.6299787005 * lb)
+        return (0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+                1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+                0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s)
+    }
+
+    /// Euclidean distance in OKLab.
+    func distance(to other: SRGB) -> Double {
+        let (p, q) = (oklab, other.oklab)
+        return ((p.l - q.l) * (p.l - q.l) + (p.a - q.a) * (p.a - q.a) + (p.b - q.b) * (p.b - q.b)).squareRoot()
     }
 }
 

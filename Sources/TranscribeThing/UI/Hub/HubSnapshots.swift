@@ -127,6 +127,29 @@ enum HubSnapshots {
                 c.settings.lineup.setSwitchable(.cleanup, false)
                 c.settings.lineup.setSwitchable(.gemini, false)
             },
+            // Colors picked in Models: every tile wears its model's, the Where Parakeet runs tiles and the sidebar chip
+            // Parakeet's.
+            hub("hub-models-colors", .models, height: 1100, configure: Samples.pickColors),
+            // History's marks in the picked colors.
+            hub("hub-home-model-colors", .home, configure: Samples.pickColors),
+            // Each model's colors as its tile opens them (a popover doesn't render in a page snapshot), in its default
+            // color.
+            SnapshotEntry("hub-model-color-picker", width: 3 * ModelColorPopover.width + 4 * 24, height: 230) { _ in
+                HStack(alignment: .top, spacing: 24) {
+                    ForEach(ModelChoice.allCases) { choice in
+                        ModelColorPopover(choice: choice, parakeet: .parakeet, color: choice.defaultColor) { _ in }
+                            .background(Color.bgElevated, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .strokeBorder(Color.stroke, lineWidth: 1)
+                            }
+                            .cardShadow(elevated: true)
+                    }
+                }
+                .padding(24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .background(Color.bgCanvas)
+            },
 
             hub("hub-shortcuts", .shortcuts),
             // Hands-free just recorded as ⌃⌥Space: saved, with macOS's input-source shortcut as the warning.
@@ -150,12 +173,10 @@ enum HubSnapshots {
                 c.devices = .preview(devices: AudioDeviceCatalog.preview().devices, defaultUID: "preview-airpods")
             },
 
-            hub("hub-general", .general, height: 1140),
-            // The narrowest window: the segmented control leaves the least room for the pill caption; sounds off; a
-            // pill color other than graphite ringed.
-            hub("hub-general-compact", .general, width: 820, height: 620) { c in
+            hub("hub-general", .general, height: 1080),
+            // The narrowest window: the segmented control leaves the least room for the pill caption; sounds off.
+            hub("hub-general-compact", .general, width: 820, height: 560) { c in
                 c.settings.pillMode = .always
-                c.settings.pillColor = .sapphire
                 c.settings.soundsEnabled = false
             },
             hub("hub-general-permissions", .general, height: 1080) { c in
@@ -235,6 +256,13 @@ enum HubSnapshots {
             Calendar.current.date(bySettingHour: 14, minute: 5, second: 0, of: Date()) ?? Date()
         }
         static let newVersion = AppVersion(major: 0, minor: 3, patch: 0)
+
+        /// Colors other than the defaults, one each: Parakeet teal, clean-up pink, Gemini blue.
+        @MainActor static func pickColors(_ context: HubContext) {
+            context.settings.modelColors[.parakeet] = .teal
+            context.settings.modelColors[.cleanup] = .pink
+            context.settings.modelColors[.gemini] = .blue
+        }
 
         @MainActor static func updates(_ context: HubContext, releases: [Release] = PreviewFixtures.releases(),
                                        isChecking: Bool = false, checkError: UpdateCheckError? = nil,

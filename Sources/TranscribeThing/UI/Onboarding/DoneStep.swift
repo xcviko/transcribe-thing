@@ -18,7 +18,8 @@ struct DoneStep: View {
                 // Every chip reads label (secondary), then value (ink).
                 SummaryChip {
                     Text("Model").foregroundStyle(.inkSecondary)
-                    ModelChoiceIcon(choice: settings.lineup.main, parakeet: settings.parakeetEngine, size: 18)
+                    ModelChoiceIcon(choice: settings.lineup.main, parakeet: settings.parakeetEngine,
+                                    color: settings.modelColors[settings.lineup.main], size: 18)
                     Text(settings.lineup.main.title(parakeet: settings.parakeetEngine))
                 }
                 SummaryChip {

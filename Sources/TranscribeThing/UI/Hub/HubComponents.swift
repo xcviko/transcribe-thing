@@ -265,30 +265,27 @@ struct HubSegmentedPicker<Value: Hashable>: View {
     }
 }
 
-/// The pill's colors as small swatches, each the pill in miniature (its fill, sheen and lit hairline); the chosen
-/// one is ringed in ink. The row's subtitle names it, as macOS names the accent color.
-struct PillColorSwatches: View {
-    var options: [PillColor] = PillColor.allCases
-    var selection: PillColor
-    var onPick: (PillColor) -> Void
+/// The model colors as small swatches, each the pill's ring in that color, graphite the plain pill in miniature; the
+/// chosen one is ringed in ink.
+struct ModelColorSwatches: View {
+    var selection: ModelColor
+    var onPick: (ModelColor) -> Void
 
     var body: some View {
         HStack(spacing: 4) {
-            ForEach(options) { color in
-                PillColorSwatch(color: color, isSelected: color == selection) {
+            ForEach(ModelColor.allCases) { color in
+                ModelColorSwatch(color: color, isSelected: color == selection) {
                     withAnimation(Theme.Motion.snappy) { onPick(color) }
                 }
             }
         }
         .fixedSize()
-        // The circles, not their hit areas, line up with the row's trailing edge.
-        .padding(.horizontal, -4)
         .accessibilityElement(children: .contain)
     }
 }
 
-private struct PillColorSwatch: View {
-    var color: PillColor
+private struct ModelColorSwatch: View {
+    var color: ModelColor
     var isSelected: Bool
     var action: () -> Void
     @State private var hovering = false
@@ -296,8 +293,8 @@ private struct PillColorSwatch: View {
     var body: some View {
         Button(action: action) {
             ZStack {
-                // Ink, not iris: a violet ring around a dark pill means Gemini. 25 pt across, so 2 pt of card
-                // keeps it off the swatch, which is as dark as the card in dark mode.
+                // Ink: a colored ring would read as one of the colors. 25 pt across, so 2 pt of the popover keeps it
+                // off the swatch.
                 Circle().ring(1.5)
                     .fill(isSelected ? Color.ink : Color.strokeStrong, style: FillStyle(eoFill: true))
                     .frame(width: 25, height: 25)
@@ -315,10 +312,28 @@ private struct PillColorSwatch: View {
         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
     }
 
-    /// Opaque: the card behind shouldn't tint it. The hairline outlines it on the dark card.
+    /// Opaque, so the popover behind doesn't tint it. An outer hairline holds a light ring's edge (orange, green) on a
+    /// white popover.
     private var swatch: some View {
         let shape = Circle()
-        return shape.fill(Color(nsColor: .hex(PillPalette.fill(for: color).hex)))
+        return ZStack {
+            if let accent = PillPalette.accent(for: color) {
+                shape.fill(accent.ring)
+            } else {
+                graphite
+            }
+        }
+        .overlay {
+            shape.inset(by: -0.5).ring(0.5)
+                .fill(Color.strokeStrong, style: FillStyle(eoFill: true))
+        }
+        .frame(width: 18, height: 18)
+    }
+
+    /// The pill's fill, sheen and lit hairline, which outlines it on the dark popover.
+    private var graphite: some View {
+        let shape = Circle()
+        return shape.fill(Color(nsColor: Palette.pillFill.withAlphaComponent(1)))
             .overlay {
                 shape.fill(LinearGradient(colors: [.white.opacity(0.08), .white.opacity(0)],
                                           startPoint: .top, endPoint: .center))
@@ -328,7 +343,6 @@ private struct PillColorSwatch: View {
                     .fill(LinearGradient(colors: [.white.opacity(0.24), .white.opacity(0.07)],
                                          startPoint: .top, endPoint: .bottom), style: FillStyle(eoFill: true))
             }
-            .frame(width: 18, height: 18)
     }
 }
 
@@ -468,8 +482,8 @@ struct CountBadge: View {
     }
 }
 
-/// The engine mark on history rows: P, F, Pro, in the model's color (`ModelChoice.tint`, as the pill wears it). Cloud
-/// Parakeet shares the local letter and color, so it carries a small cloud; a clean-up, a wand after the letter.
+/// The engine mark on history rows: P, F, Pro, in the model's color (`ModelColor.markTint`, as the pill wears it).
+/// Cloud Parakeet shares the local letter and color, so it carries a small cloud; a clean-up, a wand after the letter.
 struct EngineGlyph: View {
     var engine: EngineID
     /// The OpenRouter provider that served the transcript, for the tooltip.
@@ -478,11 +492,16 @@ struct EngineGlyph: View {
     var cleanupModel: CleanupModel?
     /// The tooltip in full (`VersionDetails`), in place of the engine and provider alone.
     var details: String?
+    /// The models' colors (`AppSettings.modelColors`).
+    var colors: ModelColors = .default
+
+    /// The color of the model that made it: the retired Gemini 3.1 Pro wears Gemini's, cloud Parakeet Parakeet's.
+    var color: ModelColor {
+        colors[ModelChoice(engine: engine, cleansUp: cleanupModel != nil)]
+    }
 
     var body: some View {
-        // Clean-up's warm is deepened for text this small, as the key card's is.
-        let choice = ModelChoice(engine: engine, cleansUp: cleanupModel != nil)
-        let tint = choice == .cleanup ? HubPalette.apricotInk : choice.tint
+        let tint = color.markTint
         HStack(spacing: 1.5) {
             if engine.cloudAPI == .transcriptions {
                 Image(systemName: "cloud.fill")
