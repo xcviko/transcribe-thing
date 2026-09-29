@@ -46,7 +46,8 @@ final class MenuBuilder {
         menu.addItem(submenuItem("Microphone", symbol: "mic", microphoneMenu(env)))
         menu.addItem(.separator())
 
-        menu.addItem(MenuActionItem(title: "Settings…") { [weak env] in env?.windows.showHub(.home) })
+        menu.addItem(MenuActionItem(title: "Home") { [weak env] in env?.windows.showHub(.home) })
+        menu.addItem(MenuActionItem(title: "Settings…") { [weak env] in env?.windows.showSettings() })
         if let update = updateItem(env) { menu.addItem(update) }
 
         if includeQuit {

@@ -48,6 +48,17 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         present(window)
     }
 
+    /// Settings… (the menus, ⌘,): the Hub on the Settings page it was last on.
+    func showSettings() {
+        showHub(Self.settingsSection(after: hubSection))
+    }
+
+    /// The page Settings… opens: the one the Hub is on, unless that's Home (not a Settings page): then Models, the
+    /// first.
+    static func settingsSection(after current: HubSection) -> HubSection {
+        current == .home ? .models : current
+    }
+
     func closeOnboarding() {
         onboardingWindow?.close()
     }
