@@ -265,6 +265,71 @@ struct HubSegmentedPicker<Value: Hashable>: View {
     }
 }
 
+/// The pill's colors as small swatches, each the pill in miniature (its fill, sheen and lit hairline); the chosen
+/// one is ringed in ink. The row's subtitle names it, as macOS names the accent color.
+struct PillColorSwatches: View {
+    var options: [PillColor] = PillColor.allCases
+    var selection: PillColor
+    var onPick: (PillColor) -> Void
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(options) { color in
+                PillColorSwatch(color: color, isSelected: color == selection) {
+                    withAnimation(Theme.Motion.snappy) { onPick(color) }
+                }
+            }
+        }
+        .fixedSize()
+        .accessibilityElement(children: .contain)
+    }
+}
+
+private struct PillColorSwatch: View {
+    var color: PillColor
+    var isSelected: Bool
+    var action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                // Ink, not iris: a violet ring around a dark pill means Gemini. 25 pt across, so 2 pt of card
+                // keeps it off the swatch, which is as dark as the card in dark mode.
+                Circle().ring(1.5)
+                    .fill(isSelected ? Color.ink : Color.strokeStrong, style: FillStyle(eoFill: true))
+                    .frame(width: 25, height: 25)
+                    .opacity(isSelected || hovering ? 1 : 0)
+                swatch
+            }
+            .frame(width: 26, height: 26)
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(Theme.Motion.hover, value: hovering)
+        .help(color.title)
+        .accessibilityLabel(color.title)
+        .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
+    }
+
+    /// Opaque: the card behind shouldn't tint it. The hairline outlines it on the dark card.
+    private var swatch: some View {
+        let shape = Circle()
+        return shape.fill(Color(nsColor: .hex(PillPalette.fill(for: color).hex)))
+            .overlay {
+                shape.fill(LinearGradient(colors: [.white.opacity(0.08), .white.opacity(0)],
+                                          startPoint: .top, endPoint: .center))
+            }
+            .overlay {
+                shape.ring(0.5)
+                    .fill(LinearGradient(colors: [.white.opacity(0.24), .white.opacity(0.07)],
+                                         startPoint: .top, endPoint: .bottom), style: FillStyle(eoFill: true))
+            }
+            .frame(width: 18, height: 18)
+    }
+}
+
 /// Search field on the canvas: rounded, hairline, magnifying glass, clear button.
 struct HubSearchField: View {
     @Binding var text: String

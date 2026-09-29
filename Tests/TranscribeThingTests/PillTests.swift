@@ -1437,6 +1437,88 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
     }
 }
 
+// MARK: - Colors
+
+@Suite struct PillColorTests {
+    @Test func pillColorsSweepTheHuesFromGraphite() {
+        #expect(PillColor.allCases == [.graphite, .emerald, .teal, .sapphire, .plum, .garnet])
+        #expect(Set(PillColor.allCases.map { PillPalette.fill(for: $0).hex }).count == PillColor.allCases.count)
+        #expect(Set(PillColor.allCases.map(\.title)).count == PillColor.allCases.count)
+    }
+
+    @Test func graphiteIsTodaysPill() {
+        #expect(PillPalette.fill(for: .graphite) == PillFill(hex: 0x101012, alpha: 0.92))
+        #expect(PillPalette.fill(for: .graphite).tooltipHex == 0x151517)
+    }
+
+    @Test func eachTooltipIsItsFillTwoPercentLighter() {
+        let tooltips = [PillColor.emerald, .teal, .sapphire, .plum, .garnet].map { PillPalette.fill(for: $0).tooltipHex }
+        #expect(tooltips == [0x082918, 0x07272D, 0x09233F, 0x370F35, 0x3C0E17])
+    }
+
+    /// Where it's hardest: the fill over a white page. Text in the capsule also sits under the top of its sheen (2%);
+    /// the chip has none. Any color added later has to pass too.
+    @Test(arguments: PillColor.allCases)
+    func everyPillColorKeepsThePillLegible(color: PillColor) throws {
+        let fill = PillPalette.fill(for: color)
+        let pill = SRGB(fill.hex).over(.white, alpha: Double(fill.alpha))
+        let capsule = SRGB.white.over(pill, alpha: 0.02)
+        let tooltip = SRGB(fill.tooltipHex).over(.white, alpha: 0.96)
+        func white(_ opacity: Double, on background: SRGB) -> Double {
+            SRGB.white.over(background, alpha: opacity).contrast(with: background)
+        }
+
+        #expect(white(0.96, on: capsule) >= 12, "the bars")
+        #expect(white(0.70, on: capsule) >= 7 && white(0.70, on: pill) >= 7 && white(0.70, on: tooltip) >= 7,
+                "the timer, the hint's label, Click for hands-free")
+        #expect(white(0.55, on: capsule) >= 5, "the counter's word")
+        #expect(white(0.50, on: pill) >= 4.5, "the chip's dimmed Parakeet")
+        #expect(white(0.45, on: pill) >= 4, "silence and processing dots")
+        #expect(white(0.35, on: pill) >= 3, "the peek's dots")
+        // A key's "left" or "right", in the tooltip and in the hint.
+        let keyCaps = [SRGB.white.over(tooltip, alpha: 0.18), SRGB.white.over(pill, alpha: 0.18)]
+        #expect(keyCaps.allSatisfy { white(0.7, on: $0) >= 4.5 }, "a key's side caption")
+
+        let gemini = try #require(PillPalette.accent(for: .gemini))
+        let cleanup = try #require(PillPalette.accent(for: .cleanup))
+        #expect(SRGB(gemini.ringHex).contrast(with: pill) >= 3.5, "Gemini's ring")
+        #expect(SRGB(cleanup.ringHex).contrast(with: pill) >= 5, "clean-up's ring")
+        #expect(SRGB(0xFF453A).contrast(with: pill) >= 4, "Stop (PillPalette.stop)")
+    }
+}
+
+/// A color as sRGB stores it (gamma-encoded, 0…1 a channel), where Core Animation blends.
+private struct SRGB {
+    var r, g, b: Double
+
+    static let white = SRGB(r: 1, g: 1, b: 1)
+
+    init(r: Double, g: Double, b: Double) {
+        (self.r, self.g, self.b) = (r, g, b)
+    }
+
+    init(_ hex: UInt32) {
+        self.init(r: Double((hex >> 16) & 0xFF) / 255, g: Double((hex >> 8) & 0xFF) / 255, b: Double(hex & 0xFF) / 255)
+    }
+
+    /// This color at `alpha` over `background`.
+    func over(_ background: SRGB, alpha: Double) -> SRGB {
+        SRGB(r: alpha * r + (1 - alpha) * background.r, g: alpha * g + (1 - alpha) * background.g,
+             b: alpha * b + (1 - alpha) * background.b)
+    }
+
+    /// WCAG 2 relative luminance.
+    var luminance: Double {
+        func linear(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+        return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+    }
+
+    /// WCAG 2 contrast ratio, 1…21.
+    func contrast(with other: SRGB) -> Double {
+        (max(luminance, other.luminance) + 0.05) / (min(luminance, other.luminance) + 0.05)
+    }
+}
+
 @Suite @MainActor struct PillStageEngineTests {
     @Test func theExitKeepsTheModelUntilThePillHasLeft() {
         var stage = PillStage()

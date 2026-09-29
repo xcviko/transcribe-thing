@@ -35,8 +35,11 @@ enum Palette {
     static let warning = dynamic("warning", light: .hex(0xA86400), dark: .hex(0xFFB340))
     static let danger = dynamic("danger", light: .hex(0xD93B30), dark: .hex(0xFF6B5E))
 
-    /// The pill is always dark, in both appearances.
-    static let pillFill = NSColor.hex(0x101012, alpha: 0.92)
+    /// Graphite, the default pill color: the Hub's and onboarding's pill illustrations always wear it.
+    static let pillFill: NSColor = {
+        let graphite = PillPalette.fill(for: .graphite)
+        return .hex(graphite.hex, alpha: graphite.alpha)
+    }()
     static let chipFill = dynamic("chipFill", light: .hex(0xFFFFFF), dark: .hex(0x2A2927))
     static let chipStroke = dynamic("chipStroke", light: .hex(0x1C1A17, alpha: 0.12), dark: .hex(0xFFFFFF, alpha: 0.12))
     static let chipBase = dynamic("chipBase", light: .hex(0x1C1A17, alpha: 0.10), dark: .hex(0x000000, alpha: 0.45))
