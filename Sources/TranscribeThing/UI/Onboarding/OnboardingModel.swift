@@ -442,6 +442,11 @@ final class OnboardingModel {
     var pushToTalkKeys: Set<IllustratedKey> { IllustratedKey.keys(for: ctx.settings.shortcuts[.pushToTalk]) }
     var handsFreeKeys: Set<IllustratedKey> { IllustratedKey.keys(for: ctx.settings.shortcuts[.handsFree]) }
     var isHoldingPushToTalk: Bool { !pushToTalkKeys.isEmpty && pushToTalkKeys.isSubset(of: pressedKeys) }
+    /// The key whose press fires the hands-free chord, as in the router: Space of fn+Space (Space held before fn is
+    /// no chord, fn is then a push-to-talk press). Nil for a modifier-only chord, which any press completing it fires.
+    private var handsFreeChordKey: IllustratedKey? {
+        ctx.settings.shortcuts[.handsFree]?.keyCode.flatMap { IllustratedKey(RawKeyEvent.Key(keyCode: $0)) }
+    }
     /// Keys the lessons use, tinted on the keyboard strip.
     var practiceKeys: Set<IllustratedKey> {
         pushToTalkKeys.union(handsFreeKeys).union(IllustratedKey.keys(for: .escape))
@@ -833,9 +838,12 @@ final class OnboardingModel {
         if key == .escape, event.isDown,
            recordingInProgress || dictationPhase.isRecording || holdingPTT || handsFreeLatched {
             completeCancelLesson()
+            // Esc cancels: the stage leaves hands-free even with no real dictation to end.
+            handsFreeLatched = false
+            stopArmed = false
         }
 
-        if holdingHandsFree && !wasHoldingHandsFree {
+        if holdingHandsFree && !wasHoldingHandsFree && (handsFreeChordKey == nil || key == handsFreeChordKey) {
             // Only starts hands-free: pressed again it does nothing, and the push-to-talk key held for it (fn of
             // fn+Space) doesn't finish on release.
             handsFreeLatched = true

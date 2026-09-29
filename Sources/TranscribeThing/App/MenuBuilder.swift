@@ -29,7 +29,7 @@ final class MenuBuilder {
         // hands-free one only starts hands-free.
         if isLocked(env.dictation.machine.capture) {
             menu.addItem(MenuActionItem(title: "Finish Dictation") { [weak env] in
-                env?.dictation.toggleHandsFree()
+                env?.dictation.finishHandsFree()
             })
         }
         if env.dictation.machine.isRecording {

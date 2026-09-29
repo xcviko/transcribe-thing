@@ -289,13 +289,10 @@ final class DictationController {
         return lineup.cycle.contains { $0 != effectiveChoice && ($0 == lineup.main || switchRefusal($0) == nil) }
     }
 
-    /// The pill's click, and the menu's "Finish Dictation" while hands-free.
-    func toggleHandsFree() {
-        switch machine.capture {
-        case .locked, .lockedStopPending: send(.pillStop)
-        case .arming, .listening: send(.handsFreeToggle)
-        case .idle, .tapPending: send(.pillClick)
-        }
+    /// The menu's "Finish Dictation", like the pill's Stop. A menu opened during hands-free can outlive it (fn
+    /// finished it meanwhile): then it does nothing.
+    func finishHandsFree() {
+        send(.pillStop)
     }
 
     /// Discards the current recording (menu or pill X).

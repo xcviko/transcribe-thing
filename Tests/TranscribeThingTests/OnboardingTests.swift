@@ -354,6 +354,46 @@ import Testing
         #expect(!model.handsFreeLatched)
     }
 
+    /// Space held before fn is no chord for the router (Space reaches the app, fn is a push-to-talk press): a lone fn
+    /// press, which finishes hands-free, and from rest a hold.
+    @Test func spaceBeforeFnIsAPushToTalkPress() {
+        let model = makeModel(step: 3)
+        let t0 = Date()
+        model.handleRawKey(RawKeyEvent(key: .space, isDown: true), now: t0)
+        model.handleRawKey(RawKeyEvent(key: .fn, isDown: true), now: t0.addingTimeInterval(0.1))
+        #expect(!model.handsFreeLatched)
+        #expect(model.livePhase == .listening)
+        model.handleRawKey(RawKeyEvent(key: .space, isDown: false), now: t0.addingTimeInterval(0.2))
+        model.handleRawKey(RawKeyEvent(key: .fn, isDown: false), now: t0.addingTimeInterval(0.25))
+        #expect(!model.triedHandsFree)
+
+        model.handleRawKey(RawKeyEvent(key: .fn, isDown: true), now: t0.addingTimeInterval(2))
+        model.handleRawKey(RawKeyEvent(key: .space, isDown: true), now: t0.addingTimeInterval(2.1))
+        model.handleRawKey(RawKeyEvent(key: .space, isDown: false), now: t0.addingTimeInterval(2.2))
+        model.handleRawKey(RawKeyEvent(key: .fn, isDown: false), now: t0.addingTimeInterval(2.25))
+        #expect(model.handsFreeLatched)
+        model.handleRawKey(RawKeyEvent(key: .space, isDown: true), now: t0.addingTimeInterval(5))
+        model.handleRawKey(RawKeyEvent(key: .fn, isDown: true), now: t0.addingTimeInterval(5.1))
+        model.handleRawKey(RawKeyEvent(key: .space, isDown: false), now: t0.addingTimeInterval(5.2))
+        model.handleRawKey(RawKeyEvent(key: .fn, isDown: false), now: t0.addingTimeInterval(5.25))
+        #expect(!model.handsFreeLatched)
+    }
+
+    /// Esc cancels hands-free: the stage leaves it with no real dictation to end (Accessibility skipped).
+    @Test func escEndsHandsFree() {
+        let model = makeModel(step: 3)
+        let t0 = Date()
+        model.handleRawKey(RawKeyEvent(key: .fn, isDown: true), now: t0)
+        model.handleRawKey(RawKeyEvent(key: .space, isDown: true), now: t0.addingTimeInterval(0.1))
+        model.handleRawKey(RawKeyEvent(key: .space, isDown: false), now: t0.addingTimeInterval(0.2))
+        model.handleRawKey(RawKeyEvent(key: .fn, isDown: false), now: t0.addingTimeInterval(0.25))
+        #expect(model.livePhase == .locked)
+        model.handleRawKey(RawKeyEvent(key: .escape, isDown: true), now: t0.addingTimeInterval(1))
+        model.handleRawKey(RawKeyEvent(key: .escape, isDown: false), now: t0.addingTimeInterval(1.1))
+        #expect(!model.handsFreeLatched)
+        #expect(model.livePhase == .rest)
+    }
+
     @Test func doublePressLatchesHandsFree() {
         let model = makeModel(step: 3)
         model.ctx.settings.doublePressForHandsFree = true

@@ -24,8 +24,9 @@ struct DictationMachine: Equatable {
     enum Input: Equatable {
         /// `pttInterrupted`: another key, extra modifier or mouse click while the PTT key is held.
         case pttDown, pttUp, pttInterrupted
-        /// `handsFreeToggle`: the hands-free shortcut. It only starts hands-free; while hands-free it does nothing
-        /// (the PTT key finishes, Esc cancels).
+        /// `handsFreeToggle`: the hands-free shortcut. It only starts hands-free. Pressed during hands-free, the
+        /// recording goes on, and a PTT key pressed for it (fn of fn+Space) no longer finishes on release. A lone PTT
+        /// press finishes, Esc cancels.
         case handsFreeToggle, cancel, pillClick, pillStop, pillCancel
         /// The switch model shortcut: another engine for the dictation being recorded.
         case cycleEngine

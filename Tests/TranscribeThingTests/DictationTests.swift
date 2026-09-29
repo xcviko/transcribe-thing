@@ -2233,6 +2233,23 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
         try await waitUntil { env.dictation.machine.activeJobs == 0 }
     }
 
+    /// The menu is built as it opens: one opened during hands-free outlives it when fn finishes it meanwhile, and its
+    /// Finish Dictation then starts nothing.
+    @Test func staleFinishDictationStartsNothing() async throws {
+        let env = Self.dictatingEnvironment()
+        env.dictation.playCueOverride = { _ in }
+        env.dictation.transcribeOverride = { _, engine in TranscriptResult(text: "", engine: engine, processingTime: 0.1) }
+        env.dictation.insertOverride = { _, _ in Issue.record("nothing should be pasted"); return .pasted }
+        env.dictation.send(.handsFreeToggle)
+        let finish = try #require(env.menuBar.builder.makeMenu(includeQuit: true).items.first { $0.title == "Finish Dictation" })
+        env.dictation.handle(.pttDown)
+        env.dictation.handle(.pttUp)
+        #expect(env.dictation.machine.capture == .idle)
+        NSApplication.shared.sendAction(try #require(finish.action), to: finish.target, from: finish)
+        #expect(env.dictation.machine.capture == .idle)
+        try await waitUntil { env.dictation.machine.activeJobs == 0 }
+    }
+
     @Test func updateItemAppearsOnlyWhileAnUpdateWaits() throws {
         let current = AppEnvironment.preview()
         #expect(!current.menuBar.builder.makeMenu(includeQuit: true).items.contains { $0.title.hasPrefix("Update") })
