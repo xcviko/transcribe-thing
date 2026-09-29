@@ -29,9 +29,10 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
 
     /// Which OpenRouter endpoint a cloud engine uses. Routing code switches on this, never on specific cases.
     enum CloudAPI: Sendable, Equatable {
-        /// `POST /chat/completions` with the audio as an `input_audio` part (Gemini). One request per recording.
+        /// `POST /chat/completions` with the audio as an `input_audio` part (Gemini). One request per recording, as
+        /// AAC in an .m4a.
         case chatCompletions
-        /// `POST /audio/transcriptions` (Parakeet). One request per recording, however long.
+        /// `POST /audio/transcriptions` (Parakeet). One request per segment of at most 5 minutes, as FLAC.
         case transcriptions
     }
 

@@ -30,6 +30,9 @@ struct TranscriptResult: Sendable, Equatable {
     var reasoningCharacters: Int? = nil
     /// Seconds from sending a streamed request until the first character of the answer.
     var timeToFirstToken: TimeInterval? = nil
+    /// The files the audio went to OpenRouter as, one per request that answered (each of Parakeet's segments); empty
+    /// for the local model. Not kept in history.
+    var uploads: [AudioUpload] = []
 
     /// Everything known about how this result came about, for its history version.
     func metadata(createdAt: Date = Date()) -> TranscriptMetadata {
@@ -56,6 +59,9 @@ final class TranscriptionService {
     private let account: OpenRouterAccount
     private let client: OpenRouterClient
     private let providerLookupDelay: Duration
+    /// The format Parakeet's segments go in: FLAC, the WAV's samples in a little over half its bytes, until OpenRouter
+    /// refuses it; WAV from then on, for as long as the app runs.
+    private(set) var speechFormat: UploadFormat = .flac
 
     init(models: ModelStore, account: OpenRouterAccount, client: OpenRouterClient,
          providerLookupDelay: Duration = .milliseconds(1500)) {
@@ -68,11 +74,13 @@ final class TranscriptionService {
     /// Throws `AppError` only, or `CancellationError` when the calling task is cancelled. A retired model never runs.
     /// `processingTime` covers everything after the recording ended, including any wait for the model.
     /// `effort` has Gemini think at another level than its own (`EngineCLI --effort`), and `prompt` replaces its
-    /// fixed `EngineID.geminiSystemPrompt` (`--prompt`; empty sends only the audio); the app never passes either.
+    /// fixed `EngineID.geminiSystemPrompt` (`--prompt`; empty sends only the audio), and `upload` sends a cloud model
+    /// the audio in that format instead of its own, a refusal of it failing rather than going again as WAV
+    /// (`--upload`); the app never passes any of them.
     /// `background`: Home's work, which lets dictations have the local model first.
     /// `progress` hears how much of a streamed answer has come (Gemini's reasoning and text); Parakeet has none.
     func transcribe(_ recording: Recording, engine: EngineID, effort: ReasoningEffort? = nil,
-                    prompt: String? = nil, background: Bool = false,
+                    prompt: String? = nil, upload: UploadFormat? = nil, background: Bool = false,
                     progress: (@Sendable (ChatStreamProgress) -> Void)? = nil) async throws -> TranscriptResult {
         guard !engine.isRetired else {
             throw AppError.engineFailed(engine, "\(engine.displayName) is no longer offered.")
@@ -86,7 +94,7 @@ final class TranscriptionService {
                 let effort = effort ?? engine.reasoningEffort
                 let prompt = engine.cloudAPI == .chatCompletions ? (prompt ?? EngineID.geminiSystemPrompt) : ""
                 let cloud = try await transcribeCloud(recording, engine: engine, effort: effort, prompt: prompt,
-                                                      progress: progress)
+                                                      upload: upload, progress: progress)
                 result.text = cloud.text
                 result.costUSD = cloud.costUSD
                 result.provider = cloud.provider
@@ -100,6 +108,7 @@ final class TranscriptionService {
                 result.audioSeconds = cloud.audioSeconds
                 result.reasoningCharacters = cloud.reasoningCharacters
                 result.timeToFirstToken = cloud.timeToFirstToken
+                result.uploads = cloud.uploads
             }
             result.text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
             result.processingTime = Self.seconds(started.duration(to: .now))
@@ -115,6 +124,7 @@ final class TranscriptionService {
     }
 
     private func transcribeCloud(_ recording: Recording, engine: EngineID, effort: ReasoningEffort?, prompt: String,
+                                 upload: UploadFormat?,
                                  progress: (@Sendable (ChatStreamProgress) -> Void)?) async throws -> CloudResult {
         guard let model = engine.openRouterModelID, let api = engine.cloudAPI else {
             throw AppError.engineFailed(engine, "No cloud model for \(engine.displayName).")
@@ -127,56 +137,85 @@ final class TranscriptionService {
             switch api {
             case .chatCompletions:
                 result = try await transcribeWithChat(recording, engine: engine, model: model, key: key,
-                                                      effort: effort ?? .medium, prompt: prompt, progress: progress)
+                                                      effort: effort ?? .medium, prompt: prompt, upload: upload,
+                                                      progress: progress)
             case .transcriptions:
-                result = try await transcribeSpeech(recording.samples, engine: engine, model: model, key: key)
+                result = try await transcribeSpeech(recording.samples, engine: engine, model: model, key: key,
+                                                    upload: upload)
             }
             account.noteCloudSuccess()
             return result
         } catch let error as AppError {
             account.noteCloudFailure(error)
             throw error
+        } catch let refused as OpenRouterClient.AudioFormatRefused {
+            // A refusal with nothing left to fall back from: a WAV's, or a format `upload` forced.
+            account.noteCloudFailure(refused.error)
+            throw refused.error
         }
     }
 
-    /// Gemini: the whole recording in one request, with its system prompt, whatever its length. Past what its WAV can
-    /// carry it goes as AAC (`CloudAudio.forChat`; History's own .m4a as it is, when it has one that fits); the
-    /// answer's token budget grows with the audio, and it streams, so no wait for it has to.
+    /// Gemini: the whole recording in one request, with its system prompt, whatever its length, as AAC in an .m4a
+    /// (`CloudAudio.forChat`: History's own file as it is, when it has one that fits, otherwise encoded off the main
+    /// actor); the answer's token budget grows with the audio, and it streams, so no wait for it has to.
     private func transcribeWithChat(_ recording: Recording, engine: EngineID, model: String, key: String,
-                                    effort: ReasoningEffort, prompt: String,
+                                    effort: ReasoningEffort, prompt: String, upload: UploadFormat?,
                                     progress: (@Sendable (ChatStreamProgress) -> Void)?) async throws -> CloudResult {
-        let samples = recording.samples, stored = recording.aacFile
-        let encoded = await Task.detached(priority: .userInitiated) {
-            try? CloudAudio.forChat(samples, stored: stored)
+        let samples = recording.samples, stored = recording.aacFile, format = upload ?? .m4a
+        let audio = await Task.detached(priority: .userInitiated) {
+            try? CloudAudio.forChat(samples, stored: stored, format: format)
         }.value
-        guard let encoded else { throw AppError.engineFailed(engine, "Couldn’t compress the recording.") }
+        guard let audio else { throw AppError.engineFailed(engine, "Couldn’t compress the recording.") }
         try Task.checkCancellation()
-        let seconds = Double(samples.count) / Recording.sampleRate
-        return try await client.transcribe(audio: encoded.data, format: encoded.format, model: model,
-                                           systemPrompt: prompt, effort: effort,
-                                           maxTokens: OpenRouterClient.transcriptionMaxTokens(audioSeconds: seconds),
-                                           apiKey: key, timeout: engine.cloudTimeout, progress: progress)
+        let maxTokens = OpenRouterClient.transcriptionMaxTokens(audioSeconds: Double(samples.count) / Recording.sampleRate)
+        var result = try await client.transcribe(audio: audio, format: format.rawValue, model: model,
+                                                 systemPrompt: prompt, effort: effort, maxTokens: maxTokens,
+                                                 apiKey: key, timeout: engine.cloudTimeout, progress: progress)
+        result.uploads = [AudioUpload(format: format, bytes: audio.count)]
+        return result
     }
 
     /// Parakeet over the speech-to-text endpoint: a request per segment of at most 5 minutes, cut in pauses
-    /// (`CloudAudio.speechSegments`; a shorter recording is one), one after another. The texts join with a space;
-    /// the billed seconds and the costs add up, and the first segment's generation stands for the whole. The
-    /// Gemini system prompt doesn't apply, and no language is sent: Parakeet v3 detects it.
-    private func transcribeSpeech(_ samples: [Float], engine: EngineID, model: String,
-                                  key: String) async throws -> CloudResult {
+    /// (`CloudAudio.speechSegments`; a shorter recording is one), one after another, each as FLAC (`speechFormat`,
+    /// or `upload`). A segment whose FLAC OpenRouter refuses goes again as WAV at once, and so does every later one,
+    /// in this and every dictation after it. The texts join with a space; the billed seconds and the costs add up, and
+    /// the first segment's generation stands for the whole. The Gemini system prompt doesn't apply, and no language is
+    /// sent: Parakeet v3 detects it.
+    private func transcribeSpeech(_ samples: [Float], engine: EngineID, model: String, key: String,
+                                  upload: UploadFormat?) async throws -> CloudResult {
         let ranges = await Task.detached(priority: .userInitiated) { CloudAudio.speechSegments(samples) }.value
         var results: [CloudResult] = []
         for range in ranges {
             try Task.checkCancellation()
-            let wav = await Task.detached(priority: .userInitiated) { WAVEncoder.pcm16(Array(samples[range])) }.value
-            results.append(try await client.transcribeSpeech(wav: wav, model: model, apiKey: key,
-                                                             timeout: engine.cloudTimeout))
+            do {
+                results.append(try await transcribeSegment(samples, range, format: upload ?? speechFormat,
+                                                           engine: engine, model: model, key: key))
+            } catch let refused as OpenRouterClient.AudioFormatRefused
+                        where upload == nil && refused.format != UploadFormat.wav.rawValue {
+                Log.net.warning("OpenRouter refused \(refused.format, privacy: .public) for \(engine.rawValue, privacy: .public): sending WAV from now on")
+                speechFormat = .wav
+                results.append(try await transcribeSegment(samples, range, format: .wav, engine: engine,
+                                                           model: model, key: key))
+            }
         }
         return Self.joined(results)
     }
 
+    /// One of Parakeet's segments in `format` (`CloudAudio.forSpeech`: WAV when that encoder fails).
+    private func transcribeSegment(_ samples: [Float], _ range: Range<Int>, format: UploadFormat, engine: EngineID,
+                                   model: String, key: String) async throws -> CloudResult {
+        let file = await Task.detached(priority: .userInitiated) {
+            CloudAudio.forSpeech(Array(samples[range]), format: format)
+        }.value
+        var result = try await client.transcribeSpeech(audio: file.data, format: file.format.rawValue, model: model,
+                                                       apiKey: key, timeout: engine.cloudTimeout)
+        result.uploads = [AudioUpload(format: file.format, bytes: file.data.count)]
+        return result
+    }
+
     /// Parakeet's segments as one result: the first's, with every text (trimmed, empty ones left out) joined by a
-    /// space, the billed seconds and costs summed (nil when none said), and the first provider any of them named.
+    /// space, the billed seconds and costs summed (nil when none said), the first provider any of them named, and
+    /// every segment's file.
     private nonisolated static func joined(_ results: [CloudResult]) -> CloudResult {
         guard var combined = results.first else { return CloudResult(text: "") }
         combined.text = results.map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -184,6 +223,7 @@ final class TranscriptionService {
         combined.audioSeconds = Self.sum(results.map(\.audioSeconds))
         combined.costUSD = Self.sum(results.map(\.costUSD))
         combined.provider = results.lazy.compactMap(\.provider).first
+        combined.uploads = results.flatMap(\.uploads)
         return combined
     }
 

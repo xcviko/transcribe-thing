@@ -39,8 +39,8 @@ struct OpenRouterChatRequest: Encodable, Equatable {
     /// `EngineID.reasoningEffort`) with its reasoning included: the summaries of its thoughts stream ahead of the
     /// transcript, so the pill can count them (the bill is the same either way). No temperature (Google recommends the
     /// default for Gemini 3). The system message exists only for a non-empty prompt, and the user message carries ONLY
-    /// the audio, in `format` ("wav", "m4a"): no text part, ever. `maxTokens` grows with the audio
-    /// (`OpenRouterClient.transcriptionMaxTokens`).
+    /// the audio, in `format` ("m4a"; "wav" or "flac" from `EngineCLI --upload`): no text part, ever. `maxTokens`
+    /// grows with the audio (`OpenRouterClient.transcriptionMaxTokens`).
     static func transcription(model: String, audioBase64: String, format: String, systemPrompt: String?,
                               effort: ReasoningEffort, maxTokens: Int) -> OpenRouterChatRequest {
         var messages: [OpenRouterMessage] = []
@@ -154,9 +154,11 @@ struct OpenRouterSpeechRequest: Encodable, Equatable {
         case inputAudio = "input_audio"
     }
 
-    /// No `language`: Parakeet v3 detects it.
-    static func wav(model: String, audioBase64: String) -> OpenRouterSpeechRequest {
-        OpenRouterSpeechRequest(model: model, inputAudio: InputAudio(data: audioBase64, format: "wav"))
+    /// One file in `format`: "flac", "wav" once OpenRouter refused FLAC, or any `UploadFormat` `EngineCLI --upload`
+    /// forces. The endpoint documents wav, mp3, flac, m4a, ogg, webm and aac, each as far as the provider takes it;
+    /// Together takes FLAC. No `language`: Parakeet v3 detects it.
+    static func audio(model: String, audioBase64: String, format: String) -> OpenRouterSpeechRequest {
+        OpenRouterSpeechRequest(model: model, inputAudio: InputAudio(data: audioBase64, format: format))
     }
 
     func encoded() throws -> Data {
@@ -585,6 +587,25 @@ enum OpenRouterErrorMapper {
 
     /// How a 400 says the request is too large to take (lowercased).
     static let tooLargePhrases = ["payload size", "request entity too large", "request too large"]
+
+    /// What a refusal of an upload's format names (lowercased)…
+    static let audioFormatSubjects = ["format", "file type", "filetype", "media type", "mime", "codec", "flac",
+                                      "extension", "content type", "content-type", "encoding", "decod"]
+    /// …and the words that refuse it.
+    static let refusalWords = ["unsupported", "not supported", "invalid", "unrecognized", "unrecognised", "unknown",
+                               "not allowed", "not accepted", "cannot", "can't", "can’t", "could not", "couldn't",
+                               "couldn’t", "unable", "failed to"]
+
+    /// Whether the speech-to-text endpoint refused an upload for its format: any 415, or a 400 or 422 whose body names
+    /// a format, file type, codec or decoding (`audioFormatSubjects`) and refuses it (`refusalWords`), however
+    /// OpenRouter or the provider words it; the provider's own error, which OpenRouter passes on in the metadata,
+    /// counts too.
+    static func refusesAudioFormat(status: Int, body: Data) -> Bool {
+        if status == 415 { return true }
+        guard status == 400 || status == 422 else { return false }
+        let text = String(decoding: body.prefix(64 * 1024), as: UTF8.self).lowercased()
+        return audioFormatSubjects.contains(where: text.contains) && refusalWords.contains(where: text.contains)
+    }
 
     /// Maps a non-200 response (body may be JSON, HTML or empty).
     static func httpError(status: Int, data: Data, retryAfter: Double?, engine: EngineID) -> AppError {

@@ -39,6 +39,8 @@ struct CloudResult: Sendable, Equatable {
     var reasoningCharacters: Int?
     /// Seconds from sending the request until the first character of the answer streamed in.
     var timeToFirstToken: TimeInterval?
+    /// The files the audio went as, one per request that answered (set by `TranscriptionService`).
+    var uploads: [AudioUpload] = []
 
     var reasoningTokens: Int? { usage?.reasoningTokens }
 }
@@ -61,12 +63,13 @@ struct TokenUsage: Codable, Equatable, Sendable {
 }
 
 /// Transcription through OpenRouter: Gemini over chat completions, Parakeet over the speech-to-text endpoint.
-/// Every failure surfaces as `AppError` (or `CancellationError` when the calling task is cancelled).
+/// Every failure surfaces as `AppError` (or `CancellationError` when the calling task is cancelled), but for a speech
+/// upload refused for its format (`AudioFormatRefused`).
 final class OpenRouterClient: Sendable {
     static let referer = "http://localhost/transcribe-thing"
     static let title = "transcribe-thing"
-    /// The inline-audio budget of one Gemini request, as base64: Gemini accepts about 20 MB of inline data. A 16 kHz
-    /// WAV fits up to about 7.4 minutes; a longer recording goes compressed (`CloudAudio.forChat`).
+    /// The inline-audio budget of one Gemini request, as base64: Gemini accepts about 20 MB of inline data. AAC at
+    /// 32 kbps fits about 54 minutes; a longer recording goes at a lower rate (`CloudAudio.aacBitRate`).
     static let maxBase64Bytes = 19_000_000
     static let keyCheckTimeout: TimeInterval = 15
     /// Longest server-requested wait worth sitting through during a dictation.
@@ -104,8 +107,9 @@ final class OpenRouterClient: Sendable {
 
     // MARK: Transcribe
 
-    /// Gemini over chat completions, streamed. `audio` is a complete file in `format` ("wav", "m4a":
-    /// `CloudAudio.forChat`), sent whatever its size: a size OpenRouter refuses comes back as `recordingTooLarge`.
+    /// Gemini over chat completions, streamed. `audio` is a complete file in `format` ("m4a", or what `EngineCLI
+    /// --upload` forces: `CloudAudio.forChat`), sent whatever its size: a size OpenRouter refuses comes back as
+    /// `recordingTooLarge`.
     /// `progress` hears how much reasoning and text has streamed in (`streamWithRetry`). Retries once, only for a
     /// transient failure (429/500/502/503/529, a 402 from the in-flight budget, a dropped connection, or the same
     /// failures reported quickly inside the stream before any of the answer) and only when the wait is at most 8 s;
@@ -156,35 +160,54 @@ final class OpenRouterClient: Sendable {
         return result
     }
 
-    /// Parakeet over `POST /audio/transcriptions`. `wav` is one WAV file in one request: a whole recording up to 5
-    /// minutes, or one segment of a longer one (`CloudAudio.speechSegments`). The provider behind it transcribes many
-    /// times faster than real time, and a size OpenRouter refuses comes back as a 413 (`recordingTooLarge`). Not
-    /// streamed (the endpoint can't), with the same retry policy as `transcribe(audio:format:model:…)`.
-    func transcribeSpeech(wav: Data, model: String, apiKey: String, timeout: TimeInterval) async throws -> CloudResult {
+    /// Parakeet over `POST /audio/transcriptions`. `audio` is one file in `format` ("flac", "wav":
+    /// `CloudAudio.forSpeech`) in one request: a whole recording up to 5 minutes, or one segment of a longer one
+    /// (`CloudAudio.speechSegments`). The provider behind it transcribes many times faster than real time, and a size
+    /// OpenRouter refuses comes back as a 413 (`recordingTooLarge`). Not streamed (the endpoint can't), with the same
+    /// retry policy as `transcribe(audio:format:model:…)`. A refusal of the file's format
+    /// (`OpenRouterErrorMapper.refusesAudioFormat`) throws `AudioFormatRefused` instead of an `AppError`, so the
+    /// caller can send the audio again as WAV.
+    func transcribeSpeech(audio: Data, format: String, model: String, apiKey: String,
+                          timeout: TimeInterval) async throws -> CloudResult {
         let engine = Self.engine(forModel: model)
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw AppError.openRouterMissingKey }
 
         let body: Data
         do {
-            body = try OpenRouterSpeechRequest.wav(model: model, audioBase64: wav.base64EncodedString()).encoded()
+            body = try OpenRouterSpeechRequest.audio(model: model, audioBase64: audio.base64EncodedString(),
+                                                     format: format).encoded()
         } catch {
             throw AppError.openRouterBadRequest("Couldn’t build the request.")
         }
         let request = makeRequest(path: "audio/transcriptions", body: body, apiKey: key, timeout: timeout)
         return try await sendWithRetry(request, engine: engine) { data in
             try OpenRouterErrorMapper.speechSuccess(data: data, engine: engine)
+        } refused: { error in
+            AudioFormatRefused(format: format, error: error)
         }
     }
 
+    /// The speech endpoint refused a file for its format: `error` is how the failure maps otherwise.
+    struct AudioFormatRefused: Error, Equatable {
+        let format: String
+        let error: AppError
+    }
+
     /// Sends `request`, retrying once per the policy above. `interpret` reads a 200 body and throws `AppError`
-    /// for a failure reported inside it.
-    private func sendWithRetry(_ request: URLRequest, engine: EngineID,
-                               interpret: (Data) throws -> CloudResult) async throws -> CloudResult {
+    /// for a failure reported inside it; a refusal of the upload's format throws what `refused` makes of its error.
+    private func sendWithRetry(_ request: URLRequest, engine: EngineID, interpret: (Data) throws -> CloudResult,
+                               refused: (AppError) -> any Error) async throws -> CloudResult {
         try await withRetry {
             let started = ContinuousClock.now
             let (data, http) = try await send(request, engine: engine)
-            guard http.statusCode == 200 else { throw Self.statusFailure(http, body: data, engine: engine) }
+            guard http.statusCode == 200 else {
+                let failure = Self.statusFailure(http, body: data, engine: engine)
+                if OpenRouterErrorMapper.refusesAudioFormat(status: http.statusCode, body: data) {
+                    throw refused(failure.error)
+                }
+                throw failure
+            }
             var result: CloudResult
             do {
                 result = try interpret(data)

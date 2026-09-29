@@ -26,15 +26,20 @@ enum WAVEncoder {
         u16(2); u16(16)
         data.append(contentsOf: Array("data".utf8)); u32(UInt32(clamping: dataBytes))
         guard !samples.isEmpty else { return data }
+        int16(samples).withUnsafeBytes { data.append(contentsOf: $0) }     // every Mac is little-endian, like RIFF
+        return data
+    }
 
+    /// The 16-bit samples `pcm16` writes (clipped to [-1, 1], scaled by 32,767, rounded), which FLAC carries too.
+    static func int16(_ samples: [Float]) -> [Int16] {
+        guard !samples.isEmpty else { return [] }
         var scaled = [Float](repeating: 0, count: samples.count)
         var low: Float = -1, high: Float = 1, scale: Float = 32_767
         vDSP_vclip(samples, 1, &low, &high, &scaled, 1, vDSP_Length(samples.count))
         vDSP_vsmul(scaled, 1, &scale, &scaled, 1, vDSP_Length(samples.count))
         var pcm = [Int16](repeating: 0, count: samples.count)
         vDSP_vfixr16(scaled, 1, &pcm, 1, vDSP_Length(samples.count))
-        pcm.withUnsafeBytes { data.append(contentsOf: $0) }     // every Mac is little-endian, like RIFF
-        return data
+        return pcm
     }
 
     /// Mono samples at `Recording.sampleRate` (resampled and downmixed as needed), or nil if the data

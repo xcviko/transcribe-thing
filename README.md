@@ -47,6 +47,10 @@ tries Gemini at another level. The prompts are fixed in the app and change only 
 tries Gemini with another one (`--prompt ""` sends only the audio). `--clean-up` sends the transcript to GPT-6 Luna
 with the app's clean-up prompt (`--clean-up-prompt` and `--clean-up-effort` change them).
 
+The app sends Gemini AAC in an .m4a and cloud Parakeet FLAC (WAV once OpenRouter refuses FLAC). `--upload wav`,
+`--upload m4a` or `--upload flac` sends a cloud model that format instead, to compare them; every run prints what
+went up (`UPLOAD:`) and what it cost and took (`USAGE:`).
+
 ## Permissions
 
 transcribe-thing asks for **Microphone** (to hear you) and **Accessibility** (to paste and to listen for its shortcuts).

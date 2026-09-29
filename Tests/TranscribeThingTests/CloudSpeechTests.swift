@@ -62,13 +62,24 @@ private func json(_ data: Data) throws -> [String: Any] {
     try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
 }
 
-/// Samples in the WAV carried by a transcription request body.
-private func wavSampleCount(inRequestBody body: Data) -> Int? {
+/// The file a transcription request body carries: its format, and how many samples it reads back as.
+private func upload(inRequestBody body: Data) -> (format: String, samples: Int)? {
     guard let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
-          let audio = object["input_audio"] as? [String: Any], let base64 = audio["data"] as? String,
-          let wav = Data(base64Encoded: base64) else { return nil }
-    return WAVEncoder.decode(wav)?.count
+          let audio = object["input_audio"] as? [String: Any], let format = audio["format"] as? String,
+          let base64 = audio["data"] as? String, let data = Data(base64Encoded: base64) else { return nil }
+    if format == "wav" { return WAVEncoder.decode(data).map { (format, $0.count) } }
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("upload-\(UUID().uuidString).\(format)")
+    defer { try? FileManager.default.removeItem(at: url) }
+    guard (try? data.write(to: url)) != nil, let samples = try? AudioFileLoader.load16kMono(url) else { return nil }
+    return (format, samples.count)
 }
+
+private func uploads(_ bodies: [Data]) async -> [(format: String, samples: Int)] {
+    await offMain { bodies.map { upload(inRequestBody: $0) ?? ("?", 0) } }
+}
+
+private let unsupportedFormat = StubURLProtocol.Reply(
+    status: 400, body: #"{"error":{"code":400,"message":"Unsupported audio format: flac"}}"#)
 
 /// Heavy synthetic audio work stays off the main actor, where other suites' timers must keep firing on time.
 private func offMain<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
@@ -151,22 +162,51 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
 // MARK: - Request and response
 
 @Suite struct OpenRouterSpeechWireTests {
-    @Test func requestCarriesModelAndAudioOnly() throws {
-        let body = try json(OpenRouterSpeechRequest.wav(model: "nvidia/parakeet-tdt-0.6b-v3",
-                                                        audioBase64: "UklG+/==").encoded())
+    @Test(arguments: UploadFormat.allCases)
+    func requestCarriesModelAndAudioOnly(_ format: UploadFormat) throws {
+        let body = try json(OpenRouterSpeechRequest.audio(model: "nvidia/parakeet-tdt-0.6b-v3",
+                                                          audioBase64: "ZkxhQw+/==", format: format.rawValue).encoded())
         #expect(Set(body.keys) == ["model", "input_audio"], "no language, provider routing, temperature or format")
         #expect(body["model"] as? String == "nvidia/parakeet-tdt-0.6b-v3")
         let audio = try #require(body["input_audio"] as? [String: Any])
-        #expect(audio["data"] as? String == "UklG+/==")
-        #expect(audio["format"] as? String == "wav")
+        #expect(audio["data"] as? String == "ZkxhQw+/==")
+        #expect(audio["format"] as? String == format.rawValue)
         #expect(audio.count == 2)
     }
 
     @Test func base64SlashesAreNotEscaped() throws {
-        let raw = String(decoding: try OpenRouterSpeechRequest.wav(model: "nvidia/parakeet-tdt-0.6b-v3",
-                                                                   audioBase64: "ab/cd+/ef==").encoded(),
+        let raw = String(decoding: try OpenRouterSpeechRequest.audio(model: "nvidia/parakeet-tdt-0.6b-v3",
+                                                                     audioBase64: "ab/cd+/ef==", format: "flac").encoded(),
                          as: UTF8.self)
         #expect(raw.contains("ab/cd+/ef==") && raw.contains("nvidia/parakeet-tdt-0.6b-v3") && !raw.contains("\\/"))
+    }
+
+    /// However OpenRouter or the provider words it, a 415, or a 400 or 422 that refuses the file's format, type or
+    /// decoding, refuses the upload's format; any other failure is what it always was.
+    @Test func formatRefusals() {
+        let refusals: [(Int, String)] = [
+            (415, ""),
+            (415, #"{"error":{"code":415,"message":"Unsupported Media Type"}}"#),
+            (400, #"{"error":{"code":400,"message":"Unsupported audio format: flac"}}"#),
+            (400, #"{"error":{"code":400,"message":"Invalid file type. Supported types: wav, mp3."}}"#),
+            (422, #"{"error":{"code":422,"message":"input_audio.format 'flac' is not supported by this model"}}"#),
+            (400, #"{"error":{"code":400,"message":"Provider returned error","metadata":{"raw":"{\"error\":{\"message\":\"Could not decode the audio\"}}","provider_name":"Together"}}}"#),
+            (400, "codec not supported"),
+        ]
+        for (status, body) in refusals {
+            #expect(OpenRouterErrorMapper.refusesAudioFormat(status: status, body: Data(body.utf8)), "\(status) \(body)")
+        }
+        let others: [(Int, String)] = [
+            (400, #"{"error":{"code":400,"message":"Invalid audio"}}"#),
+            (400, #"{"error":{"code":400,"message":"Invalid request parameters"}}"#),
+            (400, #"{"error":{"code":400,"message":"Request payload too large"}}"#),
+            (413, #"{"error":{"code":413,"message":"Unsupported format: too large"}}"#),
+            (502, #"{"error":{"code":502,"message":"Provider could not decode the audio format"}}"#),
+            (401, #"{"error":{"message":"User not found.","code":401}}"#),
+        ]
+        for (status, body) in others {
+            #expect(!OpenRouterErrorMapper.refusesAudioFormat(status: status, body: Data(body.utf8)), "\(status) \(body)")
+        }
     }
 
     @Test func successDecodesTextAndCost() throws {
@@ -213,7 +253,23 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
     private let wav = WAVEncoder.pcm16(tone(1))
 
     private func call(_ client: OpenRouterClient, model: String = "nvidia/parakeet-tdt-0.6b-v3") async throws -> CloudResult {
-        try await client.transcribeSpeech(wav: wav, model: model, apiKey: "sk-or-v1-test", timeout: 180)
+        try await client.transcribeSpeech(audio: wav, format: "wav", model: model, apiKey: "sk-or-v1-test", timeout: 180)
+    }
+
+    /// A refusal of the file's format isn't an `AppError` but says what it would have been, so the file can go again
+    /// in another format; it's never sent again as it is.
+    @Test func aRefusedFormatSaysSo() async throws {
+        let flac = try CloudAudio.flac(tone(1))
+        let (client, host) = StubURLProtocol.client([unsupportedFormat, speechReply("never")])
+        await #expect(throws: OpenRouterClient.AudioFormatRefused(
+            format: "flac", error: .openRouterBadRequest("Unsupported audio format: flac"))) {
+            try await client.transcribeSpeech(audio: flac, format: "flac", model: "nvidia/parakeet-tdt-0.6b-v3",
+                                              apiKey: "sk-or-v1-test", timeout: 180)
+        }
+        #expect(StubURLProtocol.registry.requests(for: host).count == 1)
+        let sent = try #require(StubURLProtocol.registry.bodies(for: host).first)
+        #expect(upload(inRequestBody: sent)?.format == "flac")
+        #expect(upload(inRequestBody: sent)?.samples == rate)
     }
 
     @Test func postsToTheTranscriptionEndpoint() async throws {
@@ -233,7 +289,7 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         #expect(request.value(forHTTPHeaderField: "X-OpenRouter-Title") == "transcribe-thing")
         let body = try json(try #require(StubURLProtocol.registry.bodies(for: host).first))
         #expect(Set(body.keys) == ["model", "input_audio"])
-        #expect(wavSampleCount(inRequestBody: StubURLProtocol.registry.bodies(for: host)[0]) == rate)
+        #expect(upload(inRequestBody: StubURLProtocol.registry.bodies(for: host)[0])?.samples == rate)
     }
 
     @Test func providerHeaderIsTakenWhenPresent() async throws {
@@ -334,7 +390,7 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
     private func speech(_ seconds: Double) -> Recording { Recording(samples: tone(seconds)) }
 
     @Test func aFiveMinuteRecordingIsOneRequest() async throws {
-        // 9.6 MB of WAV: the speech endpoint takes it whole.
+        // 9.6 MB as WAV, a little over half that as FLAC: the speech endpoint takes it whole.
         let audio = await offMain { babble(300) }
         let (service, host, _) = makeService([speechReply("The whole talk.", cost: 0.004, generation: "gen-1")])
         let result = try await service.transcribe(Recording(samples: audio), engine: .parakeetCloud)
@@ -355,13 +411,17 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         let bodies = StubURLProtocol.registry.bodies(for: host)
         #expect(bodies.count == 1)
         let body = try #require(bodies.first)
-        let fields = await offMain { () -> (model: String?, keys: Set<String>, samples: Int?) in
+        let fields = await offMain { () -> (model: String?, keys: Set<String>, upload: (format: String, samples: Int)?) in
             let object = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
-            return (object["model"] as? String, Set(object.keys), wavSampleCount(inRequestBody: body))
+            return (object["model"] as? String, Set(object.keys), upload(inRequestBody: body))
         }
         #expect(fields.model == "nvidia/parakeet-tdt-0.6b-v3")
         #expect(fields.keys == ["model", "input_audio"], "no language, no provider routing")
-        #expect(fields.samples == audio.count)
+        #expect(fields.upload?.format == "flac")
+        #expect(fields.upload?.samples == audio.count)
+        let flac = try #require(result.uploads.first)
+        #expect(result.uploads.count == 1 && flac.format == .flac)
+        #expect(flac.bytes < WAVEncoder.pcm16(audio).count * 7 / 10, "lossless, in far fewer bytes than WAV")
     }
 
     /// Past 5 minutes Parakeet goes in segments cut in pauses, a request each, in order: the texts join with a space
@@ -384,10 +444,84 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         let requests = StubURLProtocol.registry.requests(for: host)
         #expect(requests.count == 3)
         #expect(requests.allSatisfy { $0.timeoutInterval == 180 }, "3 minutes per segment")
-        let bodies = StubURLProtocol.registry.bodies(for: host)
-        let counts = await offMain { bodies.map { wavSampleCount(inRequestBody: $0) ?? 0 } }
-        #expect(counts.reduce(0, +) == audio.count, "every sample, once")
-        #expect(counts.allSatisfy { $0 <= 300 * 16_000 })
+        let sent = await uploads(StubURLProtocol.registry.bodies(for: host))
+        #expect(sent.map(\.format) == ["flac", "flac", "flac"])
+        #expect(sent.map(\.samples).reduce(0, +) == audio.count, "every sample, once")
+        #expect(sent.allSatisfy { $0.samples <= 300 * 16_000 })
+        #expect(result.uploads.map(\.format) == [.flac, .flac, .flac])
+    }
+
+    /// A segment whose FLAC OpenRouter refuses goes again as WAV at once; the segments after it, and every later
+    /// dictation, go as WAV from the start.
+    @Test func aRefusedFLACGoesAgainAsWAVFromThenOn() async throws {
+        let audio = await offMain { babble(288) + silence(2) + babble(290) + silence(2) + babble(138) }
+        let (service, host, _) = makeService([
+            speechReply("First part.", cost: 0.002, generation: "gen-1"),
+            .init(status: 415, body: #"{"error":{"code":415,"message":"Unsupported Media Type"}}"#),
+            speechReply("Second part.", cost: 0.002),
+            speechReply("Third part.", cost: 0.001),
+            speechReply("Later."),
+        ])
+        #expect(service.speechFormat == .flac)
+        let result = try await service.transcribe(Recording(samples: audio), engine: .parakeetCloud)
+        #expect(result.text == "First part. Second part. Third part.")
+        #expect(abs((result.costUSD ?? 0) - 0.005) < 1e-12)
+        #expect(result.uploads.map(\.format) == [.flac, .wav, .wav])
+        #expect(service.speechFormat == .wav)
+
+        let sent = await uploads(StubURLProtocol.registry.bodies(for: host))
+        #expect(sent.map(\.format) == ["flac", "flac", "wav", "wav"])
+        #expect(sent[1].samples == sent[2].samples, "the refused segment, again")
+        #expect(sent[0].samples + sent[2].samples + sent[3].samples == audio.count)
+
+        let later = try await service.transcribe(speech(3), engine: .parakeetCloud)
+        #expect(later.text == "Later." && later.uploads.map(\.format) == [.wav])
+        let all = await uploads(StubURLProtocol.registry.bodies(for: host))
+        #expect(all.map(\.format).last == "wav")
+    }
+
+    /// A refusal worded as a 400 falls back the same way, and a dictation doesn't fail for it.
+    @Test func aBadRequestRefusingTheFormatFallsBackToo() async throws {
+        let (service, host, _) = makeService([unsupportedFormat, speechReply("Hallo.")])
+        let result = try await service.transcribe(speech(3), engine: .parakeetCloud)
+        #expect(result.text == "Hallo." && result.uploads.map(\.format) == [.wav])
+        #expect(await uploads(StubURLProtocol.registry.bodies(for: host)).map(\.format) == ["flac", "wav"])
+        #expect(service.speechFormat == .wav)
+    }
+
+    /// A WAV refused as if for its format has nothing to fall back to: it fails as the bad request it is.
+    @Test func aRefusedWAVFails() async throws {
+        let refusal = StubURLProtocol.Reply(status: 400, body: #"{"error":{"code":400,"message":"Unsupported format"}}"#)
+        let (service, host, _) = makeService([unsupportedFormat, refusal, speechReply("never")])
+        await #expect(throws: AppError.openRouterBadRequest("Unsupported format")) {
+            try await service.transcribe(speech(3), engine: .parakeetCloud)
+        }
+        #expect(await uploads(StubURLProtocol.registry.bodies(for: host)).map(\.format) == ["flac", "wav"])
+    }
+
+    /// Audio FLAC can't hold (shorter than one packet) goes as WAV, and the next segment tries FLAC again: an encoder
+    /// failure isn't OpenRouter's refusal.
+    @Test func aFailedFLACEncodeSendsWAV() async throws {
+        let (service, host, _) = makeService([speechReply("Hi."), speechReply("Hello.")])
+        #expect(try await service.transcribe(speech(0.2), engine: .parakeetCloud).uploads.map(\.format) == [.wav])
+        #expect(service.speechFormat == .flac)
+        _ = try await service.transcribe(speech(1), engine: .parakeetCloud)
+        #expect(await uploads(StubURLProtocol.registry.bodies(for: host)).map(\.format) == ["wav", "flac"])
+    }
+
+    /// `EngineCLI --upload` sends the format it names; a refusal of it fails the run instead of going as WAV.
+    @Test func aForcedFormatIsSentAndNotFallenBackFrom() async throws {
+        let (service, host, _) = makeService([speechReply("As M4A."), speechReply("As WAV."), unsupportedFormat,
+                                              speechReply("never")])
+        #expect(try await service.transcribe(speech(3), engine: .parakeetCloud, upload: .m4a).text == "As M4A.")
+        #expect(try await service.transcribe(speech(3), engine: .parakeetCloud, upload: .wav).text == "As WAV.")
+        await #expect(throws: AppError.openRouterBadRequest("Unsupported audio format: flac")) {
+            try await service.transcribe(speech(3), engine: .parakeetCloud, upload: .flac)
+        }
+        let sent = await uploads(StubURLProtocol.registry.bodies(for: host))
+        #expect(sent.map(\.format) == ["m4a", "wav", "flac"])
+        #expect(sent.allSatisfy { abs($0.samples - 3 * rate) <= rate / 10 })
+        #expect(service.speechFormat == .flac, "a forced format teaches the app nothing")
     }
 
     @Test func parakeetSendsNoLanguageOrPrompt() async throws {
@@ -419,10 +553,9 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         ])
         let result = try await service.transcribe(Recording(samples: audio), engine: .parakeetCloud)
         #expect(result.text == "ok" && result.generationID == "gen-2")
-        let bodies = StubURLProtocol.registry.bodies(for: host)
-        #expect(bodies.count == 2)
-        let counts = await offMain { bodies.map { wavSampleCount(inRequestBody: $0) } }
-        #expect(counts == [audio.count, audio.count])
+        let sent = await uploads(StubURLProtocol.registry.bodies(for: host))
+        #expect(sent.map(\.format) == ["flac", "flac"])
+        #expect(sent.map(\.samples) == [audio.count, audio.count])
     }
 
     @Test func tooLargeForOpenRouterIsReportedNotRetried() async throws {

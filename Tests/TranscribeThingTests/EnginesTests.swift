@@ -109,9 +109,9 @@ import Testing
     @Test func payloadLimitMatchesBase64Size() {
         #expect(OpenRouterClient.base64Length(ofByteCount: 3) == 4)
         #expect(OpenRouterClient.base64Length(ofByteCount: 4) == 8)
-        // 7 minutes of 16 kHz WAV fits the inline budget; 8 minutes doesn't, and goes compressed (`CloudAudio`).
-        #expect(OpenRouterClient.base64Length(ofByteCount: 44 + 7 * 60 * 16_000 * 2) <= OpenRouterClient.maxBase64Bytes)
-        #expect(OpenRouterClient.base64Length(ofByteCount: 44 + 8 * 60 * 16_000 * 2) > OpenRouterClient.maxBase64Bytes)
+        // 50 minutes of AAC at 32 kbps fits the inline budget; an hour doesn't, and goes at a lower rate (`CloudAudio`).
+        #expect(OpenRouterClient.base64Length(ofByteCount: 4_000 * 50 * 60) <= OpenRouterClient.maxBase64Bytes)
+        #expect(OpenRouterClient.base64Length(ofByteCount: 4_000 * 60 * 60) > OpenRouterClient.maxBase64Bytes)
     }
 }
 
@@ -1795,17 +1795,53 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
         #expect(result.text == "Hello there.")
         #expect(result.engine == .geminiFlash)
         #expect(result.costUSD == 0.001)
-        // A dictation's everyday request is what it always was: WAV and 32,768 tokens, streamed with a stall timeout.
+        // A dictation's everyday request: AAC in an .m4a and 32,768 tokens, streamed with a stall timeout.
         let request = try #require(StubURLProtocol.registry.requests(for: host).first)
         #expect(request.timeoutInterval == 120)
         let bodies = StubURLProtocol.registry.bodies(for: host)
         let body = try #require(JSONSerialization.jsonObject(with: bodies[0]) as? [String: Any])
         #expect(body["max_tokens"] as? Int == 32_768)
-        #expect(Self.audioFormat(body) == "wav")
+        #expect(Self.audioFormat(body) == "m4a")
+        let sent = try #require(Self.audio(body))
+        #expect(String(decoding: sent[4..<8], as: UTF8.self) == "ftyp", "an MPEG-4 file")
+        #expect(result.uploads == [AudioUpload(format: .m4a, bytes: sent.count)])
+        #expect(sent.count < WAVEncoder.pcm16(speech().samples).count / 5)
     }
 
-    /// Past what its WAV can carry, a recording goes to Gemini as AAC in one request, with a budget that grows with
-    /// it; streamed, its stall timeout stays the same.
+    /// A recording read back from History goes to Gemini as History's own file, byte for byte.
+    @Test func historysFileGoesToGeminiUnchanged() async throws {
+        let (service, _, _, host) = makeServiceAccountAndHost(replies: [Fixtures.success])
+        var recording = speech(seconds: 3)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("stored-\(UUID().uuidString).m4a")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try CloudAudio.writeM4A(recording.samples, bitRate: RecordingFile.bitRate, to: url)
+        recording.aacFile = url
+        let result = try await service.transcribe(recording, engine: .geminiFlash)
+        let body = try #require(JSONSerialization.jsonObject(with: StubURLProtocol.registry.bodies(for: host)[0])
+            as? [String: Any])
+        #expect(Self.audioFormat(body) == "m4a")
+        #expect(try Self.audio(body) == Data(contentsOf: url))
+        #expect(result.uploads.map(\.format) == [.m4a])
+    }
+
+    /// `EngineCLI --upload` sends Gemini WAV or FLAC instead, and a result says what went.
+    @Test func geminiTakesAForcedFormat() async throws {
+        let (service, _, _, host) = makeServiceAccountAndHost(replies: [Fixtures.success, Fixtures.success])
+        let recording = speech(seconds: 1)
+        let wav = try await service.transcribe(recording, engine: .geminiFlash, upload: .wav)
+        let flac = try await service.transcribe(recording, engine: .geminiFlash, upload: .flac)
+        let bodies = try StubURLProtocol.registry.bodies(for: host).map {
+            try #require(JSONSerialization.jsonObject(with: $0) as? [String: Any])
+        }
+        #expect(bodies.map(Self.audioFormat) == ["wav", "flac"])
+        #expect(Self.audio(bodies[0]) == WAVEncoder.pcm16(recording.samples))
+        #expect(try Self.audio(bodies[1]) == CloudAudio.flac(recording.samples))
+        #expect(wav.uploads == [AudioUpload(format: .wav, bytes: WAVEncoder.pcm16(recording.samples).count)])
+        #expect(flac.uploads.map(\.format) == [.flac])
+    }
+
+    /// However long, a recording goes to Gemini as AAC in one request, with a budget that grows with it; streamed,
+    /// its stall timeout stays the same.
     @Test func aLongGeminiRecordingGoesCompressedInOneRequest() async throws {
         let (service, _, _, host) = makeServiceAccountAndHost(replies: [Fixtures.success])
         let second = speech().samples
@@ -1825,9 +1861,17 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
     }
 
     private static func audioFormat(_ body: [String: Any]) -> String? {
+        inputAudio(body)?["format"] as? String
+    }
+
+    private static func audio(_ body: [String: Any]) -> Data? {
+        (inputAudio(body)?["data"] as? String).flatMap { Data(base64Encoded: $0) }
+    }
+
+    private static func inputAudio(_ body: [String: Any]) -> [String: Any]? {
         let messages = body["messages"] as? [[String: Any]]
         let content = messages?.last?["content"] as? [[String: Any]]
-        return (content?.first?["input_audio"] as? [String: Any])?["format"] as? String
+        return content?.first?["input_audio"] as? [String: Any]
     }
 
     /// Every Gemini request carries the fixed prompt as the system message. `EngineCLI --prompt` replaces it, and

@@ -8,6 +8,7 @@ import Foundation
 ///     transcribe-thing --transcribe <audio file>
 ///            --engine parakeet|parakeetCloud|geminiFlash
 ///            [--download] [--prompt <text>] [--repeat <n>] [--effort low|medium|high]
+///            [--upload wav|m4a|flac]
 ///            [--clean-up [--clean-up-model gpt6Luna] [--clean-up-prompt <text>]
 ///                        [--clean-up-effort none|minimal|low|medium|high]]
 ///     transcribe-thing --model-status
@@ -22,6 +23,14 @@ import Foundation
 /// `--prompt` and `--effort` apply to Gemini only: `--effort` replaces Gemini 3.8 Flash's fixed medium and is sent as
 /// given. Without `--prompt` Gemini gets the app's fixed prompt (`EngineID.geminiSystemPrompt`); `--prompt ""` sends
 /// only the audio.
+/// The audio file may be anything AVFoundation reads (.wav, .m4a…). A cloud model gets it as the app sends a
+/// recording: Gemini as AAC in an .m4a (an .m4a that is AAC at 16 kHz mono, as History keeps a recording, goes as it
+/// is, like History's own file), cloud Parakeet as FLAC. `--upload` (cloud models only) sends that format instead, for
+/// comparing them: WAV (16-bit), .m4a (AAC at 32 kbps) or FLAC (the WAV's samples, losslessly), all 16 kHz mono; a
+/// refusal of it fails the run instead of going again as WAV. Each run prints, after its `RUN` line, what went up
+/// (`UPLOAD:` format and bytes, per segment for Parakeet) and what the app records of it (`USAGE:` tokens, billed
+/// seconds, cost, provider, generation id, time to first token, generation and total time), asking OpenRouter's
+/// generation record for what the response left out.
 /// `--clean-up` sends the last transcript to the clean-up model (GPT-6 Luna; `--clean-up-effort` replaces its fixed
 /// none) with the app's clean-up prompt (`CleanupModel.systemPrompt`, unless `--clean-up-prompt` replaces it) and
 /// prints the cleaned text. Only the models the app offers are accepted. Settings are in-memory: the CLI never
@@ -102,11 +111,11 @@ enum EngineCLI {
 
     // MARK: Transcribe
 
-    private struct Options {
+    struct Options: Equatable {
         static let usage = """
         usage: transcribe-thing --transcribe <audio file> \
         --engine parakeet|parakeetCloud|geminiFlash \
-        [--download] [--prompt <text>] [--repeat <n>] [--effort low|medium|high] \
+        [--download] [--prompt <text>] [--repeat <n>] [--effort low|medium|high] [--upload wav|m4a|flac] \
         [--clean-up [--clean-up-model gpt6Luna] [--clean-up-prompt <text>] \
         [--clean-up-effort none|minimal|low|medium|high]]
                transcribe-thing --model-status
@@ -119,6 +128,8 @@ enum EngineCLI {
         var repeatCount: Int
         var parakeetCompute: ParakeetCompute?
         var effort: ReasoningEffort?
+        /// The format a cloud model gets the audio in instead of its own.
+        var upload: UploadFormat?
         var cleanUp: Bool
         var cleanupPrompt: String?
         var cleanupEffort: ReasoningEffort?
@@ -141,6 +152,12 @@ enum EngineCLI {
             if arguments.contains("--effort") {
                 guard let level = value("--effort").flatMap(ReasoningEffort.init(rawValue:)) else { return nil }
                 effort = level
+            }
+            if arguments.contains("--upload") {
+                guard engine.isCloud, let format = value("--upload").flatMap(UploadFormat.init(rawValue:)) else {
+                    return nil
+                }
+                upload = format
             }
             cleanUp = arguments.contains("--clean-up")
             cleanupPrompt = value("--clean-up-prompt")
@@ -222,18 +239,24 @@ enum EngineCLI {
             print("KEY: \(account.maskedKey ?? "?") · \(describe(account.status))")
         }
 
-        let recording = Recording(samples: samples)
+        var recording = Recording(samples: samples)
+        if options.engine.isCloud, isKeptLikeHistory(url) { recording.aacFile = url }
         var last: TranscriptResult?
         var runTimes: [TimeInterval] = []
         for run in 1...options.repeatCount {
-            let result = try await service.transcribe(recording, engine: options.engine, effort: effort,
-                                                      prompt: options.prompt)
+            var result = try await service.transcribe(recording, engine: options.engine, effort: effort,
+                                                      prompt: options.prompt, upload: options.upload)
             runTimes.append(result.processingTime)
             let speed = result.processingTime > 0 ? audioSeconds / result.processingTime : 0
             var line = "RUN \(run): \(format(result.processingTime, digits: 3)) s · \(format(speed, digits: 1))x real time"
             if let cost = result.costUSD { line += " · $\(String(format: "%.5f", cost))" }
             if let reasoning = result.usage?.reasoningTokens { line += " · \(reasoning) reasoning tokens" }
             print(line)
+            if options.engine.isCloud {
+                await fillFromGenerationRecord(&result, service: service)
+                if let upload = uploadLine(result.uploads, input: recording.aacFile) { print(upload) }
+                print(usageLine(result))
+            }
             last = result
         }
         if let last {
@@ -337,6 +360,70 @@ enum EngineCLI {
             return env
         }
         return KeychainStore().read(KeychainStore.openRouterAccount)
+    }
+
+    /// An .m4a holding AAC at 16 kHz mono, as History keeps a recording: Gemini gets it as it is, as it gets History's
+    /// own file (`Recording.aacFile`).
+    private static func isKeptLikeHistory(_ url: URL) -> Bool {
+        guard RecordingFile.isAAC(url.lastPathComponent), let file = try? AVAudioFile(forReading: url) else {
+            return false
+        }
+        let format = file.fileFormat
+        return format.streamDescription.pointee.mFormatID == kAudioFormatMPEG4AAC
+            && format.sampleRate == Recording.sampleRate && format.channelCount == 1
+    }
+
+    /// What the app would ask OpenRouter's generation record for (`DictationController`): the provider, the cost, and
+    /// for a chat answer the generation time, when the response left them out.
+    @MainActor
+    private static func fillFromGenerationRecord(_ result: inout TranscriptResult,
+                                                 service: TranscriptionService) async {
+        guard let generationID = result.generationID,
+              result.provider == nil || result.costUSD == nil || (result.usage != nil && result.generationTime == nil),
+              let details = await service.generationDetails(generationID: generationID) else { return }
+        result.provider = result.provider ?? details.provider
+        result.costUSD = result.costUSD ?? details.costUSD
+        result.generationTime = result.generationTime ?? details.generationTime
+        if let reasoning = details.reasoningTokens, result.usage?.reasoningTokens == nil {
+            var usage = result.usage ?? TokenUsage()
+            usage.reasoningTokens = reasoning
+            result.usage = usage
+        }
+    }
+
+    /// "UPLOAD: m4a · 123456 bytes", or per segment for Parakeet ("UPLOAD: 3 segments · flac 4801234 + … · 9876543
+    /// bytes in all"); nil when nothing went up. `input` is the audio file, when it went as it is.
+    static func uploadLine(_ uploads: [AudioUpload], input: URL?) -> String? {
+        guard let first = uploads.first else { return nil }
+        guard uploads.count > 1 else {
+            let asIs = input.flatMap { RecordingFile.Stamp($0)?.size } == first.bytes && first.format == .m4a
+            return "UPLOAD: \(first.format.rawValue) · \(first.bytes) bytes" + (asIs ? " · the input file as is" : "")
+        }
+        let files = uploads.map { "\($0.format.rawValue) \($0.bytes)" }.joined(separator: " + ")
+        return "UPLOAD: \(uploads.count) segments · \(files) · \(uploads.reduce(0) { $0 + $1.bytes }) bytes in all"
+    }
+
+    /// "USAGE: …": what History keeps of a cloud result. Tokens and the time to the first token for a chat answer,
+    /// billed seconds for speech-to-text; "?" for what OpenRouter didn't say.
+    static func usageLine(_ result: TranscriptResult) -> String {
+        func known<T>(_ value: T?, _ describe: (T) -> String = { "\($0)" }) -> String { value.map(describe) ?? "?" }
+        var parts: [String] = []
+        if result.engine.cloudAPI == .chatCompletions {
+            let usage = result.usage
+            parts.append("tokens audio \(known(usage?.audioTokens)) · prompt \(known(usage?.promptTokens)) · "
+                         + "completion \(known(usage?.completionTokens)) · reasoning \(known(usage?.reasoningTokens))")
+        } else {
+            parts.append("audio \(known(result.audioSeconds) { format($0) }) s billed")
+        }
+        parts.append("cost \(known(result.costUSD) { "$" + String(format: "%.6f", $0) })")
+        parts.append("provider \(known(result.provider))")
+        parts.append("generation \(known(result.generationID))")
+        if result.engine.cloudAPI == .chatCompletions {
+            parts.append("first token \(known(result.timeToFirstToken) { format($0, digits: 3) }) s")
+        }
+        parts.append("generated in \(known(result.generationTime) { format($0, digits: 3) }) s")
+        parts.append("total \(format(result.processingTime, digits: 3)) s")
+        return "USAGE: " + parts.joined(separator: " · ")
     }
 
     // MARK: Clean-up bench
