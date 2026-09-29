@@ -634,115 +634,434 @@ private final class PasteLog: @unchecked Sendable {
     var codes: [CGKeyCode] { lock.withLock { $0 } }
 }
 
+/// What the fake target got when it read the clipboard for ⌘V.
+private final class TargetLog: @unchecked Sendable {
+    private let lock = OSAllocatedUnfairLock(initialState: [String?]())
+    func record(_ text: String?) { lock.withLock { $0.append(text) } }
+    var reads: [String?] { lock.withLock { $0 } }
+}
+
+/// A type another app provides only when it's read, the way apps put large data on the clipboard: its name as data
+/// after `delay` to render it, or nothing at all with `provides` off (asked again at every read).
+final class LazyType: NSObject, NSPasteboardItemDataProvider, @unchecked Sendable {
+    private let lock = OSAllocatedUnfairLock(initialState: 0)
+    private let delay: TimeInterval
+    private let provides: Bool
+    init(delay: TimeInterval = 0, provides: Bool = true) {
+        self.delay = delay
+        self.provides = provides
+    }
+    var requests: Int { lock.withLock { $0 } }
+
+    func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem, provideDataForType type: NSPasteboard.PasteboardType) {
+        lock.withLock { $0 += 1 }
+        Thread.sleep(forTimeInterval: delay)
+        if provides { item.setData(Data(type.rawValue.utf8), forType: type) }
+    }
+}
+
+/// The focus the fake system reports; a test can move it between pastes.
+private final class FocusBox: @unchecked Sendable {
+    private let lock: OSAllocatedUnfairLock<FocusInfo>
+    init(_ focus: FocusInfo) { lock = OSAllocatedUnfairLock(initialState: focus) }
+    var focus: FocusInfo {
+        get { lock.withLock { $0 } }
+        set { lock.withLock { $0 = newValue } }
+    }
+}
+
+/// Each item's types with their data, item by item: equal when a restore put back exactly what was there.
+@MainActor
+private func contents(of pasteboard: NSPasteboard) -> [[String: Data]] {
+    (pasteboard.pasteboardItems ?? []).map { item in
+        Dictionary(uniqueKeysWithValues: item.types.compactMap { type in item.data(forType: type).map { (type.rawValue, $0) } })
+    }
+}
+
+/// A screenshot next to its caption, then a file with an app's own type: what a paste must put back.
+@MainActor
+private func copyScreenshotAndFile(to pasteboard: NSPasteboard) {
+    let image = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 8, pixelsHigh: 8, bitsPerSample: 8,
+                                 samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                                 bytesPerRow: 0, bitsPerPixel: 0)!
+    for x in 0..<8 { image.setColor(NSColor(deviceRed: 0.2, green: 0.7, blue: CGFloat(x) / 8, alpha: 1), atX: x, y: x) }
+    let screenshot = NSPasteboardItem()
+    screenshot.setData(image.representation(using: .png, properties: [:])!, forType: .png)
+    screenshot.setData(image.tiffRepresentation!, forType: .tiff)
+    screenshot.setString("Screenshot 2026-09-29", forType: .string)
+    let file = NSPasteboardItem()
+    file.setString("file:///Users/me/Desktop/notes.txt", forType: .fileURL)
+    file.setData(Data([0xCA, 0xFE, 0x00, 0x01]), forType: NSPasteboard.PasteboardType("com.example.editor.selection"))
+    pasteboard.clearContents()
+    _ = pasteboard.writeObjects([screenshot, file])
+}
+
 @MainActor
 @Suite struct TextInserterTests {
     private struct Rig {
         let inserter: TextInserter
         let pasteboard: NSPasteboard
         let log: PasteLog
+        let focus: FocusBox
+        let target: TargetLog
     }
 
     /// After "d": the paste gets a smart leading space.
     private static let afterAWord = FocusInfo(pid: 42, editability: .editable, precedingCharacter: "d")
+    private static let restoreDelay = Duration.milliseconds(150)
 
+    /// `targetReadsAfter`: seconds after ⌘V the target reads the clipboard, on the main thread like an app (nil: it
+    /// never does).
     private func rig(focus: FocusInfo = FocusInfo(pid: 42, editability: .editable),
-                     frontmost: pid_t? = 42, canPost: Bool = true) -> Rig {
+                     frontmost: pid_t? = 42, canPost: Bool = true, posts: Bool = true,
+                     targetReadsAfter: TimeInterval? = 0.01) -> Rig {
         let pasteboard = privatePasteboard()
+        let name = pasteboard.name
         let log = PasteLog()
+        let box = FocusBox(focus)
+        let target = TargetLog()
         let system = TextInserter.System(
             frontmostPID: { frontmost },
             canPostEvents: { canPost },
             modifiersHeld: { false },
-            inspectFocus: { focus },
+            inspectFocus: { box.focus },
             pasteKeyCode: { 9 },
             postPaste: { code in
                 log.record(code)
-                return true
+                if posts, let targetReadsAfter {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + targetReadsAfter) {
+                        target.record(NSPasteboard(name: name).string(forType: .string))
+                    }
+                }
+                return posts
             })
         let inserter = TextInserter(pasteboard: pasteboard, system: system)
-        inserter.swapDelay = .milliseconds(40)
-        return Rig(inserter: inserter, pasteboard: pasteboard, log: log)
+        inserter.restoreDelay = Self.restoreDelay
+        inserter.unreadTimeout = .seconds(1)
+        return Rig(inserter: inserter, pasteboard: pasteboard, log: log, focus: box, target: target)
     }
 
     private func types(_ rig: Rig) -> [NSPasteboard.PasteboardType] {
         rig.pasteboard.pasteboardItems?.first?.types ?? []
     }
 
-    private func settle() async throws {
-        try await Task.sleep(for: .milliseconds(150))
+    private func copyString(_ string: String, to rig: Rig) {
+        rig.pasteboard.clearContents()
+        rig.pasteboard.setString(string, forType: .string)
     }
 
-    /// A dictation's paste, and paste last's: the text is on the clipboard afterwards as a normal copy (what the
-    /// user had copied before is replaced, as by any copy).
+    /// Past the moment a restore would have happened.
+    private func settle() async throws {
+        try await Task.sleep(for: Self.restoreDelay + .milliseconds(150))
+    }
+
+    /// The timings the app runs with: see `TextInserter.restoreDelay` for where they come from.
+    @Test func theAppWaitsForTheTargetWithin400MillisecondsAnd8Seconds() {
+        let inserter = TextInserter(pasteboard: privatePasteboard(), system: .init(
+            frontmostPID: { nil }, canPostEvents: { false }, modifiersHeld: { false },
+            inspectFocus: { .unknown }, pasteKeyCode: { 9 }, postPaste: { _ in false }))
+        #expect(inserter.restoreDelay == .milliseconds(400))
+        #expect(inserter.readGrace == .milliseconds(200))
+        #expect(inserter.unreadTimeout == .seconds(8))
+    }
+
+    /// A dictation's paste, and paste last's: ⌘V gets the text, then the clipboard is as it was.
     @Test(arguments: [pid_t?.some(42), nil])
-    func everyPasteLeavesTheTextOnTheClipboard(_ expected: pid_t?) async throws {
+    func everyPastePutsTheClipboardBack(_ expected: pid_t?) async throws {
+        let rig = rig()
+        defer { rig.pasteboard.releaseGlobally() }
+        copyString("original", to: rig)
+        #expect(await rig.inserter.insert("dictated", expectedPID: expected) == .pasted)
+        #expect(rig.log.codes == [9])
+        #expect(rig.pasteboard.string(forType: .string) == "dictated", "what ⌘V pastes")
+        try await waitUntil { rig.pasteboard.string(forType: .string) == "original" }
+        #expect(!types(rig).contains(PasteboardMarkers.transientType))
+    }
+
+    @Test func pasteHerePutsTheClipboardBack() async throws {
+        let rig = rig()
+        defer { rig.pasteboard.releaseGlobally() }
+        copyString("original", to: rig)
+        #expect(await rig.inserter.pasteNow("pasted here") == .pasted)
+        #expect(rig.pasteboard.string(forType: .string) == "pasted here")
+        try await waitUntil { rig.pasteboard.string(forType: .string) == "original" }
+    }
+
+    /// Clipboard managers skip the text (it's only there for the ⌘V), and Universal Clipboard doesn't carry it.
+    @Test func thePastedTextIsMarkedTransient() async throws {
+        let rig = rig()
+        defer { rig.pasteboard.releaseGlobally() }
+        copyString("original", to: rig)
+        #expect(await rig.inserter.insert("dictated", expectedPID: 42) == .pasted)
+        let item = try #require(rig.pasteboard.pasteboardItems?.first)
+        for marker in [PasteboardMarkers.transientType, PasteboardMarkers.concealedType,
+                       PasteboardMarkers.autoGeneratedType] {
+            #expect(item.types.contains(marker), "\(marker.rawValue)")
+        }
+        #expect(item.string(forType: PasteboardMarkers.sourceType)?.isEmpty == false)
+        try await waitUntil { rig.pasteboard.string(forType: .string) == "original" }
+    }
+
+    /// Not restored before `restoreDelay`: the target may still be reading the text.
+    @Test func theRestoreWaitsForTheDelay() async throws {
+        let rig = rig()
+        defer { rig.pasteboard.releaseGlobally() }
+        rig.inserter.restoreDelay = .milliseconds(400)
+        copyString("original", to: rig)
+        let clock = ContinuousClock()
+        let start = clock.now
+        #expect(await rig.inserter.insert("dictated", expectedPID: 42) == .pasted)
+        try await Task.sleep(for: .milliseconds(150))
+        // A loaded machine may wake this test past the floor.
+        if clock.now - start < .milliseconds(400) {
+            #expect(rig.pasteboard.string(forType: .string) == "dictated")
+        }
+        try await waitUntil { rig.pasteboard.string(forType: .string) == "original" }
+        #expect(clock.now - start >= .milliseconds(400))
+    }
+
+    /// A target busy for a second (a page pladder measured at 1.0 s) reads ⌘V's clipboard after the 400 ms floor: it
+    /// still gets the transcript, and the clipboard comes back after it has.
+    @Test func aBusyTargetThatReadsAfterASecondStillGetsTheTranscript() async throws {
+        let rig = rig(targetReadsAfter: 1.0)
+        defer { rig.pasteboard.releaseGlobally() }
+        rig.inserter.restoreDelay = .milliseconds(400)
+        rig.inserter.unreadTimeout = .seconds(8)
+        copyString("previous clipboard", to: rig)
+        #expect(await rig.inserter.insert("dictated", expectedPID: 42) == .pasted)
+        try await waitUntil { !rig.target.reads.isEmpty }
+        #expect(rig.target.reads == ["dictated"], "the busy target pasted \(rig.target.reads)")
+        try await waitUntil { rig.pasteboard.string(forType: .string) == "previous clipboard" }
+    }
+
+    /// After the target's read the clipboard stays as it is for `readGrace`, for a target that reads again.
+    @Test func theClipboardComesBackAGraceAfterTheTargetReadsIt() async throws {
+        let rig = rig(targetReadsAfter: 0.2)
+        defer { rig.pasteboard.releaseGlobally() }
+        rig.inserter.restoreDelay = .milliseconds(50)
+        rig.inserter.readGrace = .milliseconds(300)
+        copyString("original", to: rig)
+        let clock = ContinuousClock()
+        let start = clock.now
+        #expect(await rig.inserter.insert("dictated", expectedPID: 42) == .pasted)
+        try await waitUntil { !rig.target.reads.isEmpty }
+        // The read came 200 ms after ⌘V at the earliest, so the grace runs past 500 ms; a loaded machine may wake
+        // this test later.
+        if clock.now - start < .milliseconds(500) {
+            #expect(rig.pasteboard.string(forType: .string) == "dictated", "a second read in the grace still gets it")
+        }
+        try await waitUntil { rig.pasteboard.string(forType: .string) == "original" }
+        #expect(clock.now - start >= .milliseconds(500))
+    }
+
+    /// Nothing read the text (⌘V went where nothing takes a paste): the clipboard comes back after `unreadTimeout`.
+    @Test func aTextNobodyReadsIsReplacedAfterTheUnreadTimeout() async throws {
+        let rig = rig(targetReadsAfter: nil)
+        defer { rig.pasteboard.releaseGlobally() }
+        rig.inserter.restoreDelay = .milliseconds(50)
+        rig.inserter.unreadTimeout = .milliseconds(800)
+        copyString("original", to: rig)
+        let clock = ContinuousClock()
+        let start = clock.now
+        #expect(await rig.inserter.insert("dictated", expectedPID: 42) == .pasted)
+        // Only the change count is watched: reading the text would count as the target's read.
+        let ours = rig.pasteboard.changeCount
+        try await Task.sleep(for: .milliseconds(300))
+        // A loaded machine may wake this test past the timeout.
+        if clock.now - start < .milliseconds(800) {
+            #expect(rig.pasteboard.changeCount == ours, "past the floor, still waiting for a read")
+        }
+        try await waitUntil { rig.pasteboard.changeCount != ours }
+        #expect(clock.now - start >= .milliseconds(800))
+        #expect(rig.pasteboard.string(forType: .string) == "original")
+    }
+
+    /// Images, several items and an app's own types come back byte for byte.
+    @Test func aScreenshotAndAFileComeBackExactly() async throws {
+        let rig = rig()
+        defer { rig.pasteboard.releaseGlobally() }
+        copyScreenshotAndFile(to: rig.pasteboard)
+        let before = contents(of: rig.pasteboard)
+        #expect(before.count == 2)
+        #expect(await rig.inserter.insert("dictated", expectedPID: 42) == .pasted)
+        #expect(rig.pasteboard.string(forType: .string) == "dictated")
+        try await waitUntil { contents(of: rig.pasteboard) == before }
+    }
+
+    @Test func anEmptyClipboardIsPutBackEmpty() async throws {
         let rig = rig()
         defer { rig.pasteboard.releaseGlobally() }
         rig.pasteboard.clearContents()
-        rig.pasteboard.setString("original", forType: .string)
-        #expect(await rig.inserter.insert("keep me", expectedPID: expected) == .pasted)
-        #expect(rig.log.codes == [9])
-        #expect(rig.pasteboard.string(forType: .string) == "keep me")
+        #expect(await rig.inserter.insert("dictated", expectedPID: 42) == .pasted)
+        #expect(rig.pasteboard.string(forType: .string) == "dictated")
+        try await waitUntil { rig.pasteboard.pasteboardItems?.isEmpty == true }
+    }
+
+    /// The smart leading space goes to the paste, and the clipboard still comes back as it was.
+    @Test func theSmartSpaceIsOnlyForThePaste() async throws {
+        let rig = rig(focus: Self.afterAWord)
+        defer { rig.pasteboard.releaseGlobally() }
+        copyString("original", to: rig)
+        #expect(await rig.inserter.insert("next words", expectedPID: 42) == .pasted)
+        #expect(rig.pasteboard.string(forType: .string) == " next words", "what ⌘V pastes")
+        try await waitUntil { rig.pasteboard.string(forType: .string) == "original" }
+    }
+
+    /// The second paste finds the first one's text on the clipboard: the user's own clipboard comes back, not it.
+    @Test func backToBackPastesPutBackTheClipboardFromBeforeTheFirst() async throws {
+        let rig = rig()
+        defer { rig.pasteboard.releaseGlobally() }
+        rig.inserter.restoreDelay = .milliseconds(500)
+        copyScreenshotAndFile(to: rig.pasteboard)
+        let before = contents(of: rig.pasteboard)
+        #expect(await rig.inserter.insert("first", expectedPID: 42) == .pasted)
+        #expect(await rig.inserter.insert("second", expectedPID: 42) == .pasted)
+        #expect(rig.pasteboard.string(forType: .string) == "second")
+        try await waitUntil { contents(of: rig.pasteboard) == before }
         try await settle()
-        #expect(rig.pasteboard.string(forType: .string) == "keep me")
+        #expect(contents(of: rig.pasteboard) == before, "the first paste's restore doesn't run later")
+    }
+
+    @Test func aNewCopyDuringTheDelayWins() async throws {
+        let rig = rig()
+        defer { rig.pasteboard.releaseGlobally() }
+        copyString("original", to: rig)
+        #expect(await rig.inserter.insert("dictated", expectedPID: 42) == .pasted)
+        copyString("copied meanwhile", to: rig)
+        try await settle()
+        #expect(rig.pasteboard.string(forType: .string) == "copied meanwhile")
+    }
+
+    /// A copy made between two pastes is what the second one puts back, not the clipboard from before the first.
+    @Test func aCopyBetweenTwoPastesIsWhatComesBack() async throws {
+        let rig = rig()
+        defer { rig.pasteboard.releaseGlobally() }
+        rig.inserter.restoreDelay = .milliseconds(300)
+        copyString("before", to: rig)
+        #expect(await rig.inserter.insert("first", expectedPID: 42) == .pasted)
+        copyString("copied in between", to: rig)
+        #expect(await rig.inserter.insert("second", expectedPID: 42) == .pasted)
+        try await waitUntil { rig.pasteboard.string(forType: .string) == "copied in between" }
+        try await settle()
+        #expect(rig.pasteboard.string(forType: .string) == "copied in between")
+    }
+
+    /// The app quitting while a restore waits: the clipboard comes back then, not never.
+    @Test func quittingPutsTheClipboardBackAtOnce() async {
+        let rig = rig(targetReadsAfter: nil)
+        defer { rig.pasteboard.releaseGlobally() }
+        rig.inserter.restoreDelay = .seconds(5)
+        copyScreenshotAndFile(to: rig.pasteboard)
+        let before = contents(of: rig.pasteboard)
+        #expect(await rig.inserter.insert("dictated", expectedPID: 42) == .pasted)
+        rig.inserter.flushPendingRestore()
+        #expect(contents(of: rig.pasteboard) == before)
+    }
+
+    @Test func quittingAfterANewCopyLeavesIt() async {
+        let rig = rig()
+        defer { rig.pasteboard.releaseGlobally() }
+        rig.inserter.restoreDelay = .seconds(5)
+        copyString("original", to: rig)
+        #expect(await rig.inserter.insert("dictated", expectedPID: 42) == .pasted)
+        copyString("copied meanwhile", to: rig)
+        rig.inserter.flushPendingRestore()
+        #expect(rig.pasteboard.string(forType: .string) == "copied meanwhile")
+    }
+
+    /// Read while the dictation was transcribed: the paste doesn't read the clipboard again (a type the app can't
+    /// render is asked for once), and that snapshot comes back.
+    @Test func aClipboardReadAheadIsNotReadAgainAtThePaste() async throws {
+        let rig = rig()
+        defer { rig.pasteboard.releaseGlobally() }
+        let unrendered = LazyType(provides: false)
+        let item = NSPasteboardItem()
+        item.setString("original", forType: .string)
+        item.setDataProvider(unrendered, forTypes: [NSPasteboard.PasteboardType("com.example.canvas")])
+        rig.pasteboard.clearContents()
+        rig.pasteboard.writeObjects([item])
+        rig.inserter.prepareToPaste()
+        #expect(unrendered.requests == 1)
+        #expect(await rig.inserter.insert("dictated", expectedPID: 42) == .pasted)
+        #expect(unrendered.requests == 1, "the paste used the snapshot taken ahead")
+        #expect(rig.pasteboard.string(forType: .string) == "dictated")
+        try await waitUntil { rig.pasteboard.string(forType: .string) == "original" }
+    }
+
+    /// Copied while the dictation was transcribed: the paste reads the clipboard again, and that copy comes back.
+    @Test func aCopyAfterTheReadAheadIsWhatComesBack() async throws {
+        let rig = rig()
+        defer { rig.pasteboard.releaseGlobally() }
+        copyString("original", to: rig)
+        rig.inserter.prepareToPaste()
+        copyString("copied while transcribing", to: rig)
+        #expect(await rig.inserter.insert("dictated", expectedPID: 42) == .pasted)
+        #expect(rig.pasteboard.string(forType: .string) == "dictated")
+        try await waitUntil { rig.pasteboard.string(forType: .string) == "copied while transcribing" }
+    }
+
+    /// Copy (History, the cards) is the one way a transcript stays on the clipboard, even right after a paste.
+    @Test func anExplicitCopyStays() async throws {
+        let rig = rig()
+        defer { rig.pasteboard.releaseGlobally() }
+        copyString("original", to: rig)
+        rig.inserter.copy("copied")
+        try await settle()
+        #expect(rig.pasteboard.string(forType: .string) == "copied")
+
+        #expect(await rig.inserter.insert("dictated", expectedPID: 42) == .pasted)
+        rig.inserter.copy("copied from the card")
+        try await settle()
+        #expect(rig.pasteboard.string(forType: .string) == "copied from the card")
         #expect(!types(rig).contains(PasteboardMarkers.transientType))
         #expect(!types(rig).contains(PasteboardMarkers.concealedType))
     }
 
-    @Test func pasteHereLeavesTheTextOnTheClipboard() async throws {
+    /// A password manager's copy isn't put back: it would outlive the manager's own clearing.
+    @Test func aConcealedClipboardIsClearedNotPutBack() async throws {
         let rig = rig()
         defer { rig.pasteboard.releaseGlobally() }
+        let secret = NSPasteboardItem()
+        secret.setString("hunter2", forType: .string)
+        secret.setData(Data(), forType: PasteboardMarkers.concealedType)
         rig.pasteboard.clearContents()
-        rig.pasteboard.setString("original", forType: .string)
-        #expect(await rig.inserter.pasteNow("pasted here") == .pasted)
-        try await settle()
-        #expect(rig.pasteboard.string(forType: .string) == "pasted here")
-        #expect(!types(rig).contains(PasteboardMarkers.transientType))
-    }
-
-    /// The smart leading space is only for the paste: ⌘V gets it from a transient item that clipboard managers skip,
-    /// then the text without it takes its place.
-    @Test func thePastedTextStaysOnTheClipboardWithoutTheSmartSpace() async throws {
-        let rig = rig(focus: Self.afterAWord)
-        defer { rig.pasteboard.releaseGlobally() }
-        rig.pasteboard.clearContents()
-        rig.pasteboard.setString("original", forType: .string)
-        #expect(await rig.inserter.insert("next words", expectedPID: 42) == .pasted)
-        #expect(rig.log.codes == [9])
-        #expect(rig.pasteboard.string(forType: .string) == " next words", "what ⌘V pastes")
-        #expect(types(rig).contains(PasteboardMarkers.transientType))
-        #expect(types(rig).contains(PasteboardMarkers.concealedType))
-        try await settle()
-        #expect(rig.pasteboard.string(forType: .string) == "next words")
-        #expect(!types(rig).contains(PasteboardMarkers.transientType))
-    }
-
-    @Test func backToBackPastesLeaveTheLastText() async throws {
-        let rig = rig(focus: Self.afterAWord)
-        defer { rig.pasteboard.releaseGlobally() }
-        rig.inserter.swapDelay = .milliseconds(120)
-        #expect(await rig.inserter.insert("first", expectedPID: 42) == .pasted)
-        #expect(await rig.inserter.insert("second", expectedPID: 42) == .pasted)
-        #expect(rig.pasteboard.string(forType: .string) == " second")
-        try await Task.sleep(for: .milliseconds(250))
-        #expect(rig.pasteboard.string(forType: .string) == "second")
-    }
-
-    @Test func aNewCopyDuringTheDelayWins() async throws {
-        let rig = rig(focus: Self.afterAWord)
-        defer { rig.pasteboard.releaseGlobally() }
+        rig.pasteboard.writeObjects([secret])
         #expect(await rig.inserter.insert("dictated", expectedPID: 42) == .pasted)
+        #expect(rig.pasteboard.string(forType: .string) == "dictated")
+        try await waitUntil { rig.pasteboard.pasteboardItems?.isEmpty == true }
+    }
+
+    /// A Universal Clipboard photo would first come over from the other device: not read, so the pasted text stays.
+    @Test func aClipboardThatCantBeKeptKeepsThePastedText() async throws {
+        let rig = rig()
+        defer { rig.pasteboard.releaseGlobally() }
+        let remote = NSPasteboardItem()
+        remote.setData(Data([0x89, 0x50, 0x4E, 0x47]), forType: .png)
+        remote.setData(Data(), forType: PasteboardSnapshot.remoteClipboardType)
         rig.pasteboard.clearContents()
-        rig.pasteboard.setString("copied meanwhile", forType: .string)
+        rig.pasteboard.writeObjects([remote])
+        #expect(await rig.inserter.insert("dictated", expectedPID: 42) == .pasted)
         try await settle()
-        #expect(rig.pasteboard.string(forType: .string) == "copied meanwhile")
+        #expect(rig.pasteboard.string(forType: .string) == "dictated")
+        #expect(types(rig).contains(PasteboardMarkers.transientType))
+    }
+
+    /// ⌘V couldn't be sent: the clipboard is back at once, images and all.
+    @Test func aPasteThatFailsPutsTheClipboardBackAtOnce() async {
+        let rig = rig(posts: false)
+        defer { rig.pasteboard.releaseGlobally() }
+        copyScreenshotAndFile(to: rig.pasteboard)
+        let before = contents(of: rig.pasteboard)
+        if case .failed = await rig.inserter.insert("dictated", expectedPID: 42) {} else {
+            Issue.record("Expected a failure when ⌘V can't be sent")
+        }
+        #expect(contents(of: rig.pasteboard) == before)
     }
 
     @Test func secureFieldIsRefusedAndTheClipboardLeftAlone() async {
         let rig = rig(focus: FocusInfo(pid: 42, subrole: "AXSecureTextField", editability: .editable, isSecure: true))
         defer { rig.pasteboard.releaseGlobally() }
-        rig.pasteboard.clearContents()
-        rig.pasteboard.setString("user clipboard", forType: .string)
+        copyString("user clipboard", to: rig)
         #expect(await rig.inserter.insert("not a password", expectedPID: 42) == .noEditableTarget)
         #expect(rig.log.codes.isEmpty)
         #expect(rig.pasteboard.string(forType: .string) == "user clipboard")
@@ -751,49 +1070,53 @@ private final class PasteLog: @unchecked Sendable {
     @Test func nonTextFocusIsNotPastedNorCopied() async {
         let rig = rig(focus: FocusInfo(pid: 42, role: "AXButton", editability: .notEditable))
         defer { rig.pasteboard.releaseGlobally() }
-        rig.pasteboard.clearContents()
-        rig.pasteboard.setString("user clipboard", forType: .string)
+        copyScreenshotAndFile(to: rig.pasteboard)
+        let before = contents(of: rig.pasteboard)
         #expect(await rig.inserter.insert("hello", expectedPID: 42) == .noEditableTarget)
         #expect(rig.log.codes.isEmpty)
-        #expect(rig.pasteboard.string(forType: .string) == "user clipboard")
+        #expect(contents(of: rig.pasteboard) == before)
     }
 
-    @Test func noTargetDoesntCutAPendingSwapShort() async throws {
-        let rig = rig(focus: Self.afterAWord)
+    /// A paste refused in between touches nothing: the pending restore still brings the user's clipboard back.
+    @Test func aRefusedPasteLeavesAPendingRestoreAlone() async throws {
+        let rig = rig()
         defer { rig.pasteboard.releaseGlobally() }
+        rig.inserter.restoreDelay = .milliseconds(500)
+        copyString("original", to: rig)
         #expect(await rig.inserter.insert("first", expectedPID: 42) == .pasted)
-        let noTarget = TextInserter(pasteboard: rig.pasteboard, system: .init(
-            frontmostPID: { 42 }, canPostEvents: { true }, modifiersHeld: { false },
-            inspectFocus: { FocusInfo(pid: 42, editability: .notEditable) }, pasteKeyCode: { 9 },
-            postPaste: { _ in true }))
-        #expect(await noTarget.insert("second", expectedPID: 42) == .noEditableTarget)
-        try await settle()
+        rig.focus.focus = FocusInfo(pid: 42, editability: .notEditable)
+        #expect(await rig.inserter.insert("second", expectedPID: 42) == .noEditableTarget)
         #expect(rig.pasteboard.string(forType: .string) == "first")
+        try await waitUntil { rig.pasteboard.string(forType: .string) == "original" }
     }
 
-    @Test func unknownFocusPastesAnyway() async {
+    @Test func unknownFocusPastesAnyway() async throws {
         let rig = rig(focus: FocusInfo(pid: 42, role: "AXWebArea", editability: .unknown))
         defer { rig.pasteboard.releaseGlobally() }
         #expect(await rig.inserter.insert("hello", expectedPID: 42) == .pasted)
         #expect(rig.log.codes == [9])
+        try await settle()
     }
 
     @Test func anotherAppInFrontIsATargetChange() async {
         let rig = rig(frontmost: 7)
         defer { rig.pasteboard.releaseGlobally() }
-        rig.pasteboard.clearContents()
-        rig.pasteboard.setString("untouched", forType: .string)
+        copyString("untouched", to: rig)
         #expect(await rig.inserter.insert("hello", expectedPID: 42) == .targetChanged)
         #expect(rig.log.codes.isEmpty)
         #expect(rig.pasteboard.string(forType: .string) == "untouched")
     }
 
-    @Test func withoutPermissionTheTextIsCopied() async {
+    /// The card that follows offers Copy; nothing goes on the clipboard unasked.
+    @Test(arguments: [false, true])
+    func withoutPermissionNothingIsPastedOrCopied(_ pasteHere: Bool) async {
         let rig = rig(canPost: false)
         defer { rig.pasteboard.releaseGlobally() }
-        #expect(await rig.inserter.insert("hello", expectedPID: 42) == .accessibilityMissing)
+        copyString("user clipboard", to: rig)
+        let outcome = await (pasteHere ? rig.inserter.pasteNow("hello") : rig.inserter.insert("hello", expectedPID: 42))
+        #expect(outcome == .accessibilityMissing)
         #expect(rig.log.codes.isEmpty)
-        #expect(rig.pasteboard.string(forType: .string) == "hello")
+        #expect(rig.pasteboard.string(forType: .string) == "user clipboard")
     }
 
     /// Accessibility granted after launch: the preflight still says no, but the live event tap proves the grant.
@@ -806,11 +1129,12 @@ private final class PasteLog: @unchecked Sendable {
         try await settle()
     }
 
-    @Test func pasteNowSkipsFocusAndTargetChecks() async {
+    @Test func pasteNowSkipsFocusAndTargetChecks() async throws {
         let rig = rig(focus: FocusInfo(pid: 1, editability: .notEditable), frontmost: 7)
         defer { rig.pasteboard.releaseGlobally() }
         #expect(await rig.inserter.pasteNow("hello") == .pasted)
         #expect(rig.log.codes == [9])
+        try await settle()
     }
 
     @Test func emptyTextFails() async {
@@ -819,6 +1143,71 @@ private final class PasteLog: @unchecked Sendable {
         if case .failed = await rig.inserter.insert("", expectedPID: 42) {} else {
             Issue.record("Expected a failure for empty text")
         }
+    }
+}
+
+@MainActor
+@Suite struct PasteboardSnapshotTests {
+    @Test func aFilePromiseIsLeftOutAndTheRestOfItsItemKept() throws {
+        let pasteboard = privatePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        let item = NSPasteboardItem()
+        item.setData(Data([1, 2, 3]), forType: .png)
+        item.setData(Data([4]), forType: NSPasteboard.PasteboardType("com.apple.NSFilePromiseItemMetaData"))
+        item.setString("public.jpeg", forType: NSPasteboard.PasteboardType("com.apple.pasteboard.promised-file-content-type"))
+        let promiseOnly = NSPasteboardItem()
+        promiseOnly.setString("file:///x", forType: NSPasteboard.PasteboardType("com.apple.pasteboard.promised-file-url"))
+        pasteboard.clearContents()
+        pasteboard.writeObjects([item, promiseOnly])
+
+        let snapshot = try #require(PasteboardSnapshot.capture(pasteboard))
+        #expect(snapshot.items.count == 1, "an item with nothing but its promise goes")
+        #expect(snapshot.items.first?.entries.map(\.type) == [.png])
+    }
+
+    @Test func moreThanTheBudgetIsNotKept() {
+        let pasteboard = privatePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.setData(Data(count: 64), forType: .tiff)
+        #expect(PasteboardSnapshot.capture(pasteboard, maxBytes: 32) == nil)
+        #expect(PasteboardSnapshot.capture(pasteboard, maxBytes: 64) != nil)
+    }
+
+    @Test func onlyUniversalClipboardImagesAndFilesAreSlow() {
+        let remote = PasteboardSnapshot.remoteClipboardType
+        #expect(PasteboardSnapshot.isSlowRemote(types: [[remote, .png]]))
+        #expect(PasteboardSnapshot.isSlowRemote(types: [[remote, .fileURL, .pdf]]))
+        #expect(PasteboardSnapshot.isSlowRemote(types: [[remote, .fileURL]]), "a file URL is a URL, but its file comes over")
+        #expect(!PasteboardSnapshot.isSlowRemote(types: [[remote, .string, .URL, .rtf]]))
+        #expect(!PasteboardSnapshot.isSlowRemote(types: [[.png, .tiff], [.fileURL]]))
+    }
+
+    /// Types an app renders only when read, one after another: reading stops once it has taken too long.
+    @Test func readingStopsAtTheTimeLimit() throws {
+        func slowCanvas() -> NSPasteboard {
+            let pasteboard = privatePasteboard()
+            let item = NSPasteboardItem()
+            for name in ["com.example.canvas.a", "com.example.canvas.b", "com.example.canvas.c"] {
+                item.setDataProvider(LazyType(delay: 0.06), forTypes: [NSPasteboard.PasteboardType(name)])
+            }
+            pasteboard.clearContents()
+            pasteboard.writeObjects([item])
+            return pasteboard
+        }
+        let slow = slowCanvas()
+        defer { slow.releaseGlobally() }
+        #expect(PasteboardSnapshot.capture(slow, timeLimit: .milliseconds(100)) == nil)
+        let inTime = slowCanvas()
+        defer { inTime.releaseGlobally() }
+        let snapshot = try #require(PasteboardSnapshot.capture(inTime, timeLimit: .seconds(1)))
+        #expect(snapshot.items.first?.entries.count == 3)
+    }
+
+    @Test func aPrivatePasteboardMayBeRead() {
+        let pasteboard = privatePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        #expect(PasteboardSnapshot.mayRead(pasteboard))
     }
 }
 
@@ -909,12 +1298,16 @@ private final class PasteLog: @unchecked Sendable {
 
 @MainActor
 @Suite struct TextInserterOrderingTests {
-    @Test func overlappingInsertionsRunOneAtATimeAndLeaveTheLastText() async throws {
-        let pasteboard = NSPasteboard(name: NSPasteboard.Name("dev.transcribe-thing.tests.\(UUID().uuidString)"))
+    @MainActor private final class Seen { var texts: [String?] = [] }
+
+    /// Each ⌘V goes out with its own text on the clipboard, and the clipboard from before both comes back.
+    @Test func overlappingInsertionsRunOneAtATimeAndPutTheClipboardBack() async throws {
+        let pasteboard = privatePasteboard()
         defer { pasteboard.releaseGlobally() }
         pasteboard.clearContents()
         pasteboard.setString("original", forType: .string)
         let log = PasteLog()
+        let seen = Seen()
         let system = TextInserter.System(
             frontmostPID: { 42 },
             canPostEvents: { true },
@@ -923,21 +1316,26 @@ private final class PasteLog: @unchecked Sendable {
                 try? await Task.sleep(for: .milliseconds(30))
                 return FocusInfo(pid: 42, editability: .editable)
             },
-            pasteKeyCode: { 9 },
+            pasteKeyCode: {
+                seen.texts.append(pasteboard.string(forType: .string))
+                return 9
+            },
             postPaste: { code in
                 log.record(code)
                 return true
             })
         let inserter = TextInserter(pasteboard: pasteboard, system: system)
-        inserter.swapDelay = .milliseconds(60)
+        inserter.restoreDelay = .milliseconds(60)
 
         async let first = inserter.insert("first", expectedPID: 42)
         async let second = inserter.insert("second", expectedPID: 42)
         let outcomes = await [first, second]
         #expect(outcomes == [.pasted, .pasted])
         #expect(log.codes == [9, 9])
-        try await Task.sleep(for: .milliseconds(200))
-        #expect(pasteboard.string(forType: .string) == "second")
+        #expect(seen.texts.compactMap { $0 }.sorted() == ["first", "second"], "either may go first, each with its own text")
+        try await waitUntil { pasteboard.string(forType: .string) == "original" }
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(pasteboard.string(forType: .string) == "original")
     }
 }
 

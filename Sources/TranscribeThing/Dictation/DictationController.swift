@@ -735,6 +735,8 @@ final class DictationController {
 
     private func run(_ job: Job) {
         guard let recording = job.recording else { return }
+        // Its paste puts the clipboard back: that is read while the dictation is transcribed, not at the ⌘V.
+        inserter.prepareToPaste()
         job.stop()
         job.generation += 1
         job.outcome = nil
@@ -1130,11 +1132,11 @@ final class DictationController {
         case .targetChanged:
             toasts.post(transcriptCard(text, title: "You switched apps", body: "Paste here, or copy it.", pasteHere: true))
         case .accessibilityMissing:
-            copy(text)
+            // Nothing goes on the clipboard unasked: the card holds the text until the user copies it.
             var notice = AppError.accessibilityMissing.notice(recordingID: nil, fallbackEngine: nil)
             notice.transcript = text
             notice.actions = [NoticeAction(title: "Allow Access", kind: .openSettingsPane(.accessibility), isPrimary: true),
-                              NoticeAction(title: "Copy Again", kind: .copyText(text))]
+                              NoticeAction(title: "Copy", kind: .copyText(text))]
             toasts.post(notice)
         case .failed(let reason):
             Log.app.error("Paste failed: \(reason, privacy: .public)")
@@ -1156,7 +1158,8 @@ final class DictationController {
 
     // MARK: - Paste last
 
-    /// Copy and paste in one: the last transcript is pasted where the user is typing and stays on the clipboard.
+    /// The last transcript is pasted where the user is typing, and the clipboard stays as it was, as with every paste.
+    /// When it can't be pasted, a card holds it with Copy, like a dictation's.
     func pasteLast() {
         guard let text = history.lastSuccessfulText else {
             toasts.post(Notice(dedupeKey: "pasteLast.empty", style: .info, symbol: "text.badge.xmark",
@@ -1172,24 +1175,8 @@ final class DictationController {
             } else {
                 outcome = await self.inserter.insert(pasted, expectedPID: nil)
             }
-            switch outcome {
-            case .pasted, .accessibilityMissing:
-                // Without Accessibility the inserter has already copied it, and the notice says so.
-                self.handleInsertion(outcome, text: text, isDictation: false)
-            case .noEditableTarget, .targetChanged:
-                self.leaveOnClipboard(text, title: "Nowhere to paste")
-            case .failed(let reason):
-                Log.app.error("Paste last failed: \(reason, privacy: .public)")
-                self.leaveOnClipboard(text, title: "Couldn’t paste")
-            }
+            self.handleInsertion(outcome, text: text, isDictation: false)
         }
-    }
-
-    /// Paste last's "copy" half when the paste can't happen.
-    private func leaveOnClipboard(_ text: String, title: String) {
-        copy(text)
-        toasts.post(Notice(dedupeKey: "pasteLast.copied", style: .info, symbol: "doc.on.clipboard",
-                           title: title, body: "Your text is on the clipboard.", lifetime: .seconds(3)))
     }
 
     // MARK: - Notice actions

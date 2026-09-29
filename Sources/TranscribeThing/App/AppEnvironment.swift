@@ -231,6 +231,7 @@ final class AppEnvironment {
     /// Called at quit: persist what's pending and release the event tap.
     func stop() {
         history.flush()
+        inserter.flushPendingRestore()
         hotkeys.stop()
         maintenanceTask?.cancel()
         compressionTask?.cancel()

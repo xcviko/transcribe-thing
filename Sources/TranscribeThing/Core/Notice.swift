@@ -501,8 +501,8 @@ extension AppError {
                         order: .fixFirst, seconds: 8)
         case .accessibilityMissing:
             return Copy(style: .warning, symbol: "accessibility",
-                        title: "Copied, not pasted",
-                        body: "\(Brand.name) needs Accessibility access to paste. Your text is on the clipboard.",
+                        title: "Couldn’t paste",
+                        body: "\(Brand.name) needs Accessibility access to paste.",
                         fixes: [Fix(title: "Allow Access", kind: .openSettingsPane(.accessibility))],
                         order: .fixFirst, sound: .alert, seconds: 20)
         case .modelNotDownloaded(let e):

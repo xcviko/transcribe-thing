@@ -110,8 +110,8 @@ enum PillSnapshots {
             SnapshotEntry("pill-toast-transcript", width: 640, height: 340) { _ in
                 CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.switchedApps])
             },
-            SnapshotEntry("pill-toast-copied", width: 640, height: 360) { _ in
-                CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.copiedNotPasted])
+            SnapshotEntry("pill-toast-not-pasted", width: 640, height: 360) { _ in
+                CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.notPasted])
             },
             SnapshotEntry("pill-toast-shortcut", width: 640, height: 270) { _ in
                 CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.shortcutUnavailable])
@@ -203,12 +203,12 @@ enum PillSnapshotFixtures {
         lifetime: .seconds(20))
 
     /// What DictationController posts when Accessibility is missing at paste time.
-    static let copiedNotPasted: Notice = {
+    static let notPasted: Notice = {
         let text = "Let's move the design review to Thursday afternoon so Maya can join."
         var notice = AppError.accessibilityMissing.notice(recordingID: nil, fallbackEngine: nil)
         notice.transcript = text
         notice.actions = [NoticeAction(title: "Allow Access", kind: .openSettingsPane(.accessibility), isPrimary: true),
-                          NoticeAction(title: "Copy Again", kind: .copyText(text))]
+                          NoticeAction(title: "Copy", kind: .copyText(text))]
         return notice
     }()
 
