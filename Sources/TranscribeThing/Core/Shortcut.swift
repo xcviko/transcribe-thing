@@ -280,10 +280,12 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
         }
     }
 
-    var subtitle: String {
+    /// Hands-free's names the push-to-talk key in `bindings`: that is what finishes it.
+    func subtitle(in bindings: ShortcutBindings) -> String {
         switch self {
         case .pushToTalk: "Hold to record, let go to paste."
-        case .handsFree: "Tap to start. Tap again to finish."
+        case .handsFree:
+            "Tap to start. Press \(bindings[.pushToTalk]?.compactDescription ?? "the push-to-talk key") to finish, esc to cancel."
         case .pasteLast: "Paste your most recent transcript again. Your clipboard stays as it was."
         case .switchModel: "While dictating: switch this dictation to your next model."
         }

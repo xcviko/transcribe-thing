@@ -194,7 +194,7 @@ import Testing
         rig.h.recorder.next = Self.speech(seconds: 1)
         rig.result = { _, _ in "all of it" }
         rig.now += 1
-        rig.h.controller.send(.handsFreeToggle)
+        rig.h.controller.send(.pillStop)
         try await waitUntil { rig.pasted == ["all of it"] && rig.h.controller.machine.activeJobs == 0 }
         #expect(rig.transcribed.last?.id == kept.id)
         #expect(rig.transcribed.last?.duration == 4)

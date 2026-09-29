@@ -118,7 +118,7 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
         #expect(kb.release(.fn).events == [.pttUp])
     }
 
-    @Test func fnSpaceFromIdleTogglesHandsFreeAndSwallowsSpace() {
+    @Test func fnSpaceFromIdleStartsHandsFreeAndSwallowsSpace() {
         var kb = Keyboard()
         #expect(kb.press(.fn).events == [.pttDown])
         let space = kb.down(kVK_Space)
@@ -136,7 +136,7 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
 
     /// A combination macOS also listens to (input sources) works like any other once it's bound: the session
     /// tap sees the chord key first and swallows it.
-    @Test func controlSpaceAsHandsFreeTogglesAndSwallowsSpace() {
+    @Test func controlSpaceAsHandsFreeFiresAndSwallowsSpace() {
         var kb = Keyboard(bindings: bindings([.handsFree: Shortcut(modifiers: [.init(.control)], keyCode: KeyCode.space)]))
         #expect(kb.press(.leftControl).events.isEmpty)
         let space = kb.down(kVK_Space)
@@ -147,7 +147,7 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
         #expect(repeated.swallow)
         #expect(kb.up(kVK_Space).swallow)
         #expect(kb.release(.leftControl).events.isEmpty)
-        // Combinations ignore sides: Right ⌃ Space toggles it again.
+        // Combinations ignore sides: Right ⌃ Space fires it again.
         kb.press(.rightControl)
         #expect(kb.down(kVK_Space).events == [.handsFreeToggle])
         kb.up(kVK_Space)
@@ -189,12 +189,12 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
         #expect(kb.up(kVK_Space).events == [.pttUp])
     }
 
-    @Test func spaceWhileHoldingFnTogglesAgainWithoutReleasingFn() {
+    @Test func spaceWhileHoldingFnFiresAgainWithoutReleasingFn() {
         var kb = Keyboard()
         kb.press(.fn)
         #expect(kb.down(kVK_Space).events == [.handsFreeToggle])
         kb.up(kVK_Space)
-        // Still holding fn: a second Space stops hands-free.
+        // Still holding fn: a second Space is the chord again (which the machine ignores while hands-free).
         let again = kb.down(kVK_Space)
         #expect(again.events == [.handsFreeToggle])
         #expect(again.swallow)
@@ -202,6 +202,23 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
         #expect(kb.release(.fn).events.isEmpty)
         // Fully released: fn works as push to talk again.
         #expect(kb.press(.fn).events == [.pttDown])
+    }
+
+    /// While hands-free records, the chord does nothing (the machine ignores it) but never reaches the app underneath,
+    /// and releasing the fn it was pressed with is no push-to-talk release, which would finish the recording.
+    @Test(arguments: [Shortcut.fnSpace, Shortcut(modifiers: [.init(.control), .init(.option)], keyCode: KeyCode.space)])
+    func theHandsFreeChordIsSwallowedDuringARecording(_ handsFree: Shortcut) {
+        var kb = Keyboard(bindings: bindings([.handsFree: handsFree]))
+        kb.config.isRecording = true
+        kb.config.isBusy = true
+        let modifiers: [Keyboard.Modifier] = handsFree == .fnSpace ? [.fn] : [.leftControl, .leftOption]
+        for modifier in modifiers { kb.press(modifier) }
+        let space = kb.down(kVK_Space)
+        #expect(space.events == [.handsFreeToggle])
+        #expect(space.swallow)
+        #expect(kb.down(kVK_Space, isRepeat: true).swallow)
+        #expect(kb.up(kVK_Space).swallow)
+        for modifier in modifiers { #expect(kb.release(modifier).events.isEmpty) }
     }
 
     @Test func fnArrowInterruptsAndTheArrowPassesThrough() {
@@ -1636,7 +1653,7 @@ private func copyScreenshotAndFile(to pasteboard: NSPasteboard) {
         kb.up(kVK_Space)
         kb.release(.fn)
 
-        // Hands-free: a plain Space steps, fn+Space still stops.
+        // Hands-free: a plain Space steps, fn+Space is still the hands-free chord.
         kb.config.isRecording = true
         let plain = kb.down(kVK_Space)
         #expect(plain.events == [.cycleEngine])

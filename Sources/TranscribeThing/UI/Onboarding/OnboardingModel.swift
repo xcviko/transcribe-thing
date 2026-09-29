@@ -836,8 +836,10 @@ final class OnboardingModel {
         }
 
         if holdingHandsFree && !wasHoldingHandsFree {
-            handsFreeLatched.toggle()
-            if handsFreeLatched { markTriedHandsFree() }
+            // Only starts hands-free: pressed again it does nothing, and the push-to-talk key held for it (fn of
+            // fn+Space) doesn't finish on release.
+            handsFreeLatched = true
+            markTriedHandsFree()
             stopArmed = false
             return
         }

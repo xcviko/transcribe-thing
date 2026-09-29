@@ -334,6 +334,26 @@ import Testing
         #expect(!model.handsFreeLatched)
     }
 
+    /// fn+Space only starts hands-free: pressed again it stays latched through fn's release, as the real pill does.
+    @Test func fnSpaceAgainKeepsHandsFreeLatched() {
+        let model = makeModel(step: 3)
+        let t0 = Date()
+        model.handleRawKey(RawKeyEvent(key: .fn, isDown: true), now: t0)
+        model.handleRawKey(RawKeyEvent(key: .space, isDown: true), now: t0.addingTimeInterval(0.1))
+        model.handleRawKey(RawKeyEvent(key: .space, isDown: false), now: t0.addingTimeInterval(0.2))
+        model.handleRawKey(RawKeyEvent(key: .fn, isDown: false), now: t0.addingTimeInterval(0.25))
+        model.handleRawKey(RawKeyEvent(key: .fn, isDown: true), now: t0.addingTimeInterval(3))
+        model.handleRawKey(RawKeyEvent(key: .space, isDown: true), now: t0.addingTimeInterval(3.1))
+        #expect(model.handsFreeLatched)
+        model.handleRawKey(RawKeyEvent(key: .space, isDown: false), now: t0.addingTimeInterval(3.2))
+        model.handleRawKey(RawKeyEvent(key: .fn, isDown: false), now: t0.addingTimeInterval(3.25))
+        #expect(model.handsFreeLatched)
+        #expect(model.livePhase == .locked)
+        model.handleRawKey(RawKeyEvent(key: .fn, isDown: true), now: t0.addingTimeInterval(6))
+        model.handleRawKey(RawKeyEvent(key: .fn, isDown: false), now: t0.addingTimeInterval(6.1))
+        #expect(!model.handsFreeLatched)
+    }
+
     @Test func doublePressLatchesHandsFree() {
         let model = makeModel(step: 3)
         model.ctx.settings.doublePressForHandsFree = true

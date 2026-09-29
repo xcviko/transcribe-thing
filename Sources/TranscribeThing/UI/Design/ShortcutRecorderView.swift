@@ -696,7 +696,7 @@ private struct RecorderGallery: View {
     private func recorded(_ shortcut: Shortcut, for action: ShortcutAction, current: Shortcut?,
                           bindings: ShortcutBindings) -> some View {
         if let message = ShortcutRecorderSnapshots.message(recording: shortcut, for: action, bindings: bindings) {
-            row(action) {
+            row(action, bindings: bindings) {
                 ShortcutRecorderView(shortcut: .constant(current), action: action, previewState: .message(message))
             }
         }
@@ -708,8 +708,9 @@ private struct RecorderGallery: View {
         return result
     }
 
-    private func row<Trailing: View>(_ action: ShortcutAction, @ViewBuilder trailing: () -> Trailing) -> some View {
-        SettingsRow(title: action.title, subtitle: action.subtitle, trailing: trailing)
+    private func row<Trailing: View>(_ action: ShortcutAction, bindings: ShortcutBindings = .defaults,
+                                     @ViewBuilder trailing: () -> Trailing) -> some View {
+        SettingsRow(title: action.title, subtitle: action.subtitle(in: bindings), trailing: trailing)
     }
 }
 

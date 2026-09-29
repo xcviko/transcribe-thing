@@ -14,7 +14,7 @@ struct DictationMachine: Equatable {
         case listening(downAt: TimeInterval)
         /// Hands-free.
         case locked(startedAt: TimeInterval)
-        /// Hands-free + PTT key went down: stop on clean release, resume if it was a combo (fn+←).
+        /// Hands-free + PTT key went down: stop on clean release, resume if it was a combo (fn+←, fn+Space).
         case lockedStopPending(startedAt: TimeInterval)
         /// Quick tap; waiting for a second press (double-press → hands-free). The mic is off but the pill stays up
         /// until the window closes, so a double-press grows straight into hands-free instead of blinking.
@@ -24,6 +24,8 @@ struct DictationMachine: Equatable {
     enum Input: Equatable {
         /// `pttInterrupted`: another key, extra modifier or mouse click while the PTT key is held.
         case pttDown, pttUp, pttInterrupted
+        /// `handsFreeToggle`: the hands-free shortcut. It only starts hands-free; while hands-free it does nothing
+        /// (the PTT key finishes, Esc cancels).
         case handsFreeToggle, cancel, pillClick, pillStop, pillCancel
         /// The switch model shortcut: another engine for the dictation being recorded.
         case cycleEngine
@@ -67,10 +69,6 @@ struct DictationMachine: Equatable {
 
     private(set) var capture: Capture = .idle
     private(set) var activeJobs: Int = 0
-    /// Locked by the second press of a double-press, and that press is still down. The router reports the
-    /// press before it can know a chord follows, so fn tap, then fn+Space arrives as pttDown (locks) and then
-    /// handsFreeToggle, which only confirms the lock.
-    private(set) var lockingPressHeld = false
     /// The push-to-talk press switched the model: a quick release is then not a tap (a double-press would lock
     /// hands-free on the main model, the choice already dropped) but a quiet cancel.
     private(set) var switchedDuringPress = false
@@ -122,7 +120,6 @@ struct DictationMachine: Equatable {
         }
 
         let effects = reduce(input, now: now)
-        if case .locked = capture {} else { lockingPressHeld = false }
         switch capture {
         case .arming, .listening: break
         default: switchedDuringPress = false
@@ -234,18 +231,14 @@ struct DictationMachine: Equatable {
         case .pttDown:
             capture = .lockedStopPending(startedAt: startedAt)
             return []
-        case .pttUp:
-            // Release of the key that locked it (fn+Space, or the second press of a double-press).
-            lockingPressHeld = false
+        case .pttUp, .pttInterrupted:
+            // Release of the key that locked it (fn+Space, or the second press of a double-press), or that press
+            // became a combo (fn+←): the recording goes on.
             return []
-        case .pttInterrupted:
-            // The locking press became a combo (fn+←): it is over, and the recording goes on.
-            lockingPressHeld = false
+        case .handsFreeToggle:
+            // Already hands-free: the shortcut only starts it. The PTT key finishes, Esc cancels.
             return []
-        case .handsFreeToggle where lockingPressHeld:
-            lockingPressHeld = false
-            return []
-        case .handsFreeToggle, .pillStop:
+        case .pillStop:
             return finishHandsFree()
         default:
             return handleHandsFreeCommon(input)
@@ -254,10 +247,10 @@ struct DictationMachine: Equatable {
 
     private mutating func handleLockedStopPending(_ input: Input, startedAt: TimeInterval, now: TimeInterval) -> [Effect] {
         switch input {
-        case .pttUp, .handsFreeToggle, .pillStop:
+        case .pttUp, .pillStop:
             return finishHandsFree()
-        case .pttInterrupted:
-            // It was a combo like fn+←: keep recording.
+        case .pttInterrupted, .handsFreeToggle:
+            // It was a combo like fn+←, or fn+Space, which does nothing while hands-free: keep recording.
             capture = .locked(startedAt: startedAt)
             return []
         case .cycleEngine:
@@ -289,7 +282,6 @@ struct DictationMachine: Equatable {
         switch input {
         case .pttDown where config.doublePressEnabled && now - firstDownAt <= config.doublePressWindow:
             capture = .locked(startedAt: now)
-            lockingPressHeld = true
             return [.cancelTimer(.doublePressWindow), .startCapture, .showPill(.locked), .playSound(.lock)]
         case .pttDown:
             return [.cancelTimer(.doublePressWindow)] + arm(now: now)

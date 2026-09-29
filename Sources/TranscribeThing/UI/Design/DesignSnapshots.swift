@@ -180,7 +180,7 @@ private struct DesignGallery: View {
                             systemImage: "speaker.wave.2.fill") {
                     Toggle("", isOn: .constant(true)).toggleStyle(.appSwitch).labelsHidden()
                 }
-                SettingsRow(title: "Push to talk", subtitle: ShortcutAction.pushToTalk.subtitle, systemImage: "mic.fill") {
+                SettingsRow(title: "Push to talk", subtitle: ShortcutAction.pushToTalk.subtitle(in: .defaults), systemImage: "mic.fill") {
                     ShortcutChips(shortcut: .fn)
                 }
                 SettingsRow(title: "Open at login", systemImage: "power", iconTint: .inkSecondary) {

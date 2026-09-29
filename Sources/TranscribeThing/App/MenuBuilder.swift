@@ -21,14 +21,14 @@ final class MenuBuilder {
         menu.removeAllItems()
         menu.autoenablesItems = false
         guard let env = environment else { return }
-        let settings = env.settings
 
         menu.addItem(statusItem(env))
         menu.addItem(.separator())
 
-        // The only menu way to stop a dictation, so these show up while one runs.
+        // The only menu way to stop a dictation, so these show up while one runs. Finish shows no shortcut: the
+        // hands-free one only starts hands-free.
         if isLocked(env.dictation.machine.capture) {
-            menu.addItem(MenuActionItem(title: "Finish Dictation", shortcut: settings.shortcuts[.handsFree]) { [weak env] in
+            menu.addItem(MenuActionItem(title: "Finish Dictation") { [weak env] in
                 env?.dictation.toggleHandsFree()
             })
         }

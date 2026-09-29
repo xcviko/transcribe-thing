@@ -1269,7 +1269,7 @@ struct PillHelloTooltip: View {
     }
 }
 
-/// "Cancel [esc]" over X, "Finish [fn][space]" over Stop.
+/// "Cancel [esc]" over X, "Finish [fn]" over Stop: a press of the push-to-talk key finishes hands-free.
 private struct PillControlTooltip: View {
     let control: PillControl
     let settings: AppSettings
@@ -1282,7 +1282,7 @@ private struct PillControlTooltip: View {
                 PillShortcutChips(shortcut: .escape, fallback: "esc")
             case .stop:
                 Text("Finish")
-                PillShortcutChips(shortcut: settings.shortcuts[.handsFree], fallback: "fn space")
+                PillShortcutChips(shortcut: settings.shortcuts[.pushToTalk], fallback: "fn")
             }
         }
     }

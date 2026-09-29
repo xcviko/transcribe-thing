@@ -47,7 +47,7 @@ struct ShortcutsPage: View {
     }
 
     private func row(_ action: ShortcutAction) -> some View {
-        SettingsRow(title: action.title, subtitle: action.subtitle, systemImage: action.symbolName) {
+        SettingsRow(title: action.title, subtitle: action.subtitle(in: settings.shortcuts), systemImage: action.symbolName) {
             ShortcutRecorderView(shortcut: binding(for: action), action: action)
         }
     }

@@ -212,12 +212,21 @@ import Testing
         #expect(effects.isEmpty)
     }
 
-    @Test(arguments: ["locked", "lockedStopPending"], [DictationMachine.Input.handsFreeToggle, .pillStop])
-    func handsFreeOrStopFinishes(_ from: String, _ input: DictationMachine.Input) {
+    @Test(arguments: ["locked", "lockedStopPending"])
+    func stopFinishes(_ from: String) {
         var m = Self.state(from)
-        let effects = m.handle(input, now: 40)
+        let effects = m.handle(.pillStop, now: 40)
         #expect(m.capture == .idle)
         #expect(effects == [.stopCaptureAndTranscribe(mode: .handsFree), .playSound(.stop)])
+    }
+
+    /// The hands-free shortcut only starts hands-free: pressed again it neither finishes nor stops anything.
+    @Test(arguments: ["locked", "lockedStopPending"])
+    func handsFreeWhileHandsFreeKeepsRecording(_ from: String) {
+        var m = Self.state(from)
+        #expect(m.handle(.handsFreeToggle, now: 40).isEmpty)
+        #expect(m.capture == .locked(startedAt: Self.t0), "fn+Space is a combo: fn's release doesn't finish")
+        #expect(m.isRecording && m.mode == .handsFree)
     }
 
     @Test(arguments: ["arming", "listening", "locked", "lockedStopPending"],
@@ -256,11 +265,11 @@ import Testing
         #expect(m == before)
     }
 
-    @Test(arguments: [DictationMachine.Input.handsFreeToggle, .pillStop])
-    func resumedDictationFinishesLikeHandsFree(_ input: DictationMachine.Input) {
+    @Test func resumedDictationFinishesLikeHandsFree() {
         var m = M()
         _ = m.handle(.resume(prefix: 4), now: 20)
-        #expect(m.handle(input, now: 30) == [.stopCaptureAndTranscribe(mode: .handsFree), .playSound(.stop)])
+        #expect(m.handle(.handsFreeToggle, now: 25).isEmpty, "the shortcut only starts hands-free")
+        #expect(m.handle(.pillStop, now: 30) == [.stopCaptureAndTranscribe(mode: .handsFree), .playSound(.stop)])
         #expect(m.capture == .idle)
     }
 
@@ -336,7 +345,8 @@ import Testing
         ("idle", .timer(.doublePressWindow)), ("idle", .deviceLost), ("idle", .pillStop), ("idle", .pillCancel),
         ("arming", .pttDown), ("arming", .pillClick), ("arming", .timer(.doublePressWindow)),
         ("listening", .pttDown), ("listening", .pillClick), ("listening", .pillStop), ("listening", .timer(.arming)),
-        ("locked", .pillClick), ("locked", .pttInterrupted), ("locked", .timer(.doublePressWindow)),
+        ("locked", .pillClick), ("locked", .pttInterrupted), ("locked", .handsFreeToggle),
+        ("locked", .timer(.doublePressWindow)),
         ("lockedStopPending", .pttDown), ("lockedStopPending", .pillClick),
         ("tapPending", .pttUp), ("tapPending", .cancel), ("tapPending", .deviceLost), ("tapPending", .timer(.arming)),
     ])
@@ -411,23 +421,52 @@ import Testing
 
     @Test func fnTapThenFnSpaceLocksOnce() {
         // A quick fn tap, then fn+Space within the double-press window: the router reports the press
-        // before it knows Space follows, so the lock comes first and Space only confirms it.
+        // before it knows Space follows, so the lock comes first and Space changes nothing.
         var m = Self.tapPending()
         let lock = m.handle(.pttDown, now: 10.25)
         #expect(m.capture == .locked(startedAt: 10.25))
         #expect(lock.contains(.startCapture))
         #expect(m.handle(.handsFreeToggle, now: 10.375).isEmpty)
         #expect(m.capture == .locked(startedAt: 10.25))
-        // The chord consumed fn's release; the next fn+Space stops as usual.
-        #expect(m.handle(.handsFreeToggle, now: 20).contains(.stopCaptureAndTranscribe(mode: .handsFree)))
+        // The chord consumed fn's release; the next fn+Space does nothing either, and a lone fn tap stops.
+        #expect(m.handle(.pttDown, now: 20).isEmpty)
+        #expect(m.handle(.handsFreeToggle, now: 20.0625).isEmpty)
+        #expect(m.capture == .locked(startedAt: 10.25))
+        #expect(m.handle(.pttDown, now: 25).isEmpty)
+        #expect(m.handle(.pttUp, now: 25.125).contains(.stopCaptureAndTranscribe(mode: .handsFree)))
     }
 
-    @Test func doublePressHeldThenReleasedStopsOnTheNextToggle() {
+    @Test func doublePressHeldThenReleasedStopsOnTheNextFnTap() {
         var m = Self.tapPending()
         _ = m.handle(.pttDown, now: 10.25)
         #expect(m.handle(.pttUp, now: 10.5).isEmpty)
-        #expect(!m.lockingPressHeld)
-        #expect(m.handle(.handsFreeToggle, now: 20).contains(.stopCaptureAndTranscribe(mode: .handsFree)))
+        #expect(m.handle(.handsFreeToggle, now: 15).isEmpty)
+        #expect(m.handle(.pttDown, now: 20).isEmpty)
+        #expect(m.handle(.pttUp, now: 20.125).contains(.stopCaptureAndTranscribe(mode: .handsFree)))
+    }
+
+    /// fn+Space while hands-free is a combo like fn+Tab: the recording goes on through fn's release (should one
+    /// come through), and only a lone fn press finishes it, or Esc cancels it.
+    @Test func fnSpaceWhileHandsFreeKeepsRecordingUntilALoneFnPress() {
+        var m = M()
+        _ = m.handle(.pttDown, now: 10)
+        _ = m.handle(.handsFreeToggle, now: 10.0625)
+        #expect(m.capture == .locked(startedAt: 10))
+        var effects = m.handle(.pttDown, now: 20)
+        effects += m.handle(.handsFreeToggle, now: 20.0625)
+        effects += m.handle(.pttUp, now: 20.25)
+        #expect(effects.isEmpty, "no sound, no stop")
+        #expect(m.capture == .locked(startedAt: 10))
+        #expect(m.handle(.pttDown, now: 30).isEmpty)
+        #expect(m.handle(.pttUp, now: 30.125) == [.stopCaptureAndTranscribe(mode: .handsFree), .playSound(.stop)])
+        #expect(m.capture == .idle)
+
+        var again = M()
+        _ = again.handle(.handsFreeToggle, now: 10)
+        _ = again.handle(.pttDown, now: 20)
+        _ = again.handle(.handsFreeToggle, now: 20.0625)
+        #expect(again.handle(.cancel, now: 21) == Self.cancelAll + [.cancelCapture(keepForUndo: true, notify: true), .playSound(.cancel)])
+        #expect(again.capture == .idle)
     }
 
     @Test func fnArrowWhileLockedKeepsRecordingThenStops() {
@@ -437,7 +476,8 @@ import Testing
         #expect(m.capture == .locked(startedAt: Self.t0))
         #expect(m.handle(.pttUp, now: 20.3).isEmpty)
         #expect(m.isRecording)
-        let stop = m.handle(.handsFreeToggle, now: 25)
+        _ = m.handle(.pttDown, now: 25)
+        let stop = m.handle(.pttUp, now: 25.125)
         #expect(stop.contains(.stopCaptureAndTranscribe(mode: .handsFree)))
     }
 
@@ -990,6 +1030,34 @@ final class FakeRecorder: DictationRecorder {
         try await waitUntil { pasted == ["dictated"] }
         try await waitUntil { h.controller.machine.activeJobs == 0 }
         #expect(h.history.entries.first?.status == .success)
+    }
+
+    /// fn+Space only starts hands-free: pressed again (the router reports fn's press and the chord, and nothing for
+    /// fn's release) the recording goes on without a sound, and a lone fn press finishes it.
+    @Test func handsFreeEndToEndFinishesOnlyWithALoneFnPress() async throws {
+        let h = Self.make()
+        var pasted: [String] = []
+        h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "dictated", engine: engine, processingTime: 0.2) }
+        h.controller.insertOverride = { text, _ in pasted.append(text); return .pasted }
+        var cues: [SoundEffect] = []
+        h.controller.playCueOverride = { cues.append($0) }
+        h.controller.handle(.pttDown)
+        h.controller.handle(.handsFreeToggle)
+        #expect(h.pill.phase == .locked)
+        #expect(cues == [.lock])
+        for _ in 0..<2 {
+            h.controller.handle(.pttDown)
+            h.controller.handle(.handsFreeToggle)
+            #expect(h.recorder.isCapturing && h.recorder.starts == 1)
+            #expect(h.pill.phase == .locked)
+            #expect(cues == [.lock])
+        }
+        h.controller.handle(.pttDown)
+        h.controller.handle(.pttUp)
+        #expect(!h.recorder.isCapturing)
+        #expect(h.pill.phase == .processing)
+        try await waitUntil { pasted == ["dictated"] }
+        try await waitUntil { h.controller.machine.activeJobs == 0 }
     }
 
     @Test func silentRecordingIsRejectedBeforeTranscription() async throws {
@@ -2146,8 +2214,23 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
             ])
             Self.expectTidySeparators(menu, "hands-free")
         }
+        // Even a hands-free shortcut the menu could draw isn't Finish's: it only starts hands-free.
+        env.settings.shortcuts[.handsFree] = Shortcut(modifiers: [.init(.control), .init(.option)], keyCode: KeyCode.space)
+        #expect(MenuActionItem.keyEquivalent(for: try #require(env.settings.shortcuts[.handsFree])) != nil)
         let finish = try #require(env.menuBar.builder.makeMenu(includeQuit: true).items.first { $0.title == "Finish Dictation" })
-        #expect(finish.keyEquivalent.isEmpty, "fn Space has no faithful menu form")
+        #expect(finish.keyEquivalent.isEmpty)
+    }
+
+    @Test func finishDictationFinishesHandsFree() async throws {
+        let env = Self.dictatingEnvironment()
+        env.dictation.playCueOverride = { _ in }
+        env.dictation.transcribeOverride = { _, engine in TranscriptResult(text: "", engine: engine, processingTime: 0.1) }
+        env.dictation.insertOverride = { _, _ in Issue.record("nothing should be pasted"); return .pasted }
+        env.dictation.send(.handsFreeToggle)
+        let finish = try #require(env.menuBar.builder.makeMenu(includeQuit: true).items.first { $0.title == "Finish Dictation" })
+        NSApplication.shared.sendAction(try #require(finish.action), to: finish.target, from: finish)
+        #expect(env.dictation.machine.capture == .idle)
+        try await waitUntil { env.dictation.machine.activeJobs == 0 }
     }
 
     @Test func updateItemAppearsOnlyWhileAnUpdateWaits() throws {

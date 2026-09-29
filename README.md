@@ -151,7 +151,7 @@ model at most once, and switching between them needs no audio.
 |---|---|---|
 | Push to talk | hold **fn** | Let go to paste. A quick tap does nothing. |
 | Hands-free | **fn Space** | Also: press Space while holding fn, double-press fn (turn it on in Shortcuts), or click the pill. |
-| Finish hands-free | **fn**, **fn Space** or the Stop button | |
+| Finish hands-free | **fn** or the Stop button | **fn Space** only starts it: pressed again, it does nothing. |
 | Cancel | **esc**, always | Works while recording or transcribing; Undo brings it back. |
 | Paste last transcript | **⌘ fn V** | Your clipboard stays as it was, as with every paste. |
 
