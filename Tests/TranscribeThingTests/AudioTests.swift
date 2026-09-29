@@ -196,6 +196,15 @@ private extension Double {
         #expect(worst < 1e-4)
     }
 
+    /// Longer than the chunks a 16-bit mono WAV is converted in, the last one partly filled.
+    @Test func aLongRecordingDecodesWhole() throws {
+        let samples = Signal.noise(seconds: 5, rms: 0.3)
+        let decoded = try #require(WAVEncoder.decode(WAVEncoder.pcm16(samples)))
+        #expect(decoded.count == samples.count)
+        let worst = zip(decoded, samples).map { abs($0 - $1) }.max() ?? 1
+        #expect(worst < 1e-4)
+    }
+
     @Test func headerIsCanonical() {
         let data = WAVEncoder.pcm16([0, 0.5, -0.5], sampleRate: 16_000)
         #expect(data.count == 44 + 6)

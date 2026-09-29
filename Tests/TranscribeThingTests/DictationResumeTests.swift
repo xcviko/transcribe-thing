@@ -19,16 +19,19 @@ import Testing
 
         init(keyStatus: KeyStatus = .missing, models: [EngineID: LocalModelState] = [.parakeet: .ready]) {
             h = DictationControllerTests.make(models: models, keyStatus: keyStatus)
-            h.controller.clock = { [unowned self] in now }
-            h.controller.transcribeOverride = { [unowned self] recording, engine in
+            // Weak: a test that timed out leaves its controller at work after the rig is gone, and that test should
+            // fail on its own rather than crash every other one.
+            h.controller.clock = { [weak self] in self?.now ?? 0 }
+            h.controller.transcribeOverride = { [weak self] recording, engine in
+                guard let self else { throw CancellationError() }
                 transcribed.append(recording)
                 return TranscriptResult(text: try await result(recording, engine), engine: engine, processingTime: 0.1)
             }
-            h.controller.insertOverride = { [unowned self] text, _ in
-                pasted.append(text)
+            h.controller.insertOverride = { [weak self] text, _ in
+                self?.pasted.append(text)
                 return .pasted
             }
-            h.toasts.onAction = { [unowned self] notice, action in h.controller.perform(action, from: notice) }
+            h.toasts.onAction = { [weak self] notice, action in self?.h.controller.perform(action, from: notice) }
         }
 
         func notice(_ key: String) -> Notice? { h.toasts.notices.first { $0.dedupeKey == key } }

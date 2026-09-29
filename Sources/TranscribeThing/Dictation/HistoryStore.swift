@@ -536,15 +536,22 @@ final class HistoryStore {
     }
 
     /// The entry's recording read back, either format (`RecordingFile`); nil when it has none or it can't be read.
+    /// When the file the entry names can't be read, the same recording in the other format is: the WAV a failed
+    /// encode just kept, say, which the entry names only once `finishSaving` has run.
     func loadRecording(for entry: TranscriptEntry) -> Recording? {
         guard let name = entry.audioFileName else { return nil }
-        let url = paths.recordingURL(fileName: name)
+        let urls = [name, RecordingFile.otherFormat(of: name)].map { paths.recordingURL(fileName: $0) }
         // Waits for a pending write of the same file to land first.
-        guard let samples = io.sync({ RecordingFile.read(url) }), !samples.isEmpty else { return nil }
+        guard let (url, samples) = io.sync({ () -> (URL, [Float])? in
+            for url in urls {
+                if let samples = RecordingFile.read(url), !samples.isEmpty { return (url, samples) }
+            }
+            return nil
+        }) else { return nil }
         var speech = SpeechAnalyzer.stats(for: samples)
         if speech.voicedSeconds == 0 && entry.voicedSeconds > 0 { speech.voicedSeconds = entry.voicedSeconds }
         var recording = Recording(id: entry.id, samples: samples, startedAt: entry.createdAt, speech: speech)
-        if RecordingFile.isAAC(name) { recording.aacFile = url }
+        if RecordingFile.isAAC(url.lastPathComponent) { recording.aacFile = url }
         return recording
     }
 
@@ -692,10 +699,17 @@ final class HistoryStore {
             io.perform { try? FileManager.default.removeItem(at: made.partial) }
             return false
         }
-        guard await io.value({ RecordingFile.place(made.partial, at: aac, madeFrom: wav, stamp: made.stamp) }),
-              isUnchanged(), let index = entries.firstIndex(where: { $0.id == id }) else {
-            // Deleted or taken up meanwhile: the WAV stays its recording.
-            if !entries.contains(where: { $0.audioFileName == aacName }) { removeAudioFile(aacName) }
+        // The WAV changed or went meanwhile (another copy of the app converted it, say): whatever has the new
+        // file's name isn't this pass's to remove.
+        guard let placed = await io.value({
+            RecordingFile.place(made.partial, at: aac, madeFrom: wav, stamp: made.stamp)
+        }) else { return false }
+        guard isUnchanged(), let index = entries.firstIndex(where: { $0.id == id }) else {
+            // Deleted or taken up meanwhile: the WAV stays its recording, and the new file goes, unless something
+            // took it up or saved over it since.
+            if !entries.contains(where: { $0.audioFileName == aacName }) {
+                io.perform { RecordingFile.remove(aac, ifStill: placed) }
+            }
             return false
         }
         entries[index].audioFileName = aacName

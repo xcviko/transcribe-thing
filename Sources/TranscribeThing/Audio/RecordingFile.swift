@@ -94,17 +94,22 @@ enum RecordingFile {
 
     /// Encodes the recording at `source` (either format) into the .m4a `output` with `encode` and reads that back: it
     /// has to be as long as the source, give or take `lengthTolerance`. On any failure `output` is removed, and this
-    /// throws.
+    /// throws. The source's samples are let go before the output's are read, so an hour's recording is never held
+    /// twice.
     static func compress(_ source: URL, into output: URL, encode: Encoder = aac) throws -> Check {
         do {
-            guard let samples = read(source), !samples.isEmpty else { throw CompressError.unreadableSource }
-            try encode(samples, output)
-            guard let decoded = read(output) else { throw CompressError.unreadableOutput }
-            guard abs(decoded.count - samples.count) <= Int(lengthTolerance * Recording.sampleRate) else {
-                throw CompressError.lengthMismatch(source: samples.count, output: decoded.count)
+            let (count, level) = try autoreleasepool { () throws -> (Int, Float) in
+                guard let samples = read(source), !samples.isEmpty else { throw CompressError.unreadableSource }
+                try encode(samples, output)
+                return (samples.count, rms(samples))
             }
-            return Check(sourceSamples: samples.count, outputSamples: decoded.count,
-                         sourceRMS: rms(samples), outputRMS: rms(decoded))
+            guard let decoded = autoreleasepool(invoking: { read(output) }) else {
+                throw CompressError.unreadableOutput
+            }
+            guard abs(decoded.count - count) <= Int(lengthTolerance * Recording.sampleRate) else {
+                throw CompressError.lengthMismatch(source: count, output: decoded.count)
+            }
+            return Check(sourceSamples: count, outputSamples: decoded.count, sourceRMS: level, outputRMS: rms(decoded))
         } catch {
             try? FileManager.default.removeItem(at: output)
             throw error
@@ -140,19 +145,25 @@ enum RecordingFile {
         }
     }
 
-    /// Moves a partial file `compressLegacy` made to `url` when the WAV it came from still has `stamp`; false, and
-    /// the partial file removed, otherwise.
-    static func place(_ partial: URL, at url: URL, madeFrom wav: URL, stamp: Stamp) -> Bool {
+    /// Moves a partial file `compressLegacy` made to `url` when the WAV it came from still has `stamp`, and returns
+    /// the moved file's stamp (`remove(_:ifStill:)`); nil, and the partial file removed, otherwise.
+    static func place(_ partial: URL, at url: URL, madeFrom wav: URL, stamp: Stamp) -> Stamp? {
         defer { try? FileManager.default.removeItem(at: partial) }
-        guard Stamp(wav) == stamp else { return false }
+        guard Stamp(wav) == stamp else { return nil }
         do {
             _ = try FileManager.default.replaceItemAt(url, withItemAt: partial)
-            return true
+            return Stamp(url)
         } catch {
             let reason = error.localizedDescription
             Log.app.error("Couldn't move a compressed recording into place: \(reason, privacy: .public)")
-            return false
+            return nil
         }
+    }
+
+    /// Removes the file at `url` if it is still the one `stamp` was taken of: not one saved over it since.
+    static func remove(_ url: URL, ifStill stamp: Stamp) {
+        guard Stamp(url) == stamp else { return }
+        try? FileManager.default.removeItem(at: url)
     }
 
     /// Removes the partial files an interrupted save or conversion left in `directory`.

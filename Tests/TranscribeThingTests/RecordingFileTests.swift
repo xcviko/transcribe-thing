@@ -164,17 +164,25 @@ private final class Calls: Sendable {
         let first = try #require(RecordingFile.compressLegacy(wav))
         #expect(RecordingFile.isPartial(first.partial.lastPathComponent))
         try WAVEncoder.pcm16(speechLike(seconds: 2)).write(to: wav)
-        #expect(!RecordingFile.place(first.partial, at: aac, madeFrom: wav, stamp: first.stamp), "the WAV changed")
+        #expect(RecordingFile.place(first.partial, at: aac, madeFrom: wav, stamp: first.stamp) == nil, "the WAV changed")
         #expect(files(in: folder) == ["rec.wav"])
 
         let second = try #require(RecordingFile.compressLegacy(wav))
-        #expect(RecordingFile.place(second.partial, at: aac, madeFrom: wav, stamp: second.stamp))
+        let placed = try #require(RecordingFile.place(second.partial, at: aac, madeFrom: wav, stamp: second.stamp))
+        #expect(placed == RecordingFile.Stamp(aac))
         #expect(files(in: folder) == ["rec.wav", "rec.m4a"], "the WAV goes only once history.json names the new file")
         #expect(RecordingFile.read(aac)?.count == Int(2 * rate))
 
         #expect(RecordingFile.compressLegacy(folder.appendingPathComponent("gone.wav")) == nil)
         #expect(RecordingFile.compressLegacy(wav) { _, _ in throw EncoderFailed() } == nil)
         #expect(files(in: folder) == ["rec.wav", "rec.m4a"], "no partial file left")
+
+        // A placed file that has to go again goes only while nothing has been saved over it.
+        #expect(RecordingFile.save(speechLike(seconds: 3), as: aac) == aac)
+        RecordingFile.remove(aac, ifStill: placed)
+        #expect(RecordingFile.read(aac)?.count == Int(3 * rate), "saved over since")
+        RecordingFile.remove(aac, ifStill: try #require(RecordingFile.Stamp(aac)))
+        #expect(files(in: folder).isEmpty)
     }
 
     @Test func namesTellTheFormatsApart() {
@@ -269,6 +277,10 @@ private final class Calls: Sendable {
         let recording = Recording(samples: speechLike(seconds: 1))
         let name = try #require(s.history.saveAudio(recording))
         s.history.upsert(entry(recording.id, file: name))
+        // Read back (Retry, Undo, Home) before the entry hears of the WAV, a main-actor hop after the save.
+        let early = try #require(s.load(recording.id))
+        #expect(s.history.entry(id: recording.id)?.audioFileName == name)
+        #expect(early.samples.count == recording.samples.count && early.aacFile == nil)
         let wav = "\(recording.id.uuidString).wav"
         try await waitUntil { s.history.entry(id: recording.id)?.audioFileName == wav }
         await s.settle()
@@ -470,6 +482,66 @@ private final class Calls: Sendable {
         await s.settle()
         #expect(s.history.entry(id: busy.entry.id) == busy.entry)
         #expect(s.files == [busy.entry.audioFileName!, "\(free.entry.id.uuidString).m4a"])
+    }
+
+    /// Taken up just as its copy took the recording's name, and saved again under that name before the conversion
+    /// looked a second time: the save stays, only the copy would have gone.
+    @Test func aSaveOverAPlacedCopyStays() async throws {
+        let s = try await store()
+        defer { try? FileManager.default.removeItem(at: s.paths.root) }
+        let old = try legacy(s)
+        let aac = "\(old.entry.id.uuidString).m4a"
+        let again = Recording(id: old.entry.id, samples: speechLike(seconds: 3))
+        var saved: String?
+        s.history.isInUse = { _ in
+            if saved == nil && s.exists(aac) { saved = s.history.saveAudio(again) }
+            return saved != nil
+        }
+        await s.history.compressLegacyRecordings()
+        #expect(s.history.compressedRecordings == 0)
+        var updated = old.entry
+        updated.audioFileName = try #require(saved)
+        s.history.upsert(updated)
+        await s.settle()
+        #expect(s.files == [aac], "the WAV went with the save")
+        #expect(s.load(old.entry.id)?.samples.count == again.samples.count)
+    }
+
+    /// Two copies of the app on one Recordings folder (an installed one and a bare build) convert the same WAV. The
+    /// one that finds the WAV gone once its copy is made leaves the .m4a the other one placed: nothing else is left of
+    /// the recording.
+    @Test func aConversionThatLosesTheRaceLeavesTheWinnersFile() async throws {
+        let paths = AppPaths.temporary()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let settings = AppSettings.inMemory()
+        let first = try await store(at: paths, settings: settings)
+        let old = try legacy(first)
+        first.history.flush()
+        let second = try await store(at: paths, settings: settings)
+        #expect(second.history.entry(id: old.entry.id)?.audioFileName == old.entry.audioFileName)
+
+        // The second copy is encoding the WAV when the first one converts it and removes it.
+        let gate = DispatchSemaphore(value: 0)
+        defer { gate.signal() }
+        let encoding = OSAllocatedUnfairLock(initialState: false)
+        second.history.encodeOverride = { samples, url in
+            encoding.withLock { $0 = true }
+            gate.wait()
+            try RecordingFile.aac(samples, url)
+        }
+        let slower = Task { await second.history.compressLegacyRecordings() }
+        try await waitUntil { encoding.withLock { $0 } }
+        await first.history.compressLegacyRecordings()
+        await first.settle()
+        let aac = "\(old.entry.id.uuidString).m4a"
+        #expect(first.files == [aac])
+
+        gate.signal()
+        await slower.value
+        await second.settle()
+        #expect(second.files == [aac])
+        #expect(second.history.entry(id: old.entry.id)?.audioFileName == old.entry.audioFileName, "it names the WAV")
+        #expect(second.load(old.entry.id)?.samples.count == old.samples.count, "and reads the .m4a in its place")
     }
 
     /// Home work on a recording keeps its WAV from being compressed under it (`DictationController.isInFlight`).

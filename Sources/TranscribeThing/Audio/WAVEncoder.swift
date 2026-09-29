@@ -102,13 +102,22 @@ enum WAVEncoder {
         guard frameBytes > 0 else { return nil }
         let frames = range.count / frameBytes
         if format.channels == 1, format.bitsPerSample == 16, !format.isFloat {
+            // Converted a chunk at a time and scaled in place: an hour's recording is never held twice.
             var mono = [Float](repeating: 0, count: frames)
             let source = raw.baseAddress!.advanced(by: range.lowerBound)
-            var pcm = [Int16](repeating: 0, count: frames)
-            pcm.withUnsafeMutableBytes { $0.copyMemory(from: UnsafeRawBufferPointer(start: source, count: frames * 2)) }
-            vDSP_vflt16(pcm, 1, &mono, 1, vDSP_Length(frames))
+            var pcm = [Int16](repeating: 0, count: max(1, min(frames, 65_536)))
             var scale: Float = 1 / 32_768
-            vDSP_vsmul(mono, 1, &scale, &mono, 1, vDSP_Length(frames))
+            mono.withUnsafeMutableBufferPointer { buffer in
+                guard let out = buffer.baseAddress else { return }
+                for start in stride(from: 0, to: frames, by: pcm.count) {
+                    let count = min(pcm.count, frames - start)
+                    pcm.withUnsafeMutableBytes {
+                        $0.copyMemory(from: UnsafeRawBufferPointer(start: source + start * 2, count: count * 2))
+                    }
+                    vDSP_vflt16(pcm, 1, out + start, 1, vDSP_Length(count))
+                }
+                vDSP_vsmul(out, 1, &scale, out, 1, vDSP_Length(frames))
+            }
             return mono
         }
         var mono = [Float](repeating: 0, count: frames)
