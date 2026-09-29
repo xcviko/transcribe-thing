@@ -1187,6 +1187,31 @@ private final class EventLog: @unchecked Sendable {
         env.devices.onDevicesChanged?()
         #expect(env.settings.microphoneUID == nil)
     }
+
+    /// AirPods put away, then back: Automatic in between, the AirPods picked again after, as a USB mic re-plugged or
+    /// a device that only flickered away would be.
+    @Test @MainActor func aVanishedPickIsPickedAgainWhenItsBack() {
+        let env = AppEnvironment.preview()
+        let builtIn = AudioInputDevice(id: "BuiltInMicrophoneDevice", name: "MacBook Pro Microphone", transport: .builtIn,
+                                       isAvailable: true)
+        let airPods = AudioInputDevice(id: "preview-airpods", name: "AirPods Pro", transport: .bluetooth, isAvailable: true)
+        var flickering = airPods
+        flickering.isAvailable = false
+        env.settings.microphoneUID = airPods.id
+        env.devices.previewScan(devices: [builtIn], defaultUID: builtIn.id)
+        #expect(env.settings.microphoneUID == nil, "Automatic while they're away")
+        env.devices.previewScan(devices: [builtIn, flickering], defaultUID: builtIn.id)
+        #expect(env.settings.microphoneUID == nil, "listed but not able to record yet")
+        env.devices.previewScan(devices: [builtIn, airPods], defaultUID: airPods.id)
+        #expect(env.settings.microphoneUID == airPods.id, "back, and picked again")
+
+        // A pick made meanwhile, Automatic included, is the user's: the old one stays forgotten.
+        env.devices.previewScan(devices: [builtIn], defaultUID: builtIn.id)
+        #expect(env.settings.microphoneUID == nil)
+        env.settings.microphoneUID = nil
+        env.devices.previewScan(devices: [builtIn, airPods], defaultUID: airPods.id)
+        #expect(env.settings.microphoneUID == nil)
+    }
 }
 
 @Suite struct AudioDeviceEnumerationTests {

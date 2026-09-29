@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 struct TranscriptResult: Sendable, Equatable {
     /// Trimmed. Empty when the engine heard no speech: silence, not a failure.
@@ -193,8 +194,10 @@ final class TranscriptionService {
     /// Tidies `transcript` (written by `source`) with the clean-up model `model`, following
     /// `CleanupModel.systemPrompt` at that model's fixed reasoning level (`CleanupModel.route`). The result is a
     /// version of kind `.cleanup(of: source, by: model)`; its text is empty when the model returned nothing. Gives up
-    /// after `timeout` (by default `CleanupModel.timeout(forCharacterCount:)`) with `AppError.timeout`. Throws
-    /// `AppError` only, or `CancellationError`. A retired model never runs.
+    /// with `AppError.timeout` when the answer hasn't started within `timeout` (by default
+    /// `CleanupModel.timeout(forCharacterCount:)`); once it streams, it may take as long as it keeps coming, and the
+    /// same `timeout` without a byte ends it. Throws `AppError` only, or `CancellationError`. A retired model never
+    /// runs.
     /// `route` sends it to any other model or level instead (`EngineCLI --cleanup-bench`, `--clean-up-effort`), and
     /// `prompt` replaces the fixed prompt (`--clean-up-prompt`); the app never passes either. `progress` hears how
     /// much of the answer has streamed in.
@@ -214,10 +217,14 @@ final class TranscriptionService {
         let limit = timeout ?? CleanupModel.timeout(forCharacterCount: transcript.count)
         let client = client
         let started = ContinuousClock.now
+        let answer = AnswerStart()
         do {
-            let cloud = try await Self.withTimeout(limit, source: source) {
+            let cloud = try await Self.untilAnswerStarts(limit, answer, source: source) {
                 try await client.cleanUp(transcript: transcript, route: route, systemPrompt: prompt, apiKey: key,
-                                         timeout: limit, progress: progress)
+                                         timeout: limit) { streamed in
+                    if streamed.outputCharacters > 0 || streamed.reasoningCharacters > 0 { answer.mark() }
+                    progress?(streamed)
+                }
             }
             account.noteCloudSuccess()
             var result = TranscriptResult(text: cloud.text, engine: source,
@@ -245,9 +252,11 @@ final class TranscriptionService {
         }
     }
 
-    /// `work`, or `AppError.timeout(source)` once `seconds` pass (the request is cancelled then).
-    private static func withTimeout<T: Sendable>(_ seconds: TimeInterval, source: EngineID,
-                                                 _ work: @escaping @Sendable () async throws -> T) async throws -> T {
+    /// `work`, or `AppError.timeout(source)` when `answer` hasn't started once `seconds` pass (the request is cancelled
+    /// then). An answer that has started runs to its end: a long clean-up writes for minutes, and cutting it off
+    /// would pay for the tokens and paste the original anyway.
+    private static func untilAnswerStarts<T: Sendable>(_ seconds: TimeInterval, _ answer: AnswerStart, source: EngineID,
+                                                       _ work: @escaping @Sendable () async throws -> T) async throws -> T {
         try await withThrowingTaskGroup(of: T?.self) { group in
             group.addTask { try await work() }
             group.addTask {
@@ -255,8 +264,11 @@ final class TranscriptionService {
                 return nil
             }
             defer { group.cancelAll() }
-            guard let first = try await group.next(), let value = first else { throw AppError.timeout(source) }
-            return value
+            while let next = try await group.next() {
+                if let value = next { return value }
+                guard answer.hasStarted else { throw AppError.timeout(source) }
+            }
+            throw AppError.timeout(source)
         }
     }
 
@@ -298,4 +310,14 @@ final class TranscriptionService {
         let parts = duration.components
         return TimeInterval(parts.seconds) + TimeInterval(parts.attoseconds) / 1e18
     }
+}
+
+/// Whether a streamed answer has shown its first character: set from the stream's thread, read by the deadline that
+/// waits for it (`TranscriptionService.untilAnswerStarts`).
+final class AnswerStart: Sendable {
+    private let started = OSAllocatedUnfairLock(initialState: false)
+
+    var hasStarted: Bool { started.withLock { $0 } }
+
+    func mark() { started.withLock { $0 = true } }
 }

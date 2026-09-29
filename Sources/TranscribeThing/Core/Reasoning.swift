@@ -114,8 +114,9 @@ enum CleanupModel: String, CaseIterable, Codable, Sendable {
     /// drops fillers itself.
     static func canClean(_ engine: EngineID) -> Bool { engine.isParakeet }
 
-    /// How long a dictation waits for its clean-up before the original is pasted: 12 s, plus time to write out the
-    /// transcript, about 1 s per 200 characters, with no cap: an hour's 60,000 characters get 312 s.
+    /// How long a dictation waits for its clean-up to start answering before the original is pasted, and how long
+    /// its stream may then go without a byte: 12 s, plus about 1 s per 200 characters of transcript, with no cap (an
+    /// hour's 60,000 characters get 312 s). An answer that streams is never cut off for taking long.
     static func timeout(forCharacterCount count: Int) -> TimeInterval {
         12 + Double(max(0, count)) / 200
     }

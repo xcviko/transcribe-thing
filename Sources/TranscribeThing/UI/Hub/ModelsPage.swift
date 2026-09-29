@@ -26,7 +26,8 @@ struct ModelsPage: View {
             HubPage("Models", subtitle: "Every dictation starts on your main model. Switch to another while you talk.") {
                 HubGroup("Your models",
                          footer: "Drag to change the order. Switch model steps through the ones that are on, starting from your main model.") {
-                    SwitchModelLineView(lineup: settings.lineup, binding: settings.shortcuts[.switchModel]) {
+                    SwitchModelLineView(lineup: settings.lineup, binding: settings.shortcuts[.switchModel],
+                                        blocked: settings.lineup.steps.filter { !hub.readiness(of: $0).isUsable }) {
                         hub.show(.shortcuts)
                     }
                     SettingsGroup {
@@ -52,6 +53,12 @@ struct ModelsPage: View {
                 }
             }
         }
+        // A row's drag let go anywhere else on the page (or canceled, then the page left) ends here too.
+        .onDrop(of: [.plainText], isTargeted: nil) { _ in
+            dragged = nil
+            return false
+        }
+        .onDisappear { dragged = nil }
         .task(id: models.diskUsageBytes) {
             freeBytes = hub.paths.freeDiskBytes()
         }
@@ -71,18 +78,20 @@ struct ModelsPage: View {
 
     // MARK: Main model
 
-    /// Makes `choice` the main model. One the OpenRouter key can't pay for leads to the key instead; one on Parakeet
-    /// on this Mac starts its download, or its load, so the next dictation doesn't wait for it.
+    /// Makes `choice` the main model. One the OpenRouter key can't pay for leads to the key instead, even while it
+    /// also waits for Parakeet's download; one on Parakeet on this Mac starts its download, or its load, so the next
+    /// dictation doesn't wait for it.
     private func chooseMain(_ choice: ModelChoice, proxy: ScrollViewProxy) {
         guard settings.lineup.main != choice else { return }
         let parakeet = settings.parakeetEngine
-        switch hub.readiness(of: choice) {
-        case .needsKey, .keyProblem:
-            // Only a model that goes through OpenRouter reads as the key's.
-            focusKey(proxy)
-            return
-        case .ready, .warming, .needsDownload, .failed:
-            break
+        if choice.needsOpenRouter(parakeet: parakeet) {
+            switch hub.readiness(of: .geminiFlash) {
+            case .needsKey, .keyProblem:
+                focusKey(proxy)
+                return
+            case .ready, .warming, .needsDownload, .failed:
+                break
+            }
         }
         withAnimation(Theme.Motion.snappy) { settings.lineup.main = choice }
         guard choice.usesLocalParakeet(parakeet: parakeet) else { return }
@@ -147,10 +156,13 @@ enum ModelsAnchor: Hashable {
 // MARK: - Your models
 
 /// What the Switch model shortcut does, with the user's own binding as key caps and the models it steps through
-/// ("Parakeet → Clean-up → Gemini", the main model first); or what's missing for it to work.
+/// ("Parakeet → Clean-up → Gemini", the main model first, a step that can't run now dimmed); or what's missing for it
+/// to work.
 private struct SwitchModelLineView: View {
     var lineup: ModelLineup
     var binding: Shortcut?
+    /// Steps Switch model skips for now (no usable key, not downloaded): their rows below say why.
+    var blocked: [ModelChoice]
     var openShortcuts: () -> Void
 
     var body: some View {
@@ -176,7 +188,7 @@ private struct SwitchModelLineView: View {
                     }
                 }
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel(SwitchModelLine.explanation(status, lineup: lineup))
+                .accessibilityLabel(SwitchModelLine.explanation(status, lineup: lineup, blocked: blocked))
             case .alone, .unbound:
                 Text(SwitchModelLine.explanation(status, lineup: lineup))
                     .fixedSize(horizontal: false, vertical: true)
@@ -194,7 +206,7 @@ private struct SwitchModelLineView: View {
         .animation(Theme.Motion.snappy, value: lineup)
     }
 
-    /// The cycle by short names, the main model's in ink.
+    /// The cycle by short names, the main model's in ink, a blocked step's faint.
     private var chain: some View {
         HStack(spacing: 5) {
             ForEach(Array(lineup.cycle.enumerated()), id: \.element) { index, choice in
@@ -205,7 +217,8 @@ private struct SwitchModelLineView: View {
                 }
                 Text(choice.shortName)
                     .fontWeight(index == 0 ? .semibold : nil)
-                    .foregroundStyle(index == 0 ? Color.ink : Color.inkSecondary)
+                    .foregroundStyle(index == 0 ? Color.ink : blocked.contains(choice) ? Color.inkTertiary.opacity(0.7)
+                                     : Color.inkSecondary)
             }
         }
         .fixedSize()
@@ -373,7 +386,11 @@ private struct LineupRow: View {
         case .keyProblem:
             Button("Update Key", action: focusKey)
                 .buttonStyle(SecondaryButtonStyle(size: .small))
-        case .ready, .warming, .failed:
+        case .failed:
+            // Only Parakeet on this Mac fails this way: the same Retry as under Where Parakeet runs.
+            Button("Retry") { models.download(.parakeet) }
+                .buttonStyle(SecondaryButtonStyle(size: .small))
+        case .ready, .warming:
             EmptyView()
         }
     }
@@ -401,11 +418,17 @@ private struct LineupRow: View {
     }
 }
 
-/// Live reordering: a dragged row takes the place of the row it enters, and the others make room.
+/// Live reordering: a dragged row takes the place of the row it enters, and the others make room. Only a row's own
+/// drag counts: `dragged` is set by its handle and cleared by any drop on the page, so text dragged in from elsewhere
+/// never moves a row.
 private struct LineupDropDelegate: DropDelegate {
     var target: ModelChoice
     @Binding var dragged: ModelChoice?
     var settings: AppSettings
+
+    func validateDrop(info: DropInfo) -> Bool {
+        dragged != nil
+    }
 
     func dropEntered(info: DropInfo) {
         guard let dragged, dragged != target, let index = settings.lineup.order.firstIndex(of: target) else { return }
@@ -413,12 +436,13 @@ private struct LineupDropDelegate: DropDelegate {
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
-        DropProposal(operation: .move)
+        DropProposal(operation: dragged == nil ? .forbidden : .move)
     }
 
     func performDrop(info: DropInfo) -> Bool {
+        let wasOurs = dragged != nil
         dragged = nil
-        return true
+        return wasOurs
     }
 }
 
@@ -486,7 +510,8 @@ private struct ModelRow: View {
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
             RadioDot(isOn: isSelected)
-            EngineIcon(engine: engine, size: 36)
+            // Parakeet either way, in Parakeet's plain color: the glyph and the title say where.
+            ModelChoiceIcon(choice: .parakeet, parakeet: engine, size: 36)
             VStack(alignment: .leading, spacing: 3) {
                 ViewThatFits(in: .horizontal) {
                     titleLine(badges: badges)

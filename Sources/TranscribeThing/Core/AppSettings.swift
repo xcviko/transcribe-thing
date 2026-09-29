@@ -48,8 +48,17 @@ final class AppSettings {
     var soundsEnabled: Bool = true { didSet { store.set(soundsEnabled, .soundsEnabled) } }
     /// The only mic dictation opens while it is connected. nil = Automatic: the system default input (Bluetooth
     /// included) at the moment a dictation starts. A picked mic that goes away falls back to Automatic
-    /// (`InputDevicePolicy.keepsPick`).
-    var microphoneUID: String? = nil { didSet { store.set(microphoneUID, .microphoneUID) } }
+    /// (`InputDevicePolicy.keepsPick`), and is picked again when it's back (`microphoneUIDBeforeFallback`).
+    var microphoneUID: String? = nil {
+        didSet {
+            store.set(microphoneUID, .microphoneUID)
+            microphoneUIDBeforeFallback = nil
+        }
+    }
+    /// The mic that was picked when it went away and Automatic took over (`AppEnvironment`): picked again once it can
+    /// record, unless the user has picked a mic (Automatic included) since, which forgets it. Not stored: a relaunch
+    /// keeps Automatic.
+    @ObservationIgnored var microphoneUIDBeforeFallback: String?
     var showDockIcon: Bool = false { didSet { store.set(showDockIcon, .showDockIcon) } }
     /// Off by default. Stored only once the user flips it (Shortcuts), so an install that never did gets the
     /// default of the build it runs.

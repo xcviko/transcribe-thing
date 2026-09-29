@@ -588,15 +588,15 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         #expect(asked == ["gen-1"])
     }
 
-    @Test func aProviderFromTheResponseNeedsNoLookup() async throws {
+    @Test func aResponseThatSaidItAllNeedsNoLookup() async throws {
         let h = DictationControllerTests.make()
         h.controller.providerLookupOverride = { _ in
-            Issue.record("no lookup when the response named the provider")
+            Issue.record("no lookup when the response named the provider and the cost")
             return nil
         }
         h.controller.transcribeOverride = { _, engine in
-            TranscriptResult(text: "Hallo", engine: engine, processingTime: 0.4, provider: "Together",
-                             generationID: "gen-1")
+            TranscriptResult(text: "Hallo", engine: engine, processingTime: 0.4, costUSD: 0.00001,
+                             provider: "Together", generationID: "gen-1")
         }
         h.controller.insertOverride = { _, _ in .pasted }
         let recording = DictationControllerTests.recording()

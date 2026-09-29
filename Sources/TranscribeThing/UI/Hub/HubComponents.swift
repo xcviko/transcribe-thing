@@ -401,8 +401,8 @@ struct CountBadge: View {
     }
 }
 
-/// The engine mark on history rows: P, F, Pro. Cloud Parakeet shares the local letter, so it carries a small
-/// cloud as well as the cloud tint.
+/// The engine mark on history rows: P, F, Pro, in the model's color (`ModelChoice.tint`, as the pill wears it). Cloud
+/// Parakeet shares the local letter and color, so it carries a small cloud; a clean-up, a wand after the letter.
 struct EngineGlyph: View {
     var engine: EngineID
     /// The OpenRouter provider that served the transcript, for the tooltip.
@@ -413,7 +413,9 @@ struct EngineGlyph: View {
     var details: String?
 
     var body: some View {
-        let tint: Color = engine.isLocal ? .accent : HubPalette.apricotInk
+        // Clean-up's warm is deepened for text this small, as the key card's is.
+        let choice = ModelChoice(engine: engine, cleansUp: cleanupModel != nil)
+        let tint = choice == .cleanup ? HubPalette.apricotInk : choice.tint
         HStack(spacing: 1.5) {
             if engine.cloudAPI == .transcriptions {
                 Image(systemName: "cloud.fill")

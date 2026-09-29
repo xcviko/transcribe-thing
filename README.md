@@ -135,9 +135,9 @@ The zip's name (`transcribe-thing-<version>.zip`) and the tag (`v<version>`) are
 Every dictation keeps its audio as long as it stays in History, so History can send any of them to another model
 (Versions → Transcribe With, say Gemini after a long dictation went to Parakeet) and retry a failed one. A deleted
 entry takes its recording along, and General → History → Auto-delete history (Never by default) deletes entries older
-than 1, 7, 30 or 90 days, recordings included. Every transcript a recording gets stays in its Versions menu with how it
-was made (model, reasoning level, tokens, cost, time), each model at most once, and switching between them needs no
-audio.
+than 1, 7, 30 or 90 days, recordings included (a period that would delete some at once asks first). Every transcript a
+recording gets stays in its Versions menu with how it was made (model, reasoning level, tokens, cost, time), each
+model at most once, and switching between them needs no audio.
 
 ## Shortcuts
 

@@ -1089,6 +1089,23 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         #expect(lineup.cycle == [.gemini, .parakeet])
     }
 
+    /// A model switched off, then main for a while, is in the cycle after: it was in it all the while it was main.
+    @Test func aModelThatStopsBeingMainIsSwitchedOn() {
+        var lineup = ModelLineup.default
+        lineup.setSwitchable(.gemini, false)
+        lineup.main = .gemini
+        lineup.main = .parakeet
+        #expect(lineup.isSwitchable(.gemini))
+        #expect(lineup.cycle == [.parakeet, .cleanup, .gemini])
+    }
+
+    @Test func aSentenceListsModelsByShortName() {
+        #expect(ModelChoice.sentenceList([]) == ("", false))
+        #expect(ModelChoice.sentenceList([.gemini]) == ("Gemini", false))
+        #expect(ModelChoice.sentenceList([.cleanup, .gemini]) == ("Clean-up and Gemini", true))
+        #expect(ModelChoice.sentenceList([.parakeet, .cleanup, .gemini]) == ("Parakeet, Clean-up and Gemini", true))
+    }
+
     @Test func movingAModelReordersTheCycle() {
         var lineup = ModelLineup.default
         lineup.move(.gemini, to: 0)

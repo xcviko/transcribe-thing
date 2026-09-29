@@ -328,6 +328,34 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         #expect(StubURLProtocol.registry.requests(for: keyHost).isEmpty)
     }
 
+    /// A long clean-up writes for longer than its deadline: once its answer streams it runs to its end, instead of
+    /// being paid for and thrown away.
+    @Test func aCleanUpThatKeepsWritingIsNeverCutOff() async throws {
+        let words = ["Это ", "длинный ", "текст, ", "который ", "пишется ", "долго."]
+        let sse = SSE.stream(words.map { SSE.chunk(id: "gen-long", content: $0) }
+            + [SSE.chunk(id: "gen-long", finish: "stop")])
+        let (service, _) = makeService([.stream(sse, pieceInterval: 0.1)])
+        let started = ContinuousClock.now
+        let result = try await service.cleanUp("raw", of: .parakeet, timeout: 0.3)
+        #expect(result.text == words.joined())
+        #expect(started.duration(to: .now) > .milliseconds(500), "it wrote well past the deadline")
+    }
+
+    /// An answer that never starts gives up at the deadline (or its stall timeout, the same value), and the dictation
+    /// pastes the original.
+    @Test func aCleanUpThatNeverStartsGivesUp() async throws {
+        let (service, _) = makeService([.stream(": OPENROUTER PROCESSING\n\n", staysOpen: true)])
+        let started = ContinuousClock.now
+        let error = await #expect(throws: AppError.self) {
+            try await service.cleanUp("raw", of: .parakeet, timeout: 0.3)
+        }
+        guard case .timeout? = error else {
+            Issue.record("expected a timeout, got \(String(describing: error))")
+            return
+        }
+        #expect(started.duration(to: .now) < .seconds(10), "never left waiting")
+    }
+
     @Test func aCutOffAnswerIsAFailureNeverText() async throws {
         let (service, _) = makeService([chatReply("Half a sen", finish: "length")])
         await #expect(throws: AppError.openRouterTruncated("Half a sen")) {
@@ -646,5 +674,30 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         #expect(meta.provider == "Together" && meta.latency == 0.4 && meta.generationTime == 0.35)
         #expect(meta.costUSD == 0.00001 && meta.generationID == "gen-1")
         #expect(asked == ["gen-1"])
+    }
+
+    /// A streamed answer names its provider in every chunk, but its timing only in OpenRouter's metadata: when that
+    /// never came, the generation record fills it in, leaving what the stream said as it was.
+    @Test func aStreamedVersionWithoutItsTimingLearnsItLater() async throws {
+        let h = H.make()
+        var asked: [String] = []
+        h.controller.generationLookupOverride = { id in
+            asked.append(id)
+            return GenerationDetails(provider: "Google AI Studio (other)", costUSD: 9, latency: 3.2, generationTime: 2.9)
+        }
+        h.controller.transcribeOverride = { _, engine in
+            var result = TranscriptResult(text: "Hallo", engine: engine, processingTime: 3.4, costUSD: 0.004,
+                                          provider: "Google AI Studio", generationID: "gen-s")
+            result.usage = TokenUsage(promptTokens: 900, completionTokens: 400, reasoningTokens: 380)
+            return result
+        }
+        h.controller.insertOverride = { _, _ in .pasted }
+        let r = H.recording()
+        h.controller.enqueue(r, engine: .geminiFlash, targetPID: nil)
+        try await waitUntil { h.history.entry(id: r.id)?.currentVersion?.metadata.generationTime != nil }
+        let meta = try #require(h.history.entry(id: r.id)?.currentVersion?.metadata)
+        #expect(meta.generationTime == 2.9 && meta.latency == 3.2)
+        #expect(meta.provider == "Google AI Studio" && meta.costUSD == 0.004, "what the stream said stays")
+        #expect(asked == ["gen-s"])
     }
 }

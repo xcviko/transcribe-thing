@@ -828,59 +828,58 @@ struct StageBackground: View {
     }
 }
 
-/// Engine mark used on model cards and history rows.
+/// Where an engine runs, by color: this Mac violet, the cloud warm. Onboarding's choice of where Parakeet runs; in
+/// the Hub a model wears its own color (`ModelChoiceIcon`).
 struct EngineIcon: View {
     var engine: EngineID
     var size: CGFloat = 32
 
     var body: some View {
-        let tint: Color = engine.isLocal ? .accent : .warm
-        Image(systemName: engine.symbolName)
-            .font(.system(size: size * 0.44, weight: .semibold))
-            .foregroundStyle(tint)
-            .frame(width: size, height: size)
-            .background {
-                RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
-                    .fill(tint.opacity(0.13))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
-                            .strokeBorder(tint.opacity(0.18), lineWidth: 0.5)
-                    }
-            }
-            .accessibilityHidden(true)
+        ModelTile(symbol: engine.symbolName, tint: engine.isLocal ? .accent : .warm, size: size)
     }
 }
 
-/// Clean-up's mark: a warm wand, on the Models page, the sidebar and the pill's clean-up chip.
-struct CleanupIcon: View {
-    var size: CGFloat
-
-    var body: some View {
-        let shape = RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
-        Image(systemName: ModelChoice.cleanup.symbolName(parakeet: .parakeet))
-            .font(.system(size: size * 0.44, weight: .semibold))
-            .foregroundStyle(Color.warm)
-            .frame(width: size, height: size)
-            .background {
-                shape.fill(Color.warm.opacity(0.13))
-                    .overlay { shape.strokeBorder(Color.warm.opacity(0.18), lineWidth: 0.5) }
-            }
-            .accessibilityHidden(true)
-    }
-}
-
-/// A model's mark: its engine's (Parakeet where `parakeet` runs it, Gemini), or clean-up's wand.
+/// A model's mark: its symbol (Parakeet's bolt where `parakeet` runs it, clean-up's wand, Gemini's sparkles) in the
+/// model's own color (`ModelChoice.tint`), so a row in Models, the sidebar chip and the pill agree.
 struct ModelChoiceIcon: View {
     var choice: ModelChoice
     var parakeet: EngineID
     var size: CGFloat = 32
 
     var body: some View {
-        if choice.cleansUp {
-            CleanupIcon(size: size)
-        } else {
-            EngineIcon(engine: choice.engine(parakeet: parakeet), size: size)
+        ModelTile(symbol: choice.symbolName(parakeet: parakeet), tint: choice.tint, size: size)
+    }
+}
+
+extension ModelChoice {
+    /// The model's color in the Hub, the one the pill wears (`PillPalette.accent(for:)`): Gemini violet, clean-up
+    /// warm, and Parakeet, the plain pill, plain ink wherever it runs.
+    var tint: Color {
+        switch self {
+        case .parakeet: .inkSecondary
+        case .cleanup: .warm
+        case .gemini: .accent
         }
+    }
+}
+
+/// A symbol on a tile of its tint: `EngineIcon`, `ModelChoiceIcon`.
+private struct ModelTile: View {
+    var symbol: String
+    var tint: Color
+    var size: CGFloat
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
+        Image(systemName: symbol)
+            .font(.system(size: size * 0.44, weight: .semibold))
+            .foregroundStyle(tint)
+            .frame(width: size, height: size)
+            .background {
+                shape.fill(tint.opacity(0.13))
+                    .overlay { shape.strokeBorder(tint.opacity(0.18), lineWidth: 0.5) }
+            }
+            .accessibilityHidden(true)
     }
 }
 
@@ -956,6 +955,8 @@ struct ModelStatusText: View {
         }
     }
 
+    /// One key state, one color, wherever it shows: a missing key or spent credit is a warning to act on (as the key
+    /// card's triangle), a rejected key an error.
     static func describe(_ status: KeyStatus) -> (text: String, tone: StatusTone) {
         switch status {
         case .missing:
@@ -969,7 +970,7 @@ struct ModelStatusText: View {
         case .invalid:
             return ("Key rejected", .negative)
         case .noCredit:
-            return (status.isKeyLimitReached ? "Key limit reached" : "Out of credit", .negative)
+            return (status.isKeyLimitReached ? "Key limit reached" : "Out of credit", .warning)
         case .offline:
             return ("Offline · will check again", .warning)
         case .failed:

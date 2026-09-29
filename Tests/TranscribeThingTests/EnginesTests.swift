@@ -298,25 +298,27 @@ final class StubURLProtocol: URLProtocol {
         var body = ""
         var error: URLError.Code?
         /// A streamed body: the response, then each piece with its own load, then the end (unless `staysOpen`).
-        var chunks: [String]?
+        var chunks: [Data]?
         /// The stream never ends by itself: only cancelling the request does.
         var staysOpen = false
+        /// Seconds between one piece and the next (a model writing as it goes); 0 sends them all at once.
+        var pieceInterval: TimeInterval = 0
 
-        /// `sse` streamed as OpenRouter does, one event per piece, or in pieces of `pieceLength` characters that cut
-        /// through lines.
+        /// `sse` streamed as OpenRouter does, one event per piece, or in pieces of `pieceLength` bytes that cut through
+        /// lines and characters alike.
         static func stream(_ sse: String, headers: [String: String] = [:], pieceLength: Int? = nil,
-                           staysOpen: Bool = false) -> Reply {
-            let pieces: [String]
+                           pieceInterval: TimeInterval = 0, staysOpen: Bool = false) -> Reply {
+            let pieces: [Data]
             if let pieceLength {
-                pieces = stride(from: 0, to: sse.count, by: pieceLength).map { start in
-                    let from = sse.index(sse.startIndex, offsetBy: start)
-                    return String(sse[from ..< (sse.index(from, offsetBy: pieceLength, limitedBy: sse.endIndex) ?? sse.endIndex)])
+                let bytes = Array(sse.utf8)
+                pieces = stride(from: 0, to: bytes.count, by: pieceLength).map { start in
+                    Data(bytes[start ..< min(bytes.count, start + pieceLength)])
                 }
             } else {
-                pieces = sse.components(separatedBy: "\n\n").filter { !$0.isEmpty }.map { $0 + "\n\n" }
+                pieces = sse.components(separatedBy: "\n\n").filter { !$0.isEmpty }.map { Data(($0 + "\n\n").utf8) }
             }
             return Reply(headers: ["Content-Type": "text/event-stream"].merging(headers) { $1 }, chunks: pieces,
-                         staysOpen: staysOpen)
+                         staysOpen: staysOpen, pieceInterval: pieceInterval)
         }
     }
 
@@ -374,11 +376,28 @@ final class StubURLProtocol: URLProtocol {
         let response = HTTPURLResponse(url: url, statusCode: reply.status, httpVersion: "HTTP/1.1",
                                        headerFields: reply.headers)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        for piece in reply.chunks ?? [reply.body] { client?.urlProtocol(self, didLoad: Data(piece.utf8)) }
-        if !reply.staysOpen { client?.urlProtocolDidFinishLoading(self) }
+        let pieces = reply.chunks ?? [Data(reply.body.utf8)]
+        guard reply.pieceInterval > 0 else {
+            for piece in pieces { client?.urlProtocol(self, didLoad: piece) }
+            if !reply.staysOpen { client?.urlProtocolDidFinishLoading(self) }
+            return
+        }
+        // Spaced out: the first piece at once, each next one `pieceInterval` later, until the request is stopped.
+        DispatchQueue.global().async {
+            for (index, piece) in pieces.enumerated() {
+                if index > 0 { Thread.sleep(forTimeInterval: reply.pieceInterval) }
+                guard !self.isStopped else { return }
+                self.client?.urlProtocol(self, didLoad: piece)
+            }
+            if !reply.staysOpen, !self.isStopped { self.client?.urlProtocolDidFinishLoading(self) }
+        }
     }
 
-    override func stopLoading() {}
+    private let stopLock = NSLock()
+    private var stopped = false
+    private var isStopped: Bool { stopLock.withLock { stopped } }
+
+    override func stopLoading() { stopLock.withLock { stopped = true } }
 
     /// A client whose requests go to a host unique to the calling test.
     static func client(_ replies: [Reply]) -> (OpenRouterClient, String) {
@@ -827,6 +846,58 @@ final class ProgressLog: @unchecked Sendable {
         let result = try await transcribe(client)
         #expect(result.generationID == "gen-header")
         #expect(result.provider == "Google AI Studio")
+    }
+
+    /// JSON leaves U+2028, U+2029 and U+0085 unescaped inside strings, and the network cuts characters in two: an
+    /// event is one line up to its line feed, whatever it holds and however its bytes arrive.
+    @Test func separatorsInsideTheTextStayInIt() async throws {
+        let text = "Первая\u{2028}вторая\u{2029}третья\u{85}четвёртая — ✓"
+        // Written out by hand, so the separators go raw, as a JavaScript server sends them.
+        let event = #"{"id":"gen-sep","choices":[{"index":0,"delta":{"content":""# + text + #""},"finish_reason":"stop"}]}"#
+        let sse = SSE.stream([event])
+        #expect(sse.utf8.contains(0xE2) && sse.contains("\u{2028}"), "the separator itself, not \\u2028")
+        #expect(try OpenRouterChatStream.parse(sse, engine: .geminiFlash).text == text)
+        for pieceLength in [1, 3, 5] {
+            let (client, _) = StubURLProtocol.client([.stream(sse, pieceLength: pieceLength)])
+            let result = try await transcribe(client)
+            #expect(result.text == text, "cut every \(pieceLength) bytes")
+            #expect(result.generationID == "gen-sep")
+        }
+    }
+
+    /// Lines end at a line feed, a carriage return before it dropped; the last one may have none.
+    @Test func linesEndAtALineFeed() {
+        var lines = ServerSentEventLines()
+        var taken: [String] = []
+        for byte in Array("data: a\r\n: comment\n\ndata: b\u{2028}c\ndata: [DONE]".utf8) {
+            if let line = lines.take(byte) { taken.append(line) }
+        }
+        #expect(taken == ["data: a", ": comment", "", "data: b\u{2028}c"])
+        #expect(lines.finish() == "data: [DONE]")
+        #expect(lines.finish() == nil)
+    }
+
+    /// A count held back by the interval isn't left behind: the next line of any kind, a comment while the model
+    /// is busy included, passes it on once it's due.
+    @Test func aHeldBackCountGoesOutWithTheNextComment() async throws {
+        let sse = "data: \(SSE.chunk(reasoning: "First thought."))\n\n"
+            + "data: \(SSE.chunk(reasoning: " And a second one."))\n\n"
+            + ": OPENROUTER PROCESSING\n\n"
+            + SSE.stream([SSE.chunk(content: "Done.", finish: "stop")], done: false)
+        let pieces = sse.components(separatedBy: "\n\n").filter { !$0.isEmpty }.map { Data(($0 + "\n\n").utf8) }
+        // The second thought comes right after the first (held back), then only a comment 0.3 s later.
+        var reply = StubURLProtocol.Reply.stream("")
+        reply.chunks = [pieces[0] + pieces[1], pieces[2], pieces[3]]
+        reply.pieceInterval = 0.3
+        let (client, _) = StubURLProtocol.client([reply])
+        let log = ProgressLog()
+        let task = Task { try await transcribe(client, progress: log) }
+        try await waitUntil(timeout: .seconds(10)) { log.all.contains { $0.outputCharacters > 0 } }
+        _ = try await task.value
+        let thoughts = "First thought. And a second one.".count
+        let beforeText = log.all.filter { $0.outputCharacters == 0 }
+        #expect(beforeText.map(\.reasoningCharacters) == ["First thought.".count, thoughts],
+                "the comment passed on the second thought before the text came")
     }
 }
 

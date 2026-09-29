@@ -723,13 +723,17 @@ final class FakeRecorder: DictationRecorder {
     static func make(models: [EngineID: LocalModelState] = [.parakeet: .ready],
                      modelErrors: [EngineID: AppError] = [:], store: ModelStore? = nil,
                      mic: PermissionState = .granted, micLive: Bool = false, keyStatus: KeyStatus = .missing,
-                     meter: LevelMeter = .preview(level: 0), persistsHistory: Bool = false) -> Harness {
+                     meter: LevelMeter = .preview(level: 0), persistsHistory: Bool = false,
+                     client: OpenRouterClient? = nil) -> Harness {
         let settings = AppSettings.inMemory()
         let paths: AppPaths? = persistsHistory ? .temporary() : nil
         let devices = AudioDeviceCatalog.preview()
         let store = store ?? ModelStore.preview(states: models, lastErrors: modelErrors)
-        let account = OpenRouterAccount.preview(status: keyStatus)
-        let client = OpenRouterClient()
+        // A stubbed `client` (`StubURLProtocol`) gets a key to send; the default one never has any.
+        let account = OpenRouterAccount.preview(
+            status: keyStatus,
+            keychain: .inMemory(client == nil ? [:] : [KeychainStore.openRouterAccount: "sk-or-v1-test"]))
+        let client = client ?? OpenRouterClient()
         let history = paths.map { HistoryStore(paths: $0, settings: settings) } ?? .preview(entries: [], settings: settings)
         let toasts = ToastCenter()
         let pill = PillModel(settings: settings, levelMeter: meter)
@@ -790,6 +794,33 @@ final class FakeRecorder: DictationRecorder {
         let entry = try #require(h.history.entry(id: r.id))
         #expect(entry.audioFileName == "\(r.id.uuidString).wav")
         #expect(h.history.loadRecording(for: entry)?.samples.count == r.samples.count)
+    }
+
+    /// Recordings kept in memory for Undo and Retry stay within their budget however long they are: past it, older
+    /// ones History has on disk let go of their samples, and a Retry reads them back from there.
+    @Test func keptAudioStaysWithinItsBudget() async throws {
+        let h = Self.make(persistsHistory: true)
+        defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
+        h.controller.retainedSecondsLimit = 1.5
+        h.controller.transcribeOverride = { _, engine in throw AppError.engineFailed(engine, "Couldn’t transcribe") }
+        let voiced = (0..<16_000).map { 0.2 * sin(Float($0) * 0.05) }
+        let first = Recording(samples: voiced, speech: SpeechStats(voicedSeconds: 1, peakDBFS: -14, isSilent: false))
+        let second = Recording(samples: voiced, speech: SpeechStats(voicedSeconds: 1, peakDBFS: -14, isSilent: false))
+        h.controller.enqueue(first, engine: .parakeet, targetPID: nil)
+        try await waitUntil { h.history.entry(id: first.id)?.status == .failed }
+        #expect(h.controller.retainedRecordingIDs == [first.id])
+        h.controller.enqueue(second, engine: .parakeet, targetPID: nil)
+        try await waitUntil { h.history.entry(id: second.id)?.status == .failed }
+        #expect(h.controller.retainedRecordingIDs == [second.id], "2 s kept is past the budget: the older one goes")
+
+        var heard: [Int] = []
+        h.controller.transcribeOverride = { recording, engine in
+            heard.append(recording.samples.count)
+            return TranscriptResult(text: "back from disk", engine: engine, processingTime: 0.1)
+        }
+        h.controller.retry(try #require(h.history.entry(id: first.id)), with: .parakeet)
+        try await waitUntil { h.history.entry(id: first.id)?.status == .success }
+        #expect(heard == [first.samples.count])
     }
 
     /// General → Pasting shapes only what the app pastes (a dictation, Paste Here, paste last): History, the cards and
@@ -1830,21 +1861,65 @@ final class FakeRecorder: DictationRecorder {
         #expect(h.pill.tokenCount == nil && h.pill.phase == .rest)
     }
 
-    /// Transcribe With from Home runs beside dictations and never reaches the pill: nor does its stream.
+    // MARK: The whole way, through the service and a canned stream
+
+    /// A harness whose OpenRouter requests get `replies` (`StubURLProtocol`), each a stream that stays open until
+    /// the job is canceled.
+    private func streamingHarness(_ replies: [StubURLProtocol.Reply], persistsHistory: Bool = false) -> (H.Harness, String) {
+        let (client, host) = StubURLProtocol.client(replies)
+        let h = H.make(keyStatus: .valid(KeyInfo()), persistsHistory: persistsHistory, client: client)
+        h.pill.timing.counterDelay = 0.05
+        h.controller.insertOverride = { _, _ in Issue.record("canceled before its text came"); return .pasted }
+        return (h, host)
+    }
+
+    /// `events` streamed, then nothing more: the model still at work.
+    private func openStream(_ events: [String]) -> StubURLProtocol.Reply {
+        .stream(": OPENROUTER PROCESSING\n\n" + SSE.stream(events, done: false), staysOpen: true)
+    }
+
+    /// A Gemini dictation's own stream reaches the pill: its progress closure is wired to this attempt of this job.
+    @Test func aGeminiStreamMovesThePillsCount() async throws {
+        let (h, host) = streamingHarness([openStream([SSE.chunk(reasoning: String(repeating: "Listening. ", count: 40))])])
+        h.controller.enqueue(H.recording(), engine: .geminiFlash, targetPID: nil)
+        try await waitUntil { h.pill.tokenCount != nil }
+        #expect(h.pill.tokenCount == PillTokenCount(phase: .thinking, tokens: 110), "440 characters, 4 a token")
+        try await waitUntil { h.pill.showsCounter }
+        #expect(StubURLProtocol.registry.requests(for: host).count == 1)
+        h.controller.handle(.cancel)
+        #expect(h.controller.machine.activeJobs == 0 && h.pill.tokenCount == nil)
+    }
+
+    /// A clean-up's stream counts its writing, once Parakeet's text is in.
+    @Test func aCleanupStreamMovesThePillsCount() async throws {
+        let (h, _) = streamingHarness([openStream([SSE.chunk(content: String(repeating: "Tidy. ", count: 10))])])
+        h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "um tidy", engine: engine, processingTime: 0.1) }
+        h.controller.enqueue(H.recording(), engine: .parakeet, targetPID: nil, cleansUp: true)
+        try await waitUntil { h.pill.tokenCount != nil }
+        #expect(h.pill.tokenCount == PillTokenCount(phase: .writing, tokens: 24), "60 characters, 2.5 a token")
+        #expect(h.pill.sessionModel == .cleanup)
+        h.controller.handle(.cancel)
+        #expect(h.controller.machine.activeJobs == 0 && h.pill.tokenCount == nil)
+    }
+
+    /// Transcribe With from Home runs beside dictations and never reaches the pill: its request streams, but no
+    /// count comes of it.
     @Test func homeWorkNeverCountsInThePill() async throws {
-        let h = harness(persistsHistory: true)
+        let (h, host) = streamingHarness([openStream([SSE.chunk(reasoning: String(repeating: "Listening. ", count: 40))])],
+                                         persistsHistory: true)
         defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
         h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "parakeet text", engine: engine, processingTime: 0.1) }
+        h.controller.insertOverride = { _, _ in .pasted }
         let r = H.recording()
         h.controller.enqueue(r, engine: .parakeet, targetPID: nil)
         try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id) != nil }
-        let gate = Gate()
-        hold(h, gate)
+        h.controller.transcribeOverride = nil
         h.controller.retry(try #require(h.history.entry(id: r.id)), with: .geminiFlash)
         #expect(h.controller.homeWork[r.id] == .transcription(.geminiFlash))
-        h.controller.streamed(ChatStreamProgress(reasoningCharacters: 800), for: r.id)
+        try await waitUntil { !StubURLProtocol.registry.requests(for: host).isEmpty }
+        try await Task.sleep(for: .milliseconds(200))
         #expect(h.pill.tokenCount == nil && h.pill.phase == .rest)
-        gate.isOpen = true
+        h.controller.cancelHomeWork(for: r.id)
         try await waitUntil { h.controller.homeWork.isEmpty }
         #expect(h.pill.tokenCount == nil)
     }

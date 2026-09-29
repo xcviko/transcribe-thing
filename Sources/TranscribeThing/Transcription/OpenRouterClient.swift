@@ -202,7 +202,8 @@ final class OpenRouterClient: Sendable {
 
     /// Sends a chat `request` and reads its answer as it streams in, retrying once per the policy above. Its
     /// `timeoutInterval` is a stall timeout: seconds with no byte at all, OpenRouter's comments included.
-    /// `progress` hears at once of the first reasoning and the first text, then at most every 250 ms.
+    /// `progress` hears at once of the first reasoning and the first text, then at most every 250 ms (a change held
+    /// back goes out with the next line of any kind once that's due).
     private func streamWithRetry(_ request: URLRequest, engine: EngineID,
                                  progress: (@Sendable (ChatStreamProgress) -> Void)?) async throws -> CloudResult {
         try await withRetry {
@@ -232,18 +233,30 @@ final class OpenRouterClient: Sendable {
             reportedAt = now
             progress(reported)
         }
-        do {
-            for try await line in bytes.lines {
-                let before = stream.progress
-                guard stream.consume(line) else {
-                    if stream.isDone { break }
-                    continue
-                }
+        /// One line into the stream; true once it has said it's done.
+        func take(_ line: String) -> Bool {
+            let before = stream.progress
+            if stream.consume(line) {
                 let firstReasoning = before.reasoningCharacters == 0 && stream.progress.reasoningCharacters > 0
                 let firstText = before.outputCharacters == 0 && stream.progress.outputCharacters > 0
                 if firstText { firstToken = TranscriptionService.seconds(started.duration(to: .now)) }
                 report(force: firstReasoning || firstText)
+            } else {
+                // A comment while the model is busy, say: a change the interval held back goes out once it's due, so
+                // the count never sits on an older value than the stream has reached.
+                report(force: false)
             }
+            return stream.isDone
+        }
+        var lines = ServerSentEventLines()
+        do {
+            var done = false
+            for try await byte in bytes {
+                guard let line = lines.take(byte) else { continue }
+                done = take(line)
+                if done { break }
+            }
+            if !done, let line = lines.finish() { _ = take(line) }
         } catch {
             if error is CancellationError || Task.isCancelled { throw CancellationError() }
             guard let error = error as? URLError else {

@@ -861,6 +861,21 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
                                                            collapsed: false))
     }
 
+    /// The token count spans its capsule edge to edge, and the capsule's ends round in faster than it shrinks: it
+    /// fades over the first stretch of the morph (about 60 ms of the spring) instead of the whole of it.
+    @Test func theCountFadesEarlyWhenThePillGoesToRest() {
+        let counting = PillVisual.processing(afterHandsFree: false, counting: true)
+        let rest = PillMetrics.restSize
+        let span = PillMotion.counterFadeSpan
+        let spring = Spring(duration: PillMotion.morphDuration, bounce: 0)
+        #expect(CGFloat(spring.value(target: 1.0, time: 0.06)) >= span, "gone by 60 ms")
+        let early = PillMotion.morphPose(at: span / 2, from: counting.size, to: rest, fadeSpan: span)
+        #expect(abs(early.opacity - 0.5) < 1e-9, "halfway through its span, half gone")
+        #expect(early.size == PillMotion.morphPose(at: span / 2, from: counting.size, to: rest).size, "same capsule")
+        #expect(PillMotion.morphPose(at: span, from: counting.size, to: rest, fadeSpan: span).opacity == 0)
+        #expect(PillMotion.morphPose(at: span, from: counting.size, to: rest).opacity > 0, "other content: the whole morph")
+    }
+
     @Test func newContentReplacesTheShrinkingOne() {
         var stage = stage(after: [.processing(afterHandsFree: false), .rest])
         #expect(stage.frame(for: .peek).content == .peek)

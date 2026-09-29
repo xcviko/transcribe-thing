@@ -397,14 +397,10 @@ struct EngineSummary: Equatable {
         }
         switch keyStatus {
         case .valid: return EngineSummary(name: name, status: "Ready", tone: .positive)
-        case .checking: return EngineSummary(name: name, status: "Checking key…", tone: .progress)
-        case .missing: return EngineSummary(name: name, status: "Needs key", tone: .negative)
-        case .invalid: return EngineSummary(name: name, status: "Key rejected", tone: .negative)
-        case .noCredit:
-            return EngineSummary(name: name, status: keyStatus.isKeyLimitReached ? "Key limit reached" : "Out of credit",
-                                 tone: .negative)
-        case .offline: return EngineSummary(name: name, status: "Offline", tone: .warning)
-        case .failed: return EngineSummary(name: name, status: "Couldn’t check key", tone: .warning)
+        case .checking, .missing, .invalid, .noCredit, .offline, .failed:
+            // The key's own status, in the key's own words and color (`ModelStatusText`), shortened for offline.
+            let (text, tone) = ModelStatusText.describe(keyStatus)
+            return EngineSummary(name: name, status: keyStatus == .offline ? "Offline" : text, tone: tone)
         }
     }
 }
@@ -438,21 +434,20 @@ enum SwitchModelLine {
         return .ready(binding)
     }
 
-    /// "Parakeet → Clean-up → Gemini": the cycle by short names, from the main model.
-    static func chain(_ lineup: ModelLineup) -> String {
-        lineup.cycle.map(\.shortName).joined(separator: " → ")
-    }
-
     /// The line as one sentence, with the user's own binding: the accessibility label of the one with key caps, and
-    /// the whole line otherwise.
-    static func explanation(_ status: Status, lineup: ModelLineup) -> String {
+    /// the whole line otherwise. `blocked`: the steps that can't run now (a missing key, a model not downloaded),
+    /// which Switch model skips and the line dims.
+    static func explanation(_ status: Status, lineup: ModelLineup, blocked: [ModelChoice] = []) -> String {
         switch status {
         case .ready(let binding):
             let names = lineup.cycle.map(\.shortName)
             let rest = names.dropFirst()
             let then = rest.count > 1 ? rest.dropLast().joined(separator: ", ") + ", then " + (rest.last ?? "")
                 : rest.first ?? ""
-            return "Press \(binding.spokenDescription) while dictating to step from \(names.first ?? "") to \(then)."
+            let sentence = "Press \(binding.spokenDescription) while dictating to step from \(names.first ?? "") to \(then)."
+            let skipped = ModelChoice.sentenceList(lineup.steps.filter(blocked.contains))
+            guard !skipped.names.isEmpty else { return sentence }
+            return sentence + " \(skipped.names) \(skipped.isPlural ? "aren’t" : "isn’t") ready yet."
         case .alone(let binding?) where !binding.isEmpty:
             return "Switch on another model to reach it with \(binding.compactDescription) while dictating."
         case .alone:
@@ -659,6 +654,14 @@ enum AutoDeleteChoice {
         case 1: "After 1 day"
         default: "After \(days) days"
         }
+    }
+
+    /// What General asks before a period that deletes `count` transcripts at once: "Delete 1,180 transcripts older
+    /// than 1 day?". nil when it deletes none, and takes effect without asking.
+    static func confirmation(count: Int, days: Int) -> String? {
+        guard count > 0, days > 0 else { return nil }
+        let transcripts = count == 1 ? "1 transcript" : "\(Fmt.number(count)) transcripts"
+        return "Delete \(transcripts) older than \(days == 1 ? "1 day" : "\(days) days")?"
     }
 }
 

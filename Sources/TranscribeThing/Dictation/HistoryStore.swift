@@ -536,23 +536,27 @@ final class HistoryStore {
         }
     }
 
+    /// The entries Auto-delete after `days` removes now (none for 0, Never): what General asks about before a
+    /// shorter period takes effect.
+    func expiredEntries(afterDays days: Int, now: Date = Date()) -> [TranscriptEntry] {
+        guard days > 0 else { return [] }
+        let cutoff = now.addingTimeInterval(-Double(days) * 86_400)
+        return entries.filter { $0.createdAt < cutoff }
+    }
+
     /// Auto-delete: with `autoDeleteHistoryDays` set, entries older than that many days go, their recordings at once
     /// (no Undo brings them back). Then recordings no entry refers to are swept up.
     func deleteExpired(now: Date = Date()) {
-        let days = settings.autoDeleteHistoryDays
-        if days > 0 {
-            let cutoff = now.addingTimeInterval(-Double(days) * 86_400)
-            let expired = entries.filter { $0.createdAt < cutoff }
-            if !expired.isEmpty {
-                let ids = Set(expired.map(\.id))
-                entries.removeAll { ids.contains($0.id) }
-                for file in expired.compactMap(\.audioFileName) {
-                    pendingFileRemovals.removeValue(forKey: file)?.cancel()
-                    removeAudioFile(file)
-                }
-                changed()
-                onRemove?(expired.map(\.id))
+        let expired = expiredEntries(afterDays: settings.autoDeleteHistoryDays, now: now)
+        if !expired.isEmpty {
+            let ids = Set(expired.map(\.id))
+            entries.removeAll { ids.contains($0.id) }
+            for file in expired.compactMap(\.audioFileName) {
+                pendingFileRemovals.removeValue(forKey: file)?.cancel()
+                removeAudioFile(file)
             }
+            changed()
+            onRemove?(expired.map(\.id))
         }
 
         guard persists, isLoaded else { return }

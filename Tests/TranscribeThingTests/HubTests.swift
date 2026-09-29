@@ -165,7 +165,7 @@ import Testing
         #expect(EngineSummary.make(engine: .parakeet, localState: .downloading(DownloadProgress(fraction: 0.42)), keyStatus: .missing).status
             == "Downloading 42%")
         #expect(EngineSummary.make(engine: .geminiFlash, localState: .notInstalled, keyStatus: .missing)
-            == EngineSummary(name: "Gemini Flash", status: "Needs key", tone: .negative))
+            == EngineSummary(name: "Gemini Flash", status: "Needs key", tone: .warning))
     }
 }
 
@@ -323,22 +323,36 @@ import Testing
 @Suite struct SwitchModelLineTests {
     private let rightCommand = Shortcut.rightCommand
 
-    /// The chain reads the cycle from the main model, in the lineup's order, and follows a move.
+    /// The line reads the cycle from the main model, in the lineup's order, and follows a move.
     @Test func lineupLineNamesTheStepsFromTheMainModel() {
         var lineup = ModelLineup.default
-        #expect(SwitchModelLine.chain(lineup) == "Parakeet → Clean-up → Gemini")
+        let fnTab = Shortcut.fnTab.spokenDescription
         #expect(SwitchModelLine.explanation(.ready(.fnTab), lineup: lineup)
-            == "Press \(Shortcut.fnTab.spokenDescription) while dictating to step from Parakeet to Clean-up, then Gemini.")
+            == "Press \(fnTab) while dictating to step from Parakeet to Clean-up, then Gemini.")
         lineup.main = .gemini
-        #expect(SwitchModelLine.chain(lineup) == "Gemini → Parakeet → Clean-up")
+        #expect(SwitchModelLine.explanation(.ready(.fnTab), lineup: lineup)
+            == "Press \(fnTab) while dictating to step from Gemini to Parakeet, then Clean-up.")
         lineup.move(.gemini, to: 0)
         #expect(lineup.order == [.gemini, .parakeet, .cleanup])
         lineup.move(.cleanup, to: 1)
-        #expect(SwitchModelLine.chain(lineup) == "Gemini → Clean-up → Parakeet")
+        #expect(SwitchModelLine.explanation(.ready(.fnTab), lineup: lineup)
+            == "Press \(fnTab) while dictating to step from Gemini to Clean-up, then Parakeet.")
         lineup.setSwitchable(.parakeet, false)
-        #expect(SwitchModelLine.chain(lineup) == "Gemini → Clean-up")
         #expect(SwitchModelLine.explanation(.ready(rightCommand), lineup: lineup)
             == "Press \(rightCommand.spokenDescription) while dictating to step from Gemini to Clean-up.")
+    }
+
+    /// Steps that can't run now (no key yet) stay in the line, which says so: Switch model skips them.
+    @Test func lineupLineSaysWhichStepsArentReady() {
+        let fnTab = Shortcut.fnTab.spokenDescription
+        #expect(SwitchModelLine.explanation(.ready(.fnTab), lineup: .default, blocked: [.cleanup, .gemini])
+            == "Press \(fnTab) while dictating to step from Parakeet to Clean-up, then Gemini. Clean-up and Gemini aren’t ready yet.")
+        #expect(SwitchModelLine.explanation(.ready(.fnTab), lineup: .default, blocked: [.gemini])
+            == "Press \(fnTab) while dictating to step from Parakeet to Clean-up, then Gemini. Gemini isn’t ready yet.")
+        var geminiMain = ModelLineup.default
+        geminiMain.main = .gemini
+        #expect(!SwitchModelLine.explanation(.ready(.fnTab), lineup: geminiMain, blocked: [.gemini]).contains("ready yet"),
+                "only steps count, never the main model")
     }
 
     @Test func lineupLineStatuses() {
@@ -379,7 +393,7 @@ import Testing
 
     @Test func theSidebarChipNamesTheMainModel() {
         #expect(EngineSummary.make(choice: .cleanup, parakeet: .parakeet, localState: .ready, keyStatus: .missing)
-            == EngineSummary(name: "Parakeet + Luna", status: "Needs key", tone: .negative))
+            == EngineSummary(name: "Parakeet + Luna", status: "Needs key", tone: .warning))
         #expect(EngineSummary.make(choice: .cleanup, parakeet: .parakeet, localState: .preparing(since: Date()),
                                    keyStatus: .missing).status == "Optimizing…", "Parakeet first")
         #expect(EngineSummary.make(choice: .gemini, parakeet: .parakeet, localState: .notInstalled,
@@ -387,6 +401,30 @@ import Testing
             == EngineSummary(name: "Gemini Flash", status: "Ready", tone: .positive))
         #expect(EngineSummary.make(choice: .parakeet, parakeet: .parakeetCloud, localState: .notInstalled,
                                    keyStatus: .valid(KeyInfo())).name == "Parakeet v3 · Cloud")
+    }
+
+    /// One key state reads the same on a lineup row, the sidebar chip and Where Parakeet runs: a missing key or
+    /// spent credit is a warning to act on, as the key card's triangle says, a rejected key an error.
+    @Test func oneKeyStateHasOneColor() {
+        let states: [KeyStatus] = [.missing, .checking, .valid(KeyInfo()), .invalid("401"), .noCredit(nil),
+                                   .noCredit(KeyInfo(limit: 10, limitRemaining: 0)), .offline, .failed("x")]
+        for state in states {
+            let summary = EngineSummary.make(engine: .geminiFlash, localState: .ready, keyStatus: state)
+            let row = ModelStatusText.describe(state)
+            #expect(summary.tone == row.tone, "\(state)")
+            if case .valid = state { continue }
+            #expect(summary.status == row.text || (state == .offline && summary.status == "Offline"), "\(state)")
+        }
+        #expect(ModelStatusText.describe(.missing).tone == .warning)
+        #expect(ModelStatusText.describe(.noCredit(nil)).tone == .warning)
+        #expect(ModelStatusText.describe(.invalid("401")).tone == .negative)
+    }
+
+    /// A model wears one color: its tile in Models and the sidebar, and its pill.
+    @Test func eachModelWearsThePillsColor() {
+        #expect(ModelChoice.gemini.tint == .accent && PillPalette.accent(for: .gemini) != nil, "violet")
+        #expect(ModelChoice.cleanup.tint == .warm && PillPalette.accent(for: .cleanup) != nil, "warm")
+        #expect(ModelChoice.parakeet.tint == .inkSecondary && PillPalette.accent(for: .parakeet) == nil, "plain")
     }
 
     @Test func aCleanupMainWithoutAKeyShowsTheKeyCard() throws {

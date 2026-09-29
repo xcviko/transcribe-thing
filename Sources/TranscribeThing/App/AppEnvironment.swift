@@ -287,10 +287,18 @@ final class AppEnvironment {
     /// The device list changed (the catalog calls only after a scan that changed something, the launch scan
     /// included). A picked mic that is gone (AirPods put away, a USB mic unplugged) falls back to Automatic, so a
     /// choice always stays selected and the next dictation just works: Automatic follows macOS, which makes the
-    /// AirPods the input again when they reconnect. A capture already running is left alone (`deviceLost` handles
-    /// it).
+    /// AirPods the input again when they reconnect. When the gone mic is back, it's the pick again (unless the user
+    /// picked another since), so a device that only dropped out for a moment doesn't lose its place. A capture
+    /// already running is left alone (`deviceLost` handles it).
     private func devicesChanged() {
-        guard !InputDevicePolicy.keepsPick(settings.microphoneUID, devices: devices.devices) else { return }
+        if let lost = settings.microphoneUIDBeforeFallback, settings.microphoneUID == nil,
+           InputDevicePolicy.isBack(lost, devices: devices.devices) {
+            settings.microphoneUID = lost
+            return
+        }
+        guard let pick = settings.microphoneUID,
+              !InputDevicePolicy.keepsPick(pick, devices: devices.devices) else { return }
         settings.microphoneUID = nil
+        settings.microphoneUIDBeforeFallback = pick
     }
 }

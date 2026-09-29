@@ -400,15 +400,20 @@ enum PillMotion {
 
     /// Content of a `from`-sized pill while its capsule morphs into a `to`-sized one, at `progress` 0…1 of
     /// the capsule's own spring. The content keeps its proportions inside the capsule and fades over the whole
-    /// morph, so it is gone exactly as the capsule reaches rest and never leaves a large capsule empty.
-    static func morphPose(at progress: CGFloat, from: CGSize, to: CGSize) -> MorphPose {
+    /// morph, so it is gone exactly as the capsule reaches rest and never leaves a large capsule empty. Content that
+    /// spans the capsule edge to edge (the token count) fades over the first `fadeSpan` of it instead: the capsule's
+    /// ends round in faster than it shrinks.
+    static func morphPose(at progress: CGFloat, from: CGSize, to: CGSize, fadeSpan: CGFloat = 1) -> MorphPose {
         let p = min(1, max(0, progress))
         let size = CGSize(width: from.width + (to.width - from.width) * p,
                           height: from.height + (to.height - from.height) * p)
         let scale = min(1, size.width / from.width, size.height / from.height)
-        let u = Double(p)
+        let u = Double(min(1, p / max(fadeSpan, 0.01)))
         return MorphPose(size: size, scale: scale, opacity: 1 - u * u * (3 - 2 * u))
     }
+
+    /// The part of the morph the token count fades over: gone by about 60 ms of the spring.
+    static let counterFadeSpan: CGFloat = 0.35
 }
 
 /// Which pill to draw around a change of visual. The view asks for the frame of each new visual first and
@@ -520,6 +525,8 @@ private struct PillMorphEffect: ViewModifier, Animatable {
     let to: CGSize
     /// The model chip shrinks toward the capsule below it.
     var anchor: UnitPoint = .center
+    /// `PillMotion.morphPose`'s: the token count fades early.
+    var fadeSpan: CGFloat = 1
 
     var animatableData: CGFloat {
         get { progress }
@@ -527,7 +534,7 @@ private struct PillMorphEffect: ViewModifier, Animatable {
     }
 
     func body(content: Content) -> some View {
-        let pose = PillMotion.morphPose(at: progress, from: from, to: to)
+        let pose = PillMotion.morphPose(at: progress, from: from, to: to, fadeSpan: fadeSpan)
         content
             .scaleEffect(pose.scale, anchor: anchor)
             .opacity(pose.opacity)
@@ -602,7 +609,8 @@ struct PillFace: View {
     private func contentView(accent: PillAccent?) -> some View {
         let visual = content
         let morph = PillMorphEffect(progress: content == capsule ? 0 : morph, from: visual.size,
-                                    to: size ?? capsule.size)
+                                    to: size ?? capsule.size,
+                                    fadeSpan: visual.isCounting ? PillMotion.counterFadeSpan : 1)
         switch visual.content {
         case .empty:
             Color.clear

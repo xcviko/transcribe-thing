@@ -107,6 +107,15 @@ extension ModelChoice {
         case .gemini: "sparkles"
         }
     }
+
+    /// Short names in a sentence, and whether it takes a plural verb: "Gemini", "Clean-up and Gemini", "Parakeet,
+    /// Clean-up and Gemini".
+    static func sentenceList(_ choices: [ModelChoice]) -> (names: String, isPlural: Bool) {
+        let names = choices.map(\.shortName)
+        guard let last = names.last else { return ("", false) }
+        guard names.count > 1 else { return (last, false) }
+        return (names.dropLast().joined(separator: ", ") + " and " + last, true)
+    }
 }
 
 /// The three models as Models lists them: the user's order, the main model every dictation starts on, and which
@@ -114,12 +123,13 @@ extension ModelChoice {
 struct ModelLineup: Equatable, Sendable {
     /// Every `ModelChoice` exactly once, in the user's order.
     private(set) var order: [ModelChoice]
-    /// The model every dictation starts on, always part of the cycle. The one it replaces stays in the cycle too
-    /// (switched on): changing the main model never leaves a model out.
+    /// The model every dictation starts on, always part of the cycle. The one it replaces is switched on: it was in
+    /// the cycle, so changing the main model never leaves a model out (whatever its flag said before it was main).
     var main: ModelChoice {
         didSet { if main != oldValue { switchable.insert(oldValue) } }
     }
-    /// The models Switch model steps to. The main model's own flag is kept but ignored while it's main.
+    /// The models Switch model steps to besides the main model. The main model's own flag doesn't count while it's
+    /// main, and is switched on when it stops being main (`main`).
     private(set) var switchable: Set<ModelChoice>
 
     /// What every install starts with, and what builds before the lineup did: Parakeet, then clean-up, then Gemini.

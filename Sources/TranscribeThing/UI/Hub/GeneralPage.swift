@@ -12,6 +12,8 @@ struct GeneralPage: View {
     @State private var confirmingClear = false
     /// What the recordings take on disk, once measured.
     @State private var recordingsBytes: Int64?
+    /// An Auto-delete period that would delete entries at once, waiting for the user to confirm it.
+    @State private var pendingAutoDelete: Int?
 
     var body: some View {
         @Bindable var settings = settings
@@ -66,8 +68,8 @@ struct GeneralPage: View {
                             .labelsHidden()
                     }
                     SettingsRow(title: "Remove the final period",
-                                subtitle: "Drops a single period at the end. Keeps …, ? and !",
-                                systemImage: "text.badge.minus", iconTint: .inkSecondary) {
+                                subtitle: "Drops a single period at the end. Keeps “…”, “?” and “!”.",
+                                systemImage: "delete.backward", iconTint: .inkSecondary) {
                         Toggle("", isOn: $settings.removesFinalPeriod)
                             .toggleStyle(.appSwitch)
                             .labelsHidden()
@@ -79,7 +81,7 @@ struct GeneralPage: View {
                     SettingsRow(title: "Auto-delete history",
                                 subtitle: "Deletes transcripts and their recordings older than this.",
                                 systemImage: "clock.arrow.circlepath", iconTint: .inkSecondary) {
-                        HubMenuPicker(options: AutoDeleteChoice.days, selection: $settings.autoDeleteHistoryDays,
+                        HubMenuPicker(options: AutoDeleteChoice.days, selection: autoDeleteDays,
                                       label: AutoDeleteChoice.label)
                     }
                     SettingsRow(title: "Clear history", subtitle: clearSubtitle,
@@ -126,6 +128,40 @@ struct GeneralPage: View {
         } message: {
             Text("This can’t be undone.")
         }
+        .confirmationDialog(autoDeleteQuestion, isPresented: confirmingAutoDelete) {
+            Button("Delete", role: .destructive) {
+                guard let days = pendingAutoDelete else { return }
+                pendingAutoDelete = nil
+                withAnimation(Theme.Motion.collapse) { settings.autoDeleteHistoryDays = days }
+            }
+            Button("Cancel", role: .cancel) { pendingAutoDelete = nil }
+        } message: {
+            Text("Their recordings go too. This can’t be undone.")
+        }
+    }
+
+    /// Auto-delete's period. One that deletes transcripts right away asks first (as Delete All does); a longer one,
+    /// or Never, takes effect at once.
+    private var autoDeleteDays: Binding<Int> {
+        let settings = settings, history = history
+        return Binding(get: { settings.autoDeleteHistoryDays }, set: { days in
+            let expired = history.expiredEntries(afterDays: days).count
+            if AutoDeleteChoice.confirmation(count: expired, days: days) != nil {
+                pendingAutoDelete = days
+            } else {
+                settings.autoDeleteHistoryDays = days
+            }
+        })
+    }
+
+    private var autoDeleteQuestion: String {
+        pendingAutoDelete.flatMap { days in
+            AutoDeleteChoice.confirmation(count: history.expiredEntries(afterDays: days).count, days: days)
+        } ?? "Delete older transcripts?"
+    }
+
+    private var confirmingAutoDelete: Binding<Bool> {
+        Binding(get: { pendingAutoDelete != nil }, set: { if !$0 { pendingAutoDelete = nil } })
     }
 
     /// "Deletes 1,204 transcripts and their recordings (2.3 GB).", the size once it's known.

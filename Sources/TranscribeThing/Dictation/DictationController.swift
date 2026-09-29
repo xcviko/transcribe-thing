@@ -80,7 +80,7 @@ final class DictationController {
     @ObservationIgnored var generationLookupOverride: (@MainActor (String) async -> GenerationDetails?)?
     /// Replaces the clean-up request: the transcript and the engine that wrote it (the model is the job's).
     @ObservationIgnored var cleanupOverride: (@MainActor (String, EngineID) async throws -> TranscriptResult)?
-    /// Replaces how long a clean-up may take (`CleanupModel.timeout(forCharacterCount:)`).
+    /// Replaces how long a clean-up may take to start answering (`CleanupModel.timeout(forCharacterCount:)`).
     @ObservationIgnored var cleanupTimeoutOverride: TimeInterval?
     /// Replaces how long a job waits for its local model before saying so (`modelWaitNoticeDelay`).
     @ObservationIgnored var waitNoticeDelayOverride: TimeInterval?
@@ -163,6 +163,9 @@ final class DictationController {
     @ObservationIgnored private var shortcutNoticeTask: Task<Void, Never>?
 
     private static let retainedLimit = 8
+    /// Audio kept in memory for Undo and Retry, in seconds, past which the oldest recordings History also has on disk
+    /// are let go (`retain`): an hour-long recording alone is 230 MB of samples.
+    @ObservationIgnored var retainedSecondsLimit: TimeInterval = 30 * 60
     private static let undoMinimumDuration: TimeInterval = 1
     private static let saveCancelledMinimumDuration: TimeInterval = 20
     private static let minimumVoicedSeconds = 0.25
@@ -827,9 +830,10 @@ final class DictationController {
             && !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    /// Tidies `text` (written by `source`) with the clean-up model `model`, giving up after its timeout. Never
-    /// throws: a failure, a timeout or an empty answer is `.failed`, and the original text stands. `progress`: a
-    /// dictation's, for the pill (Home never passes one).
+    /// Tidies `text` (written by `source`) with the clean-up model `model`, giving up when its answer hasn't started
+    /// within its timeout (`TranscriptionService.cleanUp`: one that streams runs to its end). Never throws: a failure,
+    /// a timeout or an empty answer is `.failed`, and the original text stands. `progress`: a dictation's, for the
+    /// pill (Home never passes one).
     private func runCleanup(_ text: String, of source: EngineID, by model: CleanupModel,
                             progress: (@Sendable (ChatStreamProgress) -> Void)? = nil) async -> CleanupOutcome {
         // A key already known not to work would fail the request too: no round trip, and the notice says why.
@@ -843,10 +847,8 @@ final class DictationController {
             if let cleanupOverride {
                 result = try await Self.within(timeout, source: source) { try await cleanupOverride(text, source) }
             } else {
-                let transcription = transcription
-                result = try await Self.within(timeout, source: source) {
-                    try await transcription.cleanUp(text, of: source, by: model, timeout: timeout, progress: progress)
-                }
+                result = try await transcription.cleanUp(text, of: source, by: model, timeout: timeout,
+                                                         progress: progress)
             }
             result.text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !result.text.isEmpty else {
@@ -875,7 +877,8 @@ final class DictationController {
         }
     }
 
-    /// `work`, or `AppError.timeout(source)` once `seconds` pass (then `work` is cancelled).
+    /// `work`, or `AppError.timeout(source)` once `seconds` pass (then `work` is cancelled): the deadline of
+    /// `cleanupOverride`, which streams nothing.
     private static func within(_ seconds: TimeInterval, source: EngineID,
                                _ work: @escaping @MainActor () async throws -> TranscriptResult) async throws -> TranscriptResult {
         try await withThrowingTaskGroup(of: TranscriptResult?.self) { group in
@@ -1030,11 +1033,15 @@ final class DictationController {
                            lifetime: .seconds(keyProblem ? 6 : 4)))
     }
 
-    /// Asks OpenRouter about a delivered cloud version in the background, once its response didn't name the
-    /// provider: who served it, and how long the generation took. Recorded on the entry's version unless that
-    /// version changed meanwhile (deleted, or made again).
+    /// Asks OpenRouter about a delivered cloud version in the background when its response left something out: the
+    /// provider, the cost, or for a chat answer (one with token usage) how long the generation took, which a stream
+    /// cut short before its accounting chunk never says. Fills only what's missing, on the entry's version unless
+    /// that version changed meanwhile (deleted, or made again).
     private func resolveGeneration(of version: TranscriptVersion, entryID: UUID) {
-        guard version.metadata.provider == nil, let generationID = version.metadata.generationID else { return }
+        let metadata = version.metadata
+        guard let generationID = metadata.generationID,
+              metadata.provider == nil || metadata.costUSD == nil
+                || (metadata.usage != nil && metadata.generationTime == nil) else { return }
         let kind = version.kind
         Task { [weak self] in
             guard let self else { return }
@@ -1726,7 +1733,18 @@ final class DictationController {
             cancelledEngines[evicted] = nil
             cleanupIDs.remove(evicted)
         }
+        // Past `retainedSecondsLimit` of audio, the oldest recordings whose audio History keeps on disk let go of
+        // their samples (Undo and Retry read them back, and keep their model); the newest always stays.
+        var seconds = retained.values.reduce(0) { $0 + $1.duration }
+        for id in retainedOrder.dropLast() where seconds > retainedSecondsLimit {
+            guard let kept = retained[id], history.entry(id: id)?.audioFileName != nil else { continue }
+            retained[id] = nil
+            seconds -= kept.duration
+        }
     }
+
+    /// The recordings kept in memory right now: tests.
+    var retainedRecordingIDs: Set<UUID> { Set(retained.keys) }
 
     private func forget(_ id: UUID) {
         retained[id] = nil
@@ -1819,11 +1837,8 @@ final class DictationController {
     /// What a switch to models the OpenRouter key can't pay for (`blocked`, in cycle order) says: "Gemini needs an
     /// OpenRouter key", "Clean-up and Gemini need OpenRouter credit".
     static func switchWithoutKeyNotice(_ status: KeyStatus, blocked: [ModelChoice]) -> Notice {
-        let names = blocked.map(\.shortName)
-        let joined = names.count > 1
-            ? names.dropLast().joined(separator: ", ") + " and " + (names.last ?? "")
-            : names.first ?? ModelChoice.gemini.shortName
-        let subject = "\(joined) \(names.count > 1 ? "need" : "needs")"
+        let list = ModelChoice.sentenceList(blocked.isEmpty ? [.gemini] : blocked)
+        let subject = "\(list.names) \(list.isPlural ? "need" : "needs")"
         if case .noCredit = status {
             return Notice(dedupeKey: switchModelNoticeKey, style: .warning, symbol: "creditcard",
                           title: "\(subject) OpenRouter credit", body: "Add credit to switch models.",

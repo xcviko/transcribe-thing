@@ -80,8 +80,9 @@ final class OpenRouterAccount {
         self.debounce = debounce
     }
 
-    static func preview(status: KeyStatus) -> OpenRouterAccount {
-        let account = OpenRouterAccount(keychain: .inMemory(), client: OpenRouterClient())
+    /// A fixed `status` that never checks itself. `keychain` holds the key requests read (none by default).
+    static func preview(status: KeyStatus, keychain: KeychainStore = .inMemory()) -> OpenRouterAccount {
+        let account = OpenRouterAccount(keychain: keychain, client: OpenRouterClient())
         account.isPreview = true
         account.status = status
         if status != .missing { account.maskedKey = "sk-or-v1-••••3f9a" }

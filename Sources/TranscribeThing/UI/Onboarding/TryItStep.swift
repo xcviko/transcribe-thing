@@ -185,8 +185,17 @@ private struct LessonRow: View {
         case .bindable(let action):
             ShortcutRecorderView(shortcut: binding(for: action), action: action)
         case .fixed(let shortcut):
-            // The size the recorder shows the others at.
-            ShortcutChips(shortcut: shortcut)
+            // Laid out as the recorder lays out the others (its chips' inset, then "Change"), with room kept for a
+            // Change it doesn't have: the keys of every row end in one column.
+            HStack(spacing: 4) {
+                ShortcutChips(shortcut: shortcut)
+                    .padding(.horizontal, 5)
+                Button("Change") {}
+                    .buttonStyle(QuietButtonStyle())
+                    .padding(.trailing, -8)
+                    .hidden()
+                    .accessibilityHidden(true)
+            }
         }
     }
 

@@ -115,6 +115,12 @@ enum InputDevicePolicy {
         guard let device = devices.first(where: { $0.id == uid }) else { return false }
         return device.isAvailable || device.isBuiltIn
     }
+
+    /// A pick that fell back to Automatic comes back once its device is listed and can record again: AirPods back in
+    /// the ears, a USB mic plugged in again, or a device that only flickered away.
+    static func isBack(_ uid: String, devices: [AudioInputDevice]) -> Bool {
+        devices.contains { $0.id == uid && $0.isAvailable }
+    }
 }
 
 /// Live list of input devices. CoreAudio listeners run on a private queue; scans run off the main
@@ -206,6 +212,12 @@ final class AudioDeviceCatalog {
         catalog.devices = devices
         catalog.defaultDeviceUID = defaultUID
         return catalog
+    }
+
+    /// A preview catalog's devices change as a scan would report them (a mic unplugged, then back): tests.
+    func previewScan(devices: [AudioInputDevice], defaultUID: String?) {
+        guard isPreview else { return }
+        apply(Snapshot(devices: devices, defaultUID: defaultUID))
     }
 
     // MARK: Private

@@ -42,7 +42,7 @@ enum PillSnapshots {
                 ])
             },
             // The token count (`--only pill-counter`): the dots give way to it, it counts through thinking and
-            // writing, and the pill leaves with its last number.
+            // writing (a clean-up only writes), and the pill leaves with its last number.
             SnapshotEntry("pill-counter", width: PillFilmSheet.width(cell: 158, columns: 11), height: 330) { _ in
                 PillFilmSheet(cell: 158, columns: 11, strips: [
                     .counter("No tint", choice: nil),
@@ -379,12 +379,14 @@ private struct PillFilmSheet: View {
         }
 
         /// A streamed answer: the dots, then its count as it thinks and writes (the capsule has widened for it),
-        /// then the pill leaving with its last number.
+        /// then the pill leaving with its last number. A clean-up (GPT-6 Luna, which doesn't think) only writes.
         @MainActor static func counter(_ title: String, choice: ModelChoice?) -> Strip {
             let dots = PillVisual.processing(afterHandsFree: false)
             let counting = PillVisual.processing(afterHandsFree: false, counting: true)
-            let counts = [PillTokenCount(phase: .thinking, tokens: 340), PillTokenCount(phase: .thinking, tokens: 2_400),
-                          PillTokenCount(phase: .writing, tokens: 120), PillTokenCount(phase: .writing, tokens: 1_800)]
+            let counts = choice == .cleanup
+                ? [40, 120, 640, 1_800].map { PillTokenCount(phase: .writing, tokens: $0) }
+                : [PillTokenCount(phase: .thinking, tokens: 340), PillTokenCount(phase: .thinking, tokens: 2_400),
+                   PillTokenCount(phase: .writing, tokens: 120), PillTokenCount(phase: .writing, tokens: 1_800)]
             let model = PillModel.preview(phase: .processing)
             let last = PillModel.preview(phase: .processing).previewCounter(counts[counts.count - 1])
             let stills = [Frame(caption: "dots") { _ in
@@ -397,7 +399,8 @@ private struct PillFilmSheet: View {
             }
             let exit = exitFrames(counting, reduceMotion: false, steps: [0, 2, 4, 6, 8, 10], choice: choice)
                 .map { frame in Frame(caption: frame.caption) { _ in frame.face(last) } }
-            return Strip(title: "\(title): processing → thinking → writing → hidden", model: model,
+            let steps = choice == .cleanup ? "processing → writing → hidden" : "processing → thinking → writing → hidden"
+            return Strip(title: "\(title): \(steps)", model: model,
                          frames: stills + exit)
         }
 

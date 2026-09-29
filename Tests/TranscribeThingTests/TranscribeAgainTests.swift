@@ -41,9 +41,24 @@ import Testing
         #expect(removed.count == 2, "nothing more to delete")
     }
 
-    @Test func theChoicesAreNeverOrADayToThreeMonths() {
-        #expect(AutoDeleteChoice.days.map(AutoDeleteChoice.label)
-                == ["Never", "After 1 day", "After 7 days", "After 30 days", "After 90 days"])
+    /// General asks before a shorter period deletes anything: what it would delete now, without deleting it.
+    @Test func aShorterPeriodSaysWhatItWouldDeleteFirst() {
+        let settings = AppSettings.inMemory()
+        let now = Date()
+        let store = HistoryStore.preview(entries: [
+            entry(.success, hoursAgo: 2, file: "recent.wav", now: now),
+            entry(.success, hoursAgo: 24 * 3, file: "three.wav", now: now),
+            entry(.failed, hoursAgo: 24 * 40, file: "forty.wav", now: now),
+        ], settings: settings)
+        #expect(store.expiredEntries(afterDays: 0, now: now).isEmpty, "Never")
+        #expect(store.expiredEntries(afterDays: 1, now: now).map(\.audioFileName) == ["three.wav", "forty.wav"])
+        #expect(store.expiredEntries(afterDays: 30, now: now).map(\.audioFileName) == ["forty.wav"])
+        #expect(store.expiredEntries(afterDays: 90, now: now).isEmpty)
+        #expect(store.entries.count == 3, "asking deletes nothing")
+        #expect(AutoDeleteChoice.confirmation(count: 1_180, days: 1) == "Delete 1,180 transcripts older than 1 day?")
+        #expect(AutoDeleteChoice.confirmation(count: 1, days: 30) == "Delete 1 transcript older than 30 days?")
+        #expect(AutoDeleteChoice.confirmation(count: 0, days: 1) == nil, "nothing to delete: no question")
+        #expect(AutoDeleteChoice.confirmation(count: 5, days: 0) == nil, "Never deletes nothing")
     }
 }
 

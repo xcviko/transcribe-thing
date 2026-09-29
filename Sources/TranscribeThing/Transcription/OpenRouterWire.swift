@@ -355,6 +355,34 @@ struct ChatStreamProgress: Equatable, Sendable {
     var outputCharacters = 0
 }
 
+/// Cuts a server-sent-event stream into lines at line feeds only (a carriage return before one goes with it), each
+/// decoded as UTF-8 once it's whole. Foundation's `lines` also cuts at U+2028, U+2029 and U+0085, which JSON leaves
+/// unescaped inside strings: the event holding one would be split in two and its text lost. Keeping bytes until
+/// their line ends also keeps a character whole when the network splits it.
+struct ServerSentEventLines {
+    private var pending: [UInt8] = []
+
+    /// The line `byte` ends, when it's a line feed.
+    mutating func take(_ byte: UInt8) -> String? {
+        guard byte == 0x0A else {
+            pending.append(byte)
+            return nil
+        }
+        return flush()
+    }
+
+    /// The last line, when the stream ended without a line feed after it.
+    mutating func finish() -> String? {
+        pending.isEmpty ? nil : flush()
+    }
+
+    private mutating func flush() -> String {
+        if pending.last == 0x0D { pending.removeLast() }
+        defer { pending.removeAll(keepingCapacity: true) }
+        return String(decoding: pending, as: UTF8.self)
+    }
+}
+
 /// A streamed chat completion put together as its lines arrive. OpenRouter sends server-sent events: each event one
 /// `data: {chunk}` line, `: OPENROUTER PROCESSING` comments while it waits (so the connection never idles out), and
 /// `data: [DONE]` last. Pure, so tests feed it canned streams.
@@ -469,10 +497,14 @@ struct OpenRouterChatStream {
                            reasoningCharacters: progress.reasoningCharacters > 0 ? progress.reasoningCharacters : nil)
     }
 
-    /// A whole stream at once (tests, canned answers): every line of `sse`, then the result.
+    /// A whole stream at once (tests, canned answers): every line of `sse`, cut as the client cuts them, then the result.
     static func parse(_ sse: String, engine: EngineID) throws -> CloudResult {
         var stream = OpenRouterChatStream()
-        for line in sse.split(separator: "\n", omittingEmptySubsequences: false) { _ = stream.consume(line) }
+        var lines = ServerSentEventLines()
+        for byte in sse.utf8 {
+            if let line = lines.take(byte) { _ = stream.consume(line) }
+        }
+        if let line = lines.finish() { _ = stream.consume(line) }
         return try stream.result(engine: engine)
     }
 }
