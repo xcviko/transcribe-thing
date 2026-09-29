@@ -284,7 +284,7 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
         switch self {
         case .pushToTalk: "Hold to record, let go to paste."
         case .handsFree: "Tap to start. Tap again to finish."
-        case .pasteLast: "Paste your most recent transcript again. It stays on the clipboard."
+        case .pasteLast: "Paste your most recent transcript again. Your clipboard stays as it was."
         case .switchModel: "While dictating: switch this dictation to your next model."
         }
     }

@@ -151,7 +151,12 @@ model at most once, and switching between them needs no audio.
 | Hands-free | **fn Space** | Also: press Space while holding fn, double-press fn (turn it on in Shortcuts), or click the pill. |
 | Finish hands-free | **fn**, **fn Space** or the Stop button | |
 | Cancel | **esc**, always | Works while recording or transcribing; Undo brings it back. |
-| Paste last transcript | **⌘ fn V** | Also leaves it on the clipboard, like every paste. |
+| Paste last transcript | **⌘ fn V** | Your clipboard stays as it was, as with every paste. |
 
 Everything but Cancel is rebindable under transcribe-thing → Shortcuts. With secure typing on (password fields, some
 terminals), only hold-to-talk and double-press work until it's off.
+
+Pasting leaves your clipboard as it was. The text goes on it only for the paste, marked so clipboard managers skip it,
+and whatever you had copied (text, images, files) comes back 0.4 s later, unless you copy something in the meantime.
+Only Copy, in History or on a card, puts a transcript on the clipboard. A password manager's copy is cleared rather
+than put back, so it can't outlive the manager's own clearing.

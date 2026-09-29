@@ -9,14 +9,16 @@ enum InsertionOutcome: Equatable, Sendable {
     case noEditableTarget
     /// Another app came to the front while we transcribed. Nothing was pasted or copied.
     case targetChanged
-    /// transcribe-thing may not post keystrokes. The text was copied to the clipboard.
+    /// transcribe-thing may not post keystrokes. Nothing was pasted or copied.
     case accessibilityMissing
+    /// Nothing was pasted, and the clipboard is as it was.
     case failed(String)
 }
 
-/// Pastes text at the cursor of the frontmost app: pasteboard + a synthetic, layout-correct ⌘V. The text stays on
-/// the clipboard afterwards, as a normal copy. On any outcome other than `.pasted` the caller still holds the text
-/// and shows it in a transcript card.
+/// Pastes text at the cursor of the frontmost app: the text goes on the clipboard only for a synthetic, layout-correct
+/// ⌘V, and what the clipboard held before (every item with every type: text, images, files) comes back once the target
+/// has read it. Only `copy(_:)` puts text there to stay. On any outcome other than `.pasted` the caller still holds the
+/// text and shows it in a transcript card.
 @MainActor
 final class TextInserter {
     /// Everything that touches the system, injectable so the pipeline is testable without posting events.
@@ -32,8 +34,13 @@ final class TextInserter {
         var postPaste: @Sendable (CGKeyCode) -> Bool
     }
 
-    /// How long the paste with a smart leading space stays on the clipboard before the text without it replaces it.
-    var swapDelay: Duration = .milliseconds(800)
+    /// How long the target has to read the text after ⌘V before the clipboard it replaced comes back. ⌘V is only
+    /// queued: the target reads the clipboard when its main thread gets to the keystroke, which pladder measured at
+    /// 1–25 ms for most apps, and later for an Electron app, a busy page or a cold start, which souffle's 75 ms missed
+    /// (they pasted the old clipboard). espanso waits 300 ms; souffle and pladder settled on 400 ms. Longer only widens
+    /// the window in which the user's own ⌘V pastes the transcript instead of their clipboard; a copy made meanwhile
+    /// is never overwritten, however long this is.
+    var restoreDelay: Duration = .milliseconds(400)
     var modifierReleaseTimeout: Duration = .milliseconds(600)
     /// Our active event tap is running. Creating an active tap requires the same PostEvent grant, so a live
     /// tap proves we may post ⌘V even when the preflight still answers from its stale per-process cache.
@@ -41,9 +48,15 @@ final class TextInserter {
 
     private let pasteboard: NSPasteboard
     private var system: System
-    /// Puts the text without its smart leading space on the clipboard once the paste is done.
-    private var pendingSwap: Task<Void, Never>?
+    private var pendingRestore: PendingRestore?
     private var queueTail: Task<Void, Never>?
+
+    private struct PendingRestore {
+        /// Nil when the clipboard couldn't be kept (`PasteboardSnapshot.capture`): the pasted text then stays.
+        var original: PasteboardSnapshot?
+        var ourChangeCount: Int
+        var task: Task<Void, Never>
+    }
 
     init() {
         self.pasteboard = .general
@@ -68,21 +81,19 @@ final class TextInserter {
         system.frontmostPID()
     }
 
-    /// Pastes into the app that was frontmost when the recording stopped (`expectedPID`; nil for paste last). The
-    /// text stays on the clipboard as a normal copy, without the smart leading space the paste may have added.
+    /// Pastes into the app that was frontmost when the recording stopped (`expectedPID`; nil for paste last).
     func insert(_ text: String, expectedPID: pid_t?) async -> InsertionOutcome {
         await serialized { await self.performInsert(text, expectedPID: expectedPID) }
     }
 
-    /// "Paste here": paste into whatever has focus now, without focus or target checks. The text stays on the
-    /// clipboard.
+    /// "Paste here": paste into whatever has focus now, without focus or target checks.
     func pasteNow(_ text: String) async -> InsertionOutcome {
         await serialized { await self.performPasteNow(text) }
     }
 
     private func performInsert(_ text: String, expectedPID: pid_t?) async -> InsertionOutcome {
         guard !text.isEmpty else { return .failed("There was no text to paste.") }
-        if let outcome = await checkPermission(for: text) { return outcome }
+        guard await mayPostEvents() else { return .accessibilityMissing }
         if let expectedPID, system.frontmostPID() != expectedPID { return .targetChanged }
 
         await waitForModifierRelease()
@@ -100,29 +111,24 @@ final class TextInserter {
         if let previous = focus.precedingCharacter, Self.needsLeadingSpace(after: previous, before: text) {
             final = " " + text
         }
-        return await paste(final, keeping: text)
+        return await paste(final)
     }
 
     private func performPasteNow(_ text: String) async -> InsertionOutcome {
         guard !text.isEmpty else { return .failed("There was no text to paste.") }
-        if let outcome = await checkPermission(for: text) { return outcome }
+        guard await mayPostEvents() else { return .accessibilityMissing }
         await waitForModifierRelease()
-        return await paste(text, keeping: text)
+        return await paste(text)
     }
 
-    /// A normal, persistent copy (it stays on the clipboard and syncs like any other copy).
+    /// A normal, persistent copy (the Copy buttons): it stays on the clipboard and syncs like any other copy.
     func copy(_ text: String) {
-        cancelPendingSwap()
-        writePlainCopy(text)
-    }
-
-    @discardableResult
-    private func writePlainCopy(_ text: String) -> Bool {
+        cancelPendingRestore()
         pasteboard.clearContents()
         let item = NSPasteboardItem()
         item.setString(text, forType: .string)
         item.setString(Self.bundleID, forType: PasteboardMarkers.sourceType)
-        return pasteboard.writeObjects([item])
+        _ = pasteboard.writeObjects([item])
     }
 
     // MARK: Pipeline
@@ -139,40 +145,27 @@ final class TextInserter {
         return await task.value
     }
 
-    private func checkPermission(for text: String) async -> InsertionOutcome? {
-        if eventTapActive() { return nil }
+    private func mayPostEvents() async -> Bool {
+        if eventTapActive() { return true }
         let canPost = system.canPostEvents
-        guard await Task.detached(priority: .userInitiated, operation: { canPost() }).value else {
-            copy(text)
-            return .accessibilityMissing
-        }
-        return nil
+        return await Task.detached(priority: .userInitiated, operation: { canPost() }).value
     }
 
-    /// Pastes `text` and leaves `kept` on the clipboard as a normal copy: the transcript itself, without the smart
-    /// leading space the paste may have added. When they're the same, the paste is that copy. Otherwise `text` goes
-    /// on the clipboard only for the ⌘V, marked transient, and `kept` replaces it after `swapDelay` unless someone
-    /// copied something since.
-    private func paste(_ text: String, keeping kept: String) async -> InsertionOutcome {
-        cancelPendingSwap()
-        let transient = kept != text
-        let written: Bool
-        if transient {
-            // Keep the transient text off Universal Clipboard and out of clipboard managers.
-            _ = pasteboard.prepareForNewContents(with: .currentHostOnly)
-            let item = NSPasteboardItem()
-            item.setString(text, forType: .string)
-            item.setString(Self.bundleID, forType: PasteboardMarkers.sourceType)
-            for marker in [PasteboardMarkers.transientType, PasteboardMarkers.autoGeneratedType,
-                           PasteboardMarkers.concealedType] {
-                item.setData(Data(), forType: marker)
-            }
-            written = pasteboard.writeObjects([item])
-        } else {
-            written = writePlainCopy(text)
+    /// Pastes `text` from a transient clipboard item, then puts back what the clipboard held before after
+    /// `restoreDelay`, unless someone copied something since. When the paste can't go ahead, it comes back at once.
+    private func paste(_ text: String) async -> InsertionOutcome {
+        let original = takeOriginalClipboard()
+        // Only there for the ⌘V: off Universal Clipboard, and marked so clipboard managers skip it.
+        _ = pasteboard.prepareForNewContents(with: .currentHostOnly)
+        let item = NSPasteboardItem()
+        item.setString(text, forType: .string)
+        item.setString(Self.bundleID, forType: PasteboardMarkers.sourceType)
+        for marker in [PasteboardMarkers.transientType, PasteboardMarkers.autoGeneratedType,
+                       PasteboardMarkers.concealedType] {
+            item.setData(Data(), forType: marker)
         }
-        guard written else {
-            if transient { writePlainCopy(kept) }
+        guard pasteboard.writeObjects([item]) else {
+            original?.restore(to: pasteboard)
             return .failed("\(Brand.name) couldn’t use the clipboard.")
         }
         let ourChangeCount = pasteboard.changeCount
@@ -181,28 +174,42 @@ final class TextInserter {
         let post = system.postPaste
         let posted = await Task.detached(priority: .userInitiated) { post(keyCode) }.value
         guard posted else {
-            if transient, pasteboard.changeCount == ourChangeCount { writePlainCopy(kept) }
+            if pasteboard.changeCount == ourChangeCount { original?.restore(to: pasteboard) }
             return .failed("\(Brand.name) couldn’t send the paste keystroke.")
         }
-        if transient { scheduleSwap(to: kept, ourChangeCount: ourChangeCount) }
+        scheduleRestore(original, ourChangeCount: ourChangeCount)
         return .pasted
     }
 
-    private func scheduleSwap(to kept: String, ourChangeCount: Int) {
-        let delay = swapDelay
-        pendingSwap = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: delay)
-            guard !Task.isCancelled, let self else { return }
-            self.pendingSwap = nil
-            // Someone copied something since our paste: theirs wins.
-            guard self.pasteboard.changeCount == ourChangeCount else { return }
-            self.writePlainCopy(kept)
+    /// What the clipboard held before this paste. A paste while the previous one's restore is still waiting takes
+    /// over that one's original, so the user's own clipboard comes back at the end, not the previous transcript.
+    private func takeOriginalClipboard() -> PasteboardSnapshot? {
+        if let pending = pendingRestore {
+            pending.task.cancel()
+            pendingRestore = nil
+            if pasteboard.changeCount == pending.ourChangeCount { return pending.original }
         }
+        let original = PasteboardSnapshot.capture(pasteboard)
+        if original == nil { Log.app.notice("The clipboard can’t be kept for this paste; the pasted text stays on it") }
+        return original
     }
 
-    private func cancelPendingSwap() {
-        pendingSwap?.cancel()
-        pendingSwap = nil
+    private func scheduleRestore(_ original: PasteboardSnapshot?, ourChangeCount: Int) {
+        let delay = restoreDelay
+        let task = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled, let self else { return }
+            self.pendingRestore = nil
+            // Someone copied something since our paste: theirs wins.
+            guard self.pasteboard.changeCount == ourChangeCount else { return }
+            original?.restore(to: self.pasteboard)
+        }
+        pendingRestore = PendingRestore(original: original, ourChangeCount: ourChangeCount, task: task)
+    }
+
+    private func cancelPendingRestore() {
+        pendingRestore?.task.cancel()
+        pendingRestore = nil
     }
 
     /// A chord like ⌃⌥ may still be half-held when the PTT release stops recording; ⌘V with ⌥ held

@@ -194,8 +194,8 @@ final class AppSettings {
         for key in [SettingsKey.reasoningEfforts, .cleanupModel, .cleanupReasoningEfforts, .cleanupReasoningEffort] {
             store.remove(key)
         }
-        // Recordings have no length limit, the pasted text stays on the clipboard, and a recording's audio lives as
-        // long as its History entry (`autoDeleteHistoryDays`): these settings have no meaning any more.
+        // Recordings have no length limit, every paste puts the clipboard back, and a recording's audio lives as long
+        // as its History entry (`autoDeleteHistoryDays`): these settings have no meaning any more.
         for key in [SettingsKey.maxRecordingMinutes, .restoreClipboard, .keepFailedRecordingsDays,
                     .keepSuccessfulRecordingsDays] {
             store.remove(key)

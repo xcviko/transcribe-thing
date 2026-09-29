@@ -1611,7 +1611,7 @@ final class FakeRecorder: DictationRecorder {
         #expect(h.toasts.notices.first?.title == "Nothing to paste yet")
     }
 
-    /// Paste last is copy and paste in one: the inserter keeps it on the clipboard, so no copy or card here.
+    /// Paste last only pastes (the inserter puts the clipboard back): no copy, no card.
     @Test func pasteLastPastesTheLatestTranscript() async throws {
         let h = Self.make()
         h.history.upsert(TranscriptEntry(text: "last words", engine: .parakeet, audioDuration: 1, voicedSeconds: 1))
@@ -1628,8 +1628,11 @@ final class FakeRecorder: DictationRecorder {
         #expect(h.toasts.notices.isEmpty)
     }
 
-    @Test(arguments: [(InsertionOutcome.noEditableTarget, "Nowhere to paste"), (.failed("no ⌘V"), "Couldn’t paste")])
-    func pasteLastWithNowhereToPasteLeavesItOnTheClipboard(_ outcome: InsertionOutcome, _ title: String) async throws {
+    /// Nowhere to paste leaves the clipboard alone: a card holds the text, as after a dictation, and only its Copy
+    /// puts it on the clipboard.
+    @Test(arguments: [(InsertionOutcome.noEditableTarget, "Nowhere to paste", false), (.failed("no ⌘V"), "Couldn’t paste", true)])
+    func pasteLastWithNowhereToPasteOffersTheTextToCopy(_ outcome: InsertionOutcome, _ title: String,
+                                                       _ offersPasteHere: Bool) async throws {
         let h = Self.make()
         h.history.upsert(TranscriptEntry(text: "last words", engine: .parakeet, audioDuration: 1, voicedSeconds: 1))
         var copied: [String] = []
@@ -1637,11 +1640,30 @@ final class FakeRecorder: DictationRecorder {
         h.controller.copyOverride = { copied.append($0) }
         h.controller.pasteLast()
         try await waitUntil { !h.toasts.notices.isEmpty }
+        #expect(copied.isEmpty)
+        let card = try #require(h.toasts.notices.first)
+        #expect(card.title == title)
+        #expect(card.transcript == "last words")
+        #expect(card.actions.contains { $0.kind == .pasteText("last words") } == offersPasteHere)
+        h.controller.perform(try #require(card.actions.first { $0.kind == .copyText("last words") }), from: card)
         #expect(copied == ["last words"])
-        let notice = try #require(h.toasts.notices.first)
-        #expect(notice.title == title)
-        #expect(notice.body == "Your text is on the clipboard.")
-        #expect(notice.transcript == nil, "a short notice, not a transcript card")
+    }
+
+    /// Without Accessibility nothing is pasted or copied: the notice holds the text until the user copies it.
+    @Test func withoutAccessibilityTheTextWaitsInTheNoticeUncopied() async throws {
+        let h = Self.make()
+        h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "Hello there", engine: engine, processingTime: 0.1) }
+        h.controller.insertOverride = { _, _ in .accessibilityMissing }
+        var copied: [String] = []
+        h.controller.copyOverride = { copied.append($0) }
+        h.controller.enqueue(Self.recording(), engine: .parakeet, targetPID: nil)
+        try await waitUntil { h.toasts.notices.contains { $0.dedupeKey == "error.accessibilityMissing" } }
+        let notice = try #require(h.toasts.notices.first { $0.dedupeKey == "error.accessibilityMissing" })
+        #expect(notice.transcript == "Hello there")
+        #expect(notice.actions.map(\.title) == ["Allow Access", "Copy"])
+        #expect(copied.isEmpty)
+        h.controller.perform(try #require(notice.actions.first { $0.kind == .copyText("Hello there") }), from: notice)
+        #expect(copied == ["Hello there"])
     }
 
     @Test func grantingTheMicDismissesTheStickyToast() throws {
