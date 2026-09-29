@@ -573,9 +573,9 @@ private struct PillModelSheet: View {
     }
 }
 
-/// Each pill color in a row: the resting and listening pill, a Gemini chip, a clean-up count, hands-free's X, timer and
-/// Stop, the error, and the tooltip and the Switch model hint above the pill. On a white document in the light
-/// appearance (where a page showing through washes a color out most), on a dark editor in the dark one.
+/// Each pill color in a row: the resting and listening pill, a Gemini chip, the clean-up chip over a count, hands-free's
+/// X, timer and Stop, the error, and the tooltip and the Switch model hint above the pill. On a white document in the
+/// light appearance (where a page showing through washes a color out most), on a dark editor in the dark one.
 private struct PillColorSheet: View {
     private struct Column {
         let title: String
@@ -610,8 +610,9 @@ private struct PillColorSheet: View {
         Column(title: "Rest", width: 90) { standing(pill($0, .rest)) },
         Column(title: "Listening", width: 140) { standing(pill($0, .listening, choice: .parakeet)) },
         Column(title: "Gemini chip", width: 170) { standing(pill($0, .listening, choice: .gemini, chip: true)) },
-        Column(title: "Clean-up count", width: 160) {
-            standing(pill($0, .processing, choice: .cleanup)
+        // The chip's dimmed "Parakeet" is the dimmest text on the fill.
+        Column(title: "Clean-up chip", width: 200) {
+            standing(pill($0, .processing, choice: .cleanup, chip: true)
                 .previewCounter(PillTokenCount(phase: .writing, tokens: 340)))
         },
         Column(title: "Hands-free", width: 230) { standing(pill($0, .locked, level: 0.5, recordingFor: 42)) },

@@ -281,6 +281,8 @@ struct PillColorSwatches: View {
             }
         }
         .fixedSize()
+        // The circles, not their hit areas, line up with the row's trailing edge.
+        .padding(.horizontal, -4)
         .accessibilityElement(children: .contain)
     }
 }

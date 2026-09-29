@@ -153,7 +153,7 @@ enum HubSnapshots {
             hub("hub-general", .general, height: 1140),
             // The narrowest window: the segmented control leaves the least room for the pill caption; sounds off; a
             // pill color other than graphite ringed.
-            hub("hub-general-compact", .general, width: 820, height: 560) { c in
+            hub("hub-general-compact", .general, width: 820, height: 620) { c in
                 c.settings.pillMode = .always
                 c.settings.pillColor = .sapphire
                 c.settings.soundsEnabled = false
