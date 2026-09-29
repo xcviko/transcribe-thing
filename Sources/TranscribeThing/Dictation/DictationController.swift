@@ -1158,6 +1158,12 @@ final class DictationController {
 
     // MARK: - Paste last
 
+    /// The menu's Copy Last Transcript: an explicit copy, so the text stays on the clipboard (a paste puts it back).
+    func copyLast() {
+        guard let text = history.lastSuccessfulText else { return }
+        copy(text)
+    }
+
     /// The last transcript is pasted where the user is typing, and the clipboard stays as it was, as with every paste.
     /// When it can't be pasted, a card holds it with Copy, like a dictation's.
     func pasteLast() {

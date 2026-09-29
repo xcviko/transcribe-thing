@@ -2039,7 +2039,7 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
         let menu = env.menuBar.builder.makeMenu(includeQuit: true)
         #expect(Self.titles(menu) == [
             "Parakeet v3 · Ready", "—",
-            "Paste Last Transcript", "—",
+            "Copy Last Transcript", "—",
             "Microphone", "—",
             "Settings…", "—", "Quit",
         ])
@@ -2087,26 +2087,36 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
         #expect(menu.items.last?.title == "Settings…")
     }
 
-    /// ⌘, and ⌘Q are gone (no quitting by accident), and paste last's ⌘ fn V can't be drawn faithfully.
+    /// ⌘, and ⌘Q are gone (no quitting by accident); Copy Last Transcript has no shortcut of its own.
     @Test func noMisleadingKeyEquivalents() throws {
         let env = AppEnvironment.preview()
         let menu = env.menuBar.builder.makeMenu(includeQuit: true)
-        for title in ["Settings…", "Quit", "Paste Last Transcript"] {
+        for title in ["Settings…", "Quit", "Copy Last Transcript"] {
             let item = try #require(menu.items.first { $0.title == title })
             #expect(item.keyEquivalent.isEmpty, "\(title)")
         }
-        // A shortcut the menu can draw is shown.
-        env.settings.shortcuts[.pasteLast] = Shortcut(modifiers: [.init(.control), .init(.command)], keyCode: KeyCode.ansiV)
-        let paste = try #require(env.menuBar.builder.makeMenu(includeQuit: true).items.first { $0.title == "Paste Last Transcript" })
-        #expect(paste.keyEquivalent == "v" && paste.keyEquivalentModifierMask == [.control, .command])
     }
 
-    @Test func pasteLastIsDisabledWithoutHistory() throws {
+    /// The menu copies the last transcript (to stay on the clipboard); pasting it is the Paste last shortcut's job.
+    @Test func theMenuCopiesTheLastTranscriptAndNeverPastesIt() throws {
+        let env = AppEnvironment.preview()
+        var copied: [String] = []
+        env.dictation.copyOverride = { copied.append($0) }
+        let menu = env.menuBar.builder.makeMenu(includeQuit: true)
+        #expect(!menu.items.contains { $0.title == "Paste Last Transcript" })
+        let item = try #require(menu.items.first { $0.title == "Copy Last Transcript" })
+        #expect(item.isEnabled)
+        let last = try #require(env.history.lastSuccessfulText)
+        NSApplication.shared.sendAction(try #require(item.action), to: item.target, from: item)
+        #expect(copied == [last])
+    }
+
+    @Test func copyLastIsDisabledWithoutHistory() throws {
         let env = AppEnvironment.preview()
         env.history.clearAll()
         let menu = env.menuBar.builder.makeMenu(includeQuit: true)
-        let paste = try #require(menu.items.first { $0.title == "Paste Last Transcript" })
-        #expect(!paste.isEnabled)
+        let copy = try #require(menu.items.first { $0.title == "Copy Last Transcript" })
+        #expect(!copy.isEnabled)
         Self.expectTidySeparators(menu, "no history")
     }
 
@@ -2118,7 +2128,7 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
         #expect(env.dictation.machine.isRecording)
         let menu = env.menuBar.builder.makeMenu(includeQuit: true)
         #expect(Array(Self.titles(menu).dropFirst().prefix(4)) == [
-            "—", "Cancel Dictation", "Paste Last Transcript", "—",
+            "—", "Cancel Dictation", "Copy Last Transcript", "—",
         ])
         let cancel = try #require(menu.items.first { $0.title == "Cancel Dictation" })
         #expect(cancel.keyEquivalent == "\u{1b}" && cancel.keyEquivalentModifierMask.isEmpty, "esc draws as ⎋")
@@ -2132,7 +2142,7 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
         for includeQuit in [true, false] {
             let menu = env.menuBar.builder.makeMenu(includeQuit: includeQuit)
             #expect(Array(Self.titles(menu).prefix(6)) == [
-                "Parakeet v3 · Listening…", "—", "Finish Dictation", "Cancel Dictation", "Paste Last Transcript", "—",
+                "Parakeet v3 · Listening…", "—", "Finish Dictation", "Cancel Dictation", "Copy Last Transcript", "—",
             ])
             Self.expectTidySeparators(menu, "hands-free")
         }

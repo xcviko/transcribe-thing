@@ -37,11 +37,10 @@ final class MenuBuilder {
                 env?.dictation.cancelCurrent()
             })
         }
-        let paste = MenuActionItem(title: "Paste Last Transcript", shortcut: settings.shortcuts[.pasteLast]) { [weak env] in
-            env?.dictation.pasteLast()
-        }
-        paste.isEnabled = env.history.lastSuccessfulText != nil
-        menu.addItem(paste)
+        // Pasting the last transcript is the Paste last shortcut's job; the menu copies it, to stay on the clipboard.
+        let copy = MenuActionItem(title: "Copy Last Transcript") { [weak env] in env?.dictation.copyLast() }
+        copy.isEnabled = env.history.lastSuccessfulText != nil
+        menu.addItem(copy)
         menu.addItem(.separator())
 
         menu.addItem(submenuItem("Microphone", symbol: "mic", microphoneMenu(env)))
