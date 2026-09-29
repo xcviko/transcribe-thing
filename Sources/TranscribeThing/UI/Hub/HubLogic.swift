@@ -180,6 +180,16 @@ enum EngineReadiness: Equatable {
         case .noCredit: return .keyProblem(keyStatus.isKeyLimitReached ? "Key limit reached" : "No credit")
         }
     }
+
+    /// A model's readiness: its transcriber's (Parakeet where `parakeet` runs it, or Gemini) first; once that is
+    /// usable, clean-up's OpenRouter key's. `localState` and `localError` are `parakeet`'s.
+    static func of(_ choice: ModelChoice, parakeet: EngineID, localState: LocalModelState, keyStatus: KeyStatus,
+                   localError: AppError? = nil) -> EngineReadiness {
+        let transcriber = of(choice.engine(parakeet: parakeet), localState: localState, keyStatus: keyStatus,
+                             localError: localError)
+        guard choice.cleansUp, transcriber.isUsable else { return transcriber }
+        return of(.geminiFlash, localState: localState, keyStatus: keyStatus)
+    }
 }
 
 // MARK: - Versions
@@ -353,12 +363,25 @@ enum VersionDetails {
     }
 }
 
-/// The sidebar footer chip for the main model: "Parakeet v3 · Ready", "Parakeet v3 · Optimizing…",
-/// "Parakeet v3 · Cloud · Needs key".
+/// A model's name and status in a line: the sidebar footer chip for the main model ("Parakeet v3 · Ready",
+/// "Parakeet + Luna · Needs key", "Gemini Flash · Ready"), and each model's status on the Models page.
 struct EngineSummary: Equatable {
     var name: String
     var status: String
     var tone: StatusTone
+
+    /// `choice` by `ModelChoice.compactName`: its transcriber's status, and for clean-up once Parakeet is ready, the
+    /// OpenRouter key's. `localState` and `localError` are `parakeet`'s.
+    static func make(choice: ModelChoice, parakeet: EngineID, localState: LocalModelState, keyStatus: KeyStatus,
+                     localError: AppError? = nil) -> EngineSummary {
+        var summary = make(engine: choice.engine(parakeet: parakeet), localState: localState, keyStatus: keyStatus,
+                           localError: localError)
+        if choice.cleansUp, summary.tone == .positive {
+            summary = make(engine: .geminiFlash, localState: localState, keyStatus: keyStatus)
+        }
+        summary.name = choice.compactName(parakeet: parakeet)
+        return summary
+    }
 
     static func make(engine: EngineID, localState: LocalModelState, keyStatus: KeyStatus,
                      localError: AppError? = nil) -> EngineSummary {
@@ -395,45 +418,48 @@ enum ProviderNote {
     }
 }
 
-// MARK: - Extra models
+// MARK: - Switch model
 
-/// What the Models page says about the extra models: the Switch model shortcut steps through the ones switched on
-/// (clean-up among them), for one dictation at a time.
-enum ExtraModels {
+/// What the Models page says above the lineup: the Switch model shortcut steps through the models switched on, from
+/// the main model, for one dictation at a time.
+enum SwitchModelLine {
     enum Status: Equatable {
-        /// The shortcut switches between the main model, clean-up and the enabled extra models.
+        /// The shortcut steps through the cycle.
         case ready(Shortcut)
-        /// Clean-up and every extra model are off: the shortcut isn't intercepted, even while dictating.
-        case noneEnabled(Shortcut?)
+        /// Only the main model takes part: the shortcut isn't intercepted, even while dictating.
+        case alone(Shortcut?)
         /// Switch model has no shortcut, so nothing switches.
         case unbound
     }
 
-    static func status(binding: Shortcut?, enabled: [ModelChoice]) -> Status {
-        guard !enabled.isEmpty else { return .noneEnabled(binding) }
+    static func status(binding: Shortcut?, lineup: ModelLineup) -> Status {
+        guard lineup.cycle.count > 1 else { return .alone(binding) }
         guard let binding, !binding.isEmpty else { return .unbound }
         return .ready(binding)
     }
 
-    /// One line under the "Extra models" heading, with the user's own binding: "Press fn ⇥ while dictating to use
-    /// one for that dictation."
-    static func explanation(_ status: Status) -> String {
-        switch status {
-        case .ready(let binding):
-            "Press \(binding.compactDescription) while dictating to use one for that dictation."
-        case .noneEnabled(let binding?) where !binding.isEmpty:
-            "Turn one on to use it when you press \(binding.compactDescription) while dictating."
-        case .noneEnabled:
-            "Turn one on and give Switch model a shortcut to use it while dictating."
-        case .unbound:
-            "Switch model has no shortcut yet. Set one to use these while dictating."
-        }
+    /// "Parakeet → Clean-up → Gemini": the cycle by short names, from the main model.
+    static func chain(_ lineup: ModelLineup) -> String {
+        lineup.cycle.map(\.shortName).joined(separator: " → ")
     }
 
-    /// `enabled` with `engine` switched on or off, in the order the shortcut steps through them.
-    static func setting(_ engine: EngineID, on: Bool, in enabled: [EngineID]) -> [EngineID] {
-        let others = enabled.filter { $0 != engine }
-        return AppSettings.normalizedSwitchEngines(on ? others + [engine] : others)
+    /// The line as one sentence, with the user's own binding: the accessibility label of the one with key caps, and
+    /// the whole line otherwise.
+    static func explanation(_ status: Status, lineup: ModelLineup) -> String {
+        switch status {
+        case .ready(let binding):
+            let names = lineup.cycle.map(\.shortName)
+            let rest = names.dropFirst()
+            let then = rest.count > 1 ? rest.dropLast().joined(separator: ", ") + ", then " + (rest.last ?? "")
+                : rest.first ?? ""
+            return "Press \(binding.spokenDescription) while dictating to step from \(names.first ?? "") to \(then)."
+        case .alone(let binding?) where !binding.isEmpty:
+            return "Switch on another model to reach it with \(binding.compactDescription) while dictating."
+        case .alone:
+            return "Switch on another model and give Switch model a shortcut to use it while dictating."
+        case .unbound:
+            return "Switch model has no shortcut yet. Set one to switch models while dictating."
+        }
     }
 }
 
@@ -471,11 +497,14 @@ enum HubAttention {
         var accessibilityLikelyStale: Bool
         var fnKeyUsage: FnKeyUsage
         var pushToTalkUsesFn: Bool
+        /// The main model's engine.
         var engine: EngineID
         var localState: LocalModelState
         var keyStatus: KeyStatus
         /// The error ModelStore kept for a failed local model.
         var localError: AppError? = nil
+        /// The main model is clean-up: Parakeet on this Mac needs the OpenRouter key too.
+        var cleansUp = false
         /// The shortcut's event tap has stayed down (it can while Accessibility still reads as granted).
         var shortcutUnavailable = false
     }
@@ -549,7 +578,20 @@ enum HubAttention {
                     body: message.isEmpty ? "Something went wrong. Try again." : message,
                     actionTitle: "Retry", action: .download(input.engine)))
             }
-        } else {
+        }
+        if input.engine.isLocal, input.cleansUp {
+            switch input.keyStatus {
+            case .valid, .checking, .offline, .failed:
+                break
+            case .missing:
+                items.append(AttentionItem(
+                    id: "key", tone: .error, symbol: "key.fill", title: "Add your OpenRouter key",
+                    body: "Clean-up needs a key to tidy your text.",
+                    actionTitle: "Add Key", action: .openModels))
+            case .invalid, .noCredit:
+                items.append(keyItem(input.keyStatus, service: "clean-up"))
+            }
+        } else if !input.engine.isLocal {
             // Same naming as the OpenRouter notices: "Gemini" for either Gemini, the model for cloud speech.
             let service = input.engine.cloudAPI == .transcriptions ? input.engine.shortName : "Gemini"
             switch input.keyStatus {
@@ -560,21 +602,8 @@ enum HubAttention {
                     id: "key", tone: .error, symbol: "key.fill", title: "Add your OpenRouter key",
                     body: "\(input.engine.shortName) needs a key to transcribe.",
                     actionTitle: "Add Key", action: .openModels))
-            case .invalid:
-                items.append(AttentionItem(
-                    id: "key", tone: .error, symbol: "key.fill", title: "Your OpenRouter key stopped working",
-                    body: "It may be revoked or mistyped.",
-                    actionTitle: "Update Key", action: .openModels))
-            case .noCredit where input.keyStatus.isKeyLimitReached:
-                items.append(AttentionItem(
-                    id: "key", tone: .error, symbol: "creditcard", title: "Your OpenRouter key hit its limit",
-                    body: "This key has a spending limit, and it’s used up. Raise it to keep using \(service).",
-                    actionTitle: "Raise Limit", action: .openURL(OpenRouterLinks.keys)))
-            case .noCredit:
-                items.append(AttentionItem(
-                    id: "key", tone: .error, symbol: "creditcard", title: "Out of OpenRouter credit",
-                    body: "Add credit to keep using \(service).",
-                    actionTitle: "Add Credit", action: .openURL(OpenRouterLinks.credits)))
+            case .invalid, .noCredit:
+                items.append(keyItem(input.keyStatus, service: service))
             }
         }
 
@@ -585,6 +614,28 @@ enum HubAttention {
                 actionTitle: "Open Keyboard Settings", action: .openPane(.keyboard)))
         }
         return items
+    }
+
+    /// The card for a key OpenRouter rejects or that can't pay: `service` is what it keeps from working ("Gemini",
+    /// "clean-up"). Only for `.invalid` and `.noCredit`.
+    private static func keyItem(_ status: KeyStatus, service: String) -> AttentionItem {
+        switch status {
+        case .noCredit where status.isKeyLimitReached:
+            AttentionItem(
+                id: "key", tone: .error, symbol: "creditcard", title: "Your OpenRouter key hit its limit",
+                body: "This key has a spending limit, and it’s used up. Raise it to keep using \(service).",
+                actionTitle: "Raise Limit", action: .openURL(OpenRouterLinks.keys))
+        case .noCredit:
+            AttentionItem(
+                id: "key", tone: .error, symbol: "creditcard", title: "Out of OpenRouter credit",
+                body: "Add credit to keep using \(service).",
+                actionTitle: "Add Credit", action: .openURL(OpenRouterLinks.credits))
+        default:
+            AttentionItem(
+                id: "key", tone: .error, symbol: "key.fill", title: "Your OpenRouter key stopped working",
+                body: "It may be revoked or mistyped.",
+                actionTitle: "Update Key", action: .openModels)
+        }
     }
 
     /// "about 30 s left" → "About 30 s left."

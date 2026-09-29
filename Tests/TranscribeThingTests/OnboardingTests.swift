@@ -223,7 +223,7 @@ import Testing
         }
         #expect(!model.canContinue)
         model.select(.parakeetCloud)
-        #expect(model.ctx.settings.selectedEngine == .parakeetCloud)
+        #expect(model.ctx.settings.parakeetEngine == .parakeetCloud)
         #expect(model.showsKeyField)
         #expect(!model.canContinue)
     }
@@ -246,7 +246,7 @@ import Testing
             ctx.account = .preview(status: .missing)
         }
         missing.select(.parakeetCloud)
-        #expect(missing.ctx.settings.selectedEngine == .parakeetCloud)
+        #expect(missing.ctx.settings.parakeetEngine == .parakeetCloud)
         #expect(missing.showsKeyField)
         #expect(!missing.canContinue)
 
@@ -604,35 +604,65 @@ import Testing
     }
 }
 
-// MARK: - Extra models
+// MARK: - Switch model
 
-@Suite struct OnboardingExtraModelsGateTests {
-    @Test func extraModelsNeedAnEnabledModelAndAWorkingKey() {
+@Suite struct OnboardingSwitchModelGateTests {
+    private static func lineup(main: ModelChoice = .parakeet, on: [ModelChoice]) -> ModelLineup {
+        var lineup = ModelLineup.default
+        lineup.main = main
+        for choice in ModelChoice.allCases { lineup.setSwitchable(choice, on.contains(choice)) }
+        return lineup
+    }
+
+    @Test func theLessonNeedsAStepAndAWorkingKeyForIt() {
         let valid = KeyStatus.valid(KeyInfo(limitRemaining: 3))
-        #expect(OnboardingGate.extraModelsUsable(enabled: [.engine(.geminiFlash)], keyStatus: valid, hasStoredKey: true))
-        #expect(!OnboardingGate.extraModelsUsable(enabled: [], keyStatus: valid, hasStoredKey: true))
-        #expect(!OnboardingGate.extraModelsUsable(enabled: [.cleanup], keyStatus: .missing, hasStoredKey: false))
-        #expect(!OnboardingGate.extraModelsUsable(enabled: [.engine(.geminiFlash)], keyStatus: .invalid("401"), hasStoredKey: true))
-        #expect(OnboardingGate.extraModelsUsable(enabled: [.engine(.geminiFlash)], keyStatus: .offline, hasStoredKey: true))
+        func usable(_ lineup: ModelLineup, _ key: KeyStatus, parakeet: EngineID = .parakeet) -> Bool {
+            OnboardingGate.switchModelUsable(lineup: lineup, parakeet: parakeet, keyStatus: key, hasStoredKey: true)
+        }
+        #expect(usable(Self.lineup(on: [.gemini]), valid))
+        #expect(!usable(Self.lineup(on: []), valid), "nothing to step to")
+        #expect(!usable(Self.lineup(on: [.cleanup]), .missing))
+        #expect(!usable(Self.lineup(on: [.gemini]), .invalid("401")))
+        #expect(usable(Self.lineup(on: [.gemini]), .offline))
+        #expect(usable(Self.lineup(main: .gemini, on: [.parakeet]), .missing), "Parakeet on this Mac needs no key")
+        #expect(!usable(Self.lineup(main: .gemini, on: [.parakeet]), .missing, parakeet: .parakeetCloud))
     }
 
     @Test func noteNamesTheActualSwitchModelBinding() {
-        let fnTab = OnboardingGate.extraModelsNote(binding: .fnTab, enabled: [.engine(.geminiFlash)])
+        func note(_ binding: Shortcut?, _ lineup: ModelLineup) -> String {
+            OnboardingGate.lineupNote(binding: binding, lineup: lineup, parakeet: .parakeet)
+        }
+        let fnTab = note(.fnTab, Self.lineup(on: [.gemini]))
         #expect(fnTab.contains(Shortcut.fnTab.compactDescription.replacingOccurrences(of: " ", with: "\u{00A0}")))
-        let custom = OnboardingGate.extraModelsNote(binding: .rightCommand, enabled: [.engine(.geminiFlash)])
+        let custom = note(.rightCommand, Self.lineup(on: [.gemini]))
         #expect(custom.contains(Shortcut.rightCommand.compactDescription.replacingOccurrences(of: " ", with: "\u{00A0}")))
         #expect(!custom.contains("fn"))
-        #expect(OnboardingGate.extraModelsNote(binding: nil, enabled: [.engine(.geminiFlash)]).contains("Settings"))
-        #expect(OnboardingGate.extraModelsNote(binding: .fnTab, enabled: []).contains("Settings"))
-        let both = OnboardingGate.extraModelsNote(binding: .fnTab, enabled: [.cleanup, .engine(.geminiFlash)])
-        #expect(both.contains("cleaned up") && both.contains("Gemini"))
-        let cleanup = OnboardingGate.extraModelsNote(binding: .fnTab, enabled: [.cleanup])
+        #expect(note(nil, Self.lineup(on: [.gemini])).contains("Settings"))
+        #expect(note(.fnTab, Self.lineup(on: [])).contains("Settings"))
+        let cleanup = note(.fnTab, Self.lineup(on: [.cleanup]))
         #expect(cleanup.contains("cleaned up") && !cleanup.contains("Gemini"))
+        var geminiFirst = Self.lineup(on: [.cleanup, .gemini])
+        geminiFirst.move(.gemini, to: 1)
+        #expect(note(.fnTab, geminiFirst).hasPrefix("Press fn\u{00A0}⇥ while dictating to use Gemini for a long talk"))
+    }
+
+    @Test func theDefaultNoteIsUnchanged() {
+        #expect(OnboardingGate.lineupNote(binding: .fnTab, lineup: .default, parakeet: .parakeet)
+            == "Press fn\u{00A0}⇥ while dictating to have the text cleaned up, or again to use Gemini for a long talk "
+                + "where every word counts. It uses the same OpenRouter key.")
+    }
+
+    @Test func theNoteNamesAMainModelOtherThanParakeet() {
+        #expect(OnboardingGate.lineupNote(binding: .fnTab, lineup: Self.lineup(main: .gemini, on: [.parakeet]),
+                                          parakeet: .parakeet)
+            == "Your dictations start on Gemini 3.8 Flash, your main model. Change it anytime in Models.")
+        #expect(OnboardingGate.lineupNote(binding: nil, lineup: Self.lineup(main: .cleanup, on: []), parakeet: .parakeet)
+            == "Your dictations start on Parakeet v3 + GPT-6 Luna, your main model. Change it anytime in Models.")
     }
 }
 
 @MainActor
-@Suite struct OnboardingExtraModelsTests {
+@Suite struct OnboardingSwitchModelTests {
     private func makeModel(_ configure: (inout OnboardingContext) -> Void = { _ in }) -> OnboardingModel {
         let env = AppEnvironment.preview()
         env.settings.onboardingCompleted = false
@@ -642,22 +672,41 @@ import Testing
         return OnboardingModel(context: ctx)
     }
 
-    @Test func theModelStepPicksOnlyAMainModel() {
+    @Test func theModelStepPicksOnlyWhereParakeetRuns() {
         let model = makeModel()
         model.select(.parakeetCloud)
-        for engine in EngineID.switchCandidates {
+        for engine in EngineID.offered where !engine.isParakeet {
             model.select(engine)
-            #expect(model.selectedEngine == .parakeetCloud, "\(engine) is picked per dictation, not here")
+            #expect(model.selectedEngine == .parakeetCloud, "\(engine) isn’t a place Parakeet runs")
         }
+        #expect(model.ctx.settings.lineup.main == .parakeet)
     }
 
     @Test func switchModelLessonShowsOnlyWhenAStepWouldAnswer() {
         #expect(makeModel().showsSwitchModelLesson, "the preview key is valid")
         #expect(!makeModel { ctx in ctx.account = .preview(status: .missing) }.showsSwitchModelLesson)
-        #expect(makeModel { ctx in ctx.settings.switchEngines = [] }.showsSwitchModelLesson, "clean-up alone")
+        #expect(makeModel { ctx in ctx.settings.lineup.setSwitchable(.gemini, false) }.showsSwitchModelLesson,
+                "clean-up alone")
         #expect(!makeModel { ctx in
-            ctx.settings.switchEngines = []
-            ctx.settings.switchCleanup = false
+            ctx.settings.lineup.setSwitchable(.gemini, false)
+            ctx.settings.lineup.setSwitchable(.cleanup, false)
         }.showsSwitchModelLesson)
+    }
+
+    /// The practice step's checks follow the main model: Gemini needs the key, Parakeet on this Mac doesn't.
+    @Test func theGateFollowsTheMainEngine() {
+        let parakeet = makeModel { ctx in ctx.account = .preview(status: .missing) }
+        #expect(parakeet.gateInputs.engine == .parakeet)
+        let gemini = makeModel { ctx in
+            ctx.account = .preview(status: .missing)
+            ctx.settings.lineup.main = .gemini
+        }
+        #expect(gemini.gateInputs.engine == .geminiFlash)
+        #expect(gemini.practiceReadiness != .ready)
+        let cleanup = makeModel { ctx in
+            ctx.settings.parakeetEngine = .parakeetCloud
+            ctx.settings.lineup.main = .cleanup
+        }
+        #expect(cleanup.gateInputs.engine == .parakeetCloud)
     }
 }

@@ -706,12 +706,15 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         }
 
         let settings = AppSettings(defaults: defaults)
-        #expect(settings.selectedEngine == .parakeet)
+        #expect(settings.parakeetEngine == .parakeet)
+        #expect(settings.lineup == .default)
         #expect(settings.pillMode == .whileDictating)
         #expect(settings.shortcuts == .defaults)
 
-        settings.selectedEngine = .parakeetCloud
-        settings.switchEngines = []
+        settings.parakeetEngine = .parakeetCloud
+        settings.lineup.main = .cleanup
+        settings.lineup.setSwitchable(.gemini, false)
+        settings.lineup.move(.gemini, to: 0)
         settings.switchHintShownCount = 2
         settings.pillMode = .always
         settings.microphoneUID = "usb-mic"
@@ -724,8 +727,10 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         settings.shortcuts = bindings
 
         let reloaded = AppSettings(defaults: defaults)
-        #expect(reloaded.selectedEngine == .parakeetCloud)
-        #expect(reloaded.switchEngines.isEmpty)
+        #expect(reloaded.parakeetEngine == .parakeetCloud)
+        #expect(reloaded.lineup == settings.lineup)
+        #expect(reloaded.lineup.order == [.gemini, .parakeet, .cleanup] && reloaded.lineup.main == .cleanup)
+        #expect(reloaded.lineup.cycle == [.cleanup, .parakeet])
         #expect(reloaded.switchHintShownCount == 2)
         #expect(reloaded.pillMode == .always)
         #expect(reloaded.microphoneUID == "usb-mic")
@@ -810,52 +815,90 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
             try? FileManager.default.removeItem(atPath: suite + ".plist")
         }
         defaults.set(raw, forKey: SettingsKey.selectedEngine.defaultsKey)
-        #expect(AppSettings(defaults: defaults).selectedEngine == .default)
+        #expect(AppSettings(defaults: defaults).parakeetEngine == .default)
         defaults.set(EngineID.parakeetCloud.rawValue, forKey: SettingsKey.selectedEngine.defaultsKey)
-        #expect(AppSettings(defaults: defaults).selectedEngine == .parakeetCloud)
+        #expect(AppSettings(defaults: defaults).parakeetEngine == .parakeetCloud)
     }
 
-    /// Gemini was once selectable as the main model; it is an extra model now, picked per dictation.
+    /// Where Parakeet runs is still stored under the key that named the main model, so an older build reads it too.
+    @Test func whereParakeetRunsKeepsTheOldKey() throws {
+        try withSuite { defaults in
+            defaults.set("parakeetCloud", forKey: SettingsKey.selectedEngine.defaultsKey)
+            let settings = AppSettings(defaults: defaults)
+            #expect(settings.parakeetEngine == .parakeetCloud)
+            #expect(settings.lineup == .default)
+            settings.parakeetEngine = .parakeet
+            #expect(defaults.string(forKey: SettingsKey.selectedEngine.defaultsKey) == "parakeet")
+        }
+    }
+
+    /// Gemini was the main model in builds before 0.2.0 (Gemini 3.1 Pro too): it is again, with Parakeet in its
+    /// place under the old key.
     @Test(arguments: [EngineID.geminiFlash, .geminiPro])
-    func aStoredGeminiSelectionBecomesParakeetOnce(_ engine: EngineID) throws {
-        let suite = NSTemporaryDirectory() + "transcribe-thing-tests-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer {
-            defaults.removePersistentDomain(forName: suite)
-            try? FileManager.default.removeItem(atPath: suite + ".plist")
+    func aStoredGeminiMainModelIsTheMainAgain(_ engine: EngineID) throws {
+        try withSuite { defaults in
+            defaults.set(engine.rawValue, forKey: SettingsKey.selectedEngine.defaultsKey)
+            let settings = AppSettings(defaults: defaults)
+            #expect(settings.lineup.main == .gemini)
+            #expect(settings.parakeetEngine == .parakeet)
+            #expect(settings.lineup.cycle == [.gemini, .parakeet, .cleanup])
+            #expect(defaults.string(forKey: SettingsKey.selectedEngine.defaultsKey) == EngineID.parakeet.rawValue)
+            #expect(AppSettings(defaults: defaults).lineup == settings.lineup, "once")
         }
-        defaults.set(engine.rawValue, forKey: SettingsKey.selectedEngine.defaultsKey)
-        let settings = AppSettings(defaults: defaults)
-        #expect(settings.selectedEngine == .parakeet)
-        #expect(defaults.string(forKey: SettingsKey.selectedEngine.defaultsKey) == EngineID.parakeet.rawValue)
-        #expect(settings.switchEngines == [.geminiFlash], "the extra model takes part by default")
     }
 
-    @Test func onlyAMainModelCanBeSelected() {
+    @Test func onlyAParakeetRunsParakeet() {
         let settings = AppSettings.inMemory()
-        settings.selectedEngine = .parakeetCloud
-        settings.selectedEngine = .geminiFlash
-        #expect(settings.selectedEngine == .parakeet)
-        #expect(EngineID.mainCandidates == [.parakeet, .parakeetCloud])
-        #expect(EngineID.switchCandidates == [.geminiFlash])
-        #expect(EngineID.offered.filter(\.isSwitchModel) == EngineID.switchCandidates)
+        settings.parakeetEngine = .parakeetCloud
+        settings.parakeetEngine = .geminiFlash
+        #expect(settings.parakeetEngine == .parakeet)
+        #expect(EngineID.parakeetRuntimes == [.parakeet, .parakeetCloud])
+        #expect(EngineID.offered.filter(\.isParakeet) == EngineID.parakeetRuntimes)
+        #expect(!EngineID.geminiPro.isParakeet && CleanupModel.canClean(.parakeetCloud) && !CleanupModel.canClean(.geminiFlash))
     }
 
-    @Test func switchEnginesKeepExtraModelsInCycleOrder() throws {
-        let suite = NSTemporaryDirectory() + "transcribe-thing-tests-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer {
-            defaults.removePersistentDomain(forName: suite)
-            try? FileManager.default.removeItem(atPath: suite + ".plist")
+    /// The user's settings from 0.2.0 (clean-up off, Gemini on) become the lineup once; the old keys go.
+    @Test func theOldSwitchSettingsBecomeTheLineupOnce() throws {
+        try withSuite { defaults in
+            defaults.set("parakeet", forKey: SettingsKey.selectedEngine.defaultsKey)
+            defaults.set(false, forKey: SettingsKey.switchCleanup.defaultsKey)
+            defaults.set(try JSONEncoder().encode(["geminiFlash"]), forKey: SettingsKey.switchEngines.defaultsKey)
+            let settings = AppSettings(defaults: defaults)
+            #expect(settings.lineup.switchable == [.gemini])
+            #expect(settings.lineup.cycle == [.parakeet, .gemini])
+            #expect(defaults.object(forKey: SettingsKey.switchCleanup.defaultsKey) == nil)
+            #expect(defaults.object(forKey: SettingsKey.switchEngines.defaultsKey) == nil)
+            #expect(defaults.data(forKey: SettingsKey.lineup.defaultsKey) != nil, "written once, explicitly")
+            #expect(AppSettings(defaults: defaults).lineup == settings.lineup, "a reload changes nothing")
         }
-        let settings = AppSettings(defaults: defaults)
-        settings.switchEngines = [.geminiPro, .parakeet, .geminiFlash, .geminiFlash]
-        #expect(settings.switchEngines == [.geminiFlash], "extra models this build offers, each once")
-        settings.switchEngines = []
-        #expect(AppSettings(defaults: defaults).switchEngines.isEmpty, "none taking part is remembered too")
-        defaults.set(try JSONEncoder().encode(["geminiPro", "geminiFlash", "someFutureEngine"]),
-                     forKey: SettingsKey.switchEngines.defaultsKey)
-        #expect(AppSettings(defaults: defaults).switchEngines == [.geminiFlash])
+        // Today's defaults stored explicitly: the carousel stays as it was.
+        try withSuite { defaults in
+            defaults.set(true, forKey: SettingsKey.switchCleanup.defaultsKey)
+            defaults.set(try JSONEncoder().encode(["geminiFlash"]), forKey: SettingsKey.switchEngines.defaultsKey)
+            #expect(AppSettings(defaults: defaults).lineup == .default)
+        }
+    }
+
+    @Test func legacyGeminiOffIsNotSwitchable() throws {
+        try withSuite { defaults in
+            defaults.set(try JSONEncoder().encode([String]()), forKey: SettingsKey.switchEngines.defaultsKey)
+            let settings = AppSettings(defaults: defaults)
+            #expect(!settings.lineup.isSwitchable(.gemini))
+            #expect(settings.lineup.cycle == [.parakeet, .cleanup])
+        }
+        #expect(AppSettings.migratedLineup(storedEngine: nil, switchCleanup: nil, switchEngines: ["geminiPro"])?
+            .isSwitchable(.gemini) == false, "the retired Pro isn’t Flash")
+    }
+
+    @Test func withNoOldSettingsNothingIsWritten() throws {
+        #expect(AppSettings.migratedLineup(storedEngine: nil, switchCleanup: nil, switchEngines: nil) == nil)
+        #expect(AppSettings.migratedLineup(storedEngine: .parakeetCloud, switchCleanup: nil, switchEngines: nil) == nil)
+        try withSuite { defaults in
+            let settings = AppSettings(defaults: defaults)
+            #expect(settings.lineup == .default)
+            #expect(defaults.object(forKey: SettingsKey.lineup.defaultsKey) == nil)
+            #expect(defaults.object(forKey: SettingsKey.selectedEngine.defaultsKey) == nil)
+        }
     }
 
     /// The removed volume slider: left at zero it meant no sounds; any other level now plays at full volume.
@@ -977,8 +1020,9 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
     @Test func inMemorySettingsAreIndependent() {
         let a = AppSettings.inMemory()
         let b = AppSettings.inMemory()
-        a.selectedEngine = .parakeetCloud
-        #expect(b.selectedEngine == .parakeet)
+        a.parakeetEngine = .parakeetCloud
+        a.lineup.main = .gemini
+        #expect(b.parakeetEngine == .parakeet && b.lineup == .default)
     }
 
 
@@ -1009,5 +1053,96 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
     @Test func recordingDuration() {
         let recording = Recording(samples: Array(repeating: 0, count: 24_000))
         #expect(recording.duration == 1.5)
+    }
+}
+
+// MARK: - The lineup
+
+@Suite struct ModelLineupTests {
+    @Test func theDefaultLineupStepsParakeetThenCleanupThenGemini() {
+        let lineup = ModelLineup.default
+        #expect(lineup.order == [.parakeet, .cleanup, .gemini] && lineup.main == .parakeet)
+        #expect(lineup.cycle == [.parakeet, .cleanup, .gemini])
+        #expect(lineup.steps == [.cleanup, .gemini])
+        #expect(ModelChoice.allCases == [.parakeet, .cleanup, .gemini], "declaration order is the default order")
+    }
+
+    @Test func theCycleStartsAtTheMainModelAndWrapsInOrder() {
+        var lineup = ModelLineup.default
+        lineup.main = .gemini
+        #expect(lineup.cycle == [.gemini, .parakeet, .cleanup])
+        lineup.main = .cleanup
+        #expect(lineup.cycle == [.cleanup, .gemini, .parakeet])
+        #expect(lineup.cycle.first == lineup.main)
+    }
+
+    @Test func aModelSwitchedOffIsLeftOutButTheMainModelNeverIs() {
+        var lineup = ModelLineup.default
+        lineup.setSwitchable(.cleanup, false)
+        #expect(lineup.cycle == [.parakeet, .gemini])
+        lineup.setSwitchable(.parakeet, false)
+        #expect(lineup.isSwitchable(.parakeet) && lineup.cycle.first == .parakeet, "the main model's flag is ignored")
+        lineup.setSwitchable(.gemini, false)
+        #expect(lineup.cycle == [.parakeet] && lineup.steps.isEmpty)
+        // The main model it replaces stays in the cycle.
+        lineup.main = .gemini
+        #expect(lineup.cycle == [.gemini, .parakeet])
+    }
+
+    @Test func movingAModelReordersTheCycle() {
+        var lineup = ModelLineup.default
+        lineup.move(.gemini, to: 0)
+        #expect(lineup.order == [.gemini, .parakeet, .cleanup])
+        #expect(lineup.cycle == [.parakeet, .cleanup, .gemini], "from the main model, wrapping around")
+        lineup.move(.gemini, to: 99)
+        #expect(lineup.order == [.parakeet, .cleanup, .gemini], "clamped to the end")
+        lineup.move(.cleanup, to: -3)
+        #expect(lineup.order == [.cleanup, .parakeet, .gemini], "clamped to the start")
+        lineup.move(.cleanup, to: 1)
+        #expect(lineup.order == [.parakeet, .cleanup, .gemini])
+    }
+
+    @Test func aStoredLineupDecodesLeniently() throws {
+        let json = #"{"main":"whisper","order":["gemini","whisper","gemini","parakeet"],"switchable":["gemini","x"]}"#
+        let lineup = try JSONDecoder().decode(ModelLineup.self, from: Data(json.utf8))
+        #expect(lineup.order == [.gemini, .parakeet, .cleanup], "unknown and duplicate dropped, the missing appended")
+        #expect(lineup.main == .parakeet)
+        #expect(lineup.switchable == [.gemini], "the appended one is off")
+        #expect(try JSONDecoder().decode(ModelLineup.self, from: Data("{}".utf8)).order == ModelChoice.allCases)
+    }
+
+    @Test func theLineupEncodesStably() throws {
+        var lineup = ModelLineup.default
+        lineup.move(.gemini, to: 0)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let json = String(decoding: try encoder.encode(lineup), as: UTF8.self)
+        #expect(json == #"{"main":"parakeet","order":["gemini","parakeet","cleanup"],"switchable":["gemini","cleanup"]}"#)
+        #expect(try JSONDecoder().decode(ModelLineup.self, from: Data(json.utf8)) == lineup)
+    }
+
+    /// A job's engine and clean-up flag give its model back, and the model its engine.
+    @Test func modelChoiceFromAJob() {
+        for parakeet in EngineID.parakeetRuntimes {
+            for choice in ModelChoice.allCases {
+                let engine = choice.engine(parakeet: parakeet)
+                #expect(ModelChoice(engine: engine, cleansUp: choice.cleansUp) == choice)
+            }
+        }
+        #expect(ModelChoice(engine: .geminiFlash, cleansUp: true) == .gemini, "Gemini is never cleaned up")
+        #expect(ModelChoice(engine: .geminiPro, cleansUp: false) == .gemini)
+    }
+
+    @Test func modelChoiceNames() {
+        #expect(ModelChoice.allCases.map(\.modelName) == ["Parakeet v3", "Parakeet v3 + GPT-6 Luna", "Gemini 3.8 Flash"])
+        #expect(ModelChoice.parakeet.title(parakeet: .parakeetCloud) == "Parakeet v3 · Cloud")
+        #expect(ModelChoice.allCases.map(\.shortName) == ["Parakeet", "Clean-up", "Gemini"])
+        #expect(ModelChoice.allCases.map { $0.compactName(parakeet: .parakeet) }
+            == ["Parakeet v3", "Parakeet + Luna", "Gemini Flash"])
+        #expect(ModelChoice.allCases.map { $0.symbolName(parakeet: .parakeetCloud) }
+            == ["cloud.bolt.fill", "wand.and.stars", "sparkles"])
+        #expect(ModelChoice.allCases.map { $0.needsOpenRouter(parakeet: .parakeet) } == [false, true, true])
+        #expect(ModelChoice.allCases.map { $0.usesLocalParakeet(parakeet: .parakeet) } == [true, true, false])
+        #expect(ModelChoice.allCases.map { $0.needsOpenRouter(parakeet: .parakeetCloud) } == [true, true, true])
     }
 }

@@ -49,8 +49,8 @@ final class ModelStore {
     private(set) var lastErrors: [EngineID: AppError] = [:]
     /// Wall time of the last successful load per engine (Core ML specialization makes the first one long).
     private(set) var lastLoadDurations: [EngineID: TimeInterval] = [:]
-    /// A model picked before it finished downloading. It becomes the selected engine once it lands, even if
-    /// the window that asked for it has closed meanwhile.
+    /// Where Parakeet should run, picked before that model finished downloading. It becomes
+    /// `AppSettings.parakeetEngine` once it lands, even if the window that asked for it has closed meanwhile.
     private(set) var pendingSelection: EngineID?
 
     @ObservationIgnored var onDownloadFinished: ((EngineID) -> Void)?
@@ -102,7 +102,7 @@ final class ModelStore {
 
     // MARK: Start
 
-    /// Scans the disk, then prepares the selected engine if it is local and installed.
+    /// Scans the disk, then prepares Parakeet on this Mac if it's installed and a model Switch model reaches uses it.
     func start() {
         guard !isPreview, !hasStarted else { return }
         hasStarted = true
@@ -110,8 +110,8 @@ final class ModelStore {
         Task { [weak self] in
             guard let self else { return }
             await self.refreshFromDisk()
-            let selected = self.settings.selectedEngine
-            if selected.isLocal, self.state(of: selected) == .installed {
+            let selected = self.settings.parakeetEngine
+            if selected.isLocal, self.state(of: selected) == .installed, self.settings.usesLocalParakeet {
                 self.prepare(selected)
             }
         }
@@ -233,10 +233,10 @@ final class ModelStore {
             Log.engine.info("Downloaded \(id.rawValue, privacy: .public)")
             if pendingSelection == id {
                 pendingSelection = nil
-                settings.selectedEngine = id
+                settings.parakeetEngine = id
             }
             onDownloadFinished?(id)
-            if settings.selectedEngine == id { prepare(id) }
+            if settings.parakeetEngine == id, settings.usesLocalParakeet { prepare(id) }
         case .success:
             await refreshDiskUsage()
         case .failure(let error):
@@ -309,12 +309,12 @@ final class ModelStore {
 
     // MARK: Select and prepare
 
-    /// Sets the selected (main) engine; a local one starts loading. Extra models are picked per dictation, so
-    /// selecting one does nothing.
+    /// Sets where Parakeet runs (`AppSettings.parakeetEngine`); on this Mac it starts loading. Anything but
+    /// Parakeet does nothing: Gemini is a model in the lineup, not a place Parakeet runs.
     func select(_ id: EngineID) {
-        guard !id.isSwitchModel else { return }
+        guard id.isParakeet else { return }
         pendingSelection = nil
-        settings.selectedEngine = id
+        settings.parakeetEngine = id
         guard id.isLocal else { return }
         switch state(of: id) {
         case .installed, .failed: prepare(id)
@@ -325,6 +325,7 @@ final class ModelStore {
     /// Selects `id` now if it can run, otherwise downloads it (when needed) and selects it once it is installed.
     /// The current engine stays in use meanwhile.
     func selectWhenInstalled(_ id: EngineID) {
+        guard id.isParakeet else { return }
         guard id.isLocal else { return select(id) }
         switch state(of: id) {
         case .installed, .ready, .preparing:

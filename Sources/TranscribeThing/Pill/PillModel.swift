@@ -39,9 +39,9 @@ final class PillModel {
     /// Processing has run longer than `timing.slowProcessing`: the pill widens to say "Still transcribing…".
     private(set) var isProcessingSlow = false
 
-    /// What this dictation goes to past the main model alone (clean-up, Gemini Flash), set by the
-    /// controller while it records and until its text lands; nil for the main model. The pill's tint shows it
-    /// throughout; the chip only now and then (`showsChip`).
+    /// The dictation's model from key-down until its text lands, set by the controller; nil at rest. The pill's
+    /// tint shows it throughout (`PillPalette.accent`, whichever model is main); the chip only now and then
+    /// (`showsChip`).
     var sessionModel: ModelChoice?
     /// Bumped on every switch of the dictation's model, back to the main model too, so the chip names the new one
     /// for a moment.
@@ -81,6 +81,9 @@ final class PillModel {
     @ObservationIgnored var onEngineChipClick: (() -> Void)?
     /// A choice picked from that menu, for the dictation being recorded.
     @ObservationIgnored var onSelectModel: ((ModelChoice) -> Void)?
+    /// Why a model of that menu can't take the dictation now ("Needs key", "Not downloaded"), shown beside it
+    /// disabled; nil when it can. Set by the controller.
+    @ObservationIgnored var unavailableReason: ((ModelChoice) -> String?)?
     /// Called as soon as `visiblePhase` changes, in the same turn (observation only reports it on the next one),
     /// so the panel can be on screen before whatever the caller does next, such as opening the mic.
     @ObservationIgnored var onVisiblePhaseChange: (() -> Void)?
@@ -302,10 +305,9 @@ final class PillModel {
         if isPointerOverChip != over { isPointerOverChip = over }
     }
 
-    /// What the chip above the pill names right now: the dictation's clean-up or extra model, or the main model;
-    /// nil while it's down.
+    /// What the chip above the pill names right now: the dictation's model; nil while it's down.
     var chipModel: ModelChoice? {
-        showsChip ? sessionModel ?? .engine(settings.selectedEngine) : nil
+        showsChip ? sessionModel : nil
     }
 
     /// Shows the chip for `timing.chipHold`; a switch meanwhile starts it over.
@@ -321,10 +323,9 @@ final class PillModel {
         if isChipFlashing { isChipFlashing = false }
     }
 
-    /// What the hands-free chip's menu offers, in Switch model order: the main model, then clean-up and every extra
-    /// model that takes part.
+    /// What the hands-free chip's menu offers, in Switch model order: the main model, then every model it steps to.
     var menuChoices: [ModelChoice] {
-        [.engine(settings.selectedEngine)] + settings.switchChoices
+        settings.lineup.cycle
     }
 
     // MARK: Hello

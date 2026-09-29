@@ -54,7 +54,7 @@ enum OnboardingSnapshots {
             },
             entry("onboarding-3-model-cloud-valid", context: { ctx in
                 ctx.models = .preview(states: [.parakeet: .ready])
-                ctx.settings.selectedEngine = .parakeetCloud
+                ctx.settings.parakeetEngine = .parakeetCloud
             }) { model in model.stage(step: .model) },
             // Switch model rebound to right ⌘: the Gemini line names it.
             entry("onboarding-3-model-custom-switch", context: { ctx in
@@ -63,16 +63,16 @@ enum OnboardingSnapshots {
             }) { model in model.stage(step: .model) },
             entry("onboarding-3-model-cloud-stt", context: { ctx in
                 ctx.models = .preview(states: [.parakeet: .ready])
-                ctx.settings.selectedEngine = .parakeetCloud
+                ctx.settings.parakeetEngine = .parakeetCloud
             }) { model in model.stage(step: .model) },
             entry("onboarding-3-model-cloud-stt-missing", context: { ctx in
                 ctx.models = .preview(states: [.parakeet: .notInstalled])
-                ctx.settings.selectedEngine = .parakeetCloud
+                ctx.settings.parakeetEngine = .parakeetCloud
                 ctx.account = .preview(status: .missing)
             }) { model in model.stage(step: .model) },
             entry("onboarding-3-model-cloud-invalid", context: { ctx in
                 ctx.models = .preview(states: [.parakeet: .notInstalled])
-                ctx.settings.selectedEngine = .parakeetCloud
+                ctx.settings.parakeetEngine = .parakeetCloud
                 ctx.account = .preview(status: .invalid("401"))
             }) { model in
                 model.stage(step: .model)
@@ -138,7 +138,7 @@ enum OnboardingSnapshots {
 
             entry("onboarding-5-done", still: 0.42) { model in model.stage(step: .done) },
             entry("onboarding-5-done-cloud", still: 0.42, context: { ctx in
-                ctx.settings.selectedEngine = .parakeetCloud
+                ctx.settings.parakeetEngine = .parakeetCloud
             }) { model in model.stage(step: .done) },
         ]
     }

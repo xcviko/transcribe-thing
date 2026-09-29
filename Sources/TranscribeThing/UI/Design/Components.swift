@@ -851,6 +851,39 @@ struct EngineIcon: View {
     }
 }
 
+/// Clean-up's mark: a warm wand, on the Models page, the sidebar and the pill's clean-up chip.
+struct CleanupIcon: View {
+    var size: CGFloat
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
+        Image(systemName: ModelChoice.cleanup.symbolName(parakeet: .parakeet))
+            .font(.system(size: size * 0.44, weight: .semibold))
+            .foregroundStyle(Color.warm)
+            .frame(width: size, height: size)
+            .background {
+                shape.fill(Color.warm.opacity(0.13))
+                    .overlay { shape.strokeBorder(Color.warm.opacity(0.18), lineWidth: 0.5) }
+            }
+            .accessibilityHidden(true)
+    }
+}
+
+/// A model's mark: its engine's (Parakeet where `parakeet` runs it, Gemini), or clean-up's wand.
+struct ModelChoiceIcon: View {
+    var choice: ModelChoice
+    var parakeet: EngineID
+    var size: CGFloat = 32
+
+    var body: some View {
+        if choice.cleansUp {
+            CleanupIcon(size: size)
+        } else {
+            EngineIcon(engine: choice.engine(parakeet: parakeet), size: size)
+        }
+    }
+}
+
 // MARK: - Model status
 
 enum StatusTone: Sendable {

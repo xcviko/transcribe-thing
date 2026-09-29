@@ -31,33 +31,17 @@ final class AppSettings {
     var onboardingCompleted: Bool = false { didSet { store.set(onboardingCompleted, .onboardingCompleted) } }
     /// Resume point for onboarding: an `OnboardingStep` raw value (five steps).
     var onboardingStep: Int = 0 { didSet { store.set(onboardingStep, .onboardingResumeStep) } }
-    /// The main model, the one every dictation starts with: Parakeet on this Mac or through OpenRouter. An extra
-    /// model assigned here (Gemini is picked per dictation, see `switchEngines`) leaves the default selected.
-    var selectedEngine: EngineID = .default {
+    /// Where Parakeet v3 runs, on this Mac or through OpenRouter: for Parakeet alone and for clean-up
+    /// (`ModelChoice`). Anything but Parakeet leaves the default. Stored under `SettingsKey.selectedEngine`.
+    var parakeetEngine: EngineID = .default {
         didSet {
-            guard !selectedEngine.isSwitchModel else {
-                selectedEngine = .default
-                return
-            }
-            store.set(selectedEngine.rawValue, .selectedEngine)
+            if !parakeetEngine.isParakeet { parakeetEngine = .default }
+            store.set(parakeetEngine.rawValue, .selectedEngine)
         }
     }
-    /// The extra models the Switch model shortcut steps through, in `EngineID.switchCandidates` order, after
-    /// clean-up (`switchCleanup`). With neither, the shortcut is off. A retired model stored by an older build is
-    /// dropped.
-    var switchEngines: [EngineID] = EngineID.switchCandidates {
-        didSet {
-            let normalized = Self.normalizedSwitchEngines(switchEngines)
-            guard normalized == switchEngines else {
-                switchEngines = normalized
-                return
-            }
-            store.setJSON(switchEngines.map(\.rawValue), .switchEngines)
-        }
-    }
-    /// The Switch model shortcut steps to clean-up (the main model's text tidied by `CleanupModel.default`) right
-    /// after the main model.
-    var switchCleanup: Bool = true { didSet { store.set(switchCleanup, .switchCleanup) } }
+    /// The three models as Models lists them: their order, the main model every dictation starts on, and which
+    /// others the Switch model shortcut steps to.
+    var lineup: ModelLineup = .default { didSet { store.setJSON(lineup, .lineup) } }
     /// How many times the pill has shown the Switch model hint (it shows at most `switchHintLimit` times).
     var switchHintShownCount: Int = 0 { didSet { store.set(switchHintShownCount, .switchHintShownCount) } }
     var pillMode: PillMode = .whileDictating { didSet { store.set(pillMode.rawValue, .pillMode) } }
@@ -115,16 +99,26 @@ final class AppSettings {
 
     // MARK: Models
 
-    /// What the Switch model shortcut steps through after the main model, in order: clean-up, then the extra models.
-    /// Clean-up needs a main model it can tidy.
-    var switchChoices: [ModelChoice] {
-        let cleanup = switchCleanup && CleanupModel.canClean(selectedEngine)
-        return (cleanup ? [.cleanup] : []) + switchEngines.map(ModelChoice.engine)
+    /// The engine every dictation starts on: the main model's.
+    var mainEngine: EngineID { lineup.main.engine(parakeet: parakeetEngine) }
+
+    /// Some model Switch model can reach needs Parakeet on this Mac, so it's worth loading.
+    var usesLocalParakeet: Bool {
+        lineup.cycle.contains { $0.usesLocalParakeet(parakeet: parakeetEngine) }
     }
 
-    /// Extra models this build offers, each once, in `EngineID.switchCandidates` order.
-    nonisolated static func normalizedSwitchEngines(_ engines: [EngineID]) -> [EngineID] {
-        EngineID.switchCandidates.filter(engines.contains)
+    /// The lineup that stands for what an older build stored, or nil when it stored nothing the lineup replaces (the
+    /// engine is Parakeet or absent, and neither switch flag is there). Clean-up and Gemini take part unless their
+    /// old flags said no; a Gemini selection from builds before 0.2.0 (Gemini 3.1 Pro too) is the main model again.
+    nonisolated static func migratedLineup(storedEngine: EngineID?, switchCleanup: Bool?,
+                                           switchEngines: [String]?) -> ModelLineup? {
+        let geminiWasMain = storedEngine?.cloudAPI == .chatCompletions
+        guard geminiWasMain || switchCleanup != nil || switchEngines != nil else { return nil }
+        var lineup = ModelLineup.default
+        lineup.setSwitchable(.cleanup, switchCleanup ?? true)
+        lineup.setSwitchable(.gemini, switchEngines.map { $0.contains(EngineID.geminiFlash.rawValue) } ?? true)
+        if geminiWasMain { lineup.main = .gemini }
+        return lineup
     }
 
     /// Onboarding had six steps (welcome, permissions, model, shortcuts, try it, done) until shortcuts and try it
@@ -148,18 +142,22 @@ final class AppSettings {
             store.set(onboardingStep, .onboardingResumeStep)
             store.remove(.onboardingStep)
         }
-        // An engine this build doesn't offer (one since removed) leaves the default selected.
-        if let v = store.string(.selectedEngine).flatMap(EngineID.init(rawValue:)) {
-            if v.isSwitchModel {
-                // Gemini used to be selectable as the main model; it is picked per dictation now. Once.
-                store.set(EngineID.default.rawValue, .selectedEngine)
-            } else {
-                selectedEngine = v
-            }
+        // An engine this build doesn't offer (one since removed) leaves the default.
+        let storedEngine = store.string(.selectedEngine).flatMap(EngineID.init(rawValue:))
+        if let storedEngine, storedEngine.isParakeet { parakeetEngine = storedEngine }
+        if let v: ModelLineup = store.json(.lineup) {
+            lineup = v
+        } else if let migrated = Self.migratedLineup(storedEngine: storedEngine,
+                                                     switchCleanup: store.bool(.switchCleanup),
+                                                     switchEngines: store.json(.switchEngines)) {
+            // Once: the old keys go below, and the lineup stands for them from now on.
+            lineup = migrated
+            store.setJSON(migrated, .lineup)
         }
-        if let v: [String] = store.json(.switchEngines) {
-            switchEngines = Self.normalizedSwitchEngines(v.compactMap(EngineID.init(rawValue:)))
-        }
+        // A Gemini selection from builds before 0.2.0 is the lineup's main model now; the key holds Parakeet's place.
+        if let storedEngine, !storedEngine.isParakeet { store.set(EngineID.default.rawValue, .selectedEngine) }
+        store.remove(.switchCleanup)
+        store.remove(.switchEngines)
         if let v = store.int(.switchHintShownCount) { switchHintShownCount = max(0, v) }
         if let v = store.string(.pillMode).flatMap(PillMode.init(rawValue:)) { pillMode = v }
         // Older builds could hide the pill for an hour; that deadline has no meaning now.
@@ -181,7 +179,6 @@ final class AppSettings {
         // only with the app: one stored by an older build, edited or not, goes.
         store.remove(.geminiSystemPrompt)
         store.remove(.cleanupSystemPrompt)
-        if let v = store.bool(.switchCleanup) { switchCleanup = v }
         store.remove(.cleanupEnabled)
         // Every model thinks at its own fixed level now, and GPT-6 Luna is the only clean-up model: the stored
         // levels and choice have no meaning any more.
@@ -268,6 +265,7 @@ struct MicrophoneMigrationProbe: Sendable, Equatable {
 // MARK: - Storage
 
 enum SettingsKey: String, CaseIterable {
+    /// `selectedEngine` holds `parakeetEngine`; named when it was the main model.
     /// `onboardingStep` holds a six-step index from older builds, read once and moved to `onboardingResumeStep`.
     /// `soundVolume` is the removed volume slider's, read once (zero turns sounds off) and removed.
     /// `pillHiddenUntil` is the removed "Hide Pill for 1 Hour" deadline, removed at load.
@@ -281,9 +279,11 @@ enum SettingsKey: String, CaseIterable {
     case maxRecordingMinutes, doublePressForHandsFree
     case restoreClipboard, keepFailedRecordingsDays, keepSuccessfulRecordingsDays, shortcuts, hasShownWelcomeHello
     case checkForUpdatesAutomatically, announcedUpdateVersion, lastLaunchedVersion
+    /// `switchEngines` (the extra models Switch model stepped to) and `switchCleanup` (whether it stepped to clean-up)
+    /// are folded into `lineup` once and removed at load.
     case switchEngines, switchCleanup, switchHintShownCount, microphoneChoiceMigrated
     /// `cleanupEnabled` is the removed "Clean up Parakeet transcripts" switch (every dictation), removed at load:
-    /// clean-up is a Switch model step now (`switchCleanup`).
+    /// clean-up is one of the models in `lineup` now.
     /// `reasoningEfforts` (each Gemini model's Thinking level), `cleanupModel` (the clean-up model choice),
     /// `cleanupReasoningEfforts` (each clean-up model's level) and `cleanupReasoningEffort` (Flash Lite's level from
     /// before that choice) are removed at load: every model thinks at a fixed level, and GPT-6 Luna is the only
@@ -293,7 +293,7 @@ enum SettingsKey: String, CaseIterable {
     /// `geminiSystemPrompt` and `cleanupSystemPrompt` are the prompts Models used to edit, removed at load: both are
     /// fixed in code now.
     case geminiSystemPrompt, cleanupSystemPrompt
-    case addSpaceAfterText, removeFinalPeriod, autoDeleteHistoryDays
+    case addSpaceAfterText, removeFinalPeriod, autoDeleteHistoryDays, lineup
 
     var defaultsKey: String { "tt.\(rawValue)" }
 }

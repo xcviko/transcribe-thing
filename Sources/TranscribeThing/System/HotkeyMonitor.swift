@@ -115,9 +115,11 @@ final class HotkeyMonitor {
 
     // MARK: Config
 
-    private func currentConfig() -> HotkeyRouter.Config {
+    /// What the tap routes with right now: Switch model is intercepted only while the lineup's cycle has another
+    /// model to step to.
+    func currentConfig() -> HotkeyRouter.Config {
         HotkeyRouter.Config(bindings: settings.shortcuts, isBusy: isBusy, isRecording: isRecording,
-                            switchesModels: !settings.switchEngines.isEmpty,
+                            switchesModels: settings.lineup.cycle.count > 1,
                             isSuspended: suspendCount > 0, forwardsRawKeys: onRawKey != nil)
     }
 
@@ -125,8 +127,8 @@ final class HotkeyMonitor {
         engine?.update(currentConfig())
     }
 
-    /// Bindings (and the extra models taking part in Switch model) edited in the Hub or onboarding take effect on
-    /// the next keystroke.
+    /// Bindings (and the models Switch model steps through) edited in the Hub or onboarding take effect on the next
+    /// keystroke.
     private func observeSettings() {
         guard !isObservingSettings else { return }
         isObservingSettings = true
@@ -136,7 +138,7 @@ final class HotkeyMonitor {
     private func trackBindings() {
         withObservationTracking {
             _ = settings.shortcuts
-            _ = settings.switchEngines
+            _ = settings.lineup
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 self?.pushConfig()

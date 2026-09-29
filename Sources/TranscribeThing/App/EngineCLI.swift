@@ -182,7 +182,7 @@ enum EngineCLI {
 
         let paths = AppPaths.live()
         let settings = AppSettings.inMemory()
-        settings.selectedEngine = options.engine
+        if options.engine.isParakeet { settings.parakeetEngine = options.engine }
         // Gemini's own level unless --effort replaces it; nothing for a model that doesn't reason.
         let effort = options.engine.reasoningEffort.map { options.effort ?? $0 }
         if let effort { print("EFFORT: \(effort.rawValue)") }

@@ -105,12 +105,10 @@ final class DictationController {
     private(set) var homeFailures: [UUID: HomeFailure] = [:]
     /// The shortcut's event tap has been down for longer than `shortcutNoticeGrace`: fn does nothing.
     private(set) var isShortcutUnavailable = false
-    /// What this dictation goes to instead of the main model alone (Switch model): clean-up or an extra model; nil
-    /// for the main model. It lasts while the dictation records: its job keeps it, the next dictation starts on the
-    /// main model, and an Undo-resume brings back the canceled dictation's.
+    /// What this dictation goes to instead of the main model (Switch model, the pill's menu); nil for the main
+    /// model. It lasts while the dictation records: its job keeps it, the next dictation starts on the main model,
+    /// and an Undo-resume brings back the canceled dictation's.
     private(set) var modelOverride: ModelChoice?
-    /// The extra model transcribing this dictation, if `modelOverride` is one.
-    var engineOverride: EngineID? { modelOverride?.switchEngine }
     /// How long a push-to-talk hold lasts before the pill hints at Switch model.
     @ObservationIgnored var switchHintDelay: TimeInterval = 1.5
     /// How long the tap may stay down before the user is told (its own retries and brief drops stay quiet).
@@ -135,7 +133,7 @@ final class DictationController {
     @ObservationIgnored private var retained: [UUID: Recording] = [:]
     @ObservationIgnored private var retainedOrder: [UUID] = []
     @ObservationIgnored private var lastCancelledID: UUID?
-    /// The engine each canceled recording kept for Undo was dictated with (an extra model is resumed with it).
+    /// The engine each canceled recording kept for Undo was dictated with (Undo resumes on its model).
     @ObservationIgnored private var cancelledEngines: [UUID: EngineID] = [:]
     /// Kept recordings of dictations on clean-up (canceled or failed): Undo and Retry pick them up on clean-up again.
     @ObservationIgnored private var cleanupIDs: Set<UUID> = []
@@ -202,6 +200,7 @@ final class DictationController {
         pillModel.onStop = { [weak self] in self?.send(.pillStop) }
         pillModel.onCancel = { [weak self] in self?.send(.pillCancel) }
         pillModel.onSelectModel = { [weak self] choice in self?.selectModelForCurrentDictation(choice) }
+        pillModel.unavailableReason = { [weak self] choice in self?.unavailableReason(choice) }
         toasts.onAction = { [weak self] notice, action in self?.perform(action, from: notice) }
         toasts.onSound = { [weak self] sound in self?.playCue(sound) }
         let previous = models.onDownloadFinished
@@ -255,31 +254,37 @@ final class DictationController {
         }
     }
 
-    /// The Switch model shortcut: the next choice for the dictation being recorded, main model → clean-up → each
-    /// extra model (`settings.switchChoices`) → main model.
+    /// The Switch model shortcut: the next model for the dictation being recorded, in the order of the lineup from
+    /// the main model on (`ModelLineup.cycle`), back to the main model after the last.
     func cycleEngine() {
         send(.cycleEngine)
     }
 
-    /// The pill's model menu (hands-free): `choice` for the dictation being recorded; the main model, clean-up or
-    /// any extra model.
+    /// The pill's model menu (hands-free): `choice` for the dictation being recorded, any model of the cycle.
     func selectModelForCurrentDictation(_ choice: ModelChoice) {
         guard machine.isRecording else { return }
-        let target: ModelChoice? = choice == .engine(settings.selectedEngine) ? nil : choice
+        let target: ModelChoice? = choice == settings.lineup.main ? nil : choice
         guard target != modelOverride else { return }
-        if target != nil, !isCloudKeyUsable {
-            rejectSwitchWithoutKey()
+        if let target, let refusal = switchRefusal(target) {
+            rejectSwitch(blocked: [(target, refusal)])
             return
         }
         switchModel(to: target)
         stateDidChange()
     }
 
-    /// The engine the dictation being recorded goes to: the extra model picked for it, else the main model.
-    var effectiveEngine: EngineID { engineOverride ?? settings.selectedEngine }
+    /// The model the dictation being recorded goes to: the one picked for it, else the main model.
+    var effectiveChoice: ModelChoice { modelOverride ?? settings.lineup.main }
 
-    /// The Switch model shortcut can do something: clean-up or an extra model takes part, and the OpenRouter key works.
-    var canSwitchModels: Bool { !settings.switchChoices.isEmpty && isCloudKeyUsable }
+    /// The engine that hears it: `effectiveChoice`'s, with Parakeet where `AppSettings.parakeetEngine` runs it.
+    var effectiveEngine: EngineID { effectiveChoice.engine(parakeet: settings.parakeetEngine) }
+
+    /// The Switch model shortcut can do something: the cycle has another model that can take this dictation now
+    /// (the main model always can).
+    var canSwitchModels: Bool {
+        let lineup = settings.lineup
+        return lineup.cycle.contains { $0 != effectiveChoice && ($0 == lineup.main || switchRefusal($0) == nil) }
+    }
 
     /// The pill's click, and the menu's "Finish Dictation" while hands-free.
     func toggleHandsFree() {
@@ -440,27 +445,7 @@ final class DictationController {
             dismissMicrophoneNotices()
         }
         let engine = effectiveEngine
-        if engine.isLocal {
-            switch models.state(of: engine) {
-            case .notInstalled where !models.hasScannedDisk:
-                // Launch: the first disk scan hasn't landed yet. The job waits for it.
-                return nil
-            case .notInstalled: return .modelNotDownloaded(engine)
-            case .failed(let message):
-                switch models.lastErrors[engine] {
-                case .modelLoadFailed?:
-                    // The files are complete: the job loads the model once more before giving up, and a
-                    // failure then keeps the recording for Retry.
-                    return nil
-                case let error?:
-                    // A failed download keeps its own error (Try Again, Manage Storage).
-                    return error
-                case nil:
-                    return .modelLoadFailed(engine, message)
-                }
-            case .downloading, .installed, .preparing, .ready: return nil
-            }
-        }
+        if engine.isLocal { return localRefusal(engine) }
         switch account.status {
         case .missing: return .openRouterMissingKey
         case .invalid(let message):
@@ -473,6 +458,30 @@ final class DictationController {
         }
     }
 
+    /// Why the local model `engine` can't take a dictation at all, or nil when the job can wait for it (downloading,
+    /// installed, loading, ready, no disk scan yet) or load it once more (a failed load).
+    private func localRefusal(_ engine: EngineID) -> AppError? {
+        switch models.state(of: engine) {
+        case .notInstalled where !models.hasScannedDisk:
+            // Launch: the first disk scan hasn't landed yet. The job waits for it.
+            return nil
+        case .notInstalled: return .modelNotDownloaded(engine)
+        case .failed(let message):
+            switch models.lastErrors[engine] {
+            case .modelLoadFailed?:
+                // The files are complete: the job loads the model once more before giving up, and a failure then
+                // keeps the recording for Retry.
+                return nil
+            case let error?:
+                // A failed download keeps its own error (Try Again, Manage Storage).
+                return error
+            case nil:
+                return .modelLoadFailed(engine, message)
+            }
+        case .downloading, .installed, .preparing, .ready: return nil
+        }
+    }
+
     /// Queues the job right away (FIFO order is decided at release), then waits for the recorder's tail.
     private func finishCapture(tail: TimeInterval) {
         let resumedID = continuing?.id
@@ -480,7 +489,7 @@ final class DictationController {
         guard captureDevice.isCapturing else { return }
         // A resumed dictation keeps the canceled recording's id, already while its tail is captured.
         let job = Job(recording: nil, engine: effectiveEngine, targetPID: inserter.frontmostPID(), id: resumedID)
-        job.cleansUp = modelOverride == .cleanup
+        job.cleansUp = effectiveChoice.cleansUp
         queue.append(job)
         _ = machine.handle(.jobStarted, now: clock())
         finishingJob = job
@@ -544,10 +553,11 @@ final class DictationController {
         let recording = captureDevice.isCapturing ? captureDevice.cancel() : nil
         if keepForUndo {
             guard let recording else { return }
-            keepCancelled(recording, engine: effectiveEngine, cleansUp: modelOverride == .cleanup, notify: notify)
+            keepCancelled(recording, engine: effectiveEngine, cleansUp: effectiveChoice.cleansUp, notify: notify)
         } else if let resumed {
             // A resumed dictation whose mic failed: its audio (the kept part at least) stays for another Undo.
-            keepCancelled(recording ?? resumed, engine: effectiveEngine, cleansUp: modelOverride == .cleanup, notify: true)
+            keepCancelled(recording ?? resumed, engine: effectiveEngine, cleansUp: effectiveChoice.cleansUp,
+                          notify: true)
         }
     }
 
@@ -676,7 +686,7 @@ final class DictationController {
         var generation = 0
         var playsStopCue = false
         var isCancelled = false
-        /// A dictation on clean-up (Switch model): its transcript is tidied before it's pasted.
+        /// A dictation on clean-up: its transcript is tidied before it's pasted.
         var cleansUp = false
         /// Its text is with the clean-up model now: the transcription itself is done.
         var isCleaningUp: Bool { uncleaned != nil }
@@ -774,7 +784,7 @@ final class DictationController {
         }
     }
 
-    /// A dictation on clean-up (Switch model) is tidied before it's delivered.
+    /// A dictation on clean-up is tidied before it's delivered.
     private func cleansUp(_ job: Job, _ result: TranscriptResult) -> Bool {
         job.cleansUp && CleanupModel.canClean(result.engine)
             && !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -784,7 +794,7 @@ final class DictationController {
     /// throws: a failure, a timeout or an empty answer is `.failed`, and the original text stands.
     private func runCleanup(_ text: String, of source: EngineID, by model: CleanupModel) async -> CleanupOutcome {
         // A key already known not to work would fail the request too: no round trip, and the notice says why.
-        if let keyProblem = cleanupKeyProblem {
+        if let keyProblem = openRouterKeyProblem {
             Log.engine.info("Clean-up skipped: \(keyProblem.code, privacy: .public)")
             return .failed(keyProblem)
         }
@@ -813,8 +823,9 @@ final class DictationController {
         }
     }
 
-    /// Why the OpenRouter key can't clean up right now, as far as the account knows (nil while it may).
-    private var cleanupKeyProblem: AppError? {
+    /// Why the OpenRouter key can't pay for a request right now, as far as the account knows (nil while it may: a
+    /// check in progress, offline, a failed check). Clean-up and Switch model ask before any round trip.
+    private var openRouterKeyProblem: AppError? {
         switch account.status {
         case .missing: .openRouterMissingKey
         case .invalid(let message): .openRouterInvalidKey(message)
@@ -857,7 +868,7 @@ final class DictationController {
             case .downloading:
                 try await Task.sleep(for: .milliseconds(300))
             case .installed:
-                if engine == settings.selectedEngine { models.prepare(engine) }
+                if engine == settings.parakeetEngine { models.prepare(engine) }
                 return
             case .notInstalled:
                 throw AppError.modelNotDownloaded(engine)
@@ -1179,9 +1190,12 @@ final class DictationController {
         case .retryWith(let engine):
             retry(recordingID: notice.recordingID, engine: engine)
         case .selectEngine(let engine):
+            // "Use Parakeet v3": where Parakeet runs, and Parakeet in place of a Gemini main model.
             models.select(engine)
-            toasts.post(Notice(dedupeKey: "engine.selected", style: .success, symbol: engine.symbolName,
-                               title: "Now using \(engine.displayName)", lifetime: .seconds(3)))
+            if settings.lineup.main == .gemini { settings.lineup.main = .parakeet }
+            let main = settings.lineup.main, parakeet = settings.parakeetEngine
+            toasts.post(Notice(dedupeKey: "engine.selected", style: .success, symbol: main.symbolName(parakeet: parakeet),
+                               title: "Now using \(main.title(parakeet: parakeet))", lifetime: .seconds(3)))
         case .undoCancel:
             undo(recordingID: notice.recordingID ?? lastCancelledID)
         case .chooseMicrophone:
@@ -1437,7 +1451,7 @@ final class DictationController {
             postRecordingGone()
             return
         }
-        let chosen = engine ?? history.entry(id: id)?.engine ?? settings.selectedEngine
+        let chosen = engine ?? history.entry(id: id)?.engine ?? settings.mainEngine
         enqueue(recording, engine: chosen, targetPID: inserter.frontmostPID(), cleansUp: cleanupIDs.contains(id))
     }
 
@@ -1456,10 +1470,11 @@ final class DictationController {
             postCanceled(recording, note: "Finish this dictation first, then Undo.")
             return
         }
-        let engine = cancelledEngines[id] ?? history.entry(id: id)?.engine
+        let engine = cancelledEngines[id] ?? history.entry(id: id)?.engine ?? settings.mainEngine
+        let choice = ModelChoice(engine: engine, cleansUp: cleanupIDs.contains(id))
         resumeRequest = recording
         // The same dictation goes on, with the model it had; `send` drops it if the mic won't start.
-        modelOverride = cleanupIDs.contains(id) ? .cleanup : engine.flatMap { $0.isSwitchModel ? .engine($0) : nil }
+        modelOverride = choice == settings.lineup.main ? nil : choice
         send(.resume(prefix: recording.duration))
         resumeRequest = nil
         if continuing?.id != id {
@@ -1481,14 +1496,15 @@ final class DictationController {
     private func downloadFinished(_ engine: EngineID) {
         toasts.post(Notice(dedupeKey: "download.\(engine.rawValue)", style: .success, symbol: "checkmark.circle.fill",
                            title: "\(engine.displayName) is ready",
-                           body: engine == settings.selectedEngine ? "Hold \(pttHint) and start talking." : nil,
+                           body: engine == settings.mainEngine ? "Hold \(pttHint) and start talking." : nil,
                            lifetime: .seconds(5), sound: .success))
     }
 
     /// Downloads and loads run in the background (often after the window that started them closed), so
     /// their failures surface as notices. A failed dictation's notice for the same error shares the dedupe key.
     private func modelFailed(_ engine: EngineID, _ error: AppError) {
-        if case .modelLoadFailed = error, engine != settings.selectedEngine { return }
+        // A load nothing needs now (Parakeet on this Mac while the lineup runs it elsewhere) stays quiet.
+        if case .modelLoadFailed = error, !(engine == settings.parakeetEngine && settings.usesLocalParakeet) { return }
         // A load Home work waits for: its row says why. A dictation that needs the model says it in its own notice.
         if case .modelLoadFailed = error, homeWork.values.contains(.transcription(engine)) { return }
         postFailure(error.notice(recordingID: nil, fallbackEngine: usableFallback(excluding: engine, after: error),
@@ -1629,11 +1645,11 @@ final class DictationController {
     // MARK: - Engines and recordings
 
     /// Engines to fall back to from `engine`, in order: the same model on the other side (Parakeet · Cloud ↔
-    /// Parakeet on this Mac); from an extra model (Gemini), the main model `main` first, then Parakeet on the other
-    /// side. Only main models: an extra model is never offered in another's place.
-    static func fallbackCandidates(for engine: EngineID, main: EngineID) -> [EngineID] {
+    /// Parakeet on this Mac); from Gemini, Parakeet where `parakeet` runs it first, then on the other side. Only
+    /// Parakeet: Gemini is never offered in another model's place.
+    static func fallbackCandidates(for engine: EngineID, parakeet: EngineID) -> [EngineID] {
         let ordered = [engine.localCounterpart, engine.cloudCounterpart].compactMap { $0 }
-            + EngineID.mainCandidates.filter { $0 == main } + EngineID.mainCandidates
+            + [parakeet] + EngineID.parakeetRuntimes
         var candidates: [EngineID] = []
         for candidate in ordered where candidate != engine && !candidates.contains(candidate) {
             candidates.append(candidate)
@@ -1643,12 +1659,12 @@ final class DictationController {
 
     /// The engine offered in place of `engine`: "Retry with …" or "Use … Instead" for a saved recording, "Use …"
     /// when nothing was recorded. The first of `fallbackCandidates` that can run it: a local model once it's
-    /// downloaded (one that isn't loaded yet loads for the retry, so from Gemini the main model on this Mac comes
-    /// before Parakeet · Cloud even then), or only once it's loaded with `readyNow`; a cloud one while the key is
+    /// downloaded (one that isn't loaded yet loads for the retry, so from Gemini Parakeet on this Mac, where it runs,
+    /// comes before Parakeet · Cloud even then), or only once it's loaded with `readyNow`; a cloud one while the key is
     /// valid, unless `error` (the key's, the credit's, the connection's) would stop it too.
     private func usableFallback(excluding engine: EngineID, after error: AppError? = nil,
                                 readyNow: Bool = false) -> EngineID? {
-        Self.fallbackCandidates(for: engine, main: settings.selectedEngine).first { candidate in
+        Self.fallbackCandidates(for: engine, parakeet: settings.parakeetEngine).first { candidate in
             if candidate.isLocal {
                 switch models.state(of: candidate) {
                 case .ready: return true
@@ -1682,14 +1698,23 @@ final class DictationController {
 
     // MARK: - Switch model
 
-    /// Whether OpenRouter would take a Gemini request: a key that isn't known to be missing, rejected, unreadable
-    /// or out of credit (a check in progress or offline is given the benefit of the doubt).
-    private var isCloudKeyUsable: Bool {
-        switch account.status {
-        case .missing, .invalid, .noCredit: false
-        case .failed where account.isKeyUnreadable: false
-        case .checking, .valid, .offline, .failed: true
-        }
+    /// Why `choice` can't take the dictation being recorded now, or nil when it can: the OpenRouter key when it goes
+    /// through it (`openRouterKeyProblem`), then Parakeet on this Mac when it uses it (`localRefusal`).
+    private func switchRefusal(_ choice: ModelChoice) -> AppError? {
+        let parakeet = settings.parakeetEngine
+        if choice.needsOpenRouter(parakeet: parakeet), let keyProblem = openRouterKeyProblem { return keyProblem }
+        if choice.usesLocalParakeet(parakeet: parakeet) { return localRefusal(parakeet) }
+        return nil
+    }
+
+    /// The pill menu's suffix for a model that can't take this dictation now ("Needs key", "Not downloaded"); nil for
+    /// the main model, which always can, and for any other that can.
+    private func unavailableReason(_ choice: ModelChoice) -> String? {
+        guard choice != settings.lineup.main, switchRefusal(choice) != nil else { return nil }
+        let parakeet = settings.parakeetEngine
+        return EngineReadiness.of(choice, parakeet: parakeet, localState: models.state(of: parakeet),
+                                  keyStatus: account.status, localError: models.lastErrors[parakeet])
+            .unavailableReason ?? "Unavailable"
     }
 
     /// The Switch model key held down: a step, with its tick, at every autorepeat of the keyboard, however fast
@@ -1699,22 +1724,32 @@ final class DictationController {
         send(.cycleEngine)
     }
 
-    /// The machine's `.cycleEngine`: main model → clean-up → each extra model (`settings.switchChoices`) → main
-    /// model.
+    /// The machine's `.cycleEngine`: the next model of the cycle after this dictation's, wrapping around to the main
+    /// model. One that can't take the dictation now (`switchRefusal`) is skipped; with none to land on, the switch is
+    /// rejected.
     private func advanceEngine() {
-        let choices = settings.switchChoices
-        guard !choices.isEmpty else { return }
-        guard isCloudKeyUsable else {
-            rejectSwitchWithoutKey()
+        let lineup = settings.lineup
+        let cycle = lineup.cycle
+        let current = effectiveChoice
+        let start = cycle.firstIndex(of: current) ?? 0
+        var blocked: [(choice: ModelChoice, error: AppError)] = []
+        for offset in 1...cycle.count {
+            let choice = cycle[(start + offset) % cycle.count]
+            guard choice != current else { continue }
+            if choice != lineup.main, let refusal = switchRefusal(choice) {
+                blocked.append((choice, refusal))
+                continue
+            }
+            switchModel(to: choice == lineup.main ? nil : choice)
+            // Found it: the hint has nothing left to teach.
+            if settings.switchHintShownCount < AppSettings.switchHintLimit {
+                settings.switchHintShownCount = AppSettings.switchHintLimit
+            }
             return
         }
-        let cycle: [ModelChoice?] = [nil] + choices.map(Optional.some)
-        let index = cycle.firstIndex(of: modelOverride) ?? 0
-        switchModel(to: cycle[(index + 1) % cycle.count])
-        // Found it: the hint has nothing left to teach.
-        if settings.switchHintShownCount < AppSettings.switchHintLimit {
-            settings.switchHintShownCount = AppSettings.switchHintLimit
-        }
+        // A cycle of one has nothing to step to, and nothing to say.
+        guard !blocked.isEmpty else { return }
+        rejectSwitch(blocked: blocked)
     }
 
     /// Another choice for this dictation: the pill's chip and a soft tick.
@@ -1725,28 +1760,41 @@ final class DictationController {
         playCue(.modelSwitch)
     }
 
-    /// No usable OpenRouter key: the engine stays, the pill shakes and a notice says what Gemini needs.
-    private func rejectSwitchWithoutKey() {
+    /// A switch that can't happen: the model stays, the pill shakes, and a notice says why. What the OpenRouter key
+    /// can't pay for (every step it blocked), or else the first blocked step's own problem ("Parakeet v3 isn’t
+    /// downloaded yet", with Download).
+    private func rejectSwitch(blocked: [(choice: ModelChoice, error: AppError)]) {
         pillModel.shakeTrigger += 1
-        if case .invalid = account.status { account.refreshIfStale(maxAge: 30) }
-        toasts.post(Self.switchWithoutKeyNotice(account.status, choices: settings.switchChoices))
+        let keyProblem = openRouterKeyProblem
+        let keyBlocked = blocked.filter { keyProblem != nil && $0.error == keyProblem }.map(\.choice)
+        if !keyBlocked.isEmpty {
+            if case .invalid = account.status { account.refreshIfStale(maxAge: 30) }
+            toasts.post(Self.switchWithoutKeyNotice(account.status, blocked: keyBlocked))
+        } else if let first = blocked.first {
+            var notice = first.error.notice(recordingID: nil, fallbackEngine: nil, engine: settings.parakeetEngine)
+            notice.dedupeKey = Self.switchModelNoticeKey
+            toasts.post(notice)
+        }
     }
 
-    /// What a switch to clean-up or an extra model (`choices`, what Switch model steps through) says when the
-    /// OpenRouter key can't pay for it.
-    static func switchWithoutKeyNotice(_ status: KeyStatus, choices: [ModelChoice]) -> Notice {
-        let subject = choices.allSatisfy(\.cleansUp) ? "Clean-up needs"
-            : choices.contains(.cleanup) ? "Clean-up and Gemini need" : "Gemini needs"
+    /// What a switch to models the OpenRouter key can't pay for (`blocked`, in cycle order) says: "Gemini needs an
+    /// OpenRouter key", "Clean-up and Gemini need OpenRouter credit".
+    static func switchWithoutKeyNotice(_ status: KeyStatus, blocked: [ModelChoice]) -> Notice {
+        let names = blocked.map(\.shortName)
+        let joined = names.count > 1
+            ? names.dropLast().joined(separator: ", ") + " and " + (names.last ?? "")
+            : names.first ?? ModelChoice.gemini.shortName
+        let subject = "\(joined) \(names.count > 1 ? "need" : "needs")"
         if case .noCredit = status {
             return Notice(dedupeKey: switchModelNoticeKey, style: .warning, symbol: "creditcard",
-                          title: "\(subject) OpenRouter credit", body: "Add credit to use extra models.",
+                          title: "\(subject) OpenRouter credit", body: "Add credit to switch models.",
                           actions: [NoticeAction(title: "Add Credit", kind: .openURL(OpenRouterLinks.credits), isPrimary: true)],
                           lifetime: .seconds(8))
         }
         let body = switch status {
-        case .invalid: "OpenRouter rejected yours. Update it to use extra models."
-        case .failed: "\(Brand.name) can’t read yours. Check it to use extra models."
-        default: "Add one to use extra models."
+        case .invalid: "OpenRouter rejected yours. Update it to switch models."
+        case .failed: "\(Brand.name) can’t read yours. Check it to switch models."
+        default: "Add one to switch models while dictating."
         }
         return Notice(dedupeKey: switchModelNoticeKey, style: .warning, symbol: "key.fill",
                       title: "\(subject) an OpenRouter key", body: body,
@@ -1865,10 +1913,14 @@ final class DictationController {
         }
         // An idle request doesn't cut the error flourish short: PillModel holds it for its minimum time.
         if pillModel.phase != phase { pillModel.phase = phase }
-        // The chip stays through processing until the dictation's text lands.
-        let session = phase.isRecording || modelOverride != nil
-            ? modelOverride
-            : (phase == .processing ? processingSessionModel : nil)
+        // The dictation's model from key-down until its text lands: the tint (and the chip) stay through processing.
+        let session: ModelChoice? = if phase.isRecording || modelOverride != nil {
+            effectiveChoice
+        } else if phase == .processing, let job = pillJob {
+            ModelChoice(engine: job.engine, cleansUp: job.cleansUp)
+        } else {
+            nil
+        }
         if pillModel.sessionModel != session { pillModel.sessionModel = session }
 
         if phase.isRecording, let started = machine.recordingStartedAt {
@@ -1881,12 +1933,8 @@ final class DictationController {
         }
     }
 
-    /// The choice of the newest dictation still being transcribed or pasted: an extra model or clean-up.
-    private var processingSessionModel: ModelChoice? {
-        guard let newest = queue.last ?? deliveringJob else { return nil }
-        if newest.engine.isSwitchModel { return .engine(newest.engine) }
-        return newest.cleansUp ? .cleanup : nil
-    }
+    /// The job the processing pill speaks for: the newest dictation still being transcribed, or the one being pasted.
+    private var pillJob: Job? { queue.last ?? deliveringJob }
 
     private func stateDidChange() {
         if hotkeys.isBusy != machine.isBusy { hotkeys.isBusy = machine.isBusy }

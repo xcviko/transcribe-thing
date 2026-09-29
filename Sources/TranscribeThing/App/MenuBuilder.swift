@@ -81,14 +81,16 @@ final class MenuBuilder {
 
     // MARK: - Status line
 
+    /// "Parakeet v3 · Ready", "Gemini 3.8 Flash · Needs key": the main model, or what the app is doing.
     private func statusItem(_ env: AppEnvironment) -> NSMenuItem {
-        let status = Self.engineStatus(env.settings.selectedEngine, models: env.models, account: env.account)
+        let main = env.settings.lineup.main, parakeet = env.settings.parakeetEngine
+        let status = Self.status(of: main, parakeet: parakeet, models: env.models, account: env.account)
         let activity: String? = switch env.dictation.activity {
         case .recording: "Listening…"
         case .processing: "Transcribing…"
         case .idle: nil
         }
-        let item = NSMenuItem(title: "\(env.settings.selectedEngine.displayName) · \(activity ?? status.text)",
+        let item = NSMenuItem(title: "\(main.title(parakeet: parakeet)) · \(activity ?? status.text)",
                               action: nil, keyEquivalent: "")
         item.isEnabled = false
         item.image = Self.dot(activity == nil ? status.color : .systemRed)
@@ -98,6 +100,14 @@ final class MenuBuilder {
     struct EngineStatus {
         var text: String
         var color: NSColor
+    }
+
+    /// A model's status: its engine's, and for clean-up Parakeet's until it's ready, then the OpenRouter key's.
+    static func status(of choice: ModelChoice, parakeet: EngineID, models: ModelStore,
+                       account: OpenRouterAccount) -> EngineStatus {
+        let transcriber = engineStatus(choice.engine(parakeet: parakeet), models: models, account: account)
+        guard choice.cleansUp, transcriber.text == "Ready" else { return transcriber }
+        return engineStatus(.geminiFlash, models: models, account: account)
     }
 
     static func engineStatus(_ engine: EngineID, models: ModelStore, account: OpenRouterAccount) -> EngineStatus {
@@ -193,7 +203,9 @@ final class MenuBuilder {
         return image
     }
 
-    private static func titleWithSuffix(_ title: String, suffix: String) -> NSAttributedString {
+    /// `title` with a secondary suffix: "Automatic (System Default)  MacBook Pro Microphone", "Gemini 3.8 Flash
+    /// Needs key".
+    static func titleWithSuffix(_ title: String, suffix: String) -> NSAttributedString {
         let font = NSFont.menuFont(ofSize: 0)
         let result = NSMutableAttributedString(string: title, attributes: [.font: font])
         result.append(NSAttributedString(string: "  \(suffix)", attributes: [

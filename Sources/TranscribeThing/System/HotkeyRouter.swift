@@ -50,7 +50,8 @@ struct HotkeyRouter: Equatable, Sendable {
         var isBusy = false
         /// A dictation is recording: the switch model shortcut is live (and swallowed) only then.
         var isRecording = false
-        /// At least one extra model takes part in Switch model; without one its shortcut is never intercepted.
+        /// Switch model has another model to step to (`ModelLineup.cycle`); without one its shortcut is never
+        /// intercepted.
         var switchesModels = true
         /// While the shortcut recorder captures keys: nothing fires and nothing is swallowed.
         var isSuspended = false
@@ -369,8 +370,8 @@ struct HotkeyRouter: Equatable, Sendable {
         decision.events.append(.pttInterrupted)
     }
 
-    /// The switch model binding while it is live: during a dictation (a held PTT counts), with an extra model
-    /// to switch to.
+    /// The switch model binding while it is live: during a dictation (a held PTT counts), with another model to
+    /// switch to.
     private func liveSwitchModel(_ config: Config) -> Shortcut? {
         guard config.switchesModels, config.isRecording || gesture != .idle else { return nil }
         return config.bindings[.switchModel]

@@ -607,7 +607,7 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
 
     @Test func aMissingKeyRefusesCloudSpeechBeforeRecording() throws {
         let h = DictationControllerTests.make(models: [.parakeet: .ready], keyStatus: .missing)
-        h.settings.selectedEngine = .parakeetCloud
+        h.settings.parakeetEngine = .parakeetCloud
         h.controller.send(.handsFreeToggle)
         #expect(h.recorder.starts == 0)
         #expect(h.controller.machine.capture == .idle)

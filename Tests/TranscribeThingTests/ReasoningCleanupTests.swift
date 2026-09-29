@@ -46,9 +46,7 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
 
     @Test func freshSettings() {
         let settings = AppSettings.inMemory()
-        #expect(settings.switchCleanup)
-        #expect(settings.switchChoices == [.cleanup, .engine(.geminiFlash)],
-                "clean-up is the first Switch model step")
+        #expect(settings.lineup.steps == [.cleanup, .gemini], "clean-up is the first Switch model step")
     }
 
     /// The prompts Models used to edit are fixed in code now. Whatever an older build stored (a cleared prompt, one of
@@ -61,27 +59,28 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         let settings = AppSettings(defaults: store, microphoneProbe: { MicrophoneMigrationProbe() })
         #expect(store.object(forKey: SettingsKey.geminiSystemPrompt.defaultsKey) == nil)
         #expect(store.object(forKey: SettingsKey.cleanupSystemPrompt.defaultsKey) == nil)
-        #expect(settings.switchChoices == [.cleanup, .engine(.geminiFlash)])
+        #expect(settings.lineup.steps == [.cleanup, .gemini])
     }
 
     /// Clean-up takes part whenever its switch is on: there's no prompt that could be missing.
     @Test func theCleanupStepNeedsOnlyItsSwitch() {
         let settings = AppSettings.inMemory()
-        #expect(settings.switchChoices.first == .cleanup)
-        settings.selectedEngine = .parakeetCloud
-        #expect(settings.switchChoices.first == .cleanup, "cloud Parakeet is cleaned up too")
-        settings.switchCleanup = false
-        #expect(!settings.switchChoices.contains(.cleanup))
-        settings.switchEngines = []
-        #expect(settings.switchChoices.isEmpty)
+        #expect(settings.lineup.steps.first == .cleanup)
+        settings.parakeetEngine = .parakeetCloud
+        #expect(settings.lineup.steps.first == .cleanup, "cloud Parakeet is cleaned up too")
+        #expect(ModelChoice.cleanup.engine(parakeet: settings.parakeetEngine) == .parakeetCloud)
+        settings.lineup.setSwitchable(.cleanup, false)
+        #expect(!settings.lineup.steps.contains(.cleanup))
+        settings.lineup.setSwitchable(.gemini, false)
+        #expect(settings.lineup.steps.isEmpty)
     }
 
     @Test func everythingPersists() {
         let store = defaults()
         let settings = AppSettings(defaults: store, microphoneProbe: { MicrophoneMigrationProbe() })
-        settings.switchCleanup = false
+        settings.lineup.setSwitchable(.cleanup, false)
         let reloaded = AppSettings(defaults: store, microphoneProbe: { MicrophoneMigrationProbe() })
-        #expect(!reloaded.switchCleanup)
+        #expect(!reloaded.lineup.isSwitchable(.cleanup))
     }
 }
 

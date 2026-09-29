@@ -3,8 +3,8 @@ import SwiftUI
 struct ModelStep: View {
     let model: OnboardingModel
 
-    /// The main models served through OpenRouter; Gemini is an extra model, picked per dictation.
-    private static let cloudEngines = EngineID.mainCandidates.filter(\.isCloud)
+    /// Parakeet through OpenRouter: the step picks where Parakeet runs (Gemini is one of the models in Settings).
+    private static let cloudEngines = EngineID.parakeetRuntimes.filter(\.isCloud)
 
     /// Width of the cloud tile row, so the key panel's notch can point at the selected tile.
     @State private var cloudRowWidth: CGFloat = 0
@@ -55,7 +55,7 @@ struct ModelStep: View {
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
 
-            ExtraModelsNote(text: model.extraModelsNote)
+            SwitchModelNote(text: model.lineupNote)
                 .padding(.top, 14)
         }
         .animation(Theme.Motion.expand, value: cloudSelected)
@@ -102,7 +102,7 @@ private struct CloudKeySummary: View {
 
 // MARK: - Cloud tile
 
-/// Tile for a main model served through OpenRouter: name, who serves it, what it costs.
+/// Tile for Parakeet served through OpenRouter: name, who serves it, what it costs.
 private struct CloudEngineCard: View {
     let model: OnboardingModel
     let engine: EngineID
@@ -155,8 +155,8 @@ private struct CloudEngineCard: View {
     }
 }
 
-/// One line under the models: Gemini isn't picked here, it's a key press away while dictating.
-private struct ExtraModelsNote: View {
+/// One line under the models: clean-up and Gemini aren't picked here, they're a key press away while dictating.
+private struct SwitchModelNote: View {
     var text: String
 
     var body: some View {

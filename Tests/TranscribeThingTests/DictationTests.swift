@@ -1002,13 +1002,14 @@ final class FakeRecorder: DictationRecorder {
     }
 
     @Test func fallbacksPairParakeetOnThisMacWithParakeetInTheCloud() {
-        for main in EngineID.mainCandidates {
-            #expect(DictationController.fallbackCandidates(for: .parakeet, main: main) == [.parakeetCloud])
-            #expect(DictationController.fallbackCandidates(for: .parakeetCloud, main: main) == [.parakeet])
+        for parakeet in EngineID.parakeetRuntimes {
+            #expect(DictationController.fallbackCandidates(for: .parakeet, parakeet: parakeet) == [.parakeetCloud])
+            #expect(DictationController.fallbackCandidates(for: .parakeetCloud, parakeet: parakeet) == [.parakeet])
         }
-        #expect(DictationController.fallbackCandidates(for: .geminiFlash, main: .parakeet) == [.parakeet, .parakeetCloud],
-                "Gemini falls back to the main model first")
-        #expect(DictationController.fallbackCandidates(for: .geminiFlash, main: .parakeetCloud) == [.parakeetCloud, .parakeet])
+        #expect(DictationController.fallbackCandidates(for: .geminiFlash, parakeet: .parakeet) == [.parakeet, .parakeetCloud],
+                "Gemini falls back to Parakeet where it runs first")
+        #expect(DictationController.fallbackCandidates(for: .geminiFlash, parakeet: .parakeetCloud)
+                == [.parakeetCloud, .parakeet])
     }
 
     @Test func aFailedLocalDictationOffersParakeetInTheCloudOnlyWithAWorkingKey() async throws {
@@ -1023,10 +1024,10 @@ final class FakeRecorder: DictationRecorder {
         }
     }
 
-    @Test func aFailedGeminiDictationFallsBackToTheMainModel() async throws {
+    @Test func aFailedGeminiDictationFallsBackToParakeet() async throws {
         func fallback(main: EngineID = .parakeet, local: LocalModelState, error: AppError) async throws -> EngineID? {
             let h = Self.make(models: [.parakeet: local], keyStatus: .valid(KeyInfo()))
-            h.settings.selectedEngine = main
+            h.settings.parakeetEngine = main
             h.controller.transcribeOverride = { _, _ in throw error }
             let r = Self.recording()
             h.controller.enqueue(r, engine: .geminiFlash, targetPID: nil)
@@ -1035,16 +1036,16 @@ final class FakeRecorder: DictationRecorder {
             return notice.actions.lazy.compactMap { if case .retryWith(let e) = $0.kind { e } else { nil } }.first
         }
         let limited = AppError.openRouterRateLimited(retryAfter: nil)
-        #expect(try await fallback(local: .ready, error: limited) == .parakeet, "the main model, loaded")
+        #expect(try await fallback(local: .ready, error: limited) == .parakeet, "Parakeet, loaded")
         #expect(try await fallback(local: .installed, error: limited) == .parakeet,
-                "the main model on this Mac loads for the retry: it comes before a key that works now")
+                "Parakeet on this Mac loads for the retry: it comes before a key that works now")
         #expect(try await fallback(local: .preparing(since: .distantPast), error: limited) == .parakeet)
-        #expect(try await fallback(local: .notInstalled, error: limited) == .parakeetCloud, "the main model can't run")
+        #expect(try await fallback(local: .notInstalled, error: limited) == .parakeetCloud, "Parakeet on this Mac can't run")
         #expect(try await fallback(local: .failed("x"), error: limited) == .parakeetCloud)
         #expect(try await fallback(local: .notInstalled, error: .openRouterNoCredits("")) == nil,
                 "no credit stops every cloud model")
         #expect(try await fallback(local: .installed, error: .offline) == .parakeet)
-        // Parakeet · Cloud as the main model comes first; Parakeet on this Mac only when the cloud can't run.
+        // Parakeet · Cloud where Parakeet runs comes first; Parakeet on this Mac only when the cloud can't run.
         #expect(try await fallback(main: .parakeetCloud, local: .ready, error: limited) == .parakeetCloud)
         #expect(try await fallback(main: .parakeetCloud, local: .installed, error: .offline) == .parakeet)
     }
@@ -1749,6 +1750,30 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
             "Settings…", "—", "Quit",
         ])
         #expect(menu.items.first?.isEnabled == false)
+    }
+
+    /// The status line names the main model, whichever it is, and its status: clean-up's is Parakeet's until it's
+    /// ready, then the key's.
+    @Test func theStatusLineNamesTheMainModel() throws {
+        let env = AppEnvironment.preview()
+        func status() throws -> String {
+            try #require(env.menuBar.builder.makeMenu(includeQuit: true).items.first).title
+        }
+        env.settings.lineup.main = .gemini
+        #expect(try status() == "Gemini 3.8 Flash · Ready")
+        env.settings.lineup.main = .cleanup
+        #expect(try status() == "Parakeet v3 + GPT-6 Luna · Ready")
+        env.settings.parakeetEngine = .parakeetCloud
+        env.settings.lineup.main = .parakeet
+        #expect(try status() == "Parakeet v3 · Cloud · Ready")
+        let keyless = OpenRouterAccount.preview(status: .missing)
+        #expect(MenuBuilder.status(of: .gemini, parakeet: .parakeet, models: env.models, account: keyless).text
+            == "Needs key")
+        #expect(MenuBuilder.status(of: .cleanup, parakeet: .parakeet, models: env.models, account: keyless).text
+            == "Needs key")
+        let bare = ModelStore.preview(states: [.parakeet: .notInstalled])
+        #expect(MenuBuilder.status(of: .cleanup, parakeet: .parakeet, models: bare, account: keyless).text
+            == "Not downloaded", "Parakeet first")
     }
 
     /// The model is chosen in Models (and per dictation, from the pill): neither menu offers it.

@@ -138,19 +138,20 @@ private let historyFile = #"""
         try withDefaults { defaults in
             try storeOldSettings(defaults, switchEngines: ["geminiFlash", "geminiPro"])
             let settings = load(defaults)
-            #expect(settings.selectedEngine == .parakeet)
-            #expect(settings.switchEngines == [.geminiFlash])
-            #expect(settings.switchChoices == [.cleanup, .engine(.geminiFlash)])
+            // Gemini 3.1 Pro was the main model: Gemini 3.8 Flash is, and Parakeet runs on this Mac.
+            #expect(settings.parakeetEngine == .parakeet)
+            #expect(settings.lineup.main == .gemini)
+            #expect(settings.lineup.cycle == [.gemini, .parakeet, .cleanup])
             for key in [SettingsKey.reasoningEfforts, .cleanupModel, .cleanupReasoningEfforts, .cleanupReasoningEffort] {
                 #expect(defaults.object(forKey: key.defaultsKey) == nil, "\(key) is removed at load")
             }
-            #expect(load(defaults).switchEngines == [.geminiFlash], "and again next launch")
+            #expect(load(defaults).lineup == settings.lineup, "and again next launch")
         }
         try withDefaults { defaults in
             try storeOldSettings(defaults, switchEngines: ["geminiPro"])
             let settings = load(defaults)
-            #expect(settings.switchEngines.isEmpty && settings.switchChoices == [.cleanup],
-                    "Pro alone taking part leaves clean-up alone, not a model the user switched off")
+            #expect(!settings.lineup.switchable.contains(.gemini) && settings.lineup.switchable.contains(.cleanup),
+                    "Pro alone taking part isn't Flash taking part")
         }
     }
 
@@ -201,11 +202,12 @@ private let historyFile = #"""
 
     @Test func nothingOffersARetiredModel() {
         #expect(!EngineID.offered.contains(.geminiPro) && !CleanupModel.offered.contains(.geminiFlashLite))
-        #expect(!EngineID.mainCandidates.contains(.geminiPro) && !EngineID.switchCandidates.contains(.geminiPro))
-        #expect(AppSettings.inMemory().switchChoices == [.cleanup, .engine(.geminiFlash)])
+        #expect(!EngineID.parakeetRuntimes.contains(.geminiPro))
+        #expect(AppSettings.inMemory().lineup.cycle.map { $0.engine(parakeet: .parakeet) }
+                == [.parakeet, .parakeet, .geminiFlash])
         for engine in EngineID.allCases {
-            #expect(!DictationController.fallbackCandidates(for: engine, main: .parakeet).contains(.geminiPro))
+            #expect(!DictationController.fallbackCandidates(for: engine, parakeet: .parakeet).contains(.geminiPro))
         }
-        #expect(PillPalette.accent(for: .engine(.geminiPro)) == nil, "no tint of its own")
+        #expect(ModelChoice(engine: .geminiPro, cleansUp: false) == .gemini, "a job it made reads as Gemini")
     }
 }

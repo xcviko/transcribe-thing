@@ -24,11 +24,8 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
     static var cloudTranscriptionEngines: [EngineID] { offered.filter { $0.cloudAPI == .transcriptions } }
     /// Gemini through chat completions.
     static var cloudChatEngines: [EngineID] { offered.filter { $0.cloudAPI == .chatCompletions } }
-    /// What Settings can select as the main model, the one every dictation starts with.
-    static var mainCandidates: [EngineID] { offered.filter { !$0.isSwitchModel } }
-    /// The extra models, in the order the Switch model shortcut steps through them: picked per dictation from the
-    /// pill, never selected in Settings.
-    static var switchCandidates: [EngineID] { offered.filter(\.isSwitchModel) }
+    /// Where Parakeet v3 can run: on this Mac, then through OpenRouter (`AppSettings.parakeetEngine`).
+    static var parakeetRuntimes: [EngineID] { offered.filter(\.isParakeet) }
 
     /// Which OpenRouter endpoint a cloud engine uses. Routing code switches on this, never on specific cases.
     enum CloudAPI: Sendable, Equatable {
@@ -47,11 +44,11 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
 
     var isCloud: Bool { !isLocal }
 
-    /// An extra model: used for one dictation at a time (Switch model), never as the main model.
-    var isSwitchModel: Bool {
+    /// Parakeet v3, on this Mac or through OpenRouter: what Parakeet and clean-up (`ModelChoice`) run on.
+    var isParakeet: Bool {
         switch self {
-        case .parakeet, .parakeetCloud: false
-        case .geminiFlash, .geminiPro: true
+        case .parakeet, .parakeetCloud: true
+        case .geminiFlash, .geminiPro: false
         }
     }
 
@@ -105,12 +102,6 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
         case .geminiFlash: "Gemini Flash"
         case .geminiPro: "Gemini Pro"
         }
-    }
-
-    /// The pill's model chip: an extra model by its full name, the main model as just "Parakeet" (the chip only
-    /// flashes it for a moment after switching back, and heads clean-up's "Parakeet → GPT-6 Luna").
-    var chipName: String {
-        isSwitchModel ? modelName : "Parakeet"
     }
 
     var providerLine: String {

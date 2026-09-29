@@ -80,6 +80,13 @@ final class HubContext: Observable {
                            localError: models.lastErrors[engine])
     }
 
+    /// A model's readiness, with Parakeet where Settings runs it (`AppSettings.parakeetEngine`).
+    func readiness(of choice: ModelChoice) -> EngineReadiness {
+        let parakeet = settings.parakeetEngine
+        return EngineReadiness.of(choice, parakeet: parakeet, localState: models.state(of: parakeet),
+                                  keyStatus: account.status, localError: models.lastErrors[parakeet])
+    }
+
     /// What is being made for a History row's recording right now (a transcription or a clean-up), if anything.
     func runningVersion(for id: UUID) -> TranscriptVersionKind? {
         (previewRunning ?? dictation.runningVersions)[id]
@@ -255,11 +262,11 @@ private struct HubSidebar: View {
     }
 
     private var footer: some View {
-        let engine = settings.selectedEngine
-        let summary = EngineSummary.make(engine: engine, localState: models.state(of: engine), keyStatus: account.status,
-                                         localError: models.lastErrors[engine])
+        let main = settings.lineup.main, parakeet = settings.parakeetEngine
+        let summary = EngineSummary.make(choice: main, parakeet: parakeet, localState: models.state(of: parakeet),
+                                         keyStatus: account.status, localError: models.lastErrors[parakeet])
         return VStack(alignment: .leading, spacing: 10) {
-            EngineStatusChip(summary: summary, engine: engine) { hub.show(.models) }
+            EngineStatusChip(summary: summary, choice: main, parakeet: parakeet) { hub.show(.models) }
             Text(hub.versionLine)
                 .font(.system(size: 11))
                 .foregroundStyle(.inkTertiary)
@@ -321,10 +328,11 @@ private struct SidebarItem: View {
     }
 }
 
-/// "Parakeet v3 · Ready" with a status dot; opens Models.
+/// The main model: "Parakeet v3 · Ready" with a status dot; opens Models.
 private struct EngineStatusChip: View {
     var summary: EngineSummary
-    var engine: EngineID
+    var choice: ModelChoice
+    var parakeet: EngineID
     var action: () -> Void
     @State private var hovering = false
     @Environment(\.colorScheme) private var scheme
@@ -332,7 +340,7 @@ private struct EngineStatusChip: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 8) {
-                EngineIcon(engine: engine, size: 26)
+                ModelChoiceIcon(choice: choice, parakeet: parakeet, size: 26)
                 VStack(alignment: .leading, spacing: 1) {
                     nameLine
                     HStack(spacing: 4) {
@@ -372,12 +380,13 @@ private struct EngineStatusChip: View {
     /// Cloud Parakeet shows the model's name with a cloud, the same mark its history rows carry, rather than
     /// spelling out "· Cloud" in the narrow sidebar.
     private var nameLine: some View {
-        HStack(spacing: 4) {
-            Text(engine.cloudAPI == .transcriptions ? (engine.localCounterpart?.shortName ?? summary.name) : summary.name)
+        let cloudParakeet = choice == .parakeet && parakeet.isCloud
+        return HStack(spacing: 4) {
+            Text(cloudParakeet ? (parakeet.localCounterpart?.shortName ?? summary.name) : summary.name)
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.ink)
                 .lineLimit(1)
-            if engine.cloudAPI == .transcriptions {
+            if cloudParakeet {
                 Image(systemName: "cloud.fill")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(HubPalette.apricotInk)

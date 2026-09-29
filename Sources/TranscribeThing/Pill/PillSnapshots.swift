@@ -50,7 +50,7 @@ enum PillSnapshots {
                     .morph("Still transcribing → rest (Always)", from: .processing(afterHandsFree: false, slow: true),
                            model: PillModel.preview(phase: .processing).previewSlowProcessing()),
                     .exit("Still transcribing · Gemini Flash → hidden", .processing(afterHandsFree: false, slow: true),
-                          model: PillModel.preview(phase: .processing).previewSlowProcessing(), choice: .engine(.geminiFlash)),
+                          model: PillModel.preview(phase: .processing).previewSlowProcessing(), choice: .gemini),
                 ])
             },
             SnapshotEntry("pill-exit-rest", width: PillFilmSheet.width(cell: 132, columns: 11), height: 452) { _ in
@@ -65,15 +65,15 @@ enum PillSnapshots {
             SnapshotEntry("pill-exit-models", width: PillFilmSheet.width(cell: 132, columns: 11), height: 480) { _ in
                 PillFilmSheet(cell: 132, columns: 11, cellHeight: 92, strips: [
                     .exit("Processing · Gemini Flash → hidden", .processing(afterHandsFree: false),
-                          model: .preview(phase: .processing), choice: .engine(.geminiFlash)),
+                          model: .preview(phase: .processing), choice: .gemini),
                     .exit("Processing · Clean-up → hidden", .processing(afterHandsFree: false),
                           model: .preview(phase: .processing), choice: .cleanup),
                     .morph("Processing · Gemini Flash → rest (Always)", from: .processing(afterHandsFree: false),
-                           model: .preview(phase: .processing), choice: .engine(.geminiFlash)),
+                           model: .preview(phase: .processing), choice: .gemini),
                 ])
             },
-            // Extra models (`--only pill-models`): the chip, the tint, the hint and the no-key notice.
-            SnapshotEntry("pill-models", width: 760, height: 44 + 11 * 92) { _ in PillModelSheet() },
+            // Models (`--only pill-models`): the chip, the tint, the hint and the no-key notice.
+            SnapshotEntry("pill-models", width: 760, height: 44 + 12 * 92) { _ in PillModelSheet() },
             SnapshotEntry("pill-models-hint", width: 640, height: 150) { _ in
                 CanvasScene(model: hintModel(), notices: [])
             },
@@ -83,10 +83,10 @@ enum PillSnapshots {
             },
             SnapshotEntry("pill-models-no-key", width: 640, height: 270) { _ in
                 CanvasScene(model: .preview(phase: .listening, level: 0.7),
-                            notices: [DictationController.switchWithoutKeyNotice(.missing, choices: [.cleanup, .engine(.geminiFlash)])])
+                            notices: [DictationController.switchWithoutKeyNotice(.missing, blocked: [.cleanup, .gemini])])
             },
             SnapshotEntry("pill-models-toast", width: 640, height: 290) { _ in
-                CanvasScene(model: PillModelSheet.model(.locked, choice: .engine(.geminiFlash), recordingFor: 362),
+                CanvasScene(model: PillModelSheet.model(.locked, choice: .gemini, recordingFor: 362),
                             notices: [PillSnapshotFixtures.micFallback])
             },
             SnapshotEntry("pill-toast-info", width: 640, height: 250) { _ in
@@ -467,10 +467,12 @@ private struct PillModelSheet: View {
         let make: @MainActor () -> PillModel
     }
 
-    /// `chip`: right after the switch, the chip still up; else later on, the tint alone.
+    /// `chip`: right after the switch, the chip still up; else later on, the tint alone. `main`: the lineup's main
+    /// model, which changes nothing the pill draws.
     @MainActor static func model(_ phase: PillPhase, choice: ModelChoice?, level: Float = 0.7, chip: Bool = true,
-                                 recordingFor elapsed: TimeInterval? = nil) -> PillModel {
+                                 main: ModelChoice = .parakeet, recordingFor elapsed: TimeInterval? = nil) -> PillModel {
         let model = PillModel.preview(phase: phase, level: level, recordingFor: elapsed)
+        model.settings.lineup.main = main
         model.sessionModel = choice
         if chip, choice != nil { model.flashChip() }
         return model
@@ -478,26 +480,27 @@ private struct PillModelSheet: View {
 
     private var rows: [Row] {
         [
-            Row(id: "main", caption: "Push-to-talk · main model") { Self.model(.listening, choice: nil) },
+            Row(id: "parakeet", caption: "Push-to-talk · Parakeet") {
+                Self.model(.listening, choice: .parakeet, chip: false)
+            },
+            Row(id: "gemini-main", caption: "Push-to-talk · Gemini (main)") {
+                Self.model(.listening, choice: .gemini, chip: false, main: .gemini)
+            },
             Row(id: "cleanup", caption: "Push-to-talk · Clean-up") { Self.model(.listening, choice: .cleanup) },
             Row(id: "cleanup-later", caption: "Clean-up · chip gone") {
                 Self.model(.listening, choice: .cleanup, chip: false)
             },
-            Row(id: "flash", caption: "Push-to-talk · Gemini Flash") { Self.model(.listening, choice: .engine(.geminiFlash)) },
+            Row(id: "flash", caption: "Push-to-talk · Gemini Flash") { Self.model(.listening, choice: .gemini) },
             Row(id: "flash-later", caption: "Gemini Flash · chip gone") {
-                Self.model(.listening, choice: .engine(.geminiFlash), chip: false)
+                Self.model(.listening, choice: .gemini, chip: false)
             },
-            Row(id: "back", caption: "Back to the main model") {
-                let model = Self.model(.listening, choice: nil)
-                model.flashChip()
-                return model
-            },
+            Row(id: "back", caption: "Back to Parakeet") { Self.model(.listening, choice: .parakeet) },
             Row(id: "locked-cleanup", caption: "Hands-free · Clean-up") { Self.model(.locked, choice: .cleanup, level: 0.5) },
-            Row(id: "locked-flash", caption: "Hands-free · Gemini Flash") { Self.model(.locked, choice: .engine(.geminiFlash), level: 0.5) },
+            Row(id: "locked-flash", caption: "Hands-free · Gemini Flash") { Self.model(.locked, choice: .gemini, level: 0.5) },
             Row(id: "processing-cleanup", caption: "Processing · Clean-up") { Self.model(.processing, choice: .cleanup) },
-            Row(id: "processing-flash", caption: "Processing · Gemini Flash") { Self.model(.processing, choice: .engine(.geminiFlash)) },
+            Row(id: "processing-flash", caption: "Processing · Gemini Flash") { Self.model(.processing, choice: .gemini) },
             Row(id: "processing-slow-flash", caption: "Processing · slow · Flash") {
-                Self.model(.processing, choice: .engine(.geminiFlash)).previewSlowProcessing()
+                Self.model(.processing, choice: .gemini).previewSlowProcessing()
             },
         ]
     }
@@ -505,7 +508,7 @@ private struct PillModelSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
-                Text("Extra models").frame(width: 200, alignment: .leading)
+                Text("Models").frame(width: 200, alignment: .leading)
                 Text("On a document").frame(maxWidth: .infinity)
                 Text("On a dark editor").frame(maxWidth: .infinity)
             }

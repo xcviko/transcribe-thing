@@ -19,7 +19,7 @@ enum HubSnapshots {
                 c.models = .preview(states: [.parakeet: .downloading(Samples.downloading)])
             },
             hub("hub-models-compact-cloud", .models, width: 820, height: 1100) { c in
-                c.settings.selectedEngine = .parakeetCloud
+                c.settings.parakeetEngine = .parakeetCloud
             },
             hub("hub-home-search", .home) { c in
                 c.initialSearch = "zzz"
@@ -85,10 +85,10 @@ enum HubSnapshots {
                                     lastErrors: [.parakeet: .modelLoadFailed(.parakeet, "Corrupt weights")])
             },
             hub("hub-models-cloud-stt", .models, height: 1100) { c in
-                c.settings.selectedEngine = .parakeetCloud
+                c.settings.parakeetEngine = .parakeetCloud
             },
             hub("hub-models-key-limit", .models, height: 1100) { c in
-                c.settings.selectedEngine = .parakeetCloud
+                c.settings.parakeetEngine = .parakeetCloud
                 c.account = .preview(status: .noCredit(KeyInfo(label: "transcribe-thing", limit: 5, limitRemaining: 0, usage: 5)))
             },
             hub("hub-models-key-invalid", .models, height: 1100) { c in
@@ -97,23 +97,35 @@ enum HubSnapshots {
             hub("hub-models-key-missing", .models, height: 1100) { c in
                 c.account = .preview(status: .missing)
             },
-            // Switch model rebound to right ⌘, clean-up left out: the line under "Extra models" shows the real binding.
+            // Switch model rebound to right ⌘, clean-up left out: the line above the lineup shows the real binding.
             hub("hub-models-extra-custom", .models, height: 1100) { c in
                 c.settings.shortcuts[.switchModel] = .rightCommand
-                c.settings.switchCleanup = false
+                c.settings.lineup.setSwitchable(.cleanup, false)
             },
-            // The clean-up step off; GPT-6 Luna stays listed under Clean-up.
-            hub("hub-models-cleanup-off", .models, height: 1080) { c in
-                c.settings.switchCleanup = false
-            },
-            hub("hub-models-cleanup-compact", .models, width: 820, height: 1140) { c in
+            hub("hub-models-compact-key-missing", .models, width: 820, height: 1140) { c in
                 c.account = .preview(status: .missing)
             },
             hub("hub-models-extra-unbound", .models, height: 1100) { c in
                 c.settings.shortcuts[.switchModel] = nil
             },
-            hub("hub-models-extra-off", .models, height: 1100) { c in
-                c.settings.switchEngines = []
+            // Gemini as the main model: its row takes the radio and "Main", and Parakeet gets a switch.
+            hub("hub-models-main-gemini", .models, height: 1100) { c in
+                c.settings.lineup.main = .gemini
+            },
+            // Clean-up as the main model, with Parakeet through OpenRouter.
+            hub("hub-models-main-cleanup-cloud", .models, height: 1100) { c in
+                c.settings.parakeetEngine = .parakeetCloud
+                c.settings.lineup.main = .cleanup
+            },
+            // Dragged into Gemini, clean-up, Parakeet: the line follows the new order from the main model.
+            hub("hub-models-reordered", .models, height: 1100) { c in
+                c.settings.lineup.move(.gemini, to: 0)
+                c.settings.lineup.move(.cleanup, to: 1)
+            },
+            // Only the main model takes part: the line says how to reach another.
+            hub("hub-models-only-main", .models, height: 1100) { c in
+                c.settings.lineup.setSwitchable(.cleanup, false)
+                c.settings.lineup.setSwitchable(.gemini, false)
             },
 
             hub("hub-shortcuts", .shortcuts),

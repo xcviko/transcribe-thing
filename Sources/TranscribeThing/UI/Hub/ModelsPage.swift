@@ -1,7 +1,10 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
-/// The main model (download, use, delete) and storage, the extra models the Switch model shortcut steps through,
-/// the clean-up model, and the OpenRouter key.
+/// The three models in the user's order: the main model every dictation starts on (a radio), which others the Switch
+/// model shortcut steps to (a switch each), and the order it steps in (drag a row by its handle). Then where Parakeet
+/// runs (on this Mac: download, use, delete, storage; or through OpenRouter), for Parakeet and clean-up alike, and the
+/// OpenRouter key.
 struct ModelsPage: View {
     @Environment(HubContext.self) private var hub
     @Environment(ModelStore.self) private var models
@@ -12,36 +15,36 @@ struct ModelsPage: View {
     @State private var freeBytes: Int64?
     /// Narrow window: the local model drops "Private" and "Offline" and keeps "Recommended".
     @State private var compactBadges = false
+    /// The model being dragged by its handle, while it is.
+    @State private var dragged: ModelChoice?
 
     /// Below this list width the local model's full badge row stops fitting beside its actions.
     static let compactBadgeWidth: CGFloat = 640
 
     var body: some View {
-        @Bindable var settings = settings
         ScrollViewReader { proxy in
-            HubPage("Models", subtitle: "Every dictation starts on your main model. Switch to an extra one while you talk.") {
-                HubGroup("Main model") {
+            HubPage("Models", subtitle: "Every dictation starts on your main model. Switch to another while you talk.") {
+                HubGroup("Your models",
+                         footer: "Drag to change the order. Switch model steps through the ones that are on, starting from your main model.") {
+                    SwitchModelLineView(lineup: settings.lineup, binding: settings.shortcuts[.switchModel]) {
+                        hub.show(.shortcuts)
+                    }
                     SettingsGroup {
-                        ForEach(EngineID.mainCandidates) { engine in row(engine, proxy: proxy) }
+                        ForEach(settings.lineup.order) { choice in
+                            LineupRow(choice: choice, dragged: $dragged,
+                                      chooseMain: { chooseMain(choice, proxy: proxy) },
+                                      focusKey: { focusKey(proxy) })
+                        }
+                    }
+                }
+                HubGroup("Where Parakeet runs", footer: "For Parakeet v3, with or without clean-up.") {
+                    SettingsGroup {
+                        ForEach(EngineID.parakeetRuntimes) { engine in row(engine, proxy: proxy) }
                     }
                     .onGeometryChange(for: Bool.self) { $0.size.width < Self.compactBadgeWidth } action: { compact in
                         compactBadges = compact
                     }
                     storageLine
-                }
-                HubGroup("Extra models", footer: extraFooter) {
-                    ExtraModelsLine(status: extraStatus) { hub.show(.shortcuts) }
-                    SettingsGroup {
-                        CleanupStepRow(isOn: $settings.switchCleanup) { focusKey(proxy) }
-                        ForEach(EngineID.switchCandidates) { engine in
-                            ExtraModelRow(engine: engine, isOn: extraBinding(engine)) { focusKey(proxy) }
-                        }
-                    }
-                }
-                HubGroup("Clean-up", footer: "For dictations you switch to clean-up. Gemini transcripts aren’t cleaned up: Gemini already punctuates and drops filler words. History keeps the original too.") {
-                    SettingsGroup {
-                        CleanupModelRow(model: .default) { focusKey(proxy) }
-                    }
                 }
                 HubGroup("OpenRouter") {
                     OpenRouterKeyCard(focusRequest: keyFocusRequest)
@@ -55,24 +58,10 @@ struct ModelsPage: View {
         .task { account.refreshIfStale(maxAge: 300) }
     }
 
-    private var extraStatus: ExtraModels.Status {
-        ExtraModels.status(binding: settings.shortcuts[.switchModel], enabled: settings.switchChoices)
-    }
-
-    private var extraFooter: String {
-        "The next dictation starts on \(settings.selectedEngine.shortName) again."
-    }
-
-    private func extraBinding(_ engine: EngineID) -> Binding<Bool> {
-        let settings = settings
-        return Binding(get: { settings.switchEngines.contains(engine) },
-                       set: { on in settings.switchEngines = ExtraModels.setting(engine, on: on, in: settings.switchEngines) })
-    }
-
     private func row(_ engine: EngineID, proxy: ScrollViewProxy) -> some View {
         ModelRow(
             engine: engine,
-            isSelected: settings.selectedEngine == engine,
+            isSelected: settings.parakeetEngine == engine,
             isPendingSwitch: models.pendingSelection == engine,
             compactBadges: compactBadges,
             choose: { choose(engine, proxy: proxy) },
@@ -80,10 +69,34 @@ struct ModelsPage: View {
             focusKey: { focusKey(proxy) })
     }
 
-    // MARK: Selection
+    // MARK: Main model
+
+    /// Makes `choice` the main model. One the OpenRouter key can't pay for leads to the key instead; one on Parakeet
+    /// on this Mac starts its download, or its load, so the next dictation doesn't wait for it.
+    private func chooseMain(_ choice: ModelChoice, proxy: ScrollViewProxy) {
+        guard settings.lineup.main != choice else { return }
+        let parakeet = settings.parakeetEngine
+        switch hub.readiness(of: choice) {
+        case .needsKey, .keyProblem:
+            // Only a model that goes through OpenRouter reads as the key's.
+            focusKey(proxy)
+            return
+        case .ready, .warming, .needsDownload, .failed:
+            break
+        }
+        withAnimation(Theme.Motion.snappy) { settings.lineup.main = choice }
+        guard choice.usesLocalParakeet(parakeet: parakeet) else { return }
+        switch models.state(of: parakeet) {
+        case .notInstalled: models.download(parakeet)
+        case .installed: models.prepare(parakeet)
+        case .downloading, .preparing, .ready, .failed: break
+        }
+    }
+
+    // MARK: Where Parakeet runs
 
     private func choose(_ engine: EngineID, proxy: ScrollViewProxy) {
-        guard settings.selectedEngine != engine else { return }
+        guard settings.parakeetEngine != engine else { return }
         switch hub.readiness(of: engine) {
         case .ready, .warming, .needsDownload, .failed:
             // Downloads keep the current engine until the new one lands (ModelStore finishes the switch
@@ -131,8 +144,322 @@ enum ModelsAnchor: Hashable {
     case key
 }
 
-// MARK: - Row
+// MARK: - Your models
 
+/// What the Switch model shortcut does, with the user's own binding as key caps and the models it steps through
+/// ("Parakeet → Clean-up → Gemini", the main model first); or what's missing for it to work.
+private struct SwitchModelLineView: View {
+    var lineup: ModelLineup
+    var binding: Shortcut?
+    var openShortcuts: () -> Void
+
+    var body: some View {
+        let status = SwitchModelLine.status(binding: binding, lineup: lineup)
+        HStack(spacing: 6) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(status.isReady ? Color.accent : Color.inkTertiary)
+            switch status {
+            case .ready(let binding):
+                // Key caps mid-sentence; the sentence is the accessibility label.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 5) {
+                        Text("Press")
+                        ShortcutChips(shortcut: binding, size: .small)
+                        Text("while dictating:")
+                        chain
+                    }
+                    HStack(spacing: 5) {
+                        Text("Press")
+                        ShortcutChips(shortcut: binding, size: .small)
+                        Text("while dictating to step through them in this order.")
+                    }
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(SwitchModelLine.explanation(status, lineup: lineup))
+            case .alone, .unbound:
+                Text(SwitchModelLine.explanation(status, lineup: lineup))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if status == .unbound {
+                Button("Set Shortcut", action: openShortcuts)
+                    .buttonStyle(.appQuiet)
+                    .fixedSize()
+            }
+        }
+        .typeface(.callout)
+        .foregroundStyle(.inkSecondary)
+        .padding(.horizontal, 4)
+        .padding(.bottom, 2)
+        .animation(Theme.Motion.snappy, value: lineup)
+    }
+
+    /// The cycle by short names, the main model's in ink.
+    private var chain: some View {
+        HStack(spacing: 5) {
+            ForEach(Array(lineup.cycle.enumerated()), id: \.element) { index, choice in
+                if index > 0 {
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 8.5, weight: .bold))
+                        .foregroundStyle(.inkTertiary)
+                }
+                Text(choice.shortName)
+                    .fontWeight(index == 0 ? .semibold : nil)
+                    .foregroundStyle(index == 0 ? Color.ink : Color.inkSecondary)
+            }
+        }
+        .fixedSize()
+    }
+}
+
+private extension SwitchModelLine.Status {
+    var isReady: Bool {
+        if case .ready = self { true } else { false }
+    }
+}
+
+/// One model of the lineup: a handle to drag it, a radio that makes it the main model, what it is and how it's
+/// doing, and a switch that includes it in Switch model ("Main" on the main model, which is always included).
+private struct LineupRow: View {
+    var choice: ModelChoice
+    @Binding var dragged: ModelChoice?
+    var chooseMain: () -> Void
+    var focusKey: () -> Void
+
+    @Environment(HubContext.self) private var hub
+    @Environment(ModelStore.self) private var models
+    @Environment(AppSettings.self) private var settings
+    @Environment(OpenRouterAccount.self) private var account
+    @State private var hovering = false
+
+    private var isMain: Bool { settings.lineup.main == choice }
+    private var parakeet: EngineID { settings.parakeetEngine }
+    private var index: Int { settings.lineup.order.firstIndex(of: choice) ?? 0 }
+    private var isLast: Bool { index == settings.lineup.order.count - 1 }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            HStack(spacing: 6) {
+                handle
+                RadioDot(isOn: isMain)
+            }
+            ModelChoiceIcon(choice: choice, parakeet: parakeet, size: 36)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(choice.modelName)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.ink)
+                    .lineLimit(1)
+                Text(factLine)
+                    .typeface(.callout)
+                    .foregroundStyle(.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let providerNote {
+                    ProviderLine(text: providerNote)
+                }
+                status
+                    .padding(.top, 2)
+            }
+            Spacer(minLength: 8)
+            HStack(spacing: 10) {
+                actions
+                trailing
+            }
+        }
+        .padding(.leading, Theme.Spacing.md - 6)
+        .padding(.trailing, Theme.Spacing.md)
+        .padding(.vertical, 12)
+        .frame(minHeight: 76)
+        .background { RowHighlight(isSelected: isMain, isHovering: hovering) }
+        .contentShape(Rectangle())
+        .onTapGesture(perform: chooseMain)
+        .onHover { hovering = $0 }
+        .animation(Theme.Motion.hover, value: hovering)
+        .animation(Theme.Motion.snappy, value: isMain)
+        .onDrop(of: [.plainText], delegate: LineupDropDelegate(target: choice, dragged: $dragged, settings: settings))
+        .contextMenu {
+            Button("Make Main Model", action: chooseMain)
+                .disabled(isMain)
+            Divider()
+            Button("Move Up") { move(by: -1) }
+                .disabled(index == 0)
+            Button("Move Down") { move(by: 1) }
+                .disabled(isLast)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(isMain ? .isSelected : [])
+        .accessibilityValue(isMain ? "Main model"
+            : settings.lineup.isSwitchable(choice) ? "Included when switching" : "Not included when switching")
+        .accessibilityAction(named: "Make Main Model", chooseMain)
+        .accessibilityAction(named: "Move Up") { move(by: -1) }
+        .accessibilityAction(named: "Move Down") { move(by: 1) }
+    }
+
+    /// Drags the row to another place in the lineup; a click on it does nothing (the rest of the row makes it main).
+    private var handle: some View {
+        Image(systemName: "line.3.horizontal")
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(.inkTertiary)
+            .frame(width: 16, height: 36)
+            .contentShape(Rectangle())
+            .onTapGesture {}
+            .pointerStyle(.grabIdle)
+            .help("Drag to reorder")
+            .onDrag {
+                dragged = choice
+                return NSItemProvider(object: choice.rawValue as NSString)
+            }
+            .accessibilityHidden(true)
+    }
+
+    private func move(by offset: Int) {
+        let target = index + offset
+        guard settings.lineup.order.indices.contains(target) else { return }
+        withAnimation(Theme.Motion.snappy) { settings.lineup.move(choice, to: target) }
+    }
+
+    // MARK: Copy
+
+    /// What the model is like, with where Parakeet runs.
+    private var factLine: String {
+        let place = parakeet.isLocal ? "on this Mac" : "through OpenRouter"
+        switch choice {
+        case .parakeet:
+            return parakeet.isLocal ? "Fastest · private · on this Mac" : "Fast · through OpenRouter · ≈ $0.09 per hour of audio"
+        case .cleanup:
+            return "\(EngineID.parakeet.modelName) \(place) transcribes, then \(CleanupModel.default.modelName) tidies the text."
+        case .gemini:
+            return "Most accurate · thinks before it writes · pay per use"
+        }
+    }
+
+    /// Who serves it through OpenRouter; nil for Parakeet on this Mac.
+    private var providerNote: String? {
+        switch choice {
+        case .parakeet: ProviderNote.text(parakeet)
+        case .cleanup: "\(CleanupModel.default.modelName) served by \(CleanupModel.default.providerName) only."
+        case .gemini: ProviderNote.text(.geminiFlash)
+        }
+    }
+
+    // MARK: Status and controls
+
+    private var status: some View {
+        let summary = EngineSummary.make(choice: choice, parakeet: parakeet, localState: models.state(of: parakeet),
+                                         keyStatus: account.status, localError: models.lastErrors[parakeet])
+        return HStack(spacing: 4) {
+            StatusDot(color: summary.tone.color, size: 6, pulsing: summary.tone == .progress)
+                .frame(width: 12, height: 12)
+            Text(summary.status)
+                .typeface(.callout)
+                .monospacedDigit()
+                .foregroundStyle(summary.tone == .negative ? Color.danger : Color.inkSecondary)
+                .contentTransition(.numericText())
+                .lineLimit(1)
+        }
+    }
+
+    @ViewBuilder private var actions: some View {
+        switch hub.readiness(of: choice) {
+        case .needsDownload:
+            Button {
+                models.download(.parakeet)
+            } label: {
+                Label("Download", systemImage: "arrow.down")
+            }
+            .buttonStyle(SecondaryButtonStyle(size: .small))
+        case .needsKey:
+            Button("Add Key", action: focusKey)
+                .buttonStyle(SecondaryButtonStyle(size: .small))
+        case .keyProblem:
+            Button("Update Key", action: focusKey)
+                .buttonStyle(SecondaryButtonStyle(size: .small))
+        case .ready, .warming, .failed:
+            EmptyView()
+        }
+    }
+
+    /// "Main" on the main model, which Switch model always includes; a switch on the others.
+    @ViewBuilder private var trailing: some View {
+        if isMain {
+            StateCapsule(title: "Main")
+                .help("Every dictation starts here. It’s always included when switching.")
+                .transition(.opacity.combined(with: .scale(scale: 0.85)))
+        } else {
+            Toggle("", isOn: switchable)
+                .toggleStyle(.appSwitch)
+                .labelsHidden()
+                .accessibilityLabel("Include \(choice.modelName) when switching")
+                .help(settings.lineup.isSwitchable(choice) ? "Included when switching models" : "Not included when switching models")
+                .transition(.opacity.combined(with: .scale(scale: 0.85)))
+        }
+    }
+
+    private var switchable: Binding<Bool> {
+        let settings = settings, choice = choice
+        return Binding(get: { settings.lineup.isSwitchable(choice) },
+                       set: { on in withAnimation(Theme.Motion.snappy) { settings.lineup.setSwitchable(choice, on) } })
+    }
+}
+
+/// Live reordering: a dragged row takes the place of the row it enters, and the others make room.
+private struct LineupDropDelegate: DropDelegate {
+    var target: ModelChoice
+    @Binding var dragged: ModelChoice?
+    var settings: AppSettings
+
+    func dropEntered(info: DropInfo) {
+        guard let dragged, dragged != target, let index = settings.lineup.order.firstIndex(of: target) else { return }
+        withAnimation(Theme.Motion.snappy) { settings.lineup.move(dragged, to: index) }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        dragged = nil
+        return true
+    }
+}
+
+/// "✓ In use", "✓ Main": a state, not a control.
+private struct StateCapsule: View {
+    var title: String
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "checkmark").font(.system(size: 9, weight: .bold))
+            Text(title).font(.system(size: 11.5, weight: .semibold))
+        }
+        .foregroundStyle(.accent)
+        .padding(.horizontal, 9)
+        .frame(height: 24)
+        .background(Color.accentSoft, in: Capsule(style: .continuous))
+        .fixedSize()
+    }
+}
+
+/// "Served by Together.", under a model's fact line, with a server glyph.
+private struct ProviderLine: View {
+    var text: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
+            Image(systemName: "server.rack")
+                .font(.system(size: 9.5, weight: .semibold))
+                .frame(width: 12)
+            Text(text)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .typeface(.callout)
+        .foregroundStyle(.inkTertiary)
+    }
+}
+
+// MARK: - Where Parakeet runs
+
+/// Parakeet v3 on this Mac (download, use, delete) or through OpenRouter: where Parakeet and clean-up run
+/// (`AppSettings.parakeetEngine`).
 private struct ModelRow: View {
     var engine: EngineID
     var isSelected: Bool
@@ -145,11 +472,16 @@ private struct ModelRow: View {
     @Environment(HubContext.self) private var hub
     @Environment(ModelStore.self) private var models
     @Environment(OpenRouterAccount.self) private var account
+    @Environment(AppSettings.self) private var settings
     @State private var hovering = false
     @State private var confirmingDelete = false
 
     private var state: LocalModelState { models.state(of: engine) }
     private var readiness: EngineReadiness { hub.readiness(of: engine) }
+    /// A model Switch model reaches runs on Parakeet, so the selected runtime is in use.
+    private var lineupUsesParakeet: Bool { settings.lineup.cycle.contains { $0 != .gemini } }
+    /// The row's title: the place, as the section names the model.
+    private var runtimeName: String { engine.isLocal ? "On this Mac" : "Through OpenRouter" }
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
@@ -165,7 +497,7 @@ private struct ModelRow: View {
                     .foregroundStyle(.inkSecondary)
                     .lineLimit(1)
                 if let note = ProviderNote.text(engine) {
-                    providerLine(note)
+                    ProviderLine(text: note)
                 }
                 status
                     .padding(.top, 2)
@@ -189,21 +521,9 @@ private struct ModelRow: View {
         engine.badges.filter { $0 != "Cloud" && !(compactBadges && EngineID.privacyBadges.contains($0)) }
     }
 
-    private func providerLine(_ text: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 5) {
-            Image(systemName: "server.rack")
-                .font(.system(size: 9.5, weight: .semibold))
-                .frame(width: 12)
-            Text(text)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .typeface(.callout)
-        .foregroundStyle(.inkTertiary)
-    }
-
     private func titleLine(badges: [String]) -> some View {
         HStack(spacing: 6) {
-            Text(engine.displayName)
+            Text(runtimeName)
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.ink)
                 .lineLimit(1)
@@ -295,8 +615,8 @@ private struct ModelRow: View {
 
     @ViewBuilder private var actions: some View {
         HStack(spacing: 6) {
-            if isSelected && readiness.isUsable {
-                inUse
+            if isSelected && readiness.isUsable && lineupUsesParakeet {
+                StateCapsule(title: "In use")
             }
             if engine.isLocal {
                 localActions
@@ -304,17 +624,6 @@ private struct ModelRow: View {
                 cloudActions
             }
         }
-    }
-
-    private var inUse: some View {
-        HStack(spacing: 4) {
-            Image(systemName: "checkmark").font(.system(size: 9, weight: .bold))
-            Text("In use").font(.system(size: 11.5, weight: .semibold))
-        }
-        .foregroundStyle(.accent)
-        .padding(.horizontal, 9)
-        .frame(height: 24)
-        .background(Color.accentSoft, in: Capsule(style: .continuous))
     }
 
     @ViewBuilder private var localActions: some View {
@@ -349,7 +658,7 @@ private struct ModelRow: View {
                 Button("Use", action: use)
                     .buttonStyle(SecondaryButtonStyle(size: .small))
             }
-            deleteButton(isEnabled: !isSelected, freedBytes: engine.approxDownloadBytes)
+            deleteButton(isEnabled: !(isSelected && lineupUsesParakeet), freedBytes: engine.approxDownloadBytes)
         }
     }
 
@@ -377,7 +686,7 @@ private struct ModelRow: View {
         }
         .buttonStyle(IconButtonStyle(size: 26))
         .disabled(!isEnabled)
-        .help(isEnabled ? "Delete \(engine.displayName)" : "Switch to another model to delete this one.")
+        .help(isEnabled ? "Delete \(engine.displayName)" : "Switch Parakeet to OpenRouter to delete it.")
         .accessibilityLabel("Delete \(engine.displayName)")
         .popover(isPresented: $confirmingDelete, arrowEdge: .bottom) {
             DeleteModelConfirmation(engine: engine, freedBytes: freedBytes) {
@@ -388,239 +697,6 @@ private struct ModelRow: View {
                 confirmingDelete = false
             }
         }
-    }
-}
-
-// MARK: - Extra models
-
-/// What the Switch model shortcut does, with the user's own binding as key caps; or what's missing for it to work.
-private struct ExtraModelsLine: View {
-    var status: ExtraModels.Status
-    var openShortcuts: () -> Void
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(isReady ? Color.accent : Color.inkTertiary)
-            switch status {
-            case .ready(let binding):
-                // Key caps mid-sentence; the explanation's text is the accessibility label.
-                HStack(spacing: 5) {
-                    Text("Press")
-                    ShortcutChips(shortcut: binding, size: .small)
-                    Text("while dictating to use one for that dictation.")
-                }
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(ExtraModels.explanation(status))
-            case .noneEnabled, .unbound:
-                Text(ExtraModels.explanation(status))
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if status == .unbound {
-                Button("Set Shortcut", action: openShortcuts)
-                    .buttonStyle(.appQuiet)
-                    .fixedSize()
-            }
-        }
-        .typeface(.callout)
-        .foregroundStyle(.inkSecondary)
-        .padding(.horizontal, 4)
-        .padding(.bottom, 2)
-    }
-
-    private var isReady: Bool {
-        if case .ready = status { true } else { false }
-    }
-}
-
-/// An extra model: what it's like, its OpenRouter status, and whether the Switch model shortcut steps to it.
-private struct ExtraModelRow: View {
-    var engine: EngineID
-    @Binding var isOn: Bool
-    var focusKey: () -> Void
-
-    @Environment(HubContext.self) private var hub
-    @Environment(OpenRouterAccount.self) private var account
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            EngineIcon(engine: engine, size: 36)
-                .opacity(isOn ? 1 : 0.55)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(engine.modelName)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(isOn ? Color.ink : Color.inkSecondary)
-                    .lineLimit(1)
-                Text(engine.factLine)
-                    .typeface(.callout)
-                    .foregroundStyle(.inkSecondary)
-                    .lineLimit(1)
-                if let note = ProviderNote.text(engine) {
-                    HStack(alignment: .firstTextBaseline, spacing: 5) {
-                        Image(systemName: "server.rack")
-                            .font(.system(size: 9.5, weight: .semibold))
-                            .frame(width: 12)
-                        Text(note)
-                    }
-                    .typeface(.callout)
-                    .foregroundStyle(.inkTertiary)
-                }
-                ModelStatusText(keyStatus: account.status)
-                    .padding(.top, 2)
-            }
-            Spacer(minLength: 8)
-            HStack(spacing: 10) {
-                switch hub.readiness(of: engine) {
-                case .needsKey:
-                    Button("Add Key", action: focusKey)
-                        .buttonStyle(SecondaryButtonStyle(size: .small))
-                case .keyProblem:
-                    Button("Update Key", action: focusKey)
-                        .buttonStyle(SecondaryButtonStyle(size: .small))
-                case .ready, .warming, .needsDownload, .failed:
-                    EmptyView()
-                }
-                Toggle("", isOn: $isOn)
-                    .toggleStyle(.appSwitch)
-                    .labelsHidden()
-                    .accessibilityLabel("Include \(engine.displayName) when switching")
-                    .help(isOn ? "Included when switching models" : "Not included when switching models")
-            }
-        }
-        .padding(.horizontal, Theme.Spacing.md)
-        .padding(.vertical, 12)
-        .frame(minHeight: 76)
-        .animation(Theme.Motion.hover, value: isOn)
-        .accessibilityElement(children: .contain)
-    }
-}
-
-// MARK: - Clean-up
-
-/// Clean-up's mark: a warm wand, on the Models page and on the pill's clean-up chip.
-private struct CleanupIcon: View {
-    var size: CGFloat
-
-    var body: some View {
-        let shape = RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
-        Image(systemName: ModelChoice.cleanup.symbolName)
-            .font(.system(size: size * 0.44, weight: .semibold))
-            .foregroundStyle(Color.warm)
-            .frame(width: size, height: size)
-            .background {
-                shape.fill(Color.warm.opacity(0.13))
-                    .overlay { shape.strokeBorder(Color.warm.opacity(0.18), lineWidth: 0.5) }
-            }
-            .accessibilityHidden(true)
-    }
-}
-
-/// Clean-up as a Switch model step, first among the extra models: the main model transcribes and the clean-up model
-/// tidies its words. Named as the pass it is ("Parakeet v3 + GPT-6 Luna").
-private struct CleanupStepRow: View {
-    @Binding var isOn: Bool
-    var focusKey: () -> Void
-
-    @Environment(HubContext.self) private var hub
-    @Environment(OpenRouterAccount.self) private var account
-    @Environment(AppSettings.self) private var settings
-
-    var body: some View {
-        let cleanup = CleanupModel.default
-        HStack(alignment: .center, spacing: 12) {
-            CleanupIcon(size: 36)
-                .opacity(isOn ? 1 : 0.55)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(ModelChoice.cleanup.title(main: settings.selectedEngine))
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(isOn ? Color.ink : Color.inkSecondary)
-                    .lineLimit(1)
-                Text("\(settings.selectedEngine.chipName) transcribes, then \(cleanup.shortName) tidies the text.")
-                    .typeface(.callout)
-                    .foregroundStyle(.inkSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                ModelStatusText(keyStatus: account.status)
-                    .padding(.top, 2)
-            }
-            Spacer(minLength: 8)
-            HStack(spacing: 10) {
-                // The clean-up goes through the same OpenRouter key as Gemini.
-                switch hub.readiness(of: .geminiFlash) {
-                case .needsKey:
-                    Button("Add Key", action: focusKey)
-                        .buttonStyle(SecondaryButtonStyle(size: .small))
-                case .keyProblem:
-                    Button("Update Key", action: focusKey)
-                        .buttonStyle(SecondaryButtonStyle(size: .small))
-                case .ready, .warming, .needsDownload, .failed:
-                    EmptyView()
-                }
-                Toggle("", isOn: $isOn)
-                    .toggleStyle(.appSwitch)
-                    .labelsHidden()
-                    .accessibilityLabel("Include clean-up when switching")
-                    .help(isOn ? "Included when switching models" : "Not included when switching models")
-            }
-        }
-        .padding(.horizontal, Theme.Spacing.md)
-        .padding(.vertical, 12)
-        .frame(minHeight: 76)
-        .animation(Theme.Motion.hover, value: isOn)
-        .accessibilityElement(children: .contain)
-    }
-}
-
-/// The clean-up model, for information: what it does, who serves it and the OpenRouter key's status, like the
-/// extra models. Nothing to pick: it's the only one. It reads text, never audio, so it has no place among the
-/// models a dictation can go to.
-private struct CleanupModelRow: View {
-    var model: CleanupModel
-    var focusKey: () -> Void
-
-    @Environment(HubContext.self) private var hub
-    @Environment(OpenRouterAccount.self) private var account
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            CleanupIcon(size: 36)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(model.modelName)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.ink)
-                    .lineLimit(1)
-                Text("Tidies punctuation, fillers and false starts · reads text, not audio")
-                    .typeface(.callout)
-                    .foregroundStyle(.inkSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack(alignment: .firstTextBaseline, spacing: 5) {
-                    Image(systemName: "server.rack")
-                        .font(.system(size: 9.5, weight: .semibold))
-                        .frame(width: 12)
-                    Text("Served by \(model.providerName) only.")
-                }
-                .typeface(.callout)
-                .foregroundStyle(.inkTertiary)
-                ModelStatusText(keyStatus: account.status)
-                    .padding(.top, 2)
-            }
-            Spacer(minLength: 8)
-            // The clean-up goes through the same OpenRouter key as Gemini.
-            switch hub.readiness(of: .geminiFlash) {
-            case .needsKey:
-                Button("Add Key", action: focusKey)
-                    .buttonStyle(SecondaryButtonStyle(size: .small))
-            case .keyProblem:
-                Button("Update Key", action: focusKey)
-                    .buttonStyle(SecondaryButtonStyle(size: .small))
-            case .ready, .warming, .needsDownload, .failed:
-                EmptyView()
-            }
-        }
-        .padding(.horizontal, Theme.Spacing.md)
-        .padding(.vertical, 12)
-        .frame(minHeight: 76)
-        .accessibilityElement(children: .contain)
     }
 }
 

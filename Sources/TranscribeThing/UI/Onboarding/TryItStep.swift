@@ -31,7 +31,7 @@ struct TryItStep: View {
                 if model.showsSwitchModelLesson {
                     LessonRow(number: 0, title: "Switch model", detail: nil, shortcut: .bindable(.switchModel),
                               state: .extra, settings: settings)
-                        .help("While dictating, press it to clean up the text or use Gemini for that dictation.")
+                        .help("While dictating, press it to switch that dictation to your next model.")
                         .transition(.opacity)
                 }
             }

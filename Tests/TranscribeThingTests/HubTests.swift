@@ -320,33 +320,89 @@ import Testing
     }
 }
 
-@Suite struct ExtraModelsTests {
+@Suite struct SwitchModelLineTests {
     private let rightCommand = Shortcut.rightCommand
 
-    @Test func statusFollowsTheBindingAndTheToggles() {
-        #expect(ExtraModels.status(binding: .fnTab, enabled: [.cleanup, .engine(.geminiFlash)]) == .ready(.fnTab))
-        #expect(ExtraModels.status(binding: .fnTab, enabled: [.cleanup]) == .ready(.fnTab), "clean-up alone is a step")
-        #expect(ExtraModels.status(binding: nil, enabled: [.engine(.geminiFlash)]) == .unbound)
-        #expect(ExtraModels.status(binding: Shortcut(modifiers: []), enabled: [.engine(.geminiFlash)]) == .unbound)
-        #expect(ExtraModels.status(binding: .fnTab, enabled: []) == .noneEnabled(.fnTab))
-        #expect(ExtraModels.status(binding: nil, enabled: []) == .noneEnabled(nil))
+    /// The chain reads the cycle from the main model, in the lineup's order, and follows a move.
+    @Test func lineupLineNamesTheStepsFromTheMainModel() {
+        var lineup = ModelLineup.default
+        #expect(SwitchModelLine.chain(lineup) == "Parakeet → Clean-up → Gemini")
+        #expect(SwitchModelLine.explanation(.ready(.fnTab), lineup: lineup)
+            == "Press \(Shortcut.fnTab.spokenDescription) while dictating to step from Parakeet to Clean-up, then Gemini.")
+        lineup.main = .gemini
+        #expect(SwitchModelLine.chain(lineup) == "Gemini → Parakeet → Clean-up")
+        lineup.move(.gemini, to: 0)
+        #expect(lineup.order == [.gemini, .parakeet, .cleanup])
+        lineup.move(.cleanup, to: 1)
+        #expect(SwitchModelLine.chain(lineup) == "Gemini → Clean-up → Parakeet")
+        lineup.setSwitchable(.parakeet, false)
+        #expect(SwitchModelLine.chain(lineup) == "Gemini → Clean-up")
+        #expect(SwitchModelLine.explanation(.ready(rightCommand), lineup: lineup)
+            == "Press \(rightCommand.spokenDescription) while dictating to step from Gemini to Clean-up.")
     }
 
-    /// The copy names the user's own binding, never a hard-coded fn Tab.
-    @Test func explanationUsesTheActualBinding() {
-        let custom = ExtraModels.explanation(.ready(rightCommand))
-        #expect(custom.contains(rightCommand.compactDescription))
+    @Test func lineupLineStatuses() {
+        var alone = ModelLineup.default
+        alone.setSwitchable(.cleanup, false)
+        alone.setSwitchable(.gemini, false)
+        #expect(SwitchModelLine.status(binding: .fnTab, lineup: .default) == .ready(.fnTab))
+        #expect(SwitchModelLine.status(binding: nil, lineup: .default) == .unbound)
+        #expect(SwitchModelLine.status(binding: Shortcut(modifiers: []), lineup: .default) == .unbound)
+        #expect(SwitchModelLine.status(binding: .fnTab, lineup: alone) == .alone(.fnTab))
+        #expect(SwitchModelLine.status(binding: nil, lineup: alone) == .alone(nil))
+        // The copy names the user's own binding, never a hard-coded fn Tab.
+        let custom = SwitchModelLine.explanation(.alone(rightCommand), lineup: alone)
+        #expect(custom == "Switch on another model to reach it with \(rightCommand.compactDescription) while dictating.")
         #expect(!custom.contains("fn"))
-        #expect(ExtraModels.explanation(.ready(.fnTab)).contains(Shortcut.fnTab.compactDescription))
-        #expect(ExtraModels.explanation(.noneEnabled(rightCommand)).contains(rightCommand.compactDescription))
-        #expect(ExtraModels.explanation(.noneEnabled(nil)).contains("Switch model"))
-        #expect(ExtraModels.explanation(.unbound).contains("no shortcut"))
+        #expect(SwitchModelLine.explanation(.alone(nil), lineup: alone)
+            == "Switch on another model and give Switch model a shortcut to use it while dictating.")
+        #expect(SwitchModelLine.explanation(.unbound, lineup: .default)
+            == "Switch model has no shortcut yet. Set one to switch models while dictating.")
+    }
+}
+
+@Suite struct ModelChoiceHubTests {
+    /// Clean-up needs Parakeet first, then the key: a download says so before the key does.
+    @Test func cleanupReadinessPutsParakeetFirstThenTheKey() {
+        #expect(EngineReadiness.of(.cleanup, parakeet: .parakeet, localState: .notInstalled, keyStatus: .missing)
+            == .needsDownload)
+        #expect(EngineReadiness.of(.cleanup, parakeet: .parakeet, localState: .ready, keyStatus: .missing) == .needsKey)
+        #expect(EngineReadiness.of(.cleanup, parakeet: .parakeet, localState: .downloading(.zero),
+                                   keyStatus: .invalid("401")) == .keyProblem("Key rejected"))
+        #expect(EngineReadiness.of(.cleanup, parakeet: .parakeet, localState: .ready, keyStatus: .valid(KeyInfo())) == .ready)
+        #expect(EngineReadiness.of(.cleanup, parakeet: .parakeetCloud, localState: .notInstalled, keyStatus: .missing)
+            == .needsKey, "on OpenRouter Parakeet needs the key itself")
+        #expect(EngineReadiness.of(.parakeet, parakeet: .parakeet, localState: .ready, keyStatus: .missing) == .ready)
+        #expect(EngineReadiness.of(.gemini, parakeet: .parakeet, localState: .notInstalled, keyStatus: .valid(KeyInfo()))
+            == .ready)
     }
 
-    @Test func togglesKeepEachOfferedModelOnce() {
-        #expect(ExtraModels.setting(.geminiFlash, on: false, in: [.geminiFlash]).isEmpty)
-        #expect(ExtraModels.setting(.geminiFlash, on: true, in: []) == [.geminiFlash])
-        #expect(ExtraModels.setting(.geminiFlash, on: true, in: [.geminiFlash]) == [.geminiFlash], "no duplicates")
-        #expect(ExtraModels.setting(.geminiFlash, on: true, in: [.geminiPro]) == [.geminiFlash], "a retired model drops out")
+    @Test func theSidebarChipNamesTheMainModel() {
+        #expect(EngineSummary.make(choice: .cleanup, parakeet: .parakeet, localState: .ready, keyStatus: .missing)
+            == EngineSummary(name: "Parakeet + Luna", status: "Needs key", tone: .negative))
+        #expect(EngineSummary.make(choice: .cleanup, parakeet: .parakeet, localState: .preparing(since: Date()),
+                                   keyStatus: .missing).status == "Optimizing…", "Parakeet first")
+        #expect(EngineSummary.make(choice: .gemini, parakeet: .parakeet, localState: .notInstalled,
+                                   keyStatus: .valid(KeyInfo()))
+            == EngineSummary(name: "Gemini Flash", status: "Ready", tone: .positive))
+        #expect(EngineSummary.make(choice: .parakeet, parakeet: .parakeetCloud, localState: .notInstalled,
+                                   keyStatus: .valid(KeyInfo())).name == "Parakeet v3 · Cloud")
+    }
+
+    @Test func aCleanupMainWithoutAKeyShowsTheKeyCard() throws {
+        func items(_ key: KeyStatus, cleansUp: Bool = true) -> [AttentionItem] {
+            HubAttention.items(HubAttention.Input(microphone: .granted, accessibility: .granted,
+                                                  accessibilityLikelyStale: false, fnKeyUsage: .doNothing,
+                                                  pushToTalkUsesFn: true, engine: .parakeet, localState: .ready,
+                                                  keyStatus: key, cleansUp: cleansUp))
+        }
+        let missing = try #require(items(.missing).first)
+        #expect(missing.title == "Add your OpenRouter key")
+        #expect(missing.body == "Clean-up needs a key to tidy your text.")
+        #expect(missing.action == .openModels)
+        #expect(items(.invalid("401")).first?.title == "Your OpenRouter key stopped working")
+        #expect(items(.noCredit(nil)).first?.body == "Add credit to keep using clean-up.")
+        #expect(items(.valid(KeyInfo())).isEmpty)
+        #expect(items(.missing, cleansUp: false).isEmpty, "Parakeet alone needs no key")
     }
 }

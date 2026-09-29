@@ -1141,7 +1141,7 @@ private final class PasteLog: @unchecked Sendable {
         #expect(kb.release(.fn).events == [.pttUp])
     }
 
-    @Test func noExtraModelMeansTabIsNotIntercepted() {
+    @Test func aCycleOfOneMeansTabIsNotIntercepted() {
         var kb = Keyboard()
         kb.config.switchesModels = false
         kb.press(.fn)

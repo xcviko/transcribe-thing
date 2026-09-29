@@ -1159,7 +1159,7 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
     private func makeStore(installed: Bool = true, freeBytes: Int64 = 50_000_000_000, selected: EngineID = .parakeet)
         -> (ModelStore, FakeEngine, AppSettings) {
         let settings = AppSettings.inMemory()
-        settings.selectedEngine = selected
+        settings.parakeetEngine = selected
         let parakeet = FakeEngine(.parakeet, installed: installed)
         let store = ModelStore(paths: .temporary(), settings: settings, engines: [.parakeet: parakeet],
                                gate: InferenceGate(), freeDiskBytes: { freeBytes })
@@ -1334,7 +1334,7 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
         store.start()
         await waitUntil { store.state(of: .parakeet) == .ready }
         store.select(.parakeetCloud)
-        #expect(settings.selectedEngine == .parakeetCloud)
+        #expect(settings.parakeetEngine == .parakeetCloud)
         #expect(store.state(of: .parakeet) == .ready)
         #expect(await parakeet.isLoaded)
     }

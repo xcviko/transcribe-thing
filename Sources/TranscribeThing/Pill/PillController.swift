@@ -314,14 +314,16 @@ final class PillController {
         followPointer(to: point)
     }
 
-    /// The hands-free chip's model menu, just above the chip: the main model, clean-up and the extra models, the
-    /// current one checked. Picking one switches this dictation's model.
+    /// The hands-free chip's model menu, just above the chip: the models Switch model steps through, the current one
+    /// checked. Picking one switches this dictation's model.
     private func showEngineMenu() {
         guard let host, model.isPresented, model.visiblePhase == .locked, let chip = regions.chip else { return }
         let settings = model.settings
-        let current = model.sessionModel ?? .engine(settings.selectedEngine)
-        let menu = Self.modelMenu(choices: model.menuChoices, current: current,
-                                  main: settings.selectedEngine) { [weak model] choice in model?.onSelectModel?(choice) }
+        let current = model.sessionModel ?? settings.lineup.main
+        let menu = Self.modelMenu(choices: model.menuChoices, current: current, parakeet: settings.parakeetEngine,
+                                  unavailableReason: model.unavailableReason ?? { _ in nil }) { [weak model] choice in
+            model?.onSelectModel?(choice)
+        }
         // Canvas coordinates have a top-left origin; the menu's top-left goes where its bottom clears the chip.
         let top = chip.minY - 6 - menu.size.height
         let point = host.isFlipped ? CGPoint(x: chip.minX, y: top) : CGPoint(x: chip.minX, y: host.bounds.height - top)
@@ -329,19 +331,22 @@ final class PillController {
         updatePointer()
     }
 
-    /// One item per choice, titled like the chip with its symbol; `current` is checked. The main model and its
-    /// clean-up come first, the extra models after a separator: those hear the audio themselves.
-    static func modelMenu(choices: [ModelChoice], current: ModelChoice, main: EngineID,
+    /// One item per choice, in cycle order (the main model first), titled with its symbol; `current` is checked. One
+    /// that can't take the dictation now is disabled, its reason beside it.
+    static func modelMenu(choices: [ModelChoice], current: ModelChoice, parakeet: EngineID,
+                          unavailableReason: (ModelChoice) -> String?,
                           select: @escaping @MainActor (ModelChoice) -> Void) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
-        for (index, choice) in choices.enumerated() {
-            if index > 0, choice.switchEngine != nil, choices[index - 1].switchEngine == nil {
-                menu.addItem(.separator())
-            }
-            let item = MenuActionItem(title: choice.title(main: main)) { select(choice) }
+        for choice in choices {
+            let title = choice.title(parakeet: parakeet)
+            let item = MenuActionItem(title: title) { select(choice) }
             item.state = choice == current ? .on : .off
-            let image = NSImage(systemSymbolName: choice.symbolName, accessibilityDescription: nil)
+            if let reason = unavailableReason(choice) {
+                item.isEnabled = false
+                item.attributedTitle = MenuBuilder.titleWithSuffix(title, suffix: reason)
+            }
+            let image = NSImage(systemSymbolName: choice.symbolName(parakeet: parakeet), accessibilityDescription: nil)
             image?.isTemplate = true
             item.image = image
             menu.addItem(item)

@@ -110,9 +110,9 @@ enum CleanupModel: String, CaseIterable, Codable, Sendable {
         CleanupRoute(model: openRouterModelID, effort: effort, provider: provider)
     }
 
-    /// Only transcripts from the main models (Parakeet on this Mac or through OpenRouter) are cleaned up: Gemini
-    /// already punctuates and drops fillers itself.
-    static func canClean(_ engine: EngineID) -> Bool { !engine.isSwitchModel }
+    /// Only Parakeet's transcripts (on this Mac or through OpenRouter) are cleaned up: Gemini already punctuates and
+    /// drops fillers itself.
+    static func canClean(_ engine: EngineID) -> Bool { engine.isParakeet }
 
     /// How long a dictation waits for its clean-up before the original is pasted: 12 s, plus time to write out the
     /// transcript, about 1 s per 200 characters, with no cap: an hour's 60,000 characters get 312 s.

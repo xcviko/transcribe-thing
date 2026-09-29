@@ -17,8 +17,8 @@ import Testing
         var pasted: [String] = []
         var result: @MainActor (Recording, EngineID) async throws -> String = { _, _ in "" }
 
-        init(keyStatus: KeyStatus = .missing) {
-            h = DictationControllerTests.make(keyStatus: keyStatus)
+        init(keyStatus: KeyStatus = .missing, models: [EngineID: LocalModelState] = [.parakeet: .ready]) {
+            h = DictationControllerTests.make(models: models, keyStatus: keyStatus)
             h.controller.clock = { [unowned self] in now }
             h.controller.transcribeOverride = { [unowned self] recording, engine in
                 transcribed.append(recording)
