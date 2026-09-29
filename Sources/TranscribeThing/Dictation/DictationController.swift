@@ -735,6 +735,8 @@ final class DictationController {
 
     private func run(_ job: Job) {
         guard let recording = job.recording else { return }
+        // Its paste puts the clipboard back: that is read while the dictation is transcribed, not at the ⌘V.
+        inserter.prepareToPaste()
         job.stop()
         job.generation += 1
         job.outcome = nil

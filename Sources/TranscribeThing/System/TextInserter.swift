@@ -34,13 +34,20 @@ final class TextInserter {
         var postPaste: @Sendable (CGKeyCode) -> Bool
     }
 
-    /// How long the target has to read the text after ⌘V before the clipboard it replaced comes back. ⌘V is only
-    /// queued: the target reads the clipboard when its main thread gets to the keystroke, which pladder measured at
-    /// 1–25 ms for most apps, and later for an Electron app, a busy page or a cold start, which souffle's 75 ms missed
-    /// (they pasted the old clipboard). espanso waits 300 ms; souffle and pladder settled on 400 ms. Longer only widens
-    /// the window in which the user's own ⌘V pastes the transcript instead of their clipboard; a copy made meanwhile
-    /// is never overwritten, however long this is.
+    /// The earliest the clipboard a paste replaced comes back after ⌘V. ⌘V is only queued: the target reads the
+    /// clipboard when its main thread gets to the keystroke, 1–25 ms later in most apps and about a second later on a
+    /// busy page (pladder, PR #66), later than 75 ms in Electron apps and on a cold start (souffle, PR #110: those pasted
+    /// the old clipboard, and it moved to 400 ms). No fixed delay serves both, so the text is handed over lazily and
+    /// its first read is the signal, as in pladder: the clipboard comes back once this has passed since ⌘V and
+    /// `readGrace` since that read, or `unreadTimeout` after ⌘V if nothing reads it. The floor is there because the
+    /// first reader may be a clipboard helper rather than the target; kept short, so is the time in which the user's
+    /// own ⌘V would paste the transcript. A copy made meanwhile is never overwritten.
     var restoreDelay: Duration = .milliseconds(400)
+    /// How long after the text's first read the clipboard stays as it is, for a target that reads more than once.
+    var readGrace: Duration = .milliseconds(200)
+    /// When nothing reads the text (the ⌘V went where nothing takes a paste), the clipboard comes back after this.
+    /// Up to then the user's own ⌘V pastes the transcript, and that read brings the clipboard back `readGrace` later.
+    var unreadTimeout: Duration = .seconds(8)
     var modifierReleaseTimeout: Duration = .milliseconds(600)
     /// Our active event tap is running. Creating an active tap requires the same PostEvent grant, so a live
     /// tap proves we may post ⌘V even when the preflight still answers from its stale per-process cache.
@@ -49,6 +56,8 @@ final class TextInserter {
     private let pasteboard: NSPasteboard
     private var system: System
     private var pendingRestore: PendingRestore?
+    /// The clipboard as `prepareToPaste()` read it, for the next paste while nothing has changed it since.
+    private var prepared: (changeCount: Int, snapshot: PasteboardSnapshot?)?
     private var queueTail: Task<Void, Never>?
 
     private struct PendingRestore {
@@ -121,9 +130,20 @@ final class TextInserter {
         return await paste(text)
     }
 
+    /// A dictation is being transcribed: its paste will need the clipboard as it is, so it's read now rather than
+    /// between the target checks and ⌘V, where a large or slow one (`PasteboardSnapshot.timeLimit`) would hold the
+    /// paste up. While a restore is pending, the clipboard holds a transcript and the paste takes over that restore.
+    func prepareToPaste() {
+        guard pendingRestore == nil else { return }
+        let changeCount = pasteboard.changeCount
+        guard prepared?.changeCount != changeCount else { return }
+        prepared = (changeCount, captureClipboard())
+    }
+
     /// A normal, persistent copy (the Copy buttons): it stays on the clipboard and syncs like any other copy.
     func copy(_ text: String) {
         cancelPendingRestore()
+        prepared = nil
         pasteboard.clearContents()
         let item = NSPasteboardItem()
         item.setString(text, forType: .string)
@@ -151,14 +171,21 @@ final class TextInserter {
         return await Task.detached(priority: .userInitiated, operation: { canPost() }).value
     }
 
-    /// Pastes `text` from a transient clipboard item, then puts back what the clipboard held before after
-    /// `restoreDelay`, unless someone copied something since. When the paste can't go ahead, it comes back at once.
+    /// Pastes `text` from a transient clipboard item, then puts back what the clipboard held before once the target
+    /// has had it (`restoreDelay`), unless someone copied something since. When the paste can't go ahead, it comes back
+    /// at once.
     private func paste(_ text: String) async -> InsertionOutcome {
         let original = takeOriginalClipboard()
+        // Handed over when read, so the restore can wait for the target; written outright with nothing to put back.
+        let source = original.map { _ in PastedTextSource(text) }
         // Only there for the ⌘V: off Universal Clipboard, and marked so clipboard managers skip it.
         _ = pasteboard.prepareForNewContents(with: .currentHostOnly)
         let item = NSPasteboardItem()
-        item.setString(text, forType: .string)
+        if let source {
+            item.setDataProvider(source, forTypes: [.string])
+        } else {
+            item.setString(text, forType: .string)
+        }
         item.setString(Self.bundleID, forType: PasteboardMarkers.sourceType)
         for marker in [PasteboardMarkers.transientType, PasteboardMarkers.autoGeneratedType,
                        PasteboardMarkers.concealedType] {
@@ -177,34 +204,70 @@ final class TextInserter {
             if pasteboard.changeCount == ourChangeCount { original?.restore(to: pasteboard) }
             return .failed("\(Brand.name) couldn’t send the paste keystroke.")
         }
-        scheduleRestore(original, ourChangeCount: ourChangeCount)
+        scheduleRestore(original, source: source, pastedAt: .now, ourChangeCount: ourChangeCount)
         return .pasted
     }
 
     /// What the clipboard held before this paste. A paste while the previous one's restore is still waiting takes
     /// over that one's original, so the user's own clipboard comes back at the end, not the previous transcript.
     private func takeOriginalClipboard() -> PasteboardSnapshot? {
+        let prepared = prepared
+        self.prepared = nil
         if let pending = pendingRestore {
             pending.task.cancel()
             pendingRestore = nil
             if pasteboard.changeCount == pending.ourChangeCount { return pending.original }
         }
-        let original = PasteboardSnapshot.capture(pasteboard)
-        if original == nil { Log.app.notice("The clipboard can’t be kept for this paste; the pasted text stays on it") }
-        return original
+        if let prepared, prepared.changeCount == pasteboard.changeCount { return prepared.snapshot }
+        return captureClipboard()
     }
 
-    private func scheduleRestore(_ original: PasteboardSnapshot?, ourChangeCount: Int) {
-        let delay = restoreDelay
+    private func captureClipboard() -> PasteboardSnapshot? {
+        let snapshot = PasteboardSnapshot.capture(pasteboard)
+        if snapshot == nil { Log.app.notice("The clipboard can’t be kept for a paste; the pasted text stays on it") }
+        return snapshot
+    }
+
+    private func scheduleRestore(_ original: PasteboardSnapshot?, source: PastedTextSource?,
+                                 pastedAt: ContinuousClock.Instant, ourChangeCount: Int) {
+        let earliest = pastedAt + restoreDelay, readGrace = readGrace, latest = pastedAt + unreadTimeout
         let task = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: delay)
-            guard !Task.isCancelled, let self else { return }
+            guard await Self.waitForTheTarget(source, earliest: earliest, readGrace: readGrace, latest: latest),
+                  !Task.isCancelled, let self else { return }
             self.pendingRestore = nil
             // Someone copied something since our paste: theirs wins.
             guard self.pasteboard.changeCount == ourChangeCount else { return }
             original?.restore(to: self.pasteboard)
         }
         pendingRestore = PendingRestore(original: original, ourChangeCount: ourChangeCount, task: task)
+    }
+
+    /// Until the target has had the text: `earliest`, and `readGrace` after its first read, or `latest` when nothing
+    /// reads it. Only the floor without a `source` (nothing to wait for). False when canceled.
+    private static func waitForTheTarget(_ source: PastedTextSource?, earliest: ContinuousClock.Instant,
+                                         readGrace: Duration, latest: ContinuousClock.Instant) async -> Bool {
+        do {
+            try await Task.sleep(until: earliest)
+            guard let source else { return true }
+            while true {
+                if let readAt = source.firstRead {
+                    try await Task.sleep(until: readAt + readGrace)
+                    return true
+                }
+                if ContinuousClock.now >= latest { return true }
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        } catch {
+            return false
+        }
+    }
+
+    /// The app is quitting: what a paste replaced comes back now instead of never.
+    func flushPendingRestore() {
+        guard let pending = pendingRestore else { return }
+        cancelPendingRestore()
+        guard pasteboard.changeCount == pending.ourChangeCount else { return }
+        pending.original?.restore(to: pasteboard)
     }
 
     private func cancelPendingRestore() {
@@ -273,5 +336,26 @@ final class TextInserter {
         usleep(5_000)
         commandUp.post(tap: .cgSessionEventTap)
         return true
+    }
+}
+
+/// Gives the pasted text to whoever reads the clipboard, and notes when that first happens: the target reading it is
+/// the one sign that the paste has been taken. Asked once, on the main thread when another app reads; the pasteboard
+/// keeps the text from then on for later reads.
+private final class PastedTextSource: NSObject, NSPasteboardItemDataProvider, Sendable {
+    private let text: String
+    private let read = OSAllocatedUnfairLock<ContinuousClock.Instant?>(initialState: nil)
+
+    init(_ text: String) {
+        self.text = text
+    }
+
+    var firstRead: ContinuousClock.Instant? {
+        read.withLock { $0 }
+    }
+
+    func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem, provideDataForType type: NSPasteboard.PasteboardType) {
+        read.withLock { $0 = $0 ?? .now }
+        item.setString(text, forType: type)
     }
 }

@@ -724,7 +724,7 @@ final class FakeRecorder: DictationRecorder {
                      modelErrors: [EngineID: AppError] = [:], store: ModelStore? = nil,
                      mic: PermissionState = .granted, micLive: Bool = false, keyStatus: KeyStatus = .missing,
                      meter: LevelMeter = .preview(level: 0), persistsHistory: Bool = false,
-                     client: OpenRouterClient? = nil) -> Harness {
+                     client: OpenRouterClient? = nil, inserter: TextInserter? = nil) -> Harness {
         let settings = AppSettings.inMemory()
         let paths: AppPaths? = persistsHistory ? .temporary() : nil
         let devices = AudioDeviceCatalog.preview()
@@ -741,7 +741,7 @@ final class FakeRecorder: DictationRecorder {
         let controller = DictationController(
             settings: settings, recorder: AudioRecorder(levelMeter: meter, devices: devices),
             transcription: TranscriptionService(models: store, account: account, client: client),
-            models: store, account: account, history: history, inserter: TextInserter(),
+            models: store, account: account, history: history, inserter: inserter ?? .inert(),
             hotkeys: hotkeys, permissions: .preview(mic: mic, ax: .granted), sounds: SoundPlayer(settings: settings),
             pillModel: pill, toasts: toasts)
         let recorder = FakeRecorder()
@@ -1628,6 +1628,37 @@ final class FakeRecorder: DictationRecorder {
         #expect(h.toasts.notices.isEmpty)
     }
 
+    /// The clipboard a dictation's paste puts back is read while it's transcribed, not between the target checks and
+    /// ⌘V.
+    @Test func aDictationReadsTheClipboardWhileItIsTranscribed() async throws {
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name("dev.transcribe-thing.tests.\(UUID().uuidString)"))
+        defer { pasteboard.releaseGlobally() }
+        let canvas = LazyType()
+        let canvasType = NSPasteboard.PasteboardType("com.example.canvas")
+        let item = NSPasteboardItem()
+        item.setString("user clipboard", forType: .string)
+        item.setDataProvider(canvas, forTypes: [canvasType])
+        pasteboard.clearContents()
+        pasteboard.writeObjects([item])
+        let inserter = TextInserter(pasteboard: pasteboard, system: .init(
+            frontmostPID: { 42 }, canPostEvents: { true }, modifiersHeld: { false },
+            inspectFocus: { FocusInfo(pid: 42, editability: .editable) }, pasteKeyCode: { 9 },
+            postPaste: { _ in true }))
+        inserter.restoreDelay = .milliseconds(50)
+        let h = Self.make(inserter: inserter)
+        var readWhileTranscribing: Int?
+        h.controller.transcribeOverride = { _, engine in
+            readWhileTranscribing = canvas.requests
+            return TranscriptResult(text: "Hello there", engine: engine, processingTime: 0.1)
+        }
+        h.controller.enqueue(Self.recording(), engine: .parakeet, targetPID: 42)
+        try await waitUntil { h.controller.machine.activeJobs == 0 }
+        #expect(readWhileTranscribing == 1)
+        #expect(pasteboard.string(forType: .string) == "Hello there", "what ⌘V pastes")
+        try await waitUntil { pasteboard.string(forType: .string) == "user clipboard" }
+        #expect(pasteboard.data(forType: canvasType) == Data(canvasType.rawValue.utf8))
+    }
+
     /// Nowhere to paste leaves the clipboard alone: a card holds the text, as after a dictation, and only its Copy
     /// puts it on the clipboard.
     @Test(arguments: [(InsertionOutcome.noEditableTarget, "Nowhere to paste", false), (.failed("no ⌘V"), "Couldn’t paste", true)])
@@ -1954,6 +1985,16 @@ final class FakeRecorder: DictationRecorder {
         let results = [quota.take(now: day), quota.take(now: day), quota.take(now: day),
                        quota.take(now: day.addingTimeInterval(86_400))]
         #expect(results == [true, true, false, true])
+    }
+}
+
+extension TextInserter {
+    /// Test harnesses: a private pasteboard and a system that never posts ⌘V, so a test that reaches the inserter
+    /// (without an insertion override) can't touch the user's clipboard or type into the frontmost app.
+    static func inert() -> TextInserter {
+        TextInserter(pasteboard: NSPasteboard(name: NSPasteboard.Name("dev.transcribe-thing.tests.inert")), system: .init(
+            frontmostPID: { nil }, canPostEvents: { false }, modifiersHeld: { false },
+            inspectFocus: { .unknown }, pasteKeyCode: { 9 }, postPaste: { _ in false }))
     }
 }
 
