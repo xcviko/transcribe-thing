@@ -81,6 +81,9 @@ final class AppSettings {
     var announcedUpdateVersion: String? = nil { didSet { store.set(announcedUpdateVersion, .announcedUpdateVersion) } }
     /// The version that ran last time, so the first launch after an update can say so. nil on a fresh install.
     var lastLaunchedVersion: String? = nil { didSet { store.set(lastLaunchedVersion, .lastLaunchedVersion) } }
+    /// The OpenRouter key older builds kept in the login keychain is settled: moved to its key file, never there, or
+    /// a key was saved or removed since (`KeychainMigration`). From then on the Keychain is never asked again.
+    var keychainKeyMigrated: Bool = false { didSet { store.set(keychainKeyMigrated, .keychainKeyMigrated) } }
 
     @ObservationIgnored private let store: SettingsStore
     /// Read once at most, by the migration of the removed built-in-over-Bluetooth switch.
@@ -209,6 +212,7 @@ final class AppSettings {
         if let v = store.bool(.checkForUpdatesAutomatically) { checkForUpdatesAutomatically = v }
         announcedUpdateVersion = store.string(.announcedUpdateVersion)
         lastLaunchedVersion = store.string(.lastLaunchedVersion)
+        if let v = store.bool(.keychainKeyMigrated) { keychainKeyMigrated = v }
     }
 }
 
@@ -302,7 +306,7 @@ enum SettingsKey: String, CaseIterable {
     /// `geminiSystemPrompt` and `cleanupSystemPrompt` are the prompts Models used to edit, removed at load: both are
     /// fixed in code now.
     case geminiSystemPrompt, cleanupSystemPrompt
-    case addSpaceAfterText, removeFinalPeriod, autoDeleteHistoryDays, lineup
+    case addSpaceAfterText, removeFinalPeriod, autoDeleteHistoryDays, lineup, keychainKeyMigrated
 
     var defaultsKey: String { "tt.\(rawValue)" }
 }

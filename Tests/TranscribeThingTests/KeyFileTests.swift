@@ -90,9 +90,38 @@ private func removeFolder(_ paths: AppPaths) {
         let paths = AppPaths.temporary()
         defer { removeFolder(paths) }
         let store = KeyFileStore(url: paths.keyFile)
-        #expect(throws: KeyFileError.emptyKey) { try store.write("") }
-        #expect(!store.hasFile)
-        #expect(throws: KeyFileError.emptyKey) { try KeyFileStore.inMemory().write("") }
+        // Whitespace too: it would read back as no key, yet the file would count as there (`hasFile`).
+        for empty in ["", " \n", "\t"] {
+            #expect(throws: KeyFileError.emptyKey) { try store.write(empty) }
+            #expect(!store.hasFile)
+            #expect(throws: KeyFileError.emptyKey) { try KeyFileStore.inMemory().write(empty) }
+        }
+    }
+
+    /// A write cut off between creating its new file and the rename (the app killed) leaves a copy of the key beside
+    /// the file: the next write and Remove take it away, so Remove leaves no key on disk.
+    @Test func removingTheKeyLeavesNoCopyBehind() throws {
+        let paths = AppPaths.temporary()
+        defer { removeFolder(paths) }
+        let store = KeyFileStore(url: paths.keyFile)
+        let leftover = { (key: String) in
+            try Data(key.utf8).write(to: paths.root.appendingPathComponent(".openrouter-key-\(UUID().uuidString).partial"))
+        }
+        try store.write("sk-or-v1-first")
+        try leftover("sk-or-v1-first")
+        try Data("not the key's".utf8).write(to: paths.root.appendingPathComponent("unrelated.partial"))
+
+        try store.write("sk-or-v1-second")
+        #expect(Set(try FileManager.default.contentsOfDirectory(atPath: paths.root.path))
+                == ["openrouter-key", "unrelated.partial"])
+
+        try leftover("sk-or-v1-second")
+        store.delete()
+        #expect(try FileManager.default.contentsOfDirectory(atPath: paths.root.path) == ["unrelated.partial"])
+        // With no key file left, too.
+        try leftover("sk-or-v1-second")
+        store.delete()
+        #expect(try FileManager.default.contentsOfDirectory(atPath: paths.root.path) == ["unrelated.partial"])
     }
 
     @Test func aFileThatCantBeReadIsNotAMissingKey() throws {
@@ -110,17 +139,20 @@ private func removeFolder(_ paths: AppPaths) {
     }
 }
 
-/// The login keychain as `KeychainMigration` sees it, counting what it's asked.
+/// The login keychain as `KeychainMigration` sees it, counting what it's asked. `deleteFails` keeps the item, as
+/// a delete the Keychain refuses does.
 private final class FakeKeychain: @unchecked Sendable {
     private let lock = NSLock()
     private var key: String?
     private var refuses: Bool
+    private let deleteFails: Bool
     private var readCount = 0
     private var deleteCount = 0
 
-    init(key: String?, refuses: Bool = false) {
+    init(key: String?, refuses: Bool = false, deleteFails: Bool = false) {
         self.key = key
         self.refuses = refuses
+        self.deleteFails = deleteFails
     }
 
     var storedKey: String? { lock.withLock { key } }
@@ -140,27 +172,32 @@ private final class FakeKeychain: @unchecked Sendable {
             delete: {
                 self.lock.withLock {
                     self.deleteCount += 1
-                    self.key = nil
+                    if !self.deleteFails { self.key = nil }
                 }
             })
     }
 }
 
+/// `settings` stands for the app's settings across launches: each `run` is a launch.
 @MainActor
 @Suite struct KeychainMigrationTests {
     @Test func movesTheKeyThenDeletesTheItem() throws {
         let paths = AppPaths.temporary()
         defer { removeFolder(paths) }
         let store = KeyFileStore(url: paths.keyFile)
+        let settings = AppSettings.inMemory()
         let keychain = FakeKeychain(key: "sk-or-v1-abcdef")
-        #expect(KeychainMigration.run(into: store, from: keychain.legacy) == .moved)
+        #expect(KeychainMigration.run(into: store, from: keychain.legacy, settings: settings) == .moved)
         #expect(try store.lookup() == "sk-or-v1-abcdef")
         #expect(try mode(paths.keyFile) == 0o600)
         #expect(keychain.reads == 1 && keychain.deletes == 1)
         #expect(keychain.storedKey == nil)
+        #expect(settings.keychainKeyMigrated)
 
-        // The next launch finds the file and leaves the Keychain alone.
-        #expect(KeychainMigration.run(into: store, from: keychain.legacy) == .keyFileExists)
+        // Later launches leave the Keychain alone, even once the key file is gone.
+        #expect(KeychainMigration.run(into: store, from: keychain.legacy, settings: settings) == .alreadyDone)
+        store.delete()
+        #expect(KeychainMigration.run(into: store, from: keychain.legacy, settings: settings) == .alreadyDone)
         #expect(keychain.reads == 1)
     }
 
@@ -168,23 +205,66 @@ private final class FakeKeychain: @unchecked Sendable {
         let paths = AppPaths.temporary()
         defer { removeFolder(paths) }
         let store = KeyFileStore(url: paths.keyFile)
+        let settings = AppSettings.inMemory()
         let keychain = FakeKeychain(key: "sk-or-v1-abcdef", refuses: true)
-        #expect(KeychainMigration.run(into: store, from: keychain.legacy) == .keychainRefused)
+        #expect(KeychainMigration.run(into: store, from: keychain.legacy, settings: settings) == .keychainRefused)
         #expect(!store.hasFile)
         #expect(keychain.deletes == 0 && keychain.storedKey == "sk-or-v1-abcdef")
+        #expect(!settings.keychainKeyMigrated)
 
-        // The rest of the launch goes by the key file alone: "no key", and the Keychain isn't asked again.
+        // The rest of the launch goes by the key file alone (the account has no way to the Keychain): "no key".
         let account = OpenRouterAccount(keyStore: store, client: StubURLProtocol.client([]).0, debounce: .zero)
         await account.validate()
         #expect(account.status == .missing)
         #expect(account.apiKey() == nil)
         #expect(!account.isKeyUnreadable)
-        #expect(keychain.reads == 1)
 
         // The next launch asks again, while there's still no key file.
         keychain.allow()
-        #expect(KeychainMigration.run(into: store, from: keychain.legacy) == .moved)
+        #expect(KeychainMigration.run(into: store, from: keychain.legacy, settings: settings) == .moved)
         #expect(try store.lookup() == "sk-or-v1-abcdef")
+        #expect(keychain.reads == 2)
+    }
+
+    /// A launch refused the Keychain, then the user pasted a key and removed it again: later launches neither ask
+    /// the Keychain (the prompt the key file ends) nor bring back the key the user replaced and removed.
+    @Test func aKeySavedAfterARefusalSettlesIt() async throws {
+        let paths = AppPaths.temporary()
+        defer { removeFolder(paths) }
+        let store = KeyFileStore(url: paths.keyFile)
+        let settings = AppSettings.inMemory()
+        let keychain = FakeKeychain(key: "sk-or-v1-old", refuses: true)
+        #expect(KeychainMigration.run(into: store, from: keychain.legacy, settings: settings) == .keychainRefused)
+
+        let account = OpenRouterAccount(keyStore: store, client: StubURLProtocol.client([.init(body: Fixtures.keyInfo)]).0,
+                                        debounce: .zero)
+        account.onKeyChanged = { settings.keychainKeyMigrated = true } // as AppEnvironment wires it
+        await account.setKey("sk-or-v1-pasted")
+        account.removeKey()
+        #expect(!store.hasFile)
+
+        // The next launch; this time the prompt would be allowed.
+        keychain.allow()
+        #expect(KeychainMigration.run(into: store, from: keychain.legacy, settings: settings) == .alreadyDone)
+        #expect(keychain.reads == 1)
+        #expect(try store.lookup() == nil)
+    }
+
+    /// The move worked but the Keychain kept its item (its delete refused, only logged), and the user removed the
+    /// key: the old one doesn't come back.
+    @Test func anItemThatOutlivedTheMoveIsNeverReadAgain() throws {
+        let paths = AppPaths.temporary()
+        defer { removeFolder(paths) }
+        let store = KeyFileStore(url: paths.keyFile)
+        let settings = AppSettings.inMemory()
+        let keychain = FakeKeychain(key: "sk-or-v1-old", deleteFails: true)
+        #expect(KeychainMigration.run(into: store, from: keychain.legacy, settings: settings) == .moved)
+        #expect(keychain.storedKey == "sk-or-v1-old")
+
+        OpenRouterAccount(keyStore: store, client: StubURLProtocol.client([]).0, debounce: .zero).removeKey()
+        #expect(KeychainMigration.run(into: store, from: keychain.legacy, settings: settings) == .alreadyDone)
+        #expect(keychain.reads == 1)
+        #expect(try store.lookup() == nil)
     }
 
     @Test func aKeyFileLeavesTheKeychainUntouched() throws {
@@ -193,25 +273,32 @@ private final class FakeKeychain: @unchecked Sendable {
         let store = KeyFileStore(url: paths.keyFile)
         try store.write("sk-or-v1-pasted")
         let keychain = FakeKeychain(key: "sk-or-v1-old")
-        #expect(KeychainMigration.run(into: store, from: keychain.legacy) == .keyFileExists)
+        let settings = AppSettings.inMemory()
+        #expect(KeychainMigration.run(into: store, from: keychain.legacy, settings: settings) == .keyFileExists)
         #expect(keychain.reads == 0 && keychain.deletes == 0)
         #expect(try store.lookup() == "sk-or-v1-pasted")
+        #expect(settings.keychainKeyMigrated)
 
         // Even one with no key in it.
         try Data("\n".utf8).write(to: paths.keyFile)
-        #expect(KeychainMigration.run(into: store, from: keychain.legacy) == .keyFileExists)
+        #expect(KeychainMigration.run(into: store, from: keychain.legacy, settings: .inMemory()) == .keyFileExists)
         #expect(keychain.reads == 0)
     }
 
+    /// Settled too: a Mac that never had the key in the Keychain (Parakeet on this Mac only) isn't asked at every
+    /// launch.
     @Test func noKeyInTheKeychainWritesNothing() {
         let paths = AppPaths.temporary()
         defer { removeFolder(paths) }
         let store = KeyFileStore(url: paths.keyFile)
         for stored in [nil, "", " \n"] as [String?] {
             let keychain = FakeKeychain(key: stored)
-            #expect(KeychainMigration.run(into: store, from: keychain.legacy) == .nothingToMove)
+            let settings = AppSettings.inMemory()
+            #expect(KeychainMigration.run(into: store, from: keychain.legacy, settings: settings) == .nothingToMove)
             #expect(!store.hasFile)
             #expect(keychain.deletes == 0)
+            #expect(KeychainMigration.run(into: store, from: keychain.legacy, settings: settings) == .alreadyDone)
+            #expect(keychain.reads == 1)
         }
     }
 
@@ -221,10 +308,37 @@ private final class FakeKeychain: @unchecked Sendable {
         try FileManager.default.createDirectory(at: paths.root, withIntermediateDirectories: true,
                                                 attributes: [.posixPermissions: 0o500])
         let store = KeyFileStore(url: paths.keyFile)
+        let settings = AppSettings.inMemory()
         let keychain = FakeKeychain(key: "sk-or-v1-abcdef")
-        #expect(KeychainMigration.run(into: store, from: keychain.legacy) == .notWritten)
+        #expect(KeychainMigration.run(into: store, from: keychain.legacy, settings: settings) == .notWritten)
         #expect(!store.hasFile)
         #expect(keychain.deletes == 0 && keychain.storedKey == "sk-or-v1-abcdef")
+        #expect(!settings.keychainKeyMigrated, "the next launch tries again")
+    }
+
+    @Test func savingOrRemovingAKeyIsReported() async throws {
+        let paths = AppPaths.temporary()
+        defer { removeFolder(paths) }
+        let store = KeyFileStore(url: paths.keyFile)
+        let account = OpenRouterAccount(keyStore: store, client: StubURLProtocol.client([.init(body: Fixtures.keyInfo)]).0,
+                                        debounce: .zero)
+        var changes = 0
+        account.onKeyChanged = { changes += 1 }
+        await account.setKey("sk-or-v1-abcdef")
+        #expect(changes == 1)
+        account.removeKey()
+        #expect(changes == 2)
+
+        // A key that couldn't be saved changed nothing.
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: paths.root.path)
+        await account.setKey("sk-or-v1-abcdef")
+        #expect(changes == 2)
+
+        // The app settles the Keychain on it.
+        let env = AppEnvironment.preview()
+        #expect(!env.settings.keychainKeyMigrated)
+        env.account.removeKey()
+        #expect(env.settings.keychainKeyMigrated)
     }
 }
 

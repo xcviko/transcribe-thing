@@ -43,25 +43,40 @@ struct LegacyKeychainKey: Sendable {
 }
 
 /// Moves the OpenRouter key from the login keychain into its key file (`KeyFileStore`), at launch, before anything
-/// reads the key. Reading the item is the last Keychain prompt a rebuild shows; once the key file is there, the
-/// Keychain is never asked again.
+/// reads the key. Reading the item is the last Keychain prompt a rebuild shows. The Keychain is asked only until
+/// that's settled (`AppSettings.keychainKeyMigrated`): the key moved, there was none, a key file was already there,
+/// or the user saved or removed a key (`OpenRouterAccount.onKeyChanged`). A refused read or a failed write asks
+/// again at the next launch, and nothing else ever does.
+@MainActor
 enum KeychainMigration {
     enum Outcome: Equatable, Sendable {
+        /// Settled at an earlier launch, or by a key saved or removed since: the Keychain isn't asked.
+        case alreadyDone
         /// A key file is there, readable or not: the Keychain isn't asked.
         case keyFileExists
         /// No item, or an empty one.
         case nothingToMove
         /// The Keychain didn't hand the key over (a denied or cancelled prompt, a locked keychain). There's no key
-        /// until the next launch asks again, unless one is pasted in Models first.
+        /// until the next launch asks again, unless one is saved first, which settles it.
         case keychainRefused
         /// The key file couldn't be written, or didn't read back the same key: the item stays for the next launch.
         case notWritten
-        /// The key file holds the key and the item is deleted.
+        /// The key file holds the key and the item is deleted (one the Keychain won't delete stays, never read again).
         case moved
     }
 
     @discardableResult
-    static func run(into store: KeyFileStore, from keychain: LegacyKeychainKey) -> Outcome {
+    static func run(into store: KeyFileStore, from keychain: LegacyKeychainKey, settings: AppSettings) -> Outcome {
+        guard !settings.keychainKeyMigrated else { return .alreadyDone }
+        let outcome = move(into: store, from: keychain)
+        switch outcome {
+        case .keyFileExists, .nothingToMove, .moved: settings.keychainKeyMigrated = true
+        case .alreadyDone, .keychainRefused, .notWritten: break
+        }
+        return outcome
+    }
+
+    private static func move(into store: KeyFileStore, from keychain: LegacyKeychainKey) -> Outcome {
         guard !store.hasFile else { return .keyFileExists }
         let key: String
         do {

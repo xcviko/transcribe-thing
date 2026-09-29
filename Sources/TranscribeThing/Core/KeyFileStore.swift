@@ -1,7 +1,7 @@
 import Foundation
 
 enum KeyFileError: Error, Equatable, Sendable {
-    /// Removing the key deletes the file; an empty one is never written.
+    /// Removing the key deletes the file; an empty one (or only whitespace) is never written.
     case emptyKey
     /// The file isn't UTF-8 text.
     case notText
@@ -76,9 +76,10 @@ struct KeyFileStore: Sendable {
 
     /// Replaces the key in one step: the bytes go into a new 0600 file beside it, which is then renamed over the
     /// key file, so a reader finds the old key or the new one, never part of one, and nobody else can read either.
-    /// The folder is made 0700 first (older builds created it 0755).
+    /// Both reach the disk itself before it returns (the migration deletes the Keychain item next). The folder is
+    /// made 0700 first (older builds created it 0755).
     func write(_ key: String) throws {
-        guard !key.isEmpty else { throw KeyFileError.emptyKey }
+        guard !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw KeyFileError.emptyKey }
         let url: URL
         switch backing {
         case .memory(let box):
@@ -94,8 +95,10 @@ struct KeyFileStore: Sendable {
         if mode & 0o077 != 0 {
             try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path)
         }
+        // Copies of an older key that interrupted writes left.
+        Self.removePartials(beside: url)
 
-        let partial = folder.appendingPathComponent(".\(url.lastPathComponent)-\(UUID().uuidString).partial")
+        let partial = folder.appendingPathComponent(Self.partialPrefix(of: url) + UUID().uuidString + Self.partialSuffix)
         let fd = open(partial.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard fd >= 0 else { throw KeyFileError.posix(errno) }
         var placed = false
@@ -104,7 +107,7 @@ struct KeyFileStore: Sendable {
             // Created 0600 minus the umask, which only takes bits away: exactly 0600 all the same.
             guard fchmod(fd, 0o600) == 0 else { throw KeyFileError.posix(errno) }
             try Self.writeAll(Array(key.utf8), to: fd)
-            guard fsync(fd) == 0 else { throw KeyFileError.posix(errno) }
+            guard Self.flush(fd) else { throw KeyFileError.posix(errno) }
         } catch {
             close(fd)
             throw error
@@ -112,9 +115,16 @@ struct KeyFileStore: Sendable {
         guard close(fd) == 0 else { throw KeyFileError.posix(errno) }
         guard rename(partial.path, url.path) == 0 else { throw KeyFileError.posix(errno) }
         placed = true
+        // The rename is in the folder's entry. The key is in place already, so a folder that can't be flushed
+        // doesn't fail the write.
+        let folderFD = open(folder.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        if folderFD >= 0 {
+            _ = Self.flush(folderFD)
+            close(folderFD)
+        }
     }
 
-    /// Removing the key deletes the file.
+    /// Removing the key deletes the file, and any copy an interrupted write left beside it.
     func delete() {
         switch backing {
         case .memory(let box):
@@ -127,7 +137,28 @@ struct KeyFileStore: Sendable {
             } catch {
                 Log.app.error("Couldn't delete the key file: \(String(describing: error), privacy: .public)")
             }
+            Self.removePartials(beside: url)
         }
+    }
+
+    /// ".openrouter-key-<UUID>.partial": a write's new file until it's renamed over the key file. One left behind
+    /// (the app was killed mid-write) holds a key.
+    private static func partialPrefix(of url: URL) -> String { ".\(url.lastPathComponent)-" }
+    private static let partialSuffix = ".partial"
+
+    private static func removePartials(beside url: URL) {
+        let folder = url.deletingLastPathComponent()
+        let prefix = partialPrefix(of: url)
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+        where name.hasPrefix(prefix) && name.hasSuffix(partialSuffix) {
+            unlink(folder.appendingPathComponent(name).path)
+        }
+    }
+
+    /// To the disk itself: on macOS `fsync` stops at the drive's cache and `F_FULLFSYNC` doesn't. `fsync` where the
+    /// file system can't.
+    private static func flush(_ fd: Int32) -> Bool {
+        fcntl(fd, F_FULLFSYNC) == 0 || fsync(fd) == 0
     }
 
     private static func writeAll(_ bytes: [UInt8], to fd: Int32) throws {

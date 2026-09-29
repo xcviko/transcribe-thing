@@ -165,6 +165,8 @@ final class AppEnvironment {
         pillModel.contextMenuProvider = { builder.makeMenu(includeQuit: false) }
         inserter.eventTapActive = { [weak hotkeys] in hotkeys?.isTapActive ?? false }
         devices.onDevicesChanged = { [weak self] in self?.devicesChanged() }
+        // A key the user saved or removed replaces the one older builds kept in the Keychain: never asked for again.
+        account.onKeyChanged = { [weak settings] in settings?.keychainKeyMigrated = true }
         // Key-down doesn't wait ~25 ms for TCC: the permissions center probes it off the main thread (again at
         // every capture start); only a state that isn't granted asks TCC here.
         recorder.isMicrophoneAllowed = { [weak permissions] in
@@ -183,7 +185,7 @@ final class AppEnvironment {
         }
         // Before anything reads the key. Older builds kept it in the login keychain; reading it there may ask for the
         // keychain password, a last time.
-        KeychainMigration.run(into: keyStore, from: .live)
+        KeychainMigration.run(into: keyStore, from: .live, settings: settings)
         history.load()
         devices.start()
         permissions.refresh()

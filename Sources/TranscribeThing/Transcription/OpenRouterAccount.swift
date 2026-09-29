@@ -64,6 +64,8 @@ final class OpenRouterAccount {
     var maskedKey: String?
     /// Details from the last successful check (kept while offline or re-checking).
     private(set) var lastKeyInfo: KeyInfo?
+    /// A key was saved (not when saving failed) or removed.
+    @ObservationIgnored var onKeyChanged: (() -> Void)?
 
     static let offlineRecheckDelay: Duration = .seconds(60)
     static let keyUnreadableMessage = "\(Brand.name) couldn’t read the key saved on this Mac. Paste it again."
@@ -131,6 +133,7 @@ final class OpenRouterAccount {
         cachedKey = key
         maskedKey = Self.mask(key)
         lastKeyInfo = nil
+        onKeyChanged?()
         await validate()
     }
 
@@ -144,6 +147,7 @@ final class OpenRouterAccount {
         maskedKey = nil
         lastKeyInfo = nil
         status = .missing
+        onKeyChanged?()
     }
 
     /// Checks the key. Calls in quick succession collapse into one request, and a result that arrives after a
