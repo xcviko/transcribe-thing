@@ -146,7 +146,8 @@ final class AppSettings {
         }
     }
 
-    /// Initial values come from the store; property observers don't fire inside `init`.
+    /// Initial values come from the store. `init` calls this as a method, so each assignment's `didSet` fires and
+    /// writes the value back: one read leniently (the lineup, the model colors) is stored as this build reads it.
     private func load() {
         if let v = store.bool(.onboardingCompleted) { onboardingCompleted = v }
         if let v = store.int(.onboardingResumeStep) {

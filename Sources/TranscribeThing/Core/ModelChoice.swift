@@ -262,7 +262,8 @@ extension ModelColors: Codable {
     }
 
     /// Lenient, as a stored value outlives builds: a color this build doesn't offer (a newer build's), or a value of
-    /// the wrong kind, leaves that model's default; an unknown model is ignored.
+    /// the wrong kind, leaves that model's default; an unknown model is ignored. The load stores what it read
+    /// (`AppSettings.load`), so a newer build's color is that default from then on, as a newer lineup's model is gone.
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: ChoiceKey.self)
         self.init()

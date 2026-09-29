@@ -348,7 +348,7 @@ import Testing
         }
         Self.hold(rig)
         #expect(rig.h.pill.sessionModel == .gemini)
-        #expect(PillPalette.accent(for: rig.h.pill.sessionModel, in: rig.h.settings.modelColors) != nil)
+        #expect(PillPalette.accent(for: rig.h.pill.sessionModel, in: rig.h.pill.settings.modelColors) != nil)
         rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
         rig.now += 2
         c.handle(.pttUp)
@@ -360,11 +360,12 @@ import Testing
         Self.hold(rig)
         c.handle(.cycleEngine)
         #expect(c.modelOverride == .parakeet && rig.h.pill.sessionModel == .parakeet)
-        #expect(PillPalette.accent(for: rig.h.pill.sessionModel, in: rig.h.settings.modelColors) == nil)
+        #expect(PillPalette.accent(for: rig.h.pill.sessionModel, in: rig.h.pill.settings.modelColors) == nil)
         c.handle(.cancel)
     }
 
-    /// A color picked in Models is the one the pill wears for that model's dictations, whichever is main.
+    /// A color picked in Models is the one the pill wears for that model's dictations, whichever is main: the pill
+    /// reads it from the settings the Hub writes.
     @Test func aColorPickedInModelsTintsItsDictations() {
         let (rig, _) = Self.make()
         let c = rig.h.controller
@@ -373,11 +374,11 @@ import Testing
         rig.h.settings.modelColors[.gemini] = .graphite
         Self.hold(rig)
         #expect(rig.h.pill.sessionModel == .gemini)
-        #expect(PillPalette.accent(for: rig.h.pill.sessionModel, in: rig.h.settings.modelColors) == nil,
+        #expect(PillPalette.accent(for: rig.h.pill.sessionModel, in: rig.h.pill.settings.modelColors) == nil,
                 "graphite is the plain pill")
         c.handle(.cycleEngine)
         #expect(rig.h.pill.sessionModel == .parakeet)
-        #expect(PillPalette.accent(for: rig.h.pill.sessionModel, in: rig.h.settings.modelColors)
+        #expect(PillPalette.accent(for: rig.h.pill.sessionModel, in: rig.h.pill.settings.modelColors)
                 == PillPalette.accent(for: ModelColor.teal))
         c.handle(.cancel)
     }

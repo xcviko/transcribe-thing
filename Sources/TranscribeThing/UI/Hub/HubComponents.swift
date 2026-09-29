@@ -271,6 +271,10 @@ struct ModelColorSwatches: View {
     var selection: ModelColor
     var onPick: (ModelColor) -> Void
 
+    /// The width it lays out at, from the first circle's leading edge to the last one's trailing edge: 26 pt hit areas
+    /// 4 pt apart, less the 4 pt each end's hit area reaches past its 18 pt circle.
+    static let width = CGFloat(ModelColor.allCases.count) * 26 + CGFloat(ModelColor.allCases.count - 1) * 4 - 2 * 4
+
     var body: some View {
         HStack(spacing: 4) {
             ForEach(ModelColor.allCases) { color in
@@ -280,6 +284,8 @@ struct ModelColorSwatches: View {
             }
         }
         .fixedSize()
+        // The circles, not their hit areas, line up with the content around them.
+        .padding(.horizontal, -4)
         .accessibilityElement(children: .contain)
     }
 }

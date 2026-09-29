@@ -299,7 +299,7 @@ private struct LineupRow: View {
             Button("Move Down") { move(by: 1) }
                 .disabled(isLast)
             Divider()
-            // A submenu with the color checked: the tile's colors from the keyboard.
+            // A submenu with the color checked: the tile's colors without the popover (and for VoiceOver).
             Picker("Pill Color", selection: color) {
                 ForEach(ModelColor.allCases) { Text($0.title).tag($0) }
             }
@@ -480,8 +480,8 @@ struct ModelColorPopover: View {
     var color: ModelColor
     var onPick: (ModelColor) -> Void
 
-    /// The swatches' width, and the preview's.
-    static let contentWidth: CGFloat = 236
+    /// The swatches' circles span it, and the preview and the header line up on their ends.
+    static let contentWidth = ModelColorSwatches.width
     static let width: CGFloat = contentWidth + 2 * 14
 
     var body: some View {
