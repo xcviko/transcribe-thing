@@ -17,6 +17,8 @@ struct AppPaths: Sendable {
     var historyFile: URL { root.appendingPathComponent("history.json", isDirectory: false) }
     /// root/updates.json: the last release feed GitHub sent, its ETag and when it was checked.
     var updateFeedFile: URL { root.appendingPathComponent("updates.json", isDirectory: false) }
+    /// root/openrouter-key: the OpenRouter key (`KeyFileStore`), readable by the user only.
+    var keyFile: URL { root.appendingPathComponent("openrouter-key", isDirectory: false) }
 
     func recordingURL(fileName: String) -> URL {
         recordings.appendingPathComponent(fileName, isDirectory: false)

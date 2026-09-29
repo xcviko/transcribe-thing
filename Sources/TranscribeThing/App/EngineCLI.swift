@@ -19,7 +19,8 @@ import Foundation
 ///
 /// Uses the real model folder (~/Library/Application Support/transcribe-thing) and the real pipeline
 /// (ModelStore → InferenceGate → engine, or OpenRouterClient). Cloud engines read the key from
-/// OPENROUTER_API_KEY, else from the Keychain; cloud Parakeet also prints the provider that served the request.
+/// OPENROUTER_API_KEY, else from the app's key file (`keyStore`), never the Keychain; cloud Parakeet also prints the
+/// provider that served the request.
 /// `--prompt` and `--effort` apply to Gemini only: `--effort` replaces Gemini 3.8 Flash's fixed medium and is sent as
 /// given. Without `--prompt` Gemini gets the app's fixed prompt (`EngineID.geminiSystemPrompt`); `--prompt ""` sends
 /// only the audio.
@@ -224,7 +225,8 @@ enum EngineCLI {
         let store = ModelStore(paths: paths, settings: settings, engines: engines, gate: .shared,
                                freeDiskBytes: { paths.freeDiskBytes() })
         let client = OpenRouterClient()
-        let account = OpenRouterAccount(keychain: .inMemory(), client: client)
+        // A copy of the key in memory: nothing the run does changes the app's key file.
+        let account = OpenRouterAccount(keyStore: .inMemory(), client: client)
         let service = TranscriptionService(models: store, account: account, client: client)
 
         if options.engine.isLocal {
@@ -234,7 +236,13 @@ enum EngineCLI {
             guard code == ExitCode.ok else { return code }
         }
         if options.engine.isCloud || options.cleanUp {
-            guard let key = cloudKey() else { throw AppError.openRouterMissingKey }
+            let key: String?
+            do {
+                key = try keyStore(paths: paths).lookup()
+            } catch {
+                throw AppError.openRouterKeyUnreadable
+            }
+            guard let key else { throw AppError.openRouterMissingKey }
             await account.setKey(key)
             print("KEY: \(account.maskedKey ?? "?") · \(describe(account.status))")
         }
@@ -354,12 +362,14 @@ enum EngineCLI {
         }
     }
 
-    private static func cloudKey() -> String? {
-        if let env = ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines), !env.isEmpty {
-            return env
+    /// Where a run reads the key: OPENROUTER_API_KEY when it's set (in memory only), else the app's key file. Never the
+    /// Keychain, so no run waits on a password prompt.
+    static func keyStore(environment: [String: String] = ProcessInfo.processInfo.environment,
+                         paths: AppPaths = .live()) -> KeyFileStore {
+        if let env = environment["OPENROUTER_API_KEY"]?.trimmingCharacters(in: .whitespacesAndNewlines), !env.isEmpty {
+            return .inMemory(env)
         }
-        return KeychainStore().read(KeychainStore.openRouterAccount)
+        return KeyFileStore(url: paths.keyFile)
     }
 
     /// An .m4a holding AAC at 32 kbps, 16 kHz mono, as History keeps a recording (`RecordingFile`): Gemini gets it as
@@ -504,23 +514,20 @@ enum EngineCLI {
             return ExitCode.failed
         }
 
-        // The key as the app reads it: OpenRouterAccount over the Keychain (OPENROUTER_API_KEY wins when set, in
-        // memory only). Nothing about the key is printed.
+        // The key as the app reads it: OpenRouterAccount over its key file (OPENROUTER_API_KEY wins when set).
+        // Nothing about the key is printed.
         let client = OpenRouterClient()
-        let envKey = ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let keychain = envKey.flatMap { $0.isEmpty ? nil : KeychainStore.inMemory([KeychainStore.openRouterAccount: $0]) }
-            ?? KeychainStore()
-        let account = OpenRouterAccount(keychain: keychain, client: client)
+        let keyStore = keyStore()
+        let account = OpenRouterAccount(keyStore: keyStore, client: client)
         guard account.apiKey() != nil else {
             if account.isKeyUnreadable {
-                printError("ERROR: keychain: \(OpenRouterAccount.keychainReadFailedMessage)")
+                printError("ERROR: key file: \(OpenRouterAccount.keyUnreadableMessage)")
             } else {
-                printError("ERROR: no OpenRouter key in the Keychain")
+                printError("ERROR: no OpenRouter key: set OPENROUTER_API_KEY or add the key in the app")
             }
             return ExitCode.failed
         }
-        print("KEY: read from \(keychain.isInMemory ? "OPENROUTER_API_KEY" : "the Keychain")")
+        print("KEY: read from \(keyStore.isInMemory ? "OPENROUTER_API_KEY" : "the key file")")
 
         let store = ModelStore(paths: .temporary(), settings: .inMemory(), engines: [:], gate: .shared,
                                freeDiskBytes: { 0 })
@@ -967,7 +974,7 @@ enum EngineCLI {
             print("\(id.rawValue.padding(toLength: 10, withPad: " ", startingAt: 0))\(name)\(state)\(Fmt.bytes(report.bytes)) on disk · \(engine.storageURLs[0].path)")
         }
         let envKey = ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"].map { !$0.isEmpty } ?? false
-        print("OpenRouter key: \(envKey ? "OPENROUTER_API_KEY is set" : "not in the environment (the app keeps it in the Keychain)")")
+        print("OpenRouter key: \(envKey ? "OPENROUTER_API_KEY is set" : "not in the environment (the app keeps it in \(paths.keyFile.path))")")
     }
 
     // MARK: Formatting

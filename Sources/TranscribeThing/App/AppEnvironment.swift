@@ -6,7 +6,7 @@ import Observation
 final class AppEnvironment {
     let paths: AppPaths
     let settings: AppSettings
-    let keychain: KeychainStore
+    let keyStore: KeyFileStore
     let levelMeter: LevelMeter
     let devices: AudioDeviceCatalog
     let recorder: AudioRecorder
@@ -36,7 +36,7 @@ final class AppEnvironment {
     private var compressionTask: Task<Void, Never>?
     private var activationObserver: MainNotificationObserver?
 
-    init(paths: AppPaths, settings: AppSettings, keychain: KeychainStore, levelMeter: LevelMeter,
+    init(paths: AppPaths, settings: AppSettings, keyStore: KeyFileStore, levelMeter: LevelMeter,
          devices: AudioDeviceCatalog, recorder: AudioRecorder, openRouterClient: OpenRouterClient,
          account: OpenRouterAccount, models: ModelStore, transcription: TranscriptionService,
          history: HistoryStore, permissions: PermissionsCenter, hotkeys: HotkeyMonitor,
@@ -46,7 +46,7 @@ final class AppEnvironment {
          menuBar: MenuBarController, isPreview: Bool) {
         self.paths = paths
         self.settings = settings
-        self.keychain = keychain
+        self.keyStore = keyStore
         self.levelMeter = levelMeter
         self.devices = devices
         self.recorder = recorder
@@ -80,10 +80,10 @@ final class AppEnvironment {
         return assemble(
             paths: paths,
             settings: settings,
-            keychain: KeychainStore(),
+            keyStore: KeyFileStore(url: paths.keyFile),
             levelMeter: LevelMeter(),
             devices: AudioDeviceCatalog(),
-            makeAccount: { keychain, client in OpenRouterAccount(keychain: keychain, client: client) },
+            makeAccount: { keyStore, client in OpenRouterAccount(keyStore: keyStore, client: client) },
             models: ModelStore(paths: paths, settings: settings),
             history: HistoryStore(paths: paths, settings: settings),
             permissions: PermissionsCenter(),
@@ -103,7 +103,7 @@ final class AppEnvironment {
         return assemble(
             paths: .temporary(),
             settings: settings,
-            keychain: .inMemory(),
+            keyStore: .inMemory(),
             levelMeter: .preview(level: 0.55),
             devices: .preview(),
             makeAccount: { _, _ in .preview(status: .valid(PreviewFixtures.keyInfo)) },
@@ -119,16 +119,16 @@ final class AppEnvironment {
     }
 
     private static func assemble(
-        paths: AppPaths, settings: AppSettings, keychain: KeychainStore, levelMeter: LevelMeter,
+        paths: AppPaths, settings: AppSettings, keyStore: KeyFileStore, levelMeter: LevelMeter,
         devices: AudioDeviceCatalog,
-        makeAccount: (KeychainStore, OpenRouterClient) -> OpenRouterAccount,
+        makeAccount: (KeyFileStore, OpenRouterClient) -> OpenRouterAccount,
         models: ModelStore, history: HistoryStore, permissions: PermissionsCenter, hotkeys: HotkeyMonitor,
         secureInput: SecureInputMonitor, launchAtLogin: LaunchAtLogin,
         makeUpdates: (AppSettings, ToastCenter) -> UpdateCenter, isPreview: Bool
     ) -> AppEnvironment {
         let recorder = AudioRecorder(levelMeter: levelMeter, devices: devices, settings: settings)
         let client = OpenRouterClient()
-        let account = makeAccount(keychain, client)
+        let account = makeAccount(keyStore, client)
         let transcription = TranscriptionService(models: models, account: account, client: client)
         let inserter = TextInserter()
         let sounds = SoundPlayer(settings: settings)
@@ -140,7 +140,7 @@ final class AppEnvironment {
             account: account, history: history, inserter: inserter, hotkeys: hotkeys,
             permissions: permissions, sounds: sounds, pillModel: pillModel, toasts: toasts)
         return AppEnvironment(
-            paths: paths, settings: settings, keychain: keychain, levelMeter: levelMeter, devices: devices,
+            paths: paths, settings: settings, keyStore: keyStore, levelMeter: levelMeter, devices: devices,
             recorder: recorder, openRouterClient: client, account: account, models: models,
             transcription: transcription, history: history, permissions: permissions, hotkeys: hotkeys,
             inserter: inserter, secureInput: secureInput, launchAtLogin: launchAtLogin, sounds: sounds,
@@ -181,6 +181,9 @@ final class AppEnvironment {
         } catch {
             Log.app.error("Couldn't create app folders: \(error.localizedDescription, privacy: .public)")
         }
+        // Before anything reads the key. Older builds kept it in the login keychain; reading it there may ask for the
+        // keychain password, a last time.
+        KeychainMigration.run(into: keyStore, from: .live)
         history.load()
         devices.start()
         permissions.refresh()

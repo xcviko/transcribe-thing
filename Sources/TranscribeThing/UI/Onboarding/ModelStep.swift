@@ -687,7 +687,7 @@ private struct OpenRouterKeyPanel: View {
             Text(account.maskedKey ?? "")
                 .font(.system(size: 12.5, design: .monospaced))
                 .foregroundStyle(.ink)
-            Text("Saved in your Keychain")
+            Text("Stored on this Mac")
                 .font(.system(size: 11.5))
                 .foregroundStyle(.inkTertiary)
             Spacer(minLength: 0)

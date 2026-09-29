@@ -141,8 +141,8 @@ private func entry(minutesAgo: Double, status: TranscriptStatus = .success,
 @Suite struct CleanupBenchRunTests {
     private func service(_ replies: [StubURLProtocol.Reply]) -> (TranscriptionService, String) {
         let (client, host) = StubURLProtocol.client(replies)
-        let keychain = KeychainStore.inMemory([KeychainStore.openRouterAccount: "sk-or-v1-test"])
-        let account = OpenRouterAccount(keychain: keychain, client: client, debounce: .zero)
+        let keyStore = KeyFileStore.inMemory("sk-or-v1-test")
+        let account = OpenRouterAccount(keyStore: keyStore, client: client, debounce: .zero)
         let service = TranscriptionService(models: ModelStore.preview(states: [:]), account: account, client: client)
         return (service, host)
     }

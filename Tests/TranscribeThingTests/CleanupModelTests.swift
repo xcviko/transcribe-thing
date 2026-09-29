@@ -77,8 +77,8 @@ private func body(_ request: OpenRouterChatRequest) throws -> [String: Any] {
     private func makeService(_ replies: [StubURLProtocol.Reply]) -> (TranscriptionService, String) {
         let store = ModelStore.preview(states: [.parakeet: .ready])
         let (client, host) = StubURLProtocol.client(replies)
-        let keychain = KeychainStore.inMemory([KeychainStore.openRouterAccount: "sk-or-v1-test"])
-        let account = OpenRouterAccount(keychain: keychain, client: client, debounce: .zero)
+        let keyStore = KeyFileStore.inMemory("sk-or-v1-test")
+        let account = OpenRouterAccount(keyStore: keyStore, client: client, debounce: .zero)
         let service = TranscriptionService(models: store, account: account, client: client,
                                            providerLookupDelay: .milliseconds(10))
         return (service, host)

@@ -267,8 +267,8 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
                              key: String? = "sk-or-v1-test") -> (TranscriptionService, String) {
         let store = ModelStore.preview(states: [.parakeet: .ready])
         let (client, host) = StubURLProtocol.client(replies)
-        let keychain = KeychainStore.inMemory(key.map { [KeychainStore.openRouterAccount: $0] } ?? [:])
-        let account = OpenRouterAccount(keychain: keychain, client: client, debounce: .zero)
+        let keyStore = KeyFileStore.inMemory(key)
+        let account = OpenRouterAccount(keyStore: keyStore, client: client, debounce: .zero)
         let service = TranscriptionService(models: store, account: account, client: client,
                                            providerLookupDelay: .milliseconds(10))
         return (service, host)
@@ -372,8 +372,8 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
                                                                reasoningText: "**Listening** for German.", id: "gen-g",
                                                                model: "google/gemini-3.8-flash",
                                                                provider: "Google AI Studio")])
-        let keychain = KeychainStore.inMemory([KeychainStore.openRouterAccount: "sk-or-v1-test"])
-        let account = OpenRouterAccount(keychain: keychain, client: client, debounce: .zero)
+        let keyStore = KeyFileStore.inMemory("sk-or-v1-test")
+        let account = OpenRouterAccount(keyStore: keyStore, client: client, debounce: .zero)
         let service = TranscriptionService(models: store, account: account, client: client)
         let samples = (0..<16_000).map { 0.1 * sin(Float($0) * 0.09) }
         let log = ProgressLog()

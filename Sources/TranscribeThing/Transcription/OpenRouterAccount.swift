@@ -40,17 +40,17 @@ extension KeyStatus {
     }
 }
 
-/// The user's OpenRouter key: stored in the Keychain, validated against `GET /api/v1/key`.
+/// The user's OpenRouter key: stored in its key file (`KeyFileStore`), validated against `GET /api/v1/key`.
 @MainActor @Observable
 final class OpenRouterAccount {
-    @ObservationIgnored private let keychain: KeychainStore
+    @ObservationIgnored private let keyStore: KeyFileStore
     @ObservationIgnored private let client: OpenRouterClient
     @ObservationIgnored private let debounce: Duration
     @ObservationIgnored private var cachedKey: String?
-    @ObservationIgnored private var hasReadKeychain = false
-    /// The last Keychain read failed (a denied or cancelled access prompt). Only `validate()` reads again, so
-    /// dictations don't raise the prompt over and over.
-    @ObservationIgnored private var keychainReadFailed = false
+    @ObservationIgnored private var hasReadKey = false
+    /// The last read of the key file failed. Only `validate()` ("Check Again") reads it again, so dictations go by
+    /// the status on screen.
+    @ObservationIgnored private var keyReadFailed = false
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var recheckTask: Task<Void, Never>?
     @ObservationIgnored private var isPreview = false
@@ -66,23 +66,23 @@ final class OpenRouterAccount {
     private(set) var lastKeyInfo: KeyInfo?
 
     static let offlineRecheckDelay: Duration = .seconds(60)
-    static let keychainReadFailedMessage = "\(Brand.name) couldn’t read your key from the Keychain."
+    static let keyUnreadableMessage = "\(Brand.name) couldn’t read the key saved on this Mac. Paste it again."
 
-    init(keychain: KeychainStore, client: OpenRouterClient) {
-        self.keychain = keychain
+    init(keyStore: KeyFileStore, client: OpenRouterClient) {
+        self.keyStore = keyStore
         self.client = client
         self.debounce = .milliseconds(350)
     }
 
-    init(keychain: KeychainStore, client: OpenRouterClient, debounce: Duration) {
-        self.keychain = keychain
+    init(keyStore: KeyFileStore, client: OpenRouterClient, debounce: Duration) {
+        self.keyStore = keyStore
         self.client = client
         self.debounce = debounce
     }
 
-    /// A fixed `status` that never checks itself. `keychain` holds the key requests read (none by default).
-    static func preview(status: KeyStatus, keychain: KeychainStore = .inMemory()) -> OpenRouterAccount {
-        let account = OpenRouterAccount(keychain: keychain, client: OpenRouterClient())
+    /// A fixed `status` that never checks itself. `keyStore` holds the key requests read (none by default).
+    static func preview(status: KeyStatus, keyStore: KeyFileStore = .inMemory()) -> OpenRouterAccount {
+        let account = OpenRouterAccount(keyStore: keyStore, client: OpenRouterClient())
         account.isPreview = true
         account.status = status
         if status != .missing { account.maskedKey = "sk-or-v1-••••3f9a" }
@@ -90,30 +90,28 @@ final class OpenRouterAccount {
         return account
     }
 
-    /// The stored key, read from the Keychain once and cached.
+    /// The stored key, read from the key file once and cached.
     func apiKey() -> String? {
-        if !hasReadKeychain, !keychainReadFailed { readKeychain() }
+        if !hasReadKey, !keyReadFailed { readKey() }
         return cachedKey
     }
 
-    /// A key may be stored, but the Keychain wouldn't hand it over. "Check again" (`validate()`) asks again.
-    var isKeyUnreadable: Bool { keychainReadFailed }
+    /// A key file is there, but it couldn't be read. "Check again" (`validate()`) reads it again.
+    var isKeyUnreadable: Bool { keyReadFailed }
 
-    private func readKeychain() {
+    private func readKey() {
         do {
-            let value = try keychain.lookup(KeychainStore.openRouterAccount)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            hasReadKeychain = true
-            keychainReadFailed = false
-            cachedKey = value?.isEmpty == false ? value : nil
+            cachedKey = try keyStore.lookup()
+            hasReadKey = true
+            keyReadFailed = false
             maskedKey = cachedKey.map(Self.mask)
         } catch {
             // Not "no key": leave the cache unread so an explicit check can try again.
-            keychainReadFailed = true
+            keyReadFailed = true
         }
     }
 
-    /// Trims, stores in the Keychain, validates. An empty string removes the key.
+    /// Trims, stores in the key file, validates. An empty string removes the key.
     func setKey(_ raw: String) async {
         let key = Self.sanitize(raw)
         guard !key.isEmpty else {
@@ -121,15 +119,15 @@ final class OpenRouterAccount {
             return
         }
         do {
-            try keychain.write(key, account: KeychainStore.openRouterAccount)
+            try keyStore.write(key)
         } catch {
             Log.app.error("Couldn't save the OpenRouter key: \(String(describing: error), privacy: .public)")
             generation += 1
-            status = .failed("Couldn’t save the key to your Keychain.")
+            status = .failed("Couldn’t save the key on this Mac.")
             return
         }
-        hasReadKeychain = true
-        keychainReadFailed = false
+        hasReadKey = true
+        keyReadFailed = false
         cachedKey = key
         maskedKey = Self.mask(key)
         lastKeyInfo = nil
@@ -139,9 +137,9 @@ final class OpenRouterAccount {
     func removeKey() {
         generation += 1
         recheckTask?.cancel()
-        keychain.delete(KeychainStore.openRouterAccount)
-        hasReadKeychain = true
-        keychainReadFailed = false
+        keyStore.delete()
+        hasReadKey = true
+        keyReadFailed = false
         cachedKey = nil
         maskedKey = nil
         lastKeyInfo = nil
@@ -155,13 +153,13 @@ final class OpenRouterAccount {
         generation += 1
         let current = generation
         recheckTask?.cancel()
-        if !hasReadKeychain {
-            // An explicit check asks the Keychain again after a failed read.
-            keychainReadFailed = false
-            readKeychain()
+        if !hasReadKey {
+            // An explicit check reads the key file again after a failed read.
+            keyReadFailed = false
+            readKey()
         }
-        if keychainReadFailed {
-            status = .failed(Self.keychainReadFailedMessage)
+        if keyReadFailed {
+            status = .failed(Self.keyUnreadableMessage)
             return
         }
         guard let key = cachedKey else {
@@ -224,10 +222,10 @@ final class OpenRouterAccount {
     }
 
     /// Checks the key again when the last check is older than `maxAge` (a page showing the status appeared, a
-    /// dictation was refused on a key a request rejected). Never during a check, without a key, or after the
-    /// Keychain refused: only "Check again" asks the Keychain again.
+    /// dictation was refused on a key a request rejected). Never during a check, without a key, or after the key
+    /// file couldn't be read: only "Check again" reads it again.
     func refreshIfStale(maxAge: TimeInterval, now: Date = Date()) {
-        guard !isPreview, !keychainReadFailed else { return }
+        guard !isPreview, !keyReadFailed else { return }
         switch status {
         case .checking, .missing: return
         case .valid, .invalid, .noCredit, .offline, .failed: break

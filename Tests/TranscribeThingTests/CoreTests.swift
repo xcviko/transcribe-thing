@@ -1026,13 +1026,13 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
     }
 
 
-    @Test func inMemoryKeychain() throws {
-        let keychain = KeychainStore.inMemory()
-        #expect(keychain.read("k") == nil)
-        try keychain.write("secret", account: "k")
-        #expect(keychain.read("k") == "secret")
-        keychain.delete("k")
-        #expect(keychain.read("k") == nil)
+    @Test func inMemoryKeyStore() throws {
+        let keyStore = KeyFileStore.inMemory()
+        #expect(try keyStore.lookup() == nil)
+        try keyStore.write("secret")
+        #expect(try keyStore.lookup() == "secret")
+        keyStore.delete()
+        #expect(try keyStore.lookup() == nil)
     }
 
     @Test func engineFacts() {

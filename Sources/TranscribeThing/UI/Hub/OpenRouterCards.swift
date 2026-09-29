@@ -76,7 +76,7 @@ struct OpenRouterKeyCard: View {
                     .foregroundStyle(.ink)
                     .textSelection(.disabled)
                 Spacer(minLength: 0)
-                Text("Keychain")
+                Text("Stored on this Mac")
                     .font(.system(size: 10.5, weight: .medium))
                     .foregroundStyle(.inkTertiary)
             }

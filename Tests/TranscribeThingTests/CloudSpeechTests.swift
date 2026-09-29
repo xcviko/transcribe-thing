@@ -424,8 +424,8 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         -> (TranscriptionService, String, OpenRouterAccount) {
         let store = ModelStore.preview(states: [.parakeet: .ready])
         let (client, host) = StubURLProtocol.client(replies)
-        let keychain = KeychainStore.inMemory(key.map { [KeychainStore.openRouterAccount: $0] } ?? [:])
-        let account = OpenRouterAccount(keychain: keychain, client: client, debounce: .zero)
+        let keyStore = KeyFileStore.inMemory(key)
+        let account = OpenRouterAccount(keyStore: keyStore, client: client, debounce: .zero)
         let service = TranscriptionService(models: store, account: account, client: client,
                                            providerLookupDelay: .milliseconds(10))
         return (service, host, account)

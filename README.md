@@ -42,6 +42,8 @@ OPENROUTER_API_KEY=sk-or-… .build/debug/transcribe-thing --transcribe memo.m4a
 OPENROUTER_API_KEY=sk-or-… .build/debug/transcribe-thing --transcribe memo.m4a --engine parakeet --clean-up
 ```
 
+Without `OPENROUTER_API_KEY` the cloud models use the key the app saved (its key file, see below).
+
 Gemini 3.8 Flash always thinks at medium and GPT-6 Luna not at all, as in the app; `--effort` (low, medium or high)
 tries Gemini at another level. The prompts are fixed in the app and change only with a new version; `--prompt`
 tries Gemini with another one (`--prompt ""` sends only the audio). `--clean-up` sends the transcript to GPT-6 Luna
@@ -134,7 +136,7 @@ The zip's name (`transcribe-thing-<version>.zip`) and the tag (`v<version>`) are
 | Recordings | `~/Library/Application Support/transcribe-thing/Recordings`: every transcript keeps its recording while it's in History (Retry, Undo, Transcribe With), as AAC in an .m4a (about 16 MB an hour; older builds' WAVs are compressed in the background after launch); General → History → Auto-delete history, Never by default |
 | Release feed cache | `~/Library/Application Support/transcribe-thing/updates.json` (what the last update check saw) |
 | Settings | `defaults read dev.transcribe-thing.app` |
-| OpenRouter key | login Keychain, service `dev.transcribe-thing.app` |
+| OpenRouter key | `~/Library/Application Support/transcribe-thing/openrouter-key`, readable by you only (not the Keychain, so rebuilds never ask for its password; a key older builds kept there moves over at launch) |
 
 Every dictation keeps its audio as long as it stays in History, so History can send any of them to another model
 (Versions → Transcribe With, say Gemini after a long dictation went to Parakeet) and retry a failed one. A deleted

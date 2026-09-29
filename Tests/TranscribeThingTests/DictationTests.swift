@@ -732,7 +732,7 @@ final class FakeRecorder: DictationRecorder {
         // A stubbed `client` (`StubURLProtocol`) gets a key to send; the default one never has any.
         let account = OpenRouterAccount.preview(
             status: keyStatus,
-            keychain: .inMemory(client == nil ? [:] : [KeychainStore.openRouterAccount: "sk-or-v1-test"]))
+            keyStore: .inMemory(client == nil ? nil : "sk-or-v1-test"))
         let client = client ?? OpenRouterClient()
         let history = paths.map { HistoryStore(paths: $0, settings: settings) } ?? .preview(entries: [], settings: settings)
         let toasts = ToastCenter()

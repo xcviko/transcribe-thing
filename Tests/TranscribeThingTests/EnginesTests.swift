@@ -939,15 +939,15 @@ final class ProgressLog: @unchecked Sendable {
 
 @MainActor
 @Suite struct OpenRouterAccountTests {
-    private func account(_ replies: [StubURLProtocol.Reply], keychain: KeychainStore = .inMemory()) -> OpenRouterAccount {
-        OpenRouterAccount(keychain: keychain, client: StubURLProtocol.client(replies).0, debounce: .zero)
+    private func account(_ replies: [StubURLProtocol.Reply], keyStore: KeyFileStore = .inMemory()) -> OpenRouterAccount {
+        OpenRouterAccount(keyStore: keyStore, client: StubURLProtocol.client(replies).0, debounce: .zero)
     }
 
-    @Test func setKeyStoresMasksAndValidates() async {
-        let keychain = KeychainStore.inMemory()
-        let account = account([.init(body: Fixtures.keyInfo)], keychain: keychain)
+    @Test func setKeyStoresMasksAndValidates() async throws {
+        let keyStore = KeyFileStore.inMemory()
+        let account = account([.init(body: Fixtures.keyInfo)], keyStore: keyStore)
         await account.setKey("  sk-or-v1-0123456789abcdef3f9a \n")
-        #expect(keychain.read(KeychainStore.openRouterAccount) == "sk-or-v1-0123456789abcdef3f9a")
+        #expect(try keyStore.lookup() == "sk-or-v1-0123456789abcdef3f9a")
         #expect(account.apiKey() == "sk-or-v1-0123456789abcdef3f9a")
         #expect(account.maskedKey == "sk-or-v1-••••3f9a")
         guard case .valid(let info) = account.status else {
@@ -977,20 +977,20 @@ final class ProgressLog: @unchecked Sendable {
         #expect(account.apiKey() == "sk-or-v1-abcdef")
     }
 
-    @Test func removeKeyClearsEverything() async {
-        let keychain = KeychainStore.inMemory([KeychainStore.openRouterAccount: "sk-or-v1-abcdef"])
-        let account = account([], keychain: keychain)
+    @Test func removeKeyClearsEverything() async throws {
+        let keyStore = KeyFileStore.inMemory("sk-or-v1-abcdef")
+        let account = account([], keyStore: keyStore)
         #expect(account.apiKey() == "sk-or-v1-abcdef")
         account.removeKey()
         #expect(account.status == .missing)
         #expect(account.maskedKey == nil)
         #expect(account.apiKey() == nil)
-        #expect(keychain.read(KeychainStore.openRouterAccount) == nil)
+        #expect(try keyStore.lookup() == nil)
     }
 
     @Test func cancellingTheCallerDoesntStrandTheCheck() async throws {
         // Onboarding's key field: the next keystroke cancels the debounce task that is saving the key.
-        let account = OpenRouterAccount(keychain: .inMemory(), client: StubURLProtocol.client([.init(body: Fixtures.keyInfo)]).0,
+        let account = OpenRouterAccount(keyStore: .inMemory(), client: StubURLProtocol.client([.init(body: Fixtures.keyInfo)]).0,
                                         debounce: .milliseconds(150))
         let caller = Task { await account.setKey("sk-or-v1-abcdef") }
         try await Task.sleep(for: .milliseconds(30))
@@ -1018,8 +1018,8 @@ final class ProgressLog: @unchecked Sendable {
     }
 
     @Test func aWorkingDictationClearsAStaleNoCredit() async throws {
-        let keychain = KeychainStore.inMemory([KeychainStore.openRouterAccount: "sk-or-v1-abcdef"])
-        let account = account([.init(body: Fixtures.keyInfo)], keychain: keychain)
+        let keyStore = KeyFileStore.inMemory("sk-or-v1-abcdef")
+        let account = account([.init(body: Fixtures.keyInfo)], keyStore: keyStore)
         account.noteCloudFailure(.openRouterNoCredits("empty"))
         #expect(account.status == .noCredit(nil))
         // The user topped up; the next Gemini dictation goes through.
@@ -1028,8 +1028,8 @@ final class ProgressLog: @unchecked Sendable {
     }
 
     @Test func aRefusedDictationRechecksARejectedKeyAtMostSoOften() async throws {
-        let keychain = KeychainStore.inMemory([KeychainStore.openRouterAccount: "sk-or-v1-abcdef"])
-        let account = account([.init(body: Fixtures.keyInfo)], keychain: keychain)
+        let keyStore = KeyFileStore.inMemory("sk-or-v1-abcdef")
+        let account = account([.init(body: Fixtures.keyInfo)], keyStore: keyStore)
         // One request's 401 during a brief OpenRouter outage.
         account.noteCloudFailure(.openRouterInvalidKey("User not found."))
         account.refreshIfStale(maxAge: 30)
@@ -1042,23 +1042,23 @@ final class ProgressLog: @unchecked Sendable {
 
     @Test func keyLimitFetchesTheKeyToSayWhatRanOut() async throws {
         let body = #"{"data":{"label":"k","limit":5,"limit_remaining":0,"usage":5,"is_free_tier":false}}"#
-        let keychain = KeychainStore.inMemory([KeychainStore.openRouterAccount: "sk-or-v1-abcdef"])
-        let account = account([.init(body: body)], keychain: keychain)
+        let keyStore = KeyFileStore.inMemory("sk-or-v1-abcdef")
+        let account = account([.init(body: body)], keyStore: keyStore)
         account.noteCloudFailure(.openRouterKeyLimit("Key limit exceeded"))
         try await waitUntil { if case .noCredit = account.status { true } else { false } }
         #expect(account.status.isKeyLimitReached)
         #expect(!KeyStatus.noCredit(nil).isKeyLimitReached)
     }
 
-    @Test func aRefusedKeychainReadIsNotAMissingKey() async throws {
-        let keychain = KeychainStore.inMemory([KeychainStore.openRouterAccount: "sk-or-v1-abcdef"])
-        keychain.simulateReadFailure(-128) // errSecUserCanceled: the prompt was dismissed
-        let account = account([.init(body: Fixtures.keyInfo)], keychain: keychain)
+    @Test func anUnreadableKeyFileIsNotAMissingKey() async throws {
+        let keyStore = KeyFileStore.inMemory("sk-or-v1-abcdef")
+        keyStore.simulateReadFailure(true)
+        let account = account([.init(body: Fixtures.keyInfo)], keyStore: keyStore)
         await account.validate()
-        #expect(account.status == .failed(OpenRouterAccount.keychainReadFailedMessage))
+        #expect(account.status == .failed(OpenRouterAccount.keyUnreadableMessage))
         #expect(account.isKeyUnreadable)
-        // Dictations don't raise the prompt again...
-        keychain.simulateReadFailure(nil)
+        // Dictations don't read the file again, so they go by the status on screen...
+        keyStore.simulateReadFailure(false)
         #expect(account.apiKey() == nil)
         // ..."Check again" does.
         await account.validate()
@@ -1747,31 +1747,31 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
 @MainActor
 @Suite struct TranscriptionServiceTests {
     private func makeService(replies: [StubURLProtocol.Reply] = [], key: String? = "sk-or-v1-test",
-                             keychainFailure: OSStatus? = nil) -> (TranscriptionService, ModelStore) {
-        let made = makeServiceAndAccount(replies: replies, key: key, keychainFailure: keychainFailure)
+                             keyReadFails: Bool = false) -> (TranscriptionService, ModelStore) {
+        let made = makeServiceAndAccount(replies: replies, key: key, keyReadFails: keyReadFails)
         return (made.0, made.1)
     }
 
     private func makeServiceAndAccount(replies: [StubURLProtocol.Reply] = [], key: String? = "sk-or-v1-test",
-                                       keychainFailure: OSStatus? = nil,
+                                       keyReadFails: Bool = false,
                                        localTranscript: String = "hello from the fake")
         -> (TranscriptionService, ModelStore, OpenRouterAccount) {
-        let made = makeServiceAccountAndHost(replies: replies, key: key, keychainFailure: keychainFailure,
+        let made = makeServiceAccountAndHost(replies: replies, key: key, keyReadFails: keyReadFails,
                                              localTranscript: localTranscript)
         return (made.0, made.1, made.2)
     }
 
     private func makeServiceAccountAndHost(replies: [StubURLProtocol.Reply] = [], key: String? = "sk-or-v1-test",
-                                           keychainFailure: OSStatus? = nil,
+                                           keyReadFails: Bool = false,
                                            localTranscript: String = "hello from the fake")
         -> (TranscriptionService, ModelStore, OpenRouterAccount, String) {
         let store = ModelStore(paths: .temporary(), settings: .inMemory(),
                                engines: [.parakeet: FakeEngine(.parakeet, installed: true, transcript: localTranscript)],
                                gate: InferenceGate(), freeDiskBytes: { 50_000_000_000 })
         let (client, host) = StubURLProtocol.client(replies)
-        let keychain = KeychainStore.inMemory(key.map { [KeychainStore.openRouterAccount: $0] } ?? [:])
-        keychain.simulateReadFailure(keychainFailure)
-        let account = OpenRouterAccount(keychain: keychain, client: client, debounce: .zero)
+        let keyStore = KeyFileStore.inMemory(key)
+        keyStore.simulateReadFailure(keyReadFails)
+        let account = OpenRouterAccount(keyStore: keyStore, client: client, debounce: .zero)
         return (TranscriptionService(models: store, account: account, client: client), store, account, host)
     }
 
@@ -1887,8 +1887,8 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
             let store = ModelStore(paths: .temporary(), settings: .inMemory(), engines: [:], gate: InferenceGate(),
                                    freeDiskBytes: { 50_000_000_000 })
             let (client, host) = StubURLProtocol.client([Fixtures.success])
-            let keychain = KeychainStore.inMemory([KeychainStore.openRouterAccount: "sk-or-v1-test"])
-            let account = OpenRouterAccount(keychain: keychain, client: client, debounce: .zero)
+            let keyStore = KeyFileStore.inMemory("sk-or-v1-test")
+            let account = OpenRouterAccount(keyStore: keyStore, client: client, debounce: .zero)
             let service = TranscriptionService(models: store, account: account, client: client)
             let result = try await service.transcribe(speech(), engine: .geminiFlash, prompt: replacement)
             #expect(result.usedSystemPrompt == (expected != nil))
@@ -1933,8 +1933,8 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
         #expect(result.engine == .parakeet)
     }
 
-    @Test func unreadableKeychainIsNotAMissingKey() async throws {
-        let (service, _) = makeService(replies: [Fixtures.success], keychainFailure: -128)
+    @Test func unreadableKeyFileIsNotAMissingKey() async throws {
+        let (service, _) = makeService(replies: [Fixtures.success], keyReadFails: true)
         await #expect(throws: AppError.openRouterKeyUnreadable) {
             try await service.transcribe(speech(), engine: .geminiFlash)
         }

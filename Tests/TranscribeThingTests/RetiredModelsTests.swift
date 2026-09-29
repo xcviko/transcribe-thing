@@ -167,8 +167,8 @@ private let historyFile = #"""
         _ = load(defaults)
         let replies = [StubURLProtocol.Reply.stream(SSE.answer("Hallo.")), StubURLProtocol.Reply.stream(SSE.answer("Hallo!"))]
         let (client, host) = StubURLProtocol.client(replies)
-        let keychain = KeychainStore.inMemory([KeychainStore.openRouterAccount: "sk-or-v1-test"])
-        let account = OpenRouterAccount(keychain: keychain, client: client, debounce: .zero)
+        let keyStore = KeyFileStore.inMemory("sk-or-v1-test")
+        let account = OpenRouterAccount(keyStore: keyStore, client: client, debounce: .zero)
         let service = TranscriptionService(models: ModelStore.preview(states: [:]), account: account, client: client)
         let transcribed = try await service.transcribe(Recording(samples: [Float](repeating: 0.1, count: 16_000)),
                                                        engine: .geminiFlash)
@@ -190,8 +190,8 @@ private let historyFile = #"""
 @Suite struct RetiredModelRunTests {
     @Test func gemini31ProNeverRuns() async throws {
         let (client, host) = StubURLProtocol.client([StubURLProtocol.Reply.stream(SSE.answer("Hallo."))])
-        let keychain = KeychainStore.inMemory([KeychainStore.openRouterAccount: "sk-or-v1-test"])
-        let account = OpenRouterAccount(keychain: keychain, client: client, debounce: .zero)
+        let keyStore = KeyFileStore.inMemory("sk-or-v1-test")
+        let account = OpenRouterAccount(keyStore: keyStore, client: client, debounce: .zero)
         let service = TranscriptionService(models: ModelStore.preview(states: [:]), account: account, client: client)
         await #expect(throws: AppError.self) {
             try await service.transcribe(Recording(samples: [Float](repeating: 0.1, count: 16_000)), engine: .geminiPro)

@@ -333,8 +333,8 @@ private func format(of data: Data, ext: String) throws -> (codec: AudioFormatID,
     @MainActor
     private func makeService(_ replies: [StubURLProtocol.Reply]) -> (TranscriptionService, String) {
         let (client, host) = StubURLProtocol.client(replies)
-        let keychain = KeychainStore.inMemory([KeychainStore.openRouterAccount: "sk-or-v1-test"])
-        let account = OpenRouterAccount(keychain: keychain, client: client, debounce: .zero)
+        let keyStore = KeyFileStore.inMemory("sk-or-v1-test")
+        let account = OpenRouterAccount(keyStore: keyStore, client: client, debounce: .zero)
         return (TranscriptionService(models: .preview(states: [:]), account: account, client: client,
                                      providerLookupDelay: .milliseconds(10)), host)
     }

@@ -1465,7 +1465,7 @@ final class DictationController {
     private nonisolated static func accountFailureReason(_ error: AppError) -> String? {
         switch error {
         case .openRouterMissingKey: "Add your OpenRouter key in Models."
-        case .openRouterKeyUnreadable: "Your OpenRouter key couldn’t be read from the Keychain."
+        case .openRouterKeyUnreadable: "Your saved OpenRouter key couldn’t be read. Paste it again in Models."
         case .openRouterInvalidKey: "Your OpenRouter key was rejected."
         case .openRouterNoCredits: "You’re out of OpenRouter credit."
         case .openRouterKeyLimit: "Your OpenRouter key hit its spending limit."

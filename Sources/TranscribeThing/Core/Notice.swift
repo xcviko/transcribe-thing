@@ -198,7 +198,7 @@ enum AppError: Error, Equatable, Sendable {
     case downloadFailed(EngineID, String)
     case notEnoughDisk(needed: Int64, available: Int64)
     case openRouterMissingKey
-    /// A key is stored, but the Keychain refused to hand it over (a denied or cancelled prompt).
+    /// A key file is there, but it couldn't be read.
     case openRouterKeyUnreadable
     case openRouterInvalidKey(String)
     case openRouterNoCredits(String)
@@ -552,8 +552,8 @@ extension AppError {
         case .openRouterKeyUnreadable:
             return Copy(symbol: "key.fill",
                         title: "\(Brand.name) can’t read your OpenRouter key",
-                        body: "macOS didn’t let \(Brand.name) open it in the Keychain. Check the key again and choose Always Allow.",
-                        fixes: [Fix(title: "Check Key", kind: .openHub(.models))],
+                        body: "The key saved on this Mac couldn’t be read. Paste it again.",
+                        fixes: [Fix(title: "Update Key", kind: .openHub(.models))],
                         order: .fixFirst, offersSwitch: true)
         case .openRouterInvalidKey:
             return Copy(symbol: "key.fill",
