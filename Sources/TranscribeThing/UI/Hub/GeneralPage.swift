@@ -49,6 +49,7 @@ struct GeneralPage: View {
             HubGroup("Pill & Sounds") {
                 SettingsGroup {
                     pillRow
+                    pillColorRow
                     SettingsRow(title: "Play sounds", subtitle: "Soft clicks when recording starts, stops and pastes.",
                                 systemImage: settings.soundsEnabled ? "speaker.wave.2" : "speaker.slash",
                                 iconTint: .inkSecondary) {
@@ -180,6 +181,16 @@ struct GeneralPage: View {
                 settings.pillMode = mode
             }
             .accessibilityLabel("Show the pill")
+        }
+    }
+
+    /// Named in the subtitle, which the circles don't say. Open in Never mode too; with Always, the resting pill
+    /// repaints in place.
+    private var pillColorRow: some View {
+        SettingsRow(title: "Pill color", subtitle: settings.pillColor.title, systemImage: "paintpalette",
+                    iconTint: .inkSecondary) {
+            PillColorSwatches(selection: settings.pillColor) { settings.pillColor = $0 }
+                .accessibilityLabel("Pill color")
         }
     }
 

@@ -23,6 +23,25 @@ enum PillMode: String, Codable, CaseIterable, Sendable, Identifiable {
     }
 }
 
+/// The pill's own color (`PillPalette.fill(for:)`): graphite, or one of five jewel tones in the order of the hue
+/// wheel. Dark in every case, so its white content reads the same.
+enum PillColor: String, Codable, CaseIterable, Sendable, Identifiable {
+    case graphite, emerald, teal, sapphire, plum, garnet
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .graphite: "Graphite"
+        case .emerald: "Emerald"
+        case .teal: "Teal"
+        case .sapphire: "Sapphire"
+        case .plum: "Plum"
+        case .garnet: "Garnet"
+        }
+    }
+}
+
 /// User preferences. Every property writes through to its store the moment it is set.
 @MainActor @Observable
 final class AppSettings {
@@ -45,6 +64,8 @@ final class AppSettings {
     /// How many times the pill has shown the Switch model hint (it shows at most `switchHintLimit` times).
     var switchHintShownCount: Int = 0 { didSet { store.set(switchHintShownCount, .switchHintShownCount) } }
     var pillMode: PillMode = .whileDictating { didSet { store.set(pillMode.rawValue, .pillMode) } }
+    /// The capsule's color, and its chip's and tooltips'. The pill on screen repaints at once.
+    var pillColor: PillColor = .graphite { didSet { store.set(pillColor.rawValue, .pillColor) } }
     var soundsEnabled: Bool = true { didSet { store.set(soundsEnabled, .soundsEnabled) } }
     /// The only mic dictation opens while it is connected. nil = Automatic: the system default input (Bluetooth
     /// included) at the moment a dictation starts. A picked mic that goes away falls back to Automatic
@@ -172,6 +193,8 @@ final class AppSettings {
         store.remove(.switchEngines)
         if let v = store.int(.switchHintShownCount) { switchHintShownCount = max(0, v) }
         if let v = store.string(.pillMode).flatMap(PillMode.init(rawValue:)) { pillMode = v }
+        // A color this build doesn't offer leaves graphite.
+        if let v = store.string(.pillColor).flatMap(PillColor.init(rawValue:)) { pillColor = v }
         // Older builds could hide the pill for an hour; that deadline has no meaning now.
         store.remove(.pillHiddenUntil)
         if let v = store.bool(.soundsEnabled) { soundsEnabled = v }
@@ -284,7 +307,7 @@ enum SettingsKey: String, CaseIterable {
     /// `pillHiddenUntil` is the removed "Hide Pill for 1 Hour" deadline, removed at load.
     /// `preferBuiltInMicOverBluetooth` is the removed built-in-over-AirPods switch, turned into a mic choice once
     /// (`microphoneChoiceMigrated` records that) and removed.
-    case onboardingCompleted, onboardingStep, onboardingResumeStep, selectedEngine, pillMode, pillHiddenUntil
+    case onboardingCompleted, onboardingStep, onboardingResumeStep, selectedEngine, pillMode, pillColor, pillHiddenUntil
     case soundsEnabled, soundVolume, microphoneUID, preferBuiltInMicOverBluetooth, showDockIcon
     /// `maxRecordingMinutes` (the removed "Maximum recording length"), `restoreClipboard` (the removed "Restore the
     /// clipboard after pasting"), `keepFailedRecordingsDays` and `keepSuccessfulRecordingsDays` (how long audio was

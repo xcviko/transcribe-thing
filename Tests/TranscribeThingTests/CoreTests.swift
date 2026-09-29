@@ -709,6 +709,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         #expect(settings.parakeetEngine == .parakeet)
         #expect(settings.lineup == .default)
         #expect(settings.pillMode == .whileDictating)
+        #expect(settings.pillColor == .graphite)
         #expect(settings.shortcuts == .defaults)
 
         settings.parakeetEngine = .parakeetCloud
@@ -717,6 +718,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         settings.lineup.move(.gemini, to: 0)
         settings.switchHintShownCount = 2
         settings.pillMode = .always
+        settings.pillColor = .sapphire
         settings.microphoneUID = "usb-mic"
         settings.soundsEnabled = false
         settings.autoDeleteHistoryDays = 30
@@ -733,6 +735,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         #expect(reloaded.lineup.cycle == [.cleanup, .parakeet])
         #expect(reloaded.switchHintShownCount == 2)
         #expect(reloaded.pillMode == .always)
+        #expect(reloaded.pillColor == .sapphire)
         #expect(reloaded.microphoneUID == "usb-mic")
         #expect(!reloaded.soundsEnabled)
         #expect(reloaded.autoDeleteHistoryDays == 30)
@@ -741,6 +744,17 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
 
         settings.microphoneUID = nil
         #expect(AppSettings(defaults: defaults).microphoneUID == nil)
+    }
+
+    /// A pill color this build doesn't offer (one since removed, or from a newer build) leaves graphite, and stays
+    /// stored as it was.
+    @Test func anUnknownPillColorIsGraphite() throws {
+        try withSuite { defaults in
+            defaults.set("chartreuse", forKey: SettingsKey.pillColor.defaultsKey)
+            #expect(AppSettings(defaults: defaults).pillColor == .graphite)
+            #expect(defaults.string(forKey: SettingsKey.pillColor.defaultsKey) == "chartreuse")
+            #expect(SettingsKey.pillColor.defaultsKey == "tt.pillColor")
+        }
     }
 
     /// The pasting switches and Auto-delete are off (Never) out of the box.
