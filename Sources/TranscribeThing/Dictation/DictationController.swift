@@ -306,12 +306,11 @@ final class DictationController {
         let wasIdle = machine.capture == .idle
         let wasRecording = machine.isRecording
         let effects = machine.handle(input, now: clock())
-        if !wasRecording, machine.isRecording {
+        let startsRecording = !wasRecording && machine.isRecording
+        if startsRecording {
             // Every press starts with an empty equalizer: the meter still holds the last recording's levels,
             // and a refused press never opens the mic, whose start would clear them.
             pillModel.levelMeter.reset()
-            // Its start cue follows in 120 ms: the sound output (AirPods wake slowly) starts now, off the main thread.
-            sounds.warmUp()
         }
         if !machine.capture.isUncommittedPress {
             pressKeepsProcessing = false
@@ -324,6 +323,11 @@ final class DictationController {
             execute(machine.handle(.captureFailed(refusal), now: clock()))
         } else {
             execute(effects)
+        }
+        if startsRecording {
+            // Its start cue follows in 120 ms: the sound output (AirPods wake slowly) starts off the main thread,
+            // once the mic has started (`beginCapture` holds sounds until its first audio).
+            sounds.warmUp()
         }
         if !machine.isRecording {
             pendingRefusal = nil
@@ -349,7 +353,9 @@ final class DictationController {
             send(.deviceLost)
         case .failed(let error):
             send(.captureFailed(error))
-        case .firstBuffer, .configurationChanged:
+        case .firstBuffer:
+            sounds.captureStarted()
+        case .configurationChanged:
             break
         }
     }
@@ -418,6 +424,7 @@ final class DictationController {
         }
         do {
             try captureDevice.start(preferredDeviceUID: settings.microphoneUID, continuing: prefix)
+            sounds.captureStarting()
             continuing = prefix
             deviceNoticeDue = captureDevice === recorder
             // The recorder trusts the cached permission (TCC costs ~25 ms here); re-probe it off the main

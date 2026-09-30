@@ -913,7 +913,7 @@ enum StatusTone: Sendable {
 }
 
 /// One-line status for a model or the OpenRouter key: "Ready · 632 MB", "Downloading 42% · about 1 min left",
-/// "Optimizing for your Mac…", "Needs key", "Connected · $12.40 left".
+/// "Loading model…", "Needs key", "Connected · $12.40 left".
 struct ModelStatusText: View {
     private let text: String
     private let tone: StatusTone
@@ -956,7 +956,7 @@ struct ModelStatusText: View {
         case .installed:
             return ("Downloaded\(size)", .neutral)
         case .preparing:
-            return ("Optimizing for your Mac…", .progress)
+            return ("Loading model…", .progress)
         case .ready:
             return ("Ready\(size)", .positive)
         case .failed:

@@ -317,6 +317,63 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
         #expect(output.played == [.error, .lock])
     }
 
+    /// AirPods take ~450 ms to wake: a dictation's start cue still plays that late, while the dictation it
+    /// confirms is the latest thing the user did.
+    @Test func aLateStartCuePlaysUntilSomethingNewerIsAskedFor() {
+        let output = FakeCueOutput()
+        let (_, engine) = Self.make(output)
+        let now = DispatchTime.now().uptimeNanoseconds
+        let late = now - UInt64((CueEngine.maxLateness + 0.2) * 1e9)
+        engine.play(.start, requestedAt: late)
+        engine.flush()
+        engine.play(.lock, requestedAt: late)
+        engine.flush()
+        #expect(output.played == [.start, .lock])
+
+        // Released while the output wakes: the stop cue came after the start, which no longer confirms anything.
+        let gate = DispatchSemaphore(value: 0)
+        let waking = FakeCueOutput(startGate: gate)
+        let (_, wakingEngine) = Self.make(waking)
+        wakingEngine.play(.start, requestedAt: late)
+        wakingEngine.play(.stop, requestedAt: now)
+        // Other late key feedback, and a start past `maxStartLateness`, never play.
+        wakingEngine.play(.paste, requestedAt: late)
+        wakingEngine.play(.start, requestedAt: now - UInt64((CueEngine.maxStartLateness + 0.2) * 1e9))
+        gate.signal()
+        wakingEngine.flush()
+        #expect(waking.played == [.stop])
+    }
+
+    /// Waking AirPods while a mic starts would hold the mic (and the main thread's Core Audio calls) up: the
+    /// output waits for the mic's first audio.
+    @Test func cuesWaitForTheStartingMicsFirstAudio() {
+        let output = FakeCueOutput()
+        let (player, engine) = Self.make(output)
+        player.captureStarting()
+        player.play(.lock)
+        player.warmUp()
+        engine.flush()
+        #expect(output.calls == [.load])
+        player.captureStarted()
+        engine.flush()
+        #expect(output.played == [.lock])
+        #expect(output.count(.start) == 1)
+        // Once started, cues go straight to the engine.
+        player.play(.paste)
+        engine.flush()
+        #expect(output.played == [.lock, .paste])
+    }
+
+    @Test func aMicThatNeverDeliversReleasesTheCuesAfterTheWait() async throws {
+        let output = FakeCueOutput()
+        let (player, engine) = Self.make(output)
+        player.captureStarting()
+        player.play(.lock)
+        engine.flush()
+        #expect(output.played.isEmpty)
+        try await waitUntil { engine.flush(); return output.played == [.lock] }
+    }
+
     @Test func conversionResamplesToTheOutputRate() throws {
         let url = try #require(AppResources.url("start", ext: SoundEffect.fileExtension, subdirectory: "Sounds"))
         let file = try AVAudioFile(forReading: url)
@@ -335,7 +392,7 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
 
 @MainActor
 @Suite(.serialized) struct DictationCueWarmUpTests {
-    static func make(_ output: FakeCueOutput, idle: TimeInterval = 1) -> (DictationController, CueEngine) {
+    static func make(_ output: FakeCueOutput, idle: TimeInterval = 1) -> (DictationController, CueEngine, AudioRecorder) {
         let settings = AppSettings.inMemory()
         let meter = LevelMeter.preview(level: 0)
         let store = ModelStore.preview(states: [.parakeet: .ready], lastErrors: [:])
@@ -343,8 +400,9 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
         let engine = CueEngine(idleRelease: idle, makeOutput: { output })
         let sounds = SoundPlayer(settings: settings, engine: engine)
         sounds.preload()
+        let recorder = AudioRecorder(levelMeter: meter, devices: .preview())
         let controller = DictationController(
-            settings: settings, recorder: AudioRecorder(levelMeter: meter, devices: .preview()),
+            settings: settings, recorder: recorder,
             transcription: TranscriptionService(models: store, account: account, client: OpenRouterClient()),
             models: store, account: account, history: .preview(entries: []), inserter: .inert(),
             hotkeys: .preview(), permissions: .preview(mic: .granted, ax: .granted), sounds: sounds,
@@ -352,13 +410,20 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
         controller.captureDevice = FakeRecorder()
         controller.copyOverride = { _ in }
         controller.runsTimers = false
-        return (controller, engine)
+        // Wires the recorder's events (the mic's first audio).
+        controller.start()
+        return (controller, engine, recorder)
     }
 
-    @Test func keyDownWarmsTheOutputBeforeTheStartCue() {
+    /// The pill and the mic come first: the output (AirPods wake for ~450 ms, and Core Audio calls wait for them)
+    /// starts once the mic delivers audio, still ahead of the start cue.
+    @Test func keyDownWarmsTheOutputOnceTheMicHasStarted() {
         let output = FakeCueOutput()
-        let (controller, engine) = Self.make(output)
+        let (controller, engine, recorder) = Self.make(output)
         controller.send(.pttDown)
+        engine.flush()
+        #expect(output.calls == [.load])
+        recorder.onEvent?(.firstBuffer)
         engine.flush()
         #expect(output.isRunning)
         #expect(output.played.isEmpty)
@@ -369,10 +434,13 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
         #expect(!output.calledOnMain)
     }
 
-    @Test func aHandsFreeStartWarmsTheOutputToo() {
+    @Test func aHandsFreeStartsLockCueWaitsForTheMicToo() {
         let output = FakeCueOutput()
-        let (controller, engine) = Self.make(output)
+        let (controller, engine, recorder) = Self.make(output)
         controller.send(.handsFreeToggle)
+        engine.flush()
+        #expect(output.calls == [.load])
+        recorder.onEvent?(.firstBuffer)
         engine.flush()
         #expect(output.played == [.lock])
         #expect(output.calls.prefix(2) == [.load, .start])
@@ -380,8 +448,9 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
 
     @Test func theOutputStaysUpWhileRecordingAndIdlesOutAfter() async throws {
         let output = FakeCueOutput()
-        let (controller, engine) = Self.make(output, idle: 0.1)
+        let (controller, engine, recorder) = Self.make(output, idle: 0.1)
         controller.send(.handsFreeToggle)
+        recorder.onEvent?(.firstBuffer)
         #expect(controller.activity == .recording)
         try await Task.sleep(for: .milliseconds(300))
         engine.flush()

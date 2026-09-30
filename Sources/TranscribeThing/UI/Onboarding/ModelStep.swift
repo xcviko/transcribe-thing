@@ -524,7 +524,7 @@ private struct PreparingRow: View {
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 let elapsed = context.date.timeIntervalSince(since)
                 HStack(spacing: 0) {
-                    Text("Optimizing for this Mac’s Neural Engine… usually under a minute")
+                    Text("Loading model into memory… usually under a minute")
                     if elapsed >= 20 {
                         Text(" · \(Fmt.duration(elapsed))")
                             .monospacedDigit()

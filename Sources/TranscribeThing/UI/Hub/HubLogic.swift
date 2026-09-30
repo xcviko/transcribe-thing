@@ -390,7 +390,7 @@ struct EngineSummary: Equatable {
             switch localState {
             case .ready, .installed: return EngineSummary(name: name, status: "Ready", tone: .positive)
             case .downloading(let p): return EngineSummary(name: name, status: "Downloading \(p.percent)%", tone: .progress)
-            case .preparing: return EngineSummary(name: name, status: "Optimizing…", tone: .progress)
+            case .preparing: return EngineSummary(name: name, status: "Loading model…", tone: .progress)
             case .notInstalled: return EngineSummary(name: name, status: "Not downloaded", tone: .negative)
             case .failed: return EngineSummary(name: name, status: ModelFailure(localError).label, tone: .negative)
             }
@@ -564,7 +564,7 @@ enum HubAttention {
             case .preparing:
                 items.append(AttentionItem(
                     id: "model", tone: .progress, symbol: "cpu", title: "Getting \(input.engine.shortName) ready",
-                    body: "Optimizing for your Mac. This takes about half a minute after installing or updating.",
+                    body: "Loading the model into memory. After installing it or updating macOS, this takes about half a minute.",
                     actionTitle: "View", action: .openModels, isIndeterminate: true))
             case .failed(let message):
                 let title = ModelFailure(input.localError) == .load ? "Couldn’t load \(name)" : "\(name) didn’t finish downloading"

@@ -38,8 +38,10 @@ protocol CueOutput: AnyObject {
 ///
 /// A cue that waits behind a (re)start still plays once the output runs, unless it is more than
 /// `maxLateness` late and is one of the key-feedback cues: those confirm a press or a paste the user has already
-/// seen, and that late they would land mid-sentence in the next recording. Notice cues always play: their toast
-/// is still on screen and the sound is what draws the eye to it.
+/// seen, and that late they would land mid-sentence in the next recording. The start cues are the exception: a
+/// dictation's start plays up to `maxStartLateness` late (AirPods take ~450 ms to wake) as long as no key-feedback
+/// cue was asked for after it, so the recording it confirms is still the one running. Notice cues always play:
+/// their toast is still on screen and the sound is what draws the eye to it.
 ///
 /// Threading: public methods are safe from any thread and never block; everything else runs on `queue`.
 final class CueEngine: @unchecked Sendable {
@@ -47,12 +49,18 @@ final class CueEngine: @unchecked Sendable {
     static let maxLateness: TimeInterval = 0.3
     /// Cues that are dropped rather than played more than `maxLateness` late.
     static let keyFeedback: Set<SoundEffect> = [.start, .stop, .lock, .paste, .cancel, .modelSwitch]
+    /// Cues that start a dictation: late, they still play while nothing newer was asked for.
+    static let startCues: Set<SoundEffect> = [.start, .lock]
+    static let maxStartLateness: TimeInterval = 1.5
 
     private let queue = DispatchQueue(label: "dev.transcribe-thing.audio.cues", qos: .userInteractive)
     private let idleDelay: TimeInterval
     private let makeOutput: @Sendable () -> CueOutput
     /// Loaded cue lengths, read on the main actor for ducking.
     private let durations = OSAllocatedUnfairLock<[SoundEffect: TimeInterval]>(initialState: [:])
+    /// Counts key-feedback cues as they're asked for (on the caller's thread), so a late start cue can tell whether
+    /// a newer one came after it.
+    private let keyFeedbackRequests = OSAllocatedUnfairLock<UInt64>(initialState: 0)
 
     // Queue state.
     private var output: CueOutput?
@@ -84,7 +92,8 @@ final class CueEngine: @unchecked Sendable {
 
     /// `requestedAt`: `DispatchTime` uptime in ns when the cue was asked for (lateness is measured from it).
     func play(_ effect: SoundEffect, requestedAt: UInt64 = DispatchTime.now().uptimeNanoseconds) {
-        queue.async { self.playOnQueue(effect, requestedAt: requestedAt) }
+        let request = Self.keyFeedback.contains(effect) ? keyFeedbackRequests.withLock { $0 += 1; return $0 } : nil
+        queue.async { self.playOnQueue(effect, requestedAt: requestedAt, request: request) }
     }
 
     /// Starts the output ahead of a cue that is about to play.
@@ -121,13 +130,14 @@ final class CueEngine: @unchecked Sendable {
         durations.withLock { $0 = loaded }
     }
 
-    private func playOnQueue(_ effect: SoundEffect, requestedAt: UInt64) {
+    private func playOnQueue(_ effect: SoundEffect, requestedAt: UInt64, request: UInt64?) {
         Self.checkOffMain("play")
         guard let output else { return }
         defer { scheduleRelease() }
         guard ensureRunning() else { return }
         let late = Self.milliseconds(since: requestedAt)
-        if Double(late) > Self.maxLateness * 1000, Self.keyFeedback.contains(effect) {
+        if Double(late) > Self.maxLateness * 1000, Self.keyFeedback.contains(effect),
+           !isCurrentStart(effect, late: late, request: request) {
             Log.app.debug("Cue \(effect.rawValue, privacy: .public) dropped: \(late) ms late")
             return
         }
@@ -136,6 +146,14 @@ final class CueEngine: @unchecked Sendable {
             return
         }
         Log.app.debug("Cue \(effect.rawValue, privacy: .public) scheduled in \(Self.milliseconds(since: requestedAt)) ms")
+    }
+
+    /// A start cue within `maxStartLateness` with no key-feedback cue asked for since.
+    private func isCurrentStart(_ effect: SoundEffect, late: Int, request: UInt64?) -> Bool {
+        guard Self.startCues.contains(effect), Double(late) <= Self.maxStartLateness * 1000, let request else {
+            return false
+        }
+        return keyFeedbackRequests.withLock { $0 } == request
     }
 
     private func warmUpOnQueue() {

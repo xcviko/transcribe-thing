@@ -116,7 +116,7 @@ final class MenuBuilder {
             case .ready, .installed:
                 return EngineStatus(text: "Ready", color: Palette.success)
             case .preparing:
-                return EngineStatus(text: "Optimizing…", color: Palette.warning)
+                return EngineStatus(text: "Loading model…", color: Palette.warning)
             case .downloading(let progress):
                 return EngineStatus(text: "Downloading \(progress.percent)%", color: Palette.accent)
             case .notInstalled:

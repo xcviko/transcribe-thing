@@ -6,7 +6,7 @@ enum LocalModelState: Equatable, Sendable {
     case downloading(DownloadProgress)
     /// On disk, not loaded.
     case installed
-    /// Loading / Core ML specialization ("Optimizing for your Mac").
+    /// Loading / Core ML specialization ("Loading model").
     case preparing(since: Date)
     case ready
     /// Last download or load error message.

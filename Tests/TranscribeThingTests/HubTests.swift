@@ -161,7 +161,7 @@ import Testing
     @Test func summaryChip() {
         #expect(EngineSummary.make(engine: .parakeet, localState: .ready, keyStatus: .missing)
             == EngineSummary(name: "Parakeet v3", status: "Ready", tone: .positive))
-        #expect(EngineSummary.make(engine: .parakeet, localState: .preparing(since: Date()), keyStatus: .missing).status == "Optimizing…")
+        #expect(EngineSummary.make(engine: .parakeet, localState: .preparing(since: Date()), keyStatus: .missing).status == "Loading model…")
         #expect(EngineSummary.make(engine: .parakeet, localState: .downloading(DownloadProgress(fraction: 0.42)), keyStatus: .missing).status
             == "Downloading 42%")
         #expect(EngineSummary.make(engine: .geminiFlash, localState: .notInstalled, keyStatus: .missing)
@@ -395,7 +395,7 @@ import Testing
         #expect(EngineSummary.make(choice: .cleanup, parakeet: .parakeet, localState: .ready, keyStatus: .missing)
             == EngineSummary(name: "Parakeet + Luna", status: "Needs key", tone: .warning))
         #expect(EngineSummary.make(choice: .cleanup, parakeet: .parakeet, localState: .preparing(since: Date()),
-                                   keyStatus: .missing).status == "Optimizing…", "Parakeet first")
+                                   keyStatus: .missing).status == "Loading model…", "Parakeet first")
         #expect(EngineSummary.make(choice: .gemini, parakeet: .parakeet, localState: .notInstalled,
                                    keyStatus: .valid(KeyInfo()))
             == EngineSummary(name: "Gemini Flash", status: "Ready", tone: .positive))

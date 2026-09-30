@@ -10,6 +10,12 @@ final class SoundPlayer {
     private let settings: AppSettings
     private let engine: CueEngine
     private var isPreloaded = false
+    /// Cues (nil: a warm-up) asked for while a mic starts, with when; nil while no mic is starting.
+    private var heldForMic: [(effect: SoundEffect?, requestedAt: UInt64)]?
+    private var micWait: Task<Void, Never>?
+
+    /// How long cues wait for a starting mic's first audio before they go anyway.
+    static let micStartWait: Duration = .milliseconds(300)
 
     /// Lengths of the bundled WAVs (scripts/gen-sounds.py); used until the files are loaded.
     static let nominalDurations: [SoundEffect: TimeInterval] = [
@@ -32,14 +38,51 @@ final class SoundPlayer {
     /// Returns at once; the cue plays on the engine's queue.
     func play(_ effect: SoundEffect) {
         guard isPreloaded, settings.soundsEnabled else { return }
-        engine.play(effect)
+        if heldForMic != nil {
+            heldForMic?.append((effect, DispatchTime.now().uptimeNanoseconds))
+        } else {
+            engine.play(effect)
+        }
     }
 
     /// A press is starting: get the output running before its start cue. With sounds off there is nothing to
     /// warm (and no reason to wake AirPods).
     func warmUp() {
         guard isPreloaded, settings.soundsEnabled else { return }
-        engine.warmUp()
+        if heldForMic != nil {
+            heldForMic?.append((nil, DispatchTime.now().uptimeNanoseconds))
+        } else {
+            engine.warmUp()
+        }
+    }
+
+    /// A mic is starting: cues and warm-ups wait for its first audio (`captureStarted()`), at most
+    /// `micStartWait`. Waking AirPods keeps Core Audio busy for ~450 ms, and a mic start or a Core Audio call
+    /// made meanwhile waits for it: the recording would start late and the pill's first frame with it.
+    func captureStarting() {
+        guard isPreloaded else { return }
+        if heldForMic == nil { heldForMic = [] }
+        micWait?.cancel()
+        micWait = Task { [weak self] in
+            try? await Task.sleep(for: Self.micStartWait)
+            guard !Task.isCancelled else { return }
+            self?.captureStarted()
+        }
+    }
+
+    /// The mic delivers audio (or gave up): what waited for it goes to the engine, in order.
+    func captureStarted() {
+        micWait?.cancel()
+        micWait = nil
+        guard let held = heldForMic else { return }
+        heldForMic = nil
+        for item in held {
+            if let effect = item.effect {
+                engine.play(effect, requestedAt: item.requestedAt)
+            } else {
+                engine.warmUp()
+            }
+        }
     }
 
     /// While a dictation records or waits for its text, the output stays up between its cues.

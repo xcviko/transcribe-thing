@@ -711,7 +711,7 @@ private struct ModelRow: View {
                 HStack(spacing: 8) {
                     TimelineView(.periodic(from: since, by: 1)) { context in
                         let elapsed = context.date.timeIntervalSince(since)
-                        Text("Optimizing for your Mac… usually under a minute" + (elapsed >= 20 ? " · \(Fmt.duration(elapsed))" : ""))
+                        Text("Loading model into memory… up to a minute the first time" + (elapsed >= 20 ? " · \(Fmt.duration(elapsed))" : ""))
                             .typeface(.callout)
                             .monospacedDigit()
                             .foregroundStyle(.inkSecondary)
