@@ -1468,7 +1468,8 @@ final class DictationController {
         case .openRouterKeyLimit: "Your OpenRouter key hit its spending limit."
         case .openRouterRateLimited: "OpenRouter is rate-limiting requests. Try again in a moment."
         case .openRouterServer: "OpenRouter ran into a problem."
-        case .offline: "You’re offline."
+        case .offline: "Couldn’t reach OpenRouter. Check your internet or VPN."
+        case .regionBlocked: "It isn’t available in your region. Turn on your VPN."
         default: nil
         }
     }

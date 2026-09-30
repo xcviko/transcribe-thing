@@ -112,6 +112,12 @@ enum PillSnapshots {
             SnapshotEntry("pill-toast-cloud-speech", width: 640, height: 270) { _ in
                 CanvasScene(model: .preview(phase: .error), notices: [PillSnapshotFixtures.cloudSpeechRateLimited])
             },
+            SnapshotEntry("pill-toast-no-connection", width: 640, height: 270) { _ in
+                CanvasScene(model: .preview(phase: .error), notices: [PillSnapshotFixtures.noConnection])
+            },
+            SnapshotEntry("pill-toast-region", width: 640, height: 270) { _ in
+                CanvasScene(model: .preview(phase: .error), notices: [PillSnapshotFixtures.regionBlocked])
+            },
             SnapshotEntry("pill-toast-transcript", width: 640, height: 340) { _ in
                 CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.switchedApps])
             },
@@ -194,6 +200,10 @@ enum PillSnapshotFixtures {
     /// Cloud speech errors name the model and offer the same model on this Mac first.
     static let cloudSpeechRateLimited = AppError.openRouterRateLimited(retryAfter: nil)
         .notice(recordingID: UUID(), fallbackEngine: .parakeet, engine: .parakeetCloud)
+
+    /// OpenRouter out of reach (a VPN that stopped), and a VPN that went off where Gemini isn't served.
+    static let noConnection = AppError.offline.notice(recordingID: UUID(), fallbackEngine: .parakeet)
+    static let regionBlocked = AppError.regionBlocked.notice(recordingID: UUID(), fallbackEngine: .parakeet)
 
     static let truncated = AppError.openRouterTruncated(
         "So the plan for Thursday is to move the design review to the afternoon so Maya can join, and then so the plan for Thursday is to move the design review to the afternoon so Maya can join, and then so the plan for Thursday is")

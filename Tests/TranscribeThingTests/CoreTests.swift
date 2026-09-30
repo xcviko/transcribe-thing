@@ -611,7 +611,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
     }
 
     @Test func errorDescriptionCombinesTitleAndBody() {
-        #expect(AppError.offline.localizedDescription == "You’re offline. Gemini needs the internet.")
+        #expect(AppError.offline.localizedDescription == "No connection. Couldn’t reach OpenRouter. Check your internet or VPN.")
     }
 }
 

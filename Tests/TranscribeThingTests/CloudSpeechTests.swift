@@ -865,15 +865,16 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
                                                                               engine: engine)
             #expect(notice.title == "Gemini is rate-limited")
         }
-        #expect(AppError.offline.localizedDescription == "You’re offline. Gemini needs the internet.")
+        #expect(AppError.regionBlocked.notice(recordingID: nil, fallbackEngine: nil).title
+            == "Gemini isn’t available in your region")
     }
 
     @Test func speechCopyNamesTheEngine() {
         #expect(AppError.openRouterProviderUnavailable("x").notice(recordingID: nil, fallbackEngine: nil,
                                                                    engine: .parakeetCloud).title
             == "Parakeet v3 · Cloud is unavailable")
-        #expect(AppError.offline.notice(recordingID: nil, fallbackEngine: nil, engine: .parakeetCloud).body
-            == "Parakeet v3 · Cloud needs the internet.")
+        #expect(AppError.regionBlocked.notice(recordingID: nil, fallbackEngine: nil, engine: .parakeetCloud).title
+            == "Parakeet v3 · Cloud isn’t available in your region")
         #expect(AppError.timeout(.parakeetCloud).notice(recordingID: nil, fallbackEngine: nil).body
             == "OpenRouter didn’t answer in time.")
     }

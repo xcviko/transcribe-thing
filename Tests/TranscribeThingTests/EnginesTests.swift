@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import os
 import Testing
 @testable import TranscribeThing
 
@@ -187,6 +188,14 @@ struct OKBodyCase: Sendable, CustomTestStringConvertible {
         .init(504, "<html><body>Gateway timeout</body></html>", .timeout(.geminiFlash)),
         .init(524, "", .timeout(.geminiFlash)),
         .init(529, #"{"error":{"code":529,"message":"Overloaded"}}"#, .openRouterProviderUnavailable("Overloaded")),
+        // A VPN that went off: Google answers from its own JSON, inside OpenRouter's error as a string.
+        .init(400, #"{"error":{"code":400,"message":"Provider returned error","metadata":{"raw":"{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"User location is not supported for the API use.\",\n    \"status\": \"FAILED_PRECONDITION\"\n  }\n}","provider_name":"Google AI Studio"}}}"#,
+              .regionBlocked),
+        .init(403, #"{"error":{"code":403,"message":"Country, region, or territory not supported","metadata":{"provider_name":"OpenAI"}}}"#,
+              .regionBlocked),
+        // A provider's raw error that is an object never makes the rest unreadable.
+        .init(403, #"{"error":{"code":403,"message":"Key is disabled","metadata":{"raw":{"detail":"x"}}}}"#,
+              .openRouterRefused("Key is disabled")),
     ]
 
     @Test(arguments: httpCases)
@@ -194,6 +203,13 @@ struct OKBodyCase: Sendable, CustomTestStringConvertible {
         let error = OpenRouterErrorMapper.httpError(status: testCase.status, data: Data(testCase.body.utf8),
                                                     retryAfter: testCase.retryAfter, engine: .geminiFlash)
         #expect(error == testCase.expected)
+    }
+
+    /// The same refusal as an error inside a stream.
+    @Test func aStreamedErrorFromABlockedRegionSaysSo() throws {
+        let body = try JSONDecoder().decode(OpenRouterAPIError.self, from: Data(
+            #"{"code":400,"message":"Provider returned error","metadata":{"raw":"User location is not supported for the API use."}}"#.utf8))
+        #expect(OpenRouterErrorMapper.map(body, status: 200, retryAfter: nil, engine: .geminiFlash) == .regionBlocked)
     }
 
     static let okCases: [OKBodyCase] = [
@@ -303,6 +319,10 @@ final class StubURLProtocol: URLProtocol {
         var staysOpen = false
         /// Seconds between one piece and the next (a model writing as it goes); 0 sends them all at once.
         var pieceInterval: TimeInterval = 0
+        /// Nothing ever comes back, not even the response (a VPN that stopped): only cancelling ends it.
+        var hangs = false
+        /// Seconds before the response (a model busy before it starts).
+        var responseDelay: TimeInterval = 0
 
         /// `sse` streamed as OpenRouter does, one event per piece, or in pieces of `pieceLength` bytes that cut through
         /// lines and characters alike.
@@ -373,6 +393,15 @@ final class StubURLProtocol: URLProtocol {
             client?.urlProtocol(self, didFailWithError: URLError(code))
             return
         }
+        if reply.hangs { return }
+        guard reply.responseDelay > 0 else { return respond(reply, url: url) }
+        DispatchQueue.global().asyncAfter(deadline: .now() + reply.responseDelay) {
+            guard !self.isStopped else { return }
+            self.respond(reply, url: url)
+        }
+    }
+
+    private func respond(_ reply: Reply, url: URL) {
         let response = HTTPURLResponse(url: url, statusCode: reply.status, httpVersion: "HTTP/1.1",
                                        headerFields: reply.headers)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
@@ -400,13 +429,14 @@ final class StubURLProtocol: URLProtocol {
     override func stopLoading() { stopLock.withLock { stopped = true } }
 
     /// A client whose requests go to a host unique to the calling test.
-    static func client(_ replies: [Reply]) -> (OpenRouterClient, String) {
+    static func client(_ replies: [Reply], connectionWatch: ConnectionWatch? = nil) -> (OpenRouterClient, String) {
         let host = "stub-\(UUID().uuidString.lowercased()).test"
         registry.enqueue(replies, host: host)
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [StubURLProtocol.self]
         let client = OpenRouterClient(session: URLSession(configuration: config),
-                                      baseURL: URL(string: "https://\(host)/api/v1")!, retryDelay: 0.01)
+                                      baseURL: URL(string: "https://\(host)/api/v1")!, retryDelay: 0.01,
+                                      connectionWatch: connectionWatch)
         return (client, host)
     }
 }
@@ -818,6 +848,46 @@ final class ProgressLog: @unchecked Sendable {
         task.cancel()
         await #expect(throws: CancellationError.self) { try await task.value }
         #expect(StubURLProtocol.registry.requests(for: host).count == 1)
+    }
+
+    /// A VPN that stopped: nothing comes back, and the connection check can't reach OpenRouter either, so the request
+    /// ends as offline within seconds instead of waiting out its stall timeout.
+    @Test func aRequestThatCantReachOpenRouterEndsAsOffline() async throws {
+        let watch = ConnectionWatch(probeAfter: 0.2, probeAgainAfter: 5) { false }
+        let (client, _) = StubURLProtocol.client([.init(hangs: true)], connectionWatch: watch)
+        let route = try #require(CleanupModel.gpt6Luna.route)
+        let started = ContinuousClock.now
+        await #expect(throws: AppError.offline) {
+            try await client.cleanUp(transcript: "raw", route: route, systemPrompt: "Tidy.", apiKey: "k", timeout: 60)
+        }
+        #expect(started.duration(to: .now) < .seconds(5))
+    }
+
+    /// The speech endpoint answers all at once: the same check covers its wait.
+    @Test func aSpeechRequestThatCantReachOpenRouterEndsAsOffline() async throws {
+        let watch = ConnectionWatch(probeAfter: 0.2, probeAgainAfter: 5) { false }
+        let (client, _) = StubURLProtocol.client([.init(hangs: true)], connectionWatch: watch)
+        await #expect(throws: AppError.offline) {
+            try await client.transcribeSpeech(audio: Fixtures.wav, format: "wav", model: "nvidia/parakeet-tdt-0.6b-v3",
+                                              apiKey: "k", timeout: 60)
+        }
+    }
+
+    /// A busy model: OpenRouter answers the check, so the request goes on and gets its answer.
+    @Test func aSlowAnswerGoesOnWhileOpenRouterAnswersTheCheck() async throws {
+        let probes = OSAllocatedUnfairLock(initialState: 0)
+        let watch = ConnectionWatch(probeAfter: 0.2, probeAgainAfter: 0.3) {
+            probes.withLock { $0 += 1 }
+            return true
+        }
+        var reply = StubURLProtocol.Reply.stream(SSE.answer("Tidied."))
+        reply.responseDelay = 1
+        let (client, _) = StubURLProtocol.client([reply], connectionWatch: watch)
+        let route = try #require(CleanupModel.gpt6Luna.route)
+        let cleaned = try await client.cleanUp(transcript: "raw", route: route, systemPrompt: "Tidy.", apiKey: "k",
+                                               timeout: 60)
+        #expect(cleaned.text == "Tidied.")
+        #expect(probes.withLock { $0 } >= 1)
     }
 
     /// What goes on the wire: streamed, Gemini's reasoning included for its count, the clean-up's left out.

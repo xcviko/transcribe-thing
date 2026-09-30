@@ -737,7 +737,7 @@ private struct KeyStatusLine: View {
         case .noCredit:
             return ("exclamationmark.triangle.fill", "Key works, but the account has no credit. Add credits at openrouter.ai/credits.", .warning)
         case .offline:
-            return ("wifi.slash", "You’re offline. We’ll check the key when you’re back.", .neutral)
+            return ("wifi.slash", "No connection. We’ll check the key when it’s back.", .neutral)
         case .failed(let message):
             return ("exclamationmark.triangle.fill", "Couldn’t check the key: \(message)", .warning)
         }

@@ -536,8 +536,26 @@ struct OpenRouterAPIError: Decodable, Equatable {
         let errorType: String?
         let limitSource: String?
         let providerName: String?
+        /// The provider's own error, as it sent it (Google's JSON inside a string); nil when it isn't a string.
+        let raw: String?
         enum CodingKeys: String, CodingKey {
-            case errorType = "error_type", limitSource = "limit_source", providerName = "provider_name"
+            case errorType = "error_type", limitSource = "limit_source", providerName = "provider_name", raw
+        }
+
+        init(errorType: String? = nil, limitSource: String? = nil, providerName: String? = nil, raw: String? = nil) {
+            self.errorType = errorType
+            self.limitSource = limitSource
+            self.providerName = providerName
+            self.raw = raw
+        }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            errorType = try container.decodeIfPresent(String.self, forKey: .errorType)
+            limitSource = try container.decodeIfPresent(String.self, forKey: .limitSource)
+            providerName = try container.decodeIfPresent(String.self, forKey: .providerName)
+            // Some providers' raw error is an object: it never makes the whole error unreadable.
+            raw = try? container.decodeIfPresent(String.self, forKey: .raw)
         }
     }
 }
@@ -588,6 +606,19 @@ enum OpenRouterErrorMapper {
     /// How a 400 says the request is too large to take (lowercased).
     static let tooLargePhrases = ["payload size", "request entity too large", "request too large"]
 
+    /// How providers say they serve no requests from the user's country (lowercased): Google's "User location is
+    /// not supported for the API use.", OpenAI's `unsupported_country_region_territory`.
+    static let regionBlockPhrases = ["user location is not supported", "location is not supported for the api",
+                                     "unsupported_country_region_territory",
+                                     "country, region, or territory not supported",
+                                     "not available in your region", "not available in your country",
+                                     "not supported in your region", "not supported in your country"]
+
+    static func isRegionBlock(_ text: String) -> Bool {
+        let lowered = text.lowercased()
+        return regionBlockPhrases.contains(where: lowered.contains)
+    }
+
     /// What a refusal of an upload's format names (whole words, lowercased)…
     static let audioFormatSubjects = ["format", "formats", "file type", "filetype", "media type", "mime", "mimetype",
                                       "content type", "codec", "codecs", "decode", "decoding", "decoded"]
@@ -628,6 +659,8 @@ enum OpenRouterErrorMapper {
 
     /// Maps a non-200 response (body may be JSON, HTML or empty).
     static func httpError(status: Int, data: Data, retryAfter: Double?, engine: EngineID) -> AppError {
+        // Wherever in the body it says so (the provider's error is JSON inside a string), in any status.
+        if isRegionBlock(String(decoding: data.prefix(16 * 1024), as: UTF8.self)) { return .regionBlocked }
         if let envelope = try? JSONDecoder().decode(OpenRouterErrorEnvelope.self, from: data) {
             return map(envelope.error, status: status, retryAfter: retryAfter, engine: engine)
         }
@@ -638,7 +671,10 @@ enum OpenRouterErrorMapper {
     /// Maps an error object (top level or inside a choice). `status` is the HTTP status, used when the object
     /// carries no numeric code.
     static func map(_ body: OpenRouterAPIError, status: Int, retryAfter: Double?, engine: EngineID) -> AppError {
-        map(status: body.code?.intValue ?? status, message: body.message ?? "",
+        if isRegionBlock([body.message, body.metadata?.raw].compactMap { $0 }.joined(separator: " ")) {
+            return .regionBlocked
+        }
+        return map(status: body.code?.intValue ?? status, message: body.message ?? "",
             errorType: body.metadata?.errorType, limitSource: body.metadata?.limitSource,
             retryAfter: retryAfter, engine: engine)
     }

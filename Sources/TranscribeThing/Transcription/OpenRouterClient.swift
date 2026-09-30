@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 extension URLSession {
     /// Shared session for OpenRouter calls: no cookies or disk cache, fail fast when offline.
@@ -15,6 +16,68 @@ extension URLSession {
         config.urlCache = nil
         return URLSession(configuration: config)
     }()
+}
+
+/// Tells a request that's slow from one that can't get through. After `probeAfter` without a byte from OpenRouter,
+/// `probe` checks on a fresh connection whether OpenRouter can be reached at all: when it can't (no network, or a VPN
+/// that stopped and takes everything with it), the request ends at once as `offline` instead of waiting out its
+/// stall timeout (minutes). When it can, the model is just busy: the request goes on, checked again after
+/// `probeAgainAfter` more of silence.
+struct ConnectionWatch: Sendable {
+    var probeAfter: TimeInterval = 5
+    var probeAgainAfter: TimeInterval = 20
+    /// True when OpenRouter answers at all.
+    var probe: @Sendable () async -> Bool
+
+    /// Any answer from OpenRouter, the 401 of a request without a key included (no key is sent), within 4 s. A fresh
+    /// session each time: a pooled connection could be the one that died.
+    static func openRouter(baseURL: URL) -> ConnectionWatch {
+        ConnectionWatch { () async -> Bool in
+            let config = URLSessionConfiguration.ephemeral
+            config.waitsForConnectivity = false
+            config.timeoutIntervalForRequest = 4
+            config.timeoutIntervalForResource = 5
+            config.urlCache = nil
+            let session = URLSession(configuration: config)
+            defer { session.finishTasksAndInvalidate() }
+            var request = URLRequest(url: baseURL.appendingPathComponent("key"))
+            request.httpMethod = "GET"
+            do {
+                _ = try await session.data(for: request)
+                return true
+            } catch {
+                return false
+            }
+        }
+    }
+
+    /// Returns only by throwing: `offline` when OpenRouter can't be reached, `CancellationError` once the request
+    /// it watches is over.
+    func watch(_ activity: ConnectionActivity) async throws {
+        let tick = Duration.seconds(min(1, probeAfter / 2))
+        var probedAt: ContinuousClock.Instant?
+        while true {
+            try await Task.sleep(for: tick)
+            guard activity.silence >= .seconds(probeAfter) else { continue }
+            if let probedAt, probedAt.duration(to: .now) < .seconds(probeAgainAfter) { continue }
+            probedAt = .now
+            let reachable = await probe()
+            try Task.checkCancellation()
+            guard reachable else {
+                Log.net.info("OpenRouter can't be reached after \(activity.silence.components.seconds) s without a byte")
+                throw OpenRouterClient.AttemptFailure(error: .offline, retryable: false, retryAfter: nil)
+            }
+        }
+    }
+}
+
+/// When OpenRouter last sent anything to a request (its response, a streamed line).
+final class ConnectionActivity: Sendable {
+    private let last = OSAllocatedUnfairLock(initialState: ContinuousClock.now)
+
+    func touch() { last.withLock { $0 = .now } }
+
+    var silence: Duration { last.withLock { $0.duration(to: .now) } }
 }
 
 struct CloudResult: Sendable, Equatable {
@@ -78,17 +141,21 @@ final class OpenRouterClient: Sendable {
     private let session: URLSession
     private let baseURL: URL
     private let retryDelay: TimeInterval
+    /// nil: requests wait out their stall timeouts (tests that don't test this).
+    private let connectionWatch: ConnectionWatch?
 
     init(session: URLSession = .openRouterCloud) {
         self.session = session
         self.baseURL = URL(string: "https://openrouter.ai/api/v1")!
         self.retryDelay = 1.5
+        self.connectionWatch = .openRouter(baseURL: baseURL)
     }
 
-    init(session: URLSession, baseURL: URL, retryDelay: TimeInterval) {
+    init(session: URLSession, baseURL: URL, retryDelay: TimeInterval, connectionWatch: ConnectionWatch? = nil) {
         self.session = session
         self.baseURL = baseURL
         self.retryDelay = retryDelay
+        self.connectionWatch = connectionWatch
     }
 
     static func base64Length(ofByteCount count: Int) -> Int { (count + 2) / 3 * 4 }
@@ -201,7 +268,7 @@ final class OpenRouterClient: Sendable {
                                refused: (AppError) -> any Error) async throws -> CloudResult {
         try await withRetry {
             let started = ContinuousClock.now
-            let (data, http) = try await send(request, engine: engine)
+            let (data, http) = try await watching { _ in try await self.send(request, engine: engine) }
             guard http.statusCode == 200 else {
                 let failure = Self.statusFailure(http, body: data, engine: engine)
                 if OpenRouterErrorMapper.refusesAudioFormat(status: http.statusCode, body: data) {
@@ -232,16 +299,19 @@ final class OpenRouterClient: Sendable {
     private func streamWithRetry(_ request: URLRequest, engine: EngineID,
                                  progress: (@Sendable (ChatStreamProgress) -> Void)?) async throws -> CloudResult {
         try await withRetry {
-            try await stream(request, engine: engine, progress: progress)
+            try await watching { activity in
+                try await self.stream(request, engine: engine, progress: progress, activity: activity)
+            }
         }
     }
 
     /// One attempt of `streamWithRetry`. A failure before the 200 is retried like any request's; one inside the
     /// stream only when it came quickly and before any of the answer: the model's work is never thrown away.
-    private func stream(_ request: URLRequest, engine: EngineID,
-                        progress: (@Sendable (ChatStreamProgress) -> Void)?) async throws -> CloudResult {
+    private func stream(_ request: URLRequest, engine: EngineID, progress: (@Sendable (ChatStreamProgress) -> Void)?,
+                        activity: ConnectionActivity) async throws -> CloudResult {
         let started = ContinuousClock.now
         let (bytes, http) = try await open(request, engine: engine)
+        activity.touch()
         guard http.statusCode == 200 else {
             let body = try await Self.prefix(of: bytes, limit: 64 * 1024)
             throw Self.statusFailure(http, body: body, engine: engine)
@@ -260,6 +330,7 @@ final class OpenRouterClient: Sendable {
         }
         /// One line into the stream; true once it has said it's done.
         func take(_ line: String) -> Bool {
+            activity.touch()
             let before = stream.progress
             if stream.consume(line) {
                 let firstReasoning = before.reasoningCharacters == 0 && stream.progress.reasoningCharacters > 0
@@ -310,6 +381,26 @@ final class OpenRouterClient: Sendable {
         if result.generationID == nil { result.generationID = Self.header("X-Generation-Id", in: http) }
         result.timeToFirstToken = firstToken
         return result
+    }
+
+    /// Runs one attempt under `connectionWatch`: it ends as `offline` as soon as the watch finds OpenRouter
+    /// unreachable, and the watch ends with it.
+    private func watching<T: Sendable>(_ attempt: @escaping @Sendable (ConnectionActivity) async throws -> T)
+        async throws -> T {
+        let activity = ConnectionActivity()
+        guard let connectionWatch else { return try await attempt(activity) }
+        return try await withThrowingTaskGroup(of: T?.self) { group in
+            group.addTask { try await attempt(activity) }
+            group.addTask {
+                try await connectionWatch.watch(activity)
+                return nil
+            }
+            defer { group.cancelAll() }
+            while let next = try await group.next() {
+                if let next { return next }
+            }
+            throw CancellationError()
+        }
     }
 
     /// Runs `attempt`, and once more after a pause when it fails with a retryable `AttemptFailure` whose wait is
@@ -464,7 +555,7 @@ final class OpenRouterClient: Sendable {
 
     // MARK: Transport
 
-    private struct AttemptFailure: Error {
+    fileprivate struct AttemptFailure: Error {
         let error: AppError
         var retryable: Bool
         let retryAfter: Double?
@@ -516,7 +607,7 @@ final class OpenRouterClient: Sendable {
         case .networkConnectionLost:
             AttemptFailure(error: .openRouterServer("The connection to OpenRouter was lost."), retryable: true, retryAfter: nil)
         case .cannotConnectToHost:
-            AttemptFailure(error: .openRouterServer("Couldn’t connect to OpenRouter."), retryable: false, retryAfter: nil)
+            AttemptFailure(error: .offline, retryable: false, retryAfter: nil)
         default:
             AttemptFailure(error: .openRouterServer(error.localizedDescription), retryable: false, retryAfter: nil)
         }

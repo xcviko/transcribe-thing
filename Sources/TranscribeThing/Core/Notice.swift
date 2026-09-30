@@ -217,7 +217,11 @@ enum AppError: Error, Equatable, Sendable {
     /// the partial text, empty when it wrote none.
     case openRouterTruncated(String)
     case timeout(EngineID)
+    /// OpenRouter can't be reached: no network, or one that goes nowhere (a VPN that stopped).
     case offline
+    /// The provider serves no requests from where the user is (Google's "User location is not supported"): a VPN
+    /// that went off.
+    case regionBlocked
     /// Not a failure: the recording had no speech (too little voice for the recorder, or an engine that answered
     /// with no text). An info notice, never a history entry or a retry.
     case noSpeech
@@ -230,7 +234,7 @@ enum AppError: Error, Equatable, Sendable {
         case .microphoneDisconnected,
              .modelDownloading, .modelPreparing, .modelLoadFailed,
              .openRouterRateLimited, .openRouterProviderUnavailable, .openRouterServer, .openRouterTruncated,
-             .timeout, .offline, .engineFailed:
+             .timeout, .offline, .regionBlocked, .engineFailed:
             true
         case .microphonePermissionDenied, .noMicrophone, .microphoneNotResponding, .microphoneSilent,
              .accessibilityMissing, .modelNotDownloaded, .downloadFailed, .notEnoughDisk,
@@ -268,7 +272,7 @@ enum AppError: Error, Equatable, Sendable {
              .openRouterMissingKey, .openRouterKeyUnreadable, .openRouterInvalidKey, .openRouterNoCredits,
              .openRouterKeyLimit, .openRouterRateLimited, .openRouterNoRoute, .openRouterProviderUnavailable,
              .openRouterRefused, .openRouterBadRequest, .openRouterServer, .openRouterTruncated, .timeout, .offline,
-             .engineFailed, .recordingTooLarge:
+             .regionBlocked, .engineFailed, .recordingTooLarge:
             true
         case .microphonePermissionDenied, .noMicrophone, .microphoneNotResponding, .microphoneDisconnected,
              .microphoneSilent, .accessibilityMissing, .downloadFailed, .notEnoughDisk, .noSpeech:
@@ -305,6 +309,7 @@ enum AppError: Error, Equatable, Sendable {
         case .openRouterTruncated: "openRouterTruncated"
         case .timeout(let e): "timeout.\(e.rawValue)"
         case .offline: "offline"
+        case .regionBlocked: "regionBlocked"
         case .noSpeech: "noSpeech"
         case .engineFailed(let e, _): "engineFailed.\(e.rawValue)"
         case .recordingTooLarge: "recordingTooLarge"
@@ -620,8 +625,13 @@ extension AppError {
             return Copy(symbol: "hourglass", title: "\(e.shortName) took too long", body: body)
         case .offline:
             return Copy(symbol: "wifi.slash",
-                        title: "You’re offline",
-                        body: "\(cloud.service) needs the internet.",
+                        title: "No connection",
+                        body: "Couldn’t reach OpenRouter. Check your internet or VPN.",
+                        order: .fallbackFirst, offersSwitch: true)
+        case .regionBlocked:
+            return Copy(symbol: "globe",
+                        title: "\(cloud.service) isn’t available in your region",
+                        body: "Turn on your VPN and try again.",
                         order: .fallbackFirst, offersSwitch: true)
         case .noSpeech:
             return Copy(style: .info, symbol: "waveform",

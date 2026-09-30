@@ -173,7 +173,7 @@ struct OpenRouterKeyCard: View {
                 checkAgain
             }
         case .offline:
-            status("wifi.slash", .inkTertiary, "You’re offline. We’ll check the key when you’re back.")
+            status("wifi.slash", .inkTertiary, "No connection. We’ll check the key when it’s back.")
         case .failed(let message):
             HStack(spacing: 8) {
                 status("exclamationmark.circle.fill", .warning,
