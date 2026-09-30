@@ -10,6 +10,8 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
 
     struct State {
         var calls: [Call] = []
+        /// When each cue played (uptime ns).
+        var playTimes: [UInt64] = []
         var isRunning = false
         var calledOnMain = false
         /// A device change made the graph stale and nothing has rebuilt it yet.
@@ -85,6 +87,7 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
 
     func play(_ effect: SoundEffect) -> Bool {
         record(.play(effect))
+        state.withLock { $0.playTimes.append(DispatchTime.now().uptimeNanoseconds) }
         return isRunning
     }
 
@@ -317,31 +320,23 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
         #expect(output.played == [.error, .lock])
     }
 
-    /// AirPods take ~450 ms to wake: a dictation's start cue still plays that late, while the dictation it
-    /// confirms is the latest thing the user did.
-    @Test func aLateStartCuePlaysUntilSomethingNewerIsAskedFor() {
-        let output = FakeCueOutput()
-        let (_, engine) = Self.make(output)
-        let now = DispatchTime.now().uptimeNanoseconds
-        let late = now - UInt64((CueEngine.maxLateness + 0.2) * 1e9)
-        engine.play(.start, requestedAt: late)
-        engine.flush()
-        engine.play(.lock, requestedAt: late)
-        engine.flush()
-        #expect(output.played == [.start, .lock])
-
-        // Released while the output wakes: the stop cue came after the start, which no longer confirms anything.
+    /// AirPods take ~450 ms to wake: the cues asked for meanwhile play once they're up, as far apart as they were
+    /// asked for, so fn then ⇥ is still two cues.
+    @Test func cuesAskedForWhileTheOutputWakesKeepTheirSpacing() async throws {
         let gate = DispatchSemaphore(value: 0)
-        let waking = FakeCueOutput(startGate: gate)
-        let (_, wakingEngine) = Self.make(waking)
-        wakingEngine.play(.start, requestedAt: late)
-        wakingEngine.play(.stop, requestedAt: now)
-        // Other late key feedback, and a start past `maxStartLateness`, never play.
-        wakingEngine.play(.paste, requestedAt: late)
-        wakingEngine.play(.start, requestedAt: now - UInt64((CueEngine.maxStartLateness + 0.2) * 1e9))
+        let output = FakeCueOutput(startGate: gate)
+        let (_, engine) = Self.make(output)
+        engine.warmUp()
+        try await waitUntil { output.calls.contains(.start) }
+        engine.play(.start)
+        try await Task.sleep(for: .milliseconds(150))
+        engine.play(.modelSwitch)
+        try await Task.sleep(for: .milliseconds(100))
         gate.signal()
-        wakingEngine.flush()
-        #expect(waking.played == [.stop])
+        try await waitUntil { output.played == [.start, .modelSwitch] }
+        let times = output.state.withLock { $0.playTimes }
+        let gap = Double(times[1] - times[0]) / 1e6
+        #expect(gap >= 120, "\(gap) ms apart")
     }
 
     /// Waking AirPods while a mic starts would hold the mic (and the main thread's Core Audio calls) up: the
