@@ -28,8 +28,8 @@ final class PillPanel: NSPanel {
         isExcludedFromWindowsMenu = true
         animationBehavior = .none
         ignoresMouseEvents = true
-        // Never in screenshots, screen shares or recordings (Wispr parity).
-        sharingType = .none
+        // In screenshots, recordings and screen shares, like any window.
+        sharingType = .readOnly
     }
 
     override var canBecomeKey: Bool { false }

@@ -226,6 +226,11 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(PillVisibility.needsPanel(showsPill: false, toastCount: 1))
         #expect(!PillVisibility.needsPanel(showsPill: false, toastCount: 0))
     }
+
+    /// The pill and its toasts show in screenshots, recordings and screen shares.
+    @Test @MainActor func thePanelShowsInScreenCaptures() {
+        #expect(PillPanel(size: CGSize(width: 10, height: 10)).sharingType == .readOnly)
+    }
 }
 
 // MARK: - Pill model
