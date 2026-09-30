@@ -427,8 +427,13 @@ final class OpenRouterClient: Sendable {
         let retryAfter = OpenRouterErrorMapper.retryAfter(http.value(forHTTPHeaderField: "Retry-After"))
         let error = OpenRouterErrorMapper.httpError(status: http.statusCode, data: body, retryAfter: retryAfter,
                                                     engine: engine)
-        return AttemptFailure(error: error, retryable: retryableStatuses.contains(http.statusCode)
-                                  && error.isTransientCloudFailure, retryAfter: retryAfter)
+        let server = header("Server", in: http) ?? "?"
+        let excerpt = String(decoding: body.prefix(300), as: UTF8.self).split(whereSeparator: \.isNewline).joined(separator: " ")
+        Log.net.error("OpenRouter HTTP \(http.statusCode) from \(server, privacy: .public) (\(error.code, privacy: .public)): \(excerpt, privacy: .public)")
+        // A firewall's no never reached OpenRouter: nothing was billed, and its verdict can change a moment later.
+        let retryable = (retryableStatuses.contains(http.statusCode) && error.isTransientCloudFailure)
+            || error == .connectionBlocked
+        return AttemptFailure(error: error, retryable: retryable, retryAfter: retryAfter)
     }
 
     /// The start of an error body (enough for its JSON), read off a stream.

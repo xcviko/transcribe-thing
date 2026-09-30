@@ -222,6 +222,9 @@ enum AppError: Error, Equatable, Sendable {
     /// The provider serves no requests from where the user is (Google's "User location is not supported"): a VPN
     /// that went off.
     case regionBlocked
+    /// OpenRouter's firewall (Cloudflare) turned the connection away before OpenRouter saw the request: a 403
+    /// `{"success": false, "error": "Access denied by security policy."}`, usually for a VPN's address.
+    case connectionBlocked
     /// Not a failure: the recording had no speech (too little voice for the recorder, or an engine that answered
     /// with no text). An info notice, never a history entry or a retry.
     case noSpeech
@@ -234,7 +237,7 @@ enum AppError: Error, Equatable, Sendable {
         case .microphoneDisconnected,
              .modelDownloading, .modelPreparing, .modelLoadFailed,
              .openRouterRateLimited, .openRouterProviderUnavailable, .openRouterServer, .openRouterTruncated,
-             .timeout, .offline, .regionBlocked, .engineFailed:
+             .timeout, .offline, .regionBlocked, .connectionBlocked, .engineFailed:
             true
         case .microphonePermissionDenied, .noMicrophone, .microphoneNotResponding, .microphoneSilent,
              .accessibilityMissing, .modelNotDownloaded, .downloadFailed, .notEnoughDisk,
@@ -258,7 +261,7 @@ enum AppError: Error, Equatable, Sendable {
     var stopsEveryCloudModel: Bool {
         switch self {
         case .openRouterMissingKey, .openRouterKeyUnreadable, .openRouterInvalidKey, .openRouterNoCredits,
-             .openRouterKeyLimit, .offline:
+             .openRouterKeyLimit, .offline, .connectionBlocked:
             true
         default:
             false
@@ -272,7 +275,7 @@ enum AppError: Error, Equatable, Sendable {
              .openRouterMissingKey, .openRouterKeyUnreadable, .openRouterInvalidKey, .openRouterNoCredits,
              .openRouterKeyLimit, .openRouterRateLimited, .openRouterNoRoute, .openRouterProviderUnavailable,
              .openRouterRefused, .openRouterBadRequest, .openRouterServer, .openRouterTruncated, .timeout, .offline,
-             .regionBlocked, .engineFailed, .recordingTooLarge:
+             .regionBlocked, .connectionBlocked, .engineFailed, .recordingTooLarge:
             true
         case .microphonePermissionDenied, .noMicrophone, .microphoneNotResponding, .microphoneDisconnected,
              .microphoneSilent, .accessibilityMissing, .downloadFailed, .notEnoughDisk, .noSpeech:
@@ -310,6 +313,7 @@ enum AppError: Error, Equatable, Sendable {
         case .timeout(let e): "timeout.\(e.rawValue)"
         case .offline: "offline"
         case .regionBlocked: "regionBlocked"
+        case .connectionBlocked: "connectionBlocked"
         case .noSpeech: "noSpeech"
         case .engineFailed(let e, _): "engineFailed.\(e.rawValue)"
         case .recordingTooLarge: "recordingTooLarge"
@@ -627,6 +631,11 @@ extension AppError {
             return Copy(symbol: "wifi.slash",
                         title: "No connection",
                         body: "Couldn’t reach OpenRouter. Check your internet or VPN.",
+                        order: .fallbackFirst, offersSwitch: true)
+        case .connectionBlocked:
+            return Copy(symbol: "shield.slash",
+                        title: "OpenRouter blocked the connection",
+                        body: "Its firewall turned away your network’s address, often a VPN’s. Try another VPN server.",
                         order: .fallbackFirst, offersSwitch: true)
         case .regionBlocked:
             return Copy(symbol: "globe",

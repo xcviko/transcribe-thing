@@ -1470,6 +1470,7 @@ final class DictationController {
         case .openRouterServer: "OpenRouter ran into a problem."
         case .offline: "Couldn’t reach OpenRouter. Check your internet or VPN."
         case .regionBlocked: "It isn’t available in your region. Turn on your VPN."
+        case .connectionBlocked: "OpenRouter’s firewall turned your network away. Try another VPN server."
         default: nil
         }
     }

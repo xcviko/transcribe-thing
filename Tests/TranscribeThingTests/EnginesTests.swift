@@ -193,6 +193,14 @@ struct OKBodyCase: Sendable, CustomTestStringConvertible {
               .regionBlocked),
         .init(403, #"{"error":{"code":403,"message":"Country, region, or territory not supported","metadata":{"provider_name":"OpenAI"}}}"#,
               .regionBlocked),
+        // OpenRouter's Cloudflare, before OpenRouter sees the request: its JSON, or its block page.
+        .init(403, #"{ "success": false, "error": "Access denied by security policy." }"#, .connectionBlocked),
+        .init(403, "<!DOCTYPE html><html><head><title>Attention Required! | Cloudflare</title></head></html>",
+              .connectionBlocked),
+        // Someone else's JSON reads as its sentence, never as JSON.
+        .init(403, #"{"success":false,"error":"Forbidden here"}"#, .openRouterRefused("Forbidden here")),
+        .init(418, #"{"message":"I'm a teapot"}"#, .openRouterBadRequest("I'm a teapot")),
+        .init(403, #"{"success":false,"code":7}"#, .openRouterRefused("")),
         // A provider's raw error that is an object never makes the rest unreadable.
         .init(403, #"{"error":{"code":403,"message":"Key is disabled","metadata":{"raw":{"detail":"x"}}}}"#,
               .openRouterRefused("Key is disabled")),
@@ -870,6 +878,23 @@ final class ProgressLog: @unchecked Sendable {
         await #expect(throws: AppError.offline) {
             try await client.transcribeSpeech(audio: Fixtures.wav, format: "wav", model: "nvidia/parakeet-tdt-0.6b-v3",
                                               apiKey: "k", timeout: 60)
+        }
+    }
+
+    /// OpenRouter's firewall said no before OpenRouter saw anything: nothing was billed, so it's asked once more.
+    @Test func aFirewallBlockIsTriedOnceMore() async throws {
+        let blocked = StubURLProtocol.Reply(status: 403, headers: ["Server": "cloudflare"],
+                                            body: #"{ "success": false, "error": "Access denied by security policy." }"#)
+        let (client, host) = StubURLProtocol.client([blocked, .stream(SSE.answer("Tidied."))])
+        let route = try #require(CleanupModel.gpt6Luna.route)
+        let cleaned = try await client.cleanUp(transcript: "raw", route: route, systemPrompt: "Tidy.", apiKey: "k",
+                                               timeout: 12)
+        #expect(cleaned.text == "Tidied.")
+        #expect(StubURLProtocol.registry.requests(for: host).count == 2)
+
+        let (twice, _) = StubURLProtocol.client([blocked, blocked])
+        await #expect(throws: AppError.connectionBlocked) {
+            try await twice.cleanUp(transcript: "raw", route: route, systemPrompt: "Tidy.", apiKey: "k", timeout: 12)
         }
     }
 

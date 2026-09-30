@@ -619,6 +619,30 @@ enum OpenRouterErrorMapper {
         return regionBlockPhrases.contains(where: lowered.contains)
     }
 
+    /// OpenRouter's Cloudflare turning the connection away before OpenRouter sees it: its JSON (`{"success": false,
+    /// "error": "Access denied by security policy."}`) or a 403 block page.
+    static func isFirewallBlock(status: Int, text: String) -> Bool {
+        let lowered = text.lowercased()
+        if lowered.contains("access denied by security policy") { return true }
+        let isPage = lowered.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("<")
+        return status == 403 && isPage && lowered.contains("cloudflare")
+    }
+
+    /// A readable sentence from an error body that isn't OpenRouter's: a JSON object's `error`, `message` or
+    /// `detail` (or `error.message`), plain text as it is, and nothing from HTML or other JSON.
+    static func plainMessage(from data: Data) -> String {
+        let text = String(decoding: data.prefix(4096), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let nested = (object["error"] as? [String: Any])?["message"]
+            for value in [object["error"], object["message"], object["detail"], nested] {
+                if let message = value as? String, !message.isEmpty { return message }
+            }
+            return ""
+        }
+        if text.hasPrefix("<") || text.hasPrefix("{") || text.hasPrefix("[") { return "" }
+        return String(text.prefix(300))
+    }
+
     /// What a refusal of an upload's format names (whole words, lowercased)…
     static let audioFormatSubjects = ["format", "formats", "file type", "filetype", "media type", "mime", "mimetype",
                                       "content type", "codec", "codecs", "decode", "decoding", "decoded"]
@@ -660,12 +684,13 @@ enum OpenRouterErrorMapper {
     /// Maps a non-200 response (body may be JSON, HTML or empty).
     static func httpError(status: Int, data: Data, retryAfter: Double?, engine: EngineID) -> AppError {
         // Wherever in the body it says so (the provider's error is JSON inside a string), in any status.
-        if isRegionBlock(String(decoding: data.prefix(16 * 1024), as: UTF8.self)) { return .regionBlocked }
+        let text = String(decoding: data.prefix(16 * 1024), as: UTF8.self)
+        if isRegionBlock(text) { return .regionBlocked }
+        if isFirewallBlock(status: status, text: text) { return .connectionBlocked }
         if let envelope = try? JSONDecoder().decode(OpenRouterErrorEnvelope.self, from: data) {
             return map(envelope.error, status: status, retryAfter: retryAfter, engine: engine)
         }
-        let text = String(decoding: data.prefix(300), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        return map(status: status, message: text.hasPrefix("<") ? "" : text, errorType: nil, retryAfter: retryAfter, engine: engine)
+        return map(status: status, message: plainMessage(from: data), errorType: nil, retryAfter: retryAfter, engine: engine)
     }
 
     /// Maps an error object (top level or inside a choice). `status` is the HTTP status, used when the object

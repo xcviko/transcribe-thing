@@ -118,6 +118,9 @@ enum PillSnapshots {
             SnapshotEntry("pill-toast-region", width: 640, height: 270) { _ in
                 CanvasScene(model: .preview(phase: .error), notices: [PillSnapshotFixtures.regionBlocked])
             },
+            SnapshotEntry("pill-toast-firewall", width: 640, height: 270) { _ in
+                CanvasScene(model: .preview(phase: .error), notices: [PillSnapshotFixtures.connectionBlocked])
+            },
             SnapshotEntry("pill-toast-transcript", width: 640, height: 340) { _ in
                 CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.switchedApps])
             },
@@ -204,6 +207,8 @@ enum PillSnapshotFixtures {
     /// OpenRouter out of reach (a VPN that stopped), and a VPN that went off where Gemini isn't served.
     static let noConnection = AppError.offline.notice(recordingID: UUID(), fallbackEngine: .parakeet)
     static let regionBlocked = AppError.regionBlocked.notice(recordingID: UUID(), fallbackEngine: .parakeet)
+    /// OpenRouter's firewall turning a VPN's address away.
+    static let connectionBlocked = AppError.connectionBlocked.notice(recordingID: UUID(), fallbackEngine: .parakeet)
 
     static let truncated = AppError.openRouterTruncated(
         "So the plan for Thursday is to move the design review to the afternoon so Maya can join, and then so the plan for Thursday is to move the design review to the afternoon so Maya can join, and then so the plan for Thursday is")
