@@ -496,10 +496,9 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
                 for action in notice.actions {
                     switch action.kind {
                     case .retry:
-                        #expect(recordingID != nil && error.isRetryable, "\(error): Retry without retained audio")
-                    case .retryWith(let engine):
-                        #expect(recordingID != nil && fallback == engine, "\(error): Retry with unexpected engine")
-                        #expect(action.title == "Retry with \(engine.shortName)")
+                        #expect(recordingID != nil, "\(error): Retry without retained audio")
+                    case .retryWith:
+                        Issue.record("\(error): a failure's Retry is always the same model")
                     case .selectEngine(let engine):
                         #expect(recordingID == nil && fallback == engine)
                     default:
@@ -519,10 +518,15 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         #expect(NSImage(systemSymbolName: symbol, accessibilityDescription: nil) != nil, "Missing SF Symbol \(symbol)")
     }
 
-    @Test func retryableCloudFailureOffersRetryThenFallback() {
+    /// Retry is the same model, never another one ("Retry with Parakeet v3"): that's the user's call, from History.
+    @Test func aCloudFailureOffersRetryWithTheSameModel() {
         let notice = AppError.timeout(.geminiFlash).notice(recordingID: UUID(), fallbackEngine: .parakeet)
-        #expect(notice.actions.map(\.title) == ["Retry", "Retry with Parakeet v3"])
-        #expect(notice.actions.map(\.kind) == [.retry, .retryWith(.parakeet)])
+        #expect(notice.actions.map(\.title) == ["Retry"])
+        #expect(notice.actions.map(\.kind) == [.retry])
+        for error in [AppError.openRouterRefused("x"), .regionBlocked, .connectionBlocked, .offline] {
+            #expect(error.notice(recordingID: UUID(), fallbackEngine: .parakeet).actions.map(\.kind) == [.retry],
+                    "\(error.code)")
+        }
         #expect(notice.style == .error)
         #expect(notice.sound == .error)
         #expect(notice.lifetime == .seconds(10))
@@ -545,7 +549,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         #expect(notice.title == "Gemini stopped before finishing")
         #expect(notice.body == "It ran out of room before writing any text. Your recording is saved.")
         #expect(notice.transcript == nil)
-        #expect(notice.actions.map(\.kind) == [.retry, .retryWith(.parakeet)])
+        #expect(notice.actions.map(\.kind) == [.retry])
         #expect(notice.sound == .alert)
     }
 
@@ -564,7 +568,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
 
     @Test func keyProblemsLeadWithTheFix() {
         let invalid = AppError.openRouterInvalidKey("401").notice(recordingID: UUID(), fallbackEngine: .parakeet)
-        #expect(invalid.actions.map(\.title) == ["Update Key", "Retry with Parakeet v3"])
+        #expect(invalid.actions.map(\.title) == ["Update Key", "Retry"])
         let missing = AppError.openRouterMissingKey.notice(recordingID: nil, fallbackEngine: .parakeet)
         #expect(missing.actions.map(\.kind) == [.openHub(.models), .selectEngine(.parakeet)])
     }
@@ -573,7 +577,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         let noAudio = AppError.engineFailed(.parakeet, "x").notice(recordingID: nil, fallbackEngine: .parakeetCloud)
         #expect(!noAudio.actions.contains { $0.kind == .retry })
         let silent = AppError.microphoneSilent.notice(recordingID: UUID(), fallbackEngine: .parakeet)
-        #expect(!silent.actions.contains { if case .retryWith = $0.kind { true } else { false } })
+        #expect(!silent.actions.contains { $0.kind == .retry })
         #expect(AppError.noSpeech.notice(recordingID: UUID(), fallbackEngine: .parakeet).actions.isEmpty)
     }
 
@@ -602,8 +606,8 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
     }
 
     @Test func fallbackEqualToTheFailingEngineIsIgnored() {
-        let notice = AppError.engineFailed(.parakeet, "x").notice(recordingID: UUID(), fallbackEngine: .parakeet)
-        #expect(!notice.actions.contains { if case .retryWith = $0.kind { true } else { false } })
+        let notice = AppError.engineFailed(.parakeet, "x").notice(recordingID: nil, fallbackEngine: .parakeet)
+        #expect(!notice.actions.contains { if case .selectEngine = $0.kind { true } else { false } })
     }
 
     @Test func criticalNoticesAreSticky() {

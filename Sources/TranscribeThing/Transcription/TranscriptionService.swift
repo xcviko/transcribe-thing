@@ -33,6 +33,8 @@ struct TranscriptResult: Sendable, Equatable {
     /// The files the audio went to OpenRouter as, one per request that answered (each of Parakeet's segments); empty
     /// for the local model. Not kept in history.
     var uploads: [AudioUpload] = []
+    /// How Gemini's answer held its transcript (`TaggedTranscript`). Not kept in history.
+    var answerTags: TaggedTranscript.Tags? = nil
 
     /// Everything known about how this result came about, for its history version.
     func metadata(createdAt: Date = Date()) -> TranscriptMetadata {
@@ -108,6 +110,7 @@ final class TranscriptionService {
                 result.audioSeconds = cloud.audioSeconds
                 result.reasoningCharacters = cloud.reasoningCharacters
                 result.timeToFirstToken = cloud.timeToFirstToken
+                result.answerTags = cloud.answerTags
                 result.uploads = cloud.uploads
             }
             result.text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)

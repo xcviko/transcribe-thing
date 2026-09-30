@@ -358,18 +358,16 @@ extension AppError {
             actions.append(NoticeAction(title: title, kind: kind, isPrimary: actions.isEmpty))
         }
 
-        let canRetry = hasAudio && isRetryable
+        // Retry is always the same model, wherever another one could have helped too: switching models for this
+        // recording is the user's call, from History (Transcribe With).
+        let canRetry = hasAudio && (isRetryable || fallbackCanHelp) && self != .recordingTooLarge
         let retryTitle = if case .microphoneDisconnected = self { "Transcribe It" } else { "Retry" }
-        let retryWith: (String, NoticeActionKind)? = if hasAudio, fallbackCanHelp, let fallback {
-            ("Retry with \(fallback.shortName)", .retryWith(fallback))
-        } else { nil }
         let switchEngine: (String, NoticeActionKind)? = if !hasAudio, copy.offersSwitch, let fallback {
             ("Use \(fallback.shortName)", .selectEngine(fallback))
         } else { nil }
 
         func addRetry() { if canRetry { add(retryTitle, .retry) } }
         func addFallbacks() {
-            if let retryWith { add(retryWith.0, retryWith.1) }
             if let switchEngine { add(switchEngine.0, switchEngine.1) }
         }
 
@@ -390,7 +388,7 @@ extension AppError {
         }
 
         var body = copy.body
-        let offersRetry = actions.contains { if case .retry = $0.kind { true } else if case .retryWith = $0.kind { true } else { false } }
+        let offersRetry = actions.contains { $0.kind == .retry }
         if offersRetry && !(body ?? "").contains("recording is saved") {
             body = [body, "Your recording is saved."].compactMap { $0 }.joined(separator: " ")
         }

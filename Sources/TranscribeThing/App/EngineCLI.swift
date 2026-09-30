@@ -277,6 +277,7 @@ enum EngineCLI {
                 print("PROVIDER: \(provider ?? "unknown")\(expected)")
             }
             print(last.text.isEmpty ? "NO SPEECH" : "TEXT: \(last.text)")
+            if let tags = last.answerTags { print("TAGS: \(tags.rawValue)") }
             if let best = runTimes.min() { print("TRANSCRIBE: first \(format(runTimes[0], digits: 3)) s · best \(format(best, digits: 3)) s") }
             if options.cleanUp, !last.text.isEmpty {
                 let model = options.cleanupModel ?? .default

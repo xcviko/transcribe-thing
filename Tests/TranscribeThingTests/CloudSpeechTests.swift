@@ -818,7 +818,7 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         #expect(notice.actions.map(\.kind) == [.openHub(.models), .selectEngine(.parakeet)])
     }
 
-    @Test func aFailedCloudDictationOffersTheSameModelOnThisMacFirst() async throws {
+    @Test func aFailedCloudDictationOffersRetryWithTheSameModel() async throws {
         let h = DictationControllerTests.make(models: [.parakeet: .ready], keyStatus: .valid(KeyInfo()))
         h.controller.transcribeOverride = { _, _ in throw AppError.openRouterRateLimited(retryAfter: nil) }
         let recording = DictationControllerTests.recording()
@@ -826,7 +826,7 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         try await waitUntil { h.history.entry(id: recording.id)?.status == .failed }
         let notice = try #require(h.toasts.notices.first { $0.recordingID == recording.id })
         #expect(notice.title == "Parakeet v3 · Cloud is rate-limited")
-        #expect(notice.actions.contains { $0.kind == .retryWith(.parakeet) })
+        #expect(notice.actions.map(\.kind) == [.retry], "the same model: another one is the user's call")
         #expect(h.history.entry(id: recording.id)?.errorMessage == "Parakeet v3 · Cloud is rate-limited")
     }
 }
@@ -848,15 +848,15 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         }
     }
 
-    /// Nothing is refused up front, so "too large" is always OpenRouter's word, for Gemini as for Parakeet, and the
-    /// model on this Mac is offered first.
+    /// Nothing is refused up front, so "too large" is always OpenRouter's word, for Gemini as for Parakeet. The same
+    /// model would refuse it again: no Retry, the body says what takes it.
     @Test(arguments: [EngineID.geminiFlash, .parakeetCloud])
     func tooLargeIsWhatOpenRouterSaid(_ engine: EngineID) {
         let notice = AppError.recordingTooLarge.notice(recordingID: UUID(), fallbackEngine: .parakeet, engine: engine)
         #expect(notice.title == "Too large to send to OpenRouter")
         #expect(notice.body?.hasPrefix(
             "OpenRouter refused this recording as too large. Parakeet v3 on this Mac takes any length.") == true)
-        #expect(notice.primaryAction?.kind == .retryWith(.parakeet))
+        #expect(!notice.actions.contains { $0.kind == .retry })
     }
 
     @Test func geminiCopyIsUnchanged() {

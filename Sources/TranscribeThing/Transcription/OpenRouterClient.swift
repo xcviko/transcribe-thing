@@ -104,6 +104,8 @@ struct CloudResult: Sendable, Equatable {
     var timeToFirstToken: TimeInterval?
     /// The files the audio went as, one per request that answered (set by `TranscriptionService`).
     var uploads: [AudioUpload] = []
+    /// How Gemini's answer held its transcript (`TaggedTranscript`); nil for the other endpoints.
+    var answerTags: TaggedTranscript.Tags?
 
     var reasoningTokens: Int? { usage?.reasoningTokens }
 }
@@ -198,7 +200,16 @@ final class OpenRouterClient: Sendable {
             throw AppError.openRouterBadRequest("Couldn’t build the request.")
         }
         let request = makeTranscriptionRequest(body: body, apiKey: key, timeout: timeout)
-        let result = try await streamWithRetry(request, engine: engine, progress: progress)
+        var result: CloudResult
+        do {
+            result = try await streamWithRetry(request, engine: engine, progress: progress)
+        } catch AppError.openRouterTruncated(let partial) {
+            throw AppError.openRouterTruncated(TaggedTranscript.extract(partial).text)
+        }
+        (result.text, result.answerTags) = TaggedTranscript.extract(result.text)
+        if result.answerTags != .pair {
+            Log.net.info("Gemini's answer had tags: \(result.answerTags?.rawValue ?? "?", privacy: .public)")
+        }
         if let provider = result.provider, provider != "Google AI Studio" {
             Log.net.warning("Unexpected OpenRouter provider: \(provider, privacy: .public)")
         }

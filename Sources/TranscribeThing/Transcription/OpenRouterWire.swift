@@ -560,6 +560,45 @@ struct OpenRouterAPIError: Decodable, Equatable {
     }
 }
 
+/// Gemini puts the transcript between `<transcript>` tags (`EngineID.geminiSystemPrompt`). Once in a while it writes
+/// its thinking into the answer instead of its reasoning, drafts in tags included: the transcript is what the last
+/// pair holds. An answer without tags (a prompt that doesn't ask for them) is the transcript as it is.
+enum TaggedTranscript {
+    static let open = "<transcript>"
+    static let close = "</transcript>"
+
+    /// What the answer had: one pair, more than one (thinking in the answer), only an opening tag (cut short), or
+    /// none.
+    enum Tags: String, Sendable, Equatable {
+        case pair, several, unclosed, none
+    }
+
+    static func extract(_ answer: String) -> (text: String, tags: Tags) {
+        let opens = ranges(of: open, in: answer), closes = ranges(of: close, in: answer)
+        let several = opens.count > 1 || closes.count > 1
+        if let closing = closes.last {
+            let start = opens.last { $0.upperBound <= closing.lowerBound }?.upperBound ?? answer.startIndex
+            return (trimmed(answer[start..<closing.lowerBound]), several ? .several : .pair)
+        }
+        if let opening = opens.last { return (trimmed(answer[opening.upperBound...]), .unclosed) }
+        return (answer, .none)
+    }
+
+    private static func ranges(of tag: String, in text: String) -> [Range<String.Index>] {
+        var found: [Range<String.Index>] = []
+        var from = text.startIndex
+        while let range = text.range(of: tag, options: .caseInsensitive, range: from..<text.endIndex) {
+            found.append(range)
+            from = range.upperBound
+        }
+        return found
+    }
+
+    private static func trimmed(_ text: Substring) -> String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
 /// `GET /api/v1/key` → `data`.
 struct OpenRouterKeyInfo: Decodable {
     let label: String?

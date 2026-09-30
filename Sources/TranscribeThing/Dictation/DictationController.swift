@@ -1092,9 +1092,8 @@ final class DictationController {
         let file = history.saveAudio(recording)
         retain(recording)
         if job.cleansUp { cleanupIDs.insert(job.id) }
-        // A downloaded model that isn't loaded yet loads for the retry, so it counts too.
-        let fallback = usableFallback(excluding: job.engine, after: error)
-        let notice = error.notice(recordingID: job.id, fallbackEngine: fallback, engine: job.engine)
+        // Its Retry is the same model: another one for this recording is the user's call, from History.
+        let notice = error.notice(recordingID: job.id, fallbackEngine: nil, engine: job.engine)
         history.upsert(TranscriptEntry(
             id: job.id, createdAt: recording.startedAt, text: "", engine: job.engine, status: .failed,
             audioDuration: recording.duration, voicedSeconds: recording.speech.voicedSeconds,

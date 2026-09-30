@@ -2049,3 +2049,33 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
         }
     }
 }
+
+@Suite struct TaggedTranscriptTests {
+    @Test func theTranscriptIsWhatTheTagsHold() {
+        #expect(TaggedTranscript.extract("<transcript>Привет, мир.</transcript>") == ("Привет, мир.", .pair))
+        #expect(TaggedTranscript.extract("\n<transcript>\n  Hello.\n</transcript>\n") == ("Hello.", .pair))
+        #expect(TaggedTranscript.extract("<TRANSCRIPT>Hi</Transcript>") == ("Hi", .pair))
+        // No speech.
+        #expect(TaggedTranscript.extract("<transcript></transcript>") == ("", .pair))
+    }
+
+    /// Gemini wrote its thinking into the answer, drafts in tags included: the last pair is the transcript.
+    @Test func thinkingInTheAnswerKeepsOnlyTheLastPair() {
+        let answer = """
+        - User prompt specifies: transcribe only.
+        - Draft: <transcript>И давай попробуем сделать э-э кнопку</transcript>
+        Let's remove the filler words.
+        <transcript>И давай попробуем сделать кнопку.</transcript>
+        """
+        #expect(TaggedTranscript.extract(answer) == ("И давай попробуем сделать кнопку.", .several))
+    }
+
+    @Test func missingTagsAreHandled() {
+        // Cut short: everything after the opening tag.
+        #expect(TaggedTranscript.extract("<transcript>Half a sent") == ("Half a sent", .unclosed))
+        // A closing tag alone: everything before it.
+        #expect(TaggedTranscript.extract("Just this.</transcript>") == ("Just this.", .pair))
+        // No tags (a prompt that doesn't ask for them): the answer as it is.
+        #expect(TaggedTranscript.extract("Plain answer.") == ("Plain answer.", .none))
+    }
+}
