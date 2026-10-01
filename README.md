@@ -28,6 +28,7 @@ When a new version is out, the app tells you, and Update Now in General → Soft
 | Dictate without holding a key | **fn Space** to start, **fn** to finish |
 | Cancel | **esc** (Undo brings it back) |
 | Switch model while you talk | **fn ⇥** |
+| Get the message you meant, not every word (Gemini) | **fn ↩** while you talk |
 | Paste the last transcript again | **⌘ fn V** |
 
 Change any of them except esc in Shortcuts. A small pill at the bottom of the screen shows that you're recording;
@@ -42,10 +43,12 @@ History.
   languages by itself. It can also run through OpenRouter instead, for about $0.09 per hour of audio.
 - **Parakeet v3 + GPT-6 Luna** cleans up Parakeet's text before it's pasted: filler words, false starts,
   punctuation.
-- **Gemini 3.8 Flash** is the most accurate. It thinks before it writes, so it's slower.
+- **Gemini 3.8 Flash** is the most accurate. It thinks before it writes, so it's slower. It can also polish: press
+  fn ↩ while you talk, and it pastes the message you meant, without the false starts, detours and repeats.
 
 The cloud models run on your own [OpenRouter](https://openrouter.ai) key, and you pay OpenRouter per use. In Models,
-choose which model every dictation starts on, which ones fn ⇥ steps through, and each one's pill color.
+choose which model every dictation starts on, which one hands-free dictations switch to, which ones fn ⇥
+steps through, and each one's pill color.
 
 ## Your data
 
@@ -54,7 +57,7 @@ The key is in a file only you can read. Audio leaves your Mac only when a cloud 
 only when GPT-6 Luna cleans it up.
 
 History keeps every dictation with its recording until you delete it, so you can transcribe it again with another
-model. General → History can delete entries older than 1, 7, 30 or 90 days.
+model or polish it. General → History can delete entries older than 1, 7, 30 or 90 days.
 
 ## If something doesn't work
 
