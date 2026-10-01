@@ -433,8 +433,8 @@ import Testing
 
     // MARK: Hands-free's model
 
-    /// Hands-free switches to the model picked for it in Models, as Switch model would: the dictation goes there at
-    /// once, and the tick and the chip follow the lock cue. Holding the key stays on the main model.
+    /// Hands-free switches to the model picked for it in Models, as Switch model would: the dictation goes there and
+    /// the chip names it, with the lock cue as the one sound. Holding the key stays on the main model.
     @Test func handsFreeSwitchesToItsModel() async throws {
         let (rig, cues) = Self.make()
         let c = rig.h.controller
@@ -448,9 +448,8 @@ import Testing
         c.send(.handsFreeToggle)
         #expect(c.modelOverride == .gemini && c.effectiveEngine == .geminiFlash)
         #expect(rig.h.pill.sessionModel == .gemini, "the pill wears Gemini's color at once")
-        #expect(cues.played == [.lock], "the tick waits for the lock cue")
-        try await waitUntil { cues.played == [.lock, .modelSwitch] }
         #expect(rig.h.pill.engineChipPulse == pulses + 1)
+        #expect(cues.played == [.lock], "one sound: no Switch model tick")
         rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
         rig.now += 2
         c.send(.pillStop)
@@ -463,13 +462,13 @@ import Testing
     }
 
     /// Space while holding the key goes hands-free too, and switches the same way.
-    @Test func goingHandsFreeFromAHoldSwitchesToo() async throws {
+    @Test func goingHandsFreeFromAHoldSwitchesToo() {
         let (rig, cues) = Self.make()
         rig.h.settings.handsFreeModel = .gemini
         Self.hold(rig)
         rig.h.controller.handle(.handsFreeToggle)
         #expect(rig.h.controller.modelOverride == .gemini)
-        try await waitUntil { cues.played.last == .modelSwitch }
+        #expect(cues.played.last == .lock && !cues.played.contains(.modelSwitch))
         rig.h.controller.send(.pillCancel)
     }
 

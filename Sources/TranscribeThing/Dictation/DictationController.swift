@@ -120,8 +120,6 @@ final class DictationController {
     @ObservationIgnored private var deliveringJob: Job?
     /// A refusal found at key-down, reported only if the user commits to dictating (fn+← must stay silent).
     @ObservationIgnored private var pendingRefusal: AppError?
-    /// The tick and the chip of a hands-free start's switch (`switchToHandsFreeModel`), due after the lock cue.
-    @ObservationIgnored private var handsFreeSwitch: Task<Void, Never>?
     /// When the last error shake was requested (pill clicks during it open the Hub instead of recording).
     @ObservationIgnored private var lastErrorFlashAt: TimeInterval?
     /// A shake that came while the pill showed a press that hasn't committed (arming, the tap window). It
@@ -1812,9 +1810,9 @@ final class DictationController {
         rejectSwitch(blocked: blocked)
     }
 
-    /// Hands-free switches to `AppSettings.handsFreeModel` as it starts, as if Switch model had stepped there right
-    /// after: the tick and the chip come once the lock cue has played. A model already picked for this dictation
-    /// (Switch model while holding the key) stays; one that can't take it now is refused as Switch model would.
+    /// Hands-free switches to `AppSettings.handsFreeModel` as it starts, as Switch model would but without its tick:
+    /// the lock cue is the one sound. A model already picked for this dictation (Switch model while holding the key)
+    /// stays; one that can't take it now is refused as Switch model would.
     private func switchToHandsFreeModel() {
         let main = settings.lineup.main
         guard let choice = settings.handsFreeModel, choice != main, modelOverride == nil else { return }
@@ -1822,24 +1820,15 @@ final class DictationController {
             rejectSwitch(blocked: [(choice, refusal)])
             return
         }
-        // The dictation goes there however soon it ends.
-        modelOverride = choice
-        let gap = sounds.duration(of: .lock)
-        handsFreeSwitch?.cancel()
-        handsFreeSwitch = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(gap))
-            guard let self, !Task.isCancelled, self.machine.isRecording, self.modelOverride == choice else { return }
-            self.switchModel(to: choice)
-            self.stateDidChange()
-        }
+        switchModel(to: choice, tick: false)
     }
 
     /// Another choice for this dictation: the pill's chip and a soft tick.
-    private func switchModel(to choice: ModelChoice?) {
+    private func switchModel(to choice: ModelChoice?, tick: Bool = true) {
         modelOverride = choice
         pillModel.engineChipPulse &+= 1
         if pillModel.showsTabHint { pillModel.showsTabHint = false }
-        playCue(.modelSwitch)
+        if tick { playCue(.modelSwitch) }
     }
 
     /// A switch that can't happen: the model stays, the pill shakes, and a notice says why. What the OpenRouter key
