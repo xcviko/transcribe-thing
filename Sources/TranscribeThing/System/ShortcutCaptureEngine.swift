@@ -59,7 +59,8 @@ struct ShortcutCaptureEngine: Equatable, Sendable {
             reset()
             return .clear
         }
-        let shortcut = Shortcut(modifiers: Self.comboKeys(snapshot), keyCode: KeyCode.canonical(keyCode))
+        // fn ↩ on a laptop keyboard arrives as Keypad Enter; `Shortcut` records it as fn ↩.
+        let shortcut = Shortcut(modifiers: Self.comboKeys(snapshot), keyCode: keyCode)
         reset()
         return .commit(shortcut)
     }

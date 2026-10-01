@@ -41,8 +41,8 @@ struct HotkeyInput: Equatable, Sendable {
 /// - Switch model (like Esc) is live only during a dictation, and it never interrupts the PTT hold: it may be
 ///   pressed with the PTT or hands-free modifiers still held (fn+Tab while holding fn), and extra modifiers on
 ///   the way to it (⌘ of ⌘⇧M) don't end the hold. Outside a dictation its keys pass through. Held down, its
-///   autorepeats step on (`cycleEngineRepeat`). Polish's shortcut is live the same way, and held down its
-///   autorepeats turn Polish on and off again and again.
+///   autorepeats step on (`cycleEngineRepeat`). Polish's shortcut is live the same way while the dictation is on
+///   Gemini, and held down its autorepeats turn Polish on and off again and again.
 /// - Swallowed keys also have their autorepeats and keyUp swallowed.
 struct HotkeyRouter: Equatable, Sendable {
     struct Config: Equatable, Sendable {
@@ -54,6 +54,9 @@ struct HotkeyRouter: Equatable, Sendable {
         /// Switch model has another model to step to (`ModelLineup.cycle`); without one its shortcut is never
         /// intercepted.
         var switchesModels = true
+        /// The dictation (or the one a held PTT starts) is on Gemini, the only model that polishes: without it Polish's
+        /// shortcut is never intercepted, and fn ↩ reaches the app as it did before Polish.
+        var polishes = true
         /// While the shortcut recorder captures keys: nothing fires and nothing is swallowed.
         var isSuspended = false
         /// Forward raw key transitions (onboarding keyboard illustration).
@@ -203,9 +206,11 @@ struct HotkeyRouter: Equatable, Sendable {
     // MARK: keyDown / keyUp
 
     private mutating func keyDown(_ input: HotkeyInput, _ config: Config) -> Decision {
-        let key = KeyCode.canonical(input.keyCode)
+        // The physical key is what's swallowed and held (its keyUp and the session's key state name it); `key`, what
+        // a shortcut means by it (fn ↩ arrives as Keypad Enter), is what's matched.
+        let physical = input.keyCode
         // A fresh press of a key we think is still down means its keyUp was lost: evaluate it again.
-        if !input.isRepeat { swallowedKeys.remove(key) }
+        if !input.isRepeat { swallowedKeys.remove(physical) }
         var decision = Decision()
         // Fn's release was lost if this key arrives without the Fn bit (see type docs): end the hold it
         // left behind before the key is matched with a phantom Fn (Space as fn+Space, ⌘V as ⌘fnV).
@@ -213,6 +218,7 @@ struct HotkeyRouter: Equatable, Sendable {
         if lostFunctionRelease { functionDown = false }
         // Key events carry authoritative device bits; Fn keeps its tracked value (see type docs).
         modifiers = ModifierSnapshot(rawFlags: input.flags, functionDown: functionDown)
+        let key = KeyCode.canonical(physical, functionDown: functionDown)
         if lostFunctionRelease {
             if modifiers.isEmpty { blockedUntilModifiersReleased = false }
             if gesture == .holdingModifiers, !(config.bindings[.pushToTalk]?.requiredModifiersHeld(modifiers) ?? false) {
@@ -221,10 +227,10 @@ struct HotkeyRouter: Equatable, Sendable {
             }
         }
 
-        if config.forwardsRawKeys, !input.isRepeat, Self.isIllustrated(key, config) {
-            decision.rawKey = RawKeyEvent(key: RawKeyEvent.Key(keyCode: key), isDown: true)
+        if config.forwardsRawKeys, !input.isRepeat, let drawn = Self.illustrated(physical, config) {
+            decision.rawKey = RawKeyEvent(key: RawKeyEvent.Key(keyCode: drawn), isDown: true)
         }
-        if swallowedKeys.contains(key) {
+        if swallowedKeys.contains(physical) {
             decision.swallow = true
             // The switch model key held down keeps stepping, and the polish key keeps turning Polish on and off, at
             // every autorepeat.
@@ -246,25 +252,25 @@ struct HotkeyRouter: Equatable, Sendable {
         // Exact matches first: Esc and switch model also match with the PTT's and hands-free's modifiers still
         // held, so a switch model bound to plain Space would otherwise take fn+Space from hands-free.
         if let handsFree = bindings[.handsFree], handsFree.matches(keyCode: key, modifiers: modifiers) {
-            consume(key, into: &decision)
+            consume(physical, into: &decision)
             if !input.isRepeat { fireChord(.handsFree, into: &decision) }
             return decision
         }
         if let pasteLast = bindings[.pasteLast], pasteLast.matches(keyCode: key, modifiers: modifiers) {
-            consume(key, into: &decision)
+            consume(physical, into: &decision)
             if !input.isRepeat { fireChord(.pasteLast, into: &decision) }
             return decision
         }
         if let ptt = bindings[.pushToTalk], ptt.keyCode == key, ptt.modifiersMatchExactly(modifiers) {
-            consume(key, into: &decision)
+            consume(physical, into: &decision)
             if !input.isRepeat, gesture == .idle {
-                gesture = .holdingKey(key)
+                gesture = .holdingKey(physical)
                 decision.events.append(.pttDown)
             }
             return decision
         }
         if isBusy(config), key == KeyCode.escape, matchesDuringDictation(.escape, bindings) {
-            consume(key, into: &decision)
+            consume(physical, into: &decision)
             if !input.isRepeat { fire(.cancel, into: &decision) }
             return decision
         }
@@ -272,7 +278,7 @@ struct HotkeyRouter: Equatable, Sendable {
             shortcut.keyCode == key && matchesDuringDictation(shortcut, bindings)
         }) {
             // Not a PTT-ending combo: the hold (and hands-free's stop-on-release) goes on.
-            consume(key, into: &decision)
+            consume(physical, into: &decision)
             if !input.isRepeat, let event = Self.event(for: action) { decision.events.append(event) }
             return decision
         }
@@ -286,14 +292,14 @@ struct HotkeyRouter: Equatable, Sendable {
     }
 
     private mutating func keyUp(_ input: HotkeyInput, _ config: Config) -> Decision {
-        let key = KeyCode.canonical(input.keyCode)
+        let physical = input.keyCode
         var decision = Decision()
-        if config.forwardsRawKeys, Self.isIllustrated(key, config) {
-            decision.rawKey = RawKeyEvent(key: RawKeyEvent.Key(keyCode: key), isDown: false)
+        if config.forwardsRawKeys, let drawn = Self.illustrated(physical, config) {
+            decision.rawKey = RawKeyEvent(key: RawKeyEvent.Key(keyCode: drawn), isDown: false)
         }
-        guard swallowedKeys.remove(key) != nil else { return decision }
+        guard swallowedKeys.remove(physical) != nil else { return decision }
         decision.swallow = true
-        if gesture == .holdingKey(key) {
+        if gesture == .holdingKey(physical) {
             gesture = .idle
             decision.events.append(.pttUp)
         }
@@ -385,12 +391,13 @@ struct HotkeyRouter: Equatable, Sendable {
     }
 
     /// The bindings live during a dictation only (a held PTT counts): Switch model with another model to switch to,
-    /// and Polish (the controller lets it do something only on Gemini, but its keys never reach the app mid-dictation).
+    /// and Polish on Gemini.
     private func liveDuringDictation(_ config: Config) -> [(action: ShortcutAction, shortcut: Shortcut)] {
         guard config.isRecording || gesture != .idle else { return [] }
         return ShortcutAction.allCases.compactMap { action in
             guard action.isDuringDictation, let shortcut = config.bindings[action] else { return nil }
             if action == .switchModel, !config.switchesModels { return nil }
+            if action == .polish, !config.polishes { return nil }
             return (action, shortcut)
         }
     }
@@ -431,9 +438,12 @@ struct HotkeyRouter: Equatable, Sendable {
     }
 
     /// Space, Esc and any key used by a binding; other keystrokes never leave the tap thread.
-    private static func isIllustrated(_ key: UInt16, _ config: Config) -> Bool {
-        if key == KeyCode.space || key == KeyCode.escape { return true }
-        return config.bindings.bindings.values.contains { $0.keyCode == key }
+    /// The key the onboarding keyboard draws for `physical`, if it draws it: Space, Esc and the bindings' keys. A
+    /// laptop keyboard has no Keypad Enter, so it's drawn as Return, down and up alike, whatever fn does in between.
+    private static func illustrated(_ physical: UInt16, _ config: Config) -> UInt16? {
+        let key = KeyCode.canonical(physical, functionDown: true)
+        if key == KeyCode.space || key == KeyCode.escape { return key }
+        return config.bindings.bindings.values.contains { $0.keyCode == key } ? key : nil
     }
 
     private static func rawModifierEvent(keyCode: UInt16, modifiers: ModifierSnapshot) -> RawKeyEvent? {

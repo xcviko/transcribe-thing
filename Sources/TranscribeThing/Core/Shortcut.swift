@@ -24,10 +24,10 @@ enum KeyCode {
     static let returnKey = UInt16(kVK_Return)           // 36
     static let keypadEnter = UInt16(kVK_ANSI_KeypadEnter) // 76
 
-    /// The key a shortcut means by `keyCode`: Keypad Enter is Return, since fn ↩ on a laptop keyboard sends Keypad
-    /// Enter (as fn ⌫ sends Forward Delete).
-    static func canonical(_ keyCode: UInt16) -> UInt16 {
-        keyCode == keypadEnter ? returnKey : keyCode
+    /// The key a shortcut means by `keyCode`: with fn held, Keypad Enter is Return, since fn ↩ on a laptop keyboard
+    /// sends Keypad Enter (as fn ⌫ sends Forward Delete). Without fn it stays the keypad's own Enter.
+    static func canonical(_ keyCode: UInt16, functionDown: Bool) -> UInt16 {
+        keyCode == keypadEnter && functionDown ? returnKey : keyCode
     }
     static let tab = UInt16(kVK_Tab)                    // 48
     static let delete = UInt16(kVK_Delete)              // 51
@@ -167,7 +167,8 @@ struct Shortcut: Codable, Hashable, Sendable {
             }
         }
         self.modifiers = Modifier.allCases.compactMap { m in byFamily[m].map { ModifierKey(m, $0) } }
-        self.keyCode = keyCode
+        // fn ↩ recorded on a laptop keyboard (older builds saved it as fn ⌤) is fn ↩.
+        self.keyCode = keyCode.map { KeyCode.canonical($0, functionDown: byFamily[.function] != nil) }
     }
 
     private enum CodingKeys: String, CodingKey { case modifiers, keyCode }
@@ -390,9 +391,13 @@ struct ShortcutBindings: Codable, Equatable, Sendable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: ActionKey.self)
         var result = Self.defaults.bindings
+        var defaulted: [ShortcutAction] = []
         for action in ShortcutAction.allCases {
             let key = ActionKey(action)
-            guard c.contains(key) else { continue }
+            guard c.contains(key) else {
+                defaulted.append(action)
+                continue
+            }
             if try c.decodeNil(forKey: key) {
                 result[action] = nil
             } else {
@@ -400,6 +405,13 @@ struct ShortcutBindings: Codable, Equatable, Sendable {
             }
         }
         bindings = result
+        // An action newer than the saved bindings starts unbound when its default is already the user's for
+        // something else (Polish's fn ↩ next to a hands-free set to fn ↩): the user's binding keeps working.
+        for action in defaulted {
+            guard let shortcut = bindings[action],
+                  let other = conflict(for: shortcut, excluding: action), !defaulted.contains(other) else { continue }
+            bindings[action] = nil
+        }
     }
 }
 

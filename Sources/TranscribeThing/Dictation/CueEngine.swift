@@ -350,10 +350,14 @@ final class AVCueOutput: CueOutput {
         onChange?()
     }
 
-    /// Nodes per cue: one restarts a cue still sounding; the Switch model tick, held down at the keyboard's
-    /// autorepeat (as fast as every 30 ms, the tick lasts 70 ms), gets enough to let every tick ring out.
+    /// Nodes per cue: one restarts a cue still sounding. The cues of keys held down at the keyboard's autorepeat (as
+    /// fast as every 30 ms) get enough to let each ring out: the Switch model tick (70 ms), and Polish's drops (90 ms,
+    /// on and off taking turns).
     static func voices(for effect: SoundEffect) -> Int {
-        effect == .modelSwitch ? 6 : 1
+        switch effect {
+        case .modelSwitch, .polishOn, .polishOff: 6
+        default: 1
+        }
     }
 
     func play(_ effect: SoundEffect) -> Bool {

@@ -39,6 +39,11 @@ final class HotkeyMonitor {
     var isRecording = false {
         didSet { if isRecording != oldValue { pushConfig() } }
     }
+    /// The model picked for the dictation being recorded (nil: the main model): Polish's shortcut is swallowed only on
+    /// Gemini.
+    var dictationModel: ModelChoice? {
+        didSet { if dictationModel != oldValue { pushConfig() } }
+    }
     /// The tap thread is running (it keeps retrying tap creation until permission arrives).
     private(set) var isRunning = false
     /// The event tap is installed and receiving events.
@@ -118,10 +123,11 @@ final class HotkeyMonitor {
     // MARK: Config
 
     /// What the tap routes with right now: Switch model is intercepted only while the lineup's cycle has another
-    /// model to step to.
+    /// model to step to, and Polish only on Gemini.
     func currentConfig() -> HotkeyRouter.Config {
         HotkeyRouter.Config(bindings: settings.shortcuts, isBusy: isBusy, isRecording: isRecording,
                             switchesModels: settings.lineup.cycle.count > 1,
+                            polishes: (dictationModel ?? settings.lineup.main) == .gemini,
                             isSuspended: suspendCount > 0, forwardsRawKeys: onRawKey != nil)
     }
 

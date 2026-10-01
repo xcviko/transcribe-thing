@@ -58,7 +58,7 @@ import Testing
 
         var failed = TranscriptEntry(text: "", engine: .geminiPro, status: .failed, audioDuration: 20, voicedSeconds: 10,
                                      audioFileName: "a.wav")
-        #expect(menu(failed).actions.map(\.kind) == EngineID.offered.map(TranscriptVersionKind.transcription))
+        #expect(menu(failed).actions.map(\.kind) == EngineID.offered.map(TranscriptVersionKind.transcription) + [.polish])
         failed.status = .cancelled
         #expect(!menu(failed).actions.contains { $0.kind.engine.isRetired || $0.kind.cleanupModel?.isRetired == true })
     }

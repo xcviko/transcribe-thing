@@ -468,7 +468,8 @@ import Testing
                                      audioFileName: "f.wav")
         let m = menu(failed)
         #expect(m.title == "Retry With" && m.isRetry && m.versions.isEmpty)
-        #expect(m.actions.map(\.kind) == EngineID.offered.map { .transcription($0) })
+        #expect(m.actions.map(\.kind) == EngineID.offered.map { .transcription($0) } + [.polish],
+                "any engine, or Polish")
         var gone = failed
         gone.audioFileName = nil
         #expect(menu(gone).actions.allSatisfy { $0.blocker == .recordingGone })

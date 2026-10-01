@@ -253,9 +253,28 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
         #expect(kb.down(kVK_Return, isRepeat: true, fnFlagged: true).events == [.polish])
         #expect(kb.up(kVK_Return, fnFlagged: true).swallow)
         #expect(kb.release(.fn).events == [.pttUp], "still the dictation's hold")
-        // Outside a dictation, fn ↩ reaches the app.
-        let idle = kb.down(kVK_Return, fnFlagged: false)
-        #expect(idle.events.isEmpty && !idle.swallow)
+        // With fn up, Return is Return.
+        let plain = kb.down(kVK_Return, fnFlagged: false)
+        #expect(plain.events.isEmpty && !plain.swallow)
+    }
+
+    /// When the dictation isn't on Gemini (the only model that polishes), fn ↩ is an fn combo like fn ←: the hold
+    /// ends and the key reaches the app, as before Polish.
+    @Test func fnReturnReachesTheAppWhenTheDictationIsntOnGemini() {
+        var kb = Keyboard()
+        kb.config.polishes = false
+        #expect(kb.press(.fn).events == [.pttDown])
+        for key in [kVK_Return, kVK_ANSI_KeypadEnter] {
+            let enter = kb.down(key, fnFlagged: true)
+            #expect(enter.events.isEmpty || enter.events == [.pttInterrupted])
+            #expect(!enter.swallow)
+            #expect(!kb.up(key, fnFlagged: true).swallow)
+        }
+        #expect(kb.release(.fn).events.isEmpty)
+        // Hands-free on Parakeet: the same keys pass.
+        kb.config.isRecording = true
+        kb.press(.fn)
+        #expect(!kb.down(kVK_ANSI_KeypadEnter, fnFlagged: true).swallow)
     }
 
     /// A laptop keyboard sends fn ↩ as Keypad Enter: it's Polish all the same, in hands-free too, and recording it
@@ -268,11 +287,34 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
         #expect(kb.up(kVK_ANSI_KeypadEnter, fnFlagged: true).swallow)
         #expect(kb.release(.fn).events == [.pttUp])
 
+        // Hands-free: fn's release before Enter's still leaves Enter's keyUp swallowed (it's the same key).
+        kb.config.isRecording = true
+        kb.press(.fn)
+        #expect(kb.down(kVK_ANSI_KeypadEnter, fnFlagged: true).events == [.polish])
+        kb.release(.fn)
+        #expect(kb.up(kVK_ANSI_KeypadEnter).swallow, "no stray keyUp reaches the app")
+
         var capture = ShortcutCaptureEngine(action: .polish)
         _ = capture.flagsChanged(keyCode: KeyCode.function, rawFlags: CGEventFlags.maskSecondaryFn.rawValue)
         let recorded = capture.keyDown(keyCode: UInt16(kVK_ANSI_KeypadEnter),
                                        rawFlags: CGEventFlags.maskSecondaryFn.rawValue, isRepeat: false)
         #expect(recorded == .commit(.fnReturn))
+    }
+
+    /// The keypad's own Enter, without fn, stays a key of its own: a shortcut on it fires on it and not on Return,
+    /// and recording it in Shortcuts gives Keypad Enter.
+    @Test func keypadEnterWithoutFnIsItsOwnKey() {
+        let keypadEnter = Shortcut(modifiers: [], keyCode: UInt16(kVK_ANSI_KeypadEnter))
+        var kb = Keyboard(bindings: bindings([.pasteLast: keypadEnter]))
+        let enter = kb.down(kVK_ANSI_KeypadEnter)
+        #expect(enter.events == [.pasteLast] && enter.swallow)
+        #expect(kb.up(kVK_ANSI_KeypadEnter).swallow)
+        let returnKey = kb.down(kVK_Return)
+        #expect(returnKey.events.isEmpty && !returnKey.swallow)
+
+        var capture = ShortcutCaptureEngine(action: .pasteLast)
+        #expect(capture.keyDown(keyCode: UInt16(kVK_ANSI_KeypadEnter), rawFlags: 0, isRepeat: false)
+                == .commit(keypadEnter))
     }
 
     @Test func shiftThenFnNeverTriggers() {

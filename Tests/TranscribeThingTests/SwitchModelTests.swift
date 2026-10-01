@@ -509,6 +509,68 @@ import Testing
         rig.h.controller.send(.pillCancel)
     }
 
+    /// fn ⇥ back to the main model is a pick too: hands-free leaves the dictation there.
+    @Test func handsFreeLeavesTheMainModelPickedWithSwitchModel() {
+        let (rig, _) = Self.make()
+        let c = rig.h.controller
+        rig.h.settings.handsFreeModel = .gemini
+        Self.hold(rig)
+        for _ in rig.h.settings.lineup.cycle { c.handle(.cycleEngine) }
+        #expect(c.modelOverride == nil, "around the cycle and back on Parakeet")
+        c.handle(.handsFreeToggle)
+        #expect(c.modelOverride == nil && c.effectiveEngine == .parakeet)
+        c.send(.pillCancel)
+    }
+
+    /// Polish turned on while holding the key keeps the dictation on Gemini: hands-free doesn't take it away.
+    @Test func handsFreeKeepsAPolishingDictationOnGemini() {
+        let (rig, cues) = Self.make()
+        let c = rig.h.controller
+        rig.h.settings.lineup.main = .gemini
+        rig.h.settings.handsFreeModel = .parakeet
+        Self.hold(rig)
+        c.handle(.polish)
+        c.handle(.handsFreeToggle)
+        #expect(c.effectiveChoice == .gemini && c.isPolishing)
+        #expect(!cues.played.contains(.polishOff))
+        c.send(.pillCancel)
+    }
+
+    /// The main model can't take a dictation (Gemini without a key) but hands-free's can: fn Space records on it,
+    /// from the hands-free key alone and from fn's press (refused for Gemini) followed by Space.
+    @Test func handsFreeStartsOnItsModelWhenTheMainOneCant() {
+        let (rig, _) = Self.make(key: .missing)
+        let c = rig.h.controller
+        rig.h.settings.lineup.main = .gemini
+        rig.h.settings.handsFreeModel = .parakeet
+        c.send(.handsFreeToggle)
+        #expect(c.machine.capture.isListeningOrLocked && c.effectiveEngine == .parakeet)
+        c.send(.pillCancel)
+
+        c.handle(.pttDown)
+        c.handle(.handsFreeToggle)
+        #expect(c.machine.capture.isListeningOrLocked && c.effectiveEngine == .parakeet)
+        #expect(rig.h.toasts.notices.allSatisfy { $0.style == .info }, "nothing refused")
+        c.send(.pillCancel)
+    }
+
+    /// Hands-free's model is one Switch model reaches: one that becomes the main model, or that Switch model stops
+    /// reaching, is forgotten.
+    @Test func handsFreesModelIsOneOfTheCycle() {
+        let (rig, _) = Self.make()
+        let settings = rig.h.settings
+        settings.handsFreeModel = .gemini
+        #expect(settings.handsFreeChoice == .gemini)
+        settings.lineup.setSwitchable(.gemini, false)
+        #expect(settings.handsFreeModel == nil && settings.handsFreeChoice == nil)
+        settings.lineup.setSwitchable(.gemini, true)
+        #expect(settings.handsFreeChoice == nil, "back in the cycle, but not picked again")
+        settings.handsFreeModel = .gemini
+        settings.lineup.main = .gemini
+        settings.lineup.main = .parakeet
+        #expect(settings.handsFreeModel == nil, "it was the main model meanwhile")
+    }
+
     /// Undo goes on hands-free with the model the canceled dictation had, not hands-free's.
     @Test func undoKeepsItsModelOverHandsFrees() throws {
         let (rig, _) = Self.make()
@@ -640,10 +702,16 @@ import Testing
         #expect(c.modelOverride == nil, "no dictation, nothing to step")
     }
 
-    /// The tick has voices of its own, so ticks at 30 ms ring over each other; other cues restart.
+    /// The tick and Polish's drops have voices of their own, so held at 30 ms they ring over each other; other cues
+    /// restart.
     @Test func theTickRingsOverItself() {
         #expect(Double(AVCueOutput.voices(for: .modelSwitch)) * 0.03 > 0.07, "enough voices for a 70 ms tick every 30 ms")
-        #expect(SoundEffect.allCases.filter { $0 != .modelSwitch }.allSatisfy { AVCueOutput.voices(for: $0) == 1 })
+        // On and off take turns: each drop comes back every other repeat, 60 ms apart.
+        for drop in [SoundEffect.polishOn, .polishOff] {
+            #expect(Double(AVCueOutput.voices(for: drop)) * 0.06 > 0.09, "enough voices for a 90 ms drop every 60 ms")
+        }
+        let held: Set<SoundEffect> = [.modelSwitch, .polishOn, .polishOff]
+        #expect(SoundEffect.allCases.filter { !held.contains($0) }.allSatisfy { AVCueOutput.voices(for: $0) == 1 })
     }
 
     /// A held key that can't step (no usable key) says so once, at the press.

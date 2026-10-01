@@ -41,7 +41,14 @@ final class AppSettings {
     }
     /// The three models as Models lists them: their order, the main model every dictation starts on, and which
     /// others the Switch model shortcut steps to.
-    var lineup: ModelLineup = .default { didSet { store.setJSON(lineup, .lineup) } }
+    var lineup: ModelLineup = .default {
+        didSet {
+            store.setJSON(lineup, .lineup)
+            // A hands-free model that is now the main one, or that Switch model no longer reaches, is gone: turned
+            // back on later, it stays off for hands-free until picked again.
+            if let choice = handsFreeModel, !lineup.steps.contains(choice) { handsFreeModel = nil }
+        }
+    }
     /// Each model's color (Models): the pill wears the dictation's model's, and its tile, the sidebar chip and
     /// History's marks show it.
     var modelColors: ModelColors = .default { didSet { store.setJSON(modelColors, .modelColors) } }
@@ -69,6 +76,12 @@ final class AppSettings {
     /// The model a hands-free dictation switches to as it starts (Models), as if Switch model had stepped to it: a long
     /// dictation is usually one for Gemini. nil: the main model, as when holding the key.
     var handsFreeModel: ModelChoice? = nil { didSet { store.set(handsFreeModel?.rawValue, .handsFreeModel) } }
+    /// `handsFreeModel` while Switch model reaches it and it isn't the main model; nil otherwise. A hands-free
+    /// dictation is on a model of the cycle, like any other: fn ⇥ steps on from it, the pill's menu checks it, and a
+    /// local Parakeet in the cycle is loaded at launch.
+    var handsFreeChoice: ModelChoice? {
+        handsFreeModel.flatMap { lineup.steps.contains($0) ? $0 : nil }
+    }
     /// What the app pastes ends in one space, so the next dictation doesn't run into it. History and Copy keep the
     /// text as it was.
     var addsSpaceAfterText: Bool = false { didSet { store.set(addsSpaceAfterText, .addSpaceAfterText) } }

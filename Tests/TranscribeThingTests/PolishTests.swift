@@ -24,8 +24,9 @@ import Testing
         #expect(!c.isPolishing)
     }
 
-    /// Held down, fn ↩ turns Polish on and off at every autorepeat, each with its drop's sound.
-    @Test func holdingThePolishKeyFlipsItOnEveryRepeat() {
+    /// Pressed again and again (the router sends each autorepeat of a held fn ↩ as one), Polish goes on and off, each
+    /// time with its drop's sound.
+    @Test func everyPressOfThePolishKeyFlipsIt() {
         let (rig, cues) = Switch.make()
         let c = rig.h.controller
         rig.h.settings.lineup.main = .gemini
@@ -70,6 +71,70 @@ import Testing
         #expect(rig.pasted == ["Polished."])
         let entry = try #require(rig.h.history.entries.first)
         #expect(entry.engine == .geminiFlash)
+        #expect(entry.versions.map(\.kind) == [.polish])
+    }
+
+    /// Esc while a polished dictation is being transcribed, then Undo: it goes on polished.
+    @Test func undoAfterEscWhileTranscribingKeepsPolish() async throws {
+        let (rig, _) = Switch.make()
+        let c = rig.h.controller
+        rig.h.settings.lineup.main = .gemini
+        rig.result = { _, _ in
+            try await Task.sleep(for: .seconds(30))
+            return "late"
+        }
+        Switch.hold(rig)
+        c.handle(.polish)
+        rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
+        rig.now += 2
+        c.handle(.pttUp)
+        try await waitUntil { rig.transcribed.count == 1 }
+        c.handle(.cancel)
+        #expect(!c.isPolishing)
+        rig.now += 1
+        try rig.click(.undoCancel, in: "dictation.canceled")
+        #expect(c.machine.capture.isListeningOrLocked)
+        #expect(c.isPolishing && rig.h.pill.polishes)
+        c.send(.pillCancel)
+    }
+
+    /// The main model changed under a polishing dictation (Models, a notice's "Use Parakeet v3"): it goes to Parakeet
+    /// as a plain transcript, never as a polished one.
+    @Test func aDictationThatLeftGeminiIsNotPolished() async throws {
+        let (rig, _) = Switch.make()
+        let c = rig.h.controller
+        rig.h.settings.lineup.main = .gemini
+        var engines: [EngineID] = []
+        rig.result = { _, engine in
+            engines.append(engine)
+            return "words"
+        }
+        Switch.hold(rig)
+        c.handle(.polish)
+        rig.h.settings.lineup.main = .parakeet
+        try await Switch.release(rig)
+        #expect(engines == [.parakeet])
+        let entry = try #require(rig.h.history.entries.first)
+        #expect(entry.versions.map(\.kind) == [.transcription(.parakeet)])
+    }
+
+    /// Polish from a failed dictation's Retry With: the polished message becomes its text.
+    @Test func polishingAFailedDictationMakesItsText() async throws {
+        let (rig, _) = Switch.make()
+        let c = rig.h.controller
+        rig.h.settings.lineup.main = .gemini
+        rig.result = { _, _ in throw AppError.timeout(.geminiFlash) }
+        Switch.hold(rig)
+        rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
+        rig.now += 2
+        c.handle(.pttUp)
+        try await waitUntil { rig.h.history.entries.first?.status == .failed && c.machine.activeJobs == 0 }
+        let failed = try #require(rig.h.history.entries.first)
+        rig.result = { _, _ in "thinking it over <message>Polished.</message>" }
+        c.makeVersion(.polish, of: failed)
+        try await waitUntil { rig.h.history.entries.first?.status == .success }
+        let entry = try #require(rig.h.history.entries.first)
+        #expect(entry.text == "Polished.")
         #expect(entry.versions.map(\.kind) == [.polish])
     }
 

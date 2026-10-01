@@ -138,16 +138,14 @@ struct ModelsPage: View {
 
     // MARK: Hands-free
 
-    /// The main model (no switch), then every other model of the lineup.
+    /// The main model (no switch), then the models Switch model steps to.
     private var handsFreeOptions: [ModelChoice?] {
-        [nil] + settings.lineup.order.filter { $0 != settings.lineup.main }
+        [nil] + settings.lineup.steps
     }
 
-    /// A model that has become the main one since reads as the main model: there's nothing to switch to.
     private var handsFreeModel: Binding<ModelChoice?> {
         let settings = settings
-        return Binding(get: { settings.handsFreeModel == settings.lineup.main ? nil : settings.handsFreeModel },
-                       set: { settings.handsFreeModel = $0 })
+        return Binding(get: { settings.handsFreeChoice }, set: { settings.handsFreeModel = $0 })
     }
 
     private func handsFreeLabel(_ choice: ModelChoice?) -> String {

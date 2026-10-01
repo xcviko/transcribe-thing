@@ -704,10 +704,24 @@ final class ProgressLog: @unchecked Sendable {
 }
 
 @Suite struct OpenRouterStreamTests {
-    private func transcribe(_ client: OpenRouterClient, progress: ProgressLog? = nil) async throws -> CloudResult {
+    private func transcribe(_ client: OpenRouterClient, prompt: String? = nil,
+                            progress: ProgressLog? = nil) async throws -> CloudResult {
         try await client.transcribe(audio: Fixtures.wav, format: "wav", model: "google/gemini-3.8-flash",
-                                    systemPrompt: nil, effort: .medium, maxTokens: 32_768, apiKey: "k", timeout: 120,
+                                    systemPrompt: prompt, effort: .medium, maxTokens: 32_768, apiKey: "k", timeout: 120,
                                     progress: progress.map { log in { @Sendable report in log.record(report) } })
+    }
+
+    /// Polish's prompt asks for <message> tags: those are taken from its answer, finished or cut off, and a
+    /// <transcript> inside the message is just text.
+    @Test func polishAnswersComeInTheirOwnTags() async throws {
+        let (client, _) = StubURLProtocol.client([
+            .stream(SSE.answer("- the plan\n<message>Ship <transcript> on Friday.</message>")),
+            .stream(SSE.answer("Draft first. <message>Ship it on", finish: "length")),
+        ])
+        #expect(try await transcribe(client, prompt: Polish.prompt).text == "Ship <transcript> on Friday.")
+        await #expect(throws: AppError.openRouterTruncated("Ship it on")) {
+            try await transcribe(client, prompt: Polish.prompt)
+        }
     }
 
     /// OpenRouter's ": OPENROUTER PROCESSING" comments keep the connection alive and are never taken for the answer,

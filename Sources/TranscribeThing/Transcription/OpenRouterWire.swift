@@ -508,20 +508,7 @@ struct OpenRouterChatStream {
         } else if let nativeFinishReason {
             parts.append("native finish \(nativeFinishReason)")
         }
-        if let error {
-            let code = switch error.code {
-            case .int(let value)?: String(value)
-            case .string(let value)?: value
-            case nil: "no code"
-            }
-            var said = "error \(code): \(error.message ?? "no message")"
-            if let type = error.metadata?.errorType { said += " [\(type)]" }
-            if let name = error.metadata?.providerName { said += " from \(name)" }
-            if let raw = error.metadata?.raw {
-                said += ", raw: " + raw.prefix(600).split(whereSeparator: \.isNewline).joined(separator: " ")
-            }
-            parts.append(said)
-        }
+        if let error { parts.append(error.logSummary) }
         parts.append("\(progress.reasoningCharacters) reasoning and \(progress.outputCharacters) text characters")
         parts.append(isDone ? "ended with [DONE]" : "no [DONE]")
         if let provider { parts.append("provider \(provider)") }
@@ -548,6 +535,23 @@ struct OpenRouterAPIError: Decodable, Equatable {
     let code: Code?
     let message: String?
     let metadata: Metadata?
+
+    /// The error for the log: its code, message, type, provider and the provider's own words. Only these fields:
+    /// a moderation error's `flagged_input` quotes the request (a transcript being cleaned up).
+    var logSummary: String {
+        let code = switch code {
+        case .int(let value)?: String(value)
+        case .string(let value)?: value
+        case nil: "no code"
+        }
+        var said = "error \(code): \(message ?? "no message")"
+        if let type = metadata?.errorType { said += " [\(type)]" }
+        if let name = metadata?.providerName { said += " from \(name)" }
+        if let raw = metadata?.raw {
+            said += ", raw: " + raw.prefix(600).split(whereSeparator: \.isNewline).joined(separator: " ")
+        }
+        return said
+    }
 
     enum Code: Decodable, Equatable {
         case int(Int), string(String)

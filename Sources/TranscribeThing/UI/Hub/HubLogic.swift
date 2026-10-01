@@ -298,12 +298,13 @@ struct VersionsMenu: Equatable {
             if Set(cleanups.map { actions[$0].kind.engine }).count > 1 {
                 for index in cleanups { actions[index].namesSource = true }
             }
-            // Polish: Gemini on the recording again, with Polish's prompt.
-            if !entry.hasVersion(.polish) {
-                let blocker = busy ?? (hasAudio ? nil : .recordingGone)
-                    ?? readiness(.geminiFlash).unavailableReason.map(Blocker.engine)
-                actions.append(Action(kind: .polish, blocker: blocker))
-            }
+        }
+        // Polish: Gemini on the recording again, with Polish's prompt. A failed or canceled dictation can be polished
+        // too, as it can be transcribed.
+        if isRetry || !entry.hasVersion(.polish) {
+            let blocker = busy ?? (hasAudio ? nil : .recordingGone)
+                ?? readiness(.geminiFlash).unavailableReason.map(Blocker.engine)
+            actions.append(Action(kind: .polish, blocker: blocker))
         }
         let runningTitle = running.map(\.progressTitle)
         return VersionsMenu(isRetry: isRetry, title: title(for: entry), versions: versions, actions: actions,

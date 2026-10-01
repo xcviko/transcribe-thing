@@ -200,13 +200,16 @@ final class OpenRouterClient: Sendable {
             throw AppError.openRouterBadRequest("Couldn’t build the request.")
         }
         let request = makeTranscriptionRequest(body: body, apiKey: key, timeout: timeout)
+        // The tags the prompt asks the answer to come in: Polish's <message>, else <transcript>.
+        let (open, close) = systemPrompt?.contains(Polish.open) == true ? (Polish.open, Polish.close)
+            : (TaggedTranscript.open, TaggedTranscript.close)
         var result: CloudResult
         do {
             result = try await streamWithRetry(request, engine: engine, progress: progress)
         } catch AppError.openRouterTruncated(let partial) {
-            throw AppError.openRouterTruncated(TaggedTranscript.extract(partial).text)
+            throw AppError.openRouterTruncated(TaggedTranscript.extract(partial, open: open, close: close).text)
         }
-        (result.text, result.answerTags) = TaggedTranscript.extract(result.text)
+        (result.text, result.answerTags) = TaggedTranscript.extract(result.text, open: open, close: close)
         if result.answerTags != .pair {
             Log.net.info("Gemini's answer had tags: \(result.answerTags?.rawValue ?? "?", privacy: .public)")
         }
@@ -372,6 +375,10 @@ final class OpenRouterClient: Sendable {
             }
             if error.code == .cancelled { throw CancellationError() }
             var failure = Self.transportFailure(error, engine: engine)
+            if stream.hasOutput {
+                let seconds = TranscriptionService.seconds(started.duration(to: .now))
+                Log.net.error("OpenRouter stream broke off after \(seconds, format: .fixed(precision: 1)) s (\(failure.error.code, privacy: .public), URLError \(error.code.rawValue)): \(stream.failureSummary, privacy: .public)")
+            }
             // A connection lost mid-answer isn't sent again: what the model already did would be paid for twice.
             if stream.hasOutput || started.duration(to: .now) >= Self.quickFailureWindow { failure.retryable = false }
             throw failure
@@ -441,8 +448,11 @@ final class OpenRouterClient: Sendable {
         let error = OpenRouterErrorMapper.httpError(status: http.statusCode, data: body, retryAfter: retryAfter,
                                                     engine: engine)
         let server = header("Server", in: http) ?? "?"
-        let excerpt = String(decoding: body.prefix(1000), as: UTF8.self).split(whereSeparator: \.isNewline).joined(separator: " ")
-        Log.net.error("OpenRouter HTTP \(http.statusCode) from \(server, privacy: .public) (\(error.code, privacy: .public)): \(excerpt, privacy: .public)")
+        // OpenRouter's own error by its fields (never the request it may quote); anything else (a firewall's page) as
+        // it starts.
+        let said = (try? JSONDecoder().decode(OpenRouterErrorEnvelope.self, from: body))?.error.logSummary
+            ?? String(decoding: body.prefix(1000), as: UTF8.self).split(whereSeparator: \.isNewline).joined(separator: " ")
+        Log.net.error("OpenRouter HTTP \(http.statusCode) from \(server, privacy: .public) (\(error.code, privacy: .public)): \(said, privacy: .public)")
         // A firewall's no never reached OpenRouter: nothing was billed, and its verdict can change a moment later.
         let retryable = (retryableStatuses.contains(http.statusCode) && error.isTransientCloudFailure)
             || error == .connectionBlocked

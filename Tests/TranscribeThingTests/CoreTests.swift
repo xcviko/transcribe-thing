@@ -144,6 +144,22 @@ import Testing
         #expect(decoded[.handsFree] == .fnSpace)
     }
 
+    /// Older builds saved fn ↩ recorded on a laptop as fn ⌤ (Keypad Enter, which is what the keyboard sends): it loads
+    /// as fn ↩. The keypad's Enter without fn stays itself. Polish, newer than these bindings, starts unbound when its
+    /// fn ↩ is already the user's.
+    @Test func fnKeypadEnterLoadsAsFnReturnAndKeepsItsAction() throws {
+        let stored = #"{"handsFree":{"keyCode":76,"modifiers":[{"modifier":"function","side":"either"}]},"#
+            + #""pasteLast":{"keyCode":76,"modifiers":[]}}"#
+        let decoded = try JSONDecoder().decode(ShortcutBindings.self, from: Data(stored.utf8))
+        #expect(decoded[.handsFree] == .fnReturn)
+        #expect(decoded[.pasteLast] == Shortcut(modifiers: [], keyCode: KeyCode.keypadEnter))
+        #expect(decoded[.polish] == nil, "the user's hands-free keeps fn ↩")
+        #expect(decoded[.switchModel] == .fnTab, "a default nobody else has still comes")
+
+        let untouched = try JSONDecoder().decode(ShortcutBindings.self, from: Data("{}".utf8))
+        #expect(untouched == .defaults)
+    }
+
     /// Cancel is always Esc now, but bindings saved while it could be changed still carry it (here F13).
     @Test func storedBindingsWithCancelStillLoad() throws {
         let stored = #"{"cancel":{"keyCode":105,"modifiers":[]},"handsFree":null,"#
@@ -720,10 +736,10 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         #expect(settings.handsFreeModel == nil, "hands-free stays on the main model unless asked")
 
         settings.parakeetEngine = .parakeetCloud
-        settings.handsFreeModel = .gemini
         settings.lineup.main = .cleanup
         settings.lineup.setSwitchable(.gemini, false)
         settings.lineup.move(.gemini, to: 0)
+        settings.handsFreeModel = .parakeet
         settings.modelColors[.gemini] = .blue
         settings.modelColors[.parakeet] = .teal
         settings.switchHintShownCount = 2
@@ -739,7 +755,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
 
         let reloaded = AppSettings(defaults: defaults)
         #expect(reloaded.parakeetEngine == .parakeetCloud)
-        #expect(reloaded.handsFreeModel == .gemini)
+        #expect(reloaded.handsFreeModel == .parakeet)
         #expect(reloaded.lineup == settings.lineup)
         #expect(reloaded.lineup.order == [.gemini, .parakeet, .cleanup] && reloaded.lineup.main == .cleanup)
         #expect(reloaded.lineup.cycle == [.cleanup, .parakeet])
