@@ -41,7 +41,8 @@ struct HotkeyInput: Equatable, Sendable {
 /// - Switch model (like Esc) is live only during a dictation, and it never interrupts the PTT hold: it may be
 ///   pressed with the PTT or hands-free modifiers still held (fn+Tab while holding fn), and extra modifiers on
 ///   the way to it (⌘ of ⌘⇧M) don't end the hold. Outside a dictation its keys pass through. Held down, its
-///   autorepeats step on (`cycleEngineRepeat`).
+///   autorepeats step on (`cycleEngineRepeat`). Polish's shortcut is live the same way, and held down its
+///   autorepeats turn Polish on and off again and again.
 /// - Swallowed keys also have their autorepeats and keyUp swallowed.
 struct HotkeyRouter: Equatable, Sendable {
     struct Config: Equatable, Sendable {
@@ -225,10 +226,14 @@ struct HotkeyRouter: Equatable, Sendable {
         }
         if swallowedKeys.contains(key) {
             decision.swallow = true
-            // The switch model key held down keeps stepping, at every autorepeat.
+            // The switch model key held down keeps stepping, and the polish key keeps turning Polish on and off, at
+            // every autorepeat.
             if input.isRepeat, let switchModel = liveSwitchModel(config), switchModel.keyCode == key,
                matchesDuringDictation(switchModel, config.bindings) {
                 decision.events.append(.cycleEngineRepeat)
+            } else if input.isRepeat, let polish = liveDuringDictation(config).first(where: { $0.action == .polish }),
+                      polish.shortcut.keyCode == key, matchesDuringDictation(polish.shortcut, config.bindings) {
+                decision.events.append(.polish)
             }
             return decision
         }

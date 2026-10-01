@@ -24,6 +24,18 @@ import Testing
         #expect(!c.isPolishing)
     }
 
+    /// Held down, fn ↩ turns Polish on and off at every autorepeat, each with its drop's sound.
+    @Test func holdingThePolishKeyFlipsItOnEveryRepeat() {
+        let (rig, cues) = Switch.make()
+        let c = rig.h.controller
+        rig.h.settings.lineup.main = .gemini
+        Switch.hold(rig)
+        for _ in 0..<5 { c.handle(.polish) }
+        #expect(c.isPolishing)
+        #expect(cues.played.suffix(5) == [.polishOn, .polishOff, .polishOn, .polishOff, .polishOn])
+        c.send(.pillCancel)
+    }
+
     /// On Parakeet or clean-up the key does nothing at all; switching away from Gemini turns Polish off.
     @Test func onlyGeminiPolishes() {
         let (rig, cues) = Switch.make()

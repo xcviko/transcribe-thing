@@ -248,6 +248,9 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
         #expect(kb.press(.fn).events == [.pttDown])
         let polish = kb.down(kVK_Return, fnFlagged: true)
         #expect(polish.events == [.polish] && polish.swallow)
+        // Held down, every autorepeat is another press.
+        #expect(kb.down(kVK_Return, isRepeat: true, fnFlagged: true).events == [.polish])
+        #expect(kb.down(kVK_Return, isRepeat: true, fnFlagged: true).events == [.polish])
         #expect(kb.up(kVK_Return, fnFlagged: true).swallow)
         #expect(kb.release(.fn).events == [.pttUp], "still the dictation's hold")
         // Outside a dictation, fn ↩ reaches the app.
