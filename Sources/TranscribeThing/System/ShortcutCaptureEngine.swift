@@ -59,7 +59,7 @@ struct ShortcutCaptureEngine: Equatable, Sendable {
             reset()
             return .clear
         }
-        let shortcut = Shortcut(modifiers: Self.comboKeys(snapshot), keyCode: keyCode)
+        let shortcut = Shortcut(modifiers: Self.comboKeys(snapshot), keyCode: KeyCode.canonical(keyCode))
         reset()
         return .commit(shortcut)
     }

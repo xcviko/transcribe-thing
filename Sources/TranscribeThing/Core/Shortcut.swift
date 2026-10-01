@@ -22,6 +22,13 @@ enum KeyCode {
     static let space = UInt16(kVK_Space)                // 49
     static let escape = UInt16(kVK_Escape)              // 53
     static let returnKey = UInt16(kVK_Return)           // 36
+    static let keypadEnter = UInt16(kVK_ANSI_KeypadEnter) // 76
+
+    /// The key a shortcut means by `keyCode`: Keypad Enter is Return, since fn ↩ on a laptop keyboard sends Keypad
+    /// Enter (as fn ⌫ sends Forward Delete).
+    static func canonical(_ keyCode: UInt16) -> UInt16 {
+        keyCode == keypadEnter ? returnKey : keyCode
+    }
     static let tab = UInt16(kVK_Tab)                    // 48
     static let delete = UInt16(kVK_Delete)              // 51
     static let forwardDelete = UInt16(kVK_ForwardDelete) // 117

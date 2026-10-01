@@ -262,6 +262,23 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
         #expect(idle.events.isEmpty && !idle.swallow)
     }
 
+    /// A laptop keyboard sends fn ↩ as Keypad Enter: it's Polish all the same, in hands-free too, and recording it
+    /// in Shortcuts gives fn ↩.
+    @Test func fnReturnArrivesAsKeypadEnter() {
+        var kb = Keyboard()
+        #expect(kb.press(.fn).events == [.pttDown])
+        let enter = kb.down(kVK_ANSI_KeypadEnter, fnFlagged: true)
+        #expect(enter.events == [.polish(.oneRequest)] && enter.swallow)
+        #expect(kb.up(kVK_ANSI_KeypadEnter, fnFlagged: true).swallow)
+        #expect(kb.release(.fn).events == [.pttUp])
+
+        var capture = ShortcutCaptureEngine(action: .polish)
+        _ = capture.flagsChanged(keyCode: KeyCode.function, rawFlags: CGEventFlags.maskSecondaryFn.rawValue)
+        let recorded = capture.keyDown(keyCode: UInt16(kVK_ANSI_KeypadEnter),
+                                       rawFlags: CGEventFlags.maskSecondaryFn.rawValue, isRepeat: false)
+        #expect(recorded == .commit(.fnReturn))
+    }
+
     @Test func shiftThenFnNeverTriggers() {
         var kb = Keyboard()
         #expect(kb.press(.leftShift).events.isEmpty)

@@ -202,7 +202,7 @@ struct HotkeyRouter: Equatable, Sendable {
     // MARK: keyDown / keyUp
 
     private mutating func keyDown(_ input: HotkeyInput, _ config: Config) -> Decision {
-        let key = input.keyCode
+        let key = KeyCode.canonical(input.keyCode)
         // A fresh press of a key we think is still down means its keyUp was lost: evaluate it again.
         if !input.isRepeat { swallowedKeys.remove(key) }
         var decision = Decision()
@@ -281,7 +281,7 @@ struct HotkeyRouter: Equatable, Sendable {
     }
 
     private mutating func keyUp(_ input: HotkeyInput, _ config: Config) -> Decision {
-        let key = input.keyCode
+        let key = KeyCode.canonical(input.keyCode)
         var decision = Decision()
         if config.forwardsRawKeys, Self.isIllustrated(key, config) {
             decision.rawKey = RawKeyEvent(key: RawKeyEvent.Key(keyCode: key), isDown: false)
