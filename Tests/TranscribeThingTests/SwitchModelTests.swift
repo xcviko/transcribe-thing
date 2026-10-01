@@ -431,6 +431,101 @@ import Testing
         #expect(c.effectiveEngine == .geminiFlash)
     }
 
+    // MARK: Hands-free's model
+
+    /// Hands-free switches to the model picked for it in Models, as Switch model would: the dictation goes there at
+    /// once, and the tick and the chip follow the lock cue. Holding the key stays on the main model.
+    @Test func handsFreeSwitchesToItsModel() async throws {
+        let (rig, cues) = Self.make()
+        let c = rig.h.controller
+        rig.h.settings.handsFreeModel = .gemini
+        var used: [EngineID] = []
+        rig.result = { _, engine in
+            used.append(engine)
+            return "words"
+        }
+        let pulses = rig.h.pill.engineChipPulse
+        c.send(.handsFreeToggle)
+        #expect(c.modelOverride == .gemini && c.effectiveEngine == .geminiFlash)
+        #expect(rig.h.pill.sessionModel == .gemini, "the pill wears Gemini's color at once")
+        #expect(cues.played == [.lock], "the tick waits for the lock cue")
+        try await waitUntil { cues.played == [.lock, .modelSwitch] }
+        #expect(rig.h.pill.engineChipPulse == pulses + 1)
+        rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
+        rig.now += 2
+        c.send(.pillStop)
+        try await waitUntil { rig.pasted == ["words"] && c.machine.activeJobs == 0 }
+
+        Self.hold(rig)
+        #expect(c.modelOverride == nil && c.effectiveEngine == .parakeet)
+        try await Self.release(rig)
+        #expect(used == [.geminiFlash, .parakeet])
+    }
+
+    /// Space while holding the key goes hands-free too, and switches the same way.
+    @Test func goingHandsFreeFromAHoldSwitchesToo() async throws {
+        let (rig, cues) = Self.make()
+        rig.h.settings.handsFreeModel = .gemini
+        Self.hold(rig)
+        rig.h.controller.handle(.handsFreeToggle)
+        #expect(rig.h.controller.modelOverride == .gemini)
+        try await waitUntil { cues.played.last == .modelSwitch }
+        rig.h.controller.send(.pillCancel)
+    }
+
+    /// A model already picked for this dictation stays, and the main model has nothing to switch to: no tick.
+    @Test func handsFreeLeavesAPickedOrMainModelAlone() async throws {
+        let (rig, cues) = Self.make()
+        let c = rig.h.controller
+        rig.h.settings.handsFreeModel = .gemini
+        Self.hold(rig)
+        c.handle(.cycleEngine)
+        #expect(c.modelOverride == .cleanup)
+        c.handle(.handsFreeToggle)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(c.modelOverride == .cleanup)
+        #expect(cues.played.filter { $0 == .modelSwitch }.count == 1, "only fn ⇥'s own tick")
+        c.send(.pillCancel)
+
+        let (main, mainCues) = Self.make()
+        main.h.settings.lineup.main = .gemini
+        main.h.settings.handsFreeModel = .gemini
+        main.h.controller.send(.handsFreeToggle)
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(main.h.controller.modelOverride == nil && main.h.controller.effectiveEngine == .geminiFlash)
+        #expect(!mainCues.played.contains(.modelSwitch))
+        main.h.controller.send(.pillCancel)
+    }
+
+    /// A model that can't take the dictation now is refused as Switch model would refuse it: it stays on the main
+    /// model, the pill shakes, and a notice says why.
+    @Test func aHandsFreeModelThatCantRunIsRefused() {
+        let (rig, _) = Self.make(key: .noCredit(nil))
+        rig.h.settings.handsFreeModel = .gemini
+        let shakes = rig.h.pill.shakeCount
+        rig.h.controller.send(.handsFreeToggle)
+        #expect(rig.h.controller.modelOverride == nil && rig.h.controller.effectiveEngine == .parakeet)
+        #expect(rig.h.pill.shakeCount == shakes + 1)
+        #expect(rig.notice(DictationController.switchModelNoticeKey) != nil)
+        rig.h.controller.send(.pillCancel)
+    }
+
+    /// Undo goes on hands-free with the model the canceled dictation had, not hands-free's.
+    @Test func undoKeepsItsModelOverHandsFrees() throws {
+        let (rig, _) = Self.make()
+        let c = rig.h.controller
+        rig.h.settings.handsFreeModel = .gemini
+        rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
+        Self.hold(rig)
+        rig.now += 2
+        c.handle(.cancel)
+        rig.now += 1
+        try rig.click(.undoCancel, in: "dictation.canceled")
+        #expect(c.machine.capture.isListeningOrLocked)
+        #expect(c.modelOverride == nil && c.effectiveEngine == .parakeet)
+        c.send(.pillCancel)
+    }
+
     /// Tidies whatever it's given into "Clean.", as the selected clean-up model.
     static func cleansUp(_ rig: Rig, into text: String = "Clean.", asked: @escaping (String) -> Void = { _ in }) {
         rig.h.controller.cleanupOverride = { raw, source in

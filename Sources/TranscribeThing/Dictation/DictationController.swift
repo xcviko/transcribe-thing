@@ -120,6 +120,8 @@ final class DictationController {
     @ObservationIgnored private var deliveringJob: Job?
     /// A refusal found at key-down, reported only if the user commits to dictating (fn+← must stay silent).
     @ObservationIgnored private var pendingRefusal: AppError?
+    /// The tick and the chip of a hands-free start's switch (`switchToHandsFreeModel`), due after the lock cue.
+    @ObservationIgnored private var handsFreeSwitch: Task<Void, Never>?
     /// When the last error shake was requested (pill clicks during it open the Hub instead of recording).
     @ObservationIgnored private var lastErrorFlashAt: TimeInterval?
     /// A shake that came while the pill showed a press that hasn't committed (arming, the tap window). It
@@ -304,6 +306,7 @@ final class DictationController {
         syncConfig()
         let wasArming = machine.capture.isArming
         let wasIdle = machine.capture == .idle
+        let wasHandsFree = machine.mode == .handsFree
         let wasRecording = machine.isRecording
         let effects = machine.handle(input, now: clock())
         let startsRecording = !wasRecording && machine.isRecording
@@ -329,6 +332,8 @@ final class DictationController {
             // once the mic has started (`beginCapture` holds sounds until its first audio).
             sounds.warmUp()
         }
+        // Hands-free from the key, a double press or the pill; an Undo goes on with the model it had.
+        if !wasHandsFree, machine.mode == .handsFree, !input.isResume { switchToHandsFreeModel() }
         if !machine.isRecording {
             pendingRefusal = nil
             // The dictation is over (its job and any kept recording hold the choice): the next one starts on the
@@ -1805,6 +1810,28 @@ final class DictationController {
         // A cycle of one has nothing to step to, and nothing to say.
         guard !blocked.isEmpty else { return }
         rejectSwitch(blocked: blocked)
+    }
+
+    /// Hands-free switches to `AppSettings.handsFreeModel` as it starts, as if Switch model had stepped there right
+    /// after: the tick and the chip come once the lock cue has played. A model already picked for this dictation
+    /// (Switch model while holding the key) stays; one that can't take it now is refused as Switch model would.
+    private func switchToHandsFreeModel() {
+        let main = settings.lineup.main
+        guard let choice = settings.handsFreeModel, choice != main, modelOverride == nil else { return }
+        if let refusal = switchRefusal(choice) {
+            rejectSwitch(blocked: [(choice, refusal)])
+            return
+        }
+        // The dictation goes there however soon it ends.
+        modelOverride = choice
+        let gap = sounds.duration(of: .lock)
+        handsFreeSwitch?.cancel()
+        handsFreeSwitch = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(gap))
+            guard let self, !Task.isCancelled, self.machine.isRecording, self.modelOverride == choice else { return }
+            self.switchModel(to: choice)
+            self.stateDidChange()
+        }
     }
 
     /// Another choice for this dictation: the pill's chip and a soft tick.

@@ -66,6 +66,8 @@ enum HubSnapshots {
 
             hub("hub-models", .models),
             hub("hub-models-full", .models, height: 1080),
+            // Hands-free switches to Gemini.
+            hub("hub-models-hands-free", .models, height: 1080) { c in c.settings.handsFreeModel = .gemini },
             hub("hub-models-downloading", .models) { c in
                 c.models = .preview(states: [.parakeet: .downloading(Samples.downloading)])
             },

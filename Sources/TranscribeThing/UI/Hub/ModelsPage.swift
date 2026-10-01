@@ -38,6 +38,15 @@ struct ModelsPage: View {
                         }
                     }
                 }
+                HubGroup("Hands-free") {
+                    SettingsGroup {
+                        SettingsRow(title: "Hands-free dictations use", subtitle: handsFreeSubtitle,
+                                    systemImage: "lock.fill", iconTint: .inkSecondary) {
+                            HubMenuPicker(options: handsFreeOptions, selection: handsFreeModel,
+                                          label: handsFreeLabel)
+                        }
+                    }
+                }
                 HubGroup("Where Parakeet runs", footer: "For Parakeet v3, with or without clean-up.") {
                     SettingsGroup {
                         ForEach(EngineID.parakeetRuntimes) { engine in row(engine, proxy: proxy) }
@@ -126,6 +135,29 @@ struct ModelsPage: View {
     }
 
     // MARK: Storage
+
+    // MARK: Hands-free
+
+    /// The main model (no switch), then every other model of the lineup.
+    private var handsFreeOptions: [ModelChoice?] {
+        [nil] + settings.lineup.order.filter { $0 != settings.lineup.main }
+    }
+
+    /// A model that has become the main one since reads as the main model: there's nothing to switch to.
+    private var handsFreeModel: Binding<ModelChoice?> {
+        let settings = settings
+        return Binding(get: { settings.handsFreeModel == settings.lineup.main ? nil : settings.handsFreeModel },
+                       set: { settings.handsFreeModel = $0 })
+    }
+
+    private func handsFreeLabel(_ choice: ModelChoice?) -> String {
+        choice?.title(parakeet: settings.parakeetEngine) ?? "Main model"
+    }
+
+    private var handsFreeSubtitle: String {
+        let key = settings.shortcuts[.handsFree]?.compactDescription ?? "The hands-free shortcut"
+        return "\(key) switches to it as it starts, like Switch model. Holding the key stays on your main model."
+    }
 
     private var storageLine: some View {
         HStack(spacing: 6) {

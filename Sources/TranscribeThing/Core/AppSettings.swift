@@ -66,6 +66,9 @@ final class AppSettings {
     /// Off by default. Stored only once the user flips it (Shortcuts), so an install that never did gets the
     /// default of the build it runs.
     var doublePressForHandsFree: Bool = false { didSet { store.set(doublePressForHandsFree, .doublePressForHandsFree) } }
+    /// The model a hands-free dictation switches to as it starts (Models), as if Switch model had stepped to it: a long
+    /// dictation is usually one for Gemini. nil: the main model, as when holding the key.
+    var handsFreeModel: ModelChoice? = nil { didSet { store.set(handsFreeModel?.rawValue, .handsFreeModel) } }
     /// What the app pastes ends in one space, so the next dictation doesn't run into it. History and Copy keep the
     /// text as it was.
     var addsSpaceAfterText: Bool = false { didSet { store.set(addsSpaceAfterText, .addSpaceAfterText) } }
@@ -212,6 +215,7 @@ final class AppSettings {
             store.remove(key)
         }
         if let v = store.bool(.doublePressForHandsFree) { doublePressForHandsFree = v }
+        handsFreeModel = store.string(.handsFreeModel).flatMap(ModelChoice.init(rawValue:))
         if let v = store.bool(.addSpaceAfterText) { addsSpaceAfterText = v }
         if let v = store.bool(.removeFinalPeriod) { removesFinalPeriod = v }
         if let v = store.int(.autoDeleteHistoryDays), v >= 0 { autoDeleteHistoryDays = v }
@@ -317,6 +321,7 @@ enum SettingsKey: String, CaseIterable {
     /// fixed in code now.
     case geminiSystemPrompt, cleanupSystemPrompt
     case addSpaceAfterText, removeFinalPeriod, autoDeleteHistoryDays, lineup, modelColors, keychainKeyMigrated
+    case handsFreeModel
 
     var defaultsKey: String { "tt.\(rawValue)" }
 }

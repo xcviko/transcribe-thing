@@ -36,6 +36,10 @@ struct DictationMachine: Equatable {
         case captureFailed(AppError), deviceLost
         /// Bookkeeping for `isBusy`.
         case jobStarted, jobEnded
+
+        var isResume: Bool {
+            if case .resume = self { true } else { false }
+        }
     }
 
     enum TimerID: Equatable, Hashable, CaseIterable { case arming, doublePressWindow }

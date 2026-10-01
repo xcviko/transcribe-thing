@@ -715,8 +715,10 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         #expect(settings.pillMode == .whileDictating)
         #expect(settings.modelColors == .default)
         #expect(settings.shortcuts == .defaults)
+        #expect(settings.handsFreeModel == nil, "hands-free stays on the main model unless asked")
 
         settings.parakeetEngine = .parakeetCloud
+        settings.handsFreeModel = .gemini
         settings.lineup.main = .cleanup
         settings.lineup.setSwitchable(.gemini, false)
         settings.lineup.move(.gemini, to: 0)
@@ -735,6 +737,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
 
         let reloaded = AppSettings(defaults: defaults)
         #expect(reloaded.parakeetEngine == .parakeetCloud)
+        #expect(reloaded.handsFreeModel == .gemini)
         #expect(reloaded.lineup == settings.lineup)
         #expect(reloaded.lineup.order == [.gemini, .parakeet, .cleanup] && reloaded.lineup.main == .cleanup)
         #expect(reloaded.lineup.cycle == [.cleanup, .parakeet])
