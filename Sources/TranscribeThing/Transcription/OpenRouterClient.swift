@@ -385,6 +385,8 @@ final class OpenRouterClient: Sendable {
             // A failure OpenRouter reported inside the stream (or a stream that just stopped): retried like its HTTP
             // twin only when it came back quickly, before any of the answer.
             let quick = started.duration(to: .now) < Self.quickFailureWindow
+            let seconds = TranscriptionService.seconds(started.duration(to: .now))
+            Log.net.error("OpenRouter stream failed after \(seconds, format: .fixed(precision: 1)) s (\(error.code, privacy: .public)): \(stream.failureSummary, privacy: .public)")
             throw AttemptFailure(error: error, retryable: quick && !stream.hasOutput && error.isTransientCloudFailure,
                                  retryAfter: nil)
         }
@@ -439,7 +441,7 @@ final class OpenRouterClient: Sendable {
         let error = OpenRouterErrorMapper.httpError(status: http.statusCode, data: body, retryAfter: retryAfter,
                                                     engine: engine)
         let server = header("Server", in: http) ?? "?"
-        let excerpt = String(decoding: body.prefix(300), as: UTF8.self).split(whereSeparator: \.isNewline).joined(separator: " ")
+        let excerpt = String(decoding: body.prefix(1000), as: UTF8.self).split(whereSeparator: \.isNewline).joined(separator: " ")
         Log.net.error("OpenRouter HTTP \(http.statusCode) from \(server, privacy: .public) (\(error.code, privacy: .public)): \(excerpt, privacy: .public)")
         // A firewall's no never reached OpenRouter: nothing was billed, and its verdict can change a moment later.
         let retryable = (retryableStatuses.contains(http.statusCode) && error.isTransientCloudFailure)

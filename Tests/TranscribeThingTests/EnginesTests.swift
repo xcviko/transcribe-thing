@@ -808,6 +808,20 @@ final class ProgressLog: @unchecked Sendable {
         #expect(StubURLProtocol.registry.requests(for: host).count == 1)
     }
 
+    /// A failed stream's log line names its finish reasons, its error in the provider's own words, how far the answer
+    /// got and the generation, but never the answer's text.
+    @Test func aFailedStreamSummarizesWhatItSaidButNotTheText() {
+        var stream = OpenRouterChatStream()
+        _ = stream.consume("data: " + SSE.chunk(content: "So the plan"))
+        _ = stream.consume("data: " + #"{"id":"gen-f","provider":"Google AI Studio","error":{"code":"server_error","message":"Provider disconnected","metadata":{"error_type":"provider_unavailable","provider_name":"Google AI Studio","raw":"{\"error\":{\"status\":\"INTERNAL\"}}"}},"choices":[{"index":0,"delta":{"content":""},"finish_reason":"error","native_finish_reason":"OTHER"}]}"#)
+        let summary = stream.failureSummary
+        #expect(summary.contains("finish error (native OTHER)"))
+        #expect(summary.contains(#"error server_error: Provider disconnected [provider_unavailable] from Google AI Studio, raw: {"error":{"status":"INTERNAL"}}"#))
+        #expect(summary.contains("0 reasoning and 11 text characters"))
+        #expect(summary.contains("no [DONE]") && summary.contains("generation gen-f"))
+        #expect(!summary.contains("So the plan"))
+    }
+
     /// A 200 whose only event is an error is a failure, not an empty transcript.
     @Test func aStreamOfOnlyAnErrorFails() async throws {
         let broke = StubURLProtocol.Reply.stream(SSE.stream([

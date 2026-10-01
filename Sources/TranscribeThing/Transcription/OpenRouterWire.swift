@@ -499,6 +499,36 @@ struct OpenRouterChatStream {
                            reasoningCharacters: progress.reasoningCharacters > 0 ? progress.reasoningCharacters : nil)
     }
 
+    /// What a failed stream said, for the log: its finish reasons, the error it carried in the provider's own words,
+    /// how far the answer got and the generation to look up. Never the answer's text.
+    var failureSummary: String {
+        var parts: [String] = []
+        if let finishReason {
+            parts.append("finish \(finishReason)" + (nativeFinishReason.map { " (native \($0))" } ?? ""))
+        } else if let nativeFinishReason {
+            parts.append("native finish \(nativeFinishReason)")
+        }
+        if let error {
+            let code = switch error.code {
+            case .int(let value)?: String(value)
+            case .string(let value)?: value
+            case nil: "no code"
+            }
+            var said = "error \(code): \(error.message ?? "no message")"
+            if let type = error.metadata?.errorType { said += " [\(type)]" }
+            if let name = error.metadata?.providerName { said += " from \(name)" }
+            if let raw = error.metadata?.raw {
+                said += ", raw: " + raw.prefix(600).split(whereSeparator: \.isNewline).joined(separator: " ")
+            }
+            parts.append(said)
+        }
+        parts.append("\(progress.reasoningCharacters) reasoning and \(progress.outputCharacters) text characters")
+        parts.append(isDone ? "ended with [DONE]" : "no [DONE]")
+        if let provider { parts.append("provider \(provider)") }
+        if let id { parts.append("generation \(id)") }
+        return parts.joined(separator: "; ")
+    }
+
     /// A whole stream at once (tests, canned answers): every line of `sse`, cut as the client cuts them, then the result.
     static func parse(_ sse: String, engine: EngineID) throws -> CloudResult {
         var stream = OpenRouterChatStream()
