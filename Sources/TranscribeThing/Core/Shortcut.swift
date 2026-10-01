@@ -182,6 +182,8 @@ struct Shortcut: Codable, Hashable, Sendable {
     static let fn = Shortcut(modifiers: [.init(.function)])
     static let fnSpace = Shortcut(modifiers: [.init(.function)], keyCode: KeyCode.space)
     static let fnTab = Shortcut(modifiers: [.init(.function)], keyCode: KeyCode.tab)
+    static let fnReturn = Shortcut(modifiers: [.init(.function)], keyCode: KeyCode.returnKey)
+    static let fnShiftReturn = Shortcut(modifiers: [.init(.function), .init(.shift)], keyCode: KeyCode.returnKey)
     static let escape = Shortcut(modifiers: [], keyCode: KeyCode.escape)
     static let commandFnV = Shortcut(modifiers: [.init(.command), .init(.function)], keyCode: KeyCode.ansiV)
     static let rightOption = Shortcut(modifiers: [.init(.option, .right)])
@@ -260,13 +262,15 @@ struct Shortcut: Codable, Hashable, Sendable {
 /// transcribes.
 enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, CodingKeyRepresentable {
     case pushToTalk, handsFree, pasteLast, switchModel
+    /// Polish this dictation in one request, or in two steps (`PolishMode`).
+    case polish, polishInTwoSteps
 
     var id: String { rawValue }
 
     /// Live only while a dictation records: outside one its keys reach apps.
     var isDuringDictation: Bool {
         switch self {
-        case .switchModel: true
+        case .switchModel, .polish, .polishInTwoSteps: true
         case .pushToTalk, .handsFree, .pasteLast: false
         }
     }
@@ -277,6 +281,8 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
         case .handsFree: "Hands-free"
         case .pasteLast: "Paste last transcript"
         case .switchModel: "Switch model"
+        case .polish: "Polish"
+        case .polishInTwoSteps: "Polish in two steps"
         }
     }
 
@@ -288,6 +294,8 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
             "Tap to start. Press \(bindings[.pushToTalk]?.compactDescription ?? "the push-to-talk key") to finish, esc to cancel."
         case .pasteLast: "Paste your most recent transcript again. Your clipboard stays as it was."
         case .switchModel: "While dictating: switch this dictation to your next model."
+        case .polish: "While dictating: Gemini writes it as a finished message, in one request."
+        case .polishInTwoSteps: "While dictating: transcribed as usual, then Gemini polishes the text."
         }
     }
 
@@ -297,6 +305,8 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
         case .handsFree: "lock.fill"
         case .pasteLast: "doc.on.clipboard"
         case .switchModel: "sparkles"
+        case .polish: "wand.and.sparkles"
+        case .polishInTwoSteps: "text.append"
         }
     }
 
@@ -321,6 +331,8 @@ struct ShortcutBindings: Codable, Equatable, Sendable {
         .handsFree: .fnSpace,
         .pasteLast: .commandFnV,
         .switchModel: .fnTab,
+        .polish: .fnReturn,
+        .polishInTwoSteps: .fnShiftReturn,
     ])
 
     subscript(_ action: ShortcutAction) -> Shortcut? {

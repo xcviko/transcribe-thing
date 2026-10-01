@@ -232,14 +232,34 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
         #expect(kb.press(.fn).events == [.pttDown])
     }
 
-    @Test func fnThenShiftInterruptsAndBlocksUntilEverythingIsReleased() {
+    /// fn then ⇧ may still become fn ⇧ ↩ (Polish in two steps): the hold goes on until a key decides. Another key
+    /// makes it a combo like fn ⇧ ←, which interrupts and blocks until everything is released.
+    @Test func fnThenShiftWaitsForTheKeyAndAnotherKeyInterrupts() {
         var kb = Keyboard()
         #expect(kb.press(.fn).events == [.pttDown])
-        #expect(kb.press(.leftShift).events == [.pttInterrupted])
-        // fn alone is held again, but that came from a release: no re-arm.
+        #expect(kb.press(.leftShift).events.isEmpty)
+        #expect(kb.down(kVK_LeftArrow, fnFlagged: true).events == [.pttInterrupted])
         #expect(kb.release(.leftShift).events.isEmpty)
+        // fn alone is held again, but that came from a release: no re-arm.
         #expect(kb.release(.fn).events.isEmpty)
         #expect(kb.press(.fn).events == [.pttDown])
+    }
+
+    /// While dictating, fn ↩ and fn ⇧ ↩ turn on one kind of polish each, swallowed, and the hold goes on.
+    @Test func thePolishKeysWhileHoldingTheKey() {
+        var kb = Keyboard()
+        #expect(kb.press(.fn).events == [.pttDown])
+        let polish = kb.down(kVK_Return, fnFlagged: true)
+        #expect(polish.events == [.polish(.oneRequest)] && polish.swallow)
+        #expect(kb.up(kVK_Return, fnFlagged: true).swallow)
+        kb.press(.leftShift)
+        #expect(kb.down(kVK_Return, fnFlagged: true).events == [.polish(.twoSteps)])
+        kb.up(kVK_Return, fnFlagged: true)
+        kb.release(.leftShift)
+        #expect(kb.release(.fn).events == [.pttUp], "still the dictation's hold")
+        // Outside a dictation, fn ↩ reaches the app.
+        let idle = kb.down(kVK_Return, fnFlagged: false)
+        #expect(idle.events.isEmpty && !idle.swallow)
     }
 
     @Test func shiftThenFnNeverTriggers() {

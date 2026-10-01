@@ -79,6 +79,7 @@ enum PillSnapshots {
             },
             // Models (`--only pill-models`): the chip, the tint, the hint and the no-key notice.
             SnapshotEntry("pill-models", width: 760, height: 44 + 14 * 92) { _ in PillModelSheet() },
+            SnapshotEntry("pill-polish", width: 760, height: 44 + 6 * 92 + 150) { _ in PolishSheet() },
             SnapshotEntry("pill-models-hint", width: 640, height: 150) { _ in
                 CanvasScene(model: hintModel(), notices: [])
             },
@@ -581,6 +582,110 @@ private struct PillModelSheet: View {
                 .frame(height: 92)
                 .overlay(alignment: .bottom) { Rectangle().fill(Color.stroke).frame(height: 1) }
             }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Color.bgCanvas)
+        .environment(\.pillStaticRendering, true)
+    }
+}
+
+/// Polish's drop: on in each state it shows in, then its way out of the pill, frame by frame.
+private struct PolishSheet: View {
+    private struct Row: Identifiable {
+        let id: String
+        let caption: String
+        let make: @MainActor () -> PillModel
+    }
+
+    @MainActor static func model(_ phase: PillPhase, choice: ModelChoice, polish: PolishMode,
+                                 level: Float = 0.7) -> PillModel {
+        let model = PillModelSheet.model(phase, choice: choice, level: level, chip: false)
+        model.polishMode = polish
+        return model
+    }
+
+    private var rows: [Row] {
+        [
+            Row(id: "one", caption: "Push-to-talk · Polish") { Self.model(.listening, choice: .gemini, polish: .oneRequest) },
+            Row(id: "two", caption: "Push-to-talk · Polish in two steps") {
+                Self.model(.listening, choice: .parakeet, polish: .twoSteps)
+            },
+            Row(id: "locked", caption: "Hands-free · Polish") {
+                Self.model(.locked, choice: .gemini, polish: .oneRequest, level: 0.5)
+            },
+            Row(id: "locked-two", caption: "Hands-free · two steps") {
+                Self.model(.locked, choice: .parakeet, polish: .twoSteps, level: 0.5)
+            },
+            Row(id: "processing", caption: "Processing · Polish") {
+                Self.model(.processing, choice: .gemini, polish: .oneRequest)
+            },
+            Row(id: "writing", caption: "Writing · two steps") {
+                Self.model(.processing, choice: .parakeet, polish: .twoSteps)
+                    .previewCounter(PillTokenCount(phase: .writing, tokens: 340))
+            },
+        ]
+    }
+
+    private static let frames: [Double] = [0.1, 0.25, 0.4, 0.5, 0.6, 0.7, 0.78, 0.88, 1]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 0) {
+                Text("Polish").frame(width: 200, alignment: .leading)
+                Text("On a document").frame(maxWidth: .infinity)
+                Text("On a dark editor").frame(maxWidth: .infinity)
+            }
+            .font(.system(size: 11, weight: .semibold))
+            .textCase(.uppercase)
+            .tracking(0.6)
+            .foregroundStyle(.inkTertiary)
+            .padding(.horizontal, 24)
+            .frame(height: 44)
+
+            ForEach(rows) { row in
+                HStack(spacing: 0) {
+                    Text(row.caption)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.inkSecondary)
+                        .frame(width: 200, alignment: .leading)
+                        .padding(.leading, 24)
+                    ForEach([false, true], id: \.self) { dark in
+                        ZStack(alignment: .bottom) {
+                            SnapshotPage(dark: dark)
+                            PillView(model: row.make())
+                                .padding(.bottom, 16)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .clipped()
+                    }
+                }
+                .frame(height: 92)
+                .overlay(alignment: .bottom) { Rectangle().fill(Color.stroke).frame(height: 1) }
+            }
+
+            Text("The way out")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.inkSecondary)
+                .padding(.leading, 24)
+                .padding(.top, 14)
+            HStack(spacing: 4) {
+                ForEach(Self.frames, id: \.self) { progress in
+                    ZStack {
+                        SnapshotPage(dark: true)
+                        PillCapsule()
+                            .frame(width: 44, height: PillMetrics.listeningSize.height)
+                            .overlay(alignment: .trailing) {
+                                PillPolishDrop(mode: .oneRequest, height: PillMetrics.listeningSize.height,
+                                               tint: .white, progress: progress)
+                                    .frame(width: 0, height: PillMetrics.listeningSize.height)
+                            }
+                            .offset(x: -14)
+                    }
+                    .frame(width: 74, height: 90)
+                    .clipped()
+                }
+            }
+            .padding(.horizontal, 24)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color.bgCanvas)

@@ -179,7 +179,10 @@ import Testing
     static let customized = ShortcutBindings(bindings: [
         .pushToTalk: .rightOption,
         .handsFree: Shortcut(modifiers: [.init(.control), .init(.option)], keyCode: KeyCode.space),
+        // Added after it was saved: their defaults.
         .switchModel: .fnTab,
+        .polish: .fnReturn,
+        .polishInTwoSteps: .fnShiftReturn,
     ])
 
     @Test func conflictsAndSwap() {

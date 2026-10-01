@@ -157,11 +157,13 @@ struct HotkeyRouter: Equatable, Sendable {
             fireChord(action, into: &decision)
             return decision
         }
-        if isPress, let switchModel = liveSwitchModel(config), switchModel.isModifierOnly,
-           !firedModifierChords.contains(.switchModel), matchesDuringDictation(switchModel, config.bindings) {
+        if isPress, let (action, _) = liveDuringDictation(config).first(where: { action, shortcut in
+            shortcut.isModifierOnly && !firedModifierChords.contains(action)
+                && matchesDuringDictation(shortcut, config.bindings)
+        }) {
             // Leaves the PTT hold alone: releasing the PTT key still ends the dictation.
-            firedModifierChords.insert(.switchModel)
-            decision.events.append(.cycleEngine)
+            firedModifierChords.insert(action)
+            if let event = Self.event(for: action) { decision.events.append(event) }
             return decision
         }
 
@@ -174,7 +176,7 @@ struct HotkeyRouter: Equatable, Sendable {
             }
         case .holdingModifiers:
             if ptt.modifiersMatchExactly(modifiers) { break }
-            if mayBecomeSwitchModel(ptt: ptt, config) { break }
+            if mayBecomeDuringDictationShortcut(ptt: ptt, config) { break }
             gesture = .idle
             if ptt.requiredModifiersHeld(modifiers) {
                 blockedUntilModifiersReleased = true
@@ -261,11 +263,12 @@ struct HotkeyRouter: Equatable, Sendable {
             if !input.isRepeat { fire(.cancel, into: &decision) }
             return decision
         }
-        if let switchModel = liveSwitchModel(config), switchModel.keyCode == key,
-           matchesDuringDictation(switchModel, bindings) {
+        if let (action, _) = liveDuringDictation(config).first(where: { _, shortcut in
+            shortcut.keyCode == key && matchesDuringDictation(shortcut, bindings)
+        }) {
             // Not a PTT-ending combo: the hold (and hands-free's stop-on-release) goes on.
             consume(key, into: &decision)
-            if !input.isRepeat { decision.events.append(.cycleEngine) }
+            if !input.isRepeat, let event = Self.event(for: action) { decision.events.append(event) }
             return decision
         }
 
@@ -347,7 +350,7 @@ struct HotkeyRouter: Equatable, Sendable {
         switch action {
         case .handsFree: event = .handsFreeToggle
         case .pasteLast: event = .pasteLast
-        case .pushToTalk, .switchModel: return
+        case .pushToTalk, .switchModel, .polish, .polishInTwoSteps: return
         }
         if gesture != .idle, action == .pasteLast {
             decision.events.append(.pttInterrupted)
@@ -373,8 +376,27 @@ struct HotkeyRouter: Equatable, Sendable {
     /// The switch model binding while it is live: during a dictation (a held PTT counts), with another model to
     /// switch to.
     private func liveSwitchModel(_ config: Config) -> Shortcut? {
-        guard config.switchesModels, config.isRecording || gesture != .idle else { return nil }
-        return config.bindings[.switchModel]
+        liveDuringDictation(config).first { $0.action == .switchModel }?.shortcut
+    }
+
+    /// The bindings live during a dictation only (a held PTT counts): Switch model with another model to switch to,
+    /// and the polish shortcuts.
+    private func liveDuringDictation(_ config: Config) -> [(action: ShortcutAction, shortcut: Shortcut)] {
+        guard config.isRecording || gesture != .idle else { return [] }
+        return ShortcutAction.allCases.compactMap { action in
+            guard action.isDuringDictation, let shortcut = config.bindings[action] else { return nil }
+            if action == .switchModel, !config.switchesModels { return nil }
+            return (action, shortcut)
+        }
+    }
+
+    private static func event(for action: ShortcutAction) -> HotkeyEvent? {
+        switch action {
+        case .switchModel: .cycleEngine
+        case .polish: .polish(.oneRequest)
+        case .polishInTwoSteps: .polish(.twoSteps)
+        case .pushToTalk, .handsFree, .pasteLast: nil
+        }
     }
 
     /// The held modifiers match `shortcut` exactly, or do once the PTT's and the hands-free chord's modifiers that
@@ -396,12 +418,13 @@ struct HotkeyRouter: Equatable, Sendable {
         return held
     }
 
-    /// While a modifier-only PTT is held, the extra modifiers down besides it are all part of the switch model
-    /// binding (⌘ on the way to ⌘⇧M): not an interruption yet. The key that follows decides.
-    private func mayBecomeSwitchModel(ptt: Shortcut, _ config: Config) -> Bool {
-        guard let switchModel = liveSwitchModel(config), ptt.requiredModifiersHeld(modifiers) else { return false }
+    /// While a modifier-only PTT is held, the extra modifiers down besides it are all part of a binding live during
+    /// the dictation (⌘ on the way to ⌘⇧M, ⇧ on the way to fn ⇧ ↩): not an interruption yet. The key that follows
+    /// decides.
+    private func mayBecomeDuringDictationShortcut(ptt: Shortcut, _ config: Config) -> Bool {
+        guard ptt.requiredModifiersHeld(modifiers) else { return false }
         let extra = modifiers.clearing(Set(ptt.modifiers.map(\.modifier)))
-        return !extra.isEmpty && extra.isWithin(switchModel)
+        return !extra.isEmpty && liveDuringDictation(config).contains { extra.isWithin($0.shortcut) }
     }
 
     /// Space, Esc and any key used by a binding; other keystrokes never leave the tap thread.

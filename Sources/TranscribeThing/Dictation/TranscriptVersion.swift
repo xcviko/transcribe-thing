@@ -8,11 +8,15 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
     case transcription(EngineID)
     /// `model` over the text of `.transcription(engine)`.
     case cleanup(of: EngineID, by: CleanupModel)
+    /// Polish (`Polish`): Gemini 3.8 Flash's message from the audio itself (`nil`, one request), or from the text of
+    /// `.transcription(engine)` (two steps).
+    case polish(of: EngineID?)
 
     /// The engine that heard the audio (for a clean-up, the one whose text was tidied).
     var engine: EngineID {
         switch self {
         case .transcription(let engine), .cleanup(let engine, _): engine
+        case .polish(let engine): engine ?? .geminiFlash
         }
     }
 
@@ -23,7 +27,8 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
     /// Builds from before the choice of clean-up model read it: a transcription, or a clean-up by Flash Lite. A
     /// clean-up by another model has the model in its raw value, which they can't read.
     var isReadableByOlderBuilds: Bool {
-        cleanupModel.map { $0 == .geminiFlashLite } ?? true
+        if case .polish = self { return false }
+        return cleanupModel.map { $0 == .geminiFlashLite } ?? true
     }
 
     /// The model that tidied the text; nil for a transcription.
@@ -36,6 +41,8 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
         switch self {
         case .transcription(let engine): engine.displayName
         case .cleanup(let engine, let model): "\(engine.displayName) + Clean-up by \(model.shortName)"
+        case .polish(nil): "Polished by \(EngineID.geminiFlash.displayName)"
+        case .polish(let engine?): "\(engine.displayName) + Polish by \(EngineID.geminiFlash.shortName)"
         }
     }
 
@@ -44,6 +51,8 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
         switch self {
         case .transcription(let engine): engine.shortName
         case .cleanup(let engine, _): "\(engine.shortName) + Clean-up"
+        case .polish(nil): "Polished"
+        case .polish(let engine?): "\(engine.shortName) + Polish"
         }
     }
 
@@ -52,6 +61,7 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
         switch self {
         case .transcription(let engine): "Transcribing with \(engine.shortName)…"
         case .cleanup(_, let model): "Cleaning up with \(model.shortName)…"
+        case .polish: "Polishing with \(EngineID.geminiFlash.shortName)…"
         }
     }
 
@@ -61,17 +71,21 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
         switch self {
         case .transcription(let engine): "Couldn’t transcribe with \(engine.shortName)"
         case .cleanup(_, let model): "Couldn’t clean up with \(model.shortName)"
+        case .polish: "Couldn’t polish with \(EngineID.geminiFlash.shortName)"
         }
     }
 
     /// Persisted: "parakeet", "cleanup:parakeet" (Flash Lite's: the form from before the choice of clean-up model,
-    /// which older builds read), "cleanup:parakeet:gpt6Luna". Never rename. An older build can't read a kind with a model and drops that
+    /// which older builds read), "cleanup:parakeet:gpt6Luna", "polish" (one request), "polish:parakeet" (two steps).
+    /// Never rename. An older build can't read a kind with a model and drops that
     /// version, not the entry (`TranscriptEntry.encode(to:)` keeps the text it tidied intact for them).
     var rawValue: String {
         switch self {
         case .transcription(let engine): engine.rawValue
         case .cleanup(let engine, .geminiFlashLite): "cleanup:\(engine.rawValue)"
         case .cleanup(let engine, let model): "cleanup:\(engine.rawValue):\(model.rawValue)"
+        case .polish(nil): "polish"
+        case .polish(let engine?): "polish:\(engine.rawValue)"
         }
     }
 
@@ -82,7 +96,12 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
         func engine(_ raw: Substring) -> EngineID? {
             EngineID(rawValue: String(raw)) ?? TranscriptEntry.retiredEngines[String(raw)]
         }
-        if rawValue.hasPrefix("cleanup:") {
+        if rawValue == "polish" {
+            self = .polish(of: nil)
+        } else if rawValue.hasPrefix("polish:") {
+            guard let source = engine(rawValue.dropFirst("polish:".count)) else { return nil }
+            self = .polish(of: source)
+        } else if rawValue.hasPrefix("cleanup:") {
             let parts = rawValue.dropFirst("cleanup:".count).split(separator: ":", maxSplits: 1,
                                                                    omittingEmptySubsequences: false)
             guard let source = engine(parts[0]) else { return nil }

@@ -45,7 +45,8 @@ import Testing
         #expect(proMenu.versions.map(\.kind) == [.transcription(.geminiPro)])
         #expect(proMenu.versions.map(\.title) == ["Gemini 3.1 Pro"])
         #expect(proMenu.actions.map(\.kind) == [.transcription(.parakeet), .transcription(.parakeetCloud),
-                                                .transcription(.geminiFlash)], "Pro's text isn't cleaned up either")
+                                                .transcription(.geminiFlash), .polish(of: nil), .polish(of: .geminiPro)],
+                "Pro's text isn't cleaned up either, only polished")
 
         var tidied = transcript()
         tidied.addVersion(TranscriptVersion(kind: .cleanup(of: .parakeet, by: .geminiFlashLite), text: "Hello.",
@@ -53,7 +54,8 @@ import Testing
         let tidiedMenu = menu(tidied)
         #expect(tidiedMenu.versions.map(\.title) == ["Parakeet v3", "Parakeet v3 + Clean-up by Flash Lite"])
         #expect(tidiedMenu.actions.map(\.kind) == [.transcription(.parakeetCloud), .transcription(.geminiFlash),
-                                                   .cleanup(of: .parakeet, by: .gpt6Luna)])
+                                                   .cleanup(of: .parakeet, by: .gpt6Luna), .polish(of: nil),
+                                                   .polish(of: .parakeet)])
 
         var failed = TranscriptEntry(text: "", engine: .geminiPro, status: .failed, audioDuration: 20, voicedSeconds: 10,
                                      audioFileName: "a.wav")

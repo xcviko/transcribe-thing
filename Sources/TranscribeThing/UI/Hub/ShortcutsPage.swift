@@ -35,6 +35,8 @@ struct ShortcutsPage: View {
                             .labelsHidden()
                     }
                     row(.switchModel)
+                    row(.polish)
+                    row(.polishInTwoSteps)
                 }
             }
             HubGroup("Transcripts") {

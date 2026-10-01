@@ -247,6 +247,17 @@ final class TranscriptionService {
     /// `route` sends it to any other model or level instead (`EngineCLI --cleanup-bench`, `--clean-up-effort`), and
     /// `prompt` replaces the fixed prompt (`--clean-up-prompt`); the app never passes either. `progress` hears how
     /// much of the answer has streamed in.
+    /// `transcript` (written by `source`) as the message its speaker meant to send, the second of Polish's two steps:
+    /// Gemini 3.8 Flash through the clean-up request, with `Polish.textPrompt` (or `prompt`, `EngineCLI --polish`)
+    /// and its route. Fails like a clean-up.
+    func polish(_ transcript: String, of source: EngineID, prompt: String? = nil,
+                progress: (@Sendable (ChatStreamProgress) -> Void)? = nil) async throws -> TranscriptResult {
+        var result = try await cleanUp(transcript, of: source, timeout: Polish.timeout(forCharacterCount: transcript.count),
+                                       route: Polish.route, prompt: prompt ?? Polish.textPrompt, progress: progress)
+        result.text = Polish.message(from: result.text)
+        return result
+    }
+
     func cleanUp(_ transcript: String, of source: EngineID, by model: CleanupModel = .default,
                  timeout: TimeInterval? = nil, route: CleanupRoute? = nil, prompt: String? = nil,
                  progress: (@Sendable (ChatStreamProgress) -> Void)? = nil) async throws -> TranscriptResult {

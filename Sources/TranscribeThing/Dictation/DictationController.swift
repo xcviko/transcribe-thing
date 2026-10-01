@@ -80,6 +80,8 @@ final class DictationController {
     @ObservationIgnored var generationLookupOverride: (@MainActor (String) async -> GenerationDetails?)?
     /// Replaces the clean-up request: the transcript and the engine that wrote it (the model is the job's).
     @ObservationIgnored var cleanupOverride: (@MainActor (String, EngineID) async throws -> TranscriptResult)?
+    /// Tests: the second of Polish's two steps, in place of Gemini (text in, the polished text out).
+    @ObservationIgnored var polishOverride: (@MainActor (String, EngineID) async throws -> TranscriptResult)?
     /// Replaces how long a clean-up may take to start answering (`CleanupModel.timeout(forCharacterCount:)`).
     @ObservationIgnored var cleanupTimeoutOverride: TimeInterval?
     /// Replaces how long a job waits for its local model before saying so (`modelWaitNoticeDelay`).
@@ -109,6 +111,9 @@ final class DictationController {
     /// model. It lasts while the dictation records: its job keeps it, the next dictation starts on the main model,
     /// and an Undo-resume brings back the canceled dictation's.
     private(set) var modelOverride: ModelChoice?
+    /// The polish this dictation gets (`Polish`: fn ↩ for one request, fn ⇧ ↩ for two steps), nil for none. It lasts
+    /// while the dictation records, as `modelOverride` does: its job keeps it, the next dictation starts without.
+    private(set) var polishMode: PolishMode?
     /// How long a push-to-talk hold lasts before the pill hints at Switch model.
     @ObservationIgnored var switchHintDelay: TimeInterval = 1.5
     /// How long the tap may stay down before the user is told (its own retries and brief drops stay quiet).
@@ -137,6 +142,8 @@ final class DictationController {
     @ObservationIgnored private var cancelledEngines: [UUID: EngineID] = [:]
     /// Kept recordings of dictations on clean-up (canceled or failed): Undo and Retry pick them up on clean-up again.
     @ObservationIgnored private var cleanupIDs: Set<UUID> = []
+    /// Kept recordings of polished dictations (canceled or failed): Undo and Retry polish them the same way again.
+    @ObservationIgnored private var polishModes: [UUID: PolishMode] = [:]
     @ObservationIgnored private var switchHintTask: Task<Void, Never>?
     /// The push-to-talk hold (its key-down time) the hint timer runs for.
     @ObservationIgnored private var switchHintHold: TimeInterval?
@@ -254,6 +261,7 @@ final class DictationController {
         case .pasteLast: pasteLast()
         case .cycleEngine: send(.cycleEngine)
         case .cycleEngineRepeat: repeatCycle()
+        case .polish(let mode): send(.polish(mode))
         }
     }
 
@@ -337,6 +345,7 @@ final class DictationController {
             // The dictation is over (its job and any kept recording hold the choice): the next one starts on the
             // main model.
             if modelOverride != nil { modelOverride = nil }
+            if polishMode != nil { polishMode = nil }
         }
         stateDidChange()
     }
@@ -412,6 +421,8 @@ final class DictationController {
                 post(kind)
             case .cycleEngine:
                 advanceEngine()
+            case .polish(let mode):
+                togglePolish(mode)
             }
         }
     }
@@ -498,8 +509,11 @@ final class DictationController {
         continuing = nil
         guard captureDevice.isCapturing else { return }
         // A resumed dictation keeps the canceled recording's id, already while its tail is captured.
-        let job = Job(recording: nil, engine: effectiveEngine, targetPID: inserter.frontmostPID(), id: resumedID)
-        job.cleansUp = effectiveChoice.cleansUp
+        // Polished in one request, the audio goes to Gemini; in two, its transcript is polished instead of cleaned up.
+        let engine = polishMode == .oneRequest ? EngineID.geminiFlash : effectiveEngine
+        let job = Job(recording: nil, engine: engine, targetPID: inserter.frontmostPID(), id: resumedID)
+        job.cleansUp = polishMode == nil && effectiveChoice.cleansUp
+        job.polish = polishMode
         queue.append(job)
         _ = machine.handle(.jobStarted, now: clock())
         finishingJob = job
@@ -515,7 +529,7 @@ final class DictationController {
     private func captured(_ recording: Recording, for job: Job) {
         if job.isCancelled {
             // Esc during the tail: the job already left the queue and the cancel cue has played.
-            keepCancelled(recording, engine: job.engine, cleansUp: job.cleansUp, notify: true)
+            keepCancelled(recording, engine: job.engine, cleansUp: job.cleansUp, polish: job.polish, notify: true)
             return
         }
         // A new recording may already be running (re-pressed during the tail): keep the cue out of it.
@@ -563,20 +577,23 @@ final class DictationController {
         let recording = captureDevice.isCapturing ? captureDevice.cancel() : nil
         if keepForUndo {
             guard let recording else { return }
-            keepCancelled(recording, engine: effectiveEngine, cleansUp: effectiveChoice.cleansUp, notify: notify)
+            keepCancelled(recording, engine: effectiveEngine, cleansUp: effectiveChoice.cleansUp, polish: polishMode,
+                          notify: notify)
         } else if let resumed {
             // A resumed dictation whose mic failed: its audio (the kept part at least) stays for another Undo.
             keepCancelled(recording ?? resumed, engine: effectiveEngine, cleansUp: effectiveChoice.cleansUp,
-                          notify: true)
+                          polish: polishMode, notify: true)
         }
     }
 
     /// Keeps a canceled recording for Undo (and in history when it's long).
-    private func keepCancelled(_ recording: Recording, engine: EngineID, cleansUp: Bool = false, notify: Bool) {
+    private func keepCancelled(_ recording: Recording, engine: EngineID, cleansUp: Bool = false,
+                               polish: PolishMode? = nil, notify: Bool) {
         guard recording.duration >= Self.undoMinimumDuration else { return }
         retain(recording)
         cancelledEngines[recording.id] = engine
         if cleansUp { cleanupIDs.insert(recording.id) } else { cleanupIDs.remove(recording.id) }
+        polishModes[recording.id] = polish
         lastCancelledID = recording.id
         if recording.duration >= Self.saveCancelledMinimumDuration {
             let file = history.saveAudio(recording)
@@ -698,9 +715,13 @@ final class DictationController {
         var isCancelled = false
         /// A dictation on clean-up: its transcript is tidied before it's pasted.
         var cleansUp = false
-        /// Its text is with the clean-up model now: the transcription itself is done.
+        /// A polished dictation (`Polish`): its audio goes to Gemini with the polish prompt (one request), or its
+        /// transcript is polished before it's pasted (two steps, in place of a clean-up).
+        var polish: PolishMode?
+        /// Its text is with the clean-up model, or with Gemini for Polish's second step, now: the transcription itself
+        /// is done.
         var isCleaningUp: Bool { uncleaned != nil }
-        /// The finished transcript being cleaned up, kept should the clean-up be canceled.
+        /// The finished transcript being cleaned up or polished, kept should that be canceled.
         var uncleaned: TranscriptResult?
         /// How many tokens its model is thinking or writing, as far as the stream shows (`streamed(_:for:)`): nil until
         /// the first streamed character, and always for Parakeet. The processing pill shows the newest job's.
@@ -729,11 +750,13 @@ final class DictationController {
     /// Starts transcribing right away; the result is pasted at the cursor in `targetPID` after every older job's. A
     /// recording that is already queued, being delivered, being recorded on or worked on from Home is never queued
     /// twice.
-    /// `cleansUp`: a dictation on clean-up, picked up again.
-    func enqueue(_ recording: Recording, engine: EngineID, targetPID: pid_t?, cleansUp: Bool = false) {
+    /// `cleansUp`: a dictation on clean-up, picked up again; `polish`: a polished one.
+    func enqueue(_ recording: Recording, engine: EngineID, targetPID: pid_t?, cleansUp: Bool = false,
+                 polish: PolishMode? = nil) {
         guard !isInFlight(recording.id) else { return }
-        let job = Job(recording: recording, engine: engine, targetPID: targetPID)
-        job.cleansUp = cleansUp
+        let job = Job(recording: recording, engine: polish == .oneRequest ? .geminiFlash : engine, targetPID: targetPID)
+        job.cleansUp = polish == nil && cleansUp
+        job.polish = polish
         queue.append(job)
         _ = machine.handle(.jobStarted, now: clock())
         run(job)
@@ -756,21 +779,32 @@ final class DictationController {
         let progress = engine.cloudAPI == .chatCompletions ? streamProgress(for: job, generation: generation) : nil
         job.task = Task { [weak self] in
             guard let self else { return }
-            var outcome = await self.transcribe(recording, engine: engine, progress: progress)
+            var outcome = await self.transcribe(recording, engine: engine,
+                                                prompt: job.polish == .oneRequest ? Polish.audioPrompt : nil,
+                                                progress: progress)
             guard !Task.isCancelled, job.generation == generation else { return }
-            if case .success(let result, _) = outcome, self.cleansUp(job, result) {
-                // Still processing as far as the pill goes: the text is pasted once it's tidied (or given up on).
+            if job.polish == .oneRequest, case .success(var result, _) = outcome {
+                result.text = Polish.message(from: result.text)
+                outcome = .success(result)
+            }
+            let polishes = job.polish == .twoSteps
+            if case .success(let result, _) = outcome, polishes ? Self.hasText(result) : self.cleansUp(job, result) {
+                // Still processing as far as the pill goes: the text is pasted once it's tidied or polished (or given
+                // up on).
                 job.uncleaned = result
                 job.count = nil
-                job.estimate = TokenEstimate.learned(from: self.history.entries,
-                                                     modelID: CleanupModel.default.openRouterModelID)
+                job.estimate = TokenEstimate.learned(
+                    from: self.history.entries,
+                    modelID: polishes ? Polish.route.model : CleanupModel.default.openRouterModelID)
                 job.hintTask?.cancel()
                 self.dismissWaitNotice(for: job.id)
                 self.stateDidChange()
-                let cleanup = await self.runCleanup(result.text, of: result.engine, by: .default,
-                                                    progress: self.streamProgress(for: job, generation: generation))
+                let stepProgress = self.streamProgress(for: job, generation: generation)
+                let second = polishes
+                    ? await self.runPolish(result.text, of: result.engine, progress: stepProgress)
+                    : await self.runCleanup(result.text, of: result.engine, by: .default, progress: stepProgress)
                 guard !Task.isCancelled, job.generation == generation else { return }
-                outcome = .success(result, cleanup: cleanup)
+                outcome = .success(result, cleanup: second)
             }
             job.outcome = outcome
             job.hintTask?.cancel()
@@ -812,7 +846,8 @@ final class DictationController {
 
     /// `background`: Home's work, which lets dictations have the local model first. `progress`: a dictation's, for
     /// the pill (Home never passes one).
-    private func transcribe(_ recording: Recording, engine: EngineID, background: Bool = false,
+    /// `prompt`: another prompt for Gemini (`Polish.audioPrompt`).
+    private func transcribe(_ recording: Recording, engine: EngineID, prompt: String? = nil, background: Bool = false,
                             progress: (@Sendable (ChatStreamProgress) -> Void)? = nil) async -> Outcome {
         do {
             if engine.isLocal, transcribeOverride == nil { try await waitForLocalModel(engine) }
@@ -820,8 +855,8 @@ final class DictationController {
             if let transcribeOverride {
                 result = try await transcribeOverride(recording, engine)
             } else {
-                result = try await transcription.transcribe(recording, engine: engine, background: background,
-                                                            progress: progress)
+                result = try await transcription.transcribe(recording, engine: engine, prompt: prompt,
+                                                            background: background, progress: progress)
             }
             return .success(result)
         } catch let error as AppError {
@@ -835,8 +870,35 @@ final class DictationController {
 
     /// A dictation on clean-up is tidied before it's delivered.
     private func cleansUp(_ job: Job, _ result: TranscriptResult) -> Bool {
-        job.cleansUp && CleanupModel.canClean(result.engine)
-            && !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        job.cleansUp && CleanupModel.canClean(result.engine) && Self.hasText(result)
+    }
+
+    private static func hasText(_ result: TranscriptResult) -> Bool {
+        !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Polish's second step: `text` (written by `source`) rewritten by Gemini (`TranscriptionService.polish`). Never
+    /// throws, as `runCleanup`: a failure, a timeout or an empty answer is `.failed`, and the transcript stands.
+    private func runPolish(_ text: String, of source: EngineID,
+                           progress: (@Sendable (ChatStreamProgress) -> Void)? = nil) async -> CleanupOutcome {
+        if let keyProblem = openRouterKeyProblem { return .failed(keyProblem) }
+        do {
+            var result: TranscriptResult
+            if let polishOverride {
+                let timeout = cleanupTimeoutOverride ?? Polish.timeout(forCharacterCount: text.count)
+                result = try await Self.within(timeout, source: source) { try await polishOverride(text, source) }
+            } else {
+                result = try await transcription.polish(text, of: source, progress: progress)
+            }
+            result.text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !result.text.isEmpty else { return .failed(nil) }
+            return .cleaned(result)
+        } catch let error as AppError {
+            Log.engine.error("Polish failed: \(error.code, privacy: .public)")
+            return .failed(error)
+        } catch {
+            return .failed(nil)
+        }
     }
 
     /// Tidies `text` (written by `source`) with the clean-up model `model`, giving up when its answer hasn't started
@@ -1001,15 +1063,18 @@ final class DictationController {
             forget(job.id)
             // An older notice's Retry or Undo would transcribe it yet again, or record on, now that its audio is kept.
             toasts.dismiss(recordingID: job.id)
-            // The raw transcript is always a version; a clean-up that worked is another, and the one delivered.
-            var versions = [result.version(text: text)]
+            // The raw transcript is always a version (polished in one request, the only one); a clean-up or a
+            // polish that worked is another, and the one delivered.
+            var versions = [result.version(job.polish == .oneRequest ? .polish(of: nil) : nil, text: text)]
             var delivered = text
             var cleanupFailed = false
             var cleanupError: AppError?
             let cleanupModel = CleanupModel.default
             switch cleanup {
             case .cleaned(let cleaned)?:
-                versions.append(cleaned.version(.cleanup(of: result.engine, by: cleanupModel)))
+                let kind: TranscriptVersionKind = job.polish == .twoSteps
+                    ? .polish(of: result.engine) : .cleanup(of: result.engine, by: cleanupModel)
+                versions.append(cleaned.version(kind))
                 delivered = cleaned.text
             case .failed(let error)?:
                 cleanupFailed = true
@@ -1027,7 +1092,13 @@ final class DictationController {
             // Only what is pasted follows General → Pasting: History, the cards and Copy keep the text as it came.
             let insertion = await insert(pasted(delivered), expectedPID: job.targetPID)
             handleInsertion(insertion, text: delivered, isDictation: true)
-            if cleanupFailed { postCleanupFallback(error: cleanupError, model: cleanupModel) }
+            if cleanupFailed {
+                if job.polish == .twoSteps {
+                    postPolishFallback(error: cleanupError)
+                } else {
+                    postCleanupFallback(error: cleanupError, model: cleanupModel)
+                }
+            }
         }
     }
 
@@ -1040,6 +1111,14 @@ final class DictationController {
                            body: Self.cleanupFailureReason(error, model: model),
                            actions: keyProblem ? [NoticeAction(title: "Open Models", kind: .openHub(.models), isPrimary: true)] : [],
                            lifetime: .seconds(keyProblem ? 6 : 4)))
+    }
+
+    /// The quiet word that a dictation's polish didn't happen: its transcript was pasted instead.
+    private func postPolishFallback(error: AppError?) {
+        toasts.post(Notice(dedupeKey: "polish.fallback", style: .info, symbol: "wand.and.sparkles",
+                           title: "Couldn’t polish · pasted the transcript",
+                           body: Self.homeFailureReason(error, making: .polish(of: .parakeet)),
+                           actions: [], lifetime: .seconds(4)))
     }
 
     /// Asks OpenRouter about a delivered cloud version in the background when its response left something out: the
@@ -1095,6 +1174,7 @@ final class DictationController {
         let file = history.saveAudio(recording)
         retain(recording)
         if job.cleansUp { cleanupIDs.insert(job.id) }
+        polishModes[job.id] = job.polish
         // Its Retry is the same model: another one for this recording is the user's call, from History.
         let notice = error.notice(recordingID: job.id, fallbackEngine: nil, engine: job.engine)
         history.upsert(TranscriptEntry(
@@ -1274,6 +1354,7 @@ final class DictationController {
         switch kind {
         case .transcription(let engine): retry(entry, with: engine)
         case .cleanup(let source, let model): cleanUp(entry, of: source, by: model)
+        case .polish(let source): polish(entry, of: source)
         }
     }
 
@@ -1318,6 +1399,57 @@ final class DictationController {
         homeTasks[id] = Task { [weak self] in
             guard let self else { return }
             let outcome = await self.runCleanup(raw.text, of: source, by: model)
+            guard self.endHomeWork(for: id) else { return }
+            switch outcome {
+            case .cleaned(let result):
+                let version = result.version(kind)
+                guard var current = self.history.entry(id: id), current.status == .success else { return }
+                current.addVersion(version)
+                self.history.upsert(current)
+                self.resolveGeneration(of: version, entryID: id)
+            case .failed(let error):
+                guard self.history.entry(id: id) != nil else { return }
+                self.homeFailures[id] = HomeFailure(kind: kind, reason: Self.homeFailureReason(error, making: kind))
+            }
+        }
+    }
+
+    /// Home's Polish of a row: from its recording in one request (`source` nil), or from `source`'s transcript in the
+    /// second of two steps. Lands as a version like a clean-up does.
+    private func polish(_ entry: TranscriptEntry, of source: EngineID?) {
+        let id = entry.id
+        let kind = TranscriptVersionKind.polish(of: source)
+        guard !isInFlight(id) else { return }
+        if let current = history.entry(id: id), current.status == .success, current.hasVersion(kind) {
+            showVersion(kind, of: id)
+            return
+        }
+        let raw = source.flatMap { history.entry(id: id)?.version(.transcription($0)) }
+        if source != nil, raw.map(\.text).map({ $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) ?? true {
+            return
+        }
+        let recording = source == nil ? recording(for: id) : nil
+        if source == nil, recording == nil {
+            homeFailures[id] = .recordingGone(kind)
+            return
+        }
+        beginHomeWork(kind, for: id)
+        homeTasks[id] = Task { [weak self] in
+            guard let self else { return }
+            let outcome: CleanupOutcome
+            if let source, let raw {
+                outcome = await self.runPolish(raw.text, of: source)
+            } else if let recording {
+                switch await self.transcribe(recording, engine: .geminiFlash, prompt: Polish.audioPrompt, background: true) {
+                case .success(var result, _):
+                    result.text = Polish.message(from: result.text).trimmingCharacters(in: .whitespacesAndNewlines)
+                    outcome = result.text.isEmpty ? .failed(nil) : .cleaned(result)
+                case .failure(let error):
+                    outcome = .failed(error)
+                }
+            } else {
+                return
+            }
             guard self.endHomeWork(for: id) else { return }
             switch outcome {
             case .cleaned(let result):
@@ -1430,8 +1562,11 @@ final class DictationController {
         case (nil, _): "It returned no text."
         case (.timeout?, _): "It took too long."
         case (.openRouterTruncated?, _): "It stopped before finishing."
-        case (.openRouterRefused?, .cleanup), (.openRouterBadRequest?, .cleanup): "It couldn’t process the text."
+        case (.openRouterRefused?, .cleanup), (.openRouterBadRequest?, .cleanup),
+             (.openRouterRefused?, .polish(_?)), (.openRouterBadRequest?, .polish(_?)): "It couldn’t process the text."
         case (let error?, .cleanup(_, let model)): cleanupFailureReason(error, model: model)
+        case (let error?, .polish):
+            accountFailureReason(error) ?? error.notice(recordingID: nil, fallbackEngine: nil, engine: .geminiFlash).title
         case (.openRouterRefused?, _), (.openRouterBadRequest?, _): "It couldn’t process this recording."
         case (.engineFailed?, _): "It ran into a problem."
         case (.modelNotDownloaded?, _): "It isn’t downloaded yet."
@@ -1499,7 +1634,8 @@ final class DictationController {
             return
         }
         let chosen = engine ?? history.entry(id: id)?.engine ?? settings.mainEngine
-        enqueue(recording, engine: chosen, targetPID: inserter.frontmostPID(), cleansUp: cleanupIDs.contains(id))
+        enqueue(recording, engine: chosen, targetPID: inserter.frontmostPID(), cleansUp: cleanupIDs.contains(id),
+                polish: polishModes[id])
     }
 
     /// Undo of a cancel: the dictation picks up again hands-free, its kept audio first, and nothing is transcribed
@@ -1522,6 +1658,7 @@ final class DictationController {
         resumeRequest = recording
         // The same dictation goes on, with the model it had; `send` drops it if the mic won't start.
         modelOverride = choice == settings.lineup.main ? nil : choice
+        polishMode = polishModes[id]
         send(.resume(prefix: recording.duration))
         resumeRequest = nil
         if continuing?.id != id {
@@ -1733,6 +1870,7 @@ final class DictationController {
             retained[evicted] = nil
             cancelledEngines[evicted] = nil
             cleanupIDs.remove(evicted)
+            polishModes[evicted] = nil
         }
         // Past `retainedSecondsLimit` of audio, the oldest recordings whose audio History keeps on disk let go of
         // their samples (Undo and Retry read them back, and keep their model); the newest always stays.
@@ -1752,6 +1890,7 @@ final class DictationController {
         retainedOrder.removeAll { $0 == id }
         cancelledEngines[id] = nil
         cleanupIDs.remove(id)
+        polishModes[id] = nil
     }
 
     // MARK: - Switch model
@@ -1821,6 +1960,23 @@ final class DictationController {
             return
         }
         switchModel(to: choice, tick: false)
+    }
+
+    /// A polish shortcut while dictating: that polish on for this dictation, or off when pressed again, with its drop.
+    /// Both go through Gemini on OpenRouter: when it can't take the dictation now, it is refused as Switch model would
+    /// refuse it.
+    private func togglePolish(_ mode: PolishMode) {
+        if polishMode == mode {
+            polishMode = nil
+            playCue(.polishOff)
+            return
+        }
+        if let refusal = switchRefusal(.gemini) {
+            rejectSwitch(blocked: [(.gemini, refusal)])
+            return
+        }
+        polishMode = mode
+        playCue(.polishOn)
     }
 
     /// Another choice for this dictation: the pill's chip and a soft tick.
@@ -1982,14 +2138,23 @@ final class DictationController {
         // An idle request doesn't cut the error flourish short: PillModel holds it for its minimum time.
         if pillModel.phase != phase { pillModel.phase = phase }
         // The dictation's model from key-down until its text lands: the tint (and the chip) stay through processing.
+        // Polished in one request, the dictation goes to Gemini whatever its model: the pill says so.
         let session: ModelChoice? = if phase.isRecording || modelOverride != nil {
-            effectiveChoice
+            polishMode == .oneRequest ? .gemini : effectiveChoice
         } else if phase == .processing, let job = pillJob {
             ModelChoice(engine: job.engine, cleansUp: job.cleansUp)
         } else {
             nil
         }
         if pillModel.sessionModel != session { pillModel.sessionModel = session }
+        let polish: PolishMode? = if phase.isRecording {
+            polishMode
+        } else if phase == .processing {
+            pillJob?.polish
+        } else {
+            nil
+        }
+        if pillModel.polishMode != polish { pillModel.polishMode = polish }
         // The same job's count: with several in flight, the newest one's.
         let count = phase == .processing ? pillJob?.count : nil
         if pillModel.tokenCount != count { pillModel.tokenCount = count }

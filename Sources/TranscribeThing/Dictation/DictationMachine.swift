@@ -30,6 +30,8 @@ struct DictationMachine: Equatable {
         case handsFreeToggle, cancel, pillClick, pillStop, pillCancel
         /// The switch model shortcut: another engine for the dictation being recorded.
         case cycleEngine
+        /// A polish shortcut: that kind of polish on or off for the dictation being recorded.
+        case polish(PolishMode)
         /// Undo of a canceled dictation: record on, hands-free, after `prefix` seconds of kept audio.
         case resume(prefix: TimeInterval)
         case timer(TimerID)
@@ -58,6 +60,8 @@ struct DictationMachine: Equatable {
         case notice(NoticeKind)
         /// Step to the next engine for this dictation (the controller owns the choice and its sound).
         case cycleEngine
+        /// Turn that kind of polish on or off for this dictation (the controller owns it and its sound).
+        case polish(PolishMode)
     }
 
     enum NoticeKind: Equatable {
@@ -186,6 +190,9 @@ struct DictationMachine: Equatable {
         case .cycleEngine:
             switchedDuringPress = true
             return [.cycleEngine]
+        case .polish(let mode):
+            switchedDuringPress = true
+            return [.polish(mode)]
         case .deviceLost:
             capture = .idle
             return [.cancelTimer(.arming), .cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)]
@@ -221,6 +228,9 @@ struct DictationMachine: Equatable {
         case .cycleEngine:
             switchedDuringPress = true
             return [.cycleEngine]
+        case .polish(let mode):
+            switchedDuringPress = true
+            return [.polish(mode)]
         case .deviceLost:
             capture = .idle
             return [.stopCaptureAndTranscribe(mode: .pushToTalk), .notice(.deviceLostTranscribing)]
@@ -262,6 +272,10 @@ struct DictationMachine: Equatable {
             // fn+Tab: the fn press was for switching, so its release must not stop hands-free.
             capture = .locked(startedAt: startedAt)
             return [.cycleEngine]
+        case .polish(let mode):
+            // fn+↩ likewise.
+            capture = .locked(startedAt: startedAt)
+            return [.polish(mode)]
         default:
             return handleHandsFreeCommon(input)
         }
@@ -273,6 +287,8 @@ struct DictationMachine: Equatable {
             return cancelRecording()
         case .cycleEngine:
             return [.cycleEngine]
+        case .polish(let mode):
+            return [.polish(mode)]
         case .deviceLost:
             capture = .idle
             return [.stopCaptureAndTranscribe(mode: .handsFree), .notice(.deviceLostTranscribing)]

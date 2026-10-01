@@ -573,7 +573,8 @@ enum TaggedTranscript {
         case pair, several, unclosed, none
     }
 
-    static func extract(_ answer: String) -> (text: String, tags: Tags) {
+    /// The text of the last `open`…`close` pair (`Polish` reads its `<message>` tags the same way).
+    static func extract(_ answer: String, open: String = open, close: String = close) -> (text: String, tags: Tags) {
         let opens = ranges(of: open, in: answer), closes = ranges(of: close, in: answer)
         let several = opens.count > 1 || closes.count > 1
         if let closing = closes.last {

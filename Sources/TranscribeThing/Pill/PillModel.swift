@@ -50,6 +50,8 @@ final class PillModel {
     /// tint shows it throughout (`PillPalette.accent`, in the color Models gives it, whichever model is main); the
     /// chip only now and then (`showsChip`).
     var sessionModel: ModelChoice?
+    /// The polish the dictation on screen gets (`Polish`): the pill grows its drop. nil for none.
+    var polishMode: PolishMode?
     /// Bumped on every switch of the dictation's model, back to the main model too, so the chip names the new one
     /// for a moment.
     var engineChipPulse = 0 {

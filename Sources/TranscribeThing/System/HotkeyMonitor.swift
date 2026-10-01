@@ -10,6 +10,8 @@ enum HotkeyEvent: Equatable, Sendable {
     case cycleEngine
     /// Its key held down: an autorepeat, which steps on too.
     case cycleEngineRepeat
+    /// A polish shortcut, during a dictation: turns that kind of polish on or off for it.
+    case polish(PolishMode)
 }
 
 /// Marker written into `kCGEventSourceUserData` of every event transcribe-thing synthesizes (the ⌘V paste),

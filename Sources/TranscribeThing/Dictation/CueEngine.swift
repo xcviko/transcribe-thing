@@ -48,7 +48,7 @@ final class CueEngine: @unchecked Sendable {
     /// A start this long is a wake (AirPods); the built-in speakers start in a few ms and move nothing.
     static let slowStart: TimeInterval = 0.02
     /// Cues that are dropped rather than played more than `maxLateness` late.
-    static let keyFeedback: Set<SoundEffect> = [.start, .stop, .lock, .paste, .cancel, .modelSwitch]
+    static let keyFeedback: Set<SoundEffect> = [.start, .stop, .lock, .paste, .cancel, .modelSwitch, .polishOn, .polishOff]
 
     private let queue = DispatchQueue(label: "dev.transcribe-thing.audio.cues", qos: .userInteractive)
     private let idleDelay: TimeInterval

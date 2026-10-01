@@ -49,6 +49,9 @@ enum PillMetrics {
     static let tooltipHeight: CGFloat = 28
     /// Invisible margin around the pill that counts as hovering it (and clicking it).
     static let hoverMargin: CGFloat = 12
+    /// Polish's drop beside the pill: its gap from the capsule's right end, and its diameter to the capsule's height.
+    static let polishDropGap: CGFloat = 6
+    static let polishDropRatio: CGFloat = 0.86
     /// The model chip (and the Switch model hint) floats this far above the pill's top edge.
     static let chipGap: CGFloat = 6
     static let chipHeight: CGFloat = 22
@@ -585,6 +588,11 @@ struct PillFace: View {
         carriesModel && model.showsChip ? choice : nil
     }
 
+    /// Polish on for the dictation on screen: the drop beside the pill (only while the content carries its model).
+    private var polish: PolishMode? {
+        carriesModel ? model.polishMode : nil
+    }
+
     var body: some View {
         let size = self.size ?? capsule.size
         let accent = self.accent
@@ -592,6 +600,13 @@ struct PillFace: View {
         PillCapsule(quiet: capsule.isQuiet, glow: capsule == .error ? PillPalette.error : nil,
                     accent: capsule.content == .empty ? nil : accent)
             .frame(width: size.width, height: size.height)
+            .overlay(alignment: .trailing) {
+                // Starts at the capsule's right end: the drop wells out of it.
+                PillPolishDrop(mode: polish, height: size.height, tint: accent?.mark ?? .white,
+                               reduceMotion: reduceMotion)
+                    .frame(width: 0, height: size.height)
+                    .offset(x: 0)
+            }
             .overlay { contentView(accent: accent) }
             // Above the pill and part of it: it springs in on a switch, shrinks into the resting capsule with the
             // content and leaves with the pill in one piece.
@@ -726,6 +741,133 @@ struct PillCapsule: View {
             }
             .shadow(color: .black.opacity(quiet ? 0.11 : 0.22), radius: 1, x: 0, y: 1)
             .shadow(color: .black.opacity(quiet ? 0.14 : 0.28), radius: 9, x: 0, y: 6)
+    }
+}
+
+// MARK: - Polish's drop
+
+/// Polish on for the dictation (`PillModel.polishMode`): a drop wells out of the pill's right end, stretches a neck,
+/// breaks off and floats beside it with its symbol, the way the Dynamic Island splits in two; it flows back in when
+/// Polish goes off. The symbol says which polish: the wand for one request, text and a wand for two steps.
+struct PillPolishDrop: View {
+    var mode: PolishMode?
+    /// The capsule's height: the drop is a little smaller.
+    var height: CGFloat
+    var tint: Color
+    var reduceMotion = false
+    /// Snapshots: a still frame of the way out (0 inside the pill, 1 broken off).
+    var progress: Double?
+
+    /// The last polish shown, so the symbol stays while the drop flows back in.
+    @State private var shown: PolishMode?
+
+    var body: some View {
+        let target: Double = mode == nil ? 0 : 1
+        PillPolishDropShape(progress: progress ?? target, height: height, symbol: (mode ?? shown).map(Self.symbol),
+                            tint: tint)
+            .animation(progress != nil ? nil : reduceMotion ? .easeInOut(duration: 0.15)
+                       : .spring(duration: mode == nil ? 0.38 : 0.62, bounce: mode == nil ? 0 : 0.18),
+                       value: mode == nil)
+            .onChange(of: mode, initial: true) { _, new in
+                if let new { shown = new }
+            }
+            .accessibilityHidden(mode == nil)
+            .accessibilityLabel(mode == .twoSteps ? "Polish in two steps is on" : "Polish is on")
+    }
+
+    static func symbol(_ mode: PolishMode) -> String {
+        switch mode {
+        case .oneRequest: "wand.and.sparkles"
+        case .twoSteps: "text.append"
+        }
+    }
+}
+
+/// The drop at `progress` along its way out, in a frame whose leading edge is the capsule's right end: it swells at
+/// the end (to 0.3), moves off on a neck that pinches as it stretches and breaks at 0.8, and settles a gap away. Its
+/// edge and shadow come once it's off, so nothing draws over the pill on the way.
+private struct PillPolishDropShape: View, Animatable {
+    var progress: Double
+    var height: CGFloat
+    var symbol: String?
+    var tint: Color
+
+    var animatableData: Double {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    var body: some View {
+        let geometry = Geometry(progress: progress, height: height)
+        ZStack {
+            geometry.neck.fill(PillPalette.fill)
+            Circle()
+                .fill(PillPalette.fill)
+                .overlay {
+                    Circle().strokeBorder(LinearGradient(colors: [.white.opacity(0.24), .white.opacity(0.07)],
+                                                         startPoint: .top, endPoint: .bottom), lineWidth: 0.5)
+                        .opacity(geometry.separation)
+                }
+                .overlay {
+                    if let symbol {
+                        Image(systemName: symbol)
+                            .font(.system(size: geometry.diameter * 0.42, weight: .semibold))
+                            .foregroundStyle(tint)
+                            .opacity(geometry.symbolOpacity)
+                    }
+                }
+                .frame(width: geometry.diameter, height: geometry.diameter)
+                .scaleEffect(geometry.scale)
+                .position(x: geometry.centerX, y: height / 2)
+                .shadow(color: .black.opacity(0.22 * geometry.separation), radius: 1, x: 0, y: 1)
+                .shadow(color: .black.opacity(0.28 * geometry.separation), radius: 9, x: 0, y: 6)
+        }
+        .frame(width: 1, height: height, alignment: .leading)
+        .opacity(progress > 0.001 ? 1 : 0)
+    }
+
+    struct Geometry {
+        var progress: Double
+        var height: CGFloat
+
+        var diameter: CGFloat { height * PillMetrics.polishDropRatio }
+        var radius: CGFloat { diameter / 2 }
+        /// Swells at the pill's end.
+        var scale: CGFloat { CGFloat(Self.smooth(0, 0.3, progress)) }
+        /// At the pill's end at first, a gap away once off.
+        var centerX: CGFloat {
+            let start = -radius * 0.2, end = PillMetrics.polishDropGap + radius
+            return start + (end - start) * CGFloat(Self.smooth(0.25, 0.78, progress))
+        }
+        /// Broken off: its edge and shadow.
+        var separation: Double { Self.smooth(0.72, 0.9, progress) }
+        var symbolOpacity: Double { Self.smooth(0.65, 0.95, progress) }
+
+        /// The bridge from the pill's end to the drop: pinched in the middle more as it stretches, a thread when it
+        /// breaks.
+        var neck: Path {
+            let stretch = CGFloat(Self.smooth(0.3, 0.8, progress))
+            var path = Path()
+            guard progress > 0.2, progress < 0.8 else { return path }
+            let mid = height / 2
+            let atPill = radius * 0.75 * (1 - 0.5 * stretch) * scale
+            let atDrop = radius * 0.7 * (1 - 0.5 * stretch) * scale
+            let pinch = radius * 0.62 * (1 - stretch)
+            let x0: CGFloat = -2, x1 = max(x0 + 1, centerX - radius * 0.5)
+            let xm = (x0 + x1) / 2
+            path.move(to: CGPoint(x: x0, y: mid - atPill))
+            path.addQuadCurve(to: CGPoint(x: x1, y: mid - atDrop), control: CGPoint(x: xm, y: mid - pinch))
+            path.addLine(to: CGPoint(x: x1, y: mid + atDrop))
+            path.addQuadCurve(to: CGPoint(x: x0, y: mid + atPill), control: CGPoint(x: xm, y: mid + pinch))
+            path.closeSubpath()
+            return path
+        }
+
+        /// 0 before `from`, 1 after `to`, eased between.
+        static func smooth(_ from: Double, _ to: Double, _ x: Double) -> Double {
+            let t = min(1, max(0, (x - from) / (to - from)))
+            return t * t * (3 - 2 * t)
+        }
     }
 }
 

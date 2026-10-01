@@ -20,7 +20,8 @@ final class SoundPlayer {
     /// Lengths of the bundled WAVs (scripts/gen-sounds.py); used until the files are loaded.
     static let nominalDurations: [SoundEffect: TimeInterval] = [
         .start: 0.07, .stop: 0.085, .lock: 0.125, .paste: 0.045,
-        .cancel: 0.095, .alert: 0.25, .error: 0.21, .success: 0.27, .modelSwitch: 0.07,
+        .cancel: 0.095, .alert: 0.25, .error: 0.21, .success: 0.27, .modelSwitch: 0.07, .polishOn: 0.09,
+        .polishOff: 0.09,
     ]
 
     init(settings: AppSettings, engine: CueEngine = CueEngine()) {

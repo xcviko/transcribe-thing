@@ -26,6 +26,8 @@ A "tongue click": pitch-dropping mouth pops (tongue voice), bodies 120-260 Hz, 1
   alert    two pitched pops G3 -> B3, 110 ms apart      error    two low pops 140 -> 124 Hz, 105 ms apart
   success  pops G3 B3 D4, 60 ms apart, 270 ms
   modelSwitch  two tiny tongue ticks 280 -> 190 and 330 -> 220 Hz, 28 ms apart, 70 ms, as quiet as paste
+  polishOn / polishOff  a drop: one tongue pop gliding up 190 -> 330 Hz, or down 330 -> 190, 90 ms, -15 dBFS
+               (only this set has them: Polish came after the others were picked)
 
 B "low wood block": modal knocks, fundamentals 155-290 Hz, tau 11-19 ms, low-passed at 1.5-2 kHz, a faint sub thump.
   start    block 280 Hz, 90 ms                          stop     duller block 215 Hz sagging 1.5 semitones, 105 ms
@@ -463,6 +465,20 @@ def a_model_switch():
     return finish(c.buf, -19, lowpass_hz=1500, fade_out_ms=8)
 
 
+def a_polish_on():
+    c = Canvas(0.090)
+    c.add(0.0, tongue(190.0, 330.0, glide_s=0.030, tau=0.014, seconds=0.090, h2_db=-14.0, cavity=(2.4, -10.0, 0.003),
+                      click_db=-24.0, seed=135))
+    return finish(c.buf, -15, lowpass_hz=1600, fade_out_ms=14)
+
+
+def a_polish_off():
+    c = Canvas(0.090)
+    c.add(0.0, tongue(330.0, 190.0, glide_s=0.030, tau=0.014, seconds=0.090, h2_db=-14.0, cavity=(2.4, -10.0, 0.003),
+                      click_db=-24.0, seed=137))
+    return finish(c.buf, -15, lowpass_hz=1600, fade_out_ms=14)
+
+
 def a_alert():
     c = Canvas(0.250)
     c.add(0.000, tongue(215.0, 196.0, glide_s=0.010, tau=0.022, seconds=0.140, h2_db=-16.0,
@@ -657,7 +673,7 @@ SETS = {
                 "modelSwitch": make_model_switch},
     "A": {"start": a_start, "stop": a_stop, "lock": a_lock, "paste": a_paste,
           "cancel": a_cancel, "alert": a_alert, "error": a_error, "success": a_success,
-          "modelSwitch": a_model_switch},
+          "modelSwitch": a_model_switch, "polishOn": a_polish_on, "polishOff": a_polish_off},
     "B": {"start": b_start, "stop": b_stop, "lock": b_lock, "paste": b_paste,
           "cancel": b_cancel, "alert": b_alert, "error": b_error, "success": b_success,
           "modelSwitch": b_model_switch},
