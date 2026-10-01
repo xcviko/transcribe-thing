@@ -8,15 +8,14 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
     case transcription(EngineID)
     /// `model` over the text of `.transcription(engine)`.
     case cleanup(of: EngineID, by: CleanupModel)
-    /// Polish (`Polish`): Gemini 3.8 Flash's message from the audio itself (`nil`, one request), or from the text of
-    /// `.transcription(engine)` (two steps).
-    case polish(of: EngineID?)
+    /// Polish (`Polish`): Gemini 3.8 Flash's message from the audio.
+    case polish
 
     /// The engine that heard the audio (for a clean-up, the one whose text was tidied).
     var engine: EngineID {
         switch self {
         case .transcription(let engine), .cleanup(let engine, _): engine
-        case .polish(let engine): engine ?? .geminiFlash
+        case .polish: .geminiFlash
         }
     }
 
@@ -41,8 +40,7 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
         switch self {
         case .transcription(let engine): engine.displayName
         case .cleanup(let engine, let model): "\(engine.displayName) + Clean-up by \(model.shortName)"
-        case .polish(nil): "Polished by \(EngineID.geminiFlash.displayName)"
-        case .polish(let engine?): "\(engine.displayName) + Polish by \(EngineID.geminiFlash.shortName)"
+        case .polish: "Polished by \(EngineID.geminiFlash.displayName)"
         }
     }
 
@@ -51,8 +49,7 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
         switch self {
         case .transcription(let engine): engine.shortName
         case .cleanup(let engine, _): "\(engine.shortName) + Clean-up"
-        case .polish(nil): "Polished"
-        case .polish(let engine?): "\(engine.shortName) + Polish"
+        case .polish: "Polished"
         }
     }
 
@@ -76,16 +73,14 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
     }
 
     /// Persisted: "parakeet", "cleanup:parakeet" (Flash Lite's: the form from before the choice of clean-up model,
-    /// which older builds read), "cleanup:parakeet:gpt6Luna", "polish" (one request), "polish:parakeet" (two steps).
-    /// Never rename. An older build can't read a kind with a model and drops that
+    /// which older builds read), "cleanup:parakeet:gpt6Luna", "polish". Never rename. An older build can't read a kind with a model and drops that
     /// version, not the entry (`TranscriptEntry.encode(to:)` keeps the text it tidied intact for them).
     var rawValue: String {
         switch self {
         case .transcription(let engine): engine.rawValue
         case .cleanup(let engine, .geminiFlashLite): "cleanup:\(engine.rawValue)"
         case .cleanup(let engine, let model): "cleanup:\(engine.rawValue):\(model.rawValue)"
-        case .polish(nil): "polish"
-        case .polish(let engine?): "polish:\(engine.rawValue)"
+        case .polish: "polish"
         }
     }
 
@@ -97,10 +92,7 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
             EngineID(rawValue: String(raw)) ?? TranscriptEntry.retiredEngines[String(raw)]
         }
         if rawValue == "polish" {
-            self = .polish(of: nil)
-        } else if rawValue.hasPrefix("polish:") {
-            guard let source = engine(rawValue.dropFirst("polish:".count)) else { return nil }
-            self = .polish(of: source)
+            self = .polish
         } else if rawValue.hasPrefix("cleanup:") {
             let parts = rawValue.dropFirst("cleanup:".count).split(separator: ":", maxSplits: 1,
                                                                    omittingEmptySubsequences: false)

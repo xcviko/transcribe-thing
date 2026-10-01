@@ -79,7 +79,7 @@ enum PillSnapshots {
             },
             // Models (`--only pill-models`): the chip, the tint, the hint and the no-key notice.
             SnapshotEntry("pill-models", width: 760, height: 44 + 14 * 92) { _ in PillModelSheet() },
-            SnapshotEntry("pill-polish", width: 760, height: 44 + 6 * 92 + 150) { _ in PolishSheet() },
+            SnapshotEntry("pill-polish", width: 760, height: 44 + 4 * 92 + 150) { _ in PolishSheet() },
             SnapshotEntry("pill-models-hint", width: 640, height: 150) { _ in
                 CanvasScene(model: hintModel(), notices: [])
             },
@@ -597,31 +597,19 @@ private struct PolishSheet: View {
         let make: @MainActor () -> PillModel
     }
 
-    @MainActor static func model(_ phase: PillPhase, choice: ModelChoice, polish: PolishMode,
-                                 level: Float = 0.7) -> PillModel {
-        let model = PillModelSheet.model(phase, choice: choice, level: level, chip: false)
-        model.polishMode = polish
+    @MainActor static func model(_ phase: PillPhase, level: Float = 0.7) -> PillModel {
+        let model = PillModelSheet.model(phase, choice: .gemini, level: level, chip: false)
+        model.polishes = true
         return model
     }
 
     private var rows: [Row] {
         [
-            Row(id: "one", caption: "Push-to-talk · Polish") { Self.model(.listening, choice: .gemini, polish: .oneRequest) },
-            Row(id: "two", caption: "Push-to-talk · Polish in two steps") {
-                Self.model(.listening, choice: .parakeet, polish: .twoSteps)
-            },
-            Row(id: "locked", caption: "Hands-free · Polish") {
-                Self.model(.locked, choice: .gemini, polish: .oneRequest, level: 0.5)
-            },
-            Row(id: "locked-two", caption: "Hands-free · two steps") {
-                Self.model(.locked, choice: .parakeet, polish: .twoSteps, level: 0.5)
-            },
-            Row(id: "processing", caption: "Processing · Polish") {
-                Self.model(.processing, choice: .gemini, polish: .oneRequest)
-            },
-            Row(id: "writing", caption: "Writing · two steps") {
-                Self.model(.processing, choice: .parakeet, polish: .twoSteps)
-                    .previewCounter(PillTokenCount(phase: .writing, tokens: 340))
+            Row(id: "listening", caption: "Push-to-talk · Polish") { Self.model(.listening) },
+            Row(id: "locked", caption: "Hands-free · Polish") { Self.model(.locked, level: 0.5) },
+            Row(id: "processing", caption: "Processing · Polish") { Self.model(.processing) },
+            Row(id: "thinking", caption: "Thinking · Polish") {
+                Self.model(.processing).previewCounter(PillTokenCount(phase: .thinking, tokens: 1_200))
             },
         ]
     }
@@ -674,8 +662,8 @@ private struct PolishSheet: View {
                         SnapshotPage(dark: true)
                         PillCapsule()
                             .frame(width: 44, height: PillMetrics.listeningSize.height)
-                            .overlay(alignment: .trailing) {
-                                PillPolishDrop(mode: .oneRequest, height: PillMetrics.listeningSize.height,
+                            .background(alignment: .trailing) {
+                                PillPolishDrop(isOn: true, height: PillMetrics.listeningSize.height,
                                                tint: .white, progress: progress)
                                     .frame(width: 0, height: PillMetrics.listeningSize.height)
                             }

@@ -36,7 +36,6 @@ struct ShortcutsPage: View {
                     }
                     row(.switchModel)
                     row(.polish)
-                    row(.polishInTwoSteps)
                 }
             }
             HubGroup("Transcripts") {

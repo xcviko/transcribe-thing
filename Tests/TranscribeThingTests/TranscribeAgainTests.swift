@@ -379,11 +379,10 @@ import Testing
         #expect(m.title == "Versions" && !m.isRetry && m.runningTitle == nil)
         #expect(m.versions == [VersionsMenu.Version(kind: .transcription(.parakeet), summary: "0.4 s", isCurrent: true)])
         #expect(m.actions.map(\.kind) == [.transcription(.parakeetCloud), .transcription(.geminiFlash),
-                                          .cleanup(of: .parakeet, by: .gpt6Luna), .polish(of: nil),
-                                          .polish(of: .parakeet)])
+                                          .cleanup(of: .parakeet, by: .gpt6Luna), .polish])
         #expect(m.actions.allSatisfy { $0.isEnabled })
         #expect(m.actions.map(\.title) == ["Parakeet v3 · Cloud", "Gemini 3.8 Flash", "Clean Up with GPT-6 Luna",
-                                           "Polish with Gemini 3.8 Flash", "Polish Parakeet v3 with Gemini 3.8 Flash"])
+                                           "Polish with Gemini 3.8 Flash"])
     }
 
     @Test func aModelAlreadyUsedIsAVersionNotAnAction() {
@@ -396,7 +395,7 @@ import Testing
         #expect(m.versions.map(\.isCurrent) == [false, true, false])
         #expect(m.versions[1].summary == "3.0 s · $0.002")
         #expect(m.actions.map(\.kind) == [.transcription(.parakeetCloud), .cleanup(of: .parakeet, by: .gpt6Luna),
-                                          .polish(of: nil), .polish(of: .parakeet), .polish(of: .geminiFlash)],
+                                          .polish],
                 "Flash Lite already cleaned it up; Luna still can")
     }
 
@@ -415,18 +414,16 @@ import Testing
                                            .cleanup(of: .parakeet, by: .geminiFlashLite)])
     }
 
-    /// Polish from the recording (one request) needs its audio; from a transcript (two steps), its text. Each once.
-    @Test func polishIsOfferedFromTheRecordingAndEachTranscript() {
+    /// Polish runs Gemini on the recording again: it needs the audio, and it's offered once.
+    @Test func polishIsOfferedOnceAndNeedsTheRecording() {
         var entry = transcript(.parakeet)
-        entry.addVersion(TranscriptVersion(kind: .polish(of: nil), text: "Polished.", metadata: TranscriptMetadata()),
+        entry.addVersion(TranscriptVersion(kind: .polish, text: "Polished.", metadata: TranscriptMetadata()),
                          makeCurrent: false)
-        #expect(menu(entry).actions.filter { if case .polish = $0.kind { true } else { false } }.map(\.kind)
-                == [.polish(of: .parakeet)], "polished from the recording already")
+        #expect(!menu(entry).actions.contains { $0.kind == .polish }, "polished already")
         #expect(menu(entry).versions.last?.title == "Polished by Gemini 3.8 Flash")
         var gone = transcript(.parakeet)
         gone.audioFileName = nil
-        #expect(action(menu(gone), .polish(of: nil))?.isEnabled == false)
-        #expect(action(menu(gone), .polish(of: .parakeet))?.isEnabled == true)
+        #expect(action(menu(gone), .polish)?.isEnabled == false)
     }
 
     @Test func geminiTranscriptsAreNeverCleanedUp() {
@@ -437,8 +434,7 @@ import Testing
     @Test func withoutAKeyCloudActionsSaySo() {
         let m = menu(transcript(.parakeet), key: .missing)
         #expect(m.actions.map(\.title) == ["Parakeet v3 · Cloud · Needs key", "Gemini 3.8 Flash · Needs key",
-                                           "Clean Up with GPT-6 Luna · Needs key", "Polish with Gemini 3.8 Flash · Needs key",
-                                           "Polish Parakeet v3 with Gemini 3.8 Flash · Needs key"])
+                                           "Clean Up with GPT-6 Luna · Needs key", "Polish with Gemini 3.8 Flash · Needs key"])
         #expect(action(menu(transcript(.parakeetCloud), key: .invalid("401")), .transcription(.geminiFlash))?.title
                 == "Gemini 3.8 Flash · Key rejected")
         #expect(action(menu(transcript(.parakeetCloud), key: .missing), .transcription(.parakeet))?.isEnabled == true)

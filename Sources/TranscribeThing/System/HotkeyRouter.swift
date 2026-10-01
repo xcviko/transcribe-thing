@@ -350,7 +350,7 @@ struct HotkeyRouter: Equatable, Sendable {
         switch action {
         case .handsFree: event = .handsFreeToggle
         case .pasteLast: event = .pasteLast
-        case .pushToTalk, .switchModel, .polish, .polishInTwoSteps: return
+        case .pushToTalk, .switchModel, .polish: return
         }
         if gesture != .idle, action == .pasteLast {
             decision.events.append(.pttInterrupted)
@@ -380,7 +380,7 @@ struct HotkeyRouter: Equatable, Sendable {
     }
 
     /// The bindings live during a dictation only (a held PTT counts): Switch model with another model to switch to,
-    /// and the polish shortcuts.
+    /// and Polish (the controller lets it do something only on Gemini, but its keys never reach the app mid-dictation).
     private func liveDuringDictation(_ config: Config) -> [(action: ShortcutAction, shortcut: Shortcut)] {
         guard config.isRecording || gesture != .idle else { return [] }
         return ShortcutAction.allCases.compactMap { action in
@@ -393,8 +393,7 @@ struct HotkeyRouter: Equatable, Sendable {
     private static func event(for action: ShortcutAction) -> HotkeyEvent? {
         switch action {
         case .switchModel: .cycleEngine
-        case .polish: .polish(.oneRequest)
-        case .polishInTwoSteps: .polish(.twoSteps)
+        case .polish: .polish
         case .pushToTalk, .handsFree, .pasteLast: nil
         }
     }
@@ -419,8 +418,7 @@ struct HotkeyRouter: Equatable, Sendable {
     }
 
     /// While a modifier-only PTT is held, the extra modifiers down besides it are all part of a binding live during
-    /// the dictation (⌘ on the way to ⌘⇧M, ⇧ on the way to fn ⇧ ↩): not an interruption yet. The key that follows
-    /// decides.
+    /// the dictation (⌘ on the way to ⌘⇧M): not an interruption yet. The key that follows decides.
     private func mayBecomeDuringDictationShortcut(ptt: Shortcut, _ config: Config) -> Bool {
         guard ptt.requiredModifiersHeld(modifiers) else { return false }
         let extra = modifiers.clearing(Set(ptt.modifiers.map(\.modifier)))

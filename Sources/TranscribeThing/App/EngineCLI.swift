@@ -59,7 +59,6 @@ enum EngineCLI {
     static func handles(_ arguments: [String]) -> Bool {
         arguments.contains("--transcribe") || arguments.contains("--model-status")
             || arguments.contains(CleanupBench.flag) || arguments.contains(Recompress.flag)
-            || arguments.contains(PolishRun.flag)
     }
 
     /// Runs the CLI mode and exits the process.
@@ -91,9 +90,6 @@ enum EngineCLI {
         }
         if arguments.contains(Recompress.flag) {
             return await recompress(arguments)
-        }
-        if arguments.contains(PolishRun.flag) {
-            return await polish(arguments)
         }
         guard let options = Options(arguments) else {
             printError(Options.usage)
@@ -498,60 +494,6 @@ enum EngineCLI {
     }
 
     // MARK: Clean-up bench
-
-    /// `--polish <text file> [--prompt-file <file>]`: the file's text polished the way the app does it (`Polish`),
-    /// with another prompt from a file to try one. Prints TEXT (the message), TAGS, TIME and USAGE. Paid.
-    enum PolishRun {
-        static let flag = "--polish"
-        static let usage = "usage: transcribe-thing --polish <text file> [--prompt-file <file>]"
-    }
-
-    @MainActor
-    private static func polish(_ arguments: [String]) async -> Int32 {
-        func value(_ flag: String) -> String? {
-            guard let index = arguments.firstIndex(of: flag), index + 1 < arguments.count else { return nil }
-            return arguments[index + 1]
-        }
-        guard let path = value(PolishRun.flag), let text = try? String(contentsOfFile: (path as NSString).expandingTildeInPath, encoding: .utf8) else {
-            printError(PolishRun.usage)
-            return ExitCode.usage
-        }
-        var prompt: String?
-        if let promptPath = value("--prompt-file") {
-            guard let loaded = try? String(contentsOfFile: (promptPath as NSString).expandingTildeInPath, encoding: .utf8) else {
-                printError(PolishRun.usage)
-                return ExitCode.usage
-            }
-            prompt = loaded
-        }
-        let client = OpenRouterClient()
-        let account = OpenRouterAccount(keyStore: keyStore(), client: client)
-        guard account.apiKey() != nil else {
-            printError("ERROR: no OpenRouter key: set OPENROUTER_API_KEY or add the key in the app")
-            return ExitCode.failed
-        }
-        let store = ModelStore(paths: .temporary(), settings: .inMemory(), engines: [:], gate: .shared,
-                               freeDiskBytes: { 0 })
-        let service = TranscriptionService(models: store, account: account, client: client)
-        let started = ContinuousClock.now
-        do {
-            let result = try await service.polish(text.trimmingCharacters(in: .whitespacesAndNewlines), of: .geminiFlash,
-                                                  prompt: prompt)
-            let seconds = Double(started.duration(to: .now).components.attoseconds) / 1e18
-                + Double(started.duration(to: .now).components.seconds)
-            print("TEXT: \(result.text)")
-            print("TIME: \(String(format: "%.1f", seconds)) s · first token \(result.timeToFirstToken.map { String(format: "%.1f", $0) } ?? "?") s")
-            let usage = result.usage
-            print("USAGE: prompt \(usage?.promptTokens ?? 0) · completion \(usage?.completionTokens ?? 0) · reasoning \(usage?.reasoningTokens ?? 0) · $\(String(format: "%.6f", result.costUSD ?? 0))")
-            return ExitCode.ok
-        } catch let error as AppError {
-            printError("ERROR: \(error.code): \(error.localizedDescription)")
-            return ExitCode.failed
-        } catch {
-            printError("ERROR: \(error.localizedDescription)")
-            return ExitCode.failed
-        }
-    }
 
     @MainActor
     private static func runCleanupBench(_ arguments: [String]) async -> Int32 {

@@ -588,9 +588,9 @@ struct PillFace: View {
         carriesModel && model.showsChip ? choice : nil
     }
 
-    /// Polish on for the dictation on screen: the drop beside the pill (only while the content carries its model).
-    private var polish: PolishMode? {
-        carriesModel ? model.polishMode : nil
+    /// The dictation on screen is polished: the drop beside the pill (only while the content carries its model).
+    private var polishes: Bool {
+        carriesModel && model.polishes
     }
 
     var body: some View {
@@ -600,12 +600,12 @@ struct PillFace: View {
         PillCapsule(quiet: capsule.isQuiet, glow: capsule == .error ? PillPalette.error : nil,
                     accent: capsule.content == .empty ? nil : accent)
             .frame(width: size.width, height: size.height)
-            .overlay(alignment: .trailing) {
-                // Starts at the capsule's right end: the drop wells out of it.
-                PillPolishDrop(mode: polish, height: size.height, tint: accent?.mark ?? .white,
+            .background(alignment: .trailing) {
+                // Behind the capsule, from its right end: the drop slides out from under the pill, which keeps its
+                // edge whole.
+                PillPolishDrop(isOn: polishes, height: size.height, tint: accent?.mark ?? .white,
                                reduceMotion: reduceMotion)
                     .frame(width: 0, height: size.height)
-                    .offset(x: 0)
             }
             .overlay { contentView(accent: accent) }
             // Above the pill and part of it: it springs in on a switch, shrinks into the resting capsule with the
@@ -746,11 +746,11 @@ struct PillCapsule: View {
 
 // MARK: - Polish's drop
 
-/// Polish on for the dictation (`PillModel.polishMode`): a drop wells out of the pill's right end, stretches a neck,
-/// breaks off and floats beside it with its symbol, the way the Dynamic Island splits in two; it flows back in when
-/// Polish goes off. The symbol says which polish: the wand for one request, text and a wand for two steps.
+/// The dictation is polished (`PillModel.polishes`): a drop slides out from behind the pill's right end, stretches a
+/// neck, breaks off and floats beside it with a wand, the way the Dynamic Island splits in two; it flows back in when
+/// Polish goes off.
 struct PillPolishDrop: View {
-    var mode: PolishMode?
+    var isOn: Bool
     /// The capsule's height: the drop is a little smaller.
     var height: CGFloat
     var tint: Color
@@ -758,38 +758,23 @@ struct PillPolishDrop: View {
     /// Snapshots: a still frame of the way out (0 inside the pill, 1 broken off).
     var progress: Double?
 
-    /// The last polish shown, so the symbol stays while the drop flows back in.
-    @State private var shown: PolishMode?
-
     var body: some View {
-        let target: Double = mode == nil ? 0 : 1
-        PillPolishDropShape(progress: progress ?? target, height: height, symbol: (mode ?? shown).map(Self.symbol),
+        PillPolishDropShape(progress: progress ?? (isOn ? 1 : 0), height: height, symbol: "wand.and.sparkles",
                             tint: tint)
             .animation(progress != nil ? nil : reduceMotion ? .easeInOut(duration: 0.15)
-                       : .spring(duration: mode == nil ? 0.38 : 0.62, bounce: mode == nil ? 0 : 0.18),
-                       value: mode == nil)
-            .onChange(of: mode, initial: true) { _, new in
-                if let new { shown = new }
-            }
-            .accessibilityHidden(mode == nil)
-            .accessibilityLabel(mode == .twoSteps ? "Polish in two steps is on" : "Polish is on")
-    }
-
-    static func symbol(_ mode: PolishMode) -> String {
-        switch mode {
-        case .oneRequest: "wand.and.sparkles"
-        case .twoSteps: "text.append"
-        }
+                       : .spring(duration: isOn ? 0.62 : 0.38, bounce: isOn ? 0.18 : 0), value: isOn)
+            .accessibilityHidden(!isOn)
+            .accessibilityLabel("Polish is on")
     }
 }
 
-/// The drop at `progress` along its way out, in a frame whose leading edge is the capsule's right end: it swells at
-/// the end (to 0.3), moves off on a neck that pinches as it stretches and breaks at 0.8, and settles a gap away. Its
-/// edge and shadow come once it's off, so nothing draws over the pill on the way.
+/// The drop at `progress` along its way out, in a frame whose leading edge is the capsule's right end, drawn behind
+/// it: it swells under the end (to 0.3), moves off on a neck that pinches as it stretches and breaks at 0.8, and
+/// settles a gap away. Its edge and shadow come once it's off.
 private struct PillPolishDropShape: View, Animatable {
     var progress: Double
     var height: CGFloat
-    var symbol: String?
+    var symbol: String
     var tint: Color
 
     var animatableData: Double {
@@ -809,12 +794,10 @@ private struct PillPolishDropShape: View, Animatable {
                         .opacity(geometry.separation)
                 }
                 .overlay {
-                    if let symbol {
-                        Image(systemName: symbol)
-                            .font(.system(size: geometry.diameter * 0.42, weight: .semibold))
-                            .foregroundStyle(tint)
-                            .opacity(geometry.symbolOpacity)
-                    }
+                    Image(systemName: symbol)
+                        .font(.system(size: geometry.diameter * 0.42, weight: .semibold))
+                        .foregroundStyle(tint)
+                        .opacity(geometry.symbolOpacity)
                 }
                 .frame(width: geometry.diameter, height: geometry.diameter)
                 .scaleEffect(geometry.scale)

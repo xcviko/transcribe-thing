@@ -246,8 +246,7 @@ struct VersionsMenu: Equatable {
             case .transcription(let engine): engine.displayName
             case .cleanup(let source, let model):
                 namesSource ? "Clean Up \(source.displayName) with \(model.modelName)" : "Clean Up with \(model.modelName)"
-            case .polish(nil): "Polish with \(EngineID.geminiFlash.modelName)"
-            case .polish(let source?): "Polish \(source.displayName) with \(EngineID.geminiFlash.modelName)"
+            case .polish: "Polish with \(EngineID.geminiFlash.modelName)"
             }
         }
         /// `name`, with the reason when it can't run: "Gemini 3.8 Flash · Needs key".
@@ -263,7 +262,7 @@ struct VersionsMenu: Equatable {
     /// Oldest first.
     var versions: [Version]
     /// Engines in `EngineID.offered` order, then clean-ups: by source, each in `CleanupModel.offered` order, then
-    /// polish: from the recording, then from each transcript.
+    /// Polish.
     var actions: [Action]
     /// What is running for the recording right now: "Transcribing with Gemini Flash…", "Cleaning up with GPT-6 Luna…".
     var runningTitle: String?
@@ -299,17 +298,11 @@ struct VersionsMenu: Equatable {
             if Set(cleanups.map { actions[$0].kind.engine }).count > 1 {
                 for index in cleanups { actions[index].namesSource = true }
             }
-            // Polish: from the recording in one request, then from each transcript in a second step.
-            let gemini = readiness(.geminiFlash).unavailableReason.map(Blocker.engine)
-            if !entry.hasVersion(.polish(of: nil)) {
-                actions.append(Action(kind: .polish(of: nil),
-                                      blocker: busy ?? (hasAudio ? nil : .recordingGone) ?? gemini))
-            }
-            for version in entry.versions where !version.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                guard case .transcription(let source) = version.kind, !entry.hasVersion(.polish(of: source)) else {
-                    continue
-                }
-                actions.append(Action(kind: .polish(of: source), blocker: busy ?? gemini))
+            // Polish: Gemini on the recording again, with Polish's prompt.
+            if !entry.hasVersion(.polish) {
+                let blocker = busy ?? (hasAudio ? nil : .recordingGone)
+                    ?? readiness(.geminiFlash).unavailableReason.map(Blocker.engine)
+                actions.append(Action(kind: .polish, blocker: blocker))
             }
         }
         let runningTitle = running.map(\.progressTitle)
