@@ -321,13 +321,13 @@ final class DictationController {
         case .cycleEngine: send(.cycleEngine)
         case .cycleEngineRepeat: repeatCycle()
         case .polish:
-            // On Gemini the key is Polish's; off Gemini, with text selected, Polish Selection's. A selection still
-            // being looked for (a quick fn P) is waited for.
+            // On Gemini the key is Polish's; off Gemini it's Polish Selection's, for what's selected right then (text
+            // selected after fn went down counts too).
             guard machine.isRecording else { return }
-            if effectiveChoice != .gemini, canPolishSelection, selectionLookupRunning {
+            if effectiveChoice != .gemini, canPolishSelection {
                 actOnceSelectionIsKnown(.polish, nil)
             } else {
-                _ = acted(on: .polish, selection: selection)
+                _ = acted(on: .polish, selection: nil)
             }
         case .heldForSelection(let action, let key):
             actOnceSelectionIsKnown(action, key)
@@ -2174,7 +2174,7 @@ final class DictationController {
         selectionLookupRunning = true
         let override = selectionOverride
         selectionTask = Task { [weak self] in
-            let text = if let override { await override() } else { await FocusInspector.selectedText() }
+            let text = if let override { await override() } else { await Self.lookUpSelection(when: "start") }
             guard let self, !Task.isCancelled else { return }
             self.selectionLookupRunning = false
             if self.machine.isRecording, let text {
@@ -2194,23 +2194,16 @@ final class DictationController {
     private func actOnceSelectionIsKnown(_ action: ShortcutAction, _ key: KeyStroke?) {
         heldKeys.append((action, key))
         guard heldKeys.count == 1 else { return }
-        let lookup = selectionTask
         let override = selectionOverride
-        let readsAfresh = action == .addToDictionary
         Task { [weak self] in
-            var fresh: String?
-            if readsAfresh {
-                fresh = if let override { await override() } else { await FocusInspector.selectedText() }
-            } else {
-                await lookup?.value
-            }
+            let fresh = if let override { await override() } else { await Self.lookUpSelection(when: "key") }
             guard let self else { return }
             let held = self.heldKeys
             self.heldKeys = []
             var interrupts = false
             for (action, key) in held {
                 guard self.machine.isRecording else { break }
-                if self.acted(on: action, selection: readsAfresh ? fresh : self.selection) { continue }
+                if self.acted(on: action, selection: fresh) { continue }
                 guard let key else { continue }
                 if let replay = self.replayKeyOverride {
                     replay(key)
@@ -2282,7 +2275,20 @@ final class DictationController {
     /// the dictation goes on. To the machine it's a key pressed during the hold, so the release isn't a tap.
     private func explainPolish() {
         send(.polish)
-        pillModel.showKeyHint("Polish works on Gemini only")
+        pillModel.showKeyHint(canPolishSelection ? "Polish works on Gemini, or on selected text"
+                                                 : "Polish works on Gemini only")
+    }
+
+    /// A look at the selection, logged with the app and the outcome (`when`: as the dictation starts, or for a key),
+    /// never the text: why fn P or fn D found nothing in some app shows in the log.
+    private nonisolated static func lookUpSelection(when: String) async -> String? {
+        let lookup = await FocusInspector.lookUpSelection()
+        // As a dictation starts, nothing selected is the usual case: only a key pressed for the selection logs it.
+        if lookup.outcome != .found, when == "key" || lookup.outcome != .nothingSelected {
+            DiagnosticLog.shared.event(.dictation, "selection.none", ["when": when, "app": lookup.app ?? "none",
+                                                                      "why": lookup.outcome.rawValue])
+        }
+        return lookup.text
     }
 
     /// Text is selected and the polish key would polish it (Polish Selection): the keys over it are live.

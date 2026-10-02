@@ -101,42 +101,75 @@ enum FocusInspector {
     /// The longest selection Polish Selection takes (about 3,000 words): past that it's a document, not a message.
     static let maxSelection = 20_000
 
-    /// The text selected in the focused field of the frontmost app, for Polish Selection: Accessibility only, so
-    /// the clipboard is never touched. nil when nothing (or only whitespace) is selected, in a password field, past
-    /// `maxSelection`, or when the app doesn't say within `deadline` (Electron without an AX tree, most terminals).
+    /// What a look at the selection found, and why it found nothing: for the log (`DiagnosticLog`), which names the app
+    /// (its bundle id) and the outcome, never the text.
+    struct SelectionLookup: Sendable {
+        enum Outcome: String, Sendable {
+            case found
+            case nothingSelected
+            /// The app has no focused element it tells Accessibility about: Chrome and Electron apps, by default.
+            case noFocusedElement
+            case passwordField
+            case tooLong
+            case timedOut
+            case noAccessibility
+            case noApp
+        }
+
+        var text: String?
+        var outcome: Outcome
+        var app: String?
+    }
+
+    /// The text selected in the focused field of the frontmost app, for Polish Selection and the dictionary:
+    /// Accessibility only, so the clipboard is never touched. nil when nothing (or only whitespace) is selected, in a
+    /// password field, past `maxSelection`, or when the app doesn't say within `deadline` (Electron without an AX tree,
+    /// most terminals).
     static func selectedText(timeout: TimeInterval = 0.2, deadline: TimeInterval = 0.35) async -> String? {
-        let pid = await MainActor.run { NSWorkspace.shared.frontmostApplication?.processIdentifier }
-        guard let pid else { return nil }
+        await lookUpSelection(timeout: timeout, deadline: deadline).text
+    }
+
+    /// `selectedText`, with what it found out on the way.
+    static func lookUpSelection(timeout: TimeInterval = 0.2, deadline: TimeInterval = 0.35) async -> SelectionLookup {
+        let (pid, app) = await MainActor.run {
+            (NSWorkspace.shared.frontmostApplication?.processIdentifier,
+             NSWorkspace.shared.frontmostApplication?.bundleIdentifier)
+        }
+        guard let pid else { return SelectionLookup(outcome: .noApp) }
         let once = OSAllocatedUnfairLock(initialState: false)
-        return await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
-            let finish: @Sendable (String?) -> Void = { text in
+        return await withCheckedContinuation { (continuation: CheckedContinuation<SelectionLookup, Never>) in
+            let finish: @Sendable (SelectionLookup) -> Void = { lookup in
                 let first = once.withLock { done -> Bool in
                     defer { done = true }
                     return !done
                 }
-                if first { continuation.resume(returning: text) }
+                if first { continuation.resume(returning: lookup) }
             }
             DispatchQueue.global(qos: .userInitiated).async {
-                finish(selectedTextNow(pid: pid, timeout: Float(timeout)))
+                let (text, outcome) = selectedTextNow(pid: pid, timeout: Float(timeout))
+                finish(SelectionLookup(text: text, outcome: outcome, app: app))
             }
-            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + deadline) { finish(nil) }
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + deadline) {
+                finish(SelectionLookup(outcome: .timedOut, app: app))
+            }
         }
     }
 
-    /// Synchronous read of the selection in app `pid`. Never call on the main thread.
-    static func selectedTextNow(pid: pid_t, timeout: Float) -> String? {
-        guard AXIsProcessTrusted() else { return nil }
+    /// Synchronous read of the selection in app `pid`, and why there's none. Never call on the main thread.
+    static func selectedTextNow(pid: pid_t, timeout: Float) -> (String?, SelectionLookup.Outcome) {
+        guard AXIsProcessTrusted() else { return (nil, .noAccessibility) }
         let appElement = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(appElement, timeout)
         var focusedRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
-              let focusedRef, CFGetTypeID(focusedRef) == AXUIElementGetTypeID() else { return nil }
+              let focusedRef, CFGetTypeID(focusedRef) == AXUIElementGetTypeID() else { return (nil, .noFocusedElement) }
         let element = unsafeDowncast(focusedRef, to: AXUIElement.self)
         AXUIElementSetMessagingTimeout(element, timeout)
-        guard string(element, kAXSubroleAttribute) != kAXSecureTextFieldSubrole,
-              let text = string(element, kAXSelectedTextAttribute),
-              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, text.count <= maxSelection else { return nil }
-        return text
+        guard string(element, kAXSubroleAttribute) != kAXSecureTextFieldSubrole else { return (nil, .passwordField) }
+        guard let text = string(element, kAXSelectedTextAttribute),
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return (nil, .nothingSelected) }
+        guard text.count <= maxSelection else { return (nil, .tooLong) }
+        return (text, .found)
     }
 
     /// One cheap parameterized read of the single character before the selection; never the whole value.

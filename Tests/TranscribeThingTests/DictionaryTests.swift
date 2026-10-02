@@ -287,6 +287,6 @@ import Testing
         Self.pressD(rig)
         lookup.isOpen = true
         try await waitUntil { replayed.count == 1 }
-        #expect(replayed == [Self.d] && rig.h.pill.keyHint == "Polish works on Gemini only")
+        #expect(replayed == [Self.d] && rig.h.pill.keyHint == "Polish works on Gemini, or on selected text")
     }
 }

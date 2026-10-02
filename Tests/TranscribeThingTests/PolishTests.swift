@@ -198,11 +198,13 @@ import Testing
         rig.notice(DictationController.selectionCardKey(model))
     }
 
-    /// Holds the key over a selection and presses the polish key once its hint is up.
+    /// Holds the key over a selection and presses the polish key once its hint is up; returns once the selection is
+    /// read again and the dictation has given way.
     static func polish(_ rig: SwitchModelControllerTests.Rig) async throws {
         Switch.hold(rig)
         try await waitUntil { rig.h.pill.selectionHint == .shown }
         rig.h.controller.handle(.polish)
+        try await waitUntil { !rig.h.controller.machine.isRecording }
     }
 
     /// Holding the key with text selected, off Gemini: "fn P Polish selection" over the pill, quietly, and the
@@ -253,7 +255,7 @@ import Testing
         #expect(c.machine.capture == .idle)
         #expect(rig.h.pill.selectionHint == .handoff)
         #expect(rig.notice("dictation.canceled") == nil, "no Undo: the recording is gone")
-        #expect(cues.played.suffix(1) == [.cancel])
+        #expect(Array(cues.played.prefix(2)) == [.start, .cancel], "the dictation gives way with the cancel cue")
         try await waitUntil { Self.card(rig, .geminiFlash) != nil && Self.card(rig, .gpt6Luna) != nil }
         #expect(asked.models == [.geminiFlash, .gpt6Luna])
         #expect(asked.calls.allSatisfy { $0.0 == "short draft, um, of a message" })
@@ -325,15 +327,16 @@ import Testing
         #expect(rig.h.history.entries.first?.versions.map(\.kind) == [.selection(.gpt6Luna)])
     }
 
-    /// Nothing selected, off Gemini: no hint, and the key says Polish is Gemini's; the dictation goes on.
+    /// Nothing selected, off Gemini: no hint, and the key says what Polish works on; the dictation goes on.
     @Test func withoutASelectionTheKeySaysPolishIsGeminis() async throws {
         let (rig, cues, asked) = Self.make(selection: nil)
         Switch.hold(rig)
         try await Task.sleep(for: .milliseconds(150))
         #expect(rig.h.pill.selectionHint == .hidden && !rig.h.controller.polishesSelection)
         rig.h.controller.handle(.polish)
+        try await waitUntil { rig.h.pill.keyHint != nil }
         #expect(asked.calls.isEmpty && !cues.played.contains(.polishOn))
-        #expect(rig.h.pill.keyHint == "Polish works on Gemini only")
+        #expect(rig.h.pill.keyHint == "Polish works on Gemini, or on selected text")
         #expect(rig.h.controller.machine.capture.isListeningOrLocked)
         rig.h.controller.send(.pillCancel)
     }
