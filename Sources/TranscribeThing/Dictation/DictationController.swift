@@ -1048,7 +1048,7 @@ final class DictationController {
             audioDuration: recording.duration, voicedSeconds: recording.speech.voicedSeconds,
             audioFileName: history.saveAudio(recording), versions: [version]))
         resolveGeneration(of: version, entryID: job.id)
-        toasts.post(transcriptCard(text, title: "Clean-up canceled",
+        toasts.post(transcriptCard(text, by: version.kind.dictationModel, title: "Clean-up canceled",
                                    body: "The original is in History. Paste it here, or copy it.", pasteHere: true))
     }
 
@@ -1073,6 +1073,7 @@ final class DictationController {
             // another, and the one delivered.
             var versions = [result.version(job.polishes ? .polish : nil, text: text)]
             var delivered = text
+            var deliveredKind = versions[0].kind
             var cleanupFailed = false
             var cleanupError: AppError?
             let cleanupModel = CleanupModel.default
@@ -1080,6 +1081,7 @@ final class DictationController {
             case .cleaned(let cleaned)?:
                 versions.append(cleaned.version(.cleanup(of: result.engine, by: cleanupModel)))
                 delivered = cleaned.text
+                deliveredKind = .cleanup(of: result.engine, by: cleanupModel)
             case .failed(let error)?:
                 cleanupFailed = true
                 cleanupError = error
@@ -1097,9 +1099,11 @@ final class DictationController {
                 audioDuration: recording.duration, voicedSeconds: recording.speech.voicedSeconds,
                 audioFileName: history.saveAudio(recording), versions: versions))
             for version in versions { resolveGeneration(of: version, entryID: job.id) }
-            // Only what is pasted follows General → Pasting: History, the cards and Copy keep the text as it came.
-            let insertion = await insert(pasted(delivered))
-            handleInsertion(insertion, text: delivered, isDictation: true)
+            // Only what is pasted follows General → Pasting, by the model that wrote it: History, the cards and Copy
+            // keep the text as it came.
+            let model = deliveredKind.dictationModel
+            let insertion = await insert(pasted(delivered, by: model))
+            handleInsertion(insertion, text: delivered, by: model, isDictation: true)
             if cleanupFailed { postCleanupFallback(error: cleanupError, model: cleanupModel) }
         }
     }
@@ -1197,15 +1201,19 @@ final class DictationController {
         if let copyOverride { copyOverride(text) } else { inserter.copy(text) }
     }
 
-    /// `text` as the app pastes it: with General → Pasting's space after it and without its final period
-    /// (`PastedText`).
-    private func pasted(_ text: String) -> String {
-        PastedText.prepare(text, addsSpace: settings.addsSpaceAfterText, removesFinalPeriod: settings.removesFinalPeriod)
+    /// `text` as the app pastes it, by General → Pasting's rules for `model`, the one that wrote it: a space after it,
+    /// no final period (`PastedText`). Polish Selection's (nil) goes as written: it takes the selection's place.
+    private func pasted(_ text: String, by model: ModelChoice?) -> String {
+        guard let model else { return text }
+        return PastedText.prepare(text, addsSpace: settings.modelsAddingSpace.contains(model),
+                                  removesFinalPeriod: settings.modelsRemovingFinalPeriod.contains(model))
     }
 
     /// `isDictation`: a dictation's own delivery, not paste-last or a toast's Paste Here. The pasted text is the
     /// confirmation; the pill just goes back to rest. `quiet`: a card's Paste Here, which pastes without a sound.
-    private func handleInsertion(_ outcome: InsertionOutcome, text: String, isDictation: Bool, quiet: Bool = false) {
+    /// `model` wrote `text`: a card's Paste Here follows its rules.
+    private func handleInsertion(_ outcome: InsertionOutcome, text: String, by model: ModelChoice?, isDictation: Bool,
+                                 quiet: Bool = false) {
         Log.app.notice("Insertion outcome: \(String(describing: outcome), privacy: .public)")
         DiagnosticLog.shared.event(.dictation, "paste", ["outcome": outcome, "dictation": isDictation])
         switch outcome {
@@ -1214,7 +1222,7 @@ final class DictationController {
             if !quiet, !machine.isRecording { sounds.play(.paste) }
             if isDictation { onDictationDelivered?() }
         case .passwordField:
-            toasts.post(transcriptCard(text, title: "Not pasted into a password field",
+            toasts.post(transcriptCard(text, by: model, title: "Not pasted into a password field",
                                        body: "Dictated text never goes into one.", pasteHere: false))
         case .accessibilityMissing:
             // Nothing goes on the clipboard unasked: the card holds the text until the user copies it.
@@ -1225,13 +1233,17 @@ final class DictationController {
             toasts.post(notice)
         case .failed(let reason):
             Log.app.error("Paste failed: \(reason, privacy: .public)")
-            toasts.post(transcriptCard(text, title: "Couldn’t paste", body: "Copy it, or try pasting again.", pasteHere: true))
+            toasts.post(transcriptCard(text, by: model, title: "Couldn’t paste", body: "Copy it, or try pasting again.",
+                                       pasteHere: true))
         }
     }
 
-    private func transcriptCard(_ text: String, title: String, body: String, pasteHere: Bool) -> Notice {
+    private func transcriptCard(_ text: String, by model: ModelChoice?, title: String, body: String,
+                                pasteHere: Bool) -> Notice {
         var actions: [NoticeAction] = []
-        if pasteHere { actions.append(NoticeAction(title: "Paste Here", kind: .pasteText(text), isPrimary: true)) }
+        if pasteHere {
+            actions.append(NoticeAction(title: "Paste Here", kind: .pasteText(text, by: model), isPrimary: true))
+        }
         actions.append(NoticeAction(title: "Copy", kind: .copyText(text), isPrimary: !pasteHere))
         return Notice(dedupeKey: "transcript.\(text.hashValue)", style: .info, symbol: "doc.on.clipboard",
                       title: title, body: body, transcript: text, actions: actions, lifetime: .seconds(20))
@@ -1241,28 +1253,29 @@ final class DictationController {
 
     /// The menu's Copy Last Transcript: an explicit copy, so the text stays on the clipboard (a paste puts it back).
     func copyLast() {
-        guard let text = history.lastSuccessfulText else { return }
+        guard let text = history.lastSuccessful?.text else { return }
         copy(text)
     }
 
     /// The last transcript is pasted where the user is typing, and the clipboard stays as it was, as with every paste.
     /// When it can't be pasted, a card holds it with Copy, like a dictation's.
     func pasteLast() {
-        guard let text = history.lastSuccessfulText else {
+        guard let last = history.lastSuccessful else {
             toasts.post(Notice(dedupeKey: "pasteLast.empty", style: .info, symbol: "text.badge.xmark",
                                title: "Nothing to paste yet", body: "Dictate something first.", lifetime: .seconds(3)))
             return
         }
+        let text = last.text, model = last.currentKind?.dictationModel
         Task { [weak self] in
             guard let self else { return }
             let outcome: InsertionOutcome
-            let pasted = self.pasted(text)
+            let pasted = self.pasted(text, by: model)
             if let override = self.pasteLastOverride {
                 outcome = await override(pasted)
             } else {
                 outcome = await self.inserter.insert(pasted)
             }
-            self.handleInsertion(outcome, text: text, isDictation: false)
+            self.handleInsertion(outcome, text: text, by: model, isDictation: false)
         }
     }
 
@@ -1277,20 +1290,20 @@ final class DictationController {
                 selectionPicked(model, pasted: false)
             }
             return
-        case .pasteText(let text):
+        case .pasteText(let text, let model):
             toasts.dismiss(notice.id)
             if let model = Self.selectionModel(ofCard: notice) { selectionPicked(model, pasted: true) }
             Task { [weak self] in
                 guard let self else { return }
                 let outcome: InsertionOutcome
-                let pasted = self.pasted(text)
+                let pasted = self.pasted(text, by: model)
                 if let override = self.pasteNowOverride {
                     outcome = await override(pasted)
                 } else {
                     outcome = await self.inserter.pasteNow(pasted)
                 }
                 // Anything but a paste brings the text back (a card, or the Accessibility notice).
-                self.handleInsertion(outcome, text: text, isDictation: false, quiet: true)
+                self.handleInsertion(outcome, text: text, by: model, isDictation: false, quiet: true)
             }
             return
         default:
@@ -2143,7 +2156,7 @@ final class DictationController {
         let seconds = (6 + Double(words) / 20) * ToastCountdown.speed
         return Notice(dedupeKey: selectionCardKey(model), style: .info, symbol: "wand.and.sparkles",
                       title: "Polished by \(model.modelName)", transcript: text,
-                      actions: [NoticeAction(title: "Paste Here", kind: .pasteText(text), isPrimary: true),
+                      actions: [NoticeAction(title: "Paste Here", kind: .pasteText(text, by: nil), isPrimary: true),
                                 NoticeAction(title: "Copy", kind: .copyText(text))],
                       lifetime: .seconds(seconds), sound: .polishReady, takesCardKeys: true)
     }

@@ -32,6 +32,18 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
         if case .cleanup = self { true } else { false }
     }
 
+    /// The model in Models that wrote it, whose General → Pasting rules its paste follows: Parakeet for its own
+    /// transcript, clean-up for a clean-up, Gemini for its transcript and Polish. nil for Polish Selection, which
+    /// isn't a dictation.
+    var dictationModel: ModelChoice? {
+        switch self {
+        case .transcription(let engine): ModelChoice(engine: engine, cleansUp: false)
+        case .cleanup: .cleanup
+        case .polish: .gemini
+        case .selection: nil
+        }
+    }
+
     /// Builds from before the choice of clean-up model read it: a transcription, or a clean-up by Flash Lite. A
     /// clean-up by another model has the model in its raw value, which they can't read.
     var isReadableByOlderBuilds: Bool {

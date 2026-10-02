@@ -82,11 +82,16 @@ final class AppSettings {
     var handsFreeChoice: ModelChoice? {
         handsFreeModel.flatMap { lineup.steps.contains($0) ? $0 : nil }
     }
-    /// What the app pastes ends in one space, so the next dictation doesn't run into it. History and Copy keep the
+    /// The models whose text the app pastes with one space after it, so the next dictation doesn't run into it
+    /// (General → Pasting). History and Copy keep the text as it was.
+    var modelsAddingSpace: Set<ModelChoice> = [] {
+        didSet { store.setJSON(ModelChoice.stored(modelsAddingSpace), .modelsAddingSpace) }
+    }
+    /// The models whose text the app pastes without a single final period (`PastedText`). History and Copy keep the
     /// text as it was.
-    var addsSpaceAfterText: Bool = false { didSet { store.set(addsSpaceAfterText, .addSpaceAfterText) } }
-    /// What the app pastes loses a single final period (`PastedText`). History and Copy keep the text as it was.
-    var removesFinalPeriod: Bool = false { didSet { store.set(removesFinalPeriod, .removeFinalPeriod) } }
+    var modelsRemovingFinalPeriod: Set<ModelChoice> = [] {
+        didSet { store.setJSON(ModelChoice.stored(modelsRemovingFinalPeriod), .modelsRemovingFinalPeriod) }
+    }
     /// Days a transcript and its recording stay in History; 0 = Never deleted (`HistoryStore.deleteExpired`).
     var autoDeleteHistoryDays: Int = 0 { didSet { store.set(autoDeleteHistoryDays, .autoDeleteHistoryDays) } }
     var shortcuts: ShortcutBindings = .defaults { didSet { store.setJSON(shortcuts, .shortcuts) } }
@@ -231,8 +236,20 @@ final class AppSettings {
         }
         if let v = store.bool(.doublePressForHandsFree) { doublePressForHandsFree = v }
         handsFreeModel = store.string(.handsFreeModel).flatMap(ModelChoice.init(rawValue:))
-        if let v = store.bool(.addSpaceAfterText) { addsSpaceAfterText = v }
-        if let v = store.bool(.removeFinalPeriod) { removesFinalPeriod = v }
+        // Pasting's two switches held for every model; each is picked per model now. One an older build turned on
+        // holds for all three, once: the old keys go.
+        if let v: [String] = store.json(.modelsAddingSpace) {
+            modelsAddingSpace = ModelChoice.read(v)
+        } else if store.bool(.addSpaceAfterText) == true {
+            modelsAddingSpace = Set(ModelChoice.allCases)
+        }
+        if let v: [String] = store.json(.modelsRemovingFinalPeriod) {
+            modelsRemovingFinalPeriod = ModelChoice.read(v)
+        } else if store.bool(.removeFinalPeriod) == true {
+            modelsRemovingFinalPeriod = Set(ModelChoice.allCases)
+        }
+        store.remove(.addSpaceAfterText)
+        store.remove(.removeFinalPeriod)
         if let v = store.int(.autoDeleteHistoryDays), v >= 0 { autoDeleteHistoryDays = v }
         if let v: ShortcutBindings = store.json(.shortcuts) { shortcuts = v }
         if let v = store.bool(.hasShownWelcomeHello) { hasShownWelcomeHello = v }
@@ -335,8 +352,10 @@ enum SettingsKey: String, CaseIterable {
     /// `geminiSystemPrompt` and `cleanupSystemPrompt` are the prompts Models used to edit, removed at load: both are
     /// fixed in code now.
     case geminiSystemPrompt, cleanupSystemPrompt
+    /// `addSpaceAfterText` and `removeFinalPeriod` are Pasting's switches from when they held for every model, read
+    /// once into `modelsAddingSpace` and `modelsRemovingFinalPeriod` and removed at load.
     case addSpaceAfterText, removeFinalPeriod, autoDeleteHistoryDays, lineup, modelColors, keychainKeyMigrated
-    case handsFreeModel
+    case handsFreeModel, modelsAddingSpace, modelsRemovingFinalPeriod
     case polishSelectionModel
 
     var defaultsKey: String { "tt.\(rawValue)" }

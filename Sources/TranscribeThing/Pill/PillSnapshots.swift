@@ -255,7 +255,7 @@ enum PillSnapshotFixtures {
         dedupeKey: "paste.transcript", style: .info, symbol: "doc.on.clipboard",
         title: "Not pasted", body: "The cursor left the text field while it was transcribing.",
         transcript: "Let's move the design review to Thursday afternoon so Maya can join, and I'll send the updated deck tonight. Also, can someone check whether the staging build picked up the new onboarding copy?",
-        actions: [NoticeAction(title: "Paste Here", kind: .pasteText("…"), isPrimary: true),
+        actions: [NoticeAction(title: "Paste Here", kind: .pasteText("…", by: .parakeet), isPrimary: true),
                   NoticeAction(title: "Copy", kind: .copyText("…"))],
         lifetime: .seconds(20))
 

@@ -39,7 +39,7 @@ final class MenuBuilder {
         }
         // Pasting the last transcript is the Paste last shortcut's job; the menu copies it, to stay on the clipboard.
         let copy = MenuActionItem(title: "Copy Last Transcript") { [weak env] in env?.dictation.copyLast() }
-        copy.isEnabled = env.history.lastSuccessfulText != nil
+        copy.isEnabled = env.history.lastSuccessful != nil
         menu.addItem(copy)
         menu.addItem(.separator())
 

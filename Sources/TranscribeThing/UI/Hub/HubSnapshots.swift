@@ -175,13 +175,22 @@ enum HubSnapshots {
                 c.devices = .preview(devices: AudioDeviceCatalog.preview().devices, defaultUID: "preview-airpods")
             },
 
-            hub("hub-general", .general, height: 1080),
+            // Pasting set per model: quick Parakeet searches go in bare, Clean-up and Gemini get a space after.
+            hub("hub-general", .general, height: 1080) { c in
+                c.settings.modelsAddingSpace = [.cleanup, .gemini]
+                c.settings.modelsRemovingFinalPeriod = [.parakeet]
+            },
             // The whole page, down to Troubleshooting's Export Logs….
             hub("hub-general-full", .general, height: 1360),
             // The narrowest window: the segmented control leaves the least room for the pill caption; sounds off.
             hub("hub-general-compact", .general, width: 820, height: 560) { c in
                 c.settings.pillMode = .always
                 c.settings.soundsEnabled = false
+            },
+            // The narrowest window: Pasting's model chips beside rows whose captions wrap.
+            hub("hub-general-pasting-compact", .general, width: 820, height: 1080) { c in
+                c.settings.modelsAddingSpace = [.cleanup, .gemini]
+                c.settings.modelsRemovingFinalPeriod = [.parakeet]
             },
             hub("hub-general-permissions", .general, height: 1080) { c in
                 c.permissions = .preview(mic: .granted, ax: .denied)

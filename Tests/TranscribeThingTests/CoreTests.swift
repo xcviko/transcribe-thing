@@ -747,8 +747,8 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         settings.microphoneUID = "usb-mic"
         settings.soundsEnabled = false
         settings.autoDeleteHistoryDays = 30
-        settings.addsSpaceAfterText = true
-        settings.removesFinalPeriod = true
+        settings.modelsAddingSpace = [.cleanup, .gemini]
+        settings.modelsRemovingFinalPeriod = [.parakeet]
         var bindings = ShortcutBindings.defaults
         bindings[.pushToTalk] = .rightOption
         settings.shortcuts = bindings
@@ -766,7 +766,8 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         #expect(reloaded.microphoneUID == "usb-mic")
         #expect(!reloaded.soundsEnabled)
         #expect(reloaded.autoDeleteHistoryDays == 30)
-        #expect(reloaded.addsSpaceAfterText && reloaded.removesFinalPeriod)
+        #expect(reloaded.modelsAddingSpace == [.cleanup, .gemini])
+        #expect(reloaded.modelsRemovingFinalPeriod == [.parakeet])
         #expect(reloaded.shortcuts[.pushToTalk] == .rightOption)
 
         settings.microphoneUID = nil
@@ -817,11 +818,52 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         #expect(colors[.cleanup] == colors[.gemini], "two may share one")
     }
 
-    /// The pasting switches and Auto-delete are off (Never) out of the box.
+    /// The pasting rules hold for no model and Auto-delete is off (Never) out of the box.
     @Test func pastingAndAutoDeleteAreOffByDefault() {
         let settings = AppSettings.inMemory()
-        #expect(!settings.addsSpaceAfterText && !settings.removesFinalPeriod)
+        #expect(settings.modelsAddingSpace.isEmpty && settings.modelsRemovingFinalPeriod.isEmpty)
         #expect(settings.autoDeleteHistoryDays == 0)
+    }
+
+    /// Pasting's switches from when each held for every model: one that was on holds for all three, once, and the old
+    /// keys go. One that was off leaves no model picked.
+    @Test func thePastingSwitchesBecomePerModel() throws {
+        try withSuite { defaults in
+            defaults.set(true, forKey: "tt.addSpaceAfterText")
+            defaults.set(false, forKey: "tt.removeFinalPeriod")
+            let settings = AppSettings(defaults: defaults)
+            #expect(settings.modelsAddingSpace == Set(ModelChoice.allCases))
+            #expect(settings.modelsRemovingFinalPeriod.isEmpty)
+            #expect(defaults.object(forKey: "tt.addSpaceAfterText") == nil)
+            #expect(defaults.object(forKey: "tt.removeFinalPeriod") == nil)
+            // The old keys are gone, so this reload reads what the migration stored.
+            #expect(AppSettings(defaults: defaults).modelsAddingSpace == Set(ModelChoice.allCases))
+
+            settings.modelsAddingSpace.remove(.parakeet)
+            let stored = defaults.data(forKey: "tt.modelsAddingSpace").map { String(decoding: $0, as: UTF8.self) }
+            #expect(stored == #"["cleanup","gemini"]"#)
+            #expect(AppSettings(defaults: defaults).modelsAddingSpace == [.cleanup, .gemini], "migrated only once")
+        }
+    }
+
+    @Test func anOldFinalPeriodSwitchThatWasOnHoldsForEveryModel() throws {
+        try withSuite { defaults in
+            defaults.set(true, forKey: "tt.removeFinalPeriod")
+            let settings = AppSettings(defaults: defaults)
+            #expect(settings.modelsRemovingFinalPeriod == Set(ModelChoice.allCases))
+            #expect(settings.modelsAddingSpace.isEmpty)
+            #expect(AppSettings(defaults: defaults).modelsRemovingFinalPeriod == Set(ModelChoice.allCases))
+        }
+    }
+
+    /// A stored set outlives builds: a model this build doesn't know is dropped.
+    @Test func storedPastingModelsDecodeLeniently() throws {
+        try withSuite { defaults in
+            defaults.set(Data(#"["parakeet","whisper"]"#.utf8), forKey: "tt.modelsRemovingFinalPeriod")
+            // A newer set wins over an old switch an older build may have left.
+            defaults.set(true, forKey: "tt.removeFinalPeriod")
+            #expect(AppSettings(defaults: defaults).modelsRemovingFinalPeriod == [.parakeet])
+        }
     }
 
     /// "Maximum recording length", "Restore the clipboard after pasting" and the two audio retention choices are

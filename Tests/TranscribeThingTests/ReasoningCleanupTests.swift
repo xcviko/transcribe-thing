@@ -431,6 +431,21 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         return r.id
     }
 
+    /// A clean-up's text follows Clean-up's Pasting rules, not Parakeet's; one that fell back to Parakeet's own text
+    /// follows Parakeet's.
+    @Test func aCleanedUpDictationPastesByCleanUpsRules() async throws {
+        let h = harness()
+        defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
+        h.settings.modelsAddingSpace = [.cleanup]
+        h.settings.modelsRemovingFinalPeriod = [.parakeet]
+        h.controller.cleanupOverride = { _, _ in self.cleaned("Hello there.") }
+        var pasted: [String] = []
+        _ = try await dictate(h, text: "hello there.") { pasted.append($0) }
+        h.controller.cleanupOverride = { _, _ in throw AppError.offline }
+        _ = try await dictate(h, text: "hello there.") { pasted.append($0) }
+        #expect(pasted == ["Hello there. ", "hello there"])
+    }
+
     @Test func aCleanedUpDictationPastesTheCleanTextAndKeepsBothVersions() async throws {
         let h = harness()
         defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
@@ -504,7 +519,7 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         #expect(entry.versions.map(\.kind) == [.transcription(.parakeet)])
         let card = try #require(h.toasts.notices.first { $0.transcript == "raw text" })
         #expect(card.title == "Clean-up canceled")
-        #expect(card.actions.map(\.kind) == [.pasteText("raw text"), .copyText("raw text")])
+        #expect(card.actions.map(\.kind) == [.pasteText("raw text", by: .parakeet), .copyText("raw text")])
         #expect(!h.toasts.notices.contains { $0.dedupeKey == "dictation.canceled" })
         try await Task.sleep(for: .milliseconds(50))
         #expect(h.history.entry(id: r.id)?.versions.count == 1)

@@ -265,6 +265,80 @@ struct HubSegmentedPicker<Value: Hashable>: View {
     }
 }
 
+/// The models a General → Pasting rule holds for: a chip per model in the lineup's order, each switched on and off on
+/// its own. One that's on is filled with the accent.
+struct ModelToggleChips: View {
+    var order: [ModelChoice]
+    var parakeet: EngineID
+    @Binding var selection: Set<ModelChoice>
+    /// What the chips switch, which each chip's VoiceOver label names after the model: "Add a space after the text".
+    var rule: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(order) { choice in
+                let isOn = selection.contains(choice)
+                ModelToggleChip(title: choice.shortName, symbol: choice.symbolName(parakeet: parakeet), rule: rule,
+                                isOn: isOn) {
+                    withAnimation(Theme.Motion.snappy) {
+                        if isOn { selection.remove(choice) } else { selection.insert(choice) }
+                    }
+                }
+                .help(choice.title(parakeet: parakeet))
+            }
+        }
+        .fixedSize()
+        .accessibilityElement(children: .contain)
+    }
+}
+
+private struct ModelToggleChip: View {
+    var title: String
+    var symbol: String
+    var rule: String
+    var isOn: Bool
+    var action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: symbol)
+                    .font(.system(size: 10, weight: .semibold))
+                // As wide on as off: the bolder title of a chip that's on never shifts the others.
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .hidden()
+                    .overlay {
+                        Text(title).font(.system(size: 12, weight: isOn ? .semibold : .medium))
+                    }
+                    .lineLimit(1)
+            }
+            .foregroundStyle(isOn ? Color.accent : Color.inkSecondary)
+            .padding(.horizontal, 10)
+            .frame(height: Theme.Metrics.smallButtonHeight - 2)
+            .background {
+                Capsule(style: .continuous)
+                    .fill(isOn ? Color.accentSoft : hovering ? Color.hover : Color.clear)
+            }
+            .overlay {
+                Capsule(style: .continuous).ring(1)
+                    .fill(isOn ? Color.accentRing : Color.strokeStrong, style: FillStyle(eoFill: true))
+            }
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(Theme.Motion.hover, value: hovering)
+        // Two rows of the same three names: each says which rule it switches. Voice Control still answers to the name
+        // on the chip.
+        .accessibilityLabel("\(title), \(rule)")
+        .accessibilityInputLabels([title, "\(title) \(rule)"])
+        .accessibilityAddTraits(.isToggle)
+        .accessibilityValue(isOn ? "On" : "Off")
+    }
+}
+
 /// The model colors as small swatches, each the pill's ring in that color, graphite the plain pill in miniature; the
 /// chosen one is ringed in ink.
 struct ModelColorSwatches: View {

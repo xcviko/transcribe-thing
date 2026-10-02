@@ -605,7 +605,7 @@ import Testing
         updated.text = "older, retried"
         store.upsert(updated)
         #expect(store.entries.map(\.text) == ["newer", "older, retried"])
-        #expect(store.lastSuccessfulText == "newer")
+        #expect(store.lastSuccessful?.text == "newer")
     }
 
     @Test func lastSuccessfulTextSkipsFailures() {
@@ -614,7 +614,7 @@ import Testing
             TranscriptEntry(createdAt: Date().addingTimeInterval(-10), text: "keep me", engine: .parakeet,
                             audioDuration: 3, voicedSeconds: 2),
         ])
-        #expect(store.lastSuccessfulText == "keep me")
+        #expect(store.lastSuccessful?.text == "keep me")
     }
 
     @Test func historyIsCappedAt2000() {
@@ -867,8 +867,8 @@ final class FakeRecorder: DictationRecorder {
     /// Copy keep the text as the model wrote it.
     @Test func thePastingSettingsShapeOnlyWhatIsPasted() async throws {
         let h = Self.make()
-        h.settings.addsSpaceAfterText = true
-        h.settings.removesFinalPeriod = true
+        h.settings.modelsAddingSpace = [.parakeet]
+        h.settings.modelsRemovingFinalPeriod = [.parakeet]
         h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "Hello.", engine: engine, processingTime: 0.1) }
         var pasted: [String] = []
         h.controller.insertOverride = { text in pasted.append(text); return .failed("no ⌘V") }
@@ -895,6 +895,54 @@ final class FakeRecorder: DictationRecorder {
         h.controller.pasteLast()
         try await waitUntil { !pastedLast.isEmpty }
         #expect(pastedLast == ["Hello "])
+    }
+
+    /// Whose Pasting rules a transcript's paste follows: the model that wrote it. Polish is Gemini's; Polish Selection,
+    /// which takes the selection's place, goes as written.
+    @Test func eachKindOfTranscriptPastesByItsModel() {
+        #expect(TranscriptVersionKind.transcription(.parakeet).dictationModel == .parakeet)
+        #expect(TranscriptVersionKind.transcription(.parakeetCloud).dictationModel == .parakeet)
+        #expect(TranscriptVersionKind.transcription(.geminiFlash).dictationModel == .gemini)
+        #expect(TranscriptVersionKind.transcription(.geminiPro).dictationModel == .gemini)
+        #expect(TranscriptVersionKind.cleanup(of: .parakeet, by: .gpt6Luna).dictationModel == .cleanup)
+        #expect(TranscriptVersionKind.cleanup(of: .parakeetCloud, by: .geminiFlashLite).dictationModel == .cleanup)
+        #expect(TranscriptVersionKind.polish.dictationModel == .gemini)
+        for model in PolishSelectionModel.allCases {
+            #expect(TranscriptVersionKind.selection(model).dictationModel == nil)
+        }
+    }
+
+    /// Each model has its own Pasting rules: Parakeet's quick searches go in bare, Gemini's sentences keep their
+    /// period and get a space. Paste Last and a card's Paste Here follow the model that wrote the text.
+    @Test func pastingFollowsTheModelThatWroteTheText() async throws {
+        let h = Self.make()
+        h.settings.modelsAddingSpace = [.gemini]
+        h.settings.modelsRemovingFinalPeriod = [.parakeet]
+        h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "Hello.", engine: engine, processingTime: 0.1) }
+        var pasted: [String] = []
+        h.controller.insertOverride = { text in pasted.append(text); return pasted.count == 1 ? .pasted : .failed("no ⌘V") }
+        var pastedLast: [String] = []
+        h.controller.pasteLastOverride = { pastedLast.append($0); return .pasted }
+        var pastedHere: [String] = []
+        h.controller.pasteNowOverride = { pastedHere.append($0); return .pasted }
+
+        h.controller.enqueue(Self.recording(), engine: .parakeet)
+        try await waitUntil { pasted.count == 1 }
+        h.controller.pasteLast()
+        try await waitUntil { pastedLast.count == 1 }
+
+        h.controller.enqueue(Self.recording(), engine: .geminiFlash)
+        try await waitUntil { pasted.count == 2 }
+        h.controller.pasteLast()
+        try await waitUntil { pastedLast.count == 2 }
+        #expect(pasted == ["Hello", "Hello. "])
+        #expect(pastedLast == ["Hello", "Hello. "])
+
+        let card = try #require(h.toasts.notices.first { $0.transcript == "Hello." })
+        #expect(card.actions.first?.kind == .pasteText("Hello.", by: .gemini))
+        h.controller.perform(try #require(card.actions.first), from: card)
+        try await waitUntil { !pastedHere.isEmpty }
+        #expect(pastedHere == ["Hello. "])
     }
 
     @Test func aFailureInTheMiddleDoesntBlockTheQueue() async throws {
@@ -1002,7 +1050,7 @@ final class FakeRecorder: DictationRecorder {
         try await waitUntil { h.controller.machine.activeJobs == 0 }
         let card = try #require(h.toasts.notices.first { $0.transcript != nil })
         #expect(card.transcript == "Hello there")
-        #expect(card.actions.map(\.kind) == [.pasteText("Hello there"), .copyText("Hello there")])
+        #expect(card.actions.map(\.kind) == [.pasteText("Hello there", by: .parakeet), .copyText("Hello there")])
         #expect(h.history.entries.first?.text == "Hello there")
     }
 
@@ -1722,7 +1770,7 @@ final class FakeRecorder: DictationRecorder {
         let card = try #require(h.toasts.notices.first)
         #expect(card.title == title)
         #expect(card.transcript == "last words")
-        #expect(card.actions.contains { $0.kind == .pasteText("last words") } == offersPasteHere)
+        #expect(card.actions.contains { $0.kind == .pasteText("last words", by: .parakeet) } == offersPasteHere)
         h.controller.perform(try #require(card.actions.first { $0.kind == .copyText("last words") }), from: card)
         #expect(copied == ["last words"])
     }
@@ -1764,14 +1812,14 @@ final class FakeRecorder: DictationRecorder {
         h.controller.enqueue(Self.recording(), engine: .parakeet)
         try await waitUntil { h.controller.machine.activeJobs == 0 }
         let card = try #require(h.toasts.notices.first { $0.transcript == "Hello there" })
-        let pasteHere = try #require(card.actions.first { $0.kind == .pasteText("Hello there") })
+        let pasteHere = try #require(card.actions.first { $0.kind == .pasteText("Hello there", by: .parakeet) })
 
         h.controller.pasteNowOverride = { _ in .failed("no event source") }
         h.controller.perform(pasteHere, from: card)
         try await waitUntil { h.toasts.notices.contains { $0.transcript == "Hello there" && $0.id != card.id } }
 
         let again = try #require(h.toasts.notices.first { $0.transcript == "Hello there" })
-        let retry = try #require(again.actions.first { $0.kind == .pasteText("Hello there") })
+        let retry = try #require(again.actions.first { $0.kind == .pasteText("Hello there", by: .parakeet) })
         h.controller.pasteNowOverride = { _ in .accessibilityMissing }
         h.controller.perform(retry, from: again)
         try await waitUntil { h.toasts.notices.contains { $0.dedupeKey == "error.accessibilityMissing" } }
@@ -2150,7 +2198,7 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
         #expect(!menu.items.contains { $0.title == "Paste Last Transcript" })
         let item = try #require(menu.items.first { $0.title == "Copy Last Transcript" })
         #expect(item.isEnabled)
-        let last = try #require(env.history.lastSuccessfulText)
+        let last = try #require(env.history.lastSuccessful?.text)
         NSApplication.shared.sendAction(try #require(item.action), to: item.target, from: item)
         #expect(copied == [last])
     }

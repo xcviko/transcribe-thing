@@ -373,8 +373,9 @@ final class HistoryStore {
         HistoryStats.compute(entries, now: now, calendar: calendar)
     }
 
-    var lastSuccessfulText: String? {
-        entries.first { $0.status == .success && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }?.text
+    /// The newest entry with text: what Paste Last and Copy Last Transcript use.
+    var lastSuccessful: TranscriptEntry? {
+        entries.first { $0.status == .success && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
 
     func entry(id: UUID) -> TranscriptEntry? {

@@ -16,6 +16,11 @@ struct GeneralPage: View {
     @State private var recordingsBytes: Int64?
     /// An Auto-delete period that would delete entries at once, waiting for the user to confirm it.
     @State private var pendingAutoDelete: Int?
+    /// Narrow window: Pasting's model chips go under each rule's text.
+    @State private var stackedPasting = false
+
+    /// Below this width Pasting's chips, beside a rule, would squeeze its title onto two lines.
+    static let stackedPastingWidth: CGFloat = 600
 
     var body: some View {
         @Bindable var settings = settings
@@ -60,22 +65,19 @@ struct GeneralPage: View {
                     }
                 }
             }
-            HubGroup("Pasting") {
+            HubGroup("Pasting", footer: "Each applies to dictations by the models you pick. Polish Selection, History "
+                         + "and Copy keep the text as the model wrote it.") {
                 SettingsGroup {
-                    SettingsRow(title: "Add a space after the text",
-                                subtitle: "So what you say next doesn’t run into it.",
-                                systemImage: "space", iconTint: .inkSecondary) {
-                        Toggle("", isOn: $settings.addsSpaceAfterText)
-                            .toggleStyle(.appSwitch)
-                            .labelsHidden()
-                    }
-                    SettingsRow(title: "Remove the final period",
-                                subtitle: "Drops a single period at the end. Keeps “…”, “?” and “!”.",
-                                systemImage: "delete.backward", iconTint: .inkSecondary) {
-                        Toggle("", isOn: $settings.removesFinalPeriod)
-                            .toggleStyle(.appSwitch)
-                            .labelsHidden()
-                    }
+                    PastingRuleRow(title: "Add a space after the text",
+                                   subtitle: "So what you say next doesn’t run into it.", systemImage: "space",
+                                   models: $settings.modelsAddingSpace, stacked: stackedPasting)
+                    PastingRuleRow(title: "Remove the final period",
+                                   subtitle: "Drops a single period at the end. Keeps “…”, “?” and “!”.",
+                                   systemImage: "delete.backward", models: $settings.modelsRemovingFinalPeriod,
+                                   stacked: stackedPasting)
+                }
+                .onGeometryChange(for: Bool.self) { $0.size.width < Self.stackedPastingWidth } action: { stacked in
+                    stackedPasting = stacked
                 }
             }
             HubGroup("History") {
@@ -384,5 +386,38 @@ private struct AboutCard: View {
                 .buttonStyle(SecondaryButtonStyle(size: .small))
             }
         }
+    }
+}
+
+/// A General → Pasting rule and the models it applies to: the chips beside its text, or under it in a narrow window.
+private struct PastingRuleRow: View {
+    var title: String
+    var subtitle: String
+    var systemImage: String
+    @Binding var models: Set<ModelChoice>
+    var stacked: Bool
+
+    @Environment(AppSettings.self) private var settings
+
+    var body: some View {
+        if stacked {
+            VStack(alignment: .leading, spacing: 0) {
+                SettingsRow(title: title, subtitle: subtitle, systemImage: systemImage, iconTint: .inkSecondary)
+                // Lined up with the text, past the row's icon.
+                chips
+                    .padding(.leading, Theme.Spacing.md + 28 + Theme.Spacing.sm)
+                    .padding(.top, -2)
+                    .padding(.bottom, Theme.Spacing.sm)
+            }
+        } else {
+            SettingsRow(title: title, subtitle: subtitle, systemImage: systemImage, iconTint: .inkSecondary) {
+                chips
+            }
+        }
+    }
+
+    private var chips: some View {
+        ModelToggleChips(order: settings.lineup.order, parakeet: settings.parakeetEngine, selection: $models,
+                         rule: title)
     }
 }

@@ -116,6 +116,16 @@ extension ModelChoice {
         guard names.count > 1 else { return (last, false) }
         return (names.dropLast().joined(separator: ", ") + " and " + last, true)
     }
+
+    /// A set of models as stored (General → Pasting's): raw values in declaration order, so the value is stable.
+    static func stored(_ choices: Set<ModelChoice>) -> [String] {
+        allCases.filter(choices.contains).map(\.rawValue)
+    }
+
+    /// A stored set, read leniently: a model this build doesn't know is dropped.
+    static func read(_ raw: [String]) -> Set<ModelChoice> {
+        Set(raw.compactMap(ModelChoice.init(rawValue:)))
+    }
 }
 
 /// The three models as Models lists them: the user's order, the main model every dictation starts on, and which

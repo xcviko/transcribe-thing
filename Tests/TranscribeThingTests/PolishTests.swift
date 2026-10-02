@@ -278,6 +278,9 @@ import Testing
         let (rig, _, asked) = Self.make()
         var pastedHere: [String] = []
         rig.h.controller.pasteNowOverride = { pastedHere.append($0); return .pasted }
+        // General → Pasting's rules are for dictations: the answer takes the selection's place as the model wrote it.
+        rig.h.settings.modelsAddingSpace = Set(ModelChoice.allCases)
+        rig.h.settings.modelsRemovingFinalPeriod = Set(ModelChoice.allCases)
         asked.hold(.geminiFlash)
         try await Self.polish(rig)
         try await waitUntil { Self.card(rig, .gpt6Luna) != nil }

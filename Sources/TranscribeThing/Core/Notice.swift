@@ -27,7 +27,8 @@ enum NoticeActionKind: Sendable, Equatable {
     /// Undo a cancel: the dictation picks up again hands-free, its kept audio first.
     case undoCancel
     case copyText(String)
-    case pasteText(String)
+    /// The text and the model that wrote it, whose General → Pasting rules the paste follows (nil: as written).
+    case pasteText(String, by: ModelChoice?)
     case chooseMicrophone
     case useBuiltInMicrophone
     /// Open Software Update and install the newest release there, where its progress shows.
