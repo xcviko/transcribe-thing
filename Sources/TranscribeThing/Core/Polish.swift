@@ -1,6 +1,6 @@
 import Foundation
 
-/// Polish (fn ↩ while a dictation is on Gemini): Gemini 3.8 Flash hears the audio with `prompt`, Gemini's own prompt
+/// Polish (fn P while a dictation is on Gemini): Gemini 3.8 Flash hears the audio with `prompt`, Gemini's own prompt
 /// grown into one that also leaves out the thinking out loud, and writes the message its speaker meant to send. Polish
 /// Selection sends selected text with `textPrompt` instead. The message comes back in `<message>` tags.
 enum Polish {

@@ -242,19 +242,20 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
         #expect(kb.press(.fn).events == [.pttDown])
     }
 
-    /// While dictating, fn ↩ is Polish, swallowed, and the hold goes on.
+    /// While dictating, fn P is Polish, swallowed, and the hold goes on.
     @Test func thePolishKeyWhileHoldingTheKey() {
         var kb = Keyboard()
+        #expect(ShortcutBindings.defaults[.polish] == .fnP)
         #expect(kb.press(.fn).events == [.pttDown])
-        let polish = kb.down(kVK_Return, fnFlagged: true)
+        let polish = kb.down(kVK_ANSI_P, fnFlagged: true)
         #expect(polish.events == [.polish] && polish.swallow)
         // Held down, every autorepeat is another press.
-        #expect(kb.down(kVK_Return, isRepeat: true, fnFlagged: true).events == [.polish])
-        #expect(kb.down(kVK_Return, isRepeat: true, fnFlagged: true).events == [.polish])
-        #expect(kb.up(kVK_Return, fnFlagged: true).swallow)
+        #expect(kb.down(kVK_ANSI_P, isRepeat: true, fnFlagged: true).events == [.polish])
+        #expect(kb.down(kVK_ANSI_P, isRepeat: true, fnFlagged: true).events == [.polish])
+        #expect(kb.up(kVK_ANSI_P, fnFlagged: true).swallow)
         #expect(kb.release(.fn).events == [.pttUp], "still the dictation's hold")
-        // With fn up, Return is Return.
-        let plain = kb.down(kVK_Return, fnFlagged: false)
+        // With fn up, P is P.
+        let plain = kb.down(kVK_ANSI_P, fnFlagged: false)
         #expect(plain.events.isEmpty && !plain.swallow)
     }
 
@@ -277,10 +278,10 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
         #expect(!kb.down(kVK_ANSI_KeypadEnter, fnFlagged: true).swallow)
     }
 
-    /// A laptop keyboard sends fn ↩ as Keypad Enter: it's Polish all the same, in hands-free too, and recording it
-    /// in Shortcuts gives fn ↩.
+    /// A laptop keyboard sends fn ↩ as Keypad Enter: bound to fn ↩ (Polish's old default), it's Polish all the same,
+    /// in hands-free too, and recording it in Shortcuts gives fn ↩.
     @Test func fnReturnArrivesAsKeypadEnter() {
-        var kb = Keyboard()
+        var kb = Keyboard(bindings: bindings([.polish: .fnReturn]))
         #expect(kb.press(.fn).events == [.pttDown])
         let enter = kb.down(kVK_ANSI_KeypadEnter, fnFlagged: true)
         #expect(enter.events == [.polish] && enter.swallow)
@@ -342,10 +343,10 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
         #expect(kb.down(kVK_Return).events == [.cardPaste])
     }
 
-    /// Off Gemini, before the selection lookup has answered, fn ↩ is held for it: the key (as it came) goes to the
-    /// controller to decide, and its repeats and release stay swallowed.
+    /// Off Gemini, before the selection lookup has answered, the polish key is held for it: the key (as it came) goes
+    /// to the controller to decide, and its repeats and release stay swallowed. (fn ↩ here, as a laptop sends it.)
     @Test func thePolishKeyIsHeldWhileTheLookupRuns() {
-        var kb = Keyboard()
+        var kb = Keyboard(bindings: bindings([.polish: .fnReturn]))
         kb.config.polishes = false
         kb.config.selectionPending = true
         #expect(kb.press(.fn).events == [.pttDown])

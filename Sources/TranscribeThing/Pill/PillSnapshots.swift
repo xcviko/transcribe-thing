@@ -90,7 +90,7 @@ enum PillSnapshots {
             SnapshotEntry("pill-selection-hint", width: 640, height: 150) { _ in
                 CanvasScene(model: selectionModel(.listening), notices: [])
             },
-            // On Gemini fn ↩ is Polish's: only the dictionary is offered.
+            // On Gemini fn P is Polish's: only the dictionary is offered.
             SnapshotEntry("pill-selection-hint-gemini", width: 640, height: 150) { _ in
                 CanvasScene(model: selectionModel(.listening, choice: .gemini,
                                                   offer: PillSelectionOffer(polish: false, dictionary: true)),

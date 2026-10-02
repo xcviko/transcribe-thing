@@ -56,7 +56,7 @@ struct HotkeyRouter: Equatable, Sendable {
         /// intercepted.
         var switchesModels = true
         /// The dictation (or the one a held PTT starts) is on Gemini, the only model that polishes: without it Polish's
-        /// shortcut is never intercepted, and fn ↩ reaches the app as it did before Polish.
+        /// shortcut is never intercepted, and its keys reach the app as they did before Polish.
         var polishes = true
         /// The selection lookup hasn't answered and Polish Selection can happen: Polish's shortcut is held off Gemini
         /// as `.heldForSelection`, for the lookup to decide (Polish Selection, or the key given back).

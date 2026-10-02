@@ -145,15 +145,14 @@ import Testing
     }
 
     /// Older builds saved fn ↩ recorded on a laptop as fn ⌤ (Keypad Enter, which is what the keyboard sends): it loads
-    /// as fn ↩. The keypad's Enter without fn stays itself. Polish, newer than these bindings, starts unbound when its
-    /// fn ↩ is already the user's.
+    /// as fn ↩. The keypad's Enter without fn stays itself. Polish, newer than these bindings, gets its default (fn P).
     @Test func fnKeypadEnterLoadsAsFnReturnAndKeepsItsAction() throws {
         let stored = #"{"handsFree":{"keyCode":76,"modifiers":[{"modifier":"function","side":"either"}]},"#
             + #""pasteLast":{"keyCode":76,"modifiers":[]}}"#
         let decoded = try JSONDecoder().decode(ShortcutBindings.self, from: Data(stored.utf8))
         #expect(decoded[.handsFree] == .fnReturn)
         #expect(decoded[.pasteLast] == Shortcut(modifiers: [], keyCode: KeyCode.keypadEnter))
-        #expect(decoded[.polish] == nil, "the user's hands-free keeps fn ↩")
+        #expect(decoded[.polish] == .fnP)
         #expect(decoded[.switchModel] == .fnTab, "a default nobody else has still comes")
 
         let untouched = try JSONDecoder().decode(ShortcutBindings.self, from: Data("{}".utf8))
@@ -197,7 +196,7 @@ import Testing
         .handsFree: Shortcut(modifiers: [.init(.control), .init(.option)], keyCode: KeyCode.space),
         // Added after it was saved: their defaults.
         .switchModel: .fnTab,
-        .polish: .fnReturn,
+        .polish: .fnP,
         .addToDictionary: .fnD,
     ])
 
@@ -817,6 +816,30 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         colors[.cleanup] = .violet
         #expect(try JSONDecoder().decode(ModelColors.self, from: encoder.encode(colors)) == colors)
         #expect(colors[.cleanup] == colors[.gemini], "two may share one")
+    }
+
+    /// Polish moved from fn ↩ to fn P: a build that had it on fn ↩ moves it once; bound to fn ↩ again, it stays.
+    @Test func polishMovesFromFnReturnToFnPOnce() throws {
+        try withSuite { defaults in
+            var old = ShortcutBindings.defaults
+            old[.polish] = .fnReturn
+            defaults.set(try JSONEncoder().encode(old), forKey: "tt.shortcuts")
+            let settings = AppSettings(defaults: defaults)
+            #expect(settings.shortcuts[.polish] == .fnP)
+            settings.shortcuts[.polish] = .fnReturn
+            #expect(AppSettings(defaults: defaults).shortcuts[.polish] == .fnReturn, "chosen again, it stays")
+        }
+    }
+
+    /// fn P taken by something else: Polish stays where it was.
+    @Test func polishStaysOnFnReturnWhenFnPIsTaken() throws {
+        try withSuite { defaults in
+            var old = ShortcutBindings.defaults
+            old[.polish] = .fnReturn
+            old[.pasteLast] = .fnP
+            defaults.set(try JSONEncoder().encode(old), forKey: "tt.shortcuts")
+            #expect(AppSettings(defaults: defaults).shortcuts[.polish] == .fnReturn)
+        }
     }
 
     /// The pasting rules hold for no model and Auto-delete is off (Never) out of the box.

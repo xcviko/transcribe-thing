@@ -1523,7 +1523,7 @@ struct PillSelectionHint: View {
         let polish = model.settings.shortcuts[.polish], dictionary = model.settings.shortcuts[.addToDictionary]
         PillChipCapsule {
             if offer.polish {
-                PillShortcutChips(shortcut: polish, fallback: "↩")
+                PillShortcutChips(shortcut: polish, fallback: "P")
                     .scaleEffect(0.9)
                 Text(offer.dictionary ? "Polish" : "Polish selection")
                     .foregroundStyle(.white.opacity(0.8))

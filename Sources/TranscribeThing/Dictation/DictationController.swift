@@ -138,7 +138,7 @@ final class DictationController {
     @ObservationIgnored private var selectionHintTask: Task<Void, Never>?
     /// Polish Selection under way: the pill shows it (the polish circle, then the count) until its card comes up.
     @ObservationIgnored private var selectionPolish: SelectionPolish?
-    /// This dictation is polished (`Polish`, fn ↩ while it's on Gemini). It lasts while the dictation records, as
+    /// This dictation is polished (`Polish`, fn P while it's on Gemini). It lasts while the dictation records, as
     /// `modelOverride` does: its job keeps it, the next dictation starts without.
     private(set) var isPolishing = false
     /// How long a push-to-talk hold lasts before the pill hints at Switch model.
@@ -277,7 +277,7 @@ final class DictationController {
     }
 
     /// The key's state decides whether Polish Selection can happen: the first press after launch (the key is checked
-    /// meanwhile), or after a key is added, finds the tap already holding a quick fn ↩ for it.
+    /// meanwhile), or after a key is added, finds the tap already holding a quick fn P for it.
     private func observeAccountForSelection() {
         withObservationTracking {
             _ = account.status
@@ -291,7 +291,7 @@ final class DictationController {
     }
 
     /// Until a recording's lookup answers, the polish key may be Polish Selection's: the tap holds it. Between
-    /// dictations that's the next press's, so a quick fn ↩ is held from its first moment. The dictionary key is held
+    /// dictations that's the next press's, so a quick fn P is held from its first moment. The dictionary key is held
     /// whenever it's bound: it reads the selection when it's pressed.
     private func syncSelectionPending() {
         let pending = canPolishSelection && (!machine.isRecording || selectionLookupRunning)
@@ -2186,9 +2186,9 @@ final class DictationController {
         }
     }
 
-    /// A key the tap held for the selection. fn ↩ came before the dictation's lookup answered (a quick fn ↩): the
+    /// A key the tap held for the selection. fn P came before the dictation's lookup answered (a quick fn P): the
     /// lookup decides. fn D always reads what's selected now (in a long hands-free dictation, not what was selected
-    /// as it started). With text selected the key does its work on it (on Gemini, fn ↩ is Polish's); without, it goes
+    /// as it started). With text selected the key does its work on it (on Gemini, fn P is Polish's); without, it goes
     /// on to the app after all, ending a held press as any other key would have.
     /// Keys pressed while the first waits follow it: dropped once it did its work, given to the app after it.
     /// A recording canceled meanwhile (Esc) drops them all.

@@ -258,6 +258,14 @@ final class AppSettings {
         if let v: UserDictionary = store.json(.dictionary) { dictionary = v }
         if let v = store.int(.autoDeleteHistoryDays), v >= 0 { autoDeleteHistoryDays = v }
         if let v: ShortcutBindings = store.json(.shortcuts) { shortcuts = v }
+        // Polish moved from fn ↩ to fn P (↩ sends a hands-free dictation): a build that had it on fn ↩ by default
+        // moves it, once, unless fn P is taken. Bound to fn ↩ again after that, it stays.
+        if store.bool(.polishMovedToFnP) != true {
+            if shortcuts[.polish] == .fnReturn, shortcuts.conflict(for: .fnP, excluding: .polish) == nil {
+                shortcuts[.polish] = .fnP
+            }
+            store.set(true, .polishMovedToFnP)
+        }
         if let v = store.bool(.hasShownWelcomeHello) { hasShownWelcomeHello = v }
         if let v = store.bool(.checkForUpdatesAutomatically) { checkForUpdatesAutomatically = v }
         announcedUpdateVersion = store.string(.announcedUpdateVersion)
@@ -362,6 +370,8 @@ enum SettingsKey: String, CaseIterable {
     /// once into `modelsAddingSpace` and `modelsRemovingFinalPeriod` and removed at load.
     case addSpaceAfterText, removeFinalPeriod, autoDeleteHistoryDays, lineup, modelColors, keychainKeyMigrated
     case handsFreeModel, modelsAddingSpace, modelsRemovingFinalPeriod, dictionary, returnSendsHandsFree
+    /// Polish's default left fn ↩ for fn P: set once its old default has been moved (`load`).
+    case polishMovedToFnP
     case polishSelectionModel
 
     var defaultsKey: String { "tt.\(rawValue)" }

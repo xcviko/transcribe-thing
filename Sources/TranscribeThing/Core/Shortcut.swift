@@ -34,6 +34,7 @@ enum KeyCode {
     static let forwardDelete = UInt16(kVK_ForwardDelete) // 117
     static let ansiV = UInt16(kVK_ANSI_V)               // 9
     static let ansiD = UInt16(kVK_ANSI_D)               // 2
+    static let ansiP = UInt16(kVK_ANSI_P)               // 35
     static let ansiC = UInt16(kVK_ANSI_C)               // 8
     static let f13 = UInt16(kVK_F13)                    // 105
 
@@ -193,6 +194,7 @@ struct Shortcut: Codable, Hashable, Sendable {
     static let fnTab = Shortcut(modifiers: [.init(.function)], keyCode: KeyCode.tab)
     static let fnReturn = Shortcut(modifiers: [.init(.function)], keyCode: KeyCode.returnKey)
     static let fnD = Shortcut(modifiers: [.init(.function)], keyCode: KeyCode.ansiD)
+    static let fnP = Shortcut(modifiers: [.init(.function)], keyCode: KeyCode.ansiP)
     static let escape = Shortcut(modifiers: [], keyCode: KeyCode.escape)
     static let commandFnV = Shortcut(modifiers: [.init(.command), .init(.function)], keyCode: KeyCode.ansiV)
     static let rightOption = Shortcut(modifiers: [.init(.option, .right)])
@@ -342,7 +344,8 @@ struct ShortcutBindings: Codable, Equatable, Sendable {
         .handsFree: .fnSpace,
         .pasteLast: .commandFnV,
         .switchModel: .fnTab,
-        .polish: .fnReturn,
+        // P for Polish, D for Dictionary; ↩ is kept for sending (`AppSettings.returnSendsHandsFree`).
+        .polish: .fnP,
         .addToDictionary: .fnD,
     ])
 
@@ -414,7 +417,7 @@ struct ShortcutBindings: Codable, Equatable, Sendable {
         }
         bindings = result
         // An action newer than the saved bindings starts unbound when its default is already the user's for
-        // something else (Polish's fn ↩ next to a hands-free set to fn ↩): the user's binding keeps working.
+        // something else (Polish's fn P next to a hands-free set to fn P): the user's binding keeps working.
         for action in defaulted {
             guard let shortcut = bindings[action],
                   let other = conflict(for: shortcut, excluding: action), !defaulted.contains(other) else { continue }
