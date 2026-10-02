@@ -1170,10 +1170,13 @@ final class DictationController {
             if !machine.isRecording { sounds.play(.paste) }
             if isDictation { onDictationDelivered?() }
         case .noEditableTarget:
-            toasts.post(transcriptCard(text, title: "Nowhere to paste",
-                                       body: "Or click a text field and press \(pasteLastHint).", pasteHere: false))
+            toasts.post(transcriptCard(text, title: "Not pasted", body: "The cursor wasn’t in a text field.",
+                                       pasteHere: false))
         case .targetChanged:
-            toasts.post(transcriptCard(text, title: "You switched apps", body: "Paste here, or copy it.", pasteHere: true))
+            // Another app came to the front, or the focus moved to another process (clicking out of a field in a
+            // browser or an Electron app does that): either way the cursor left the field, which is what to say.
+            toasts.post(transcriptCard(text, title: "Not pasted", body: "The cursor left the text field while it was transcribing.",
+                                       pasteHere: true))
         case .accessibilityMissing:
             // Nothing goes on the clipboard unasked: the card holds the text until the user copies it.
             var notice = AppError.accessibilityMissing.notice(recordingID: nil, fallbackEngine: nil)
@@ -1193,10 +1196,6 @@ final class DictationController {
         actions.append(NoticeAction(title: "Copy", kind: .copyText(text), isPrimary: !pasteHere))
         return Notice(dedupeKey: "transcript.\(text.hashValue)", style: .info, symbol: "doc.on.clipboard",
                       title: title, body: body, transcript: text, actions: actions, lifetime: .seconds(20))
-    }
-
-    private var pasteLastHint: String {
-        settings.shortcuts[.pasteLast]?.compactDescription ?? "⌘ fn V"
     }
 
     // MARK: - Paste last

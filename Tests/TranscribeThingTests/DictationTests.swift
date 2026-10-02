@@ -1705,9 +1705,9 @@ final class FakeRecorder: DictationRecorder {
         #expect(pasteboard.data(forType: canvasType) == Data(canvasType.rawValue.utf8))
     }
 
-    /// Nowhere to paste leaves the clipboard alone: a card holds the text, as after a dictation, and only its Copy
+    /// No text field to paste into leaves the clipboard alone: a card holds the text, as after a dictation, and only its Copy
     /// puts it on the clipboard.
-    @Test(arguments: [(InsertionOutcome.noEditableTarget, "Nowhere to paste", false), (.failed("no ⌘V"), "Couldn’t paste", true)])
+    @Test(arguments: [(InsertionOutcome.noEditableTarget, "Not pasted", false), (.failed("no ⌘V"), "Couldn’t paste", true)])
     func pasteLastWithNowhereToPasteOffersTheTextToCopy(_ outcome: InsertionOutcome, _ title: String,
                                                        _ offersPasteHere: Bool) async throws {
         let h = Self.make()

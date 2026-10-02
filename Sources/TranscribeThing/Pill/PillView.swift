@@ -79,23 +79,27 @@ enum PillMetrics {
     static let counterNumberFontSize: CGFloat = 12
     static let counterNumberFont = Font.system(size: counterNumberFontSize, weight: .semibold, design: .rounded)
         .monospacedDigit()
-    /// The breathing dot at the counter's start.
-    static let counterDotSize: CGFloat = 5
     /// Between the counter and the capsule's ends.
     static let counterPadding: CGFloat = 14
-    /// Between the dot and the number at their closest (the widest number), and between the number and its word.
-    static let counterDotGap: CGFloat = 6
+    /// Between the number and its word.
     static let counterWordGap: CGFloat = 4
-    /// The processing pill with its token count: the push-to-talk height, wide enough for "~88.8k thinking", the
-    /// widest it says (a request's `max_tokens` keeps counts under 100k). Fixed, so the capsule never resizes as it
-    /// counts.
-    static let counterSize = CGSize(
-        width: (2 * counterPadding + counterDotSize + counterDotGap
-                + textWidth("~88.8k", size: counterNumberFontSize, weight: .semibold, rounded: true,
-                            monospacedDigits: true)
-                + counterWordGap + textWidth("thinking", size: captionFontSize, weight: .medium, rounded: true))
-            .rounded(.up),
+    /// A polished count starts with the wand, this wide and this far from the number.
+    static let counterWandSize: CGFloat = 12
+    static let counterWandGap: CGFloat = 6
+    /// "~88.8k thinking", the widest the count says (a request's `max_tokens` keeps counts under 100k).
+    private static let widestCount = textWidth("~88.8k", size: counterNumberFontSize, weight: .semibold,
+                                               rounded: true, monospacedDigits: true)
+        + counterWordGap + textWidth("thinking", size: captionFontSize, weight: .medium, rounded: true)
+    /// The processing pill with its token count, centered: the push-to-talk height, wide enough for the widest
+    /// count. Fixed, so the capsule never resizes as it counts.
+    static let counterSize = CGSize(width: (2 * counterPadding + widestCount).rounded(.up), height: listeningSize.height)
+    /// The polished count: the wand, then the count.
+    static let polishCounterSize = CGSize(
+        width: (2 * counterPadding + counterWandSize + counterWandGap + widestCount).rounded(.up),
         height: listeningSize.height)
+    /// A polish (a dictation's or a selection's) before its count: the capsule closes into a circle around the wand,
+    /// the drop come back into the pill.
+    static let polishCircleSize = CGSize(width: listeningSize.height, height: listeningSize.height)
 
     /// Width of a single line of `text` in the system font, as SwiftUI's `Font.system` draws it.
     static func textWidth(_ text: String, size: CGFloat, weight: NSFont.Weight, rounded: Bool,
@@ -167,8 +171,9 @@ enum PillVisual: Equatable, Sendable {
     /// The push-to-talk size: stopping hands-free shrinks the pill. `afterHandsFree` only starts the dots
     /// where the hands-free bars stood, so they glide to the center as the pill narrows instead of hopping.
     /// `counting`: the model's token count in place of the dots, in a capsule wide enough for it. The number itself is
-    /// never part of the visual, so a tick never springs the capsule.
-    case processing(afterHandsFree: Bool, counting: Bool = false)
+    /// never part of the visual, so a tick never springs the capsule. `polishes`: a polish is being written, so a
+    /// circle with the wand until the count, then the wand before it.
+    case processing(afterHandsFree: Bool, counting: Bool = false, polishes: Bool = false)
     case error
     /// The error flash as a sentence instead of the glyph ("No speech detected"): no red, no shake.
     case message(String)
@@ -179,7 +184,9 @@ enum PillVisual: Equatable, Sendable {
         switch self {
         case .hidden, .rest: PillMetrics.restSize
         case .peek: PillMetrics.peekSize
-        case .processing(_, counting: true): PillMetrics.counterSize
+        case .processing(_, counting: true, polishes: true): PillMetrics.polishCounterSize
+        case .processing(_, counting: true, _): PillMetrics.counterSize
+        case .processing(_, counting: false, polishes: true): PillMetrics.polishCircleSize
         case .listening, .hello, .processing: PillMetrics.listeningSize
         case .locked(hours: true): PillMetrics.lockedHoursSize
         case .locked: PillMetrics.lockedSize
@@ -218,7 +225,10 @@ enum PillVisual: Equatable, Sendable {
     var showsHours: Bool { self == .locked(hours: true) }
 
     /// Processing with the token count in place of the dots.
-    var isCounting: Bool { if case .processing(_, counting: true) = self { true } else { false } }
+    var isCounting: Bool { if case .processing(_, counting: true, _) = self { true } else { false } }
+
+    /// Processing a polish: the wand inside the capsule.
+    var isPolishing: Bool { if case .processing(_, _, polishes: true) = self { true } else { false } }
 
     /// Horizontal offset of the bars from the pill's center. Hands-free centers them between X and the timer;
     /// processing after it starts its dots where the usual hands-free bars stand, so they don't hop sideways when
@@ -226,7 +236,7 @@ enum PillVisual: Equatable, Sendable {
     var barsOffset: CGFloat {
         switch self {
         case .locked(let hours): PillMetrics.lockedBarsOffset(hours: hours)
-        case .processing(afterHandsFree: true, _): PillMetrics.lockedBarsOffset(hours: false)
+        case .processing(afterHandsFree: true, _, polishes: false): PillMetrics.lockedBarsOffset(hours: false)
         default: 0
         }
     }
@@ -287,7 +297,8 @@ struct PillView: View {
         case .locked:
             return .locked(hours: model.showsHours)
         case .processing:
-            return .processing(afterHandsFree: model.processingOrigin == .locked, counting: model.showsCounter)
+            return .processing(afterHandsFree: model.processingOrigin == .locked, counting: model.showsCounter,
+                               polishes: model.polishes)
         case .error:
             if let text = model.errorMessage { return .message(text) }
             return .error
@@ -588,9 +599,10 @@ struct PillFace: View {
         carriesModel && model.showsChip ? choice : nil
     }
 
-    /// The dictation on screen is polished: the drop beside the pill (only while the content carries its model).
+    /// The dictation being recorded is polished: the drop beside the pill. Once it's processing, the drop flows back
+    /// in and the wand is inside the capsule.
     private var polishes: Bool {
-        carriesModel && model.polishes
+        content.content == .recording && model.polishes
     }
 
     var body: some View {
@@ -603,7 +615,7 @@ struct PillFace: View {
             .background(alignment: .trailing) {
                 // Behind the capsule, from its right end: the drop slides out from under the pill, which keeps its
                 // edge whole.
-                PillPolishDrop(isOn: polishes, height: size.height, tint: accent?.mark ?? .white,
+                PillPolishDrop(isOn: polishes, height: size.height, tint: accent?.mark ?? .white, accent: accent,
                                reduceMotion: reduceMotion)
                     .frame(width: 0, height: size.height)
             }
@@ -665,7 +677,7 @@ struct PillFace: View {
                 .transition(contentTransition())
         case .processing:
             ProcessingContent(startOffset: visual.barsOffset, tint: accent?.mark ?? .white, accent: accent,
-                              count: model.tokenCount, isCounting: visual.isCounting)
+                              count: model.tokenCount, isCounting: visual.isCounting, polishes: visual.isPolishing)
                 .frame(width: visual.size.width, height: visual.size.height)
                 .modifier(morph)
                 .id(PillVisual.Content.processing)
@@ -754,13 +766,15 @@ struct PillPolishDrop: View {
     /// The capsule's height: the drop is a little smaller.
     var height: CGFloat
     var tint: Color
+    /// The dictation's model's ring, which the drop wears as the pill does.
+    var accent: PillAccent?
     var reduceMotion = false
     /// Snapshots: a still frame of the way out (0 inside the pill, 1 broken off).
     var progress: Double?
 
     var body: some View {
         PillPolishDropShape(progress: progress ?? (isOn ? 1 : 0), height: height, symbol: "wand.and.sparkles",
-                            tint: tint)
+                            tint: tint, accent: accent)
             .animation(progress != nil ? nil : reduceMotion ? .easeInOut(duration: 0.1)
                        : .spring(duration: isOn ? 0.41 : 0.25, bounce: isOn ? 0.18 : 0), value: isOn)
             .accessibilityHidden(!isOn)
@@ -776,6 +790,7 @@ private struct PillPolishDropShape: View, Animatable {
     var height: CGFloat
     var symbol: String
     var tint: Color
+    var accent: PillAccent?
 
     var animatableData: Double {
         get { progress }
@@ -792,6 +807,15 @@ private struct PillPolishDropShape: View, Animatable {
                     Circle().strokeBorder(LinearGradient(colors: [.white.opacity(0.24), .white.opacity(0.07)],
                                                          startPoint: .top, endPoint: .bottom), lineWidth: 0.5)
                         .opacity(geometry.separation)
+                }
+                .overlay {
+                    // The capsule's ring, once the drop is off.
+                    if let accent {
+                        Circle().strokeBorder(LinearGradient(colors: [accent.mark.opacity(0.95), accent.ring.opacity(0.9)],
+                                                             startPoint: .top, endPoint: .bottom), lineWidth: 1.25)
+                            .shadow(color: accent.ring.opacity(0.55), radius: 4)
+                            .opacity(geometry.separation)
+                    }
                 }
                 .overlay {
                     Image(systemName: symbol)
@@ -950,7 +974,8 @@ private struct PillCaptionText: View {
 
 /// The processing wave, and once the model has streamed for a moment, its token count: the dots fade out as the
 /// capsule widens and the count fades in while the shimmer keeps sweeping. Same content either way, so starting to
-/// count never restarts the wave or the shimmer.
+/// count never restarts the wave or the shimmer. A polish has no dots: the wand in a circle until the count, under a
+/// shimmer in the model's color.
 private struct ProcessingContent: View {
     var startOffset: CGFloat
     var tint: Color
@@ -958,6 +983,7 @@ private struct ProcessingContent: View {
     /// The model's count right now; nil once the controller has let it go (the pill leaving with its number).
     var count: PillTokenCount?
     var isCounting: Bool
+    var polishes = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The last count shown, so a pill that leaves or shrinks after its count went keeps its number to the end.
@@ -965,9 +991,14 @@ private struct ProcessingContent: View {
 
     var body: some View {
         ZStack {
-            ProcessingWaveView(startOffset: startOffset, tint: tint, showsDots: !isCounting)
+            ProcessingWaveView(startOffset: startOffset, tint: tint, showsDots: !isCounting && !polishes,
+                               glow: polishes ? tint : nil)
+            if polishes, !isCounting {
+                PillWand(tint: tint)
+                    .transition(counterTransition)
+            }
             if isCounting, let shown = count ?? lastCount {
-                PillTokenCounter(count: shown, accent: accent)
+                PillTokenCounter(count: shown, accent: accent, polishes: polishes)
                     .transition(counterTransition)
             }
         }
@@ -984,30 +1015,40 @@ private struct ProcessingContent: View {
     }
 }
 
-/// "● ~1.2k thinking": a breathing dot that says the request is alive, then the count and what the model is doing.
-/// The word's right edge stays put and the number grows leftward; within a phase its digits roll, and from thinking
-/// to writing (which starts again from its first tokens) number and word crossfade instead, so the restart never
-/// reads as a countdown.
+/// Polish's wand inside the capsule, as it stands in the drop.
+private struct PillWand: View {
+    var tint: Color
+
+    var body: some View {
+        Image(systemName: "wand.and.sparkles")
+            .font(.system(size: PillMetrics.counterWandSize, weight: .semibold))
+            .foregroundStyle(tint)
+            .frame(width: PillMetrics.counterWandSize + 2)
+            .accessibilityHidden(true)
+    }
+}
+
+/// "~1.2k thinking", centered in the capsule: the count and what the model is doing; a polish puts the wand before
+/// it. Within a phase the digits roll, and from thinking to writing (which starts again from its first tokens) number
+/// and word crossfade instead, so the restart never reads as a countdown.
 struct PillTokenCounter: View {
     let count: PillTokenCount
     var accent: PillAccent?
+    var polishes = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(spacing: 0) {
-            BreathingDot(color: accent?.mark ?? .white)
-            Spacer(minLength: PillMetrics.counterDotGap)
-            ZStack(alignment: .trailing) {
-                label
-                    .id(count.phase)
-                    .transition(.opacity.animation(.easeInOut(duration: reduceMotion ? 0.15 : 0.2)))
-            }
-            .animation(.easeInOut(duration: reduceMotion ? 0.15 : 0.2), value: count.phase)
+        HStack(spacing: PillMetrics.counterWandGap) {
+            if polishes { PillWand(tint: accent?.mark ?? .white) }
+            label
+                .id(count.phase)
+                .transition(.opacity.animation(.easeInOut(duration: reduceMotion ? 0.15 : 0.2)))
         }
+        .animation(.easeInOut(duration: reduceMotion ? 0.15 : 0.2), value: count.phase)
         .padding(.horizontal, PillMetrics.counterPadding)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(count.spokenDescription)
+        .accessibilityLabel(polishes ? "Polishing, \(count.spokenDescription)" : count.spokenDescription)
         .accessibilityAddTraits(.updatesFrequently)
     }
 
@@ -1024,33 +1065,6 @@ struct PillTokenCounter: View {
         }
         .lineLimit(1)
         .fixedSize()
-    }
-}
-
-/// The counter's liveness cue: a small dot that breathes between 45% and full, 1.2 s each way. Reduce Motion holds
-/// it still at 80%; static snapshots at full.
-private struct BreathingDot: View {
-    var color: Color
-
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.pillStaticRendering) private var isStatic
-
-    var body: some View {
-        if isStatic || reduceMotion {
-            dot.opacity(isStatic ? 1 : 0.8)
-        } else {
-            PhaseAnimator([false, true]) { lit in
-                dot.opacity(lit ? 1 : 0.45)
-            } animation: { _ in
-                .easeInOut(duration: 1.2)
-            }
-        }
-    }
-
-    private var dot: some View {
-        Circle()
-            .fill(color)
-            .frame(width: PillMetrics.counterDotSize, height: PillMetrics.counterDotSize)
     }
 }
 

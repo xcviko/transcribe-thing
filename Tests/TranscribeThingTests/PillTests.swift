@@ -587,13 +587,19 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         let size = counting.size
         #expect(size == PillMetrics.counterSize && size.height == PillMetrics.listeningSize.height)
         #expect(size.width > PillMetrics.listeningSize.width && size.width < PillMetrics.lockedSize.width)
-        // Room for "~88.8k thinking", the widest it says, and its dot and padding.
+        // Room for "~88.8k thinking", the widest it says, and its padding (no dot: the count is centered).
         let number = PillMetrics.textWidth("~88.8k", size: PillMetrics.counterNumberFontSize, weight: .semibold,
                                            rounded: true, monospacedDigits: true)
         let word = PillMetrics.textWidth("thinking", size: PillMetrics.captionFontSize, weight: .medium, rounded: true)
         #expect(number > 25 && word > 35)
-        #expect(size.width >= 2 * PillMetrics.counterPadding + PillMetrics.counterDotSize + PillMetrics.counterDotGap
-                + number + PillMetrics.counterWordGap + word)
+        let text: CGFloat = number + PillMetrics.counterWordGap + word
+        #expect(size.width >= 2 * PillMetrics.counterPadding + text)
+        // A polish: a circle with the wand until the count, then the wand before it.
+        let wand: CGFloat = PillMetrics.counterWandSize + PillMetrics.counterWandGap
+        #expect(PillVisual.processing(afterHandsFree: false, polishes: true).size == CGSize(width: 32, height: 32))
+        #expect(PillVisual.processing(afterHandsFree: false, counting: true, polishes: true).size.width
+                >= 2 * PillMetrics.counterPadding + wand + text)
+        #expect(PillVisual.processing(afterHandsFree: true, polishes: true).barsOffset == 0, "no dots to start aside")
         #expect(PillTokenCount(phase: .thinking, tokens: 88_849).text == "~88.8k")
         // After hands-free it's the same pill; the dots' start offset doesn't change its size.
         let afterHandsFree = PillModel.preview(phase: .locked)

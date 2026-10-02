@@ -221,6 +221,8 @@ struct ProcessingWaveView: View {
     var tint: Color = .white
     /// The token count fades the dots out and takes their place; the shimmer keeps sweeping.
     var showsDots = true
+    /// A polish: the shimmer also sweeps the whole capsule in this color, plainly, as the wand works.
+    var glow: Color?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.pillStaticRendering) private var isStatic
@@ -290,6 +292,14 @@ struct ProcessingWaveView: View {
         var inside = context
         inside.clip(to: Capsule(style: .continuous).path(in: bounds))
         inside.fill(Path(bounds), with: sweep(0.035))
+        if let glow {
+            let wide = size.width * 0.7, glowX = -wide / 2 + (size.width + wide) * phase
+            inside.fill(Path(bounds), with: .linearGradient(Gradient(stops: [
+                .init(color: glow.opacity(0), location: 0),
+                .init(color: glow.opacity(0.32 * ramp), location: 0.5),
+                .init(color: glow.opacity(0), location: 1),
+            ]), startPoint: CGPoint(x: glowX - wide / 2, y: 0), endPoint: CGPoint(x: glowX + wide / 2, y: 0)))
+        }
     }
 
     private func drawDots(in context: inout GraphicsContext, size: CGSize, time t: TimeInterval) {
