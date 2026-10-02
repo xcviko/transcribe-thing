@@ -326,9 +326,44 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
         kb.up(kVK_Escape)
         kb.config = HotkeyRouter.Config()
         kb.config.cardClose = true
-        #expect(!kb.down(kVK_Return).swallow, "two cards: ↩ is the app's")
+        #expect(!kb.down(kVK_Return).swallow, "an answer was copied: ↩ is the app's again")
         kb.up(kVK_Return)
         #expect(kb.down(kVK_Escape).events == [.cardClose])
+    }
+
+    /// A key the user bound themselves stays theirs while a card is up: bare Keypad Enter for Paste Last.
+    @Test func theCardsKeysYieldToTheUsersBindings() {
+        let keypadEnter = Shortcut(modifiers: [], keyCode: UInt16(kVK_ANSI_KeypadEnter))
+        var kb = Keyboard(bindings: bindings([.pasteLast: keypadEnter]))
+        kb.config.cardPaste = true
+        kb.config.cardClose = true
+        #expect(kb.down(kVK_ANSI_KeypadEnter).events == [.pasteLast])
+        kb.up(kVK_ANSI_KeypadEnter)
+        #expect(kb.down(kVK_Return).events == [.cardPaste])
+    }
+
+    /// Off Gemini, before the selection lookup has answered, fn ↩ is held for it: the key (as it came) goes to the
+    /// controller to decide, and its repeats and release stay swallowed.
+    @Test func thePolishKeyIsHeldWhileTheLookupRuns() {
+        var kb = Keyboard()
+        kb.config.polishes = false
+        kb.config.selectionPending = true
+        #expect(kb.press(.fn).events == [.pttDown])
+        let enter = kb.down(kVK_ANSI_KeypadEnter, fnFlagged: true)
+        #expect(enter.swallow && enter.events.count == 1)
+        if case .polishIfSelected(let key) = enter.events.first {
+            #expect(key.keyCode == UInt16(kVK_ANSI_KeypadEnter) && key.interruptsHold)
+            #expect(key.flags & CGEventFlags.maskSecondaryFn.rawValue != 0)
+        } else {
+            Issue.record("expected polishIfSelected, got \(enter.events)")
+        }
+        #expect(kb.down(kVK_ANSI_KeypadEnter, isRepeat: true, fnFlagged: true).events.isEmpty)
+        #expect(kb.up(kVK_ANSI_KeypadEnter, fnFlagged: true).swallow)
+        #expect(kb.release(.fn).events == [.pttUp])
+        // Nothing pending and off Gemini: it passes, as before.
+        kb.config.selectionPending = false
+        kb.press(.fn)
+        #expect(!kb.down(kVK_ANSI_KeypadEnter, fnFlagged: true).swallow)
     }
 
     /// The keypad's own Enter, without fn, stays a key of its own: a shortcut on it fires on it and not on Return,
@@ -835,7 +870,7 @@ private func copyScreenshotAndFile(to pasteboard: NSPasteboard) {
     /// `targetReadsAfter`: seconds after ⌘V the target reads the clipboard, on the main thread like an app (nil: it
     /// never does).
     private func rig(focus: FocusInfo = FocusInfo(pid: 42, editability: .editable),
-                     frontmost: pid_t? = 42, canPost: Bool = true, posts: Bool = true,
+                     canPost: Bool = true, posts: Bool = true,
                      targetReadsAfter: TimeInterval? = 0.01) -> Rig {
         let pasteboard = privatePasteboard()
         let name = pasteboard.name
@@ -843,7 +878,6 @@ private func copyScreenshotAndFile(to pasteboard: NSPasteboard) {
         let box = FocusBox(focus)
         let target = TargetLog()
         let system = TextInserter.System(
-            frontmostPID: { frontmost },
             canPostEvents: { canPost },
             modifiersHeld: { false },
             inspectFocus: { box.focus },
@@ -880,7 +914,7 @@ private func copyScreenshotAndFile(to pasteboard: NSPasteboard) {
     /// The timings the app runs with: see `TextInserter.restoreDelay` for where they come from.
     @Test func theAppWaitsForTheTargetWithin400MillisecondsAnd8Seconds() {
         let inserter = TextInserter(pasteboard: privatePasteboard(), system: .init(
-            frontmostPID: { nil }, canPostEvents: { false }, modifiersHeld: { false },
+            canPostEvents: { false }, modifiersHeld: { false },
             inspectFocus: { .unknown }, pasteKeyCode: { 9 }, postPaste: { _ in false }))
         #expect(inserter.restoreDelay == .milliseconds(400))
         #expect(inserter.readGrace == .milliseconds(200))
@@ -1242,8 +1276,8 @@ private func copyScreenshotAndFile(to pasteboard: NSPasteboard) {
         try await settle()
     }
 
-    @Test func pasteNowSkipsFocusAndTargetChecks() async throws {
-        let rig = rig(focus: FocusInfo(pid: 1, editability: .notEditable), frontmost: 7)
+    @Test func pasteNowSkipsTheFocusCheck() async throws {
+        let rig = rig(focus: FocusInfo(pid: 1, editability: .notEditable))
         defer { rig.pasteboard.releaseGlobally() }
         #expect(await rig.inserter.pasteNow("hello") == .pasted)
         #expect(rig.log.codes == [9])
@@ -1422,7 +1456,6 @@ private func copyScreenshotAndFile(to pasteboard: NSPasteboard) {
         let log = PasteLog()
         let seen = Seen()
         let system = TextInserter.System(
-            frontmostPID: { 42 },
             canPostEvents: { true },
             modifiersHeld: { false },
             inspectFocus: {

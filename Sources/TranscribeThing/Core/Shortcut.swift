@@ -269,7 +269,7 @@ struct Shortcut: Codable, Hashable, Sendable {
 /// transcribes.
 enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, CodingKeyRepresentable {
     case pushToTalk, handsFree, pasteLast, switchModel
-    /// Polish this dictation (`Polish`): only while it's on Gemini.
+    /// Polish this dictation (`Polish`) while it's on Gemini; off Gemini, with text selected, Polish Selection.
     case polish
 
     var id: String { rawValue }
@@ -300,7 +300,7 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
             "Tap to start. Press \(bindings[.pushToTalk]?.compactDescription ?? "the push-to-talk key") to finish, esc to cancel."
         case .pasteLast: "Paste your most recent transcript again. Your clipboard stays as it was."
         case .switchModel: "While dictating: switch this dictation to your next model."
-        case .polish: "While dictating on Gemini: it writes the message you meant, without the thinking out loud."
+        case .polish: "While dictating: on Gemini, it writes the message you meant; with text selected, it polishes that."
         }
     }
 

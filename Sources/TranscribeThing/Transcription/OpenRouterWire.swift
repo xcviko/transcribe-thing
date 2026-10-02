@@ -60,7 +60,8 @@ struct OpenRouterChatRequest: Encodable, Equatable {
     /// Clean-up of a transcript: the prompt as the system message, then the transcript as plain user text inside
     /// `<transcript>` tags. `route` names the model, the provider it's pinned to (no fallbacks) and the effort as
     /// sent (`CleanupModel.route`, or any model for `EngineCLI --cleanup-bench`). Streamed like transcription, with no
-    /// temperature; reasoning excluded (GPT-6 Luna doesn't think at "none"). `max_tokens` grows with the text
+    /// temperature; reasoning excluded (GPT-6 Luna doesn't think at "none") unless the route streams it. `max_tokens`
+    /// grows with the text
     /// (`CleanupModel.maxTokens`).
     static func cleanup(route: CleanupRoute, systemPrompt: String, transcript: String) -> OpenRouterChatRequest {
         var messages: [OpenRouterMessage] = []
@@ -70,7 +71,7 @@ struct OpenRouterChatRequest: Encodable, Equatable {
         return OpenRouterChatRequest(
             model: route.model,
             messages: messages,
-            reasoning: Reasoning(effort: route.effort, exclude: true),
+            reasoning: Reasoning(effort: route.effort, exclude: !route.streamsReasoning),
             provider: route.provider,
             maxTokens: CleanupModel.maxTokens(forCharacterCount: transcript.count, effort: route.budget),
             stream: true)
@@ -93,6 +94,10 @@ struct CleanupRoute: Equatable, Sendable {
     var effort: String
     /// The level `max_tokens` is sized for (`CleanupModel.maxTokens`).
     var budget: ReasoningEffort
+    /// Its thinking streams in, as a Gemini transcription's does (Polish Selection's Gemini): the answer has started
+    /// with its first thought, and the pill counts them. Off, the model's first word is the start, which a thinking
+    /// model reaches only after all of its thinking.
+    var streamsReasoning = false
 
     init(model: String, effort: ReasoningEffort, provider: OpenRouterChatRequest.Provider) {
         self.init(model: model, provider: provider, effort: effort.rawValue, budget: effort)

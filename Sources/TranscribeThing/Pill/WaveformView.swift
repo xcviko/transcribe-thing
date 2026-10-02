@@ -217,7 +217,7 @@ struct ProcessingWaveView: View {
     /// Where the recording bars stood, relative to the center (hands-free keeps them left of the timer): the
     /// dots appear there, so they don't hop sideways in the crossfade, then glide to the center.
     var startOffset: CGFloat = 0
-    /// The dots' color: white, or the dictation's model's tint. The shimmer stays white.
+    /// The dots' color (white: everything inside the capsule is). The shimmer stays white.
     var tint: Color = .white
     /// The token count fades the dots out and takes their place; the shimmer keeps sweeping.
     var showsDots = true

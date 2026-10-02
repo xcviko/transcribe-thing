@@ -1,8 +1,8 @@
 import Foundation
 
-/// Polish (fn ↩ while a dictation is on Gemini): Gemini 3.8 Flash hears the audio with `prompt`, the user's own Gemini
-/// prompt grown into one that also leaves out the thinking out loud, and writes the message its speaker meant to send.
-/// The message comes back in `<message>` tags.
+/// Polish (fn ↩ while a dictation is on Gemini): Gemini 3.8 Flash hears the audio with `prompt`, Gemini's own prompt
+/// grown into one that also leaves out the thinking out loud, and writes the message its speaker meant to send. Polish
+/// Selection sends selected text with `textPrompt` instead. The message comes back in `<message>` tags.
 enum Polish {
     static let open = "<message>"
     static let close = "</message>"
@@ -62,14 +62,17 @@ enum PolishSelectionModel: String, CaseIterable, Codable, Sendable {
         }
     }
 
-    /// Text in, text out over chat completions: Gemini at the level it always thinks at, Luna at clean-up's.
+    /// Text in, text out over chat completions: Gemini at the level it always thinks at, its thinking streamed (so
+    /// it counts as an answer under way, as for a dictation), and Luna at clean-up's.
     var route: CleanupRoute {
         switch self {
         case .geminiFlash:
-            CleanupRoute(model: EngineID.geminiFlash.openRouterModelID ?? "google/gemini-3.8-flash",
-                         effort: EngineID.geminiFlash.reasoningEffort ?? .medium, provider: .googleAIStudio)
+            var route = CleanupRoute(model: EngineID.geminiFlash.openRouterModelID ?? "google/gemini-3.8-flash",
+                                     effort: EngineID.geminiFlash.reasoningEffort ?? .medium, provider: .googleAIStudio)
+            route.streamsReasoning = true
+            return route
         case .gpt6Luna:
-            CleanupModel.gpt6Luna.route(effort: CleanupModel.gpt6Luna.reasoningEffort ?? .off)
+            return CleanupModel.gpt6Luna.route(effort: CleanupModel.gpt6Luna.reasoningEffort ?? .off)
         }
     }
 

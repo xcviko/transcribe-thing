@@ -45,11 +45,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         self.activity = activity
         guard let button = statusItem?.button else { return }
         setRecordingDot(activity == .recording, on: button)
-        setPulsing(activity == .processing, on: button)
+        setPulsing(activity == .processing || activity == .polishing, on: button)
         let value = switch activity {
         case .idle: "Idle"
         case .recording: "Recording"
         case .processing: "Transcribing"
+        case .polishing: "Polishing"
         }
         button.setAccessibilityValue(value)
     }

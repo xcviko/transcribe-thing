@@ -28,8 +28,11 @@ final class DiagnosticLog: @unchecked Sendable {
     struct Limits: Sendable, Equatable {
         /// Days of files kept, today's included.
         var days = 7
-        /// What all the files may take together; also the most one day's file grows to.
+        /// What all the files may take together.
         var totalBytes: Int64 = 10 * 1024 * 1024
+        /// The most one day's file grows to: half of it, so a runaway day never pushes out the day before (the one
+        /// that explains it), and the earlier days plus today stay within `totalBytes`.
+        var dayBytes: Int64 { totalBytes / 2 }
     }
 
     /// The longest a value is written, in characters (an OpenRouter error quoting a provider can run long).
@@ -47,7 +50,7 @@ final class DiagnosticLog: @unchecked Sendable {
     private var handle: FileHandle?
     /// The day `handle` writes, nil while no file is open.
     private var openDay: String?
-    /// What today's file holds, so a runaway day stops at `limits.totalBytes`.
+    /// What today's file holds, so a runaway day stops at `limits.dayBytes`.
     private var dayBytes: Int64 = 0
     /// The day the files were last checked against the limits.
     private var prunedDay: String?
@@ -207,8 +210,10 @@ final class DiagnosticLog: @unchecked Sendable {
     private func append(_ line: String, day: String, now: Date) {
         guard let directory else { return }
         if day != openDay { openFile(day: day, in: directory, now: now) }
-        guard let handle, dayBytes < limits.totalBytes else { return }
         let data = Data((line + "\n").utf8)
+        // A line that would take the day past its share isn't written: the file never outgrows it, so the next day's
+        // pruning always keeps it.
+        guard let handle, dayBytes + Int64(data.count) <= limits.dayBytes else { return }
         do {
             try handle.write(contentsOf: data)
             dayBytes += Int64(data.count)
@@ -242,8 +247,9 @@ final class DiagnosticLog: @unchecked Sendable {
         openDay = nil
     }
 
-    /// Deletes the day files older than `limits.days` days, then the oldest ones while all of them together take
-    /// more than `limits.totalBytes`. Today's file stays whatever its size (`append` stops it growing).
+    /// Deletes the day files older than `limits.days` days, then the oldest earlier days while they take more than
+    /// what today may still need leaves (`totalBytes - dayBytes`). Today's file stays whatever its size (`append`
+    /// stops it growing).
     private func prune(in directory: URL, now: Date) {
         let fm = FileManager.default
         let today = format.day(now)
@@ -257,12 +263,11 @@ final class DiagnosticLog: @unchecked Sendable {
                 kept.append((file.url, file.day, Int64(size)))
             }
         }
-        var total = kept.reduce(Int64(0)) { $0 + $1.size }
-        for file in kept {
-            guard total > limits.totalBytes else { break }
-            guard file.day != today else { continue }
+        var earlier = kept.filter { $0.day != today }.reduce(Int64(0)) { $0 + $1.size }
+        for file in kept where file.day != today {
+            guard earlier > limits.totalBytes - limits.dayBytes else { break }
             try? fm.removeItem(at: file.url)
-            total -= file.size
+            earlier -= file.size
         }
     }
 }

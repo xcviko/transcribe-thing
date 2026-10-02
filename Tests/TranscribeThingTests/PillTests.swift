@@ -46,6 +46,16 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(center.countdowns.count == 2)
     }
 
+    /// Polish Selection's answers go last: a timed notice up when they arrive makes room first.
+    @Test func answerCardsAreDroppedLast() {
+        let (center, _) = makeCenter()
+        center.post(notice("other"))
+        center.post(DictationController.selectionCard("Luna's.", by: .gpt6Luna))
+        center.post(DictationController.selectionCard("Gemini's.", by: .geminiFlash))
+        #expect(center.notices.map(\.dedupeKey) == [DictationController.selectionCardKey(.gpt6Luna),
+                                                     DictationController.selectionCardKey(.geminiFlash)])
+    }
+
     @Test func stickyNoticesSurviveOverflow() {
         let (center, _) = makeCenter()
         center.post(notice("mic", lifetime: .sticky))

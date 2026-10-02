@@ -26,6 +26,8 @@ final class PillController {
     private var lastReposition = Date.distantPast
     private var announcedNotices: Set<UUID> = []
     private var lastVisiblePhase: PillPhase = .rest
+    /// Where the pointer was at the last update: a card that comes up under a pointer at rest doesn't pause.
+    private var lastPointerLocation: CGPoint?
 
     init(model: PillModel, toasts: ToastCenter, settings: AppSettings) {
         self.model = model
@@ -49,6 +51,11 @@ final class PillController {
         self.host = host
 
         host.onPointerActivity = { [weak self] in self?.updatePointer() }
+        // Scrolling a card's text or clicking it holds the cards as a pointer brought onto them does.
+        host.onPointerInteraction = { [weak self] in
+            self?.lastPointerLocation = nil
+            self?.updatePointer()
+        }
         host.onRightMouseDown = { [weak self] event in self?.showContextMenu(for: event) ?? false }
         model.onEngineChipClick = { [weak self] in self?.showEngineMenu() }
         regions.onChange = { [weak self] in self?.updatePointer() }
@@ -309,7 +316,11 @@ final class PillController {
         model.setPointerOverChip(overChip)
         let control = overPill ? regions.controls.first { screenRect($0.value)?.contains(point) ?? false }?.key : nil
         model.setHoveredControl(model.visiblePhase == .locked ? control : nil)
-        toasts.setPaused(overToast)
+        // Only a pointer brought onto the cards (or scrolling or clicking them) holds them: one resting where they come
+        // up (on the text just selected, say) would keep them, and Polish Selection's hold on ↩ and Esc, forever.
+        let moved = point != lastPointerLocation
+        lastPointerLocation = point
+        toasts.setPaused(overToast && (moved || toasts.isPaused))
 
         followPointer(to: point)
     }

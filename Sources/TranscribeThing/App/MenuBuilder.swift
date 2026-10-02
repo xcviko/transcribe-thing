@@ -81,17 +81,22 @@ final class MenuBuilder {
 
     // MARK: - Status line
 
-    /// "Parakeet v3 · Ready", "Gemini 3.8 Flash · Needs key": the main model, or what the app is doing.
+    /// "Parakeet v3 · Ready", "Gemini 3.8 Flash · Needs key": the main model, or what the app is doing (while
+    /// recording, with the model the dictation is on: switched, or hands-free's).
     private func statusItem(_ env: AppEnvironment) -> NSMenuItem {
-        let main = env.settings.lineup.main, parakeet = env.settings.parakeetEngine
+        let parakeet = env.settings.parakeetEngine
+        let main = env.dictation.activity == .recording ? env.dictation.effectiveChoice : env.settings.lineup.main
         let status = Self.status(of: main, parakeet: parakeet, models: env.models, account: env.account)
         let activity: String? = switch env.dictation.activity {
         case .recording: "Listening…"
         case .processing: "Transcribing…"
+        case .polishing: "Polishing…"
         case .idle: nil
         }
-        let item = NSMenuItem(title: "\(main.title(parakeet: parakeet)) · \(activity ?? status.text)",
-                              action: nil, keyEquivalent: "")
+        // Polish Selection asks two models at once: the line names neither.
+        let title = env.dictation.activity == .polishing ? "Polish Selection · Polishing…"
+            : "\(main.title(parakeet: parakeet)) · \(activity ?? status.text)"
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         item.isEnabled = false
         item.image = Self.dot(activity == nil ? status.color : .systemRed)
         return item

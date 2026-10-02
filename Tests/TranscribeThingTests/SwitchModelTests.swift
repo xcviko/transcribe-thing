@@ -554,6 +554,77 @@ import Testing
         c.send(.pillCancel)
     }
 
+    /// fn Space at an everyday pace, after the hold has been confirmed: still hands-free on its own model, with no
+    /// word of the main model's refusal.
+    @Test func handsFreeOnItsModelAfterTheHoldIsConfirmed() {
+        let (rig, cues) = Self.make(key: .missing)
+        let c = rig.h.controller
+        c.runsTimers = false
+        rig.h.settings.lineup.main = .gemini
+        rig.h.settings.handsFreeModel = .parakeet
+        c.handle(.pttDown)
+        c.send(.timer(.arming))
+        #expect(rig.h.toasts.notices.isEmpty && !cues.played.contains(.start))
+        rig.now += 0.15
+        c.handle(.handsFreeToggle)
+        #expect(c.machine.capture.isListeningOrLocked && c.machine.mode == .handsFree && c.effectiveEngine == .parakeet)
+        #expect(rig.h.toasts.notices.allSatisfy { $0.style == .info }, "nothing refused")
+        c.send(.pillCancel)
+    }
+
+    /// fn Space when hands-free doesn't switch the model (Polish was turned on meanwhile, which keeps Gemini): refused
+    /// as the hold was, never a hands-free session that records nothing.
+    @Test func handsFreeThatKeepsTheRefusedModelIsRefused() {
+        let (rig, _) = Self.make(key: .missing)
+        let c = rig.h.controller
+        c.runsTimers = false
+        rig.h.settings.lineup.main = .gemini
+        rig.h.settings.handsFreeModel = .parakeet
+        c.handle(.pttDown)
+        c.send(.timer(.arming))
+        c.handle(.polish)
+        #expect(c.isPolishing)
+        c.handle(.handsFreeToggle)
+        #expect(!c.machine.capture.isListeningOrLocked)
+        #expect(rig.h.toasts.notices.contains { $0.style != .info }, "the refusal")
+    }
+
+    /// The same hold released as a push-to-talk: nothing was recorded, and the main model's refusal says why.
+    @Test func aPushToTalkOnTheRefusedModelIsStillTold() {
+        let (rig, _) = Self.make(key: .missing)
+        let c = rig.h.controller
+        c.runsTimers = false
+        rig.h.settings.lineup.main = .gemini
+        rig.h.settings.handsFreeModel = .parakeet
+        c.handle(.pttDown)
+        c.send(.timer(.arming))
+        rig.now += 2
+        c.handle(.pttUp)
+        #expect(!c.machine.isRecording && rig.transcribed.isEmpty)
+        #expect(rig.h.toasts.notices.contains { $0.style != .info }, "the refusal")
+    }
+
+    /// Double press for hands-free, its first tap held past the confirm delay: not reported, and the second press
+    /// starts hands-free on its own model.
+    @Test func aDoublePressAfterARefusedTapStartsHandsFree() {
+        let (rig, _) = Self.make(key: .missing)
+        let c = rig.h.controller
+        c.runsTimers = false
+        rig.h.settings.lineup.main = .gemini
+        rig.h.settings.handsFreeModel = .parakeet
+        rig.h.settings.doublePressForHandsFree = true
+        c.handle(.pttDown)
+        c.send(.timer(.arming))
+        rig.now += 0.2
+        c.handle(.pttUp)
+        #expect(rig.h.toasts.notices.isEmpty, "a tap")
+        rig.now += 0.1
+        c.handle(.pttDown)
+        #expect(c.machine.capture.isListeningOrLocked && c.machine.mode == .handsFree && c.effectiveEngine == .parakeet)
+        #expect(rig.h.toasts.notices.allSatisfy { $0.style == .info })
+        c.send(.pillCancel)
+    }
+
     /// Hands-free's model is one Switch model reaches: one that becomes the main model, or that Switch model stops
     /// reaching, is forgotten.
     @Test func handsFreesModelIsOneOfTheCycle() {

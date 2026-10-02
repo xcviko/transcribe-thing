@@ -12,6 +12,9 @@ enum HotkeyEvent: Equatable, Sendable {
     case cycleEngineRepeat
     /// The polish shortcut, during a dictation: Polish on or off for it, or Polish Selection with text selected.
     case polish
+    /// The polish shortcut before the dictation's selection lookup has answered (off Gemini): Polish Selection if text
+    /// turns out to be selected, else the key goes on to the app (`KeyStroke.post`).
+    case polishIfSelected(KeyStroke)
     /// ↩ and Esc while Polish Selection's card is up: Paste Here, and close it.
     case cardPaste, cardClose
 }
@@ -20,6 +23,33 @@ enum HotkeyEvent: Equatable, Sendable {
 /// so our own tap lets them through untouched.
 enum SyntheticEvent {
     static let tag: Int64 = 0x5454_4E47  // "TTNG"
+}
+
+/// A key the tap took and may give back: the physical key and its flags as they came.
+struct KeyStroke: Equatable, Sendable {
+    var keyCode: UInt16
+    var flags: UInt64
+    /// It came while a modifier-only push-to-talk was held, which a key passed on to the app ends.
+    var interruptsHold: Bool
+
+    /// Down and up again at the session tap, marked as ours so the tap lets them through. As the paste's ⌘V
+    /// (`TextInserter.postCommandV`): the user's own keys are never held back meanwhile (a suppressed fn release
+    /// would be one the tap never sees), and a short gap helps slow consumers. Off the main thread: it sleeps.
+    nonisolated static func post(_ key: KeyStroke) {
+        guard let source = CGEventSource(stateID: .combinedSessionState) else { return }
+        source.userData = SyntheticEvent.tag
+        source.setLocalEventsFilterDuringSuppressionState(
+            [.permitLocalMouseEvents, .permitLocalKeyboardEvents, .permitSystemDefinedEvents],
+            state: .eventSuppressionStateSuppressionInterval)
+        guard let down = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(key.keyCode), keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(key.keyCode), keyDown: false)
+        else { return }
+        down.flags = CGEventFlags(rawValue: key.flags)
+        up.flags = CGEventFlags(rawValue: key.flags)
+        down.post(tap: .cgSessionEventTap)
+        usleep(5_000)
+        up.post(tap: .cgSessionEventTap)
+    }
 }
 
 /// Global hotkeys on an active session event tap. Dictation-agnostic: it reports key gestures
@@ -37,7 +67,7 @@ final class HotkeyMonitor {
     var isBusy = false {
         didSet { if isBusy != oldValue { pushConfig() } }
     }
-    /// Swallow the switch model shortcut only while a dictation records.
+    /// Swallow the Switch model and Polish shortcuts only while a dictation records.
     var isRecording = false {
         didSet { if isRecording != oldValue { pushConfig() } }
     }
@@ -50,7 +80,13 @@ final class HotkeyMonitor {
     var selectionReady = false {
         didSet { if selectionReady != oldValue { pushConfig() } }
     }
-    /// Polish Selection's cards are up: ↩ pastes the one card (with two it couldn't tell which), Esc closes them.
+    /// The selection lookup hasn't answered yet (between dictations: the next press's will run): Polish's shortcut
+    /// is held off Gemini, as `.polishIfSelected`.
+    var selectionPending = false {
+        didSet { if selectionPending != oldValue { pushConfig() } }
+    }
+    /// Polish Selection's cards are up: ↩ is theirs (it pastes the one card; with two it couldn't tell which, and does
+    /// nothing), Esc closes them.
     var cardPaste = false {
         didSet { if cardPaste != oldValue { pushConfig() } }
     }
@@ -141,7 +177,7 @@ final class HotkeyMonitor {
         HotkeyRouter.Config(bindings: settings.shortcuts, isBusy: isBusy, isRecording: isRecording,
                             switchesModels: settings.lineup.cycle.count > 1,
                             polishes: (dictationModel ?? settings.lineup.main) == .gemini || selectionReady,
-                            cardPaste: cardPaste, cardClose: cardClose,
+                            selectionPending: selectionPending, cardPaste: cardPaste, cardClose: cardClose,
                             isSuspended: suspendCount > 0, forwardsRawKeys: onRawKey != nil)
     }
 

@@ -262,7 +262,11 @@ import Testing
         #expect(Self.card(rig, .gpt6Luna)?.actions.map(\.title) == ["Paste Here", "Copy"])
         try await waitUntil { cues.played.contains(.polishOn) }
         #expect(cues.played.filter { $0 == .polishReady }.count == 2)
-        #expect(!rig.h.hotkeys.cardPaste && rig.h.hotkeys.cardClose, "↩ can't tell which of two to paste")
+        // ↩ can't tell which of two to paste, but it stays the cards': passed on, it would land on the selection.
+        #expect(rig.h.hotkeys.cardPaste && rig.h.hotkeys.cardClose)
+        #expect(!rig.h.toasts.cardKeys.returnPastes, "the footer doesn't offer ↩")
+        c.handle(.cardPaste)
+        #expect(Self.card(rig, .geminiFlash) != nil && Self.card(rig, .gpt6Luna) != nil, "↩ did nothing")
         let entry = try #require(rig.h.history.entries.first)
         #expect(rig.h.history.entries.count == 1 && entry.isSelection && entry.audioFileName == nil)
         #expect(Set(entry.versions.map(\.kind)) == [.selection(.geminiFlash), .selection(.gpt6Luna)])
@@ -358,6 +362,163 @@ import Testing
         #expect(stats.wordsThisWeek == 0 && stats.totalDictations == 0)
         let menu = VersionsMenu.make(for: entry, running: nil) { _ in .ready }
         #expect(menu.actions.isEmpty)
+    }
+
+    /// Holds a selection lookup until opened.
+    @MainActor final class Lookup {
+        var isOpen = false
+        func wait() async { while !isOpen { try? await Task.sleep(for: .milliseconds(5)) } }
+    }
+
+    /// A quick fn ↩, before the lookup has answered: the tap held the key from the press's first moment, and once
+    /// the lookup finds text, it's Polish Selection.
+    @Test func aQuickPolishKeyWaitsForTheLookup() async throws {
+        let (rig, _, asked) = Self.make()
+        let lookup = Lookup()
+        rig.h.controller.selectionOverride = { await lookup.wait(); return "short draft" }
+        var replayed: [KeyStroke] = []
+        rig.h.controller.replayKeyOverride = { replayed.append($0) }
+        #expect(rig.h.hotkeys.currentConfig().selectionPending, "between dictations: the next press's lookup")
+        rig.h.controller.handle(.pttDown)
+        #expect(rig.h.hotkeys.currentConfig().selectionPending)
+        rig.h.controller.handle(.polishIfSelected(KeyStroke(keyCode: KeyCode.keypadEnter, flags: 0, interruptsHold: true)))
+        try await Task.sleep(for: .milliseconds(40))
+        #expect(asked.calls.isEmpty)
+        lookup.isOpen = true
+        try await waitUntil { asked.calls.count == 2 }
+        #expect(asked.calls.allSatisfy { $0.0 == "short draft" } && replayed.isEmpty)
+    }
+
+    /// fn let go before the lookup answered: the press is still decided by its key. With text selected it's Polish
+    /// Selection all the same, and the release changes nothing; a second fn ↩ meanwhile follows the first.
+    @Test func lettingGoOfFnWaitsForTheKeysDecision() async throws {
+        let (rig, cues, asked) = Self.make()
+        let lookup = Lookup()
+        rig.h.controller.selectionOverride = { await lookup.wait(); return "short draft" }
+        var replayed: [KeyStroke] = []
+        rig.h.controller.replayKeyOverride = { replayed.append($0) }
+        let key = KeyStroke(keyCode: KeyCode.keypadEnter, flags: 0, interruptsHold: true)
+        rig.h.controller.handle(.pttDown)
+        rig.h.controller.handle(.polishIfSelected(key))
+        rig.h.controller.handle(.polishIfSelected(key))
+        rig.now += 0.1
+        rig.h.controller.handle(.pttUp)
+        #expect(rig.h.controller.machine.isRecording, "the release waits for the key")
+        lookup.isOpen = true
+        try await waitUntil { asked.calls.count == 2 }
+        #expect(replayed.isEmpty && rig.h.controller.machine.capture == .idle)
+        #expect(rig.transcribed.isEmpty && !cues.played.contains(.start))
+    }
+
+    /// Nothing selected after all: the key goes on to the app, and the hold ends as any other key would end it.
+    @Test func aQuickPolishKeyOverNothingGoesToTheApp() async throws {
+        let (rig, _, asked) = Self.make(selection: nil)
+        var replayed: [KeyStroke] = []
+        rig.h.controller.replayKeyOverride = { replayed.append($0) }
+        rig.h.controller.handle(.pttDown)
+        let key = KeyStroke(keyCode: KeyCode.keypadEnter, flags: 0x80_0000, interruptsHold: true)
+        rig.h.controller.handle(.polishIfSelected(key))
+        try await waitUntil { replayed == [key] }
+        #expect(asked.calls.isEmpty && !rig.h.controller.machine.isRecording)
+        #expect(!rig.h.hotkeys.currentConfig().polishes)
+    }
+
+    /// Once the lookup has answered with nothing, the key isn't held at all: fn ↩ reaches the app as before.
+    @Test func anAnsweredLookupLetsTheKeyGo() async throws {
+        let (rig, _, _) = Self.make(selection: nil)
+        Switch.hold(rig)
+        try await waitUntil { !rig.h.hotkeys.currentConfig().selectionPending }
+        #expect(!rig.h.hotkeys.currentConfig().polishes)
+        rig.h.controller.send(.pillCancel)
+    }
+
+    /// Without an OpenRouter key Polish Selection can't happen: nothing is looked up, no hint promises it, and the
+    /// key stays the app's.
+    @Test func withoutAKeyThereIsNoPolishSelection() async throws {
+        let (rig, _) = Switch.make(key: .missing)
+        rig.h.controller.start()
+        var looked = false
+        rig.h.controller.selectionOverride = { looked = true; return "text" }
+        #expect(!rig.h.hotkeys.currentConfig().selectionPending)
+        Switch.hold(rig)
+        try await Task.sleep(for: .milliseconds(60))
+        #expect(!looked && rig.h.pill.selectionHint == .hidden)
+        #expect(!rig.h.hotkeys.currentConfig().polishes && !rig.h.hotkeys.currentConfig().selectionPending)
+        rig.h.controller.send(.pillCancel)
+    }
+
+    /// Copy picks an answer to paste elsewhere: ↩ goes back to the app (it would paste the card a second time), and
+    /// the footer stops offering it. Esc still closes.
+    @Test func copyingGivesReturnBack() async throws {
+        let (rig, _, asked) = Self.make()
+        asked.hold(.geminiFlash)
+        try await Self.polish(rig)
+        try await waitUntil { Self.card(rig, .gpt6Luna) != nil }
+        #expect(rig.h.hotkeys.cardPaste && rig.h.toasts.cardKeys.returnPastes)
+        let card = try #require(Self.card(rig, .gpt6Luna))
+        rig.h.controller.perform(try #require(card.actions.first { $0.title == "Copy" }), from: card)
+        #expect(!rig.h.hotkeys.cardPaste && rig.h.hotkeys.cardClose)
+        #expect(!rig.h.toasts.cardKeys.returnPastes)
+        rig.h.controller.handle(.cardPaste)
+        #expect(Self.card(rig, .gpt6Luna) != nil && rig.pasted.isEmpty)
+        asked.release(.geminiFlash)
+        rig.h.controller.handle(.cardClose)
+    }
+
+    /// Esc stops a polish still under way: both models are dropped, the pill rests, with the cancel cue. While it
+    /// runs it counts as the app's work (an update waits for it).
+    @Test func escStopsAPolishUnderWay() async throws {
+        let (rig, cues, asked) = Self.make()
+        asked.hold(.geminiFlash)
+        asked.hold(.gpt6Luna)
+        try await Self.polish(rig)
+        try await waitUntil { asked.calls.count == 2 }
+        #expect(rig.h.controller.activity == .polishing && rig.h.hotkeys.cardClose)
+        rig.h.controller.handle(.cardClose)
+        #expect(rig.h.pill.phase == .rest && rig.h.controller.activity == .idle)
+        #expect(cues.played.filter { $0 == .cancel }.count == 2, "the handoff's, then Esc's")
+        asked.release(.geminiFlash)
+        asked.release(.gpt6Luna)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(Self.card(rig, .geminiFlash) == nil && Self.card(rig, .gpt6Luna) == nil)
+        #expect(!cues.played.contains(.polishOn), "no Polish cue for a polish already stopped")
+    }
+
+    /// Deleted from History while the other model still wrote: its late answer comes on its card only, and the entry
+    /// stays deleted.
+    @Test func aDeletedEntryStaysDeleted() async throws {
+        let (rig, _, asked) = Self.make()
+        asked.hold(.geminiFlash)
+        try await Self.polish(rig)
+        try await waitUntil { Self.card(rig, .gpt6Luna) != nil }
+        let id = try #require(rig.h.history.entries.first?.id)
+        rig.h.history.delete(id)
+        asked.release(.geminiFlash)
+        try await waitUntil { Self.card(rig, .geminiFlash) != nil }
+        #expect(rig.h.history.entries.isEmpty)
+    }
+
+    /// The count is the one of a model still writing: once Gemini is done, Luna's.
+    @Test func theCountFollowsAModelStillWriting() {
+        let work = DictationController.SelectionPolish(estimates: [:])
+        work.pending = [.geminiFlash, .gpt6Luna]
+        work.counts = [.geminiFlash: PillTokenCount(phase: .writing, tokens: 380),
+                       .gpt6Luna: PillTokenCount(phase: .writing, tokens: 40)]
+        #expect(work.count?.tokens == 380)
+        work.pending.remove(.geminiFlash)
+        #expect(work.count?.tokens == 40)
+    }
+
+    /// Paste Last pastes the last dictation, never a polished selection (closing its card said no).
+    @Test func pasteLastSkipsAPolishedSelection() throws {
+        let version = TranscriptResult(text: "Polished.", engine: .geminiFlash, processingTime: 1)
+            .version(.selection(.gpt6Luna))
+        let store = HistoryStore.preview(entries: [
+            TranscriptEntry(engine: .geminiFlash, audioDuration: 0, voicedSeconds: 0, versions: [version]),
+            TranscriptEntry(createdAt: Date().addingTimeInterval(-60), text: "dictated", engine: .parakeet,
+                            audioDuration: 1, voicedSeconds: 1),
+        ])
+        #expect(store.lastSuccessful?.text == "dictated")
     }
 }
 

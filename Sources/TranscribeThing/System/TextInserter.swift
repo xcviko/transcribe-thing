@@ -21,7 +21,6 @@ enum InsertionOutcome: Equatable, Sendable {
 final class TextInserter {
     /// Everything that touches the system, injectable so the pipeline is testable without posting events.
     struct System {
-        var frontmostPID: @MainActor () -> pid_t?
         /// PostEvent permission (listed under Accessibility). Called off the main thread.
         var canPostEvents: @Sendable () -> Bool
         /// Any of ⌘ ⌃ ⌥ ⇧ fn physically held right now.
@@ -68,7 +67,6 @@ final class TextInserter {
     init() {
         self.pasteboard = .general
         self.system = System(
-            frontmostPID: { NSWorkspace.shared.frontmostApplication?.processIdentifier },
             // CGPreflightPostEventAccess() caches its first answer for the life of the process, so a grant
             // given after launch stays "denied" there; AXIsProcessTrusted() follows live changes.
             canPostEvents: { AXIsProcessTrusted() || CGPreflightPostEventAccess() },
@@ -82,10 +80,6 @@ final class TextInserter {
     init(pasteboard: NSPasteboard, system: System) {
         self.pasteboard = pasteboard
         self.system = system
-    }
-
-    func frontmostPID() -> pid_t? {
-        system.frontmostPID()
     }
 
     /// Pastes at the cursor of whatever has focus now. Whether a text field has it can't be told everywhere (Chrome

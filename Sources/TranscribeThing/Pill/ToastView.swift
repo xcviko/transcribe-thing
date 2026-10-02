@@ -316,10 +316,12 @@ struct ToastCard: View {
 
     /// "[return] pastes · [esc] closes": the card's own keys while it's up. Next to another such card ↩ couldn't tell
     /// which to paste: "[esc] closes both".
+    /// What the keys do right now (`ToastCenter.cardKeys`). While a dictation is busy with them, the footer dims.
     private var cardKeysHint: some View {
         let together = center.notices.filter(\.takesCardKeys).count > 1
+        let keys = center.cardKeys
         return HStack(spacing: 5) {
-            if !together {
+            if keys.returnPastes, !together {
                 ShortcutChips(shortcut: Shortcut(modifiers: [], keyCode: KeyCode.returnKey), size: .small)
                 Text("pastes")
                 Text("·").foregroundStyle(.inkTertiary.opacity(0.6))
@@ -327,10 +329,13 @@ struct ToastCard: View {
             ShortcutChips(shortcut: Shortcut(modifiers: [], keyCode: KeyCode.escape), size: .small)
             Text(together ? "closes both" : "closes")
         }
+        .opacity(keys.escCloses ? 1 : 0.45)
         .font(.system(size: 11, weight: .medium))
         .foregroundStyle(.inkTertiary)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(together ? "Escape closes both" : "Return pastes, Escape closes")
+        .accessibilityLabel((keys.returnPastes && !together ? "Return pastes, " : "")
+                            + (together ? "Escape closes both" : "Escape closes")
+                            + (keys.escCloses ? "" : ", once the dictation is done"))
     }
 
     private var pasteHint: some View {

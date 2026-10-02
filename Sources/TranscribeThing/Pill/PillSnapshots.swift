@@ -84,15 +84,12 @@ enum PillSnapshots {
                 CanvasScene(model: hintModel(), notices: [])
             },
             // Polish Selection (`--only pill-selection`): the hint over a hold with text selected, the polish while
-            // Gemini or Luna writes, and the card.
+            // the models write, and the cards.
             SnapshotEntry("pill-selection-hint", width: 640, height: 150) { _ in
                 CanvasScene(model: selectionModel(.listening), notices: [])
             },
             SnapshotEntry("pill-selection-polishing", width: 640, height: 150) { _ in
                 CanvasScene(model: selectionModel(.processing, choice: .gemini), notices: [])
-            },
-            SnapshotEntry("pill-selection-polishing-luna", width: 640, height: 150) { _ in
-                CanvasScene(model: selectionModel(.processing, choice: .cleanup), notices: [])
             },
             SnapshotEntry("pill-selection-counting", width: 640, height: 150) { _ in
                 CanvasScene(model: selectionModel(.processing, choice: .gemini)
@@ -106,6 +103,14 @@ enum PillSnapshots {
                     DictationController.selectionCard(
                         "Прикинь, сегодня новые дорожки поставили - впервые с 22 года все заменили.\n\nТам есть фича: прислоняешь часы, они по NFC договариваются друг с другом, и дорожка получает инфу о пульсе и калориях, а часы - о дистанции, скорости и т. д.\n\nЗавтра схожу ещё раз и проверю, как оно с тренировкой на интервалы.",
                         by: .geminiFlash),
+                ])
+            },
+            // The tallest it gets: both answers long enough to fill their boxes, under a pill still processing
+            // with its chip. Everything fits the panel.
+            SnapshotEntry("pill-selection-cards-full", width: 640, height: PillCanvasMetrics.size.height) { _ in
+                CanvasScene(model: PillModelSheet.model(.processing, choice: .gemini), notices: [
+                    DictationController.selectionCard(Self.longAnswer, by: .gpt6Luna),
+                    DictationController.selectionCard(Self.longAnswer, by: .geminiFlash),
                 ])
             },
             SnapshotEntry("pill-models-hint-custom", width: 640, height: 150) { _ in
@@ -200,6 +205,10 @@ enum PillSnapshots {
         }
         return model
     }
+
+    private static let longAnswer = "Прикинь, сегодня новые дорожки поставили - впервые с 22 года все заменили.\n\n"
+        + "Там есть фича: прислоняешь часы, они по NFC договариваются друг с другом, и дорожка получает инфу о пульсе и "
+        + "калориях, а часы - о дистанции, скорости и т. д.\n\nЗавтра схожу ещё раз и проверю, как оно с тренировкой."
 
     @MainActor private static func restModel() -> PillModel {
         let model = PillModel.preview(phase: .rest)
@@ -380,8 +389,11 @@ private struct CanvasScene: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             SnapshotDesktop(dark: scheme == .dark)
+            // The panel's own size: what doesn't fit is cut off here as it is on screen.
             PillCanvasView(model: model, toasts: .preview(notices))
                 .frame(width: PillCanvasMetrics.size.width)
+                .frame(maxHeight: PillCanvasMetrics.size.height, alignment: .bottom)
+                .clipped()
         }
         .clipped()
         .environment(\.pillStaticRendering, true)

@@ -53,8 +53,12 @@ steps through, and each one's pill color.
 ## Your data
 
 History, the recordings and your OpenRouter key stay on your Mac, in `~/Library/Application Support/transcribe-thing`.
-The key is in a file only you can read. Audio leaves your Mac only when a cloud model transcribes it, and a transcript
-only when GPT-6 Luna cleans it up.
+The key is in a file only you can read. Audio leaves your Mac only when a cloud model transcribes it. Text leaves it
+only when a model works on it: GPT-6 Luna cleaning up a transcript, or Gemini 3.8 Flash and GPT-6 Luna polishing text
+you selected and pressed fn ↩ on.
+
+The same folder keeps a log of what the app did in the last 7 days, without your dictations, your selected text or
+your key. It stays there until you send it: General → Troubleshooting → Export Logs… saves it as a file.
 
 History keeps every dictation with its recording until you delete it, so you can transcribe it again with another
 model or polish it. General → History can delete entries older than 1, 7, 30 or 90 days.

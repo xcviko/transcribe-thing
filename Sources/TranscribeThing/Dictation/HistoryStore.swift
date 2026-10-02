@@ -373,9 +373,12 @@ final class HistoryStore {
         HistoryStats.compute(entries, now: now, calendar: calendar)
     }
 
-    /// The newest entry with text: what Paste Last and Copy Last Transcript use.
+    /// The newest dictation with text: what Paste Last and Copy Last Transcript use. A polished selection isn't one
+    /// (its card had its own Paste Here, and closing it said no).
     var lastSuccessful: TranscriptEntry? {
-        entries.first { $0.status == .success && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        entries.first {
+            $0.status == .success && !$0.isSelection && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
     }
 
     func entry(id: UUID) -> TranscriptEntry? {

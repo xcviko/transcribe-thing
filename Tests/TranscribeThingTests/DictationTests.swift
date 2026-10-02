@@ -1735,7 +1735,7 @@ final class FakeRecorder: DictationRecorder {
         pasteboard.clearContents()
         pasteboard.writeObjects([item])
         let inserter = TextInserter(pasteboard: pasteboard, system: .init(
-            frontmostPID: { 42 }, canPostEvents: { true }, modifiersHeld: { false },
+            canPostEvents: { true }, modifiersHeld: { false },
             inspectFocus: { FocusInfo(pid: 42, editability: .editable) }, pasteKeyCode: { 9 },
             postPaste: { _ in true }))
         inserter.restoreDelay = .milliseconds(50)
@@ -2077,7 +2077,7 @@ extension TextInserter {
     /// (without an insertion override) can't touch the user's clipboard or type into the frontmost app.
     static func inert() -> TextInserter {
         TextInserter(pasteboard: NSPasteboard(name: NSPasteboard.Name("dev.transcribe-thing.tests.inert")), system: .init(
-            frontmostPID: { nil }, canPostEvents: { false }, modifiersHeld: { false },
+            canPostEvents: { false }, modifiersHeld: { false },
             inspectFocus: { .unknown }, pasteKeyCode: { 9 }, postPaste: { _ in false }))
     }
 }

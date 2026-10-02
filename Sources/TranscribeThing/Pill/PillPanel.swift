@@ -40,6 +40,8 @@ final class PillPanel: NSPanel {
 /// events, and routes right-clicks on the pill to its context menu.
 final class PillHostingView: NSHostingView<PillCanvasView> {
     var onPointerActivity: (() -> Void)?
+    /// A scroll or click: the pointer is in use where it is, though it may not have moved.
+    var onPointerInteraction: (() -> Void)?
     /// Returns true when it handled the click (showed the menu).
     var onRightMouseDown: ((NSEvent) -> Bool)?
 
@@ -71,6 +73,16 @@ final class PillHostingView: NSHostingView<PillCanvasView> {
     override func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
         onPointerActivity?()
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        onPointerInteraction?()
+        super.scrollWheel(with: event)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        onPointerInteraction?()
+        super.mouseDown(with: event)
     }
 
     override func rightMouseDown(with event: NSEvent) {

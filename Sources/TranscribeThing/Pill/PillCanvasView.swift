@@ -1,8 +1,10 @@
 import SwiftUI
 
 enum PillCanvasMetrics {
-    /// Fixed transparent canvas: room for the widest pill, two stacked transcript cards and their shadows.
-    static let size = CGSize(width: 480, height: 460)
+    /// Fixed transparent canvas: room for the widest pill, the chip over it and two stacked cards with their text
+    /// boxes full (Polish Selection's two answers: about 250 pt each), with their shadows. Clicks pass through
+    /// everywhere but the pill and the cards, so the height costs nothing.
+    static let size = CGSize(width: 480, height: 640)
     /// Canvas bottom → pill bottom; leaves room for the pill's shadow.
     static let pillBottomInset: CGFloat = 24
     /// Toasts sit 10 pt above the pill's tallest state, so they never move while the pill changes shape.
@@ -73,10 +75,11 @@ struct PillCanvasView: View {
             && (model.visiblePhase.isRecording || model.selectionHint == .handoff)
     }
 
-    /// The model chip floats above the pill: toasts make room for it.
+    /// The model chip, or Polish Selection's hint in its place, floats above the pill: toasts make room for it.
     private var showsChip: Bool {
-        model.isPresented && model.isPillAllowed && model.showsChip
+        let chip = model.isPillAllowed && model.showsChip
             && (model.visiblePhase.isRecording || model.visiblePhase == .processing)
+        return model.isPresented && (chip || model.selectionHint == .shown && model.visiblePhase.isRecording)
     }
 
     /// With no pill on screen (hidden until the next dictation, or Never mode) toasts drop into its slot, bottoms

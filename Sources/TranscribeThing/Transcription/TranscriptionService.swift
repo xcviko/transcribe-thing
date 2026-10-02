@@ -76,9 +76,9 @@ final class TranscriptionService {
     /// Throws `AppError` only, or `CancellationError` when the calling task is cancelled. A retired model never runs.
     /// `processingTime` covers everything after the recording ended, including any wait for the model.
     /// `effort` has Gemini think at another level than its own (`EngineCLI --effort`), and `prompt` replaces its
-    /// fixed `EngineID.geminiSystemPrompt` (`--prompt`; empty sends only the audio), and `upload` sends a cloud model
-    /// the audio in that format instead of its own, a refusal of it failing rather than going again as WAV
-    /// (`--upload`); the app never passes any of them.
+    /// fixed `EngineID.geminiSystemPrompt`: Polish's (`Polish.prompt`, for a polished dictation and Home's Polish), or
+    /// any (`--prompt`; empty sends only the audio). `upload` sends a cloud model the audio in that format instead of
+    /// its own, a refusal of it failing rather than going again as WAV (`--upload`). The app passes only `prompt`.
     /// `background`: Home's work, which lets dictations have the local model first.
     /// `progress` hears how much of a streamed answer has come (Gemini's reasoning and text); Parakeet has none.
     func transcribe(_ recording: Recording, engine: EngineID, effort: ReasoningEffort? = nil,
@@ -251,9 +251,9 @@ final class TranscriptionService {
     /// `CleanupModel.timeout(forCharacterCount:)`); once it streams, it may take as long as it keeps coming, and the
     /// same `timeout` without a byte ends it. Throws `AppError` only, or `CancellationError`. A retired model never
     /// runs.
-    /// `route` sends it to any other model or level instead (`EngineCLI --cleanup-bench`, `--clean-up-effort`), and
-    /// `prompt` replaces the fixed prompt (`--clean-up-prompt`); the app never passes either. `progress` hears how
-    /// much of the answer has streamed in.
+    /// `route` sends it to any other model or level instead, and `prompt` replaces the fixed prompt: Polish
+    /// Selection's (`PolishSelectionModel.route`, `Polish.textPrompt`), or the CLI's (`--cleanup-bench`,
+    /// `--clean-up-effort`, `--clean-up-prompt`). `progress` hears how much of the answer has streamed in.
     func cleanUp(_ transcript: String, of source: EngineID, by model: CleanupModel = .default,
                  timeout: TimeInterval? = nil, route: CleanupRoute? = nil, prompt: String? = nil,
                  progress: (@Sendable (ChatStreamProgress) -> Void)? = nil) async throws -> TranscriptResult {

@@ -20,6 +20,8 @@ final class ToastCenter {
     private(set) var countdowns: [UUID: ToastCountdown] = [:]
     /// True while the pointer is over the toast stack.
     private(set) var isPaused = false
+    /// What ↩ and Esc do for Polish Selection's cards right now, which their footer says.
+    var cardKeys = CardKeys()
 
     @ObservationIgnored var onAction: ((Notice, NoticeAction) -> Void)?
     @ObservationIgnored var onSound: ((SoundEffect) -> Void)?
@@ -150,11 +152,13 @@ final class ToastCenter {
         }
     }
 
-    /// Keeps two: drops the oldest timed notice first, so sticky ones (permissions, missing mic) survive.
+    /// Keeps two: drops the oldest timed notice first, so sticky ones (permissions, missing mic) survive, and
+    /// Polish Selection's answers (to compare) go last.
     private func trimToCapacity() {
         while notices.count > Self.maxVisible {
             let candidates = notices.dropLast()
-            let index = candidates.firstIndex { $0.lifetime != .sticky } ?? notices.startIndex
+            let index = candidates.firstIndex { $0.lifetime != .sticky && !$0.takesCardKeys }
+                ?? candidates.firstIndex { $0.lifetime != .sticky } ?? notices.startIndex
             countdowns[notices[index].id] = nil
             notices.remove(at: index)
         }
@@ -218,4 +222,11 @@ struct ToastCountdown: Equatable, Sendable {
         guard resumedAt == nil else { return self }
         return ToastCountdown(total: total, remaining: max(remaining, min(grace, total)), resumedAt: date)
     }
+}
+
+/// What the keys do for Polish Selection's cards: ↩ pastes the only card, until an answer is copied and while no
+/// dictation records; Esc closes them while no dictation is busy (then it cancels the dictation).
+struct CardKeys: Equatable, Sendable {
+    var returnPastes = true
+    var escCloses = true
 }

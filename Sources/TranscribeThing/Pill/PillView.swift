@@ -370,11 +370,13 @@ struct PillView: View {
         case .rest, .peek, .hello: "transcribe-thing. Click to start hands-free dictation"
         case .listening: "transcribe-thing is listening"
         case .locked: "transcribe-thing is listening, hands-free"
+        // A polish (a dictation's on Gemini, or a selection's by both models) names no model.
+        case .processing(_, _, polishes: true): "transcribe-thing is polishing"
         case .processing: "transcribe-thing is transcribing"
         case .error: "Dictation failed"
         case .message(let text): text
         }
-        guard let choice, visual.carriesModel else { return label }
+        guard let choice, visual.carriesModel, !visual.isPolishing else { return label }
         return "\(label) with \(choice.title(parakeet: model.settings.parakeetEngine))"
     }
 }
@@ -773,12 +775,21 @@ struct PillPolishDrop: View {
     var progress: Double?
 
     var body: some View {
-        PillPolishDropShape(progress: progress ?? (isOn ? 1 : 0), height: height, symbol: "wand.and.sparkles",
-                            tint: tint, accent: accent)
-            .animation(progress != nil ? nil : reduceMotion ? .easeInOut(duration: 0.1)
-                       : .spring(duration: isOn ? 0.41 : 0.25, bounce: isOn ? 0.18 : 0), value: isOn)
-            .accessibilityHidden(!isOn)
-            .accessibilityLabel("Polish is on")
+        Group {
+            if reduceMotion, progress == nil {
+                // Reduce Motion: it doesn't travel, it fades in and out where it floats.
+                PillPolishDropShape(progress: 1, height: height, symbol: "wand.and.sparkles", tint: tint, accent: accent)
+                    .opacity(isOn ? 1 : 0)
+                    .animation(.easeInOut(duration: 0.15), value: isOn)
+            } else {
+                PillPolishDropShape(progress: progress ?? (isOn ? 1 : 0), height: height, symbol: "wand.and.sparkles",
+                                    tint: tint, accent: accent)
+                    .animation(progress != nil ? nil : .spring(duration: isOn ? 0.41 : 0.25, bounce: isOn ? 0.18 : 0),
+                               value: isOn)
+            }
+        }
+        .accessibilityHidden(!isOn)
+        .accessibilityLabel("Polish is on")
     }
 }
 
@@ -963,6 +974,7 @@ private struct ProcessingContent: View {
     var polishes = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.pillStaticRendering) private var staticRendering
     /// The last count shown, so a pill that leaves or shrinks after its count went keeps its number to the end.
     @State private var lastCount: PillTokenCount?
 
@@ -971,7 +983,7 @@ private struct ProcessingContent: View {
             ProcessingWaveView(startOffset: startOffset, tint: tint, showsDots: !isCounting && !polishes,
                                glow: polishes ? tint : nil)
             if polishes, !isCounting {
-                PillWand(tint: tint)
+                PillWand(tint: tint, pulses: reduceMotion && !staticRendering)
                     .transition(counterTransition)
             }
             if isCounting, let shown = count ?? lastCount {
@@ -992,11 +1004,25 @@ private struct ProcessingContent: View {
     }
 }
 
-/// Polish's wand inside the capsule, as it stands in the drop.
+/// Polish's wand inside the capsule, as it stands in the drop. `pulses`: Reduce Motion, where the shimmer over it
+/// stops, so it breathes once a second instead, as the processing dots do.
 private struct PillWand: View {
     var tint: Color
+    var pulses = false
 
     var body: some View {
+        if pulses {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                let dim = Int(context.date.timeIntervalSinceReferenceDate) % 2 == 1
+                wand.opacity(dim ? 0.5 : 1)
+                    .animation(.easeInOut(duration: 0.9), value: dim)
+            }
+        } else {
+            wand
+        }
+    }
+
+    private var wand: some View {
         Image(systemName: "wand.and.sparkles")
             .font(.system(size: PillMetrics.counterWandSize, weight: .semibold))
             .foregroundStyle(tint)

@@ -340,7 +340,8 @@ final class PillModel {
         if autoSettles { chipTask = delayed(timing.chipHold) { $0.endChipFlash() } }
     }
 
-    private func endChipFlash() {
+    /// Takes the chip down at once: Polish Selection's handoff, whose polish circle it would sit over.
+    func endChipFlash() {
         chipTask?.cancel()
         chipTask = nil
         if isChipFlashing { isChipFlashing = false }
@@ -368,13 +369,13 @@ final class PillModel {
     }
 }
 
-/// Buttons of the hands-free pill.
 /// Polish Selection's hint over the recording pill. `handoff`: its key was pressed, so the hint drops into the pill
 /// and dissolves as the pill turns into the polish.
 enum PillSelectionHintState: Equatable, Sendable {
     case hidden, shown, handoff
 }
 
+/// Buttons of the hands-free pill.
 enum PillControl: Equatable, Sendable {
     case cancel, stop
 }

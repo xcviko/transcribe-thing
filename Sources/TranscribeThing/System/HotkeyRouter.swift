@@ -49,7 +49,8 @@ struct HotkeyRouter: Equatable, Sendable {
         var bindings: ShortcutBindings = .defaults
         /// Recording or transcribing: Esc cancels (and is swallowed) only then.
         var isBusy = false
-        /// A dictation is recording: the switch model shortcut is live (and swallowed) only then.
+        /// A dictation is recording: the Switch model and Polish shortcuts are live (and swallowed) only then, and the
+        /// cards' ↩ isn't theirs.
         var isRecording = false
         /// Switch model has another model to step to (`ModelLineup.cycle`); without one its shortcut is never
         /// intercepted.
@@ -57,8 +58,11 @@ struct HotkeyRouter: Equatable, Sendable {
         /// The dictation (or the one a held PTT starts) is on Gemini, the only model that polishes: without it Polish's
         /// shortcut is never intercepted, and fn ↩ reaches the app as it did before Polish.
         var polishes = true
-        /// Polish Selection's cards: ↩ (with no modifier) pastes the only one, and Esc closes them unless a dictation
-        /// is busy.
+        /// Off Gemini, the selection lookup hasn't answered: Polish's shortcut is held as `.polishIfSelected`, for
+        /// the lookup to decide (Polish Selection, or the key given back to the app).
+        var selectionPending = false
+        /// Polish Selection's cards: ↩ (with no modifier) is theirs unless a dictation records, and Esc closes them
+        /// unless one is busy.
         var cardPaste = false
         var cardClose = false
         /// While the shortcut recorder captures keys: nothing fires and nothing is swallowed.
@@ -241,7 +245,8 @@ struct HotkeyRouter: Equatable, Sendable {
             if input.isRepeat, let switchModel = liveSwitchModel(config), switchModel.keyCode == key,
                matchesDuringDictation(switchModel, config.bindings) {
                 decision.events.append(.cycleEngineRepeat)
-            } else if input.isRepeat, let polish = liveDuringDictation(config).first(where: { $0.action == .polish }),
+            } else if input.isRepeat, config.polishes,
+                      let polish = liveDuringDictation(config).first(where: { $0.action == .polish }),
                       polish.shortcut.keyCode == key, matchesDuringDictation(polish.shortcut, config.bindings) {
                 decision.events.append(.polish)
             }
@@ -251,7 +256,9 @@ struct HotkeyRouter: Equatable, Sendable {
             endGestureForSuspension(&decision)
             return decision
         }
-        if config.cardPaste || config.cardClose, modifiers.isEmpty, gesture == .idle {
+        // A key the user bound themselves (bare Keypad Enter for push-to-talk) stays theirs.
+        if config.cardPaste || config.cardClose, modifiers.isEmpty, gesture == .idle,
+           !config.bindings.bindings.values.contains(where: { $0.matches(keyCode: key, modifiers: modifiers) }) {
             if config.cardPaste, !config.isRecording, key == KeyCode.returnKey || key == KeyCode.keypadEnter {
                 consume(physical, into: &decision)
                 if !input.isRepeat { decision.events.append(.cardPaste) }
@@ -295,7 +302,15 @@ struct HotkeyRouter: Equatable, Sendable {
         }) {
             // Not a PTT-ending combo: the hold (and hands-free's stop-on-release) goes on.
             consume(physical, into: &decision)
-            if !input.isRepeat, let event = Self.event(for: action) { decision.events.append(event) }
+            if input.isRepeat {
+                return decision
+            } else if action == .polish, !config.polishes {
+                // Held only for the selection lookup: what it is gets decided once that answers.
+                decision.events.append(.polishIfSelected(KeyStroke(keyCode: physical, flags: input.flags,
+                                                                   interruptsHold: gesture == .holdingModifiers)))
+            } else if let event = Self.event(for: action) {
+                decision.events.append(event)
+            }
             return decision
         }
 
@@ -413,7 +428,8 @@ struct HotkeyRouter: Equatable, Sendable {
         return ShortcutAction.allCases.compactMap { action in
             guard action.isDuringDictation, let shortcut = config.bindings[action] else { return nil }
             if action == .switchModel, !config.switchesModels { return nil }
-            if action == .polish, !config.polishes { return nil }
+            // Held for the lookup only as a key that can be given back: a modifier-only Polish isn't.
+            if action == .polish, !config.polishes, !config.selectionPending || shortcut.isModifierOnly { return nil }
             return (action, shortcut)
         }
     }
@@ -453,7 +469,6 @@ struct HotkeyRouter: Equatable, Sendable {
         return !extra.isEmpty && liveDuringDictation(config).contains { extra.isWithin($0.shortcut) }
     }
 
-    /// Space, Esc and any key used by a binding; other keystrokes never leave the tap thread.
     /// The key the onboarding keyboard draws for `physical`, if it draws it: Space, Esc and the bindings' keys. A
     /// laptop keyboard has no Keypad Enter, so it's drawn as Return, down and up alike, whatever fn does in between.
     private static func illustrated(_ physical: UInt16, _ config: Config) -> UInt16? {

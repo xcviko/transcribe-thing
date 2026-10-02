@@ -167,16 +167,31 @@ private enum Fixture {
         #expect(Fixture.files(in: directory) == ["2026-10-02.log", "2026-10-03.log"])
     }
 
+    /// Earlier days keep what today may still need free: with a 1000-byte limit, today grows to 500, so earlier days
+    /// keep at most 500.
     @Test func theOldestDaysGoWhileAllTogetherTakeMoreThanTheLimit() throws {
         let directory = Fixture.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         for name in ["2026-09-28.log", "2026-09-29.log", "2026-09-30.log", "2026-10-01.log", "2026-10-02.log"] {
-            try Fixture.write(300, bytesTo: name, in: directory)
+            try Fixture.write(200, bytesTo: name, in: directory)
         }
         let log = Fixture.log(limits: .init(days: 7, totalBytes: 1000))
         log.start(directory: directory)
         log.flush()
         #expect(Fixture.files(in: directory) == ["2026-09-30.log", "2026-10-01.log", "2026-10-02.log"])
+    }
+
+    /// A runaway day stops at its own share, so the next morning it's still there to explain itself.
+    @Test func aDayThatHitItsShareSurvivesTheNextDay() throws {
+        let directory = Fixture.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try Fixture.write(500, bytesTo: "2026-10-01.log", in: directory)
+        try Fixture.write(100, bytesTo: "2026-09-30.log", in: directory)
+        let log = Fixture.log(limits: .init(days: 7, totalBytes: 1000))
+        log.start(directory: directory)
+        log.event(.app, "next.morning")
+        log.flush()
+        #expect(Fixture.files(in: directory) == ["2026-10-01.log", "2026-10-02.log"])
     }
 
     @Test func todaysFileStaysAndStopsGrowingAtTheLimit() throws {
@@ -194,11 +209,11 @@ private enum Fixture {
 
         let busy = Fixture.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: busy) }
-        let runaway = Fixture.log(limits: .init(days: 7, totalBytes: 500))
+        let runaway = Fixture.log(limits: .init(days: 7, totalBytes: 1000))
         runaway.start(directory: busy)
         for index in 0..<100 { runaway.event(.dictation, "job.finished", ["index": index]) }
         let written = runaway.retainedText().utf8.count
-        #expect(written >= 500 && written < 600, "stops within a line of the limit")
+        #expect(written <= 500 && written > 400, "stops a line short of a day's share, half the limit")
     }
 
     @Test func filesThatArentDaysAreLeftAlone() throws {
@@ -333,7 +348,7 @@ private enum Fixture {
         let target = FocusInfo(pid: 42, bundleID: "com.example.secret-notes", role: "AXTextArea",
                                editability: .editable)
         let inserter = TextInserter(pasteboard: pasteboard, system: .init(
-            frontmostPID: { 42 }, canPostEvents: { true }, modifiersHeld: { false },
+            canPostEvents: { true }, modifiersHeld: { false },
             inspectFocus: { target }, pasteKeyCode: { 9 }, postPaste: { _ in true }))
         inserter.restoreDelay = .milliseconds(20)
         inserter.unreadTimeout = .milliseconds(200)
