@@ -231,7 +231,7 @@ import Testing
         try await waitUntil { asked.calls.count == 2 }
     }
 
-    /// On Gemini the key is Polish's: the hint offers only the dictionary, and fn ↩ polishes the dictation, the
+    /// On Gemini the key is Polish's: the hint offers only the dictionary, and fn P polishes the dictation, the
     /// selection left alone.
     @Test func onGeminiTheKeyStaysPolishs() async throws {
         let (rig, _, asked) = Self.make()
@@ -408,6 +408,61 @@ import Testing
         try await waitUntil { asked.calls.count == 2 }
         #expect(rig.h.controller.machine.capture == .idle)
         #expect(rig.transcribed.isEmpty && !cues.played.contains(.start))
+        try await Task.sleep(for: .milliseconds(60))
+        #expect(asked.calls.count == 2, "one Polish Selection, not one per key")
+    }
+
+    /// fn P reads what's selected when it's pressed: text selected after fn went down (the start found nothing) is
+    /// polished all the same.
+    @Test func textSelectedAfterFnWentDownIsPolished() async throws {
+        let (rig, _, asked) = Self.make()
+        var current: String?
+        rig.h.controller.selectionOverride = { current }
+        Switch.hold(rig)
+        try await Task.sleep(for: .milliseconds(40))
+        #expect(rig.h.pill.selectionHint == .hidden)
+        current = "selected later"
+        rig.h.controller.handle(.polish)
+        try await waitUntil { asked.calls.count == 2 }
+        #expect(asked.calls.allSatisfy { $0.0 == "selected later" })
+    }
+
+    /// Held down off Gemini, fn P's autorepeats do nothing more: one look at the selection, one word over the pill.
+    @Test func holdingThePolishKeyOffGeminiLooksOnce() async throws {
+        let (rig, _, asked) = Self.make(selection: nil)
+        var looks = 0
+        rig.h.controller.selectionOverride = { looks += 1; return nil }
+        Switch.hold(rig)
+        try await waitUntil { looks == 1 }
+        rig.h.controller.handle(.polish)
+        try await waitUntil { rig.h.pill.keyHint != nil }
+        for _ in 0..<5 { rig.h.controller.handle(.polishRepeat) }
+        try await Task.sleep(for: .milliseconds(40))
+        #expect(looks == 2 && asked.calls.isEmpty && rig.h.controller.machine.isRecording)
+        rig.h.controller.send(.pillCancel)
+    }
+
+    /// With no pill on screen (Never), the word about the key comes as a short notice.
+    @Test func withNoPillTheKeySaysSoInANotice() async throws {
+        let (rig, _, _) = Self.make(selection: nil)
+        rig.h.pill.isPresented = false
+        Switch.hold(rig)
+        rig.h.controller.handle(.polish)
+        try await waitUntil { rig.notice("key.hint") != nil }
+        #expect(rig.notice("key.hint")?.title == "Polish works on Gemini, or on selected text")
+        rig.h.controller.send(.pillCancel)
+    }
+
+    /// A long dictation Polish Selection took over isn't lost: it's in History, to transcribe from there.
+    @Test func aLongDictationPolishSelectionTookOverIsInHistory() async throws {
+        let (rig, _, asked) = Self.make()
+        rig.h.recorder.next = DictationResumeTests.speech(seconds: 25)
+        rig.h.controller.send(.handsFreeToggle)
+        rig.now += 25
+        rig.h.controller.handle(.polish)
+        try await waitUntil { asked.calls.count == 2 }
+        #expect(rig.h.history.entries.contains { $0.status == .cancelled })
+        #expect(rig.transcribed.isEmpty)
     }
 
     /// Nothing selected after all: the key never goes to the app; it says Polish is Gemini's, and the dictation goes on.

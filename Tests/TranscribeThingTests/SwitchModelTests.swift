@@ -1,3 +1,4 @@
+import AppKit
 import Carbon.HIToolbox
 import Foundation
 import Testing
@@ -993,12 +994,47 @@ import Testing
         #expect(returns == 0 && rig.pasted.isEmpty)
     }
 
-    @Test func itCanBeTurnedOff() {
+    @Test func itCanBeTurnedOff() async throws {
         let (rig, _) = Switch.make()
+        rig.h.controller.start()
         rig.h.settings.returnSendsHandsFree = false
         rig.h.controller.send(.handsFreeToggle)
         #expect(!rig.h.hotkeys.currentConfig().returnSends)
+        rig.h.settings.returnSendsHandsFree = true
+        try await waitUntil { rig.h.hotkeys.currentConfig().returnSends }
+        rig.h.settings.returnSendsHandsFree = false
+        try await waitUntil { !rig.h.hotkeys.currentConfig().returnSends }
         rig.h.controller.send(.pillCancel)
+    }
+
+    /// While one of the app's menus is open, Return chooses in it.
+    @Test func aMenuOpenKeepsReturnForIt() async throws {
+        let (rig, _) = Switch.make()
+        rig.h.controller.start()
+        rig.h.controller.send(.handsFreeToggle)
+        NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: NSMenu())
+        try await waitUntil { !rig.h.hotkeys.currentConfig().returnSends }
+        NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: NSMenu())
+        try await waitUntil { rig.h.hotkeys.currentConfig().returnSends }
+        rig.h.controller.send(.pillCancel)
+    }
+
+    /// Esc while it's being pasted: too late for the text, not for the Return.
+    @Test func escWhilePastingKeepsTheReturn() async throws {
+        let (rig, cues) = Switch.make()
+        let c = rig.h.controller
+        var returns = 0
+        c.returnOverride = { returns += 1 }
+        rig.result = { _, _ in "Hello there" }
+        c.send(.handsFreeToggle)
+        rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
+        rig.now += 2
+        c.handle(.finishAndSend)
+        try await waitUntil { rig.pasted.count == 1 }
+        c.handle(.cancel)
+        try await waitUntil { c.machine.activeJobs == 0 }
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(returns == 0 && cues.played.contains(.cancel))
     }
 }
 
@@ -1006,13 +1042,30 @@ import Testing
 
 @MainActor
 @Suite(.serialized) struct NoSpeechPillTests {
-    /// Gemini heard nothing: "No speech detected" wears Gemini's ring, as the dictation did.
+    /// Gemini heard nothing: "No speech detected" wears Gemini's ring, as the dictation did, though the main model
+    /// is another.
     @Test func noSpeechWearsTheDictationsModel() async throws {
         let (rig, _) = SwitchModelControllerTests.make()
-        rig.h.settings.lineup.main = .gemini
         rig.result = { _, _ in "" }
         SwitchModelControllerTests.hold(rig)
+        rig.h.controller.handle(.cycleEngine)
+        rig.h.controller.handle(.cycleEngine)
+        #expect(rig.h.controller.effectiveChoice == .gemini && rig.h.settings.lineup.main != .gemini)
         rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
+        rig.now += 2
+        rig.h.controller.handle(.pttUp)
+        try await waitUntil { rig.h.pill.errorMessage == PillMetrics.noSpeechText }
+        #expect(rig.h.pill.errorModel == .gemini)
+    }
+
+    /// Nothing said at all, so it never went to the model: the same.
+    @Test func silenceBeforeTheModelWearsItToo() async throws {
+        let (rig, _) = SwitchModelControllerTests.make()
+        SwitchModelControllerTests.hold(rig)
+        rig.h.controller.handle(.cycleEngine)
+        rig.h.controller.handle(.cycleEngine)
+        rig.h.recorder.next = Recording(samples: Array(repeating: 0.01, count: 32_000),
+                                        speech: SpeechStats(voicedSeconds: 0.1, peakDBFS: -40, isSilent: false))
         rig.now += 2
         rig.h.controller.handle(.pttUp)
         try await waitUntil { rig.h.pill.errorMessage == PillMetrics.noSpeechText }

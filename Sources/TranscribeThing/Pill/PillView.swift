@@ -307,9 +307,9 @@ struct PillView: View {
         }
     }
 
-    /// The dictation's model the stage keeps with each visual, so its chip and tint leave with the pill. Once the
-    /// dictation is over, the error flash about it still has it.
-    private var choice: ModelChoice? { model.sessionModel ?? model.errorModel }
+    /// The dictation's model the stage keeps with each visual, so its chip and tint leave with the pill. The error
+    /// flash about a dictation has that dictation's, even with another one still in flight behind it.
+    private var choice: ModelChoice? { model.errorModel ?? model.sessionModel }
 
     var body: some View {
         let visual = self.visual
@@ -1514,7 +1514,8 @@ struct PillShortcutChips: View {
     }
 }
 
-/// Polish Selection's hint over the pill, "[fn] [return] · Polish selection": the polish shortcut in full.
+/// The hint over the pill while text is selected, "[fn] [P] Polish · [fn] [D] Add to dictionary": what the selection
+/// can go to, each with its shortcut in full.
 struct PillSelectionHint: View {
     let model: PillModel
 
@@ -1545,7 +1546,7 @@ struct PillSelectionHint: View {
 
     private func accessibilityLabel(_ offer: PillSelectionOffer, polish: Shortcut?, dictionary: Shortcut?) -> String {
         let parts = [
-            offer.polish ? "\(polish?.spokenDescription ?? "Return") to polish it" : nil,
+            offer.polish ? "\(polish?.spokenDescription ?? "P") to polish it" : nil,
             offer.dictionary ? "\(dictionary?.spokenDescription ?? "D") to add it to your dictionary" : nil,
         ].compactMap { $0 }
         return "Text selected. Press " + parts.joined(separator: ", or ")
@@ -1616,7 +1617,8 @@ private struct PillControlTooltip: View {
             case .stop:
                 Text("Finish")
                 PillShortcutChips(shortcut: settings.shortcuts[.pushToTalk], fallback: "fn")
-                if settings.returnSendsHandsFree {
+                // Not when the user bound Return itself: the router leaves it theirs.
+                if settings.returnSendsHandsFree, !settings.shortcuts.claims(bareKey: KeyCode.returnKey) {
                     Text("·").foregroundStyle(.white.opacity(0.4))
                     PillShortcutChips(shortcut: Shortcut(modifiers: [], keyCode: KeyCode.returnKey), fallback: "↩")
                     Text("sends")

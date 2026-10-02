@@ -83,11 +83,13 @@ final class DictationController {
     @ObservationIgnored var cleanupOverride: (@MainActor (String, EngineID) async throws -> TranscriptResult)?
     /// Tests: the selected text Polish Selection finds as a dictation starts, instead of asking Accessibility.
     @ObservationIgnored var selectionOverride: (@MainActor () async -> String?)?
+    /// Tests: why `selectionOverride` found nothing (nothing selected, unless this says the app couldn't tell).
+    @ObservationIgnored var selectionMissingOverride: FocusInspector.SelectionLookup.Outcome?
     /// Tests: the model's answer for Polish Selection (its `<message>` tags included), instead of OpenRouter.
     @ObservationIgnored var selectionPolishOverride: (@MainActor (String, PolishSelectionModel) async throws -> TranscriptResult)?
     /// Tests: the Return pressed after a hands-free dictation finished with Return is pasted, instead of posting it.
     @ObservationIgnored var returnOverride: (@MainActor () -> Void)?
-    /// Tests: a key the tap took for Polish Selection and gives back to the app, instead of posting it.
+    /// Tests: a key the tap held for the selection and gives back to the app, instead of posting it.
     @ObservationIgnored var replayKeyOverride: (@MainActor (KeyStroke) -> Void)?
     /// Replaces how long a clean-up may take to start answering (`CleanupModel.timeout(forCharacterCount:)`).
     @ObservationIgnored var cleanupTimeoutOverride: TimeInterval?
@@ -124,8 +126,13 @@ final class DictationController {
     /// Text selected in the frontmost app as this dictation started (Polish Selection), found through Accessibility.
     @ObservationIgnored private var selection: String?
     @ObservationIgnored private var selectionTask: Task<Void, Never>?
-    /// The lookup for `selection` hasn't answered yet: the tap holds the polish key for it (`polishOnceSelectionIsKnown`).
-    @ObservationIgnored private var selectionLookupRunning = false
+    /// Counts recordings: keys held for a lookup belong to the recording they were pressed in.
+    @ObservationIgnored private var recordingGeneration = 0
+    /// A key took this press's recording over (fn D in push-to-talk, Polish Selection) and fn is still down: another
+    /// fn D in the same press still adds what's selected.
+    @ObservationIgnored private var pressTakenByKey = false
+    /// One of the app's own menus is open (the menu bar's, the pill's model menu): Return is for choosing in it.
+    @ObservationIgnored private var menuIsOpen = false
     /// Keys the tap held for the selection, waiting for a lookup, in the order they came: the press's own release
     /// waits with them (`heldRelease`), so what the press was is decided by its keys, not by when fn came up.
     @ObservationIgnored private var heldKeys: [(action: ShortcutAction, key: KeyStroke?)] = []
@@ -208,6 +215,8 @@ final class DictationController {
     private static let undoMinimumDuration: TimeInterval = 1
     private static let saveCancelledMinimumDuration: TimeInterval = 20
     private static let minimumVoicedSeconds = 0.25
+    /// Speech a recording a key took over must hold to stay for Undo (`Input.discard`).
+    private static let takenOverKeepsVoicedSeconds = 1.0
     /// The same failure again within this long updates its notice silently.
     static let repeatedFailureQuietPeriod: TimeInterval = 2
     /// What Undo does after a cancel, in the cancel notices.
@@ -258,7 +267,8 @@ final class DictationController {
         }
         history.onRemove = { [weak self] ids in self?.entriesRemoved(ids) }
         observeMicrophonePermission()
-        observeAccountForSelection()
+        observeReturnSends()
+        observeMenus()
         stateDidChange()
     }
 
@@ -276,24 +286,32 @@ final class DictationController {
         }
     }
 
-    /// The key's state decides whether Polish Selection can happen: the first press after launch (the key is checked
-    /// meanwhile), or after a key is added, finds the tap already holding a quick fn P for it.
-    private func observeAccountForSelection() {
+    /// Shortcuts → "Return sends" turned on or off reaches a hands-free dictation already recording.
+    private func observeReturnSends() {
         withObservationTracking {
-            _ = account.status
+            _ = settings.returnSendsHandsFree
+            _ = settings.shortcuts
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.syncSelectionPending()
-                self.observeAccountForSelection()
+                self?.stateDidChange()
+                self?.observeReturnSends()
             }
         }
     }
 
-    /// The dictionary key is the tap's during a dictation whenever it's bound: it reads the selection when it's
-    /// pressed. (The polish key always is.)
-    private func syncSelectionPending() {
-        if hotkeys.dictionaryReady != canAddToDictionary { hotkeys.dictionaryReady = canAddToDictionary }
+    /// While one of the app's menus is open (the menu bar's, the pill's model menu), Return chooses in it instead of
+    /// sending a hands-free dictation.
+    private func observeMenus() {
+        let center = NotificationCenter.default
+        for (name, open) in [(NSMenu.didBeginTrackingNotification, true), (NSMenu.didEndTrackingNotification, false)] {
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.menuIsOpen != open else { return }
+                    self.menuIsOpen = open
+                    self.stateDidChange()
+                }
+            }
+        }
     }
 
     private func dismissMicrophoneNotices() {
@@ -307,14 +325,20 @@ final class DictationController {
 
     func handle(_ event: HotkeyEvent) {
         switch event {
-        case .pttDown: send(.pttDown)
+        case .pttDown:
+            pressTakenByKey = false
+            send(.pttDown)
         case .pttUp where !heldKeys.isEmpty:
             // The press's polish key is still being decided: its release follows the decision.
             heldRelease = .pttUp
         case .pttInterrupted where !heldKeys.isEmpty:
             heldRelease = .pttInterrupted
-        case .pttUp: send(.pttUp)
-        case .pttInterrupted: send(.pttInterrupted)
+        case .pttUp:
+            pressTakenByKey = false
+            send(.pttUp)
+        case .pttInterrupted:
+            pressTakenByKey = false
+            send(.pttInterrupted)
         case .handsFreeToggle: send(.handsFreeToggle)
         case .cancel: send(.cancel)
         case .pasteLast: pasteLast()
@@ -329,6 +353,9 @@ final class DictationController {
             } else {
                 _ = acted(on: .polish, selection: nil)
             }
+        case .polishRepeat:
+            // Held down: Polish on and off again on Gemini; elsewhere the first press has said what it could.
+            if machine.isRecording, effectiveChoice == .gemini { send(.polish) }
         case .heldForSelection(let action, let key):
             actOnceSelectionIsKnown(action, key)
         case .finishAndSend:
@@ -396,6 +423,7 @@ final class DictationController {
         let effects = machine.handle(input, now: clock())
         let startsRecording = !wasRecording && machine.isRecording
         if startsRecording {
+            recordingGeneration &+= 1
             // Every press starts with an empty equalizer: the meter still holds the last recording's levels,
             // and a refused press never opens the mic, whose start would clear them.
             pillModel.levelMeter.reset()
@@ -463,7 +491,6 @@ final class DictationController {
             pickedModel = false
             if isPolishing { isPolishing = false }
             selectionTask?.cancel()
-            selectionLookupRunning = false
             selection = nil
         }
         // A hold the main model refused isn't a start (`deferredRefusal`); hands-free taking it over is.
@@ -527,6 +554,8 @@ final class DictationController {
                 finishCapture(tail: effects.contains(.notice(.deviceLostTranscribing)) ? 0 : AudioRecorder.stopTail)
             case .cancelCapture(let keepForUndo, let notify):
                 cancelCapture(keepForUndo: keepForUndo, notify: notify)
+            case .discardCapture:
+                cancelCapture(keepForUndo: true, notify: true, onlyWithSpeech: true)
             case .showPill:
                 refreshPill()
             case .playSound(let sound):
@@ -699,12 +728,16 @@ final class DictationController {
         flashError(message: PillMetrics.noSpeechText, model: model)
     }
 
-    private func cancelCapture(keepForUndo: Bool, notify: Bool) {
-        // "Dictation stopped · Undo" offers this recording or nothing, never an older one still retained.
-        if keepForUndo { lastCancelledID = nil }
+    /// `onlyWithSpeech`: a key took the recording over (`Input.discard`), so it's kept only if the user had said
+    /// something in it; a hold that was only the way to the key goes without a trace.
+    private func cancelCapture(keepForUndo: Bool, notify: Bool, onlyWithSpeech: Bool = false) {
         let resumed = continuing
         continuing = nil
         let recording = captureDevice.isCapturing ? captureDevice.cancel() : nil
+        let keepForUndo = keepForUndo
+            && !(onlyWithSpeech && (recording?.speech.voicedSeconds ?? 0) < Self.takenOverKeepsVoicedSeconds)
+        // "Dictation stopped · Undo" offers this recording or nothing, never an older one still retained.
+        if keepForUndo { lastCancelledID = nil }
         if keepForUndo {
             DiagnosticLog.shared.event(.dictation, "dictation.canceled",
                                        ["seconds": recording?.duration, "voiced": recording?.speech.voicedSeconds])
@@ -1110,7 +1143,13 @@ final class DictationController {
     /// False when there was nothing left to cancel (the last result is already being delivered).
     @discardableResult
     private func cancelNewestJob() -> Bool {
-        guard let job = queue.last else { return false }
+        guard let job = queue.last else {
+            // Being pasted: too late for the text, not for the Return that would send it.
+            guard let delivering = deliveringJob, delivering.pressesReturn else { return false }
+            delivering.pressesReturn = false
+            DiagnosticLog.shared.event(.dictation, "job.sendCanceled")
+            return true
+        }
         DiagnosticLog.shared.event(.dictation, "job.canceled", ["engine": job.engine, "cleaningUp": job.isCleaningUp])
         queue.removeLast()
         job.stop()
@@ -1195,7 +1234,7 @@ final class DictationController {
             let model = deliveredKind.dictationModel
             let insertion = await insert(pasted(delivered, by: model))
             handleInsertion(insertion, text: delivered, by: model, isDictation: true)
-            if job.pressesReturn, case .pasted = insertion { pressReturn() }
+            if job.pressesReturn, case .pasted = insertion { await pressReturn(for: job) }
             if cleanupFailed { postCleanupFallback(error: cleanupError, model: cleanupModel) }
         }
     }
@@ -1291,15 +1330,18 @@ final class DictationController {
 
     /// Return, a moment after a hands-free dictation finished with Return was pasted: the app gets it as if typed, and
     /// the message or prompt goes. The moment lets an app that pastes in its own time (Electron) take the text first.
-    private func pressReturn() {
+    /// Part of the delivery: the next dictation's paste waits for it, so it never joins this message. Esc meanwhile
+    /// keeps it (`cancelNewestJob`).
+    private func pressReturn(for job: Job) async {
+        try? await Task.sleep(for: .milliseconds(120))
+        guard job.pressesReturn else { return }
         if let returnOverride {
             returnOverride()
             return
         }
-        Task.detached {
-            try? await Task.sleep(for: .milliseconds(120))
+        await Task.detached {
             KeyStroke.post(KeyStroke(keyCode: KeyCode.returnKey, flags: 0, interruptsHold: false))
-        }
+        }.value
     }
 
     private func copy(_ text: String) {
@@ -1447,8 +1489,8 @@ final class DictationController {
             useBuiltInMicrophone()
         case .installUpdate:
             installUpdate?()
-        case .restoreDictionary(let dictionary):
-            settings.dictionary = dictionary
+        case .undoDictionaryAdd(let word, let before, let after):
+            settings.dictionary.undoAdding(word, before: before, after: after)
         case .dismiss, .copyText, .pasteText:
             break
         }
@@ -2100,8 +2142,8 @@ final class DictationController {
     }
 
     /// The polish shortcut while dictating: Polish on for this dictation, or off when pressed again, with its drop.
-    /// Only a dictation on Gemini polishes: on another model the router lets the keys through to the app, and this
-    /// guard is for a model that changed in between.
+    /// Only a dictation on Gemini polishes: on another model the key does Polish Selection or says why it can't
+    /// (`acted(on:selection:)`), and this guard is for a model that changed in between.
     private func togglePolish() {
         guard effectiveChoice == .gemini else { return }
         isPolishing.toggle()
@@ -2154,9 +2196,10 @@ final class DictationController {
         settings.shortcuts[.polish] != nil && openRouterKeyProblem == nil
     }
 
-    /// fn D can add the selection to the dictionary: its key is bound. On any model, with or without a key.
+    /// fn D can add the selection to the dictionary: its key is bound (with a key: a modifier-only binding can't be
+    /// held while the selection is read). On any model, with or without an OpenRouter key.
     private var canAddToDictionary: Bool {
-        settings.shortcuts[.addToDictionary] != nil
+        settings.shortcuts[.addToDictionary].map { !$0.isModifierOnly } ?? false
     }
 
     /// The selection is worth looking for: something can be done with it.
@@ -2169,14 +2212,11 @@ final class DictationController {
     private func lookForSelection() {
         selectionTask?.cancel()
         selection = nil
-        selectionLookupRunning = false
         guard canLookForSelection else { return }
-        selectionLookupRunning = true
         let override = selectionOverride
         selectionTask = Task { [weak self] in
-            let text = if let override { await override() } else { await Self.lookUpSelection(when: "start") }
+            let text = if let override { await override() } else { await Self.lookUpSelection(when: "start").text }
             guard let self, !Task.isCancelled else { return }
-            self.selectionLookupRunning = false
             if self.machine.isRecording, let text {
                 DiagnosticLog.shared.event(.dictation, "selection.found", ["characters": text.count])
                 self.selection = text
@@ -2185,27 +2225,41 @@ final class DictationController {
         }
     }
 
-    /// A key the tap held for the selection. fn P came before the dictation's lookup answered (a quick fn P): the
-    /// lookup decides. fn D always reads what's selected now (in a long hands-free dictation, not what was selected
-    /// as it started). With text selected the key does its work on it (on Gemini, fn P is Polish's); without, it goes
-    /// on to the app after all, ending a held press as any other key would have.
-    /// Keys pressed while the first waits are decided the same way, in order, once the dictation is still on.
-    /// A recording canceled meanwhile (Esc) drops them all.
+    /// A key for the selection, decided by what's selected right when it's pressed (in a long hands-free dictation,
+    /// not what was selected as it started; text selected after fn went down counts too). With text selected the key
+    /// does its work on it (on Gemini, fn P is Polish's). With nothing selected fn D goes on to the app after all,
+    /// ending a held press as any other key would have; where the app couldn't say (Chrome, a password field) it isn't
+    /// typed over what may be selected, and the pill says why nothing happened.
+    /// Keys pressed while the first waits are decided the same way, in order, once the dictation is still on. A
+    /// recording canceled meanwhile (Esc) drops them all, even with a new one started since.
     private func actOnceSelectionIsKnown(_ action: ShortcutAction, _ key: KeyStroke?) {
         heldKeys.append((action, key))
         guard heldKeys.count == 1 else { return }
-        let override = selectionOverride
+        let override = selectionOverride, missing = selectionMissingOverride ?? .nothingSelected
+        let generation = recordingGeneration
         Task { [weak self] in
-            let fresh = if let override { await override() } else { await Self.lookUpSelection(when: "key") }
+            let fresh = if let override {
+                await override().map { FocusInspector.SelectionLookup(text: $0, outcome: .found) }
+                    ?? FocusInspector.SelectionLookup(outcome: missing)
+            } else {
+                await Self.lookUpSelection(when: "key")
+            }
             guard let self else { return }
             let held = self.heldKeys
             self.heldKeys = []
+            guard self.recordingGeneration == generation else {
+                self.heldRelease = nil
+                return
+            }
             var interrupts = false
             for (action, key) in held {
-                guard self.machine.isRecording else { break }
-                if self.acted(on: action, selection: fresh) { continue }
+                // A second fn D in a press the first one took over still adds what's selected.
+                guard self.machine.isRecording || action == .addToDictionary && self.pressTakenByKey else { break }
+                if self.acted(on: action, selection: fresh.text) { continue }
                 guard let key else { continue }
-                if let replay = self.replayKeyOverride {
+                if !fresh.isKnown {
+                    self.cantReadSelection(fresh.outcome)
+                } else if let replay = self.replayKeyOverride {
                     replay(key)
                 } else {
                     Task.detached { KeyStroke.post(key) }
@@ -2238,14 +2292,15 @@ final class DictationController {
         return true
     }
 
-    /// While there's a selection, the router takes the polish key off Gemini (on Gemini it's Polish's). The hint over
+    /// While there's a selection, the polish key polishes it off Gemini (on Gemini it's Polish's). The hint over
     /// the pill says what the selection can go to for a moment, as the model chip does: when it's found, and again
     /// when it can go somewhere new (the dictation comes back off Gemini). A switch that only takes something away
     /// (onto Gemini) leaves the chip to name the model. It comes without a sound.
     private func updateSelectionHint() {
         let selected = selection != nil && machine.isRecording
         let offer = PillSelectionOffer(polish: selected && effectiveChoice != .gemini && canPolishSelection,
-                                       dictionary: selected && canAddToDictionary)
+                                       dictionary: selected && canAddToDictionary
+                                           && UserDictionary.normalized(selection ?? "") != nil)
         let previous = selectionOffer
         guard offer != previous else { return }
         selectionOffer = offer
@@ -2274,21 +2329,50 @@ final class DictationController {
     /// The polish key where it can't polish (off Gemini, nothing selected): it says so over the pill for a moment, and
     /// the dictation goes on. To the machine it's a key pressed during the hold, so the release isn't a tap.
     private func explainPolish() {
-        send(.polish)
-        pillModel.showKeyHint(canPolishSelection ? "Polish works on Gemini, or on selected text"
-                                                 : "Polish works on Gemini only")
+        send(.keyUsed)
+        showKeyHint(canPolishSelection ? "Polish works on Gemini, or on selected text" : "Polish works on Gemini only")
+    }
+
+    /// fn D where the app couldn't say what's selected: the key isn't typed over what may be, and a card says why
+    /// nothing happened (a push-to-talk hold ends with it). A selection too long for Accessibility is too long for the
+    /// dictionary too.
+    private func cantReadSelection(_ outcome: FocusInspector.SelectionLookup.Outcome) {
+        switch outcome {
+        case .tooLong:
+            postDictionaryRefusal(.tooLong)
+        case .passwordField:
+            toasts.post(Notice(dedupeKey: Self.dictionaryNoteKey, style: .warning, symbol: "character.book.closed",
+                               title: "Not from a password field", lifetime: .seconds(6)))
+        default:
+            toasts.post(Notice(dedupeKey: Self.dictionaryNoteKey, style: .warning, symbol: "character.book.closed",
+                               title: "Can’t read the selection here",
+                               body: "This app doesn’t share what’s selected. You can add the word in Dictionary.",
+                               actions: [NoticeAction(title: "Open Dictionary", kind: .openHub(.dictionary))],
+                               lifetime: .seconds(8)))
+        }
+    }
+
+    /// A word about a key over the pill for a moment (`PillModel.keyHint`); with no pill on screen (Never), a short
+    /// notice in its place.
+    private func showKeyHint(_ text: String) {
+        if pillModel.isPresented {
+            pillModel.showKeyHint(text)
+        } else {
+            toasts.post(Notice(dedupeKey: "key.hint", style: .info, symbol: "info.circle", title: text,
+                               lifetime: .seconds(3)))
+        }
     }
 
     /// A look at the selection, logged with the app and the outcome (`when`: as the dictation starts, or for a key),
     /// never the text: why fn P or fn D found nothing in some app shows in the log.
-    private nonisolated static func lookUpSelection(when: String) async -> String? {
+    private nonisolated static func lookUpSelection(when: String) async -> FocusInspector.SelectionLookup {
         let lookup = await FocusInspector.lookUpSelection()
         // As a dictation starts, nothing selected is the usual case: only a key pressed for the selection logs it.
         if lookup.outcome != .found, when == "key" || lookup.outcome != .nothingSelected {
             DiagnosticLog.shared.event(.dictation, "selection.none", ["when": when, "app": lookup.app ?? "none",
                                                                       "why": lookup.outcome.rawValue])
         }
-        return lookup.text
+        return lookup
     }
 
     /// Text is selected and the polish key would polish it (Polish Selection): the keys over it are live.
@@ -2313,6 +2397,7 @@ final class DictationController {
         // The chip would come back over the polish circle once the hint has gone, naming one of the two models.
         pillModel.endChipFlash()
         playCue(.cancel)
+        pressTakenByKey = true
         send(.discard)
         Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(110))
@@ -2472,11 +2557,15 @@ final class DictationController {
 
     /// The dictionary key over a selection: the selection goes into the dictionary (`UserDictionary`), and a card
     /// says what happened, with Undo. A push-to-talk hold was only the way to the key, so its dictation gives way
-    /// without a trace, the hint dropping into the pill; a hands-free dictation goes on.
+    /// (kept for Undo only if something was said in it), the hint dropping into the pill; a hands-free dictation goes
+    /// on, fn's release included.
     private func addToDictionary(_ text: String) {
         let before = settings.dictionary
         let result = settings.dictionary.add(text)
-        if machine.mode == .pushToTalk {
+        if machine.mode != .pushToTalk {
+            send(.keyUsed)
+        } else {
+            pressTakenByKey = true
             selectionTask?.cancel()
             selectionHintTask?.cancel()
             selection = nil
@@ -2493,17 +2582,23 @@ final class DictationController {
         case .added(let word, let replaced):
             DiagnosticLog.shared.event(.dictation, "dictionary.added", [
                 "characters": word.count, "words": settings.dictionary.words.count, "respelled": replaced != nil])
-            toasts.post(Self.dictionaryCard(added: word, replacing: replaced, before: before))
+            toasts.post(Self.dictionaryCard(added: word, replacing: replaced, before: before,
+                                            after: settings.dictionary))
         case .alreadyThere(let word):
-            toasts.post(Notice(dedupeKey: Self.dictionaryCardKey, style: .info, symbol: "character.book.closed",
+            // Under its own key: an "Added" card still up keeps its Undo.
+            toasts.post(Notice(dedupeKey: Self.dictionaryNoteKey, style: .info, symbol: "character.book.closed",
                                title: "Already in your dictionary", body: "“\(word)”",
                                actions: [NoticeAction(title: "Open Dictionary", kind: .openHub(.dictionary))],
                                lifetime: .seconds(6)))
         case .invalid(let reason):
-            toasts.post(Notice(dedupeKey: Self.dictionaryCardKey, style: .warning, symbol: "character.book.closed",
-                               title: "Select a word or a name", body: Self.dictionaryRefusal(reason),
-                               lifetime: .seconds(8), sound: .alert))
+            postDictionaryRefusal(reason)
         }
+    }
+
+    private func postDictionaryRefusal(_ reason: UserDictionary.InvalidReason) {
+        toasts.post(Notice(dedupeKey: Self.dictionaryNoteKey, style: .warning, symbol: "character.book.closed",
+                           title: "Select a word or a name", body: Self.dictionaryRefusal(reason),
+                           lifetime: .seconds(8), sound: .alert))
     }
 
     /// Why a selection can't go into the dictionary, in the card's words.
@@ -2517,11 +2612,13 @@ final class DictationController {
     }
 
     nonisolated static let dictionaryCardKey = "dictionary.added"
+    /// "Already in your dictionary", "Select a word or a name".
+    nonisolated static let dictionaryNoteKey = "dictionary.note"
 
-    /// "Added to your dictionary": the word (and the spelling it replaced), with Undo, which puts the dictionary back
-    /// as it was (`before`), and a way to the rest of it.
+    /// "Added to your dictionary": the word (and the spelling it replaced), with Undo, which takes back just this add
+    /// (`before` to `after`), and a way to the rest of it.
     nonisolated static func dictionaryCard(added word: String, replacing replaced: String? = nil,
-                                           before: UserDictionary) -> Notice {
+                                           before: UserDictionary, after: UserDictionary) -> Notice {
         let body = if let replaced {
             "“\(word)” replaces “\(replaced)”. Gemini and GPT-6 Luna get it as a hint."
         } else {
@@ -2530,7 +2627,8 @@ final class DictationController {
         return Notice(dedupeKey: dictionaryCardKey, style: .info, symbol: "character.book.closed",
                       title: "Added to your dictionary", body: body,
                       actions: [NoticeAction(title: "Open Dictionary", kind: .openHub(.dictionary), isPrimary: true),
-                                NoticeAction(title: "Undo", kind: .restoreDictionary(before))],
+                                NoticeAction(title: "Undo", kind: .undoDictionaryAdd(word, before: before,
+                                                                                     after: after))],
                       lifetime: .seconds(10), sound: .success)
     }
 
@@ -2734,8 +2832,8 @@ final class DictationController {
     private func stateDidChange() {
         if hotkeys.isBusy != machine.isBusy { hotkeys.isBusy = machine.isBusy }
         if hotkeys.isRecording != machine.isRecording { hotkeys.isRecording = machine.isRecording }
-        syncSelectionPending()
         let returnSends = settings.returnSendsHandsFree && machine.mode == .handsFree && machine.isRecording
+            && !menuIsOpen
         if hotkeys.returnSends != returnSends { hotkeys.returnSends = returnSends }
         updateSelectionHint()
         syncCardKeys()

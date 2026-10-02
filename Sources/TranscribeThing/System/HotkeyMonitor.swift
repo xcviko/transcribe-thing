@@ -12,11 +12,12 @@ enum HotkeyEvent: Equatable, Sendable {
     case cycleEngineRepeat
     /// The polish shortcut, during a dictation: Polish on or off for it, or Polish Selection with text selected.
     case polish
+    /// Its key held down: an autorepeat, which turns Polish on and off again on Gemini (and does nothing elsewhere).
+    case polishRepeat
     /// Return during a hands-free dictation: finish it, paste it and press Return (`AppSettings.returnSendsHandsFree`).
     case finishAndSend
-    /// A key the tap held for the selection: Polish's before the dictation's selection lookup has answered, Add to
-    /// dictionary's always (it reads what's selected now). What the key does with the selection if there is one, else
-    /// it goes on to the app (`KeyStroke.post`).
+    /// A key the tap held for the selection (Add to dictionary's: it reads what's selected now). What the key does with
+    /// the selection if there is one, else it goes on to the app (`KeyStroke.post`).
     case heldForSelection(ShortcutAction, KeyStroke)
     /// ↩ and Esc while Polish Selection's card is up: Paste Here, and close it.
     case cardPaste, cardClose
@@ -77,10 +78,6 @@ final class HotkeyMonitor {
     /// A hands-free dictation records and Return sends it: Return is taken, as `.finishAndSend`.
     var returnSends = false {
         didSet { if returnSends != oldValue { pushConfig() } }
-    }
-    /// Add to dictionary has a shortcut: during a dictation it's held, as `.heldForSelection`, on any model.
-    var dictionaryReady = false {
-        didSet { if dictionaryReady != oldValue { pushConfig() } }
     }
     /// Polish Selection's cards are up: ↩ is theirs (it pastes the one card; with two it couldn't tell which, and does
     /// nothing), Esc closes them.
@@ -172,8 +169,7 @@ final class HotkeyMonitor {
     /// model to step to.
     func currentConfig() -> HotkeyRouter.Config {
         HotkeyRouter.Config(bindings: settings.shortcuts, isBusy: isBusy, isRecording: isRecording,
-                            switchesModels: settings.lineup.cycle.count > 1, addsToDictionary: dictionaryReady,
-                            returnSends: returnSends,
+                            switchesModels: settings.lineup.cycle.count > 1, returnSends: returnSends,
                             cardPaste: cardPaste, cardClose: cardClose,
                             isSuspended: suspendCount > 0, forwardsRawKeys: onRawKey != nil)
     }

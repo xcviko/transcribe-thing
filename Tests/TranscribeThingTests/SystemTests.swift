@@ -249,9 +249,9 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
         #expect(kb.press(.fn).events == [.pttDown])
         let polish = kb.down(kVK_ANSI_P, fnFlagged: true)
         #expect(polish.events == [.polish] && polish.swallow)
-        // Held down, every autorepeat is another press.
-        #expect(kb.down(kVK_ANSI_P, isRepeat: true, fnFlagged: true).events == [.polish])
-        #expect(kb.down(kVK_ANSI_P, isRepeat: true, fnFlagged: true).events == [.polish])
+        // Held down, its autorepeats turn Polish on and off on Gemini (`polishRepeat`).
+        #expect(kb.down(kVK_ANSI_P, isRepeat: true, fnFlagged: true).events == [.polishRepeat])
+        #expect(kb.down(kVK_ANSI_P, isRepeat: true, fnFlagged: true).events == [.polishRepeat])
         #expect(kb.up(kVK_ANSI_P, fnFlagged: true).swallow)
         #expect(kb.release(.fn).events == [.pttUp], "still the dictation's hold")
         // With fn up, P is P.
@@ -1814,7 +1814,6 @@ private func copyScreenshotAndFile(to pasteboard: NSPasteboard) {
     /// unbound (or between dictations) it's the app's.
     @Test func fnDIsHeldDuringADictation() {
         var kb = Keyboard()
-        kb.config.addsToDictionary = true
         #expect(kb.press(.fn).events == [.pttDown])
         let held = kb.down(kVK_ANSI_D, fnFlagged: true)
         #expect(held.swallow)
@@ -1828,7 +1827,7 @@ private func copyScreenshotAndFile(to pasteboard: NSPasteboard) {
         #expect(!kb.down(kVK_ANSI_D).swallow, "between dictations D is just D")
         kb.up(kVK_ANSI_D)
 
-        kb.config.addsToDictionary = false
+        kb.config.bindings[.addToDictionary] = nil
         kb.press(.fn)
         #expect(!kb.down(kVK_ANSI_D, fnFlagged: true).swallow)
     }
@@ -1852,5 +1851,19 @@ private func copyScreenshotAndFile(to pasteboard: NSPasteboard) {
         kb.release(.leftCommand)
         kb.config.returnSends = false
         #expect(!kb.down(kVK_Return).swallow)
+    }
+
+    /// A bare Return or Keypad Enter the user bound stays theirs, and Stop's tooltip doesn't promise it.
+    @Test func aReturnTheUserBoundStaysTheirs() {
+        var kb = Keyboard()
+        kb.config.isRecording = true
+        kb.config.returnSends = true
+        kb.config.bindings[.pasteLast] = Shortcut(modifiers: [], keyCode: KeyCode.keypadEnter)
+        #expect(kb.down(kVK_ANSI_KeypadEnter).events == [.pasteLast])
+        kb.up(kVK_ANSI_KeypadEnter)
+        #expect(kb.down(kVK_Return).events == [.finishAndSend], "Return itself still sends")
+        kb.up(kVK_Return)
+        #expect(kb.config.bindings.claims(bareKey: KeyCode.keypadEnter))
+        #expect(!kb.config.bindings.claims(bareKey: KeyCode.returnKey) && !ShortcutBindings.defaults.claims(bareKey: KeyCode.returnKey))
     }
 }

@@ -72,13 +72,23 @@ struct UserDictionary: Equatable, Sendable {
         // single letters ("U.S.", "Ph.D.", "e.g.").
         if ",;:?!…".contains(last) { return word.dropLast() }
         if last == ".", !isAbbreviation(word) { return word.dropLast() }
-        // Brackets around all of it, or one the selection cut off from its partner.
-        if let close = pairs[first], last == close { return word.dropFirst().dropLast() }
+        // Brackets around all of it ("(a) and (b)" keeps its own), or one the selection cut off from its partner.
+        if let close = pairs[first], last == close, opensAll(word, first, close) { return word.dropFirst().dropLast() }
         if let close = pairs[first], !word.dropFirst().contains(close) { return word.dropFirst() }
         if let open = pairs.first(where: { $0.value == last })?.key, !word.dropLast().contains(open) {
             return word.dropLast()
         }
         return word
+    }
+
+    /// The first character's bracket closes only at the last one: it holds all of `word`.
+    private static func opensAll(_ word: Substring, _ open: Character, _ close: Character) -> Bool {
+        var depth = 0
+        for (i, c) in word.enumerated() {
+            if c == open { depth += 1 } else if c == close { depth -= 1 }
+            if depth == 0 { return i == word.count - 1 }
+        }
+        return false
     }
 
     /// "U.S.", "Ph.D.": the period before the final one sets off a single letter.
@@ -120,6 +130,15 @@ struct UserDictionary: Equatable, Sendable {
 
     mutating func remove(_ word: String) {
         words.removeAll { $0 == word }
+    }
+
+    /// Takes back the add of `word` that made `after` out of `before`, keeping whatever changed since: the word goes,
+    /// and the spelling it replaced and the oldest words it pushed out come back where they were.
+    mutating func undoAdding(_ word: String, before: UserDictionary, after: UserDictionary) {
+        words.removeAll { $0 == word }
+        for (i, taken) in before.words.enumerated() where !after.words.contains(taken) && index(of: taken) == nil {
+            words.insert(taken, at: min(i, words.count))
+        }
     }
 
     // MARK: Prompts

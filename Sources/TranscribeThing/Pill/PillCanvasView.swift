@@ -84,7 +84,8 @@ struct PillCanvasView: View {
     /// The model chip, or a hint in its place, floats above the pill: toasts make room for it.
     private var showsChip: Bool {
         let chip = model.isPillAllowed && model.showsChip
-            && (model.visiblePhase.isRecording || model.visiblePhase == .processing)
+            && (model.visiblePhase.isRecording || model.visiblePhase == .processing
+                || model.visiblePhase == .error && model.errorMessage != nil)
         return model.isPresented && (chip || showsKeyHint || showsSelectionHint && model.visiblePhase.isRecording)
     }
 

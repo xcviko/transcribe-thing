@@ -262,6 +262,20 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(model.shortcutHint == "fn")
     }
 
+    /// A word about a key belongs to its dictation: a switch answers it (the chip names the model), and the next
+    /// dictation doesn't find it.
+    @Test func aKeyHintGoesWithASwitchOrTheDictation() {
+        let model = makeModel()
+        model.phase = .listening
+        model.showKeyHint("Polish works on Gemini only")
+        model.flashChip()
+        #expect(model.keyHint == nil)
+        model.showKeyHint("Polish works on Gemini only")
+        model.phase = .rest
+        model.phase = .listening
+        #expect(model.keyHint == nil)
+    }
+
     /// A delivered dictation has no flourish: the pasted text is the confirmation.
     @Test func finishedProcessingGoesStraightBackToRest() {
         let model = makeModel()

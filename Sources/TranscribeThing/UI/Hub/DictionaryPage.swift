@@ -55,7 +55,7 @@ struct DictionaryPage: View {
             }
         }
         // Typing again clears what the last Add said (the field emptied by an Add keeps it).
-        .onChange(of: draft) { if !draft.isEmpty { feedback = tooLong ? Self.refusal(.tooLong) : nil } }
+        .onChange(of: draft) { if !draft.isEmpty { feedback = problem.map(Self.refusal) } }
         // A search left behind when the field goes (words removed below `searchFrom`) would hide the rest.
         .onChange(of: settings.dictionary.words.count) { _, count in
             if count < Self.searchFrom { search = "" }
@@ -77,9 +77,9 @@ struct DictionaryPage: View {
 
     private var canAdd: Bool { UserDictionary.normalized(draft, typed: true) != nil }
 
-    /// Said as soon as it's typed, not only on Add: the button would just grey out.
-    private var tooLong: Bool {
-        if case .failure(.tooLong) = UserDictionary.validated(draft, typed: true) { true } else { false }
+    /// Why the draft can't go in, said as soon as it's typed, not only on Add: the button would just grey out.
+    private var problem: UserDictionary.InvalidReason? {
+        if case .failure(let reason) = UserDictionary.validated(draft, typed: true), reason != .empty { reason } else { nil }
     }
 
     static func refusal(_ reason: UserDictionary.InvalidReason) -> String {

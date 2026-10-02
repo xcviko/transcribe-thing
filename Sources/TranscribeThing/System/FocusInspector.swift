@@ -109,6 +109,8 @@ enum FocusInspector {
             case nothingSelected
             /// The app has no focused element it tells Accessibility about: Chrome and Electron apps, by default.
             case noFocusedElement
+            /// The focused element doesn't say what's selected in it (a terminal, a canvas): something may be.
+            case selectionUnsupported
             case passwordField
             case tooLong
             case timedOut
@@ -119,6 +121,10 @@ enum FocusInspector {
         var text: String?
         var outcome: Outcome
         var app: String?
+
+        /// Whether anything is selected is known: it's `text`, or nothing is (or no app is in front). Otherwise the
+        /// app couldn't say, and there may be a selection a key would type over.
+        var isKnown: Bool { outcome == .found || outcome == .nothingSelected || outcome == .noApp }
     }
 
     /// The text selected in the focused field of the frontmost app, for Polish Selection and the dictionary:
@@ -161,12 +167,22 @@ enum FocusInspector {
         let appElement = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(appElement, timeout)
         var focusedRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
-              let focusedRef, CFGetTypeID(focusedRef) == AXUIElementGetTypeID() else { return (nil, .noFocusedElement) }
+        let focused = AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &focusedRef)
+        // An app that doesn't answer within `timeout` comes back as .cannotComplete.
+        guard focused != .cannotComplete else { return (nil, .timedOut) }
+        guard focused == .success, let focusedRef, CFGetTypeID(focusedRef) == AXUIElementGetTypeID() else {
+            return (nil, .noFocusedElement)
+        }
         let element = unsafeDowncast(focusedRef, to: AXUIElement.self)
         AXUIElementSetMessagingTimeout(element, timeout)
         guard string(element, kAXSubroleAttribute) != kAXSecureTextFieldSubrole else { return (nil, .passwordField) }
-        guard let text = string(element, kAXSelectedTextAttribute),
+        var selectedRef: CFTypeRef?
+        switch AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute as CFString, &selectedRef) {
+        case .success, .noValue: break
+        case .cannotComplete: return (nil, .timedOut)
+        default: return (nil, .selectionUnsupported)
+        }
+        guard let text = selectedRef as? String,
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return (nil, .nothingSelected) }
         guard text.count <= maxSelection else { return (nil, .tooLong) }
         return (text, .found)

@@ -209,6 +209,14 @@ import Testing
         #expect(bindings[.handsFree] == .fn)
     }
 
+    /// Add to dictionary's key is held while the selection is read: a modifier alone can't be.
+    @Test func addToDictionaryNeedsAKey() {
+        let rightCommand = Shortcut(modifiers: [.init(.command, .right)], keyCode: nil)
+        let validation = ShortcutValidator.validate(rightCommand, for: .addToDictionary, bindings: .defaults,
+                                                    system: ShortcutPolicyTests.stock(fnUsage: .doNothing))
+        #expect(validation.errors == ["Add to dictionary needs a key, like fn D."])
+    }
+
     @Test(arguments: ShortcutAction.allCases)
     func defaultsValidateCleanly(_ action: ShortcutAction) throws {
         let shortcut = try #require(ShortcutBindings.defaults[action])

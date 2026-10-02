@@ -42,7 +42,9 @@ struct HotkeyInput: Equatable, Sendable {
 ///   pressed with the PTT or hands-free modifiers still held (fn+Tab while holding fn), and extra modifiers on
 ///   the way to it (⌘ of ⌘⇧M) don't end the hold. Outside a dictation its keys pass through. Held down, its
 ///   autorepeats step on (`cycleEngineRepeat`). Polish's shortcut is live the same way, on any model (the controller
-///   decides what it does there), and held down its autorepeats turn Polish on and off again and again.
+///   decides what it does there), and its autorepeats are `polishRepeat` (on Gemini, Polish on and off again and
+///   again). Add to dictionary's is live too, on any model, always held as `.heldForSelection`: the controller reads
+///   what's selected right then.
 /// - Swallowed keys also have their autorepeats and keyUp swallowed.
 struct HotkeyRouter: Equatable, Sendable {
     struct Config: Equatable, Sendable {
@@ -55,9 +57,6 @@ struct HotkeyRouter: Equatable, Sendable {
         /// Switch model has another model to step to (`ModelLineup.cycle`); without one its shortcut is never
         /// intercepted.
         var switchesModels = true
-        /// Add to dictionary's shortcut is live during a dictation, on any model, always held as `.heldForSelection`:
-        /// the controller reads what's selected right then.
-        var addsToDictionary = false
         /// A hands-free dictation records and Return (with no modifier) finishes it and sends it.
         var returnSends = false
         /// Polish Selection's cards: ↩ (with no modifier) is theirs unless a dictation records, and Esc closes them
@@ -239,15 +238,15 @@ struct HotkeyRouter: Equatable, Sendable {
         }
         if swallowedKeys.contains(physical) {
             decision.swallow = true
-            // The switch model key held down keeps stepping, and the polish key keeps turning Polish on and off, at
-            // every autorepeat.
+            // The switch model key held down keeps stepping, and the polish key keeps turning Polish on and off on
+            // Gemini, at every autorepeat.
             if input.isRepeat, let switchModel = liveSwitchModel(config), switchModel.keyCode == key,
                matchesDuringDictation(switchModel, config.bindings) {
                 decision.events.append(.cycleEngineRepeat)
             } else if input.isRepeat,
                       let polish = liveDuringDictation(config).first(where: { $0.action == .polish }),
                       polish.shortcut.keyCode == key, matchesDuringDictation(polish.shortcut, config.bindings) {
-                decision.events.append(.polish)
+                decision.events.append(.polishRepeat)
             }
             return decision
         }
@@ -257,7 +256,7 @@ struct HotkeyRouter: Equatable, Sendable {
         }
         // A key the user bound themselves (bare Keypad Enter for push-to-talk) stays theirs.
         if config.cardPaste || config.cardClose, modifiers.isEmpty, gesture == .idle,
-           !config.bindings.bindings.values.contains(where: { $0.matches(keyCode: key, modifiers: modifiers) }) {
+           !config.bindings.claims(bareKey: key) {
             if config.cardPaste, !config.isRecording, key == KeyCode.returnKey || key == KeyCode.keypadEnter {
                 consume(physical, into: &decision)
                 if !input.isRepeat { decision.events.append(.cardPaste) }
@@ -272,8 +271,7 @@ struct HotkeyRouter: Equatable, Sendable {
 
         // Hands-free: Return finishes the dictation and sends it, unless it's a key the user bound themselves.
         if config.returnSends, modifiers.isEmpty, gesture == .idle,
-           key == KeyCode.returnKey || key == KeyCode.keypadEnter,
-           !config.bindings.bindings.values.contains(where: { $0.matches(keyCode: key, modifiers: modifiers) }) {
+           key == KeyCode.returnKey || key == KeyCode.keypadEnter, !config.bindings.claims(bareKey: key) {
             consume(physical, into: &decision)
             if !input.isRepeat { decision.events.append(.finishAndSend) }
             return decision
@@ -430,14 +428,14 @@ struct HotkeyRouter: Equatable, Sendable {
     }
 
     /// The bindings live during a dictation only (a held PTT counts): Switch model with another model to switch to,
-    /// and Polish on Gemini.
+    /// Polish, Add to dictionary.
     private func liveDuringDictation(_ config: Config) -> [(action: ShortcutAction, shortcut: Shortcut)] {
         guard config.isRecording || gesture != .idle else { return [] }
         return ShortcutAction.allCases.compactMap { action in
             guard action.isDuringDictation, let shortcut = config.bindings[action] else { return nil }
             if action == .switchModel, !config.switchesModels { return nil }
             // Held, then given back if nothing is selected: only a key can be (a modifier-only binding isn't).
-            if action == .addToDictionary, !config.addsToDictionary || shortcut.isModifierOnly { return nil }
+            if action == .addToDictionary, shortcut.isModifierOnly { return nil }
             return (action, shortcut)
         }
     }

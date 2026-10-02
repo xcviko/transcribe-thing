@@ -101,7 +101,7 @@ enum PillSnapshots {
                             notices: [])
             },
             SnapshotEntry("pill-dictionary-added", width: 640, height: 260) { _ in
-                CanvasScene(model: restModel(), notices: [DictationController.dictionaryCard(added: "Wispr Flow", before: UserDictionary())])
+                CanvasScene(model: restModel(), notices: [DictationController.dictionaryCard(added: "Wispr Flow", before: UserDictionary(), after: UserDictionary(words: ["Wispr Flow"]))])
             },
             SnapshotEntry("pill-selection-polishing", width: 640, height: 150) { _ in
                 CanvasScene(model: selectionModel(.processing, choice: .gemini), notices: [])

@@ -34,8 +34,12 @@ struct DictationMachine: Equatable {
         case polish
         /// Undo of a canceled dictation: record on, hands-free, after `prefix` seconds of kept audio.
         case resume(prefix: TimeInterval)
-        /// Polish Selection took over: the recording goes without a trace (no Undo, no notice, no sound).
+        /// A key took the press over (Polish Selection, fn D in push-to-talk): the recording goes without a sound,
+        /// kept for Undo only if something was said in it (`discardCapture`).
         case discard
+        /// A key the press was for that changes nothing here (fn D, the polish key off Gemini saying why it can't):
+        /// the release isn't a tap, and doesn't finish hands-free.
+        case keyUsed
         case timer(TimerID)
         case captureFailed(AppError), deviceLost
         /// Bookkeeping for `isBusy`.
@@ -54,6 +58,8 @@ struct DictationMachine: Equatable {
         case resumeCapture
         case stopCaptureAndTranscribe(mode: Mode)
         case cancelCapture(keepForUndo: Bool, notify: Bool)
+        /// `Input.discard`: the recording goes, and stays for Undo only if the user had said something in it.
+        case discardCapture
         /// .listening / .locked / .rest (rest or hidden per pill mode).
         case showPill(PillPhase)
         case playSound(SoundEffect)
@@ -130,7 +136,7 @@ struct DictationMachine: Equatable {
             guard isRecording else { return [] }
             capture = .idle
             switchedDuringPress = false
-            return cancelAllTimers + [.cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)]
+            return cancelAllTimers + [.discardCapture, .showPill(.rest)]
         default:
             break
         }
@@ -200,6 +206,9 @@ struct DictationMachine: Equatable {
         case .polish:
             switchedDuringPress = true
             return [.polish]
+        case .keyUsed:
+            switchedDuringPress = true
+            return []
         case .deviceLost:
             capture = .idle
             return [.cancelTimer(.arming), .cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)]
@@ -238,6 +247,9 @@ struct DictationMachine: Equatable {
         case .polish:
             switchedDuringPress = true
             return [.polish]
+        case .keyUsed:
+            switchedDuringPress = true
+            return []
         case .deviceLost:
             capture = .idle
             return [.stopCaptureAndTranscribe(mode: .pushToTalk), .notice(.deviceLostTranscribing)]
@@ -271,8 +283,8 @@ struct DictationMachine: Equatable {
         switch input {
         case .pttUp, .pillStop:
             return finishHandsFree()
-        case .pttInterrupted, .handsFreeToggle:
-            // It was a combo like fn+←, or fn+Space, which does nothing while hands-free: keep recording.
+        case .pttInterrupted, .handsFreeToggle, .keyUsed:
+            // It was a combo like fn+←, fn D, or fn+Space, which does nothing while hands-free: keep recording.
             capture = .locked(startedAt: startedAt)
             return []
         case .cycleEngine:
@@ -280,7 +292,7 @@ struct DictationMachine: Equatable {
             capture = .locked(startedAt: startedAt)
             return [.cycleEngine]
         case .polish:
-            // fn+↩ likewise.
+            // fn P likewise.
             capture = .locked(startedAt: startedAt)
             return [.polish]
         default:

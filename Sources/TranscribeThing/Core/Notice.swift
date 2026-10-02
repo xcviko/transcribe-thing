@@ -27,8 +27,9 @@ enum NoticeActionKind: Sendable, Equatable {
     /// Undo a cancel: the dictation picks up again hands-free, its kept audio first.
     case undoCancel
     case copyText(String)
-    /// Undo of fn D: the dictionary as it was before (a spelling it replaced, or a word it pushed out, comes back).
-    case restoreDictionary(UserDictionary)
+    /// Undo of fn D adding `word`, the dictionary going from `before` to `after`: the word goes, and a spelling it
+    /// replaced or a word it pushed out comes back (`UserDictionary.undoAdding`).
+    case undoDictionaryAdd(String, before: UserDictionary, after: UserDictionary)
     /// The text and the model that wrote it, whose General → Pasting rules the paste follows (nil: as written).
     case pasteText(String, by: ModelChoice?)
     case chooseMicrophone

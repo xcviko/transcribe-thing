@@ -180,6 +180,8 @@ final class PillModel {
             errorMessage = nil
             errorModel = nil
         }
+        // The word about a key belongs to the dictation it was pressed in.
+        if !target.isRecording { clearKeyHint() }
         visiblePhase = target
         if !target.isIdle { showsTooltip = false }
         if !target.isRecording { setHoveredControl(nil) }
@@ -353,8 +355,15 @@ final class PillModel {
         if autoSettles { keyHintTask = delayed(timing.keyHintHold) { $0.keyHint = nil } }
     }
 
-    /// Shows the chip for `timing.chipHold`; a switch meanwhile starts it over.
+    private func clearKeyHint() {
+        keyHintTask?.cancel()
+        if keyHint != nil { keyHint = nil }
+    }
+
+    /// Shows the chip for `timing.chipHold`; a switch meanwhile starts it over, and answers a word about a key
+    /// ("Polish works on Gemini only", then fn ⇥ onto Gemini).
     func flashChip() {
+        clearKeyHint()
         chipTask?.cancel()
         isChipFlashing = true
         if autoSettles { chipTask = delayed(timing.chipHold) { $0.endChipFlash() } }

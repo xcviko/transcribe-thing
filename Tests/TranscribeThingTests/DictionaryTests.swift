@@ -11,7 +11,8 @@ import Testing
     @Test(arguments: [("Wispr,", "Wispr"), ("  «Flow»\n", "Flow"), ("Gemini  3.8\tFlash.", "Gemini 3.8 Flash"),
                       ("(GPT-6 Luna).", "GPT-6 Luna"), ("Мелания Трамп!", "Мелания Трамп"), (".NET", ".NET"),
                       ("U.S.", "U.S."), ("Ph.D.", "Ph.D."), ("f(x)", "f(x)"), ("Ubuntu (LTS)", "Ubuntu (LTS)"),
-                      ("LTS)", "LTS"), ("“Node.js”.", "Node.js")])
+                      ("LTS)", "LTS"), ("“Node.js”.", "Node.js"), ("(a) and (b)", "(a) and (b)"),
+                      ("((nested))", "nested")])
     func aSelectionBecomesTheWord(_ selected: String, _ word: String) {
         #expect(UserDictionary.normalized(selected) == word)
     }
@@ -51,6 +52,26 @@ import Testing
         let dictionary = UserDictionary(words: (0...UserDictionary.maxCount).map { "word\($0)" })
         #expect(dictionary.words.count == UserDictionary.maxCount)
         #expect(dictionary.words.first == "word1")
+    }
+
+    /// Undo of an add takes back only that add: the spelling it replaced and the words it pushed out come back where
+    /// they were, and what changed since stays.
+    @Test func undoingAnAddKeepsWhatChangedSince() {
+        let before = UserDictionary(words: ["Wispr", "Kubernetes", "Gemini"])
+        var dictionary = before
+        dictionary.add("WISPR")
+        let after = dictionary
+        dictionary.remove("Gemini")
+        dictionary.add("New one")
+        dictionary.undoAdding("WISPR", before: before, after: after)
+        #expect(dictionary.words == ["Wispr", "Kubernetes", "New one"])
+
+        let full = UserDictionary(words: (0..<UserDictionary.maxCount).map { "word\($0)" })
+        var more = full
+        more.add("One more")
+        let added = more
+        more.undoAdding("One more", before: full, after: added)
+        #expect(more == full, "the oldest word it pushed out comes back first")
     }
 
     @Test func itStoresAsAListAndReadsLeniently() throws {
@@ -145,6 +166,9 @@ import Testing
         rig.h.controller.start()
         rig.h.controller.playCueOverride = { cues.played.append($0) }
         rig.h.controller.selectionOverride = { selection }
+        // A hold that's only the way to the key: nothing said in it.
+        rig.h.recorder.next = Recording(samples: Array(repeating: 0.01, count: 8_000),
+                                        speech: SpeechStats(voicedSeconds: 0.2, peakDBFS: -40, isSilent: false))
         return (rig, cues)
     }
 
@@ -159,7 +183,7 @@ import Testing
         Switch.hold(rig)
         try await waitUntil { rig.h.pill.selectionHint == .shown }
         #expect(rig.h.pill.selectionOffer == PillSelectionOffer(polish: true, dictionary: true))
-        #expect(rig.h.controller.polishesSelection && rig.h.hotkeys.currentConfig().addsToDictionary)
+        #expect(rig.h.controller.polishesSelection)
         rig.h.controller.send(.pillCancel)
     }
 
@@ -173,7 +197,8 @@ import Testing
         #expect(rig.notice("dictation.canceled") == nil)
         let card = try #require(rig.notice(DictationController.dictionaryCardKey))
         #expect(card.title == "Added to your dictionary")
-        try rig.click(.restoreDictionary(UserDictionary()), in: DictationController.dictionaryCardKey)
+        try rig.click(.undoDictionaryAdd("Wispr Flow", before: UserDictionary(), after: UserDictionary(words: ["Wispr Flow"])),
+                      in: DictationController.dictionaryCardKey)
         #expect(rig.h.settings.dictionary.words.isEmpty)
     }
 
@@ -186,7 +211,9 @@ import Testing
         try await waitUntil { rig.h.settings.dictionary.words == ["WISPR"] }
         let card = try #require(rig.notice(DictationController.dictionaryCardKey))
         #expect(card.body?.contains("replaces “Wispr”") == true)
-        try rig.click(.restoreDictionary(UserDictionary(words: ["Wispr"])), in: DictationController.dictionaryCardKey)
+        try rig.click(.undoDictionaryAdd("WISPR", before: UserDictionary(words: ["Wispr"]),
+                                         after: UserDictionary(words: ["WISPR"])),
+                      in: DictationController.dictionaryCardKey)
         #expect(rig.h.settings.dictionary.words == ["Wispr"])
     }
 
@@ -195,8 +222,8 @@ import Testing
         rig.h.settings.dictionary.add("Wispr Flow")
         Switch.hold(rig)
         Self.pressD(rig)
-        try await waitUntil { rig.notice(DictationController.dictionaryCardKey) != nil }
-        #expect(rig.notice(DictationController.dictionaryCardKey)?.title == "Already in your dictionary")
+        try await waitUntil { rig.notice(DictationController.dictionaryNoteKey) != nil }
+        #expect(rig.notice(DictationController.dictionaryNoteKey)?.title == "Already in your dictionary")
         #expect(rig.h.settings.dictionary.words == ["Wispr Flow"])
     }
 
@@ -204,8 +231,8 @@ import Testing
         let (rig, _) = Self.make(selection: "First line.\nSecond line.")
         Switch.hold(rig)
         Self.pressD(rig)
-        try await waitUntil { rig.notice(DictationController.dictionaryCardKey) != nil }
-        let card = try #require(rig.notice(DictationController.dictionaryCardKey))
+        try await waitUntil { rig.notice(DictationController.dictionaryNoteKey) != nil }
+        let card = try #require(rig.notice(DictationController.dictionaryNoteKey))
         #expect(card.title == "Select a word or a name" && card.body == DictationController.dictionaryRefusal(.lines))
         #expect(rig.h.settings.dictionary.words.isEmpty)
     }
@@ -225,7 +252,7 @@ import Testing
         c.send(.pillCancel)
     }
 
-    /// On Gemini fn ↩ is Polish's, but fn D still adds.
+    /// On Gemini fn P is Polish's, but fn D still adds.
     @Test func fnDWorksOnGemini() async throws {
         let (rig, _) = Self.make()
         rig.h.settings.lineup.main = .gemini
@@ -239,7 +266,6 @@ import Testing
     /// Without an OpenRouter key Polish Selection isn't offered, but the dictionary is.
     @Test func fnDWorksWithoutAKey() async throws {
         let (rig, _) = Self.make(key: .missing)
-        #expect(rig.h.hotkeys.currentConfig().addsToDictionary)
         Switch.hold(rig)
         try await waitUntil { rig.h.pill.selectionHint == .shown }
         #expect(rig.h.pill.selectionOffer == PillSelectionOffer(polish: false, dictionary: true))
@@ -260,6 +286,77 @@ import Testing
         Self.pressD(rig)
         try await waitUntil { rig.h.settings.dictionary.words == ["Kubernetes"] }
         #expect(rig.h.controller.machine.capture.isListeningOrLocked)
+        rig.h.controller.send(.pillCancel)
+    }
+
+    /// In hands-free fn D comes with a press of fn: fn's release after it doesn't finish the dictation, even when it
+    /// comes before the lookup has answered.
+    @Test func inHandsFreeLettingGoOfFnAfterFnDRecordsOn() async throws {
+        let (rig, _) = Self.make()
+        let c = rig.h.controller
+        c.send(.handsFreeToggle)
+        c.handle(.pttDown)
+        Self.pressD(rig)
+        c.handle(.pttUp)
+        try await waitUntil { rig.h.settings.dictionary.words == ["Wispr Flow"] }
+        #expect(c.machine.capture.isListeningOrLocked && rig.transcribed.isEmpty)
+        c.handle(.pttDown)
+        Self.pressD(rig)
+        try await waitUntil { rig.notice(DictationController.dictionaryNoteKey) != nil }
+        c.handle(.pttUp)
+        #expect(c.machine.capture.isListeningOrLocked, "already there: the same")
+        #expect(rig.notice(DictationController.dictionaryCardKey) != nil, "the Added card keeps its Undo")
+        c.send(.pillCancel)
+    }
+
+    /// Where the app can't say what's selected (Chrome, Electron), fn D isn't typed over what may be selected: a card
+    /// says why nothing happened, and the hold ends as any other key would end it.
+    @Test func fnDWhereTheSelectionCantBeReadIsntTyped() async throws {
+        let (rig, _) = Self.make(selection: nil)
+        rig.h.controller.selectionMissingOverride = .noFocusedElement
+        var replayed: [KeyStroke] = []
+        rig.h.controller.replayKeyOverride = { replayed.append($0) }
+        rig.h.controller.handle(.pttDown)
+        Self.pressD(rig)
+        try await waitUntil { rig.notice(DictationController.dictionaryNoteKey) != nil }
+        #expect(rig.notice(DictationController.dictionaryNoteKey)?.title == "Can’t read the selection here")
+        #expect(replayed.isEmpty && rig.h.settings.dictionary.words.isEmpty && !rig.h.controller.machine.isRecording)
+    }
+
+    /// Another word selected and fn D again, fn still down after the first took the dictation over: it goes in too.
+    @Test func aSecondFnDInTheSamePressAddsToo() async throws {
+        let (rig, _) = Self.make()
+        var current = "Wispr Flow"
+        rig.h.controller.selectionOverride = { current }
+        Switch.hold(rig)
+        Self.pressD(rig)
+        try await waitUntil { rig.h.settings.dictionary.words == ["Wispr Flow"] }
+        current = "Kubernetes"
+        Self.pressD(rig)
+        try await waitUntil { rig.h.settings.dictionary.words == ["Wispr Flow", "Kubernetes"] }
+        rig.h.controller.handle(.pttUp)
+        Self.pressD(rig)
+        try await Task.sleep(for: .milliseconds(40))
+        #expect(rig.h.settings.dictionary.words.count == 2, "fn let go: the press is over")
+    }
+
+    /// A push-to-talk dictation the user had spoken in stays for Undo when fn D takes it over.
+    @Test func whatWasSaidBeforeFnDStaysForUndo() async throws {
+        let (rig, _) = Self.make()
+        rig.h.recorder.next = DictationResumeTests.speech(seconds: 3)
+        Switch.hold(rig)
+        rig.now += 3
+        Self.pressD(rig)
+        try await waitUntil { rig.h.settings.dictionary.words == ["Wispr Flow"] }
+        #expect(rig.notice("dictation.canceled") != nil && rig.transcribed.isEmpty)
+    }
+
+    /// The hint offers the dictionary only for what could go in.
+    @Test func aParagraphIsntOfferedToTheDictionary() async throws {
+        let (rig, _) = Self.make(selection: "First line.\nSecond line.")
+        Switch.hold(rig)
+        try await waitUntil { rig.h.pill.selectionHint == .shown }
+        #expect(rig.h.pill.selectionOffer == PillSelectionOffer(polish: true, dictionary: false))
         rig.h.controller.send(.pillCancel)
     }
 
@@ -287,6 +384,7 @@ import Testing
         Self.pressD(rig)
         lookup.isOpen = true
         try await waitUntil { replayed.count == 1 }
-        #expect(replayed == [Self.d] && rig.h.pill.keyHint == "Polish works on Gemini, or on selected text")
+        #expect(replayed == [Self.d] && !rig.h.controller.machine.isRecording)
+        #expect(rig.h.pill.keyHint == nil, "the word about fn P went with the dictation")
     }
 }

@@ -354,6 +354,12 @@ struct ShortcutBindings: Codable, Equatable, Sendable {
         set { bindings[action] = newValue }
     }
 
+    /// The user bound this key on its own (bare Return for push-to-talk, say): the app's own uses of it (Return
+    /// sending a hands-free dictation, a card's Return and Esc) leave it alone.
+    func claims(bareKey keyCode: UInt16) -> Bool {
+        bindings.values.contains { $0.matches(keyCode: keyCode, modifiers: ModifierSnapshot()) }
+    }
+
     /// First other action (in declaration order) whose shortcut some key press would trigger together with
     /// this one (⌥ and Right ⌥ clash as much as two identical shortcuts do).
     func conflict(for shortcut: Shortcut, excluding: ShortcutAction) -> ShortcutAction? {
@@ -742,6 +748,11 @@ enum ShortcutValidator {
         var v = ShortcutValidation()
         if s.isEmpty {
             v.errors.append("Press a key or a key combination.")
+            return v
+        }
+        if action == .addToDictionary, s.isModifierOnly {
+            // The key is held while the selection is read, and modifiers can't be held back from the app.
+            v.errors.append("Add to dictionary needs a key, like fn D.")
             return v
         }
         v.warnings = warnings(for: s, action: action, system: system)
