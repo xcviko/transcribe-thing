@@ -1986,6 +1986,7 @@ final class DictationController {
         selectionTask = Task { [weak self] in
             let text = if let override { await override() } else { await FocusInspector.selectedText() }
             guard let self, !Task.isCancelled, self.machine.isRecording, let text else { return }
+            DiagnosticLog.shared.event(.dictation, "selection.found", ["characters": text.count])
             self.selection = text
             self.updateSelectionHint(announce: true)
         }
@@ -2017,6 +2018,7 @@ final class DictationController {
         let work = SelectionPolish(model: model,
                                    estimate: TokenEstimate.learned(from: history.entries, modelID: model.route.model))
         selectionPolish = work
+        DiagnosticLog.shared.event(.dictation, "selection.polish", ["model": model.rawValue, "characters": text.count])
         pillModel.selectionHint = .handoff
         playCue(.cancel)
         send(.discard)
@@ -2066,6 +2068,9 @@ final class DictationController {
                 selectionFailed(reason: "\(work.model.modelName) returned no text.")
                 break
             }
+            DiagnosticLog.shared.event(.dictation, "selection.finished", [
+                "model": work.model.rawValue, "outcome": "success", "seconds": result.processingTime,
+                "words": message.split(whereSeparator: \.isWhitespace).count])
             let version = result.version(.selection(work.model), text: message)
             let entry = TranscriptEntry(engine: .geminiFlash, audioDuration: 0, voicedSeconds: 0, versions: [version])
             history.upsert(entry)
@@ -2073,6 +2078,8 @@ final class DictationController {
             toasts.post(Self.selectionCard(message))
         case .failure(let error):
             Log.engine.error("Polish Selection failed: \(error.code, privacy: .public)")
+            DiagnosticLog.shared.event(.dictation, "selection.finished",
+                                       ["model": work.model.rawValue, "outcome": "failure", "code": error.code])
             let reason = work.model == .gpt6Luna ? Self.cleanupFailureReason(error, model: .gpt6Luna)
                 : Self.homeFailureReason(error, making: .selection(work.model))
             selectionFailed(reason: reason)

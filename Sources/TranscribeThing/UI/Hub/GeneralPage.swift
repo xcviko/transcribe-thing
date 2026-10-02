@@ -115,13 +115,13 @@ struct GeneralPage: View {
                     }
                 }
             }
-            HubGroup("About") {
-                AboutCard()
-            }
             HubGroup("Troubleshooting") {
                 SettingsGroup {
                     LogsRow()
                 }
+            }
+            HubGroup("About") {
+                AboutCard()
             }
         }
         // Approval in Login Items (or removal there) happens outside transcribe-thing.
