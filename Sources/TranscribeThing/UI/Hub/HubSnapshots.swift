@@ -176,6 +176,8 @@ enum HubSnapshots {
             },
 
             hub("hub-general", .general, height: 1080),
+            // The whole page, down to Troubleshooting's Export Logs….
+            hub("hub-general-full", .general, height: 1360),
             // The narrowest window: the segmented control leaves the least room for the pill caption; sounds off.
             hub("hub-general-compact", .general, width: 820, height: 560) { c in
                 c.settings.pillMode = .always

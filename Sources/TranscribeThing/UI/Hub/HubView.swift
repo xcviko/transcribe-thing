@@ -22,6 +22,8 @@ final class HubContext: Observable {
     let dictation: DictationController
     let toasts: ToastCenter
     let paths: AppPaths
+    /// General → Troubleshooting's Export Logs….
+    let diagnostics: DiagnosticsCenter
     let isPreview: Bool
     /// Stand-in traffic lights so snapshots read like the real window.
     var drawsWindowControls = false
@@ -54,6 +56,7 @@ final class HubContext: Observable {
         dictation = env.dictation
         toasts = env.toasts
         paths = env.paths
+        diagnostics = env.diagnostics
         isPreview = env.isPreview
         firstName = HubGreeting.firstName(fullName: NSFullUserName(), accountName: NSUserName())
     }

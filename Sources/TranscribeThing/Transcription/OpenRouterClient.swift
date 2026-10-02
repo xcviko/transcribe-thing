@@ -65,6 +65,8 @@ struct ConnectionWatch: Sendable {
             try Task.checkCancellation()
             guard reachable else {
                 Log.net.info("OpenRouter can't be reached after \(activity.silence.components.seconds) s without a byte")
+                DiagnosticLog.shared.event(.net, "openrouter.unreachable",
+                                           ["silence": Int(activity.silence.components.seconds)])
                 throw OpenRouterClient.AttemptFailure(error: .offline, retryable: false, retryAfter: nil)
             }
         }
@@ -378,6 +380,9 @@ final class OpenRouterClient: Sendable {
             if stream.hasOutput {
                 let seconds = TranscriptionService.seconds(started.duration(to: .now))
                 Log.net.error("OpenRouter stream broke off after \(seconds, format: .fixed(precision: 1)) s (\(failure.error.code, privacy: .public), URLError \(error.code.rawValue)): \(stream.failureSummary, privacy: .public)")
+                DiagnosticLog.shared.event(.net, "openrouter.streamBrokeOff", [
+                    "engine": engine, "seconds": seconds, "code": failure.error, "urlError": error.code.rawValue,
+                    "summary": stream.failureSummary])
             }
             // A connection lost mid-answer isn't sent again: what the model already did would be paid for twice.
             if stream.hasOutput || started.duration(to: .now) >= Self.quickFailureWindow { failure.retryable = false }
@@ -394,6 +399,8 @@ final class OpenRouterClient: Sendable {
             let quick = started.duration(to: .now) < Self.quickFailureWindow
             let seconds = TranscriptionService.seconds(started.duration(to: .now))
             Log.net.error("OpenRouter stream failed after \(seconds, format: .fixed(precision: 1)) s (\(error.code, privacy: .public)): \(stream.failureSummary, privacy: .public)")
+            DiagnosticLog.shared.event(.net, "openrouter.streamFailed", [
+                "engine": engine, "seconds": seconds, "code": error, "summary": stream.failureSummary])
             throw AttemptFailure(error: error, retryable: quick && !stream.hasOutput && error.isTransientCloudFailure,
                                  retryAfter: nil)
         }
@@ -434,6 +441,8 @@ final class OpenRouterClient: Sendable {
                 let wait = failure.retryAfter ?? retryDelay
                 guard failure.retryable, number < 2, wait <= Self.maxRetryWait else { throw failure.error }
                 Log.net.info("OpenRouter attempt \(number) failed (\(failure.error.code, privacy: .public)); retrying in \(wait, format: .fixed(precision: 1)) s")
+                DiagnosticLog.shared.event(.net, "openrouter.retry",
+                                           ["attempt": number, "code": failure.error, "wait": wait])
                 try await Task.sleep(for: .seconds(wait))
                 number += 1
             }
@@ -453,6 +462,8 @@ final class OpenRouterClient: Sendable {
         let said = (try? JSONDecoder().decode(OpenRouterErrorEnvelope.self, from: body))?.error.logSummary
             ?? String(decoding: body.prefix(1000), as: UTF8.self).split(whereSeparator: \.isNewline).joined(separator: " ")
         Log.net.error("OpenRouter HTTP \(http.statusCode) from \(server, privacy: .public) (\(error.code, privacy: .public)): \(said, privacy: .public)")
+        DiagnosticLog.shared.event(.net, "openrouter.http", [
+            "engine": engine, "status": http.statusCode, "server": server, "code": error, "said": said])
         // A firewall's no never reached OpenRouter: nothing was billed, and its verdict can change a moment later.
         let retryable = (retryableStatuses.contains(http.statusCode) && error.isTransientCloudFailure)
             || error == .connectionBlocked

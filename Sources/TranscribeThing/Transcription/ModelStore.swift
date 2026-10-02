@@ -170,6 +170,7 @@ final class ModelStore {
         downloadTokens[id] = token
         lastErrors[id] = nil
         states[id] = .downloading(DownloadProgress(fraction: 0, totalBytes: id.approxDownloadBytes ?? 0))
+        DiagnosticLog.shared.event(.models, "download.started", ["model": id])
         downloadTasks[id] = Task { [weak self] in
             // A just-cancelled download must fully unwind before the next one touches the same files.
             await previous?.value
@@ -211,6 +212,8 @@ final class ModelStore {
         let available = freeDiskBytes()
         guard isCurrent() else { return settleCancelledDownload(id, engine: engine, token: token) }
         if available < needed {
+            DiagnosticLog.shared.event(.models, "download.failed", [
+                "model": id, "code": "notEnoughDisk", "needed": Int(needed), "free": Int(available)])
             let error = AppError.notEnoughDisk(needed: needed, available: available)
             fail(id, error, message: "Not enough space. \(id.shortName) needs \(Fmt.bytes(needed)); \(Fmt.bytes(available)) is free.")
             return
@@ -231,6 +234,7 @@ final class ModelStore {
             lastErrors[id] = nil
             await refreshDiskUsage()
             Log.engine.info("Downloaded \(id.rawValue, privacy: .public)")
+            DiagnosticLog.shared.event(.models, "download.finished", ["model": id, "bytes": Int(total)])
             if pendingSelection == id {
                 pendingSelection = nil
                 settings.parakeetEngine = id
@@ -245,6 +249,8 @@ final class ModelStore {
             } else {
                 let detail = Self.describeDownloadFailure(error)
                 Log.engine.error("Download of \(id.rawValue, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+                DiagnosticLog.shared.event(.models, "download.failed",
+                                           ["model": id, "error": DiagnosticErrorCode(error)])
                 fail(id, .downloadFailed(id, detail), message: "Download didn’t finish. \(detail)")
             }
             await refreshDiskUsage()
@@ -376,9 +382,12 @@ final class ModelStore {
             lastErrors[id] = nil
             lastLoadDurations[id] = duration
             Log.engine.info("Loaded \(id.rawValue, privacy: .public) in \(duration, format: .fixed(precision: 2), privacy: .public) s")
+            DiagnosticLog.shared.event(.models, "load.finished", ["model": id, "seconds": duration])
         case .failure(let error):
             Log.engine.error("Load of \(id.rawValue, privacy: .public) failed: \(String(describing: error), privacy: .public)")
             let detail = Self.oneLine(error)
+            DiagnosticLog.shared.event(.models, "load.failed", [
+                "model": id, "seconds": duration, "error": DiagnosticErrorCode(error), "detail": detail])
             // Model libraries skip files that already exist, so Retry can't repair a damaged install.
             fail(id, .modelLoadFailed(id, detail),
                  message: "Couldn’t load the model. Retry, or download it again.")

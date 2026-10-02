@@ -28,6 +28,8 @@ final class AppEnvironment {
     let updates: UpdateCenter
     let windows: WindowCoordinator
     let menuBar: MenuBarController
+    /// The diagnostic log's launch, settings, permissions and microphone lines, and Export Logs….
+    let diagnostics: DiagnosticsCenter
     /// Preview environments never start services.
     let isPreview: Bool
 
@@ -69,6 +71,8 @@ final class AppEnvironment {
         self.windows = windows
         self.menuBar = menuBar
         self.isPreview = isPreview
+        diagnostics = DiagnosticsCenter(log: .shared, settings: settings, keyStore: keyStore, account: account,
+                                        permissions: permissions, devices: devices)
         windows.environment = self
         menuBar.environment = self
         wire()
@@ -183,9 +187,12 @@ final class AppEnvironment {
         } catch {
             Log.app.error("Couldn't create app folders: \(error.localizedDescription, privacy: .public)")
         }
+        diagnostics.log.start(directory: paths.logs)
         // Before anything reads the key. Older builds kept it in the login keychain; reading it there may ask for the
         // keychain password, a last time.
         KeychainMigration.run(into: keyStore, from: .live, settings: settings)
+        // After the migration, so the settings line knows whether a key is saved.
+        diagnostics.start()
         history.load()
         devices.start()
         permissions.refresh()
@@ -197,6 +204,7 @@ final class AppEnvironment {
         dictation.start()
         permissions.onAccessibilityGranted = { [weak self] in self?.startHotkeys() }
         hotkeys.onTapAvailabilityChanged = { [weak self] available in
+            DiagnosticLog.shared.event(.hotkeys, "tap.changed", ["available": available])
             if !available { self?.permissions.pollInBackground() }
             self?.dictation.shortcutAvailabilityChanged(available)
         }
@@ -230,6 +238,7 @@ final class AppEnvironment {
 
     /// Called at quit: persist what's pending and release the event tap.
     func stop() {
+        diagnostics.stop()
         history.flush()
         inserter.flushPendingRestore()
         hotkeys.stop()
@@ -251,8 +260,10 @@ final class AppEnvironment {
         // At launch no availability callback fires, so the result is passed on here.
         if hotkeys.start() {
             Log.app.info("Hotkeys active")
+            DiagnosticLog.shared.event(.hotkeys, "tap.started", ["available": true])
             dictation.shortcutAvailabilityChanged(true)
         } else {
+            DiagnosticLog.shared.event(.hotkeys, "tap.started", ["available": false])
             permissions.pollInBackground()
             dictation.shortcutAvailabilityChanged(false)
         }

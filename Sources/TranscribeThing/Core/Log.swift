@@ -10,4 +10,6 @@ enum Log {
     static let engine = Logger(subsystem: subsystem, category: "engine")
     static let net = Logger(subsystem: subsystem, category: "net")
     static let ui = Logger(subsystem: subsystem, category: "ui")
+    /// Every line of the diagnostic log (`DiagnosticLog`), as its file has it.
+    static let diagnostics = Logger(subsystem: subsystem, category: "diagnostics")
 }
