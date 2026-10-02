@@ -57,8 +57,10 @@ struct HotkeyRouter: Equatable, Sendable {
         /// The dictation (or the one a held PTT starts) is on Gemini, the only model that polishes: without it Polish's
         /// shortcut is never intercepted, and fn ↩ reaches the app as it did before Polish.
         var polishes = true
-        /// Polish Selection's card is up: ↩ (with no modifier) pastes it, and Esc closes it unless a dictation is busy.
-        var cardKeys = false
+        /// Polish Selection's cards: ↩ (with no modifier) pastes the only one, and Esc closes them unless a dictation
+        /// is busy.
+        var cardPaste = false
+        var cardClose = false
         /// While the shortcut recorder captures keys: nothing fires and nothing is swallowed.
         var isSuspended = false
         /// Forward raw key transitions (onboarding keyboard illustration).
@@ -249,13 +251,13 @@ struct HotkeyRouter: Equatable, Sendable {
             endGestureForSuspension(&decision)
             return decision
         }
-        if config.cardKeys, modifiers.isEmpty, gesture == .idle {
-            if !config.isRecording, key == KeyCode.returnKey || key == KeyCode.keypadEnter {
+        if config.cardPaste || config.cardClose, modifiers.isEmpty, gesture == .idle {
+            if config.cardPaste, !config.isRecording, key == KeyCode.returnKey || key == KeyCode.keypadEnter {
                 consume(physical, into: &decision)
                 if !input.isRepeat { decision.events.append(.cardPaste) }
                 return decision
             }
-            if !isBusy(config), key == KeyCode.escape {
+            if config.cardClose, !isBusy(config), key == KeyCode.escape {
                 consume(physical, into: &decision)
                 if !input.isRepeat { decision.events.append(.cardClose) }
                 return decision

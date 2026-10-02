@@ -71,7 +71,8 @@ struct ToastStack: View {
         VStack(spacing: ToastMetrics.gap) {
             ForEach(center.notices, id: \.dedupeKey) { notice in
                 let isOlder = notice.dedupeKey != newestKey
-                let dimmed = isOlder && !center.isPaused
+                // Polish Selection's cards are answers to compare: neither recedes.
+                let dimmed = isOlder && !center.isPaused && !notice.takesCardKeys
                 ToastCard(notice: notice, center: center, pasteShortcut: pasteShortcut, isDimmed: dimmed,
                           width: stackWidth)
                     .scaleEffect(dimmed ? 0.96 : 1, anchor: .bottom)
@@ -313,19 +314,23 @@ struct ToastCard: View {
         .accessibilityLabel(copied ? "Copied" : action.title)
     }
 
-    /// "[return] pastes · [esc] closes": the card's own keys while it's up.
+    /// "[return] pastes · [esc] closes": the card's own keys while it's up. Next to another such card ↩ couldn't tell
+    /// which to paste: "[esc] closes both".
     private var cardKeysHint: some View {
-        HStack(spacing: 5) {
-            ShortcutChips(shortcut: Shortcut(modifiers: [], keyCode: KeyCode.returnKey), size: .small)
-            Text("pastes")
-            Text("·").foregroundStyle(.inkTertiary.opacity(0.6))
+        let together = center.notices.filter(\.takesCardKeys).count > 1
+        return HStack(spacing: 5) {
+            if !together {
+                ShortcutChips(shortcut: Shortcut(modifiers: [], keyCode: KeyCode.returnKey), size: .small)
+                Text("pastes")
+                Text("·").foregroundStyle(.inkTertiary.opacity(0.6))
+            }
             ShortcutChips(shortcut: Shortcut(modifiers: [], keyCode: KeyCode.escape), size: .small)
-            Text("closes")
+            Text(together ? "closes both" : "closes")
         }
         .font(.system(size: 11, weight: .medium))
         .foregroundStyle(.inkTertiary)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Return pastes, Escape closes")
+        .accessibilityLabel(together ? "Escape closes both" : "Return pastes, Escape closes")
     }
 
     private var pasteHint: some View {

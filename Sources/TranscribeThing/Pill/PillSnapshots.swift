@@ -98,9 +98,15 @@ enum PillSnapshots {
                 CanvasScene(model: selectionModel(.processing, choice: .gemini)
                     .previewCounter(PillTokenCount(phase: .thinking, tokens: 420)), notices: [])
             },
-            SnapshotEntry("pill-selection-card", width: 640, height: 340) { _ in
-                CanvasScene(model: restModel(), notices: [DictationController.selectionCard(
-                    "Прикинь, сегодня новые дорожки поставили - впервые с 22 года все заменили.\n\nТам есть фича: прислоняешь часы, они по NFC договариваются друг с другом, и дорожка получает инфу о пульсе и калориях, а часы - о дистанции, скорости и т. д.\n\nЗавтра схожу ещё раз и проверю, как оно с тренировкой на интервалы.")])
+            SnapshotEntry("pill-selection-card", width: 640, height: 640) { _ in
+                CanvasScene(model: restModel(), notices: [
+                    DictationController.selectionCard(
+                        "Прикинь, сегодня поставили новые дорожки, впервые с 22 года. Прислоняешь часы, они по NFC обмениваются пульсом, калориями и дистанцией.",
+                        by: .gpt6Luna),
+                    DictationController.selectionCard(
+                        "Прикинь, сегодня новые дорожки поставили - впервые с 22 года все заменили.\n\nТам есть фича: прислоняешь часы, они по NFC договариваются друг с другом, и дорожка получает инфу о пульсе и калориях, а часы - о дистанции, скорости и т. д.\n\nЗавтра схожу ещё раз и проверю, как оно с тренировкой на интервалы.",
+                        by: .geminiFlash),
+                ])
             },
             SnapshotEntry("pill-models-hint-custom", width: 640, height: 150) { _ in
                 CanvasScene(model: hintModel(binding: Shortcut(modifiers: [.init(.control), .init(.option)],

@@ -340,7 +340,7 @@ struct HistoryRow: View, Equatable {
         if entry.status == .success && !isEmptySuccess {
             Button("Copy") { hub.copy(entry.text) }
         }
-        if !entry.isSelection {
+        if !entry.isSelection || entry.versions.count > 1 {
             Menu(VersionsMenu.title(for: entry)) {
                 VersionsMenuItems(entry: entry)
             }

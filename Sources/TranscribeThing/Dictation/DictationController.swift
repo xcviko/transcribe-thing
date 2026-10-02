@@ -284,7 +284,7 @@ final class DictationController {
                 send(.polish)
             }
         case .cardPaste: pasteSelectionCard()
-        case .cardClose: toasts.dismiss(dedupeKey: Self.selectionCardKey)
+        case .cardClose: settleSelection()
         }
     }
 
@@ -1272,10 +1272,14 @@ final class DictationController {
         switch action.kind {
         case .copyText(let text):
             copy(text)
-            if notice.dedupeKey == Self.selectionCardKey { playCue(.paste) }
+            if let model = Self.selectionModel(ofCard: notice) {
+                playCue(.paste)
+                selectionPicked(model, pasted: false)
+            }
             return
         case .pasteText(let text):
             toasts.dismiss(notice.id)
+            if let model = Self.selectionModel(ofCard: notice) { selectionPicked(model, pasted: true) }
             Task { [weak self] in
                 guard let self else { return }
                 let outcome: InsertionOutcome
@@ -1956,19 +1960,38 @@ final class DictationController {
 
     // MARK: - Polish Selection
 
-    /// Polish Selection's card, by its dedupe key: ↩ and Esc work on it while it's up.
-    nonisolated static let selectionCardKey = "polish.selection"
+    /// Polish Selection's cards, one per model, by their dedupe keys: "polish.selection.geminiFlash".
+    nonisolated static let selectionCardPrefix = "polish.selection."
 
-    /// Polish Selection under way: its model, and how far its answer has streamed, for the pill.
+    nonisolated static func selectionCardKey(_ model: PolishSelectionModel) -> String {
+        selectionCardPrefix + model.rawValue
+    }
+
+    /// The model of a Polish Selection card; nil for any other notice.
+    nonisolated static func selectionModel(ofCard notice: Notice) -> PolishSelectionModel? {
+        guard notice.dedupeKey.hasPrefix(selectionCardPrefix) else { return nil }
+        return PolishSelectionModel(rawValue: String(notice.dedupeKey.dropFirst(selectionCardPrefix.count)))
+    }
+
+    /// Polish Selection: both models asked at once, how far each has streamed, and the History entry their answers
+    /// land in. `settled` once an answer is pasted or the cards are closed: what comes after is dropped.
     final class SelectionPolish {
-        let model: PolishSelectionModel
-        let estimate: TokenEstimate
-        var count: PillTokenCount?
+        var pending: Set<PolishSelectionModel>
+        let estimates: [PolishSelectionModel: TokenEstimate]
+        var counts: [PolishSelectionModel: PillTokenCount] = [:]
+        var tasks: [Task<Void, Never>] = []
+        var entryID: UUID?
+        var settled = false
 
-        init(model: PolishSelectionModel, estimate: TokenEstimate) {
-            self.model = model
-            self.estimate = estimate
+        init(estimates: [PolishSelectionModel: TokenEstimate]) {
+            self.pending = Set(estimates.keys)
+            self.estimates = estimates
         }
+
+        /// The pill shows the polish while a model still writes.
+        var isRunning: Bool { !pending.isEmpty && !settled }
+        /// The count the pill shows: Gemini's (it thinks), else Luna's.
+        var count: PillTokenCount? { counts[.geminiFlash] ?? counts[.gpt6Luna] }
     }
 
     /// As a dictation starts: text selected in the frontmost app, read through Accessibility off the main thread (the
@@ -2004,7 +2027,7 @@ final class DictationController {
         pillModel.selectionHint = .shown
         if pillModel.showsTabHint { pillModel.showsTabHint = false }
         guard runsTimers else { return }
-        let hold = pillModel.timing.selectionHintHold
+        let hold = pillModel.timing.chipHold
         selectionHintTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(hold))
             guard !Task.isCancelled, let self, self.pillModel.selectionHint == .shown else { return }
@@ -2013,18 +2036,20 @@ final class DictationController {
     }
 
     /// The polish key over the hint: the dictation gives way without a trace (the cancel cue, then Polish's drop), the
-    /// hint drops into the pill as it closes into the polish circle, and the selection goes to the model picked in
-    /// Models. Its message comes up on a card to paste over the selection or copy, and History keeps it.
+    /// hint drops into the pill as it closes into the polish circle, and the selection goes to both models at once.
+    /// Each message comes up on its own card, to paste over the selection or copy, and History keeps both.
     private func polishSelection(_ text: String) {
         selectionTask?.cancel()
         selectionHintTask?.cancel()
         selection = nil
         selectionReady = false
-        let model = settings.polishSelectionModel
-        let work = SelectionPolish(model: model,
-                                   estimate: TokenEstimate.learned(from: history.entries, modelID: model.route.model))
+        settleSelection()
+        let entries = history.entries
+        let work = SelectionPolish(estimates: Dictionary(uniqueKeysWithValues: PolishSelectionModel.allCases.map {
+            ($0, TokenEstimate.learned(from: entries, modelID: $0.route.model))
+        }))
         selectionPolish = work
-        DiagnosticLog.shared.event(.dictation, "selection.polish", ["model": model.rawValue, "characters": text.count])
+        DiagnosticLog.shared.event(.dictation, "selection.polish", ["characters": text.count])
         pillModel.selectionHint = .handoff
         playCue(.cancel)
         send(.discard)
@@ -2034,94 +2059,132 @@ final class DictationController {
             try? await Task.sleep(for: .milliseconds(220))
             if self?.pillModel.selectionHint == .handoff { self?.pillModel.selectionHint = .hidden }
         }
-        let progress: @Sendable (ChatStreamProgress) -> Void = { [weak self] streamed in
-            Task { @MainActor [weak self] in
-                guard let self, self.selectionPolish === work else { return }
-                work.count = work.estimate.count(for: streamed)
-                self.refreshPill()
-            }
-        }
         let override = selectionPolishOverride
         let transcription = transcription
-        Task { [weak self] in
-            let outcome: Result<TranscriptResult, AppError>
-            do {
-                let result = if let override {
-                    try await override(text, model)
-                } else {
-                    try await transcription.cleanUp(text, of: .geminiFlash, route: model.route, prompt: Polish.textPrompt,
-                                                    progress: progress)
+        for model in PolishSelectionModel.allCases {
+            let progress: @Sendable (ChatStreamProgress) -> Void = { [weak self] streamed in
+                Task { @MainActor [weak self] in
+                    guard let self, self.selectionPolish === work, let estimate = work.estimates[model] else { return }
+                    work.counts[model] = estimate.count(for: streamed)
+                    self.refreshPill()
                 }
-                outcome = .success(result)
-            } catch let error as AppError {
-                outcome = .failure(error)
-            } catch {
-                outcome = .failure(.engineFailed(.geminiFlash, ModelStore.oneLine(error)))
             }
-            self?.finishSelectionPolish(work, outcome)
+            work.tasks.append(Task { [weak self] in
+                let outcome: Result<TranscriptResult, AppError>
+                do {
+                    let result = if let override {
+                        try await override(text, model)
+                    } else {
+                        try await transcription.cleanUp(text, of: .geminiFlash, route: model.route,
+                                                        prompt: Polish.textPrompt, progress: progress)
+                    }
+                    outcome = .success(result)
+                } catch let error as AppError {
+                    outcome = .failure(error)
+                } catch {
+                    outcome = .failure(.engineFailed(.geminiFlash, ModelStore.oneLine(error)))
+                }
+                self?.finishSelectionPolish(work, model, outcome)
+            })
         }
         stateDidChange()
     }
 
-    /// The model answered: its message on the card and in History, or why not.
-    private func finishSelectionPolish(_ work: SelectionPolish, _ outcome: Result<TranscriptResult, AppError>) {
+    /// A model answered: its message on its card and in History (both models' in one entry), or why not.
+    private func finishSelectionPolish(_ work: SelectionPolish, _ model: PolishSelectionModel,
+                                       _ outcome: Result<TranscriptResult, AppError>) {
         guard selectionPolish === work else { return }
-        selectionPolish = nil
+        work.pending.remove(model)
+        defer { stateDidChange() }
+        guard !work.settled else { return }
         switch outcome {
         case .success(let result):
             let message = Polish.message(from: result.text).trimmingCharacters(in: .whitespacesAndNewlines)
             guard !message.isEmpty else {
-                selectionFailed(reason: "\(work.model.modelName) returned no text.")
-                break
+                selectionFailed(model, reason: "It returned no text.")
+                return
             }
             DiagnosticLog.shared.event(.dictation, "selection.finished", [
-                "model": work.model.rawValue, "outcome": "success", "seconds": result.processingTime,
+                "model": model.rawValue, "outcome": "success", "seconds": result.processingTime,
                 "words": message.split(whereSeparator: \.isWhitespace).count])
-            let version = result.version(.selection(work.model), text: message)
-            let entry = TranscriptEntry(engine: .geminiFlash, audioDuration: 0, voicedSeconds: 0, versions: [version])
-            history.upsert(entry)
-            resolveGeneration(of: version, entryID: entry.id)
-            toasts.post(Self.selectionCard(message))
+            let version = result.version(.selection(model), text: message)
+            if let id = work.entryID, var entry = history.entry(id: id) {
+                _ = entry.addVersion(version, makeCurrent: false)
+                history.upsert(entry)
+            } else {
+                let entry = TranscriptEntry(engine: .geminiFlash, audioDuration: 0, voicedSeconds: 0, versions: [version])
+                history.upsert(entry)
+                work.entryID = entry.id
+            }
+            if let id = work.entryID { resolveGeneration(of: version, entryID: id) }
+            toasts.post(Self.selectionCard(message, by: model))
         case .failure(let error):
             Log.engine.error("Polish Selection failed: \(error.code, privacy: .public)")
             DiagnosticLog.shared.event(.dictation, "selection.finished",
-                                       ["model": work.model.rawValue, "outcome": "failure", "code": error.code])
-            let reason = work.model == .gpt6Luna ? Self.cleanupFailureReason(error, model: .gpt6Luna)
-                : Self.homeFailureReason(error, making: .selection(work.model))
-            selectionFailed(reason: reason)
+                                       ["model": model.rawValue, "outcome": "failure", "code": error.code])
+            let reason = model == .gpt6Luna ? Self.cleanupFailureReason(error, model: .gpt6Luna)
+                : Self.homeFailureReason(error, making: .selection(model))
+            selectionFailed(model, reason: reason)
         }
-        stateDidChange()
     }
 
-    private func selectionFailed(reason: String) {
+    private func selectionFailed(_ model: PolishSelectionModel, reason: String) {
         pillModel.shakeTrigger += 1
-        toasts.post(Notice(dedupeKey: "polish.selection.failed", style: .warning, symbol: "wand.and.sparkles",
-                           title: "Couldn’t polish the selection", body: reason, lifetime: .seconds(8), sound: .alert))
+        toasts.post(Notice(dedupeKey: "polish.selection.failed.\(model.rawValue)", style: .warning,
+                           symbol: "wand.and.sparkles", title: "Couldn’t polish with \(model.modelName)", body: reason,
+                           lifetime: .seconds(8), sound: .alert))
     }
 
-    /// "Polished": the message, Paste Here (also ↩, over the selection still selected) and Copy (Esc closes it). Up
-    /// for 6 s and a second for every 20 words, longer while the pointer is over it.
-    nonisolated static func selectionCard(_ text: String) -> Notice {
+    /// "Polished by Gemini 3.8 Flash": the message, Paste Here (over the selection still selected) and Copy. Up for
+    /// 6 s and a second for every 20 words, longer while the pointer is over it. ↩ pastes it while it's the only one,
+    /// Esc closes every one.
+    nonisolated static func selectionCard(_ text: String, by model: PolishSelectionModel) -> Notice {
         let words = text.split(whereSeparator: \.isWhitespace).count
         let seconds = (6 + Double(words) / 20) * ToastCountdown.speed
-        return Notice(dedupeKey: selectionCardKey, style: .info, symbol: "wand.and.sparkles", title: "Polished",
-                      transcript: text,
+        return Notice(dedupeKey: selectionCardKey(model), style: .info, symbol: "wand.and.sparkles",
+                      title: "Polished by \(model.modelName)", transcript: text,
                       actions: [NoticeAction(title: "Paste Here", kind: .pasteText(text), isPrimary: true),
                                 NoticeAction(title: "Copy", kind: .copyText(text))],
                       lifetime: .seconds(seconds), sound: .polishReady, takesCardKeys: true)
     }
 
-    /// ↩ with the card up: its Paste Here.
+    private var selectionCards: [Notice] {
+        toasts.notices.filter { Self.selectionModel(ofCard: $0) != nil }
+    }
+
+    /// ↩ with one card up: its Paste Here.
     private func pasteSelectionCard() {
-        guard let notice = toasts.notices.last(where: { $0.dedupeKey == Self.selectionCardKey }),
-              let action = notice.primaryAction else { return }
+        let cards = selectionCards
+        guard cards.count == 1, let notice = cards.first, let action = notice.primaryAction else { return }
         toasts.perform(action, on: notice)
     }
 
-    /// ↩ and Esc belong to the card exactly while it's up.
+    /// An answer was picked (its card's Paste Here or Copy): History shows it, and the log keeps which model won.
+    /// Pasting it settles the polish: the other card goes, and a model still writing is stopped.
+    private func selectionPicked(_ model: PolishSelectionModel, pasted: Bool) {
+        DiagnosticLog.shared.event(.dictation, "selection.picked", ["model": model.rawValue,
+                                                                   "how": pasted ? "pasted" : "copied"])
+        if let id = selectionPolish?.entryID, history.entry(id: id)?.hasVersion(.selection(model)) == true {
+            history.selectVersion(.selection(model), of: id)
+        }
+        if pasted { settleSelection() }
+    }
+
+    /// Esc, a paste or a new polish: every card goes, and what's still writing is stopped and dropped.
+    private func settleSelection() {
+        if let work = selectionPolish, !work.settled {
+            work.settled = true
+            work.tasks.forEach { $0.cancel() }
+        }
+        for card in selectionCards { toasts.dismiss(card.id) }
+        stateDidChange()
+    }
+
+    /// ↩ belongs to the card while it's the only one up, Esc while any is.
     private func syncCardKeys() {
-        let up = toasts.notices.contains { $0.dedupeKey == Self.selectionCardKey }
-        if hotkeys.cardKeys != up { hotkeys.cardKeys = up }
+        let count = selectionCards.count
+        if hotkeys.cardPaste != (count == 1) { hotkeys.cardPaste = count == 1 }
+        if hotkeys.cardClose != (count > 0) { hotkeys.cardClose = count > 0 }
     }
 
     /// Another choice for this dictation: the pill's chip, and for the user's own pick a soft tick. Polish goes off
@@ -2265,7 +2328,8 @@ final class DictationController {
     }
 
     private func refreshPill() {
-        let idle: PillPhase = hasPendingWork || selectionPolish != nil ? .processing : .rest
+        let selectionRuns = selectionPolish?.isRunning == true
+        let idle: PillPhase = hasPendingWork || selectionRuns ? .processing : .rest
         let phase: PillPhase
         switch machine.capture {
         case .arming:
@@ -2290,18 +2354,18 @@ final class DictationController {
             effectiveChoice
         } else if phase == .processing, let job = pillJob {
             ModelChoice(engine: job.engine, cleansUp: job.cleansUp)
-        } else if phase == .processing, let work = selectionPolish {
-            work.model.choice
+        } else if phase == .processing, selectionRuns {
+            ModelChoice.gemini
         } else {
             nil
         }
         if pillModel.sessionModel != session { pillModel.sessionModel = session }
         // A dictation in flight speaks for the processing pill before a selection's polish does.
         let polishes = phase.isRecording ? isPolishing && effectiveChoice == .gemini
-            : phase == .processing && (pillJob.map(\.polishes) ?? (selectionPolish != nil))
+            : phase == .processing && (pillJob.map(\.polishes) ?? selectionRuns)
         if pillModel.polishes != polishes { pillModel.polishes = polishes }
         // The same job's count: with several in flight, the newest one's.
-        let count = phase == .processing ? (pillJob.map(\.count) ?? selectionPolish?.count) : nil
+        let count = phase == .processing ? (pillJob.map(\.count) ?? (selectionRuns ? selectionPolish?.count : nil)) : nil
         if pillModel.tokenCount != count { pillModel.tokenCount = count }
 
         if phase.isRecording, let started = machine.recordingStartedAt {

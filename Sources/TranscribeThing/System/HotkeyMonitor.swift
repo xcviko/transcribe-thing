@@ -50,9 +50,12 @@ final class HotkeyMonitor {
     var selectionReady = false {
         didSet { if selectionReady != oldValue { pushConfig() } }
     }
-    /// Polish Selection's card is up: ↩ pastes it and Esc closes it.
-    var cardKeys = false {
-        didSet { if cardKeys != oldValue { pushConfig() } }
+    /// Polish Selection's cards are up: ↩ pastes the one card (with two it couldn't tell which), Esc closes them.
+    var cardPaste = false {
+        didSet { if cardPaste != oldValue { pushConfig() } }
+    }
+    var cardClose = false {
+        didSet { if cardClose != oldValue { pushConfig() } }
     }
     /// The tap thread is running (it keeps retrying tap creation until permission arrives).
     private(set) var isRunning = false
@@ -138,7 +141,7 @@ final class HotkeyMonitor {
         HotkeyRouter.Config(bindings: settings.shortcuts, isBusy: isBusy, isRecording: isRecording,
                             switchesModels: settings.lineup.cycle.count > 1,
                             polishes: (dictationModel ?? settings.lineup.main) == .gemini || selectionReady,
-                            cardKeys: cardKeys,
+                            cardPaste: cardPaste, cardClose: cardClose,
                             isSuspended: suspendCount > 0, forwardsRawKeys: onRawKey != nil)
     }
 

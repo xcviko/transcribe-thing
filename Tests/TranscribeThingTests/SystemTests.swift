@@ -305,7 +305,8 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
     /// while a dictation records, and Esc cancels a busy dictation first.
     @Test func theCardTakesReturnAndEscape() {
         var kb = Keyboard()
-        kb.config.cardKeys = true
+        kb.config.cardPaste = true
+        kb.config.cardClose = true
         let paste = kb.down(kVK_Return)
         #expect(paste.events == [.cardPaste] && paste.swallow)
         #expect(kb.down(kVK_Return, isRepeat: true).events.isEmpty, "one paste per press")
@@ -324,7 +325,10 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
         #expect(kb.down(kVK_Escape).events == [.cancel])
         kb.up(kVK_Escape)
         kb.config = HotkeyRouter.Config()
-        #expect(!kb.down(kVK_Return).swallow, "no card, no ↩")
+        kb.config.cardClose = true
+        #expect(!kb.down(kVK_Return).swallow, "two cards: ↩ is the app's")
+        kb.up(kVK_Return)
+        #expect(kb.down(kVK_Escape).events == [.cardClose])
     }
 
     /// The keypad's own Enter, without fn, stays a key of its own: a shortcut on it fires on it and not on Return,

@@ -47,17 +47,7 @@ struct ModelsPage: View {
                         }
                     }
                 }
-                HubGroup("Polish Selection") {
-                    SettingsGroup {
-                        SettingsRow(title: "Polish selected text with", subtitle: polishSelectionSubtitle,
-                                    systemImage: "wand.and.sparkles", iconTint: .inkSecondary) {
-                            HubMenuPicker(options: PolishSelectionModel.allCases,
-                                          selection: Binding(get: { settings.polishSelectionModel },
-                                                             set: { settings.polishSelectionModel = $0 }),
-                                          label: \.modelName)
-                        }
-                    }
-                }
+
                 HubGroup("Where Parakeet runs", footer: "For Parakeet v3, with or without clean-up.") {
                     SettingsGroup {
                         ForEach(EngineID.parakeetRuntimes) { engine in row(engine, proxy: proxy) }
@@ -157,11 +147,6 @@ struct ModelsPage: View {
     private var handsFreeModel: Binding<ModelChoice?> {
         let settings = settings
         return Binding(get: { settings.handsFreeChoice }, set: { settings.handsFreeModel = $0 })
-    }
-
-    private var polishSelectionSubtitle: String {
-        let key = settings.shortcuts[.pushToTalk]?.compactDescription ?? "fn"
-        return "Select text, hold \(key) and press ↩ while the dictation isn’t on Gemini: the message you meant comes up on a card."
     }
 
     private func handsFreeLabel(_ choice: ModelChoice?) -> String {

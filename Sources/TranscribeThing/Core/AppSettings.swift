@@ -76,10 +76,6 @@ final class AppSettings {
     /// The model a hands-free dictation switches to as it starts (Models), as if Switch model had stepped to it: a long
     /// dictation is usually one for Gemini. nil: the main model, as when holding the key.
     var handsFreeModel: ModelChoice? = nil { didSet { store.set(handsFreeModel?.rawValue, .handsFreeModel) } }
-    /// The model that polishes text selected in another app (Polish Selection, Models).
-    var polishSelectionModel: PolishSelectionModel = .default {
-        didSet { store.set(polishSelectionModel.rawValue, .polishSelectionModel) }
-    }
     /// `handsFreeModel` while Switch model reaches it and it isn't the main model; nil otherwise. A hands-free
     /// dictation is on a model of the cycle, like any other: fn ⇥ steps on from it, the pill's menu checks it, and a
     /// local Parakeet in the cycle is loaded at launch.
@@ -220,6 +216,8 @@ final class AppSettings {
         store.remove(.geminiSystemPrompt)
         store.remove(.cleanupSystemPrompt)
         store.remove(.cleanupEnabled)
+        // Polish Selection asks both its models at once now (to pick the better answer): the stored choice goes.
+        store.remove(.polishSelectionModel)
         // Every model thinks at its own fixed level now, and GPT-6 Luna is the only clean-up model: the stored
         // levels and choice have no meaning any more.
         for key in [SettingsKey.reasoningEfforts, .cleanupModel, .cleanupReasoningEfforts, .cleanupReasoningEffort] {
@@ -233,9 +231,6 @@ final class AppSettings {
         }
         if let v = store.bool(.doublePressForHandsFree) { doublePressForHandsFree = v }
         handsFreeModel = store.string(.handsFreeModel).flatMap(ModelChoice.init(rawValue:))
-        if let v = store.string(.polishSelectionModel).flatMap(PolishSelectionModel.init(rawValue:)) {
-            polishSelectionModel = v
-        }
         if let v = store.bool(.addSpaceAfterText) { addsSpaceAfterText = v }
         if let v = store.bool(.removeFinalPeriod) { removesFinalPeriod = v }
         if let v = store.int(.autoDeleteHistoryDays), v >= 0 { autoDeleteHistoryDays = v }

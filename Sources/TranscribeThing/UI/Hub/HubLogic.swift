@@ -277,12 +277,13 @@ struct VersionsMenu: Equatable {
                      readiness: (EngineID) -> EngineReadiness) -> VersionsMenu {
         let isRetry = entry.status != .success
         let hasAudio = entry.audioFileName != nil
-        // A selection's polish has no recording to make another version from.
-        if entry.isSelection {
-            return VersionsMenu(isRetry: false, title: title(for: entry), versions: [], actions: [], runningTitle: nil)
-        }
         let versions = entry.versions.map {
             Version(kind: $0.kind, summary: $0.metadata.summary, isCurrent: $0.kind == entry.currentKind)
+        }
+        // A selection's polish has its models' answers to pick from, and no recording to make another one from.
+        if entry.isSelection {
+            return VersionsMenu(isRetry: false, title: title(for: entry), versions: versions, actions: [],
+                                runningTitle: nil)
         }
         let busy = running.map(Blocker.running)
         var actions = EngineID.offered.filter { isRetry || !entry.hasVersion(.transcription($0)) }.map { engine in

@@ -387,10 +387,9 @@ struct PillTiming: Equatable, Sendable {
     var controlTooltipDelay: TimeInterval = 0.5
     /// How long a token count waits before the processing pill shows it (`PillModel.showsCounter`).
     var counterDelay: TimeInterval = 1.0
-    /// How long the model chip stays after a switch, before it fades and the tint alone says the model.
+    /// How long the model chip stays after a switch, before it fades and the tint alone says the model; Polish
+    /// Selection's hint stays as long.
     var chipHold: TimeInterval = 1.2
-    /// How long Polish Selection's hint stays over the pill, long enough to read its keys; the key works after too.
-    var selectionHintHold: TimeInterval = 2.5
 }
 
 extension PillPhase {
