@@ -2130,12 +2130,9 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
         #expect(menu.items.first?.isEnabled == false)
     }
 
-    /// Home opens Home; Settings… opens the Settings page the Hub was last on, and Models (the first) after Home.
-    @Test func settingsOpensASettingsPage() {
-        #expect(WindowCoordinator.settingsSection(after: .home) == .models)
-        for section in HubSection.allCases where section != .home {
-            #expect(WindowCoordinator.settingsSection(after: section) == section, "\(section)")
-        }
+    /// Home opens Home; Settings… opens General.
+    @Test func settingsOpensGeneral() {
+        #expect(WindowCoordinator.settingsPage == .general)
     }
 
     /// The status line names the main model, whichever it is, and its status: clean-up's is Parakeet's until it's
