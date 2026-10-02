@@ -41,8 +41,8 @@ struct HotkeyInput: Equatable, Sendable {
 /// - Switch model (like Esc) is live only during a dictation, and it never interrupts the PTT hold: it may be
 ///   pressed with the PTT or hands-free modifiers still held (fn+Tab while holding fn), and extra modifiers on
 ///   the way to it (⌘ of ⌘⇧M) don't end the hold. Outside a dictation its keys pass through. Held down, its
-///   autorepeats step on (`cycleEngineRepeat`). Polish's shortcut is live the same way while the dictation is on
-///   Gemini, and held down its autorepeats turn Polish on and off again and again.
+///   autorepeats step on (`cycleEngineRepeat`). Polish's shortcut is live the same way, on any model (the controller
+///   decides what it does there), and held down its autorepeats turn Polish on and off again and again.
 /// - Swallowed keys also have their autorepeats and keyUp swallowed.
 struct HotkeyRouter: Equatable, Sendable {
     struct Config: Equatable, Sendable {
@@ -55,12 +55,6 @@ struct HotkeyRouter: Equatable, Sendable {
         /// Switch model has another model to step to (`ModelLineup.cycle`); without one its shortcut is never
         /// intercepted.
         var switchesModels = true
-        /// The dictation (or the one a held PTT starts) is on Gemini, the only model that polishes: without it Polish's
-        /// shortcut is never intercepted, and its keys reach the app as they did before Polish.
-        var polishes = true
-        /// The selection lookup hasn't answered and Polish Selection can happen: Polish's shortcut is held off Gemini
-        /// as `.heldForSelection`, for the lookup to decide (Polish Selection, or the key given back).
-        var selectionPending = false
         /// Add to dictionary's shortcut is live during a dictation, on any model, always held as `.heldForSelection`:
         /// the controller reads what's selected right then.
         var addsToDictionary = false
@@ -250,7 +244,7 @@ struct HotkeyRouter: Equatable, Sendable {
             if input.isRepeat, let switchModel = liveSwitchModel(config), switchModel.keyCode == key,
                matchesDuringDictation(switchModel, config.bindings) {
                 decision.events.append(.cycleEngineRepeat)
-            } else if input.isRepeat, config.polishes,
+            } else if input.isRepeat,
                       let polish = liveDuringDictation(config).first(where: { $0.action == .polish }),
                       polish.shortcut.keyCode == key, matchesDuringDictation(polish.shortcut, config.bindings) {
                 decision.events.append(.polish)
@@ -318,7 +312,7 @@ struct HotkeyRouter: Equatable, Sendable {
             consume(physical, into: &decision)
             if input.isRepeat {
                 return decision
-            } else if action == .polish && !config.polishes || action == .addToDictionary {
+            } else if action == .addToDictionary {
                 // Held only for the selection lookup: what it is gets decided once that answers.
                 decision.events.append(.heldForSelection(action, KeyStroke(keyCode: physical, flags: input.flags,
                                                                            interruptsHold: gesture == .holdingModifiers)))
@@ -442,8 +436,6 @@ struct HotkeyRouter: Equatable, Sendable {
         return ShortcutAction.allCases.compactMap { action in
             guard action.isDuringDictation, let shortcut = config.bindings[action] else { return nil }
             if action == .switchModel, !config.switchesModels { return nil }
-            // Held for the lookup only as a key that can be given back: a modifier-only Polish isn't.
-            if action == .polish, !config.polishes, !config.selectionPending || shortcut.isModifierOnly { return nil }
             // Held, then given back if nothing is selected: only a key can be (a modifier-only binding isn't).
             if action == .addToDictionary, !config.addsToDictionary || shortcut.isModifierOnly { return nil }
             return (action, shortcut)

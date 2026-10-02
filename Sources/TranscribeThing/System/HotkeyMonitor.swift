@@ -74,20 +74,6 @@ final class HotkeyMonitor {
     var isRecording = false {
         didSet { if isRecording != oldValue { pushConfig() } }
     }
-    /// The model picked for the dictation being recorded (nil: the main model): Polish's shortcut is swallowed only on
-    /// Gemini.
-    var dictationModel: ModelChoice? {
-        didSet { if dictationModel != oldValue { pushConfig() } }
-    }
-    /// Text is selected for Polish Selection (its hint is over the pill): Polish's shortcut is live off Gemini too.
-    var selectionReady = false {
-        didSet { if selectionReady != oldValue { pushConfig() } }
-    }
-    /// The selection lookup hasn't answered yet, and Polish Selection can happen (between dictations: the next press's
-    /// lookup will run): Polish's shortcut is held off Gemini, as `.heldForSelection`.
-    var selectionPending = false {
-        didSet { if selectionPending != oldValue { pushConfig() } }
-    }
     /// A hands-free dictation records and Return sends it: Return is taken, as `.finishAndSend`.
     var returnSends = false {
         didSet { if returnSends != oldValue { pushConfig() } }
@@ -183,12 +169,10 @@ final class HotkeyMonitor {
     // MARK: Config
 
     /// What the tap routes with right now: Switch model is intercepted only while the lineup's cycle has another
-    /// model to step to, and Polish only on Gemini.
+    /// model to step to.
     func currentConfig() -> HotkeyRouter.Config {
         HotkeyRouter.Config(bindings: settings.shortcuts, isBusy: isBusy, isRecording: isRecording,
-                            switchesModels: settings.lineup.cycle.count > 1,
-                            polishes: (dictationModel ?? settings.lineup.main) == .gemini || selectionReady,
-                            selectionPending: selectionPending, addsToDictionary: dictionaryReady,
+                            switchesModels: settings.lineup.cycle.count > 1, addsToDictionary: dictionaryReady,
                             returnSends: returnSends,
                             cardPaste: cardPaste, cardClose: cardClose,
                             isSuspended: suspendCount > 0, forwardsRawKeys: onRawKey != nil)

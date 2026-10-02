@@ -1048,7 +1048,7 @@ import Testing
         rig.h.settings.showsPillHints = false
         rig.h.controller.selectionOverride = { "Wispr" }
         SwitchModelControllerTests.hold(rig)
-        try await waitUntil { rig.h.hotkeys.selectionReady }
+        try await waitUntil { rig.h.controller.polishesSelection }
         rig.h.controller.handle(.heldForSelection(.addToDictionary, AddToDictionaryTests.d))
         try await waitUntil { rig.h.settings.dictionary.words == ["Wispr"] }
     }

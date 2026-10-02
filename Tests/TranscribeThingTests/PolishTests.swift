@@ -205,16 +205,16 @@ import Testing
         rig.h.controller.handle(.polish)
     }
 
-    /// Holding the key with text selected, off Gemini: "fn ↩ Polish selection" over the pill, quietly, and the
-    /// polish key goes to the router.
+    /// Holding the key with text selected, off Gemini: "fn P Polish selection" over the pill, quietly, and the
+    /// polish key polishes the selection.
     @Test func aSelectionShowsTheHintOffGemini() async throws {
         let (rig, cues, _) = Self.make()
         Switch.hold(rig)
         try await waitUntil { rig.h.pill.selectionHint == .shown }
-        #expect(rig.h.hotkeys.selectionReady && rig.h.hotkeys.currentConfig().polishes)
+        #expect(rig.h.controller.polishesSelection)
         #expect(cues.played.allSatisfy { $0 != .polishOn && $0 != .modelSwitch }, "the hint makes no sound")
         rig.h.controller.send(.pillCancel)
-        #expect(rig.h.pill.selectionHint == .hidden && !rig.h.hotkeys.selectionReady)
+        #expect(rig.h.pill.selectionHint == .hidden && !rig.h.controller.polishesSelection)
     }
 
     /// The hint stays as long as the model chip does; the key still polishes the selection after it's gone.
@@ -224,7 +224,7 @@ import Testing
         Switch.hold(rig)
         try await waitUntil { rig.h.pill.selectionHint == .shown }
         try await waitUntil { rig.h.pill.selectionHint == .hidden }
-        #expect(rig.h.hotkeys.selectionReady)
+        #expect(rig.h.controller.polishesSelection)
         rig.h.controller.handle(.polish)
         try await waitUntil { asked.calls.count == 2 }
     }
@@ -325,14 +325,15 @@ import Testing
         #expect(rig.h.history.entries.first?.versions.map(\.kind) == [.selection(.gpt6Luna)])
     }
 
-    /// Nothing selected: no hint, and off Gemini the key does nothing.
-    @Test func withoutASelectionNothingHappens() async throws {
+    /// Nothing selected, off Gemini: no hint, and the key says Polish is Gemini's; the dictation goes on.
+    @Test func withoutASelectionTheKeySaysPolishIsGeminis() async throws {
         let (rig, cues, asked) = Self.make(selection: nil)
         Switch.hold(rig)
         try await Task.sleep(for: .milliseconds(150))
-        #expect(rig.h.pill.selectionHint == .hidden && !rig.h.hotkeys.selectionReady)
+        #expect(rig.h.pill.selectionHint == .hidden && !rig.h.controller.polishesSelection)
         rig.h.controller.handle(.polish)
         #expect(asked.calls.isEmpty && !cues.played.contains(.polishOn))
+        #expect(rig.h.pill.keyHint == "Polish works on Gemini only")
         #expect(rig.h.controller.machine.capture.isListeningOrLocked)
         rig.h.controller.send(.pillCancel)
     }
@@ -371,18 +372,16 @@ import Testing
         func wait() async { while !isOpen { try? await Task.sleep(for: .milliseconds(5)) } }
     }
 
-    /// A quick fn ↩, before the lookup has answered: the tap held the key from the press's first moment, and once
-    /// the lookup finds text, it's Polish Selection.
+    /// A quick fn P, before the lookup has answered: it waits for the lookup, and once that finds text, it's Polish
+    /// Selection.
     @Test func aQuickPolishKeyWaitsForTheLookup() async throws {
         let (rig, _, asked) = Self.make()
         let lookup = Lookup()
         rig.h.controller.selectionOverride = { await lookup.wait(); return "short draft" }
         var replayed: [KeyStroke] = []
         rig.h.controller.replayKeyOverride = { replayed.append($0) }
-        #expect(rig.h.hotkeys.currentConfig().selectionPending, "between dictations: the next press's lookup")
         rig.h.controller.handle(.pttDown)
-        #expect(rig.h.hotkeys.currentConfig().selectionPending)
-        rig.h.controller.handle(.heldForSelection(.polish, KeyStroke(keyCode: KeyCode.keypadEnter, flags: 0, interruptsHold: true)))
+        rig.h.controller.handle(.polish)
         try await Task.sleep(for: .milliseconds(40))
         #expect(asked.calls.isEmpty)
         lookup.isOpen = true
@@ -391,62 +390,51 @@ import Testing
     }
 
     /// fn let go before the lookup answered: the press is still decided by its key. With text selected it's Polish
-    /// Selection all the same, and the release changes nothing; a second fn ↩ meanwhile follows the first.
+    /// Selection all the same, and the release changes nothing; a second fn P meanwhile follows the first.
     @Test func lettingGoOfFnWaitsForTheKeysDecision() async throws {
         let (rig, cues, asked) = Self.make()
         let lookup = Lookup()
         rig.h.controller.selectionOverride = { await lookup.wait(); return "short draft" }
-        var replayed: [KeyStroke] = []
-        rig.h.controller.replayKeyOverride = { replayed.append($0) }
-        let key = KeyStroke(keyCode: KeyCode.keypadEnter, flags: 0, interruptsHold: true)
         rig.h.controller.handle(.pttDown)
-        rig.h.controller.handle(.heldForSelection(.polish, key))
-        rig.h.controller.handle(.heldForSelection(.polish, key))
+        rig.h.controller.handle(.polish)
+        rig.h.controller.handle(.polish)
         rig.now += 0.1
         rig.h.controller.handle(.pttUp)
         #expect(rig.h.controller.machine.isRecording, "the release waits for the key")
         lookup.isOpen = true
         try await waitUntil { asked.calls.count == 2 }
-        #expect(replayed.isEmpty && rig.h.controller.machine.capture == .idle)
+        #expect(rig.h.controller.machine.capture == .idle)
         #expect(rig.transcribed.isEmpty && !cues.played.contains(.start))
     }
 
-    /// Nothing selected after all: the key goes on to the app, and the hold ends as any other key would end it.
-    @Test func aQuickPolishKeyOverNothingGoesToTheApp() async throws {
+    /// Nothing selected after all: the key never goes to the app; it says Polish is Gemini's, and the dictation goes on.
+    @Test func aQuickPolishKeyOverNothingSaysSo() async throws {
         let (rig, _, asked) = Self.make(selection: nil)
+        let lookup = Lookup()
+        rig.h.controller.selectionOverride = { await lookup.wait(); return nil }
         var replayed: [KeyStroke] = []
         rig.h.controller.replayKeyOverride = { replayed.append($0) }
         rig.h.controller.handle(.pttDown)
-        let key = KeyStroke(keyCode: KeyCode.keypadEnter, flags: 0x80_0000, interruptsHold: true)
-        rig.h.controller.handle(.heldForSelection(.polish, key))
-        try await waitUntil { replayed == [key] }
-        #expect(asked.calls.isEmpty && !rig.h.controller.machine.isRecording)
-        #expect(!rig.h.hotkeys.currentConfig().polishes)
-    }
-
-    /// Once the lookup has answered with nothing, the key isn't held at all: fn ↩ reaches the app as before.
-    @Test func anAnsweredLookupLetsTheKeyGo() async throws {
-        let (rig, _, _) = Self.make(selection: nil)
-        Switch.hold(rig)
-        try await waitUntil { !rig.h.hotkeys.currentConfig().selectionPending }
-        #expect(!rig.h.hotkeys.currentConfig().polishes)
+        rig.h.controller.handle(.polish)
+        lookup.isOpen = true
+        try await waitUntil { rig.h.pill.keyHint != nil }
+        #expect(asked.calls.isEmpty && replayed.isEmpty && rig.h.controller.machine.isRecording)
         rig.h.controller.send(.pillCancel)
     }
 
-    /// Without an OpenRouter key Polish Selection can't happen: no hint promises it, and the key stays the app's
-    /// (never held). With Add to dictionary unbound too, nothing is even looked up.
+    /// Without an OpenRouter key Polish Selection can't happen: no hint promises it, and the key says Polish is
+    /// Gemini's. With Add to dictionary unbound too, nothing is even looked up.
     @Test func withoutAKeyThereIsNoPolishSelection() async throws {
         let (rig, _) = Switch.make(key: .missing)
         rig.h.controller.start()
-        #expect(!rig.h.hotkeys.currentConfig().selectionPending, "fn ↩ isn't held with the default bindings either")
         rig.h.settings.shortcuts[.addToDictionary] = nil
         var looked = false
         rig.h.controller.selectionOverride = { looked = true; return "text" }
-        #expect(!rig.h.hotkeys.currentConfig().selectionPending)
         Switch.hold(rig)
         try await Task.sleep(for: .milliseconds(60))
         #expect(!looked && rig.h.pill.selectionHint == .hidden)
-        #expect(!rig.h.hotkeys.currentConfig().polishes && !rig.h.hotkeys.currentConfig().selectionPending)
+        rig.h.controller.handle(.polish)
+        #expect(rig.h.pill.keyHint == "Polish works on Gemini only")
         rig.h.controller.send(.pillCancel)
     }
 

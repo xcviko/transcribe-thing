@@ -259,23 +259,16 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
         #expect(plain.events.isEmpty && !plain.swallow)
     }
 
-    /// When the dictation isn't on Gemini (the only model that polishes), fn ↩ is an fn combo like fn ←: the hold
-    /// ends and the key reaches the app, as before Polish.
-    @Test func fnReturnReachesTheAppWhenTheDictationIsntOnGemini() {
+    /// The polish key is the tap's during any dictation, Gemini or not (the controller says what it does there): the
+    /// hold goes on. Outside a dictation, P is P.
+    @Test func thePolishKeyIsTakenOnAnyModel() {
         var kb = Keyboard()
-        kb.config.polishes = false
         #expect(kb.press(.fn).events == [.pttDown])
-        for key in [kVK_Return, kVK_ANSI_KeypadEnter] {
-            let enter = kb.down(key, fnFlagged: true)
-            #expect(enter.events.isEmpty || enter.events == [.pttInterrupted])
-            #expect(!enter.swallow)
-            #expect(!kb.up(key, fnFlagged: true).swallow)
-        }
-        #expect(kb.release(.fn).events.isEmpty)
-        // Hands-free on Parakeet: the same keys pass.
-        kb.config.isRecording = true
-        kb.press(.fn)
-        #expect(!kb.down(kVK_ANSI_KeypadEnter, fnFlagged: true).swallow)
+        let polish = kb.down(kVK_ANSI_P, fnFlagged: true)
+        #expect(polish.events == [.polish] && polish.swallow)
+        kb.up(kVK_ANSI_P, fnFlagged: true)
+        #expect(kb.release(.fn).events == [.pttUp])
+        #expect(!kb.down(kVK_ANSI_P).swallow)
     }
 
     /// A laptop keyboard sends fn ↩ as Keypad Enter: bound to fn ↩ (Polish's old default), it's Polish all the same,
@@ -341,30 +334,6 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
         #expect(kb.down(kVK_ANSI_KeypadEnter).events == [.pasteLast])
         kb.up(kVK_ANSI_KeypadEnter)
         #expect(kb.down(kVK_Return).events == [.cardPaste])
-    }
-
-    /// Off Gemini, before the selection lookup has answered, the polish key is held for it: the key (as it came) goes
-    /// to the controller to decide, and its repeats and release stay swallowed. (fn ↩ here, as a laptop sends it.)
-    @Test func thePolishKeyIsHeldWhileTheLookupRuns() {
-        var kb = Keyboard(bindings: bindings([.polish: .fnReturn]))
-        kb.config.polishes = false
-        kb.config.selectionPending = true
-        #expect(kb.press(.fn).events == [.pttDown])
-        let enter = kb.down(kVK_ANSI_KeypadEnter, fnFlagged: true)
-        #expect(enter.swallow && enter.events.count == 1)
-        if case .heldForSelection(.polish, let key) = enter.events.first {
-            #expect(key.keyCode == UInt16(kVK_ANSI_KeypadEnter) && key.interruptsHold)
-            #expect(key.flags & CGEventFlags.maskSecondaryFn.rawValue != 0)
-        } else {
-            Issue.record("expected polishIfSelected, got \(enter.events)")
-        }
-        #expect(kb.down(kVK_ANSI_KeypadEnter, isRepeat: true, fnFlagged: true).events.isEmpty)
-        #expect(kb.up(kVK_ANSI_KeypadEnter, fnFlagged: true).swallow)
-        #expect(kb.release(.fn).events == [.pttUp])
-        // Nothing pending and off Gemini: it passes, as before.
-        kb.config.selectionPending = false
-        kb.press(.fn)
-        #expect(!kb.down(kVK_ANSI_KeypadEnter, fnFlagged: true).swallow)
     }
 
     /// The keypad's own Enter, without fn, stays a key of its own: a shortcut on it fires on it and not on Return,

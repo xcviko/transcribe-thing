@@ -75,11 +75,17 @@ struct PillCanvasView: View {
             && (model.visiblePhase.isRecording || model.selectionHint == .handoff)
     }
 
-    /// The model chip, or Polish Selection's hint in its place, floats above the pill: toasts make room for it.
+    /// A word about a key that did nothing (`PillModel.keyHint`), over a dictation: shown whatever the hints setting,
+    /// as the answer to a key just pressed.
+    private var showsKeyHint: Bool {
+        model.isPresented && model.keyHint != nil && model.visiblePhase.isRecording
+    }
+
+    /// The model chip, or a hint in its place, floats above the pill: toasts make room for it.
     private var showsChip: Bool {
         let chip = model.isPillAllowed && model.showsChip
             && (model.visiblePhase.isRecording || model.visiblePhase == .processing)
-        return model.isPresented && (chip || showsSelectionHint && model.visiblePhase.isRecording)
+        return model.isPresented && (chip || showsKeyHint || showsSelectionHint && model.visiblePhase.isRecording)
     }
 
     /// With no pill on screen (hidden until the next dictation, or Never mode) toasts drop into its slot, bottoms
@@ -126,6 +132,11 @@ struct PillCanvasView: View {
                         .offset(y: -(PillMetrics.tooltipHeight + 8))
                         .transition(tooltipTransition)
                         .allowsHitTesting(false)
+                } else if showsKeyHint, let text = model.keyHint {
+                    PillKeyHint(text: text)
+                        .offset(y: -PillMetrics.chipLift)
+                        .transition(tooltipTransition)
+                        .allowsHitTesting(false)
                 } else if showsSelectionHint {
                     // Handed off, it drops into the pill and dissolves while the pill becomes the polish.
                     let handoff = model.selectionHint == .handoff
@@ -144,6 +155,7 @@ struct PillCanvasView: View {
             }
             .animation(.easeOut(duration: 0.16), value: showsRestTooltip)
             .animation(.easeOut(duration: 0.2), value: showsSwitchHint)
+            .animation(.easeOut(duration: 0.2), value: showsKeyHint)
             .animation(reduceMotion ? .easeInOut(duration: 0.15) : .spring(duration: 0.3, bounce: 0.1),
                        value: model.selectionHint)
             .padding(PillMetrics.hoverMargin)

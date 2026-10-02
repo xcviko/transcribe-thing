@@ -82,6 +82,10 @@ enum PillSnapshots {
             SnapshotEntry("pill-polish", width: 760, height: 44 + 4 * 92 + 150) { _ in PolishSheet() },
             // fn ⇥ while the chip is up: its names roll on, frame by frame of the spring.
             SnapshotEntry("pill-chip-roll", width: 2040, height: 340) { _ in ChipRollSheet() },
+            // fn P on Parakeet with nothing selected: it says Polish is Gemini's, and the dictation goes on.
+            SnapshotEntry("pill-polish-gemini-only", width: 640, height: 150) { _ in
+                CanvasScene(model: polishGeminiOnlyModel(), notices: [])
+            },
             SnapshotEntry("pill-models-hint", width: 640, height: 150) { _ in
                 CanvasScene(model: hintModel(), notices: [])
             },
@@ -224,6 +228,12 @@ enum PillSnapshots {
     private static let longAnswer = "Прикинь, сегодня новые дорожки поставили - впервые с 22 года все заменили.\n\n"
         + "Там есть фича: прислоняешь часы, они по NFC договариваются друг с другом, и дорожка получает инфу о пульсе и "
         + "калориях, а часы - о дистанции, скорости и т. д.\n\nЗавтра схожу ещё раз и проверю, как оно с тренировкой."
+
+    @MainActor private static func polishGeminiOnlyModel() -> PillModel {
+        let model = PillModelSheet.model(.listening, choice: .parakeet, level: 0.7, chip: false)
+        model.showKeyHint("Polish works on Gemini only")
+        return model
+    }
 
     @MainActor private static func restModel() -> PillModel {
         let model = PillModel.preview(phase: .rest)

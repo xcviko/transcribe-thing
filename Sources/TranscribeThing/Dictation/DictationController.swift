@@ -128,7 +128,7 @@ final class DictationController {
     @ObservationIgnored private var selectionLookupRunning = false
     /// Keys the tap held for the selection, waiting for a lookup, in the order they came: the press's own release
     /// waits with them (`heldRelease`), so what the press was is decided by its keys, not by when fn came up.
-    @ObservationIgnored private var heldKeys: [(action: ShortcutAction, key: KeyStroke)] = []
+    @ObservationIgnored private var heldKeys: [(action: ShortcutAction, key: KeyStroke?)] = []
     @ObservationIgnored private var heldRelease: DictationMachine.Input?
     /// Return is finishing the hands-free dictation: the job it makes presses Return once pasted.
     @ObservationIgnored private var finishesWithReturn = false
@@ -290,12 +290,9 @@ final class DictationController {
         }
     }
 
-    /// Until a recording's lookup answers, the polish key may be Polish Selection's: the tap holds it. Between
-    /// dictations that's the next press's, so a quick fn P is held from its first moment. The dictionary key is held
-    /// whenever it's bound: it reads the selection when it's pressed.
+    /// The dictionary key is the tap's during a dictation whenever it's bound: it reads the selection when it's
+    /// pressed. (The polish key always is.)
     private func syncSelectionPending() {
-        let pending = canPolishSelection && (!machine.isRecording || selectionLookupRunning)
-        if hotkeys.selectionPending != pending { hotkeys.selectionPending = pending }
         if hotkeys.dictionaryReady != canAddToDictionary { hotkeys.dictionaryReady = canAddToDictionary }
     }
 
@@ -324,11 +321,13 @@ final class DictationController {
         case .cycleEngine: send(.cycleEngine)
         case .cycleEngineRepeat: repeatCycle()
         case .polish:
-            // Off Gemini with text selected, the key is Polish Selection's; on Gemini it's Polish's.
-            if machine.isRecording, effectiveChoice != .gemini, canPolishSelection, let selection {
-                polishSelection(selection)
+            // On Gemini the key is Polish's; off Gemini, with text selected, Polish Selection's. A selection still
+            // being looked for (a quick fn P) is waited for.
+            guard machine.isRecording else { return }
+            if effectiveChoice != .gemini, canPolishSelection, selectionLookupRunning {
+                actOnceSelectionIsKnown(.polish, nil)
             } else {
-                send(.polish)
+                _ = acted(on: .polish, selection: selection)
             }
         case .heldForSelection(let action, let key):
             actOnceSelectionIsKnown(action, key)
@@ -2190,9 +2189,9 @@ final class DictationController {
     /// lookup decides. fn D always reads what's selected now (in a long hands-free dictation, not what was selected
     /// as it started). With text selected the key does its work on it (on Gemini, fn P is Polish's); without, it goes
     /// on to the app after all, ending a held press as any other key would have.
-    /// Keys pressed while the first waits follow it: dropped once it did its work, given to the app after it.
+    /// Keys pressed while the first waits are decided the same way, in order, once the dictation is still on.
     /// A recording canceled meanwhile (Esc) drops them all.
-    private func actOnceSelectionIsKnown(_ action: ShortcutAction, _ key: KeyStroke) {
+    private func actOnceSelectionIsKnown(_ action: ShortcutAction, _ key: KeyStroke?) {
         heldKeys.append((action, key))
         guard heldKeys.count == 1 else { return }
         let lookup = selectionTask
@@ -2208,16 +2207,19 @@ final class DictationController {
             guard let self else { return }
             let held = self.heldKeys
             self.heldKeys = []
-            if self.machine.isRecording, !self.acted(on: action, selection: readsAfresh ? fresh : self.selection) {
-                for (_, key) in held {
-                    if let replay = self.replayKeyOverride {
-                        replay(key)
-                    } else {
-                        Task.detached { KeyStroke.post(key) }
-                    }
+            var interrupts = false
+            for (action, key) in held {
+                guard self.machine.isRecording else { break }
+                if self.acted(on: action, selection: readsAfresh ? fresh : self.selection) { continue }
+                guard let key else { continue }
+                if let replay = self.replayKeyOverride {
+                    replay(key)
+                } else {
+                    Task.detached { KeyStroke.post(key) }
                 }
-                if held.contains(where: \.key.interruptsHold) { self.send(.pttInterrupted) }
+                interrupts = interrupts || key.interruptsHold
             }
+            if interrupts, self.machine.isRecording { self.send(.pttInterrupted) }
             if let release = self.heldRelease {
                 self.heldRelease = nil
                 self.send(release)
@@ -2225,13 +2227,16 @@ final class DictationController {
         }
     }
 
-    /// What a held key does once the selection is known; false when it does nothing, and goes to the app.
+    /// What a key for the selection does once the selection is known; false when it does nothing, and goes to the
+    /// app. The polish key never does: where it can't polish, it says so.
     private func acted(on action: ShortcutAction, selection: String?) -> Bool {
         switch action {
         case .polish where effectiveChoice == .gemini:
             send(.polish)
         case .polish where canPolishSelection && selection != nil:
             polishSelection(selection ?? "")
+        case .polish:
+            explainPolish()
         case .addToDictionary where selection != nil:
             addToDictionary(selection ?? "")
         default:
@@ -2248,7 +2253,6 @@ final class DictationController {
         let selected = selection != nil && machine.isRecording
         let offer = PillSelectionOffer(polish: selected && effectiveChoice != .gemini && canPolishSelection,
                                        dictionary: selected && canAddToDictionary)
-        if hotkeys.selectionReady != offer.polish { hotkeys.selectionReady = offer.polish }
         let previous = selectionOffer
         guard offer != previous else { return }
         selectionOffer = offer
@@ -2273,6 +2277,16 @@ final class DictationController {
             self.pillModel.selectionHint = .hidden
         }
     }
+
+    /// The polish key where it can't polish (off Gemini, nothing selected): it says so over the pill for a moment, and
+    /// the dictation goes on. To the machine it's a key pressed during the hold, so the release isn't a tap.
+    private func explainPolish() {
+        send(.polish)
+        pillModel.showKeyHint("Polish works on Gemini only")
+    }
+
+    /// Text is selected and the polish key would polish it (Polish Selection): the keys over it are live.
+    var polishesSelection: Bool { selectionOffer.polish }
 
     /// The polish key over the hint: the dictation gives way without a trace (the cancel cue, then Polish's drop), the
     /// hint drops into the pill as it closes into the polish circle, and the selection goes to both models at once.
@@ -2714,7 +2728,6 @@ final class DictationController {
     private func stateDidChange() {
         if hotkeys.isBusy != machine.isBusy { hotkeys.isBusy = machine.isBusy }
         if hotkeys.isRecording != machine.isRecording { hotkeys.isRecording = machine.isRecording }
-        if hotkeys.dictationModel != modelOverride { hotkeys.dictationModel = modelOverride }
         syncSelectionPending()
         let returnSends = settings.returnSendsHandsFree && machine.mode == .handsFree && machine.isRecording
         if hotkeys.returnSends != returnSends { hotkeys.returnSends = returnSends }

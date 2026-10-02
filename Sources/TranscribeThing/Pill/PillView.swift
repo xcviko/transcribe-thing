@@ -601,7 +601,7 @@ struct PillFace: View {
     /// What the chip names while it's up (`PillModel.showsChip`): the dictation's model. Content shrinking away
     /// keeps its own choice's chip.
     private var chipChoice: ModelChoice? {
-        carriesModel && model.showsChip && model.selectionHint == .hidden ? choice : nil
+        carriesModel && model.showsChip && model.selectionHint == .hidden && model.keyHint == nil ? choice : nil
     }
 
     /// The dictation being recorded is polished: the drop beside the pill. Once it's processing, the drop flows back
@@ -1549,6 +1549,24 @@ struct PillSelectionHint: View {
             offer.dictionary ? "\(dictionary?.spokenDescription ?? "D") to add it to your dictionary" : nil,
         ].compactMap { $0 }
         return "Text selected. Press " + parts.joined(separator: ", or ")
+    }
+}
+
+/// "Polish works on Gemini only": a key pressed where it does nothing says so, over the pill, in the chip's place.
+struct PillKeyHint: View {
+    let text: String
+
+    var body: some View {
+        PillChipCapsule {
+            Image(systemName: "wand.and.sparkles")
+                .font(.system(size: 9.5, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.6))
+            Text(text)
+                .foregroundStyle(.white.opacity(0.85))
+        }
+        .fixedSize()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(text)
     }
 }
 

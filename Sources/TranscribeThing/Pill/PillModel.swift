@@ -65,6 +65,9 @@ final class PillModel {
     var selectionHint: PillSelectionHintState = .hidden
     /// What the hint offers for the selected text.
     var selectionOffer = PillSelectionOffer()
+    /// A word over the pill about a key that did nothing where it was pressed ("Polish works on Gemini only"), for
+    /// `timing.keyHintHold`. It takes the chip's place.
+    private(set) var keyHint: String?
 
     /// Key-chip text for the tooltip, from `settings.shortcuts[.pushToTalk]`.
     var shortcutHint: String = "fn"
@@ -118,6 +121,7 @@ final class PillModel {
     @ObservationIgnored private var controlTooltipTask: Task<Void, Never>?
     @ObservationIgnored private var helloTask: Task<Void, Never>?
     @ObservationIgnored private var chipTask: Task<Void, Never>?
+    @ObservationIgnored private var keyHintTask: Task<Void, Never>?
     @ObservationIgnored private var pointerInside = false
 
     init(settings: AppSettings, levelMeter: LevelMeter) {
@@ -342,6 +346,13 @@ final class PillModel {
         showsChip ? sessionModel : nil
     }
 
+    /// Says `text` over the pill for `timing.keyHintHold`; another meanwhile starts it over.
+    func showKeyHint(_ text: String) {
+        keyHintTask?.cancel()
+        keyHint = text
+        if autoSettles { keyHintTask = delayed(timing.keyHintHold) { $0.keyHint = nil } }
+    }
+
     /// Shows the chip for `timing.chipHold`; a switch meanwhile starts it over.
     func flashChip() {
         chipTask?.cancel()
@@ -409,6 +420,8 @@ struct PillTiming: Equatable, Sendable {
     /// How long the model chip stays after a switch, before it fades and the tint alone says the model; Polish
     /// Selection's hint stays as long.
     var chipHold: TimeInterval = 1.2
+    /// How long a word about a key that did nothing stays over the pill (`PillModel.keyHint`).
+    var keyHintHold: TimeInterval = 1.8
 }
 
 extension PillPhase {

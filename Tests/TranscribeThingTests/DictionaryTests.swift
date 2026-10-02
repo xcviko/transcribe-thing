@@ -159,8 +159,7 @@ import Testing
         Switch.hold(rig)
         try await waitUntil { rig.h.pill.selectionHint == .shown }
         #expect(rig.h.pill.selectionOffer == PillSelectionOffer(polish: true, dictionary: true))
-        let config = rig.h.hotkeys.currentConfig()
-        #expect(config.polishes && config.addsToDictionary)
+        #expect(rig.h.controller.polishesSelection && rig.h.hotkeys.currentConfig().addsToDictionary)
         rig.h.controller.send(.pillCancel)
     }
 
@@ -237,14 +236,14 @@ import Testing
         try await waitUntil { rig.h.settings.dictionary.words == ["Wispr Flow"] }
     }
 
-    /// Without an OpenRouter key Polish Selection isn't offered (nor its key held), but the dictionary is.
+    /// Without an OpenRouter key Polish Selection isn't offered, but the dictionary is.
     @Test func fnDWorksWithoutAKey() async throws {
         let (rig, _) = Self.make(key: .missing)
-        #expect(!rig.h.hotkeys.currentConfig().selectionPending && rig.h.hotkeys.currentConfig().addsToDictionary)
+        #expect(rig.h.hotkeys.currentConfig().addsToDictionary)
         Switch.hold(rig)
         try await waitUntil { rig.h.pill.selectionHint == .shown }
         #expect(rig.h.pill.selectionOffer == PillSelectionOffer(polish: false, dictionary: true))
-        #expect(!rig.h.hotkeys.currentConfig().polishes && !rig.h.hotkeys.currentConfig().selectionPending)
+        #expect(!rig.h.controller.polishesSelection)
         Self.pressD(rig)
         try await waitUntil { rig.h.settings.dictionary.words == ["Wispr Flow"] }
     }
@@ -275,19 +274,19 @@ import Testing
         #expect(rig.h.settings.dictionary.words.isEmpty && !rig.h.controller.machine.isRecording)
     }
 
-    /// fn ↩ and fn D both before anything is known, with nothing selected: both go on to the app, in order.
-    @Test func keysWaitingTogetherAllGoToTheApp() async throws {
+    /// fn P and fn D both before anything is known, with nothing selected: fn P says Polish is Gemini's, and the D goes
+    /// on to the app.
+    @Test func keysWaitingTogetherEachDoTheirPart() async throws {
         let (rig, _) = Self.make(selection: nil)
         let lookup = PolishSelectionTests.Lookup()
         rig.h.controller.selectionOverride = { await lookup.wait(); return nil }
         var replayed: [KeyStroke] = []
         rig.h.controller.replayKeyOverride = { replayed.append($0) }
         rig.h.controller.handle(.pttDown)
-        let enter = KeyStroke(keyCode: KeyCode.keypadEnter, flags: 0, interruptsHold: true)
-        rig.h.controller.handle(.heldForSelection(.polish, enter))
+        rig.h.controller.handle(.polish)
         Self.pressD(rig)
         lookup.isOpen = true
-        try await waitUntil { replayed.count == 2 }
-        #expect(replayed == [enter, Self.d])
+        try await waitUntil { replayed.count == 1 }
+        #expect(replayed == [Self.d] && rig.h.pill.keyHint == "Polish works on Gemini only")
     }
 }
