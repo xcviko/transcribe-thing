@@ -118,10 +118,15 @@ final class TranscriptionService {
             return result
         } catch let error as AppError {
             Log.engine.error("\(engine.rawValue, privacy: .public) failed: \(error.code, privacy: .public)")
+            DiagnosticLog.shared.event(.engine, "transcription.failed", [
+                "engine": engine, "code": error, "seconds": Self.seconds(started.duration(to: .now))])
             throw error
         } catch {
             if error is CancellationError || Task.isCancelled { throw CancellationError() }
             Log.engine.error("\(engine.rawValue, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+            DiagnosticLog.shared.event(.engine, "transcription.failed", [
+                "engine": engine, "error": DiagnosticErrorCode(error),
+                "seconds": Self.seconds(started.duration(to: .now))])
             throw AppError.engineFailed(engine, ModelStore.oneLine(error))
         }
     }
@@ -196,6 +201,8 @@ final class TranscriptionService {
             } catch let refused as OpenRouterClient.AudioFormatRefused
                         where upload == nil && refused.format != UploadFormat.wav.rawValue {
                 Log.net.warning("OpenRouter refused \(refused.format, privacy: .public) for \(engine.rawValue, privacy: .public): sending WAV from now on")
+                DiagnosticLog.shared.event(.net, "openrouter.formatRefused",
+                                           ["engine": engine, "format": refused.format])
                 speechFormat = .wav
                 results.append(try await transcribeSegment(samples, range, format: .wav, engine: engine,
                                                            model: model, key: key))
@@ -291,6 +298,8 @@ final class TranscriptionService {
         } catch let error as AppError {
             account.noteCloudFailure(error)
             Log.engine.error("Clean-up failed: \(error.code, privacy: .public)")
+            DiagnosticLog.shared.event(.engine, "cleanup.failed", [
+                "source": source, "code": error, "seconds": Self.seconds(started.duration(to: .now))])
             throw error
         } catch {
             if error is CancellationError || Task.isCancelled { throw CancellationError() }

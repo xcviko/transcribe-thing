@@ -263,9 +263,12 @@ final class UpdateCenter {
             checkError = nil
             saveCache(feedURL: client.feedURL)
             Log.app.info("Update check: latest \(self.releases.first?.version.description ?? "none", privacy: .public), running \(self.currentVersion?.description ?? "unknown", privacy: .public)")
+            DiagnosticLog.shared.event(.updates, "update.checked", [
+                "latest": releases.first?.version.description ?? "none", "running": currentVersion?.description])
         } catch {
             checkError = error
             Log.app.error("Update check failed: \(String(describing: error), privacy: .public)")
+            DiagnosticLog.shared.event(.updates, "update.checkFailed", ["code": error])
         }
     }
 
@@ -397,6 +400,7 @@ final class UpdateCenter {
             try installer.install(ready)
             install = .restarting(version)
             Log.app.notice("Installed \(version.description, privacy: .public); relaunching")
+            DiagnosticLog.shared.event(.updates, "update.installed", ["version": version.description])
             do {
                 try relaunch(installer.target)
             } catch {
@@ -410,6 +414,7 @@ final class UpdateCenter {
             let failure = (error as? UpdateInstallError)
                 ?? (error is CancellationError ? .cancelled : .installFailed(error.localizedDescription))
             Log.app.error("Update to \(version.description, privacy: .public) failed: \(String(describing: failure), privacy: .public)")
+            DiagnosticLog.shared.event(.updates, "update.failed", ["version": version.description, "code": failure])
             switch failure {
             case .cancelled:
                 install = .idle

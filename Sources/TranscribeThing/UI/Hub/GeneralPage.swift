@@ -1,6 +1,8 @@
+import AppKit
 import SwiftUI
 
-/// Software Update, startup, the pill and sounds, how text is pasted, History's Auto-delete, permissions and About.
+/// Software Update, startup, the pill and sounds, how text is pasted, History's Auto-delete, permissions, About, and
+/// the logs to send when something breaks.
 struct GeneralPage: View {
     @Environment(HubContext.self) private var hub
     @Environment(AppSettings.self) private var settings
@@ -17,7 +19,7 @@ struct GeneralPage: View {
 
     var body: some View {
         @Bindable var settings = settings
-        HubPage("General", subtitle: "Updates, startup, pill and sounds, pasting, history and permissions.") {
+        HubPage("General", subtitle: "Updates, startup, pill and sounds, pasting, history, permissions and logs.") {
             HubGroup("Updates") {
                 SettingsGroup {
                     SoftwareUpdateRow()
@@ -115,6 +117,11 @@ struct GeneralPage: View {
             }
             HubGroup("About") {
                 AboutCard()
+            }
+            HubGroup("Troubleshooting") {
+                SettingsGroup {
+                    LogsRow()
+                }
             }
         }
         // Approval in Login Items (or removal there) happens outside transcribe-thing.
@@ -250,6 +257,52 @@ private struct SoftwareUpdateRow: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .accessibilityLabel("Software Update, \(UpdateFormat.summary(updates, now: hub.now))")
+    }
+}
+
+/// Export Logs…: what the app did over the last days (`DiagnosticLog`), in one file on the Desktop, shown in Finder,
+/// for the user to send when something breaks. A failure says why in a notice.
+private struct LogsRow: View {
+    @Environment(HubContext.self) private var hub
+    @State private var isExporting = false
+
+    var body: some View {
+        SettingsRow(title: "Logs",
+                    subtitle: "The last \(hub.diagnostics.log.limits.days) days of what the app did, without your "
+                        + "dictations or key. Send the file if something breaks.",
+                    systemImage: "doc.text.magnifyingglass", iconTint: .inkSecondary) {
+            Button("Export Logs…", action: export)
+                .buttonStyle(SecondaryButtonStyle(size: .small))
+                .disabled(isExporting)
+        }
+    }
+
+    private func export() {
+        guard !hub.isPreview, !isExporting else { return }
+        isExporting = true
+        let hub = hub
+        Task {
+            defer { isExporting = false }
+            do {
+                let url = try await hub.diagnostics.exportLogs()
+                NSWorkspace.shared.activateFileViewerSelecting([url])
+            } catch {
+                hub.toasts.post(Self.failureNotice(error))
+            }
+        }
+    }
+
+    /// The Desktop needs the user's yes the first time (Files & Folders); anything else says what went wrong.
+    static func failureNotice(_ error: Error) -> Notice {
+        let ns = error as NSError
+        let denied = ns.domain == NSCocoaErrorDomain && ns.code == NSFileWriteNoPermissionError
+        return Notice(dedupeKey: "logs.export", style: .error, symbol: "exclamationmark.triangle.fill",
+                      title: "Couldn’t save the logs",
+                      body: denied
+                          ? "Allow \(Brand.name) to use your Desktop in System Settings › Privacy & Security › "
+                              + "Files & Folders, then try again."
+                          : error.localizedDescription,
+                      lifetime: .seconds(10), sound: .error)
     }
 }
 

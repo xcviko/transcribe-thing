@@ -377,6 +377,11 @@ final class DictationController {
             selectionTask?.cancel()
             selection = nil
         }
+        if !wasRecording || wasArming, machine.capture.isListeningOrLocked {
+            DiagnosticLog.shared.event(.dictation, "dictation.started", [
+                "mode": machine.mode, "model": effectiveChoice, "engine": effectiveEngine, "polish": isPolishing,
+                "undo": input.isResume ? true : nil, "mic": recorder.lastChoice?.device.transport])
+        }
         stateDidChange()
     }
 
@@ -563,7 +568,11 @@ final class DictationController {
         }
         // A new recording may already be running (re-pressed during the tail): keep the cue out of it.
         if job.playsStopCue { playCue(.stop) }
+        DiagnosticLog.shared.event(.dictation, "dictation.stopped",
+                                   ["seconds": recording.duration, "voiced": recording.speech.voicedSeconds])
         guard passesPreflight(recording) else {
+            DiagnosticLog.shared.event(.dictation, "job.finished", [
+                "engine": job.engine, "outcome": recording.speech.isSilent ? "silent" : "noSpeech", "sent": false])
             queue.removeAll { $0 === job }
             _ = machine.handle(.jobEnded, now: clock())
             drain()
@@ -605,6 +614,8 @@ final class DictationController {
         continuing = nil
         let recording = captureDevice.isCapturing ? captureDevice.cancel() : nil
         if keepForUndo {
+            DiagnosticLog.shared.event(.dictation, "dictation.canceled",
+                                       ["seconds": recording?.duration, "voiced": recording?.speech.voicedSeconds])
             guard let recording else { return }
             keepCancelled(recording, engine: effectiveEngine, cleansUp: effectiveChoice.cleansUp,
                           polishes: isPolishing, notify: notify)
@@ -1010,6 +1021,7 @@ final class DictationController {
     @discardableResult
     private func cancelNewestJob() -> Bool {
         guard let job = queue.last else { return false }
+        DiagnosticLog.shared.event(.dictation, "job.canceled", ["engine": job.engine, "cleaningUp": job.isCleaningUp])
         queue.removeLast()
         job.stop()
         job.isCancelled = true
@@ -1074,6 +1086,10 @@ final class DictationController {
             case nil:
                 break
             }
+            DiagnosticLog.shared.event(.dictation, "job.finished", [
+                "engine": result.engine, "outcome": "success", "seconds": result.processingTime,
+                "retry": history.entry(id: job.id)?.status == .failed, "polished": job.polishes,
+                "cleanup": cleanup.map { _ in cleanupFailed ? "failed" : "cleaned" }, "cleanupError": cleanupError])
             // Kept as long as the entry, so History can transcribe it again with another model. Saved again even when
             // a failed or canceled row had it: an Undo-resumed dictation's file holds only the part before the cancel.
             history.upsert(TranscriptEntry(
@@ -1140,6 +1156,9 @@ final class DictationController {
     /// Retry. One that already had a failed or canceled row (a retry, a resumed dictation) takes the row and its
     /// audio along; "No speech detected" still says why, so a row never vanishes without a word.
     private func deliverSilence(_ job: Job) {
+        DiagnosticLog.shared.event(.dictation, "job.finished", [
+            "engine": job.engine, "outcome": "noSpeech", "retry": history.entry(id: job.id)?.status == .failed,
+            "polished": job.polishes])
         forget(job.id)
         let hadRow = history.entry(id: job.id).map { $0.status != .success } ?? false
         if hadRow { history.delete(job.id) }
@@ -1149,6 +1168,9 @@ final class DictationController {
 
     private func deliverFailure(_ job: Job, _ error: AppError) {
         guard let recording = job.recording else { return }
+        DiagnosticLog.shared.event(.dictation, "job.finished", [
+            "engine": job.engine, "outcome": "failure", "code": error,
+            "retry": history.entry(id: job.id)?.status == .failed, "polished": job.polishes, "cleansUp": job.cleansUp])
         let file = history.saveAudio(recording)
         retain(recording)
         if job.cleansUp { cleanupIDs.insert(job.id) }
@@ -1185,6 +1207,7 @@ final class DictationController {
     /// confirmation; the pill just goes back to rest.
     private func handleInsertion(_ outcome: InsertionOutcome, text: String, isDictation: Bool) {
         Log.app.notice("Insertion outcome: \(String(describing: outcome), privacy: .public)")
+        DiagnosticLog.shared.event(.dictation, "paste", ["outcome": outcome, "dictation": isDictation])
         switch outcome {
         case .pasted:
             // A paste landing mid-recording must not leak its tick into the new recording.
@@ -1382,12 +1405,16 @@ final class DictationController {
             guard self.endHomeWork(for: id) else { return }
             switch outcome {
             case .cleaned(let result):
+                DiagnosticLog.shared.event(.dictation, "home.finished",
+                                           ["cleanup": source, "outcome": "success", "seconds": result.processingTime])
                 let version = result.version(kind)
                 guard var current = self.history.entry(id: id), current.status == .success else { return }
                 current.addVersion(version)
                 self.history.upsert(current)
                 self.resolveGeneration(of: version, entryID: id)
             case .failed(let error):
+                DiagnosticLog.shared.event(.dictation, "home.finished",
+                                           ["cleanup": source, "outcome": "failure", "code": error])
                 guard self.history.entry(id: id) != nil else { return }
                 self.homeFailures[id] = HomeFailure(kind: kind, reason: Self.homeFailureReason(error, making: kind))
             }
@@ -1490,11 +1517,16 @@ final class DictationController {
                     audioFileName: history.saveAudio(recording), versions: [version]))
             }
             resolveGeneration(of: version, entryID: id)
+            DiagnosticLog.shared.event(.dictation, "home.finished", [
+                "engine": result.engine, "polish": made == .polish, "outcome": "success",
+                "seconds": result.processingTime])
             return
         case .failure(let error):
             failure = error
         }
         Log.engine.error("Home transcription failed: \(failure.code, privacy: .public)")
+        DiagnosticLog.shared.event(.dictation, "home.finished",
+                                   ["engine": engine, "polish": made == .polish, "outcome": "failure", "code": failure])
         let kind = made ?? .transcription(engine)
         guard entry.status != .success else {
             homeFailures[id] = HomeFailure(kind: kind, reason: Self.homeFailureReason(failure, making: kind))
@@ -1691,6 +1723,7 @@ final class DictationController {
     }
 
     private func reportCaptureFailure(_ error: AppError) {
+        DiagnosticLog.shared.event(.dictation, "dictation.refused", ["code": error, "engine": effectiveEngine])
         if error == .microphonePermissionDenied, permissions.microphone == .notDetermined {
             let permissions = permissions
             Task { _ = await permissions.requestMicrophone() }
