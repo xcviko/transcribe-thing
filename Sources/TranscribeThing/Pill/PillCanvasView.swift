@@ -65,13 +65,13 @@ struct PillCanvasView: View {
 
     /// The Switch model hint over a long push-to-talk hold (the controller decides when).
     private var showsSwitchHint: Bool {
-        model.isPresented && model.visiblePhase == .listening && model.showsTabHint
+        model.isPresented && model.settings.showsPillHints && model.visiblePhase == .listening && model.showsTabHint
             && model.settings.shortcuts[.switchModel] != nil
     }
 
     /// Polish Selection's hint over a recording with text selected, and as it drops into the pill.
     private var showsSelectionHint: Bool {
-        model.isPresented && model.selectionHint != .hidden
+        model.isPresented && model.settings.showsPillHints && model.selectionHint != .hidden
             && (model.visiblePhase.isRecording || model.selectionHint == .handoff)
     }
 
@@ -79,7 +79,7 @@ struct PillCanvasView: View {
     private var showsChip: Bool {
         let chip = model.isPillAllowed && model.showsChip
             && (model.visiblePhase.isRecording || model.visiblePhase == .processing)
-        return model.isPresented && (chip || model.selectionHint == .shown && model.visiblePhase.isRecording)
+        return model.isPresented && (chip || showsSelectionHint && model.visiblePhase.isRecording)
     }
 
     /// With no pill on screen (hidden until the next dictation, or Never mode) toasts drop into its slot, bottoms

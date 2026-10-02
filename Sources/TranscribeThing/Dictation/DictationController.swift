@@ -2591,7 +2591,7 @@ final class DictationController {
     /// `switchHintDelay` shows the Switch model hint, its first `AppSettings.switchHintLimit` times.
     func showSwitchHintIfDue() {
         guard case .listening(let downAt) = machine.capture, clock() - downAt >= switchHintDelay - 0.01,
-              !pillModel.showsTabHint, modelOverride == nil, canSwitchModels,
+              !pillModel.showsTabHint, modelOverride == nil, canSwitchModels, settings.showsPillHints,
               settings.shortcuts[.switchModel] != nil,
               settings.switchHintShownCount < AppSettings.switchHintLimit else { return }
         settings.switchHintShownCount += 1

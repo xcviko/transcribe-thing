@@ -56,6 +56,9 @@ final class AppSettings {
     var switchHintShownCount: Int = 0 { didSet { store.set(switchHintShownCount, .switchHintShownCount) } }
     var pillMode: PillMode = .whileDictating { didSet { store.set(pillMode.rawValue, .pillMode) } }
     var soundsEnabled: Bool = true { didSet { store.set(soundsEnabled, .soundsEnabled) } }
+    /// What floats above the pill to say what's going on: the model's name after a switch, the keys for selected text,
+    /// the Switch model hint. Off, the pill's color tells the model, and the keys work all the same.
+    var showsPillHints: Bool = true { didSet { store.set(showsPillHints, .showsPillHints) } }
     /// The only mic dictation opens while it is connected. nil = Automatic: the system default input (Bluetooth
     /// included) at the moment a dictation starts. A picked mic that goes away falls back to Automatic
     /// (`InputDevicePolicy.keepsPick`), and is picked again when it's back (`microphoneUIDBeforeFallback`).
@@ -208,6 +211,7 @@ final class AppSettings {
         // again.
         store.remove(.pillColor)
         if let v = store.bool(.soundsEnabled) { soundsEnabled = v }
+        if let v = store.bool(.showsPillHints) { showsPillHints = v }
         // Older builds had a volume slider; sounds now play at their files' own level. A slider left at zero
         // meant no sounds, so it turns "Play sounds" off once, and the old key goes.
         if let volume = store.double(.soundVolume) {
@@ -371,7 +375,7 @@ enum SettingsKey: String, CaseIterable {
     case addSpaceAfterText, removeFinalPeriod, autoDeleteHistoryDays, lineup, modelColors, keychainKeyMigrated
     case handsFreeModel, modelsAddingSpace, modelsRemovingFinalPeriod, dictionary, returnSendsHandsFree
     /// Polish's default left fn ↩ for fn P: set once its old default has been moved (`load`).
-    case polishMovedToFnP
+    case polishMovedToFnP, showsPillHints
     case polishSelectionModel
 
     var defaultsKey: String { "tt.\(rawValue)" }

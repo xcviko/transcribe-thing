@@ -1019,3 +1019,37 @@ import Testing
         #expect(rig.h.pill.errorModel == .gemini)
     }
 }
+
+// MARK: - Hints above the pill off
+
+@MainActor
+@Suite(.serialized) struct PillHintsOffTests {
+    /// Off, a switch brings no chip and a long hold no Switch model hint (nor uses up one of its showings); the pill's
+    /// color still changes, and the keys work.
+    @Test func noChipNoHintTheKeysStill() {
+        let (rig, _) = SwitchModelControllerTests.make()
+        let c = rig.h.controller
+        c.runsTimers = false
+        rig.h.settings.showsPillHints = false
+        SwitchModelControllerTests.hold(rig)
+        rig.now += 2
+        c.showSwitchHintIfDue()
+        #expect(!rig.h.pill.showsTabHint && rig.h.settings.switchHintShownCount == 0)
+        c.handle(.cycleEngine)
+        #expect(c.effectiveChoice != rig.h.settings.lineup.main && !rig.h.pill.showsChip)
+        #expect(rig.h.pill.sessionModel == c.effectiveChoice, "the color follows the model")
+        c.handle(.cancel)
+    }
+
+    /// The selection's keys work without their hint.
+    @Test func theSelectionsKeysWorkWithoutTheHint() async throws {
+        let (rig, _) = SwitchModelControllerTests.make()
+        rig.h.controller.start()
+        rig.h.settings.showsPillHints = false
+        rig.h.controller.selectionOverride = { "Wispr" }
+        SwitchModelControllerTests.hold(rig)
+        try await waitUntil { rig.h.hotkeys.selectionReady }
+        rig.h.controller.handle(.heldForSelection(.addToDictionary, AddToDictionaryTests.d))
+        try await waitUntil { rig.h.settings.dictionary.words == ["Wispr"] }
+    }
+}

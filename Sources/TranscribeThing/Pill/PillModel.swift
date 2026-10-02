@@ -325,9 +325,10 @@ final class PillModel {
 
     /// The chip above the pill is up only for a moment after a switch (Switch model, or the menu), and in
     /// hands-free while the pointer rests on the chip itself, so a click can open the model menu. Hovering the
-    /// pill never brings it up: the tint alone says the model.
+    /// pill never brings it up: the tint alone says the model. With hints above the pill off
+    /// (`AppSettings.showsPillHints`), a switch doesn't bring it up either.
     var showsChip: Bool {
-        isChipFlashing || (visiblePhase == .locked && isPointerOverChip)
+        isChipFlashing && settings.showsPillHints || (visiblePhase == .locked && isPointerOverChip)
     }
     /// The pointer is on the chip (hands-free), set by the controller.
     private(set) var isPointerOverChip = false

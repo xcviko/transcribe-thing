@@ -56,6 +56,14 @@ struct GeneralPage: View {
             HubGroup("Pill & Sounds") {
                 SettingsGroup {
                     pillRow
+                    SettingsRow(title: "Hints above the pill",
+                                subtitle: "The model’s name when you switch, and the keys for text you’ve selected. "
+                                    + "Off, the pill’s color tells the model, and the keys work all the same.",
+                                systemImage: "text.bubble", iconTint: .inkSecondary) {
+                        Toggle("", isOn: $settings.showsPillHints)
+                            .toggleStyle(.appSwitch)
+                            .labelsHidden()
+                    }
                     SettingsRow(title: "Play sounds", subtitle: "Soft clicks when recording starts, stops and pastes.",
                                 systemImage: settings.soundsEnabled ? "speaker.wave.2" : "speaker.slash",
                                 iconTint: .inkSecondary) {
