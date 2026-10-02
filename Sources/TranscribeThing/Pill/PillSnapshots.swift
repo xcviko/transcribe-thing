@@ -80,6 +80,8 @@ enum PillSnapshots {
             // Models (`--only pill-models`): the chip, the tint, the hint and the no-key notice.
             SnapshotEntry("pill-models", width: 760, height: 44 + 14 * 92) { _ in PillModelSheet() },
             SnapshotEntry("pill-polish", width: 760, height: 44 + 4 * 92 + 150) { _ in PolishSheet() },
+            // fn ⇥ while the chip is up: its names roll on, frame by frame of the spring.
+            SnapshotEntry("pill-chip-roll", width: 2040, height: 260) { _ in ChipRollSheet() },
             SnapshotEntry("pill-models-hint", width: 640, height: 150) { _ in
                 CanvasScene(model: hintModel(), notices: [])
             },
@@ -931,5 +933,35 @@ private struct PillStateSheet: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color.bgCanvas)
         .environment(\.pillStaticRendering, true)
+    }
+}
+
+/// The chip's roll between two models, every 40 ms of its spring (`PillChipRoll`), on the pill's dark ground.
+private struct ChipRollSheet: View {
+    private let settings = AppSettings.inMemory()
+    private let rolls: [(ModelChoice, ModelChoice)] = [(.cleanup, .gemini), (.gemini, .parakeet), (.parakeet, .cleanup)]
+    private let times = Array(0...9).map { Double($0) * 0.04 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            ForEach(Array(rolls.enumerated()), id: \.offset) { _, roll in
+                HStack(spacing: 0) {
+                    ForEach(times, id: \.self) { time in
+                        let progress = Spring(duration: 0.4, bounce: 0.15).value(target: 1.0, time: time)
+                        VStack(spacing: 6) {
+                            PillChipRoll(from: roll.0, to: roll.1, progress: progress, settings: settings)
+                                .frame(width: 200, height: 30)
+                            Text("\(Int((time * 1000).rounded())) ms")
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.5))
+                        }
+                        .frame(width: 200)
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color(nsColor: .hex(0x1F1F22)))
     }
 }

@@ -1326,20 +1326,6 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         return model
     }
 
-    /// A chip that comes up for a switch rolls on from the model the dictation was on; one already up rolls on from
-    /// what it shows, so the first model is kept only until it goes down.
-    @Test func aChipComingUpRollsOnFromTheModelBefore() {
-        let model = PillModel.preview(phase: .listening)
-        model.sessionModel = .parakeet
-        model.engineChipPulse &+= 1
-        #expect(model.chipRollsFrom == .parakeet)
-        model.sessionModel = .gemini
-        model.engineChipPulse &+= 1
-        #expect(model.chipRollsFrom == .parakeet && model.showsChip)
-        model.endChipFlash()
-        #expect(model.chipRollsFrom == nil && !model.showsChip)
-    }
-
     /// A switch names the new model for a moment; then the tint alone says it.
     @Test func eachSwitchFlashesTheChipThenItGoes() async throws {
         let model = makeModel()
