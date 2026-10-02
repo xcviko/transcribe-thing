@@ -1001,3 +1001,21 @@ import Testing
         rig.h.controller.send(.pillCancel)
     }
 }
+
+// MARK: - The no-speech pill
+
+@MainActor
+@Suite(.serialized) struct NoSpeechPillTests {
+    /// Gemini heard nothing: "No speech detected" wears Gemini's ring, as the dictation did.
+    @Test func noSpeechWearsTheDictationsModel() async throws {
+        let (rig, _) = SwitchModelControllerTests.make()
+        rig.h.settings.lineup.main = .gemini
+        rig.result = { _, _ in "" }
+        SwitchModelControllerTests.hold(rig)
+        rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
+        rig.now += 2
+        rig.h.controller.handle(.pttUp)
+        try await waitUntil { rig.h.pill.errorMessage == PillMetrics.noSpeechText }
+        #expect(rig.h.pill.errorModel == .gemini)
+    }
+}

@@ -4,7 +4,7 @@ import SwiftUI
 enum PillSnapshots {
     @MainActor static var entries: [SnapshotEntry] {
         [
-            SnapshotEntry("pill-states", width: 760, height: 44 + 14 * 68) { _ in PillStateSheet() },
+            SnapshotEntry("pill-states", width: 760, height: 44 + 15 * 68) { _ in PillStateSheet() },
             SnapshotEntry("pill-tooltip", width: 640, height: 140) { _ in
                 SideBySide { _ in
                     PillView(model: .preview(phase: .rest, isHovering: true))
@@ -81,7 +81,7 @@ enum PillSnapshots {
             SnapshotEntry("pill-models", width: 760, height: 44 + 14 * 92) { _ in PillModelSheet() },
             SnapshotEntry("pill-polish", width: 760, height: 44 + 4 * 92 + 150) { _ in PolishSheet() },
             // fn ⇥ while the chip is up: its names roll on, frame by frame of the spring.
-            SnapshotEntry("pill-chip-roll", width: 2040, height: 260) { _ in ChipRollSheet() },
+            SnapshotEntry("pill-chip-roll", width: 2040, height: 340) { _ in ChipRollSheet() },
             SnapshotEntry("pill-models-hint", width: 640, height: 150) { _ in
                 CanvasScene(model: hintModel(), notices: [])
             },
@@ -887,6 +887,12 @@ private struct PillStateSheet: View {
                 model.errorMessage = PillMetrics.noSpeechText
                 return model
             },
+            Row(id: "no-speech-gemini", caption: "No speech · after Gemini") {
+                let model = PillModel.preview(phase: .error)
+                model.errorMessage = PillMetrics.noSpeechText
+                model.errorModel = .gemini
+                return model
+            },
         ]
     }
 
@@ -944,12 +950,27 @@ private struct ChipRollSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
+            // fn ⇥ held down: three switches in a row, the strip rolling on through them in one go.
+            HStack(spacing: 0) {
+                ForEach(Array(times.enumerated()), id: \.offset) { index, _ in
+                    let position = Double(index) / Double(times.count - 1) * 3
+                    VStack(spacing: 6) {
+                        PillChipRoll(names: [.cleanup, .gemini, .parakeet, .cleanup], position: position,
+                                     settings: settings)
+                            .frame(width: 200, height: 30)
+                        Text(String(format: "%.2f", position))
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.5))
+                    }
+                    .frame(width: 200)
+                }
+            }
             ForEach(Array(rolls.enumerated()), id: \.offset) { _, roll in
                 HStack(spacing: 0) {
                     ForEach(times, id: \.self) { time in
-                        let progress = Spring(duration: 0.4, bounce: 0.15).value(target: 1.0, time: time)
+                        let progress = Spring(duration: 0.35, bounce: 0).value(target: 1.0, time: time)
                         VStack(spacing: 6) {
-                            PillChipRoll(from: roll.0, to: roll.1, progress: progress, settings: settings)
+                            PillChipRoll(names: [roll.0, roll.1], position: progress, settings: settings)
                                 .frame(width: 200, height: 30)
                             Text("\(Int((time * 1000).rounded())) ms")
                                 .font(.system(size: 9, weight: .medium))

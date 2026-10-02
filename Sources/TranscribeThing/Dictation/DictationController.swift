@@ -163,6 +163,7 @@ final class DictationController {
     @ObservationIgnored private var isErrorFlashDeferred = false
     /// The words the deferred flash carries ("No speech detected"), or nil for the plain shake.
     @ObservationIgnored private var deferredErrorMessage: String?
+    @ObservationIgnored private var deferredErrorModel: ModelChoice?
     /// The press under way began while a job was in flight: until it commits, the processing pill stays exactly
     /// as it is (its width, its count), so an fn tap or an fn combo doesn't disturb it.
     @ObservationIgnored private var pressKeepsProcessing = false
@@ -662,7 +663,7 @@ final class DictationController {
         if job.playsStopCue { playCue(.stop) }
         DiagnosticLog.shared.event(.dictation, "dictation.stopped",
                                    ["seconds": recording.duration, "voiced": recording.speech.voicedSeconds])
-        guard passesPreflight(recording) else {
+        guard passesPreflight(recording, model: ModelChoice(engine: job.engine, cleansUp: job.cleansUp)) else {
             DiagnosticLog.shared.event(.dictation, "job.finished", [
                 "engine": job.engine, "outcome": recording.speech.isSilent ? "silent" : "noSpeech", "sent": false])
             queue.removeAll { $0 === job }
@@ -676,14 +677,14 @@ final class DictationController {
     }
 
     /// Rejects flat or speechless recordings before any engine (or Gemini bill) sees them.
-    private func passesPreflight(_ recording: Recording) -> Bool {
+    private func passesPreflight(_ recording: Recording, model: ModelChoice) -> Bool {
         if recording.speech.isSilent {
             postFailure(AppError.microphoneSilent.notice(recordingID: nil, fallbackEngine: nil))
             flashError()
             return false
         }
         if recording.speech.voicedSeconds < Self.minimumVoicedSeconds {
-            reportNoSpeech()
+            reportNoSpeech(model: model)
             return false
         }
         return true
@@ -691,12 +692,12 @@ final class DictationController {
 
     /// "No speech detected", every time: said inside the pill, in place of the error glyph and without the shake.
     /// With no pill at all (Never mode) it is the quiet info notice instead. Shared by recordings the recorder
-    /// finds speechless and engines that answer with no text.
-    private func reportNoSpeech() {
+    /// finds speechless and engines that answer with no text. The pill wears `model`'s ring, as the dictation did.
+    private func reportNoSpeech(model: ModelChoice?) {
         if settings.pillMode == .never {
             postFailure(AppError.noSpeech.notice(recordingID: nil, fallbackEngine: nil))
         }
-        flashError(message: PillMetrics.noSpeechText)
+        flashError(message: PillMetrics.noSpeechText, model: model)
     }
 
     private func cancelCapture(keepForUndo: Bool, notify: Bool) {
@@ -1259,7 +1260,7 @@ final class DictationController {
         let hadRow = history.entry(id: job.id).map { $0.status != .success } ?? false
         if hadRow { history.delete(job.id) }
         Log.engine.info("No speech from \(job.engine.rawValue, privacy: .public)")
-        reportNoSpeech()
+        reportNoSpeech(model: ModelChoice(engine: job.engine, cleansUp: job.cleansUp))
     }
 
     private func deliverFailure(_ job: Job, _ error: AppError) {
@@ -2618,28 +2619,31 @@ final class DictationController {
     /// A one-shot error shake. PillModel keeps the flourish on screen for its minimum time and settles back by
     /// itself, even when the next `refreshPill` already asks for rest.
     /// `message` says it in words inside the capsule instead of the glyph and the shake.
-    private func flashError(message: String? = nil) {
+    private func flashError(message: String? = nil, model: ModelChoice? = nil) {
         lastErrorFlashAt = clock()
         onDictationFailed?()
-        showErrorFlash(message: message)
+        showErrorFlash(message: message, model: model)
     }
 
     /// Only a real recording suppresses the shake. The dots of a press that hasn't committed hold it back
     /// until the press folds away (a quick tap, an fn combo), so the shake is never lost to it.
-    private func showErrorFlash(message: String? = nil) {
+    private func showErrorFlash(message: String? = nil, model: ModelChoice? = nil) {
         guard !machine.capture.isListeningOrLocked else { return }
         if machine.capture.isUncommittedPress, !pressKeepsProcessing {
             isErrorFlashDeferred = true
             deferredErrorMessage = message
+            deferredErrorModel = model
             return
         }
         isErrorFlashDeferred = false
         deferredErrorMessage = nil
+        deferredErrorModel = nil
         // Leave any recording phase first, so the shake lands on the idle/processing pill.
         refreshPill()
         // Turns an idle or processing pill into the error flash, or re-shakes one already showing. Set after the
         // refresh: leaving for rest or processing clears the words.
         pillModel.errorMessage = message
+        pillModel.errorModel = message == nil ? nil : model
         pillModel.shakeTrigger += 1
     }
 
@@ -2650,7 +2654,7 @@ final class DictationController {
         isErrorFlashDeferred = false
         guard machine.capture == .idle else { return }
         lastErrorFlashAt = clock()
-        showErrorFlash(message: deferredErrorMessage)
+        showErrorFlash(message: deferredErrorMessage, model: deferredErrorModel)
     }
 
     private func refreshPill() {

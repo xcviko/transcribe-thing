@@ -71,6 +71,9 @@ final class PillModel {
     /// Set before an error flash to say it in words inside the capsule ("No speech detected") instead of the
     /// glyph and the shake. Cleared when the flash settles.
     var errorMessage: String?
+    /// The model of the dictation the error flash is about: "No speech detected" wears its ring, as the dictation
+    /// did. Gone with the flash.
+    var errorModel: ModelChoice?
     /// Increment to shake. Shaking an idle or processing pill turns it into a brief error flash
     /// so the feedback is visible even when the pill would otherwise be hidden.
     var shakeTrigger = 0 {
@@ -169,7 +172,10 @@ final class PillModel {
             recordingStartedAt = nil
         }
         if target == .error, previous != .error, errorMessage == nil { shakeCount &+= 1 }
-        if target != .error { errorMessage = nil }
+        if target != .error {
+            errorMessage = nil
+            errorModel = nil
+        }
         visiblePhase = target
         if !target.isIdle { showsTooltip = false }
         if !target.isRecording { setHoveredControl(nil) }
