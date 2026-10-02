@@ -67,6 +67,12 @@ struct PillCanvasView: View {
             && model.settings.shortcuts[.switchModel] != nil
     }
 
+    /// Polish Selection's hint over a recording with text selected, and as it drops into the pill.
+    private var showsSelectionHint: Bool {
+        model.isPresented && model.selectionHint != .hidden
+            && (model.visiblePhase.isRecording || model.selectionHint == .handoff)
+    }
+
     /// The model chip floats above the pill: toasts make room for it.
     private var showsChip: Bool {
         model.isPresented && model.isPillAllowed && model.showsChip
@@ -117,6 +123,15 @@ struct PillCanvasView: View {
                         .offset(y: -(PillMetrics.tooltipHeight + 8))
                         .transition(tooltipTransition)
                         .allowsHitTesting(false)
+                } else if showsSelectionHint {
+                    // Handed off, it drops into the pill and dissolves while the pill becomes the polish.
+                    let handoff = model.selectionHint == .handoff
+                    PillSelectionHint(model: model)
+                        .scaleEffect(handoff && !reduceMotion ? 0.6 : 1, anchor: .bottom)
+                        .offset(y: handoff && !reduceMotion ? PillMetrics.chipGap : -PillMetrics.chipLift)
+                        .opacity(handoff ? 0 : 1)
+                        .transition(tooltipTransition)
+                        .allowsHitTesting(false)
                 } else if showsSwitchHint {
                     PillSwitchHint(model: model)
                         .offset(y: -PillMetrics.chipLift)
@@ -126,6 +141,8 @@ struct PillCanvasView: View {
             }
             .animation(.easeOut(duration: 0.16), value: showsRestTooltip)
             .animation(.easeOut(duration: 0.2), value: showsSwitchHint)
+            .animation(reduceMotion ? .easeInOut(duration: 0.15) : .spring(duration: 0.3, bounce: 0.1),
+                       value: model.selectionHint)
             .padding(PillMetrics.hoverMargin)
             .contentShape(Rectangle())
             .onTapGesture {

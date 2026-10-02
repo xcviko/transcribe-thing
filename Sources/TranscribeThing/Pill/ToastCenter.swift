@@ -13,7 +13,9 @@ final class ToastCenter {
     static let afterCopyLifetime: TimeInterval = 2
 
     /// Newest last; at most two visible.
-    private(set) var notices: [Notice] = []
+    private(set) var notices: [Notice] = [] {
+        didSet { onNoticesChange?() }
+    }
     /// Countdown per notice id; sticky notices have none.
     private(set) var countdowns: [UUID: ToastCountdown] = [:]
     /// True while the pointer is over the toast stack.
@@ -21,6 +23,8 @@ final class ToastCenter {
 
     @ObservationIgnored var onAction: ((Notice, NoticeAction) -> Void)?
     @ObservationIgnored var onSound: ((SoundEffect) -> Void)?
+    /// A notice came or went, in the same turn (Polish Selection's card keys follow its card).
+    @ObservationIgnored var onNoticesChange: (() -> Void)?
 
     @ObservationIgnored private let clock: @MainActor () -> Date
     @ObservationIgnored private let schedulesExpiry: Bool

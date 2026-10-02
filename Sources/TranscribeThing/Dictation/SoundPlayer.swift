@@ -21,7 +21,7 @@ final class SoundPlayer {
     static let nominalDurations: [SoundEffect: TimeInterval] = [
         .start: 0.07, .stop: 0.085, .lock: 0.125, .paste: 0.045,
         .cancel: 0.095, .alert: 0.25, .error: 0.21, .success: 0.27, .modelSwitch: 0.07, .polishOn: 0.09,
-        .polishOff: 0.09,
+        .polishOff: 0.09, .polishHint: 0.06, .polishReady: 0.12,
     ]
 
     init(settings: AppSettings, engine: CueEngine = CueEngine()) {

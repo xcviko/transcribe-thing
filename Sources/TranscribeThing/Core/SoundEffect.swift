@@ -7,6 +7,8 @@ enum SoundEffect: String, CaseIterable, Sendable {
     case modelSwitch
     /// Polish turned on and off for a dictation: a drop rising, and falling (set A only, `scripts/gen-sounds.py`).
     case polishOn, polishOff
+    /// Polish Selection: its hint over the pill (a light "hm?"), and its card coming up (a bubble surfacing).
+    case polishHint, polishReady
 
     var fileName: String { rawValue }
     static let fileExtension = "wav"

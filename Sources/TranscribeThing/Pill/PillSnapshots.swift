@@ -83,6 +83,25 @@ enum PillSnapshots {
             SnapshotEntry("pill-models-hint", width: 640, height: 150) { _ in
                 CanvasScene(model: hintModel(), notices: [])
             },
+            // Polish Selection (`--only pill-selection`): the hint over a hold with text selected, the polish while
+            // Gemini or Luna writes, and the card.
+            SnapshotEntry("pill-selection-hint", width: 640, height: 150) { _ in
+                CanvasScene(model: selectionModel(.listening), notices: [])
+            },
+            SnapshotEntry("pill-selection-polishing", width: 640, height: 150) { _ in
+                CanvasScene(model: selectionModel(.processing, choice: .gemini), notices: [])
+            },
+            SnapshotEntry("pill-selection-polishing-luna", width: 640, height: 150) { _ in
+                CanvasScene(model: selectionModel(.processing, choice: .cleanup), notices: [])
+            },
+            SnapshotEntry("pill-selection-counting", width: 640, height: 150) { _ in
+                CanvasScene(model: selectionModel(.processing, choice: .gemini)
+                    .previewCounter(PillTokenCount(phase: .thinking, tokens: 420)), notices: [])
+            },
+            SnapshotEntry("pill-selection-card", width: 640, height: 340) { _ in
+                CanvasScene(model: restModel(), notices: [DictationController.selectionCard(
+                    "Давайте перенесём созвон на пятницу после обеда: в четверг Маша не может.")])
+            },
             SnapshotEntry("pill-models-hint-custom", width: 640, height: 150) { _ in
                 CanvasScene(model: hintModel(binding: Shortcut(modifiers: [.init(.control), .init(.option)],
                                                                keyCode: KeyCode.space)), notices: [])
@@ -162,6 +181,17 @@ enum PillSnapshots {
         let model = PillModel.preview(phase: .listening, level: 0.7)
         if let binding { model.settings.shortcuts[.switchModel] = binding }
         model.showsTabHint = true
+        return model
+    }
+
+    /// Polish Selection: a hold over selected text with its hint, or the polish being written by `choice`'s model.
+    @MainActor private static func selectionModel(_ phase: PillPhase, choice: ModelChoice = .parakeet) -> PillModel {
+        let model = PillModelSheet.model(phase, choice: choice, level: 0.7, chip: false)
+        if phase.isRecording {
+            model.selectionHint = .shown
+        } else {
+            model.polishes = true
+        }
         return model
     }
 

@@ -98,6 +98,47 @@ enum FocusInspector {
         return info
     }
 
+    /// The longest selection Polish Selection takes (about 3,000 words): past that it's a document, not a message.
+    static let maxSelection = 20_000
+
+    /// The text selected in the focused field of the frontmost app, for Polish Selection: Accessibility only, so
+    /// the clipboard is never touched. nil when nothing (or only whitespace) is selected, in a password field, past
+    /// `maxSelection`, or when the app doesn't say within `deadline` (Electron without an AX tree, most terminals).
+    static func selectedText(timeout: TimeInterval = 0.2, deadline: TimeInterval = 0.35) async -> String? {
+        let pid = await MainActor.run { NSWorkspace.shared.frontmostApplication?.processIdentifier }
+        guard let pid else { return nil }
+        let once = OSAllocatedUnfairLock(initialState: false)
+        return await withCheckedContinuation { (continuation: CheckedContinuation<String?, Never>) in
+            let finish: @Sendable (String?) -> Void = { text in
+                let first = once.withLock { done -> Bool in
+                    defer { done = true }
+                    return !done
+                }
+                if first { continuation.resume(returning: text) }
+            }
+            DispatchQueue.global(qos: .userInitiated).async {
+                finish(selectedTextNow(pid: pid, timeout: Float(timeout)))
+            }
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + deadline) { finish(nil) }
+        }
+    }
+
+    /// Synchronous read of the selection in app `pid`. Never call on the main thread.
+    static func selectedTextNow(pid: pid_t, timeout: Float) -> String? {
+        guard AXIsProcessTrusted() else { return nil }
+        let appElement = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(appElement, timeout)
+        var focusedRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &focusedRef) == .success,
+              let focusedRef, CFGetTypeID(focusedRef) == AXUIElementGetTypeID() else { return nil }
+        let element = unsafeDowncast(focusedRef, to: AXUIElement.self)
+        AXUIElementSetMessagingTimeout(element, timeout)
+        guard string(element, kAXSubroleAttribute) != kAXSecureTextFieldSubrole,
+              let text = string(element, kAXSelectedTextAttribute),
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, text.count <= maxSelection else { return nil }
+        return text
+    }
+
     /// One cheap parameterized read of the single character before the selection; never the whole value.
     private static func precedingCharacter(_ element: AXUIElement, range value: AXValue) -> Character? {
         var range = CFRange(location: 0, length: 0)

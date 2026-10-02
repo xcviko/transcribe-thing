@@ -116,7 +116,9 @@ struct ToastCard: View {
                         actionRow
                             .padding(.leading, isTranscript ? 0 : ToastMetrics.textInset)
                     }
-                    if showsPasteHint {
+                    if notice.takesCardKeys {
+                        cardKeysHint
+                    } else if showsPasteHint {
                         pasteHint
                     }
                 }
@@ -282,6 +284,21 @@ struct ToastCard: View {
         .buttonStyle(ToastActionStyle(isPrimary: isPrimary))
         .animation(.snappy(duration: 0.2), value: copied)
         .accessibilityLabel(copied ? "Copied" : action.title)
+    }
+
+    /// "[return] pastes · [esc] closes": the card's own keys while it's up.
+    private var cardKeysHint: some View {
+        HStack(spacing: 5) {
+            ShortcutChips(shortcut: Shortcut(modifiers: [], keyCode: KeyCode.returnKey), size: .small)
+            Text("pastes")
+            Text("·").foregroundStyle(.inkTertiary.opacity(0.6))
+            ShortcutChips(shortcut: Shortcut(modifiers: [], keyCode: KeyCode.escape), size: .small)
+            Text("closes")
+        }
+        .font(.system(size: 11, weight: .medium))
+        .foregroundStyle(.inkTertiary)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Return pastes, Escape closes")
     }
 
     private var pasteHint: some View {

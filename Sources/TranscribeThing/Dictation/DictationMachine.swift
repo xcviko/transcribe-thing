@@ -34,6 +34,8 @@ struct DictationMachine: Equatable {
         case polish
         /// Undo of a canceled dictation: record on, hands-free, after `prefix` seconds of kept audio.
         case resume(prefix: TimeInterval)
+        /// Polish Selection took over: the recording goes without a trace (no Undo, no notice, no sound).
+        case discard
         case timer(TimerID)
         case captureFailed(AppError), deviceLost
         /// Bookkeeping for `isBusy`.
@@ -124,6 +126,11 @@ struct DictationMachine: Equatable {
         case .jobEnded:
             activeJobs = max(0, activeJobs - 1)
             return []
+        case .discard:
+            guard isRecording else { return [] }
+            capture = .idle
+            switchedDuringPress = false
+            return cancelAllTimers + [.cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)]
         default:
             break
         }

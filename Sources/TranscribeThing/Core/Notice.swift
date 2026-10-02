@@ -66,6 +66,9 @@ struct Notice: Identifiable, Equatable, Sendable {
     var sound: SoundEffect?
     /// Recording the retry/undo actions refer to.
     var recordingID: UUID?
+    /// A transcript card whose keys are ↩ and Esc (Polish Selection's): it says so where other cards point to the
+    /// paste shortcut.
+    var takesCardKeys = false
 
     init(
         id: UUID = UUID(),
@@ -78,7 +81,8 @@ struct Notice: Identifiable, Equatable, Sendable {
         actions: [NoticeAction] = [],
         lifetime: NoticeLifetime = .seconds(5),
         sound: SoundEffect? = nil,
-        recordingID: UUID? = nil
+        recordingID: UUID? = nil,
+        takesCardKeys: Bool = false
     ) {
         self.id = id
         self.dedupeKey = dedupeKey
@@ -91,6 +95,7 @@ struct Notice: Identifiable, Equatable, Sendable {
         self.lifetime = lifetime
         self.sound = sound
         self.recordingID = recordingID
+        self.takesCardKeys = takesCardKeys
     }
 
     var primaryAction: NoticeAction? { actions.first(where: \.isPrimary) }

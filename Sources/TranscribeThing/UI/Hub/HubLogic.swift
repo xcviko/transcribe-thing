@@ -60,7 +60,7 @@ enum HistoryGrouping {
                                        entries: []))
             }
             days[days.count - 1].entries.append(entry)
-            days[days.count - 1].words += entry.wordCount
+            if !entry.isSelection { days[days.count - 1].words += entry.wordCount }
         }
         return days
     }
@@ -247,6 +247,7 @@ struct VersionsMenu: Equatable {
             case .cleanup(let source, let model):
                 namesSource ? "Clean Up \(source.displayName) with \(model.modelName)" : "Clean Up with \(model.modelName)"
             case .polish: "Polish with \(EngineID.geminiFlash.modelName)"
+            case .selection(let model): "Polish with \(model.modelName)"
             }
         }
         /// `name`, with the reason when it can't run: "Gemini 3.8 Flash · Needs key".
@@ -276,6 +277,10 @@ struct VersionsMenu: Equatable {
                      readiness: (EngineID) -> EngineReadiness) -> VersionsMenu {
         let isRetry = entry.status != .success
         let hasAudio = entry.audioFileName != nil
+        // A selection's polish has no recording to make another version from.
+        if entry.isSelection {
+            return VersionsMenu(isRetry: false, title: title(for: entry), versions: [], actions: [], runningTitle: nil)
+        }
         let versions = entry.versions.map {
             Version(kind: $0.kind, summary: $0.metadata.summary, isCurrent: $0.kind == entry.currentKind)
         }

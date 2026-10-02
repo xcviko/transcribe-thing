@@ -301,6 +301,32 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
         #expect(recorded == .commit(.fnReturn))
     }
 
+    /// With Polish Selection's card up, ↩ pastes it and Esc closes it, swallowed. ⌘↩ stays the app's, ↩ goes to the app
+    /// while a dictation records, and Esc cancels a busy dictation first.
+    @Test func theCardTakesReturnAndEscape() {
+        var kb = Keyboard()
+        kb.config.cardKeys = true
+        let paste = kb.down(kVK_Return)
+        #expect(paste.events == [.cardPaste] && paste.swallow)
+        #expect(kb.down(kVK_Return, isRepeat: true).events.isEmpty, "one paste per press")
+        #expect(kb.up(kVK_Return).swallow)
+        let close = kb.down(kVK_Escape)
+        #expect(close.events == [.cardClose] && close.swallow)
+        kb.up(kVK_Escape)
+        kb.press(.leftCommand)
+        #expect(!kb.down(kVK_Return).swallow)
+        kb.up(kVK_Return)
+        kb.release(.leftCommand)
+        kb.config.isRecording = true
+        kb.config.isBusy = true
+        #expect(!kb.down(kVK_Return).swallow)
+        kb.up(kVK_Return)
+        #expect(kb.down(kVK_Escape).events == [.cancel])
+        kb.up(kVK_Escape)
+        kb.config = HotkeyRouter.Config()
+        #expect(!kb.down(kVK_Return).swallow, "no card, no ↩")
+    }
+
     /// The keypad's own Enter, without fn, stays a key of its own: a shortcut on it fires on it and not on Return,
     /// and recording it in Shortcuts gives Keypad Enter.
     @Test func keypadEnterWithoutFnIsItsOwnKey() {

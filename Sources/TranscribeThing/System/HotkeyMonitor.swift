@@ -10,8 +10,10 @@ enum HotkeyEvent: Equatable, Sendable {
     case cycleEngine
     /// Its key held down: an autorepeat, which steps on too.
     case cycleEngineRepeat
-    /// The polish shortcut, during a dictation: Polish on or off for it.
+    /// The polish shortcut, during a dictation: Polish on or off for it, or Polish Selection with text selected.
     case polish
+    /// ↩ and Esc while Polish Selection's card is up: Paste Here, and close it.
+    case cardPaste, cardClose
 }
 
 /// Marker written into `kCGEventSourceUserData` of every event transcribe-thing synthesizes (the ⌘V paste),
@@ -43,6 +45,14 @@ final class HotkeyMonitor {
     /// Gemini.
     var dictationModel: ModelChoice? {
         didSet { if dictationModel != oldValue { pushConfig() } }
+    }
+    /// Text is selected for Polish Selection (its hint is over the pill): Polish's shortcut is live off Gemini too.
+    var selectionReady = false {
+        didSet { if selectionReady != oldValue { pushConfig() } }
+    }
+    /// Polish Selection's card is up: ↩ pastes it and Esc closes it.
+    var cardKeys = false {
+        didSet { if cardKeys != oldValue { pushConfig() } }
     }
     /// The tap thread is running (it keeps retrying tap creation until permission arrives).
     private(set) var isRunning = false
@@ -127,7 +137,8 @@ final class HotkeyMonitor {
     func currentConfig() -> HotkeyRouter.Config {
         HotkeyRouter.Config(bindings: settings.shortcuts, isBusy: isBusy, isRecording: isRecording,
                             switchesModels: settings.lineup.cycle.count > 1,
-                            polishes: (dictationModel ?? settings.lineup.main) == .gemini,
+                            polishes: (dictationModel ?? settings.lineup.main) == .gemini || selectionReady,
+                            cardKeys: cardKeys,
                             isSuspended: suspendCount > 0, forwardsRawKeys: onRawKey != nil)
     }
 

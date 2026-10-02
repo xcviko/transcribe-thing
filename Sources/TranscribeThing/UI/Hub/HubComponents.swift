@@ -490,6 +490,29 @@ struct CountBadge: View {
 
 /// The engine mark on history rows: P, F, Pro, in the model's color (`ModelColor.markTint`, as the pill wears it).
 /// Cloud Parakeet shares the local letter and color, so it carries a small cloud; a clean-up, a wand after the letter.
+/// A selection's polish in History: the wand, in the color of the model that wrote it.
+struct SelectionGlyph: View {
+    var model: PolishSelectionModel
+    /// The tooltip in full (`VersionDetails`).
+    var details: String?
+    var colors: ModelColors = .default
+
+    var body: some View {
+        let tint = colors[model.choice].markTint
+        Image(systemName: "wand.and.sparkles")
+            .font(.system(size: 8.5, weight: .bold))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 4)
+            .frame(minWidth: 17, minHeight: 17)
+            .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+            .help(details ?? label)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(label)
+    }
+
+    private var label: String { TranscriptVersionKind.selection(model).displayName }
+}
+
 struct EngineGlyph: View {
     var engine: EngineID
     /// The OpenRouter provider that served the transcript, for the tooltip.

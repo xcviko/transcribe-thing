@@ -80,6 +80,10 @@ final class DictationController {
     @ObservationIgnored var generationLookupOverride: (@MainActor (String) async -> GenerationDetails?)?
     /// Replaces the clean-up request: the transcript and the engine that wrote it (the model is the job's).
     @ObservationIgnored var cleanupOverride: (@MainActor (String, EngineID) async throws -> TranscriptResult)?
+    /// Tests: the selected text Polish Selection finds as a dictation starts, instead of asking Accessibility.
+    @ObservationIgnored var selectionOverride: (@MainActor () async -> String?)?
+    /// Tests: the model's answer for Polish Selection (its `<message>` tags included), instead of OpenRouter.
+    @ObservationIgnored var selectionPolishOverride: (@MainActor (String, PolishSelectionModel) async throws -> TranscriptResult)?
     /// Replaces how long a clean-up may take to start answering (`CleanupModel.timeout(forCharacterCount:)`).
     @ObservationIgnored var cleanupTimeoutOverride: TimeInterval?
     /// Replaces how long a job waits for its local model before saying so (`modelWaitNoticeDelay`).
@@ -112,6 +116,11 @@ final class DictationController {
     /// The user picked this dictation's model (Switch model, the pill's menu), even if it's the main model again:
     /// hands-free then doesn't switch it to its own.
     @ObservationIgnored private var pickedModel = false
+    /// Text selected in the frontmost app as this dictation started (Polish Selection), found through Accessibility.
+    @ObservationIgnored private var selection: String?
+    @ObservationIgnored private var selectionTask: Task<Void, Never>?
+    /// Polish Selection under way: the pill shows it (the polish circle, then the count) until its card comes up.
+    @ObservationIgnored private var selectionPolish: SelectionPolish?
     /// This dictation is polished (`Polish`, fn ↩ while it's on Gemini). It lasts while the dictation records, as
     /// `modelOverride` does: its job keeps it, the next dictation starts without.
     private(set) var isPolishing = false
@@ -213,6 +222,7 @@ final class DictationController {
         pillModel.onSelectModel = { [weak self] choice in self?.selectModelForCurrentDictation(choice) }
         pillModel.unavailableReason = { [weak self] choice in self?.unavailableReason(choice) }
         toasts.onAction = { [weak self] notice, action in self?.perform(action, from: notice) }
+        toasts.onNoticesChange = { [weak self] in self?.syncCardKeys() }
         toasts.onSound = { [weak self] sound in self?.playCue(sound) }
         let previous = models.onDownloadFinished
         models.onDownloadFinished = { [weak self] engine in
@@ -262,7 +272,15 @@ final class DictationController {
         case .pasteLast: pasteLast()
         case .cycleEngine: send(.cycleEngine)
         case .cycleEngineRepeat: repeatCycle()
-        case .polish: send(.polish)
+        case .polish:
+            // Off Gemini with text selected, the key is Polish Selection's; on Gemini it's Polish's.
+            if machine.isRecording, effectiveChoice != .gemini, let selection {
+                polishSelection(selection)
+            } else {
+                send(.polish)
+            }
+        case .cardPaste: pasteSelectionCard()
+        case .cardClose: toasts.dismiss(dedupeKey: Self.selectionCardKey)
         }
     }
 
@@ -347,6 +365,7 @@ final class DictationController {
             // Its start cue follows in 120 ms: the sound output (AirPods wake slowly) starts off the main thread,
             // once the mic has started (`beginCapture` holds sounds until its first audio).
             sounds.warmUp()
+            if !input.isResume { lookForSelection() }
         }
         if !machine.isRecording {
             pendingRefusal = nil
@@ -355,6 +374,8 @@ final class DictationController {
             if modelOverride != nil { modelOverride = nil }
             pickedModel = false
             if isPolishing { isPolishing = false }
+            selectionTask?.cancel()
+            selection = nil
         }
         stateDidChange()
     }
@@ -1233,6 +1254,7 @@ final class DictationController {
         switch action.kind {
         case .copyText(let text):
             copy(text)
+            if notice.dedupeKey == Self.selectionCardKey { playCue(.paste) }
             return
         case .pasteText(let text):
             toasts.dismiss(notice.id)
@@ -1311,6 +1333,8 @@ final class DictationController {
         case .transcription(let engine): retry(entry, with: engine)
         case .cleanup(let source, let model): cleanUp(entry, of: source, by: model)
         case .polish: polish(entry)
+        // A selection has no recording to make another version from.
+        case .selection: break
         }
     }
 
@@ -1496,7 +1520,7 @@ final class DictationController {
         case (.openRouterTruncated?, _): "It stopped before finishing."
         case (.openRouterRefused?, .cleanup), (.openRouterBadRequest?, .cleanup): "It couldn’t process the text."
         case (let error?, .cleanup(_, let model)): cleanupFailureReason(error, model: model)
-        case (let error?, .polish):
+        case (let error?, .polish), (let error?, .selection):
             accountFailureReason(error) ?? error.notice(recordingID: nil, fallbackEngine: nil, engine: .geminiFlash).title
         case (.openRouterRefused?, _), (.openRouterBadRequest?, _): "It couldn’t process this recording."
         case (.engineFailed?, _): "It ran into a problem."
@@ -1902,6 +1926,158 @@ final class DictationController {
         playCue(isPolishing ? .polishOn : .polishOff)
     }
 
+    // MARK: - Polish Selection
+
+    /// Polish Selection's card, by its dedupe key: ↩ and Esc work on it while it's up.
+    nonisolated static let selectionCardKey = "polish.selection"
+
+    /// Polish Selection under way: its model, and how far its answer has streamed, for the pill.
+    final class SelectionPolish {
+        let model: PolishSelectionModel
+        let estimate: TokenEstimate
+        var count: PillTokenCount?
+
+        init(model: PolishSelectionModel, estimate: TokenEstimate) {
+            self.model = model
+            self.estimate = estimate
+        }
+    }
+
+    /// As a dictation starts: text selected in the frontmost app, read through Accessibility off the main thread (the
+    /// clipboard is never touched). Its hint shows once it's there, while the dictation isn't on Gemini.
+    private func lookForSelection() {
+        selectionTask?.cancel()
+        selection = nil
+        guard settings.shortcuts[.polish] != nil else { return }
+        let override = selectionOverride
+        selectionTask = Task { [weak self] in
+            let text = if let override { await override() } else { await FocusInspector.selectedText() }
+            guard let self, !Task.isCancelled, self.machine.isRecording, let text else { return }
+            self.selection = text
+            self.updateSelectionHint(announce: true)
+        }
+    }
+
+    /// The hint over the pill while there's a selection and the dictation isn't on Gemini (on Gemini the key is
+    /// Polish's); the router takes the polish key off Gemini only then. A switch to Gemini hides it, and back shows it
+    /// again, quietly.
+    private func updateSelectionHint(announce: Bool = false) {
+        let shows = selection != nil && machine.isRecording && effectiveChoice != .gemini
+        if pillModel.selectionHint != .handoff {
+            let state: PillSelectionHintState = shows ? .shown : .hidden
+            if pillModel.selectionHint != state {
+                pillModel.selectionHint = state
+                if shows, announce { playCue(.polishHint) }
+            }
+            if shows, pillModel.showsTabHint { pillModel.showsTabHint = false }
+        }
+        if hotkeys.selectionReady != shows { hotkeys.selectionReady = shows }
+    }
+
+    /// The polish key over the hint: the dictation gives way without a trace (the cancel cue, then Polish's drop), the
+    /// hint drops into the pill as it closes into the polish circle, and the selection goes to the model picked in
+    /// Models. Its message comes up on a card to paste over the selection or copy, and History keeps it.
+    private func polishSelection(_ text: String) {
+        selectionTask?.cancel()
+        selection = nil
+        let model = settings.polishSelectionModel
+        let work = SelectionPolish(model: model,
+                                   estimate: TokenEstimate.learned(from: history.entries, modelID: model.route.model))
+        selectionPolish = work
+        pillModel.selectionHint = .handoff
+        playCue(.cancel)
+        send(.discard)
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(110))
+            self?.playCue(.polishOn)
+            try? await Task.sleep(for: .milliseconds(220))
+            if self?.pillModel.selectionHint == .handoff { self?.pillModel.selectionHint = .hidden }
+        }
+        let progress: @Sendable (ChatStreamProgress) -> Void = { [weak self] streamed in
+            Task { @MainActor [weak self] in
+                guard let self, self.selectionPolish === work else { return }
+                work.count = work.estimate.count(for: streamed)
+                self.refreshPill()
+            }
+        }
+        let override = selectionPolishOverride
+        let transcription = transcription
+        Task { [weak self] in
+            let outcome: Result<TranscriptResult, AppError>
+            do {
+                let result = if let override {
+                    try await override(text, model)
+                } else {
+                    try await transcription.cleanUp(text, of: .geminiFlash, route: model.route, prompt: Polish.textPrompt,
+                                                    progress: progress)
+                }
+                outcome = .success(result)
+            } catch let error as AppError {
+                outcome = .failure(error)
+            } catch {
+                outcome = .failure(.engineFailed(.geminiFlash, ModelStore.oneLine(error)))
+            }
+            self?.finishSelectionPolish(work, outcome)
+        }
+        stateDidChange()
+    }
+
+    /// The model answered: its message on the card and in History, or why not.
+    private func finishSelectionPolish(_ work: SelectionPolish, _ outcome: Result<TranscriptResult, AppError>) {
+        guard selectionPolish === work else { return }
+        selectionPolish = nil
+        switch outcome {
+        case .success(let result):
+            let message = Polish.message(from: result.text).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !message.isEmpty else {
+                selectionFailed(reason: "\(work.model.modelName) returned no text.")
+                break
+            }
+            let version = result.version(.selection(work.model), text: message)
+            let entry = TranscriptEntry(engine: .geminiFlash, audioDuration: 0, voicedSeconds: 0, versions: [version])
+            history.upsert(entry)
+            resolveGeneration(of: version, entryID: entry.id)
+            toasts.post(Self.selectionCard(message))
+        case .failure(let error):
+            Log.engine.error("Polish Selection failed: \(error.code, privacy: .public)")
+            let reason = work.model == .gpt6Luna ? Self.cleanupFailureReason(error, model: .gpt6Luna)
+                : Self.homeFailureReason(error, making: .selection(work.model))
+            selectionFailed(reason: reason)
+        }
+        stateDidChange()
+    }
+
+    private func selectionFailed(reason: String) {
+        pillModel.shakeTrigger += 1
+        toasts.post(Notice(dedupeKey: "polish.selection.failed", style: .warning, symbol: "wand.and.sparkles",
+                           title: "Couldn’t polish the selection", body: reason, lifetime: .seconds(8), sound: .alert))
+    }
+
+    /// "Polished": the message, Paste Here (also ↩, over the selection still selected) and Copy (Esc closes it). Up
+    /// for 6 s and a second for every 20 words, longer while the pointer is over it.
+    nonisolated static func selectionCard(_ text: String) -> Notice {
+        let words = text.split(whereSeparator: \.isWhitespace).count
+        let seconds = (6 + Double(words) / 20) * ToastCountdown.speed
+        return Notice(dedupeKey: selectionCardKey, style: .info, symbol: "wand.and.sparkles", title: "Polished",
+                      transcript: text,
+                      actions: [NoticeAction(title: "Paste Here", kind: .pasteText(text), isPrimary: true),
+                                NoticeAction(title: "Copy", kind: .copyText(text))],
+                      lifetime: .seconds(seconds), sound: .polishReady, takesCardKeys: true)
+    }
+
+    /// ↩ with the card up: its Paste Here.
+    private func pasteSelectionCard() {
+        guard let notice = toasts.notices.last(where: { $0.dedupeKey == Self.selectionCardKey }),
+              let action = notice.primaryAction else { return }
+        toasts.perform(action, on: notice)
+    }
+
+    /// ↩ and Esc belong to the card exactly while it's up.
+    private func syncCardKeys() {
+        let up = toasts.notices.contains { $0.dedupeKey == Self.selectionCardKey }
+        if hotkeys.cardKeys != up { hotkeys.cardKeys = up }
+    }
+
     /// Another choice for this dictation: the pill's chip, and for the user's own pick a soft tick. Polish goes off
     /// away from Gemini.
     private func switchModel(to choice: ModelChoice?, byUser: Bool = true) {
@@ -2043,7 +2219,7 @@ final class DictationController {
     }
 
     private func refreshPill() {
-        let idle: PillPhase = hasPendingWork ? .processing : .rest
+        let idle: PillPhase = hasPendingWork || selectionPolish != nil ? .processing : .rest
         let phase: PillPhase
         switch machine.capture {
         case .arming:
@@ -2068,15 +2244,18 @@ final class DictationController {
             effectiveChoice
         } else if phase == .processing, let job = pillJob {
             ModelChoice(engine: job.engine, cleansUp: job.cleansUp)
+        } else if phase == .processing, let work = selectionPolish {
+            work.model.choice
         } else {
             nil
         }
         if pillModel.sessionModel != session { pillModel.sessionModel = session }
+        // A dictation in flight speaks for the processing pill before a selection's polish does.
         let polishes = phase.isRecording ? isPolishing && effectiveChoice == .gemini
-            : phase == .processing && pillJob?.polishes == true
+            : phase == .processing && (pillJob.map(\.polishes) ?? (selectionPolish != nil))
         if pillModel.polishes != polishes { pillModel.polishes = polishes }
         // The same job's count: with several in flight, the newest one's.
-        let count = phase == .processing ? pillJob?.count : nil
+        let count = phase == .processing ? (pillJob.map(\.count) ?? selectionPolish?.count) : nil
         if pillModel.tokenCount != count { pillModel.tokenCount = count }
 
         if phase.isRecording, let started = machine.recordingStartedAt {
@@ -2096,6 +2275,7 @@ final class DictationController {
         if hotkeys.isBusy != machine.isBusy { hotkeys.isBusy = machine.isBusy }
         if hotkeys.isRecording != machine.isRecording { hotkeys.isRecording = machine.isRecording }
         if hotkeys.dictationModel != modelOverride { hotkeys.dictationModel = modelOverride }
+        updateSelectionHint()
         updateSwitchHint()
         let count = queue.count + (isDelivering ? 1 : 0)
         if pendingJobCount != count { pendingJobCount = count }

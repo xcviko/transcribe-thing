@@ -596,7 +596,7 @@ struct PillFace: View {
     /// What the chip names while it's up (`PillModel.showsChip`): the dictation's model. Content shrinking away
     /// keeps its own choice's chip.
     private var chipChoice: ModelChoice? {
-        carriesModel && model.showsChip ? choice : nil
+        carriesModel && model.showsChip && model.selectionHint == .hidden ? choice : nil
     }
 
     /// The dictation being recorded is polished: the drop beside the pill. Once it's processing, the drop flows back
@@ -1391,6 +1391,33 @@ struct PillShortcutChips: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(shortcut?.spokenDescription ?? fallback)
+    }
+}
+
+/// Polish Selection's hint over the pill, "[↩] Polish selection": the polish shortcut without the modifiers the
+/// push-to-talk key already holds (fn of fn ↩, as the key is held).
+struct PillSelectionHint: View {
+    let model: PillModel
+
+    /// The keys still to press while holding the push-to-talk key.
+    static func keys(polish: Shortcut?, pushToTalk: Shortcut?) -> Shortcut? {
+        guard let polish else { return nil }
+        let held = Set(pushToTalk?.modifiers.map(\.modifier) ?? [])
+        return Shortcut(modifiers: polish.modifiers.filter { !held.contains($0.modifier) }, keyCode: polish.keyCode)
+    }
+
+    var body: some View {
+        let settings = model.settings
+        let keys = Self.keys(polish: settings.shortcuts[.polish], pushToTalk: settings.shortcuts[.pushToTalk])
+        PillChipCapsule {
+            PillShortcutChips(shortcut: keys, fallback: "↩")
+                .scaleEffect(0.9)
+            Text("Polish selection")
+                .foregroundStyle(.white.opacity(0.8))
+        }
+        .fixedSize()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Press \(keys?.spokenDescription ?? "Return") to polish the selected text")
     }
 }
 

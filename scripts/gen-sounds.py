@@ -27,6 +27,8 @@ A "tongue click": pitch-dropping mouth pops (tongue voice), bodies 120-260 Hz, 1
   success  pops G3 B3 D4, 60 ms apart, 270 ms
   modelSwitch  two tiny tongue ticks 280 -> 190 and 330 -> 220 Hz, 28 ms apart, 70 ms, as quiet as paste
   polishOn / polishOff  a drop: one tongue pop gliding up 190 -> 330 Hz, or down 330 -> 190, 90 ms, -15 dBFS
+  polishHint    a light "hm?": one tok lifting 300 -> 340 Hz, 60 ms, -20 dBFS (Polish Selection's hint)
+  polishReady   a bubble surfacing: one round pop falling 720 -> 380 Hz in a touch of room, 120 ms, -16 dBFS
                (only this set has them: Polish came after the others were picked)
 
 B "low wood block": modal knocks, fundamentals 155-290 Hz, tau 11-19 ms, low-passed at 1.5-2 kHz, a faint sub thump.
@@ -479,6 +481,19 @@ def a_polish_off():
     return finish(c.buf, -15, lowpass_hz=1600, fade_out_ms=14)
 
 
+def a_polish_hint():
+    c = Canvas(0.060)
+    c.add(0.0, tongue(300.0, 340.0, glide_s=0.020, tau=0.006, seconds=0.060, h2_db=-14.0,
+                      cavity=(2.5, -10.0, 0.002), click_db=-18.0, seed=201))
+    return finish(c.buf, -20, lowpass_hz=1800, fade_out_ms=10)
+
+
+def a_polish_ready():
+    c = Canvas(0.120)
+    c.add(0.0, pop(720.0, 380.0, glide_s=0.020, tau=0.016, seconds=0.120, seed=221))
+    return finish(c.buf, -16, lowpass_hz=2600, room=0.06, fade_out_ms=20)
+
+
 def a_alert():
     c = Canvas(0.250)
     c.add(0.000, tongue(215.0, 196.0, glide_s=0.010, tau=0.022, seconds=0.140, h2_db=-16.0,
@@ -673,7 +688,8 @@ SETS = {
                 "modelSwitch": make_model_switch},
     "A": {"start": a_start, "stop": a_stop, "lock": a_lock, "paste": a_paste,
           "cancel": a_cancel, "alert": a_alert, "error": a_error, "success": a_success,
-          "modelSwitch": a_model_switch, "polishOn": a_polish_on, "polishOff": a_polish_off},
+          "modelSwitch": a_model_switch, "polishOn": a_polish_on, "polishOff": a_polish_off,
+          "polishHint": a_polish_hint, "polishReady": a_polish_ready},
     "B": {"start": b_start, "stop": b_stop, "lock": b_lock, "paste": b_paste,
           "cancel": b_cancel, "alert": b_alert, "error": b_error, "success": b_success,
           "modelSwitch": b_model_switch},

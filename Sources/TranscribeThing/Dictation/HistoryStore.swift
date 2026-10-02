@@ -229,6 +229,9 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
 
     var wordCount: Int { Self.countWords(text) }
 
+    /// A selection's polish (Polish Selection): no recording, nothing dictated, so it stays out of the dictation stats.
+    var isSelection: Bool { currentKind?.isSelection == true }
+
     /// Whitespace-separated tokens; tokens made only of punctuation (a lone "—" or "…") don't count.
     static func countWords(_ text: String) -> Int {
         var count = 0
@@ -263,7 +266,7 @@ struct HistoryStats: Equatable, Sendable {
         var speaking: TimeInterval = 0
         var voiced: TimeInterval = 0
         var count = 0
-        for entry in entries where entry.status == .success {
+        for entry in entries where entry.status == .success && !entry.isSelection {
             let n = entry.wordCount
             count += 1
             words += n

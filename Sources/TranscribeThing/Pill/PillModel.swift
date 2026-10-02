@@ -61,6 +61,8 @@ final class PillModel {
     private(set) var isChipFlashing = false
     /// The Switch model discovery hint next to a long push-to-talk hold (its first few times).
     var showsTabHint = false
+    /// Polish Selection's hint over the pill: text is selected, and the polish key would polish it.
+    var selectionHint: PillSelectionHintState = .hidden
 
     /// Key-chip text for the tooltip, from `settings.shortcuts[.pushToTalk]`.
     var shortcutHint: String = "fn"
@@ -367,6 +369,12 @@ final class PillModel {
 }
 
 /// Buttons of the hands-free pill.
+/// Polish Selection's hint over the recording pill. `handoff`: its key was pressed, so the hint drops into the pill
+/// and dissolves as the pill turns into the polish.
+enum PillSelectionHintState: Equatable, Sendable {
+    case hidden, shown, handoff
+}
+
 enum PillControl: Equatable, Sendable {
     case cancel, stop
 }

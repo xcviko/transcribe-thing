@@ -279,13 +279,19 @@ struct HistoryRow: View, Equatable {
                 VersionCount(count: entry.versions.count)
             }
             // Observed: a color picked in Models redraws the row, `equatable()` or not.
-            EngineGlyph(engine: entry.engine, provider: entry.provider, cleanupModel: entry.currentKind?.cleanupModel,
-                        details: entry.currentVersion.map(VersionDetails.tooltip), colors: hub.settings.modelColors)
-            Text(Fmt.duration(entry.audioDuration))
-                .font(.system(size: 11.5))
-                .monospacedDigit()
-                .foregroundStyle(.inkTertiary)
-                .frame(minWidth: 28, alignment: .trailing)
+            if case .selection(let model)? = entry.currentKind {
+                // No recording: the wand in its model's color, and no duration.
+                SelectionGlyph(model: model, details: entry.currentVersion.map(VersionDetails.tooltip),
+                               colors: hub.settings.modelColors)
+            } else {
+                EngineGlyph(engine: entry.engine, provider: entry.provider, cleanupModel: entry.currentKind?.cleanupModel,
+                            details: entry.currentVersion.map(VersionDetails.tooltip), colors: hub.settings.modelColors)
+                Text(Fmt.duration(entry.audioDuration))
+                    .font(.system(size: 11.5))
+                    .monospacedDigit()
+                    .foregroundStyle(.inkTertiary)
+                    .frame(minWidth: 28, alignment: .trailing)
+            }
         }
     }
 
@@ -334,8 +340,10 @@ struct HistoryRow: View, Equatable {
         if entry.status == .success && !isEmptySuccess {
             Button("Copy") { hub.copy(entry.text) }
         }
-        Menu(VersionsMenu.title(for: entry)) {
-            VersionsMenuItems(entry: entry)
+        if !entry.isSelection {
+            Menu(VersionsMenu.title(for: entry)) {
+                VersionsMenuItems(entry: entry)
+            }
         }
         Divider()
         Button("Delete", role: .destructive) { onDelete(entry) }
