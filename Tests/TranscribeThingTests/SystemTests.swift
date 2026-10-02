@@ -1863,3 +1863,24 @@ private func copyScreenshotAndFile(to pasteboard: NSPasteboard) {
         #expect(!kb.down(kVK_ANSI_D, fnFlagged: true).swallow)
     }
 }
+
+// MARK: - Return in hands-free
+
+@Suite struct ReturnSendsRouterTests {
+    /// In hands-free, Return finishes the dictation and sends it; ⌘↩ stays the app's, and so does Return otherwise.
+    @Test func returnSendsAHandsFreeDictation() {
+        var kb = Keyboard()
+        kb.config.isRecording = true
+        kb.config.returnSends = true
+        let enter = kb.down(kVK_Return)
+        #expect(enter.events == [.finishAndSend] && enter.swallow)
+        #expect(kb.down(kVK_Return, isRepeat: true).events.isEmpty, "once per press")
+        #expect(kb.up(kVK_Return).swallow)
+        kb.press(.leftCommand)
+        #expect(!kb.down(kVK_Return).swallow)
+        kb.up(kVK_Return)
+        kb.release(.leftCommand)
+        kb.config.returnSends = false
+        #expect(!kb.down(kVK_Return).swallow)
+    }
+}

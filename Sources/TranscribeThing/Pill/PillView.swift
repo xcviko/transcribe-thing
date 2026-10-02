@@ -1595,6 +1595,11 @@ private struct PillControlTooltip: View {
             case .stop:
                 Text("Finish")
                 PillShortcutChips(shortcut: settings.shortcuts[.pushToTalk], fallback: "fn")
+                if settings.returnSendsHandsFree {
+                    Text("·").foregroundStyle(.white.opacity(0.4))
+                    PillShortcutChips(shortcut: Shortcut(modifiers: [], keyCode: KeyCode.returnKey), fallback: "↩")
+                    Text("sends")
+                }
             }
         }
     }

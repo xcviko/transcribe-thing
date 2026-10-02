@@ -34,6 +34,14 @@ struct ShortcutsPage: View {
                             .toggleStyle(.appSwitch)
                             .labelsHidden()
                     }
+                    SettingsRow(title: "Return sends a hands-free dictation",
+                                subtitle: "Return finishes it, pastes it and presses Return, as if you’d typed it.",
+                                systemImage: "return",
+                                iconTint: .inkSecondary) {
+                        Toggle("", isOn: $settings.returnSendsHandsFree)
+                            .toggleStyle(.appSwitch)
+                            .labelsHidden()
+                    }
                     row(.switchModel)
                     row(.polish)
                     row(.addToDictionary)

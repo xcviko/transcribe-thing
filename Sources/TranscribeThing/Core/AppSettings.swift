@@ -73,6 +73,8 @@ final class AppSettings {
     /// Off by default. Stored only once the user flips it (Shortcuts), so an install that never did gets the
     /// default of the build it runs.
     var doublePressForHandsFree: Bool = false { didSet { store.set(doublePressForHandsFree, .doublePressForHandsFree) } }
+    /// Return during a hands-free dictation finishes it, pastes it and presses Return: the message or prompt goes.
+    var returnSendsHandsFree: Bool = true { didSet { store.set(returnSendsHandsFree, .returnSendsHandsFree) } }
     /// The model a hands-free dictation switches to as it starts (Models), as if Switch model had stepped to it: a long
     /// dictation is usually one for Gemini. nil: the main model, as when holding the key.
     var handsFreeModel: ModelChoice? = nil { didSet { store.set(handsFreeModel?.rawValue, .handsFreeModel) } }
@@ -237,6 +239,7 @@ final class AppSettings {
             store.remove(key)
         }
         if let v = store.bool(.doublePressForHandsFree) { doublePressForHandsFree = v }
+        if let v = store.bool(.returnSendsHandsFree) { returnSendsHandsFree = v }
         handsFreeModel = store.string(.handsFreeModel).flatMap(ModelChoice.init(rawValue:))
         // Pasting's two switches held for every model; each is picked per model now. One an older build turned on
         // holds for all three, once: the old keys go.
@@ -358,7 +361,7 @@ enum SettingsKey: String, CaseIterable {
     /// `addSpaceAfterText` and `removeFinalPeriod` are Pasting's switches from when they held for every model, read
     /// once into `modelsAddingSpace` and `modelsRemovingFinalPeriod` and removed at load.
     case addSpaceAfterText, removeFinalPeriod, autoDeleteHistoryDays, lineup, modelColors, keychainKeyMigrated
-    case handsFreeModel, modelsAddingSpace, modelsRemovingFinalPeriod, dictionary
+    case handsFreeModel, modelsAddingSpace, modelsRemovingFinalPeriod, dictionary, returnSendsHandsFree
     case polishSelectionModel
 
     var defaultsKey: String { "tt.\(rawValue)" }

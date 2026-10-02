@@ -64,6 +64,8 @@ struct HotkeyRouter: Equatable, Sendable {
         /// Add to dictionary's shortcut is live during a dictation, on any model, always held as `.heldForSelection`:
         /// the controller reads what's selected right then.
         var addsToDictionary = false
+        /// A hands-free dictation records and Return (with no modifier) finishes it and sends it.
+        var returnSends = false
         /// Polish Selection's cards: ↩ (with no modifier) is theirs unless a dictation records, and Esc closes them
         /// unless one is busy.
         var cardPaste = false
@@ -272,6 +274,15 @@ struct HotkeyRouter: Equatable, Sendable {
                 if !input.isRepeat { decision.events.append(.cardClose) }
                 return decision
             }
+        }
+
+        // Hands-free: Return finishes the dictation and sends it, unless it's a key the user bound themselves.
+        if config.returnSends, modifiers.isEmpty, gesture == .idle,
+           key == KeyCode.returnKey || key == KeyCode.keypadEnter,
+           !config.bindings.bindings.values.contains(where: { $0.matches(keyCode: key, modifiers: modifiers) }) {
+            consume(physical, into: &decision)
+            if !input.isRepeat { decision.events.append(.finishAndSend) }
+            return decision
         }
 
         let bindings = config.bindings

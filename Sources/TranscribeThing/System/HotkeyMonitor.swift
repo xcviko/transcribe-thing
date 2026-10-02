@@ -12,6 +12,8 @@ enum HotkeyEvent: Equatable, Sendable {
     case cycleEngineRepeat
     /// The polish shortcut, during a dictation: Polish on or off for it, or Polish Selection with text selected.
     case polish
+    /// Return during a hands-free dictation: finish it, paste it and press Return (`AppSettings.returnSendsHandsFree`).
+    case finishAndSend
     /// A key the tap held for the selection: Polish's before the dictation's selection lookup has answered, Add to
     /// dictionary's always (it reads what's selected now). What the key does with the selection if there is one, else
     /// it goes on to the app (`KeyStroke.post`).
@@ -85,6 +87,10 @@ final class HotkeyMonitor {
     /// lookup will run): Polish's shortcut is held off Gemini, as `.heldForSelection`.
     var selectionPending = false {
         didSet { if selectionPending != oldValue { pushConfig() } }
+    }
+    /// A hands-free dictation records and Return sends it: Return is taken, as `.finishAndSend`.
+    var returnSends = false {
+        didSet { if returnSends != oldValue { pushConfig() } }
     }
     /// Add to dictionary has a shortcut: during a dictation it's held, as `.heldForSelection`, on any model.
     var dictionaryReady = false {
@@ -183,6 +189,7 @@ final class HotkeyMonitor {
                             switchesModels: settings.lineup.cycle.count > 1,
                             polishes: (dictationModel ?? settings.lineup.main) == .gemini || selectionReady,
                             selectionPending: selectionPending, addsToDictionary: dictionaryReady,
+                            returnSends: returnSends,
                             cardPaste: cardPaste, cardClose: cardClose,
                             isSuspended: suspendCount > 0, forwardsRawKeys: onRawKey != nil)
     }

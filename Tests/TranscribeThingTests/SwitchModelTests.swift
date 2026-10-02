@@ -935,3 +935,69 @@ import Testing
         #expect(!rig.h.hotkeys.isRecording)
     }
 }
+
+// MARK: - Return in hands-free
+
+@MainActor
+@Suite(.serialized) struct ReturnSendsTests {
+    typealias Switch = SwitchModelControllerTests
+
+    /// Return in hands-free finishes the dictation, pastes it, then presses Return: the message goes.
+    @Test func returnFinishesPastesAndSends() async throws {
+        let (rig, _) = Switch.make()
+        let c = rig.h.controller
+        var returns = 0
+        c.returnOverride = { returns += 1 }
+        rig.result = { _, _ in "Hello there" }
+        c.send(.handsFreeToggle)
+        #expect(rig.h.hotkeys.currentConfig().returnSends)
+        rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
+        rig.now += 2
+        c.handle(.finishAndSend)
+        #expect(!rig.h.hotkeys.currentConfig().returnSends, "Return is the app's again at once")
+        try await waitUntil { rig.pasted.count == 1 && returns == 1 }
+    }
+
+    /// fn (or Stop) still finishes without sending, and push-to-talk never takes Return.
+    @Test func onlyReturnSends() async throws {
+        let (rig, _) = Switch.make()
+        let c = rig.h.controller
+        var returns = 0
+        c.returnOverride = { returns += 1 }
+        rig.result = { _, _ in "Hello there" }
+        c.send(.handsFreeToggle)
+        rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
+        rig.now += 2
+        c.send(.pillStop)
+        try await waitUntil { rig.pasted.count == 1 }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(returns == 0)
+        Switch.hold(rig)
+        #expect(!rig.h.hotkeys.currentConfig().returnSends)
+        c.send(.pillCancel)
+    }
+
+    /// Nothing heard, nothing sent.
+    @Test func silenceSendsNothing() async throws {
+        let (rig, _) = Switch.make()
+        let c = rig.h.controller
+        var returns = 0
+        c.returnOverride = { returns += 1 }
+        rig.result = { _, _ in "" }
+        c.send(.handsFreeToggle)
+        rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
+        rig.now += 2
+        c.handle(.finishAndSend)
+        try await waitUntil { c.machine.activeJobs == 0 }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(returns == 0 && rig.pasted.isEmpty)
+    }
+
+    @Test func itCanBeTurnedOff() {
+        let (rig, _) = Switch.make()
+        rig.h.settings.returnSendsHandsFree = false
+        rig.h.controller.send(.handsFreeToggle)
+        #expect(!rig.h.hotkeys.currentConfig().returnSends)
+        rig.h.controller.send(.pillCancel)
+    }
+}
