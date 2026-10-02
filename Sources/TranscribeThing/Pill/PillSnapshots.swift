@@ -100,7 +100,7 @@ enum PillSnapshots {
             },
             SnapshotEntry("pill-selection-card", width: 640, height: 340) { _ in
                 CanvasScene(model: restModel(), notices: [DictationController.selectionCard(
-                    "Давайте перенесём созвон на пятницу после обеда: в четверг Маша не может.")])
+                    "Прикинь, сегодня новые дорожки поставили - впервые с 22 года все заменили.\n\nТам есть фича: прислоняешь часы, они по NFC договариваются друг с другом, и дорожка получает инфу о пульсе и калориях, а часы - о дистанции, скорости и т. д.\n\nЗавтра схожу ещё раз и проверю, как оно с тренировкой на интервалы.")])
             },
             SnapshotEntry("pill-models-hint-custom", width: 640, height: 150) { _ in
                 CanvasScene(model: hintModel(binding: Shortcut(modifiers: [.init(.control), .init(.option)],

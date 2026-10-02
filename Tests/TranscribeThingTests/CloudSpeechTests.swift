@@ -781,9 +781,9 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
             TranscriptResult(text: "Hallo", engine: engine, processingTime: 0.4, costUSD: 0.00001,
                              generationID: "gen-1")
         }
-        h.controller.insertOverride = { _, _ in .pasted }
+        h.controller.insertOverride = { _ in .pasted }
         let recording = DictationControllerTests.recording()
-        h.controller.enqueue(recording, engine: .parakeetCloud, targetPID: nil)
+        h.controller.enqueue(recording, engine: .parakeetCloud)
         try await waitUntil { h.history.entry(id: recording.id)?.provider != nil }
         #expect(h.history.entry(id: recording.id)?.provider == "Together")
         #expect(asked == ["gen-1"])
@@ -799,9 +799,9 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
             TranscriptResult(text: "Hallo", engine: engine, processingTime: 0.4, costUSD: 0.00001,
                              provider: "Together", generationID: "gen-1")
         }
-        h.controller.insertOverride = { _, _ in .pasted }
+        h.controller.insertOverride = { _ in .pasted }
         let recording = DictationControllerTests.recording()
-        h.controller.enqueue(recording, engine: .parakeetCloud, targetPID: nil)
+        h.controller.enqueue(recording, engine: .parakeetCloud)
         try await waitUntil { h.history.entry(id: recording.id) != nil }
         #expect(h.history.entry(id: recording.id)?.provider == "Together")
     }
@@ -822,7 +822,7 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         let h = DictationControllerTests.make(models: [.parakeet: .ready], keyStatus: .valid(KeyInfo()))
         h.controller.transcribeOverride = { _, _ in throw AppError.openRouterRateLimited(retryAfter: nil) }
         let recording = DictationControllerTests.recording()
-        h.controller.enqueue(recording, engine: .parakeetCloud, targetPID: nil)
+        h.controller.enqueue(recording, engine: .parakeetCloud)
         try await waitUntil { h.history.entry(id: recording.id)?.status == .failed }
         let notice = try #require(h.toasts.notices.first { $0.recordingID == recording.id })
         #expect(notice.title == "Parakeet v3 · Cloud is rate-limited")

@@ -145,7 +145,8 @@ enum PillPalette {
     }
 }
 
-/// A model's tint: the capsule's ring, and the bars and processing dots (lighter, so they read on the fill).
+/// A model's tint: the capsule's ring, and the polish drop's (`mark`, the lighter one, for marks outside the capsule,
+/// like the model chip's symbol). Everything inside the capsule stays white.
 struct PillAccent: Equatable, Sendable {
     let ringHex: UInt32
     let markHex: UInt32
@@ -615,7 +616,7 @@ struct PillFace: View {
             .background(alignment: .trailing) {
                 // Behind the capsule, from its right end: the drop slides out from under the pill, which keeps its
                 // edge whole.
-                PillPolishDrop(isOn: polishes, height: size.height, tint: accent?.mark ?? .white, accent: accent,
+                PillPolishDrop(isOn: polishes, height: size.height, tint: .white, accent: accent,
                                reduceMotion: reduceMotion)
                     .frame(width: 0, height: size.height)
             }
@@ -670,13 +671,13 @@ struct PillFace: View {
                 .transition(contentTransition())
         case .recording:
             RecordingContent(model: model, locked: visual.isLocked, hours: visual.showsHours,
-                             barsOffset: visual.barsOffset, regions: regions, tint: accent?.mark ?? .white)
+                             barsOffset: visual.barsOffset, regions: regions)
                 .frame(width: visual.size.width, height: visual.size.height)
                 .modifier(morph)
                 .id(PillVisual.Content.recording)
                 .transition(contentTransition())
         case .processing:
-            ProcessingContent(startOffset: visual.barsOffset, tint: accent?.mark ?? .white, accent: accent,
+            ProcessingContent(startOffset: visual.barsOffset, tint: .white,
                               count: model.tokenCount, isCounting: visual.isCounting, polishes: visual.isPolishing)
                 .frame(width: visual.size.width, height: visual.size.height)
                 .modifier(morph)
@@ -975,11 +976,10 @@ private struct PillCaptionText: View {
 /// The processing wave, and once the model has streamed for a moment, its token count: the dots fade out as the
 /// capsule widens and the count fades in while the shimmer keeps sweeping. Same content either way, so starting to
 /// count never restarts the wave or the shimmer. A polish has no dots: the wand in a circle until the count, under a
-/// shimmer in the model's color.
+/// shimmer. Everything inside the capsule is white: the model's color is its ring's alone.
 private struct ProcessingContent: View {
     var startOffset: CGFloat
     var tint: Color
-    var accent: PillAccent?
     /// The model's count right now; nil once the controller has let it go (the pill leaving with its number).
     var count: PillTokenCount?
     var isCounting: Bool
@@ -998,7 +998,7 @@ private struct ProcessingContent: View {
                     .transition(counterTransition)
             }
             if isCounting, let shown = count ?? lastCount {
-                PillTokenCounter(count: shown, accent: accent, polishes: polishes)
+                PillTokenCounter(count: shown, polishes: polishes)
                     .transition(counterTransition)
             }
         }
@@ -1033,14 +1033,13 @@ private struct PillWand: View {
 /// and word crossfade instead, so the restart never reads as a countdown.
 struct PillTokenCounter: View {
     let count: PillTokenCount
-    var accent: PillAccent?
     var polishes = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: PillMetrics.counterWandGap) {
-            if polishes { PillWand(tint: accent?.mark ?? .white) }
+            if polishes { PillWand(tint: .white) }
             label
                 .id(count.phase)
                 .transition(.opacity.animation(.easeInOut(duration: reduceMotion ? 0.15 : 0.2)))
@@ -1061,7 +1060,7 @@ struct PillTokenCounter: View {
                 .animation(reduceMotion ? nil : .snappy(duration: 0.3), value: count.text)
             Text(count.word)
                 .font(PillMetrics.captionFont)
-                .foregroundStyle(accent?.mark ?? .white.opacity(0.55))
+                .foregroundStyle(.white.opacity(0.55))
         }
         .lineLimit(1)
         .fixedSize()

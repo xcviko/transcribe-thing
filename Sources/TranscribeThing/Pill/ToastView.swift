@@ -33,6 +33,25 @@ enum ToastMetrics {
     static let compactTrailing: CGFloat = 14
     static let compactVertical: CGFloat = 12
     static let compactHeight: CGFloat = 24 + 2 * compactVertical
+    /// A transcript's text in its box: 13 pt, 2 pt between lines, inset 12 by 10.
+    static let transcriptFontSize: CGFloat = 13
+    static let transcriptLineSpacing: CGFloat = 2
+    static let transcriptInsets = CGSize(width: 12, height: 10)
+    /// The box shows about five lines; longer text scrolls inside it.
+    static let transcriptMaxTextHeight: CGFloat = 92
+
+    /// How tall `text` sets in a box `boxWidth` wide, capped at `transcriptMaxTextHeight` (the rest scrolls).
+    static func transcriptTextHeight(_ text: String, boxWidth: CGFloat) -> CGFloat {
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = transcriptLineSpacing
+        let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: transcriptFontSize),
+                                                         .paragraphStyle: style]
+        let width = max(1, boxWidth - 2 * transcriptInsets.width)
+        let rect = (text as NSString).boundingRect(with: CGSize(width: width, height: .greatestFiniteMagnitude),
+                                                   options: [.usesLineFragmentOrigin, .usesFontLeading],
+                                                   attributes: attributes)
+        return min(ceil(rect.height), transcriptMaxTextHeight)
+    }
 }
 
 // MARK: - Stack
@@ -207,26 +226,34 @@ struct ToastCard: View {
         }
     }
 
+    /// The text, selectable, in a box as tall as it needs up to about five lines, scrolling past that. A selectable
+    /// `Text` with a line limit draws every line once clicked, out over the buttons, so the box never truncates.
     private func transcriptBlock(_ transcript: String) -> some View {
-        Text(transcript)
-            .font(.system(size: 13))
-            .foregroundStyle(.ink)
-            .lineSpacing(2)
-            .lineLimit(4)
-            .truncationMode(.tail)
-            .textSelection(.enabled)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(ToastPalette.transcriptFill)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .strokeBorder(ToastPalette.stroke, lineWidth: 1)
-                    }
-            }
+        let boxWidth = cardWidth - 2 * ToastMetrics.padding
+        let insets = ToastMetrics.transcriptInsets
+        return ScrollView(.vertical) {
+            Text(transcript)
+                .font(.system(size: ToastMetrics.transcriptFontSize))
+                .foregroundStyle(.ink)
+                .lineSpacing(ToastMetrics.transcriptLineSpacing)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, insets.width)
+                .padding(.vertical, insets.height)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .scrollIndicators(.automatic)
+        .frame(height: ToastMetrics.transcriptTextHeight(transcript, boxWidth: boxWidth) + 2 * insets.height)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(ToastPalette.transcriptFill)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(ToastPalette.stroke, lineWidth: 1)
+                }
+        }
     }
 
     /// Transcript cards always offer Copy: primary unless the poster already chose one ("Paste Here").

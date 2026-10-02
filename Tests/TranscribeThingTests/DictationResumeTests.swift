@@ -27,7 +27,7 @@ import Testing
                 transcribed.append(recording)
                 return TranscriptResult(text: try await result(recording, engine), engine: engine, processingTime: 0.1)
             }
-            h.controller.insertOverride = { [weak self] text, _ in
+            h.controller.insertOverride = { [weak self] text in
                 self?.pasted.append(text)
                 return .pasted
             }
@@ -118,7 +118,7 @@ import Testing
             let rig = Rig(keyStatus: key)
             rig.h.settings.pillMode = .never   // the notice itself is what's checked here
             let r = Self.roomNoise()
-            rig.h.controller.enqueue(r, engine: engine, targetPID: nil)
+            rig.h.controller.enqueue(r, engine: engine)
             try await waitUntil { rig.h.controller.machine.activeJobs == 0 }
             let notice = try #require(rig.notice("error.noSpeech"), "\(engine)")
             #expect(notice.actions.isEmpty, "\(engine)")
@@ -135,7 +135,7 @@ import Testing
         let rig = Rig(keyStatus: .valid(KeyInfo()))
         rig.result = { _, engine in throw AppError.timeout(engine) }
         let key = "error.timeout.geminiFlash"
-        rig.h.controller.enqueue(Self.speech(seconds: 1), engine: .geminiFlash, targetPID: nil)
+        rig.h.controller.enqueue(Self.speech(seconds: 1), engine: .geminiFlash)
         try await waitUntil { rig.notice(key) != nil }
         #expect(rig.notice(key)?.sound == .error)
 
@@ -341,7 +341,7 @@ import Testing
     @Test func doubleClickingRetryOnACloudFailureRetriesOnce() async throws {
         let rig = Rig(keyStatus: .valid(KeyInfo()))
         rig.result = { _, _ in throw AppError.openRouterServer("HTTP 500") }
-        rig.h.controller.enqueue(Self.speech(seconds: 1), engine: .geminiFlash, targetPID: nil)
+        rig.h.controller.enqueue(Self.speech(seconds: 1), engine: .geminiFlash)
         try await waitUntil { rig.notice("error.openRouterServer") != nil && rig.h.controller.machine.activeJobs == 0 }
         let failed = try #require(rig.notice("error.openRouterServer"))
         let retry = try #require(failed.actions.first { $0.kind == .retry })
@@ -365,7 +365,7 @@ import Testing
             if recording.id == failing.id, rig.transcribed.count == 1 { throw AppError.timeout(engine) }
             return ""
         }
-        rig.h.controller.enqueue(failing, engine: .geminiFlash, targetPID: nil)
+        rig.h.controller.enqueue(failing, engine: .geminiFlash)
         try await waitUntil { rig.h.history.entry(id: failing.id)?.status == .failed && rig.h.controller.machine.activeJobs == 0 }
         let failed = try #require(rig.notice("error.timeout.geminiFlash"))
         let retry = try #require(failed.actions.first { $0.kind == .retry })
@@ -388,7 +388,7 @@ import Testing
             if recording.id == failing.id, rig.transcribed.count == 1 { throw AppError.timeout(engine) }
             return ""
         }
-        rig.h.controller.enqueue(failing, engine: .geminiFlash, targetPID: nil)
+        rig.h.controller.enqueue(failing, engine: .geminiFlash)
         try await waitUntil { rig.h.history.entry(id: failing.id)?.status == .failed && rig.h.controller.machine.activeJobs == 0 }
         rig.h.toasts.dismissAll()
         let shakes = rig.h.pill.shakeCount
@@ -422,7 +422,7 @@ import Testing
     @Test func aRecordingIsNeverQueuedTwice() async throws {
         let rig = Rig()
         var pasting = false, releasePaste = false
-        rig.h.controller.insertOverride = { text, _ in
+        rig.h.controller.insertOverride = { text in
             pasting = true
             while !releasePaste { try? await Task.sleep(for: .milliseconds(10)) }
             rig.pasted.append(text)
@@ -430,12 +430,12 @@ import Testing
         }
         rig.result = { _, _ in "once" }
         let r = Self.speech(seconds: 2)
-        rig.h.controller.enqueue(r, engine: .parakeet, targetPID: nil)
-        rig.h.controller.enqueue(r, engine: .parakeet, targetPID: nil)
+        rig.h.controller.enqueue(r, engine: .parakeet)
+        rig.h.controller.enqueue(r, engine: .parakeet)
         #expect(rig.h.controller.pendingJobCount == 1)
         // Being pasted now (it has left the queue): still not queued again.
         try await waitUntil { pasting }
-        rig.h.controller.enqueue(r, engine: .parakeet, targetPID: nil)
+        rig.h.controller.enqueue(r, engine: .parakeet)
         releasePaste = true
         try await waitUntil { rig.h.controller.machine.activeJobs == 0 }
         try await Task.sleep(for: .milliseconds(100))

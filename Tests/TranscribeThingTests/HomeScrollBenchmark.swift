@@ -94,7 +94,7 @@ import Testing
         let failed = try #require(entries.first { $0.status == .failed })
         let dictation = env.dictation
         var release = false
-        dictation.insertOverride = { _, _ in .pasted }
+        dictation.insertOverride = { _ in .pasted }
         dictation.transcribeOverride = { _, engine in
             while !release { try await Task.sleep(for: .milliseconds(5)) }
             return TranscriptResult(text: "retried", engine: engine, processingTime: 1)
@@ -103,8 +103,7 @@ import Testing
             while !release { try await Task.sleep(for: .milliseconds(5)) }
             return TranscriptResult(text: text, engine: source, processingTime: 1)
         }
-        dictation.enqueue(Recording(id: failed.id, samples: Array(repeating: 0.1, count: 16_000)), engine: .geminiFlash,
-                          targetPID: nil)
+        dictation.enqueue(Recording(id: failed.id, samples: Array(repeating: 0.1, count: 16_000)), engine: .geminiFlash)
         dictation.makeVersion(.cleanup(of: .parakeet, by: .gpt6Luna), of: transcript)
         #expect(dictation.runningVersions.count == 2 && dictation.homeWork.count == 1)
         let context = HubContext(env: env)

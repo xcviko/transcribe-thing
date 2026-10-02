@@ -486,9 +486,9 @@ import Testing
     private func dictate(_ h: H.Harness, _ recording: Recording? = nil, text: String = "parakeet text",
                          pasted: @escaping (String) -> Void) async throws -> UUID {
         h.controller.transcribeOverride = { _, engine in TranscriptResult(text: text, engine: engine, processingTime: 0.1) }
-        h.controller.insertOverride = { text, _ in pasted(text); return .pasted }
+        h.controller.insertOverride = { text in pasted(text); return .pasted }
         let r = recording ?? H.recording()
-        h.controller.enqueue(r, engine: .parakeet, targetPID: nil)
+        h.controller.enqueue(r, engine: .parakeet)
         try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id) != nil }
         return r.id
     }
@@ -617,9 +617,9 @@ import Testing
             if engine == .parakeetCloud { throw AppError.timeout(engine) }
             return TranscriptResult(text: "text by \(engine.rawValue)", engine: engine, processingTime: 1)
         }
-        h.controller.insertOverride = { text, _ in pasted.append(text); return .pasted }
+        h.controller.insertOverride = { text in pasted.append(text); return .pasted }
         let r = H.recording()
-        h.controller.enqueue(r, engine: .parakeetCloud, targetPID: nil)
+        h.controller.enqueue(r, engine: .parakeetCloud)
         try await waitUntil { h.controller.machine.activeJobs == 0 && h.toasts.notices.contains { $0.recordingID == r.id } }
         let failure = try #require(h.toasts.notices.first { $0.recordingID == r.id })
         let retry = try #require(failure.actions.first { $0.kind == .retry })
@@ -705,7 +705,7 @@ import Testing
         let id = try await dictate(h) { _ in }
         h.controller.transcribeOverride = { _, engine in throw AppError.timeout(engine) }
         let failed = H.recording()
-        h.controller.enqueue(failed, engine: .geminiFlash, targetPID: nil)
+        h.controller.enqueue(failed, engine: .geminiFlash)
         try await waitUntil { h.history.entry(id: failed.id)?.status == .failed && h.controller.machine.activeJobs == 0 }
 
         h.controller.transcribeOverride = { _, engine in

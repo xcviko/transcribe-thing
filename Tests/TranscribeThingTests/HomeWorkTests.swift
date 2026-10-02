@@ -48,9 +48,9 @@ import Testing
     /// A dictation Parakeet transcribed and pasted, its audio kept.
     private func transcript(_ h: H.Harness) async throws -> UUID {
         h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "parakeet text", engine: engine, processingTime: 0.1) }
-        h.controller.insertOverride = { _, _ in .pasted }
+        h.controller.insertOverride = { _ in .pasted }
         let r = H.recording()
-        h.controller.enqueue(r, engine: .parakeet, targetPID: nil)
+        h.controller.enqueue(r, engine: .parakeet)
         try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id) != nil }
         return r.id
     }
@@ -60,7 +60,7 @@ import Testing
         h.pill.timing.errorHold = 0.01
         h.controller.transcribeOverride = { _, engine in throw AppError.timeout(engine) }
         let r = H.recording()
-        h.controller.enqueue(r, engine: .geminiFlash, targetPID: nil)
+        h.controller.enqueue(r, engine: .geminiFlash)
         try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id)?.status == .failed }
         h.toasts.dismissAll()
         try await waitUntil { h.pill.visiblePhase == .rest }
@@ -87,7 +87,7 @@ import Testing
             if fails { throw AppError.openRouterServer("HTTP 500") }
             return TranscriptResult(text: "Clean.", engine: source, processingTime: 1)
         }
-        h.controller.insertOverride = { _, _ in Issue.record("Home work is never pasted"); return .pasted }
+        h.controller.insertOverride = { _ in Issue.record("Home work is never pasted"); return .pasted }
 
         for failing in [true, false] {
             fails = failing
@@ -147,7 +147,7 @@ import Testing
         let id = try await transcript(h)
         var release = false
         var pasted: [String] = []
-        h.controller.insertOverride = { text, _ in pasted.append(text); return .pasted }
+        h.controller.insertOverride = { text in pasted.append(text); return .pasted }
         h.controller.transcribeOverride = { recording, engine in
             guard recording.id == id else { return TranscriptResult(text: "dictated", engine: engine, processingTime: 0.1) }
             while !release { try await Task.sleep(for: .milliseconds(5)) }
@@ -176,7 +176,7 @@ import Testing
         let before = [h.history.entry(id: id), h.history.entry(id: failed)]
         var landed: [String] = []
         var pasted: [String] = []
-        h.controller.insertOverride = { text, _ in pasted.append(text); return .pasted }
+        h.controller.insertOverride = { text in pasted.append(text); return .pasted }
         h.controller.cleanupOverride = { _, source in
             try await Task.sleep(for: .milliseconds(150))
             landed.append("clean-up")
@@ -189,7 +189,7 @@ import Testing
         }
         h.controller.makeVersion(.cleanup(of: .parakeet, by: .gpt6Luna), of: try #require(h.history.entry(id: id)))
         h.controller.retry(try #require(h.history.entry(id: failed)), with: .parakeet)
-        h.controller.enqueue(H.recording(), engine: .parakeet, targetPID: nil)
+        h.controller.enqueue(H.recording(), engine: .parakeet)
         #expect(h.controller.homeWork.count == 2)
         h.controller.cancelHomeWork(for: id)
         h.controller.cancelHomeWork(for: failed)
@@ -293,7 +293,7 @@ import Testing
         let first = try await failedDictation(h), second = try await failedDictation(h)
         h.controller.transcribeOverride = nil
         var pasted: [String] = []
-        h.controller.insertOverride = { text, _ in pasted.append(text); return .pasted }
+        h.controller.insertOverride = { text in pasted.append(text); return .pasted }
         func waitForQueue(_ count: Int) async throws {
             let deadline = ContinuousClock.now + .seconds(3)
             while await gate.queueLength < count {
@@ -309,7 +309,7 @@ import Testing
         await steps.arrival(1)
         h.controller.retry(try #require(h.history.entry(id: second)), with: .parakeet)
         try await waitForQueue(1)
-        h.controller.enqueue(H.recording(), engine: .parakeet, targetPID: nil)
+        h.controller.enqueue(H.recording(), engine: .parakeet)
         try await waitForQueue(2)
 
         steps.open()
@@ -405,7 +405,7 @@ import Testing
 
         let shakes = h.pill.shakeCount
         let r = H.recording()
-        h.controller.enqueue(r, engine: .geminiFlash, targetPID: nil)
+        h.controller.enqueue(r, engine: .geminiFlash)
         try await waitUntil { h.controller.machine.activeJobs == 0 }
         #expect(h.toasts.notices.contains { $0.dedupeKey == "error.timeout.geminiFlash" && $0.recordingID == r.id })
         #expect(h.pill.shakeCount == shakes + 1 && failedDictations == 1)

@@ -424,9 +424,9 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
     private func dictate(_ h: H.Harness, engine: EngineID = .parakeet, text: String = "um so like hello hello there",
                          cleansUp: Bool = true, pasted: @escaping (String) -> Void) async throws -> UUID {
         h.controller.transcribeOverride = { _, engine in TranscriptResult(text: text, engine: engine, processingTime: 0.3) }
-        h.controller.insertOverride = { text, _ in pasted(text); return .pasted }
+        h.controller.insertOverride = { text in pasted(text); return .pasted }
         let r = H.recording()
-        h.controller.enqueue(r, engine: engine, targetPID: nil, cleansUp: cleansUp)
+        h.controller.enqueue(r, engine: engine, cleansUp: cleansUp)
         try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id) != nil }
         return r.id
     }
@@ -493,9 +493,9 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
             return self.cleaned("too late")
         }
         h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "raw text", engine: engine, processingTime: 0.3) }
-        h.controller.insertOverride = { _, _ in Issue.record("a canceled dictation is never pasted"); return .pasted }
+        h.controller.insertOverride = { _ in Issue.record("a canceled dictation is never pasted"); return .pasted }
         let r = H.recording()
-        h.controller.enqueue(r, engine: .parakeet, targetPID: nil, cleansUp: true)
+        h.controller.enqueue(r, engine: .parakeet, cleansUp: true)
         try await waitUntil { h.controller.runningVersions[r.id] == .cleanup(of: .parakeet, by: .gpt6Luna) }
         h.controller.handle(.cancel)
         #expect(h.controller.machine.activeJobs == 0)
@@ -598,7 +598,7 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
             try await Task.sleep(for: .milliseconds(30))
             return TranscriptResult(text: "Hello.", engine: source, processingTime: 0.8, costUSD: 0.0001)
         }
-        h.controller.insertOverride = { _, _ in Issue.record("never pasted"); return .pasted }
+        h.controller.insertOverride = { _ in Issue.record("never pasted"); return .pasted }
         h.controller.makeVersion(.cleanup(of: .parakeet, by: .gpt6Luna), of: entry)
         #expect(h.controller.runningVersions[entry.id] == .cleanup(of: .parakeet, by: .gpt6Luna))
         // Nothing else runs for it meanwhile.
@@ -645,9 +645,9 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
             runs.append(engine)
             return TranscriptResult(text: "text by \(engine.rawValue)", engine: engine, processingTime: 0.2)
         }
-        h.controller.insertOverride = { _, _ in .pasted }
+        h.controller.insertOverride = { _ in .pasted }
         let r = H.recording()
-        h.controller.enqueue(r, engine: .parakeet, targetPID: nil)
+        h.controller.enqueue(r, engine: .parakeet)
         try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id) != nil }
         h.controller.makeVersion(.transcription(.geminiFlash), of: try #require(h.history.entry(id: r.id)))
         try await waitUntil { h.history.entry(id: r.id)?.versions.count == 2 && h.controller.runningVersions.isEmpty }
@@ -669,9 +669,9 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         h.controller.transcribeOverride = { _, engine in
             TranscriptResult(text: "Hallo", engine: engine, processingTime: 0.4, generationID: "gen-1")
         }
-        h.controller.insertOverride = { _, _ in .pasted }
+        h.controller.insertOverride = { _ in .pasted }
         let r = H.recording()
-        h.controller.enqueue(r, engine: .parakeetCloud, targetPID: nil)
+        h.controller.enqueue(r, engine: .parakeetCloud)
         try await waitUntil { h.history.entry(id: r.id)?.provider != nil }
         let meta = try #require(h.history.entry(id: r.id)?.currentVersion?.metadata)
         #expect(meta.provider == "Together" && meta.latency == 0.4 && meta.generationTime == 0.35)
@@ -694,9 +694,9 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
             result.usage = TokenUsage(promptTokens: 900, completionTokens: 400, reasoningTokens: 380)
             return result
         }
-        h.controller.insertOverride = { _, _ in .pasted }
+        h.controller.insertOverride = { _ in .pasted }
         let r = H.recording()
-        h.controller.enqueue(r, engine: .geminiFlash, targetPID: nil)
+        h.controller.enqueue(r, engine: .geminiFlash)
         try await waitUntil { h.history.entry(id: r.id)?.currentVersion?.metadata.generationTime != nil }
         let meta = try #require(h.history.entry(id: r.id)?.currentVersion?.metadata)
         #expect(meta.generationTime == 2.9 && meta.latency == 3.2)

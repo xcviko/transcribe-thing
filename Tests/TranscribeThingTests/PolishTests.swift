@@ -175,14 +175,14 @@ import Testing
 
     final class Asked { var calls: [(String, PolishSelectionModel)] = [] }
 
-    /// Holding the key with text selected, off Gemini: "↩ Polish selection" over the pill, a light "hm?", and the
-    /// polish key goes to the router.
+    /// Holding the key with text selected, off Gemini: "↩ Polish selection" over the pill, quietly, and the polish key
+    /// goes to the router.
     @Test func aSelectionShowsTheHintOffGemini() async throws {
         let (rig, cues, _) = Self.make()
         Switch.hold(rig)
         try await waitUntil { rig.h.pill.selectionHint == .shown }
         #expect(rig.h.hotkeys.selectionReady && rig.h.hotkeys.currentConfig().polishes)
-        #expect(cues.played.contains(.polishHint))
+        #expect(cues.played.allSatisfy { $0 != .polishOn && $0 != .modelSwitch }, "the hint makes no sound")
         rig.h.controller.send(.pillCancel)
         #expect(rig.h.pill.selectionHint == .hidden && !rig.h.hotkeys.selectionReady)
     }
@@ -193,7 +193,7 @@ import Testing
         rig.h.settings.lineup.main = .gemini
         Switch.hold(rig)
         try await Task.sleep(for: .milliseconds(150))
-        #expect(rig.h.pill.selectionHint == .hidden && !cues.played.contains(.polishHint))
+        #expect(rig.h.pill.selectionHint == .hidden)
         rig.h.controller.handle(.polish)
         #expect(rig.h.controller.isPolishing && asked.calls.isEmpty)
         rig.h.controller.send(.pillCancel)
@@ -289,7 +289,7 @@ import Testing
         try await Task.sleep(for: .milliseconds(150))
         #expect(rig.h.pill.selectionHint == .hidden && !rig.h.hotkeys.selectionReady)
         rig.h.controller.handle(.polish)
-        #expect(asked.calls.isEmpty && !cues.played.contains(.polishHint))
+        #expect(asked.calls.isEmpty && !cues.played.contains(.polishOn))
         #expect(rig.h.controller.machine.capture.isListeningOrLocked)
         rig.h.controller.send(.pillCancel)
     }

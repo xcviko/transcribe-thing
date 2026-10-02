@@ -84,8 +84,7 @@ extension InsertionOutcome: DiagnosticValue {
     var diagnosticText: String {
         switch self {
         case .pasted: "pasted"
-        case .noEditableTarget: "noEditableTarget"
-        case .targetChanged: "targetChanged"
+        case .passwordField: "passwordField"
         case .accessibilityMissing: "accessibilityMissing"
         case .failed: "failed"
         }

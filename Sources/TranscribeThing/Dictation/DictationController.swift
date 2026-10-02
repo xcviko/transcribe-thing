@@ -70,7 +70,7 @@ final class DictationController {
     @ObservationIgnored var clock: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
     @ObservationIgnored var captureDevice: any DictationRecorder
     @ObservationIgnored var transcribeOverride: (@MainActor (Recording, EngineID) async throws -> TranscriptResult)?
-    @ObservationIgnored var insertOverride: (@MainActor (String, pid_t?) async -> InsertionOutcome)?
+    @ObservationIgnored var insertOverride: (@MainActor (String) async -> InsertionOutcome)?
     @ObservationIgnored var copyOverride: (@MainActor (String) -> Void)?
     @ObservationIgnored var pasteNowOverride: (@MainActor (String) async -> InsertionOutcome)?
     @ObservationIgnored var pasteLastOverride: (@MainActor (String) async -> InsertionOutcome)?
@@ -544,7 +544,7 @@ final class DictationController {
         continuing = nil
         guard captureDevice.isCapturing else { return }
         // A resumed dictation keeps the canceled recording's id, already while its tail is captured.
-        let job = Job(recording: nil, engine: effectiveEngine, targetPID: inserter.frontmostPID(), id: resumedID)
+        let job = Job(recording: nil, engine: effectiveEngine, id: resumedID)
         job.cleansUp = effectiveChoice.cleansUp
         // The main model may have changed under it (Models, a notice's "Use Parakeet v3"): only Gemini polishes.
         job.polishes = isPolishing && effectiveChoice == .gemini
@@ -745,8 +745,6 @@ final class DictationController {
         /// nil while the recorder is still capturing the tail.
         var recording: Recording?
         var engine: EngineID
-        /// The app that was frontmost when recording stopped: the text is pasted at the cursor there.
-        let targetPID: pid_t?
         var outcome: Outcome?
         var task: Task<Void, Never>?
         var hintTask: Task<Void, Never>?
@@ -769,10 +767,9 @@ final class DictationController {
         private let placeholderID: UUID
 
         /// `id`: the id the recording will have (a resumed dictation's), when it is known before the audio is.
-        init(recording: Recording?, engine: EngineID, targetPID: pid_t?, id: UUID? = nil) {
+        init(recording: Recording?, engine: EngineID, id: UUID? = nil) {
             self.recording = recording
             self.engine = engine
-            self.targetPID = targetPID
             self.placeholderID = id ?? UUID()
         }
 
@@ -785,14 +782,13 @@ final class DictationController {
         }
     }
 
-    /// Starts transcribing right away; the result is pasted at the cursor in `targetPID` after every older job's. A
+    /// Starts transcribing right away; the result is pasted at the cursor after every older job's. A
     /// recording that is already queued, being delivered, being recorded on or worked on from Home is never queued
     /// twice.
     /// `cleansUp`: a dictation on clean-up, picked up again; `polishes`: a polished one.
-    func enqueue(_ recording: Recording, engine: EngineID, targetPID: pid_t?, cleansUp: Bool = false,
-                 polishes: Bool = false) {
+    func enqueue(_ recording: Recording, engine: EngineID, cleansUp: Bool = false, polishes: Bool = false) {
         guard !isInFlight(recording.id) else { return }
-        let job = Job(recording: recording, engine: engine, targetPID: targetPID)
+        let job = Job(recording: recording, engine: engine)
         job.cleansUp = cleansUp
         job.polishes = polishes && engine == .geminiFlash
         queue.append(job)
@@ -1098,7 +1094,7 @@ final class DictationController {
                 audioFileName: history.saveAudio(recording), versions: versions))
             for version in versions { resolveGeneration(of: version, entryID: job.id) }
             // Only what is pasted follows General → Pasting: History, the cards and Copy keep the text as it came.
-            let insertion = await insert(pasted(delivered), expectedPID: job.targetPID)
+            let insertion = await insert(pasted(delivered))
             handleInsertion(insertion, text: delivered, isDictation: true)
             if cleanupFailed { postCleanupFallback(error: cleanupError, model: cleanupModel) }
         }
@@ -1188,9 +1184,9 @@ final class DictationController {
 
     // MARK: - Insertion
 
-    private func insert(_ text: String, expectedPID: pid_t?) async -> InsertionOutcome {
-        if let insertOverride { return await insertOverride(text, expectedPID) }
-        return await inserter.insert(text, expectedPID: expectedPID)
+    private func insert(_ text: String) async -> InsertionOutcome {
+        if let insertOverride { return await insertOverride(text) }
+        return await inserter.insert(text)
     }
 
     private func copy(_ text: String) {
@@ -1204,23 +1200,18 @@ final class DictationController {
     }
 
     /// `isDictation`: a dictation's own delivery, not paste-last or a toast's Paste Here. The pasted text is the
-    /// confirmation; the pill just goes back to rest.
-    private func handleInsertion(_ outcome: InsertionOutcome, text: String, isDictation: Bool) {
+    /// confirmation; the pill just goes back to rest. `quiet`: a card's Paste Here, which pastes without a sound.
+    private func handleInsertion(_ outcome: InsertionOutcome, text: String, isDictation: Bool, quiet: Bool = false) {
         Log.app.notice("Insertion outcome: \(String(describing: outcome), privacy: .public)")
         DiagnosticLog.shared.event(.dictation, "paste", ["outcome": outcome, "dictation": isDictation])
         switch outcome {
         case .pasted:
             // A paste landing mid-recording must not leak its tick into the new recording.
-            if !machine.isRecording { sounds.play(.paste) }
+            if !quiet, !machine.isRecording { sounds.play(.paste) }
             if isDictation { onDictationDelivered?() }
-        case .noEditableTarget:
-            toasts.post(transcriptCard(text, title: "Not pasted", body: "The cursor wasn’t in a text field.",
-                                       pasteHere: false))
-        case .targetChanged:
-            // Another app came to the front, or the focus moved to another process (clicking out of a field in a
-            // browser or an Electron app does that): either way the cursor left the field, which is what to say.
-            toasts.post(transcriptCard(text, title: "Not pasted", body: "The cursor left the text field while it was transcribing.",
-                                       pasteHere: true))
+        case .passwordField:
+            toasts.post(transcriptCard(text, title: "Not pasted into a password field",
+                                       body: "Dictated text never goes into one.", pasteHere: false))
         case .accessibilityMissing:
             // Nothing goes on the clipboard unasked: the card holds the text until the user copies it.
             var notice = AppError.accessibilityMissing.notice(recordingID: nil, fallbackEngine: nil)
@@ -1265,7 +1256,7 @@ final class DictationController {
             if let override = self.pasteLastOverride {
                 outcome = await override(pasted)
             } else {
-                outcome = await self.inserter.insert(pasted, expectedPID: nil)
+                outcome = await self.inserter.insert(pasted)
             }
             self.handleInsertion(outcome, text: text, isDictation: false)
         }
@@ -1291,7 +1282,7 @@ final class DictationController {
                     outcome = await self.inserter.pasteNow(pasted)
                 }
                 // Anything but a paste brings the text back (a card, or the Accessibility notice).
-                self.handleInsertion(outcome, text: text, isDictation: false)
+                self.handleInsertion(outcome, text: text, isDictation: false, quiet: true)
             }
             return
         default:
@@ -1621,7 +1612,7 @@ final class DictationController {
             return
         }
         let chosen = engine ?? history.entry(id: id)?.engine ?? settings.mainEngine
-        enqueue(recording, engine: chosen, targetPID: inserter.frontmostPID(), cleansUp: cleanupIDs.contains(id),
+        enqueue(recording, engine: chosen, cleansUp: cleanupIDs.contains(id),
                 polishes: polishIDs.contains(id))
     }
 
@@ -1988,21 +1979,18 @@ final class DictationController {
             guard let self, !Task.isCancelled, self.machine.isRecording, let text else { return }
             DiagnosticLog.shared.event(.dictation, "selection.found", ["characters": text.count])
             self.selection = text
-            self.updateSelectionHint(announce: true)
+            self.updateSelectionHint()
         }
     }
 
     /// The hint over the pill while there's a selection and the dictation isn't on Gemini (on Gemini the key is
     /// Polish's); the router takes the polish key off Gemini only then. A switch to Gemini hides it, and back shows it
-    /// again, quietly.
-    private func updateSelectionHint(announce: Bool = false) {
+    /// again. It comes without a sound.
+    private func updateSelectionHint() {
         let shows = selection != nil && machine.isRecording && effectiveChoice != .gemini
         if pillModel.selectionHint != .handoff {
             let state: PillSelectionHintState = shows ? .shown : .hidden
-            if pillModel.selectionHint != state {
-                pillModel.selectionHint = state
-                if shows, announce { playCue(.polishHint) }
-            }
+            if pillModel.selectionHint != state { pillModel.selectionHint = state }
             if shows, pillModel.showsTabHint { pillModel.showsTabHint = false }
         }
         if hotkeys.selectionReady != shows { hotkeys.selectionReady = shows }

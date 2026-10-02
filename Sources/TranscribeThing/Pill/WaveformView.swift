@@ -296,7 +296,7 @@ struct ProcessingWaveView: View {
             let wide = size.width * 0.7, glowX = -wide / 2 + (size.width + wide) * phase
             inside.fill(Path(bounds), with: .linearGradient(Gradient(stops: [
                 .init(color: glow.opacity(0), location: 0),
-                .init(color: glow.opacity(0.32 * ramp), location: 0.5),
+                .init(color: glow.opacity(0.16 * ramp), location: 0.5),
                 .init(color: glow.opacity(0), location: 1),
             ]), startPoint: CGPoint(x: glowX - wide / 2, y: 0), endPoint: CGPoint(x: glowX + wide / 2, y: 0)))
         }

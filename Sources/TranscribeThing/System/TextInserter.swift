@@ -5,10 +5,8 @@ import os
 
 enum InsertionOutcome: Equatable, Sendable {
     case pasted
-    /// No text field has focus, or it is a password field. Nothing was pasted or copied.
-    case noEditableTarget
-    /// Another app came to the front while we transcribed. Nothing was pasted or copied.
-    case targetChanged
+    /// The cursor is in a password field, where dictated text never goes. Nothing was pasted or copied.
+    case passwordField
     /// transcribe-thing may not post keystrokes. Nothing was pasted or copied.
     case accessibilityMissing
     /// Nothing was pasted, and the clipboard is as it was.
@@ -90,9 +88,11 @@ final class TextInserter {
         system.frontmostPID()
     }
 
-    /// Pastes into the app that was frontmost when the recording stopped (`expectedPID`; nil for paste last).
-    func insert(_ text: String, expectedPID: pid_t?) async -> InsertionOutcome {
-        await serialized { await self.performInsert(text, expectedPID: expectedPID) }
+    /// Pastes at the cursor of whatever has focus now. Whether a text field has it can't be told everywhere (Chrome
+    /// and Electron apps don't say), so the paste never depends on it; only a password field, which macOS always
+    /// names, is refused.
+    func insert(_ text: String) async -> InsertionOutcome {
+        await serialized { await self.performInsert(text) }
     }
 
     /// "Paste here": paste into whatever has focus now, without focus or target checks.
@@ -100,20 +100,17 @@ final class TextInserter {
         await serialized { await self.performPasteNow(text) }
     }
 
-    private func performInsert(_ text: String, expectedPID: pid_t?) async -> InsertionOutcome {
+    private func performInsert(_ text: String) async -> InsertionOutcome {
         guard !text.isEmpty else { return .failed("There was no text to paste.") }
         guard await mayPostEvents() else { return .accessibilityMissing }
-        if let expectedPID, system.frontmostPID() != expectedPID { return .targetChanged }
 
         await waitForModifierRelease()
         let focus = await system.inspectFocus()
         Log.app.notice("Paste target: \(focus.bundleID ?? "?", privacy: .public) role=\(focus.role ?? "-", privacy: .public) subrole=\(focus.subrole ?? "-", privacy: .public) editable=\(String(describing: focus.editability), privacy: .public)")
-        if let expectedPID, let focusPID = focus.pid, focusPID != expectedPID { return .targetChanged }
-        if let expectedPID, system.frontmostPID() != expectedPID { return .targetChanged }
-        if focus.isSecure || focus.editability == .notEditable {
-            // Leave the clipboard alone: the transcript card offers Copy, and paste-last works once a text
-            // field has focus. Next to a password field this also keeps the text out of clipboard history.
-            return .noEditableTarget
+        if focus.isSecure {
+            // Leave the clipboard alone, which also keeps the text out of clipboard history: the transcript card
+            // offers Copy.
+            return .passwordField
         }
 
         var final = text
