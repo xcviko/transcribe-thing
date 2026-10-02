@@ -187,6 +187,18 @@ import Testing
         #expect(rig.h.pill.selectionHint == .hidden && !rig.h.hotkeys.selectionReady)
     }
 
+    /// The hint stays a moment, as the model chip does; the key still polishes the selection after it's gone.
+    @Test func theHintGoesButTheKeyStays() async throws {
+        let (rig, _, asked) = Self.make()
+        rig.h.pill.timing.selectionHintHold = 0.05
+        Switch.hold(rig)
+        try await waitUntil { rig.h.pill.selectionHint == .shown }
+        try await waitUntil { rig.h.pill.selectionHint == .hidden }
+        #expect(rig.h.hotkeys.selectionReady)
+        rig.h.controller.handle(.polish)
+        try await waitUntil { asked.calls.count == 1 }
+    }
+
     /// On Gemini the key is Polish's: no hint, and fn ↩ polishes the dictation, the selection left alone.
     @Test func onGeminiTheKeyStaysPolishs() async throws {
         let (rig, cues, asked) = Self.make()

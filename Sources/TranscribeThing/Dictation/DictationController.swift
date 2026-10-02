@@ -119,6 +119,10 @@ final class DictationController {
     /// Text selected in the frontmost app as this dictation started (Polish Selection), found through Accessibility.
     @ObservationIgnored private var selection: String?
     @ObservationIgnored private var selectionTask: Task<Void, Never>?
+    /// The polish key polishes the selection (it was there when the last hint went up); the hint itself hides after
+    /// `PillTiming.selectionHintHold`.
+    @ObservationIgnored private var selectionReady = false
+    @ObservationIgnored private var selectionHintTask: Task<Void, Never>?
     /// Polish Selection under way: the pill shows it (the polish circle, then the count) until its card comes up.
     @ObservationIgnored private var selectionPolish: SelectionPolish?
     /// This dictation is polished (`Polish`, fn ↩ while it's on Gemini). It lasts while the dictation records, as
@@ -1983,17 +1987,29 @@ final class DictationController {
         }
     }
 
-    /// The hint over the pill while there's a selection and the dictation isn't on Gemini (on Gemini the key is
-    /// Polish's); the router takes the polish key off Gemini only then. A switch to Gemini hides it, and back shows it
-    /// again. It comes without a sound.
+    /// While there's a selection and the dictation isn't on Gemini (on Gemini the key is Polish's), the router takes
+    /// the polish key. The hint over the pill says so for a moment, as the model chip does: when the selection is
+    /// found, and again when the dictation comes back off Gemini. It comes without a sound.
     private func updateSelectionHint() {
-        let shows = selection != nil && machine.isRecording && effectiveChoice != .gemini
-        if pillModel.selectionHint != .handoff {
-            let state: PillSelectionHintState = shows ? .shown : .hidden
-            if pillModel.selectionHint != state { pillModel.selectionHint = state }
-            if shows, pillModel.showsTabHint { pillModel.showsTabHint = false }
+        let ready = selection != nil && machine.isRecording && effectiveChoice != .gemini
+        if hotkeys.selectionReady != ready { hotkeys.selectionReady = ready }
+        guard ready != selectionReady else { return }
+        selectionReady = ready
+        selectionHintTask?.cancel()
+        guard pillModel.selectionHint != .handoff else { return }
+        guard ready else {
+            if pillModel.selectionHint == .shown { pillModel.selectionHint = .hidden }
+            return
         }
-        if hotkeys.selectionReady != shows { hotkeys.selectionReady = shows }
+        pillModel.selectionHint = .shown
+        if pillModel.showsTabHint { pillModel.showsTabHint = false }
+        guard runsTimers else { return }
+        let hold = pillModel.timing.selectionHintHold
+        selectionHintTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(hold))
+            guard !Task.isCancelled, let self, self.pillModel.selectionHint == .shown else { return }
+            self.pillModel.selectionHint = .hidden
+        }
     }
 
     /// The polish key over the hint: the dictation gives way without a trace (the cancel cue, then Polish's drop), the
@@ -2001,7 +2017,9 @@ final class DictationController {
     /// Models. Its message comes up on a card to paste over the selection or copy, and History keeps it.
     private func polishSelection(_ text: String) {
         selectionTask?.cancel()
+        selectionHintTask?.cancel()
         selection = nil
+        selectionReady = false
         let model = settings.polishSelectionModel
         let work = SelectionPolish(model: model,
                                    estimate: TokenEstimate.learned(from: history.entries, modelID: model.route.model))

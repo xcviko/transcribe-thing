@@ -759,9 +759,8 @@ struct PillCapsule: View {
 
 // MARK: - Polish's drop
 
-/// The dictation is polished (`PillModel.polishes`): a drop slides out from behind the pill's right end, stretches a
-/// neck, breaks off and floats beside it with a wand, the way the Dynamic Island splits in two; it flows back in when
-/// Polish goes off.
+/// The dictation is polished (`PillModel.polishes`): a drop, whole with its ring and wand, slides out from behind
+/// the pill's right end and floats beside it; it slides back in when Polish goes off, or when the dictation is done.
 struct PillPolishDrop: View {
     var isOn: Bool
     /// The capsule's height: the drop is a little smaller.
@@ -784,8 +783,8 @@ struct PillPolishDrop: View {
 }
 
 /// The drop at `progress` along its way out, in a frame whose leading edge is the capsule's right end, drawn behind
-/// it: it swells under the end (to 0.3), moves off on a neck that pinches as it stretches and breaks at 0.8, and
-/// settles a gap away. Its edge and shadow come once it's off.
+/// it: whole from the start (its ring and wand drawn), it waits under the capsule's rounded end and slides out to a gap
+/// away; the spring's overshoot is its bounce.
 private struct PillPolishDropShape: View, Animatable {
     var progress: Double
     var height: CGFloat
@@ -800,38 +799,45 @@ private struct PillPolishDropShape: View, Animatable {
 
     var body: some View {
         let geometry = Geometry(progress: progress, height: height)
-        ZStack {
-            geometry.neck.fill(PillPalette.fill)
-            Circle()
-                .fill(PillPalette.fill)
-                .overlay {
-                    Circle().strokeBorder(LinearGradient(colors: [.white.opacity(0.24), .white.opacity(0.07)],
-                                                         startPoint: .top, endPoint: .bottom), lineWidth: 0.5)
-                        .opacity(geometry.separation)
+        Circle()
+            .fill(PillPalette.fill)
+            .overlay {
+                Circle().strokeBorder(LinearGradient(colors: [.white.opacity(0.24), .white.opacity(0.07)],
+                                                     startPoint: .top, endPoint: .bottom), lineWidth: 0.5)
+            }
+            .overlay {
+                // The capsule's ring.
+                if let accent {
+                    Circle().strokeBorder(LinearGradient(colors: [accent.mark.opacity(0.95), accent.ring.opacity(0.9)],
+                                                         startPoint: .top, endPoint: .bottom), lineWidth: 1.25)
+                        .shadow(color: accent.ring.opacity(0.55), radius: 4)
                 }
-                .overlay {
-                    // The capsule's ring, once the drop is off.
-                    if let accent {
-                        Circle().strokeBorder(LinearGradient(colors: [accent.mark.opacity(0.95), accent.ring.opacity(0.9)],
-                                                             startPoint: .top, endPoint: .bottom), lineWidth: 1.25)
-                            .shadow(color: accent.ring.opacity(0.55), radius: 4)
-                            .opacity(geometry.separation)
-                    }
-                }
-                .overlay {
-                    Image(systemName: symbol)
-                        .font(.system(size: geometry.diameter * 0.42, weight: .semibold))
-                        .foregroundStyle(tint)
-                        .opacity(geometry.symbolOpacity)
-                }
-                .frame(width: geometry.diameter, height: geometry.diameter)
-                .scaleEffect(geometry.scale)
-                .position(x: geometry.centerX, y: height / 2)
-                .shadow(color: .black.opacity(0.22 * geometry.separation), radius: 1, x: 0, y: 1)
-                .shadow(color: .black.opacity(0.28 * geometry.separation), radius: 9, x: 0, y: 6)
+            }
+            .overlay {
+                Image(systemName: symbol)
+                    .font(.system(size: geometry.diameter * 0.42, weight: .semibold))
+                    .foregroundStyle(tint)
+            }
+            .frame(width: geometry.diameter, height: geometry.diameter)
+            .position(x: geometry.centerX, y: height / 2)
+            .shadow(color: .black.opacity(0.22 * geometry.out), radius: 1, x: 0, y: 1)
+            .shadow(color: .black.opacity(0.28 * geometry.out), radius: 9, x: 0, y: 6)
+            .frame(width: 1, height: height, alignment: .leading)
+            // The capsule's fill lets a little through: what is still under it stays unseen.
+            .mask { OutsideCapsuleEnd() }
+            .opacity(progress > 0.001 ? 1 : 0)
+    }
+
+    /// Everything but the capsule's rounded right end (and the capsule left of it), in a frame whose leading edge is
+    /// that end.
+    struct OutsideCapsuleEnd: Shape {
+        func path(in rect: CGRect) -> Path {
+            let h = rect.height
+            let everything = Path(CGRect(x: -4 * h, y: -2 * h, width: 8 * h, height: 5 * h))
+            var capsule = Path(ellipseIn: CGRect(x: -h, y: 0, width: h, height: h))
+            capsule.addRect(CGRect(x: -4 * h, y: 0, width: 3.5 * h, height: h))
+            return everything.subtracting(capsule)
         }
-        .frame(width: 1, height: height, alignment: .leading)
-        .opacity(progress > 0.001 ? 1 : 0)
     }
 
     struct Geometry {
@@ -840,42 +846,13 @@ private struct PillPolishDropShape: View, Animatable {
 
         var diameter: CGFloat { height * PillMetrics.polishDropRatio }
         var radius: CGFloat { diameter / 2 }
-        /// Swells at the pill's end.
-        var scale: CGFloat { CGFloat(Self.smooth(0, 0.3, progress)) }
-        /// At the pill's end at first, a gap away once off.
+        /// Under the capsule's rounded end at first (which hides it whole), a gap away once out.
         var centerX: CGFloat {
-            let start = -radius * 0.2, end = PillMetrics.polishDropGap + radius
-            return start + (end - start) * CGFloat(Self.smooth(0.25, 0.78, progress))
+            let start = -radius, end = PillMetrics.polishDropGap + radius
+            return start + (end - start) * CGFloat(progress)
         }
-        /// Broken off: its edge and shadow.
-        var separation: Double { Self.smooth(0.72, 0.9, progress) }
-        var symbolOpacity: Double { Self.smooth(0.65, 0.95, progress) }
-
-        /// The bridge from the pill's end to the drop: pinched in the middle more as it stretches, a thread when it
-        /// breaks.
-        var neck: Path {
-            let stretch = CGFloat(Self.smooth(0.3, 0.8, progress))
-            var path = Path()
-            guard progress > 0.2, progress < 0.8 else { return path }
-            let mid = height / 2
-            let atPill = radius * 0.75 * (1 - 0.5 * stretch) * scale
-            let atDrop = radius * 0.7 * (1 - 0.5 * stretch) * scale
-            let pinch = radius * 0.62 * (1 - stretch)
-            let x0: CGFloat = -2, x1 = max(x0 + 1, centerX - radius * 0.5)
-            let xm = (x0 + x1) / 2
-            path.move(to: CGPoint(x: x0, y: mid - atPill))
-            path.addQuadCurve(to: CGPoint(x: x1, y: mid - atDrop), control: CGPoint(x: xm, y: mid - pinch))
-            path.addLine(to: CGPoint(x: x1, y: mid + atDrop))
-            path.addQuadCurve(to: CGPoint(x: x0, y: mid + atPill), control: CGPoint(x: xm, y: mid + pinch))
-            path.closeSubpath()
-            return path
-        }
-
-        /// 0 before `from`, 1 after `to`, eased between.
-        static func smooth(_ from: Double, _ to: Double, _ x: Double) -> Double {
-            let t = min(1, max(0, (x - from) / (to - from)))
-            return t * t * (3 - 2 * t)
-        }
+        /// Its shadow grows as it comes out from under the capsule.
+        var out: Double { min(1, max(0, progress / 0.6)) }
     }
 }
 
@@ -1393,24 +1370,16 @@ struct PillShortcutChips: View {
     }
 }
 
-/// Polish Selection's hint over the pill, "[↩] Polish selection": the polish shortcut without the modifiers the
-/// push-to-talk key already holds (fn of fn ↩, as the key is held).
+/// Polish Selection's hint over the pill, "[fn] [return] · Polish selection": the polish shortcut in full.
 struct PillSelectionHint: View {
     let model: PillModel
 
-    /// The keys still to press while holding the push-to-talk key.
-    static func keys(polish: Shortcut?, pushToTalk: Shortcut?) -> Shortcut? {
-        guard let polish else { return nil }
-        let held = Set(pushToTalk?.modifiers.map(\.modifier) ?? [])
-        return Shortcut(modifiers: polish.modifiers.filter { !held.contains($0.modifier) }, keyCode: polish.keyCode)
-    }
-
     var body: some View {
-        let settings = model.settings
-        let keys = Self.keys(polish: settings.shortcuts[.polish], pushToTalk: settings.shortcuts[.pushToTalk])
+        let keys = model.settings.shortcuts[.polish]
         PillChipCapsule {
             PillShortcutChips(shortcut: keys, fallback: "↩")
                 .scaleEffect(0.9)
+            Text("·").foregroundStyle(.white.opacity(0.35))
             Text("Polish selection")
                 .foregroundStyle(.white.opacity(0.8))
         }
