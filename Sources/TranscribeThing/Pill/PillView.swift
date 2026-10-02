@@ -761,8 +761,8 @@ struct PillPolishDrop: View {
     var body: some View {
         PillPolishDropShape(progress: progress ?? (isOn ? 1 : 0), height: height, symbol: "wand.and.sparkles",
                             tint: tint)
-            .animation(progress != nil ? nil : reduceMotion ? .easeInOut(duration: 0.15)
-                       : .spring(duration: isOn ? 0.62 : 0.38, bounce: isOn ? 0.18 : 0), value: isOn)
+            .animation(progress != nil ? nil : reduceMotion ? .easeInOut(duration: 0.1)
+                       : .spring(duration: isOn ? 0.41 : 0.25, bounce: isOn ? 0.18 : 0), value: isOn)
             .accessibilityHidden(!isOn)
             .accessibilityLabel("Polish is on")
     }
