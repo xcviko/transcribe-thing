@@ -297,7 +297,7 @@ import Testing
     @Test func everyPageHasASidebarItem() {
         // Pill & Sounds is gone (its settings live in General): the sidebar lists every section but the
         // sub-pages, in case order.
-        #expect(HubSection.sidebar == [.home, .models, .shortcuts, .microphone, .general])
+        #expect(HubSection.sidebar == [.home, .models, .shortcuts, .dictionary, .microphone, .general])
         #expect(HubSection.sidebar == HubSection.allCases.filter { $0 != .softwareUpdate })
     }
 
@@ -308,7 +308,7 @@ import Testing
     }
 
     @Test func commandDigitsFollowTheSidebar() {
-        #expect(HubSection.sidebar.compactMap(\.shortcutDigit) == ["1", "2", "3", "4", "5"])
+        #expect(HubSection.sidebar.compactMap(\.shortcutDigit) == ["1", "2", "3", "4", "5", "6"])
     }
 }
 

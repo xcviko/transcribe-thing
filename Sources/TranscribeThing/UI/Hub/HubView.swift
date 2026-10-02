@@ -195,6 +195,7 @@ private struct HubRoot: View {
         case .home: HomePage()
         case .models: ModelsPage()
         case .shortcuts: ShortcutsPage()
+        case .dictionary: DictionaryPage()
         case .microphone: MicrophonePage()
         case .general: GeneralPage()
         case .softwareUpdate: SoftwareUpdatePage()

@@ -198,6 +198,7 @@ import Testing
         // Added after it was saved: their defaults.
         .switchModel: .fnTab,
         .polish: .fnReturn,
+        .addToDictionary: .fnD,
     ])
 
     @Test func conflictsAndSwap() {

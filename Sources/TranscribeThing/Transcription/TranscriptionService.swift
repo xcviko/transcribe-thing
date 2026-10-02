@@ -64,6 +64,9 @@ final class TranscriptionService {
     /// The format Parakeet's segments go in: FLAC, the WAV's samples in a little over half its bytes, until OpenRouter
     /// refuses it; WAV from then on, for as long as the app runs.
     private(set) var speechFormat: UploadFormat = .flac
+    /// The user's dictionary (`UserDictionary`), at the moment each request goes: after Gemini's prompt and the
+    /// clean-up's, whichever prompt they get. The app reads it from its settings; the CLI sends none.
+    var vocabulary: @MainActor () -> [String] = { [] }
 
     init(models: ModelStore, account: OpenRouterAccount, client: OpenRouterClient,
          providerLookupDelay: Duration = .milliseconds(1500)) {
@@ -94,7 +97,8 @@ final class TranscriptionService {
                 result.text = try await models.transcribeLocal(engine, samples: recording.samples, background: background)
             } else {
                 let effort = effort ?? engine.reasoningEffort
-                let prompt = engine.cloudAPI == .chatCompletions ? (prompt ?? EngineID.geminiSystemPrompt) : ""
+                let prompt = engine.cloudAPI == .chatCompletions
+                    ? UserDictionary.prompt(prompt ?? EngineID.geminiSystemPrompt, with: vocabulary(), heard: true) : ""
                 let cloud = try await transcribeCloud(recording, engine: engine, effort: effort, prompt: prompt,
                                                       upload: upload, progress: progress)
                 result.text = cloud.text
@@ -260,7 +264,8 @@ final class TranscriptionService {
         guard let route = route ?? model.route else {
             throw AppError.engineFailed(source, "\(model.modelName) no longer cleans up.")
         }
-        let prompt = (prompt ?? CleanupModel.systemPrompt).trimmingCharacters(in: .whitespacesAndNewlines)
+        let prompt = UserDictionary.prompt(prompt ?? CleanupModel.systemPrompt, with: vocabulary(), heard: false)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         // A replacement with no instruction would have the model reply to the transcript instead of tidying it.
         guard !prompt.isEmpty else { throw AppError.engineFailed(source, "The clean-up prompt is empty.") }
         guard let key = account.apiKey() else {

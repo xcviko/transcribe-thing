@@ -283,7 +283,7 @@ private enum Fixture {
                      "OpenRouter key saved: no",
                      "Settings: main=parakeet steps=cleanup,gemini parakeet=local handsFreeModel=main "
                          + #"shortcut.pushToTalk=fn shortcut.handsFree="fn Space""#,
-                     "pill=whileDictating sounds=on doublePress=off keySaved=no"] {
+                     "pill=whileDictating sounds=on doublePress=off dictionaryWords=0 keySaved=no"] {
             #expect(header.contains(line), "header has \(line)")
         }
         let older = try #require(text.range(of: "[app] older")), newer = try #require(text.range(of: "[app] newer"))
@@ -327,7 +327,8 @@ private enum Fixture {
         try await Task.sleep(for: .milliseconds(300))
         let changes = log.retainedText().split(separator: "\n").filter { $0.contains("[settings] settings.changed") }
         #expect(changes.count == 1)
-        #expect(changes.first?.contains("shortcut.polish=none pill=always sounds=off") == true)
+        #expect(changes.first?.contains("shortcut.polish=none") == true)
+        #expect(changes.first?.contains("pill=always sounds=off") == true)
     }
 }
 

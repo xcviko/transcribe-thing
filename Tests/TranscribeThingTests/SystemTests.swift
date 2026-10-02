@@ -351,7 +351,7 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
         #expect(kb.press(.fn).events == [.pttDown])
         let enter = kb.down(kVK_ANSI_KeypadEnter, fnFlagged: true)
         #expect(enter.swallow && enter.events.count == 1)
-        if case .polishIfSelected(let key) = enter.events.first {
+        if case .heldForSelection(.polish, let key) = enter.events.first {
             #expect(key.keyCode == UInt16(kVK_ANSI_KeypadEnter) && key.interruptsHold)
             #expect(key.flags & CGEventFlags.maskSecondaryFn.rawValue != 0)
         } else {
@@ -1834,5 +1834,32 @@ private func copyScreenshotAndFile(to pasteboard: NSPasteboard) {
     @Test(arguments: ["Hello.", "Wait...", " spaced ", ""])
     func bothOffChangeNothing(_ text: String) {
         #expect(prepare(text) == text)
+    }
+}
+
+// MARK: - Add to dictionary's key
+
+@Suite struct AddToDictionaryRouterTests {
+    /// During a dictation fn D is always held, on any model, for the controller to read what's selected right then;
+    /// unbound (or between dictations) it's the app's.
+    @Test func fnDIsHeldDuringADictation() {
+        var kb = Keyboard()
+        kb.config.addsToDictionary = true
+        #expect(kb.press(.fn).events == [.pttDown])
+        let held = kb.down(kVK_ANSI_D, fnFlagged: true)
+        #expect(held.swallow)
+        if case .heldForSelection(.addToDictionary, let key) = held.events.first {
+            #expect(key.keyCode == UInt16(kVK_ANSI_D))
+        } else {
+            Issue.record("expected heldForSelection, got \(held.events)")
+        }
+        #expect(kb.up(kVK_ANSI_D, fnFlagged: true).swallow)
+        kb.release(.fn)
+        #expect(!kb.down(kVK_ANSI_D).swallow, "between dictations D is just D")
+        kb.up(kVK_ANSI_D)
+
+        kb.config.addsToDictionary = false
+        kb.press(.fn)
+        #expect(!kb.down(kVK_ANSI_D, fnFlagged: true).swallow)
     }
 }

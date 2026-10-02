@@ -134,6 +134,7 @@ final class AppEnvironment {
         let client = OpenRouterClient()
         let account = makeAccount(keyStore, client)
         let transcription = TranscriptionService(models: models, account: account, client: client)
+        transcription.vocabulary = { [settings] in settings.dictionary.words }
         let inserter = TextInserter()
         let sounds = SoundPlayer(settings: settings)
         let pillModel = PillModel(settings: settings, levelMeter: levelMeter)

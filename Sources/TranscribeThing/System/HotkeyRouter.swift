@@ -58,9 +58,12 @@ struct HotkeyRouter: Equatable, Sendable {
         /// The dictation (or the one a held PTT starts) is on Gemini, the only model that polishes: without it Polish's
         /// shortcut is never intercepted, and fn ↩ reaches the app as it did before Polish.
         var polishes = true
-        /// Off Gemini, the selection lookup hasn't answered: Polish's shortcut is held as `.polishIfSelected`, for
-        /// the lookup to decide (Polish Selection, or the key given back to the app).
+        /// The selection lookup hasn't answered and Polish Selection can happen: Polish's shortcut is held off Gemini
+        /// as `.heldForSelection`, for the lookup to decide (Polish Selection, or the key given back).
         var selectionPending = false
+        /// Add to dictionary's shortcut is live during a dictation, on any model, always held as `.heldForSelection`:
+        /// the controller reads what's selected right then.
+        var addsToDictionary = false
         /// Polish Selection's cards: ↩ (with no modifier) is theirs unless a dictation records, and Esc closes them
         /// unless one is busy.
         var cardPaste = false
@@ -304,10 +307,10 @@ struct HotkeyRouter: Equatable, Sendable {
             consume(physical, into: &decision)
             if input.isRepeat {
                 return decision
-            } else if action == .polish, !config.polishes {
+            } else if action == .polish && !config.polishes || action == .addToDictionary {
                 // Held only for the selection lookup: what it is gets decided once that answers.
-                decision.events.append(.polishIfSelected(KeyStroke(keyCode: physical, flags: input.flags,
-                                                                   interruptsHold: gesture == .holdingModifiers)))
+                decision.events.append(.heldForSelection(action, KeyStroke(keyCode: physical, flags: input.flags,
+                                                                           interruptsHold: gesture == .holdingModifiers)))
             } else if let event = Self.event(for: action) {
                 decision.events.append(event)
             }
@@ -392,7 +395,7 @@ struct HotkeyRouter: Equatable, Sendable {
         switch action {
         case .handsFree: event = .handsFreeToggle
         case .pasteLast: event = .pasteLast
-        case .pushToTalk, .switchModel, .polish: return
+        case .pushToTalk, .switchModel, .polish, .addToDictionary: return
         }
         if gesture != .idle, action == .pasteLast {
             decision.events.append(.pttInterrupted)
@@ -430,6 +433,8 @@ struct HotkeyRouter: Equatable, Sendable {
             if action == .switchModel, !config.switchesModels { return nil }
             // Held for the lookup only as a key that can be given back: a modifier-only Polish isn't.
             if action == .polish, !config.polishes, !config.selectionPending || shortcut.isModifierOnly { return nil }
+            // Held, then given back if nothing is selected: only a key can be (a modifier-only binding isn't).
+            if action == .addToDictionary, !config.addsToDictionary || shortcut.isModifierOnly { return nil }
             return (action, shortcut)
         }
     }
@@ -438,7 +443,7 @@ struct HotkeyRouter: Equatable, Sendable {
         switch action {
         case .switchModel: .cycleEngine
         case .polish: .polish
-        case .pushToTalk, .handsFree, .pasteLast: nil
+        case .pushToTalk, .handsFree, .pasteLast, .addToDictionary: nil
         }
     }
 

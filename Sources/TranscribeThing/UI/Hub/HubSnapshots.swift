@@ -176,6 +176,13 @@ enum HubSnapshots {
             },
 
             // Pasting set per model: quick Parakeet searches go in bare, Clean-up and Gemini get a space after.
+            hub("hub-dictionary", .dictionary, height: 720) { c in
+                c.settings.dictionary = UserDictionary(words: [
+                    "Wispr Flow", "OpenRouter", "Parakeet", "GPT-6 Luna", "Gemini 3.8 Flash", "SwiftUI", "Claude Code",
+                    "Мелания Трамп", "TestFlight", "xcviko", "Liquid Glass", "Тбилиси", "Kubernetes", "Figma",
+                ])
+            },
+            hub("hub-dictionary-empty", .dictionary, height: 560),
             hub("hub-general", .general, height: 1080) { c in
                 c.settings.modelsAddingSpace = [.cleanup, .gemini]
                 c.settings.modelsRemovingFinalPeriod = [.parakeet]

@@ -12,9 +12,10 @@ enum HotkeyEvent: Equatable, Sendable {
     case cycleEngineRepeat
     /// The polish shortcut, during a dictation: Polish on or off for it, or Polish Selection with text selected.
     case polish
-    /// The polish shortcut before the dictation's selection lookup has answered (off Gemini): Polish Selection if text
-    /// turns out to be selected, else the key goes on to the app (`KeyStroke.post`).
-    case polishIfSelected(KeyStroke)
+    /// A key the tap held for the selection: Polish's before the dictation's selection lookup has answered, Add to
+    /// dictionary's always (it reads what's selected now). What the key does with the selection if there is one, else
+    /// it goes on to the app (`KeyStroke.post`).
+    case heldForSelection(ShortcutAction, KeyStroke)
     /// ↩ and Esc while Polish Selection's card is up: Paste Here, and close it.
     case cardPaste, cardClose
 }
@@ -80,10 +81,14 @@ final class HotkeyMonitor {
     var selectionReady = false {
         didSet { if selectionReady != oldValue { pushConfig() } }
     }
-    /// The selection lookup hasn't answered yet (between dictations: the next press's will run): Polish's shortcut
-    /// is held off Gemini, as `.polishIfSelected`.
+    /// The selection lookup hasn't answered yet, and Polish Selection can happen (between dictations: the next press's
+    /// lookup will run): Polish's shortcut is held off Gemini, as `.heldForSelection`.
     var selectionPending = false {
         didSet { if selectionPending != oldValue { pushConfig() } }
+    }
+    /// Add to dictionary has a shortcut: during a dictation it's held, as `.heldForSelection`, on any model.
+    var dictionaryReady = false {
+        didSet { if dictionaryReady != oldValue { pushConfig() } }
     }
     /// Polish Selection's cards are up: ↩ is theirs (it pastes the one card; with two it couldn't tell which, and does
     /// nothing), Esc closes them.
@@ -177,7 +182,8 @@ final class HotkeyMonitor {
         HotkeyRouter.Config(bindings: settings.shortcuts, isBusy: isBusy, isRecording: isRecording,
                             switchesModels: settings.lineup.cycle.count > 1,
                             polishes: (dictationModel ?? settings.lineup.main) == .gemini || selectionReady,
-                            selectionPending: selectionPending, cardPaste: cardPaste, cardClose: cardClose,
+                            selectionPending: selectionPending, addsToDictionary: dictionaryReady,
+                            cardPaste: cardPaste, cardClose: cardClose,
                             isSuspended: suspendCount > 0, forwardsRawKeys: onRawKey != nil)
     }
 

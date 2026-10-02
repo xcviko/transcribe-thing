@@ -1401,17 +1401,36 @@ struct PillSelectionHint: View {
     let model: PillModel
 
     var body: some View {
-        let keys = model.settings.shortcuts[.polish]
+        let offer = model.selectionOffer
+        let polish = model.settings.shortcuts[.polish], dictionary = model.settings.shortcuts[.addToDictionary]
         PillChipCapsule {
-            PillShortcutChips(shortcut: keys, fallback: "↩")
-                .scaleEffect(0.9)
-            Text("·").foregroundStyle(.white.opacity(0.35))
-            Text("Polish selection")
-                .foregroundStyle(.white.opacity(0.8))
+            if offer.polish {
+                PillShortcutChips(shortcut: polish, fallback: "↩")
+                    .scaleEffect(0.9)
+                Text(offer.dictionary ? "Polish" : "Polish selection")
+                    .foregroundStyle(.white.opacity(0.8))
+            }
+            if offer.polish, offer.dictionary {
+                Text("·").foregroundStyle(.white.opacity(0.35))
+            }
+            if offer.dictionary {
+                PillShortcutChips(shortcut: dictionary, fallback: "D")
+                    .scaleEffect(0.9)
+                Text("Add to dictionary")
+                    .foregroundStyle(.white.opacity(0.8))
+            }
         }
         .fixedSize()
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Press \(keys?.spokenDescription ?? "Return") to polish the selected text")
+        .accessibilityLabel(accessibilityLabel(offer, polish: polish, dictionary: dictionary))
+    }
+
+    private func accessibilityLabel(_ offer: PillSelectionOffer, polish: Shortcut?, dictionary: Shortcut?) -> String {
+        let parts = [
+            offer.polish ? "\(polish?.spokenDescription ?? "Return") to polish it" : nil,
+            offer.dictionary ? "\(dictionary?.spokenDescription ?? "D") to add it to your dictionary" : nil,
+        ].compactMap { $0 }
+        return "Text selected. Press " + parts.joined(separator: ", or ")
     }
 }
 

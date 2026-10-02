@@ -27,6 +27,8 @@ enum NoticeActionKind: Sendable, Equatable {
     /// Undo a cancel: the dictation picks up again hands-free, its kept audio first.
     case undoCancel
     case copyText(String)
+    /// Undo of fn D: the dictionary as it was before (a spelling it replaced, or a word it pushed out, comes back).
+    case restoreDictionary(UserDictionary)
     /// The text and the model that wrote it, whose General → Pasting rules the paste follows (nil: as written).
     case pasteText(String, by: ModelChoice?)
     case chooseMicrophone
@@ -151,7 +153,7 @@ enum SettingsPane: String, Sendable {
 }
 
 enum HubSection: String, CaseIterable, Sendable, Identifiable {
-    case home, models, shortcuts, microphone, general
+    case home, models, shortcuts, dictionary, microphone, general
     /// A sub-page of General (no sidebar item of its own), like a pane inside System Settings.
     case softwareUpdate
 
@@ -162,6 +164,7 @@ enum HubSection: String, CaseIterable, Sendable, Identifiable {
         case .home: "Home"
         case .models: "Models"
         case .shortcuts: "Shortcuts"
+        case .dictionary: "Dictionary"
         case .microphone: "Microphone"
         case .general: "General"
         case .softwareUpdate: "Software Update"
@@ -173,6 +176,7 @@ enum HubSection: String, CaseIterable, Sendable, Identifiable {
         case .home: "house"
         case .models: "square.stack.3d.up"
         case .shortcuts: "keyboard"
+        case .dictionary: "character.book.closed"
         case .microphone: "mic"
         case .general: "gearshape"
         case .softwareUpdate: "arrow.down.circle"

@@ -63,6 +63,8 @@ final class PillModel {
     var showsTabHint = false
     /// Polish Selection's hint over the pill: text is selected, and the polish key would polish it.
     var selectionHint: PillSelectionHintState = .hidden
+    /// What the hint offers for the selected text.
+    var selectionOffer = PillSelectionOffer()
 
     /// Key-chip text for the tooltip, from `settings.shortcuts[.pushToTalk]`.
     var shortcutHint: String = "fn"
@@ -367,6 +369,15 @@ final class PillModel {
             body(self)
         }
     }
+}
+
+/// What the selected text can go to while dictating: Polish Selection (off Gemini, with a key that can pay) and the
+/// dictionary (on any model).
+struct PillSelectionOffer: Equatable, Sendable {
+    var polish = false
+    var dictionary = false
+
+    var isEmpty: Bool { !polish && !dictionary }
 }
 
 /// Polish Selection's hint over the recording pill. `handoff`: its key was pressed, so the hint drops into the pill

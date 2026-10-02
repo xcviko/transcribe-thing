@@ -33,6 +33,7 @@ enum KeyCode {
     static let delete = UInt16(kVK_Delete)              // 51
     static let forwardDelete = UInt16(kVK_ForwardDelete) // 117
     static let ansiV = UInt16(kVK_ANSI_V)               // 9
+    static let ansiD = UInt16(kVK_ANSI_D)               // 2
     static let ansiC = UInt16(kVK_ANSI_C)               // 8
     static let f13 = UInt16(kVK_F13)                    // 105
 
@@ -191,6 +192,7 @@ struct Shortcut: Codable, Hashable, Sendable {
     static let fnSpace = Shortcut(modifiers: [.init(.function)], keyCode: KeyCode.space)
     static let fnTab = Shortcut(modifiers: [.init(.function)], keyCode: KeyCode.tab)
     static let fnReturn = Shortcut(modifiers: [.init(.function)], keyCode: KeyCode.returnKey)
+    static let fnD = Shortcut(modifiers: [.init(.function)], keyCode: KeyCode.ansiD)
     static let escape = Shortcut(modifiers: [], keyCode: KeyCode.escape)
     static let commandFnV = Shortcut(modifiers: [.init(.command), .init(.function)], keyCode: KeyCode.ansiV)
     static let rightOption = Shortcut(modifiers: [.init(.option, .right)])
@@ -271,13 +273,15 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
     case pushToTalk, handsFree, pasteLast, switchModel
     /// Polish this dictation (`Polish`) while it's on Gemini; off Gemini, with text selected, Polish Selection.
     case polish
+    /// While dictating with text selected: the selection goes into the user's dictionary (`UserDictionary`).
+    case addToDictionary
 
     var id: String { rawValue }
 
     /// Live only while a dictation records: outside one its keys reach apps.
     var isDuringDictation: Bool {
         switch self {
-        case .switchModel, .polish: true
+        case .switchModel, .polish, .addToDictionary: true
         case .pushToTalk, .handsFree, .pasteLast: false
         }
     }
@@ -289,6 +293,7 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
         case .pasteLast: "Paste last transcript"
         case .switchModel: "Switch model"
         case .polish: "Polish"
+        case .addToDictionary: "Add to dictionary"
         }
     }
 
@@ -301,6 +306,7 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
         case .pasteLast: "Paste your most recent transcript again. Your clipboard stays as it was."
         case .switchModel: "While dictating: switch this dictation to your next model."
         case .polish: "While dictating: on Gemini, it writes the message you meant; with text selected, it polishes that."
+        case .addToDictionary: "While dictating with a word selected: Gemini and GPT-6 Luna spell it as written from then on."
         }
     }
 
@@ -311,6 +317,7 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
         case .pasteLast: "doc.on.clipboard"
         case .switchModel: "sparkles"
         case .polish: "wand.and.sparkles"
+        case .addToDictionary: "character.book.closed"
         }
     }
 
@@ -336,6 +343,7 @@ struct ShortcutBindings: Codable, Equatable, Sendable {
         .pasteLast: .commandFnV,
         .switchModel: .fnTab,
         .polish: .fnReturn,
+        .addToDictionary: .fnD,
     ])
 
     subscript(_ action: ShortcutAction) -> Shortcut? {

@@ -684,7 +684,7 @@ enum AutoDeleteChoice {
 
 extension HubSection {
     /// Sidebar pages, top to bottom. ⌘1…⌘N follow this order.
-    static let sidebar: [HubSection] = [.home, .models, .shortcuts, .microphone, .general]
+    static let sidebar: [HubSection] = [.home, .models, .shortcuts, .dictionary, .microphone, .general]
 
     /// The digit of the ⌘-shortcut that opens this page ("1" for Home), or nil when it has no sidebar item.
     var shortcutDigit: Character? {
@@ -695,7 +695,7 @@ extension HubSection {
     var sidebarItem: HubSection {
         switch self {
         case .softwareUpdate: .general
-        case .home, .models, .shortcuts, .microphone, .general: self
+        case .home, .models, .shortcuts, .dictionary, .microphone, .general: self
         }
     }
 }
