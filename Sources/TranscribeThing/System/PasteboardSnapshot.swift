@@ -87,13 +87,15 @@ struct PasteboardSnapshot {
         }
     }
 
-    /// Puts the items back as they were; an empty snapshot leaves the pasteboard empty.
-    func restore(to pasteboard: NSPasteboard) {
+    /// Puts the items back as they were; an empty snapshot leaves the pasteboard empty. `transient`: marked so
+    /// clipboard managers don't take it for a new copy (it's in their history already).
+    func restore(to pasteboard: NSPasteboard, transient: Bool = false) {
         pasteboard.clearContents()
         guard !items.isEmpty else { return }
         let restored: [NSPasteboardItem] = items.map { item in
             let copy = NSPasteboardItem()
             for entry in item.entries { copy.setData(entry.data, forType: entry.type) }
+            if transient { copy.setData(Data(), forType: PasteboardMarkers.transientType) }
             return copy
         }
         _ = pasteboard.writeObjects(restored)

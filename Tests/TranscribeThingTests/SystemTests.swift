@@ -823,6 +823,83 @@ private func copyScreenshotAndFile(to pasteboard: NSPasteboard) {
     _ = pasteboard.writeObjects([screenshot, file])
 }
 
+// MARK: - Copying the selection (fake ⌘C, private pasteboard)
+
+@MainActor
+@Suite struct SelectionCopyTests {
+    /// An inserter whose ⌘C has the app put `copies` on the clipboard a moment later (and VS Code's own type with
+    /// `editorData`), as an app would; nil copies nothing.
+    private func inserter(_ pasteboard: NSPasteboard, canPost: Bool = true, copies: String?,
+                          editorData: String? = nil) -> TextInserter {
+        let name = pasteboard.name
+        let system = TextInserter.System(
+            canPostEvents: { canPost }, modifiersHeld: { false },
+            inspectFocus: { FocusInfo(pid: 42, editability: .editable) }, pasteKeyCode: { 9 },
+            postPaste: { _ in true }, copyKeyCode: { 8 },
+            postCopy: { _ in
+                guard let copies else { return true }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
+                    let pasteboard = NSPasteboard(name: name)
+                    pasteboard.clearContents()
+                    let item = NSPasteboardItem()
+                    item.setString(copies, forType: .string)
+                    if let editorData, let utf16 = editorData.data(using: .utf16LittleEndian) {
+                        // Chromium keeps a page's own clipboard types in one of its own, as UTF-16.
+                        item.setData(utf16, forType: NSPasteboard.PasteboardType("org.chromium.web-custom-data"))
+                    }
+                    _ = pasteboard.writeObjects([item])
+                }
+                return true
+            })
+        let inserter = TextInserter(pasteboard: pasteboard, system: system)
+        inserter.copyTimeout = .milliseconds(200)
+        return inserter
+    }
+
+    private func keep(_ text: String, on pasteboard: NSPasteboard) {
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+    }
+
+    /// What ⌘C copied comes back, and the clipboard goes back to what it held, marked so clipboard managers don't
+    /// take it for a new copy.
+    @Test func itCopiesTheSelectionAndPutsTheClipboardBack() async {
+        let pasteboard = privatePasteboard()
+        copyScreenshotAndFile(to: pasteboard)
+        let before = contents(of: pasteboard)
+        #expect(await inserter(pasteboard, copies: "selected words").copySelection() == .text("selected words"))
+        let marker = PasteboardMarkers.transientType.rawValue
+        #expect(contents(of: pasteboard).map { $0.filter { $0.key != marker } } == before)
+        #expect(pasteboard.pasteboardItems?.allSatisfy { $0.types.contains(PasteboardMarkers.transientType) } == true)
+    }
+
+    /// ⌘C copied nothing: nothing was selected, and the clipboard wasn't touched.
+    @Test func nothingCopiedIsNothingSelected() async {
+        let pasteboard = privatePasteboard()
+        keep("kept", on: pasteboard)
+        let count = pasteboard.changeCount
+        #expect(await inserter(pasteboard, copies: nil).copySelection() == .nothing)
+        #expect(pasteboard.changeCount == count && pasteboard.string(forType: .string) == "kept")
+    }
+
+    /// VS Code copies the whole line when nothing is selected, and says so: that's nothing selected.
+    @Test func vsCodesWholeLineIsNothingSelected() async {
+        let pasteboard = privatePasteboard()
+        keep("kept", on: pasteboard)
+        let editorData = #"{"version":1,"isFromEmptySelection":true,"multicursorText":null,"mode":"swift"}"#
+        let inserter = inserter(pasteboard, copies: "    let line = 1\n", editorData: editorData)
+        #expect(await inserter.copySelection() == .nothing)
+        #expect(pasteboard.string(forType: .string) == "kept")
+    }
+
+    @Test func withoutPermissionItIsntTried() async {
+        let pasteboard = privatePasteboard()
+        keep("kept", on: pasteboard)
+        #expect(await inserter(pasteboard, canPost: false, copies: "x").copySelection() == .unavailable)
+        #expect(pasteboard.string(forType: .string) == "kept")
+    }
+}
+
 @MainActor
 @Suite struct TextInserterTests {
     private struct Rig {

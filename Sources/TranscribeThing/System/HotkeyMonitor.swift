@@ -37,7 +37,7 @@ struct KeyStroke: Equatable, Sendable {
     var interruptsHold: Bool
 
     /// Down and up again at the session tap, marked as ours so the tap lets them through. As the paste's ⌘V
-    /// (`TextInserter.postCommandV`): the user's own keys are never held back meanwhile (a suppressed fn release
+    /// (`TextInserter.postCommand`): the user's own keys are never held back meanwhile (a suppressed fn release
     /// would be one the tap never sees), and a short gap helps slow consumers. Off the main thread: it sleeps.
     nonisolated static func post(_ key: KeyStroke) {
         guard let source = CGEventSource(stateID: .combinedSessionState) else { return }

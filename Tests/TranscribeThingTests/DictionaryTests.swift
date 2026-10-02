@@ -323,6 +323,24 @@ import Testing
         #expect(replayed.isEmpty && rig.h.settings.dictionary.words.isEmpty && !rig.h.controller.machine.isRecording)
     }
 
+    /// Where the app can't say (VS Code, Claude), what ⌘C copies goes in; when it copies nothing, nothing was
+    /// selected, and the D goes on to the app.
+    @Test func fnDWhereTheAppCantSayTakesWhatCopyingFinds() async throws {
+        let (rig, _) = Self.make(selection: nil)
+        var copy = TextInserter.SelectionCopy.text("Kubernetes")
+        rig.h.controller.selectionMissingOverride = .noFocusedElement
+        rig.h.controller.selectionCopyOverride = { copy }
+        var replayed: [KeyStroke] = []
+        rig.h.controller.replayKeyOverride = { replayed.append($0) }
+        rig.h.controller.send(.handsFreeToggle)
+        Self.pressD(rig)
+        try await waitUntil { rig.h.settings.dictionary.words == ["Kubernetes"] }
+        copy = .nothing
+        Self.pressD(rig)
+        try await waitUntil { replayed == [Self.d] }
+        rig.h.controller.send(.pillCancel)
+    }
+
     /// Another word selected and fn D again, fn still down after the first took the dictation over: it goes in too.
     @Test func aSecondFnDInTheSamePressAddsToo() async throws {
         let (rig, _) = Self.make()

@@ -2,7 +2,7 @@ import AppKit
 import Carbon.HIToolbox
 import CoreGraphics
 
-/// The virtual key code that produces "v" *with ⌘ held* in the current keyboard layout.
+/// The virtual key code that produces "v" (or "c", for ⌘C) *with ⌘ held* in the current keyboard layout.
 /// The target app reads the key code through its layout, so a hard-coded `kVK_ANSI_V` is wrong for
 /// some layouts. Verified on macOS 26.6: RussianWin/Russian/Greek/Hebrew → 9 (their ⌘ layer is Latin),
 /// Dvorak → 47, "Dvorak – QWERTY ⌘" → 9, ABC/German/French/Colemak → 9.
@@ -14,19 +14,28 @@ enum PasteKeyResolver {
     /// Text Input Sources are main-thread APIs inside apps, hence the main actor. Usually one
     /// `UCKeyTranslate` (the ANSI V check answers for most layouts).
     static func resolveCurrent() -> CGKeyCode {
-        guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue() else { return fallback }
-        return resolve(source: source) ?? fallback
+        resolveCurrent(letter: "v", ansi: KeyCode.ansiV)
+    }
+
+    /// ⌘C's key, for copying what's selected.
+    static func resolveCurrentCopy() -> CGKeyCode {
+        resolveCurrent(letter: "c", ansi: KeyCode.ansiC)
+    }
+
+    private static func resolveCurrent(letter: String, ansi: UInt16) -> CGKeyCode {
+        guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue() else { return CGKeyCode(ansi) }
+        return resolve(source: source, letter: letter, ansi: ansi) ?? CGKeyCode(ansi)
     }
 
     static let fallback = CGKeyCode(kVK_ANSI_V)
 
-    static func resolve(source: TISInputSource) -> CGKeyCode? {
+    static func resolve(source: TISInputSource, letter: String = "v", ansi: UInt16 = KeyCode.ansiV) -> CGKeyCode? {
         let command = UInt32(cmdKey)
-        if KeyboardLayout.translate(keyCode: KeyCode.ansiV, carbonModifiers: command, source: source)?.lowercased() == "v" {
-            return CGKeyCode(KeyCode.ansiV)
+        if KeyboardLayout.translate(keyCode: ansi, carbonModifiers: command, source: source)?.lowercased() == letter {
+            return CGKeyCode(ansi)
         }
         for code in UInt16(0)..<128 where !KeyCode.modifierKeyCodes.contains(code) {
-            if KeyboardLayout.translate(keyCode: code, carbonModifiers: command, source: source)?.lowercased() == "v" {
+            if KeyboardLayout.translate(keyCode: code, carbonModifiers: command, source: source)?.lowercased() == letter {
                 return CGKeyCode(code)
             }
         }

@@ -427,6 +427,17 @@ import Testing
         #expect(asked.calls.allSatisfy { $0.0 == "selected later" })
     }
 
+    /// Where the app can't say what's selected (VS Code, Claude), fn P polishes what ⌘C copies.
+    @Test func whereTheAppCantSayCopyingFindsTheSelection() async throws {
+        let (rig, _, asked) = Self.make(selection: nil)
+        rig.h.controller.selectionMissingOverride = .noFocusedElement
+        rig.h.controller.selectionCopyOverride = { .text("copied draft") }
+        Switch.hold(rig)
+        rig.h.controller.handle(.polish)
+        try await waitUntil { asked.calls.count == 2 }
+        #expect(asked.calls.allSatisfy { $0.0 == "copied draft" })
+    }
+
     /// Held down off Gemini, fn P's autorepeats do nothing more: one look at the selection, one word over the pill.
     @Test func holdingThePolishKeyOffGeminiLooksOnce() async throws {
         let (rig, _, asked) = Self.make(selection: nil)

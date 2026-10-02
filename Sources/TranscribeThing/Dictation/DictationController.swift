@@ -85,6 +85,9 @@ final class DictationController {
     @ObservationIgnored var selectionOverride: (@MainActor () async -> String?)?
     /// Tests: why `selectionOverride` found nothing (nothing selected, unless this says the app couldn't tell).
     @ObservationIgnored var selectionMissingOverride: FocusInspector.SelectionLookup.Outcome?
+    /// Tests: what ⌘C copies where the app couldn't tell (`copiedSelection`). Without it, a test with
+    /// `selectionOverride` never copies.
+    @ObservationIgnored var selectionCopyOverride: (@MainActor () async -> TextInserter.SelectionCopy)?
     /// Tests: the model's answer for Polish Selection (its `<message>` tags included), instead of OpenRouter.
     @ObservationIgnored var selectionPolishOverride: (@MainActor (String, PolishSelectionModel) async throws -> TranscriptResult)?
     /// Tests: the Return pressed after a hands-free dictation finished with Return is pasted, instead of posting it.
@@ -2238,13 +2241,16 @@ final class DictationController {
         let override = selectionOverride, missing = selectionMissingOverride ?? .nothingSelected
         let generation = recordingGeneration
         Task { [weak self] in
-            let fresh = if let override {
+            var fresh = if let override {
                 await override().map { FocusInspector.SelectionLookup(text: $0, outcome: .found) }
                     ?? FocusInspector.SelectionLookup(outcome: missing)
             } else {
                 await Self.lookUpSelection(when: "key")
             }
             guard let self else { return }
+            if Self.copyCanTell(fresh.outcome), self.recordingGeneration == generation {
+                fresh = await self.copiedSelection(after: fresh)
+            }
             let held = self.heldKeys
             self.heldKeys = []
             guard self.recordingGeneration == generation else {
@@ -2331,6 +2337,36 @@ final class DictationController {
     private func explainPolish() {
         send(.keyUsed)
         showKeyHint(canPolishSelection ? "Polish works on Gemini, or on selected text" : "Polish works on Gemini only")
+    }
+
+    /// Accessibility couldn't say what's selected, but ⌘C can: the app shows no focused element (Chrome, Electron
+    /// apps, VS Code), doesn't say what's selected in it, or didn't answer in time.
+    private static func copyCanTell(_ outcome: FocusInspector.SelectionLookup.Outcome) -> Bool {
+        outcome == .noFocusedElement || outcome == .selectionUnsupported || outcome == .timedOut
+    }
+
+    /// What ⌘C copies where Accessibility couldn't say (`TextInserter.copySelection`): only for a key pressed for the
+    /// selection, never as a dictation starts, so clipboard history doesn't get every dictation. The lookup as it
+    /// was when copying can't be tried. Logged with the outcome and the length, never the text.
+    private func copiedSelection(after lookup: FocusInspector.SelectionLookup) async -> FocusInspector.SelectionLookup {
+        let copy: TextInserter.SelectionCopy
+        if let selectionCopyOverride {
+            copy = await selectionCopyOverride()
+        } else if selectionOverride != nil {
+            return lookup
+        } else {
+            copy = await inserter.copySelection()
+        }
+        let result: FocusInspector.SelectionLookup = switch copy {
+        case .text(let text) where text.count > FocusInspector.maxSelection:
+            .init(outcome: .tooLong, app: lookup.app)
+        case .text(let text): .init(text: text, outcome: .found, app: lookup.app)
+        case .nothing: .init(outcome: .nothingSelected, app: lookup.app)
+        case .unavailable: lookup
+        }
+        DiagnosticLog.shared.event(.dictation, "selection.copied", [
+            "app": lookup.app ?? "none", "outcome": result.outcome.rawValue, "characters": result.text?.count])
+        return result
     }
 
     /// fn D where the app couldn't say what's selected: the key isn't typed over what may be, and a card says why

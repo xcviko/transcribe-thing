@@ -29,6 +29,19 @@ final class TextInserter {
         var pasteKeyCode: @MainActor () -> CGKeyCode
         /// Posts ⌘V; false if the event source couldn't be created. Called off the main thread.
         var postPaste: @Sendable (CGKeyCode) -> Bool
+        var copyKeyCode: @MainActor () -> CGKeyCode = { PasteKeyResolver.resolveCurrentCopy() }
+        /// Posts ⌘C, as `postPaste` does ⌘V (`copySelection`).
+        var postCopy: @Sendable (CGKeyCode) -> Bool = { _ in false }
+    }
+
+    /// What copying the selection found (`copySelection()`).
+    enum SelectionCopy: Equatable, Sendable {
+        case text(String)
+        /// ⌘C copied nothing (the clipboard didn't change), or only the whole line VS Code copies for an empty
+        /// selection.
+        case nothing
+        /// It couldn't be tried: no permission to post keys, or a clipboard that couldn't be put back after.
+        case unavailable
     }
 
     /// The earliest the clipboard a paste replaced comes back after ⌘V. ⌘V is only queued: the target reads the
@@ -46,6 +59,9 @@ final class TextInserter {
     /// Up to then the user's own ⌘V pastes the transcript, and that read brings the clipboard back `readGrace` later.
     var unreadTimeout: Duration = .seconds(8)
     var modifierReleaseTimeout: Duration = .milliseconds(600)
+    /// How long ⌘C has to put the selection on the clipboard: an Electron app takes tens of milliseconds, a busy one
+    /// longer. Past this, nothing was selected.
+    var copyTimeout: Duration = .milliseconds(500)
     /// Our active event tap is running. Creating an active tap requires the same PostEvent grant, so a live
     /// tap proves we may post ⌘V even when the preflight still answers from its stale per-process cache.
     var eventTapActive: @MainActor () -> Bool = { false }
@@ -73,7 +89,8 @@ final class TextInserter {
             modifiersHeld: { TextInserter.physicalModifiersHeld() },
             inspectFocus: { await FocusInspector.inspect() },
             pasteKeyCode: { PasteKeyResolver.resolveCurrent() },
-            postPaste: { TextInserter.postCommandV(keyCode: $0) })
+            postPaste: { TextInserter.postCommand(keyCode: $0) },
+            postCopy: { TextInserter.postCommand(keyCode: $0) })
     }
 
     /// Tests: a private pasteboard and fake system hooks.
@@ -131,6 +148,61 @@ final class TextInserter {
         prepared = (changeCount, captureClipboard())
     }
 
+    /// The text selected in the frontmost app, for one that doesn't tell Accessibility what's selected (Chrome,
+    /// Electron apps): copied with ⌘C, then the clipboard goes back to what it held, marked so clipboard managers
+    /// don't count that as a new copy. The selection itself may still show up in their history: that copy is the
+    /// app's own. Not tried when the clipboard couldn't be put back after.
+    func copySelection() async -> SelectionCopy {
+        await serialized { await self.performCopySelection() }
+    }
+
+    private func performCopySelection() async -> SelectionCopy {
+        guard await mayPostEvents() else { return .unavailable }
+        // A paste's restore still waiting: the clipboard holds that transcript, and what goes back is the user's own.
+        let tookOverRestore = pendingRestore.map { pasteboard.changeCount == $0.ourChangeCount } ?? false
+        guard let original = takeOriginalClipboard() else { return .unavailable }
+        let before = pasteboard.changeCount
+        let keyCode = system.copyKeyCode()
+        let post = system.postCopy
+        let posted = await Task.detached(priority: .userInitiated) { post(keyCode) }.value
+        // The app clears the clipboard, then writes to it: what it copied is there once it has types again.
+        let deadline = ContinuousClock.now + copyTimeout
+        var copied = false
+        while posted, ContinuousClock.now < deadline {
+            if pasteboard.changeCount != before, pasteboard.types?.isEmpty == false {
+                copied = true
+                break
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        guard copied else {
+            if pasteboard.changeCount != before {
+                original.restore(to: pasteboard, transient: true)
+            } else if tookOverRestore {
+                original.restore(to: pasteboard)
+            }
+            return posted ? .nothing : .unavailable
+        }
+        let text = pasteboard.string(forType: .string)
+        let wholeLine = Self.isEmptySelectionCopy(pasteboard)
+        original.restore(to: pasteboard, transient: true)
+        guard !wholeLine, let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return .nothing }
+        return .text(text)
+    }
+
+    /// VS Code (and Cursor, Windsurf, the other editors built on it) copies the cursor's whole line for ⌘C with
+    /// nothing selected, and says so in its "vscode-editor-data", which Chromium keeps inside its own web data type
+    /// as UTF-16: looked for in every small type of the copy, whatever it's called.
+    nonisolated static func isEmptySelectionCopy(_ pasteboard: NSPasteboard) -> Bool {
+        guard let item = pasteboard.pasteboardItems?.first else { return false }
+        let marker = #""isFromEmptySelection":true"#
+        let patterns = [Data(marker.utf8), marker.data(using: .utf16LittleEndian) ?? Data()]
+        return item.types.contains { type in
+            guard let data = item.data(forType: type), data.count < 1_000_000 else { return false }
+            return patterns.contains { data.range(of: $0) != nil }
+        }
+    }
+
     /// A normal, persistent copy (the Copy buttons): it stays on the clipboard and syncs like any other copy.
     func copy(_ text: String) {
         cancelPendingRestore()
@@ -146,7 +218,7 @@ final class TextInserter {
 
     /// One insertion at a time: each suspends (focus probe, ⌘V), and a second one starting in between would change
     /// the clipboard under the first one's ⌘V.
-    private func serialized(_ work: @escaping @MainActor () async -> InsertionOutcome) async -> InsertionOutcome {
+    private func serialized<T: Sendable>(_ work: @escaping @MainActor () async -> T) async -> T {
         let previous = queueTail
         let task = Task { @MainActor in
             await previous?.value
@@ -295,9 +367,9 @@ final class TextInserter {
         return !CGEventSource.flagsState(.combinedSessionState).intersection(relevant).isEmpty
     }
 
-    /// ⌘ down, V down, V up, ⌘ up from the combined session state, posted at the session tap (posting at
+    /// ⌘ down, V (or C) down and up, ⌘ up from the combined session state, posted at the session tap (posting at
     /// the HID tap would also mutate the HID state table, and a lost keyUp could leave ⌘ stuck).
-    nonisolated static func postCommandV(keyCode: CGKeyCode) -> Bool {
+    nonisolated static func postCommand(keyCode: CGKeyCode) -> Bool {
         guard let source = CGEventSource(stateID: .combinedSessionState) else { return false }
         source.userData = SyntheticEvent.tag
         // Never hold back the user's own keys: a suppressed flagsChanged would be a PTT release our tap never
