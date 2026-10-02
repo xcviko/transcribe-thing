@@ -55,10 +55,18 @@ final class PillModel {
     /// Bumped on every switch of the dictation's model, back to the main model too, so the chip names the new one
     /// for a moment.
     var engineChipPulse = 0 {
-        didSet { if engineChipPulse != oldValue { flashChip() } }
+        didSet {
+            guard engineChipPulse != oldValue else { return }
+            // A chip that comes up for the switch rolls on from the model the dictation was on (the controller sets
+            // the new one right after); one already up rolls on from what it shows.
+            if !isChipFlashing { chipRollsFrom = sessionModel }
+            flashChip()
+        }
     }
     /// The chip after a switch, for `timing.chipHold`; a switch meanwhile starts it over.
     private(set) var isChipFlashing = false
+    /// The model the chip rolls on from as it comes up for a switch; nil once it's down.
+    private(set) var chipRollsFrom: ModelChoice?
     /// The Switch model discovery hint next to a long push-to-talk hold (its first few times).
     var showsTabHint = false
     /// Polish Selection's hint over the pill: text is selected, and the polish key would polish it.
@@ -347,6 +355,7 @@ final class PillModel {
         chipTask?.cancel()
         chipTask = nil
         if isChipFlashing { isChipFlashing = false }
+        if chipRollsFrom != nil { chipRollsFrom = nil }
     }
 
     /// What the hands-free chip's menu offers, in Switch model order: the main model, then every model it steps to.

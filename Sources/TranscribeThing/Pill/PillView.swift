@@ -627,12 +627,12 @@ struct PillFace: View {
             // content and leaves with the pill in one piece.
             .overlay(alignment: .top) {
                 if let chipChoice {
-                    PillModelChip(model: model, choice: chipChoice, regions: regions,
+                    // One chip for the whole cycle: a switch rolls its names on (`PillModelChip`).
+                    PillModelChip(model: model, choice: chipChoice, rollsFrom: model.chipRollsFrom, regions: regions,
                                    isInteractive: capsule == content && capsule.isLocked)
                         .modifier(PillMorphEffect(progress: content == capsule ? 0 : morph, from: content.size,
                                                   to: size, anchor: .bottom))
                         .offset(y: -PillMetrics.chipLift)
-                        .id(chipChoice)
                         .transition(chipTransition)
                 }
             }
@@ -1191,50 +1191,185 @@ private struct PillControlButton: View {
 
 /// The dictation's model, floating above the pill for a moment after a switch, by its full name: sparkles and
 /// "Gemini 3.8 Flash" in its color; clean-up as the pass it is, "Parakeet → GPT-6 Luna" with Parakeet dimmed ahead of
-/// the wand; or a bolt and "Parakeet". In hands-free it stays while the pointer is on it, and opens the model menu
-/// (the controller pops it up).
+/// the wand; or a bolt and "Parakeet". One chip for the whole cycle: the names sit side by side on a strip, and a switch
+/// rolls it on, the old name leaving past the left edge as the new one comes in from the right, while the chip's width
+/// springs to the new name (Reduce Motion: they crossfade). Coming up for a switch, it rolls on from the model the
+/// dictation was on. In hands-free it stays while the pointer is on it, and opens the model menu (the controller pops
+/// it up).
 private struct PillModelChip: View {
     let model: PillModel
     let choice: ModelChoice
+    /// Coming up for a switch: the model it rolls on from.
+    let rollsFrom: ModelChoice?
     let regions: PillHitRegions?
     /// Hands-free only: push-to-talk holds a key, and processing is past choosing.
     let isInteractive: Bool
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.pillStaticRendering) private var staticRendering
+    /// The name the strip rests on (or rolls to); nil until the chip is up.
+    @State private var resting: ModelChoice?
+    /// The name rolling out, while it does.
+    @State private var leaving: ModelChoice?
+    @State private var rolled = false
+    /// The chip's width while a roll changes it; nil at rest (the name's own).
+    @State private var width: CGFloat?
+    @State private var widths: [ModelChoice: CGFloat] = [:]
+
+    private var current: ModelChoice { resting ?? choice }
+
     var body: some View {
-        let accent = PillPalette.accent(for: model.settings.modelColors[choice])
+        // The ring turns to the new model's color as the roll goes, not before it starts.
+        let ringModel = leaving.flatMap { rolled ? nil : $0 } ?? current
+        let accent = PillPalette.accent(for: model.settings.modelColors[ringModel])
         let settings = model.settings
         Button { model.onEngineChipClick?() } label: {
-            PillChipCapsule(accent: accent) {
-                if choice == .cleanup {
-                    Text(ModelChoice.parakeet.chipName)
-                        .foregroundStyle(.white.opacity(0.5))
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 7.5, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.35))
-                }
-                symbol(accent: accent)
-                Text(choice.chipName)
-                    .foregroundStyle(.white.opacity(0.92))
-            }
-            .contentShape(Capsule())
+            strip
+                .frame(width: width, alignment: .leading)
+                .frame(height: PillMetrics.chipHeight)
+                .clipShape(Capsule(style: .continuous))
+                .background { PillChipChrome(accent: accent) }
+                .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .fixedSize()
+        .background { measuring }
         .allowsHitTesting(isInteractive)
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(PillCanvasMetrics.space)) } action: { rect in
             regions?.setChip(isInteractive ? rect : nil)
         }
         .onChange(of: isInteractive) { _, interactive in if !interactive { regions?.setChip(nil) } }
         .onDisappear { regions?.setChip(nil) }
+        .onAppear(perform: comeUp)
+        .onChange(of: choice) { _, new in roll(to: new) }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Model: \(choice.title(parakeet: settings.parakeetEngine))")
         .accessibilityAddTraits(isInteractive ? .isButton : [])
     }
 
-    private func symbol(accent: PillAccent?) -> some View {
-        Image(systemName: choice.symbolName(parakeet: model.settings.parakeetEngine))
-            .font(.system(size: 9.5, weight: .semibold))
-            .foregroundStyle(accent?.mark ?? .white.opacity(0.75))
+    /// The leaving name, then the current one: side by side, the strip moved on by the leaving one's width once rolled;
+    /// stacked under Reduce Motion, the one fading out as the other fades in.
+    @ViewBuilder private var strip: some View {
+        if reduceMotion {
+            ZStack(alignment: .leading) {
+                if let leaving { label(leaving).opacity(rolled ? 0 : 1) }
+                label(current).opacity(leaving != nil && !rolled ? 0 : 1)
+            }
+        } else {
+            HStack(spacing: 0) {
+                if let leaving { label(leaving) }
+                label(current)
+            }
+            .offset(x: rolled ? -(leaving.flatMap { widths[$0] } ?? 0) : 0)
+        }
+    }
+
+    /// Every model's name laid out unseen, so a roll knows the widths it goes between.
+    private var measuring: some View {
+        ZStack {
+            ForEach(ModelChoice.allCases) { choice in
+                label(choice)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { widths[choice] = $0 }
+            }
+        }
+        .hidden()
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private func label(_ choice: ModelChoice) -> some View {
+        let accent = PillPalette.accent(for: model.settings.modelColors[choice])
+        return HStack(spacing: 4) {
+            if choice == .cleanup {
+                Text(ModelChoice.parakeet.chipName)
+                    .foregroundStyle(.white.opacity(0.5))
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 7.5, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.35))
+            }
+            Image(systemName: choice.symbolName(parakeet: model.settings.parakeetEngine))
+                .font(.system(size: 9.5, weight: .semibold))
+                .foregroundStyle(accent?.mark ?? .white.opacity(0.75))
+            Text(choice.chipName)
+                .foregroundStyle(.white.opacity(0.92))
+        }
+        .font(.system(size: 11, weight: .semibold))
+        .lineLimit(1)
+        .padding(.horizontal, 9)
+        .frame(height: PillMetrics.chipHeight)
+        .fixedSize()
+    }
+
+    /// Up for a switch: it shows the model it rolls on from for a moment as it springs up, then rolls to the new one.
+    private func comeUp() {
+        guard let rollsFrom, rollsFrom != choice, !staticRendering else {
+            resting = choice
+            return
+        }
+        resting = rollsFrom
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(140))
+            roll(to: choice)
+        }
+    }
+
+    /// From the name it rests on to `new`. A roll under way lands at once and the new one starts from there.
+    private func roll(to new: ModelChoice) {
+        let old = current
+        guard old != new, resting != nil else {
+            resting = new
+            return
+        }
+        var still = Transaction()
+        still.disablesAnimations = true
+        withTransaction(still) {
+            leaving = old
+            resting = new
+            rolled = false
+            width = widths[old]
+        }
+        let animation: Animation = reduceMotion ? .easeInOut(duration: 0.15) : .spring(duration: 0.4, bounce: 0.18)
+        Task { @MainActor in
+            withAnimation(animation, completionCriteria: .logicallyComplete) {
+                rolled = true
+                width = widths[new]
+            } completion: {
+                guard resting == new else { return }
+                withTransaction(still) {
+                    leaving = nil
+                    rolled = false
+                    width = nil
+                }
+            }
+        }
+    }
+}
+
+/// The chip's capsule: the pill's fill, its lit hairline, and the model's ring.
+struct PillChipChrome: View {
+    var accent: PillAccent?
+
+    var body: some View {
+        let shape = Capsule(style: .continuous)
+        shape.fill(PillPalette.fill)
+            .overlay {
+                shape.ring(0.5)
+                    .fill(LinearGradient(colors: [.white.opacity(0.24), .white.opacity(0.07)],
+                                         startPoint: .top, endPoint: .bottom), style: FillStyle(eoFill: true))
+            }
+            .overlay {
+                if let accent {
+                    shape.ring(1)
+                        .fill(accent.ring.opacity(0.85), style: FillStyle(eoFill: true))
+                }
+            }
+            .overlay {
+                shape.inset(by: -0.5).ring(0.5)
+                    .fill(.white.opacity(0.11), style: FillStyle(eoFill: true))
+            }
+            .shadow(color: .black.opacity(0.2), radius: 1, x: 0, y: 1)
+            .shadow(color: .black.opacity(0.24), radius: 6, x: 0, y: 3)
+            .environment(\.colorScheme, .dark)
     }
 }
 
@@ -1245,32 +1380,12 @@ struct PillChipCapsule<Content: View>: View {
     @ViewBuilder var content: Content
 
     var body: some View {
-        let shape = Capsule(style: .continuous)
         HStack(spacing: 4) { content }
             .font(.system(size: 11, weight: .semibold))
             .lineLimit(1)
             .padding(.horizontal, 9)
             .frame(height: PillMetrics.chipHeight)
-            .background {
-                shape.fill(PillPalette.fill)
-                    .overlay {
-                        shape.ring(0.5)
-                            .fill(LinearGradient(colors: [.white.opacity(0.24), .white.opacity(0.07)],
-                                                 startPoint: .top, endPoint: .bottom), style: FillStyle(eoFill: true))
-                    }
-                    .overlay {
-                        if let accent {
-                            shape.ring(1)
-                                .fill(accent.ring.opacity(0.85), style: FillStyle(eoFill: true))
-                        }
-                    }
-                    .overlay {
-                        shape.inset(by: -0.5).ring(0.5)
-                            .fill(.white.opacity(0.11), style: FillStyle(eoFill: true))
-                    }
-                    .shadow(color: .black.opacity(0.2), radius: 1, x: 0, y: 1)
-                    .shadow(color: .black.opacity(0.24), radius: 6, x: 0, y: 3)
-            }
+            .background { PillChipChrome(accent: accent) }
             .environment(\.colorScheme, .dark)
     }
 }
