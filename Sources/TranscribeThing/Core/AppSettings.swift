@@ -92,7 +92,7 @@ final class AppSettings {
     var modelsRemovingFinalPeriod: Set<ModelChoice> = [] {
         didSet { store.setJSON(ModelChoice.stored(modelsRemovingFinalPeriod), .modelsRemovingFinalPeriod) }
     }
-    /// Words, names and terms Gemini 3.8 Flash and GPT-6 Luna spell as written (Hub → Dictionary, fn D).
+    /// Words, names and terms Gemini 3.8 Flash and GPT-6 Luna get as a hint, with their spelling (Hub → Dictionary, fn D).
     var dictionary = UserDictionary() { didSet { store.setJSON(dictionary, .dictionary) } }
     /// Days a transcript and its recording stay in History; 0 = Never deleted (`HistoryStore.deleteExpired`).
     var autoDeleteHistoryDays: Int = 0 { didSet { store.set(autoDeleteHistoryDays, .autoDeleteHistoryDays) } }

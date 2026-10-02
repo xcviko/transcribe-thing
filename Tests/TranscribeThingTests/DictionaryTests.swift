@@ -69,12 +69,12 @@ import Testing
         #expect(UserDictionary.prompt("", with: ["Wispr"], heard: true) == "", "the CLI's empty prompt sends only the audio")
         let gemini = UserDictionary.prompt(EngineID.geminiSystemPrompt, with: ["Wispr", "Flow"], heard: true)
         #expect(gemini.hasPrefix(EngineID.geminiSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)))
-        #expect(gemini.contains("Когда я говорю одно из них") && gemini.contains("не меняй"))
+        #expect(gemini.contains("Подсказка") && gemini.contains("Если услышишь") && gemini.contains("Решай сам"))
         #expect(gemini.hasSuffix("<dictionary>\nWispr\nFlow\n</dictionary>"))
         let selection = UserDictionary.prompt(Polish.textPrompt, with: ["Wispr"], heard: false)
-        #expect(selection.contains("Если в тексте имеется в виду"))
+        #expect(selection.contains("Если встретишь в тексте"))
         let cleanup = UserDictionary.prompt(CleanupModel.systemPrompt, with: ["Wispr"], heard: false)
-        #expect(cleanup.contains("The speaker's dictionary") && cleanup.contains("Don't change ordinary words"))
+        #expect(cleanup.contains("A hint") && cleanup.contains("Use your judgment"))
     }
 
     @MainActor @Test func itPersistsInTheSettings() throws {

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The user's dictionary (`UserDictionary`): words, names and terms Gemini 3.8 Flash and GPT-6 Luna spell as written.
+/// The user's dictionary (`UserDictionary`): words, names and terms Gemini 3.8 Flash and GPT-6 Luna get as a hint.
 /// Most come from fn D over selected text; the field here adds one by hand. Newest first, as chips that wrap.
 struct DictionaryPage: View {
     @Environment(AppSettings.self) private var settings
@@ -18,7 +18,7 @@ struct DictionaryPage: View {
 
     var body: some View {
         HubPage("Dictionary",
-                subtitle: "Words, names and terms that Gemini 3.8 Flash and GPT-6 Luna write exactly as they are here.") {
+                subtitle: "Words, names and terms you use, and how they’re spelled: a hint for Gemini 3.8 Flash and GPT-6 Luna.") {
             HubGroup("Add") {
                 SettingsGroup {
                     addRow

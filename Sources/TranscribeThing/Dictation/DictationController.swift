@@ -2475,9 +2475,9 @@ final class DictationController {
     nonisolated static func dictionaryCard(added word: String, replacing replaced: String? = nil,
                                            before: UserDictionary) -> Notice {
         let body = if let replaced {
-            "“\(word)” replaces “\(replaced)”: Gemini and GPT-6 Luna write it this way now."
+            "“\(word)” replaces “\(replaced)”. Gemini and GPT-6 Luna get it as a hint."
         } else {
-            "Gemini and GPT-6 Luna write “\(word)” this way now."
+            "Gemini and GPT-6 Luna now know “\(word)” and how it’s spelled."
         }
         return Notice(dedupeKey: dictionaryCardKey, style: .info, symbol: "character.book.closed",
                       title: "Added to your dictionary", body: body,

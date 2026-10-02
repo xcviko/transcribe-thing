@@ -1,7 +1,7 @@
 import Foundation
 
 /// The user's dictionary (Hub → Dictionary, or fn D over selected text): words, names and terms that Gemini 3.8 Flash
-/// and GPT-6 Luna spell as written (`prompt(_:with:)`). Parakeet hears without instructions and can't use it. Words
+/// and GPT-6 Luna get as a hint: they exist, and this is how they're spelled (`prompt(_:with:)`). Parakeet hears without instructions and can't use it. Words
 /// keep the order they came in, each once (case aside); one JSON array under `SettingsKey.dictionary`.
 struct UserDictionary: Equatable, Sendable {
     /// Oldest first.
@@ -124,8 +124,9 @@ struct UserDictionary: Equatable, Sendable {
 
     // MARK: Prompts
 
-    /// `prompt` followed by the dictionary, for a model that reads it: Gemini's (`heard`: it hears the words, in
-    /// audio) or a model that reads a text (GPT-6 Luna's clean-up, Polish Selection's). In the prompt's own language:
+    /// `prompt` followed by the dictionary as a hint, not a rule: these words exist and are usually spelled this way,
+    /// and the model decides what to make of it. For Gemini (`heard`: it hears the words, in audio) or a model that
+    /// reads a text (GPT-6 Luna's clean-up, Polish Selection's). In the prompt's own language:
     /// Russian when it has Cyrillic, else English. With no words, or an empty prompt (the CLI's `--prompt ""` sends
     /// only the audio), `prompt` as it is.
     static func prompt(_ prompt: String, with words: [String], heard: Bool) -> String {
@@ -134,13 +135,13 @@ struct UserDictionary: Equatable, Sendable {
         let russian = trimmed.unicodeScalars.contains { (0x0400...0x04FF).contains($0.value) }
         let intro = switch (russian, heard) {
         case (true, true):
-            "Мой словарь: слова, имена и термины, которые я говорю. Когда я говорю одно из них, пиши его точно так, как здесь, даже если слышится немного иначе. Обычные слова, которые просто похоже звучат, не меняй, а русские слова оставляй кириллицей."
+            "Подсказка: слова, имена и термины, которые я иногда говорю, и как они обычно пишутся. Если услышишь что-то из этого, скорее всего, имеется в виду такое написание. Решай сам, по смыслу."
         case (true, false):
-            "Мой словарь: слова, имена и термины, которые я использую. Если в тексте имеется в виду одно из них, но написано оно иначе (с ошибкой или по звучанию), пиши его точно так, как здесь. Обычные слова, которые просто похожи, не меняй, а русские слова оставляй кириллицей."
+            "Подсказка: слова, имена и термины, которые я иногда использую, и как они обычно пишутся. Если встретишь в тексте что-то из этого, скорее всего, имеется в виду такое написание. Решай сам, по смыслу."
         case (false, true):
-            "The speaker's dictionary: words, names and terms they say. When they say one of them, write it exactly as listed here, even if it sounds a little different. Don't change ordinary words that only sound similar, and keep Russian words in Cyrillic."
+            "A hint: words, names and terms the speaker sometimes says, and how they're usually spelled. If you hear one of them, it's most likely meant this way. Use your judgment."
         case (false, false):
-            "The speaker's dictionary: words, names and terms they use. When the text means one of them but spells it differently (misspelled, or spelled by sound), write it exactly as listed here. Don't change ordinary words that only look or sound similar, and keep Russian words in Cyrillic."
+            "A hint: words, names and terms the speaker sometimes uses, and how they're usually spelled. If the text has one of them, it's most likely meant this way. Use your judgment."
         }
         return trimmed + "\n\n" + intro + "\n<dictionary>\n" + words.joined(separator: "\n") + "\n</dictionary>"
     }
