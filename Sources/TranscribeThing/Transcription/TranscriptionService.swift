@@ -84,9 +84,10 @@ final class TranscriptionService {
     /// its own, a refusal of it failing rather than going again as WAV (`--upload`). The app passes only `prompt`.
     /// `background`: Home's work, which lets dictations have the local model first.
     /// `progress` hears how much of a streamed answer has come (Gemini's reasoning and text); Parakeet has none.
+    /// `hedge`: Gemini gets the request twice at once (`CloudHedge`); the speech endpoint never does.
     func transcribe(_ recording: Recording, engine: EngineID, effort: ReasoningEffort? = nil,
                     prompt: String? = nil, upload: UploadFormat? = nil, speechModel: String? = nil,
-                    background: Bool = false,
+                    hedge: CloudHedge? = nil, background: Bool = false,
                     progress: (@Sendable (ChatStreamProgress) -> Void)? = nil) async throws -> TranscriptResult {
         guard !engine.isRetired else {
             throw AppError.engineFailed(engine, "\(engine.displayName) is no longer offered.")
@@ -101,7 +102,8 @@ final class TranscriptionService {
                 let prompt = engine.cloudAPI == .chatCompletions
                     ? UserDictionary.prompt(prompt ?? EngineID.geminiSystemPrompt, with: vocabulary(), heard: true) : ""
                 let cloud = try await transcribeCloud(recording, engine: engine, effort: effort, prompt: prompt,
-                                                      upload: upload, speechModel: speechModel, progress: progress)
+                                                      upload: upload, speechModel: speechModel, hedge: hedge,
+                                                      progress: progress)
                 result.text = cloud.text
                 result.costUSD = cloud.costUSD
                 result.provider = cloud.provider
@@ -139,7 +141,7 @@ final class TranscriptionService {
     /// `speechModel`: another model on the transcriptions endpoint in the engine's place (`EngineCLI --speech-model`,
     /// to compare one with cloud Parakeet).
     private func transcribeCloud(_ recording: Recording, engine: EngineID, effort: ReasoningEffort?, prompt: String,
-                                 upload: UploadFormat?, speechModel: String? = nil,
+                                 upload: UploadFormat?, speechModel: String? = nil, hedge: CloudHedge? = nil,
                                  progress: (@Sendable (ChatStreamProgress) -> Void)?) async throws -> CloudResult {
         guard let model = (engine.cloudAPI == .transcriptions ? speechModel : nil) ?? engine.openRouterModelID,
               let api = engine.cloudAPI else {
@@ -154,7 +156,7 @@ final class TranscriptionService {
             case .chatCompletions:
                 result = try await transcribeWithChat(recording, engine: engine, model: model, key: key,
                                                       effort: effort ?? .medium, prompt: prompt, upload: upload,
-                                                      progress: progress)
+                                                      hedge: hedge, progress: progress)
             case .transcriptions:
                 result = try await transcribeSpeech(recording.samples, engine: engine, model: model, key: key,
                                                     upload: upload)
@@ -176,6 +178,7 @@ final class TranscriptionService {
     /// actor); the answer's token budget grows with the audio, and it streams, so no wait for it has to.
     private func transcribeWithChat(_ recording: Recording, engine: EngineID, model: String, key: String,
                                     effort: ReasoningEffort, prompt: String, upload: UploadFormat?,
+                                    hedge: CloudHedge? = nil,
                                     progress: (@Sendable (ChatStreamProgress) -> Void)?) async throws -> CloudResult {
         let samples = recording.samples, stored = recording.aacFile, format = upload ?? .m4a
         let audio = await Task.detached(priority: .userInitiated) {
@@ -184,9 +187,17 @@ final class TranscriptionService {
         guard let audio else { throw AppError.engineFailed(engine, "Couldn’t compress the recording.") }
         try Task.checkCancellation()
         let maxTokens = OpenRouterClient.transcriptionMaxTokens(audioSeconds: Double(samples.count) / Recording.sampleRate)
-        var result = try await client.transcribe(audio: audio, format: format.rawValue, model: model,
-                                                 systemPrompt: prompt, effort: effort, maxTokens: maxTokens,
-                                                 apiKey: key, timeout: engine.cloudTimeout, progress: progress)
+        let client = client, timeout = engine.cloudTimeout
+        let send: @Sendable ((@Sendable (ChatStreamProgress) -> Void)?) async throws -> CloudResult = { progress in
+            try await client.transcribe(audio: audio, format: format.rawValue, model: model, systemPrompt: prompt,
+                                        effort: effort, maxTokens: maxTokens, apiKey: key, timeout: timeout,
+                                        progress: progress)
+        }
+        var result = if let hedge {
+            try await CloudHedge.run(hedge, .transcription, engine: engine, progress: progress, send)
+        } else {
+            try await send(progress)
+        }
         result.uploads = [AudioUpload(format: format, bytes: audio.count, generationID: result.generationID)]
         return result
     }
@@ -261,9 +272,11 @@ final class TranscriptionService {
     /// runs.
     /// `route` sends it to any other model or level instead, and `prompt` replaces the fixed prompt: Polish
     /// Selection's (`PolishSelectionModel.route`, `Polish.textPrompt`), or the CLI's (`--cleanup-bench`,
-    /// `--clean-up-effort`, `--clean-up-prompt`). `progress` hears how much of the answer has streamed in.
+    /// `--clean-up-effort`, `--clean-up-prompt`). `progress` hears how much of the answer has streamed in. `hedge`: the
+    /// request goes twice at once (`CloudHedge`).
     func cleanUp(_ transcript: String, of source: EngineID, by model: CleanupModel = .default,
                  timeout: TimeInterval? = nil, route: CleanupRoute? = nil, prompt: String? = nil,
+                 hedge: CloudHedge? = nil,
                  progress: (@Sendable (ChatStreamProgress) -> Void)? = nil) async throws -> TranscriptResult {
         guard let route = route ?? model.route else {
             throw AppError.engineFailed(source, "\(model.modelName) no longer cleans up.")
@@ -281,11 +294,18 @@ final class TranscriptionService {
         let started = ContinuousClock.now
         let answer = AnswerStart()
         do {
-            let cloud = try await Self.untilAnswerStarts(limit, answer, source: source) {
+            let send: @Sendable ((@Sendable (ChatStreamProgress) -> Void)?) async throws -> CloudResult = { report in
                 try await client.cleanUp(transcript: transcript, route: route, systemPrompt: prompt, apiKey: key,
                                          timeout: limit) { streamed in
                     if streamed.outputCharacters > 0 || streamed.reasoningCharacters > 0 { answer.mark() }
-                    progress?(streamed)
+                    report?(streamed)
+                }
+            }
+            let cloud = try await Self.untilAnswerStarts(limit, answer, source: source) {
+                if let hedge {
+                    try await CloudHedge.run(hedge, .cleanup, engine: source, progress: progress, send)
+                } else {
+                    try await send(progress)
                 }
             }
             account.noteCloudSuccess()

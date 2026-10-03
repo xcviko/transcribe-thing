@@ -935,7 +935,8 @@ final class DictationController {
         job.task = Task { [weak self] in
             guard let self else { return }
             var outcome = await self.transcribe(recording, engine: engine,
-                                                prompt: job.polishes ? Polish.prompt : nil, progress: progress)
+                                                prompt: job.polishes ? Polish.prompt : nil,
+                                                hedge: self.settings.cloudHedge, progress: progress)
             guard !Task.isCancelled, job.generation == generation else { return }
             if job.polishes, case .success(var result, _) = outcome {
                 result.text = Polish.message(from: result.text)
@@ -951,6 +952,7 @@ final class DictationController {
                 self.dismissWaitNotice(for: job.id)
                 self.stateDidChange()
                 let cleanup = await self.runCleanup(result.text, of: result.engine, by: .default,
+                                                    hedge: self.settings.cloudHedge,
                                                     progress: self.streamProgress(for: job, generation: generation))
                 guard !Task.isCancelled, job.generation == generation else { return }
                 outcome = .success(result, cleanup: cleanup)
@@ -996,7 +998,9 @@ final class DictationController {
     /// `background`: Home's work, which lets dictations have the local model first. `progress`: a dictation's, for
     /// the pill (Home never passes one).
     /// `prompt`: another prompt for Gemini (`Polish.prompt`).
+    /// `hedge`: a dictation's Gemini request goes twice at once (`AppSettings.cloudHedge`); Home's never does.
     private func transcribe(_ recording: Recording, engine: EngineID, prompt: String? = nil, background: Bool = false,
+                            hedge: CloudHedge? = nil,
                             progress: (@Sendable (ChatStreamProgress) -> Void)? = nil) async -> Outcome {
         do {
             if engine.isLocal, transcribeOverride == nil { try await waitForLocalModel(engine) }
@@ -1004,7 +1008,7 @@ final class DictationController {
             if let transcribeOverride {
                 result = try await transcribeOverride(recording, engine)
             } else {
-                result = try await transcription.transcribe(recording, engine: engine, prompt: prompt,
+                result = try await transcription.transcribe(recording, engine: engine, prompt: prompt, hedge: hedge,
                                                             background: background, progress: progress)
             }
             return .success(result)
@@ -1027,7 +1031,7 @@ final class DictationController {
     /// within its timeout (`TranscriptionService.cleanUp`: one that streams runs to its end). Never throws: a failure,
     /// a timeout or an empty answer is `.failed`, and the original text stands. `progress`: a dictation's, for the
     /// pill (Home never passes one).
-    private func runCleanup(_ text: String, of source: EngineID, by model: CleanupModel,
+    private func runCleanup(_ text: String, of source: EngineID, by model: CleanupModel, hedge: CloudHedge? = nil,
                             progress: (@Sendable (ChatStreamProgress) -> Void)? = nil) async -> CleanupOutcome {
         // A key already known not to work would fail the request too: no round trip, and the notice says why.
         if let keyProblem = openRouterKeyProblem {
@@ -1040,7 +1044,7 @@ final class DictationController {
             if let cleanupOverride {
                 result = try await Self.within(timeout, source: source) { try await cleanupOverride(text, source) }
             } else {
-                result = try await transcription.cleanUp(text, of: source, by: model, timeout: timeout,
+                result = try await transcription.cleanUp(text, of: source, by: model, timeout: timeout, hedge: hedge,
                                                          progress: progress)
             }
             result.text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
