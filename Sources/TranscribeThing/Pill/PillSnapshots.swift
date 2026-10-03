@@ -32,6 +32,10 @@ enum PillSnapshots {
                           reduceMotion: true),
                 ])
             },
+            // Stop (`--only pill-exit-stop`): hands-free's controls stay inside the narrowing capsule.
+            SnapshotEntry("pill-exit-stop", width: PillFilmSheet.width(cell: 170, columns: 11), height: 150) { _ in
+                PillFilmSheet(cell: 170, columns: 11, strips: [.handsFreeStops()])
+            },
             SnapshotEntry("pill-exit-wide", width: PillFilmSheet.width(cell: 226, columns: 6), height: 630) { _ in
                 PillFilmSheet(cell: 226, columns: 6, strips: [
                     .exit("Processing after hands-free → hidden", .processing(afterHandsFree: true),
@@ -536,6 +540,31 @@ private struct PillFilmSheet: View {
         }
 
         /// Hands-free, Stop (the pill narrows to the push-to-talk size), then the processing pill leaving.
+        /// Stop: the hands-free capsule narrows to the processing one, every 30 ms of its spring, its X, timer and
+        /// check staying put inside it until its ends have covered them, the processing dots coming in.
+        @MainActor static func handsFreeStops() -> Strip {
+            let locked = PillVisual.locked(), processing = PillVisual.processing(afterHandsFree: true)
+            let model = PillModel.preview(phase: .locked, level: 0.5)
+            let frames = (0...10).map { i in
+                let time = Double(i) * 0.03
+                let progress = CGFloat(Spring(duration: 0.3, bounce: 0.12).value(target: 1.0, time: time))
+                let size = CGSize(width: locked.size.width + (processing.size.width - locked.size.width) * progress,
+                                  height: locked.size.height + (processing.size.height - locked.size.height) * progress)
+                let presence = max(0, 1 - time / PillContentPresence.leaving)
+                let dots = min(1, max(0, (time - 0.06) / 0.18))
+                return Frame(caption: "\(Int((time * 1000).rounded())) ms") { model in
+                    AnyView(ZStack {
+                        PillFace(model: model, capsule: processing, content: locked, size: size)
+                            .environment(\.pillContentPresence, presence)
+                        PillFace(model: model, capsule: processing, content: processing, size: size)
+                            .opacity(dots)
+                            .blendMode(.plusLighter)
+                    })
+                }
+            }
+            return Strip(title: "Hands-free → processing (Stop)", model: model, frames: frames)
+        }
+
         @MainActor static func handsFreeToHidden() -> Strip {
             let locked = PillVisual.locked(), processing = PillVisual.processing(afterHandsFree: true)
             let model = PillModel.preview(phase: .locked, level: 0.5)

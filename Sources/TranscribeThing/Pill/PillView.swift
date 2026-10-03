@@ -332,16 +332,17 @@ struct PillView: View {
         let visual = self.visual
         let shown = visual != .hidden
         let frame = stage.frame(for: visual, choice: choice)
+        // From nowhere the pill is just there, whole, at once: a key press shows it in the same frame.
+        let appears = shown && stage.parked
         PillFace(model: model, regions: regions, capsule: frame.capsule, content: frame.content, morph: frame.morph,
-                 choice: frame.choice)
+                 choice: frame.choice, appearsAtOnce: appears)
             // Capsule and content leave together, as one composited piece.
             .modifier(PillExitEffect(progress: exitProgress, reduceMotion: reduceMotion))
             .scaleEffect(frame.collapsed && !reduceMotion ? 0.6 : 1, anchor: .bottom)
-            // Appearing, the fade runs ahead of the spring: a spring starts from rest and would keep the capsule
-            // nearly transparent for its first 50 ms. The scale still blooms with the spring.
-            .animation(fadeAnimation(shown: shown, to: visual)) { $0.opacity(frame.collapsed ? 0 : 1) }
+            // Back before its exit finished, the pill fades back in quickly.
+            .animation(appears ? nil : fadeAnimation(shown: shown, to: visual)) { $0.opacity(frame.collapsed ? 0 : 1) }
             .modifier(PillShake(trigger: model.shakeCount, enabled: !reduceMotion))
-            .animation(animation(to: visual), value: visual)
+            .animation(appears ? nil : animation(to: visual), value: visual)
             .onChange(of: PillStage.Key(visual: visual, choice: choice), initial: true) { _, new in
                 // Its own transaction, so the exit's timing never reaches the capsule's springs (nor the reverse).
                 let exit = stage.frame(for: new.visual, choice: new.choice).exit
@@ -604,6 +605,8 @@ struct PillFace: View {
     var size: CGSize?
     /// The model of `content`'s dictation: the chip above the pill and the tint.
     var choice: ModelChoice?
+    /// The pill shows from nowhere: its content is there at once too, nothing fades or grows in.
+    var appearsAtOnce = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -631,7 +634,7 @@ struct PillFace: View {
         let size = self.size ?? capsule.size
         let accent = self.accent
         // An overlay, so content larger than the capsule (shrinking into it) never sizes the pill.
-        PillCapsule(quiet: capsule.isQuiet, accent: capsule.content == .empty ? nil : accent)
+        PillCapsule(quiet: capsule.isQuiet, drawsEdge: false)
             .frame(width: size.width, height: size.height)
             .background(alignment: .trailing) {
                 // Behind the capsule, from its right end: the drop slides out from under the pill, which keeps its
@@ -640,7 +643,15 @@ struct PillFace: View {
                                reduceMotion: reduceMotion)
                     .frame(width: 0, height: size.height)
             }
-            .overlay { contentView(accent: accent) }
+            // Inside the capsule: a capsule narrowing past its content (hands-free's X, timer and check as it
+            // stops) covers it with its ends, edge and all, instead of the content floating over it.
+            .overlay {
+                // The capsule's own frame (the content may be laid out wider), so the mask is the capsule's.
+                Color.clear
+                    .overlay { contentView(accent: accent) }
+                    .mask(PillContentMask())
+            }
+            .overlay { PillCapsuleEdge(accent: capsule.content == .empty ? nil : accent) }
             // Above the pill and part of it: it springs in on a switch, shrinks into the resting capsule with the
             // content and leaves with the pill in one piece.
             .overlay(alignment: .top) {
@@ -695,7 +706,7 @@ struct PillFace: View {
                 .frame(width: visual.size.width, height: visual.size.height)
                 .modifier(morph)
                 .id(PillVisual.Content.recording)
-                .transition(contentTransition())
+                .transition(recordingTransition)
         case .processing:
             ProcessingContent(startOffset: visual.barsOffset, tint: .white,
                               count: model.tokenCount, isCounting: visual.isCounting, polishes: visual.isPolishing)
@@ -721,28 +732,53 @@ struct PillFace: View {
     private func contentTransition(anchor: UnitPoint = .center) -> AnyTransition {
         if reduceMotion { return .opacity.animation(.easeInOut(duration: 0.15)) }
         return .asymmetric(
-            insertion: .opacity.combined(with: .scale(scale: 0.85, anchor: anchor))
-                .animation(.easeOut(duration: 0.18).delay(0.06)),
+            insertion: insertion(anchor: anchor),
             removal: .opacity.animation(.easeIn(duration: 0.1)))
+    }
+
+    private func insertion(anchor: UnitPoint = .center) -> AnyTransition {
+        if appearsAtOnce { return .identity }
+        return .opacity.combined(with: .scale(scale: 0.85, anchor: anchor))
+            .animation(.easeOut(duration: 0.18).delay(0.06))
+    }
+
+    /// Recording leaves in two parts: the bars fade at once, under what comes next, while hands-free's controls stay
+    /// put until the narrowing capsule has covered them (`PillContentPresence`).
+    private var recordingTransition: AnyTransition {
+        if reduceMotion { return .opacity.animation(.easeInOut(duration: 0.15)) }
+        return .asymmetric(
+            insertion: insertion(),
+            removal: .modifier(active: PillContentPresence(presence: 0), identity: PillContentPresence(presence: 1))
+                .animation(.linear(duration: PillContentPresence.leaving)))
     }
 }
 
 // MARK: - Capsule
 
 /// Black capsule with a flat hairline and a soft shadow, so it reads on white documents and on dark desktops alike.
+/// `drawsEdge: false` leaves the hairline to a `PillCapsuleEdge` drawn over the content.
 struct PillCapsule: View {
     var quiet = false
     /// The model's ring (`PillPalette.accent`) in place of the hairline.
     var accent: PillAccent?
+    var drawsEdge = true
+
+    var body: some View {
+        Capsule(style: .continuous)
+            .fill(PillPalette.fill)
+            .overlay { if drawsEdge { PillCapsuleEdge(accent: accent) } }
+            .shadow(color: .black.opacity(quiet ? 0.12 : 0.22), radius: quiet ? 3 : 6, x: 0, y: quiet ? 1 : 3)
+    }
+}
+
+/// The capsule's hairline, or the model's ring in its place.
+struct PillCapsuleEdge: View {
+    var accent: PillAccent?
 
     var body: some View {
         let shape = Capsule(style: .continuous)
-        shape
-            .fill(PillPalette.fill)
-            .overlay {
-                shape.ring(1)
-                    .fill(PillPalette.hairline, style: FillStyle(eoFill: true))
-            }
+        shape.ring(1)
+            .fill(PillPalette.hairline, style: FillStyle(eoFill: true))
             .overlay {
                 if let accent {
                     shape.ring(1)
@@ -750,8 +786,42 @@ struct PillCapsule: View {
                         .transition(.opacity)
                 }
             }
-            .shadow(color: .black.opacity(quiet ? 0.12 : 0.22), radius: quiet ? 3 : 6, x: 0, y: quiet ? 1 : 3)
+            .allowsHitTesting(false)
     }
+}
+
+/// What the pill's content may draw on: the capsule, and everything above its top edge (a control's tooltip).
+struct PillContentMask: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Capsule(style: .continuous).path(in: rect)
+        let far: CGFloat = 4000
+        path.addRect(CGRect(x: rect.minX - far, y: rect.minY - far, width: rect.width + 2 * far, height: far))
+        return path
+    }
+}
+
+/// How much of a leaving recording is left (1 → 0 over `leaving`): its bars are gone in the first 40%, its controls
+/// hold until the last 20%, by when the narrowing capsule has covered them.
+struct PillContentPresence: ViewModifier, Animatable {
+    static let leaving: TimeInterval = 0.3
+
+    var presence: Double
+
+    var animatableData: Double {
+        get { presence }
+        set { presence = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        content.environment(\.pillContentPresence, presence)
+    }
+
+    static func barsOpacity(_ presence: Double) -> Double { min(1, max(0, (presence - 0.6) / 0.4)) }
+    static func controlsOpacity(_ presence: Double) -> Double { min(1, max(0, presence / 0.2)) }
+}
+
+extension EnvironmentValues {
+    @Entry var pillContentPresence: Double = 1
 }
 
 // MARK: - Polish's drop
@@ -1085,11 +1155,13 @@ private struct RecordingContent: View {
     var tint: Color = .white
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.pillContentPresence) private var presence
 
     var body: some View {
         ZStack {
             WaveformView(meter: model.levelMeter, tint: tint)
                 .offset(x: barsOffset)
+                .opacity(PillContentPresence.barsOpacity(presence))
             // Each piece is inserted on its own so its transition runs (a transition only applies to the
             // outermost view being inserted).
             HStack(spacing: 0) {
@@ -1110,6 +1182,7 @@ private struct RecordingContent: View {
                 }
             }
             .padding(.horizontal, PillMetrics.buttonInset)
+            .opacity(PillContentPresence.controlsOpacity(presence))
         }
     }
 

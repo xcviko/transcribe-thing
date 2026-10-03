@@ -213,7 +213,7 @@ struct ToastStack: View {
                 .animation(.spring(duration: 0.42, bounce: 0.14)),
             removal: .modifier(active: ToastRevealEffect(reveal: ToastReveal(progress: 0, origin: origin)),
                                identity: ToastRevealEffect(reveal: ToastReveal(progress: 1, origin: origin)))
-                .animation(.spring(duration: 0.3, bounce: 0)))
+                .animation(.spring(duration: PillCanvasView.toastClosing, bounce: 0)))
     }
 
     /// An older toast just goes.

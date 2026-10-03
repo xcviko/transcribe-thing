@@ -61,6 +61,8 @@ struct PillCanvasView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The pill's area as last laid out, handed back to the hit regions when a toast uncovers it.
     @State private var pillRect: CGRect?
+    /// The last toast is closing back into the pill's slot: the pill waits under it until it's done.
+    @State private var closingIntoSlot = false
 
     private var showsRestTooltip: Bool {
         guard model.isPresented, model.visiblePhase.isIdle, toasts.notices.isEmpty else { return false }
@@ -98,10 +100,14 @@ struct PillCanvasView: View {
         model.isPresented && (!model.visiblePhase.isIdle || model.isHelloActive)
     }
 
-    /// The resting pill is under a toast that took its place: it steps aside, and comes back when the toasts go.
+    /// The resting pill is under a toast that took its place: it steps aside, and comes back (at once) when the last
+    /// toast has closed back into its slot.
     private var pillCovered: Bool {
-        model.isPresented && !pillHoldsSlot && !toasts.notices.isEmpty
+        model.isPresented && !pillHoldsSlot && (!toasts.notices.isEmpty || closingIntoSlot)
     }
+
+    /// How long the last toast takes to close back into the pill's slot (`ToastStack`'s removal).
+    static let toastClosing: TimeInterval = 0.3
 
     /// Toasts stand above a pill that holds its place, and in its slot, bottoms aligned, when it doesn't.
     static func toastBottomPadding(pillOnScreen: Bool, showsChip: Bool) -> CGFloat {
@@ -138,6 +144,14 @@ struct PillCanvasView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .coordinateSpace(.named(PillCanvasMetrics.space))
+        .onChange(of: toasts.notices.isEmpty) { _, empty in
+            closingIntoSlot = empty
+        }
+        .task(id: closingIntoSlot) {
+            guard closingIntoSlot else { return }
+            try? await Task.sleep(for: .seconds(Self.toastClosing))
+            closingIntoSlot = false
+        }
     }
 
     private var pillArea: some View {
