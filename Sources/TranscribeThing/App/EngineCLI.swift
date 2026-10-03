@@ -537,7 +537,7 @@ enum EngineCLI {
         print("BENCH: \(route.model) · effort \(route.effort) · provider \(route.provider.only.joined(separator: ","))\(route.temperature.map { " · temperature \($0)" } ?? "") · \(items.count) dictations")
 
         let startedAt = Date()
-        let rows = await CleanupBench.run(items, route: route, service: service) { index, row in
+        let rows = await CleanupBench.run(items, route: route, prompt: options.prompt, service: service) { index, row in
             var line = "[\(index + 1)/\(items.count)] \(row.wallMs) ms"
             if let generation = row.generationMs { line += " · gen \(generation) ms" }
             if let cost = row.costUSD { line += " · $\(String(format: "%.6f", cost))" }
@@ -550,7 +550,8 @@ enum EngineCLI {
         }
         let report = CleanupBench.Report(model: route.model, provider: route.provider.only, effort: route.effort,
                                          temperature: route.temperature,
-                                         maxTokensSizedFor: route.budget.rawValue, prompt: "CleanupModel.systemPrompt",
+                                         maxTokensSizedFor: route.budget.rawValue,
+                                         prompt: options.promptFile ?? "CleanupModel.systemPrompt",
                                          history: options.history.path, startedAt: startedAt, items: rows,
                                          summary: CleanupBench.summarize(rows))
         let summary = report.summary
@@ -586,7 +587,7 @@ enum EngineCLI {
             static let usage = """
             usage: transcribe-thing --cleanup-bench --history <history.json> --model <openrouter slug> \
             --effort none|minimal|low|medium|high|xhigh|max [--count <n> | --entry <id>] [--provider <slug>] \
-            [--temperature <0-2>] [--out <report.json>]
+            [--temperature <0-2>] [--prompt-file <prompt.txt>] [--out <report.json>]
             """
             static let efforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
             static let defaultCount = 20
@@ -597,6 +598,9 @@ enum EngineCLI {
             /// Just this entry, whatever its age.
             var entry: UUID?
             var route: CleanupRoute
+            /// A system prompt to try instead of `CleanupModel.systemPrompt`, read from `--prompt-file`.
+            var prompt: String?
+            var promptFile: String?
             var out: URL?
 
             init?(_ arguments: [String]) {
@@ -637,6 +641,14 @@ enum EngineCLI {
                     guard let temperature = value("--temperature").flatMap(Double.init), (0...2).contains(temperature)
                     else { return nil }
                     route.temperature = temperature
+                }
+                if arguments.contains("--prompt-file") {
+                    guard let path = value("--prompt-file") else { return nil }
+                    let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+                    guard let text = try? String(contentsOf: url, encoding: .utf8),
+                          !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+                    prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    promptFile = url.path
                 }
                 out = value("--out").map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
             }
@@ -744,7 +756,7 @@ enum EngineCLI {
 
         /// Cleans up every item in turn; a failure becomes a row with `error`, and the run goes on.
         @MainActor
-        static func run(_ items: [Item], route: CleanupRoute, service: TranscriptionService,
+        static func run(_ items: [Item], route: CleanupRoute, prompt: String? = nil, service: TranscriptionService,
                         progress: (Int, Row) -> Void = { _, _ in }) async -> [Row] {
             var rows: [Row] = []
             for (index, item) in items.enumerated() {
@@ -753,7 +765,7 @@ enum EngineCLI {
                               existingFlashLite: item.flashLite, existingFlashLiteEffort: item.flashLiteEffort)
                 let started = ContinuousClock.now
                 do {
-                    let result = try await service.cleanUp(item.parakeet, of: .parakeet, route: route)
+                    let result = try await service.cleanUp(item.parakeet, of: .parakeet, route: route, prompt: prompt)
                     row.wallMs = milliseconds(started.duration(to: .now))
                     row.output = result.text
                     row.identical = result.text == item.parakeet
