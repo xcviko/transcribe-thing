@@ -1912,21 +1912,21 @@ private func copyScreenshotAndFile(to pasteboard: NSPasteboard) {
 
 // MARK: - Return in hands-free
 
-@Suite struct ReturnSendsRouterTests {
-    /// In hands-free, Return finishes the dictation and sends it; ⌘↩ stays the app's, and so does Return otherwise.
-    @Test func returnSendsAHandsFreeDictation() {
+@Suite struct ReturnFinishesRouterTests {
+    /// In hands-free, Return finishes the dictation; ⌘↩ stays the app's, and so does Return otherwise.
+    @Test func returnFinishesAHandsFreeDictation() {
         var kb = Keyboard()
         kb.config.isRecording = true
-        kb.config.returnSends = true
+        kb.config.returnFinishes = true
         let enter = kb.down(kVK_Return)
-        #expect(enter.events == [.finishAndSend] && enter.swallow)
+        #expect(enter.events == [.finishHandsFree] && enter.swallow)
         #expect(kb.down(kVK_Return, isRepeat: true).events.isEmpty, "once per press")
         #expect(kb.up(kVK_Return).swallow)
         kb.press(.leftCommand)
         #expect(!kb.down(kVK_Return).swallow)
         kb.up(kVK_Return)
         kb.release(.leftCommand)
-        kb.config.returnSends = false
+        kb.config.returnFinishes = false
         #expect(!kb.down(kVK_Return).swallow)
     }
 
@@ -1934,11 +1934,11 @@ private func copyScreenshotAndFile(to pasteboard: NSPasteboard) {
     @Test func aReturnTheUserBoundStaysTheirs() {
         var kb = Keyboard()
         kb.config.isRecording = true
-        kb.config.returnSends = true
+        kb.config.returnFinishes = true
         kb.config.bindings[.pasteLast] = Shortcut(modifiers: [], keyCode: KeyCode.keypadEnter)
         #expect(kb.down(kVK_ANSI_KeypadEnter).events == [.pasteLast])
         kb.up(kVK_ANSI_KeypadEnter)
-        #expect(kb.down(kVK_Return).events == [.finishAndSend], "Return itself still sends")
+        #expect(kb.down(kVK_Return).events == [.finishHandsFree], "Return itself still finishes")
         kb.up(kVK_Return)
         #expect(kb.config.bindings.claims(bareKey: KeyCode.keypadEnter))
         #expect(!kb.config.bindings.claims(bareKey: KeyCode.returnKey) && !ShortcutBindings.defaults.claims(bareKey: KeyCode.returnKey))

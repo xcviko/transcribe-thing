@@ -344,7 +344,7 @@ struct ShortcutBindings: Codable, Equatable, Sendable {
         .handsFree: .fnSpace,
         .pasteLast: .commandFnV,
         .switchModel: .fnTab,
-        // P for Polish, D for Dictionary; ↩ is kept for sending (`AppSettings.returnSendsHandsFree`).
+        // P for Polish, D for Dictionary; ↩ is kept for finishing hands-free (`AppSettings.returnFinishesHandsFree`).
         .polish: .fnP,
         .addToDictionary: .fnD,
     ])

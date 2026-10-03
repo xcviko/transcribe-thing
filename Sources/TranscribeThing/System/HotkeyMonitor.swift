@@ -14,8 +14,8 @@ enum HotkeyEvent: Equatable, Sendable {
     case polish
     /// Its key held down: an autorepeat, which turns Polish on and off again on Gemini (and does nothing elsewhere).
     case polishRepeat
-    /// Return during a hands-free dictation: finish it, paste it and press Return (`AppSettings.returnSendsHandsFree`).
-    case finishAndSend
+    /// Return during a hands-free dictation: finish it, as fn does (`AppSettings.returnFinishesHandsFree`).
+    case finishHandsFree
     /// A key the tap held for the selection (Add to dictionary's: it reads what's selected now). What the key does with
     /// the selection if there is one, else it goes on to the app (`KeyStroke.post`).
     case heldForSelection(ShortcutAction, KeyStroke)
@@ -75,9 +75,9 @@ final class HotkeyMonitor {
     var isRecording = false {
         didSet { if isRecording != oldValue { pushConfig() } }
     }
-    /// A hands-free dictation records and Return sends it: Return is taken, as `.finishAndSend`.
-    var returnSends = false {
-        didSet { if returnSends != oldValue { pushConfig() } }
+    /// A hands-free dictation records and Return finishes it: Return is taken, as `.finishHandsFree`.
+    var returnFinishes = false {
+        didSet { if returnFinishes != oldValue { pushConfig() } }
     }
     /// Polish Selection's cards are up: ↩ is theirs (it pastes the one card; with two it couldn't tell which, and does
     /// nothing), Esc closes them.
@@ -169,7 +169,7 @@ final class HotkeyMonitor {
     /// model to step to.
     func currentConfig() -> HotkeyRouter.Config {
         HotkeyRouter.Config(bindings: settings.shortcuts, isBusy: isBusy, isRecording: isRecording,
-                            switchesModels: settings.lineup.cycle.count > 1, returnSends: returnSends,
+                            switchesModels: settings.lineup.cycle.count > 1, returnFinishes: returnFinishes,
                             cardPaste: cardPaste, cardClose: cardClose,
                             isSuspended: suspendCount > 0, forwardsRawKeys: onRawKey != nil)
     }

@@ -90,8 +90,6 @@ final class DictationController {
     @ObservationIgnored var selectionCopyOverride: (@MainActor () async -> TextInserter.SelectionCopy)?
     /// Tests: the model's answer for Polish Selection (its `<message>` tags included), instead of OpenRouter.
     @ObservationIgnored var selectionPolishOverride: (@MainActor (String, PolishSelectionModel) async throws -> TranscriptResult)?
-    /// Tests: the Return pressed after a hands-free dictation finished with Return is pasted, instead of posting it.
-    @ObservationIgnored var returnOverride: (@MainActor () -> Void)?
     /// Tests: a key the tap held for the selection and gives back to the app, instead of posting it.
     @ObservationIgnored var replayKeyOverride: (@MainActor (KeyStroke) -> Void)?
     /// Replaces how long a clean-up may take to start answering (`CleanupModel.timeout(forCharacterCount:)`).
@@ -140,8 +138,6 @@ final class DictationController {
     /// waits with them (`heldRelease`), so what the press was is decided by its keys, not by when fn came up.
     @ObservationIgnored private var heldKeys: [(action: ShortcutAction, key: KeyStroke?)] = []
     @ObservationIgnored private var heldRelease: DictationMachine.Input?
-    /// Return is finishing the hands-free dictation: the job it makes presses Return once pasted.
-    @ObservationIgnored private var finishesWithReturn = false
     /// What the selection can go to (it was there when the last hint went up): Polish Selection, the dictionary. The
     /// hint itself hides after `PillTiming.chipHold`; the keys stay.
     @ObservationIgnored private var selectionOffer = PillSelectionOffer()
@@ -270,7 +266,7 @@ final class DictationController {
         }
         history.onRemove = { [weak self] ids in self?.entriesRemoved(ids) }
         observeMicrophonePermission()
-        observeReturnSends()
+        observeReturnFinishes()
         observeMenus()
         stateDidChange()
     }
@@ -289,21 +285,21 @@ final class DictationController {
         }
     }
 
-    /// Shortcuts → "Return sends" turned on or off reaches a hands-free dictation already recording.
-    private func observeReturnSends() {
+    /// Shortcuts → "Return finishes" turned on or off reaches a hands-free dictation already recording.
+    private func observeReturnFinishes() {
         withObservationTracking {
-            _ = settings.returnSendsHandsFree
+            _ = settings.returnFinishesHandsFree
             _ = settings.shortcuts
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 self?.stateDidChange()
-                self?.observeReturnSends()
+                self?.observeReturnFinishes()
             }
         }
     }
 
     /// While one of the app's menus is open (the menu bar's, the pill's model menu), Return chooses in it instead of
-    /// sending a hands-free dictation.
+    /// finishing a hands-free dictation.
     private func observeMenus() {
         let center = NotificationCenter.default
         for (name, open) in [(NSMenu.didBeginTrackingNotification, true), (NSMenu.didEndTrackingNotification, false)] {
@@ -361,11 +357,9 @@ final class DictationController {
             if machine.isRecording, effectiveChoice == .gemini { send(.polish) }
         case .heldForSelection(let action, let key):
             actOnceSelectionIsKnown(action, key)
-        case .finishAndSend:
+        case .finishHandsFree:
             guard machine.mode == .handsFree, machine.isRecording else { return }
-            finishesWithReturn = true
             send(.pillStop)
-            finishesWithReturn = false
         case .cardPaste: pasteSelectionCard()
         case .cardClose:
             // Esc stops a polish still under way too, with the cancel cue.
@@ -671,7 +665,6 @@ final class DictationController {
         job.cleansUp = effectiveChoice.cleansUp
         // The main model may have changed under it (Models, a notice's "Use Parakeet v3"): only Gemini polishes.
         job.polishes = isPolishing && effectiveChoice == .gemini
-        job.pressesReturn = finishesWithReturn
         queue.append(job)
         _ = machine.handle(.jobStarted, now: clock())
         finishingJob = job
@@ -883,8 +876,6 @@ final class DictationController {
         var cleansUp = false
         /// A polished dictation (`Polish`): its audio goes to Gemini with Polish's prompt.
         var polishes = false
-        /// Finished with Return in hands-free: once pasted, Return is pressed, and the message or prompt goes.
-        var pressesReturn = false
         /// Its text is with the clean-up model now: the transcription itself is done.
         var isCleaningUp: Bool { uncleaned != nil }
         /// The finished transcript being cleaned up, kept should the clean-up be canceled.
@@ -1146,13 +1137,7 @@ final class DictationController {
     /// False when there was nothing left to cancel (the last result is already being delivered).
     @discardableResult
     private func cancelNewestJob() -> Bool {
-        guard let job = queue.last else {
-            // Being pasted: too late for the text, not for the Return that would send it.
-            guard let delivering = deliveringJob, delivering.pressesReturn else { return false }
-            delivering.pressesReturn = false
-            DiagnosticLog.shared.event(.dictation, "job.sendCanceled")
-            return true
-        }
+        guard let job = queue.last else { return false }
         DiagnosticLog.shared.event(.dictation, "job.canceled", ["engine": job.engine, "cleaningUp": job.isCleaningUp])
         queue.removeLast()
         job.stop()
@@ -1223,7 +1208,6 @@ final class DictationController {
             DiagnosticLog.shared.event(.dictation, "job.finished", [
                 "engine": result.engine, "outcome": "success", "seconds": result.processingTime,
                 "retry": history.entry(id: job.id)?.status == .failed, "polished": job.polishes,
-                "sends": job.pressesReturn ? true : nil,
                 "cleanup": cleanup.map { _ in cleanupFailed ? "failed" : "cleaned" }, "cleanupError": cleanupError])
             // Kept as long as the entry, so History can transcribe it again with another model. Saved again even when
             // a failed or canceled row had it: an Undo-resumed dictation's file holds only the part before the cancel.
@@ -1237,7 +1221,6 @@ final class DictationController {
             let model = deliveredKind.dictationModel
             let insertion = await insert(pasted(delivered, by: model))
             handleInsertion(insertion, text: delivered, by: model, isDictation: true)
-            if job.pressesReturn, case .pasted = insertion { await pressReturn(for: job) }
             if cleanupFailed { postCleanupFallback(error: cleanupError, model: cleanupModel) }
         }
     }
@@ -1329,22 +1312,6 @@ final class DictationController {
     private func insert(_ text: String) async -> InsertionOutcome {
         if let insertOverride { return await insertOverride(text) }
         return await inserter.insert(text)
-    }
-
-    /// Return, a moment after a hands-free dictation finished with Return was pasted: the app gets it as if typed, and
-    /// the message or prompt goes. The moment lets an app that pastes in its own time (Electron) take the text first.
-    /// Part of the delivery: the next dictation's paste waits for it, so it never joins this message. Esc meanwhile
-    /// keeps it (`cancelNewestJob`).
-    private func pressReturn(for job: Job) async {
-        try? await Task.sleep(for: .milliseconds(120))
-        guard job.pressesReturn else { return }
-        if let returnOverride {
-            returnOverride()
-            return
-        }
-        await Task.detached {
-            KeyStroke.post(KeyStroke(keyCode: KeyCode.returnKey, flags: 0, interruptsHold: false))
-        }.value
     }
 
     private func copy(_ text: String) {
@@ -2868,9 +2835,9 @@ final class DictationController {
     private func stateDidChange() {
         if hotkeys.isBusy != machine.isBusy { hotkeys.isBusy = machine.isBusy }
         if hotkeys.isRecording != machine.isRecording { hotkeys.isRecording = machine.isRecording }
-        let returnSends = settings.returnSendsHandsFree && machine.mode == .handsFree && machine.isRecording
+        let returnFinishes = settings.returnFinishesHandsFree && machine.mode == .handsFree && machine.isRecording
             && !menuIsOpen
-        if hotkeys.returnSends != returnSends { hotkeys.returnSends = returnSends }
+        if hotkeys.returnFinishes != returnFinishes { hotkeys.returnFinishes = returnFinishes }
         updateSelectionHint()
         syncCardKeys()
         updateSwitchHint()

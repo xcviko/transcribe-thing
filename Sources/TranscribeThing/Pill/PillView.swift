@@ -1618,10 +1618,9 @@ private struct PillControlTooltip: View {
                 Text("Finish")
                 PillShortcutChips(shortcut: settings.shortcuts[.pushToTalk], fallback: "fn")
                 // Not when the user bound Return itself: the router leaves it theirs.
-                if settings.returnSendsHandsFree, !settings.shortcuts.claims(bareKey: KeyCode.returnKey) {
-                    Text("·").foregroundStyle(.white.opacity(0.4))
+                if settings.returnFinishesHandsFree, !settings.shortcuts.claims(bareKey: KeyCode.returnKey) {
+                    Text("or").foregroundStyle(.white.opacity(0.55))
                     PillShortcutChips(shortcut: Shortcut(modifiers: [], keyCode: KeyCode.returnKey), fallback: "↩")
-                    Text("sends")
                 }
             }
         }

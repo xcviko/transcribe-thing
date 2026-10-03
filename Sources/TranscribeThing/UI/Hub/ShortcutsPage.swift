@@ -34,11 +34,11 @@ struct ShortcutsPage: View {
                             .toggleStyle(.appSwitch)
                             .labelsHidden()
                     }
-                    SettingsRow(title: "Return sends a hands-free dictation",
-                                subtitle: "Return finishes it, pastes it and presses Return, as if you’d typed it.",
+                    SettingsRow(title: "Return finishes a hands-free dictation",
+                                subtitle: "Like pressing fn: the text is pasted, nothing is sent.",
                                 systemImage: "return",
                                 iconTint: .inkSecondary) {
-                        Toggle("", isOn: $settings.returnSendsHandsFree)
+                        Toggle("", isOn: $settings.returnFinishesHandsFree)
                             .toggleStyle(.appSwitch)
                             .labelsHidden()
                     }

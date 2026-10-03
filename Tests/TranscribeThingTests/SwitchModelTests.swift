@@ -940,70 +940,41 @@ import Testing
 // MARK: - Return in hands-free
 
 @MainActor
-@Suite(.serialized) struct ReturnSendsTests {
+@Suite(.serialized) struct ReturnFinishesTests {
     typealias Switch = SwitchModelControllerTests
 
-    /// Return in hands-free finishes the dictation, pastes it, then presses Return: the message goes.
-    @Test func returnFinishesPastesAndSends() async throws {
+    /// Return in hands-free finishes the dictation as fn does: it's pasted, and nothing more is pressed.
+    @Test func returnFinishesAndPastes() async throws {
         let (rig, _) = Switch.make()
         let c = rig.h.controller
-        var returns = 0
-        c.returnOverride = { returns += 1 }
         rig.result = { _, _ in "Hello there" }
         c.send(.handsFreeToggle)
-        #expect(rig.h.hotkeys.currentConfig().returnSends)
+        #expect(rig.h.hotkeys.currentConfig().returnFinishes)
         rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
         rig.now += 2
-        c.handle(.finishAndSend)
-        #expect(!rig.h.hotkeys.currentConfig().returnSends, "Return is the app's again at once")
-        try await waitUntil { rig.pasted.count == 1 && returns == 1 }
+        c.handle(.finishHandsFree)
+        #expect(!rig.h.hotkeys.currentConfig().returnFinishes, "Return is the app's again at once")
+        try await waitUntil { rig.pasted.count == 1 && c.machine.activeJobs == 0 }
     }
 
-    /// fn (or Stop) still finishes without sending, and push-to-talk never takes Return.
-    @Test func onlyReturnSends() async throws {
+    /// Push-to-talk never takes Return.
+    @Test func pushToTalkLeavesReturnAlone() {
         let (rig, _) = Switch.make()
-        let c = rig.h.controller
-        var returns = 0
-        c.returnOverride = { returns += 1 }
-        rig.result = { _, _ in "Hello there" }
-        c.send(.handsFreeToggle)
-        rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
-        rig.now += 2
-        c.send(.pillStop)
-        try await waitUntil { rig.pasted.count == 1 }
-        try await Task.sleep(for: .milliseconds(50))
-        #expect(returns == 0)
         Switch.hold(rig)
-        #expect(!rig.h.hotkeys.currentConfig().returnSends)
-        c.send(.pillCancel)
-    }
-
-    /// Nothing heard, nothing sent.
-    @Test func silenceSendsNothing() async throws {
-        let (rig, _) = Switch.make()
-        let c = rig.h.controller
-        var returns = 0
-        c.returnOverride = { returns += 1 }
-        rig.result = { _, _ in "" }
-        c.send(.handsFreeToggle)
-        rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
-        rig.now += 2
-        c.handle(.finishAndSend)
-        try await waitUntil { c.machine.activeJobs == 0 }
-        try await Task.sleep(for: .milliseconds(50))
-        #expect(returns == 0 && rig.pasted.isEmpty)
+        #expect(!rig.h.hotkeys.currentConfig().returnFinishes)
+        rig.h.controller.send(.pillCancel)
     }
 
     @Test func itCanBeTurnedOff() async throws {
         let (rig, _) = Switch.make()
         rig.h.controller.start()
-        rig.h.settings.returnSendsHandsFree = false
+        rig.h.settings.returnFinishesHandsFree = false
         rig.h.controller.send(.handsFreeToggle)
-        #expect(!rig.h.hotkeys.currentConfig().returnSends)
-        rig.h.settings.returnSendsHandsFree = true
-        try await waitUntil { rig.h.hotkeys.currentConfig().returnSends }
-        rig.h.settings.returnSendsHandsFree = false
-        try await waitUntil { !rig.h.hotkeys.currentConfig().returnSends }
+        #expect(!rig.h.hotkeys.currentConfig().returnFinishes)
+        rig.h.settings.returnFinishesHandsFree = true
+        try await waitUntil { rig.h.hotkeys.currentConfig().returnFinishes }
+        rig.h.settings.returnFinishesHandsFree = false
+        try await waitUntil { !rig.h.hotkeys.currentConfig().returnFinishes }
         rig.h.controller.send(.pillCancel)
     }
 
@@ -1013,32 +984,12 @@ import Testing
         rig.h.controller.start()
         rig.h.controller.send(.handsFreeToggle)
         NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: NSMenu())
-        try await waitUntil { !rig.h.hotkeys.currentConfig().returnSends }
+        try await waitUntil { !rig.h.hotkeys.currentConfig().returnFinishes }
         NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: NSMenu())
-        try await waitUntil { rig.h.hotkeys.currentConfig().returnSends }
+        try await waitUntil { rig.h.hotkeys.currentConfig().returnFinishes }
         rig.h.controller.send(.pillCancel)
     }
-
-    /// Esc while it's being pasted: too late for the text, not for the Return.
-    @Test func escWhilePastingKeepsTheReturn() async throws {
-        let (rig, cues) = Switch.make()
-        let c = rig.h.controller
-        var returns = 0
-        c.returnOverride = { returns += 1 }
-        rig.result = { _, _ in "Hello there" }
-        c.send(.handsFreeToggle)
-        rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
-        rig.now += 2
-        c.handle(.finishAndSend)
-        try await waitUntil { rig.pasted.count == 1 }
-        c.handle(.cancel)
-        try await waitUntil { c.machine.activeJobs == 0 }
-        try await Task.sleep(for: .milliseconds(150))
-        #expect(returns == 0 && cues.played.contains(.cancel))
-    }
 }
-
-// MARK: - The no-speech pill
 
 @MainActor
 @Suite(.serialized) struct NoSpeechPillTests {
