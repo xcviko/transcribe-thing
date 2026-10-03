@@ -43,8 +43,10 @@ struct OpenRouterChatRequest: Encodable, Equatable {
     /// default for Gemini 3). The system message exists only for a non-empty prompt, and the user message carries ONLY
     /// the audio, in `format` ("m4a"; "wav" or "flac" from `EngineCLI --upload`): no text part, ever. `maxTokens`
     /// grows with the audio (`OpenRouterClient.transcriptionMaxTokens`).
+    /// `provider`: another endpoint than Google AI Studio's ("google-ai-studio/priority", `EngineCLI --provider`).
     static func transcription(model: String, audioBase64: String, format: String, systemPrompt: String?,
-                              effort: ReasoningEffort, maxTokens: Int) -> OpenRouterChatRequest {
+                              effort: ReasoningEffort, maxTokens: Int,
+                              provider: Provider = .googleAIStudio) -> OpenRouterChatRequest {
         var messages: [OpenRouterMessage] = []
         if let prompt = systemPrompt?.trimmingCharacters(in: .whitespacesAndNewlines), !prompt.isEmpty {
             messages.append(.system(prompt))
@@ -54,7 +56,7 @@ struct OpenRouterChatRequest: Encodable, Equatable {
             model: model,
             messages: messages,
             reasoning: Reasoning(effort: effort.rawValue, exclude: false),
-            provider: .googleAIStudio,
+            provider: provider,
             maxTokens: maxTokens,
             stream: true)
     }

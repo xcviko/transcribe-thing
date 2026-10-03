@@ -13,6 +13,9 @@ import Foundation
 ///                        [--clean-up-effort none|minimal|low|medium|high]]
 ///     transcribe-thing --model-status
 ///
+/// Hidden comparison (not in the usage text): `--provider <slug>` sends Gemini to another endpoint than Google AI
+/// Studio's ("google-ai-studio/priority"), pinned without fallbacks.
+///
 /// Hidden comparison (not in the usage text): `--hedge race|measure` sends a cloud engine's request twice at once, as
 /// dictations do (`CloudHedge`); `measure` lets both run to their end and prints both times (`HEDGE:`).
 ///
@@ -146,6 +149,8 @@ enum EngineCLI {
         var speechModel: String?
         /// The request twice at once (`--hedge`).
         var hedge: CloudHedge?
+        /// Gemini's endpoint instead of Google AI Studio's (`--provider`).
+        var provider: String?
 
         init?(_ arguments: [String]) {
             func value(_ flag: String) -> String? {
@@ -187,6 +192,12 @@ enum EngineCLI {
                     return nil
                 }
                 speechModel = slug
+            }
+            if arguments.contains("--provider") {
+                guard engine.cloudAPI == .chatCompletions, let slug = value("--provider"), !slug.isEmpty else {
+                    return nil
+                }
+                provider = slug
             }
             if arguments.contains("--hedge") {
                 switch value("--hedge") {
@@ -284,7 +295,10 @@ enum EngineCLI {
         for run in 1...options.repeatCount {
             var result = try await service.transcribe(recording, engine: options.engine, effort: effort,
                                                       prompt: options.prompt, upload: options.upload,
-                                                      speechModel: options.speechModel, hedge: options.hedge)
+                                                      speechModel: options.speechModel, hedge: options.hedge,
+                                                      provider: options.provider.map {
+                                                          .init(only: [$0], allowFallbacks: false)
+                                                      })
             runTimes.append(result.processingTime)
             // Measuring: the other request finishes before the next run, so the two runs don't overlap.
             if options.hedge == .measure {

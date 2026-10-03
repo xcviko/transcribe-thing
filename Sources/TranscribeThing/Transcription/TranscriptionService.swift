@@ -99,7 +99,7 @@ final class TranscriptionService {
     /// `hedge`: the cloud request goes twice at once (`CloudHedge`): Gemini's, or each of cloud Parakeet's segments.
     func transcribe(_ recording: Recording, engine: EngineID, effort: ReasoningEffort? = nil,
                     prompt: String? = nil, upload: UploadFormat? = nil, speechModel: String? = nil,
-                    hedge: CloudHedge? = nil, background: Bool = false,
+                    hedge: CloudHedge? = nil, provider: OpenRouterChatRequest.Provider? = nil, background: Bool = false,
                     progress: (@Sendable (ChatStreamProgress) -> Void)? = nil) async throws -> TranscriptResult {
         guard !engine.isRetired else {
             throw AppError.engineFailed(engine, "\(engine.displayName) is no longer offered.")
@@ -115,7 +115,7 @@ final class TranscriptionService {
                     ? UserDictionary.prompt(prompt ?? EngineID.geminiSystemPrompt, with: vocabulary(), heard: true) : ""
                 let cloud = try await transcribeCloud(recording, engine: engine, effort: effort, prompt: prompt,
                                                       upload: upload, speechModel: speechModel, hedge: hedge,
-                                                      progress: progress)
+                                                      provider: provider, progress: progress)
                 result.text = cloud.text
                 result.costUSD = cloud.costUSD
                 result.provider = cloud.provider
@@ -155,6 +155,7 @@ final class TranscriptionService {
     /// to compare one with cloud Parakeet).
     private func transcribeCloud(_ recording: Recording, engine: EngineID, effort: ReasoningEffort?, prompt: String,
                                  upload: UploadFormat?, speechModel: String? = nil, hedge: CloudHedge? = nil,
+                                 provider: OpenRouterChatRequest.Provider? = nil,
                                  progress: (@Sendable (ChatStreamProgress) -> Void)?) async throws -> CloudResult {
         guard let model = (engine.cloudAPI == .transcriptions ? speechModel : nil) ?? engine.openRouterModelID,
               let api = engine.cloudAPI else {
@@ -169,7 +170,7 @@ final class TranscriptionService {
             case .chatCompletions:
                 result = try await transcribeWithChat(recording, engine: engine, model: model, key: key,
                                                       effort: effort ?? .medium, prompt: prompt, upload: upload,
-                                                      hedge: hedge, progress: progress)
+                                                      hedge: hedge, provider: provider, progress: progress)
             case .transcriptions:
                 result = try await transcribeSpeech(recording.samples, engine: engine, model: model, key: key,
                                                     upload: upload, hedge: hedge)
@@ -191,7 +192,7 @@ final class TranscriptionService {
     /// actor); the answer's token budget grows with the audio, and it streams, so no wait for it has to.
     private func transcribeWithChat(_ recording: Recording, engine: EngineID, model: String, key: String,
                                     effort: ReasoningEffort, prompt: String, upload: UploadFormat?,
-                                    hedge: CloudHedge? = nil,
+                                    hedge: CloudHedge? = nil, provider: OpenRouterChatRequest.Provider? = nil,
                                     progress: (@Sendable (ChatStreamProgress) -> Void)?) async throws -> CloudResult {
         let samples = recording.samples, stored = recording.aacFile, format = upload ?? .m4a
         let audio = await Task.detached(priority: .userInitiated) {
@@ -204,7 +205,8 @@ final class TranscriptionService {
         let send: @Sendable (CloudHedge.Hooks) async throws -> CloudResult = { hooks in
             try await client.transcribe(audio: audio, format: format.rawValue, model: model, systemPrompt: prompt,
                                         effort: effort, maxTokens: maxTokens, apiKey: key, timeout: timeout,
-                                        progress: hooks.progress, generation: hooks.generation)
+                                        progress: hooks.progress, generation: hooks.generation,
+                                        provider: provider ?? .googleAIStudio)
         }
         var result = if let hedge {
             try await CloudHedge.run(hedge, .transcription, engine: engine, modelName: engine.modelName,

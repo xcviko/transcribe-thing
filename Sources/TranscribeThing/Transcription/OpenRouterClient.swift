@@ -192,7 +192,8 @@ final class OpenRouterClient: Sendable {
     func transcribe(audio: Data, format: String, model: String, systemPrompt: String?, effort: ReasoningEffort,
                     maxTokens: Int, apiKey: String, timeout: TimeInterval,
                     progress: (@Sendable (ChatStreamProgress) -> Void)? = nil,
-                    generation: (@Sendable (String) -> Void)? = nil) async throws -> CloudResult {
+                    generation: (@Sendable (String) -> Void)? = nil,
+                    provider: OpenRouterChatRequest.Provider = .googleAIStudio) async throws -> CloudResult {
         let engine = Self.engine(forModel: model)
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw AppError.openRouterMissingKey }
@@ -201,7 +202,7 @@ final class OpenRouterClient: Sendable {
         do {
             body = try OpenRouterChatRequest.transcription(model: model, audioBase64: audio.base64EncodedString(),
                                                            format: format, systemPrompt: systemPrompt, effort: effort,
-                                                           maxTokens: maxTokens).encoded()
+                                                           maxTokens: maxTokens, provider: provider).encoded()
         } catch {
             throw AppError.openRouterBadRequest("Couldn’t build the request.")
         }
