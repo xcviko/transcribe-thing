@@ -17,7 +17,7 @@ enum HotkeyEvent: Equatable, Sendable {
     /// Return during a hands-free dictation: finish it, as fn does (`AppSettings.returnFinishesHandsFree`).
     case finishHandsFree
     /// A key the tap held for the selection (Add to dictionary's: it reads what's selected now). What the key does with
-    /// the selection if there is one, else it goes on to the app (`KeyStroke.post`).
+    /// the selection if there is one; with none, the pill says to select a word first.
     case heldForSelection(ShortcutAction, KeyStroke)
     /// ↩ and Esc while Polish Selection's card is up: Paste Here, and close it.
     case cardPaste, cardClose
@@ -29,31 +29,12 @@ enum SyntheticEvent {
     static let tag: Int64 = 0x5454_4E47  // "TTNG"
 }
 
-/// A key the tap took and may give back: the physical key and its flags as they came.
+/// A key the tap took for the selection: the physical key and its flags as they came.
 struct KeyStroke: Equatable, Sendable {
     var keyCode: UInt16
     var flags: UInt64
-    /// It came while a modifier-only push-to-talk was held, which a key passed on to the app ends.
+    /// It came while a modifier-only push-to-talk was held.
     var interruptsHold: Bool
-
-    /// Down and up again at the session tap, marked as ours so the tap lets them through. As the paste's ⌘V
-    /// (`TextInserter.postCommand`): the user's own keys are never held back meanwhile (a suppressed fn release
-    /// would be one the tap never sees), and a short gap helps slow consumers. Off the main thread: it sleeps.
-    nonisolated static func post(_ key: KeyStroke) {
-        guard let source = CGEventSource(stateID: .combinedSessionState) else { return }
-        source.userData = SyntheticEvent.tag
-        source.setLocalEventsFilterDuringSuppressionState(
-            [.permitLocalMouseEvents, .permitLocalKeyboardEvents, .permitSystemDefinedEvents],
-            state: .eventSuppressionStateSuppressionInterval)
-        guard let down = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(key.keyCode), keyDown: true),
-              let up = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(key.keyCode), keyDown: false)
-        else { return }
-        down.flags = CGEventFlags(rawValue: key.flags)
-        up.flags = CGEventFlags(rawValue: key.flags)
-        down.post(tap: .cgSessionEventTap)
-        usleep(5_000)
-        up.post(tap: .cgSessionEventTap)
-    }
 }
 
 /// Global hotkeys on an active session event tap. Dictation-agnostic: it reports key gestures

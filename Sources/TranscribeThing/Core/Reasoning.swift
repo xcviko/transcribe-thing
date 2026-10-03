@@ -183,9 +183,10 @@ enum CleanupModel: String, CaseIterable, Codable, Sendable {
     You may write a spoken number as digits, but never change its value.
     When unsure, keep what was said, not what you expect.
 
-    Remove filler words and false starts. Fix punctuation, typing only plain keyboard characters: wherever Russian or English punctuation calls for a dash (тире), type a hyphen with a space on each side, as in "Москва - столица". Quote with straight double quotes, as in "привет". Never type a long dash, a medium dash, angle quotes or curly quotes.
+    Remove filler words and false starts. Fix punctuation.
     Keep the speaker's words, slang and profanity. Don't censor, paraphrase or translate.
     Fix only obvious recognizer misspellings, keeping the same sounds. Never turn a word into a different word, name, version or number.
     The recognizer spells English words and names by sound in Cyrillic. Write them in English spelling, keeping the same sounds. Leave common Russian loanwords in Cyrillic.
+    Use a hyphen "-" instead of "—" and straight quotes "..." instead of «...».
     """
 }

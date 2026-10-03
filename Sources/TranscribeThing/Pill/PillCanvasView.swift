@@ -75,10 +75,9 @@ struct PillCanvasView: View {
             && (model.visiblePhase.isRecording || model.selectionHint == .handoff)
     }
 
-    /// A word about a key that did nothing (`PillModel.keyHint`), over a dictation: shown whatever the hints setting,
-    /// as the answer to a key just pressed.
+    /// A word about a key that did nothing (`PillModel.keyHint`), over a dictation, while hints above the pill are on.
     private var showsKeyHint: Bool {
-        model.isPresented && model.keyHint != nil && model.visiblePhase.isRecording
+        model.isPresented && model.settings.showsPillHints && model.keyHint != nil && model.visiblePhase.isRecording
     }
 
     /// The model chip, or a hint in its place, floats above the pill: toasts make room for it.

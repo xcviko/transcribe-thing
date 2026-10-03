@@ -57,7 +57,8 @@ struct GeneralPage: View {
                 SettingsGroup {
                     pillRow
                     SettingsRow(title: "Hints above the pill",
-                                subtitle: "The model’s name when you switch, and the keys for text you’ve selected. "
+                                subtitle: "The model’s name when you switch, the keys for text you’ve selected, and a word when a "
+                                    + "key does nothing. "
                                     + "Off, the pill’s color tells the model, and the keys work all the same.",
                                 systemImage: "text.bubble", iconTint: .inkSecondary) {
                         Toggle("", isOn: $settings.showsPillHints)

@@ -92,8 +92,6 @@ final class DictationController {
     @ObservationIgnored var selectionCopyOverride: (@MainActor () async -> TextInserter.SelectionCopy)?
     /// Tests: the model's answer for Polish Selection (its `<message>` tags included), instead of OpenRouter.
     @ObservationIgnored var selectionPolishOverride: (@MainActor (String, PolishSelectionModel) async throws -> TranscriptResult)?
-    /// Tests: a key the tap held for the selection and gives back to the app, instead of posting it.
-    @ObservationIgnored var replayKeyOverride: (@MainActor (KeyStroke) -> Void)?
     /// Replaces how long a clean-up may take to start answering (`CleanupModel.timeout(forCharacterCount:)`).
     @ObservationIgnored var cleanupTimeoutOverride: TimeInterval?
     /// Replaces how long a job waits for its local model before saying so (`modelWaitNoticeDelay`).
@@ -2223,9 +2221,9 @@ final class DictationController {
 
     /// A key for the selection, decided by what's selected right when it's pressed (in a long hands-free dictation,
     /// not what was selected as it started; text selected after fn went down counts too). With text selected the key
-    /// does its work on it (on Gemini, fn P is Polish's). With nothing selected fn D goes on to the app after all,
-    /// ending a held press as any other key would have; where the app couldn't say (Chrome, a password field) it isn't
-    /// typed over what may be selected, and the pill says why nothing happened.
+    /// does its work on it (on Gemini, fn P is Polish's). With nothing selected fn D says to select a word first, and
+    /// the dictation goes on; where the app couldn't say (a password field, an app that didn't answer even to ⌘C) a card
+    /// says why nothing happened, and a held press ends. The key never reaches the app.
     /// Keys pressed while the first waits are decided the same way, in order, once the dictation is still on. A
     /// recording canceled meanwhile (Esc) drops them all, even with a new one started since.
     private func actOnceSelectionIsKnown(_ action: ShortcutAction, _ key: KeyStroke?) {
@@ -2256,14 +2254,15 @@ final class DictationController {
                 guard self.machine.isRecording || action == .addToDictionary && self.pressTakenByKey else { break }
                 if self.acted(on: action, selection: fresh.text) { continue }
                 guard let key else { continue }
-                if !fresh.isKnown {
-                    self.cantReadSelection(fresh.outcome)
-                } else if let replay = self.replayKeyOverride {
-                    replay(key)
+                if fresh.isKnown {
+                    // Nothing selected: the key never reaches the app (a "d" in the text); the pill says why nothing
+                    // happened, and the dictation goes on.
+                    self.send(.keyUsed)
+                    self.showKeyHint("Select a word to add it to your dictionary")
                 } else {
-                    Task.detached { KeyStroke.post(key) }
+                    self.cantReadSelection(fresh.outcome)
+                    interrupts = interrupts || key.interruptsHold
                 }
-                interrupts = interrupts || key.interruptsHold
             }
             if interrupts, self.machine.isRecording { self.send(.pttInterrupted) }
             if let release = self.heldRelease {
@@ -2383,7 +2382,9 @@ final class DictationController {
 
     /// A word about a key over the pill for a moment (`PillModel.keyHint`); with no pill on screen (Never), a short
     /// notice in its place.
+    /// Nothing with General → "Hints above the pill" off.
     private func showKeyHint(_ text: String) {
+        guard settings.showsPillHints else { return }
         if pillModel.isPresented {
             pillModel.showKeyHint(text)
         } else {

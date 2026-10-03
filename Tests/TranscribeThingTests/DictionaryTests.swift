@@ -400,30 +400,26 @@ import Testing
     @Test func fnDWhereTheSelectionCantBeReadIsntTyped() async throws {
         let (rig, _) = Self.make(selection: nil)
         rig.h.controller.selectionMissingOverride = .noFocusedElement
-        var replayed: [KeyStroke] = []
-        rig.h.controller.replayKeyOverride = { replayed.append($0) }
         rig.h.controller.handle(.pttDown)
         Self.pressD(rig)
         try await waitUntil { rig.notice(DictationController.dictionaryNoteKey) != nil }
         #expect(rig.notice(DictationController.dictionaryNoteKey)?.title == "Can’t read the selection here")
-        #expect(replayed.isEmpty && rig.h.settings.dictionary.words.isEmpty && !rig.h.controller.machine.isRecording)
+        #expect(rig.h.settings.dictionary.words.isEmpty && !rig.h.controller.machine.isRecording)
     }
 
     /// Where the app can't say (VS Code, Claude), what ⌘C copies goes in; when it copies nothing, nothing was
-    /// selected, and the D goes on to the app.
+    /// selected, and the pill says to select a word.
     @Test func fnDWhereTheAppCantSayTakesWhatCopyingFinds() async throws {
         let (rig, _) = Self.make(selection: nil)
         var copy = TextInserter.SelectionCopy.text("Kubernetes")
         rig.h.controller.selectionMissingOverride = .noFocusedElement
         rig.h.controller.selectionCopyOverride = { copy }
-        var replayed: [KeyStroke] = []
-        rig.h.controller.replayKeyOverride = { replayed.append($0) }
         rig.h.controller.send(.handsFreeToggle)
         Self.pressD(rig)
         try await waitUntil { rig.h.settings.dictionary.words == ["Kubernetes"] }
         copy = .nothing
         Self.pressD(rig)
-        try await waitUntil { replayed == [Self.d] }
+        try await waitUntil { rig.h.pill.keyHint == "Select a word to add it to your dictionary" }
         rig.h.controller.send(.pillCancel)
     }
 
@@ -464,31 +460,42 @@ import Testing
         rig.h.controller.send(.pillCancel)
     }
 
-    /// Nothing selected right then: the D goes on to the app, and ends the push-to-talk hold as a key would.
-    @Test func fnDOverNothingGoesToTheApp() async throws {
+    /// Nothing selected right then: no "d" lands in the app; the pill says to select a word, and the dictation goes on.
+    @Test func fnDOverNothingSaysToSelectAWord() async throws {
         let (rig, _) = Self.make(selection: nil)
-        var replayed: [KeyStroke] = []
-        rig.h.controller.replayKeyOverride = { replayed.append($0) }
         rig.h.controller.handle(.pttDown)
         Self.pressD(rig)
-        try await waitUntil { replayed == [Self.d] }
-        #expect(rig.h.settings.dictionary.words.isEmpty && !rig.h.controller.machine.isRecording)
+        try await waitUntil { rig.h.pill.keyHint != nil }
+        #expect(rig.h.pill.keyHint == "Select a word to add it to your dictionary")
+        #expect(rig.h.settings.dictionary.words.isEmpty && rig.h.controller.machine.isRecording)
+        rig.h.controller.send(.pillCancel)
     }
 
-    /// fn P and fn D both before anything is known, with nothing selected: fn P says Polish is Gemini's, and the D goes
-    /// on to the app.
+    /// With hints above the pill off, that word isn't shown, over the pill or as a notice.
+    @Test func withHintsOffNothingIsSaid() async throws {
+        let (rig, _) = Self.make(selection: nil)
+        rig.h.settings.showsPillHints = false
+        rig.h.pill.isPresented = false
+        rig.h.controller.handle(.pttDown)
+        Self.pressD(rig)
+        rig.h.controller.handle(.polish)
+        try await Task.sleep(for: .milliseconds(60))
+        #expect(rig.h.pill.keyHint == nil && rig.notice("key.hint") == nil && rig.h.controller.machine.isRecording)
+        rig.h.controller.send(.pillCancel)
+    }
+
+    /// fn P and fn D both before anything is known, with nothing selected: each says what it would have done, the D
+    /// last, and the dictation goes on.
     @Test func keysWaitingTogetherEachDoTheirPart() async throws {
         let (rig, _) = Self.make(selection: nil)
         let lookup = PolishSelectionTests.Lookup()
         rig.h.controller.selectionOverride = { await lookup.wait(); return nil }
-        var replayed: [KeyStroke] = []
-        rig.h.controller.replayKeyOverride = { replayed.append($0) }
         rig.h.controller.handle(.pttDown)
         rig.h.controller.handle(.polish)
         Self.pressD(rig)
         lookup.isOpen = true
-        try await waitUntil { replayed.count == 1 }
-        #expect(replayed == [Self.d] && !rig.h.controller.machine.isRecording)
-        #expect(rig.h.pill.keyHint == nil, "the word about fn P went with the dictation")
+        try await waitUntil { rig.h.pill.keyHint == "Select a word to add it to your dictionary" }
+        #expect(rig.h.controller.machine.isRecording)
+        rig.h.controller.send(.pillCancel)
     }
 }

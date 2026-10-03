@@ -381,15 +381,13 @@ import Testing
         let (rig, _, asked) = Self.make()
         let lookup = Lookup()
         rig.h.controller.selectionOverride = { await lookup.wait(); return "short draft" }
-        var replayed: [KeyStroke] = []
-        rig.h.controller.replayKeyOverride = { replayed.append($0) }
         rig.h.controller.handle(.pttDown)
         rig.h.controller.handle(.polish)
         try await Task.sleep(for: .milliseconds(40))
         #expect(asked.calls.isEmpty)
         lookup.isOpen = true
         try await waitUntil { asked.calls.count == 2 }
-        #expect(asked.calls.allSatisfy { $0.0 == "short draft" } && replayed.isEmpty)
+        #expect(asked.calls.allSatisfy { $0.0 == "short draft" })
     }
 
     /// fn let go before the lookup answered: the press is still decided by its key. With text selected it's Polish
@@ -481,13 +479,11 @@ import Testing
         let (rig, _, asked) = Self.make(selection: nil)
         let lookup = Lookup()
         rig.h.controller.selectionOverride = { await lookup.wait(); return nil }
-        var replayed: [KeyStroke] = []
-        rig.h.controller.replayKeyOverride = { replayed.append($0) }
         rig.h.controller.handle(.pttDown)
         rig.h.controller.handle(.polish)
         lookup.isOpen = true
         try await waitUntil { rig.h.pill.keyHint != nil }
-        #expect(asked.calls.isEmpty && replayed.isEmpty && rig.h.controller.machine.isRecording)
+        #expect(asked.calls.isEmpty && rig.h.controller.machine.isRecording)
         rig.h.controller.send(.pillCancel)
     }
 
