@@ -308,7 +308,7 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
         case .pasteLast: "Paste your most recent transcript again. Your clipboard stays as it was."
         case .switchModel: "While dictating: switch this dictation to your next model."
         case .polish: "While dictating: on Gemini, it writes the message you meant; with text selected, it polishes that."
-        case .addToDictionary: "While dictating with a word selected: Gemini and GPT-6 Luna learn it and how it’s spelled."
+        case .addToDictionary: "While dictating with a word selected: Gemini learns it and how it’s spelled."
         }
     }
 

@@ -27,11 +27,13 @@ import Testing
     }
 
     @Test func oneTextToCleanUpNamesOnlyTheModelTwoNameTheirText() {
-        #expect(menu(transcript()).actions.filter(\.kind.isCleanup).map(\.name) == ["Clean Up with GPT-6 Luna"])
+        #expect(menu(transcript()).actions.filter(\.kind.isCleanup).map(\.name)
+                == ["Clean Up with Gemini 3 Flash", "Clean Up with GPT-6 Luna"])
         var entry = transcript(.parakeet)
         entry.addVersion(TranscriptVersion(text: "cloud", engine: .parakeetCloud))
         let cleanups = menu(entry).actions.filter { $0.kind.isCleanup }
-        #expect(cleanups.map(\.name) == ["Clean Up Parakeet v3 with GPT-6 Luna",
+        #expect(cleanups.map(\.name) == ["Clean Up Parakeet v3 with Gemini 3 Flash", "Clean Up Parakeet v3 with GPT-6 Luna",
+                                          "Clean Up Parakeet v3 · Cloud with Gemini 3 Flash",
                                           "Clean Up Parakeet v3 · Cloud with GPT-6 Luna"])
         #expect(cleanups.map(\.title) == cleanups.map(\.name))
     }
@@ -54,6 +56,7 @@ import Testing
         let tidiedMenu = menu(tidied)
         #expect(tidiedMenu.versions.map(\.title) == ["Parakeet v3", "Parakeet v3 + Clean-up by Flash Lite"])
         #expect(tidiedMenu.actions.map(\.kind) == [.transcription(.parakeetCloud), .transcription(.geminiFlash),
+                                                   .cleanup(of: .parakeet, by: .gemini3Flash),
                                                    .cleanup(of: .parakeet, by: .gpt6Luna), .polish])
 
         var failed = TranscriptEntry(text: "", engine: .geminiPro, status: .failed, audioDuration: 20, voicedSeconds: 10,

@@ -1,8 +1,9 @@
 import Foundation
 
 /// The user's dictionary (Hub → Dictionary, or fn D over selected text): words, names and terms that Gemini 3.8 Flash
-/// and GPT-6 Luna get as a hint: they exist, and this is how they're spelled (`prompt(_:with:)`). Parakeet hears without instructions and can't use it. Words
-/// keep the order they came in, each once (case aside); one JSON array under `SettingsKey.dictionary`.
+/// and the clean-up model get as a hint: they exist, and this is how they're spelled (`prompt(_:with:)`). Parakeet
+/// hears without instructions and can't use it. Words keep the order they came in, each once (case aside); one JSON
+/// array under `SettingsKey.dictionary`.
 struct UserDictionary: Equatable, Sendable {
     /// Oldest first.
     private(set) var words: [String] = []
@@ -145,13 +146,15 @@ struct UserDictionary: Equatable, Sendable {
 
     /// `prompt` followed by the dictionary as a hint, not a rule: these words exist and are usually spelled this way,
     /// and the model decides what to make of it. For Gemini (`heard`: it hears the words, in audio) or a model that
-    /// reads a text (GPT-6 Luna's clean-up, Polish Selection's). In the prompt's own language:
-    /// Russian when it has Cyrillic, else English. With no words, or an empty prompt (the CLI's `--prompt ""` sends
-    /// only the audio), `prompt` as it is.
+    /// reads a text (the clean-up, Polish Selection's). In the prompt's own language: Russian when most of its letters
+    /// are Cyrillic (an English prompt may quote a Russian example), else English. With no words, or an empty prompt
+    /// (the CLI's `--prompt ""` sends only the audio), `prompt` as it is.
     static func prompt(_ prompt: String, with words: [String], heard: Bool) -> String {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !words.isEmpty, !trimmed.isEmpty else { return prompt }
-        let russian = trimmed.unicodeScalars.contains { (0x0400...0x04FF).contains($0.value) }
+        let letters = trimmed.unicodeScalars.filter { CharacterSet.letters.contains($0) }
+        let cyrillic = letters.filter { (0x0400...0x04FF).contains($0.value) }.count
+        let russian = cyrillic * 2 > letters.count
         let intro = switch (russian, heard) {
         case (true, true):
             "Подсказка: слова, имена и термины, которые я иногда говорю, и как они обычно пишутся. Если услышишь что-то из этого, скорее всего, имеется в виду такое написание. Решай сам, по смыслу."

@@ -379,10 +379,11 @@ import Testing
         #expect(m.title == "Versions" && !m.isRetry && m.runningTitle == nil)
         #expect(m.versions == [VersionsMenu.Version(kind: .transcription(.parakeet), summary: "0.4 s", isCurrent: true)])
         #expect(m.actions.map(\.kind) == [.transcription(.parakeetCloud), .transcription(.geminiFlash),
+                                          .cleanup(of: .parakeet, by: .gemini3Flash),
                                           .cleanup(of: .parakeet, by: .gpt6Luna), .polish])
         #expect(m.actions.allSatisfy { $0.isEnabled })
-        #expect(m.actions.map(\.title) == ["Parakeet v3 · Cloud", "Gemini 3.8 Flash", "Clean Up with GPT-6 Luna",
-                                           "Polish with Gemini 3.8 Flash"])
+        #expect(m.actions.map(\.title) == ["Parakeet v3 · Cloud", "Gemini 3.8 Flash", "Clean Up with Gemini 3 Flash",
+                                           "Clean Up with GPT-6 Luna", "Polish with Gemini 3.8 Flash"])
     }
 
     @Test func aModelAlreadyUsedIsAVersionNotAnAction() {
@@ -394,9 +395,9 @@ import Testing
         #expect(m.versions.map(\.kind) == [.transcription(.parakeet), .transcription(.geminiFlash), flashLite])
         #expect(m.versions.map(\.isCurrent) == [false, true, false])
         #expect(m.versions[1].summary == "3.0 s · $0.002")
-        #expect(m.actions.map(\.kind) == [.transcription(.parakeetCloud), .cleanup(of: .parakeet, by: .gpt6Luna),
-                                          .polish],
-                "Flash Lite already cleaned it up; Luna still can")
+        #expect(m.actions.map(\.kind) == [.transcription(.parakeetCloud), .cleanup(of: .parakeet, by: .gemini3Flash),
+                                          .cleanup(of: .parakeet, by: .gpt6Luna), .polish],
+                "Flash Lite already cleaned it up; the others still can")
     }
 
     @Test func eachCleanUpModelTidiesTheSameTextOnce() {
@@ -404,14 +405,15 @@ import Testing
         entry.addVersion(TranscriptVersion(kind: .cleanup(of: .parakeet, by: .gpt6Luna), text: "l",
                                            metadata: TranscriptMetadata(processingTime: 1.1)))
         var m = menu(entry)
-        #expect(!m.actions.contains { $0.kind.isCleanup }, "Luna has tidied it")
+        #expect(m.actions.filter(\.kind.isCleanup).map(\.kind) == [.cleanup(of: .parakeet, by: .gemini3Flash)],
+                "Luna has tidied it")
         #expect(m.versions.last?.itemTitle == "Parakeet v3 + Clean-up by GPT-6 Luna\u{2003}1.1 s")
-        entry.addVersion(TranscriptVersion(kind: .cleanup(of: .parakeet, by: .geminiFlashLite), text: "f",
+        entry.addVersion(TranscriptVersion(kind: .cleanup(of: .parakeet, by: .gemini3Flash), text: "f",
                                            metadata: TranscriptMetadata()))
         m = menu(entry)
         #expect(!m.actions.contains { $0.kind.isCleanup })
         #expect(m.versions.map(\.kind) == [.transcription(.parakeet), .cleanup(of: .parakeet, by: .gpt6Luna),
-                                           .cleanup(of: .parakeet, by: .geminiFlashLite)])
+                                           .cleanup(of: .parakeet, by: .gemini3Flash)])
     }
 
     /// Polish runs Gemini on the recording again: it needs the audio, and it's offered once.
@@ -434,7 +436,8 @@ import Testing
     @Test func withoutAKeyCloudActionsSaySo() {
         let m = menu(transcript(.parakeet), key: .missing)
         #expect(m.actions.map(\.title) == ["Parakeet v3 · Cloud · Needs key", "Gemini 3.8 Flash · Needs key",
-                                           "Clean Up with GPT-6 Luna · Needs key", "Polish with Gemini 3.8 Flash · Needs key"])
+                                           "Clean Up with Gemini 3 Flash · Needs key", "Clean Up with GPT-6 Luna · Needs key",
+                                           "Polish with Gemini 3.8 Flash · Needs key"])
         #expect(action(menu(transcript(.parakeetCloud), key: .invalid("401")), .transcription(.geminiFlash))?.title
                 == "Gemini 3.8 Flash · Key rejected")
         #expect(action(menu(transcript(.parakeetCloud), key: .missing), .transcription(.parakeet))?.isEnabled == true)

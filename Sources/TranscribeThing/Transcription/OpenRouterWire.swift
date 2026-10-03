@@ -28,7 +28,7 @@ struct OpenRouterChatRequest: Encodable, Equatable {
 
         /// Google AI Studio and nothing else, no fallbacks: every Gemini request.
         static let googleAIStudio = Provider(only: ["google-ai-studio"], allowFallbacks: false)
-        /// OpenAI and nothing else, no fallbacks: GPT-6 Luna as Clean-up.
+        /// OpenAI and nothing else, no fallbacks: GPT-6 Luna (History's clean-up, Polish Selection).
         static let openAI = Provider(only: ["openai"], allowFallbacks: false)
     }
 
@@ -62,7 +62,7 @@ struct OpenRouterChatRequest: Encodable, Equatable {
     /// Clean-up of a transcript: the prompt as the system message, then the transcript as plain user text inside
     /// `<transcript>` tags. `route` names the model, the provider it's pinned to (no fallbacks) and the effort as
     /// sent (`CleanupModel.route`, or any model for `EngineCLI --cleanup-bench`). Streamed like transcription, with no
-    /// temperature; reasoning excluded (GPT-6 Luna doesn't think at "none") unless the route streams it. `max_tokens`
+    /// temperature; reasoning excluded (the clean-up models don't think at their level) unless the route streams it. `max_tokens`
     /// grows with the text
     /// (`CleanupModel.maxTokens`).
     static func cleanup(route: CleanupRoute, systemPrompt: String, transcript: String) -> OpenRouterChatRequest {
@@ -89,7 +89,7 @@ struct OpenRouterChatRequest: Encodable, Equatable {
 }
 
 /// Where a clean-up request goes and how hard the model thinks. The app sends the clean-up model's
-/// (`CleanupModel.route`): GPT-6 Luna on OpenAI, thinking off.
+/// (`CleanupModel.route`): Gemini 3 Flash on Google AI Studio, thinking at minimal.
 struct CleanupRoute: Equatable, Sendable {
     var model: String
     var provider: OpenRouterChatRequest.Provider

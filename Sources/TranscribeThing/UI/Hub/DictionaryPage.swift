@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The user's dictionary (`UserDictionary`): words, names and terms Gemini 3.8 Flash and GPT-6 Luna get as a hint.
+/// The user's dictionary (`UserDictionary`): words, names and terms Gemini 3.8 Flash and the clean-up model get as a hint.
 /// Most come from fn D over selected text; the field here adds one by hand. Newest first, as chips that wrap.
 struct DictionaryPage: View {
     @Environment(AppSettings.self) private var settings
@@ -18,7 +18,8 @@ struct DictionaryPage: View {
 
     var body: some View {
         HubPage("Dictionary",
-                subtitle: "Words, names and terms you use, and how they’re spelled: a hint for Gemini 3.8 Flash and GPT-6 Luna.") {
+                subtitle: "Words, names and terms you use, and how they’re spelled: a hint for "
+                    + "\(EngineID.geminiFlash.modelName) and \(CleanupModel.default.modelName).") {
             HubGroup("Add") {
                 SettingsGroup {
                     addRow
@@ -26,7 +27,7 @@ struct DictionaryPage: View {
                 tip
             }
             HubGroup(wordsTitle, footer: "Parakeet hears without instructions, so it doesn’t use the dictionary. "
-                     + "Clean-up does: GPT-6 Luna tidies Parakeet’s text with it.") {
+                     + "Clean-up does: \(CleanupModel.default.modelName) tidies Parakeet’s text with it.") {
                 if settings.dictionary.words.count >= Self.searchFrom {
                     HubSearchField(text: $search, prompt: "Search the dictionary", focused: $searchFocused)
                 }

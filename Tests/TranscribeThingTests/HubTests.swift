@@ -393,7 +393,7 @@ import Testing
 
     @Test func theSidebarChipNamesTheMainModel() {
         #expect(EngineSummary.make(choice: .cleanup, parakeet: .parakeet, localState: .ready, keyStatus: .missing)
-            == EngineSummary(name: "Parakeet + Luna", status: "Needs key", tone: .warning))
+            == EngineSummary(name: "Parakeet + 3 Flash", status: "Needs key", tone: .warning))
         #expect(EngineSummary.make(choice: .cleanup, parakeet: .parakeet, localState: .preparing(since: Date()),
                                    keyStatus: .missing).status == "Loading model…", "Parakeet first")
         #expect(EngineSummary.make(choice: .gemini, parakeet: .parakeet, localState: .notInstalled,

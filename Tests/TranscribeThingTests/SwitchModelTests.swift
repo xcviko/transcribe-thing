@@ -75,7 +75,7 @@ import Testing
     /// Parakeet's name).
     @Test func theChipNamesEachModel() {
         #expect(ModelChoice.parakeet.chipName == "Parakeet")
-        #expect(ModelChoice.cleanup.chipName == "GPT-6 Luna")
+        #expect(ModelChoice.cleanup.chipName == "Gemini 3 Flash")
         #expect(ModelChoice.gemini.chipName == "Gemini 3.8 Flash")
     }
 
@@ -205,7 +205,7 @@ import Testing
         #expect(rig.pasted == ["words", "words", "Clean."])
         let entries = rig.h.history.entries.sorted { $0.createdAt < $1.createdAt }
         #expect(entries.map(\.engine) == [.geminiFlash, .parakeet, .parakeet], "history records the engine used")
-        #expect(entries.last?.currentKind == .cleanup(of: .parakeet, by: .gpt6Luna))
+        #expect(entries.last?.currentKind == .cleanup(of: .parakeet, by: .gemini3Flash))
     }
 
     @Test func theOrderOfModelsIsTheOrderOfSteps() {
@@ -690,7 +690,7 @@ import Testing
         #expect(rig.h.pill.sessionModel == .cleanup, "the chip stays while it's transcribed and tidied")
         try await waitUntil { rig.pasted == ["Clean."] && c.machine.activeJobs == 0 }
         #expect(used == [.parakeet] && asked == ["um raw words"])
-        #expect(rig.h.history.entries.first?.currentKind == .cleanup(of: .parakeet, by: .gpt6Luna))
+        #expect(rig.h.history.entries.first?.currentKind == .cleanup(of: .parakeet, by: .gemini3Flash))
         #expect(rig.h.pill.sessionModel == nil)
 
         // The next dictation is on Parakeet alone.

@@ -3,7 +3,7 @@ import Foundation
 /// How long a model thinks before it answers: OpenRouter's `reasoning.effort`. Gemini gets it as `thinkingLevel`
 /// one to one (minimal → minimal … high → high). Raw values go on the wire and are persisted (a history version
 /// records the level it was asked for). Each model thinks at one fixed level (`EngineID.reasoningEffort`,
-/// `CleanupModel.reasoningEffort`); `off` ("none") is for a model that can skip thinking (GPT-6 Luna as Clean-up).
+/// `CleanupModel.reasoningEffort`); `off` ("none") is for a model that can skip thinking (GPT-6 Luna).
 /// Declaration order is from least to most thinking.
 enum ReasoningEffort: String, Codable, CaseIterable, Sendable {
     /// Sent as "none". Not named `none`, which would read as `Optional.none` wherever a level is optional.
@@ -35,18 +35,22 @@ extension EngineID {
 
 /// The models that clean up Parakeet transcripts, text to text: punctuation, filler words, false starts. Not
 /// `EngineID`s: they never hear audio, so they stay out of the main-model list, Switch model and every list of
-/// engines a recording can go to. GPT-6 Luna is the one that runs (`default`); Gemini 3.5 Flash Lite is retired,
-/// kept so History reads and names its clean-ups. Raw values are persisted (history version kinds): never rename
-/// them.
+/// engines a recording can go to. Gemini 3 Flash cleans up dictations (`default`); GPT-6 Luna is still offered in
+/// History; Gemini 3.5 Flash Lite is retired, kept so History reads and names its clean-ups. Raw values are persisted
+/// (history version kinds): never rename them.
 enum CleanupModel: String, CaseIterable, Codable, Sendable {
     /// Gemini 3.5 Flash Lite on Google AI Studio: what Clean-up used first. Retired (`isRetired`).
     case geminiFlashLite
+    /// Gemini 3 Flash on Google AI Studio, thinking at minimal (it thinks not at all there): in the bench on 40 of the
+    /// user's dictations, 1.0 s median for a normal one against Luna's 1.6, with no slow tail (1.15 s at the 90th
+    /// percentile against 2.3), editing about as much as Luna. About five times Luna's cost, still under $0.001.
+    case gemini3Flash
     /// GPT-6 Luna on OpenAI with thinking off: about as fast as Flash Lite (1.1 s median in the bench), about 3.5
-    /// times cheaper, and better at spelling English terms.
+    /// times cheaper, and better at spelling English terms. Dictations' clean-up before Gemini 3 Flash.
     case gpt6Luna
 
-    /// The model every clean-up goes to, from a dictation or from History.
-    static let `default`: CleanupModel = .gpt6Luna
+    /// The model a dictation's clean-up goes to.
+    static let `default`: CleanupModel = .gemini3Flash
 
     /// A model this build no longer runs: Gemini 3.5 Flash Lite. History still reads and names its clean-ups.
     var isRetired: Bool { self == .geminiFlashLite }
@@ -58,6 +62,7 @@ enum CleanupModel: String, CaseIterable, Codable, Sendable {
         switch self {
         case .geminiFlashLite: "google/gemini-3.5-flash-lite"
         case .gpt6Luna: "openai/gpt-6-luna"
+        case .gemini3Flash: "google/gemini-3-flash-preview"
         }
     }
 
@@ -66,6 +71,7 @@ enum CleanupModel: String, CaseIterable, Codable, Sendable {
         switch self {
         case .geminiFlashLite: "Gemini 3.5 Flash Lite"
         case .gpt6Luna: "GPT-6 Luna"
+        case .gemini3Flash: "Gemini 3 Flash"
         }
     }
 
@@ -74,13 +80,23 @@ enum CleanupModel: String, CaseIterable, Codable, Sendable {
         switch self {
         case .geminiFlashLite: "Flash Lite"
         case .gpt6Luna: "GPT-6 Luna"
+        case .gemini3Flash: "Gemini 3 Flash"
+        }
+    }
+
+    /// After Parakeet's name in the sidebar chip: "Parakeet + 3 Flash".
+    var compactName: String {
+        switch self {
+        case .geminiFlashLite: "Flash Lite"
+        case .gpt6Luna: "Luna"
+        case .gemini3Flash: "3 Flash"
         }
     }
 
     /// The provider requests are pinned to, as OpenRouter names it in responses.
     var providerName: String {
         switch self {
-        case .geminiFlashLite: "Google AI Studio"
+        case .geminiFlashLite, .gemini3Flash: "Google AI Studio"
         case .gpt6Luna: "OpenAI"
         }
     }
@@ -88,16 +104,17 @@ enum CleanupModel: String, CaseIterable, Codable, Sendable {
     /// That provider and nothing else, no fallbacks.
     var provider: OpenRouterChatRequest.Provider {
         switch self {
-        case .geminiFlashLite: .googleAIStudio
+        case .geminiFlashLite, .gemini3Flash: .googleAIStudio
         case .gpt6Luna: .openAI
         }
     }
 
-    /// The level the model thinks at, fixed: GPT-6 Luna doesn't think ("none"), plenty for tidying. nil for a
-    /// retired model, which never runs.
+    /// The level the model thinks at, fixed: GPT-6 Luna doesn't think ("none"), plenty for tidying; Gemini 3 Flash
+    /// can't be told not to, and at minimal it doesn't. nil for a retired model, which never runs.
     var reasoningEffort: ReasoningEffort? {
         switch self {
         case .gpt6Luna: .off
+        case .gemini3Flash: .minimal
         case .geminiFlashLite: nil
         }
     }
@@ -176,10 +193,9 @@ enum CleanupModel: String, CaseIterable, Codable, Sendable {
     You may write a spoken number as digits, but never change its value.
     When unsure, keep what was said, not what you expect.
 
-    Remove filler words and false starts. Fix punctuation.
+    Remove filler words and false starts. Fix punctuation, typing only plain keyboard characters: wherever Russian or English punctuation calls for a dash (тире), type a hyphen with a space on each side, as in "Москва - столица". Quote with straight double quotes, as in "привет". Never type a long dash, a medium dash, angle quotes or curly quotes.
     Keep the speaker's words, slang and profanity. Don't censor, paraphrase or translate.
     Fix only obvious recognizer misspellings, keeping the same sounds. Never turn a word into a different word, name, version or number.
     The recognizer spells English words and names by sound in Cyrillic. Write them in English spelling, keeping the same sounds. Leave common Russian loanwords in Cyrillic.
-    Use a hyphen "-" instead of "—" and straight quotes "..." instead of «...».
     """
 }

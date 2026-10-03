@@ -1455,7 +1455,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         }
         // The cycle as it is, the main model first: no separators.
         #expect(menu.items.allSatisfy { !$0.isSeparatorItem })
-        #expect(menu.items.map(\.title) == ["Gemini 3.8 Flash", "Parakeet v3 · Cloud  Needs key", "Parakeet v3 + GPT-6 Luna"])
+        #expect(menu.items.map(\.title) == ["Gemini 3.8 Flash", "Parakeet v3 · Cloud  Needs key", "Parakeet v3 + Gemini 3 Flash"])
         #expect(menu.items.map(\.state) == [.off, .off, .on])
         #expect(menu.items.map(\.isEnabled) == [true, false, true])
         #expect(menu.items[0].attributedTitle == nil, "a suffix only for what can't run")
@@ -1466,7 +1466,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
 
     @Test func theHintNamesTheOneStepOrWhatTheyShare() {
         #expect(PillSwitchHint.label(for: [.gemini]) == "Gemini 3.8 Flash")
-        #expect(PillSwitchHint.label(for: [.cleanup]) == "GPT-6 Luna clean-up")
+        #expect(PillSwitchHint.label(for: [.cleanup]) == "Gemini 3 Flash clean-up")
         #expect(PillSwitchHint.label(for: [.parakeet]) == "Parakeet v3")
         #expect(PillSwitchHint.label(for: [.cleanup, .gemini]) == "Clean-up, Gemini")
         #expect(PillSwitchHint.label(for: [.parakeet, .cleanup]) == "Parakeet, Clean-up")

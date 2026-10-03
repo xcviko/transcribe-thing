@@ -99,7 +99,7 @@ final class AppSettings {
     var modelsRemovingFinalPeriod: Set<ModelChoice> = [] {
         didSet { store.setJSON(ModelChoice.stored(modelsRemovingFinalPeriod), .modelsRemovingFinalPeriod) }
     }
-    /// Words, names and terms Gemini 3.8 Flash and GPT-6 Luna get as a hint, with their spelling (Hub → Dictionary, fn D).
+    /// Words, names and terms Gemini 3.8 Flash and the clean-up model get as a hint, with their spelling (Hub → Dictionary, fn D).
     var dictionary = UserDictionary() { didSet { store.setJSON(dictionary, .dictionary) } }
     /// Days a transcript and its recording stay in History; 0 = Never deleted (`HistoryStore.deleteExpired`).
     var autoDeleteHistoryDays: Int = 0 { didSet { store.set(autoDeleteHistoryDays, .autoDeleteHistoryDays) } }
@@ -233,8 +233,8 @@ final class AppSettings {
         store.remove(.cleanupEnabled)
         // Polish Selection asks both its models at once now (to pick the better answer): the stored choice goes.
         store.remove(.polishSelectionModel)
-        // Every model thinks at its own fixed level now, and GPT-6 Luna is the only clean-up model: the stored
-        // levels and choice have no meaning any more.
+        // Every model thinks at its own fixed level now, and clean-up has one model (`CleanupModel.default`): the
+        // stored levels and choice have no meaning any more.
         for key in [SettingsKey.reasoningEfforts, .cleanupModel, .cleanupReasoningEfforts, .cleanupReasoningEffort] {
             store.remove(key)
         }
@@ -365,8 +365,8 @@ enum SettingsKey: String, CaseIterable {
     /// clean-up is one of the models in `lineup` now.
     /// `reasoningEfforts` (each Gemini model's Thinking level), `cleanupModel` (the clean-up model choice),
     /// `cleanupReasoningEfforts` (each clean-up model's level) and `cleanupReasoningEffort` (Flash Lite's level from
-    /// before that choice) are removed at load: every model thinks at a fixed level, and GPT-6 Luna is the only
-    /// clean-up model.
+    /// before that choice) are removed at load: every model thinks at a fixed level, and dictations have one
+    /// clean-up model (`CleanupModel.default`).
     case reasoningEfforts, cleanupEnabled, cleanupReasoningEffort
     case cleanupModel, cleanupReasoningEfforts
     /// `geminiSystemPrompt` and `cleanupSystemPrompt` are the prompts Models used to edit, removed at load: both are
