@@ -182,6 +182,21 @@ enum HubSnapshots {
                     "Мелания Трамп", "TestFlight", "xcviko", "Liquid Glass", "Тбилиси", "Kubernetes", "Figma",
                 ])
             },
+            // Sorted into groups: Ungrouped first, then each group with its handle, count and trash.
+            hub("hub-dictionary-groups", .dictionary, height: 900) { c in
+                var dictionary = UserDictionary(words: [
+                    "Wispr Flow", "OpenRouter", "Parakeet", "GPT-6 Luna", "Gemini 3.8 Flash", "SwiftUI", "Claude Code",
+                    "Мелания Трамп", "TestFlight", "xcviko", "Liquid Glass", "Тбилиси", "Kubernetes", "Figma",
+                ])
+                let apple = dictionary.addGroup(named: "Apple")
+                let models = dictionary.addGroup(named: "Models")
+                for word in ["OpenRouter", "Parakeet", "GPT-6 Luna", "Gemini 3.8 Flash", "Claude Code"] {
+                    dictionary.move(word, to: models)
+                }
+                for word in ["SwiftUI", "TestFlight", "Liquid Glass"] { dictionary.move(word, to: apple) }
+                dictionary.addGroup(named: "Travel")
+                c.settings.dictionary = dictionary
+            },
             hub("hub-dictionary-empty", .dictionary, height: 560),
             hub("hub-general", .general, height: 1080) { c in
                 c.settings.modelsAddingSpace = [.cleanup, .gemini]

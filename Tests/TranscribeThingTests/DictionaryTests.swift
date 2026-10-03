@@ -153,6 +153,92 @@ import Testing
     }
 }
 
+// MARK: - Groups
+
+/// Groups sort the words for the user only: the prompts get every word alike.
+@Suite struct DictionaryGroupTests {
+    private func sample() -> (UserDictionary, models: UUID, work: UUID) {
+        var dictionary = UserDictionary(words: ["Wispr", "Kubernetes", "GPT-6 Luna", "Figma", "Gemini"])
+        let work = dictionary.addGroup(named: "Work")
+        let models = dictionary.addGroup(named: "  Models\n")
+        dictionary.move("GPT-6 Luna", to: models)
+        dictionary.move("Gemini", to: models)
+        dictionary.move("Kubernetes", to: work)
+        return (dictionary, models, work)
+    }
+
+    @Test func wordsSortIntoGroupsNewestFirst() {
+        let (d, models, work) = sample()
+        #expect(d.groups.map(\.name) == ["Models", "Work"], "a new group comes first, its name one trimmed line")
+        #expect(d.words(in: nil) == ["Figma", "Wispr"])
+        #expect(d.words(in: models) == ["Gemini", "GPT-6 Luna"])
+        #expect(d.words(in: work) == ["Kubernetes"])
+        #expect(d.words == ["Wispr", "Kubernetes", "GPT-6 Luna", "Figma", "Gemini"], "the prompts' list is untouched")
+    }
+
+    @Test func groupsReorderAndRename() {
+        var (d, models, work) = sample()
+        d.moveGroup(models, before: nil)
+        #expect(d.groups.map(\.id) == [work, models])
+        d.moveGroup(models, before: work)
+        #expect(d.groups.map(\.id) == [models, work])
+        d.rename(group: work, to: "Day job")
+        d.rename(group: work, to: "   ")
+        #expect(d.groups.last?.name == "Day job", "an empty name keeps the old one")
+    }
+
+    @Test func aGroupGoesWithItsWordsOrLeavesThem() {
+        var (d, models, work) = sample()
+        var kept = d
+        kept.deleteGroup(models, keepingWords: true)
+        #expect(kept.groups.map(\.id) == [work] && kept.words.count == 5)
+        #expect(kept.words(in: nil) == ["Gemini", "Figma", "GPT-6 Luna", "Wispr"])
+        d.deleteGroup(models, keepingWords: false)
+        #expect(d.words == ["Wispr", "Kubernetes", "Figma"] && d.groups.map(\.id) == [work])
+    }
+
+    /// A respelling stays in its group; a word removed and added again comes back ungrouped.
+    @Test func membershipFollowsTheWord() {
+        var (d, models, _) = sample()
+        d.add("GEMINI")
+        #expect(d.words(in: models) == ["GEMINI", "GPT-6 Luna"])
+        d.remove("GEMINI")
+        d.add("Gemini")
+        #expect(d.group(of: "Gemini") == nil)
+    }
+
+    @Test func undoingAnAddPutsTheOldSpellingBackInItsGroup() {
+        var (d, models, _) = sample()
+        let before = d
+        d.add("GPT-6 LUNA")
+        let after = d
+        d.undoAdding("GPT-6 LUNA", before: before, after: after)
+        #expect(d.words(in: models) == ["Gemini", "GPT-6 Luna"])
+    }
+
+    @Test func theGroupingIsStoredApartAndCleanedOnTheWayBack() throws {
+        let (d, models, _) = sample()
+        var stale = d.grouping
+        stale.membership["not a word"] = models
+        stale.membership["figma"] = UUID()
+        var restored = UserDictionary(words: d.words)
+        restored.grouping = stale
+        #expect(restored == d, "only words still here and groups that exist")
+        let data = try JSONEncoder().encode(d)
+        #expect(try JSONDecoder().decode([String].self, from: data) == d.words, "older builds read the words as ever")
+    }
+
+    @MainActor @Test func groupsPersistInTheSettings() throws {
+        let suite = "transcribe-thing-tests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = AppSettings(defaults: defaults)
+        let (d, _, _) = sample()
+        settings.dictionary = d
+        #expect(AppSettings(defaults: defaults).dictionary == d)
+    }
+}
+
 // MARK: - fn D
 
 @MainActor

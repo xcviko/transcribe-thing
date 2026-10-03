@@ -111,7 +111,12 @@ final class AppSettings {
         didSet { store.setJSON(ModelChoice.stored(modelsRemovingFinalPeriod), .modelsRemovingFinalPeriod) }
     }
     /// Words, names and terms Gemini 3.8 Flash and GPT-6 Luna get as a hint, with their spelling (Hub → Dictionary, fn D).
-    var dictionary = UserDictionary() { didSet { store.setJSON(dictionary, .dictionary) } }
+    var dictionary = UserDictionary() {
+        didSet {
+            store.setJSON(dictionary, .dictionary)
+            if dictionary.grouping != oldValue.grouping { store.setJSON(dictionary.grouping, .dictionaryGroups) }
+        }
+    }
     /// Days a transcript and its recording stay in History; 0 = Never deleted (`HistoryStore.deleteExpired`).
     var autoDeleteHistoryDays: Int = 0 { didSet { store.set(autoDeleteHistoryDays, .autoDeleteHistoryDays) } }
     var shortcuts: ShortcutBindings = .defaults { didSet { store.setJSON(shortcuts, .shortcuts) } }
@@ -274,7 +279,11 @@ final class AppSettings {
         }
         store.remove(.addSpaceAfterText)
         store.remove(.removeFinalPeriod)
-        if let v: UserDictionary = store.json(.dictionary) { dictionary = v }
+        if let v: UserDictionary = store.json(.dictionary) {
+            var loaded = v
+            if let grouping: UserDictionary.Grouping = store.json(.dictionaryGroups) { loaded.grouping = grouping }
+            dictionary = loaded
+        }
         if let v = store.int(.autoDeleteHistoryDays), v >= 0 { autoDeleteHistoryDays = v }
         if let v: ShortcutBindings = store.json(.shortcuts) { shortcuts = v }
         // Polish moved from fn ↩ to fn P (↩ finishes a hands-free dictation): a build that had it on fn ↩ by default
@@ -389,6 +398,8 @@ enum SettingsKey: String, CaseIterable {
     /// once into `modelsAddingSpace` and `modelsRemovingFinalPeriod` and removed at load.
     case addSpaceAfterText, removeFinalPeriod, autoDeleteHistoryDays, lineup, modelColors, keychainKeyMigrated
     case handsFreeModel, modelsAddingSpace, modelsRemovingFinalPeriod, dictionary
+    /// The Dictionary page's groups, apart from the words (`UserDictionary.Grouping`).
+    case dictionaryGroups
     /// Stored under its first name, from when Return also sent what it finished.
     case returnFinishesHandsFree = "returnSendsHandsFree"
     /// Polish's default left fn ↩ for fn P: set once its old default has been moved (`load`).
