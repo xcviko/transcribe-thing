@@ -137,8 +137,8 @@ struct GeneralPage: View {
                             .labelsHidden()
                     }
                     SettingsRow(title: "Measure the time it saves",
-                                subtitle: "Waits for both answers before pasting the first, and writes how much sooner "
-                                    + "it came to the log.",
+                                subtitle: "Lets the other request finish too: a card says how much sooner the first "
+                                    + "answer came, and the average so far.",
                                 systemImage: "stopwatch", iconTint: .inkSecondary) {
                         Toggle("", isOn: $settings.measuresSendingTwice)
                             .toggleStyle(.appSwitch)

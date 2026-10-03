@@ -7,83 +7,135 @@ import os
 enum CloudHedge: Sendable, Equatable {
     /// The first answer is used and the other request is cancelled.
     case race
-    /// Both run to their end, the first answer is used, and the log says how long the second took
-    /// (`hedge.measured`): what sending twice saves. The dictation waits for both, the pill with it.
+    /// The first answer is used at once, and the other request runs to its end in the background: how much sooner the
+    /// first one came is measured (`Measurement`, logged as `hedge.measured`).
     case measure
 
     /// What the log calls the request: "transcription", "cleanup".
     enum Kind: String, Sendable { case transcription, cleanup }
 
-    /// `work` twice at once, the first answer used. A request that fails leaves the other to answer; when both fail,
-    /// the first failure is thrown. `progress` hears the further of the two streams, so the pill's count never goes
-    /// back. Cancelling the caller cancels both.
-    static func run(_ mode: CloudHedge, _ kind: Kind, engine: EngineID,
+    /// Both answers of a measured request, the first one's and the other one's.
+    struct Measurement: Sendable, Equatable {
+        var kind: Kind
+        /// "Gemini 3.8 Flash", "Gemini 3 Flash".
+        var modelName: String
+        var first: TimeInterval
+        /// nil when the other request failed.
+        var second: TimeInterval?
+        var reasoningFirst: Int?
+        var reasoningSecond: Int?
+
+        /// How much sooner the first answer came than the other.
+        var saved: TimeInterval? { second.map { $0 - first } }
+    }
+
+    /// `work` twice at once; the first answer comes back as soon as it's there. A request that fails leaves the other
+    /// to answer; when both fail, the first failure is thrown. `progress` hears the further of the two streams, so the
+    /// pill's count never goes back. Cancelling the caller before an answer cancels both. `measured` hears both answers
+    /// once the other is in too (`.measure` only).
+    static func run(_ mode: CloudHedge, _ kind: Kind, engine: EngineID, modelName: String,
                     progress: (@Sendable (ChatStreamProgress) -> Void)?,
+                    measured: (@Sendable (Measurement) -> Void)? = nil,
                     _ work: @escaping @Sendable (_ progress: (@Sendable (ChatStreamProgress) -> Void)?) async throws
                         -> CloudResult) async throws -> CloudResult {
         let merger = ProgressMerger(progress)
-        typealias Leg = (index: Int, outcome: Result<CloudResult, any Error>, seconds: TimeInterval)
-        return try await withThrowingTaskGroup(of: Leg.self) { group in
-            for index in 0..<2 {
-                let report = merger.reporter(for: index)
-                group.addTask {
-                    let started = ContinuousClock.now
-                    do {
-                        let result = try await work(report)
-                        return (index, .success(result), seconds(started.duration(to: .now)))
-                    } catch {
-                        return (index, .failure(error), seconds(started.duration(to: .now)))
-                    }
-                }
-            }
-            var first: (result: CloudResult, seconds: TimeInterval)?
-            var second: (result: CloudResult?, seconds: TimeInterval)?
-            var failures: [any Error] = []
-            for try await leg in group {
-                switch leg.outcome {
-                case .success(let result) where first == nil:
-                    first = (result, leg.seconds)
-                    if mode == .race { group.cancelAll() }
-                case .success(let result):
-                    second = (result, leg.seconds)
-                case .failure(let error) where first == nil:
-                    failures.append(error)
-                case .failure:
-                    second = (nil, leg.seconds)
-                }
-                if first != nil, mode == .race { break }
-            }
-            try Task.checkCancellation()
-            guard let first else {
-                if let error = failures.first(where: { !($0 is CancellationError) }) ?? failures.first { throw error }
-                throw CancellationError()
-            }
-            log(mode, kind, engine: engine, first: first, second: second)
-            return first.result
+        let race = Race { first, second in
+            guard mode == .measure else { return }
+            let measurement = Measurement(kind: kind, modelName: modelName, first: first.seconds,
+                                          second: second.result == nil ? nil : second.seconds,
+                                          reasoningFirst: first.result.reasoningTokens,
+                                          reasoningSecond: second.result?.reasoningTokens)
+            DiagnosticLog.shared.event(.engine, "hedge.measured", [
+                "kind": kind.rawValue, "engine": engine, "first": measurement.first, "second": measurement.second,
+                "saved": measurement.saved.map { Self.rounded($0) }, "secondFailed": second.result == nil ? true : nil,
+                "reasoningFirst": measurement.reasoningFirst, "reasoningSecond": measurement.reasoningSecond,
+                "costFirst": first.result.costUSD, "costSecond": second.result?.costUSD])
+            measured?(measurement)
         }
-    }
-
-    private static func log(_ mode: CloudHedge, _ kind: Kind, engine: EngineID,
-                            first: (result: CloudResult, seconds: TimeInterval),
-                            second: (result: CloudResult?, seconds: TimeInterval)?) {
-        switch mode {
-        case .race:
+        let tasks = (0..<2).map { index in
+            let report = merger.reporter(for: index)
+            return Task {
+                let started = ContinuousClock.now
+                let outcome: Result<CloudResult, any Error>
+                do {
+                    outcome = .success(try await work(report))
+                } catch {
+                    outcome = .failure(error)
+                }
+                await race.finish(index, outcome, seconds: Self.seconds(started.duration(to: .now)))
+            }
+        }
+        let first = try await withTaskCancellationHandler {
+            try await race.firstAnswer()
+        } onCancel: {
+            tasks.forEach { $0.cancel() }
+        }
+        if mode == .race {
+            for (index, task) in tasks.enumerated() where index != first.index { task.cancel() }
             DiagnosticLog.shared.event(.engine, "hedge.won", [
                 "kind": kind.rawValue, "engine": engine, "seconds": first.seconds,
                 "reasoning": first.result.reasoningTokens])
-        case .measure:
-            DiagnosticLog.shared.event(.engine, "hedge.measured", [
-                "kind": kind.rawValue, "engine": engine, "first": first.seconds, "second": second?.seconds,
-                "saved": second.map { $0.seconds - first.seconds },
-                "secondFailed": second.flatMap { $0.result == nil ? true : nil },
-                "reasoningFirst": first.result.reasoningTokens, "reasoningSecond": second?.result?.reasoningTokens,
-                "costFirst": first.result.costUSD, "costSecond": second?.result?.costUSD])
+        }
+        return first.result
+    }
+
+    /// The two requests' answers as they come: the first success goes to the caller at once, and `onSecond` hears
+    /// it with the other's, once that one is in too.
+    private actor Race {
+        typealias Answer = (index: Int, result: CloudResult, seconds: TimeInterval)
+        typealias Other = (result: CloudResult?, seconds: TimeInterval)
+
+        private var first: Answer?
+        private var failures: [any Error] = []
+        private var finished = 0
+        private var waiter: CheckedContinuation<Answer, any Error>?
+        private let onSecond: @Sendable (Answer, Other) -> Void
+
+        init(onSecond: @escaping @Sendable (Answer, Other) -> Void) {
+            self.onSecond = onSecond
+        }
+
+        func finish(_ index: Int, _ outcome: Result<CloudResult, any Error>, seconds: TimeInterval) {
+            finished += 1
+            switch outcome {
+            case .success(let result) where first == nil:
+                let answer = (index, result, seconds)
+                first = answer
+                waiter?.resume(returning: answer)
+                waiter = nil
+            case .success(let result):
+                if let first { onSecond(first, (result, seconds)) }
+            case .failure(let error):
+                if let first {
+                    if !(error is CancellationError) { onSecond(first, (nil, seconds)) }
+                } else {
+                    failures.append(error)
+                }
+            }
+            if first == nil, finished == 2 {
+                waiter?.resume(throwing: firstFailure)
+                waiter = nil
+            }
+        }
+
+        func firstAnswer() async throws -> Answer {
+            if let first { return first }
+            if finished == 2 { throw firstFailure }
+            return try await withCheckedThrowingContinuation { waiter = $0 }
+        }
+
+        private var firstFailure: any Error {
+            failures.first { !($0 is CancellationError) } ?? failures.first ?? CancellationError()
         }
     }
 
     private static func seconds(_ duration: Duration) -> TimeInterval {
         let (whole, attoseconds) = duration.components
-        return (Double(whole) + Double(attoseconds) / 1e18).rounded(toPlaces: 3)
+        return rounded(Double(whole) + Double(attoseconds) / 1e18)
+    }
+
+    private static func rounded(_ seconds: TimeInterval) -> TimeInterval {
+        (seconds * 1000).rounded() / 1000
     }
 
     /// The two streams' progress as one: each count the further of the two.
@@ -107,12 +159,5 @@ enum CloudHedge: Sendable, Equatable {
                 forward(merged)
             }
         }
-    }
-}
-
-private extension Double {
-    func rounded(toPlaces places: Int) -> Double {
-        let scale = pow(10, Double(places))
-        return (self * scale).rounded() / scale
     }
 }

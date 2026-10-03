@@ -265,6 +265,7 @@ final class DictationController {
             self?.modelFailed(engine, error)
         }
         history.onRemove = { [weak self] ids in self?.entriesRemoved(ids) }
+        transcription.hedgeMeasured = { [weak self] measurement in self?.hedgeMeasured(measurement) }
         observeMicrophonePermission()
         observeReturnFinishes()
         observeMenus()
@@ -2558,6 +2559,47 @@ final class DictationController {
         if hotkeys.cardClose != takesEsc { hotkeys.cardClose = takesEsc }
         let keys = CardKeys(returnPastes: count == 1 && !copied && !machine.isRecording, escCloses: !machine.isBusy)
         if toasts.cardKeys != keys { toasts.cardKeys = keys }
+    }
+
+    // MARK: - Asking twice
+
+    /// How much sooner the first of two answers came, over this launch: the count and the seconds, per kind of request.
+    @ObservationIgnored private var hedgeTally: [CloudHedge.Kind: (count: Int, saved: TimeInterval)] = [:]
+
+    /// A request sent twice to measure (General → Experimental) has both its answers: a card says how much sooner the
+    /// first one came, and what that averages over this launch.
+    private func hedgeMeasured(_ measurement: CloudHedge.Measurement) {
+        guard settings.cloudHedge == .measure else { return }
+        toasts.post(Self.hedgeCard(measurement, tally: tally(adding: measurement)))
+    }
+
+    private func tally(adding measurement: CloudHedge.Measurement) -> (count: Int, saved: TimeInterval) {
+        guard let saved = measurement.saved else { return hedgeTally[measurement.kind] ?? (0, 0) }
+        var tally = hedgeTally[measurement.kind] ?? (0, 0)
+        tally.count += 1
+        tally.saved += saved
+        hedgeTally[measurement.kind] = tally
+        return tally
+    }
+
+    nonisolated static let hedgeCardKey = "hedge.measured"
+
+    /// "1.8 s sooner by asking twice": both answers' times, and the average over this launch.
+    nonisolated static func hedgeCard(_ measurement: CloudHedge.Measurement,
+                                      tally: (count: Int, saved: TimeInterval)) -> Notice {
+        func seconds(_ value: TimeInterval) -> String { String(format: "%.1f s", value) }
+        let what = measurement.kind == .cleanup ? "Clean-up by \(measurement.modelName)" : measurement.modelName
+        guard let second = measurement.second, let saved = measurement.saved else {
+            return Notice(dedupeKey: hedgeCardKey, style: .info, symbol: "stopwatch",
+                          title: "Asked twice · the other request failed",
+                          body: "\(what) answered in \(seconds(measurement.first)).", lifetime: .seconds(6))
+        }
+        var body = "\(what) answered in \(seconds(measurement.first)) and \(seconds(second))."
+        if tally.count > 1 {
+            body += " This launch: \(seconds(tally.saved / Double(tally.count))) sooner on average over \(tally.count)."
+        }
+        return Notice(dedupeKey: hedgeCardKey, style: .info, symbol: "stopwatch",
+                      title: "\(seconds(saved)) sooner by asking twice", body: body, lifetime: .seconds(6))
     }
 
     // MARK: - Dictionary

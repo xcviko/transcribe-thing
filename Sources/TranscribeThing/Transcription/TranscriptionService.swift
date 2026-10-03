@@ -61,12 +61,20 @@ final class TranscriptionService {
     private let account: OpenRouterAccount
     private let client: OpenRouterClient
     private let providerLookupDelay: Duration
+    /// `hedgeMeasured`, from any thread.
+    private var measuredReporter: @Sendable (CloudHedge.Measurement) -> Void {
+        let report = hedgeMeasured
+        return { measurement in Task { @MainActor in report(measurement) } }
+    }
     /// The format Parakeet's segments go in: FLAC, the WAV's samples in a little over half its bytes, until OpenRouter
     /// refuses it; WAV from then on, for as long as the app runs.
     private(set) var speechFormat: UploadFormat = .flac
     /// The user's dictionary (`UserDictionary`), at the moment each request goes: after Gemini's prompt and the
     /// clean-up's, whichever prompt they get. The app reads it from its settings; the CLI sends none.
     var vocabulary: @MainActor () -> [String] = { [] }
+    /// A request sent twice to measure (`CloudHedge.measure`) has both its answers: the app says how much sooner the
+    /// first one came.
+    var hedgeMeasured: @MainActor (CloudHedge.Measurement) -> Void = { _ in }
 
     init(models: ModelStore, account: OpenRouterAccount, client: OpenRouterClient,
          providerLookupDelay: Duration = .milliseconds(1500)) {
@@ -194,7 +202,8 @@ final class TranscriptionService {
                                         progress: progress)
         }
         var result = if let hedge {
-            try await CloudHedge.run(hedge, .transcription, engine: engine, progress: progress, send)
+            try await CloudHedge.run(hedge, .transcription, engine: engine, modelName: engine.modelName,
+                                     progress: progress, measured: measuredReporter, send)
         } else {
             try await send(progress)
         }
@@ -301,9 +310,11 @@ final class TranscriptionService {
                     report?(streamed)
                 }
             }
+            let measured = measuredReporter, modelName = model.modelName
             let cloud = try await Self.untilAnswerStarts(limit, answer, source: source) {
                 if let hedge {
-                    try await CloudHedge.run(hedge, .cleanup, engine: source, progress: progress, send)
+                    try await CloudHedge.run(hedge, .cleanup, engine: source, modelName: modelName, progress: progress,
+                                             measured: measured, send)
                 } else {
                     try await send(progress)
                 }

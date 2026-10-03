@@ -34,15 +34,16 @@ import Testing
 
     @Test func theFirstAnswerWinsAndTheOtherIsCancelled() async throws {
         let calls = Calls()
-        let result = try await CloudHedge.run(.race, .transcription, engine: .geminiFlash, progress: nil,
+        let result = try await CloudHedge.run(.race, .transcription, engine: .geminiFlash, modelName: "Gemini", progress: nil,
                                               work(calls, delays: [0.6, 0.02], texts: ["slow", "fast"]))
         #expect(result.text == "fast")
-        #expect(calls.count == 2 && calls.cancelledCalls == [0], "the slow one is stopped")
+        try await waitUntil { calls.cancelledCalls == [0] }
+        #expect(calls.count == 2, "the slow one is stopped")
     }
 
     @Test func aFailedRequestLeavesTheOtherToAnswer() async throws {
         let calls = Calls()
-        let result = try await CloudHedge.run(.race, .cleanup, engine: .parakeet, progress: nil,
+        let result = try await CloudHedge.run(.race, .cleanup, engine: .parakeet, modelName: "Clean-up", progress: nil,
                                               work(calls, delays: [0.01, 0.1], texts: ["x", "answer"],
                                                    failures: [0: .openRouterProviderUnavailable("")]))
         #expect(result.text == "answer")
@@ -51,28 +52,48 @@ import Testing
     @Test func whenBothFailTheFirstFailureIsThrown() async {
         let calls = Calls()
         await #expect(throws: AppError.timeout(.parakeet)) {
-            try await CloudHedge.run(.race, .cleanup, engine: .parakeet, progress: nil,
+            try await CloudHedge.run(.race, .cleanup, engine: .parakeet, modelName: "Clean-up", progress: nil,
                                      work(calls, delays: [0.01, 0.05],
                                           failures: [0: .timeout(.parakeet), 1: .openRouterTruncated("")]))
         }
     }
 
-    /// Measuring lets the second one run to its end, and still uses the first answer.
-    @Test func measuringWaitsForBoth() async throws {
+    /// Measuring pastes the first answer at once and lets the other run to its end, then says how much sooner the
+    /// first one came.
+    @Test func measuringAnswersAtOnceAndMeasuresTheOther() async throws {
         let calls = Calls()
+        let measured = OSAllocatedUnfairLock<CloudHedge.Measurement?>(initialState: nil)
         let started = ContinuousClock.now
-        let result = try await CloudHedge.run(.measure, .transcription, engine: .geminiFlash, progress: nil,
-                                              work(calls, delays: [0.02, 0.3], texts: ["fast", "slow"]))
+        let result = try await CloudHedge.run(.measure, .transcription, engine: .geminiFlash, modelName: "Gemini",
+                                              progress: nil, measured: { m in measured.withLock { $0 = m } },
+                                              work(calls, delays: [0.02, 1.0], texts: ["fast", "slow"]))
         #expect(result.text == "fast")
-        #expect(calls.cancelledCalls.isEmpty)
-        #expect(started.duration(to: .now) >= .milliseconds(290))
+        #expect(started.duration(to: .now) < .milliseconds(700), "the first answer doesn't wait for the other")
+        try await waitUntil { measured.withLock { $0 } != nil }
+        let m = try #require(measured.withLock { $0 })
+        #expect(calls.cancelledCalls.isEmpty && m.kind == .transcription && m.modelName == "Gemini")
+        #expect(m.first < 0.7 && (m.second ?? 0) >= 0.99 && (m.saved ?? 0) > 0.3)
+    }
+
+    @Test func theCardSaysHowMuchSoonerAndTheAverage() {
+        let m = CloudHedge.Measurement(kind: .cleanup, modelName: "Gemini 3 Flash", first: 0.9, second: 2.4)
+        let one = DictationController.hedgeCard(m, tally: (1, 1.5))
+        #expect(one.title == "1.5 s sooner by asking twice")
+        #expect(one.body == "Clean-up by Gemini 3 Flash answered in 0.9 s and 2.4 s.")
+        let more = DictationController.hedgeCard(m, tally: (4, 4.0))
+        #expect(more.body?.hasSuffix("This launch: 1.0 s sooner on average over 4.") == true)
+        let failed = DictationController.hedgeCard(CloudHedge.Measurement(kind: .transcription,
+                                                                          modelName: "Gemini 3.8 Flash", first: 3.1),
+                                                   tally: (0, 0))
+        #expect(failed.title == "Asked twice · the other request failed")
+        #expect(failed.body == "Gemini 3.8 Flash answered in 3.1 s.")
     }
 
     /// The pill hears the further of the two streams: its count never goes back when the other one reports.
     @Test func progressIsTheFurtherOfTheTwo() async throws {
         let heard = OSAllocatedUnfairLock(initialState: [ChatStreamProgress]())
         let calls = Calls()
-        _ = try await CloudHedge.run(.race, .transcription, engine: .geminiFlash,
+        _ = try await CloudHedge.run(.race, .transcription, engine: .geminiFlash, modelName: "Gemini",
                                      progress: { p in heard.withLock { $0.append(p) } }) { report in
             let index = calls.next()
             if index == 0 {
