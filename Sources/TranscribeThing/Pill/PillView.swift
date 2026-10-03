@@ -3,40 +3,51 @@ import SwiftUI
 
 // MARK: - Tokens
 
-/// Pill geometry (wispr-ux §1.3–1.4). Everything in points.
+/// Pill geometry (wispr-ux §1.3–1.4, made smaller after Wispr Flow's). Everything in points.
 enum PillMetrics {
-    static let restSize = CGSize(width: 40, height: 10)
-    static let peekSize = CGSize(width: 76, height: 24)
-    static let listeningSize = CGSize(width: 104, height: 32)
+    static let restSize = CGSize(width: 36, height: 8)
+    static let peekSize = CGSize(width: 64, height: 20)
+    static let listeningSize = CGSize(width: barFieldWidth + 2 * listeningPadding, height: 26)
+    /// Between the bars and the push-to-talk capsule's ends.
+    static let listeningPadding: CGFloat = 14
     /// Hands-free always carries the timer, so hovering never resizes it (nor does the timer reaching 10:00).
-    static let lockedSize = CGSize(width: 198, height: 36)
+    static let lockedSize = CGSize(width: (2 * (buttonInset + buttonSize) + barFieldWidth + shortTimerWidth
+                                           + 3 * targetLockedGap).rounded(.up),
+                                   height: maxHeight)
     /// Past an hour the timer reads "1:02:03", wider than its column: the capsule widens once, keeping its even gaps.
     static let lockedHoursSize = CGSize(width: 2 * (buttonInset + buttonSize) + barFieldWidth + hoursTimerWidth
                                             + 3 * lockedGap,
-                                        height: 36)
-    static let errorSize = CGSize(width: 104, height: 32)
-    /// Tallest state; toasts sit 10 pt above it so they never move while the pill changes shape.
-    static let maxHeight: CGFloat = 36
+                                        height: maxHeight)
+    static let errorSize = listeningSize
+    /// Tallest state (hands-free); toasts sit 10 pt above it so they never move while the pill changes shape.
+    static let maxHeight: CGFloat = 28
 
-    static let barCount = 13
-    static let barWidth: CGFloat = 3
-    static let barGap: CGFloat = 2.5
+    static let barCount = 11
+    static let barWidth: CGFloat = 2
+    static let barGap: CGFloat = 2
     static let barFieldWidth: CGFloat = CGFloat(barCount) * barWidth + CGFloat(barCount - 1) * barGap
-    static let barMinHeight: CGFloat = 3
-    static let barMaxHeight: CGFloat = 20
+    static let barMinHeight: CGFloat = 2
+    static let barMaxHeight: CGFloat = 14
 
-    static let buttonSize: CGFloat = 22
-    static let buttonInset: CGFloat = 7
+    static let buttonSize: CGFloat = 18
+    static let buttonInset: CGFloat = 5
+    static let timerFontSize: CGFloat = 10
     /// Monospaced digits, so the timer never jitters as it counts.
-    static let timerFont = Font.system(size: 11, weight: .medium, design: .rounded).monospacedDigit()
+    static let timerFont = Font.system(size: timerFontSize, weight: .medium, design: .rounded).monospacedDigit()
     /// Fits "59:59" in `timerFont`.
-    static let timerWidth: CGFloat = 33
-    /// Fits "1:02:03" in `timerFont` (measured): the timer's column past an hour.
-    static let hoursTimerWidth: CGFloat = 44
+    static let timerWidth = timerTextWidth("59:59")
+    /// Fits "1:02:03" in `timerFont`: the timer's column past an hour.
+    static let hoursTimerWidth = timerTextWidth("1:02:03")
     /// "9:59", the timer's width for most recordings.
-    static let shortTimerWidth: CGFloat = 26
-    /// Hands-free spaces X, the bars, the timer and Stop by one even gap, 15 pt. That holds for a "9:59"
-    /// timer, which sits centered in the timer’s column; "59:59" fills the column, taking 3.5 pt from each side.
+    static let shortTimerWidth = timerTextWidth("9:59")
+    private static func timerTextWidth(_ text: String) -> CGFloat {
+        textWidth(text, size: timerFontSize, weight: .medium, rounded: true, monospacedDigits: true)
+    }
+    /// About the gap between X, the bars, the timer and the finish button; the capsule rounds its width up to whole
+    /// points, and `lockedGap` is what that leaves.
+    private static let targetLockedGap: CGFloat = 10
+    /// Hands-free spaces X, the bars, the timer and the finish button by one even gap. That holds for a "9:59"
+    /// timer, which sits centered in the timer’s column; "59:59" fills the column, taking a little from each side.
     static let lockedGap: CGFloat = (lockedSize.width - 2 * (buttonInset + buttonSize) - barFieldWidth - shortTimerWidth) / 3
     /// Space between the timer's column and Stop. Past an hour it is `lockedGap`: the text fills its column.
     static let timerTrailing: CGFloat = lockedGap - (timerWidth - shortTimerWidth) / 2
@@ -46,7 +57,7 @@ enum PillMetrics {
         let width = hours ? lockedHoursSize.width : lockedSize.width
         return buttonInset + buttonSize + lockedGap + barFieldWidth / 2 - width / 2
     }
-    static let tooltipHeight: CGFloat = 28
+    static let tooltipHeight: CGFloat = 24
     /// Invisible margin around the pill that counts as hovering it (and clicking it).
     static let hoverMargin: CGFloat = 12
     /// Polish's drop beside the pill: its gap from the capsule's right end, and its diameter to the capsule's height.
@@ -54,16 +65,16 @@ enum PillMetrics {
     static let polishDropRatio: CGFloat = 0.86
     /// The model chip (and the Switch model hint) floats this far above the pill's top edge.
     static let chipGap: CGFloat = 6
-    static let chipHeight: CGFloat = 22
+    static let chipHeight: CGFloat = 20
     /// From the pill's top edge to the chip's.
     static let chipLift: CGFloat = chipGap + chipHeight
 
-    static let captionFontSize: CGFloat = 12
+    static let captionFontSize: CGFloat = 11
     /// Words inside the capsule: the timer's rounded face, a size up so they read at a glance.
     static let captionFont = Font.system(size: captionFontSize, weight: .medium, design: .rounded)
     /// Between a sentence and the capsule's ends: the push-to-talk pill's own margin around its bars, less the
     /// capsule's rounding the text doesn't need.
-    static let captionPadding: CGFloat = 15
+    static let captionPadding: CGFloat = 12
     /// A dictation with no words says so inside the capsule, in the caption face.
     static let noSpeechText = "No speech detected"
 
@@ -76,16 +87,16 @@ enum PillMetrics {
 
     /// The token count's number: the caption's rounded face, semibold, with digits of one width so it never jitters
     /// as it counts.
-    static let counterNumberFontSize: CGFloat = 12
+    static let counterNumberFontSize: CGFloat = 11
     static let counterNumberFont = Font.system(size: counterNumberFontSize, weight: .semibold, design: .rounded)
         .monospacedDigit()
     /// Between the counter and the capsule's ends.
-    static let counterPadding: CGFloat = 14
+    static let counterPadding: CGFloat = 12
     /// Between the number and its word.
     static let counterWordGap: CGFloat = 4
     /// A polished count starts with the wand, this wide and this far from the number.
-    static let counterWandSize: CGFloat = 12
-    static let counterWandGap: CGFloat = 6
+    static let counterWandSize: CGFloat = 11
+    static let counterWandGap: CGFloat = 5
     /// "~88.8k thinking", the widest the count says (a request's `max_tokens` keeps counts under 100k).
     private static let widestCount = textWidth("~88.8k", size: counterNumberFontSize, weight: .semibold,
                                                rounded: true, monospacedDigits: true)
@@ -113,13 +124,16 @@ enum PillMetrics {
     }
 }
 
-/// The pill is always dark, in both appearances; these colors never adapt.
+/// The pill is always black and white, in both appearances; these colors never adapt. The only color on it is the
+/// model's ring.
 enum PillPalette {
     static let fill = Color(nsColor: Palette.pillFill)
     static let bar = Color.white.opacity(0.96)
-    static let stop = Color(nsColor: .hex(0xFF453A))
-    static let error = Color(nsColor: .hex(0xFF6B5E))
-    static let tooltipFill = Color(nsColor: .hex(0x151517, alpha: 0.96))
+    /// The pill's flat edge, and the edge of everything that grows out of it (toasts, chips, tooltips).
+    static let hairline = Color.white.opacity(0.17)
+    /// Hands-free's finish button: a white disc with a black check.
+    static let finish = Color(nsColor: .hex(0xF4F4F2))
+    static let tooltipFill = fill
 
     /// A model color on the pill; graphite is the plain pill. The new colors sit at one depth (OKLCH L 0.645 for the
     /// ring, 0.79 for the marks), so each reads on the fill at least as well as violet does; orange and violet are
@@ -260,6 +274,8 @@ struct PillView: View {
 
     let model: PillModel
     var context: Context = .standalone
+    /// A toast took the resting pill's place (`PillCanvasView`): it steps aside until the toasts go.
+    var covered = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// What is still leaving: the last pill while it exits, the last content while it shrinks into the rest shape.
@@ -271,9 +287,10 @@ struct PillView: View {
         self.model = model
     }
 
-    init(model: PillModel, context: Context) {
+    init(model: PillModel, context: Context, covered: Bool = false) {
         self.model = model
         self.context = context
+        self.covered = covered
     }
 
     private var isPanel: Bool { if case .panel = context { true } else { false } }
@@ -283,7 +300,7 @@ struct PillView: View {
     var visual: PillVisual {
         let phase = model.visiblePhase
         if isPanel {
-            guard model.isPresented else { return .hidden }
+            guard model.isPresented, !covered else { return .hidden }
             if phase.isIdle {
                 if model.isHelloActive { return .hello }
                 return model.isHovering ? .peek : .rest
@@ -614,8 +631,7 @@ struct PillFace: View {
         let size = self.size ?? capsule.size
         let accent = self.accent
         // An overlay, so content larger than the capsule (shrinking into it) never sizes the pill.
-        PillCapsule(quiet: capsule.isQuiet, glow: capsule == .error ? PillPalette.error : nil,
-                    accent: capsule.content == .empty ? nil : accent)
+        PillCapsule(quiet: capsule.isQuiet, accent: capsule.content == .empty ? nil : accent)
             .frame(width: size.width, height: size.height)
             .background(alignment: .trailing) {
                 // Behind the capsule, from its right end: the drop slides out from under the pill, which keeps its
@@ -713,12 +729,10 @@ struct PillFace: View {
 
 // MARK: - Capsule
 
-/// Near-black capsule with a lit hairline (white 24% → 7%) and a two-layer shadow, so it reads on white
-/// documents and on dark desktops alike.
+/// Black capsule with a flat hairline and a soft shadow, so it reads on white documents and on dark desktops alike.
 struct PillCapsule: View {
     var quiet = false
-    var glow: Color?
-    /// The model's ring (`PillPalette.accent`), with a faint halo of its color.
+    /// The model's ring (`PillPalette.accent`) in place of the hairline.
     var accent: PillAccent?
 
     var body: some View {
@@ -726,38 +740,17 @@ struct PillCapsule: View {
         shape
             .fill(PillPalette.fill)
             .overlay {
-                if let glow {
-                    shape.fill(RadialGradient(colors: [glow.opacity(0.2), glow.opacity(0)],
-                                              center: .center, startRadius: 0, endRadius: 30))
-                }
-            }
-            .overlay {
-                // Soft top sheen: a hint of volume without turning into glass.
-                shape.fill(LinearGradient(colors: [.white.opacity(0.08), .white.opacity(0)],
-                                          startPoint: .top, endPoint: .center))
-            }
-            .overlay {
-                // The resting shapes are small: a brighter top edge keeps them from sinking into dark content.
-                shape.ring(0.5)
-                    .fill(LinearGradient(colors: [.white.opacity(quiet ? 0.30 : 0.24), .white.opacity(0.07)],
-                                         startPoint: .top, endPoint: .bottom), style: FillStyle(eoFill: true))
-            }
-            .overlay {
-                // Faint outer edge: lost on light documents, it outlines the dark capsule on dark editors.
-                shape.inset(by: -0.5).ring(0.5)
-                    .fill(.white.opacity(0.11), style: FillStyle(eoFill: true))
+                shape.ring(1)
+                    .fill(PillPalette.hairline, style: FillStyle(eoFill: true))
             }
             .overlay {
                 if let accent {
-                    shape.ring(1.25)
-                        .fill(LinearGradient(colors: [accent.mark.opacity(0.95), accent.ring.opacity(0.9)],
-                                             startPoint: .top, endPoint: .bottom), style: FillStyle(eoFill: true))
-                        .shadow(color: accent.ring.opacity(0.55), radius: 4)
+                    shape.ring(1)
+                        .fill(accent.ring, style: FillStyle(eoFill: true))
                         .transition(.opacity)
                 }
             }
-            .shadow(color: .black.opacity(quiet ? 0.11 : 0.22), radius: 1, x: 0, y: 1)
-            .shadow(color: .black.opacity(quiet ? 0.14 : 0.28), radius: 9, x: 0, y: 6)
+            .shadow(color: .black.opacity(quiet ? 0.12 : 0.22), radius: quiet ? 3 : 6, x: 0, y: quiet ? 1 : 3)
     }
 }
 
@@ -814,16 +807,11 @@ private struct PillPolishDropShape: View, Animatable {
         let geometry = Geometry(progress: progress, height: height)
         Circle()
             .fill(PillPalette.fill)
-            .overlay {
-                Circle().strokeBorder(LinearGradient(colors: [.white.opacity(0.24), .white.opacity(0.07)],
-                                                     startPoint: .top, endPoint: .bottom), lineWidth: 0.5)
-            }
+            .overlay { Circle().strokeBorder(PillPalette.hairline, lineWidth: 1) }
             .overlay {
                 // The capsule's ring.
                 if let accent {
-                    Circle().strokeBorder(LinearGradient(colors: [accent.mark.opacity(0.95), accent.ring.opacity(0.9)],
-                                                         startPoint: .top, endPoint: .bottom), lineWidth: 1.25)
-                        .shadow(color: accent.ring.opacity(0.55), radius: 4)
+                    Circle().strokeBorder(accent.ring, lineWidth: 1)
                 }
             }
             .overlay {
@@ -833,8 +821,7 @@ private struct PillPolishDropShape: View, Animatable {
             }
             .frame(width: geometry.diameter, height: geometry.diameter)
             .position(x: geometry.centerX, y: height / 2)
-            .shadow(color: .black.opacity(0.22 * geometry.out), radius: 1, x: 0, y: 1)
-            .shadow(color: .black.opacity(0.28 * geometry.out), radius: 9, x: 0, y: 6)
+            .shadow(color: .black.opacity(0.22 * geometry.out), radius: 6, x: 0, y: 3)
             .frame(width: 1, height: height, alignment: .leading)
             // The capsule's fill lets a little through: what is still under it stays unseen.
             .mask { OutsideCapsuleEnd() }
@@ -878,11 +865,11 @@ private struct PeekDots: View {
     @State private var appeared = false
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 3.5) {
             ForEach(0..<9, id: \.self) { i in
                 Circle()
                     .fill(.white.opacity(0.35))
-                    .frame(width: 3, height: 3)
+                    .frame(width: 2.5, height: 2.5)
                     .opacity(appeared || isStatic || reduceMotion ? 1 : 0)
                     .animation(.easeOut(duration: 0.16).delay(Double(i) * 0.02), value: appeared)
             }
@@ -921,9 +908,9 @@ private struct HelloRipple: View {
         .accessibilityHidden(true)
     }
 
-    /// Center weighting: env(i) = 0.35 + 0.65 · cos²(π(i − 6)/14).
+    /// Center weighting: env(i) = 0.35 + 0.65 · cos²(π(i − middle)/(count + 1)).
     private static func envelope(_ i: Int) -> CGFloat {
-        let c = cos(Double.pi * Double(i - PillMetrics.barCount / 2) / 14)
+        let c = cos(Double.pi * Double(i - PillMetrics.barCount / 2) / Double(PillMetrics.barCount + 1))
         return CGFloat(0.35 + 0.65 * c * c)
     }
 
@@ -1076,11 +1063,11 @@ private struct ErrorGlyph: View {
     var body: some View {
         ZStack {
             Circle()
-                .fill(PillPalette.error.opacity(0.2))
-                .frame(width: 20, height: 20)
+                .fill(.white.opacity(0.16))
+                .frame(width: 17, height: 17)
             Image(systemName: "exclamationmark")
-                .font(.system(size: 11, weight: .heavy))
-                .foregroundStyle(PillPalette.error)
+                .font(.system(size: 9.5, weight: .heavy))
+                .foregroundStyle(.white)
         }
     }
 }
@@ -1136,8 +1123,8 @@ private struct RecordingContent: View {
     }
 }
 
-/// X (cancel) and red Stop of the hands-free pill. Hover comes from the controller, which tracks the pointer
-/// for the never-key panel.
+/// X (cancel) and the white finish check of the hands-free pill. Hover comes from the controller, which tracks the
+/// pointer for the never-key panel.
 private struct PillControlButton: View {
     let control: PillControl
     let model: PillModel
@@ -1152,20 +1139,16 @@ private struct PillControlButton: View {
             ZStack {
                 switch control {
                 case .cancel:
-                    Circle().fill(.white.opacity(hovered ? 0.2 : 0.12))
+                    Circle().fill(.white.opacity(hovered ? 0.34 : 0.24))
                     Image(systemName: "xmark")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.white.opacity(hovered ? 0.95 : 0.8))
+                        .font(.system(size: 7.5, weight: .bold))
+                        .foregroundStyle(.white)
                 case .stop:
-                    Circle().fill(PillPalette.stop)
-                        .overlay {
-                            Circle().fill(LinearGradient(colors: [.white.opacity(0.18), .white.opacity(0)],
-                                                         startPoint: .top, endPoint: .center))
-                        }
-                        .brightness(hovered ? 0.08 : 0)
-                    RoundedRectangle(cornerRadius: 2, style: .continuous)
-                        .fill(.white)
-                        .frame(width: 8, height: 8)
+                    Circle().fill(PillPalette.finish)
+                        .brightness(hovered ? 0.04 : 0)
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.black)
                 }
             }
             .frame(width: PillMetrics.buttonSize, height: PillMetrics.buttonSize)
@@ -1319,9 +1302,9 @@ struct PillChipRoll: View, Animatable {
             Text(choice.chipName)
                 .foregroundStyle(.white.opacity(0.92))
         }
-        .font(.system(size: 11, weight: .semibold))
+        .font(.system(size: 10.5, weight: .semibold))
         .lineLimit(1)
-        .padding(.horizontal, 9)
+        .padding(.horizontal, 8)
         .frame(height: PillMetrics.chipHeight)
         .fixedSize()
     }
@@ -1339,8 +1322,8 @@ struct PillChipRoll: View, Animatable {
     }
 }
 
-/// The chip's capsule: the pill's fill, its lit hairline, and the model's ring. `nextAccent` at `blend` (0…1) is the
-/// ring a roll passes on to: the two crossfade.
+/// The chip's capsule: the pill's fill, its hairline, and the model's ring. `nextAccent` at `blend` (0…1) is the ring a
+/// roll passes on to: the two crossfade.
 struct PillChipChrome: View {
     var accent: PillAccent?
     var nextAccent: PillAccent?
@@ -1350,28 +1333,21 @@ struct PillChipChrome: View {
         let shape = Capsule(style: .continuous)
         shape.fill(PillPalette.fill)
             .overlay {
-                shape.ring(0.5)
-                    .fill(LinearGradient(colors: [.white.opacity(0.24), .white.opacity(0.07)],
-                                         startPoint: .top, endPoint: .bottom), style: FillStyle(eoFill: true))
+                shape.ring(1).fill(PillPalette.hairline, style: FillStyle(eoFill: true))
             }
             .overlay {
                 if let accent {
                     shape.ring(1)
-                        .fill(accent.ring.opacity(0.85 * Double(1 - blend)), style: FillStyle(eoFill: true))
+                        .fill(accent.ring.opacity(Double(1 - blend)), style: FillStyle(eoFill: true))
                 }
             }
             .overlay {
                 if let nextAccent {
                     shape.ring(1)
-                        .fill(nextAccent.ring.opacity(0.85 * Double(blend)), style: FillStyle(eoFill: true))
+                        .fill(nextAccent.ring.opacity(Double(blend)), style: FillStyle(eoFill: true))
                 }
             }
-            .overlay {
-                shape.inset(by: -0.5).ring(0.5)
-                    .fill(.white.opacity(0.11), style: FillStyle(eoFill: true))
-            }
-            .shadow(color: .black.opacity(0.2), radius: 1, x: 0, y: 1)
-            .shadow(color: .black.opacity(0.24), radius: 6, x: 0, y: 3)
+            .shadow(color: .black.opacity(0.2), radius: 5, x: 0, y: 2)
             .environment(\.colorScheme, .dark)
     }
 }
@@ -1384,9 +1360,9 @@ struct PillChipCapsule<Content: View>: View {
 
     var body: some View {
         HStack(spacing: 4) { content }
-            .font(.system(size: 11, weight: .semibold))
+            .font(.system(size: 10.5, weight: .semibold))
             .lineLimit(1)
-            .padding(.horizontal, 9)
+            .padding(.horizontal, 8)
             .frame(height: PillMetrics.chipHeight)
             .background { PillChipChrome(accent: accent) }
             .environment(\.colorScheme, .dark)
@@ -1434,7 +1410,7 @@ private struct PillTimerLabel: View {
             let elapsed = max(0, context.date.timeIntervalSince(start))
             Text(Fmt.duration(elapsed.rounded(.down)))
                 .font(PillMetrics.timerFont)
-                .foregroundStyle(.white.opacity(0.7))
+                .foregroundStyle(.white.opacity(0.55))
                 .lineLimit(1)
                 .contentTransition(.numericText())
         }
@@ -1443,27 +1419,21 @@ private struct PillTimerLabel: View {
 
 // MARK: - Tooltips
 
-/// Dark tooltip capsule used above the pill.
+/// Black tooltip capsule used above the pill, with the pill's hairline.
 struct PillTooltipBubble<Content: View>: View {
     @ViewBuilder var content: Content
 
     var body: some View {
         let shape = Capsule(style: .continuous)
         HStack(spacing: 5) { content }
-            .font(.system(size: 12, weight: .medium))
+            .font(.system(size: 11, weight: .medium))
             .foregroundStyle(.white.opacity(0.92))
-            .padding(.leading, 11)
-            .padding(.trailing, 11)
+            .padding(.horizontal, 10)
             .frame(height: PillMetrics.tooltipHeight)
             .background {
                 shape.fill(PillPalette.tooltipFill)
-                    .overlay {
-                        shape.ring(0.5)
-                            .fill(LinearGradient(colors: [.white.opacity(0.2), .white.opacity(0.06)],
-                                                 startPoint: .top, endPoint: .bottom), style: FillStyle(eoFill: true))
-                    }
-                    .shadow(color: .black.opacity(0.18), radius: 1, x: 0, y: 1)
-                    .shadow(color: .black.opacity(0.22), radius: 8, x: 0, y: 4)
+                    .overlay { shape.ring(1).fill(PillPalette.hairline, style: FillStyle(eoFill: true)) }
+                    .shadow(color: .black.opacity(0.2), radius: 5, x: 0, y: 2)
             }
             .environment(\.colorScheme, .dark)
     }

@@ -50,13 +50,17 @@ final class PillHitRegions {
     }
 }
 
-/// Everything the floating panel draws: the pill (with its hover margin and tooltip) and the toast stack above it.
+/// Everything the floating panel draws: the pill (with its hover margin and tooltip) and the toasts, which grow out of
+/// it. With nothing on the pill, the newest toast takes the pill's place and the pill waits under it; while a
+/// dictation is on the pill, the toasts stand above it.
 struct PillCanvasView: View {
     let model: PillModel
     let toasts: ToastCenter
     var regions: PillHitRegions?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The pill's area as last laid out, handed back to the hit regions when a toast uncovers it.
+    @State private var pillRect: CGRect?
 
     private var showsRestTooltip: Bool {
         guard model.isPresented, model.visiblePhase.isIdle, toasts.notices.isEmpty else { return false }
@@ -88,26 +92,45 @@ struct PillCanvasView: View {
         return model.isPresented && (chip || showsKeyHint || showsSelectionHint && model.visiblePhase.isRecording)
     }
 
-    /// With no pill on screen (hidden until the next dictation, or Never mode) toasts drop into its slot, bottoms
-    /// aligned, instead of hovering over an empty gap.
+    /// The pill keeps its place under the toasts while it shows a dictation (or the hello); otherwise (at rest, hidden
+    /// until the next dictation, or in Never mode) the newest toast takes it.
+    private var pillHoldsSlot: Bool {
+        model.isPresented && (!model.visiblePhase.isIdle || model.isHelloActive)
+    }
+
+    /// The resting pill is under a toast that took its place: it steps aside, and comes back when the toasts go.
+    private var pillCovered: Bool {
+        model.isPresented && !pillHoldsSlot && !toasts.notices.isEmpty
+    }
+
+    /// Toasts stand above a pill that holds its place, and in its slot, bottoms aligned, when it doesn't.
     static func toastBottomPadding(pillOnScreen: Bool, showsChip: Bool) -> CGFloat {
         guard pillOnScreen else { return PillCanvasMetrics.pillBottomInset }
         return PillCanvasMetrics.toastLift + (showsChip ? PillCanvasMetrics.chipLift : 0)
+    }
+
+    /// Where the newest toast grows out of: the pill's slot, or the dictation's pill under the toasts.
+    private var toastOrigin: ToastOrigin {
+        guard pillHoldsSlot else { return ToastOrigin() }
+        let pill = PillView(model: model, context: .panel(nil)).visual.size
+        let lift = Self.toastBottomPadding(pillOnScreen: true, showsChip: showsChip) - PillCanvasMetrics.pillBottomInset
+        return ToastOrigin(size: pill, drop: lift)
     }
 
     /// Toasts rise with the pill at once, and settle into its slot only once its exit has played out, so they
     /// never slide over the fading pill.
     private var slotAnimation: Animation {
         let move: Animation = reduceMotion ? .easeInOut(duration: 0.15) : .spring(duration: 0.32, bounce: 0.15)
-        guard !model.isPresented else { return move }
+        guard !pillHoldsSlot else { return move }
         return move.delay(reduceMotion ? PillMotion.reducedExitDuration : PillMotion.exitDuration)
     }
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            ToastStack(center: toasts, pasteShortcut: model.settings.shortcuts[.pasteLast], regions: regions)
-                .padding(.bottom, Self.toastBottomPadding(pillOnScreen: model.isPresented, showsChip: showsChip))
-                .animation(slotAnimation, value: model.isPresented)
+            ToastStack(center: toasts, pasteShortcut: model.settings.shortcuts[.pasteLast], regions: regions,
+                       origin: toastOrigin)
+                .padding(.bottom, Self.toastBottomPadding(pillOnScreen: pillHoldsSlot, showsChip: showsChip))
+                .animation(slotAnimation, value: pillHoldsSlot)
                 .animation(reduceMotion ? .easeInOut(duration: 0.15) : .spring(duration: 0.32, bounce: 0.15),
                            value: showsChip)
             pillArea
@@ -118,7 +141,7 @@ struct PillCanvasView: View {
     }
 
     private var pillArea: some View {
-        PillView(model: model, context: .panel(regions))
+        PillView(model: model, context: .panel(regions), covered: pillCovered)
             .overlay(alignment: .top) {
                 if showsRestTooltip {
                     Group {
@@ -164,8 +187,14 @@ struct PillCanvasView: View {
                 // Clicking the resting pill (or its hover margin) starts hands-free, like Wispr.
                 if model.isPresented, model.visiblePhase.isIdle { model.onClick?() }
             }
+            // Under a toast, the toast takes the clicks and the pointer.
+            .allowsHitTesting(!pillCovered)
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(PillCanvasMetrics.space)) } action: { rect in
-                regions?.setPill(rect)
+                pillRect = rect
+                regions?.setPill(pillCovered ? nil : rect)
+            }
+            .onChange(of: pillCovered) { _, covered in
+                regions?.setPill(covered ? nil : pillRect)
             }
     }
 

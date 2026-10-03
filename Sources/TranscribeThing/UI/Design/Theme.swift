@@ -43,7 +43,7 @@ enum Palette {
     static let modelPink = dynamic("modelPink", light: .hex(0xB9306E), dark: .hex(0xEB709F))
 
     /// The pill is always dark, in both appearances.
-    static let pillFill = NSColor.hex(0x101012, alpha: 0.92)
+    static let pillFill = NSColor.hex(0x000000, alpha: 0.96)
     static let chipFill = dynamic("chipFill", light: .hex(0xFFFFFF), dark: .hex(0x2A2927))
     static let chipStroke = dynamic("chipStroke", light: .hex(0x1C1A17, alpha: 0.12), dark: .hex(0xFFFFFF, alpha: 0.12))
     static let chipBase = dynamic("chipBase", light: .hex(0x1C1A17, alpha: 0.10), dark: .hex(0x000000, alpha: 0.45))

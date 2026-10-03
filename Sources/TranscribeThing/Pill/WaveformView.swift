@@ -44,7 +44,7 @@ final class WaveformEngine {
     /// into view.
     static let appearDuration: TimeInterval = growDuration
     /// Static snapshots freeze the preview voice at this moment: a pause, then a phrase.
-    static let staticTime: TimeInterval = 4.2
+    static let staticTime: TimeInterval = 4.1
     /// One column per slot; the oldest glides out past the left edge while the next one lands.
     static var columnCount: Int { PillMetrics.barCount }
 

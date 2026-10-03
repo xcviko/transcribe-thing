@@ -464,7 +464,9 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         let locked = PillVisual.locked(), processing = PillVisual.processing(afterHandsFree: true)
         // Both pills share their center on screen while the hands-free one narrows, so the dots start at the
         // bars' offset from that center.
-        #expect(locked.barsOffset == -20.5)
+        #expect(locked.barsOffset == PillMetrics.buttonInset + PillMetrics.buttonSize + PillMetrics.lockedGap
+                + PillMetrics.barFieldWidth / 2 - locked.size.width / 2)
+        #expect(locked.barsOffset < 0, "left of center, the timer being right of the bars")
         let width = processing.size.width
         let barsCenter = width / 2 + locked.barsOffset
         func center(at time: Double, reduceMotion: Bool = false) -> CGFloat {
@@ -489,16 +491,19 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(PillVisual.listening.barsOffset == 0 && PillVisual.processing(afterHandsFree: false).barsOffset == 0)
     }
 
+    /// Small, after Wispr Flow's: a 36×8 bar at rest, 70×26 while you hold the key, 28 pt tall hands-free.
     @Test func visualGeometryMatchesTheSpec() {
-        #expect(PillVisual.rest.size == CGSize(width: 40, height: 10))
-        #expect(PillVisual.peek.size == CGSize(width: 76, height: 24))
-        #expect(PillVisual.listening.size == CGSize(width: 104, height: 32))
-        #expect(PillVisual.locked().size == CGSize(width: 198, height: 36))
-        #expect(PillVisual.locked(hours: true).size == CGSize(width: 216, height: 36))
-        #expect(PillVisual.processing(afterHandsFree: true).size == CGSize(width: 104, height: 32))
-        #expect(PillVisual.processing(afterHandsFree: false).size == CGSize(width: 104, height: 32))
-        #expect(PillVisual.error.size == CGSize(width: 104, height: 32))
-        #expect(PillMetrics.barFieldWidth == 69)
+        #expect(PillVisual.rest.size == CGSize(width: 36, height: 8))
+        #expect(PillVisual.peek.size == CGSize(width: 64, height: 20))
+        #expect(PillVisual.listening.size == CGSize(width: 70, height: 26))
+        #expect(PillMetrics.barFieldWidth == 42)
+        let locked = PillVisual.locked().size, hours = PillVisual.locked(hours: true).size
+        #expect(locked.height == 28 && hours.height == 28 && PillMetrics.maxHeight == 28)
+        #expect(locked.width == locked.width.rounded() && locked.width > 120 && locked.width < 150)
+        #expect(hours.width > locked.width)
+        #expect(PillVisual.processing(afterHandsFree: true).size == PillVisual.listening.size)
+        #expect(PillVisual.processing(afterHandsFree: false).size == PillVisual.listening.size)
+        #expect(PillVisual.error.size == PillVisual.listening.size)
     }
 
     /// X | bars | timer | Stop, left to right, with the same gap between each for a "9:59" timer, and a
@@ -513,9 +518,14 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         func gaps(timer: CGFloat) -> [CGFloat] {
             [barsLeft - cancelRight, timerCenter - timer / 2 - barsRight, stopLeft - (timerCenter + timer / 2)]
         }
-        #expect(gaps(timer: PillMetrics.shortTimerWidth) == [15, 15, 15])
-        #expect(gaps(timer: PillMetrics.timerWidth) == [15, 11.5, 11.5])
-        #expect(PillMetrics.lockedGap == 15)
+        let gap = PillMetrics.lockedGap
+        #expect(gap >= 10 && gap < 10.5)
+        let even = gaps(timer: PillMetrics.shortTimerWidth)
+        #expect(even.allSatisfy { abs($0 - gap) < 1e-9 })
+        let wide = gaps(timer: PillMetrics.timerWidth)
+        let squeeze = (PillMetrics.timerWidth - PillMetrics.shortTimerWidth) / 2
+        #expect(abs(wide[0] - gap) < 1e-9 && abs(wide[1] - (gap - squeeze)) < 1e-9 && abs(wide[2] - (gap - squeeze)) < 1e-9)
+        #expect(wide[1] > 5, "still clear of the bars and the finish button")
     }
 
     /// Past an hour the timer reads "1:02:03": the capsule widens once, to a column that fits it, and keeps its
@@ -620,7 +630,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(size.width >= 2 * PillMetrics.counterPadding + text)
         // A polish: a circle with the wand until the count, then the wand before it.
         let wand: CGFloat = PillMetrics.counterWandSize + PillMetrics.counterWandGap
-        #expect(PillVisual.processing(afterHandsFree: false, polishes: true).size == CGSize(width: 32, height: 32))
+        #expect(PillVisual.processing(afterHandsFree: false, polishes: true).size == CGSize(width: 26, height: 26))
         #expect(PillVisual.processing(afterHandsFree: false, counting: true, polishes: true).size.width
                 >= 2 * PillMetrics.counterPadding + wand + text)
         #expect(PillVisual.processing(afterHandsFree: true, polishes: true).barsOffset == 0, "no dots to start aside")
@@ -1324,7 +1334,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(barsA == a.frame(size: Self.size, meter: meter, now: now, reduceMotion: false, isStatic: true))
         // A full field on the slots: a pause (dots), then a phrase.
         #expect(barsA.map(\.rect.minX) == Self.slots)
-        #expect(barsA.filter { $0.rect.height > 10 }.count >= 5)
+        #expect(barsA.filter { $0.rect.height > PillMetrics.barMaxHeight / 2 }.count >= 5)
         #expect(barsA.contains { $0.rect.height == PillMetrics.barMinHeight && $0.opacity > 0.4 })
         // Before audio (the "just started" snapshot) the field is empty.
         #expect(a.frame(size: Self.size, meter: LevelMeter(), now: now, reduceMotion: false, isStatic: true).isEmpty)

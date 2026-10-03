@@ -145,6 +145,10 @@ enum PillSnapshots {
             SnapshotEntry("pill-model-colors", width: ModelColorSheet.width, height: ModelColorSheet.height) { _ in
                 ModelColorSheet()
             },
+            // Toasts growing out of the pill (`--only pill-toast-grow`), frame by frame along the spring.
+            SnapshotEntry("pill-toast-grow", width: ToastGrowSheet.width, height: ToastGrowSheet.height) { _ in
+                ToastGrowSheet()
+            },
             SnapshotEntry("pill-toast-info", width: 640, height: 250) { _ in
                 CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.canceled])
             },
@@ -402,6 +406,78 @@ private struct SideBySide<Content: View>: View {
             }
         }
         .environment(\.pillStaticRendering, true)
+    }
+}
+
+/// The newest toast opening out of the pill, each frame pinned at its progress along the insertion spring: in the
+/// pill's slot (the resting pill under it), and over a hands-free pill that holds its place.
+private struct ToastGrowSheet: View {
+    static let cell = CGSize(width: 360, height: 128)
+    static let columns = 3
+    static let times: [Double] = [0, 0.03, 0.06, 0.09, 0.12, 0.16, 0.2, 0.28, 0.42]
+    static let header: CGFloat = 34
+    static var width: CGFloat { cell.width * CGFloat(columns) }
+    static var height: CGFloat {
+        2 * (header + cell.height * CGFloat((times.count + columns - 1) / columns))
+    }
+
+    private struct Strip {
+        let title: String
+        let notice: Notice
+        let pill: PillVisual?
+    }
+
+    private var strips: [Strip] {
+        [Strip(title: "In the pill's slot", notice: PillSnapshotFixtures.canceled, pill: nil),
+         Strip(title: "Over a dictation", notice: PillSnapshotFixtures.micFallback, pill: .locked())]
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(strips.enumerated()), id: \.offset) { _, strip in
+                Text(strip.title.uppercased())
+                    .font(.system(size: 11, weight: .semibold))
+                    .tracking(0.6)
+                    .foregroundStyle(.white.opacity(0.6))
+                    .padding(.leading, 16)
+                    .frame(height: Self.header, alignment: .bottomLeading)
+                LazyVGrid(columns: Array(repeating: GridItem(.fixed(Self.cell.width), spacing: 0), count: Self.columns),
+                          spacing: 0) {
+                    ForEach(Self.times, id: \.self) { time in
+                        frame(strip, time: time)
+                    }
+                }
+            }
+        }
+        .frame(width: Self.width, height: Self.height, alignment: .topLeading)
+        .background(Color(nsColor: .hex(0x1E1E21)))
+        .environment(\.pillStaticRendering, true)
+    }
+
+    private func frame(_ strip: Strip, time: Double) -> some View {
+        let progress = CGFloat(Spring(duration: 0.42, bounce: 0.14).value(target: 1.0, time: time))
+        let bottom: CGFloat = 14
+        let lift = strip.pill == nil ? 0 : PillMetrics.maxHeight + 10
+        let origin = ToastOrigin(size: strip.pill?.size ?? PillMetrics.restSize, drop: lift)
+        let center = ToastCenter.preview([strip.notice])
+        let model = PillModel.preview(phase: .locked, level: 0.5)
+        return ZStack(alignment: .bottom) {
+            ToastCard(notice: strip.notice, center: center, width: ToastCard.preferredWidth(for: strip.notice))
+                .environment(\.toastReveal, ToastReveal(progress: progress, origin: origin))
+                .environment(\.colorScheme, .dark)
+                .padding(.bottom, bottom + lift)
+            if let pill = strip.pill {
+                PillFace(model: model, capsule: pill, content: pill)
+                    .padding(.bottom, bottom)
+            }
+            Text("\(Int((time * 1000).rounded())) ms")
+                .font(.system(size: 10, weight: .medium).monospacedDigit())
+                .foregroundStyle(.white.opacity(0.45))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(8)
+        }
+        .frame(width: Self.cell.width, height: Self.cell.height)
+        .clipped()
     }
 }
 
@@ -863,6 +939,11 @@ private struct ModelColorSheet: View {
 
 /// Every pill state on a white document and on a dark editor.
 private struct PillStateSheet: View {
+    /// "70×26".
+    static func dimensions(_ size: CGSize) -> String {
+        "\(Int(size.width.rounded()))×\(Int(size.height.rounded()))"
+    }
+
     private struct Row: Identifiable {
         let id: String
         let caption: String
@@ -871,12 +952,12 @@ private struct PillStateSheet: View {
 
     private var rows: [Row] {
         [
-            Row(id: "rest", caption: "Rest · 40×10") { .preview(phase: .rest) },
-            Row(id: "peek", caption: "Hover · 76×24") { .preview(phase: .rest, isHovering: true) },
+            Row(id: "rest", caption: "Rest · \(Self.dimensions(PillMetrics.restSize))") { .preview(phase: .rest) },
+            Row(id: "peek", caption: "Hover · \(Self.dimensions(PillMetrics.peekSize))") { .preview(phase: .rest, isHovering: true) },
             Row(id: "starting", caption: "Listening · just started") { .preview(phase: .listening, levelMeter: LevelMeter()) },
-            Row(id: "listening", caption: "Listening · 104×32") { .preview(phase: .listening, level: 0.7) },
+            Row(id: "listening", caption: "Listening · \(Self.dimensions(PillMetrics.listeningSize))") { .preview(phase: .listening, level: 0.7) },
             Row(id: "silence", caption: "Listening · silence") { .preview(phase: .listening, level: 0) },
-            Row(id: "locked", caption: "Hands-free · 198×36") { .preview(phase: .locked, level: 0.5) },
+            Row(id: "locked", caption: "Hands-free · \(Self.dimensions(PillMetrics.lockedSize))") { .preview(phase: .locked, level: 0.5) },
             Row(id: "locked-long", caption: "Hands-free · 28 min") {
                 .preview(phase: .locked, level: 0.62, recordingFor: 1728)
             },
@@ -885,7 +966,7 @@ private struct PillStateSheet: View {
             },
             Row(id: "processing", caption: "Processing") { .preview(phase: .processing) },
             Row(id: "processing-wide", caption: "Processing · after hands-free") { PillStateSheet.processingAfterLocked() },
-            Row(id: "processing-counter", caption: "Processing · counting · \(Int(PillMetrics.counterSize.width))×32") {
+            Row(id: "processing-counter", caption: "Processing · counting · \(Self.dimensions(PillMetrics.counterSize))") {
                 PillModel.preview(phase: .processing).previewCounter(PillTokenCount(phase: .thinking, tokens: 1_249))
             },
             Row(id: "processing-counter-after-hands-free", caption: "Counting · after hands-free") {
