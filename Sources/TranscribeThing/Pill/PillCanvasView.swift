@@ -133,8 +133,7 @@ struct PillCanvasView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            ToastStack(center: toasts, pasteShortcut: model.settings.shortcuts[.pasteLast], regions: regions,
-                       origin: toastOrigin)
+            ToastStack(center: toasts, regions: regions, origin: toastOrigin)
                 .padding(.bottom, Self.toastBottomPadding(pillOnScreen: pillHoldsSlot, showsChip: showsChip))
                 .animation(slotAnimation, value: pillHoldsSlot)
                 .animation(reduceMotion ? .easeInOut(duration: 0.15) : .spring(duration: 0.32, bounce: 0.15),

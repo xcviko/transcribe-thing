@@ -432,7 +432,7 @@ private struct ToastGrowSheet: View {
     }
 
     private var strips: [Strip] {
-        [Strip(title: "In the pill's slot", notice: PillSnapshotFixtures.canceled, pill: nil),
+        [Strip(title: "In the pill’s slot", notice: PillSnapshotFixtures.canceled, pill: nil),
          Strip(title: "Over a dictation", notice: PillSnapshotFixtures.micFallback, pill: .locked())]
     }
 

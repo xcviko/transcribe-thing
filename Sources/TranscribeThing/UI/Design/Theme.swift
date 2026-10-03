@@ -1,41 +1,46 @@
 import AppKit
 import SwiftUI
 
-// "Paper, ink and a quiet glow" (wispr-ux.md §6.2): warm oat canvas, ink text, an iris accent.
+// Black and white, after Wispr Flow's pill: neutral grays, ink text, and ink as the accent (black on light, white on
+// dark). Color is left to what it says: a model's own color, warnings and failures.
 // Colors resolve per appearance at draw time, so they follow window/system appearance changes.
 
 // MARK: - Palette
 
 enum Palette {
-    static let bgCanvas = dynamic("bgCanvas", light: .hex(0xFAF7F2), dark: .hex(0x161514))
-    static let bgSurface = dynamic("bgSurface", light: .hex(0xFFFFFF), dark: .hex(0x1F1E1C))
-    static let bgSunken = dynamic("bgSunken", light: .hex(0xF3EFE8), dark: .hex(0x121110))
-    static let bgElevated = dynamic("bgElevated", light: .hex(0xFFFFFF), dark: .hex(0x2A2927))
-    static let stroke = dynamic("stroke", light: .hex(0x1C1A17, alpha: 0.08), dark: .hex(0xFFFFFF, alpha: 0.09))
-    static let strokeStrong = dynamic("strokeStrong", light: .hex(0x1C1A17, alpha: 0.14), dark: .hex(0xFFFFFF, alpha: 0.16))
-    static let hover = dynamic("hover", light: .hex(0x1C1A17, alpha: 0.05), dark: .hex(0xFFFFFF, alpha: 0.06))
-    static let pressed = dynamic("pressed", light: .hex(0x1C1A17, alpha: 0.09), dark: .hex(0xFFFFFF, alpha: 0.10))
+    static let bgCanvas = dynamic("bgCanvas", light: .hex(0xF7F7F7), dark: .hex(0x111111))
+    static let bgSurface = dynamic("bgSurface", light: .hex(0xFFFFFF), dark: .hex(0x1A1A1A))
+    static let bgSunken = dynamic("bgSunken", light: .hex(0xEFEFEF), dark: .hex(0x0B0B0B))
+    static let bgElevated = dynamic("bgElevated", light: .hex(0xFFFFFF), dark: .hex(0x242424))
+    static let stroke = dynamic("stroke", light: .hex(0x000000, alpha: 0.08), dark: .hex(0xFFFFFF, alpha: 0.09))
+    static let strokeStrong = dynamic("strokeStrong", light: .hex(0x000000, alpha: 0.14), dark: .hex(0xFFFFFF, alpha: 0.16))
+    static let hover = dynamic("hover", light: .hex(0x000000, alpha: 0.05), dark: .hex(0xFFFFFF, alpha: 0.06))
+    static let pressed = dynamic("pressed", light: .hex(0x000000, alpha: 0.09), dark: .hex(0xFFFFFF, alpha: 0.10))
 
-    static let ink = dynamic("ink", light: .hex(0x1C1A17), dark: .hex(0xF4F1EC))
-    static let inkSecondary = dynamic("inkSecondary", light: .hex(0x1C1A17, alpha: 0.62), dark: .hex(0xF4F1EC, alpha: 0.64))
+    static let ink = dynamic("ink", light: .hex(0x111111), dark: .hex(0xF2F2F2))
+    static let inkSecondary = dynamic("inkSecondary", light: .hex(0x111111, alpha: 0.62), dark: .hex(0xF2F2F2, alpha: 0.64))
     /// Meta text and placeholders: 3.8:1 on the light canvas, 4.8:1 on the dark one.
-    static let inkTertiary = dynamic("inkTertiary", light: .hex(0x1C1A17, alpha: 0.55), dark: .hex(0xF4F1EC, alpha: 0.50))
+    static let inkTertiary = dynamic("inkTertiary", light: .hex(0x111111, alpha: 0.55), dark: .hex(0xF2F2F2, alpha: 0.50))
 
-    static let accent = dynamic("accent", light: .hex(0x5B4FE0), dark: .hex(0x8F86FF))
-    /// Button fills: a touch deeper than `accent` in dark mode so white labels keep 4.5:1 contrast.
-    static let accentFill = dynamic("accentFill", light: .hex(0x5B4FE0), dark: .hex(0x6C61F2))
-    static let accentSoft = dynamic("accentSoft", light: .hex(0x5B4FE0, alpha: 0.10), dark: .hex(0x8F86FF, alpha: 0.16))
-    static let accentRing = dynamic("accentRing", light: .hex(0x5B4FE0, alpha: 0.35), dark: .hex(0x8F86FF, alpha: 0.45))
-    static let onAccent = NSColor.white
+    /// The accent is ink: black on light, white on dark.
+    static let accent = dynamic("accent", light: .hex(0x111111), dark: .hex(0xF2F2F2))
+    /// Button fills and a switch that's on.
+    static let accentFill = dynamic("accentFill", light: .hex(0x111111), dark: .hex(0xF2F2F2))
+    static let accentSoft = dynamic("accentSoft", light: .hex(0x000000, alpha: 0.06), dark: .hex(0xFFFFFF, alpha: 0.10))
+    static let accentRing = dynamic("accentRing", light: .hex(0x000000, alpha: 0.30), dark: .hex(0xFFFFFF, alpha: 0.40))
+    /// Words on `accentFill`: white on black, black on white.
+    static let onAccent = dynamic("onAccent", light: .hex(0xFFFFFF), dark: .hex(0x111111))
 
     static let warm = dynamic("warm", light: .hex(0xFF9F6E), dark: .hex(0xFFB38F))
-    static let lilacWash = dynamic("lilacWash", light: .hex(0xEFEAFF), dark: .hex(0x2A2640))
-    static let success = dynamic("success", light: .hex(0x2F9E57), dark: .hex(0x3CCB6C))
+    static let lilacWash = dynamic("lilacWash", light: .hex(0xF0F0F0), dark: .hex(0x232323))
+    /// "Ready", "Allowed", "Connected": said in ink, not green.
+    static let success = dynamic("success", light: .hex(0x111111, alpha: 0.72), dark: .hex(0xF2F2F2, alpha: 0.75))
     /// Deep enough in light mode for warning text (4.4:1 on the canvas).
     static let warning = dynamic("warning", light: .hex(0xA86400), dark: .hex(0xFFB340))
     static let danger = dynamic("danger", light: .hex(0xD93B30), dark: .hex(0xFF6B5E))
-    /// Model colors in the Hub besides warm and accent (`ModelColor.hubColor`): a tile's symbol reads 4.5:1 over 13%
-    /// of itself on the card, light and dark.
+    /// Model colors in the Hub besides warm (`ModelColor.hubColor`): a tile's symbol reads 4.5:1 over 13% of itself on
+    /// the card, light and dark.
+    static let modelViolet = dynamic("modelViolet", light: .hex(0x5B4FE0), dark: .hex(0x8F86FF))
     static let modelGreen = dynamic("modelGreen", light: .hex(0x247804), dark: .hex(0x5AAC46))
     static let modelTeal = dynamic("modelTeal", light: .hex(0x06756D), dark: .hex(0x08AB9E))
     static let modelBlue = dynamic("modelBlue", light: .hex(0x036DAA), dark: .hex(0x1A9FF2))
@@ -44,9 +49,9 @@ enum Palette {
 
     /// The pill is always dark, in both appearances.
     static let pillFill = NSColor.hex(0x000000, alpha: 0.96)
-    static let chipFill = dynamic("chipFill", light: .hex(0xFFFFFF), dark: .hex(0x2A2927))
-    static let chipStroke = dynamic("chipStroke", light: .hex(0x1C1A17, alpha: 0.12), dark: .hex(0xFFFFFF, alpha: 0.12))
-    static let chipBase = dynamic("chipBase", light: .hex(0x1C1A17, alpha: 0.10), dark: .hex(0x000000, alpha: 0.45))
+    static let chipFill = dynamic("chipFill", light: .hex(0xFFFFFF), dark: .hex(0x2A2A2A))
+    static let chipStroke = dynamic("chipStroke", light: .hex(0x000000, alpha: 0.12), dark: .hex(0xFFFFFF, alpha: 0.12))
+    static let chipBase = dynamic("chipBase", light: .hex(0x000000, alpha: 0.10), dark: .hex(0x000000, alpha: 0.45))
 
     static func dynamic(_ name: String, light: NSColor, dark: NSColor) -> NSColor {
         NSColor(name: NSColor.Name("tt.\(name)")) { appearance in

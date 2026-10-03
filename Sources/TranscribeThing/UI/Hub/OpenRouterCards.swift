@@ -41,17 +41,11 @@ struct OpenRouterKeyCard: View {
     // MARK: Parts
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 12) {
-            IconTile(symbol: "key.fill", tint: HubPalette.apricotInk, size: 30)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("OpenRouter key")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.ink)
-                Text("Cloud models run on your own OpenRouter account. You pay OpenRouter per use.")
-                    .typeface(.callout)
-                    .foregroundStyle(.inkSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+        HStack(alignment: .center, spacing: 12) {
+            IconTile(symbol: "key.fill", tint: .inkSecondary, size: 30)
+            Text("OpenRouter key")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.ink)
             Spacer(minLength: 8)
             Button {
                 hub.open(OpenRouterLinks.keys)
@@ -76,9 +70,6 @@ struct OpenRouterKeyCard: View {
                     .foregroundStyle(.ink)
                     .textSelection(.disabled)
                 Spacer(minLength: 0)
-                Text("Stored on this Mac")
-                    .font(.system(size: 10.5, weight: .medium))
-                    .foregroundStyle(.inkTertiary)
             }
             .padding(.horizontal, 11)
             .frame(height: 32)

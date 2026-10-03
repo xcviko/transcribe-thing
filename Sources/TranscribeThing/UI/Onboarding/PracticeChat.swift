@@ -74,7 +74,7 @@ struct PracticeChat: View {
                     .font(.system(size: 14, weight: .semibold, design: .rounded))
                     .foregroundStyle(.white)
                     .frame(width: 34, height: 34)
-                    .background(LinearGradient(colors: [Color.warm, Color(nsColor: .hex(0xE0708A))],
+                    .background(LinearGradient(colors: [Color(nsColor: .hex(0x8A8A8A)), Color(nsColor: .hex(0x4A4A4A))],
                                                startPoint: .topLeading, endPoint: .bottomTrailing), in: Circle())
                 Circle()
                     .fill(Color.success)
@@ -301,7 +301,7 @@ private struct ChatBubble: View {
 }
 
 private extension Color {
-    static let bubbleIncoming = Color(nsColor: Palette.dynamic("bubbleIncoming", light: .hex(0xF0ECE6), dark: .hex(0x2C2B28)))
+    static let bubbleIncoming = Color(nsColor: Palette.dynamic("bubbleIncoming", light: .hex(0xEFEFEF), dark: .hex(0x2B2B2B)))
 }
 
 private struct TypingBubble: View {

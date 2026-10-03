@@ -19,17 +19,14 @@ struct DictionaryPage: View {
     static let searchFrom = 16
 
     var body: some View {
-        HubPage("Dictionary",
-                subtitle: "Words, names and terms you use, and how they’re spelled: a hint for Gemini 3.8 Flash and GPT-6 Luna.") {
+        HubPage("Dictionary") {
             HubGroup("Add") {
                 SettingsGroup {
                     addRow
                 }
                 tip
             }
-            HubGroup(wordsTitle, footer: "Parakeet hears without instructions, so it doesn’t use the dictionary. "
-                     + "Clean-up does: GPT-6 Luna tidies Parakeet’s text with it. Groups are only for you: the "
-                     + "models get every word alike.") {
+            HubGroup(wordsTitle) {
                 Button {
                     withAnimation(Theme.Motion.snappy) { renaming = settings.dictionary.addGroup() }
                 } label: {
@@ -42,7 +39,7 @@ struct DictionaryPage: View {
                 }
                 if settings.dictionary.words.isEmpty && settings.dictionary.groups.isEmpty {
                     Card(padding: Theme.Spacing.md) {
-                        Text("Nothing here yet. Words you add show up here, newest first.")
+                        Text("No words yet")
                             .typeface(.callout)
                             .foregroundStyle(.inkSecondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -157,18 +154,9 @@ struct DictionaryPage: View {
         .animation(Theme.Motion.fade, value: feedback)
     }
 
-    /// The quick way, with the user's own keys: fn D over a word selected anywhere.
+    /// Only when fn D can't work: Add to dictionary has no shortcut.
     @ViewBuilder private var tip: some View {
-        if let keys = settings.shortcuts[.addToDictionary] {
-            HStack(spacing: 6) {
-                Text("Quicker: select a word in any app, start dictating and press")
-                ShortcutChips(shortcut: keys, size: .small)
-            }
-            .typeface(.callout)
-            .foregroundStyle(.inkSecondary)
-            .padding(.horizontal, 4)
-            .accessibilityElement(children: .combine)
-        } else {
+        if settings.shortcuts[.addToDictionary] == nil {
             Button("Add to dictionary has no shortcut. Set one in Shortcuts.") { hub.show(.shortcuts) }
                 .buttonStyle(.plain)
                 .typeface(.callout)
@@ -238,8 +226,7 @@ struct DictionarySection: View {
             VStack(alignment: .leading, spacing: 10) {
                 if !model.isOnly { header }
                 if model.words.isEmpty {
-                    Text(model.group == nil ? "Words in no group. Drag one onto a group to move it."
-                                            : "Empty. Drag words here.")
+                    Text(model.group == nil ? "No words" : "Drag words here")
                         .typeface(.callout)
                         .foregroundStyle(.inkTertiary)
                         .frame(maxWidth: .infinity, alignment: .leading)

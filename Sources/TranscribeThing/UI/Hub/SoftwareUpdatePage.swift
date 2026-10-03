@@ -9,13 +9,11 @@ struct SoftwareUpdatePage: View {
 
     var body: some View {
         @Bindable var settings = settings
-        HubPage("Software Update", subtitle: "New versions of \(Brand.name) come from its GitHub releases.",
-                back: HubBackLink(title: HubSection.general.title) { hub.show(.general) }) {
+        HubPage("Software Update", back: HubBackLink(title: HubSection.general.title) { hub.show(.general) }) {
             SettingsGroup {
                 UpdateStatusRow()
-                SettingsRow(title: "Check for updates automatically",
-                            subtitle: "Off means no reminders and no badges. You can still check here anytime.",
-                            systemImage: "arrow.triangle.2.circlepath", iconTint: .inkSecondary) {
+                SettingsRow(title: "Check for updates automatically", systemImage: "arrow.triangle.2.circlepath",
+                            iconTint: .inkSecondary) {
                     Toggle("", isOn: $settings.checkForUpdatesAutomatically)
                         .toggleStyle(.appSwitch)
                         .labelsHidden()

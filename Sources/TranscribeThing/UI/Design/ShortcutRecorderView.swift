@@ -710,7 +710,7 @@ private struct RecorderGallery: View {
 
     private func row<Trailing: View>(_ action: ShortcutAction, bindings: ShortcutBindings = .defaults,
                                      @ViewBuilder trailing: () -> Trailing) -> some View {
-        SettingsRow(title: action.title, subtitle: action.subtitle(in: bindings), trailing: trailing)
+        SettingsRow(title: action.title, trailing: trailing)
     }
 }
 

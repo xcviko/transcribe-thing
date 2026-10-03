@@ -7,7 +7,7 @@ struct ShortcutsPage: View {
 
     var body: some View {
         @Bindable var settings = settings
-        HubPage("Shortcuts", subtitle: "Hold, tap or combine. Works everywhere, even in full-screen apps.") {
+        HubPage("Shortcuts") {
             // Offered only when there is something to restore; a dimmed label here read as stray text.
             if settings.shortcuts != .defaults {
                 Button("Restore Defaults") {
@@ -26,17 +26,13 @@ struct ShortcutsPage: View {
                 SettingsGroup {
                     row(.pushToTalk)
                     row(.handsFree)
-                    SettingsRow(title: "Double-press to go hands-free",
-                                subtitle: doublePressSubtitle,
-                                systemImage: "hand.tap",
+                    SettingsRow(title: "Double-press to go hands-free", systemImage: "hand.tap",
                                 iconTint: .inkSecondary) {
                         Toggle("", isOn: $settings.doublePressForHandsFree)
                             .toggleStyle(.appSwitch)
                             .labelsHidden()
                     }
-                    SettingsRow(title: "Return finishes a hands-free dictation",
-                                subtitle: "Like pressing fn: the text is pasted, nothing is sent.",
-                                systemImage: "return",
+                    SettingsRow(title: "Return finishes a hands-free dictation", systemImage: "return",
                                 iconTint: .inkSecondary) {
                         Toggle("", isOn: $settings.returnFinishesHandsFree)
                             .toggleStyle(.appSwitch)
@@ -57,18 +53,13 @@ struct ShortcutsPage: View {
     }
 
     private func row(_ action: ShortcutAction) -> some View {
-        SettingsRow(title: action.title, subtitle: action.subtitle(in: settings.shortcuts), systemImage: action.symbolName) {
+        SettingsRow(title: action.title, systemImage: action.symbolName) {
             ShortcutRecorderView(shortcut: binding(for: action), action: action)
         }
     }
 
     private func binding(for action: ShortcutAction) -> Binding<Shortcut?> {
         Binding(get: { settings.shortcuts[action] }, set: { settings.shortcuts[action] = $0 })
-    }
-
-    private var doublePressSubtitle: String {
-        let key = settings.shortcuts[.pushToTalk]?.compactDescription ?? "the push-to-talk key"
-        return "Press \(key) twice quickly to start. Press it again to finish."
     }
 
     private var secureInputText: String {

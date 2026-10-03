@@ -8,7 +8,7 @@
 //   AppIcon.icon/  Icon Composer package (background gradient + glyph layer) for macOS 26 Liquid Glass;
 //                  scripts/build-app.sh compiles it with actool when available.
 //
-// The artwork: a deep ink-to-iris squircle with a quiet top light and a warm apricot glow low on the right;
+// The artwork: a black-to-graphite squircle with a quiet top light;
 // in the middle, a white capsule (transcribe-thing's pill, inverted) holding five rounded waveform bars.
 import AppKit
 import CoreGraphics
@@ -58,12 +58,11 @@ func capsule(_ r: CGRect) -> CGPath {
     return CGPath(roundedRect: r, cornerWidth: radius, cornerHeight: radius, transform: nil)
 }
 
-// Palette (Theme.swift "Paper, ink and a quiet glow").
-let iris = rgb(0x5B4FE0)
-let irisBright = rgb(0x7A6FF5)
-let irisDeep = rgb(0x3A2DB0)
-let ink = rgb(0x141129)
-let apricot = rgb(0xFF9F6E)
+// Palette: black and white, like the app (Theme.swift).
+let barTop = rgb(0x2A2A2A)
+let barMid = rgb(0x151515)
+let barDeep = rgb(0x000000)
+let ink = rgb(0x0A0A0A)
 
 /// The glyph, centred on `center`: white capsule + five bars. `forGlass` omits the capsule's own shadow and
 /// glow (the system adds depth to Liquid Glass layers).
@@ -74,7 +73,7 @@ func drawGlyph(_ ctx: CGContext, center: CGPoint, scale s: CGFloat, forGlass: Bo
     if !forGlass {
         // Lit halo behind the capsule: the "quiet glow".
         ctx.saveGState()
-        let halo = gradient([(rgb(0xD4CEFF, 0.42), 0), (rgb(0xB9B0FF, 0.16), 0.45), (rgb(0xB9B0FF, 0.0), 1)])
+        let halo = gradient([(rgb(0xFFFFFF, 0.22), 0), (rgb(0xFFFFFF, 0.08), 0.45), (rgb(0xFFFFFF, 0.0), 1)])
         ctx.saveGState()
         // Stretch the halo horizontally so it follows the capsule.
         ctx.translateBy(x: center.x, y: center.y)
@@ -84,26 +83,26 @@ func drawGlyph(_ ctx: CGContext, center: CGPoint, scale s: CGFloat, forGlass: Bo
         ctx.restoreGState()
         ctx.restoreGState()
 
-        // Two-layer shadow: a tight contact shadow and a wide soft one tinted with deep iris.
+        // Two-layer shadow: a tight contact shadow and a wide soft one.
         ctx.saveGState()
-        setShadow(ctx, dy: -34 * s, blur: 70 * s, color: rgb(0x0E0A2E, 0.55))
+        setShadow(ctx, dy: -34 * s, blur: 70 * s, color: rgb(0x000000, 0.55))
         ctx.addPath(capsule(pill))
         ctx.setFillColor(rgb(0xFFFFFF))
         ctx.fillPath()
         ctx.restoreGState()
         ctx.saveGState()
-        setShadow(ctx, dy: -6 * s, blur: 12 * s, color: rgb(0x0E0A2E, 0.35))
+        setShadow(ctx, dy: -6 * s, blur: 12 * s, color: rgb(0x000000, 0.35))
         ctx.addPath(capsule(pill))
         ctx.setFillColor(rgb(0xFFFFFF))
         ctx.fillPath()
         ctx.restoreGState()
     }
 
-    // Capsule body: paper white with a faint lilac fall-off towards the bottom.
+    // Capsule body: paper white with a faint gray fall-off towards the bottom.
     ctx.saveGState()
     ctx.addPath(capsule(pill))
     ctx.clip()
-    let paper = gradient([(rgb(0xFFFFFF), 0), (rgb(0xF6F3FF), 0.55), (rgb(0xE6E0FF), 1)])
+    let paper = gradient([(rgb(0xFFFFFF), 0), (rgb(0xF5F5F5), 0.55), (rgb(0xE4E4E4), 1)])
     ctx.drawLinearGradient(paper, start: CGPoint(x: pill.midX, y: pill.maxY), end: CGPoint(x: pill.midX, y: pill.minY), options: [])
     if !forGlass {
         // Soft specular band along the top edge.
@@ -117,7 +116,7 @@ func drawGlyph(_ ctx: CGContext, center: CGPoint, scale s: CGFloat, forGlass: Bo
     if !forGlass {
         ctx.saveGState()
         ctx.addPath(capsule(pill.insetBy(dx: 1.5 * s, dy: 1.5 * s)))
-        ctx.setStrokeColor(rgb(0x2A2170, 0.10))
+        ctx.setStrokeColor(rgb(0x000000, 0.10))
         ctx.setLineWidth(3 * s)
         ctx.strokePath()
         ctx.restoreGState()
@@ -128,7 +127,7 @@ func drawGlyph(_ ctx: CGContext, center: CGPoint, scale s: CGFloat, forGlass: Bo
     let barW: CGFloat = 38 * s, gap: CGFloat = 32 * s
     let total = CGFloat(heights.count) * barW + CGFloat(heights.count - 1) * gap
     var x = center.x - total / 2
-    let barFill = gradient([(irisBright, 0), (iris, 0.45), (irisDeep, 1)])
+    let barFill = gradient([(barTop, 0), (barMid, 0.45), (barDeep, 1)])
     for h in heights {
         let r = CGRect(x: x, y: center.y - h * s / 2, width: barW, height: h * s)
         ctx.saveGState()
@@ -141,15 +140,9 @@ func drawGlyph(_ ctx: CGContext, center: CGPoint, scale s: CGFloat, forGlass: Bo
 }
 
 func drawBackground(_ ctx: CGContext, in rect: CGRect) {
-    // Deep ink (bottom right) rising to iris (top left).
-    let base = gradient([(rgb(0x8275F8), 0), (rgb(0x5B4CE2), 0.34), (rgb(0x2F2490), 0.74), (rgb(0x19133F), 1)])
+    // Black (bottom right) rising to graphite (top left).
+    let base = gradient([(rgb(0x3A3A3A), 0), (rgb(0x222222), 0.34), (rgb(0x0E0E0E), 0.74), (rgb(0x000000), 1)])
     ctx.drawLinearGradient(base, start: CGPoint(x: rect.minX, y: rect.maxY), end: CGPoint(x: rect.maxX, y: rect.minY), options: [])
-
-    // A hint of apricot warming the deepest corner.
-    let warm = gradient([(rgb(0xFF9F6E, 0.16), 0), (rgb(0xFF9F6E, 0), 1)])
-    let warmCenter = CGPoint(x: rect.maxX - rect.width * 0.04, y: rect.minY + rect.height * 0.04)
-    ctx.drawRadialGradient(warm, startCenter: warmCenter, startRadius: 0, endCenter: warmCenter,
-                           endRadius: rect.width * 0.40, options: [])
 
     // Top light.
     let top = gradient([(rgb(0xFFFFFF, 0.26), 0), (rgb(0xFFFFFF, 0), 1)])
@@ -245,8 +238,8 @@ let iconJSON = """
 {
   "fill" : {
     "linear-gradient" : [
-      "extended-srgb:0.43922,0.38824,0.94902,1.00000",
-      "extended-srgb:0.07843,0.06667,0.16078,1.00000"
+      "extended-srgb:0.22745,0.22745,0.22745,1.00000",
+      "extended-srgb:0.00000,0.00000,0.00000,1.00000"
     ]
   },
   "groups" : [

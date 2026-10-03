@@ -163,7 +163,7 @@ private struct SwitchModelNote: View {
         HStack(alignment: .firstTextBaseline, spacing: 7) {
             Image(systemName: "sparkles")
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.warm)
+                .foregroundStyle(.inkSecondary)
             Text(text)
                 .font(.system(size: 12))
                 .foregroundStyle(.inkSecondary)

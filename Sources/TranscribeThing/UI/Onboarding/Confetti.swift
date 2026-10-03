@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// A short, soft burst of paper in the accent, apricot and lilac palette (about 1.6 s), drawn in one Canvas.
+/// A short, soft burst of paper in black, grays and white (about 1.6 s), drawn in one Canvas.
 /// Nothing is drawn under Reduce Motion, and the timeline stops once the last piece has faded.
 struct ConfettiBurst: View {
     /// Burst origin in unit coordinates of the view.
@@ -48,8 +48,8 @@ struct ConfettiPiece {
     var sway: Double
 
     private static let palette: [Color] = [
-        Color(nsColor: .hex(0x5B4FE0)), Color(nsColor: .hex(0x8F86FF)), Color(nsColor: .hex(0xFF9F6E)),
-        Color(nsColor: .hex(0xFFC4A3)), Color(nsColor: .hex(0xC9C1FF)), Color(nsColor: .hex(0xFFD27A)),
+        Color(nsColor: .hex(0x111111)), Color(nsColor: .hex(0x5A5A5A)), Color(nsColor: .hex(0x9A9A9A)),
+        Color(nsColor: .hex(0x2E2E2E)), Color(nsColor: .hex(0xC8C8C8)), Color(nsColor: .hex(0x777777)),
     ]
 
     /// Deterministic pseudo-random pieces: identical every frame and in every snapshot.

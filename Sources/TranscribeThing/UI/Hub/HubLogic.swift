@@ -420,15 +420,6 @@ struct EngineSummary: Equatable {
     }
 }
 
-/// Who serves a cloud model, as the Models page says it: "Served by Together.", or "… only." for Gemini, whose
-/// requests are pinned to Google AI Studio. nil for the local model.
-enum ProviderNote {
-    static func text(_ engine: EngineID) -> String? {
-        guard let provider = engine.provider else { return nil }
-        return engine.cloudAPI == .chatCompletions ? "Served by \(provider) only." : "Served by \(provider)."
-    }
-}
-
 // MARK: - Switch model
 
 /// What the Models page says above the lineup: the Switch model shortcut steps through the models switched on, from
@@ -700,15 +691,3 @@ extension HubSection {
     }
 }
 
-// MARK: - Pill
-
-enum PillCaption {
-    /// The line under "Show the pill" in General: what the chosen mode does.
-    static func text(_ mode: PillMode) -> String {
-        switch mode {
-        case .always: "A slim bar waits at the bottom of the screen."
-        case .whileDictating: "Appears when you start talking, then steps aside."
-        case .never: "Nothing on screen while you dictate. Notices still appear."
-        }
-    }
-}

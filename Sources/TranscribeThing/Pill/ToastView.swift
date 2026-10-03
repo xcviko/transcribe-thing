@@ -170,7 +170,6 @@ private struct ToastSurfaceShadow: View {
 /// hovered.
 struct ToastStack: View {
     let center: ToastCenter
-    var pasteShortcut: Shortcut?
     var regions: PillHitRegions?
     /// Where the newest toast grows out of, and closes back into.
     var origin = ToastOrigin()
@@ -186,7 +185,7 @@ struct ToastStack: View {
                 let isNewest = notice.dedupeKey == newestKey
                 // Polish Selection's cards are answers to compare: neither recedes.
                 let dimmed = !isNewest && !center.isPaused && !notice.takesCardKeys
-                ToastCard(notice: notice, center: center, pasteShortcut: pasteShortcut, isDimmed: dimmed,
+                ToastCard(notice: notice, center: center, isDimmed: dimmed,
                           width: stackWidth)
                     .scaleEffect(dimmed ? 0.96 : 1, anchor: .bottom)
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(PillCanvasMetrics.space)) } action: { rect in
@@ -228,7 +227,6 @@ struct ToastStack: View {
 struct ToastCard: View {
     let notice: Notice
     let center: ToastCenter
-    var pasteShortcut: Shortcut?
     /// The older toast of a stack: its content recedes to about 70% while the card stays opaque, so the
     /// desktop never shows through it.
     var isDimmed = false
@@ -239,9 +237,9 @@ struct ToastCard: View {
     @State private var copiedAt: Date?
 
     private var isTranscript: Bool { notice.transcript != nil }
-    /// A delivered transcript that didn't land points at paste-last instead of repeating its body. A failure
-    /// showing text that came back (warning or error) keeps its explanation, and paste-last wouldn't paste it.
-    private var showsPasteHint: Bool { isTranscript && notice.style == .info }
+    /// A delivered transcript that didn't land says only "Not pasted" over its text. A failure showing text that came
+    /// back (warning or error) keeps its explanation.
+    private var hidesBody: Bool { isTranscript && notice.style == .info }
 
     /// Title with at most one short action and nothing else: a single row, in a capsule.
     private var isCompact: Bool { Self.isCompact(notice) }
@@ -275,11 +273,6 @@ struct ToastCard: View {
                 }
                 if !actions.isEmpty {
                     actionRow
-                }
-                if notice.takesCardKeys {
-                    cardKeysHint
-                } else if showsPasteHint {
-                    pasteHint
                 }
             }
             .padding(ToastMetrics.padding)
@@ -330,7 +323,7 @@ struct ToastCard: View {
                 .font(ToastMetrics.titleFont)
                 .foregroundStyle(ToastPalette.title)
                 .fixedSize(horizontal: false, vertical: true)
-            if let body = notice.body, !showsPasteHint {
+            if let body = notice.body, !hidesBody {
                 Text(body)
                     .font(.system(size: 12))
                     .foregroundStyle(ToastPalette.body)
@@ -440,45 +433,6 @@ struct ToastCard: View {
         .buttonStyle(ToastActionStyle(isFilled: isFilled))
         .animation(.snappy(duration: 0.2), value: copied)
         .accessibilityLabel(copied ? "Copied" : action.title)
-    }
-
-    /// "[return] pastes · [esc] closes": the card's own keys while it's up. Next to another such card ↩ couldn't tell
-    /// which to paste: "[esc] closes both".
-    /// What the keys do right now (`ToastCenter.cardKeys`). While a dictation is busy with them, the footer dims.
-    private var cardKeysHint: some View {
-        let together = center.notices.filter(\.takesCardKeys).count > 1
-        let keys = center.cardKeys
-        return HStack(spacing: 5) {
-            if keys.returnPastes, !together {
-                ShortcutChips(shortcut: Shortcut(modifiers: [], keyCode: KeyCode.returnKey), size: .small)
-                Text("pastes")
-                Text("·").foregroundStyle(ToastPalette.quiet.opacity(0.6))
-            }
-            ShortcutChips(shortcut: Shortcut(modifiers: [], keyCode: KeyCode.escape), size: .small)
-            Text(together ? "closes both" : "closes")
-        }
-        .opacity(keys.escCloses ? 1 : 0.45)
-        .font(.system(size: 11, weight: .medium))
-        .foregroundStyle(ToastPalette.quiet)
-        .padding(.horizontal, 2)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel((keys.returnPastes && !together ? "Return pastes, " : "")
-                            + (together ? "Escape closes both" : "Escape closes")
-                            + (keys.escCloses ? "" : ", once the dictation is done"))
-    }
-
-    private var pasteHint: some View {
-        HStack(spacing: 5) {
-            Text("Or click a text field and press")
-            if let pasteShortcut, !pasteShortcut.isEmpty {
-                ShortcutChips(shortcut: pasteShortcut, size: .small)
-            } else {
-                Text("⌘V")
-            }
-        }
-        .font(.system(size: 11, weight: .medium))
-        .foregroundStyle(ToastPalette.quiet)
-        .padding(.horizontal, 2)
     }
 
     private func flashCopied() {

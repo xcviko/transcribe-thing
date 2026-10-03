@@ -207,9 +207,6 @@ struct DoneStage: View {
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
                 ZStack {
-                    StageGlow(color: .accent, radius: 150, opacity: 0.26)
-                    StageGlow(color: .warm, radius: 90, opacity: 0.18)
-                        .offset(x: 40, y: 30)
                     AppMark(size: 96)
                 }
                 .frame(height: 200)

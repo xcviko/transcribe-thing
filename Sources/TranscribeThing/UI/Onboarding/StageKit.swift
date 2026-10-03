@@ -112,24 +112,24 @@ struct StagePill: View {
         case .error:
             Image(systemName: "exclamationmark")
                 .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(Color(nsColor: .hex(0xFF6B5E)))
+                .foregroundStyle(.white)
         }
     }
 
     private var cancelButton: some View {
         Image(systemName: "xmark")
             .font(.system(size: 9, weight: .bold))
-            .foregroundStyle(.white.opacity(0.8))
+            .foregroundStyle(.white)
             .frame(width: 22, height: 22)
-            .background(.white.opacity(0.12), in: Circle())
+            .background(.white.opacity(0.24), in: Circle())
     }
 
     private var stopButton: some View {
-        RoundedRectangle(cornerRadius: 2, style: .continuous)
-            .fill(.white)
-            .frame(width: 8, height: 8)
+        Image(systemName: "checkmark")
+            .font(.system(size: 9.5, weight: .bold))
+            .foregroundStyle(.black)
             .frame(width: 22, height: 22)
-            .background(Color(nsColor: .hex(0xFF453A)), in: Circle())
+            .background(PillPalette.finish, in: Circle())
     }
 }
 
@@ -253,8 +253,8 @@ struct AppMark: View {
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: size * 0.27, style: .continuous)
         ZStack {
-            shape.fill(LinearGradient(colors: [Color(nsColor: .hex(0x2A2358)), Color(nsColor: .hex(0x5B4FE0)),
-                                               Color(nsColor: .hex(0x8F86FF))],
+            shape.fill(LinearGradient(colors: [Color(nsColor: .hex(0x000000)), Color(nsColor: .hex(0x1C1C1C)),
+                                               Color(nsColor: .hex(0x3A3A3A))],
                                       startPoint: .bottomLeading, endPoint: .topTrailing))
             shape.fill(RadialGradient(colors: [.white.opacity(0.28), .clear], center: .topTrailing,
                                       startRadius: 0, endRadius: size * 0.9))
@@ -265,16 +265,16 @@ struct AppMark: View {
                     HStack(spacing: size * 0.035) {
                         ForEach([0.35, 0.7, 1.0, 0.62, 0.3], id: \.self) { h in
                             Capsule(style: .continuous)
-                                .fill(Color(nsColor: .hex(0x3B2FB8)))
+                                .fill(Color(nsColor: .hex(0x111111)))
                                 .frame(width: size * 0.045, height: size * 0.19 * h)
                         }
                     }
                 }
-                .shadow(color: Color(nsColor: .hex(0x8F86FF)).opacity(0.7), radius: size * 0.08)
+                .shadow(color: .white.opacity(0.25), radius: size * 0.08)
             shape.strokeBorder(.white.opacity(0.18), lineWidth: max(0.5, size / 64))
         }
         .frame(width: size, height: size)
-        .shadow(color: Color(nsColor: .hex(0x3B2FB8)).opacity(0.28), radius: size * 0.12, x: 0, y: size * 0.06)
+        .shadow(color: .black.opacity(0.28), radius: size * 0.12, x: 0, y: size * 0.06)
         .accessibilityHidden(true)
     }
 }

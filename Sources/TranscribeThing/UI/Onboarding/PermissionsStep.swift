@@ -112,7 +112,7 @@ struct PermissionsStep: View {
         }
         return VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 12) {
-                PermissionIcon(symbol: "globe", tint: .warm)
+                PermissionIcon(symbol: "globe", tint: .inkSecondary)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Free up the fn key")
                         .font(.system(size: 13, weight: .semibold))

@@ -291,7 +291,7 @@ enum ButtonSize {
     }
 }
 
-/// Iris capsule, 32 pt: the one primary action on a surface.
+/// Ink capsule, 32 pt: the one primary action on a surface (black on light, white on dark).
 struct PrimaryButtonStyle: ButtonStyle {
     var size: ButtonSize = .regular
     var fullWidth = false
@@ -323,21 +323,9 @@ private struct PrimaryButtonBody: View {
             .background {
                 Capsule(style: .continuous)
                     .fill(tint)
-                    .overlay {
-                        // Lit top edge: a soft white wash that fades by mid-height.
-                        Capsule(style: .continuous)
-                            .fill(LinearGradient(colors: [.white.opacity(0.20), .white.opacity(0)],
-                                                 startPoint: .top, endPoint: .center))
-                    }
-                    .overlay {
-                        Capsule(style: .continuous).ring(1)
-                            .fill(LinearGradient(colors: [.white.opacity(0.28), .white.opacity(0.04)],
-                                                 startPoint: .top, endPoint: .bottom), style: FillStyle(eoFill: true))
-                    }
-                    .brightness(pressed ? -0.07 : (hovering ? 0.05 : 0))
+                    .opacity(pressed ? 0.8 : (hovering ? 0.88 : 1))
             }
-            .shadow(color: tint.opacity(scheme == .dark ? 0.0 : (isEnabled ? 0.22 : 0)), radius: 3.5, x: 0, y: 2)
-            .shadow(color: .black.opacity(scheme == .dark ? 0.35 : 0.06), radius: 1, x: 0, y: 1)
+            .shadow(color: .black.opacity(scheme == .dark ? 0.3 : 0.08), radius: 1, x: 0, y: 1)
             .scaleEffect(pressed ? 0.975 : 1)
             .opacity(isEnabled ? 1 : 0.45)
             .contentShape(Capsule())
@@ -481,7 +469,8 @@ extension ButtonStyle where Self == IconButtonStyle {
 
 // MARK: - Switch
 
-/// Iris switch drawn in SwiftUI, so it looks identical in windows and offscreen snapshots.
+/// Ink switch drawn in SwiftUI, so it looks identical in windows and offscreen snapshots: on, a black track with a
+/// white knob on light, a white track with a black knob on dark.
 struct AppSwitchStyle: ToggleStyle {
     var width: CGFloat = 34
     var height: CGFloat = 20
@@ -510,7 +499,7 @@ private struct AppSwitch: View {
                 Capsule(style: .continuous).ring(0.5)
                     .fill(Color.black.opacity(on ? 0.06 : 0.04), style: FillStyle(eoFill: true))
                 Circle()
-                    .fill(.white)
+                    .fill(on && scheme == .dark ? Color(nsColor: .hex(0x111111)) : .white)
                     .shadow(color: .black.opacity(0.22), radius: 1, x: 0, y: 0.5)
                     .shadow(color: .black.opacity(0.10), radius: 3, x: 0, y: 1.5)
                     .frame(width: knob, height: knob)
@@ -809,7 +798,7 @@ extension SettingsRow where Trailing == EmptyView {
     }
 }
 
-/// Soft onboarding/preview stage: lilac wash top-left, sunken middle, a warm glow bottom-right.
+/// Soft onboarding/preview stage: a light wash top-left over the sunken gray.
 struct StageBackground: View {
     var cornerRadius: CGFloat = Theme.Radius.card
 
@@ -820,22 +809,18 @@ struct StageBackground: View {
                 shape.fill(RadialGradient(colors: [.lilacWash, .lilacWash.opacity(0)],
                                           center: .topLeading, startRadius: 0, endRadius: 420))
             }
-            .overlay {
-                shape.fill(RadialGradient(colors: [Color.warm.opacity(0.16), Color.warm.opacity(0)],
-                                          center: .bottomTrailing, startRadius: 0, endRadius: 360))
-            }
             .overlay { shape.strokeBorder(.stroke, lineWidth: 1) }
     }
 }
 
-/// Where an engine runs, by color: this Mac violet, the cloud warm. Onboarding's choice of where Parakeet runs; in
-/// the Hub a model wears its own color (`ModelChoiceIcon`).
+/// Where an engine runs: this Mac in ink, the cloud in gray. Onboarding's choice of where Parakeet runs; in the Hub a
+/// model wears its own color (`ModelChoiceIcon`).
 struct EngineIcon: View {
     var engine: EngineID
     var size: CGFloat = 32
 
     var body: some View {
-        ModelTile(symbol: engine.symbolName, tint: engine.isLocal ? .accent : .warm, size: size)
+        ModelTile(symbol: engine.symbolName, tint: engine.isLocal ? .accent : .inkSecondary, size: size)
     }
 }
 
@@ -854,8 +839,7 @@ struct ModelChoiceIcon: View {
 
 extension ModelColor {
     /// The model's color in the Hub, the one the pill wears (`PillPalette.accent(for:)`): its tile in Models and the
-    /// sidebar, onboarding's summary. Graphite, the plain pill, is plain ink; orange and violet are the Hub's warm and
-    /// accent.
+    /// sidebar, onboarding's summary. Graphite, the plain pill, is plain ink; orange is the Hub's warm.
     var hubColor: NSColor {
         switch self {
         case .graphite: Palette.inkSecondary
@@ -863,7 +847,7 @@ extension ModelColor {
         case .green: Palette.modelGreen
         case .teal: Palette.modelTeal
         case .blue: Palette.modelBlue
-        case .violet: Palette.accent
+        case .violet: Palette.modelViolet
         case .purple: Palette.modelPurple
         case .pink: Palette.modelPink
         }
@@ -871,7 +855,7 @@ extension ModelColor {
 
     var tint: Color { Color(nsColor: hubColor) }
 
-    /// History's marks, text this small: orange deepened (`HubPalette.apricotInk`), as the key card's is; the others
+    /// History's marks, text this small: orange deepened (`HubPalette.apricotInk`); the others
     /// as `tint`.
     var markTint: Color { self == .orange ? HubPalette.apricotInk : tint }
 }
@@ -1028,8 +1012,8 @@ struct PillModeMiniScreen: View {
         let shape = RoundedRectangle(cornerRadius: compact ? 7 : 9, style: .continuous)
         ZStack(alignment: .bottom) {
             shape.fill(LinearGradient(colors: dark
-                                      ? [Color(nsColor: .hex(0x28243F)), Color(nsColor: .hex(0x2B211C))]
-                                      : [Color(nsColor: .hex(0xECE7FF)), Color(nsColor: .hex(0xFFE9DC))],
+                                      ? [Color(nsColor: .hex(0x2A2A2A)), Color(nsColor: .hex(0x1E1E1E))]
+                                      : [Color(nsColor: .hex(0xF2F2F2)), Color(nsColor: .hex(0xE6E6E6))],
                                       startPoint: .topLeading, endPoint: .bottomTrailing))
             // An app window, suggested rather than drawn.
             RoundedRectangle(cornerRadius: compact ? 3 : 5, style: .continuous)

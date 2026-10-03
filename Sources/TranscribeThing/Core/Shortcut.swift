@@ -299,19 +299,6 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
         }
     }
 
-    /// Hands-free's names the push-to-talk key in `bindings`: that is what finishes it.
-    func subtitle(in bindings: ShortcutBindings) -> String {
-        switch self {
-        case .pushToTalk: "Hold to record, let go to paste."
-        case .handsFree:
-            "Tap to start. Press \(bindings[.pushToTalk]?.compactDescription ?? "the push-to-talk key") to finish, esc to cancel."
-        case .pasteLast: "Paste your most recent transcript again. Your clipboard stays as it was."
-        case .switchModel: "While dictating: switch this dictation to your next model."
-        case .polish: "While dictating: on Gemini, it writes the message you meant; with text selected, it polishes that."
-        case .addToDictionary: "While dictating with a word selected: Gemini and GPT-6 Luna learn it and how it’s spelled."
-        }
-    }
-
     var symbolName: String {
         switch self {
         case .pushToTalk: "mic.fill"

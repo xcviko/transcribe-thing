@@ -1403,7 +1403,7 @@ final class DictationController {
     func pasteLast() {
         guard let last = history.lastSuccessful else {
             toasts.post(Notice(dedupeKey: "pasteLast.empty", style: .info, symbol: "text.badge.xmark",
-                               title: "Nothing to paste yet", body: "Dictate something first.", lifetime: .seconds(3)))
+                               title: "Nothing to paste yet", lifetime: .seconds(3)))
             return
         }
         let text = last.text, model = last.currentKind?.dictationModel

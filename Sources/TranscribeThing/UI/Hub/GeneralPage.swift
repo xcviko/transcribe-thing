@@ -24,7 +24,7 @@ struct GeneralPage: View {
 
     var body: some View {
         @Bindable var settings = settings
-        HubPage("General", subtitle: "Updates, startup, pill and sounds, pasting, history, permissions and logs.") {
+        HubPage("General") {
             HubGroup("Updates") {
                 SettingsGroup {
                     SoftwareUpdateRow()
@@ -44,9 +44,8 @@ struct GeneralPage: View {
                                 .labelsHidden()
                         }
                     }
-                    SettingsRow(title: "Show \(Brand.name) in the Dock",
-                                subtitle: "\(Brand.name) always stays in the menu bar.",
-                                systemImage: "dock.rectangle", iconTint: .inkSecondary) {
+                    SettingsRow(title: "Show \(Brand.name) in the Dock", systemImage: "dock.rectangle",
+                                iconTint: .inkSecondary) {
                         Toggle("", isOn: showInDock)
                             .toggleStyle(.appSwitch)
                             .labelsHidden()
@@ -56,17 +55,12 @@ struct GeneralPage: View {
             HubGroup("Pill & Sounds") {
                 SettingsGroup {
                     pillRow
-                    SettingsRow(title: "Hints above the pill",
-                                subtitle: "The model’s name when you switch, the keys for text you’ve selected, and a word when a "
-                                    + "key does nothing. "
-                                    + "Off, the pill’s color tells the model, and the keys work all the same.",
-                                systemImage: "text.bubble", iconTint: .inkSecondary) {
+                    SettingsRow(title: "Hints above the pill", systemImage: "text.bubble", iconTint: .inkSecondary) {
                         Toggle("", isOn: $settings.showsPillHints)
                             .toggleStyle(.appSwitch)
                             .labelsHidden()
                     }
-                    SettingsRow(title: "Play sounds", subtitle: "Soft clicks when recording starts, stops and pastes.",
-                                systemImage: settings.soundsEnabled ? "speaker.wave.2" : "speaker.slash",
+                    SettingsRow(title: "Play sounds", systemImage: settings.soundsEnabled ? "speaker.wave.2" : "speaker.slash",
                                 iconTint: .inkSecondary) {
                         Toggle("", isOn: playSounds)
                             .toggleStyle(.appSwitch)
@@ -74,16 +68,12 @@ struct GeneralPage: View {
                     }
                 }
             }
-            HubGroup("Pasting", footer: "Each applies to dictations by the models you pick. Polish Selection, History "
-                         + "and Copy keep the text as the model wrote it.") {
+            HubGroup("Pasting") {
                 SettingsGroup {
-                    PastingRuleRow(title: "Add a space after the text",
-                                   subtitle: "So what you say next doesn’t run into it.", systemImage: "space",
+                    PastingRuleRow(title: "Add a space after the text", systemImage: "space",
                                    models: $settings.modelsAddingSpace, stacked: stackedPasting)
-                    PastingRuleRow(title: "Remove the final period",
-                                   subtitle: "Drops a single period at the end. Keeps “…”, “?” and “!”.",
-                                   systemImage: "delete.backward", models: $settings.modelsRemovingFinalPeriod,
-                                   stacked: stackedPasting)
+                    PastingRuleRow(title: "Remove the final period", systemImage: "delete.backward",
+                                   models: $settings.modelsRemovingFinalPeriod, stacked: stackedPasting)
                 }
                 .onGeometryChange(for: Bool.self) { $0.size.width < Self.stackedPastingWidth } action: { stacked in
                     stackedPasting = stacked
@@ -91,9 +81,8 @@ struct GeneralPage: View {
             }
             HubGroup("History") {
                 SettingsGroup {
-                    SettingsRow(title: "Auto-delete history",
-                                subtitle: "Deletes transcripts and their recordings older than this.",
-                                systemImage: "clock.arrow.circlepath", iconTint: .inkSecondary) {
+                    SettingsRow(title: "Auto-delete history", systemImage: "clock.arrow.circlepath",
+                                iconTint: .inkSecondary) {
                         HubMenuPicker(options: AutoDeleteChoice.days, selection: autoDeleteDays,
                                       label: AutoDeleteChoice.label)
                     }
@@ -107,8 +96,7 @@ struct GeneralPage: View {
             }
             HubGroup("Permissions") {
                 SettingsGroup {
-                    PermissionRow(title: "Microphone", subtitle: "Hears you while you hold the key.",
-                                  symbol: "mic.fill", state: permissions.microphone) {
+                    PermissionRow(title: "Microphone", symbol: "mic.fill", state: permissions.microphone) {
                         if permissions.microphone == .notDetermined {
                             let permissions = permissions
                             Task { _ = await permissions.requestMicrophone() }
@@ -185,15 +173,15 @@ struct GeneralPage: View {
     }
 
     /// "Deletes 1,204 transcripts and their recordings (2.3 GB).", the size once it's known.
+    /// "10 transcripts · 12 MB".
     private var clearSubtitle: String {
-        guard !history.entries.isEmpty else { return "History is empty." }
-        let size = recordingsBytes.flatMap { $0 > 0 ? " (\(Fmt.bytes($0)))" : nil } ?? ""
-        return "Deletes \(Fmt.number(history.entries.count)) transcripts and their recordings\(size)."
+        guard !history.entries.isEmpty else { return "Empty" }
+        let size = recordingsBytes.flatMap { $0 > 0 ? " · \(Fmt.bytes($0))" : nil } ?? ""
+        return "\(Fmt.number(history.entries.count)) transcripts\(size)"
     }
 
     private var pillRow: some View {
-        SettingsRow(title: "Show the pill", subtitle: PillCaption.text(settings.pillMode),
-                    systemImage: "capsule", iconTint: .inkSecondary) {
+        SettingsRow(title: "Show the pill", systemImage: "capsule", iconTint: .inkSecondary) {
             HubSegmentedPicker(options: PillMode.allCases, selection: settings.pillMode, label: \.title) { mode in
                 settings.pillMode = mode
             }
@@ -225,17 +213,18 @@ struct GeneralPage: View {
         Binding(get: { settings.showDockIcon }, set: { settings.showDockIcon = $0 })
     }
 
-    private var loginSubtitle: String {
+    /// Only what needs doing: an error, or the approval macOS waits for.
+    private var loginSubtitle: String? {
         if let loginError { return loginError }
         if launchAtLogin.requiresApproval { return "Waiting for your approval in Login Items." }
-        return "Start quietly in the menu bar when you log in."
+        return nil
     }
 
-    private var accessibilitySubtitle: String {
+    private var accessibilitySubtitle: String? {
         if permissions.accessibility != .granted && permissions.accessibilityLikelyStale {
             return "\(Brand.name) was updated. Remove it from the list, then add it back."
         }
-        return "Pastes text into other apps and listens for your shortcut."
+        return nil
     }
 }
 
@@ -278,10 +267,7 @@ private struct LogsRow: View {
     @State private var isExporting = false
 
     var body: some View {
-        SettingsRow(title: "Logs",
-                    subtitle: "The last \(hub.diagnostics.log.limits.days) days of what the app did, without your "
-                        + "dictations or key. Send the file if something breaks.",
-                    systemImage: "doc.text.magnifyingglass", iconTint: .inkSecondary) {
+        SettingsRow(title: "Logs", systemImage: "doc.text.magnifyingglass", iconTint: .inkSecondary) {
             Button("Export Logs…", action: export)
                 .buttonStyle(SecondaryButtonStyle(size: .small))
                 .disabled(isExporting)
@@ -319,7 +305,7 @@ private struct LogsRow: View {
 
 private struct PermissionRow: View {
     var title: String
-    var subtitle: String
+    var subtitle: String?
     var symbol: String
     var state: PermissionState
     var action: () -> Void
@@ -381,9 +367,6 @@ private struct AboutCard: View {
                         .font(.system(size: 12))
                         .monospacedDigit()
                         .foregroundStyle(.inkSecondary)
-                    Text("Speak, and it types. Transcription only, no rewriting.")
-                        .typeface(.callout)
-                        .foregroundStyle(.inkTertiary)
                 }
                 Spacer(minLength: 8)
                 Button {
@@ -401,7 +384,7 @@ private struct AboutCard: View {
 /// A General → Pasting rule and the models it applies to: the chips beside its text, or under it in a narrow window.
 private struct PastingRuleRow: View {
     var title: String
-    var subtitle: String
+    var subtitle: String?
     var systemImage: String
     @Binding var models: Set<ModelChoice>
     var stacked: Bool

@@ -654,7 +654,6 @@ extension AppError {
         case .noSpeech:
             return Copy(style: .info, symbol: "waveform",
                         title: "No speech detected",
-                        body: "Hold the key while you talk.",
                         sound: nil, seconds: 4)
         case .engineFailed(let e, _):
             return Copy(title: "Couldn’t transcribe",

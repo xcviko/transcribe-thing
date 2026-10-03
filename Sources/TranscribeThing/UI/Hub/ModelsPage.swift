@@ -12,23 +12,16 @@ struct ModelsPage: View {
     @Environment(OpenRouterAccount.self) private var account
 
     @State private var keyFocusRequest = 0
-    @State private var freeBytes: Int64?
-    /// Narrow window: the local model drops "Private" and "Offline" and keeps "Recommended".
-    @State private var compactBadges = false
     /// The model being dragged by its handle, while it is.
     @State private var dragged: ModelChoice?
 
-    /// Below this list width the local model's full badge row stops fitting beside its actions.
-    static let compactBadgeWidth: CGFloat = 640
-
     var body: some View {
         ScrollViewReader { proxy in
-            HubPage("Models", subtitle: "Every dictation starts on your main model. Switch to another while you talk.") {
-                HubGroup("Your models",
-                         footer: "Drag to change the order. Switch model steps through the ones that are on, starting from your main model. Click a model’s icon to change its color.") {
-                    SwitchModelLineView(lineup: settings.lineup, binding: settings.shortcuts[.switchModel],
-                                        blocked: settings.lineup.steps.filter { !hub.readiness(of: $0).isUsable }) {
-                        hub.show(.shortcuts)
+            HubPage("Models") {
+                HubGroup("Your models") {
+                    // Only when it can't work: Switch model has no shortcut.
+                    if SwitchModelLine.status(binding: settings.shortcuts[.switchModel], lineup: settings.lineup) == .unbound {
+                        SwitchModelUnboundLine { hub.show(.shortcuts) }
                     }
                     SettingsGroup {
                         ForEach(settings.lineup.order) { choice in
@@ -40,22 +33,17 @@ struct ModelsPage: View {
                 }
                 HubGroup("Hands-free") {
                     SettingsGroup {
-                        SettingsRow(title: "Hands-free dictations use", subtitle: handsFreeSubtitle,
-                                    systemImage: "lock.fill", iconTint: .inkSecondary) {
+                        SettingsRow(title: "Hands-free dictations use", systemImage: "lock.fill", iconTint: .inkSecondary) {
                             HubMenuPicker(options: handsFreeOptions, selection: handsFreeModel,
                                           label: handsFreeLabel)
                         }
                     }
                 }
 
-                HubGroup("Where Parakeet runs", footer: "For Parakeet v3, with or without clean-up.") {
+                HubGroup("Where Parakeet runs") {
                     SettingsGroup {
                         ForEach(EngineID.parakeetRuntimes) { engine in row(engine, proxy: proxy) }
                     }
-                    .onGeometryChange(for: Bool.self) { $0.size.width < Self.compactBadgeWidth } action: { compact in
-                        compactBadges = compact
-                    }
-                    storageLine
                 }
                 HubGroup("OpenRouter") {
                     OpenRouterKeyCard(focusRequest: keyFocusRequest)
@@ -69,9 +57,6 @@ struct ModelsPage: View {
             return false
         }
         .onDisappear { dragged = nil }
-        .task(id: models.diskUsageBytes) {
-            freeBytes = hub.paths.freeDiskBytes()
-        }
         .task { account.refreshIfStale(maxAge: 300) }
     }
 
@@ -80,7 +65,6 @@ struct ModelsPage: View {
             engine: engine,
             isSelected: settings.parakeetEngine == engine,
             isPendingSwitch: models.pendingSelection == engine,
-            compactBadges: compactBadges,
             choose: { choose(engine, proxy: proxy) },
             use: { use(engine) },
             focusKey: { focusKey(proxy) })
@@ -135,8 +119,6 @@ struct ModelsPage: View {
         keyFocusRequest += 1
     }
 
-    // MARK: Storage
-
     // MARK: Hands-free
 
     /// The main model (no switch), then the models Switch model steps to.
@@ -153,31 +135,6 @@ struct ModelsPage: View {
         choice?.title(parakeet: settings.parakeetEngine) ?? "Main model"
     }
 
-    private var handsFreeSubtitle: String {
-        let key = settings.shortcuts[.handsFree]?.compactDescription ?? "The hands-free shortcut"
-        return "\(key) switches to it as it starts, like Switch model. Holding the key stays on your main model."
-    }
-
-    private var storageLine: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "internaldrive")
-                .font(.system(size: 11, weight: .medium))
-            Text(storageText)
-                .monospacedDigit()
-        }
-        .typeface(.callout)
-        .foregroundStyle(.inkSecondary)
-        .padding(.horizontal, 4)
-        .padding(.top, 2)
-    }
-
-    /// "Takes 632 MB on disk · 23.6 GB free on this Mac"; just the free space before anything is downloaded.
-    private var storageText: String {
-        let free = freeBytes.flatMap { $0 > 0 ? "\(Fmt.bytes($0)) free on this Mac" : nil }
-        guard models.diskUsageBytes > 0 else { return free ?? "Nothing downloaded yet" }
-        let used = "Takes \(Fmt.bytes(models.diskUsageBytes)) on disk"
-        return free.map { "\(used) · \($0)" } ?? used
-    }
 }
 
 enum ModelsAnchor: Hashable {
@@ -186,79 +143,22 @@ enum ModelsAnchor: Hashable {
 
 // MARK: - Your models
 
-/// What the Switch model shortcut does, with the user's own binding as key caps and the models it steps through
-/// ("Parakeet → Clean-up → Gemini", the main model first, a step that can't run now dimmed); or what's missing for it
-/// to work.
-private struct SwitchModelLineView: View {
-    var lineup: ModelLineup
-    var binding: Shortcut?
-    /// Steps Switch model skips for now (no usable key, not downloaded): their rows below say why.
-    var blocked: [ModelChoice]
+/// Switch model has no shortcut, so nothing switches: says so, with a way to set one.
+private struct SwitchModelUnboundLine: View {
     var openShortcuts: () -> Void
 
     var body: some View {
-        let status = SwitchModelLine.status(binding: binding, lineup: lineup)
         HStack(spacing: 6) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(status.isReady ? Color.accent : Color.inkTertiary)
-            switch status {
-            case .ready(let binding):
-                // Key caps mid-sentence; the sentence is the accessibility label.
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 5) {
-                        Text("Press")
-                        ShortcutChips(shortcut: binding, size: .small)
-                        Text("while dictating:")
-                        chain
-                    }
-                    HStack(spacing: 5) {
-                        Text("Press")
-                        ShortcutChips(shortcut: binding, size: .small)
-                        Text("while dictating to step through them in this order.")
-                    }
-                }
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(SwitchModelLine.explanation(status, lineup: lineup, blocked: blocked))
-            case .alone, .unbound:
-                Text(SwitchModelLine.explanation(status, lineup: lineup))
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if status == .unbound {
-                Button("Set Shortcut", action: openShortcuts)
-                    .buttonStyle(.appQuiet)
-                    .fixedSize()
-            }
+            Text(SwitchModelLine.explanation(.unbound, lineup: .default))
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Set Shortcut", action: openShortcuts)
+                .buttonStyle(.appQuiet)
+                .fixedSize()
         }
         .typeface(.callout)
         .foregroundStyle(.inkSecondary)
         .padding(.horizontal, 4)
         .padding(.bottom, 2)
-        .animation(Theme.Motion.snappy, value: lineup)
-    }
-
-    /// The cycle by short names, the main model's in ink, a blocked step's faint.
-    private var chain: some View {
-        HStack(spacing: 5) {
-            ForEach(Array(lineup.cycle.enumerated()), id: \.element) { index, choice in
-                if index > 0 {
-                    Image(systemName: "arrow.right")
-                        .font(.system(size: 8.5, weight: .bold))
-                        .foregroundStyle(.inkTertiary)
-                }
-                Text(choice.shortName)
-                    .fontWeight(index == 0 ? .semibold : nil)
-                    .foregroundStyle(index == 0 ? Color.ink : blocked.contains(choice) ? Color.inkTertiary.opacity(0.7)
-                                     : Color.inkSecondary)
-            }
-        }
-        .fixedSize()
-    }
-}
-
-private extension SwitchModelLine.Status {
-    var isReady: Bool {
-        if case .ready = self { true } else { false }
     }
 }
 
@@ -294,15 +194,7 @@ private struct LineupRow: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.ink)
                     .lineLimit(1)
-                Text(factLine)
-                    .typeface(.callout)
-                    .foregroundStyle(.inkSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                if let providerNote {
-                    ProviderLine(text: providerNote)
-                }
                 status
-                    .padding(.top, 2)
             }
             Spacer(minLength: 8)
             HStack(spacing: 10) {
@@ -365,30 +257,6 @@ private struct LineupRow: View {
         let target = index + offset
         guard settings.lineup.order.indices.contains(target) else { return }
         withAnimation(Theme.Motion.snappy) { settings.lineup.move(choice, to: target) }
-    }
-
-    // MARK: Copy
-
-    /// What the model is like, with where Parakeet runs.
-    private var factLine: String {
-        let place = parakeet.isLocal ? "on this Mac" : "through OpenRouter"
-        switch choice {
-        case .parakeet:
-            return parakeet.isLocal ? "Fastest · private · on this Mac" : "Fast · through OpenRouter · ≈ $0.09 per hour of audio"
-        case .cleanup:
-            return "\(EngineID.parakeet.modelName) \(place) transcribes, then \(CleanupModel.default.modelName) tidies the text."
-        case .gemini:
-            return "Most accurate · thinks before it writes · pay per use"
-        }
-    }
-
-    /// Who serves it through OpenRouter; nil for Parakeet on this Mac.
-    private var providerNote: String? {
-        switch choice {
-        case .parakeet: ProviderNote.text(parakeet)
-        case .cleanup: "\(CleanupModel.default.modelName) served by \(CleanupModel.default.providerName)’s fast tier only."
-        case .gemini: ProviderNote.text(.geminiFlash)
-        }
     }
 
     // MARK: Status and controls
@@ -614,23 +482,6 @@ private struct StateCapsule: View {
     }
 }
 
-/// "Served by Together.", under a model's fact line, with a server glyph.
-private struct ProviderLine: View {
-    var text: String
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 5) {
-            Image(systemName: "server.rack")
-                .font(.system(size: 9.5, weight: .semibold))
-                .frame(width: 12)
-            Text(text)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .typeface(.callout)
-        .foregroundStyle(.inkTertiary)
-    }
-}
-
 // MARK: - Where Parakeet runs
 
 /// Parakeet v3 on this Mac (download, use, delete) or through OpenRouter: where Parakeet and clean-up run
@@ -639,7 +490,6 @@ private struct ModelRow: View {
     var engine: EngineID
     var isSelected: Bool
     var isPendingSwitch: Bool
-    var compactBadges: Bool
     var choose: () -> Void
     var use: () -> Void
     var focusKey: () -> Void
@@ -664,19 +514,11 @@ private struct ModelRow: View {
             // Parakeet either way, in Parakeet's color: the glyph and the title say where.
             ModelChoiceIcon(choice: .parakeet, parakeet: engine, color: settings.modelColors[.parakeet], size: 36)
             VStack(alignment: .leading, spacing: 3) {
-                ViewThatFits(in: .horizontal) {
-                    titleLine(badges: badges)
-                    titleLine(badges: [])
-                }
-                Text(engine.factLine)
-                    .typeface(.callout)
-                    .foregroundStyle(.inkSecondary)
+                Text(runtimeName)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.ink)
                     .lineLimit(1)
-                if let note = ProviderNote.text(engine) {
-                    ProviderLine(text: note)
-                }
                 status
-                    .padding(.top, 2)
             }
             Spacer(minLength: 8)
             actions
@@ -691,21 +533,6 @@ private struct ModelRow: View {
         .animation(Theme.Motion.hover, value: hovering)
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
-    }
-
-    private var badges: [String] {
-        engine.badges.filter { $0 != "Cloud" && !(compactBadges && EngineID.privacyBadges.contains($0)) }
-    }
-
-    private func titleLine(badges: [String]) -> some View {
-        HStack(spacing: 6) {
-            Text(runtimeName)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.ink)
-                .lineLimit(1)
-                .fixedSize()
-            ForEach(badges, id: \.self) { Badge.engine($0) }
-        }
     }
 
     // MARK: Status

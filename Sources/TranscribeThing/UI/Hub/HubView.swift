@@ -397,7 +397,7 @@ private struct EngineStatusChip: View {
             if cloudParakeet {
                 Image(systemName: "cloud.fill")
                     .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(HubPalette.apricotInk)
+                    .foregroundStyle(.inkTertiary)
             }
         }
     }

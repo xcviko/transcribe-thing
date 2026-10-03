@@ -46,22 +46,18 @@ struct HomePage: View {
     // MARK: Header
 
     private var header: some View {
-        HStack(alignment: .top, spacing: Theme.Spacing.md) {
-            VStack(alignment: .leading, spacing: 8) {
-                TimelineView(.everyMinute) { context in
-                    Text(HubGreeting.text(for: hub.fixedNow ?? context.date, name: hub.firstName))
-                        .typeface(.greeting)
-                        .foregroundStyle(.ink)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                        .accessibilityAddTraits(.isHeader)
-                }
-                hint
+        HStack(alignment: .center, spacing: Theme.Spacing.md) {
+            TimelineView(.everyMinute) { context in
+                Text(HubGreeting.text(for: hub.fixedNow ?? context.date, name: hub.firstName))
+                    .typeface(.greeting)
+                    .foregroundStyle(.ink)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .accessibilityAddTraits(.isHeader)
             }
             Spacer(minLength: Theme.Spacing.md)
             HubSearchField(text: $query, prompt: "Search transcripts", focused: $searchFocused)
                 .frame(width: 220)
-                .padding(.top, 4)
                 .background {
                     Button("Search") { searchFocused = true }
                         .keyboardShortcut("f", modifiers: .command)
@@ -70,30 +66,6 @@ struct HomePage: View {
                         .accessibilityHidden(true)
                 }
         }
-    }
-
-    /// "Hold [fn] to dictate anywhere · [fn] [space] for hands-free"; the second half drops in narrow windows.
-    private var hint: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 6) {
-                holdHint
-                if let handsFree = settings.shortcuts[.handsFree] {
-                    Text("·").foregroundStyle(.inkTertiary)
-                    ShortcutChips(shortcut: handsFree, size: .small)
-                    Text("for hands-free")
-                }
-            }
-            HStack(spacing: 6) { holdHint }
-        }
-        .typeface(.callout)
-        .foregroundStyle(.inkSecondary)
-        .lineLimit(1)
-    }
-
-    @ViewBuilder private var holdHint: some View {
-        Text("Hold")
-        ShortcutChips(shortcut: settings.shortcuts[.pushToTalk], size: .small)
-        Text("to dictate anywhere")
     }
 
     // MARK: Attention
@@ -174,7 +146,8 @@ struct HomePage: View {
                 }
                 .buttonStyle(.plain)
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color(nsColor: .hex(0xB3ACFF)))
+                .foregroundStyle(.white)
+                .underline()
             }
             .padding(.horizontal, 16)
             .frame(height: 36)
@@ -354,7 +327,7 @@ private struct Sparkline: View {
         HStack(alignment: .bottom, spacing: 2.5) {
             ForEach(Array(heights.enumerated()), id: \.offset) { index, h in
                 Capsule(style: .continuous)
-                    .fill(index == heights.count - 1 ? Color.warm : Color.accent.opacity(0.35))
+                    .fill(index == heights.count - 1 ? Color.ink : Color.ink.opacity(0.25))
                     .frame(width: 3, height: max(3, 22 * h))
             }
         }

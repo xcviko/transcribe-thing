@@ -9,7 +9,7 @@ struct MicrophonePage: View {
 
     var body: some View {
         @Bindable var settings = settings
-        HubPage("Microphone", subtitle: "Pick the mic \(Brand.name) listens to.") {
+        HubPage("Microphone") {
             if permissions.microphone != .granted {
                 Callout(.error, symbol: "mic.slash.fill",
                         text: "Microphone access is off, so \(Brand.name) can’t hear anything yet.") {

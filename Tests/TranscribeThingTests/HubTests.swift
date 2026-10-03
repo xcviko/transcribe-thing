@@ -269,12 +269,6 @@ import Testing
             == EngineSummary(name: "Parakeet v3 · Cloud", status: "Ready", tone: .positive))
     }
 
-    @Test func providerNotesNameWhoServesEachCloudModel() {
-        #expect(ProviderNote.text(.parakeetCloud) == "Served by Together.")
-        #expect(ProviderNote.text(.geminiFlash) == "Served by Google AI Studio only.")
-        #expect(ProviderNote.text(.parakeet) == nil)
-    }
-
     @Test func preparingCopyFitsParakeetsShortFirstLoad() throws {
         let input = HubAttention.Input(microphone: .granted, accessibility: .granted, accessibilityLikelyStale: false,
                                        fnKeyUsage: .doNothing, pushToTalkUsesFn: true, engine: .parakeet,
@@ -309,14 +303,6 @@ import Testing
 
     @Test func commandDigitsFollowTheSidebar() {
         #expect(HubSection.sidebar.compactMap(\.shortcutDigit) == ["1", "2", "3", "4", "5", "6"])
-    }
-}
-
-@Suite struct PillCaptionTests {
-    @Test func describesEachMode() {
-        #expect(PillCaption.text(.always) == "A slim bar waits at the bottom of the screen.")
-        #expect(PillCaption.text(.whileDictating) == "Appears when you start talking, then steps aside.")
-        #expect(PillCaption.text(.never) == "Nothing on screen while you dictate. Notices still appear.")
     }
 }
 
@@ -422,7 +408,7 @@ import Testing
 
     /// A model wears one color: its tile in Models and the sidebar, History's marks, and its pill.
     @Test func eachModelWearsThePillsColor() {
-        #expect(ModelColor.violet.hubColor == Palette.accent)
+        #expect(ModelColor.violet.hubColor == Palette.modelViolet, "the accent is ink now")
         #expect(ModelColor.orange.hubColor == Palette.warm)
         #expect(ModelColor.graphite.hubColor == Palette.inkSecondary, "plain")
         #expect(ModelColor.orange.markTint == HubPalette.apricotInk, "deepened for text this small")

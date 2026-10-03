@@ -57,8 +57,8 @@ private struct KeyboardDeck: View {
         let shape = RoundedRectangle(cornerRadius: 13, style: .continuous)
         let dark = scheme == .dark
         shape
-            .fill(LinearGradient(colors: dark ? [Color(nsColor: .hex(0x242321)), Color(nsColor: .hex(0x1B1A19))]
-                                     : [Color(nsColor: .hex(0xE9E5DF)), Color(nsColor: .hex(0xDFDAD2))],
+            .fill(LinearGradient(colors: dark ? [Color(nsColor: .hex(0x242424)), Color(nsColor: .hex(0x1B1B1B))]
+                                     : [Color(nsColor: .hex(0xE6E6E6)), Color(nsColor: .hex(0xDCDCDC))],
                                  startPoint: .top, endPoint: .bottom))
             .overlay {
                 shape.strokeBorder(LinearGradient(colors: [.white.opacity(dark ? 0.08 : 0.7), .black.opacity(dark ? 0.3 : 0.06)],
@@ -141,8 +141,8 @@ private struct KeycapFace: View {
         let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
         let dark = scheme == .dark
         shape
-            .fill(LinearGradient(colors: dark ? [Color(nsColor: .hex(0x3A3936)), Color(nsColor: .hex(0x302F2C))]
-                                     : [Color(nsColor: .hex(0xFFFFFF)), Color(nsColor: .hex(0xF5F3EF))],
+            .fill(LinearGradient(colors: dark ? [Color(nsColor: .hex(0x3A3A3A)), Color(nsColor: .hex(0x303030))]
+                                     : [Color(nsColor: .hex(0xFFFFFF)), Color(nsColor: .hex(0xF4F4F4))],
                                  startPoint: .top, endPoint: .bottom))
             .overlay {
                 if isPressed {

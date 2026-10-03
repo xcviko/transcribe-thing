@@ -7,13 +7,13 @@ import SwiftUI
 
 enum HubPalette {
     /// Sidebar: a shade deeper than the canvas so the content reads as the lit "page".
-    static let sidebar = Color(nsColor: Palette.dynamic("hub.sidebar", light: .hex(0xF2EEE6), dark: .hex(0x111010)))
+    static let sidebar = Color(nsColor: Palette.dynamic("hub.sidebar", light: .hex(0xEFEFEF), dark: .hex(0x0B0B0B)))
     /// Selected sidebar row.
-    static let sidebarSelection = Color(nsColor: Palette.dynamic("hub.sidebarSelection", light: .hex(0xFFFFFF), dark: .hex(0x2A2826)))
+    static let sidebarSelection = Color(nsColor: Palette.dynamic("hub.sidebarSelection", light: .hex(0xFFFFFF), dark: .hex(0x242424)))
     /// Apricot dark enough for text on light surfaces.
     static let apricotInk = Color(nsColor: Palette.dynamic("hub.apricotInk", light: .hex(0xB85A2A), dark: .hex(0xFFB38F)))
     /// Field fill on cards (search, key field, code in release notes).
-    static let field = Color(nsColor: Palette.dynamic("hub.field", light: .hex(0xF7F4EE), dark: .hex(0x171615)))
+    static let field = Color(nsColor: Palette.dynamic("hub.field", light: .hex(0xF5F5F5), dark: .hex(0x141414)))
 }
 
 // MARK: - Page scaffold
@@ -633,14 +633,14 @@ struct EngineGlyph: View {
     }
 }
 
-/// transcribe-thing's mark: an ink-to-iris squircle holding a white capsule with five waveform bars.
+/// transcribe-thing's mark: a black-to-graphite squircle holding a white capsule with five waveform bars.
 struct BrandMark: View {
     var size: CGFloat = 24
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: size * 0.27, style: .continuous)
         ZStack {
-            shape.fill(LinearGradient(colors: [Color(nsColor: .hex(0x2B2470)), Color(nsColor: .hex(0x6A5CF0))],
+            shape.fill(LinearGradient(colors: [Color(nsColor: .hex(0x3A3A3A)), Color(nsColor: .hex(0x000000))],
                                       startPoint: .topLeading, endPoint: .bottomTrailing))
             shape.fill(RadialGradient(colors: [Color.white.opacity(0.22), .clear], center: .topLeading,
                                       startRadius: 0, endRadius: size))
@@ -650,13 +650,13 @@ struct BrandMark: View {
             HStack(spacing: size * 0.045) {
                 ForEach(Array([0.35, 0.7, 1.0, 0.62, 0.3].enumerated()), id: \.offset) { _, h in
                     Capsule(style: .continuous)
-                        .fill(Color(nsColor: .hex(0x3A2F9E)))
+                        .fill(Color(nsColor: .hex(0x111111)))
                         .frame(width: size * 0.055, height: max(size * 0.05, size * 0.2 * h))
                 }
             }
         }
         .frame(width: size, height: size)
-        .shadow(color: Color(nsColor: .hex(0x3A2F9E)).opacity(0.25), radius: size * 0.08, y: size * 0.04)
+        .shadow(color: .black.opacity(0.25), radius: size * 0.08, y: size * 0.04)
         .accessibilityHidden(true)
     }
 }
