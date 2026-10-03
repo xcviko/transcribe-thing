@@ -41,7 +41,7 @@ extension EngineID {
 enum CleanupModel: String, CaseIterable, Codable, Sendable {
     /// Gemini 3.5 Flash Lite on Google AI Studio: what Clean-up used first. Retired (`isRetired`).
     case geminiFlashLite
-    /// GPT-6 Luna on OpenAI with thinking off: about as fast as Flash Lite (1.1 s median in the bench), about 3.5
+    /// GPT-6 Luna on OpenAI's fast tier with thinking off: about as fast as Flash Lite (1.1 s median in the bench), about 3.5
     /// times cheaper, and better at spelling English terms.
     case gpt6Luna
     /// Gemini 3 Flash on Google AI Studio at minimal: dictations' clean-up for a day, faster than Luna (1.0 s median
@@ -96,7 +96,7 @@ enum CleanupModel: String, CaseIterable, Codable, Sendable {
     var provider: OpenRouterChatRequest.Provider {
         switch self {
         case .geminiFlashLite, .gemini3Flash: .googleAIStudio
-        case .gpt6Luna: .openAI
+        case .gpt6Luna: .openAIFast
         }
     }
 

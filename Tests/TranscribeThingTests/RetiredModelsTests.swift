@@ -180,7 +180,7 @@ private let historyFile = #"""
         #expect(bodies.map { $0["model"] as? String } == ["google/gemini-3.8-flash", "openai/gpt-6-luna"])
         #expect(bodies.map { $0["reasoning"] as? [String: AnyHashable] }
                 == [["effort": "medium", "exclude": false], ["effort": "none", "exclude": true]])
-        #expect((bodies[1]["provider"] as? [String: Any])?["only"] as? [String] == ["openai"])
+        #expect((bodies[1]["provider"] as? [String: Any])?["only"] as? [String] == ["openai/fast"])
     }
 }
 

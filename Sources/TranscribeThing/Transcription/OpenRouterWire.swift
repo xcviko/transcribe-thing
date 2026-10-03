@@ -28,8 +28,10 @@ struct OpenRouterChatRequest: Encodable, Equatable {
 
         /// Google AI Studio and nothing else, no fallbacks: every Gemini request.
         static let googleAIStudio = Provider(only: ["google-ai-studio"], allowFallbacks: false)
-        /// OpenAI and nothing else, no fallbacks: GPT-6 Luna as Clean-up.
-        static let openAI = Provider(only: ["openai"], allowFallbacks: false)
+        /// OpenAI's fast tier and nothing else, no fallbacks: GPT-6 Luna (the clean-up, Polish Selection). Twice the
+        /// price of its standard tier, and about 0.3 s sooner on a dictation's clean-up (1.2 s against 1.5 in the
+        /// bench, 0.9 against 1.0 for a short one). A base slug never reaches it: the tier is named outright.
+        static let openAIFast = Provider(only: ["openai/fast"], allowFallbacks: false)
     }
 
     enum CodingKeys: String, CodingKey {
@@ -91,7 +93,7 @@ struct OpenRouterChatRequest: Encodable, Equatable {
 }
 
 /// Where a clean-up request goes and how hard the model thinks. The app sends the clean-up model's
-/// (`CleanupModel.route`): GPT-6 Luna on OpenAI, thinking off.
+/// (`CleanupModel.route`): GPT-6 Luna on OpenAI's fast tier, thinking off.
 struct CleanupRoute: Equatable, Sendable {
     var model: String
     var provider: OpenRouterChatRequest.Provider

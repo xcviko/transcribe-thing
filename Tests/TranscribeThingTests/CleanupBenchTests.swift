@@ -55,7 +55,7 @@ private func entry(minutesAgo: Double, status: TranscriptStatus = .success,
         #expect(CleanupModel.maxTokens(forCharacterCount: 10, effort: .off)
                 == CleanupModel.maxTokens(forCharacterCount: 10, effort: .minimal))
         #expect(options.route == CleanupModel.gpt6Luna.route, "what the app sends for Luna")
-        #expect(options.route.provider == .init(only: ["openai"], allowFallbacks: false))
+        #expect(options.route.provider == .init(only: ["openai/fast"], allowFallbacks: false))
     }
 
     @Test func pinsEachModelToItsOwnProviderUnlessToldOtherwise() throws {
@@ -169,7 +169,7 @@ private func entry(minutesAgo: Double, status: TranscriptStatus = .success,
         let body = try #require(JSONSerialization.jsonObject(with: bodies[0]) as? [String: Any])
         #expect(body["model"] as? String == "openai/gpt-6-luna")
         #expect(body["reasoning"] as? [String: AnyHashable] == ["effort": "none", "exclude": true])
-        #expect(body["provider"] as? [String: AnyHashable] == ["only": ["openai"], "allow_fallbacks": false])
+        #expect(body["provider"] as? [String: AnyHashable] == ["only": ["openai/fast"], "allow_fallbacks": false])
         #expect(body["max_tokens"] as? Int == CleanupModel.maxTokens(forCharacterCount: 18, effort: .minimal))
         let messages = try #require(body["messages"] as? [[String: Any]])
         #expect(messages[0]["content"] as? String == CleanupModel.systemPrompt)
@@ -202,7 +202,7 @@ private func entry(minutesAgo: Double, status: TranscriptStatus = .success,
             as? [String: Any])
         #expect(body["model"] as? String == CleanupModel.gpt6Luna.openRouterModelID)
         #expect(body["reasoning"] as? [String: AnyHashable] == ["effort": "none", "exclude": true])
-        #expect(body["provider"] as? [String: AnyHashable] == ["only": ["openai"], "allow_fallbacks": false])
+        #expect(body["provider"] as? [String: AnyHashable] == ["only": ["openai/fast"], "allow_fallbacks": false])
         #expect(body["max_tokens"] as? Int == CleanupModel.maxTokens(forCharacterCount: 2, effort: .off))
     }
 }

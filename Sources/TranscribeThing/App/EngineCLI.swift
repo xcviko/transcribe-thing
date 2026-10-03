@@ -703,10 +703,10 @@ enum EngineCLI {
                 out = value("--out").map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
             }
 
-            /// The first-party provider each model is pinned to, like the app pins Gemini to Google AI Studio.
+            /// The first-party provider each model is pinned to, as the app pins it: Google AI Studio, OpenAI's fast tier.
             static func provider(forModel model: String) -> String? {
                 if model.hasPrefix("google/") { return "google-ai-studio" }
-                if model.hasPrefix("openai/") { return "openai" }
+                if model.hasPrefix("openai/") { return "openai/fast" }
                 return nil
             }
 

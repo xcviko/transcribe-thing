@@ -111,7 +111,7 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         let reasoning = try #require(json["reasoning"] as? [String: Any])
         #expect(reasoning["effort"] as? String == "none" && reasoning["exclude"] as? Bool == true)
         let provider = try #require(json["provider"] as? [String: Any])
-        #expect(provider["only"] as? [String] == ["openai"] && provider["allow_fallbacks"] as? Bool == false)
+        #expect(provider["only"] as? [String] == ["openai/fast"] && provider["allow_fallbacks"] as? Bool == false)
         #expect(json["max_tokens"] as? Int == CleanupModel.maxTokens(forCharacterCount: 31, effort: .off))
     }
 

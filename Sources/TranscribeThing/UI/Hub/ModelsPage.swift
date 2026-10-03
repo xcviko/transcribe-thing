@@ -386,7 +386,7 @@ private struct LineupRow: View {
     private var providerNote: String? {
         switch choice {
         case .parakeet: ProviderNote.text(parakeet)
-        case .cleanup: "\(CleanupModel.default.modelName) served by \(CleanupModel.default.providerName) only."
+        case .cleanup: "\(CleanupModel.default.modelName) served by \(CleanupModel.default.providerName)’s fast tier only."
         case .gemini: ProviderNote.text(.geminiFlash)
         }
     }
