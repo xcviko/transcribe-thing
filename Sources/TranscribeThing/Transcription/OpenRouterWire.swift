@@ -13,6 +13,8 @@ struct OpenRouterChatRequest: Encodable, Equatable {
     let provider: Provider
     let maxTokens: Int
     let stream: Bool
+    /// Sent only when set (a clean-up route's, from `EngineCLI --cleanup-bench`): otherwise the model's default.
+    var temperature: Double? = nil
 
     struct Reasoning: Encodable, Equatable {
         let effort: String
@@ -31,7 +33,7 @@ struct OpenRouterChatRequest: Encodable, Equatable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case model, messages, reasoning, provider, stream
+        case model, messages, reasoning, provider, stream, temperature
         case maxTokens = "max_tokens"
     }
 
@@ -74,7 +76,8 @@ struct OpenRouterChatRequest: Encodable, Equatable {
             reasoning: Reasoning(effort: route.effort, exclude: !route.streamsReasoning),
             provider: route.provider,
             maxTokens: CleanupModel.maxTokens(forCharacterCount: transcript.count, effort: route.budget),
-            stream: true)
+            stream: true,
+            temperature: route.temperature)
     }
 
     func encoded() throws -> Data {
@@ -98,6 +101,8 @@ struct CleanupRoute: Equatable, Sendable {
     /// with its first thought, and the pill counts them. Off, the model's first word is the start, which a thinking
     /// model reaches only after all of its thinking.
     var streamsReasoning = false
+    /// The model's default when nil (every clean-up model the app offers).
+    var temperature: Double?
 
     init(model: String, effort: ReasoningEffort, provider: OpenRouterChatRequest.Provider) {
         self.init(model: model, provider: provider, effort: effort.rawValue, budget: effort)

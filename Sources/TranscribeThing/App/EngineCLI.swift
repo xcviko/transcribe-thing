@@ -534,7 +534,7 @@ enum EngineCLI {
                                freeDiskBytes: { 0 })
         let service = TranscriptionService(models: store, account: account, client: client)
         let route = options.route
-        print("BENCH: \(route.model) · effort \(route.effort) · provider \(route.provider.only.joined(separator: ",")) · \(items.count) dictations")
+        print("BENCH: \(route.model) · effort \(route.effort) · provider \(route.provider.only.joined(separator: ","))\(route.temperature.map { " · temperature \($0)" } ?? "") · \(items.count) dictations")
 
         let startedAt = Date()
         let rows = await CleanupBench.run(items, route: route, service: service) { index, row in
@@ -549,6 +549,7 @@ enum EngineCLI {
             print(line)
         }
         let report = CleanupBench.Report(model: route.model, provider: route.provider.only, effort: route.effort,
+                                         temperature: route.temperature,
                                          maxTokensSizedFor: route.budget.rawValue, prompt: "CleanupModel.systemPrompt",
                                          history: options.history.path, startedAt: startedAt, items: rows,
                                          summary: CleanupBench.summarize(rows))
@@ -585,7 +586,7 @@ enum EngineCLI {
             static let usage = """
             usage: transcribe-thing --cleanup-bench --history <history.json> --model <openrouter slug> \
             --effort none|minimal|low|medium|high|xhigh|max [--count <n> | --entry <id>] [--provider <slug>] \
-            [--out <report.json>]
+            [--temperature <0-2>] [--out <report.json>]
             """
             static let efforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
             static let defaultCount = 20
@@ -632,6 +633,11 @@ enum EngineCLI {
                 route = CleanupRoute(model: model,
                                      provider: .init(only: [provider], allowFallbacks: false),
                                      effort: effort, budget: Self.budget(for: effort))
+                if arguments.contains("--temperature") {
+                    guard let temperature = value("--temperature").flatMap(Double.init), (0...2).contains(temperature)
+                    else { return nil }
+                    route.temperature = temperature
+                }
                 out = value("--out").map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
             }
 
@@ -726,6 +732,8 @@ enum EngineCLI {
             var model: String
             var provider: [String]
             var effort: String
+            /// nil: the model's default.
+            var temperature: Double?
             var maxTokensSizedFor: String
             var prompt: String
             var history: String
