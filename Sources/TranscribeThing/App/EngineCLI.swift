@@ -13,6 +13,10 @@ import Foundation
 ///                        [--clean-up-effort none|minimal|low|medium|high]]
 ///     transcribe-thing --model-status
 ///
+/// Hidden comparison (not in the usage text): `--speech-model <openrouter slug>` with `--engine parakeetCloud` sends the
+/// recording to another model on the transcriptions endpoint the same way ("openai/whisper-large-v3"). OpenRouter picks
+/// its provider: that endpoint takes no routing preferences.
+///
 /// Hidden diagnostic (not in the usage text): `--parakeet-compute ane|gpu` loads the local model on other Core ML
 /// compute units. Core ML specializes and caches the model per compute unit, so the first run with a new choice
 /// is a cold load, and it can evict the default Neural Engine build (the next default load is cold again).
@@ -135,6 +139,8 @@ enum EngineCLI {
         var cleanupPrompt: String?
         var cleanupEffort: ReasoningEffort?
         var cleanupModel: CleanupModel?
+        /// Another model on the transcriptions endpoint in cloud Parakeet's place.
+        var speechModel: String?
 
         init?(_ arguments: [String]) {
             func value(_ flag: String) -> String? {
@@ -170,6 +176,12 @@ enum EngineCLI {
                 guard let name = value("--clean-up-model"),
                       let model = CleanupModel.offered.first(where: { $0.rawValue == name }) else { return nil }
                 cleanupModel = model
+            }
+            if arguments.contains("--speech-model") {
+                guard engine.cloudAPI == .transcriptions, let slug = value("--speech-model"), slug.contains("/") else {
+                    return nil
+                }
+                speechModel = slug
             }
             if arguments.contains("--parakeet-compute") {
                 guard let preset = value("--parakeet-compute").flatMap(ParakeetCompute.init(rawValue:)) else { return nil }
@@ -253,7 +265,8 @@ enum EngineCLI {
         var runTimes: [TimeInterval] = []
         for run in 1...options.repeatCount {
             var result = try await service.transcribe(recording, engine: options.engine, effort: effort,
-                                                      prompt: options.prompt, upload: options.upload)
+                                                      prompt: options.prompt, upload: options.upload,
+                                                      speechModel: options.speechModel)
             runTimes.append(result.processingTime)
             let speed = result.processingTime > 0 ? audioSeconds / result.processingTime : 0
             var line = "RUN \(run): \(format(result.processingTime, digits: 3)) s · \(format(speed, digits: 1))x real time"

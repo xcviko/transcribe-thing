@@ -85,7 +85,8 @@ final class TranscriptionService {
     /// `background`: Home's work, which lets dictations have the local model first.
     /// `progress` hears how much of a streamed answer has come (Gemini's reasoning and text); Parakeet has none.
     func transcribe(_ recording: Recording, engine: EngineID, effort: ReasoningEffort? = nil,
-                    prompt: String? = nil, upload: UploadFormat? = nil, background: Bool = false,
+                    prompt: String? = nil, upload: UploadFormat? = nil, speechModel: String? = nil,
+                    background: Bool = false,
                     progress: (@Sendable (ChatStreamProgress) -> Void)? = nil) async throws -> TranscriptResult {
         guard !engine.isRetired else {
             throw AppError.engineFailed(engine, "\(engine.displayName) is no longer offered.")
@@ -100,7 +101,7 @@ final class TranscriptionService {
                 let prompt = engine.cloudAPI == .chatCompletions
                     ? UserDictionary.prompt(prompt ?? EngineID.geminiSystemPrompt, with: vocabulary(), heard: true) : ""
                 let cloud = try await transcribeCloud(recording, engine: engine, effort: effort, prompt: prompt,
-                                                      upload: upload, progress: progress)
+                                                      upload: upload, speechModel: speechModel, progress: progress)
                 result.text = cloud.text
                 result.costUSD = cloud.costUSD
                 result.provider = cloud.provider
@@ -135,10 +136,13 @@ final class TranscriptionService {
         }
     }
 
+    /// `speechModel`: another model on the transcriptions endpoint in the engine's place (`EngineCLI --speech-model`,
+    /// to compare one with cloud Parakeet).
     private func transcribeCloud(_ recording: Recording, engine: EngineID, effort: ReasoningEffort?, prompt: String,
-                                 upload: UploadFormat?,
+                                 upload: UploadFormat?, speechModel: String? = nil,
                                  progress: (@Sendable (ChatStreamProgress) -> Void)?) async throws -> CloudResult {
-        guard let model = engine.openRouterModelID, let api = engine.cloudAPI else {
+        guard let model = (engine.cloudAPI == .transcriptions ? speechModel : nil) ?? engine.openRouterModelID,
+              let api = engine.cloudAPI else {
             throw AppError.engineFailed(engine, "No cloud model for \(engine.displayName).")
         }
         guard let key = account.apiKey() else {
