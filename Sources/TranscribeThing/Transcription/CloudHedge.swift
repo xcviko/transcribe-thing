@@ -1,11 +1,12 @@
 import Foundation
 import os
 
-/// Two identical requests at once to the same model (General → Experimental): a dictation's Gemini transcription, or
-/// its clean-up. A model's time varies a lot from one request to the next (Gemini 3.8 Flash thinks anywhere from none
-/// to thousands of tokens), so the first of two answers is often much sooner than either one alone.
+/// Two identical requests at once to the same model: every dictation's cloud request (Gemini 3.8 Flash, its clean-up,
+/// cloud Parakeet). A model's time varies a lot from one request to the next (Gemini 3.8 Flash thinks anywhere from
+/// none to thousands of tokens), so the first of two answers is often much sooner than either one alone.
 enum CloudHedge: Sendable, Equatable {
-    /// The first answer is used and the other request is cancelled.
+    /// The first answer is used and the other request is cancelled, whatever it's doing. What it cost is looked up
+    /// later by its generation (`CloudResult.otherGenerationIDs`) and added to the first one's.
     case race
     /// The first answer is used at once, and the other request runs to its end in the background: how much sooner the
     /// first one came is measured (`Measurement`, logged as `hedge.measured`).
@@ -13,6 +14,13 @@ enum CloudHedge: Sendable, Equatable {
 
     /// What the log calls the request: "transcription", "cleanup".
     enum Kind: String, Sendable { case transcription, cleanup }
+
+    /// What a request hears as it goes: its stream's progress (nil when nobody listens), and its generation id once
+    /// OpenRouter names it.
+    struct Hooks: Sendable {
+        var progress: (@Sendable (ChatStreamProgress) -> Void)?
+        var generation: @Sendable (String) -> Void
+    }
 
     /// Both answers of a measured request, the first one's and the other one's.
     struct Measurement: Sendable, Equatable {
@@ -29,16 +37,17 @@ enum CloudHedge: Sendable, Equatable {
         var saved: TimeInterval? { second.map { $0 - first } }
     }
 
-    /// `work` twice at once; the first answer comes back as soon as it's there. A request that fails leaves the other
-    /// to answer; when both fail, the first failure is thrown. `progress` hears the further of the two streams, so the
-    /// pill's count never goes back. Cancelling the caller before an answer cancels both. `measured` hears both answers
-    /// once the other is in too (`.measure` only).
+    /// `work` twice at once; the first answer comes back as soon as it's there, with the other request's generation in
+    /// `otherGenerationIDs` when OpenRouter had named it. A request that fails leaves the other to answer; when both
+    /// fail, the first failure is thrown. `progress` hears the further of the two streams, so the pill's count never
+    /// goes back. Cancelling the caller before an answer cancels both. `measured` hears both answers once the other is
+    /// in too (`.measure` only).
     static func run(_ mode: CloudHedge, _ kind: Kind, engine: EngineID, modelName: String,
                     progress: (@Sendable (ChatStreamProgress) -> Void)?,
                     measured: (@Sendable (Measurement) -> Void)? = nil,
-                    _ work: @escaping @Sendable (_ progress: (@Sendable (ChatStreamProgress) -> Void)?) async throws
-                        -> CloudResult) async throws -> CloudResult {
+                    _ work: @escaping @Sendable (_ hooks: Hooks) async throws -> CloudResult) async throws -> CloudResult {
         let merger = ProgressMerger(progress)
+        let generations = OSAllocatedUnfairLock(initialState: [String?](repeating: nil, count: 2))
         let race = Race { first, second in
             guard mode == .measure else { return }
             let measurement = Measurement(kind: kind, modelName: modelName, first: first.seconds,
@@ -53,12 +62,12 @@ enum CloudHedge: Sendable, Equatable {
             measured?(measurement)
         }
         let tasks = (0..<2).map { index in
-            let report = merger.reporter(for: index)
+            let hooks = Hooks(progress: merger.reporter(for: index)) { id in generations.withLock { $0[index] = id } }
             return Task {
                 let started = ContinuousClock.now
                 let outcome: Result<CloudResult, any Error>
                 do {
-                    outcome = .success(try await work(report))
+                    outcome = .success(try await work(hooks))
                 } catch {
                     outcome = .failure(error)
                 }
@@ -70,13 +79,17 @@ enum CloudHedge: Sendable, Equatable {
         } onCancel: {
             tasks.forEach { $0.cancel() }
         }
+        var result = first.result
         if mode == .race {
             for (index, task) in tasks.enumerated() where index != first.index { task.cancel() }
+            let others = generations.withLock { ids in ids.enumerated().filter { $0.offset != first.index } }
+                .compactMap(\.element).filter { $0 != result.generationID }
+            result.otherGenerationIDs = others
             DiagnosticLog.shared.event(.engine, "hedge.won", [
                 "kind": kind.rawValue, "engine": engine, "seconds": first.seconds,
-                "reasoning": first.result.reasoningTokens])
+                "reasoning": first.result.reasoningTokens, "otherNamed": !others.isEmpty])
         }
-        return first.result
+        return result
     }
 
     /// The two requests' answers as they come: the first success goes to the caller at once, and `onSecond` hears

@@ -18,9 +18,10 @@ import Testing
     /// A call that answers `text` after `delays[index]`, or throws `failures[index]` then.
     private func work(_ calls: Calls, delays: [Double], texts: [String] = ["first", "second"],
                       failures: [Int: AppError] = [:])
-        -> @Sendable ((@Sendable (ChatStreamProgress) -> Void)?) async throws -> CloudResult {
-        { _ in
+        -> @Sendable (CloudHedge.Hooks) async throws -> CloudResult {
+        { hooks in
             let index = calls.next()
+            hooks.generation("gen-\(index)")
             do {
                 try await Task.sleep(for: .seconds(delays[index]))
             } catch {
@@ -28,7 +29,9 @@ import Testing
                 throw error
             }
             if let failure = failures[index] { throw failure }
-            return CloudResult(text: texts[index])
+            var result = CloudResult(text: texts[index])
+            result.generationID = "gen-\(index)"
+            return result
         }
     }
 
@@ -37,6 +40,7 @@ import Testing
         let result = try await CloudHedge.run(.race, .transcription, engine: .geminiFlash, modelName: "Gemini", progress: nil,
                                               work(calls, delays: [0.6, 0.02], texts: ["slow", "fast"]))
         #expect(result.text == "fast")
+        #expect(result.otherGenerationIDs == ["gen-0"], "the cancelled one's cost is looked up later")
         try await waitUntil { calls.cancelledCalls == [0] }
         #expect(calls.count == 2, "the slow one is stopped")
     }
@@ -74,26 +78,13 @@ import Testing
         #expect((m.second ?? 0) >= 0.99 && (m.saved ?? 0) > 0)
     }
 
-    @Test func theCardSaysHowMuchSoonerAndTheAverage() {
-        let m = CloudHedge.Measurement(kind: .cleanup, modelName: "Gemini 3 Flash", first: 0.9, second: 2.4)
-        let one = DictationController.hedgeCard(m, tally: (1, 1.5))
-        #expect(one.title == "1.5 s sooner by asking twice")
-        #expect(one.body == "Clean-up by Gemini 3 Flash answered in 0.9 s and 2.4 s.")
-        let more = DictationController.hedgeCard(m, tally: (4, 4.0))
-        #expect(more.body?.hasSuffix("This launch: 1.0 s sooner on average over 4.") == true)
-        let failed = DictationController.hedgeCard(CloudHedge.Measurement(kind: .transcription,
-                                                                          modelName: "Gemini 3.8 Flash", first: 3.1),
-                                                   tally: (0, 0))
-        #expect(failed.title == "Asked twice · the other request failed")
-        #expect(failed.body == "Gemini 3.8 Flash answered in 3.1 s.")
-    }
-
     /// The pill hears the further of the two streams: its count never goes back when the other one reports.
     @Test func progressIsTheFurtherOfTheTwo() async throws {
         let heard = OSAllocatedUnfairLock(initialState: [ChatStreamProgress]())
         let calls = Calls()
         _ = try await CloudHedge.run(.race, .transcription, engine: .geminiFlash, modelName: "Gemini",
-                                     progress: { p in heard.withLock { $0.append(p) } }) { report in
+                                     progress: { p in heard.withLock { $0.append(p) } }) { hooks in
+            let report = hooks.progress
             let index = calls.next()
             if index == 0 {
                 report?(ChatStreamProgress(reasoningCharacters: 400, outputCharacters: 0))
@@ -112,21 +103,6 @@ import Testing
     }
 }
 
-/// The settings that turn it on.
-@MainActor
-@Suite struct CloudHedgeSettingsTests {
-    @Test func itsOffUntilTurnedOnAndMeasuresOnlyWhenAsked() {
-        let settings = AppSettings.inMemory()
-        #expect(settings.cloudHedge == nil)
-        settings.measuresSendingTwice = true
-        #expect(settings.cloudHedge == nil, "measuring alone sends nothing twice")
-        settings.sendsTwice = true
-        #expect(settings.cloudHedge == .measure)
-        settings.measuresSendingTwice = false
-        #expect(settings.cloudHedge == .race)
-    }
-}
-
 /// The service sends the very same request twice.
 @MainActor
 @Suite(.serialized) struct CloudHedgeServiceTests {
@@ -135,7 +111,7 @@ import Testing
         let (client, host) = StubURLProtocol.client(replies)
         let account = OpenRouterAccount(keyStore: KeyFileStore.inMemory("sk-or-v1-test"), client: client, debounce: .zero)
         let service = TranscriptionService(models: ModelStore.preview(states: [:]), account: account, client: client)
-        let result = try await service.cleanUp("hello", of: .parakeet, hedge: .measure)
+        let result = try await service.cleanUp("hello", of: .parakeet, hedge: .race)
         #expect(result.text == "Hello.")
         let bodies = try StubURLProtocol.registry.bodies(for: host)
         #expect(bodies.count == 2)
@@ -149,5 +125,50 @@ import Testing
         let service = TranscriptionService(models: ModelStore.preview(states: [:]), account: account, client: client)
         _ = try await service.cleanUp("hello", of: .parakeet)
         #expect(try StubURLProtocol.registry.bodies(for: host).count == 1)
+    }
+}
+
+/// A dictation's cost is what both requests of its pair cost: the cancelled one's is added once OpenRouter has it.
+@MainActor
+@Suite(.serialized) struct CloudHedgeCostTests {
+    private typealias H = DictationControllerTests
+
+    @Test func theCancelledRequestsCostIsAddedToTheDictations() async throws {
+        let h = H.make(keyStatus: .valid(KeyInfo()), persistsHistory: true)
+        defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
+        h.controller.cancelledGenerationDelay = .zero
+        h.controller.generationLookupOverride = { id in
+            id == "gen-other" ? GenerationDetails(provider: "OpenAI", costUSD: 0.00002) : nil
+        }
+        h.controller.cleanupOverride = { _, engine in
+            var result = TranscriptResult(text: "Hello there.", engine: engine, processingTime: 0.9, costUSD: 0.00005,
+                                          provider: "OpenAI", generationID: "gen-won")
+            result.modelID = CleanupModel.gpt6Luna.openRouterModelID
+            result.otherGenerationIDs = ["gen-other"]
+            return result
+        }
+        h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "hello there", engine: engine, processingTime: 0.2) }
+        h.controller.insertOverride = { _ in .pasted }
+        let r = H.recording()
+        h.controller.enqueue(r, engine: .parakeet, cleansUp: true)
+        let kind = TranscriptVersionKind.cleanup(of: .parakeet, by: .gpt6Luna)
+        try await waitUntil { h.history.entry(id: r.id)?.version(kind)?.metadata.pendingGenerationIDs == nil
+            && h.history.entry(id: r.id)?.version(kind) != nil }
+        let cost = try #require(h.history.entry(id: r.id)?.version(kind)?.metadata.costUSD)
+        #expect(abs(cost - 0.00007) < 1e-12, "both requests, as one dictation")
+    }
+}
+
+/// The stream names its generation as soon as OpenRouter does, so a request cancelled midway can still be looked up.
+@MainActor
+@Suite(.serialized) struct GenerationNamingTests {
+    @Test func theStreamNamesItsGenerationEarly() async throws {
+        let (client, _) = StubURLProtocol.client([.stream(SSE.answer("Hello."))])
+        let named = OSAllocatedUnfairLock(initialState: [String]())
+        let result = try await client.cleanUp(transcript: "hello", route: try #require(CleanupModel.gpt6Luna.route),
+                                              systemPrompt: "Tidy it.", apiKey: "sk-or-v1-test", timeout: 10,
+                                              generation: { id in named.withLock { $0.append(id) } })
+        let ids = named.withLock { $0 }
+        #expect(ids.count == 1 && ids.first == result.generationID && result.generationID != nil)
     }
 }

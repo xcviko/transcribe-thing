@@ -77,6 +77,8 @@ final class DictationController {
     @ObservationIgnored var pasteLastOverride: (@MainActor (String) async -> InsertionOutcome)?
     /// Replaces the OpenRouter generation lookup that fills in a delivered cloud transcript's provider.
     @ObservationIgnored var providerLookupOverride: (@MainActor (String) async -> String?)?
+    /// How long after a dictation the cost of the other request of its pair is asked for (`CloudHedge.race`).
+    @ObservationIgnored var cancelledGenerationDelay: Duration = .seconds(3)
     /// Replaces the whole generation lookup (provider, timing); wins over `providerLookupOverride`.
     @ObservationIgnored var generationLookupOverride: (@MainActor (String) async -> GenerationDetails?)?
     /// Replaces the clean-up request: the transcript and the engine that wrote it (the model is the job's).
@@ -265,7 +267,6 @@ final class DictationController {
             self?.modelFailed(engine, error)
         }
         history.onRemove = { [weak self] ids in self?.entriesRemoved(ids) }
-        transcription.hedgeMeasured = { [weak self] measurement in self?.hedgeMeasured(measurement) }
         observeMicrophonePermission()
         observeReturnFinishes()
         observeMenus()
@@ -937,7 +938,7 @@ final class DictationController {
             guard let self else { return }
             var outcome = await self.transcribe(recording, engine: engine,
                                                 prompt: job.polishes ? Polish.prompt : nil,
-                                                hedge: self.settings.cloudHedge, progress: progress)
+                                                hedge: .race, progress: progress)
             guard !Task.isCancelled, job.generation == generation else { return }
             if job.polishes, case .success(var result, _) = outcome {
                 result.text = Polish.message(from: result.text)
@@ -953,7 +954,7 @@ final class DictationController {
                 self.dismissWaitNotice(for: job.id)
                 self.stateDidChange()
                 let cleanup = await self.runCleanup(result.text, of: result.engine, by: .default,
-                                                    hedge: self.settings.cloudHedge,
+                                                    hedge: .race,
                                                     progress: self.streamProgress(for: job, generation: generation))
                 guard !Task.isCancelled, job.generation == generation else { return }
                 outcome = .success(result, cleanup: cleanup)
@@ -999,7 +1000,7 @@ final class DictationController {
     /// `background`: Home's work, which lets dictations have the local model first. `progress`: a dictation's, for
     /// the pill (Home never passes one).
     /// `prompt`: another prompt for Gemini (`Polish.prompt`).
-    /// `hedge`: a dictation's Gemini request goes twice at once (`AppSettings.cloudHedge`); Home's never does.
+    /// `hedge`: a dictation's cloud request goes twice at once (`CloudHedge.race`); Home's never does.
     private func transcribe(_ recording: Recording, engine: EngineID, prompt: String? = nil, background: Bool = false,
                             hedge: CloudHedge? = nil,
                             progress: (@Sendable (ChatStreamProgress) -> Void)? = nil) async -> Outcome {
@@ -1247,35 +1248,55 @@ final class DictationController {
     /// that version changed meanwhile (deleted, or made again).
     private func resolveGeneration(of version: TranscriptVersion, entryID: UUID) {
         let metadata = version.metadata
-        guard let generationID = metadata.generationID,
-              metadata.provider == nil || metadata.costUSD == nil
-                || (metadata.usage != nil && metadata.generationTime == nil) else { return }
+        let needsDetails = metadata.generationID != nil
+            && (metadata.provider == nil || metadata.costUSD == nil
+                || (metadata.usage != nil && metadata.generationTime == nil))
+        let pending = metadata.pendingGenerationIDs ?? []
+        guard needsDetails || !pending.isEmpty else { return }
         let kind = version.kind
         Task { [weak self] in
             guard let self else { return }
-            let details: GenerationDetails?
-            if let override = self.generationLookupOverride {
-                details = await override(generationID)
-            } else if let override = self.providerLookupOverride {
-                details = await override(generationID).map { GenerationDetails(provider: $0) }
-            } else {
-                details = await self.transcription.generationDetails(generationID: generationID)
-            }
-            guard let details, var entry = self.history.entry(id: entryID), entry.status == .success,
-                  entry.version(kind)?.metadata.generationID == generationID else { return }
-            entry.updateMetadata(of: kind) { metadata in
-                metadata.provider = metadata.provider ?? details.provider
-                metadata.latency = metadata.latency ?? details.latency
-                metadata.generationTime = metadata.generationTime ?? details.generationTime
-                metadata.costUSD = metadata.costUSD ?? details.costUSD
-                if details.reasoningTokens != nil, metadata.usage?.reasoningTokens == nil {
-                    var usage = metadata.usage ?? TokenUsage()
-                    usage.reasoningTokens = details.reasoningTokens
-                    metadata.usage = usage
+            if needsDetails, let generationID = metadata.generationID,
+               let details = await self.generationDetails(generationID),
+               var entry = self.history.entry(id: entryID), entry.status == .success,
+               entry.version(kind)?.metadata.generationID == generationID {
+                entry.updateMetadata(of: kind) { metadata in
+                    metadata.provider = metadata.provider ?? details.provider
+                    metadata.latency = metadata.latency ?? details.latency
+                    metadata.generationTime = metadata.generationTime ?? details.generationTime
+                    metadata.costUSD = metadata.costUSD ?? details.costUSD
+                    if details.reasoningTokens != nil, metadata.usage?.reasoningTokens == nil {
+                        var usage = metadata.usage ?? TokenUsage()
+                        usage.reasoningTokens = details.reasoningTokens
+                        metadata.usage = usage
+                    }
                 }
+                self.history.upsert(entry)
             }
-            self.history.upsert(entry)
+            guard !pending.isEmpty else { return }
+            // The other request of the pair: OpenRouter records what a cancelled generation cost a moment after it
+            // stopped. It's added to this version's cost, the two being one dictation.
+            try? await Task.sleep(for: self.cancelledGenerationDelay)
+            for id in pending {
+                let cost = await self.generationDetails(id)?.costUSD
+                DiagnosticLog.shared.event(.engine, "hedge.otherCost", ["cost": cost, "known": cost != nil])
+                guard var entry = self.history.entry(id: entryID), entry.status == .success,
+                      entry.version(kind)?.metadata.pendingGenerationIDs?.contains(id) == true else { continue }
+                entry.updateMetadata(of: kind) { metadata in
+                    if let cost { metadata.costUSD = (metadata.costUSD ?? 0) + cost }
+                    let left = (metadata.pendingGenerationIDs ?? []).filter { $0 != id }
+                    metadata.pendingGenerationIDs = left.isEmpty ? nil : left
+                }
+                self.history.upsert(entry)
+            }
         }
+    }
+
+    /// OpenRouter's record of a generation, or the tests' stand-in for it.
+    private func generationDetails(_ generationID: String) async -> GenerationDetails? {
+        if let override = generationLookupOverride { return await override(generationID) }
+        if let override = providerLookupOverride { return await override(generationID).map { GenerationDetails(provider: $0) } }
+        return await transcription.generationDetails(generationID: generationID)
     }
 
     /// A recording that turned out to be silence leaves nothing behind: no history entry, no kept audio, no
@@ -2559,47 +2580,6 @@ final class DictationController {
         if hotkeys.cardClose != takesEsc { hotkeys.cardClose = takesEsc }
         let keys = CardKeys(returnPastes: count == 1 && !copied && !machine.isRecording, escCloses: !machine.isBusy)
         if toasts.cardKeys != keys { toasts.cardKeys = keys }
-    }
-
-    // MARK: - Asking twice
-
-    /// How much sooner the first of two answers came, over this launch: the count and the seconds, per kind of request.
-    @ObservationIgnored private var hedgeTally: [CloudHedge.Kind: (count: Int, saved: TimeInterval)] = [:]
-
-    /// A request sent twice to measure (General → Experimental) has both its answers: a card says how much sooner the
-    /// first one came, and what that averages over this launch.
-    private func hedgeMeasured(_ measurement: CloudHedge.Measurement) {
-        guard settings.cloudHedge == .measure else { return }
-        toasts.post(Self.hedgeCard(measurement, tally: tally(adding: measurement)))
-    }
-
-    private func tally(adding measurement: CloudHedge.Measurement) -> (count: Int, saved: TimeInterval) {
-        guard let saved = measurement.saved else { return hedgeTally[measurement.kind] ?? (0, 0) }
-        var tally = hedgeTally[measurement.kind] ?? (0, 0)
-        tally.count += 1
-        tally.saved += saved
-        hedgeTally[measurement.kind] = tally
-        return tally
-    }
-
-    nonisolated static let hedgeCardKey = "hedge.measured"
-
-    /// "1.8 s sooner by asking twice": both answers' times, and the average over this launch.
-    nonisolated static func hedgeCard(_ measurement: CloudHedge.Measurement,
-                                      tally: (count: Int, saved: TimeInterval)) -> Notice {
-        func seconds(_ value: TimeInterval) -> String { String(format: "%.1f s", value) }
-        let what = measurement.kind == .cleanup ? "Clean-up by \(measurement.modelName)" : measurement.modelName
-        guard let second = measurement.second, let saved = measurement.saved else {
-            return Notice(dedupeKey: hedgeCardKey, style: .info, symbol: "stopwatch",
-                          title: "Asked twice · the other request failed",
-                          body: "\(what) answered in \(seconds(measurement.first)).", lifetime: .seconds(6))
-        }
-        var body = "\(what) answered in \(seconds(measurement.first)) and \(seconds(second))."
-        if tally.count > 1 {
-            body += " This launch: \(seconds(tally.saved / Double(tally.count))) sooner on average over \(tally.count)."
-        }
-        return Notice(dedupeKey: hedgeCardKey, style: .info, symbol: "stopwatch",
-                      title: "\(seconds(saved)) sooner by asking twice", body: body, lifetime: .seconds(6))
     }
 
     // MARK: - Dictionary

@@ -125,29 +125,6 @@ struct GeneralPage: View {
                     }
                 }
             }
-            HubGroup("Experimental", footer: "For Gemini dictations and clean-up. The other request costs as much again "
-                     + "while it runs.") {
-                SettingsGroup {
-                    SettingsRow(title: "Ask twice, take the first answer",
-                                subtitle: "Each request goes twice at once and the first answer is pasted: a model "
-                                    + "that stops to think long on one doesn’t hold you up.",
-                                systemImage: "arrow.triangle.branch", iconTint: .inkSecondary) {
-                        Toggle("", isOn: $settings.sendsTwice)
-                            .toggleStyle(.appSwitch)
-                            .labelsHidden()
-                    }
-                    SettingsRow(title: "Measure the time it saves",
-                                subtitle: "Lets the other request finish too: a card says how much sooner the first "
-                                    + "answer came, and the average so far.",
-                                systemImage: "stopwatch", iconTint: .inkSecondary) {
-                        Toggle("", isOn: $settings.measuresSendingTwice)
-                            .toggleStyle(.appSwitch)
-                            .labelsHidden()
-                    }
-                    .disabled(!settings.sendsTwice)
-                    .opacity(settings.sendsTwice ? 1 : 0.5)
-                }
-            }
             HubGroup("Troubleshooting") {
                 SettingsGroup {
                     LogsRow()

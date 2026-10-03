@@ -108,6 +108,9 @@ struct CloudResult: Sendable, Equatable {
     var uploads: [AudioUpload] = []
     /// How Gemini's answer held its transcript (`TaggedTranscript`); nil for the other endpoints.
     var answerTags: TaggedTranscript.Tags?
+    /// The other request of a pair sent at once (`CloudHedge.race`), cancelled when this one answered: its
+    /// generations, to add what it cost.
+    var otherGenerationIDs: [String] = []
 
     var reasoningTokens: Int? { usage?.reasoningTokens }
 }
@@ -188,7 +191,8 @@ final class OpenRouterClient: Sendable {
     /// Studio doesn't support stream cancellation, so the model finishes and is paid for in full.
     func transcribe(audio: Data, format: String, model: String, systemPrompt: String?, effort: ReasoningEffort,
                     maxTokens: Int, apiKey: String, timeout: TimeInterval,
-                    progress: (@Sendable (ChatStreamProgress) -> Void)? = nil) async throws -> CloudResult {
+                    progress: (@Sendable (ChatStreamProgress) -> Void)? = nil,
+                    generation: (@Sendable (String) -> Void)? = nil) async throws -> CloudResult {
         let engine = Self.engine(forModel: model)
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw AppError.openRouterMissingKey }
@@ -207,7 +211,7 @@ final class OpenRouterClient: Sendable {
             : (TaggedTranscript.open, TaggedTranscript.close)
         var result: CloudResult
         do {
-            result = try await streamWithRetry(request, engine: engine, progress: progress)
+            result = try await streamWithRetry(request, engine: engine, progress: progress, generation: generation)
         } catch AppError.openRouterTruncated(let partial) {
             throw AppError.openRouterTruncated(TaggedTranscript.extract(partial, open: open, close: close).text)
         }
@@ -226,7 +230,8 @@ final class OpenRouterClient: Sendable {
     /// failure is mapped as a Gemini one. Cancelling stops OpenAI's generation and its bill. The returned text is the
     /// model's reply without any tags or quotes it put around it.
     func cleanUp(transcript: String, route: CleanupRoute, systemPrompt: String, apiKey: String,
-                 timeout: TimeInterval, progress: (@Sendable (ChatStreamProgress) -> Void)? = nil) async throws -> CloudResult {
+                 timeout: TimeInterval, progress: (@Sendable (ChatStreamProgress) -> Void)? = nil,
+                 generation: (@Sendable (String) -> Void)? = nil) async throws -> CloudResult {
         let engine = EngineID.geminiFlash
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw AppError.openRouterMissingKey }
@@ -238,7 +243,7 @@ final class OpenRouterClient: Sendable {
             throw AppError.openRouterBadRequest("Couldn’t build the request.")
         }
         let request = makeTranscriptionRequest(body: body, apiKey: key, timeout: timeout)
-        var result = try await streamWithRetry(request, engine: engine, progress: progress)
+        var result = try await streamWithRetry(request, engine: engine, progress: progress, generation: generation)
         result.text = CleanupModel.cleanedText(from: result.text)
         return result
     }
@@ -311,12 +316,16 @@ final class OpenRouterClient: Sendable {
     /// Sends a chat `request` and reads its answer as it streams in, retrying once per the policy above. Its
     /// `timeoutInterval` is a stall timeout: seconds with no byte at all, OpenRouter's comments included.
     /// `progress` hears at once of the first reasoning and the first text, then at most every 250 ms (a change held
-    /// back goes out with the next line of any kind once that's due).
+    /// back goes out with the next line of any kind once that's due). `generation` hears the request's generation id
+    /// as soon as OpenRouter names it (its headers, else the first chunk): a request cancelled before its answer is
+    /// done can still be looked up for what it cost.
     private func streamWithRetry(_ request: URLRequest, engine: EngineID,
-                                 progress: (@Sendable (ChatStreamProgress) -> Void)?) async throws -> CloudResult {
+                                 progress: (@Sendable (ChatStreamProgress) -> Void)?,
+                                 generation: (@Sendable (String) -> Void)? = nil) async throws -> CloudResult {
         try await withRetry {
             try await watching { activity in
-                try await self.stream(request, engine: engine, progress: progress, activity: activity)
+                try await self.stream(request, engine: engine, progress: progress, generation: generation,
+                                      activity: activity)
             }
         }
     }
@@ -324,6 +333,7 @@ final class OpenRouterClient: Sendable {
     /// One attempt of `streamWithRetry`. A failure before the 200 is retried like any request's; one inside the
     /// stream only when it came quickly and before any of the answer: the model's work is never thrown away.
     private func stream(_ request: URLRequest, engine: EngineID, progress: (@Sendable (ChatStreamProgress) -> Void)?,
+                        generation: (@Sendable (String) -> Void)? = nil,
                         activity: ConnectionActivity) async throws -> CloudResult {
         let started = ContinuousClock.now
         let (bytes, http) = try await open(request, engine: engine)
@@ -331,6 +341,11 @@ final class OpenRouterClient: Sendable {
         guard http.statusCode == 200 else {
             let body = try await Self.prefix(of: bytes, limit: 64 * 1024)
             throw Self.statusFailure(http, body: body, engine: engine)
+        }
+        var named = false
+        if let id = Self.header("X-Generation-Id", in: http) {
+            generation?(id)
+            named = true
         }
         var stream = OpenRouterChatStream()
         var firstToken: TimeInterval?
@@ -348,6 +363,12 @@ final class OpenRouterClient: Sendable {
         func take(_ line: String) -> Bool {
             activity.touch()
             let before = stream.progress
+            defer {
+                if !named, let id = stream.id {
+                    generation?(id)
+                    named = true
+                }
+            }
             if stream.consume(line) {
                 let firstReasoning = before.reasoningCharacters == 0 && stream.progress.reasoningCharacters > 0
                 let firstText = before.outputCharacters == 0 && stream.progress.outputCharacters > 0

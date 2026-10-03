@@ -35,6 +35,9 @@ struct TranscriptResult: Sendable, Equatable {
     var uploads: [AudioUpload] = []
     /// How Gemini's answer held its transcript (`TaggedTranscript`). Not kept in history.
     var answerTags: TaggedTranscript.Tags? = nil
+    /// The other request of the pair, cancelled when this one answered (`CloudHedge.race`): its generations, whose
+    /// cost is added to this one's once OpenRouter has it (`TranscriptMetadata.pendingGenerationIDs`).
+    var otherGenerationIDs: [String] = []
 
     /// Everything known about how this result came about, for its history version.
     func metadata(createdAt: Date = Date()) -> TranscriptMetadata {
@@ -43,7 +46,8 @@ struct TranscriptResult: Sendable, Equatable {
                            processingTime: processingTime, timeToFirstToken: timeToFirstToken,
                            generationTime: generationTime, usedSystemPrompt: usedSystemPrompt,
                            finishReason: finishReason, audioSeconds: audioSeconds,
-                           reasoningCharacters: reasoningCharacters)
+                           reasoningCharacters: reasoningCharacters,
+                           pendingGenerationIDs: otherGenerationIDs.isEmpty ? nil : otherGenerationIDs)
     }
 
     /// This result as a history version of `kind` (a transcription by its engine unless said otherwise).
@@ -92,7 +96,7 @@ final class TranscriptionService {
     /// its own, a refusal of it failing rather than going again as WAV (`--upload`). The app passes only `prompt`.
     /// `background`: Home's work, which lets dictations have the local model first.
     /// `progress` hears how much of a streamed answer has come (Gemini's reasoning and text); Parakeet has none.
-    /// `hedge`: Gemini gets the request twice at once (`CloudHedge`); the speech endpoint never does.
+    /// `hedge`: the cloud request goes twice at once (`CloudHedge`): Gemini's, or each of cloud Parakeet's segments.
     func transcribe(_ recording: Recording, engine: EngineID, effort: ReasoningEffort? = nil,
                     prompt: String? = nil, upload: UploadFormat? = nil, speechModel: String? = nil,
                     hedge: CloudHedge? = nil, background: Bool = false,
@@ -126,6 +130,7 @@ final class TranscriptionService {
                 result.reasoningCharacters = cloud.reasoningCharacters
                 result.timeToFirstToken = cloud.timeToFirstToken
                 result.answerTags = cloud.answerTags
+                result.otherGenerationIDs = cloud.otherGenerationIDs
                 result.uploads = cloud.uploads
             }
             result.text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -167,7 +172,7 @@ final class TranscriptionService {
                                                       hedge: hedge, progress: progress)
             case .transcriptions:
                 result = try await transcribeSpeech(recording.samples, engine: engine, model: model, key: key,
-                                                    upload: upload)
+                                                    upload: upload, hedge: hedge)
             }
             account.noteCloudSuccess()
             return result
@@ -196,16 +201,16 @@ final class TranscriptionService {
         try Task.checkCancellation()
         let maxTokens = OpenRouterClient.transcriptionMaxTokens(audioSeconds: Double(samples.count) / Recording.sampleRate)
         let client = client, timeout = engine.cloudTimeout
-        let send: @Sendable ((@Sendable (ChatStreamProgress) -> Void)?) async throws -> CloudResult = { progress in
+        let send: @Sendable (CloudHedge.Hooks) async throws -> CloudResult = { hooks in
             try await client.transcribe(audio: audio, format: format.rawValue, model: model, systemPrompt: prompt,
                                         effort: effort, maxTokens: maxTokens, apiKey: key, timeout: timeout,
-                                        progress: progress)
+                                        progress: hooks.progress, generation: hooks.generation)
         }
         var result = if let hedge {
             try await CloudHedge.run(hedge, .transcription, engine: engine, modelName: engine.modelName,
                                      progress: progress, measured: measuredReporter, send)
         } else {
-            try await send(progress)
+            try await send(CloudHedge.Hooks(progress: progress) { _ in })
         }
         result.uploads = [AudioUpload(format: format, bytes: audio.count, generationID: result.generationID)]
         return result
@@ -218,14 +223,14 @@ final class TranscriptionService {
     /// the first segment's generation stands for the whole. The Gemini system prompt doesn't apply, and no language is
     /// sent: Parakeet v3 detects it.
     private func transcribeSpeech(_ samples: [Float], engine: EngineID, model: String, key: String,
-                                  upload: UploadFormat?) async throws -> CloudResult {
+                                  upload: UploadFormat?, hedge: CloudHedge? = nil) async throws -> CloudResult {
         let ranges = await Task.detached(priority: .userInitiated) { CloudAudio.speechSegments(samples) }.value
         var results: [CloudResult] = []
         for range in ranges {
             try Task.checkCancellation()
             do {
                 results.append(try await transcribeSegment(samples, range, format: upload ?? speechFormat,
-                                                           engine: engine, model: model, key: key))
+                                                           engine: engine, model: model, key: key, hedge: hedge))
             } catch let refused as OpenRouterClient.AudioFormatRefused
                         where upload == nil && refused.format != UploadFormat.wav.rawValue {
                 Log.net.warning("OpenRouter refused \(refused.format, privacy: .public) for \(engine.rawValue, privacy: .public): sending WAV from now on")
@@ -233,7 +238,7 @@ final class TranscriptionService {
                                            ["engine": engine, "format": refused.format])
                 speechFormat = .wav
                 results.append(try await transcribeSegment(samples, range, format: .wav, engine: engine,
-                                                           model: model, key: key))
+                                                           model: model, key: key, hedge: hedge))
             }
         }
         return Self.joined(results)
@@ -241,12 +246,21 @@ final class TranscriptionService {
 
     /// One of Parakeet's segments in `format` (`CloudAudio.forSpeech`: WAV when that encoder fails).
     private func transcribeSegment(_ samples: [Float], _ range: Range<Int>, format: UploadFormat, engine: EngineID,
-                                   model: String, key: String) async throws -> CloudResult {
+                                   model: String, key: String, hedge: CloudHedge? = nil) async throws -> CloudResult {
         let file = await Task.detached(priority: .userInitiated) {
             CloudAudio.forSpeech(Array(samples[range]), format: format)
         }.value
-        var result = try await client.transcribeSpeech(audio: file.data, format: file.format.rawValue, model: model,
-                                                       apiKey: key, timeout: engine.cloudTimeout)
+        let client = client, timeout = engine.cloudTimeout
+        let send: @Sendable (CloudHedge.Hooks) async throws -> CloudResult = { _ in
+            try await client.transcribeSpeech(audio: file.data, format: file.format.rawValue, model: model,
+                                              apiKey: key, timeout: timeout)
+        }
+        var result = if let hedge {
+            try await CloudHedge.run(hedge, .transcription, engine: engine, modelName: engine.displayName,
+                                     progress: nil, measured: measuredReporter, send)
+        } else {
+            try await send(CloudHedge.Hooks(progress: nil) { _ in })
+        }
         result.uploads = [AudioUpload(format: file.format, bytes: file.data.count, generationID: result.generationID)]
         return result
     }
@@ -262,6 +276,7 @@ final class TranscriptionService {
         combined.costUSD = Self.sum(results.map(\.costUSD))
         combined.provider = results.lazy.compactMap(\.provider).first
         combined.uploads = results.flatMap(\.uploads)
+        combined.otherGenerationIDs = results.flatMap(\.otherGenerationIDs)
         return combined
     }
 
@@ -303,12 +318,12 @@ final class TranscriptionService {
         let started = ContinuousClock.now
         let answer = AnswerStart()
         do {
-            let send: @Sendable ((@Sendable (ChatStreamProgress) -> Void)?) async throws -> CloudResult = { report in
+            let send: @Sendable (CloudHedge.Hooks) async throws -> CloudResult = { hooks in
                 try await client.cleanUp(transcript: transcript, route: route, systemPrompt: prompt, apiKey: key,
-                                         timeout: limit) { streamed in
+                                         timeout: limit, progress: { streamed in
                     if streamed.outputCharacters > 0 || streamed.reasoningCharacters > 0 { answer.mark() }
-                    report?(streamed)
-                }
+                    hooks.progress?(streamed)
+                }, generation: hooks.generation)
             }
             let measured = measuredReporter, modelName = model.modelName
             let cloud = try await Self.untilAnswerStarts(limit, answer, source: source) {
@@ -316,7 +331,7 @@ final class TranscriptionService {
                     try await CloudHedge.run(hedge, .cleanup, engine: source, modelName: modelName, progress: progress,
                                              measured: measured, send)
                 } else {
-                    try await send(progress)
+                    try await send(CloudHedge.Hooks(progress: progress) { _ in })
                 }
             }
             account.noteCloudSuccess()
@@ -334,6 +349,7 @@ final class TranscriptionService {
             result.serviceTier = cloud.serviceTier
             result.reasoningCharacters = cloud.reasoningCharacters
             result.timeToFirstToken = cloud.timeToFirstToken
+            result.otherGenerationIDs = cloud.otherGenerationIDs
             return result
         } catch let error as AppError {
             account.noteCloudFailure(error)

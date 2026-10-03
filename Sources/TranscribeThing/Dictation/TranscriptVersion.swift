@@ -191,12 +191,16 @@ struct TranscriptMetadata: Codable, Equatable, Sendable {
     /// reasoning it's billed for (`usage.reasoningTokens`). Their ratio calibrates the pill's live count
     /// (`TokenEstimate`).
     var reasoningCharacters: Int?
+    /// The other request of the pair sent at once, cancelled when this one answered (`CloudHedge.race`): its
+    /// generations, until what each cost is added to `costUSD`.
+    var pendingGenerationIDs: [String]?
 
     init(createdAt: Date = Date(), modelID: String? = nil, provider: String? = nil, generationID: String? = nil,
          reasoningEffort: ReasoningEffort? = nil, usage: TokenUsage? = nil, costUSD: Double? = nil,
          processingTime: TimeInterval? = nil, timeToFirstToken: TimeInterval? = nil,
          generationTime: TimeInterval? = nil, latency: TimeInterval? = nil, usedSystemPrompt: Bool? = nil,
-         finishReason: String? = nil, audioSeconds: Double? = nil, reasoningCharacters: Int? = nil) {
+         finishReason: String? = nil, audioSeconds: Double? = nil, reasoningCharacters: Int? = nil,
+         pendingGenerationIDs: [String]? = nil) {
         self.createdAt = createdAt
         self.modelID = modelID
         self.provider = provider
@@ -212,6 +216,7 @@ struct TranscriptMetadata: Codable, Equatable, Sendable {
         self.finishReason = finishReason
         self.audioSeconds = audioSeconds
         self.reasoningCharacters = reasoningCharacters
+        self.pendingGenerationIDs = pendingGenerationIDs
     }
 
     /// Lenient: a field this build can't read (a reasoning level from a newer build) is dropped, not the version.
@@ -232,6 +237,7 @@ struct TranscriptMetadata: Codable, Equatable, Sendable {
         finishReason = try? c.decodeIfPresent(String.self, forKey: .finishReason)
         audioSeconds = try? c.decodeIfPresent(Double.self, forKey: .audioSeconds)
         reasoningCharacters = try? c.decodeIfPresent(Int.self, forKey: .reasoningCharacters)
+        pendingGenerationIDs = try? c.decodeIfPresent([String].self, forKey: .pendingGenerationIDs)
     }
 
     /// A compact line for a menu item: "76 s · $0.07 · 17.7k thinking", "0.4 s". Empty when nothing is known.

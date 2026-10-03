@@ -13,6 +13,9 @@ import Foundation
 ///                        [--clean-up-effort none|minimal|low|medium|high]]
 ///     transcribe-thing --model-status
 ///
+/// Hidden comparison (not in the usage text): `--hedge race|measure` sends a cloud engine's request twice at once, as
+/// dictations do (`CloudHedge`); `measure` lets both run to their end and prints both times (`HEDGE:`).
+///
 /// Hidden comparison (not in the usage text): `--speech-model <openrouter slug>` with `--engine parakeetCloud` sends the
 /// recording to another model on the transcriptions endpoint the same way ("openai/whisper-large-v3"). OpenRouter picks
 /// its provider: that endpoint takes no routing preferences.
@@ -141,6 +144,8 @@ enum EngineCLI {
         var cleanupModel: CleanupModel?
         /// Another model on the transcriptions endpoint in cloud Parakeet's place.
         var speechModel: String?
+        /// The request twice at once (`--hedge`).
+        var hedge: CloudHedge?
 
         init?(_ arguments: [String]) {
             func value(_ flag: String) -> String? {
@@ -182,6 +187,13 @@ enum EngineCLI {
                     return nil
                 }
                 speechModel = slug
+            }
+            if arguments.contains("--hedge") {
+                switch value("--hedge") {
+                case "race" where engine.isCloud: hedge = .race
+                case "measure" where engine.isCloud: hedge = .measure
+                default: return nil
+                }
             }
             if arguments.contains("--parakeet-compute") {
                 guard let preset = value("--parakeet-compute").flatMap(ParakeetCompute.init(rawValue:)) else { return nil }
@@ -261,13 +273,24 @@ enum EngineCLI {
 
         var recording = Recording(samples: samples)
         if options.engine.isCloud, isKeptLikeHistory(url) { recording.aacFile = url }
+        var measurements = 0
+        service.hedgeMeasured = { m in
+            let second = m.second.map { format($0, digits: 3) + " s" } ?? "failed"
+            print("HEDGE: first \(format(m.first, digits: 3)) s · second \(second)")
+            measurements += 1
+        }
         var last: TranscriptResult?
         var runTimes: [TimeInterval] = []
         for run in 1...options.repeatCount {
             var result = try await service.transcribe(recording, engine: options.engine, effort: effort,
                                                       prompt: options.prompt, upload: options.upload,
-                                                      speechModel: options.speechModel)
+                                                      speechModel: options.speechModel, hedge: options.hedge)
             runTimes.append(result.processingTime)
+            // Measuring: the other request finishes before the next run, so the two runs don't overlap.
+            if options.hedge == .measure {
+                let deadline = ContinuousClock.now + .seconds(120)
+                while measurements < run, ContinuousClock.now < deadline { try? await Task.sleep(for: .milliseconds(20)) }
+            }
             let speed = result.processingTime > 0 ? audioSeconds / result.processingTime : 0
             var line = "RUN \(run): \(format(result.processingTime, digits: 3)) s · \(format(speed, digits: 1))x real time"
             if let cost = result.costUSD { line += " · $\(String(format: "%.5f", cost))" }

@@ -59,17 +59,6 @@ final class AppSettings {
     /// What floats above the pill to say what's going on: the model's name after a switch, the keys for selected text,
     /// the Switch model hint. Off, the pill's color tells the model, and the keys work all the same.
     var showsPillHints: Bool = true { didSet { store.set(showsPillHints, .showsPillHints) } }
-    /// Experimental: a dictation's Gemini transcription and its clean-up go twice at once, and the first answer is
-    /// used (`CloudHedge`). Costs up to twice as much.
-    var sendsTwice: Bool = false { didSet { store.set(sendsTwice, .sendsTwice) } }
-    /// With `sendsTwice`: the second request runs to its end too, and the log says how much time the first one saved.
-    var measuresSendingTwice: Bool = false { didSet { store.set(measuresSendingTwice, .measuresSendingTwice) } }
-
-    /// How a dictation's cloud requests go: once (nil), or twice at once.
-    var cloudHedge: CloudHedge? {
-        guard sendsTwice else { return nil }
-        return measuresSendingTwice ? .measure : .race
-    }
     /// The only mic dictation opens while it is connected. nil = Automatic: the system default input (Bluetooth
     /// included) at the moment a dictation starts. A picked mic that goes away falls back to Automatic
     /// (`InputDevicePolicy.keepsPick`), and is picked again when it's back (`microphoneUIDBeforeFallback`).
@@ -230,8 +219,9 @@ final class AppSettings {
         store.remove(.pillColor)
         if let v = store.bool(.soundsEnabled) { soundsEnabled = v }
         if let v = store.bool(.showsPillHints) { showsPillHints = v }
-        if let v = store.bool(.sendsTwice) { sendsTwice = v }
-        if let v = store.bool(.measuresSendingTwice) { measuresSendingTwice = v }
+        // Asking twice was a switch for a day (General → Experimental); every dictation does it now.
+        store.remove(.sendsTwice)
+        store.remove(.measuresSendingTwice)
         // Older builds had a volume slider; sounds now play at their files' own level. A slider left at zero
         // meant no sounds, so it turns "Play sounds" off once, and the old key goes.
         if let volume = store.double(.soundVolume) {
@@ -404,6 +394,7 @@ enum SettingsKey: String, CaseIterable {
     case returnFinishesHandsFree = "returnSendsHandsFree"
     /// Polish's default left fn ↩ for fn P: set once its old default has been moved (`load`).
     case polishMovedToFnP, showsPillHints
+    /// The day-old switches of asking twice (`CloudHedge`), removed at load: every dictation asks twice now.
     case sendsTwice, measuresSendingTwice
     case polishSelectionModel
 
