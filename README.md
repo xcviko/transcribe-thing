@@ -25,10 +25,12 @@ When a new version is out, the app tells you, and Update Now in General → Soft
 | To | Press |
 |---|---|
 | Dictate | hold **fn**, speak, let go |
-| Dictate without holding a key | **fn Space** to start, **fn** to finish |
+| Dictate without holding a key | **fn Space** to start, **fn** or **return** to finish |
 | Cancel | **esc** (Undo brings it back) |
 | Switch model while you talk | **fn ⇥** |
-| Get the message you meant, not every word (Gemini) | **fn ↩** while you talk |
+| Get the message you meant, not every word (Gemini) | **fn P** while you talk |
+| Polish text you've selected (on Parakeet) | select it, hold **fn**, press **P** |
+| Teach the cloud models a word or a name | select it, hold **fn**, press **D** |
 | Paste the last transcript again | **⌘ fn V** |
 
 Change any of them except esc in Shortcuts. A small pill at the bottom of the screen shows that you're recording;
@@ -37,6 +39,10 @@ General → Show the pill chooses always, only while you dictate, or never.
 Pasting leaves your clipboard as it was. To copy a transcript, use Copy Last Transcript in the menu bar or Copy in
 History.
 
+fn P and fn D read the selected text through Accessibility. In apps that don't share it that way (Chrome, and
+Electron apps such as VS Code or Claude), they copy it with ⌘C and put your clipboard back right after. A clipboard
+manager may still keep the selected text.
+
 ## Models
 
 - **Parakeet v3** (the default) runs on your Mac. It's the fastest, works offline, and recognizes 25 European
@@ -44,18 +50,31 @@ History.
 - **Parakeet v3 + GPT-6 Luna** cleans up Parakeet's text before it's pasted: filler words, false starts,
   punctuation.
 - **Gemini 3.8 Flash** is the most accurate. It thinks before it writes, so it's slower. It can also polish: press
-  fn ↩ while you talk, and it pastes the message you meant, without the false starts, detours and repeats.
+  fn P while you talk, and it pastes the message you meant, without the false starts, detours and repeats.
 
-The cloud models run on your own [OpenRouter](https://openrouter.ai) key, and you pay OpenRouter per use. In Models,
-choose which model every dictation starts on, which one hands-free dictations switch to, which ones fn ⇥
-steps through, and each one's pill color.
+On another model, fn P polishes the text you've selected instead: Gemini 3.8 Flash and GPT-6 Luna each write their
+version on a card, and Paste Here puts it in place of the selection.
+
+The cloud models run on your own [OpenRouter](https://openrouter.ai) key, and you pay OpenRouter per use. Each cloud
+dictation sends its request twice at once and pastes the first answer, stopping the other, so it can cost up to twice
+as much: a model that stops to think on one request doesn't hold you up. In Models, choose which model every
+dictation starts on, which one hands-free dictations switch to, which ones fn ⇥ steps through, and each one's pill
+color.
+
+## Dictionary
+
+Words, names and terms you use, and how they're spelled. Gemini 3.8 Flash and GPT-6 Luna get them as a hint, so a
+dictation spells "Wispr Flow" the way you do; Parakeet takes no hints. Add one with fn D over selected text, or in the
+app's Dictionary page, where you can also sort them into groups by dragging. Groups are only for you: the models get
+every word.
 
 ## Your data
 
-History, the recordings and your OpenRouter key stay on your Mac, in `~/Library/Application Support/transcribe-thing`.
-The key is in a file only you can read. Audio leaves your Mac only when a cloud model transcribes it. Text leaves it
-only when a model works on it: GPT-6 Luna cleaning up a transcript, or Gemini 3.8 Flash and GPT-6 Luna polishing text
-you selected and pressed fn ↩ on.
+History, the recordings, your dictionary and your OpenRouter key stay on your Mac, in
+`~/Library/Application Support/transcribe-thing`. The key is in a file only you can read. Audio leaves your Mac only
+when a cloud model transcribes it. Text leaves it only when a model works on it: GPT-6 Luna cleaning up a transcript,
+or Gemini 3.8 Flash and GPT-6 Luna polishing text you selected. Your dictionary's words go along with every Gemini 3.8
+Flash dictation and every clean-up.
 
 The same folder keeps a log of what the app did in the last 7 days, without your dictations, your selected text or
 your key. It stays there until you send it: General → Troubleshooting → Export Logs… saves it as a file.
