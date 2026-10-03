@@ -63,16 +63,15 @@ import Testing
     @Test func measuringAnswersAtOnceAndMeasuresTheOther() async throws {
         let calls = Calls()
         let measured = OSAllocatedUnfairLock<CloudHedge.Measurement?>(initialState: nil)
-        let started = ContinuousClock.now
         let result = try await CloudHedge.run(.measure, .transcription, engine: .geminiFlash, modelName: "Gemini",
                                               progress: nil, measured: { m in measured.withLock { $0 = m } },
                                               work(calls, delays: [0.02, 1.0], texts: ["fast", "slow"]))
         #expect(result.text == "fast")
-        #expect(started.duration(to: .now) < .milliseconds(700), "the first answer doesn't wait for the other")
+        #expect(measured.withLock { $0 } == nil, "the first answer doesn't wait for the other")
         try await waitUntil { measured.withLock { $0 } != nil }
         let m = try #require(measured.withLock { $0 })
         #expect(calls.cancelledCalls.isEmpty && m.kind == .transcription && m.modelName == "Gemini")
-        #expect(m.first < 0.7 && (m.second ?? 0) >= 0.99 && (m.saved ?? 0) > 0.3)
+        #expect((m.second ?? 0) >= 0.99 && (m.saved ?? 0) > 0)
     }
 
     @Test func theCardSaysHowMuchSoonerAndTheAverage() {

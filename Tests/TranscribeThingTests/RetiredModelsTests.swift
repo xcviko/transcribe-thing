@@ -173,14 +173,14 @@ private let historyFile = #"""
         let transcribed = try await service.transcribe(Recording(samples: [Float](repeating: 0.1, count: 16_000)),
                                                        engine: .geminiFlash)
         let cleaned = try await service.cleanUp(transcribed.text, of: .parakeet)
-        #expect(transcribed.reasoningEffort == .medium && cleaned.reasoningEffort == .minimal)
+        #expect(transcribed.reasoningEffort == .medium && cleaned.reasoningEffort == .off)
         let bodies = try StubURLProtocol.registry.bodies(for: host).map {
             try #require(JSONSerialization.jsonObject(with: $0) as? [String: Any])
         }
-        #expect(bodies.map { $0["model"] as? String } == ["google/gemini-3.8-flash", "google/gemini-3-flash-preview"])
+        #expect(bodies.map { $0["model"] as? String } == ["google/gemini-3.8-flash", "openai/gpt-6-luna"])
         #expect(bodies.map { $0["reasoning"] as? [String: AnyHashable] }
-                == [["effort": "medium", "exclude": false], ["effort": "minimal", "exclude": true]])
-        #expect((bodies[1]["provider"] as? [String: Any])?["only"] as? [String] == ["google-ai-studio"])
+                == [["effort": "medium", "exclude": false], ["effort": "none", "exclude": true]])
+        #expect((bodies[1]["provider"] as? [String: Any])?["only"] as? [String] == ["openai"])
     }
 }
 

@@ -52,7 +52,7 @@ enum ModelChoice: String, Codable, CaseIterable, Identifiable, Sendable {
 }
 
 extension ModelChoice {
-    /// The model's own name, wherever it runs: "Parakeet v3", "Parakeet v3 + Gemini 3 Flash", "Gemini 3.8 Flash". The
+    /// The model's own name, wherever it runs: "Parakeet v3", "Parakeet v3 + GPT-6 Luna", "Gemini 3.8 Flash". The
     /// Models rows, which say where Parakeet runs in a section of their own.
     var modelName: String {
         switch self {
@@ -80,17 +80,17 @@ extension ModelChoice {
         }
     }
 
-    /// The sidebar chip's name: "Parakeet v3 · Cloud", "Parakeet + 3 Flash", "Gemini Flash".
+    /// The sidebar chip's name: "Parakeet v3 · Cloud", "Parakeet + Luna", "Gemini Flash".
     func compactName(parakeet: EngineID) -> String {
         switch self {
         case .parakeet: parakeet.shortName
-        case .cleanup: "Parakeet + \(CleanupModel.default.compactName)"
+        case .cleanup: "Parakeet + Luna"
         case .gemini: EngineID.geminiFlash.shortName
         }
     }
 
     /// The pill chip's name after its symbol: "Parakeet", "Gemini 3.8 Flash"; for clean-up the model after the wand,
-    /// "Gemini 3 Flash", which the chip heads with Parakeet's name dimmed.
+    /// "GPT-6 Luna", which the chip heads with Parakeet's name dimmed.
     var chipName: String {
         switch self {
         case .parakeet: "Parakeet"

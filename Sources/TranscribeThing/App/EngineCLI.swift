@@ -9,7 +9,7 @@ import Foundation
 ///            --engine parakeet|parakeetCloud|geminiFlash
 ///            [--download] [--prompt <text>] [--repeat <n>] [--effort low|medium|high]
 ///            [--upload wav|m4a|flac]
-///            [--clean-up [--clean-up-model gemini3Flash|gpt6Luna] [--clean-up-prompt <text>]
+///            [--clean-up [--clean-up-model gpt6Luna] [--clean-up-prompt <text>]
 ///                        [--clean-up-effort none|minimal|low|medium|high]]
 ///     transcribe-thing --model-status
 ///
@@ -36,8 +36,8 @@ import Foundation
 /// what went up (`UPLOAD:` format and bytes, per segment for Parakeet) and what the app records of it (`USAGE:`
 /// tokens, billed seconds, cost, provider, generation id, time to first token, generation and total time), asking
 /// OpenRouter's generation record (every segment's, for Parakeet) for what the response left out.
-/// `--clean-up` sends the last transcript to the clean-up model (Gemini 3 Flash; `--clean-up-effort` replaces its
-/// fixed level) with the app's clean-up prompt (`CleanupModel.systemPrompt`, unless `--clean-up-prompt` replaces it) and
+/// `--clean-up` sends the last transcript to the clean-up model (GPT-6 Luna; `--clean-up-effort` replaces its fixed
+/// none) with the app's clean-up prompt (`CleanupModel.systemPrompt`, unless `--clean-up-prompt` replaces it) and
 /// prints the cleaned text. Only the models the app offers are accepted. Settings are in-memory: the CLI never
 /// changes the app's.
 /// An engine that answers with no text heard no speech: that prints `NO SPEECH` instead of `TEXT:` and exits 0,
@@ -121,7 +121,7 @@ enum EngineCLI {
         usage: transcribe-thing --transcribe <audio file> \
         --engine parakeet|parakeetCloud|geminiFlash \
         [--download] [--prompt <text>] [--repeat <n>] [--effort low|medium|high] [--upload wav|m4a|flac] \
-        [--clean-up [--clean-up-model gemini3Flash|gpt6Luna] [--clean-up-prompt <text>] \
+        [--clean-up [--clean-up-model gpt6Luna] [--clean-up-prompt <text>] \
         [--clean-up-effort none|minimal|low|medium|high]]
                transcribe-thing --model-status
         """

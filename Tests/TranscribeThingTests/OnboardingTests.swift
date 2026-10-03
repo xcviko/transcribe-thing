@@ -717,7 +717,7 @@ import Testing
                                           parakeet: .parakeet)
             == "Your dictations start on Gemini 3.8 Flash, your main model. Change it anytime in Models.")
         #expect(OnboardingGate.lineupNote(binding: nil, lineup: Self.lineup(main: .cleanup, on: []), parakeet: .parakeet)
-            == "Your dictations start on Parakeet v3 + Gemini 3 Flash, your main model. Change it anytime in Models.")
+            == "Your dictations start on Parakeet v3 + GPT-6 Luna, your main model. Change it anytime in Models.")
     }
 }
 

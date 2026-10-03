@@ -1934,19 +1934,19 @@ final class FakeRecorder: DictationRecorder {
         try await waitUntil { h.controller.machine.activeJobs == 0 }
     }
 
-    /// On clean-up, Parakeet's part has nothing to count; the clean-up model's answer does, calibrated by its own history.
+    /// On clean-up, Parakeet's part has nothing to count; GPT-6 Luna's answer does, calibrated by its own history.
     @Test func aCleanupJobCountsOnlyItsWriting() async throws {
         let h = harness()
-        // Gemini 3 Flash wrote 100 characters for 50 tokens before; Gemini 3.8 Flash's ratio must not leak into it.
+        // Luna wrote 100 characters for 50 tokens before; Gemini's ratio must not leak into it.
         let raw = TranscriptResult(text: "raw", engine: .parakeet, processingTime: 1)
         var luna = TranscriptResult(text: String(repeating: "a", count: 100), engine: .parakeet, processingTime: 1)
-        luna.modelID = "google/gemini-3-flash-preview-20260601"
+        luna.modelID = "openai/gpt-6-luna-20260922"
         luna.usage = TokenUsage(completionTokens: 50, reasoningTokens: 0)
         var gemini = TranscriptResult(text: String(repeating: "b", count: 100), engine: .geminiFlash, processingTime: 1)
         gemini.modelID = "google/gemini-3.8-flash"
         gemini.usage = TokenUsage(completionTokens: 900, reasoningTokens: 0)
         h.history.upsert(TranscriptEntry(engine: .parakeet, audioDuration: 5, voicedSeconds: 4,
-                                         versions: [raw.version(), luna.version(.cleanup(of: .parakeet, by: .gemini3Flash))]))
+                                         versions: [raw.version(), luna.version(.cleanup(of: .parakeet, by: .gpt6Luna))]))
         h.history.upsert(TranscriptEntry(engine: .geminiFlash, audioDuration: 5, voicedSeconds: 4,
                                          versions: [gemini.version()]))
         let transcription = Gate(), cleanup = Gate()
@@ -1960,10 +1960,10 @@ final class FakeRecorder: DictationRecorder {
         h.controller.streamed(ChatStreamProgress(outputCharacters: 40), for: r.id)
         #expect(h.pill.tokenCount == nil, "Parakeet streams nothing")
         transcription.isOpen = true
-        try await waitUntil { h.controller.runningVersions[r.id] == .cleanup(of: .parakeet, by: .gemini3Flash) }
+        try await waitUntil { h.controller.runningVersions[r.id] == .cleanup(of: .parakeet, by: .gpt6Luna) }
         #expect(h.pill.tokenCount == nil, "the clean-up starts from nothing")
         h.controller.streamed(ChatStreamProgress(outputCharacters: 40), for: r.id)
-        #expect(h.pill.tokenCount == PillTokenCount(phase: .writing, tokens: 20), "its half a token a character")
+        #expect(h.pill.tokenCount == PillTokenCount(phase: .writing, tokens: 20), "Luna's half a token a character")
         #expect(h.pill.sessionModel == .cleanup)
         cleanup.isOpen = true
         try await waitUntil { h.controller.machine.activeJobs == 0 }
@@ -2145,7 +2145,7 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
         env.settings.lineup.main = .gemini
         #expect(try status() == "Gemini 3.8 Flash · Ready")
         env.settings.lineup.main = .cleanup
-        #expect(try status() == "Parakeet v3 + Gemini 3 Flash · Ready")
+        #expect(try status() == "Parakeet v3 + GPT-6 Luna · Ready")
         env.settings.parakeetEngine = .parakeetCloud
         env.settings.lineup.main = .parakeet
         #expect(try status() == "Parakeet v3 · Cloud · Ready")

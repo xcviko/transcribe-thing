@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import TranscribeThing
 
-// The fixed reasoning level of each model, the metadata every cloud answer leaves behind, and the
+// The fixed reasoning level of each model, the metadata every cloud answer leaves behind, and the GPT-6 Luna
 // clean-up of Parakeet transcripts: request, service, and the dictation pipeline around it.
 
 private func object(_ body: OpenRouterChatRequest) throws -> [String: Any] {
@@ -96,11 +96,11 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         #expect(provider["only"] as? [String] == ["google-ai-studio"] && provider["allow_fallbacks"] as? Bool == false)
     }
 
-    @Test func cleanupIsTextInTextOutPinnedToItsProvider() throws {
+    @Test func cleanupIsTextInTextOutPinnedToOpenAI() throws {
         let json = try object(.cleanup(route: try #require(CleanupModel.default.route),
                                        systemPrompt: "  Tidy it.\n", transcript: "Можешь, пожалуйста, убрать это?"))
         #expect(Set(json.keys) == ["model", "messages", "reasoning", "provider", "max_tokens", "stream"])
-        #expect(json["model"] as? String == "google/gemini-3-flash-preview")
+        #expect(json["model"] as? String == "openai/gpt-6-luna")
         #expect(json["temperature"] == nil)
         #expect(json["stream"] as? Bool == true)
         let messages = try #require(json["messages"] as? [[String: Any]])
@@ -109,10 +109,10 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         #expect(messages[1]["role"] as? String == "user")
         #expect(messages[1]["content"] as? String == "<transcript>\nМожешь, пожалуйста, убрать это?\n</transcript>")
         let reasoning = try #require(json["reasoning"] as? [String: Any])
-        #expect(reasoning["effort"] as? String == "minimal" && reasoning["exclude"] as? Bool == true)
+        #expect(reasoning["effort"] as? String == "none" && reasoning["exclude"] as? Bool == true)
         let provider = try #require(json["provider"] as? [String: Any])
-        #expect(provider["only"] as? [String] == ["google-ai-studio"] && provider["allow_fallbacks"] as? Bool == false)
-        #expect(json["max_tokens"] as? Int == CleanupModel.maxTokens(forCharacterCount: 31, effort: .minimal))
+        #expect(provider["only"] as? [String] == ["openai"] && provider["allow_fallbacks"] as? Bool == false)
+        #expect(json["max_tokens"] as? Int == CleanupModel.maxTokens(forCharacterCount: 31, effort: .off))
     }
 
     @Test func cleanupBudgetGrowsWithTheTextAndTheLevel() {
@@ -289,7 +289,7 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
 
     @Test func cleanUpSendsThePromptAndTheTranscriptAndRecordsTheMetadata() async throws {
         let (service, host) = makeService([chatReply("<transcript>\nМожешь убрать это?\n</transcript>")])
-        let result = try await service.cleanUp("можешь ну убрать убрать это", of: .parakeet, by: .gpt6Luna)
+        let result = try await service.cleanUp("можешь ну убрать убрать это", of: .parakeet)
         #expect(result.text == "Можешь убрать это?")
         #expect(result.engine == .parakeet)
         #expect(result.modelID == "openai/gpt-6-luna")
@@ -411,9 +411,9 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
 
     private func cleaned(_ text: String, cost: Double = 0.0002) -> TranscriptResult {
         var result = TranscriptResult(text: text, engine: .parakeet, processingTime: 0.9, costUSD: cost,
-                                      provider: "Google AI Studio", generationID: "gen-c")
-        result.modelID = CleanupModel.gemini3Flash.openRouterModelID
-        result.reasoningEffort = .minimal
+                                      provider: "OpenAI", generationID: "gen-c")
+        result.modelID = CleanupModel.gpt6Luna.openRouterModelID
+        result.reasoningEffort = .off
         result.usedSystemPrompt = true
         return result
     }
@@ -453,7 +453,7 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
             asked.append((text, source))
             pillWhileCleaning = h.pill.phase
             try await Task.sleep(for: .milliseconds(30))
-            #expect(h.controller.runningVersions.values.contains(.cleanup(of: .parakeet, by: .gemini3Flash)))
+            #expect(h.controller.runningVersions.values.contains(.cleanup(of: .parakeet, by: .gpt6Luna)))
             return self.cleaned("Hello there.")
         }
         var pasted: [String] = []
@@ -462,12 +462,12 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         #expect(asked.map(\.0) == ["um so like hello hello there"] && asked.map(\.1) == [.parakeet])
         #expect(pillWhileCleaning == .processing)
         let entry = try #require(h.history.entry(id: id))
-        #expect(entry.versions.map(\.kind) == [.transcription(.parakeet), .cleanup(of: .parakeet, by: .gemini3Flash)])
-        #expect(entry.currentKind == .cleanup(of: .parakeet, by: .gemini3Flash))
+        #expect(entry.versions.map(\.kind) == [.transcription(.parakeet), .cleanup(of: .parakeet, by: .gpt6Luna)])
+        #expect(entry.currentKind == .cleanup(of: .parakeet, by: .gpt6Luna))
         #expect(entry.text == "Hello there." && entry.engine == .parakeet)
         #expect(entry.version(.transcription(.parakeet))?.text == "um so like hello hello there")
         let meta = try #require(entry.currentVersion?.metadata)
-        #expect(meta.modelID == "google/gemini-3-flash-preview" && meta.reasoningEffort == .minimal)
+        #expect(meta.modelID == "openai/gpt-6-luna" && meta.reasoningEffort == .off)
         #expect(meta.costUSD == 0.0002 && meta.usedSystemPrompt == true)
         #expect(!h.toasts.notices.contains { $0.dedupeKey == "cleanup.fallback" })
         #expect(h.controller.runningVersions.isEmpty)
@@ -509,7 +509,7 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         h.controller.insertOverride = { _ in Issue.record("a canceled dictation is never pasted"); return .pasted }
         let r = H.recording()
         h.controller.enqueue(r, engine: .parakeet, cleansUp: true)
-        try await waitUntil { h.controller.runningVersions[r.id] == .cleanup(of: .parakeet, by: .gemini3Flash) }
+        try await waitUntil { h.controller.runningVersions[r.id] == .cleanup(of: .parakeet, by: .gpt6Luna) }
         h.controller.handle(.cancel)
         #expect(h.controller.machine.activeJobs == 0)
         let entry = try #require(h.history.entry(id: r.id))
@@ -538,7 +538,7 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         #expect(notice.title == "Couldn’t clean up · pasted the original")
         #expect(notice.body == DictationController.cleanupFailureReason(
             key == .missing ? .openRouterMissingKey : key == .noCredit(nil) ? .openRouterNoCredits("") : .openRouterInvalidKey(""),
-            model: .default))
+            model: .gpt6Luna))
         #expect(notice.actions.map(\.kind) == [.openHub(.models)])
     }
 
@@ -572,7 +572,7 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         let cloud = try await dictate(h, engine: .parakeetCloud, text: "cloud text") { pasted.append($0) }
         #expect(pasted == ["Gemini text.", "Clean."])
         #expect(sources == [.parakeetCloud])
-        #expect(h.history.entry(id: cloud)?.currentKind == .cleanup(of: .parakeetCloud, by: .gemini3Flash))
+        #expect(h.history.entry(id: cloud)?.currentKind == .cleanup(of: .parakeetCloud, by: .gpt6Luna))
     }
 
     @Test func transcribeWithFromHistoryIsNotCleanedUpAutomatically() async throws {

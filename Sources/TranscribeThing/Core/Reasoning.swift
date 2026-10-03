@@ -3,7 +3,7 @@ import Foundation
 /// How long a model thinks before it answers: OpenRouter's `reasoning.effort`. Gemini gets it as `thinkingLevel`
 /// one to one (minimal → minimal … high → high). Raw values go on the wire and are persisted (a history version
 /// records the level it was asked for). Each model thinks at one fixed level (`EngineID.reasoningEffort`,
-/// `CleanupModel.reasoningEffort`); `off` ("none") is for a model that can skip thinking (GPT-6 Luna).
+/// `CleanupModel.reasoningEffort`); `off` ("none") is for a model that can skip thinking (GPT-6 Luna as Clean-up).
 /// Declaration order is from least to most thinking.
 enum ReasoningEffort: String, Codable, CaseIterable, Sendable {
     /// Sent as "none". Not named `none`, which would read as `Optional.none` wherever a level is optional.
@@ -35,25 +35,25 @@ extension EngineID {
 
 /// The models that clean up Parakeet transcripts, text to text: punctuation, filler words, false starts. Not
 /// `EngineID`s: they never hear audio, so they stay out of the main-model list, Switch model and every list of
-/// engines a recording can go to. Gemini 3 Flash cleans up dictations (`default`); GPT-6 Luna is still offered in
-/// History; Gemini 3.5 Flash Lite is retired, kept so History reads and names its clean-ups. Raw values are persisted
-/// (history version kinds): never rename them.
+/// engines a recording can go to. GPT-6 Luna is the one that runs (`default`); Gemini 3.5 Flash Lite and Gemini 3
+/// Flash are retired, kept so History reads and names their clean-ups. Raw values are persisted (history version
+/// kinds): never rename them.
 enum CleanupModel: String, CaseIterable, Codable, Sendable {
     /// Gemini 3.5 Flash Lite on Google AI Studio: what Clean-up used first. Retired (`isRetired`).
     case geminiFlashLite
-    /// Gemini 3 Flash on Google AI Studio, thinking at minimal (it thinks not at all there): in the bench on 40 of the
-    /// user's dictations, 1.0 s median for a normal one against Luna's 1.6, with no slow tail (1.15 s at the 90th
-    /// percentile against 2.3), editing about as much as Luna. About five times Luna's cost, still under $0.001.
-    case gemini3Flash
     /// GPT-6 Luna on OpenAI with thinking off: about as fast as Flash Lite (1.1 s median in the bench), about 3.5
-    /// times cheaper, and better at spelling English terms. Dictations' clean-up before Gemini 3 Flash.
+    /// times cheaper, and better at spelling English terms.
     case gpt6Luna
+    /// Gemini 3 Flash on Google AI Studio at minimal: dictations' clean-up for a day, faster than Luna (1.0 s median
+    /// against 1.6 in the bench) but less to the user's liking. Retired (`isRetired`).
+    case gemini3Flash
 
-    /// The model a dictation's clean-up goes to.
-    static let `default`: CleanupModel = .gemini3Flash
+    /// The model every clean-up goes to, from a dictation or from History.
+    static let `default`: CleanupModel = .gpt6Luna
 
-    /// A model this build no longer runs: Gemini 3.5 Flash Lite. History still reads and names its clean-ups.
-    var isRetired: Bool { self == .geminiFlashLite }
+    /// A model this build no longer runs: Gemini 3.5 Flash Lite, Gemini 3 Flash. History still reads and names their
+    /// clean-ups.
+    var isRetired: Bool { self == .geminiFlashLite || self == .gemini3Flash }
 
     /// Every clean-up model this build runs. Lists of clean-ups to make come from here, never from `allCases`.
     static var offered: [CleanupModel] { allCases.filter { !$0.isRetired } }
@@ -84,15 +84,6 @@ enum CleanupModel: String, CaseIterable, Codable, Sendable {
         }
     }
 
-    /// After Parakeet's name in the sidebar chip: "Parakeet + 3 Flash".
-    var compactName: String {
-        switch self {
-        case .geminiFlashLite: "Flash Lite"
-        case .gpt6Luna: "Luna"
-        case .gemini3Flash: "3 Flash"
-        }
-    }
-
     /// The provider requests are pinned to, as OpenRouter names it in responses.
     var providerName: String {
         switch self {
@@ -109,13 +100,12 @@ enum CleanupModel: String, CaseIterable, Codable, Sendable {
         }
     }
 
-    /// The level the model thinks at, fixed: GPT-6 Luna doesn't think ("none"), plenty for tidying; Gemini 3 Flash
-    /// can't be told not to, and at minimal it doesn't. nil for a retired model, which never runs.
+    /// The level the model thinks at, fixed: GPT-6 Luna doesn't think ("none"), plenty for tidying. nil for a
+    /// retired model, which never runs.
     var reasoningEffort: ReasoningEffort? {
         switch self {
         case .gpt6Luna: .off
-        case .gemini3Flash: .minimal
-        case .geminiFlashLite: nil
+        case .geminiFlashLite, .gemini3Flash: nil
         }
     }
 

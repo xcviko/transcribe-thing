@@ -2,8 +2,7 @@ import Foundation
 import Testing
 @testable import TranscribeThing
 
-// The clean-up models: Gemini 3 Flash for dictations (thinking at minimal), GPT-6 Luna in History (without
-// thinking); Gemini 3.5 Flash Lite is retired. What each request
+// The clean-up model: GPT-6 Luna, always without thinking; Gemini 3.5 Flash Lite is retired. What each request
 // carries, and the dictation and History clean-ups Luna makes.
 
 private func lunaReply(_ content: String) -> StubURLProtocol.Reply {
@@ -18,14 +17,12 @@ private func body(_ request: OpenRouterChatRequest) throws -> [String: Any] {
 // MARK: - Models and requests
 
 @Suite struct CleanupModelRoutingTests {
-    /// Gemini 3 Flash cleans up dictations; Luna is still offered (History); Flash Lite is retired.
-    @Test func gemini3FlashRunsLunaStaysFlashLiteIsRetired() {
-        #expect(CleanupModel.allCases == [.geminiFlashLite, .gemini3Flash, .gpt6Luna], "Flash Lite stays readable")
-        #expect(CleanupModel.offered == [.gemini3Flash, .gpt6Luna])
-        #expect(CleanupModel.default == .gemini3Flash)
-        #expect(CleanupModel.gemini3Flash.openRouterModelID == "google/gemini-3-flash-preview")
-        #expect(CleanupModel.gemini3Flash.modelName == "Gemini 3 Flash" && CleanupModel.gemini3Flash.compactName == "3 Flash")
-        #expect(CleanupModel.gemini3Flash.provider == .googleAIStudio && CleanupModel.gemini3Flash.reasoningEffort == .minimal)
+    @Test func lunaIsTheOneThatRunsFlashLiteIsRetired() {
+        #expect(CleanupModel.allCases == [.geminiFlashLite, .gpt6Luna, .gemini3Flash], "the retired stay readable")
+        #expect(CleanupModel.gemini3Flash.isRetired && CleanupModel.gemini3Flash.route == nil)
+        #expect(CleanupModel(rawValue: "gemini3Flash") == .gemini3Flash && CleanupModel.gemini3Flash.shortName == "Gemini 3 Flash")
+        #expect(CleanupModel.offered == [.gpt6Luna])
+        #expect(CleanupModel.default == .gpt6Luna)
         #expect(CleanupModel.geminiFlashLite.isRetired && !CleanupModel.gpt6Luna.isRetired)
         #expect(CleanupModel.gpt6Luna.openRouterModelID == "openai/gpt-6-luna")
         #expect(CleanupModel.gpt6Luna.modelName == "GPT-6 Luna" && CleanupModel.gpt6Luna.shortName == "GPT-6 Luna")
@@ -91,7 +88,7 @@ private func body(_ request: OpenRouterChatRequest) throws -> [String: Any] {
 
     @Test func lunaGetsTheRequestWithoutThinking() async throws {
         let (service, host) = makeService([lunaReply("Hello.")])
-        let result = try await service.cleanUp("hello", of: .parakeet, by: .gpt6Luna)
+        let result = try await service.cleanUp("hello", of: .parakeet)
         #expect(result.text == "Hello.")
         #expect(result.modelID == "openai/gpt-6-luna" && result.provider == "OpenAI")
         #expect(result.reasoningEffort == .off)
@@ -119,15 +116,15 @@ private func body(_ request: OpenRouterChatRequest) throws -> [String: Any] {
     private typealias H = DictationControllerTests
 
     private func cleaned(_ text: String, engine: EngineID = .parakeet) -> TranscriptResult {
-        var result = TranscriptResult(text: text, engine: engine, processingTime: 1.1, costUSD: 0.0003,
-                                      provider: "Google AI Studio", generationID: "gen-flash")
-        result.modelID = CleanupModel.gemini3Flash.openRouterModelID
-        result.reasoningEffort = .minimal
+        var result = TranscriptResult(text: text, engine: engine, processingTime: 1.1, costUSD: 0.00006,
+                                      provider: "OpenAI", generationID: "gen-luna")
+        result.modelID = CleanupModel.gpt6Luna.openRouterModelID
+        result.reasoningEffort = .off
         result.usedSystemPrompt = true
         return result
     }
 
-    @Test func aDictationIsCleanedUpByTheCleanupModel() async throws {
+    @Test func aDictationIsCleanedUpByLuna() async throws {
         let h = H.make(keyStatus: .valid(KeyInfo()), persistsHistory: true)
         defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
         var running: [TranscriptVersionKind] = []
@@ -142,10 +139,10 @@ private func body(_ request: OpenRouterChatRequest) throws -> [String: Any] {
         h.controller.enqueue(r, engine: .parakeet, cleansUp: true)
         try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id) != nil }
         #expect(pasted == ["Hello there."])
-        #expect(running == [.cleanup(of: .parakeet, by: .gemini3Flash)])
+        #expect(running == [.cleanup(of: .parakeet, by: .gpt6Luna)])
         let entry = try #require(h.history.entry(id: r.id))
-        #expect(entry.versions.map(\.kind) == [.transcription(.parakeet), .cleanup(of: .parakeet, by: .gemini3Flash)])
-        #expect(entry.currentVersion?.metadata.reasoningEffort == .minimal)
+        #expect(entry.versions.map(\.kind) == [.transcription(.parakeet), .cleanup(of: .parakeet, by: .gpt6Luna)])
+        #expect(entry.currentVersion?.metadata.reasoningEffort == .off)
     }
 
     @Test func aFailedCleanUpNamesTheModelThatTried() async throws {
@@ -159,7 +156,7 @@ private func body(_ request: OpenRouterChatRequest) throws -> [String: Any] {
         try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id) != nil }
         let notice = try #require(h.toasts.notices.first { $0.dedupeKey == "cleanup.fallback" })
         #expect(notice.title == "Couldn’t clean up · pasted the original")
-        #expect(notice.body == "Gemini 3 Flash stopped before finishing.")
+        #expect(notice.body == "GPT-6 Luna stopped before finishing.")
     }
 
     @Test func failureReasonsNameTheModelAndItsProvider() {

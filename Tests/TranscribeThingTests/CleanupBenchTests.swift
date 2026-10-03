@@ -194,15 +194,15 @@ private func entry(minutesAgo: Double, status: TranscriptStatus = .success,
         #expect(summary.providers == ["OpenAI"] && summary.serviceTiers == ["default", "flex"])
     }
 
-    @Test func theAppsOwnCleanupGoesToGemini3FlashAtMinimal() async throws {
+    @Test func theAppsOwnCleanupGoesToLunaWithoutThinking() async throws {
         let (service, host) = service([reply("Ok.")])
         let result = try await service.cleanUp("ok", of: .parakeet)
-        #expect(result.reasoningEffort == .minimal)
+        #expect(result.reasoningEffort == .off)
         let body = try #require(JSONSerialization.jsonObject(with: StubURLProtocol.registry.bodies(for: host)[0])
             as? [String: Any])
-        #expect(body["model"] as? String == CleanupModel.gemini3Flash.openRouterModelID)
-        #expect(body["reasoning"] as? [String: AnyHashable] == ["effort": "minimal", "exclude": true])
-        #expect(body["provider"] as? [String: AnyHashable] == ["only": ["google-ai-studio"], "allow_fallbacks": false])
-        #expect(body["max_tokens"] as? Int == CleanupModel.maxTokens(forCharacterCount: 2, effort: .minimal))
+        #expect(body["model"] as? String == CleanupModel.gpt6Luna.openRouterModelID)
+        #expect(body["reasoning"] as? [String: AnyHashable] == ["effort": "none", "exclude": true])
+        #expect(body["provider"] as? [String: AnyHashable] == ["only": ["openai"], "allow_fallbacks": false])
+        #expect(body["max_tokens"] as? Int == CleanupModel.maxTokens(forCharacterCount: 2, effort: .off))
     }
 }
