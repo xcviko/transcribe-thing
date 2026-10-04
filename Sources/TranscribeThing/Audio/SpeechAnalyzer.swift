@@ -19,6 +19,10 @@ enum SpeechAnalyzer {
         var floorBlockSeconds: Double = 0.5
         var floorRadiusSeconds: Double = 3.0
         var floorPercentile: Double = 0.10
+        /// The mic's first moments ramp up from near-silence. Left out of the floor (they still count as voiced when
+        /// they are), so a short recording's room noise isn't measured against them and taken for speech: a 1.5 s
+        /// recording of nothing read 0.66 s "voiced" and went to Gemini, which wrote a dictionary word.
+        var warmUpSeconds: Double = 0.15
     }
 
     /// Below this peak the signal is digital silence: a muted, disconnected or permission-blocked mic.
@@ -115,7 +119,10 @@ enum SpeechAnalyzer {
 
         var blockHistograms = [[Int32]](repeating: [Int32](repeating: 0, count: binCount), count: blockCount)
         var blockTotals = [Int](repeating: 0, count: blockCount)
-        for (index, db) in frameDB.enumerated() {
+        // Past the mic's warm-up, unless that leaves nothing to measure.
+        let warmUp = Int((parameters.warmUpSeconds / parameters.frameSeconds).rounded())
+        let firstSteady = frameDB.count > warmUp ? warmUp : 0
+        for (index, db) in frameDB.enumerated() where index >= firstSteady {
             guard let b = bin(db) else { continue }
             blockHistograms[index / framesPerBlock][b] += 1
             blockTotals[index / framesPerBlock] += 1

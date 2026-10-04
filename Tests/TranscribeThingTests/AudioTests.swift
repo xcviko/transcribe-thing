@@ -362,6 +362,31 @@ private extension Double {
         #expect(stats.voicedSeconds >= 0.25)
     }
 
+    /// The mic ramps up from near-silence in its first moments: a short recording of room noise after it (rising and
+    /// falling by 9 dB, as a real one did) is no speech, and a word after it still is.
+    @Test func theMicsWarmUpDoesntMakeRoomNoiseSpeech() {
+        let rate = 16_000.0
+        let rampCount = Int(0.15 * rate)
+        let ramp = Signal.noise(seconds: 0.15, rms: 1, seed: 3).enumerated().map { i, sample in
+            sample * Signal.dbToAmplitude(-80 + 25 * Float(i) / Float(rampCount))
+        }
+        func room(seconds: Double, seed: UInt64) -> [Float] {
+            let levels: [Float] = [-50, -44, -47, -41, -46, -49, -43, -45, -42, -48]
+            return (0..<Int(seconds / 0.05)).flatMap { chunk in
+                Signal.noise(seconds: 0.05, rms: Signal.dbToAmplitude(levels[chunk % levels.count]),
+                             seed: seed + UInt64(chunk))
+            }
+        }
+        let nothing = ramp + room(seconds: 1.3, seed: 5)
+        #expect(SpeechAnalyzer.stats(for: nothing).voicedSeconds < 0.25, "a dictation of nothing, sent nowhere")
+
+        let tone = Signal.sine(220, seconds: 0.5, rate: rate, amplitude: 0.1)
+        let word = ramp + room(seconds: 0.3, seed: 40) + zip(tone, room(seconds: 0.5, seed: 60)).map(+)
+            + room(seconds: 0.4, seed: 80)
+        let voiced = SpeechAnalyzer.stats(for: word).voicedSeconds
+        #expect(voiced > 0.4 && voiced < 0.6, "voiced \(voiced)")
+    }
+
     @Test func keyClicksAreIgnored() {
         var samples = Signal.noise(seconds: 2, rms: Signal.dbToAmplitude(-60))
         for start in [4_000, 12_000, 24_000] {
