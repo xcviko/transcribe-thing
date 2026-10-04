@@ -18,7 +18,7 @@ struct ModelsPage: View {
     var body: some View {
         ScrollViewReader { proxy in
             HubPage("Models") {
-                HubGroup("Your models") {
+                HubGroup("Your models", footer: lineupFooter) {
                     // Only when it can't work: Switch model has no shortcut.
                     if SwitchModelLine.status(binding: settings.shortcuts[.switchModel], lineup: settings.lineup) == .unbound {
                         SwitchModelUnboundLine { hub.show(.shortcuts) }
@@ -33,7 +33,8 @@ struct ModelsPage: View {
                 }
                 HubGroup("Hands-free") {
                     SettingsGroup {
-                        SettingsRow(title: "Hands-free dictations use", systemImage: "lock.fill", iconTint: .inkSecondary) {
+                        SettingsRow(title: "Hands-free dictations use", subtitle: handsFreeSubtitle,
+                                    systemImage: "lock.fill", iconTint: .inkSecondary) {
                             HubMenuPicker(options: handsFreeOptions, selection: handsFreeModel,
                                           label: handsFreeLabel)
                         }
@@ -129,6 +130,19 @@ struct ModelsPage: View {
     private var handsFreeModel: Binding<ModelChoice?> {
         let settings = settings
         return Binding(get: { settings.handsFreeChoice }, set: { settings.handsFreeModel = $0 })
+    }
+
+    /// The one thing the list can't say by itself: what the dot and the switches mean.
+    private var lineupFooter: String {
+        let keys = settings.shortcuts[.switchModel].map { " (\($0.compactDescription))" } ?? ""
+        return "The dot picks the main model: every dictation starts on it. Models switched on are the ones "
+            + "Switch model\(keys) steps through while you dictate."
+    }
+
+    /// Which key the setting is about.
+    private var handsFreeSubtitle: String {
+        let key = settings.shortcuts[.handsFree]?.compactDescription ?? "The hands-free shortcut"
+        return "The model \(key) starts on."
     }
 
     private func handsFreeLabel(_ choice: ModelChoice?) -> String {
@@ -507,6 +521,8 @@ private struct ModelRow: View {
     private var lineupUsesParakeet: Bool { settings.lineup.cycle.contains { $0 != .gemini } }
     /// The row's title: the place, as the section names the model.
     private var runtimeName: String { engine.isLocal ? "On this Mac" : "Through OpenRouter" }
+    /// What the choice costs, the one thing worth saying here.
+    private var runtimeNote: String { engine.isLocal ? "Free · works offline" : "≈ $0.09 per hour of audio" }
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
@@ -517,6 +533,10 @@ private struct ModelRow: View {
                 Text(runtimeName)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.ink)
+                    .lineLimit(1)
+                Text(runtimeNote)
+                    .typeface(.callout)
+                    .foregroundStyle(.inkSecondary)
                     .lineLimit(1)
                 status
             }

@@ -19,7 +19,7 @@ struct DictionaryPage: View {
     static let searchFrom = 16
 
     var body: some View {
-        HubPage("Dictionary") {
+        HubPage("Dictionary", subtitle: "How you spell words and names: a hint for Gemini and clean-up. Parakeet doesn’t use it.") {
             HubGroup("Add") {
                 SettingsGroup {
                     addRow
@@ -154,9 +154,18 @@ struct DictionaryPage: View {
         .animation(Theme.Motion.fade, value: feedback)
     }
 
-    /// Only when fn D can't work: Add to dictionary has no shortcut.
+    /// The quick way, with the user's own keys: fn D over a word selected anywhere; or what's missing for it.
     @ViewBuilder private var tip: some View {
-        if settings.shortcuts[.addToDictionary] == nil {
+        if let keys = settings.shortcuts[.addToDictionary] {
+            HStack(spacing: 6) {
+                Text("Quicker: select a word in any app, start dictating and press")
+                ShortcutChips(shortcut: keys, size: .small)
+            }
+            .typeface(.callout)
+            .foregroundStyle(.inkSecondary)
+            .padding(.horizontal, 4)
+            .accessibilityElement(children: .combine)
+        } else {
             Button("Add to dictionary has no shortcut. Set one in Shortcuts.") { hub.show(.shortcuts) }
                 .buttonStyle(.plain)
                 .typeface(.callout)

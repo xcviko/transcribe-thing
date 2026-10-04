@@ -265,19 +265,12 @@ private struct HubSidebar: View {
         .keyboardShortcut(section.shortcutDigit.map { KeyboardShortcut(KeyEquivalent($0), modifiers: .command) })
     }
 
+    /// Just the version: the main model and how it's doing are in Models, and a problem with it is on Home.
     private var footer: some View {
-        let main = settings.lineup.main, parakeet = settings.parakeetEngine
-        let summary = EngineSummary.make(choice: main, parakeet: parakeet, localState: models.state(of: parakeet),
-                                         keyStatus: account.status, localError: models.lastErrors[parakeet])
-        return VStack(alignment: .leading, spacing: 10) {
-            EngineStatusChip(summary: summary, choice: main, parakeet: parakeet, color: settings.modelColors[main]) {
-                hub.show(.models)
-            }
-            Text(hub.versionLine)
-                .font(.system(size: 11))
-                .foregroundStyle(.inkTertiary)
-                .padding(.horizontal, 6)
-        }
+        Text(hub.versionLine)
+            .font(.system(size: 11))
+            .foregroundStyle(.inkTertiary)
+            .padding(.horizontal, 6)
     }
 }
 
@@ -331,75 +324,6 @@ private struct SidebarItem: View {
         .animation(Theme.Motion.snappy, value: badge)
         .accessibilityLabel(badge == nil ? section.title : "\(section.title), update available")
         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
-    }
-}
-
-/// The main model: "Parakeet v3 · Ready" with a status dot; opens Models.
-private struct EngineStatusChip: View {
-    var summary: EngineSummary
-    var choice: ModelChoice
-    var parakeet: EngineID
-    /// The main model's color (`AppSettings.modelColors`).
-    var color: ModelColor
-    var action: () -> Void
-    @State private var hovering = false
-    @Environment(\.colorScheme) private var scheme
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                ModelChoiceIcon(choice: choice, parakeet: parakeet, color: color, size: 26)
-                VStack(alignment: .leading, spacing: 1) {
-                    nameLine
-                    HStack(spacing: 4) {
-                        StatusDot(color: summary.tone.color, size: 6, pulsing: summary.tone == .progress)
-                            .frame(width: 10, height: 10)
-                        Text(summary.status)
-                            .font(.system(size: 11))
-                            .monospacedDigit()
-                            .foregroundStyle(summary.tone == .negative ? Color.danger : Color.inkSecondary)
-                            .lineLimit(1)
-                    }
-                }
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.inkTertiary)
-            }
-            .padding(.leading, 8)
-            .padding(.trailing, 10)
-            .padding(.vertical, 8)
-            .background {
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .fill(hovering ? HubPalette.sidebarSelection : HubPalette.sidebarSelection.opacity(scheme == .dark ? 0.7 : 0.75))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 11, style: .continuous).strokeBorder(Color.stroke, lineWidth: 1)
-                    }
-            }
-            .contentShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .animation(Theme.Motion.hover, value: hovering)
-        .help("Open Models")
-        .accessibilityLabel("\(summary.name), \(summary.status). Open Models.")
-    }
-
-    /// Cloud Parakeet shows the model's name with a cloud, the same mark its history rows carry, rather than
-    /// spelling out "· Cloud" in the narrow sidebar.
-    private var nameLine: some View {
-        let cloudParakeet = choice == .parakeet && parakeet.isCloud
-        return HStack(spacing: 4) {
-            Text(cloudParakeet ? (parakeet.localCounterpart?.shortName ?? summary.name) : summary.name)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.ink)
-                .lineLimit(1)
-            if cloudParakeet {
-                Image(systemName: "cloud.fill")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.inkTertiary)
-            }
-        }
     }
 }
 

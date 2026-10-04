@@ -41,11 +41,18 @@ struct OpenRouterKeyCard: View {
     // MARK: Parts
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 12) {
+        HStack(alignment: .top, spacing: 12) {
             IconTile(symbol: "key.fill", tint: .inkSecondary, size: 30)
-            Text("OpenRouter key")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.ink)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("OpenRouter key")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.ink)
+                // Who pays, and for what: worth saying every time.
+                Text("Gemini, clean-up and cloud Parakeet run on it. You pay OpenRouter per use.")
+                    .typeface(.callout)
+                    .foregroundStyle(.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Spacer(minLength: 8)
             Button {
                 hub.open(OpenRouterLinks.keys)

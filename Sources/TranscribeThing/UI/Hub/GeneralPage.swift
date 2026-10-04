@@ -55,7 +55,9 @@ struct GeneralPage: View {
             HubGroup("Pill & Sounds") {
                 SettingsGroup {
                     pillRow
-                    SettingsRow(title: "Hints above the pill", systemImage: "text.bubble", iconTint: .inkSecondary) {
+                    SettingsRow(title: "Hints above the pill",
+                                subtitle: "The model’s name when you switch, and the keys for text you’ve selected.",
+                                systemImage: "text.bubble", iconTint: .inkSecondary) {
                         Toggle("", isOn: $settings.showsPillHints)
                             .toggleStyle(.appSwitch)
                             .labelsHidden()
@@ -68,7 +70,7 @@ struct GeneralPage: View {
                     }
                 }
             }
-            HubGroup("Pasting") {
+            HubGroup("Pasting", footer: "Each rule applies to the models picked beside it.") {
                 SettingsGroup {
                     PastingRuleRow(title: "Add a space after the text", systemImage: "space",
                                    models: $settings.modelsAddingSpace, stacked: stackedPasting)
@@ -267,7 +269,8 @@ private struct LogsRow: View {
     @State private var isExporting = false
 
     var body: some View {
-        SettingsRow(title: "Logs", systemImage: "doc.text.magnifyingglass", iconTint: .inkSecondary) {
+        SettingsRow(title: "Logs", subtitle: "Your dictations, selected text and key are never in them.",
+                    systemImage: "doc.text.magnifyingglass", iconTint: .inkSecondary) {
             Button("Export Logs…", action: export)
                 .buttonStyle(SecondaryButtonStyle(size: .small))
                 .disabled(isExporting)

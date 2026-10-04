@@ -299,6 +299,16 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
         }
     }
 
+    /// The line under it in Shortcuts, only where the name doesn't say when it works or what it does.
+    var hint: String? {
+        switch self {
+        case .switchModel: "While you dictate."
+        case .polish: "On Gemini, the message you meant. With text selected, that text polished."
+        case .addToDictionary: "With a word selected, while you dictate."
+        case .pushToTalk, .handsFree, .pasteLast: nil
+        }
+    }
+
     var symbolName: String {
         switch self {
         case .pushToTalk: "mic.fill"

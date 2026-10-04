@@ -170,9 +170,10 @@ struct RadioDot: View {
     var body: some View {
         ZStack {
             if isOn {
+                // Ink with a dot of the opposite: a black disc with a white dot on light, a white disc with a black
+                // dot on dark (the accent being white there, a white dot vanished into it).
                 Circle().fill(Color.accentFill)
-                Circle().fill(.white).frame(width: size * 0.38, height: size * 0.38)
-                    .shadow(color: .black.opacity(0.15), radius: 0.5, y: 0.5)
+                Circle().fill(Color.onAccent).frame(width: size * 0.38, height: size * 0.38)
             } else {
                 Circle().fill(Color.bgSurface)
                 Circle().strokeBorder(Color.strokeStrong, lineWidth: 1.25)
