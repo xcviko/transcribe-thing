@@ -2645,8 +2645,8 @@ final class DictationController {
     /// "Already in your dictionary", "Select a word or a name".
     nonisolated static let dictionaryNoteKey = "dictionary.note"
 
-    /// "Added to your dictionary": the word (and the spelling it replaced), with Undo, which takes back just this add
-    /// (`before` to `after`), and a way to the rest of it.
+    /// "Added to your dictionary": the word (and the spelling it replaced), with Close first (fn D was meant, so the
+    /// card is mostly there to be closed) and Undo, which takes back just this add (`before` to `after`).
     nonisolated static func dictionaryCard(added word: String, replacing replaced: String? = nil,
                                            before: UserDictionary, after: UserDictionary) -> Notice {
         let body = if let replaced {
@@ -2656,7 +2656,7 @@ final class DictationController {
         }
         return Notice(dedupeKey: dictionaryCardKey, style: .info, symbol: "character.book.closed",
                       title: "Added to your dictionary", body: body,
-                      actions: [NoticeAction(title: "Open Dictionary", kind: .openHub(.dictionary), isPrimary: true),
+                      actions: [NoticeAction(title: "Close", kind: .dismiss, isPrimary: true),
                                 NoticeAction(title: "Undo", kind: .undoDictionaryAdd(word, before: before,
                                                                                      after: after))],
                       lifetime: .seconds(10), sound: .success)
