@@ -196,7 +196,12 @@ enum PillVisual: Equatable, Sendable {
     /// The error flash as a sentence instead of the glyph ("No speech detected"): no red, no shake.
     case message(String)
 
-    enum Content: Hashable { case empty, peek, hello, recording, processing, error, message }
+    enum Content: Hashable {
+        case empty, peek, hello, recording, processing, error, message
+
+        /// Everything but `.empty`, which draws nothing: one layer each on the pill's stage (`PillFace`).
+        static let drawn: [Content] = [.peek, .hello, .recording, .processing, .error, .message]
+    }
 
     var size: CGSize {
         switch self {
@@ -594,11 +599,18 @@ struct PillExitEffect: ViewModifier, Animatable {
     }
 }
 
-/// Content shrinking with its capsule into the resting one; `progress` runs on the capsule's own spring.
-private struct PillMorphEffect: ViewModifier, Animatable {
+/// Content that isn't its capsule's own (shrinking into the resting capsule, or on its way out): laid out at its own
+/// pill's size and scaled to fit the capsule as it stands in this frame, so it never reaches past the capsule's ends.
+/// The morph into the resting capsule fades it as it shrinks; `progress` runs on the capsule's own spring
+/// (`PillMotion.morphPose`), and `capsule` is the size that spring has reached, so the two never drift apart.
+private struct PillContentFit: ViewModifier, Animatable {
     var progress: CGFloat
-    let from: CGSize
-    let to: CGSize
+    /// The content's own pill.
+    let own: CGSize
+    /// The capsule in this frame.
+    let capsule: CGSize
+    /// Content in its own capsule is laid out on it and never scales.
+    var fits = true
     /// The model chip shrinks toward the capsule below it.
     var anchor: UnitPoint = .center
     /// `PillMotion.morphPose`'s: the token count fades early.
@@ -610,10 +622,63 @@ private struct PillMorphEffect: ViewModifier, Animatable {
     }
 
     func body(content: Content) -> some View {
-        let pose = PillMotion.morphPose(at: progress, from: from, to: to, fadeSpan: fadeSpan)
+        let scale = fits ? min(1, capsule.width / max(own.width, 1), capsule.height / max(own.height, 1)) : 1
+        let pose = PillMotion.morphPose(at: progress, from: own, to: own, fadeSpan: fadeSpan)
         content
-            .scaleEffect(pose.scale, anchor: anchor)
+            .scaleEffect(max(scale, 0.01), anchor: anchor)
             .opacity(pose.opacity)
+    }
+}
+
+// MARK: - Staying live while leaving
+
+/// Draws `content` for `value`, and once `value` goes nil goes on drawing it, live, while it fades out (`leaving` is
+/// true), then drops it out of sight.
+///
+/// A view taken out of the tree is no longer laid out: through its removal transition it stays frozen at its last
+/// frame, placed relative to an ancestor that may itself be moving or resizing. That froze a fading "No speech
+/// detected" against the left of a narrowing pill (it slid right and was cut on one side), left a hint behind as the
+/// pill widened under it, and kept a closing toast whole over the pill that took its place. So nothing that can still
+/// be seen leaves through a removal here: what goes stays laid out (it follows the pill, fits it, takes the current
+/// environment) until it's invisible, and only then is it removed, with nothing left to animate.
+struct PillLingering<Value: Equatable, Content: View>: View {
+    var value: Value?
+    /// How it comes in. A transition only runs on the outermost view inserted, so it's applied here.
+    var insertion: AnyTransition = .identity
+    /// How it fades out; nil: at once.
+    var fadeOut: Animation?
+    /// How it comes back while it's still fading out; nil: at once.
+    var fadeIn: Animation?
+    /// How long it's kept once it starts leaving: longer than `fadeOut`, so it's dropped out of sight.
+    var hold: TimeInterval = 0.4
+    @ViewBuilder var content: (_ value: Value, _ leaving: Bool) -> Content
+
+    @State private var last: Value?
+
+    var body: some View {
+        let leaving = value == nil
+        // A container that's always there, so its handlers run with nothing inside it.
+        ZStack {
+            if let shown = value ?? last {
+                content(shown, leaving)
+                    .animation(leaving ? fadeOut : fadeIn) { $0.opacity(leaving ? 0 : 1) }
+                    .allowsHitTesting(!leaving)
+                    .accessibilityHidden(leaving)
+                    .transition(.asymmetric(insertion: insertion, removal: .identity))
+            }
+        }
+        .onChange(of: value, initial: true) { _, new in
+            if let new { last = new }
+        }
+        .task(id: leaving) {
+            guard leaving, last != nil else { return }
+            try? await Task.sleep(for: .seconds(hold))
+            guard !Task.isCancelled else { return }
+            // Out of sight by now: nothing may animate.
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { last = nil }
+        }
     }
 }
 
@@ -656,6 +721,20 @@ struct PillFace: View {
         content.content == .recording && model.polishes
     }
 
+    /// What the content's layer draws: `content`, laid out on the capsule when it's the capsule's own, shrinking into
+    /// it (by `morph`) when it isn't.
+    private var contentLayer: PillContentLayer {
+        PillContentLayer(visual: content, inOwnCapsule: content == capsule, morph: content == capsule ? 0 : morph)
+    }
+
+    /// The chip over the pill while it's up, with what it needs to shrink with its content.
+    private var chipLayer: PillChipLayer? {
+        chipChoice.map {
+            PillChipLayer(choice: $0, isInteractive: capsule == content && capsule.isLocked, contentSize: content.size,
+                          shrinks: content != capsule, morph: content == capsule ? 0 : morph)
+        }
+    }
+
     var body: some View {
         let size = self.size ?? capsule.size
         let accent = self.accent
@@ -670,113 +749,124 @@ struct PillFace: View {
                     .frame(width: 0, height: size.height)
             }
             // Content and chip stand on a stage of fixed size centered on the capsule, never on the capsule's own
-            // frame: what leaves is no longer laid out, and on the capsule's frame it would stay where that frame's
-            // corner put it (a fading "No speech detected" sliding right as the pill narrowed). On the stage it keeps
-            // its place, and the capsule's ends close over it evenly.
+            // frame, so nothing on it moves when the capsule changes size.
             .overlay {
-                contentView(accent: accent)
+                contentLayers(capsule: size)
                     .frame(width: PillMetrics.stageSize.width, height: PillMetrics.stageSize.height)
-                    // Inside the capsule: a capsule narrowing past its content (hands-free's X, timer and check as
-                    // it stops) covers it with its ends, edge and all, instead of the content floating over it.
+                    // Inside the capsule, whatever happens: nothing of the content is ever drawn past its ends.
                     .mask { PillContentMask().frame(width: size.width, height: size.height) }
             }
             .overlay { PillCapsuleEdge(accent: capsule.content == .empty ? nil : accent) }
             // Above the pill and part of it: it springs in on a switch, shrinks into the resting capsule with the
-            // content and leaves with the pill in one piece.
+            // content and leaves with the pill in one piece. When it goes by itself (its hold over, the content no
+            // longer a dictation's), it stays live while it fades, riding the capsule's top.
             .overlay {
-                ZStack {
-                    if let chipChoice {
-                        // One chip for the whole cycle: a switch rolls its names on (`PillModelChip`).
-                        PillModelChip(model: model, choice: chipChoice, regions: regions,
-                                       isInteractive: capsule == content && capsule.isLocked)
-                            .modifier(PillMorphEffect(progress: content == capsule ? 0 : morph, from: content.size,
-                                                      to: capsule.size, anchor: .bottom))
-                            .offset(y: -(size.height / 2 + PillMetrics.chipGap + PillMetrics.chipHeight / 2))
-                            .transition(chipTransition)
-                    }
+                PillLingering(value: chipLayer, insertion: chipInsertion,
+                              fadeOut: reduceMotion ? .easeInOut(duration: 0.15) : .easeIn(duration: 0.25),
+                              fadeIn: reduceMotion ? .easeInOut(duration: 0.15) : .easeOut(duration: 0.2)) { chip, leaving in
+                    // One chip for the whole cycle: a switch rolls its names on (`PillModelChip`).
+                    PillModelChip(model: model, choice: chip.choice, regions: regions,
+                                  isInteractive: chip.isInteractive && !leaving)
+                        .modifier(PillContentFit(progress: chip.morph, own: chip.contentSize, capsule: size,
+                                                 fits: chip.shrinks, anchor: .bottom))
+                        .offset(y: -(size.height / 2 + PillMetrics.chipGap + PillMetrics.chipHeight / 2))
                 }
                 .frame(width: PillMetrics.stageSize.width, height: PillMetrics.stageSize.height)
             }
-            .animation(reduceMotion ? .easeInOut(duration: 0.15) : .spring(duration: 0.3, bounce: 0.3),
-                       value: chipChoice)
-            .animation(.easeOut(duration: 0.2), value: accent)
     }
 
-    /// A chip springs up out of the pill and goes quietly.
-    private var chipTransition: AnyTransition {
-        if reduceMotion { return .opacity }
-        return .asymmetric(
-            insertion: .opacity.combined(with: .scale(scale: 0.7, anchor: .bottom)).combined(with: .offset(y: 5)),
-            removal: .opacity.animation(.easeIn(duration: 0.25)))
+    /// A chip springs up out of the pill.
+    private var chipInsertion: AnyTransition {
+        if reduceMotion { return .opacity.animation(.easeInOut(duration: 0.15)) }
+        return .opacity.combined(with: .scale(scale: 0.7, anchor: .bottom)).combined(with: .offset(y: 5))
+            .animation(.spring(duration: 0.3, bounce: 0.3))
     }
 
-    /// Content in its own capsule is laid out on the capsule's frame, so it moves with the capsule's one spring (hands-free's
-    /// X and check ride its ends). Content shrinking into a smaller capsule keeps its own pill's size, stays laid out as
-    /// it was and only scales.
-    @ViewBuilder
-    private func contentView(accent: PillAccent?) -> some View {
-        let visual = content
-        let frame = content == capsule ? (size ?? visual.size) : visual.size
-        let morph = PillMorphEffect(progress: content == capsule ? 0 : morph, from: visual.size,
-                                    to: capsule.size,
-                                    fadeSpan: visual.isCounting ? PillMotion.counterFadeSpan : 1)
-        switch visual.content {
-        case .empty:
-            Color.clear
-                .id(PillVisual.Content.empty)
-        case .peek:
-            PeekDots()
-                .modifier(morph)
-                .id(PillVisual.Content.peek)
-                .transition(contentTransition())
-        case .hello:
-            HelloRipple()
-                .modifier(morph)
-                .id(PillVisual.Content.hello)
-                .transition(contentTransition())
-        case .recording:
-            RecordingContent(model: model, locked: visual.isLocked, hours: visual.showsHours,
-                             barsOffset: visual.barsOffset, regions: regions)
-                .frame(width: frame.width, height: frame.height)
-                .modifier(morph)
-                .id(PillVisual.Content.recording)
-                .transition(contentTransition())
-        case .processing:
-            ProcessingContent(startOffset: visual.barsOffset, tint: .white,
-                              count: model.tokenCount, isCounting: visual.isCounting, polishes: visual.isPolishing)
-                .frame(width: frame.width, height: frame.height)
-                .modifier(morph)
-                .id(PillVisual.Content.processing)
-                .transition(contentTransition(anchor: visual.barsAnchor))
-        case .error:
-            ErrorGlyph()
-                .modifier(morph)
-                .id(PillVisual.Content.error)
-                .transition(contentTransition())
-        case .message:
-            if case .message(let text) = visual {
-                PillCaptionText(text: text)
-                    .modifier(morph)
-                    .id(PillVisual.Content.message)
-                    .transition(contentTransition())
+    /// One layer per kind of content, each lingering live while it leaves (`PillLingering`): one content gives way to
+    /// the next without the two piling up. The old one fades out in a tenth of a second, still laid out and fitted to
+    /// the capsule as it changes; the new one comes in once the old is nearly gone. A content coming back while it's
+    /// still fading out (an error flash and fn again within its hold) is the same view, and fades back in.
+    private func contentLayers(capsule size: CGSize) -> some View {
+        ZStack {
+            ForEach(PillVisual.Content.drawn, id: \.self) { kind in
+                PillLingering(value: content.content == kind ? contentLayer : nil,
+                              insertion: contentInsertion(anchor: kind == .processing ? content.barsAnchor : .center),
+                              fadeOut: reduceMotion ? .easeInOut(duration: 0.15)
+                                  : .easeOut(duration: PillMotion.contentLeaving),
+                              fadeIn: appearsAtOnce ? nil : (reduceMotion ? .easeInOut(duration: 0.15)
+                                  : .easeOut(duration: 0.18).delay(PillMotion.contentEntering))) { layer, leaving in
+                    contentView(layer, leaving: leaving, capsule: size)
+                }
             }
         }
     }
 
-    /// One content gives way to the next without the two piling up: the old one is gone in a tenth of a second (inside
-    /// the capsule, whose ends close over what's near them), and the new one comes in once it's nearly gone.
-    private func contentTransition(anchor: UnitPoint = .center) -> AnyTransition {
-        if reduceMotion { return .opacity.animation(.easeInOut(duration: 0.15)) }
-        return .asymmetric(
-            insertion: insertion(anchor: anchor),
-            removal: .opacity.animation(.easeOut(duration: PillMotion.contentLeaving)))
+    /// Content in its own capsule is laid out on the capsule's frame, so it moves with the capsule's one spring
+    /// (hands-free's X and check ride its ends as it widens). Leaving for another dictation's content, it keeps its own
+    /// pill's layout where it stands, centered, and the capsule's ends close over it as it fades (hands-free's X, timer
+    /// and check as it stops, "No speech detected" as fn is pressed again). Shrinking into the resting capsule, it
+    /// keeps its own pill's size and only scales, to fit inside the capsule in every frame.
+    @ViewBuilder
+    private func contentView(_ layer: PillContentLayer, leaving: Bool, capsule size: CGSize) -> some View {
+        let visual = layer.visual
+        let onCapsule = layer.inOwnCapsule && !leaving
+        let frame = onCapsule ? size : visual.size
+        let fit = PillContentFit(progress: layer.morph, own: visual.size, capsule: size, fits: !layer.inOwnCapsule,
+                                 fadeSpan: visual.isCounting ? PillMotion.counterFadeSpan : 1)
+        switch visual.content {
+        case .empty:
+            EmptyView()
+        case .peek:
+            PeekDots()
+                .modifier(fit)
+        case .hello:
+            HelloRipple()
+                .modifier(fit)
+        case .recording:
+            RecordingContent(model: model, locked: visual.isLocked, hours: visual.showsHours,
+                             barsOffset: visual.barsOffset, regions: regions, isLive: !leaving)
+                .frame(width: frame.width, height: frame.height)
+                .modifier(fit)
+        case .processing:
+            ProcessingContent(startOffset: visual.barsOffset, tint: .white,
+                              count: model.tokenCount, isCounting: visual.isCounting, polishes: visual.isPolishing)
+                .frame(width: frame.width, height: frame.height)
+                .modifier(fit)
+        case .error:
+            ErrorGlyph()
+                .modifier(fit)
+        case .message:
+            if case .message(let text) = visual {
+                PillCaptionText(text: text)
+                    .modifier(fit)
+            }
+        }
     }
 
-    private func insertion(anchor: UnitPoint = .center) -> AnyTransition {
+    private func contentInsertion(anchor: UnitPoint = .center) -> AnyTransition {
         if appearsAtOnce { return .identity }
+        if reduceMotion { return .opacity.animation(.easeInOut(duration: 0.15)) }
         return .opacity.combined(with: .scale(scale: 0.85, anchor: anchor))
             .animation(.easeOut(duration: 0.18).delay(PillMotion.contentEntering))
     }
+}
+
+/// One content on the pill's stage (`PillFace`): the visual whose content it draws, whether that's the capsule's own,
+/// and the morph shrinking it into the capsule when it isn't. Kept as it was while the content leaves.
+struct PillContentLayer: Equatable {
+    var visual: PillVisual
+    var inOwnCapsule: Bool
+    var morph: CGFloat
+}
+
+/// The model chip above the pill (`PillFace`): its model, whether it opens the model menu, and the content it shrinks
+/// with into the resting capsule. Kept as it was while the chip fades out.
+struct PillChipLayer: Equatable {
+    var choice: ModelChoice
+    var isInteractive: Bool
+    var contentSize: CGSize
+    var shrinks: Bool
+    var morph: CGFloat
 }
 
 // MARK: - Capsule
@@ -800,20 +890,26 @@ struct PillCapsule: View {
 /// The capsule's hairline, or the model's ring in its place: one ring whose color changes, never a ring that comes or
 /// goes. A ring on its way out is no longer laid out, so it stayed the old size while the capsule changed under it (a
 /// clean-up's orange "No speech detected" ring around a narrowing Parakeet pill).
+///
+/// Only the color fades (a color picked mid-dictation, the next dictation's model): the animation is scoped to it. On
+/// the whole face, it also animated whatever changed with the color, so a pill appearing on a colored model grew out
+/// of its top-left corner instead of being there at once.
 struct PillCapsuleEdge: View {
     var accent: PillAccent?
 
     var body: some View {
         Capsule(style: .continuous).ring(1)
-            .fill(accent?.ring ?? PillPalette.hairline, style: FillStyle(eoFill: true))
+            .fill(.foreground, style: FillStyle(eoFill: true))
+            .animation(.easeOut(duration: 0.2)) { $0.foregroundStyle(accent?.ring ?? PillPalette.hairline) }
             .allowsHitTesting(false)
     }
 }
 
-/// What the pill's content may draw on: the capsule, and everything above its top edge (a control's tooltip).
+/// What the pill's content may draw on: the capsule inside its edge, and everything above its top edge (a control's
+/// tooltip). Inside the edge, not the capsule's outline: letters cut at the outline showed through the 1 pt ring.
 struct PillContentMask: View {
     var body: some View {
-        Capsule(style: .continuous)
+        Capsule(style: .continuous).inset(by: 1)
             .overlay(alignment: .top) {
                 Rectangle()
                     .frame(width: 8000, height: 4000)
@@ -877,12 +973,9 @@ private struct PillPolishDropShape: View, Animatable {
         Circle()
             .fill(PillPalette.fill)
             .overlay { Circle().strokeBorder(PillPalette.hairline, lineWidth: 1) }
-            .overlay {
-                // The capsule's ring.
-                if let accent {
-                    Circle().strokeBorder(accent.ring, lineWidth: 1)
-                }
-            }
+            // The capsule's ring: always there, its color changing. One that went with the model's color (Polish off as
+            // the dictation switches to Parakeet) would stay where the drop was while the drop slid back in.
+            .overlay { Circle().strokeBorder(accent?.ring ?? .clear, lineWidth: 1) }
             .overlay {
                 Image(systemName: symbol)
                     .font(.system(size: geometry.diameter * 0.42, weight: .semibold))
@@ -1040,9 +1133,13 @@ private struct ProcessingContent: View {
         ZStack {
             ProcessingWaveView(startOffset: startOffset, tint: tint, showsDots: !isCounting && !polishes,
                                glow: polishes ? tint : nil)
-            if polishes, !isCounting {
+            // Live while it fades, centered: through a removal it stayed against the capsule's left end as the circle
+            // widened into the count, beside the count's own wand.
+            PillLingering(value: polishes && !isCounting ? true : nil, insertion: counterTransition,
+                          fadeOut: reduceMotion ? .easeInOut(duration: 0.15)
+                              : .easeOut(duration: PillMotion.contentLeaving),
+                          fadeIn: reduceMotion ? .easeInOut(duration: 0.15) : .easeOut(duration: 0.18)) { _, _ in
                 PillWand(tint: tint, pulses: reduceMotion && !staticRendering)
-                    .transition(counterTransition)
             }
             if isCounting, let shown = count ?? lastCount {
                 PillTokenCounter(count: shown, polishes: polishes)
@@ -1151,6 +1248,9 @@ private struct RecordingContent: View {
     var hours = false
     let barsOffset: CGFloat
     let regions: PillHitRegions?
+    /// Still the pill's content: once it's leaving, X and the check take no clicks, report no regions and show no
+    /// tooltips.
+    var isLive = true
     var tint: Color = .white
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -1163,7 +1263,9 @@ private struct RecordingContent: View {
             // outermost view being inserted).
             HStack(spacing: 0) {
                 if locked {
-                    PillControlButton(control: .cancel, model: model, regions: regions) { model.onCancel?() }
+                    PillControlButton(control: .cancel, model: model, regions: regions, isLive: isLive) {
+                        model.onCancel?()
+                    }
                         .transition(controlTransition)
                 }
                 Spacer(minLength: 0)
@@ -1174,7 +1276,9 @@ private struct RecordingContent: View {
                         .transition(timerTransition)
                 }
                 if locked {
-                    PillControlButton(control: .stop, model: model, regions: regions) { model.onStop?() }
+                    PillControlButton(control: .stop, model: model, regions: regions, isLive: isLive) {
+                        model.onStop?()
+                    }
                         .transition(controlTransition)
                 }
             }
@@ -1204,10 +1308,15 @@ private struct PillControlButton: View {
     let control: PillControl
     let model: PillModel
     let regions: PillHitRegions?
+    /// Its content is leaving the pill: no region, no hover, no tooltip.
+    var isLive = true
     let action: () -> Void
 
-    private var hovered: Bool { model.hoveredControl == control }
-    private var showsTooltip: Bool { model.controlTooltip == control }
+    /// Where it is on the canvas, as last laid out.
+    @State private var frame: CGRect?
+
+    private var hovered: Bool { isLive && model.hoveredControl == control }
+    private var showsTooltip: Bool { isLive && model.controlTooltip == control }
 
     var body: some View {
         Button(action: action) {
@@ -1233,17 +1342,22 @@ private struct PillControlButton: View {
         .buttonStyle(.plain)
         .animation(.easeOut(duration: 0.12), value: hovered)
         .overlay(alignment: .top) {
-            if showsTooltip {
+            // Live while it fades, so it follows the button as the capsule changes under it.
+            PillLingering(value: showsTooltip ? control : nil,
+                          insertion: .opacity.combined(with: .offset(y: 3)).animation(.easeOut(duration: 0.14)),
+                          fadeOut: .easeOut(duration: 0.14), fadeIn: .easeOut(duration: 0.14)) { control, _ in
                 PillControlTooltip(control: control, settings: model.settings)
                     .fixedSize()
                     .offset(y: -(PillMetrics.tooltipHeight + PillMetrics.buttonInset + 8))
-                    .transition(.opacity.combined(with: .offset(y: 3)).animation(.easeOut(duration: 0.14)))
                     .allowsHitTesting(false)
             }
         }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(PillCanvasMetrics.space)) } action: { rect in
-            regions?.setControl(control, rect: rect)
+            frame = rect
+            regions?.setControl(control, rect: isLive ? rect : nil)
         }
+        // Leaving (hands-free stopped), the button no longer counts as one at once, not when it's finally removed.
+        .onChange(of: isLive) { _, live in regions?.setControl(control, rect: live ? frame : nil) }
         .onDisappear { regions?.setControl(control, rect: nil) }
         .accessibilityLabel(control == .cancel ? "Cancel dictation" : "Finish dictation")
     }

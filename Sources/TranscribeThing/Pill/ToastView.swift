@@ -61,6 +61,12 @@ enum ToastMetrics {
 struct ToastOrigin: Equatable {
     var size: CGSize = PillMetrics.restSize
     var drop: CGFloat = 0
+    /// The resting pill is under the toast in its slot (Always) and takes over as the toast closes into it: the card
+    /// closes into the pill's very shape without fading, so the two meet with no seam.
+    var pillComesBack = false
+
+    /// The pill's slot: the toast stands where the pill would.
+    var isSlot: Bool { drop == 0 }
 }
 
 /// How far a toast is out of the pill: 0 is the pill's capsule, 1 the whole card. The card's black surface grows
@@ -77,15 +83,29 @@ struct ToastReveal: Equatable {
     }
 
     /// The surface itself fades over the first few percent, so a toast leaving where no pill is doesn't end as a
-    /// speck.
-    var surfaceOpacity: Double { Double(min(1, max(0, progress / 0.15))) }
+    /// speck. Where the resting pill takes over, it closes whole into the pill's shape instead. Over a dictation's pill
+    /// (`drop` above it) it's gone by the time it would reach the pill's top edge, and comes in only above it: never
+    /// a card under the pill, wider than it, showing around it.
+    var surfaceOpacity: Double {
+        if origin.pillComesBack { return 1 }
+        if origin.drop > 0 {
+            let reachesPill = min(0.9, origin.size.height / origin.drop)
+            return Double(min(1, max(0, (progress - reachesPill) / (1 - reachesPill))))
+        }
+        return Double(min(1, max(0, progress / 0.15)))
+    }
 }
 
 extension EnvironmentValues {
     @Entry var toastReveal = ToastReveal()
 }
 
-/// Drives `ToastReveal.progress` through a transition, handing it to the card below.
+/// Drives `ToastReveal.progress`, handing it to the card below: as the newest card's insertion transition (it grows out
+/// of the pill), and on every card in the stack (the newest closing back into it, `ToastStack`). The two multiply, so
+/// a card closing while it still grows closes from where it got to.
+///
+/// Only a live card follows it: a view being removed no longer takes new environment values, so a card closing
+/// through a removal transition stayed whole and opaque until the removal ended, then vanished in one frame.
 struct ToastRevealEffect: ViewModifier, Animatable {
     var reveal: ToastReveal
 
@@ -95,7 +115,10 @@ struct ToastRevealEffect: ViewModifier, Animatable {
     }
 
     func body(content: Content) -> some View {
-        content.environment(\.toastReveal, reveal)
+        content.transformEnvironment(\.toastReveal) { value in
+            value.progress *= reveal.progress
+            value.origin = reveal.origin
+        }
     }
 }
 
@@ -168,6 +191,14 @@ private struct ToastSurfaceShadow: View {
 
 /// Newest toast nearest the pill, grown out of it; the older one sits above it, slightly smaller and dimmer until
 /// hovered.
+///
+/// The newest toast closes back into the pill as a live card. Gone from `center`, it stays in the stack while it
+/// closes: it takes no room, stays at the bottom where the newest card stands, behind the cards closing up over it,
+/// follows the stack, takes no clicks, and is dropped once it's closed. Through a removal transition it couldn't close
+/// at all: a view being removed is no longer laid out and takes no new environment values, so it stayed whole and
+/// opaque where it was, over whatever came there, until the removal ended. A card closing into the pill's slot as the
+/// pill comes back into it (Undo on "Dictation canceled", Retry on a failure) is gone in that same frame: the pill is
+/// drawn where it was.
 struct ToastStack: View {
     let center: ToastCenter
     var regions: PillHitRegions?
@@ -175,50 +206,202 @@ struct ToastStack: View {
     var origin = ToastOrigin()
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The cards and the origin as of the last update. In the update that takes the newest card away, it's still here,
+    /// so the card closes from that very frame (`record` keeps it in `closing` right after).
+    @State private var seen = Seen()
+    /// Newest cards that went, closing into the pill.
+    @State private var closing: [ToastClosing] = []
+
+    struct Seen: Equatable {
+        var notices: [Notice] = []
+        var origin = ToastOrigin()
+    }
 
     var body: some View {
-        let newestKey = center.notices.last?.dedupeKey
+        let notices = center.notices
+        let keys = Set(notices.map(\.dedupeKey))
+        let newestKey = notices.last?.dedupeKey
         // Stacked cards share one width so their edges line up.
-        let stackWidth = center.notices.map(ToastCard.preferredWidth(for:)).max()
-        VStack(spacing: ToastMetrics.gap) {
-            ForEach(center.notices, id: \.dedupeKey) { notice in
+        let stackWidth = notices.map(ToastCard.preferredWidth(for:)).max()
+        // Closing cards first: drawn under the cards that stay.
+        let entries = closingCards(keys: keys).map { ToastStackEntry(notice: $0.notice, closing: $0) }
+            + notices.map { ToastStackEntry(notice: $0, closing: nil) }
+        ToastStackLayout(spacing: ToastMetrics.gap) {
+            ForEach(entries) { entry in
+                let notice = entry.notice
                 let isNewest = notice.dedupeKey == newestKey
+                let leaving = entry.closing != nil
                 // Polish Selection's cards are answers to compare: neither recedes.
-                let dimmed = !isNewest && !center.isPaused && !notice.takesCardKeys
-                ToastCard(notice: notice, center: center, isDimmed: dimmed,
-                          width: stackWidth)
+                let dimmed = !leaving && !isNewest && !center.isPaused && !notice.takesCardKeys
+                // Closing into the slot the pill has come back into: under the pill, so gone at once.
+                let covered = entry.closing.map { $0.origin.isSlot && !origin.isSlot } ?? false
+                ToastCard(notice: notice, center: center, isDimmed: dimmed, isLeaving: leaving,
+                          width: entry.closing?.width ?? stackWidth)
                     .scaleEffect(dimmed ? 0.96 : 1, anchor: .bottom)
-                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(PillCanvasMetrics.space)) } action: { rect in
-                        // A little wider than the card, for its close button on the corner.
-                        regions?.setToast(notice.dedupeKey, rect: rect.insetBy(dx: -ToastCloseButton.overhang,
-                                                                               dy: -ToastCloseButton.overhang))
-                    }
-                    .onDisappear { regions?.setToast(notice.dedupeKey, rect: nil) }
+                    // Not a scoped `animation(_:body:)`: the environment set inside one never reaches the card.
+                    .modifier(ToastRevealEffect(reveal: reveal(of: entry)))
+                    .opacity(leaving && reduceMotion ? 0 : 1)
+                    .animation(closingAnimation, value: leaving)
+                    .animation(nil) { $0.opacity(covered ? 0 : 1) }
+                    .allowsHitTesting(!leaving)
+                    .accessibilityHidden(leaving)
+                    .modifier(ToastRegion(key: notice.dedupeKey, regions: regions, isLive: !leaving))
+                    .layoutValue(key: ToastLeavingKey.self, value: leaving)
                     .transition(isNewest ? growTransition : recedeTransition)
             }
         }
         .animation(reduceMotion ? .easeInOut(duration: 0.15) : .spring(duration: 0.34, bounce: 0.12),
-                   value: center.notices.map(\.dedupeKey))
+                   value: notices.map(\.dedupeKey))
         .animation(.easeOut(duration: 0.18), value: center.isPaused)
         .environment(\.colorScheme, .dark)
+        .onChange(of: Seen(notices: notices, origin: origin), initial: true) { _, new in record(new) }
     }
 
-    /// The newest toast opens out of the pill and closes back into it.
+    /// The newest card closes into the pill on the capsule's own spring; Reduce Motion fades it.
+    private var closingAnimation: Animation {
+        reduceMotion ? .easeInOut(duration: 0.15) : .spring(duration: PillCanvasView.toastClosing, bounce: 0)
+    }
+
+    /// A card that stays is whole; one closing goes to the pill it came from (where the pill was when it went).
+    private func reveal(of entry: ToastStackEntry) -> ToastReveal {
+        guard let closing = entry.closing else { return ToastReveal(progress: 1, origin: origin) }
+        return ToastReveal(progress: reduceMotion ? 1 : 0, origin: closing.origin)
+    }
+
+    /// The cards closing now: those already kept, and the newest card of the last update if it has just gone.
+    private func closingCards(keys: Set<String>) -> [ToastClosing] {
+        var cards = closing.filter { !keys.contains($0.key) }
+        if let card = Self.departure(from: seen, keys: keys), !cards.contains(where: { $0.key == card.key }) {
+            cards.append(card)
+        }
+        return cards
+    }
+
+    /// `seen`'s newest card, if it's no longer among `keys`: as it stood, its width and the pill it grew out of. Only
+    /// when it was the last card: with others left, the next one comes down into its place, and a card closing there
+    /// showed under it; it fades where it is instead (`growTransition`'s removal).
+    private static func departure(from seen: Seen, keys: Set<String>) -> ToastClosing? {
+        guard keys.isEmpty, let newest = seen.notices.last, !keys.contains(newest.dedupeKey) else { return nil }
+        return ToastClosing(notice: newest,
+                            width: seen.notices.map(ToastCard.preferredWidth(for:)).max()
+                                ?? ToastCard.preferredWidth(for: newest),
+                            origin: seen.origin)
+    }
+
+    private func record(_ new: Seen) {
+        let keys = Set(new.notices.map(\.dedupeKey))
+        // Posted again while it closed: a live card again, it opens back up.
+        closing.removeAll { keys.contains($0.key) }
+        if let card = Self.departure(from: seen, keys: keys) {
+            closing.removeAll { $0.key == card.key }
+            closing.append(card)
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(PillCanvasView.toastClosing + 0.15))
+                // Closed by now: nothing may animate.
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { closing.removeAll { $0.id == card.id } }
+            }
+        }
+        // A card that went takes no clicks and holds no hover from now on, not once its removal has played out.
+        for notice in seen.notices where !keys.contains(notice.dedupeKey) {
+            regions?.setToast(notice.dedupeKey, rect: nil)
+        }
+        seen = new
+    }
+
+    /// The newest toast opens out of the pill. The last one closes back into it as a live card (`ToastClosing`); one with
+    /// others left fades where it is as the next comes down.
     private var growTransition: AnyTransition {
         if reduceMotion { return .opacity.animation(.easeInOut(duration: 0.15)) }
         return .asymmetric(
             insertion: .modifier(active: ToastRevealEffect(reveal: ToastReveal(progress: 0, origin: origin)),
                                  identity: ToastRevealEffect(reveal: ToastReveal(progress: 1, origin: origin)))
                 .animation(.spring(duration: 0.42, bounce: 0.14)),
-            removal: .modifier(active: ToastRevealEffect(reveal: ToastReveal(progress: 0, origin: origin)),
-                               identity: ToastRevealEffect(reveal: ToastReveal(progress: 1, origin: origin)))
-                .animation(.spring(duration: PillCanvasView.toastClosing, bounce: 0)))
+            removal: .opacity.animation(.easeOut(duration: 0.12)))
     }
 
-    /// An older toast just goes.
+    /// An older toast just goes, quick and soft from the start: the cards below close up over it, so it's out of the way
+    /// before they reach it.
     private var recedeTransition: AnyTransition {
         if reduceMotion { return .opacity.animation(.easeInOut(duration: 0.15)) }
-        return .opacity.combined(with: .scale(scale: 0.94, anchor: .bottom)).animation(.easeIn(duration: 0.18))
+        return .opacity.combined(with: .scale(scale: 0.94, anchor: .bottom)).animation(.easeOut(duration: 0.12))
+    }
+}
+
+/// The newest card on its way back into the pill (`ToastStack`): as it stood, its width in the stack, and the pill it
+/// closes into.
+struct ToastClosing: Identifiable, Equatable {
+    let id = UUID()
+    let notice: Notice
+    let width: CGFloat
+    let origin: ToastOrigin
+
+    var key: String { notice.dedupeKey }
+}
+
+/// Reports a card's area to the hit regions while it's live; a card closing back into the pill takes no clicks and holds
+/// no hover from the moment it goes, and one posted again while it closed takes them back at once.
+private struct ToastRegion: ViewModifier {
+    let key: String
+    let regions: PillHitRegions?
+    let isLive: Bool
+
+    /// Where the card is on the canvas, as last laid out: a little wider than it, for its close button on the corner.
+    @State private var frame: CGRect?
+
+    func body(content: Content) -> some View {
+        content
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(PillCanvasMetrics.space)) } action: { rect in
+                frame = rect.insetBy(dx: -ToastCloseButton.overhang, dy: -ToastCloseButton.overhang)
+                regions?.setToast(key, rect: isLive ? frame : nil)
+            }
+            .onChange(of: isLive) { _, live in regions?.setToast(key, rect: live ? frame : nil) }
+            .onDisappear { regions?.setToast(key, rect: nil) }
+    }
+}
+
+/// A card in the stack: a notice, and how it closes when it's one that went.
+private struct ToastStackEntry: Identifiable {
+    let notice: Notice
+    let closing: ToastClosing?
+
+    var id: String { notice.dedupeKey }
+}
+
+/// A card closing back into the pill takes no room in the stack.
+private struct ToastLeavingKey: LayoutValueKey {
+    static let defaultValue = false
+}
+
+/// The cards bottom up, newest at the bottom, each centered, `spacing` apart. A card closing back into the pill
+/// (`ToastLeavingKey`) takes no room: it stays at the bottom, where the newest card stands, and the others close up
+/// over it.
+private struct ToastStackLayout: Layout {
+    var spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        var size = CGSize.zero
+        var count = 0
+        for subview in subviews where !subview[ToastLeavingKey.self] {
+            let card = subview.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
+            size.width = max(size.width, card.width)
+            size.height += card.height
+            count += 1
+        }
+        size.height += spacing * CGFloat(max(0, count - 1))
+        return size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var bottom = bounds.maxY
+        for subview in subviews.reversed() {
+            let card = subview.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
+            let leaving = subview[ToastLeavingKey.self]
+            subview.place(at: CGPoint(x: bounds.midX, y: leaving ? bounds.maxY : bottom), anchor: .bottom,
+                          proposal: ProposedViewSize(card))
+            if !leaving { bottom -= card.height + spacing }
+        }
     }
 }
 
@@ -230,6 +413,9 @@ struct ToastCard: View {
     /// The older toast of a stack: its content recedes to about 70% while the card stays opaque, so the
     /// desktop never shows through it.
     var isDimmed = false
+    /// Closing back into the pill (`ToastStack`): gone from the center. Its close button hides; its countdown stays,
+    /// emptied, and fades with the words.
+    var isLeaving = false
     /// Shared width when stacked; nil = the notice's own preferred width.
     var width: CGFloat?
 
@@ -281,7 +467,8 @@ struct ToastCard: View {
 
     @ViewBuilder
     private var countdown: some View {
-        if center.countdowns[notice.id] != nil {
+        // Closing, its bar stays (emptied) and fades with the words, rather than going through a removal.
+        if center.countdowns[notice.id] != nil || isLeaving {
             // A point above the edge, so the card keeps a dark rim under it on a white page.
             ToastCountdownBar(center: center, id: notice.id)
                 .padding(.bottom, 1)
@@ -292,7 +479,7 @@ struct ToastCard: View {
     private var closeButton: some View {
         ToastCloseButton(notice: notice, center: center)
             .offset(x: -ToastCloseButton.overhang, y: -ToastCloseButton.overhang)
-            .opacity(center.isPaused && reveal.progress > 0.99 ? 1 : 0)
+            .opacity(center.isPaused && !isLeaving && reveal.progress > 0.99 ? 1 : 0)
             .animation(.easeOut(duration: 0.15), value: center.isPaused)
     }
 

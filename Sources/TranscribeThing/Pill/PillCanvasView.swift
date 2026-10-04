@@ -63,6 +63,10 @@ struct PillCanvasView: View {
     @State private var pillRect: CGRect?
     /// The last toast is closing back into the pill's slot: the pill waits under it until it's done.
     @State private var closingIntoSlot = false
+    /// There were toasts as of the last update. In the update that takes the last one away it's still true, so the
+    /// resting pill stays under it from that very update on (`closingIntoSlot` takes over right after): set a pass
+    /// late, the pill showed whole over the closing toast, then left again.
+    @State private var hadToasts = false
 
     private var showsRestTooltip: Bool {
         guard model.isPresented, model.visiblePhase.isIdle, toasts.notices.isEmpty else { return false }
@@ -100,14 +104,20 @@ struct PillCanvasView: View {
         model.isPresented && (!model.visiblePhase.isIdle || model.isHelloActive)
     }
 
-    /// The resting pill is under a toast that took its place: it steps aside, and comes back (at once) when the last
-    /// toast has closed back into its slot.
+    /// The resting pill is under a toast that took its place: it steps aside, and comes back (at once) as the last
+    /// toast closes back into its slot (`slotHandover`).
     private var pillCovered: Bool {
-        model.isPresented && !pillHoldsSlot && (!toasts.notices.isEmpty || closingIntoSlot)
+        model.isPresented && !pillHoldsSlot && (!toasts.notices.isEmpty || hadToasts || closingIntoSlot)
     }
 
-    /// How long the last toast takes to close back into the pill's slot (`ToastStack`'s removal).
+    /// How long the last toast takes to close back into the pill's slot: the duration of `ToastStack`'s closing spring.
     static let toastClosing: TimeInterval = 0.3
+    /// How long the resting pill waits under the last toast closing into its slot: until the card has closed into the
+    /// pill's own shape (`ToastOrigin.pillComesBack`), so the pill takes over from it with no seam. Sooner, the card
+    /// still wider than the pill showed around it as a dark halo.
+    /// The spring is within a point of the pill by then; the card itself is dropped later (`ToastStack`), so the two
+    /// overlap and never leave the slot empty.
+    static let slotHandover: TimeInterval = toastClosing + 0.05
 
     /// Toasts stand above a pill that holds its place, and in its slot, bottoms aligned, when it doesn't.
     static func toastBottomPadding(pillOnScreen: Bool, showsChip: Bool) -> CGFloat {
@@ -117,7 +127,7 @@ struct PillCanvasView: View {
 
     /// Where the newest toast grows out of: the pill's slot, or the dictation's pill under the toasts.
     private var toastOrigin: ToastOrigin {
-        guard pillHoldsSlot else { return ToastOrigin() }
+        guard pillHoldsSlot else { return ToastOrigin(pillComesBack: model.isPresented) }
         let pill = PillView(model: model, context: .panel(nil)).visual.size
         let lift = Self.toastBottomPadding(pillOnScreen: true, showsChip: showsChip) - PillCanvasMetrics.pillBottomInset
         return ToastOrigin(size: pill, drop: lift)
@@ -143,55 +153,38 @@ struct PillCanvasView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .coordinateSpace(.named(PillCanvasMetrics.space))
-        .onChange(of: toasts.notices.isEmpty) { _, empty in
-            closingIntoSlot = empty
+        .onChange(of: toasts.notices.isEmpty, initial: true) { old, empty in
+            if old != empty { closingIntoSlot = empty }
+            hadToasts = !empty
         }
         .task(id: closingIntoSlot) {
             guard closingIntoSlot else { return }
-            try? await Task.sleep(for: .seconds(Self.toastClosing))
+            try? await Task.sleep(for: .seconds(Self.slotHandover))
             closingIntoSlot = false
         }
+    }
+
+    /// What floats over the pill, in the chip's place, one at a time.
+    private var hint: PillHint? {
+        if showsRestTooltip { return .rest(hello: model.isHelloActive) }
+        if showsKeyHint, let text = model.keyHint { return .key(text) }
+        if showsSelectionHint { return .selection(handoff: model.selectionHint == .handoff) }
+        if showsSwitchHint { return .switchModel }
+        return nil
     }
 
     private var pillArea: some View {
         PillView(model: model, context: .panel(regions), covered: pillCovered)
             .overlay(alignment: .top) {
-                if showsRestTooltip {
-                    Group {
-                        if model.isHelloActive {
-                            PillHelloTooltip(model: model)
-                        } else {
-                            PillRestTooltip(model: model)
-                        }
-                    }
-                        .fixedSize()
-                        .offset(y: -(PillMetrics.tooltipHeight + 8))
-                        .transition(tooltipTransition)
-                        .allowsHitTesting(false)
-                } else if showsKeyHint, let text = model.keyHint {
-                    PillKeyHint(text: text)
-                        .offset(y: -PillMetrics.chipLift)
-                        .transition(tooltipTransition)
-                        .allowsHitTesting(false)
-                } else if showsSelectionHint {
-                    // Handed off, it drops into the pill and dissolves while the pill becomes the polish.
-                    let handoff = model.selectionHint == .handoff
-                    PillSelectionHint(model: model)
-                        .scaleEffect(handoff && !reduceMotion ? 0.6 : 1, anchor: .bottom)
-                        .offset(y: handoff && !reduceMotion ? PillMetrics.chipGap : -PillMetrics.chipLift)
-                        .opacity(handoff ? 0 : 1)
-                        .transition(tooltipTransition)
-                        .allowsHitTesting(false)
-                } else if showsSwitchHint {
-                    PillSwitchHint(model: model)
-                        .offset(y: -PillMetrics.chipLift)
-                        .transition(tooltipTransition)
+                // Live while it fades (`PillLingering`): a hint going as the pill changes size (the Switch model hint
+                // as fn Space widens the pill into hands-free) stays over the pill's middle, where the pill's corner
+                // would otherwise have left it.
+                PillLingering(value: hint, insertion: tooltipTransition, fadeOut: .easeOut(duration: 0.18),
+                              fadeIn: .easeOut(duration: 0.18)) { hint, _ in
+                    hintView(hint)
                         .allowsHitTesting(false)
                 }
             }
-            .animation(.easeOut(duration: 0.16), value: showsRestTooltip)
-            .animation(.easeOut(duration: 0.2), value: showsSwitchHint)
-            .animation(.easeOut(duration: 0.2), value: showsKeyHint)
             .animation(reduceMotion ? .easeInOut(duration: 0.15) : .spring(duration: 0.3, bounce: 0.1),
                        value: model.selectionHint)
             .padding(PillMetrics.hoverMargin)
@@ -211,8 +204,48 @@ struct PillCanvasView: View {
             }
     }
 
-    private var tooltipTransition: AnyTransition {
-        if reduceMotion { return .opacity }
-        return .opacity.combined(with: .offset(y: 4)).combined(with: .scale(scale: 0.96, anchor: .bottom))
+    @ViewBuilder
+    private func hintView(_ hint: PillHint) -> some View {
+        switch hint {
+        case .rest(let hello):
+            Group {
+                if hello {
+                    PillHelloTooltip(model: model)
+                } else {
+                    PillRestTooltip(model: model)
+                }
+            }
+                .fixedSize()
+                .offset(y: -(PillMetrics.tooltipHeight + 8))
+        case .key(let text):
+            PillKeyHint(text: text)
+                .offset(y: -PillMetrics.chipLift)
+        case .selection(let handoff):
+            // Handed off, it drops into the pill and dissolves while the pill becomes the polish.
+            PillSelectionHint(model: model)
+                .scaleEffect(handoff && !reduceMotion ? 0.6 : 1, anchor: .bottom)
+                .offset(y: handoff && !reduceMotion ? PillMetrics.chipGap : -PillMetrics.chipLift)
+                .opacity(handoff ? 0 : 1)
+        case .switchModel:
+            PillSwitchHint(model: model)
+                .offset(y: -PillMetrics.chipLift)
+        }
     }
+
+    private var tooltipTransition: AnyTransition {
+        if reduceMotion { return .opacity.animation(.easeInOut(duration: 0.15)) }
+        return .opacity.combined(with: .offset(y: 4)).combined(with: .scale(scale: 0.96, anchor: .bottom))
+            .animation(.easeOut(duration: 0.18))
+    }
+}
+
+/// What floats over the pill in the chip's place (`PillCanvasView`), as it was when it went, so it leaves as it stood.
+enum PillHint: Equatable {
+    /// "Hold fn to dictate", or the one-time hello.
+    case rest(hello: Bool)
+    /// A key that did nothing (`PillModel.keyHint`).
+    case key(String)
+    /// Polish Selection's offer; `handoff`: dropping into the pill.
+    case selection(handoff: Bool)
+    case switchModel
 }

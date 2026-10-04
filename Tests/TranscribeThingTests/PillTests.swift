@@ -1695,6 +1695,26 @@ private struct SRGB {
 }
 
 @Suite struct ToastSlotTests {
+    /// The last toast closes back into the pill's slot on a spring; the resting pill comes back while the card is about
+    /// its size and fading, so it takes over from the card instead of turning up after it has gone.
+    /// The card closes whole into the resting pill's shape, and the pill takes over as they meet: no halo, no gap.
+    @Test func theRestingPillTakesOverFromTheClosingToast() {
+        let spring = Spring(duration: PillCanvasView.toastClosing, bounce: 0)
+        let left = 1 - CGFloat(spring.value(target: 1.0, time: PillCanvasView.slotHandover))
+        let reveal = ToastReveal(progress: left, origin: ToastOrigin(pillComesBack: true))
+        let card = ToastSurfaceShape.frame(reveal, in: CGRect(x: 0, y: 0, width: 210, height: 40))
+        #expect(card.width - PillMetrics.restSize.width < 2, "the card is the pill's size by then")
+        #expect(reveal.surfaceOpacity == 1, "and whole, not fading out ahead of the pill")
+        #expect(reveal.contentOpacity == 0, "its words are gone")
+        #expect(ToastReveal(progress: 0.05).surfaceOpacity < 0.5, "where no pill comes back, it fades instead")
+    }
+
+    /// A toast stands in the pill's slot only when no pill holds it; closing there as a pill comes back, it's gone at once.
+    @Test func theSlotIsWhereNoPillIs() {
+        #expect(ToastOrigin().isSlot)
+        #expect(!ToastOrigin(size: PillMetrics.lockedSize, drop: PillCanvasMetrics.toastLift - PillCanvasMetrics.pillBottomInset).isSlot)
+    }
+
     /// A hidden pill (While dictating, between dictations) or Never mode: the toast's bottom meets the pill's.
     @Test func toastsDropIntoThePillSlotWhenNoPillIsShown() {
         #expect(PillCanvasView.toastBottomPadding(pillOnScreen: false, showsChip: false) == PillCanvasMetrics.pillBottomInset)
