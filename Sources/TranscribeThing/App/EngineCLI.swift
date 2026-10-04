@@ -151,6 +151,8 @@ enum EngineCLI {
         var hedge: CloudHedge?
         /// Gemini's endpoint instead of Google AI Studio's (`--provider`).
         var provider: String?
+        /// A dictionary to send as the app does, one word per line (`--vocabulary`, hidden): the CLI sends none by itself.
+        var vocabulary: URL?
 
         init?(_ arguments: [String]) {
             func value(_ flag: String) -> String? {
@@ -210,6 +212,10 @@ enum EngineCLI {
                 guard let preset = value("--parakeet-compute").flatMap(ParakeetCompute.init(rawValue:)) else { return nil }
                 parakeetCompute = preset
             }
+            if arguments.contains("--vocabulary") {
+                guard engine.isCloud, let path = value("--vocabulary") else { return nil }
+                vocabulary = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+            }
         }
 
         /// An engine the app offers, by raw value or a loose spelling of it; nil for a retired one.
@@ -263,6 +269,12 @@ enum EngineCLI {
         // A copy of the key in memory: nothing the run does changes the app's key file.
         let account = OpenRouterAccount(keyStore: .inMemory(), client: client)
         let service = TranscriptionService(models: store, account: account, client: client)
+        if let url = options.vocabulary {
+            let words = try String(contentsOf: url, encoding: .utf8).split(whereSeparator: \.isNewline)
+                .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            service.vocabulary = { words }
+            print("VOCABULARY: \(words.count) words")
+        }
 
         if options.engine.isLocal {
             try paths.ensureDirectories()
