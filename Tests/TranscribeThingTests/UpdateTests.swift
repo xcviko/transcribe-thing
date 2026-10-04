@@ -383,6 +383,21 @@ final class StubTransport: @unchecked Sendable {
         #expect(h.settings.announcedUpdateVersion == "0.3.0", "the next paste announces it")
     }
 
+    /// "Updated to …" waits for the first dictation after the update, when the user is looking at the pill.
+    @Test func updatedToShowsAfterTheFirstDictation() async throws {
+        let h = Self.make(runsInBackground: true)
+        defer { try? FileManager.default.removeItem(at: h.cache.deletingLastPathComponent()) }
+        h.settings.lastLaunchedVersion = "0.1.0"
+        h.center.start()
+        #expect(h.settings.updatedVersionToAnnounce == "0.2.0" && h.settings.lastLaunchedVersion == "0.2.0")
+        try await Task.sleep(for: .seconds(0.3))
+        #expect(h.toasts.notices.isEmpty, "not at launch")
+
+        h.center.dictationDelivered()
+        try await waitUntil { h.toasts.notices.contains { $0.dedupeKey == UpdateCenter.installedKey } }
+        #expect(h.settings.updatedVersionToAnnounce == nil, "once")
+    }
+
     @Test func theGeneralRowAgreesWithThePageAfterAFailedCheck() async {
         let h = Self.make(feed: [], failsAfterFirstCheck: true)
         defer { try? FileManager.default.removeItem(at: h.cache.deletingLastPathComponent()) }

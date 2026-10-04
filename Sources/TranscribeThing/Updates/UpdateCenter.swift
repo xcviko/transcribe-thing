@@ -292,9 +292,11 @@ final class UpdateCenter {
 
     // MARK: Announcing
 
-    /// A dictation was just pasted: the moment to mention a new version, once per version.
+    /// A dictation was just pasted: the moment to say the app was updated, or to mention a new version once per
+    /// version. The user is looking at the pill then, instead of at whatever else was on screen at launch.
     func dictationDelivered() {
-        guard runsInBackground, policy.shouldAnnounce, !install.isBusy else { return }
+        guard runsInBackground, !install.isBusy, settings.updatedVersionToAnnounce != nil || policy.shouldAnnounce
+        else { return }
         announceTask?.cancel()
         announceTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(UpdatePolicy.announceDelay))
@@ -311,9 +313,18 @@ final class UpdateCenter {
     }
 
     /// Posts the toast and marks the version announced at once: Update, What's New, the close button and a
-    /// timeout all end it for this version. Waits for the next dictation if a new one already started.
+    /// timeout all end it for this version. Waits for the next dictation if a new one already started. "Updated to …"
+    /// goes first, alone: a new version waits for the paste after.
     func announceIfDue() {
-        guard policy.shouldAnnounce, !install.isBusy, let release = availableUpdate, !isDictationActive() else { return }
+        guard !isDictationActive() else { return }
+        if let updated = settings.updatedVersionToAnnounce {
+            settings.updatedVersionToAnnounce = nil
+            guard let current = currentVersion, updated == current.description else { return }
+            let notes = releases.first { $0.version == current }?.notes
+            toasts.post(Self.installedNotice(current, notes: notes))
+            return
+        }
+        guard policy.shouldAnnounce, !install.isBusy, let release = availableUpdate else { return }
         settings.announcedUpdateVersion = release.version.description
         toasts.post(Self.availableNotice(release))
         Log.app.info("Announced update \(release.version.description, privacy: .public)")
@@ -337,19 +348,13 @@ final class UpdateCenter {
                lifetime: .seconds(10))
     }
 
-    /// Records this launch's version; the first launch after an update says so in the pill.
+    /// Records this launch's version; the first launch after an update says so in the pill after the next dictation
+    /// (`dictationDelivered`), when the user is looking, rather than now, when they may not be.
     private func noteLaunch() {
         guard let current = currentVersion else { return }
         let updated = UpdatePolicy.isFirstLaunchAfterUpdate(lastLaunched: settings.lastLaunchedVersion, current: current)
         settings.lastLaunchedVersion = current.description
-        guard updated else { return }
-        Task { [weak self] in
-            // Once the pill's panel is up.
-            try? await Task.sleep(for: .seconds(2))
-            guard let self else { return }
-            let notes = self.releases.first { $0.version == current }?.notes
-            self.toasts.post(Self.installedNotice(current, notes: notes))
-        }
+        if updated { settings.updatedVersionToAnnounce = current.description }
     }
 
     // MARK: Installing

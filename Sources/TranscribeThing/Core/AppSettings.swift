@@ -119,6 +119,11 @@ final class AppSettings {
     var announcedUpdateVersion: String? = nil { didSet { store.set(announcedUpdateVersion, .announcedUpdateVersion) } }
     /// The version that ran last time, so the first launch after an update can say so. nil on a fresh install.
     var lastLaunchedVersion: String? = nil { didSet { store.set(lastLaunchedVersion, .lastLaunchedVersion) } }
+    /// The version just updated to, until its "Updated to …" has shown after a dictation (`UpdateCenter`). Kept across
+    /// launches, so quitting before dictating doesn't lose it.
+    var updatedVersionToAnnounce: String? = nil {
+        didSet { store.set(updatedVersionToAnnounce, .updatedVersionToAnnounce) }
+    }
     /// The OpenRouter key older builds kept in the login keychain is settled: moved to its key file, never there, or
     /// a key was saved or removed since (`KeychainMigration`). From then on the Keychain is never asked again.
     var keychainKeyMigrated: Bool = false { didSet { store.set(keychainKeyMigrated, .keychainKeyMigrated) } }
@@ -288,6 +293,7 @@ final class AppSettings {
         if let v = store.bool(.checkForUpdatesAutomatically) { checkForUpdatesAutomatically = v }
         announcedUpdateVersion = store.string(.announcedUpdateVersion)
         lastLaunchedVersion = store.string(.lastLaunchedVersion)
+        updatedVersionToAnnounce = store.string(.updatedVersionToAnnounce)
         if let v = store.bool(.keychainKeyMigrated) { keychainKeyMigrated = v }
     }
 }
@@ -369,7 +375,7 @@ enum SettingsKey: String, CaseIterable {
     /// kept, now as long as its entry) are removed at load.
     case maxRecordingMinutes, doublePressForHandsFree
     case restoreClipboard, keepFailedRecordingsDays, keepSuccessfulRecordingsDays, shortcuts, hasShownWelcomeHello
-    case checkForUpdatesAutomatically, announcedUpdateVersion, lastLaunchedVersion
+    case checkForUpdatesAutomatically, announcedUpdateVersion, lastLaunchedVersion, updatedVersionToAnnounce
     /// `switchEngines` (the extra models Switch model stepped to) and `switchCleanup` (whether it stepped to clean-up)
     /// are folded into `lineup` once and removed at load.
     case switchEngines, switchCleanup, switchHintShownCount, microphoneChoiceMigrated
