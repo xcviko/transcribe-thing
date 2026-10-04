@@ -133,11 +133,12 @@ struct PillCanvasView: View {
         return ToastOrigin(size: pill, drop: lift)
     }
 
-    /// Toasts rise with the pill at once, and settle into its slot only once its exit has played out, so they
-    /// never slide over the fading pill.
-    private var slotAnimation: Animation {
+    /// Toasts stand above the pill the moment it shows in their slot (it's there at once, so a toast still rising
+    /// out of the slot was drawn under it), and settle into the slot only once its exit has played out, so they never
+    /// slide over the fading pill.
+    private var slotAnimation: Animation? {
+        guard !pillHoldsSlot else { return nil }
         let move: Animation = reduceMotion ? .easeInOut(duration: 0.15) : .spring(duration: 0.32, bounce: 0.15)
-        guard !pillHoldsSlot else { return move }
         return move.delay(reduceMotion ? PillMotion.reducedExitDuration : PillMotion.exitDuration)
     }
 

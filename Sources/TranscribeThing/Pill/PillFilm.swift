@@ -163,6 +163,30 @@ private enum FilmScript {
                 s.toasts.perform(canceled.actions[0], on: canceled)
             }
         },
+        FilmScenario(name: "handsfree-cancel-then-fn", mode: .whileDictating, area: FilmScenario.toast,
+                     note: "Hands-free on Gemini with its chip, Esc (“Dictation canceled”), fn again 0.3 s later on Parakeet") { s in
+            s.record(.locked, on: .gemini, startedAgo: 3)
+            s.switchModel(to: .gemini)
+            s.wait(0.6)
+            s.toasts.post(FilmScript.canceled())
+            s.rest()
+            s.wait(0.3)
+            s.film("fn while the hands-free pill is still leaving", for: 0.6) {
+                s.record(.listening, on: .parakeet)
+            }
+        },
+        FilmScenario(name: "handsfree-cancel-then-fn-later", mode: .whileDictating, area: FilmScenario.toast,
+                     note: "The same, fn 0.8 s after Esc: the pill gone, its last content not yet dropped") { s in
+            s.record(.locked, on: .gemini, startedAgo: 3)
+            s.switchModel(to: .gemini)
+            s.wait(0.6)
+            s.toasts.post(FilmScript.canceled())
+            s.rest()
+            s.wait(0.8)
+            s.film("fn after the hands-free pill has gone", for: 0.6) {
+                s.record(.listening, on: .parakeet)
+            }
+        },
         FilmScenario(name: "processing-to-toast", mode: .always, area: FilmScenario.toast,
                      note: "Esc while processing: rest, and “Dictation canceled” grows out of the pill") { s in
             s.record(.listening, on: .parakeet)

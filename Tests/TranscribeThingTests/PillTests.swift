@@ -933,11 +933,14 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         var stage = stage(after: [.listening, .processing(afterHandsFree: false)])
         stage.record(.hidden)
         let exitGeneration = stage.generation
-        // A new dictation mid-exit: the pill is the new one at once, and fades back in at the entry's pace.
+        // A new dictation mid-exit: the pill is the new one, a pill of its own, there at once (nothing fades back).
         let back = stage.frame(for: .listening)
         #expect(back == PillStage.Frame(capsule: .listening, content: .listening, exit: 0, morph: 0, collapsed: false))
-        #expect(stage.exitAnimation(to: .listening, reduceMotion: false) == .easeOut(duration: 0.12))
+        #expect(stage.showsAfresh(.listening))
+        #expect(stage.exitAnimation(to: .listening, reduceMotion: false) == nil)
+        let session = stage.session
         stage.record(.listening)
+        #expect(stage.session == session + 1 && !stage.showsAfresh(.processing(afterHandsFree: false)))
         // The exit's settle arrives late: it must neither park nor drop anything.
         stage.settle(exitGeneration, visual: .hidden)
         stage.settle(stage.generation, visual: .listening)

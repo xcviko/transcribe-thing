@@ -340,8 +340,11 @@ struct PillView: View {
         let visual = self.visual
         let shown = visual != .hidden
         let frame = stage.frame(for: visual, choice: choice)
-        // From nowhere the pill is just there, whole, at once: a key press shows it in the same frame.
-        let appears = shown && stage.parked
+        // From nowhere (hidden, its exit over or not) the pill is just there, whole, at once, a pill of its own: a key
+        // press shows it in the same frame, and nothing of the dictation before (hands-free's X and check still
+        // fading, the last model's chip rolling on to this one's) comes with it.
+        let appears = stage.showsAfresh(visual)
+        let session = stage.session &+ (appears ? 1 : 0)
         // The capsule's size animates as one value, and the whole face is laid out at it in every frame: fill, edge, mask
         // and content can't drift apart. Left to SwiftUI's frame animation, a view that appears mid-change (the model's
         // ring as hands-free starts on another model, the controls) is drawn at the final size from the first frame.
@@ -349,8 +352,9 @@ struct PillView: View {
             PillFace(model: model, regions: regions, capsule: frame.capsule, content: frame.content, morph: frame.morph,
                      size: size, choice: frame.choice, appearsAtOnce: appears)
         }
+            .id(session)
             // Capsule and content leave together, as one composited piece.
-            .modifier(PillExitEffect(progress: exitProgress, reduceMotion: reduceMotion))
+            .modifier(PillExitEffect(progress: appears ? 0 : exitProgress, reduceMotion: reduceMotion))
             .scaleEffect(frame.collapsed && !reduceMotion ? 0.6 : 1, anchor: .bottom)
             // Back before its exit finished, the pill fades back in quickly.
             .animation(appears ? nil : fadeAnimation(shown: shown, to: visual)) { $0.opacity(frame.collapsed ? 0 : 1) }
@@ -495,6 +499,11 @@ struct PillStage: Equatable {
     private(set) var parked = true
     /// Bumped at every change; the view settles `PillMotion.settleDelay` after the last one.
     private(set) var generation = 0
+    /// The last visual recorded was hidden (exiting, or parked once the exit is over).
+    private(set) var hidden = true
+    /// Bumped each time the pill shows after being hidden: each showing is a pill of its own, nothing of the one
+    /// before carried into it (`PillView` gives the face this identity).
+    private(set) var session = 0
     /// The models of `lastShown`'s and `lingering`'s dictations: an exiting or shrinking pill keeps its chip and
     /// tint.
     private(set) var lastShownChoice: ModelChoice?
@@ -521,11 +530,15 @@ struct PillStage: Equatable {
         var choice: ModelChoice? = nil
     }
 
+    /// The pill shows after being hidden, whether its exit had played out or not: it starts afresh, at once, with
+    /// nothing of the dictation before (its controls, its chip, its content shrinking away).
+    func showsAfresh(_ visual: PillVisual) -> Bool { visual != .hidden && hidden }
+
     /// `choice` is the model of the dictation `visual` shows (the model's `sessionModel`).
     func frame(for visual: PillVisual, choice: ModelChoice? = nil) -> Frame {
         let shown = visual != .hidden
         let capsule = shown ? visual : (parked ? .hidden : lastShown)
-        let content = capsule.content == .empty ? (lingering ?? capsule) : capsule
+        let content = capsule.content == .empty && !showsAfresh(visual) ? (lingering ?? capsule) : capsule
         let contentChoice = content != capsule ? lingeringChoice : (shown ? choice : lastShownChoice)
         return Frame(capsule: capsule, content: content, exit: shown ? 0 : 1, morph: content == capsule ? 0 : 1,
                      collapsed: !shown && parked, choice: content.carriesModel ? contentChoice : nil)
@@ -533,6 +546,12 @@ struct PillStage: Equatable {
 
     mutating func record(_ visual: PillVisual, choice: ModelChoice? = nil) {
         generation &+= 1
+        if showsAfresh(visual) {
+            session &+= 1
+            lingering = nil
+            lingeringChoice = nil
+        }
+        hidden = visual == .hidden
         if visual != .hidden {
             lastShown = visual
             lastShownChoice = choice
@@ -556,10 +575,10 @@ struct PillStage: Equatable {
         }
     }
 
-    /// Animation of the exit progress on the way to `visual`. Back before the exit finished, the pill comes
-    /// back at the entry's quick fade; parked, there is nothing to exit or undo: it simply blooms.
+    /// Animation of the exit progress on the way to `visual`. Showing after being hidden (`showsAfresh`), even mid
+    /// exit, it's there at once; parked, there is nothing to exit or undo.
     func exitAnimation(to visual: PillVisual, reduceMotion: Bool) -> Animation? {
-        if parked { return nil }
+        if parked || showsAfresh(visual) { return nil }
         if visual == .hidden { return PillMotion.exitAnimation(reduceMotion: reduceMotion) }
         return reduceMotion ? .easeInOut(duration: 0.15) : .easeOut(duration: 0.12)
     }

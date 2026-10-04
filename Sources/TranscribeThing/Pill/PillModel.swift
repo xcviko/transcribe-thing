@@ -48,8 +48,11 @@ final class PillModel {
 
     /// The dictation's model from key-down until its text lands, set by the controller; nil at rest. The pill's
     /// tint shows it throughout (`PillPalette.accent`, in the color Models gives it, whichever model is main); the
-    /// chip only now and then (`showsChip`).
-    var sessionModel: ModelChoice?
+    /// chip only now and then (`showsChip`). With the dictation over, its chip goes with it: the next dictation never
+    /// starts under the last one's chip (Esc in hands-free on Gemini, then fn on Parakeet).
+    var sessionModel: ModelChoice? {
+        didSet { if sessionModel == nil, oldValue != nil { endChipFlash() } }
+    }
     /// The dictation on screen is polished (`Polish`): the pill grows its drop.
     var polishes = false
     /// Bumped on every switch of the dictation's model, back to the main model too, so the chip names the new one
