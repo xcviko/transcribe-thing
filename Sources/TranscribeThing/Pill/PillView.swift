@@ -63,6 +63,9 @@ enum PillMetrics {
     /// Polish's drop beside the pill: its gap from the capsule's right end, and its diameter to the capsule's height.
     static let polishDropGap: CGFloat = 6
     static let polishDropRatio: CGFloat = 0.86
+    /// What the pill's content and chip are laid out on: fixed, and centered on the capsule, so nothing on it moves when
+    /// the capsule changes size (`PillFace`). Room for the widest content and the chip above it.
+    static let stageSize = CGSize(width: 420, height: 120)
     /// The model chip (and the Switch model hint) floats this far above the pill's top edge.
     static let chipGap: CGFloat = 6
     static let chipHeight: CGFloat = 20
@@ -666,27 +669,33 @@ struct PillFace: View {
                                reduceMotion: reduceMotion)
                     .frame(width: 0, height: size.height)
             }
-            // Inside the capsule: a capsule narrowing past its content (hands-free's X, timer and check as it
-            // stops) covers it with its ends, edge and all, instead of the content floating over it.
+            // Content and chip stand on a stage of fixed size centered on the capsule, never on the capsule's own
+            // frame: what leaves is no longer laid out, and on the capsule's frame it would stay where that frame's
+            // corner put it (a fading "No speech detected" sliding right as the pill narrowed). On the stage it keeps
+            // its place, and the capsule's ends close over it evenly.
             .overlay {
-                // The capsule's own frame (the content may be laid out wider), so the mask is the capsule's.
-                Color.clear
-                    .overlay { contentView(accent: accent) }
-                    .mask { PillContentMask() }
+                contentView(accent: accent)
+                    .frame(width: PillMetrics.stageSize.width, height: PillMetrics.stageSize.height)
+                    // Inside the capsule: a capsule narrowing past its content (hands-free's X, timer and check as
+                    // it stops) covers it with its ends, edge and all, instead of the content floating over it.
+                    .mask { PillContentMask().frame(width: size.width, height: size.height) }
             }
             .overlay { PillCapsuleEdge(accent: capsule.content == .empty ? nil : accent) }
             // Above the pill and part of it: it springs in on a switch, shrinks into the resting capsule with the
             // content and leaves with the pill in one piece.
-            .overlay(alignment: .top) {
-                if let chipChoice {
-                    // One chip for the whole cycle: a switch rolls its names on (`PillModelChip`).
-                    PillModelChip(model: model, choice: chipChoice, regions: regions,
-                                   isInteractive: capsule == content && capsule.isLocked)
-                        .modifier(PillMorphEffect(progress: content == capsule ? 0 : morph, from: content.size,
-                                                  to: capsule.size, anchor: .bottom))
-                        .offset(y: -PillMetrics.chipLift)
-                        .transition(chipTransition)
+            .overlay {
+                ZStack {
+                    if let chipChoice {
+                        // One chip for the whole cycle: a switch rolls its names on (`PillModelChip`).
+                        PillModelChip(model: model, choice: chipChoice, regions: regions,
+                                       isInteractive: capsule == content && capsule.isLocked)
+                            .modifier(PillMorphEffect(progress: content == capsule ? 0 : morph, from: content.size,
+                                                      to: capsule.size, anchor: .bottom))
+                            .offset(y: -(size.height / 2 + PillMetrics.chipGap + PillMetrics.chipHeight / 2))
+                            .transition(chipTransition)
+                    }
                 }
+                .frame(width: PillMetrics.stageSize.width, height: PillMetrics.stageSize.height)
             }
             .animation(reduceMotion ? .easeInOut(duration: 0.15) : .spring(duration: 0.3, bounce: 0.3),
                        value: chipChoice)
@@ -788,21 +797,15 @@ struct PillCapsule: View {
     }
 }
 
-/// The capsule's hairline, or the model's ring in its place.
+/// The capsule's hairline, or the model's ring in its place: one ring whose color changes, never a ring that comes or
+/// goes. A ring on its way out is no longer laid out, so it stayed the old size while the capsule changed under it (a
+/// clean-up's orange "No speech detected" ring around a narrowing Parakeet pill).
 struct PillCapsuleEdge: View {
     var accent: PillAccent?
 
     var body: some View {
-        let shape = Capsule(style: .continuous)
-        shape.ring(1)
-            .fill(PillPalette.hairline, style: FillStyle(eoFill: true))
-            .overlay {
-                if let accent {
-                    shape.ring(1)
-                        .fill(accent.ring, style: FillStyle(eoFill: true))
-                        .transition(.opacity)
-                }
-            }
+        Capsule(style: .continuous).ring(1)
+            .fill(accent?.ring ?? PillPalette.hairline, style: FillStyle(eoFill: true))
             .allowsHitTesting(false)
     }
 }
