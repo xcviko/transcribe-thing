@@ -464,6 +464,11 @@ enum PillMotion {
 
     /// The part of the morph the token count fades over: gone by about 60 ms of the spring.
     static let counterFadeSpan: CGFloat = 0.35
+
+    /// Content giving way to the next (hands-free's controls and bars to the processing dots, say): the old one fades
+    /// out over this long, and the new one starts coming in after this delay, when the old is nearly gone.
+    static let contentLeaving: TimeInterval = 0.1
+    static let contentEntering: TimeInterval = 0.08
 }
 
 /// Which pill to draw around a change of visual. The view asks for the frame of each new visual first and
@@ -678,11 +683,13 @@ struct PillFace: View {
             removal: .opacity.animation(.easeIn(duration: 0.25)))
     }
 
-    /// Every content keeps its own pill's size, so content shrinking into a smaller capsule stays laid out as
+    /// Content in its own capsule is laid out on the capsule's frame, so it moves with the capsule's one spring (hands-free's
+    /// X and check ride its ends). Content shrinking into a smaller capsule keeps its own pill's size, stays laid out as
     /// it was and only scales.
     @ViewBuilder
     private func contentView(accent: PillAccent?) -> some View {
         let visual = content
+        let frame = content == capsule ? (size ?? visual.size) : visual.size
         let morph = PillMorphEffect(progress: content == capsule ? 0 : morph, from: visual.size,
                                     to: size ?? capsule.size,
                                     fadeSpan: visual.isCounting ? PillMotion.counterFadeSpan : 1)
@@ -703,14 +710,14 @@ struct PillFace: View {
         case .recording:
             RecordingContent(model: model, locked: visual.isLocked, hours: visual.showsHours,
                              barsOffset: visual.barsOffset, regions: regions)
-                .frame(width: visual.size.width, height: visual.size.height)
+                .frame(width: frame.width, height: frame.height)
                 .modifier(morph)
                 .id(PillVisual.Content.recording)
-                .transition(recordingTransition)
+                .transition(contentTransition())
         case .processing:
             ProcessingContent(startOffset: visual.barsOffset, tint: .white,
                               count: model.tokenCount, isCounting: visual.isCounting, polishes: visual.isPolishing)
-                .frame(width: visual.size.width, height: visual.size.height)
+                .frame(width: frame.width, height: frame.height)
                 .modifier(morph)
                 .id(PillVisual.Content.processing)
                 .transition(contentTransition(anchor: visual.barsAnchor))
@@ -729,27 +736,19 @@ struct PillFace: View {
         }
     }
 
+    /// One content gives way to the next without the two piling up: the old one is gone in a tenth of a second (inside
+    /// the capsule, whose ends close over what's near them), and the new one comes in once it's nearly gone.
     private func contentTransition(anchor: UnitPoint = .center) -> AnyTransition {
         if reduceMotion { return .opacity.animation(.easeInOut(duration: 0.15)) }
         return .asymmetric(
             insertion: insertion(anchor: anchor),
-            removal: .opacity.animation(.easeIn(duration: 0.1)))
+            removal: .opacity.animation(.easeOut(duration: PillMotion.contentLeaving)))
     }
 
     private func insertion(anchor: UnitPoint = .center) -> AnyTransition {
         if appearsAtOnce { return .identity }
         return .opacity.combined(with: .scale(scale: 0.85, anchor: anchor))
-            .animation(.easeOut(duration: 0.18).delay(0.06))
-    }
-
-    /// Recording leaves in two parts: the bars fade at once, under what comes next, while hands-free's controls stay
-    /// put until the narrowing capsule has covered them (`PillContentPresence`).
-    private var recordingTransition: AnyTransition {
-        if reduceMotion { return .opacity.animation(.easeInOut(duration: 0.15)) }
-        return .asymmetric(
-            insertion: insertion(),
-            removal: .modifier(active: PillContentPresence(presence: 0), identity: PillContentPresence(presence: 1))
-                .animation(.linear(duration: PillContentPresence.leaving)))
+            .animation(.easeOut(duration: 0.18).delay(PillMotion.contentEntering))
     }
 }
 
@@ -800,29 +799,6 @@ struct PillContentMask: Shape {
     }
 }
 
-/// How much of a leaving recording is left (1 → 0 over `leaving`): its bars are gone in the first 40%, its controls
-/// hold until the last 20%, by when the narrowing capsule has covered them.
-struct PillContentPresence: ViewModifier, Animatable {
-    static let leaving: TimeInterval = 0.3
-
-    var presence: Double
-
-    var animatableData: Double {
-        get { presence }
-        set { presence = newValue }
-    }
-
-    func body(content: Content) -> some View {
-        content.environment(\.pillContentPresence, presence)
-    }
-
-    static func barsOpacity(_ presence: Double) -> Double { min(1, max(0, (presence - 0.6) / 0.4)) }
-    static func controlsOpacity(_ presence: Double) -> Double { min(1, max(0, presence / 0.2)) }
-}
-
-extension EnvironmentValues {
-    @Entry var pillContentPresence: Double = 1
-}
 
 // MARK: - Polish's drop
 
@@ -1142,8 +1118,8 @@ private struct ErrorGlyph: View {
     }
 }
 
-/// Bars while recording; in hands-free, X and Stop slide out from under the bars and the timer sits left
-/// of Stop, all four evenly spaced (`PillMetrics.lockedGap`).
+/// Bars while recording; in hands-free, X and the check ride the capsule's ends as it widens and the timer sits left
+/// of the check, all four evenly spaced (`PillMetrics.lockedGap`).
 private struct RecordingContent: View {
     let model: PillModel
     /// Hands-free: X, the timer and Stop.
@@ -1155,44 +1131,47 @@ private struct RecordingContent: View {
     var tint: Color = .white
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.pillContentPresence) private var presence
 
     var body: some View {
         ZStack {
             WaveformView(meter: model.levelMeter, tint: tint)
                 .offset(x: barsOffset)
-                .opacity(PillContentPresence.barsOpacity(presence))
             // Each piece is inserted on its own so its transition runs (a transition only applies to the
             // outermost view being inserted).
             HStack(spacing: 0) {
                 if locked {
                     PillControlButton(control: .cancel, model: model, regions: regions) { model.onCancel?() }
-                        .transition(buttonTransition(from: 1, delay: 0))
+                        .transition(controlTransition)
                 }
                 Spacer(minLength: 0)
                 if locked {
                     PillTimerLabel(model: model)
                         .frame(width: hours ? PillMetrics.hoursTimerWidth : PillMetrics.timerWidth)
                         .padding(.trailing, hours ? PillMetrics.lockedGap : PillMetrics.timerTrailing)
-                        .transition(.opacity.animation(.easeOut(duration: 0.16).delay(0.08)))
+                        .transition(timerTransition)
                 }
                 if locked {
                     PillControlButton(control: .stop, model: model, regions: regions) { model.onStop?() }
-                        .transition(buttonTransition(from: -1, delay: 0.06))
+                        .transition(controlTransition)
                 }
             }
             .padding(.horizontal, PillMetrics.buttonInset)
-            .opacity(PillContentPresence.controlsOpacity(presence))
         }
     }
 
-    /// Buttons grow out of the bars toward their edge; the second one follows 60 ms later.
-    private func buttonTransition(from direction: CGFloat, delay: Double) -> AnyTransition {
+    /// The controls only fade: where they are comes from the capsule, so they never lag its ends.
+    private var controlTransition: AnyTransition {
         if reduceMotion { return .opacity }
-        return .asymmetric(
-            insertion: .offset(x: 30 * direction).combined(with: .scale(scale: 0.4)).combined(with: .opacity)
-                .animation(.spring(duration: 0.34, bounce: 0.3).delay(delay)),
-            removal: .opacity.combined(with: .scale(scale: 0.6)).animation(.easeIn(duration: 0.12)))
+        return .asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.14)),
+                           removal: .opacity.animation(.easeOut(duration: PillMotion.contentLeaving)))
+    }
+
+    /// The timer sits near the middle, where the bars still are while the capsule widens: it comes in once there's
+    /// room for it.
+    private var timerTransition: AnyTransition {
+        if reduceMotion { return .opacity }
+        return .asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.14).delay(0.1)),
+                           removal: .opacity.animation(.easeOut(duration: PillMotion.contentLeaving)))
     }
 }
 

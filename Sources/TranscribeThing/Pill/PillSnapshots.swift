@@ -33,8 +33,8 @@ enum PillSnapshots {
                 ])
             },
             // Stop (`--only pill-exit-stop`): hands-free's controls stay inside the narrowing capsule.
-            SnapshotEntry("pill-exit-stop", width: PillFilmSheet.width(cell: 170, columns: 11), height: 150) { _ in
-                PillFilmSheet(cell: 170, columns: 11, strips: [.handsFreeStops()])
+            SnapshotEntry("pill-exit-stop", width: PillFilmSheet.width(cell: 170, columns: 11), height: 280) { _ in
+                PillFilmSheet(cell: 170, columns: 11, strips: [.handsFreeStarts(), .handsFreeStops()])
             },
             SnapshotEntry("pill-exit-wide", width: PillFilmSheet.width(cell: 226, columns: 6), height: 630) { _ in
                 PillFilmSheet(cell: 226, columns: 6, strips: [
@@ -540,29 +540,50 @@ private struct PillFilmSheet: View {
         }
 
         /// Hands-free, Stop (the pill narrows to the push-to-talk size), then the processing pill leaving.
-        /// Stop: the hands-free capsule narrows to the processing one, every 30 ms of its spring, its X, timer and
-        /// check staying put inside it until its ends have covered them, the processing dots coming in.
+        /// Stop: the hands-free capsule narrows to the processing one, every 30 ms of its spring: X, timer and check fade
+        /// out in a tenth of a second inside it, its ends closing over them, and the processing dots come in after.
         @MainActor static func handsFreeStops() -> Strip {
             let locked = PillVisual.locked(), processing = PillVisual.processing(afterHandsFree: true)
             let model = PillModel.preview(phase: .locked, level: 0.5)
             let frames = (0...10).map { i in
                 let time = Double(i) * 0.03
                 let progress = CGFloat(Spring(duration: 0.3, bounce: 0.12).value(target: 1.0, time: time))
-                let size = CGSize(width: locked.size.width + (processing.size.width - locked.size.width) * progress,
-                                  height: locked.size.height + (processing.size.height - locked.size.height) * progress)
-                let presence = max(0, 1 - time / PillContentPresence.leaving)
-                let dots = min(1, max(0, (time - 0.06) / 0.18))
+                let size = lerp(locked.size, processing.size, progress)
+                let leaving = min(1, time / PillMotion.contentLeaving)
+                let old = 1 - (1 - (1 - leaving) * (1 - leaving))
+                let entering = min(1, max(0, (time - PillMotion.contentEntering) / 0.18))
+                let new = 1 - (1 - entering) * (1 - entering)
                 return Frame(caption: "\(Int((time * 1000).rounded())) ms") { model in
                     AnyView(ZStack {
                         PillFace(model: model, capsule: processing, content: locked, size: size)
-                            .environment(\.pillContentPresence, presence)
+                            .opacity(old)
                         PillFace(model: model, capsule: processing, content: processing, size: size)
-                            .opacity(dots)
+                            .opacity(new)
                             .blendMode(.plusLighter)
                     })
                 }
             }
             return Strip(title: "Hands-free → processing (Stop)", model: model, frames: frames)
+        }
+
+        /// fn Space: the push-to-talk capsule widens into hands-free on its spring, every 30 ms, X and the check riding
+        /// its ends (they fade in over the first 140 ms, which a still frame doesn't show).
+        @MainActor static func handsFreeStarts() -> Strip {
+            let listening = PillVisual.listening, locked = PillVisual.locked()
+            let model = PillModel.preview(phase: .locked, level: 0.5)
+            let frames = (0...10).map { i in
+                let time = Double(i) * 0.03
+                let progress = CGFloat(Spring(duration: 0.34, bounce: 0.3).value(target: 1.0, time: time))
+                let size = lerp(listening.size, locked.size, progress)
+                return Frame(caption: "\(Int((time * 1000).rounded())) ms") { model in
+                    AnyView(PillFace(model: model, capsule: locked, content: locked, size: size))
+                }
+            }
+            return Strip(title: "Push-to-talk → hands-free (fn Space)", model: model, frames: frames)
+        }
+
+        private static func lerp(_ a: CGSize, _ b: CGSize, _ t: CGFloat) -> CGSize {
+            CGSize(width: a.width + (b.width - a.width) * t, height: a.height + (b.height - a.height) * t)
         }
 
         @MainActor static func handsFreeToHidden() -> Strip {
