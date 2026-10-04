@@ -13,6 +13,9 @@ public enum TranscribeThingMain {
             if arguments.contains("--snapshots") {
                 exit(SnapshotRunner.run(arguments: arguments))
             }
+            if arguments.contains("--pill-film") {
+                exit(PillFilm.run(arguments: arguments))
+            }
             if EngineCLI.handles(arguments) {
                 EngineCLI.run(arguments)
             }
