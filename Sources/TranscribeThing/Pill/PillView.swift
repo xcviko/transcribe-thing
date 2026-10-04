@@ -334,8 +334,13 @@ struct PillView: View {
         let frame = stage.frame(for: visual, choice: choice)
         // From nowhere the pill is just there, whole, at once: a key press shows it in the same frame.
         let appears = shown && stage.parked
-        PillFace(model: model, regions: regions, capsule: frame.capsule, content: frame.content, morph: frame.morph,
-                 choice: frame.choice, appearsAtOnce: appears)
+        // The capsule's size animates as one value, and the whole face is laid out at it in every frame: fill, edge, mask
+        // and content can't drift apart. Left to SwiftUI's frame animation, a view that appears mid-change (the model's
+        // ring as hands-free starts on another model, the controls) is drawn at the final size from the first frame.
+        PillSizing(size: frame.capsule.size) { size in
+            PillFace(model: model, regions: regions, capsule: frame.capsule, content: frame.content, morph: frame.morph,
+                     size: size, choice: frame.choice, appearsAtOnce: appears)
+        }
             // Capsule and content leave together, as one composited piece.
             .modifier(PillExitEffect(progress: exitProgress, reduceMotion: reduceMotion))
             .scaleEffect(frame.collapsed && !reduceMotion ? 0.6 : 1, anchor: .bottom)
@@ -552,6 +557,19 @@ struct PillStage: Equatable {
     }
 }
 
+/// The capsule's size, animated as one value: `content` is laid out at it in every frame of a change.
+struct PillSizing<Content: View>: View, Animatable {
+    var size: CGSize
+    @ViewBuilder var content: (CGSize) -> Content
+
+    var animatableData: AnimatablePair<CGFloat, CGFloat> {
+        get { AnimatablePair(size.width, size.height) }
+        set { size = CGSize(width: newValue.first, height: newValue.second) }
+    }
+
+    var body: some View { content(size) }
+}
+
 /// The pill leaving: capsule and content composited, then scaled, dropped, blurred and faded together.
 struct PillExitEffect: ViewModifier, Animatable {
     var progress: CGFloat
@@ -654,7 +672,7 @@ struct PillFace: View {
                 // The capsule's own frame (the content may be laid out wider), so the mask is the capsule's.
                 Color.clear
                     .overlay { contentView(accent: accent) }
-                    .mask(PillContentMask())
+                    .mask { PillContentMask() }
             }
             .overlay { PillCapsuleEdge(accent: capsule.content == .empty ? nil : accent) }
             // Above the pill and part of it: it springs in on a switch, shrinks into the resting capsule with the
@@ -665,7 +683,7 @@ struct PillFace: View {
                     PillModelChip(model: model, choice: chipChoice, regions: regions,
                                    isInteractive: capsule == content && capsule.isLocked)
                         .modifier(PillMorphEffect(progress: content == capsule ? 0 : morph, from: content.size,
-                                                  to: size, anchor: .bottom))
+                                                  to: capsule.size, anchor: .bottom))
                         .offset(y: -PillMetrics.chipLift)
                         .transition(chipTransition)
                 }
@@ -691,7 +709,7 @@ struct PillFace: View {
         let visual = content
         let frame = content == capsule ? (size ?? visual.size) : visual.size
         let morph = PillMorphEffect(progress: content == capsule ? 0 : morph, from: visual.size,
-                                    to: size ?? capsule.size,
+                                    to: capsule.size,
                                     fadeSpan: visual.isCounting ? PillMotion.counterFadeSpan : 1)
         switch visual.content {
         case .empty:
@@ -790,12 +808,14 @@ struct PillCapsuleEdge: View {
 }
 
 /// What the pill's content may draw on: the capsule, and everything above its top edge (a control's tooltip).
-struct PillContentMask: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Capsule(style: .continuous).path(in: rect)
-        let far: CGFloat = 4000
-        path.addRect(CGRect(x: rect.minX - far, y: rect.minY - far, width: rect.width + 2 * far, height: far))
-        return path
+struct PillContentMask: View {
+    var body: some View {
+        Capsule(style: .continuous)
+            .overlay(alignment: .top) {
+                Rectangle()
+                    .frame(width: 8000, height: 4000)
+                    .offset(y: -4000)
+            }
     }
 }
 
