@@ -117,18 +117,14 @@ enum PillSnapshots {
             SnapshotEntry("pill-selection-card", width: 640, height: 640) { _ in
                 CanvasScene(model: restModel(), notices: [
                     DictationController.selectionCard(
-                        "Прикинь, сегодня поставили новые дорожки, впервые с 22 года. Прислоняешь часы, они по NFC обмениваются пульсом, калориями и дистанцией.",
-                        by: .gpt6Luna),
-                    DictationController.selectionCard(
                         "Прикинь, сегодня новые дорожки поставили - впервые с 22 года все заменили.\n\nТам есть фича: прислоняешь часы, они по NFC договариваются друг с другом, и дорожка получает инфу о пульсе и калориях, а часы - о дистанции, скорости и т. д.\n\nЗавтра схожу ещё раз и проверю, как оно с тренировкой на интервалы.",
                         by: .geminiFlash),
                 ])
             },
-            // The tallest it gets: both answers long enough to fill their boxes, under a pill still processing
-            // with its chip. Everything fits the panel.
-            SnapshotEntry("pill-selection-cards-full", width: 640, height: PillCanvasMetrics.size.height) { _ in
+            // The tallest it gets: an answer long enough to fill its box, under a pill still processing with its
+            // chip. Everything fits the panel.
+            SnapshotEntry("pill-selection-card-full", width: 640, height: PillCanvasMetrics.size.height) { _ in
                 CanvasScene(model: PillModelSheet.model(.processing, choice: .gemini), notices: [
-                    DictationController.selectionCard(Self.longAnswer, by: .gpt6Luna),
                     DictationController.selectionCard(Self.longAnswer, by: .geminiFlash),
                 ])
             },

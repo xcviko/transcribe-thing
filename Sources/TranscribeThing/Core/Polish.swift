@@ -47,12 +47,15 @@ enum Polish {
     }
 }
 
-/// The models that polish a selection: Gemini 3.8 Flash, as Polish does, and GPT-6 Luna, the clean-up model, which
-/// doesn't think and answers quickly. Both are asked at once, each answer on its own card, to see which one is picked
-/// more often; then one goes. Raw values are persisted (History): never rename them.
+/// The models that have polished a selection. Gemini 3.8 Flash does it now, as Polish does (`asked`). GPT-6 Luna, the
+/// clean-up model, was asked alongside it to see which answer gets picked; Gemini's was, so Luna is no longer asked, and
+/// stays only so History reads the versions it wrote. Raw values are persisted (History): never rename them.
 enum PolishSelectionModel: String, CaseIterable, Codable, Sendable {
     case geminiFlash
     case gpt6Luna
+
+    /// The models Polish Selection asks, each answer on its own card.
+    static let asked: [PolishSelectionModel] = [.geminiFlash]
 
     /// "Gemini 3.8 Flash", "GPT-6 Luna".
     var modelName: String {

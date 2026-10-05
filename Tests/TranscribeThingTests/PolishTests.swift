@@ -160,8 +160,7 @@ import Testing
     /// A rig whose dictations find `selection` selected, and whose models answer from `answers` (or fail with
     /// `errors`), after `gate` lets them when it's set.
     static func make(selection: String? = "short draft, um, of a message",
-                     answers: [PolishSelectionModel: String] = [.geminiFlash: "- drafts\n<message>Gemini's.</message>",
-                                                                .gpt6Luna: "<message>Luna's.</message>"],
+                     answers: [PolishSelectionModel: String] = [.geminiFlash: "- drafts\n<message>Gemini's.</message>"],
                      errors: [PolishSelectionModel: AppError] = [:]) -> (SwitchModelControllerTests.Rig, SwitchModelControllerTests.Cues, Asked) {
         let (rig, cues) = Switch.make()
         let asked = Asked()
@@ -228,7 +227,7 @@ import Testing
         try await waitUntil { rig.h.pill.selectionHint == .hidden }
         #expect(rig.h.controller.polishesSelection)
         rig.h.controller.handle(.polish)
-        try await waitUntil { asked.calls.count == 2 }
+        try await waitUntil { asked.calls.count == 1 }
     }
 
     /// On Gemini the key is Polish's: the hint offers only the dictionary, and fn P polishes the dictation, the
@@ -244,9 +243,10 @@ import Testing
         rig.h.controller.send(.pillCancel)
     }
 
-    /// The polish key over the hint: the dictation goes without a trace, the pill becomes the polish, and both
-    /// models' messages come up on their own cards, kept together in History. Esc closes both.
-    @Test func bothModelsAnswerOnTheirOwnCards() async throws {
+    /// The polish key over the hint: the dictation gives way (something was said in it, so it stays for Undo), the
+    /// pill becomes the polish, and Gemini's message comes up on its card, kept in History. GPT-6 Luna is no longer
+    /// asked. Esc closes the card.
+    @Test func geminiAnswersOnACard() async throws {
         let (rig, cues, asked) = Self.make()
         let c = rig.h.controller
         rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
@@ -254,77 +254,69 @@ import Testing
         try await Self.polish(rig)
         #expect(c.machine.capture == .idle)
         #expect(rig.h.pill.selectionHint == .handoff)
-        #expect(rig.notice("dictation.canceled") == nil, "no Undo: the recording is gone")
+        #expect(rig.notice("dictation.canceled") != nil, "2 s said: Undo brings the dictation back")
         #expect(Array(cues.played.prefix(2)) == [.start, .cancel], "the dictation gives way with the cancel cue")
-        try await waitUntil { Self.card(rig, .geminiFlash) != nil && Self.card(rig, .gpt6Luna) != nil }
-        #expect(asked.models == [.geminiFlash, .gpt6Luna])
+        try await waitUntil { Self.card(rig, .geminiFlash) != nil }
+        #expect(asked.calls.count == 1 && asked.models == [.geminiFlash])
         #expect(asked.calls.allSatisfy { $0.0 == "short draft, um, of a message" })
         #expect(Self.card(rig, .geminiFlash)?.transcript == "Gemini's.")
-        #expect(Self.card(rig, .gpt6Luna)?.transcript == "Luna's.")
         #expect(Self.card(rig, .geminiFlash)?.title == "Polished by Gemini 3.8 Flash")
-        #expect(Self.card(rig, .gpt6Luna)?.actions.map(\.title) == ["Paste Here", "Copy"])
+        #expect(Self.card(rig, .geminiFlash)?.actions.map(\.title) == ["Paste Here", "Copy"])
         try await waitUntil { cues.played.contains(.polishOn) }
-        #expect(cues.played.filter { $0 == .polishReady }.count == 2)
-        // ↩ can't tell which of two to paste, but it stays the cards': passed on, it would land on the selection.
+        #expect(cues.played.filter { $0 == .polishReady }.count == 1)
         #expect(rig.h.hotkeys.cardPaste && rig.h.hotkeys.cardClose)
-        #expect(!rig.h.toasts.cardKeys.returnPastes, "the footer doesn't offer ↩")
-        c.handle(.cardPaste)
-        #expect(Self.card(rig, .geminiFlash) != nil && Self.card(rig, .gpt6Luna) != nil, "↩ did nothing")
-        let entry = try #require(rig.h.history.entries.first)
-        #expect(rig.h.history.entries.count == 1 && entry.isSelection && entry.audioFileName == nil)
-        #expect(Set(entry.versions.map(\.kind)) == [.selection(.geminiFlash), .selection(.gpt6Luna)])
+        #expect(rig.h.toasts.cardKeys.returnPastes, "the footer offers ↩ for the only card")
+        let entry = try #require(rig.h.history.entries.first { $0.isSelection })
+        #expect(entry.audioFileName == nil)
+        #expect(entry.versions.map(\.kind) == [.selection(.geminiFlash)])
         #expect(rig.transcribed.isEmpty && rig.pasted.isEmpty)
         c.handle(.cardClose)
-        #expect(Self.card(rig, .geminiFlash) == nil && Self.card(rig, .gpt6Luna) == nil)
+        #expect(Self.card(rig, .geminiFlash) == nil)
         #expect(!rig.h.hotkeys.cardPaste && !rig.h.hotkeys.cardClose)
     }
 
-    /// The quick model's card comes first, alone, so ↩ pastes it: that's the pick. The other model is stopped and its
-    /// card never comes; History shows the pasted one.
-    @Test func pastingOneAnswerSettlesTheOther() async throws {
-        let (rig, _, asked) = Self.make()
+    /// ↩ pastes the card over the selection: that settles the polish, and History shows it.
+    @Test func returnPastesTheAnswer() async throws {
+        let (rig, _, _) = Self.make()
         var pastedHere: [String] = []
         rig.h.controller.pasteNowOverride = { pastedHere.append($0); return .pasted }
         // General → Pasting's rules are for dictations: the answer takes the selection's place as the model wrote it.
         rig.h.settings.modelsAddingSpace = Set(ModelChoice.allCases)
         rig.h.settings.modelsRemovingFinalPeriod = Set(ModelChoice.allCases)
-        asked.hold(.geminiFlash)
         try await Self.polish(rig)
-        try await waitUntil { Self.card(rig, .gpt6Luna) != nil }
+        try await waitUntil { Self.card(rig, .geminiFlash) != nil }
         #expect(rig.h.hotkeys.cardPaste, "one card: ↩ pastes it")
-        #expect(rig.h.pill.phase == .processing, "Gemini still writes")
         rig.h.controller.handle(.cardPaste)
-        try await waitUntil { pastedHere == ["Luna's."] }
-        asked.release(.geminiFlash)
-        try await Task.sleep(for: .milliseconds(100))
+        try await waitUntil { pastedHere == ["Gemini's."] }
         #expect(Self.card(rig, .geminiFlash) == nil)
-        #expect(rig.h.history.entries.first?.currentKind == .selection(.gpt6Luna))
+        #expect(rig.h.history.entries.first?.currentKind == .selection(.geminiFlash))
         #expect(rig.h.history.entries.first?.versions.count == 1)
     }
 
-    /// Copy picks an answer too (History shows it) but leaves the other card to compare.
-    @Test func copyPicksWithoutClosingTheOther() async throws {
+    /// Copy picks the answer too (History shows it) and leaves its card up.
+    @Test func copyPicksTheAnswerAndKeepsItsCard() async throws {
         let (rig, cues, _) = Self.make()
         try await Self.polish(rig)
-        try await waitUntil { Self.card(rig, .geminiFlash) != nil && Self.card(rig, .gpt6Luna) != nil }
+        try await waitUntil { Self.card(rig, .geminiFlash) != nil }
         let gemini = try #require(Self.card(rig, .geminiFlash))
         let copy = try #require(gemini.actions.first { $0.title == "Copy" })
         rig.h.toasts.perform(copy, on: gemini)
         #expect(rig.h.history.entries.first?.currentKind == .selection(.geminiFlash))
-        #expect(Self.card(rig, .gpt6Luna) != nil)
+        #expect(Self.card(rig, .geminiFlash) != nil)
         #expect(cues.played.last == .paste)
     }
 
-    /// One model failing says why on its own notice; the other's card still comes.
-    @Test func oneFailingModelSaysWhy() async throws {
+    /// A polish that fails says why on its own notice; nothing goes to History.
+    @Test func aFailedPolishSaysWhy() async throws {
         let (rig, _, _) = Self.make(errors: [.geminiFlash: .timeout(.geminiFlash)])
         let shakes = rig.h.pill.shakeCount
         try await Self.polish(rig)
-        try await waitUntil { rig.notice("polish.selection.failed.geminiFlash") != nil && Self.card(rig, .gpt6Luna) != nil }
+        try await waitUntil { rig.notice("polish.selection.failed.geminiFlash") != nil }
         let notice = try #require(rig.notice("polish.selection.failed.geminiFlash"))
         #expect(notice.title == "Couldn’t polish with Gemini 3.8 Flash" && notice.body == "It took too long.")
         #expect(rig.h.pill.shakeCount > shakes)
-        #expect(rig.h.history.entries.first?.versions.map(\.kind) == [.selection(.gpt6Luna)])
+        #expect(Self.card(rig, .geminiFlash) == nil)
+        #expect(!rig.h.history.entries.contains { $0.isSelection })
     }
 
     /// Nothing selected, off Gemini: no hint, and the key says what Polish works on; the dictation goes on.
@@ -343,7 +335,7 @@ import Testing
 
     /// A card stays 6 s and a second for every 20 words (lifetimes are nominal: the countdown runs at double speed).
     @Test func theCardStaysLongerForLongerText() {
-        let short = DictationController.selectionCard("One two three.", by: .gpt6Luna)
+        let short = DictationController.selectionCard("One two three.", by: .geminiFlash)
         let long = DictationController.selectionCard(Array(repeating: "word", count: 100).joined(separator: " "),
                                                      by: .geminiFlash)
         #expect(short.lifetime == .seconds((6 + 3.0 / 20) * ToastCountdown.speed))
@@ -354,7 +346,9 @@ import Testing
     /// A selection's polish reads back from History, stays out of the dictation stats and offers no other version.
     @Test func aSelectionEntryIsItsOwnKind() throws {
         #expect(TranscriptVersionKind(rawValue: "selection:geminiFlash") == .selection(.geminiFlash))
-        #expect(TranscriptVersionKind.selection(.gpt6Luna).rawValue == "selection:gpt6Luna")
+        #expect(TranscriptVersionKind(rawValue: "selection:gpt6Luna") == .selection(.gpt6Luna),
+                "GPT-6 Luna is no longer asked, but its answers in History stay readable")
+        #expect(PolishSelectionModel.asked == [.geminiFlash])
         #expect(TranscriptVersionKind(rawValue: "selection:nope") == nil)
         #expect(!TranscriptVersionKind.selection(.geminiFlash).isReadableByOlderBuilds)
         let version = TranscriptResult(text: "Polished.", engine: .geminiFlash, processingTime: 1)
@@ -386,7 +380,7 @@ import Testing
         try await Task.sleep(for: .milliseconds(40))
         #expect(asked.calls.isEmpty)
         lookup.isOpen = true
-        try await waitUntil { asked.calls.count == 2 }
+        try await waitUntil { asked.calls.count == 1 }
         #expect(asked.calls.allSatisfy { $0.0 == "short draft" })
     }
 
@@ -403,12 +397,12 @@ import Testing
         rig.h.controller.handle(.pttUp)
         #expect(rig.h.controller.machine.isRecording, "the release waits for the key")
         lookup.isOpen = true
-        try await waitUntil { asked.calls.count == 2 }
+        try await waitUntil { asked.calls.count == 1 }
         #expect(rig.h.controller.machine.capture == .idle)
         #expect(rig.transcribed.isEmpty)
         #expect(cues.played.filter { $0 == .start }.count == 1, "fn's own cue at key-down, and no other")
         try await Task.sleep(for: .milliseconds(60))
-        #expect(asked.calls.count == 2, "one Polish Selection, not one per key")
+        #expect(asked.calls.count == 1, "one Polish Selection, not one per key")
     }
 
     /// fn P reads what's selected when it's pressed: text selected after fn went down (the start found nothing) is
@@ -422,7 +416,7 @@ import Testing
         #expect(rig.h.pill.selectionHint == .hidden)
         current = "selected later"
         rig.h.controller.handle(.polish)
-        try await waitUntil { asked.calls.count == 2 }
+        try await waitUntil { asked.calls.count == 1 }
         #expect(asked.calls.allSatisfy { $0.0 == "selected later" })
     }
 
@@ -433,7 +427,7 @@ import Testing
         rig.h.controller.selectionCopyOverride = { .text("copied draft") }
         Switch.hold(rig)
         rig.h.controller.handle(.polish)
-        try await waitUntil { asked.calls.count == 2 }
+        try await waitUntil { asked.calls.count == 1 }
         #expect(asked.calls.allSatisfy { $0.0 == "copied draft" })
     }
 
@@ -470,7 +464,7 @@ import Testing
         rig.h.controller.send(.handsFreeToggle)
         rig.now += 25
         rig.h.controller.handle(.polish)
-        try await waitUntil { asked.calls.count == 2 }
+        try await waitUntil { asked.calls.count == 1 }
         #expect(rig.h.history.entries.contains { $0.status == .cancelled })
         #expect(rig.transcribed.isEmpty)
     }
@@ -507,63 +501,44 @@ import Testing
     /// Copy picks an answer to paste elsewhere: ↩ goes back to the app (it would paste the card a second time), and
     /// the footer stops offering it. Esc still closes.
     @Test func copyingGivesReturnBack() async throws {
-        let (rig, _, asked) = Self.make()
-        asked.hold(.geminiFlash)
+        let (rig, _, _) = Self.make()
         try await Self.polish(rig)
-        try await waitUntil { Self.card(rig, .gpt6Luna) != nil }
+        try await waitUntil { Self.card(rig, .geminiFlash) != nil }
         #expect(rig.h.hotkeys.cardPaste && rig.h.toasts.cardKeys.returnPastes)
-        let card = try #require(Self.card(rig, .gpt6Luna))
+        let card = try #require(Self.card(rig, .geminiFlash))
         rig.h.controller.perform(try #require(card.actions.first { $0.title == "Copy" }), from: card)
         #expect(!rig.h.hotkeys.cardPaste && rig.h.hotkeys.cardClose)
         #expect(!rig.h.toasts.cardKeys.returnPastes)
         rig.h.controller.handle(.cardPaste)
-        #expect(Self.card(rig, .gpt6Luna) != nil && rig.pasted.isEmpty)
-        asked.release(.geminiFlash)
+        #expect(Self.card(rig, .geminiFlash) != nil && rig.pasted.isEmpty)
         rig.h.controller.handle(.cardClose)
     }
 
-    /// Esc stops a polish still under way: both models are dropped, the pill rests, with the cancel cue. While it
-    /// runs it counts as the app's work (an update waits for it).
+    /// Esc stops a polish still under way: the answer is dropped, the pill rests, with the cancel cue. While it runs
+    /// it counts as the app's work (an update waits for it).
     @Test func escStopsAPolishUnderWay() async throws {
         let (rig, cues, asked) = Self.make()
         asked.hold(.geminiFlash)
-        asked.hold(.gpt6Luna)
         try await Self.polish(rig)
-        try await waitUntil { asked.calls.count == 2 }
+        try await waitUntil { asked.calls.count == 1 }
         #expect(rig.h.controller.activity == .polishing && rig.h.hotkeys.cardClose)
         rig.h.controller.handle(.cardClose)
         #expect(rig.h.pill.phase == .rest && rig.h.controller.activity == .idle)
         #expect(cues.played.filter { $0 == .cancel }.count == 2, "the handoff's, then Esc's")
         asked.release(.geminiFlash)
-        asked.release(.gpt6Luna)
         try await Task.sleep(for: .milliseconds(200))
-        #expect(Self.card(rig, .geminiFlash) == nil && Self.card(rig, .gpt6Luna) == nil)
+        #expect(Self.card(rig, .geminiFlash) == nil)
         #expect(!cues.played.contains(.polishOn), "no Polish cue for a polish already stopped")
     }
 
-    /// Deleted from History while the other model still wrote: its late answer comes on its card only, and the entry
-    /// stays deleted.
-    @Test func aDeletedEntryStaysDeleted() async throws {
-        let (rig, _, asked) = Self.make()
-        asked.hold(.geminiFlash)
-        try await Self.polish(rig)
-        try await waitUntil { Self.card(rig, .gpt6Luna) != nil }
-        let id = try #require(rig.h.history.entries.first?.id)
-        rig.h.history.delete(id)
-        asked.release(.geminiFlash)
-        try await waitUntil { Self.card(rig, .geminiFlash) != nil }
-        #expect(rig.h.history.entries.isEmpty)
-    }
-
-    /// The count is the one of a model still writing: once Gemini is done, Luna's.
-    @Test func theCountFollowsAModelStillWriting() {
+    /// The pill counts Gemini's tokens while it writes, and nothing once it's done.
+    @Test func theCountFollowsTheModelWhileItWrites() {
         let work = DictationController.SelectionPolish(estimates: [:])
-        work.pending = [.geminiFlash, .gpt6Luna]
-        work.counts = [.geminiFlash: PillTokenCount(phase: .writing, tokens: 380),
-                       .gpt6Luna: PillTokenCount(phase: .writing, tokens: 40)]
+        work.pending = [.geminiFlash]
+        work.counts = [.geminiFlash: PillTokenCount(phase: .writing, tokens: 380)]
         #expect(work.count?.tokens == 380)
         work.pending.remove(.geminiFlash)
-        #expect(work.count?.tokens == 40)
+        #expect(work.count == nil)
     }
 
     /// Paste Last pastes the last dictation, never a polished selection (closing its card said no).

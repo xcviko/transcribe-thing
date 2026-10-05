@@ -407,7 +407,7 @@ struct PillView: View {
         case .rest, .peek, .hello: "transcribe-thing. Click to start hands-free dictation"
         case .listening: "transcribe-thing is listening"
         case .locked: "transcribe-thing is listening, hands-free"
-        // A polish (a dictation's on Gemini, or a selection's by both models) names no model.
+        // A polish (a dictation's or a selection's, both by Gemini) names no model.
         case .processing(_, _, polishes: true): "transcribe-thing is polishing"
         case .processing: "transcribe-thing is transcribing"
         case .error: "Dictation failed"

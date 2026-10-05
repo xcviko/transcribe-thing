@@ -93,7 +93,7 @@ final class MenuBuilder {
         case .polishing: "Polishing…"
         case .idle: nil
         }
-        // Polish Selection asks two models at once: the line names neither.
+        // Polish Selection isn't the dictation's model: the line names the polish instead.
         let title = env.dictation.activity == .polishing ? "Polish Selection · Polishing…"
             : "\(main.title(parakeet: parakeet)) · \(activity ?? status.text)"
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")

@@ -2160,8 +2160,9 @@ final class DictationController {
         return PolishSelectionModel(rawValue: String(notice.dedupeKey.dropFirst(selectionCardPrefix.count)))
     }
 
-    /// Polish Selection: both models asked at once, how far each has streamed, and the History entry their answers
-    /// land in. `settled` once an answer is pasted or the cards are closed: what comes after is dropped.
+    /// Polish Selection: the models asked (`PolishSelectionModel.asked`), how far each has streamed, and the History
+    /// entry their answers land in. `settled` once an answer is pasted or the cards are closed: what comes after is
+    /// dropped.
     final class SelectionPolish {
         var pending: Set<PolishSelectionModel>
         let estimates: [PolishSelectionModel: TokenEstimate]
@@ -2179,9 +2180,9 @@ final class DictationController {
 
         /// The pill shows the polish while a model still writes.
         var isRunning: Bool { !pending.isEmpty && !settled }
-        /// The count the pill shows: Gemini's while it writes (it thinks), else Luna's while it does.
+        /// The count the pill shows: the first model's that still writes.
         var count: PillTokenCount? {
-            PolishSelectionModel.allCases.first { pending.contains($0) && counts[$0] != nil }.flatMap { counts[$0] }
+            PolishSelectionModel.asked.first { pending.contains($0) && counts[$0] != nil }.flatMap { counts[$0] }
         }
     }
 
@@ -2410,8 +2411,9 @@ final class DictationController {
     var polishesSelection: Bool { selectionOffer.polish }
 
     /// The polish key over the hint: the dictation gives way without a trace (the cancel cue, then Polish's drop), the
-    /// hint drops into the pill as it closes into the polish circle, and the selection goes to both models at once.
-    /// Each message comes up on its own card, to paste over the selection or copy, and History keeps both.
+    /// hint drops into the pill as it closes into the polish circle, and the selection goes to Gemini 3.8 Flash
+    /// (`PolishSelectionModel.asked`). Its message comes up on a card, to paste over the selection or copy, and History
+    /// keeps it.
     private func polishSelection(_ text: String) {
         selectionTask?.cancel()
         selectionHintTask?.cancel()
@@ -2419,13 +2421,13 @@ final class DictationController {
         selectionOffer = PillSelectionOffer()
         settleSelection()
         let entries = history.entries
-        let work = SelectionPolish(estimates: Dictionary(uniqueKeysWithValues: PolishSelectionModel.allCases.map {
+        let work = SelectionPolish(estimates: Dictionary(uniqueKeysWithValues: PolishSelectionModel.asked.map {
             ($0, TokenEstimate.learned(from: entries, modelID: $0.route.model))
         }))
         selectionPolish = work
         DiagnosticLog.shared.event(.dictation, "selection.polish", ["characters": text.count])
         pillModel.selectionHint = .handoff
-        // The chip would come back over the polish circle once the hint has gone, naming one of the two models.
+        // The chip would come back over the polish circle once the hint has gone, naming the dictation's model.
         pillModel.endChipFlash()
         playCue(.cancel)
         pressTakenByKey = true
@@ -2439,7 +2441,7 @@ final class DictationController {
         }
         let override = selectionPolishOverride
         let transcription = transcription
-        for model in PolishSelectionModel.allCases {
+        for model in PolishSelectionModel.asked {
             let progress: @Sendable (ChatStreamProgress) -> Void = { [weak self] streamed in
                 Task { @MainActor [weak self] in
                     guard let self, self.selectionPolish === work, let estimate = work.estimates[model] else { return }
@@ -2468,7 +2470,7 @@ final class DictationController {
         stateDidChange()
     }
 
-    /// A model answered: its message on its card and in History (both models' in one entry), or why not.
+    /// A model answered: its message on its card and in History (every model's in one entry), or why not.
     private func finishSelectionPolish(_ work: SelectionPolish, _ model: PolishSelectionModel,
                                        _ outcome: Result<TranscriptResult, AppError>) {
         guard selectionPolish === work else { return }
@@ -2504,9 +2506,7 @@ final class DictationController {
             Log.engine.error("Polish Selection failed: \(error.code, privacy: .public)")
             DiagnosticLog.shared.event(.dictation, "selection.finished",
                                        ["model": model.rawValue, "outcome": "failure", "code": error.code])
-            let reason = model == .gpt6Luna ? Self.cleanupFailureReason(error, model: .gpt6Luna)
-                : Self.homeFailureReason(error, making: .selection(model))
-            selectionFailed(model, reason: reason)
+            selectionFailed(model, reason: Self.homeFailureReason(error, making: .selection(model)))
         }
     }
 
