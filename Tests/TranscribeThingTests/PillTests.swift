@@ -604,40 +604,52 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(PillView(model: pushToTalk).visual.size.width == PillMetrics.listeningSize.width)
     }
 
-    /// The count takes the dots' place in a capsule wide enough for the longest it says, and no tick ever resizes it:
-    /// the number isn't part of the visual.
-    @Test func theCounterNeverResizesThePill() throws {
+    /// The count takes the dots' place in a capsule just around its text. A tick keeps the capsule as it is: only a
+    /// number that gains a digit or a decimal point, or a new phase, resizes it.
+    @Test func theCounterFitsItsTextAndResizesOnlyWithIt() throws {
         let model = PillModel.preview(phase: .processing)
         #expect(PillView(model: model).visual == .processing(afterHandsFree: false))
-        let visuals = [PillTokenCount(phase: .thinking, tokens: 1), PillTokenCount(phase: .thinking, tokens: 88_800),
-                       PillTokenCount(phase: .writing, tokens: 340)].map {
-            PillView(model: PillModel.preview(phase: .processing).previewCounter($0)).visual
+        func visual(_ count: PillTokenCount) -> PillVisual {
+            PillView(model: PillModel.preview(phase: .processing).previewCounter(count)).visual
         }
-        #expect(Set(visuals.map { "\($0)" }).count == 1)
-        let counting = try #require(visuals.first)
-        #expect(counting == .processing(afterHandsFree: false, counting: true) && counting.isCounting)
+        let ticks = [420, 470, 990].map { visual(PillTokenCount(phase: .thinking, tokens: $0)) }
+        #expect(Set(ticks.map { "\($0)" }).count == 1, "~420, ~470 and ~990 fit the same capsule")
+        let counting = try #require(ticks.first)
+        #expect(counting == .processing(afterHandsFree: false, counting: true,
+                                        label: PillCountLabel(number: "~888", word: "thinking")))
+        #expect(counting.isCounting)
         #expect(!PillVisual.processing(afterHandsFree: false).isCounting && !PillVisual.listening.isCounting)
-        // Push-to-talk height, wider than the dots' pill and still narrower than hands-free.
-        let size = counting.size
-        #expect(size == PillMetrics.counterSize && size.height == PillMetrics.listeningSize.height)
-        #expect(size.width > PillMetrics.listeningSize.width && size.width < PillMetrics.lockedSize.width)
-        // Room for "~88.8k thinking", the widest it says, and its padding (no dot: the count is centered).
-        let number = PillMetrics.textWidth("~88.8k", size: PillMetrics.counterNumberFontSize, weight: .semibold,
+        let thousands = visual(PillTokenCount(phase: .thinking, tokens: 1_240))
+        let writing = visual(PillTokenCount(phase: .writing, tokens: 420))
+        #expect(thousands.size.width > counting.size.width && writing.size.width < counting.size.width)
+        // Push-to-talk height, just around "~420 thinking" and its padding (no dot: the count is centered).
+        let number = PillMetrics.textWidth("~888", size: PillMetrics.counterNumberFontSize, weight: .semibold,
                                            rounded: true, monospacedDigits: true)
+        let thinking = PillMetrics.textWidth("thinking", size: PillMetrics.captionFontSize, weight: .medium,
+                                             rounded: true)
+        let size = counting.size
+        #expect(size.height == PillMetrics.listeningSize.height)
+        #expect(size.width == (2 * PillMetrics.counterPadding + number + PillMetrics.counterWordGap + thinking).rounded(.up))
+        // The widest it says, "~88.8k thinking", still fits under the hands-free pill; a count with no label (a
+        // snapshot's) is that wide.
+        let widest = visual(PillTokenCount(phase: .thinking, tokens: 88_800))
+        #expect(widest.size == PillMetrics.counterSize)
+        #expect(PillVisual.processing(afterHandsFree: false, counting: true).size == PillMetrics.counterSize)
+        #expect(widest.size.width > PillMetrics.listeningSize.width && widest.size.width < PillMetrics.lockedSize.width)
         let word = PillMetrics.textWidth("thinking", size: PillMetrics.captionFontSize, weight: .medium, rounded: true)
-        #expect(number > 25 && word > 35)
-        let text: CGFloat = number + PillMetrics.counterWordGap + word
-        #expect(size.width >= 2 * PillMetrics.counterPadding + text)
-        // A polish puts the wand first: a dictation's beside the wave, a selection's beside "Polishing", in the
-        // count's own capsule, so the count takes its place without a resize.
+        let text = PillMetrics.textWidth("~88.8k", size: PillMetrics.counterNumberFontSize, weight: .semibold,
+                                         rounded: true, monospacedDigits: true) + PillMetrics.counterWordGap + word
+        // A polish puts the wand first: a dictation's beside the wave, a selection's beside "Polishing", in a capsule
+        // just around them.
         let wand: CGFloat = PillMetrics.counterWandSize + PillMetrics.counterWandGap
         let polishedCount = PillVisual.processing(afterHandsFree: false, counting: true, polish: .selection).size
         #expect(polishedCount.width >= 2 * PillMetrics.counterPadding + wand + text)
         #expect(PillVisual.processing(afterHandsFree: false, counting: true, polish: .dictation).size == polishedCount)
-        #expect(PillVisual.processing(afterHandsFree: false, polish: .selection).size == polishedCount)
         let polishing = PillMetrics.textWidth(PillMetrics.polishingText, size: PillMetrics.captionFontSize,
                                               weight: .medium, rounded: true)
-        #expect(polishedCount.width >= 2 * PillMetrics.counterPadding + wand + polishing)
+        let selection = PillVisual.processing(afterHandsFree: false, polish: .selection).size
+        #expect(selection.width >= 2 * PillMetrics.counterPadding + wand + polishing)
+        #expect(selection.width <= 2 * PillMetrics.counterPadding + wand + polishing + 4, "no room to spare")
         let wave = PillVisual.processing(afterHandsFree: false, polish: .dictation)
         #expect(wave.size == CGSize(width: PillVisual.listening.size.width + wand, height: PillVisual.listening.size.height))
         // The dots come in where they settle, right of the wand: from the hands-free bars they'd pass under it.
@@ -650,8 +662,10 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         let afterHandsFree = PillModel.preview(phase: .locked)
         afterHandsFree.phase = .processing
         _ = afterHandsFree.previewCounter(PillTokenCount(phase: .writing, tokens: 12))
-        #expect(PillView(model: afterHandsFree).visual == .processing(afterHandsFree: true, counting: true))
-        #expect(PillVisual.processing(afterHandsFree: true, counting: true).size == size)
+        let handsFreeCount = PillView(model: afterHandsFree).visual
+        #expect(handsFreeCount == .processing(afterHandsFree: true, counting: true,
+                                              label: PillCountLabel(PillTokenCount(phase: .writing, tokens: 12))))
+        #expect(handsFreeCount.size == visual(PillTokenCount(phase: .writing, tokens: 12)).size)
         #expect(PillVisual.processing(afterHandsFree: true, counting: true).barsOffset
                 == PillMetrics.lockedBarsOffset(hours: false))
         // The panel's pill counts too.

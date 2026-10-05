@@ -1912,7 +1912,8 @@ final class FakeRecorder: DictationRecorder {
         #expect(h.pill.tokenCount == PillTokenCount(phase: .thinking, tokens: 200))
         #expect(h.pill.tokenCount.map { "\($0.text) \($0.word)" } == "~200 thinking")
         try await waitUntil { h.pill.showsCounter }
-        #expect(PillView(model: h.pill).visual == .processing(afterHandsFree: false, counting: true))
+        #expect(PillView(model: h.pill).visual == .processing(afterHandsFree: false, counting: true,
+                                                              label: PillCountLabel(number: "~888", word: "thinking")))
         // The answer starts: writing, counted from its own first tokens.
         h.controller.streamed(ChatStreamProgress(reasoningCharacters: 900, outputCharacters: 25), for: r.id)
         #expect(h.pill.tokenCount == PillTokenCount(phase: .writing, tokens: 10))

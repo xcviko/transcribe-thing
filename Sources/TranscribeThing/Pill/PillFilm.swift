@@ -223,7 +223,7 @@ private enum FilmScript {
             s.film("counting → rest") { s.rest() }
         },
         FilmScenario(name: "polish-to-count", mode: .always,
-                     note: "Polish Selection on Gemini: the wand and “Polishing”, then the count in the same capsule") { s in
+                     note: "Polish Selection on Gemini: the wand and “Polishing”, then the capsule widens for the count") { s in
             s.polish(on: .gemini, selection: true)
             s.wait(0.6)
             s.model.tokenCount = PillTokenCount(phase: .thinking, tokens: 380)

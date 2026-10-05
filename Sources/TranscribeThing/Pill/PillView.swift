@@ -107,11 +107,18 @@ enum PillMetrics {
     /// The processing pill with its token count, centered: the push-to-talk height, wide enough for the widest
     /// count. Fixed, so the capsule never resizes as it counts.
     static let counterSize = CGSize(width: (2 * counterPadding + widestCount).rounded(.up), height: listeningSize.height)
-    /// The polished count: the wand, then the count. A selection's polish says "Polishing" in it before its count,
-    /// so the count takes the word's place without a resize.
+    /// The polished count: the wand, then the count.
     static let polishCounterSize = CGSize(
         width: (2 * counterPadding + counterWandSize + counterWandGap + widestCount).rounded(.up),
         height: listeningSize.height)
+    /// The count's capsule just around `label`: the padding, the wand for a polish, and the text.
+    static func counterSize(for label: PillCountLabel, polishes: Bool) -> CGSize {
+        let wand = polishes ? counterWandSize + 2 + counterWandGap : 0
+        let text = textWidth(label.number, size: counterNumberFontSize, weight: .semibold, rounded: true,
+                             monospacedDigits: true)
+            + counterWordGap + textWidth(label.word, size: captionFontSize, weight: .medium, rounded: true)
+        return CGSize(width: (2 * counterPadding + wand + text).rounded(.up), height: listeningSize.height)
+    }
     /// A dictation's polish before its count: the processing wave with the wand before it, the drop come back into
     /// the pill. The push-to-talk pill, wider by the wand.
     static let polishWaveSize = CGSize(width: listeningSize.width + counterWandSize + counterWandGap,
@@ -120,6 +127,11 @@ enum PillMetrics {
     static let polishDotsShift = (counterWandSize + counterWandGap) / 2
     /// What a selection's polish says until the model's count comes.
     static let polishingText = "Polishing"
+    /// A selection's polish before its count: the wand and "Polishing", with the counter's padding and nothing more.
+    static let polishingSize = CGSize(
+        width: (2 * counterPadding + counterWandSize + 2 + counterWandGap
+                + textWidth(polishingText, size: captionFontSize, weight: .medium, rounded: true)).rounded(.up),
+        height: listeningSize.height)
 
     /// Width of a single line of `text` in the system font, as SwiftUI's `Font.system` draws it.
     static func textWidth(_ text: String, size: CGFloat, weight: NSFont.Weight, rounded: Bool,
@@ -191,6 +203,23 @@ enum PillPolish: Hashable, Sendable {
     case dictation, selection
 }
 
+/// What a token count's capsule has to fit: its number with every digit as an 8 ("~8.8k"; digits are all one width)
+/// and its word. A count that ticks keeps its label, so the capsule resizes only when the number gains a digit or a
+/// decimal point, or the phase changes.
+struct PillCountLabel: Hashable, Sendable {
+    let number: String
+    let word: String
+
+    init(number: String, word: String) {
+        self.number = number
+        self.word = word
+    }
+
+    init(_ count: PillTokenCount) {
+        self.init(number: String(count.text.map { $0.isNumber ? "8" : $0 }), word: count.word)
+    }
+}
+
 /// What the capsule looks like: the phase plus hover, presentation and the recording timer.
 enum PillVisual: Equatable, Sendable {
     case hidden, rest, peek, listening
@@ -203,8 +232,9 @@ enum PillVisual: Equatable, Sendable {
     /// `counting`: the model's token count in place of the dots, in a capsule wide enough for it. The number itself is
     /// never part of the visual, so a tick never springs the capsule. `polish`: a polish is being written, with the
     /// wand before what the pill shows: a dictation's keeps the wave (its audio is being transcribed), a selection's
-    /// says "Polishing" (nothing was heard); then both show the count.
-    case processing(afterHandsFree: Bool, counting: Bool = false, polish: PillPolish? = nil)
+    /// says "Polishing" (nothing was heard); then both show the count. `label`: what the count's capsule fits, just
+    /// around it (none: as wide as the widest count).
+    case processing(afterHandsFree: Bool, counting: Bool = false, polish: PillPolish? = nil, label: PillCountLabel? = nil)
     case error
     /// The error flash as a sentence instead of the glyph ("No speech detected"): no red, no shake.
     case message(String)
@@ -220,10 +250,12 @@ enum PillVisual: Equatable, Sendable {
         switch self {
         case .hidden, .rest: PillMetrics.restSize
         case .peek: PillMetrics.peekSize
-        case .processing(_, counting: true, polish: .some), .processing(_, counting: false, polish: .selection):
-            PillMetrics.polishCounterSize
-        case .processing(_, counting: true, polish: nil): PillMetrics.counterSize
-        case .processing(_, counting: false, polish: .dictation): PillMetrics.polishWaveSize
+        case .processing(_, counting: true, let polish, label: let label?):
+            PillMetrics.counterSize(for: label, polishes: polish != nil)
+        case .processing(_, counting: true, polish: .some, _): PillMetrics.polishCounterSize
+        case .processing(_, counting: true, polish: nil, _): PillMetrics.counterSize
+        case .processing(_, counting: false, polish: .selection, _): PillMetrics.polishingSize
+        case .processing(_, counting: false, polish: .dictation, _): PillMetrics.polishWaveSize
         case .listening, .hello, .processing: PillMetrics.listeningSize
         case .locked(hours: true): PillMetrics.lockedHoursSize
         case .locked: PillMetrics.lockedSize
@@ -263,13 +295,13 @@ enum PillVisual: Equatable, Sendable {
     var showsHours: Bool { self == .locked(hours: true) }
 
     /// Processing with the token count in place of the dots.
-    var isCounting: Bool { if case .processing(_, counting: true, _) = self { true } else { false } }
+    var isCounting: Bool { if case .processing(_, counting: true, _, _) = self { true } else { false } }
 
     /// Processing a polish: the wand inside the capsule.
     var isPolishing: Bool { polish != nil }
 
     /// What the polish on screen is written from; nil for anything but a polish.
-    var polish: PillPolish? { if case .processing(_, _, let polish) = self { polish } else { nil } }
+    var polish: PillPolish? { if case .processing(_, _, let polish, _) = self { polish } else { nil } }
 
     /// Horizontal offset of the bars from the pill's center. Hands-free centers them between X and the timer;
     /// processing after it starts its dots where the usual hands-free bars stand, so they don't hop sideways when
@@ -278,8 +310,8 @@ enum PillVisual: Equatable, Sendable {
     var barsOffset: CGFloat {
         switch self {
         case .locked(let hours): PillMetrics.lockedBarsOffset(hours: hours)
-        case .processing(_, _, polish: .dictation): PillMetrics.polishDotsShift
-        case .processing(afterHandsFree: true, _, polish: nil): PillMetrics.lockedBarsOffset(hours: false)
+        case .processing(_, _, polish: .dictation, _): PillMetrics.polishDotsShift
+        case .processing(afterHandsFree: true, _, polish: nil, _): PillMetrics.lockedBarsOffset(hours: false)
         default: 0
         }
     }
@@ -344,7 +376,8 @@ struct PillView: View {
             return .locked(hours: model.showsHours)
         case .processing:
             return .processing(afterHandsFree: model.processingOrigin == .locked, counting: model.showsCounter,
-                               polish: model.polishes ? (model.selectionPolishing ? .selection : .dictation) : nil)
+                               polish: model.polishes ? (model.selectionPolishing ? .selection : .dictation) : nil,
+                               label: model.showsCounter ? model.tokenCount.map(PillCountLabel.init) : nil)
         case .error:
             if let text = model.errorMessage { return .message(text) }
             return .error
@@ -427,7 +460,7 @@ struct PillView: View {
         case .listening: "transcribe-thing is listening"
         case .locked: "transcribe-thing is listening, hands-free"
         // A polish (a dictation's or a selection's, both by Gemini) names no model.
-        case .processing(_, _, polish: .some): "transcribe-thing is polishing"
+        case .processing(_, _, polish: .some, _): "transcribe-thing is polishing"
         case .processing: "transcribe-thing is transcribing"
         case .error: "Dictation failed"
         case .message(let text): text
@@ -1206,7 +1239,7 @@ private struct ProcessingContent: View {
     }
 }
 
-/// A selection's polish before its count: the wand and "Polishing", centered as the count will be.
+/// A selection's polish before its count: the wand and "Polishing", the capsule just around them.
 private struct PillPolishingLabel: View {
     var pulses = false
 
