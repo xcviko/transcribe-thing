@@ -53,7 +53,7 @@ final class PillModel {
     var sessionModel: ModelChoice? {
         didSet { if sessionModel == nil, oldValue != nil { endChipFlash() } }
     }
-    /// The dictation on screen is polished (`Polish`): the pill grows its drop.
+    /// The dictation on screen is polished (`Polish`): the wand sits left of its bars, then of its wave.
     var polishes = false
     /// The polish on screen is a selection's (Polish Selection): nothing was heard, so the pill says "Polishing" where
     /// a dictation's shows the wave.

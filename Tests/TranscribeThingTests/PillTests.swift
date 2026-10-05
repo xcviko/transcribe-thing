@@ -450,7 +450,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         model.tokenCount = PillTokenCount(phase: .writing, tokens: 900)
         try await Task.sleep(for: .milliseconds(150))
         #expect(!model.showsCounter)
-        #expect(PillView(model: model).visual == .listening)
+        #expect(PillView(model: model).visual == .listening())
     }
 
     @Test func previewsHoldTheirPhase() async throws {
@@ -488,22 +488,22 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(abs(processing.barsAnchor.x * width - barsCenter) < 1e-9)
         #expect(PillVisual.processing(afterHandsFree: false).barsAnchor == .center)
         // Push-to-talk never offsets them.
-        #expect(PillVisual.listening.barsOffset == 0 && PillVisual.processing(afterHandsFree: false).barsOffset == 0)
+        #expect(PillVisual.listening().barsOffset == 0 && PillVisual.processing(afterHandsFree: false).barsOffset == 0)
     }
 
     /// Small, after Wispr Flow's: a 36×8 bar at rest, 70×26 while you hold the key, 28 pt tall hands-free.
     @Test func visualGeometryMatchesTheSpec() {
         #expect(PillVisual.rest.size == CGSize(width: 36, height: 8))
         #expect(PillVisual.peek.size == CGSize(width: 64, height: 20))
-        #expect(PillVisual.listening.size == CGSize(width: 70, height: 26))
+        #expect(PillVisual.listening().size == CGSize(width: 70, height: 26))
         #expect(PillMetrics.barFieldWidth == 42)
         let locked = PillVisual.locked().size, hours = PillVisual.locked(hours: true).size
         #expect(locked.height == 28 && hours.height == 28 && PillMetrics.maxHeight == 28)
         #expect(locked.width == locked.width.rounded() && locked.width > 120 && locked.width < 150)
         #expect(hours.width > locked.width)
-        #expect(PillVisual.processing(afterHandsFree: true).size == PillVisual.listening.size)
-        #expect(PillVisual.processing(afterHandsFree: false).size == PillVisual.listening.size)
-        #expect(PillVisual.error.size == PillVisual.listening.size)
+        #expect(PillVisual.processing(afterHandsFree: true).size == PillVisual.listening().size)
+        #expect(PillVisual.processing(afterHandsFree: false).size == PillVisual.listening().size)
+        #expect(PillVisual.error.size == PillVisual.listening().size)
     }
 
     /// X | bars | timer | Stop, left to right, with the same gap between each for a "9:59" timer, and a
@@ -582,7 +582,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
             model.isHovering = true
             #expect(PillView(model: model, context: context).visual == .locked())
         }
-        #expect(PillVisual.locked().isLocked && !PillVisual.listening.isLocked)
+        #expect(PillVisual.locked().isLocked && !PillVisual.listening().isLocked)
     }
 
     @Test func hoverNeverResizesHandsFree() {
@@ -604,6 +604,35 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(PillView(model: pushToTalk).visual.size.width == PillMetrics.listeningSize.width)
     }
 
+    /// Polish on while recording puts the wand inside the pill, left of the bars, in a capsule wider by it: nothing
+    /// beside the pill. Processing keeps the wand where it stood, the bars turned into the wave.
+    @Test func aPolishedDictationCarriesTheWandInsideThePill() {
+        let room = PillMetrics.counterWandSize + PillMetrics.counterWandGap
+        let model = PillModel.preview(phase: .listening, level: 0.7)
+        model.sessionModel = .gemini
+        model.polishes = true
+        let listening = PillView(model: model).visual
+        #expect(listening == .listening(polishes: true) && listening.recordsPolished)
+        #expect(listening.size == CGSize(width: PillVisual.listening().size.width + room, height: 26))
+        #expect(listening.barsOffset == room / 2, "the bars make way for the wand")
+        // The wand stands where the processing wave puts it: the bars turn into dots around it, nothing moves.
+        let processing = PillVisual.processing(afterHandsFree: false, polish: .dictation)
+        #expect(processing.size == listening.size && processing.barsOffset == listening.barsOffset)
+        let wandFromCenter = listening.barsOffset + PillMetrics.polishWandOffset
+        #expect(abs(wandFromCenter - -(PillMetrics.counterWandGap + PillMetrics.barFieldWidth) / 2) < 0.001)
+        // Hands-free: X, the wand, the bars, the timer and the check, in a capsule wider by the wand.
+        model.phase = .locked
+        let locked = PillView(model: model).visual
+        #expect(locked == .locked(hours: false, polishes: true) && locked.recordsPolished && locked.isLocked)
+        #expect(locked.size.width == PillVisual.locked().size.width + room)
+        #expect(locked.barsOffset == PillMetrics.lockedBarsOffset(hours: false) + room / 2)
+        #expect(PillVisual.locked(hours: true, polishes: true).showsHours)
+        #expect(PillVisual.locked(hours: true, polishes: true).size.width == PillVisual.locked(hours: true).size.width + room)
+        // Off, it's the plain pill again.
+        model.polishes = false
+        #expect(PillView(model: model).visual == .locked() && !PillView(model: model).visual.recordsPolished)
+    }
+
     /// The count takes the dots' place in a capsule just around its text. A tick keeps the capsule as it is: only a
     /// number that gains a digit or a decimal point, or a new phase, resizes it.
     @Test func theCounterFitsItsTextAndResizesOnlyWithIt() throws {
@@ -618,7 +647,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(counting == .processing(afterHandsFree: false, counting: true,
                                         label: PillCountLabel(number: "~888", word: "thinking")))
         #expect(counting.isCounting)
-        #expect(!PillVisual.processing(afterHandsFree: false).isCounting && !PillVisual.listening.isCounting)
+        #expect(!PillVisual.processing(afterHandsFree: false).isCounting && !PillVisual.listening().isCounting)
         let thousands = visual(PillTokenCount(phase: .thinking, tokens: 1_240))
         let writing = visual(PillTokenCount(phase: .writing, tokens: 420))
         #expect(thousands.size.width > counting.size.width && writing.size.width < counting.size.width)
@@ -651,7 +680,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(selection.width >= 2 * PillMetrics.counterPadding + wand + polishing)
         #expect(selection.width <= 2 * PillMetrics.counterPadding + wand + polishing + 4, "no room to spare")
         let wave = PillVisual.processing(afterHandsFree: false, polish: .dictation)
-        #expect(wave.size == CGSize(width: PillVisual.listening.size.width + wand, height: PillVisual.listening.size.height))
+        #expect(wave.size == CGSize(width: PillVisual.listening().size.width + wand, height: PillVisual.listening().size.height))
         // The dots come in where they settle, right of the wand: from the hands-free bars they'd pass under it.
         #expect(wave.barsOffset == PillMetrics.polishDotsShift)
         #expect(PillVisual.processing(afterHandsFree: true, polish: .dictation).barsOffset == PillMetrics.polishDotsShift)
@@ -703,7 +732,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(!PillVisual.hello.isQuiet)
         // A real dictation takes over from the hello.
         model.phase = .listening
-        #expect(PillView(model: model, context: .panel(nil)).visual == .listening)
+        #expect(PillView(model: model, context: .panel(nil)).visual == .listening())
     }
 }
 
@@ -843,11 +872,11 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
     }
 
     @Test(arguments: [
-        [PillVisual.listening, .processing(afterHandsFree: false)],
+        [PillVisual.listening(), .processing(afterHandsFree: false)],
         [PillVisual.locked(), .processing(afterHandsFree: true)],
-        [PillVisual.listening, .processing(afterHandsFree: false), .processing(afterHandsFree: false, counting: true)],
-        [PillVisual.listening, .error],
-        [PillVisual.rest, .listening],
+        [PillVisual.listening(), .processing(afterHandsFree: false), .processing(afterHandsFree: false, counting: true)],
+        [PillVisual.listening(), .error],
+        [PillVisual.rest, .listening()],
     ])
     func theExitKeepsTheWholePillUntilItHasFaded(shown: [PillVisual]) {
         var stage = stage(after: shown)
@@ -891,14 +920,14 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         }
         #expect(PillMotion.exitPose(at: 1, reduceMotion: true).opacity == 0)
         #expect(PillMotion.reducedExitDuration < PillMotion.exitDuration)
-        let stage = stage(after: [.listening])
+        let stage = stage(after: [.listening()])
         #expect(stage.exitAnimation(to: .hidden, reduceMotion: true) == .linear(duration: PillMotion.reducedExitDuration))
         #expect(stage.exitAnimation(to: .hidden, reduceMotion: false) == .linear(duration: PillMotion.exitDuration))
     }
 
     @Test(arguments: [PillVisual.processing(afterHandsFree: false), .processing(afterHandsFree: true),
                       .processing(afterHandsFree: false, counting: true), .processing(afterHandsFree: true, counting: true),
-                      .error, .listening, .locked(), .locked(hours: true), .peek, .hello])
+                      .error, .listening(), .listening(polishes: true), .locked(), .locked(polishes: true), .locked(hours: true), .peek, .hello])
     func morphingToRestShrinksTheContentWithTheCapsule(from visual: PillVisual) {
         var stage = stage(after: [visual])
         let morphing = stage.frame(for: .rest)
@@ -955,23 +984,23 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
     }
 
     @Test func showingAgainDuringTheExitCancelsIt() {
-        var stage = stage(after: [.listening, .processing(afterHandsFree: false)])
+        var stage = stage(after: [.listening(), .processing(afterHandsFree: false)])
         stage.record(.hidden)
         let exitGeneration = stage.generation
         // A new dictation mid-exit: the pill is the new one, a pill of its own, there at once (nothing fades back).
-        let back = stage.frame(for: .listening)
-        #expect(back == PillStage.Frame(capsule: .listening, content: .listening, exit: 0, morph: 0, collapsed: false))
-        #expect(stage.showsAfresh(.listening))
-        #expect(stage.exitAnimation(to: .listening, reduceMotion: false) == nil)
+        let back = stage.frame(for: .listening())
+        #expect(back == PillStage.Frame(capsule: .listening(), content: .listening(), exit: 0, morph: 0, collapsed: false))
+        #expect(stage.showsAfresh(.listening()))
+        #expect(stage.exitAnimation(to: .listening(), reduceMotion: false) == nil)
         let session = stage.session
-        stage.record(.listening)
+        stage.record(.listening())
         #expect(stage.session == session + 1 && !stage.showsAfresh(.processing(afterHandsFree: false)))
         // The exit's settle arrives late: it must neither park nor drop anything.
         stage.settle(exitGeneration, visual: .hidden)
-        stage.settle(stage.generation, visual: .listening)
-        #expect(stage.frame(for: .listening) == back)
+        stage.settle(stage.generation, visual: .listening())
+        #expect(stage.frame(for: .listening()) == back)
         // Hiding again starts a fresh exit of the current pill; the stale settle still can't park it.
-        #expect(stage.frame(for: .hidden).capsule == .listening)
+        #expect(stage.frame(for: .hidden).capsule == .listening())
         stage.record(.hidden)
         stage.settle(exitGeneration, visual: .hidden)
         #expect(!stage.frame(for: .hidden).collapsed)
@@ -982,9 +1011,9 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         // Hidden from the start (While dictating, Never): parked, nothing to exit.
         #expect(stage.frame(for: .hidden).collapsed)
         // Appearing, the exit has nothing to undo: no animation, so only the tuned bloom runs.
-        #expect(stage.exitAnimation(to: .listening, reduceMotion: false) == nil)
-        #expect(stage.frame(for: .listening)
-                == PillStage.Frame(capsule: .listening, content: .listening, exit: 0, morph: 0, collapsed: false))
+        #expect(stage.exitAnimation(to: .listening(), reduceMotion: false) == nil)
+        #expect(stage.frame(for: .listening())
+                == PillStage.Frame(capsule: .listening(), content: .listening(), exit: 0, morph: 0, collapsed: false))
     }
 
     @Test func thePanelStaysUpUntilThePillHasLeft() {
@@ -1686,7 +1715,7 @@ private struct SRGB {
 @Suite @MainActor struct PillStageEngineTests {
     @Test func theExitKeepsTheModelUntilThePillHasLeft() {
         var stage = PillStage()
-        stage.record(.listening, choice: .gemini)
+        stage.record(.listening(), choice: .gemini)
         stage.record(.processing(afterHandsFree: false), choice: .gemini)
         // The text lands: the controller drops the engine in the same update that hides the pill.
         let exiting = stage.frame(for: .hidden, choice: nil)
@@ -1711,9 +1740,9 @@ private struct SRGB {
 
     @Test func aShownPillFollowsTheCurrentEngine() {
         var stage = PillStage()
-        stage.record(.listening, choice: nil)
-        #expect(stage.frame(for: .listening, choice: .gemini).choice == .gemini)
-        stage.record(.listening, choice: .gemini)
+        stage.record(.listening(), choice: nil)
+        #expect(stage.frame(for: .listening(), choice: .gemini).choice == .gemini)
+        stage.record(.listening(), choice: .gemini)
         // The next queued job has no model to show (at rest): its processing pill drops the chip.
         #expect(stage.frame(for: .processing(afterHandsFree: false), choice: nil).choice == nil)
         // Contents without a dictation never carry one.

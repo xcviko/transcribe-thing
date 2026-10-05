@@ -2136,7 +2136,8 @@ final class DictationController {
         switchModel(to: choice, byUser: false)
     }
 
-    /// The polish shortcut while dictating: Polish on for this dictation, or off when pressed again, with its drop.
+    /// The polish shortcut while dictating: Polish on for this dictation (the wand in the pill), or off when pressed
+    /// again.
     /// Only a dictation on Gemini polishes: on another model the key does Polish Selection or says why it can't
     /// (`acted(on:selection:)`), and this guard is for a model that changed in between.
     private func togglePolish() {
@@ -2410,8 +2411,8 @@ final class DictationController {
     /// Text is selected and the polish key would polish it (Polish Selection): the keys over it are live.
     var polishesSelection: Bool { selectionOffer.polish }
 
-    /// The polish key over the hint: the dictation gives way without a trace (the cancel cue, then Polish's drop), the
-    /// hint drops into the pill as it closes into the polish circle, and the selection goes to Gemini 3.8 Flash
+    /// The polish key over the hint: the dictation gives way without a trace (the cancel cue, then Polish's sound), the
+    /// hint drops into the pill as it turns into the polish, and the selection goes to Gemini 3.8 Flash
     /// (`PolishSelectionModel.asked`). Its message comes up on a card, to paste over the selection or copy, and History
     /// keeps it.
     private func polishSelection(_ text: String) {

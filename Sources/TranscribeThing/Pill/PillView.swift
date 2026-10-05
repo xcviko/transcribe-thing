@@ -60,9 +60,6 @@ enum PillMetrics {
     static let tooltipHeight: CGFloat = 24
     /// Invisible margin around the pill that counts as hovering it (and clicking it).
     static let hoverMargin: CGFloat = 12
-    /// Polish's drop beside the pill: its gap from the capsule's right end, and its diameter to the capsule's height.
-    static let polishDropGap: CGFloat = 6
-    static let polishDropRatio: CGFloat = 0.86
     /// What the pill's content and chip are laid out on: fixed, and centered on the capsule, so nothing on it moves when
     /// the capsule changes size (`PillFace`). Room for the widest content and the chip above it.
     static let stageSize = CGSize(width: 420, height: 120)
@@ -119,12 +116,15 @@ enum PillMetrics {
             + counterWordGap + textWidth(label.word, size: captionFontSize, weight: .medium, rounded: true)
         return CGSize(width: (2 * counterPadding + wand + text).rounded(.up), height: listeningSize.height)
     }
-    /// A dictation's polish before its count: the processing wave with the wand before it, the drop come back into
-    /// the pill. The push-to-talk pill, wider by the wand.
-    static let polishWaveSize = CGSize(width: listeningSize.width + counterWandSize + counterWandGap,
-                                       height: listeningSize.height)
-    /// In a dictation's polish the dots sit right of the capsule's center by this much, leaving the wand its room.
-    static let polishDotsShift = (counterWandSize + counterWandGap) / 2
+    /// A polished dictation carries the wand left of its bars (and of its dots once processing): the capsule widens
+    /// by this much for it, the wand and its gap.
+    static let polishWandRoom = counterWandSize + counterWandGap
+    /// A polished push-to-talk dictation, and its processing wave: the push-to-talk pill, wider by the wand.
+    static let polishWaveSize = CGSize(width: listeningSize.width + polishWandRoom, height: listeningSize.height)
+    /// In a polished dictation the bars (and dots) sit right of where they'd be by this much, leaving the wand its room.
+    static let polishDotsShift = polishWandRoom / 2
+    /// The wand's center, from the bars' center: left of them by its own half, its gap and theirs.
+    static let polishWandOffset = -(counterWandSize / 2 + counterWandGap + barFieldWidth / 2)
     /// What a selection's polish says until the model's count comes.
     static let polishingText = "Polishing"
     /// A selection's polish before its count: the wand and "Polishing", with the counter's padding and nothing more.
@@ -180,8 +180,8 @@ enum PillPalette {
     }
 }
 
-/// A model's tint: the capsule's ring, and the polish drop's (`mark`, the lighter one, for marks outside the capsule,
-/// like the model chip's symbol). Everything inside the capsule stays white.
+/// A model's tint: the capsule's ring, and `mark`, the lighter one, for marks outside the capsule (the model chip's
+/// symbol). Everything inside the capsule stays white.
 struct PillAccent: Equatable, Sendable {
     let ringHex: UInt32
     let markHex: UInt32
@@ -222,11 +222,15 @@ struct PillCountLabel: Hashable, Sendable {
 
 /// What the capsule looks like: the phase plus hover, presentation and the recording timer.
 enum PillVisual: Equatable, Sendable {
-    case hidden, rest, peek, listening
+    case hidden, rest, peek
+    /// Push-to-talk. `polishes`: Polish is on for the dictation (`PillModel.polishes`), so the wand sits left of the
+    /// bars in a capsule wider by it.
+    case listening(polishes: Bool = false)
     /// One-time post-onboarding bloom: listening size, bars ripple once, then rest as dots.
     case hello
-    /// `hours`: the recording has run past an hour, and the capsule is wide enough for "1:02:03".
-    case locked(hours: Bool = false)
+    /// `hours`: the recording has run past an hour, and the capsule is wide enough for "1:02:03". `polishes`: the
+    /// wand left of the bars, as in push-to-talk.
+    case locked(hours: Bool = false, polishes: Bool = false)
     /// The push-to-talk size: stopping hands-free shrinks the pill. `afterHandsFree` only starts the dots
     /// where the hands-free bars stood, so they glide to the center as the pill narrows instead of hopping.
     /// `counting`: the model's token count in place of the dots, in a capsule wide enough for it. The number itself is
@@ -255,10 +259,13 @@ enum PillVisual: Equatable, Sendable {
         case .processing(_, counting: true, polish: .some, _): PillMetrics.polishCounterSize
         case .processing(_, counting: true, polish: nil, _): PillMetrics.counterSize
         case .processing(_, counting: false, polish: .selection, _): PillMetrics.polishingSize
-        case .processing(_, counting: false, polish: .dictation, _): PillMetrics.polishWaveSize
+        case .processing(_, counting: false, polish: .dictation, _), .listening(polishes: true):
+            PillMetrics.polishWaveSize
         case .listening, .hello, .processing: PillMetrics.listeningSize
-        case .locked(hours: true): PillMetrics.lockedHoursSize
-        case .locked: PillMetrics.lockedSize
+        case .locked(let hours, let polishes):
+            CGSize(width: (hours ? PillMetrics.lockedHoursSize : PillMetrics.lockedSize).width
+                       + (polishes ? PillMetrics.polishWandRoom : 0),
+                   height: PillMetrics.maxHeight)
         case .error: PillMetrics.errorSize
         case .message(let text): PillMetrics.captionSize(for: text)
         }
@@ -292,7 +299,15 @@ enum PillVisual: Equatable, Sendable {
     var isLocked: Bool { if case .locked = self { true } else { false } }
 
     /// Hands-free past an hour: the wider timer.
-    var showsHours: Bool { self == .locked(hours: true) }
+    var showsHours: Bool { if case .locked(hours: true, _) = self { true } else { false } }
+
+    /// Recording a polished dictation: the wand left of the bars.
+    var recordsPolished: Bool {
+        switch self {
+        case .listening(polishes: true), .locked(_, polishes: true): true
+        default: false
+        }
+    }
 
     /// Processing with the token count in place of the dots.
     var isCounting: Bool { if case .processing(_, counting: true, _, _) = self { true } else { false } }
@@ -306,10 +321,12 @@ enum PillVisual: Equatable, Sendable {
     /// Horizontal offset of the bars from the pill's center. Hands-free centers them between X and the timer;
     /// processing after it starts its dots where the usual hands-free bars stand, so they don't hop sideways when
     /// Stop is pressed. A dictation's polish starts them where they settle, right of the wand: gliding from the bars,
-    /// they would pass under it.
+    /// they would pass under it. Recording a polished dictation, they sit right of where they'd be, by the wand's half.
     var barsOffset: CGFloat {
         switch self {
-        case .locked(let hours): PillMetrics.lockedBarsOffset(hours: hours)
+        case .listening(polishes: true): PillMetrics.polishDotsShift
+        case .locked(let hours, let polishes):
+            PillMetrics.lockedBarsOffset(hours: hours) + (polishes ? PillMetrics.polishDotsShift : 0)
         case .processing(_, _, polish: .dictation, _): PillMetrics.polishDotsShift
         case .processing(afterHandsFree: true, _, polish: nil, _): PillMetrics.lockedBarsOffset(hours: false)
         default: 0
@@ -371,9 +388,9 @@ struct PillView: View {
         case .hidden, .rest:
             return model.isHovering ? .peek : .rest
         case .listening:
-            return .listening
+            return .listening(polishes: model.polishes)
         case .locked:
-            return .locked(hours: model.showsHours)
+            return .locked(hours: model.showsHours, polishes: model.polishes)
         case .processing:
             return .processing(afterHandsFree: model.processingOrigin == .locked, counting: model.showsCounter,
                                polish: model.polishes ? (model.selectionPolishing ? .selection : .dictation) : nil,
@@ -786,12 +803,6 @@ struct PillFace: View {
         carriesModel && model.showsChip && model.selectionHint == .hidden && model.keyHint == nil ? choice : nil
     }
 
-    /// The dictation being recorded is polished: the drop beside the pill. Once it's processing, the drop flows back
-    /// in and the wand is inside the capsule.
-    private var polishes: Bool {
-        content.content == .recording && model.polishes
-    }
-
     /// What the content's layer draws: `content`, laid out on the capsule when it's the capsule's own, shrinking into
     /// it (by `morph`) when it isn't.
     private var contentLayer: PillContentLayer {
@@ -812,13 +823,6 @@ struct PillFace: View {
         // An overlay, so content larger than the capsule (shrinking into it) never sizes the pill.
         PillCapsule(quiet: capsule.isQuiet, drawsEdge: false)
             .frame(width: size.width, height: size.height)
-            .background(alignment: .trailing) {
-                // Behind the capsule, from its right end: the drop slides out from under the pill, which keeps its
-                // edge whole.
-                PillPolishDrop(isOn: polishes, height: size.height, tint: .white, accent: accent,
-                               reduceMotion: reduceMotion)
-                    .frame(width: 0, height: size.height)
-            }
             // Content and chip stand on a stage of fixed size centered on the capsule, never on the capsule's own
             // frame, so nothing on it moves when the capsule changes size.
             .overlay {
@@ -895,7 +899,8 @@ struct PillFace: View {
                 .modifier(fit)
         case .recording:
             RecordingContent(model: model, locked: visual.isLocked, hours: visual.showsHours,
-                             barsOffset: visual.barsOffset, regions: regions, isLive: !leaving)
+                             polishes: visual.recordsPolished, barsOffset: visual.barsOffset, regions: regions,
+                             isLive: !leaving)
                 .frame(width: frame.width, height: frame.height)
                 .modifier(fit)
         case .processing:
@@ -989,105 +994,6 @@ struct PillContentMask: View {
     }
 }
 
-
-// MARK: - Polish's drop
-
-/// The dictation is polished (`PillModel.polishes`): a drop, whole with its ring and wand, slides out from behind
-/// the pill's right end and floats beside it; it slides back in when Polish goes off, or when the dictation is done.
-struct PillPolishDrop: View {
-    var isOn: Bool
-    /// The capsule's height: the drop is a little smaller.
-    var height: CGFloat
-    var tint: Color
-    /// The dictation's model's ring, which the drop wears as the pill does.
-    var accent: PillAccent?
-    var reduceMotion = false
-    /// Snapshots: a still frame of the way out (0 inside the pill, 1 broken off).
-    var progress: Double?
-
-    var body: some View {
-        Group {
-            if reduceMotion, progress == nil {
-                // Reduce Motion: it doesn't travel, it fades in and out where it floats.
-                PillPolishDropShape(progress: 1, height: height, symbol: "wand.and.sparkles", tint: tint, accent: accent)
-                    .opacity(isOn ? 1 : 0)
-                    .animation(.easeInOut(duration: 0.15), value: isOn)
-            } else {
-                PillPolishDropShape(progress: progress ?? (isOn ? 1 : 0), height: height, symbol: "wand.and.sparkles",
-                                    tint: tint, accent: accent)
-                    .animation(progress != nil ? nil : .spring(duration: isOn ? 0.41 : 0.25, bounce: isOn ? 0.18 : 0),
-                               value: isOn)
-            }
-        }
-        .accessibilityHidden(!isOn)
-        .accessibilityLabel("Polish is on")
-    }
-}
-
-/// The drop at `progress` along its way out, in a frame whose leading edge is the capsule's right end, drawn behind
-/// it: whole from the start (its ring and wand drawn), it waits under the capsule's rounded end and slides out to a gap
-/// away; the spring's overshoot is its bounce.
-private struct PillPolishDropShape: View, Animatable {
-    var progress: Double
-    var height: CGFloat
-    var symbol: String
-    var tint: Color
-    var accent: PillAccent?
-
-    var animatableData: Double {
-        get { progress }
-        set { progress = newValue }
-    }
-
-    var body: some View {
-        let geometry = Geometry(progress: progress, height: height)
-        Circle()
-            .fill(PillPalette.fill)
-            .overlay { Circle().strokeBorder(PillPalette.hairline, lineWidth: 1) }
-            // The capsule's ring: always there, its color changing. One that went with the model's color (Polish off as
-            // the dictation switches to Parakeet) would stay where the drop was while the drop slid back in.
-            .overlay { Circle().strokeBorder(accent?.ring ?? .clear, lineWidth: 1) }
-            .overlay {
-                Image(systemName: symbol)
-                    .font(.system(size: geometry.diameter * 0.42, weight: .semibold))
-                    .foregroundStyle(tint)
-            }
-            .frame(width: geometry.diameter, height: geometry.diameter)
-            .position(x: geometry.centerX, y: height / 2)
-            .shadow(color: .black.opacity(0.22 * geometry.out), radius: 6, x: 0, y: 3)
-            .frame(width: 1, height: height, alignment: .leading)
-            // The capsule's fill lets a little through: what is still under it stays unseen.
-            .mask { OutsideCapsuleEnd() }
-            .opacity(progress > 0.001 ? 1 : 0)
-    }
-
-    /// Everything but the capsule's rounded right end (and the capsule left of it), in a frame whose leading edge is
-    /// that end.
-    struct OutsideCapsuleEnd: Shape {
-        func path(in rect: CGRect) -> Path {
-            let h = rect.height
-            let everything = Path(CGRect(x: -4 * h, y: -2 * h, width: 8 * h, height: 5 * h))
-            var capsule = Path(ellipseIn: CGRect(x: -h, y: 0, width: h, height: h))
-            capsule.addRect(CGRect(x: -4 * h, y: 0, width: 3.5 * h, height: h))
-            return everything.subtracting(capsule)
-        }
-    }
-
-    struct Geometry {
-        var progress: Double
-        var height: CGFloat
-
-        var diameter: CGFloat { height * PillMetrics.polishDropRatio }
-        var radius: CGFloat { diameter / 2 }
-        /// Under the capsule's rounded end at first (which hides it whole), a gap away once out.
-        var centerX: CGFloat {
-            let start = -radius, end = PillMetrics.polishDropGap + radius
-            return start + (end - start) * CGFloat(progress)
-        }
-        /// Its shadow grows as it comes out from under the capsule.
-        var out: Double { min(1, max(0, progress / 0.6)) }
-    }
-}
 
 // MARK: - Contents
 
@@ -1255,7 +1161,7 @@ private struct PillPolishingLabel: View {
     }
 }
 
-/// Polish's wand inside the capsule, as it stands in the drop. `pulses`: Reduce Motion, where the shimmer over it
+/// Polish's wand inside the capsule. `pulses`: Reduce Motion, where the shimmer over it
 /// stops, so it breathes once a second instead, as the processing dots do.
 private struct PillWand: View {
     var tint: Color
@@ -1335,13 +1241,16 @@ private struct ErrorGlyph: View {
 }
 
 /// Bars while recording; in hands-free, X and the check ride the capsule's ends as it widens and the timer sits left
-/// of the check, all four evenly spaced (`PillMetrics.lockedGap`).
+/// of the check, all four evenly spaced (`PillMetrics.lockedGap`). A polished dictation has Polish's wand just left of
+/// the bars, in a capsule wider by it.
 private struct RecordingContent: View {
     let model: PillModel
     /// Hands-free: X, the timer and Stop.
     let locked: Bool
     /// Past an hour: the timer's wider column.
     var hours = false
+    /// Polish is on: the wand left of the bars.
+    var polishes = false
     let barsOffset: CGFloat
     let regions: PillHitRegions?
     /// Still the pill's content: once it's leaving, X and the check take no clicks, report no regions and show no
@@ -1355,6 +1264,14 @@ private struct RecordingContent: View {
         ZStack {
             WaveformView(meter: model.levelMeter, tint: tint)
                 .offset(x: barsOffset)
+            // Live while it fades, beside the bars as they slide back: removed, it would freeze where it stood. Moved
+            // into place outside its transition, so it grows where it stands, not from the pill's center.
+            PillLingering(value: polishes ? true : nil, insertion: wandTransition,
+                          fadeOut: .easeOut(duration: reduceMotion ? 0.15 : 0.12),
+                          fadeIn: .easeOut(duration: 0.14)) { _, _ in
+                PillWand(tint: tint)
+            }
+            .offset(x: barsOffset + PillMetrics.polishWandOffset)
             // Each piece is inserted on its own so its transition runs (a transition only applies to the
             // outermost view being inserted).
             HStack(spacing: 0) {
@@ -1387,6 +1304,14 @@ private struct RecordingContent: View {
         if reduceMotion { return .opacity }
         return .asymmetric(insertion: .opacity.animation(.easeOut(duration: 0.14)),
                            removal: .opacity.animation(.easeOut(duration: PillMotion.contentLeaving)))
+    }
+
+    /// The wand comes in as the capsule widens for it, a little after it starts, so it never shows over the bars still
+    /// sliding aside.
+    private var wandTransition: AnyTransition {
+        if reduceMotion { return .opacity.animation(.easeInOut(duration: 0.15)) }
+        return .opacity.combined(with: .scale(scale: 0.6))
+            .animation(.spring(duration: 0.3, bounce: 0.35).delay(0.08))
     }
 
     /// The timer sits near the middle, where the bars still are while the capsule widens: it comes in once there's

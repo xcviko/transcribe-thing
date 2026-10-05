@@ -27,7 +27,7 @@ enum PillSnapshots {
                 PillFilmSheet(cell: 132, columns: 11, strips: [
                     .exit("Processing → hidden", .processing(afterHandsFree: false), model: .preview(phase: .processing)),
                     .exit("Error → hidden", .error, model: .preview(phase: .error)),
-                    .exit("Listening → hidden (Esc)", .listening, model: .preview(phase: .listening, level: 0.7)),
+                    .exit("Listening → hidden (Esc)", .listening(), model: .preview(phase: .listening, level: 0.7)),
                     .exit("Reduce Motion", .processing(afterHandsFree: false), model: .preview(phase: .processing),
                           reduceMotion: true),
                 ])
@@ -66,7 +66,7 @@ enum PillSnapshots {
                 PillFilmSheet(cell: 132, columns: 11, strips: [
                     .morph("Processing → rest (Always)", from: .processing(afterHandsFree: false), model: .preview(phase: .processing)),
                     .morph("Error → rest", from: .error, model: .preview(phase: .error)),
-                    .morph("Listening → rest (Esc)", from: .listening, model: .preview(phase: .listening, level: 0.7)),
+                    .morph("Listening → rest (Esc)", from: .listening(), model: .preview(phase: .listening, level: 0.7)),
                     .morph("Hover ends", from: .peek, model: .preview(phase: .rest, isHovering: true)),
                 ])
             },
@@ -83,7 +83,7 @@ enum PillSnapshots {
             },
             // Models (`--only pill-models`): the chip, the tint, the hint and the no-key notice.
             SnapshotEntry("pill-models", width: 760, height: 44 + 14 * 92) { _ in PillModelSheet() },
-            SnapshotEntry("pill-polish", width: 760, height: 44 + 4 * 92 + 150) { _ in PolishSheet() },
+            SnapshotEntry("pill-polish", width: 760, height: 44 + 4 * 92) { _ in PolishSheet() },
             // fn ⇥ while the chip is up: its names roll on, frame by frame of the spring.
             SnapshotEntry("pill-chip-roll", width: 2040, height: 340) { _ in ChipRollSheet() },
             // fn P on Parakeet with nothing selected: it says Polish is Gemini's, and the dictation goes on.
@@ -566,7 +566,7 @@ private struct PillFilmSheet: View {
         /// fn Space: the push-to-talk capsule widens into hands-free on its spring, every 30 ms, X and the check riding
         /// its ends (they fade in over the first 140 ms, which a still frame doesn't show).
         @MainActor static func handsFreeStarts() -> Strip {
-            let listening = PillVisual.listening, locked = PillVisual.locked()
+            let listening = PillVisual.listening(), locked = PillVisual.locked()
             let model = PillModel.preview(phase: .locked, level: 0.5)
             let frames = (0...10).map { i in
                 let time = Double(i) * 0.03
@@ -785,7 +785,7 @@ private struct PillModelSheet: View {
     }
 }
 
-/// Polish's drop: on in each state it shows in, then its way out of the pill, frame by frame.
+/// Polish in each state it shows in: the wand left of the bars while recording, beside the wave, then the count.
 private struct PolishSheet: View {
     private struct Row: Identifiable {
         let id: String
@@ -809,8 +809,6 @@ private struct PolishSheet: View {
             },
         ]
     }
-
-    private static let frames: [Double] = [0.1, 0.25, 0.4, 0.5, 0.6, 0.7, 0.78, 0.88, 1]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -847,29 +845,6 @@ private struct PolishSheet: View {
                 .overlay(alignment: .bottom) { Rectangle().fill(Color.stroke).frame(height: 1) }
             }
 
-            Text("The way out")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.inkSecondary)
-                .padding(.leading, 24)
-                .padding(.top, 14)
-            HStack(spacing: 4) {
-                ForEach(Self.frames, id: \.self) { progress in
-                    ZStack {
-                        SnapshotPage(dark: true)
-                        PillCapsule()
-                            .frame(width: 44, height: PillMetrics.listeningSize.height)
-                            .background(alignment: .trailing) {
-                                PillPolishDrop(isOn: true, height: PillMetrics.listeningSize.height,
-                                               tint: .white, progress: progress)
-                                    .frame(width: 0, height: PillMetrics.listeningSize.height)
-                            }
-                            .offset(x: -14)
-                    }
-                    .frame(width: 74, height: 90)
-                    .clipped()
-                }
-            }
-            .padding(.horizontal, 24)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color.bgCanvas)

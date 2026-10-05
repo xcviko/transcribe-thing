@@ -231,7 +231,7 @@ private enum FilmScript {
             s.film("thinking → writing") { s.model.tokenCount = PillTokenCount(phase: .writing, tokens: 12) }
         },
         FilmScenario(name: "dictation-polish-to-count", mode: .always,
-                     note: "A polished dictation on Gemini: the drop goes back in, the wave with the wand, then the count") { s in
+                     note: "A polished dictation on Gemini: the bars turn into the wave beside the wand, then the count") { s in
             s.model.polishes = true
             s.record(.listening, on: .gemini)
             s.wait(0.5)
@@ -254,12 +254,16 @@ private enum FilmScript {
             s.film("switch to clean-up: chip rolls, orange ring") { s.switchModel(to: .cleanup) }
             s.film("chip goes", when: { !s.model.isChipFlashing })
         },
-        FilmScenario(name: "polish-drop", mode: .always, note: "fn P twice while listening on Gemini") { s in
+        FilmScenario(name: "polish-toggle", mode: .always,
+                     note: "fn P on and off on Gemini: the capsule widens and the wand comes in left of the bars") { s in
             s.record(.listening, on: .gemini)
             s.wait(0.6)
-            s.film("polish on: the drop slides out") { s.model.polishes = true }
+            s.film("polish on (push-to-talk)") { s.model.polishes = true }
             s.wait(0.3)
-            s.film("polish off: the drop slides back") { s.model.polishes = false }
+            s.film("polish off (push-to-talk)") { s.model.polishes = false }
+            s.record(.locked, on: .gemini, startedAgo: 14)
+            s.wait(0.6)
+            s.film("polish on (hands-free)") { s.model.polishes = true }
         },
         FilmScenario(name: "error-glyph-to-listening", mode: .always,
                      note: "An error flash from rest, then fn within its hold") { s in
