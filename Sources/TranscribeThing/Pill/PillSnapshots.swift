@@ -225,6 +225,7 @@ enum PillSnapshots {
             model.selectionHint = .shown
         } else {
             model.polishes = true
+            model.selectionPolishing = true
         }
         return model
     }

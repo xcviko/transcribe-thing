@@ -2843,6 +2843,9 @@ final class DictationController {
         let polishes = phase.isRecording ? isPolishing && effectiveChoice == .gemini
             : phase == .processing && (pillJob.map(\.polishes) ?? selectionRuns)
         if pillModel.polishes != polishes { pillModel.polishes = polishes }
+        // No job on the pill: the polish is the selection's, with no audio behind it.
+        let selectionPolishing = polishes && phase == .processing && pillJob == nil
+        if pillModel.selectionPolishing != selectionPolishing { pillModel.selectionPolishing = selectionPolishing }
         // The same job's count: with several in flight, the newest one's.
         let count = phase == .processing ? (pillJob.map(\.count) ?? (selectionRuns ? selectionPolish?.count : nil)) : nil
         if pillModel.tokenCount != count { pillModel.tokenCount = count }

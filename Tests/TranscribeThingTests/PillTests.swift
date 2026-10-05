@@ -628,12 +628,23 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(number > 25 && word > 35)
         let text: CGFloat = number + PillMetrics.counterWordGap + word
         #expect(size.width >= 2 * PillMetrics.counterPadding + text)
-        // A polish: a circle with the wand until the count, then the wand before it.
+        // A polish puts the wand first: a dictation's beside the wave, a selection's beside "Polishing", in the
+        // count's own capsule, so the count takes its place without a resize.
         let wand: CGFloat = PillMetrics.counterWandSize + PillMetrics.counterWandGap
-        #expect(PillVisual.processing(afterHandsFree: false, polishes: true).size == CGSize(width: 26, height: 26))
-        #expect(PillVisual.processing(afterHandsFree: false, counting: true, polishes: true).size.width
-                >= 2 * PillMetrics.counterPadding + wand + text)
-        #expect(PillVisual.processing(afterHandsFree: true, polishes: true).barsOffset == 0, "no dots to start aside")
+        let polishedCount = PillVisual.processing(afterHandsFree: false, counting: true, polish: .selection).size
+        #expect(polishedCount.width >= 2 * PillMetrics.counterPadding + wand + text)
+        #expect(PillVisual.processing(afterHandsFree: false, counting: true, polish: .dictation).size == polishedCount)
+        #expect(PillVisual.processing(afterHandsFree: false, polish: .selection).size == polishedCount)
+        let polishing = PillMetrics.textWidth(PillMetrics.polishingText, size: PillMetrics.captionFontSize,
+                                              weight: .medium, rounded: true)
+        #expect(polishedCount.width >= 2 * PillMetrics.counterPadding + wand + polishing)
+        let wave = PillVisual.processing(afterHandsFree: false, polish: .dictation)
+        #expect(wave.size == CGSize(width: PillVisual.listening.size.width + wand, height: PillVisual.listening.size.height))
+        // The dots come in where they settle, right of the wand: from the hands-free bars they'd pass under it.
+        #expect(wave.barsOffset == PillMetrics.polishDotsShift)
+        #expect(PillVisual.processing(afterHandsFree: true, polish: .dictation).barsOffset == PillMetrics.polishDotsShift)
+        #expect(PillVisual.processing(afterHandsFree: true, polish: .selection).barsOffset == 0, "no dots")
+        #expect(wave.isPolishing && wave.polish == .dictation && !PillVisual.processing(afterHandsFree: false).isPolishing)
         #expect(PillTokenCount(phase: .thinking, tokens: 88_849).text == "~88.8k")
         // After hands-free it's the same pill; the dots' start offset doesn't change its size.
         let afterHandsFree = PillModel.preview(phase: .locked)

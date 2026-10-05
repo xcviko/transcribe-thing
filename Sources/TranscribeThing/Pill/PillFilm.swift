@@ -223,11 +223,28 @@ private enum FilmScript {
             s.film("counting → rest") { s.rest() }
         },
         FilmScenario(name: "polish-to-count", mode: .always,
-                     note: "Polish Selection on Gemini: the wand in its circle, then the count with the wand before it") { s in
-            s.polish(on: .gemini)
+                     note: "Polish Selection on Gemini: the wand and “Polishing”, then the count in the same capsule") { s in
+            s.polish(on: .gemini, selection: true)
             s.wait(0.6)
-            s.model.tokenCount = PillTokenCount(phase: .writing, tokens: 380)
+            s.model.tokenCount = PillTokenCount(phase: .thinking, tokens: 380)
             s.film("polishing → counting", when: { s.model.showsCounter })
+            s.film("thinking → writing") { s.model.tokenCount = PillTokenCount(phase: .writing, tokens: 12) }
+        },
+        FilmScenario(name: "dictation-polish-to-count", mode: .always,
+                     note: "A polished dictation on Gemini: the drop goes back in, the wave with the wand, then the count") { s in
+            s.model.polishes = true
+            s.record(.listening, on: .gemini)
+            s.wait(0.5)
+            s.film("listening → processing (wave and wand)") { s.polish(on: .gemini) }
+            s.model.tokenCount = PillTokenCount(phase: .thinking, tokens: 420)
+            s.film("processing → counting", when: { s.model.showsCounter })
+        },
+        FilmScenario(name: "handsfree-polish-stop", mode: .always,
+                     note: "Stop in hands-free with Polish on: the bars fade, the dots come in right of the wand") { s in
+            s.model.polishes = true
+            s.record(.locked, on: .gemini, startedAgo: 14)
+            s.wait(0.5)
+            s.film("locked → processing (wave and wand)") { s.polish(on: .gemini) }
         },
         FilmScenario(name: "chip-switch", mode: .always,
                      note: "fn ⇥ twice while listening, then the chip’s hold runs out") { s in
@@ -455,9 +472,9 @@ private final class FilmSet {
         apply(.processing, session: choice, polishes: false, start: nil)
     }
 
-    /// `refreshPill()` with a polish in flight on `choice` (a dictation's, or Polish Selection's).
-    func polish(on choice: ModelChoice) {
-        apply(.processing, session: choice, polishes: true, start: nil)
+    /// `refreshPill()` with a polish in flight on `choice`: a dictation's, or Polish Selection's (`selection`).
+    func polish(on choice: ModelChoice, selection: Bool = false) {
+        apply(.processing, session: choice, polishes: true, selection: selection, start: nil)
     }
 
     /// `refreshPill()` with nothing left to do.
@@ -489,10 +506,12 @@ private final class FilmSet {
         if model.polishes, choice != .gemini { model.polishes = false }
     }
 
-    private func apply(_ phase: PillPhase, session: ModelChoice?, polishes: Bool, start: Date?) {
+    private func apply(_ phase: PillPhase, session: ModelChoice?, polishes: Bool, selection: Bool = false,
+                       start: Date?) {
         if model.phase != phase { model.phase = phase }
         if model.sessionModel != session { model.sessionModel = session }
         if model.polishes != polishes { model.polishes = polishes }
+        if model.selectionPolishing != selection { model.selectionPolishing = selection }
         // A job's count only comes later, from its stream (the scripts set it themselves).
         if model.tokenCount != nil { model.tokenCount = nil }
         if let start {

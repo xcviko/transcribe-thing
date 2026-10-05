@@ -55,6 +55,9 @@ final class PillModel {
     }
     /// The dictation on screen is polished (`Polish`): the pill grows its drop.
     var polishes = false
+    /// The polish on screen is a selection's (Polish Selection): nothing was heard, so the pill says "Polishing" where
+    /// a dictation's shows the wave.
+    var selectionPolishing = false
     /// Bumped on every switch of the dictation's model, back to the main model too, so the chip names the new one
     /// for a moment.
     var engineChipPulse = 0 {

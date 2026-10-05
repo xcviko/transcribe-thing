@@ -223,6 +223,8 @@ struct ProcessingWaveView: View {
     var showsDots = true
     /// A polish: the shimmer also sweeps the whole capsule in this color, plainly, as the wand works.
     var glow: Color?
+    /// Where the dots settle, right of the capsule's center (a dictation's polish leaves the wand room on the left).
+    var dotsShift: CGFloat = 0
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.pillStaticRendering) private var isStatic
@@ -250,12 +252,13 @@ struct ProcessingWaveView: View {
     /// while the wave swells in.
     static let glide: ClosedRange<TimeInterval> = 0.06 ... 0.46
 
-    /// X center of the dot row, `time` seconds after the view appeared in a field `width` wide. Reduce Motion
-    /// crossfades straight to the center (an opacity-only swap), so the dots never sit off-center.
-    static func dotsCenterX(width: CGFloat, time: TimeInterval, startOffset: CGFloat, reduceMotion: Bool) -> CGFloat {
-        guard !reduceMotion else { return width / 2 }
+    /// X center of the dot row, `time` seconds after the view appeared in a field `width` wide: from `startOffset` to
+    /// `shift`, both from the center. Reduce Motion crossfades straight to where they settle (an opacity-only swap).
+    static func dotsCenterX(width: CGFloat, time: TimeInterval, startOffset: CGFloat, shift: CGFloat = 0,
+                            reduceMotion: Bool) -> CGFloat {
+        guard !reduceMotion else { return width / 2 + shift }
         let u = CGFloat(min(1, max(0, (time - glide.lowerBound) / (glide.upperBound - glide.lowerBound))))
-        return width / 2 + startOffset * (1 - u * u * (3 - 2 * u))
+        return width / 2 + shift + (startOffset - shift) * (1 - u * u * (3 - 2 * u))
     }
 
     /// Seconds since the view appeared; static snapshots freeze a pleasant mid-wave moment.
@@ -306,8 +309,8 @@ struct ProcessingWaveView: View {
         let ramp = ramp(at: t)
         let w = PillMetrics.barWidth
         let step = w + PillMetrics.barGap
-        let originX = Self.dotsCenterX(width: size.width, time: t, startOffset: startOffset, reduceMotion: reduceMotion)
-            - PillMetrics.barFieldWidth / 2
+        let originX = Self.dotsCenterX(width: size.width, time: t, startOffset: startOffset, shift: dotsShift,
+                                       reduceMotion: reduceMotion) - PillMetrics.barFieldWidth / 2
         let midY = size.height / 2
 
         for i in 0..<PillMetrics.barCount {

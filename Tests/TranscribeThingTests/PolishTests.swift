@@ -89,6 +89,7 @@ import Testing
         rig.now += 2
         c.handle(.pttUp)
         try await waitUntil { rig.transcribed.count == 1 }
+        #expect(PillView(model: rig.h.pill).visual.polish == .dictation, "its audio is in: the wave, with the wand")
         c.handle(.cancel)
         #expect(!c.isPolishing)
         rig.now += 1
@@ -522,6 +523,8 @@ import Testing
         try await Self.polish(rig)
         try await waitUntil { asked.calls.count == 1 }
         #expect(rig.h.controller.activity == .polishing && rig.h.hotkeys.cardClose)
+        #expect(PillView(model: rig.h.pill).visual == .processing(afterHandsFree: false, polish: .selection),
+                "nothing heard: “Polishing”, with the wand")
         rig.h.controller.handle(.cardClose)
         #expect(rig.h.pill.phase == .rest && rig.h.controller.activity == .idle)
         #expect(cues.played.filter { $0 == .cancel }.count == 2, "the handoff's, then Esc's")
