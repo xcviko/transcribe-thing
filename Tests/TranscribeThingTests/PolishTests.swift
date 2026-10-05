@@ -405,7 +405,8 @@ import Testing
         lookup.isOpen = true
         try await waitUntil { asked.calls.count == 2 }
         #expect(rig.h.controller.machine.capture == .idle)
-        #expect(rig.transcribed.isEmpty && !cues.played.contains(.start))
+        #expect(rig.transcribed.isEmpty)
+        #expect(cues.played.filter { $0 == .start }.count == 1, "fn's own cue at key-down, and no other")
         try await Task.sleep(for: .milliseconds(60))
         #expect(asked.calls.count == 2, "one Polish Selection, not one per key")
     }

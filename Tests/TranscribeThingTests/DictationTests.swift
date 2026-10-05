@@ -61,8 +61,8 @@ import Testing
         var m = M()
         let effects = m.handle(.pttDown, now: Self.t0)
         #expect(m.capture == .arming(downAt: Self.t0))
-        #expect(effects == [.showPill(.listening), .startCapture, .schedule(.arming, after: 0.12)],
-                "the pill first, so the mic open never delays it; no sound yet")
+        #expect(effects == [.showPill(.listening), .startCapture, .playSound(.start), .schedule(.arming, after: 0.12)],
+                "the pill first, so the mic open never delays it; the start sound at once")
         #expect(m.isRecording && m.isBusy)
     }
 
@@ -70,7 +70,7 @@ import Testing
         var m = Self.arming()
         let effects = m.handle(.timer(.arming), now: Self.armedAt)
         #expect(m.capture == .listening(downAt: Self.t0))
-        #expect(effects == [.playSound(.start)], "the pill is already up")
+        #expect(effects.isEmpty, "the pill and the start sound came at key-down")
     }
 
     @Test func releaseDuringArmingIsATap() {
@@ -145,7 +145,7 @@ import Testing
         let effects = m.handle(.pttDown, now: 10.625)
         #expect(m.capture == .arming(downAt: 10.625))
         #expect(effects == [.cancelTimer(.doublePressWindow), .showPill(.listening), .startCapture,
-                            .schedule(.arming, after: 0.12)])
+                            .playSound(.start), .schedule(.arming, after: 0.12)])
     }
 
     @Test func doublePressDisabledFoldsTheTapAwayAndArmsAgain() {
@@ -156,7 +156,7 @@ import Testing
         #expect(tap == [.cancelTimer(.arming), .cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)])
         let effects = m.handle(.pttDown, now: 10.25)
         #expect(m.capture == .arming(downAt: 10.25))
-        #expect(effects == [.showPill(.listening), .startCapture, .schedule(.arming, after: 0.12)])
+        #expect(effects == [.showPill(.listening), .startCapture, .playSound(.start), .schedule(.arming, after: 0.12)])
     }
 
     @Test func doublePressDisabledShortListeningReleaseFoldsAway() {
@@ -361,7 +361,7 @@ import Testing
 
     @Test func fnSpaceFromIdleLocksThenFnTapStops() {
         var m = M()
-        #expect(m.handle(.pttDown, now: 10) == [.showPill(.listening), .startCapture, .schedule(.arming, after: 0.12)])
+        #expect(m.handle(.pttDown, now: 10) == [.showPill(.listening), .startCapture, .playSound(.start), .schedule(.arming, after: 0.12)])
         let lock = m.handle(.handsFreeToggle, now: 10.0625)
         #expect(lock.contains(.playSound(.lock)))
         #expect(!lock.contains(.startCapture), "the mic is already live since key-down")
@@ -393,7 +393,7 @@ import Testing
         #expect(m.capture == .locked(startedAt: 10.3125))
     }
 
-    @Test func quickTapIsSilentAndFoldsWhenTheWindowCloses() {
+    @Test func quickTapOnlySoundsItsStartAndFoldsWhenTheWindowCloses() {
         var m = M()
         var effects = m.handle(.pttDown, now: 10)
         effects += m.handle(.pttUp, now: 10.0625)
@@ -402,11 +402,12 @@ import Testing
         effects += m.handle(.timer(.doublePressWindow), now: 10.5)
         #expect(m.capture == .idle)
         #expect(effects.last == .showPill(.rest))
-        #expect(!effects.contains { if case .playSound = $0 { true } else { false } })
+        let sounds = effects.compactMap { if case .playSound(let s) = $0 { s } else { nil } }
+        #expect(sounds == [.start], "the key-down cue, then nothing")
         #expect(!effects.contains { if case .notice = $0 { true } else { false } })
     }
 
-    @Test func doublePressLocksWithOneLockSoundAndNoStartSound() {
+    @Test func doublePressSoundsItsStartThenOneLock() {
         var m = M()
         var effects = m.handle(.pttDown, now: 10)
         effects += m.handle(.pttUp, now: 10.0625)
@@ -414,7 +415,7 @@ import Testing
         effects += m.handle(.pttUp, now: 10.3125)
         #expect(m.capture == .locked(startedAt: 10.25))
         let sounds = effects.compactMap { if case .playSound(let s) = $0 { s } else { nil } }
-        #expect(sounds == [.lock])
+        #expect(sounds == [.start, .lock])
         let pills = effects.compactMap { if case .showPill(let p) = $0 { p } else { nil } }
         #expect(pills == [.listening, .locked], "the pill grows into hands-free without folding in between")
     }
@@ -495,7 +496,7 @@ import Testing
         var m = Self.listening()
         _ = m.handle(.pttUp, now: 12)
         _ = m.handle(.jobStarted, now: 12)
-        #expect(m.handle(.pttDown, now: 13) == [.showPill(.listening), .startCapture, .schedule(.arming, after: 0.12)])
+        #expect(m.handle(.pttDown, now: 13) == [.showPill(.listening), .startCapture, .playSound(.start), .schedule(.arming, after: 0.12)])
         #expect(m.activeJobs == 1 && m.isRecording)
     }
 
@@ -704,6 +705,7 @@ import Testing
 @MainActor
 final class FakeRecorder: DictationRecorder {
     var isCapturing = false
+    var capturesFromBluetooth = false
     var starts = 0
     /// The recording the last successful start continued (Undo), if any.
     var lastPrefix: Recording?
@@ -1066,7 +1068,7 @@ final class FakeRecorder: DictationRecorder {
         h.controller.handle(.pttDown)
         #expect(h.recorder.starts == 1)
         #expect(h.pill.phase == .listening, "the pill answers the key at once")
-        #expect(cues.isEmpty, "the start sound waits for the arming delay")
+        #expect(cues == [.start], "the start sound answers the key at once too")
         h.controller.send(.timer(.arming))
         #expect(h.pill.phase == .listening)
         #expect(cues == [.start])
@@ -1091,13 +1093,13 @@ final class FakeRecorder: DictationRecorder {
         h.controller.handle(.pttDown)
         h.controller.handle(.handsFreeToggle)
         #expect(h.pill.phase == .locked)
-        #expect(cues == [.lock])
+        #expect(cues == [.start, .lock], "fn's own cue at key-down, then hands-free's")
         for _ in 0..<2 {
             h.controller.handle(.pttDown)
             h.controller.handle(.handsFreeToggle)
             #expect(h.recorder.isCapturing && h.recorder.starts == 1)
             #expect(h.pill.phase == .locked)
-            #expect(cues == [.lock])
+            #expect(cues == [.start, .lock])
         }
         h.controller.handle(.pttDown)
         h.controller.handle(.pttUp)
@@ -1279,7 +1281,7 @@ final class FakeRecorder: DictationRecorder {
         #expect(h.controller.machine.capture.isArming)
     }
 
-    @Test func aQuickTapStaysUpForTheDoublePressWindowThenFoldsSilently() {
+    @Test func aQuickTapStaysUpForTheDoublePressWindowThenFoldsWithoutAnotherCue() {
         let h = Self.make()
         h.settings.doublePressForHandsFree = true
         var cues: [SoundEffect] = []
@@ -1292,7 +1294,7 @@ final class FakeRecorder: DictationRecorder {
         #expect(h.pill.visiblePhase == .listening, "a second press may still come")
         h.controller.send(.timer(.doublePressWindow))
         #expect(phases == [.listening, .rest])
-        #expect(cues.isEmpty)
+        #expect(cues == [.start], "the key-down cue only")
         #expect(h.pill.shakeCount == 0)
         #expect(h.toasts.notices.isEmpty)
         #expect(h.controller.activity == .idle)
@@ -1308,7 +1310,7 @@ final class FakeRecorder: DictationRecorder {
         #expect(h.pill.visiblePhase == .rest)
     }
 
-    @Test func doublePressGrowsIntoHandsFreeWithOneLockCue() {
+    @Test func doublePressGrowsIntoHandsFreeWithAStartThenALockCue() {
         let h = Self.make()
         h.settings.doublePressForHandsFree = true
         var cues: [SoundEffect] = []
@@ -1322,7 +1324,7 @@ final class FakeRecorder: DictationRecorder {
         #expect(h.controller.machine.capture.isListeningOrLocked)
         #expect(h.controller.machine.mode == .handsFree)
         #expect(h.recorder.starts == 2 && h.recorder.isCapturing)
-        #expect(cues == [.lock])
+        #expect(cues == [.start, .lock])
         #expect(phases == [.listening, .locked], "never folds in between")
     }
 

@@ -33,6 +33,7 @@ final class AudioRecorder {
     var isMicrophoneAllowed: () -> Bool = { AudioRecorder.isMicrophoneAuthorized }
     /// The device choice of the current (or last) capture, including why it was picked.
     private(set) var lastChoice: InputDeviceChoice?
+    var capturesFromBluetooth: Bool { lastChoice?.device.isBluetooth == true }
 
     private var session: CaptureSession?
     /// The canceled recording this capture continues (Undo): its audio comes first in what `finish`, `stop` and

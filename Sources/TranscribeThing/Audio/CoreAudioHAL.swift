@@ -109,6 +109,20 @@ enum CoreAudioHAL {
         return true
     }
 
+    /// True when starting the default output would take long: a Bluetooth headset that nothing is playing to
+    /// (AirPods asleep take ~450 ms to wake). A headset another app keeps playing starts in a few ms.
+    static func defaultOutputWakesSlowly() -> Bool {
+        var id = AudioDeviceID(kAudioObjectUnknown)
+        guard read(systemObject, kAudioHardwarePropertyDefaultOutputDevice, into: &id),
+              id != kAudioObjectUnknown else { return true }
+        var transport: UInt32 = 0
+        read(id, kAudioDevicePropertyTransportType, into: &transport)
+        guard transportKind(transport) == .bluetooth else { return false }
+        var running: UInt32 = 0
+        read(id, kAudioDevicePropertyDeviceIsRunningSomewhere, into: &running)
+        return running == 0
+    }
+
     /// MacBooks disconnect the built-in microphone in hardware while the lid is closed.
     static func isClamshellClosed() -> Bool {
         let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPMrootDomain"))

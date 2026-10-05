@@ -12,6 +12,10 @@ protocol CueOutput: AnyObject {
     var onChange: (() -> Void)? { get set }
     /// Started, and on the current device: false once a change made the graph stale.
     var isRunning: Bool { get }
+    /// Starting it now would take long: a Bluetooth headset nothing is playing to. AirPods asleep take ~450 ms to
+    /// wake, and keep Core Audio busy meanwhile. Built-in, wired and USB outputs start in a few ms, as does a
+    /// headset another app keeps playing.
+    var wakesSlowly: Bool { get }
     /// Reads the sound files and starts watching the default output; returns each loaded cue's length in seconds.
     func load() -> [SoundEffect: TimeInterval]
     /// Builds the graph for the current output device if there is none (or it went stale), then starts it.
@@ -29,12 +33,16 @@ protocol CueOutput: AnyObject {
 
 /// Plays transcribe-thing's sound cues without ever touching audio on the main thread.
 ///
-/// Starting an output is a blocking `AudioDeviceStart`: a few ms on the built-in speakers, up to ~300 ms while
+/// Starting an output is a blocking `AudioDeviceStart`: a few ms on the built-in speakers, up to ~450 ms while
 /// AirPods wake their Bluetooth route. `AVAudioPlayer` did that on the main thread for every cue and froze the
 /// pill each time. Here one persistent output lives on a private serial queue: callers only enqueue ("play X",
-/// "warm up") and return at once. `warmUp()` at key-down gets the device running before the start cue 120 ms
-/// later; the output stops `idleRelease` seconds after the last cue while no dictation holds it, so AirPods don't
-/// stay in an active playback state.
+/// "warm up") and return at once. The output stops `idleRelease` seconds after the last cue while no dictation
+/// holds it, so AirPods don't stay in an active playback state.
+///
+/// The start cue plays at key-down, while the mic starts. Waking AirPods then would hold the mic's start up too
+/// (Core Audio is busy meanwhile), and the recording would begin late: while a mic starts (`micStarting`), a cue
+/// that would have to wake the output waits for the mic's first audio. One that can play at once (the output is
+/// running, or starts in a few ms) does.
 ///
 /// Cues asked for while the output starts keep their timeline, moved by how long the start took: after AirPods
 /// wake (~450 ms), fn then ⇥ still sounds as two cues, as far apart as the keys were. A key-feedback cue that would
@@ -68,6 +76,12 @@ final class CueEngine: @unchecked Sendable {
     private var lastStart: (began: UInt64, readyAt: UInt64)?
     /// When the latest cue is due, so a cue never sounds before one asked for earlier.
     private var lastDue: UInt64 = 0
+    /// A mic is starting (`micStarting`), from a Bluetooth headset or not; nil once it delivers.
+    private var startingMic: MicKind?
+    /// Cues (nil: a warm-up) waiting for the starting mic's first audio, with when they were asked for.
+    private var heldForMic: [(effect: SoundEffect?, requestedAt: UInt64)] = []
+
+    private enum MicKind { case bluetooth, other }
 
     init(idleRelease: TimeInterval = CueEngine.idleRelease,
          makeOutput: @escaping @Sendable () -> CueOutput = { AVCueOutput() }) {
@@ -103,6 +117,18 @@ final class CueEngine: @unchecked Sendable {
         queue.async { self.setHeldOnQueue(held) }
     }
 
+    /// A mic is starting: until `micStarted()`, cues that would have to wake the output wait for it. A Bluetooth
+    /// mic holds every cue: it switches its headset to the call profile, which rebuilds the output and would cut
+    /// a cue off.
+    func micStarting(bluetooth: Bool) {
+        queue.async { self.startingMic = bluetooth ? .bluetooth : .other }
+    }
+
+    /// The mic delivers audio (or gave up on it): what waited plays, in order, keeping when it was asked for.
+    func micStarted() {
+        queue.async { self.micStartedOnQueue() }
+    }
+
     func duration(of effect: SoundEffect) -> TimeInterval? {
         durations.withLock { $0[effect] }
     }
@@ -130,6 +156,7 @@ final class CueEngine: @unchecked Sendable {
     private func playOnQueue(_ effect: SoundEffect, requestedAt: UInt64) {
         Self.checkOffMain("play")
         guard output != nil else { return }
+        if waitsForMic() { return heldForMic.append((effect, requestedAt)) }
         defer { scheduleRelease() }
         guard ensureRunning() else { return }
         let now = DispatchTime.now().uptimeNanoseconds
@@ -165,11 +192,34 @@ final class CueEngine: @unchecked Sendable {
         Self.checkOffMain("warmUp")
         guard output != nil else { return }
         let requestedAt = DispatchTime.now().uptimeNanoseconds
+        if waitsForMic() { return heldForMic.append((nil, requestedAt)) }
         let wasRunning = output?.isRunning == true
         if ensureRunning(), !wasRunning {
             Log.app.debug("Cue output warmed up in \(Self.milliseconds(since: requestedAt)) ms")
         }
         scheduleRelease()
+    }
+
+    /// While a mic starts: whether a cue must wait for its first audio. Once one waits, the ones after it do too,
+    /// so they keep their order.
+    private func waitsForMic() -> Bool {
+        guard let startingMic, let output else { return false }
+        if !heldForMic.isEmpty || startingMic == .bluetooth { return true }
+        return !output.isRunning && output.wakesSlowly
+    }
+
+    private func micStartedOnQueue() {
+        Self.checkOffMain("micStarted")
+        startingMic = nil
+        let held = heldForMic
+        heldForMic = []
+        for item in held {
+            if let effect = item.effect {
+                playOnQueue(effect, requestedAt: item.requestedAt)
+            } else {
+                warmUpOnQueue()
+            }
+        }
     }
 
     private func setHeldOnQueue(_ held: Bool) {
@@ -287,6 +337,8 @@ final class AVCueOutput: CueOutput {
 
     /// Running on the current device: a stale graph counts as stopped, so the next cue rebuilds before it plays.
     var isRunning: Bool { engine?.isRunning == true && !isStale.withLock { $0 } }
+
+    var wakesSlowly: Bool { CoreAudioHAL.defaultOutputWakesSlowly() }
 
     func load() -> [SoundEffect: TimeInterval] {
         CueEngine.checkOffMain("AVCueOutput.load")

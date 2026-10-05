@@ -18,6 +18,8 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
         var isStale = false
         /// Starts that throw before one succeeds.
         var failingStarts = 0
+        /// Like AirPods nothing is playing to (false: built-in speakers).
+        var wakesSlowly = false
     }
 
     let state = OSAllocatedUnfairLock(initialState: State())
@@ -33,6 +35,7 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
     var calls: [Call] { state.withLock { $0.calls } }
     var calledOnMain: Bool { state.withLock { $0.calledOnMain } }
     var isRunning: Bool { state.withLock { $0.isRunning } }
+    var wakesSlowly: Bool { state.withLock { $0.wakesSlowly } }
     var played: [SoundEffect] {
         calls.compactMap { if case .play(let effect) = $0 { effect } else { nil } }
     }
@@ -140,7 +143,6 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
         let output = FakeCueOutput()
         let engine = CueEngine(makeOutput: { output })
         let player = SoundPlayer(settings: .inMemory(), engine: engine)
-        player.warmUp()
         player.play(.start)
         engine.flush()
         #expect(output.calls.isEmpty)
@@ -157,7 +159,7 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
     @Test func soundsOffSchedulesNothingAndWakesNothing() {
         let output = FakeCueOutput()
         let (player, engine) = Self.make(output, soundsOn: false)
-        player.warmUp()
+        player.captureStarting(bluetooth: false)
         player.play(.start)
         player.play(.paste)
         engine.flush()
@@ -167,7 +169,7 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
     @Test func warmUpStartsTheOutputAndIdleReleaseStopsIt() async throws {
         let output = FakeCueOutput()
         let (player, engine) = Self.make(output, idle: 0.5)
-        player.warmUp()
+        engine.warmUp()
         engine.flush()
         #expect(output.isRunning)
         #expect(output.count(.start) == 1)
@@ -190,7 +192,7 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
         let output = FakeCueOutput()
         // Gaps far shorter than the idle window, adding up to more than it.
         let (player, engine) = Self.make(output, idle: 1)
-        player.warmUp()
+        engine.warmUp()
         for _ in 0..<5 {
             try await Task.sleep(for: .milliseconds(300))
             player.play(.lock)
@@ -205,7 +207,7 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
         let output = FakeCueOutput()
         let (player, engine) = Self.make(output, idle: 0.1)
         player.setDictationActive(true)
-        player.warmUp()
+        engine.warmUp()
         try await Task.sleep(for: .milliseconds(300))
         engine.flush()
         #expect(output.isRunning)
@@ -244,7 +246,7 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
     @Test func aDeviceChangeWhileIdleRebuildsAtTheNextCue() async throws {
         let output = FakeCueOutput()
         let (player, engine) = Self.make(output, idle: 0.05)
-        player.warmUp()
+        engine.warmUp()
         try await waitUntil { output.count(.stop) == 1 }
         output.simulateDeviceChange()
         try await waitUntil { output.count(.reset) == 1 }
@@ -339,30 +341,72 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
         #expect(gap >= 120, "\(gap) ms apart")
     }
 
-    /// Waking AirPods while a mic starts would hold the mic (and the main thread's Core Audio calls) up: the
-    /// output waits for the mic's first audio.
-    @Test func cuesWaitForTheStartingMicsFirstAudio() {
+    /// The start cue answers the key while the mic starts: an output that starts in a few ms plays it at once.
+    @Test func aQuickOutputPlaysWhileTheMicStarts() {
         let output = FakeCueOutput()
         let (player, engine) = Self.make(output)
-        player.captureStarting()
+        player.captureStarting(bluetooth: false)
+        player.play(.start)
+        engine.flush()
+        #expect(output.played == [.start])
+        player.captureStarted()
+        engine.flush()
+        #expect(output.played == [.start])
+    }
+
+    /// Waking AirPods while a mic starts would hold the mic up: the cues wait for its first audio, in order.
+    @Test func cuesThatWouldWakeTheOutputWaitForTheStartingMicsFirstAudio() {
+        let output = FakeCueOutput()
+        output.state.withLock { $0.wakesSlowly = true }
+        let (player, engine) = Self.make(output)
+        player.captureStarting(bluetooth: false)
+        player.play(.start)
+        engine.warmUp()
         player.play(.lock)
-        player.warmUp()
         engine.flush()
         #expect(output.calls == [.load])
         player.captureStarted()
         engine.flush()
-        #expect(output.played == [.lock])
+        #expect(output.played == [.start, .lock])
         #expect(output.count(.start) == 1)
-        // Once started, cues go straight to the engine.
+        // Once started, cues go straight to the output.
         player.play(.paste)
         engine.flush()
-        #expect(output.played == [.lock, .paste])
+        #expect(output.played == [.start, .lock, .paste])
+    }
+
+    /// Already running, the output plays at once, even for AirPods.
+    @Test func aRunningOutputPlaysWhileTheMicStarts() {
+        let output = FakeCueOutput()
+        output.state.withLock { $0.wakesSlowly = true }
+        let (player, engine) = Self.make(output)
+        engine.warmUp()
+        engine.flush()
+        player.captureStarting(bluetooth: false)
+        player.play(.start)
+        engine.flush()
+        #expect(output.played == [.start])
+    }
+
+    /// A Bluetooth mic switches its headset to the call profile, which rebuilds the output: every cue waits.
+    @Test func aBluetoothMicHoldsEveryCue() {
+        let output = FakeCueOutput()
+        let (player, engine) = Self.make(output)
+        engine.warmUp()
+        engine.flush()
+        player.captureStarting(bluetooth: true)
+        player.play(.start)
+        engine.flush()
+        #expect(output.played.isEmpty)
+        player.captureStarted()
+        engine.flush()
+        #expect(output.played == [.start])
     }
 
     @Test func aMicThatNeverDeliversReleasesTheCuesAfterTheWait() async throws {
         let output = FakeCueOutput()
         let (player, engine) = Self.make(output)
-        player.captureStarting()
+        player.captureStarting(bluetooth: true)
         player.play(.lock)
         engine.flush()
         #expect(output.played.isEmpty)
@@ -410,28 +454,38 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
         return (controller, engine, recorder)
     }
 
-    /// The pill and the mic come first: the output (AirPods wake for ~450 ms, and Core Audio calls wait for them)
-    /// starts once the mic delivers audio, still ahead of the start cue.
-    @Test func keyDownWarmsTheOutputOnceTheMicHasStarted() {
+    /// The start cue answers fn at once, in the key-down turn, after the pill and the mic start.
+    @Test func keyDownPlaysTheStartCueAtOnce() {
         let output = FakeCueOutput()
+        let (controller, engine, _) = Self.make(output)
+        controller.send(.pttDown)
+        engine.flush()
+        #expect(output.played == [.start])
+        controller.send(.timer(.arming))
+        engine.flush()
+        #expect(output.played == [.start], "the confirm only goes on listening")
+        #expect(!output.calledOnMain)
+    }
+
+    /// AirPods asleep (~450 ms to wake, Core Audio busy meanwhile) would start the mic late: the start cue waits
+    /// for its first audio.
+    @Test func keyDownWaitsForTheMicBeforeWakingAirPods() {
+        let output = FakeCueOutput()
+        output.state.withLock { $0.wakesSlowly = true }
         let (controller, engine, recorder) = Self.make(output)
         controller.send(.pttDown)
         engine.flush()
         #expect(output.calls == [.load])
         recorder.onEvent?(.firstBuffer)
         engine.flush()
-        #expect(output.isRunning)
-        #expect(output.played.isEmpty)
-        controller.send(.timer(.arming))
-        engine.flush()
         #expect(output.played == [.start])
         #expect(output.count(.start) == 1)
-        #expect(!output.calledOnMain)
     }
 
-    @Test func aHandsFreeStartsLockCueWaitsForTheMicToo() {
+    @Test func aHandsFreeStartsLockCueWaitsForABluetoothMic() {
         let output = FakeCueOutput()
         let (controller, engine, recorder) = Self.make(output)
+        (controller.captureDevice as? FakeRecorder)?.capturesFromBluetooth = true
         controller.send(.handsFreeToggle)
         engine.flush()
         #expect(output.calls == [.load])
@@ -439,6 +493,16 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
         engine.flush()
         #expect(output.played == [.lock])
         #expect(output.calls.prefix(2) == [.load, .start])
+    }
+
+    /// The mic refused the press: nothing records, so no start cue (the refusal shows at the confirm).
+    @Test func aRefusedPressPlaysNoStartCue() {
+        let output = FakeCueOutput()
+        let (controller, engine, _) = Self.make(output)
+        (controller.captureDevice as? FakeRecorder)?.startError = .noMicrophone
+        controller.send(.pttDown)
+        engine.flush()
+        #expect(output.played.isEmpty)
     }
 
     @Test func theOutputStaysUpWhileRecordingAndIdlesOutAfter() async throws {

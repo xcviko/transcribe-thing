@@ -7,8 +7,8 @@ struct DictationMachine: Equatable {
 
     enum Capture: Equatable {
         case idle
-        /// Key down: the pill is up and the mic is opening, but the start sound and any refusal wait for the
-        /// confirm delay, so a quick tap or an fn combo (fn+←) stays quiet.
+        /// Key down: the pill is up, the mic is opening and the start sound plays, but a refusal waits for the
+        /// confirm delay, so a quick tap or an fn combo (fn+←) shows no error.
         case arming(downAt: TimeInterval)
         /// PTT held past the confirm delay.
         case listening(downAt: TimeInterval)
@@ -184,9 +184,9 @@ struct DictationMachine: Equatable {
     private mutating func handleArming(_ input: Input, downAt: TimeInterval, now: TimeInterval) -> [Effect] {
         switch input {
         case .timer(.arming):
-            // The pill has been up since key-down; the sound confirms a real hold.
+            // The pill and the start sound came at key-down; this only confirms a real hold.
             capture = .listening(downAt: downAt)
-            return [.playSound(.start)]
+            return []
         case .pttUp where switchedDuringPress:
             capture = .idle
             return [.cancelTimer(.arming), .cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)]
@@ -339,10 +339,11 @@ struct DictationMachine: Equatable {
 
     // MARK: - Shared transitions
 
-    /// Key down: the pill comes first, in this very turn, so the mic open never delays its first frame.
+    /// Key down: the pill comes first, in this very turn, so the mic open never delays its first frame. The start
+    /// sound follows in the same turn, so it answers the key at once.
     private mutating func arm(now: TimeInterval) -> [Effect] {
         capture = .arming(downAt: now)
-        return [.showPill(.listening), .startCapture, .schedule(.arming, after: config.armingDelay)]
+        return [.showPill(.listening), .startCapture, .playSound(.start), .schedule(.arming, after: config.armingDelay)]
     }
 
     /// A quick tap: the mic closes without a sound. With double-press on, the pill stays up for the rest of the

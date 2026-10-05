@@ -34,6 +34,8 @@ protocol DictationRecorder: AnyObject {
     func cancel() -> Recording?
     /// `from` is a monotonic timestamp (`systemUptime`).
     func duckRecording(from: TimeInterval, duration: TimeInterval)
+    /// The capture started (or last started) on a Bluetooth mic.
+    var capturesFromBluetooth: Bool { get }
 }
 
 extension AudioRecorder: DictationRecorder {}
@@ -459,9 +461,8 @@ final class DictationController {
             // model, which hands-free may have just left for one that can start.
             pendingRefusal = nil
             if !entersHandsFree, handsFreeCouldTakeOver {
-                // Without its start cue: nothing records yet.
                 deferredRefusal = refusal
-                execute(effects.filter { $0 != .playSound(.start) })
+                execute(effects)
                 reportDeferredRefusal(after: machine.config.tapThreshold - machine.config.armingDelay)
             } else if let failure = entersHandsFree && modelOverride != nil ? beginCapture() : refusal {
                 execute(machine.handle(.captureFailed(failure), now: clock()))
@@ -471,11 +472,8 @@ final class DictationController {
         } else {
             execute(effects)
         }
-        if startsRecording {
-            // Its start cue follows in 120 ms: the sound output (AirPods wake slowly) starts off the main thread,
-            // once the mic has started (`beginCapture` holds sounds until its first audio).
-            sounds.warmUp()
-            if !input.isResume { lookForSelection() }
+        if startsRecording, !input.isResume {
+            lookForSelection()
         }
         if !machine.isRecording {
             pendingRefusal = nil
@@ -557,6 +555,9 @@ final class DictationController {
                 refreshPill()
             case .playSound(let sound):
                 if sound == .cancel, nothingCancelled { continue }
+                // The mic refused this press at key-down: nothing records, so no start sound. The refusal itself
+                // shows once the hold is confirmed (an fn combo shows nothing).
+                if sound == .start, pendingRefusal != nil { continue }
                 if sound == .stop, let job = finishingJob {
                     // Played once the tail is captured, so the cue never lands in the recording.
                     job.playsStopCue = true
@@ -590,7 +591,7 @@ final class DictationController {
         }
         do {
             try captureDevice.start(preferredDeviceUID: settings.microphoneUID, continuing: prefix)
-            sounds.captureStarting()
+            sounds.captureStarting(bluetooth: captureDevice.capturesFromBluetooth)
             continuing = prefix
             deviceNoticeDue = captureDevice === recorder
             // The recorder trusts the cached permission (TCC costs ~25 ms here); re-probe it off the main
@@ -2910,8 +2911,8 @@ extension DictationMachine.Capture {
         }
     }
 
-    /// Recording past the confirm delay. Arming already shows the pill, but its sound, notices and the menu bar
-    /// state wait, so fn combos and quick taps stay quiet.
+    /// Recording past the confirm delay. Arming already shows the pill and plays the start sound, but notices and
+    /// the menu bar state wait, so fn combos and quick taps show nothing else.
     var isListeningOrLocked: Bool {
         switch self {
         case .listening, .locked, .lockedStopPending: true
