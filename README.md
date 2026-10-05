@@ -52,8 +52,8 @@ manager may still keep the selected text.
 - **Gemini 3.8 Flash** is the most accurate. It thinks before it writes, so it's slower. It can also polish: press
   fn P while you talk, and it pastes the message you meant, without the false starts, detours and repeats.
 
-On another model, fn P polishes the text you've selected instead: Gemini 3.8 Flash and GPT-6 Luna each write their
-version on a card, and Paste Here puts it in place of the selection.
+On another model, fn P polishes the text you've selected instead: Gemini 3.8 Flash writes the polished version on a
+card, and Paste Here puts it in place of the selection.
 
 The cloud models run on your own [OpenRouter](https://openrouter.ai) key, and you pay OpenRouter per use. Each cloud
 dictation sends its request twice at once and pastes the first answer, stopping the other, so it can cost up to twice
@@ -73,7 +73,7 @@ every word.
 History, the recordings, your dictionary and your OpenRouter key stay on your Mac, in
 `~/Library/Application Support/transcribe-thing`. The key is in a file only you can read. Audio leaves your Mac only
 when a cloud model transcribes it. Text leaves it only when a model works on it: GPT-6 Luna cleaning up a transcript,
-or Gemini 3.8 Flash and GPT-6 Luna polishing text you selected. Your dictionary's words go along with every Gemini 3.8
+or Gemini 3.8 Flash polishing text you selected. Your dictionary's words go along with every Gemini 3.8
 Flash dictation and every clean-up.
 
 The same folder keeps a log of what the app did in the last 7 days, without your dictations, your selected text or
