@@ -144,6 +144,8 @@ final class DictationController {
     /// hint itself hides after `PillTiming.chipHold`; the keys stay.
     @ObservationIgnored private var selectionOffer = PillSelectionOffer()
     @ObservationIgnored private var selectionHintTask: Task<Void, Never>?
+    /// The selection hint has had its moment in this press: it shows once, when the selection is first found.
+    @ObservationIgnored private var selectionHintShown = false
     /// Polish Selection under way: the pill shows it (the polish circle, then the count) until its card comes up.
     @ObservationIgnored private var selectionPolish: SelectionPolish?
     /// This dictation is polished (`Polish`, fn P while it's on Gemini). It lasts while the dictation records, as
@@ -2294,10 +2296,11 @@ final class DictationController {
     }
 
     /// While there's a selection, the polish key polishes it off Gemini (on Gemini it's Polish's). The hint over
-    /// the pill says what the selection can go to for a moment, as the model chip does: when it's found, and again
-    /// when it can go somewhere new (the dictation comes back off Gemini). A switch that only takes something away
-    /// (onto Gemini) leaves the chip to name the model. It comes without a sound.
+    /// the pill says what the selection can go to for a moment, as the model chip does, once a press: when the
+    /// selection is found. After that a switch of model shows the chip, naming the model, and what the keys do follows
+    /// the model without a word. It comes without a sound.
     private func updateSelectionHint() {
+        if !machine.isRecording { selectionHintShown = false }
         let selected = selection != nil && machine.isRecording
         let offer = PillSelectionOffer(polish: selected && effectiveChoice != .gemini && canPolishSelection,
                                        dictionary: selected && canAddToDictionary
@@ -2307,13 +2310,11 @@ final class DictationController {
         selectionOffer = offer
         let gains = offer.polish && !previous.polish || offer.dictionary && !previous.dictionary
         guard pillModel.selectionHint != .handoff else { return }
-        guard gains else {
-            if pillModel.selectionHint == .shown {
-                selectionHintTask?.cancel()
-                pillModel.selectionHint = .hidden
-            }
+        guard gains, !selectionHintShown else {
+            if !gains { hideSelectionHint() }
             return
         }
+        selectionHintShown = true
         selectionHintTask?.cancel()
         if pillModel.selectionOffer != offer { pillModel.selectionOffer = offer }
         pillModel.selectionHint = .shown
@@ -2325,6 +2326,13 @@ final class DictationController {
             guard !Task.isCancelled, let self, self.pillModel.selectionHint == .shown else { return }
             self.pillModel.selectionHint = .hidden
         }
+    }
+
+    /// The hint goes at once (not its handoff into the pill): the chip can show again.
+    private func hideSelectionHint() {
+        guard pillModel.selectionHint == .shown else { return }
+        selectionHintTask?.cancel()
+        pillModel.selectionHint = .hidden
     }
 
     /// The polish key where it can't polish (off Gemini, nothing selected): it says so over the pill for a moment, and
@@ -2664,12 +2672,14 @@ final class DictationController {
                       lifetime: .seconds(10), sound: .success)
     }
 
-    /// Another choice for this dictation: the pill's chip, and for the user's own pick a soft tick. Polish goes off
-    /// away from Gemini.
+    /// Another choice for this dictation: the pill's chip (in place of the selection's hint), and for the user's own
+    /// pick a soft tick. Polish goes off away from Gemini.
     private func switchModel(to choice: ModelChoice?, byUser: Bool = true) {
         modelOverride = choice
         if byUser { pickedModel = true }
         if isPolishing, effectiveChoice != .gemini { isPolishing = false }
+        // The chip names the new model: the selection's hint, still up from the press, makes way for it.
+        hideSelectionHint()
         pillModel.engineChipPulse &+= 1
         if pillModel.showsTabHint { pillModel.showsTabHint = false }
         if byUser { playCue(.modelSwitch) }

@@ -323,18 +323,25 @@ import Testing
         #expect(rig.h.settings.dictionary.words.isEmpty)
     }
 
-    /// A switch onto Gemini only takes Polish Selection away: the hint goes, so the chip can name the model. Back off
-    /// Gemini, Polish Selection is there again, and so is the hint.
-    @Test func switchingOntoGeminiLetsTheChipNameIt() async throws {
+    /// The hint shows once a press, as fn goes down: a switch of model hides it so the chip names the model, and it
+    /// doesn't come back, not even off Gemini, where Polish Selection is there again (its key still works).
+    @Test func aSwitchShowsTheChipAndTheHintStaysGone() async throws {
         let (rig, _) = Self.make()
         let c = rig.h.controller
         Switch.hold(rig)
         try await waitUntil { rig.h.pill.selectionHint == .shown }
         c.handle(.cycleEngine)
+        #expect(c.effectiveChoice != .parakeet && rig.h.pill.selectionHint == .hidden, "the chip, not the hint")
+        #expect(rig.h.pill.showsChip && rig.h.pill.keyHint == nil, "nothing stands in the chip's way")
         c.handle(.cycleEngine)
         #expect(c.effectiveChoice == .gemini && rig.h.pill.selectionHint == .hidden)
         c.handle(.cycleEngine)
-        #expect(c.effectiveChoice == .parakeet && rig.h.pill.selectionHint == .shown)
+        #expect(c.effectiveChoice == .parakeet && rig.h.pill.selectionHint == .hidden)
+        #expect(c.polishesSelection, "the polish key polishes the selection again")
+        c.send(.pillCancel)
+        // The next press shows it again.
+        Switch.hold(rig)
+        try await waitUntil { rig.h.pill.selectionHint == .shown }
         c.send(.pillCancel)
     }
 
