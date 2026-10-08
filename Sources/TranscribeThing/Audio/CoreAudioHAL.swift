@@ -76,6 +76,36 @@ enum CoreAudioHAL {
         return objectList(process, kAudioProcessPropertyDevices, scope: kAudioObjectPropertyScopeInput)
     }
 
+    /// A client of coreaudiod and the audio IO it is running right now, as the HAL reports it (macOS 14+).
+    struct ProcessRecord: Sendable, Equatable {
+        var objectID: AudioObjectID
+        var pid: pid_t
+        var bundleID: String?
+        var isRunningInput: Bool
+        var isRunningOutput: Bool
+        var inputDevices: [AudioDeviceID]
+        var outputDevices: [AudioDeviceID]
+    }
+
+    /// Every process connected to coreaudiod, whether or not it is doing IO.
+    static func processObjectIDs() -> [AudioObjectID] {
+        objectList(systemObject, kAudioHardwarePropertyProcessObjectList)
+    }
+
+    static func processRecord(_ id: AudioObjectID) -> ProcessRecord? {
+        var pid: pid_t = -1
+        guard read(id, kAudioProcessPropertyPID, into: &pid), pid > 0 else { return nil }
+        var input: UInt32 = 0
+        var output: UInt32 = 0
+        read(id, kAudioProcessPropertyIsRunningInput, into: &input)
+        read(id, kAudioProcessPropertyIsRunningOutput, into: &output)
+        let bundleID = string(id, kAudioProcessPropertyBundleID).flatMap { $0.isEmpty ? nil : $0 }
+        return ProcessRecord(
+            objectID: id, pid: pid, bundleID: bundleID, isRunningInput: input != 0, isRunningOutput: output != 0,
+            inputDevices: input != 0 ? objectList(id, kAudioProcessPropertyDevices, scope: kAudioObjectPropertyScopeInput) : [],
+            outputDevices: output != 0 ? objectList(id, kAudioProcessPropertyDevices, scope: kAudioObjectPropertyScopeOutput) : [])
+    }
+
     static func isAlive(_ id: AudioDeviceID) -> Bool {
         var alive: UInt32 = 0
         return read(id, kAudioDevicePropertyDeviceIsAlive, into: &alive) && alive != 0

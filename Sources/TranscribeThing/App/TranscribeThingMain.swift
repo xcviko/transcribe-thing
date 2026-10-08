@@ -19,6 +19,9 @@ public enum TranscribeThingMain {
             if EngineCLI.handles(arguments) {
                 EngineCLI.run(arguments)
             }
+            if AudioWatchCLI.handles(arguments) {
+                AudioWatchCLI.run(arguments)
+            }
             if UpdateCLI.handles(arguments) {
                 UpdateCLI.run(arguments)
             }
