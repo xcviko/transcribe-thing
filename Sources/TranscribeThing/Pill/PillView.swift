@@ -1694,31 +1694,38 @@ struct PillShortcutChips: View {
     }
 }
 
-/// The hint over the pill while text is selected, "[fn] [P] Polish · [fn] [D] Add to dictionary": what the selection
-/// can go to, each with its shortcut in full.
+/// The hint over the pill while text is selected: what the selection can go to, one line each, the shortcut in full
+/// in a column of its own and what it does beside it ("[fn] [P]  Polish" over "[fn] [D]  Add to dictionary"). A small
+/// dark card, so two lines read at a glance instead of one long capsule.
 struct PillSelectionHint: View {
     let model: PillModel
 
     var body: some View {
         let offer = model.selectionOffer
         let polish = model.settings.shortcuts[.polish], dictionary = model.settings.shortcuts[.addToDictionary]
-        PillChipCapsule {
+        Grid(alignment: .leading, horizontalSpacing: 7, verticalSpacing: 5) {
             if offer.polish {
-                PillShortcutChips(shortcut: polish, fallback: "P")
-                    .scaleEffect(0.9)
-                Text(offer.dictionary ? "Polish" : "Polish selection")
-                    .foregroundStyle(.white.opacity(0.8))
-            }
-            if offer.polish, offer.dictionary {
-                Text("·").foregroundStyle(.white.opacity(0.35))
+                GridRow {
+                    PillShortcutChips(shortcut: polish, fallback: "P")
+                        .gridColumnAlignment(.trailing)
+                    Text(offer.dictionary ? "Polish" : "Polish selection")
+                }
             }
             if offer.dictionary {
-                PillShortcutChips(shortcut: dictionary, fallback: "D")
-                    .scaleEffect(0.9)
-                Text("Add to dictionary")
-                    .foregroundStyle(.white.opacity(0.8))
+                GridRow {
+                    PillShortcutChips(shortcut: dictionary, fallback: "D")
+                        .gridColumnAlignment(.trailing)
+                    Text("Add to dictionary")
+                }
             }
         }
+        .font(.system(size: 10.5, weight: .semibold))
+        .foregroundStyle(.white.opacity(0.85))
+        .lineLimit(1)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
+        .background { PillHintCard() }
+        .environment(\.colorScheme, .dark)
         .fixedSize()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel(offer, polish: polish, dictionary: dictionary))
@@ -1730,6 +1737,16 @@ struct PillSelectionHint: View {
             offer.dictionary ? "\(dictionary?.spokenDescription ?? "D") to add it to your dictionary" : nil,
         ].compactMap { $0 }
         return "Text selected. Press " + parts.joined(separator: ", or ")
+    }
+}
+
+/// The selection hint's card: the chip's dark fill, hairline and shadow, on a rounded rectangle for its two lines.
+private struct PillHintCard: View {
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+        shape.fill(PillPalette.fill)
+            .overlay { shape.ring(1).fill(PillPalette.hairline, style: FillStyle(eoFill: true)) }
+            .shadow(color: .black.opacity(0.2), radius: 5, x: 0, y: 2)
     }
 }
 

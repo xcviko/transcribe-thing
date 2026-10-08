@@ -222,10 +222,12 @@ struct PillCanvasView: View {
             PillKeyHint(text: text)
                 .offset(y: -PillMetrics.chipLift)
         case .selection(let handoff):
-            // Handed off, it drops into the pill and dissolves while the pill becomes the polish.
+            // Its bottom a chip's gap over the pill, however many lines it has. Handed off, it drops into the pill
+            // and dissolves while the pill becomes the polish.
             PillSelectionHint(model: model)
                 .scaleEffect(handoff && !reduceMotion ? 0.6 : 1, anchor: .bottom)
-                .offset(y: handoff && !reduceMotion ? PillMetrics.chipGap : -PillMetrics.chipLift)
+                .offset(y: handoff && !reduceMotion ? PillMetrics.chipHeight : -PillMetrics.chipGap)
+                .frame(height: 0, alignment: .bottom)
                 .opacity(handoff ? 0 : 1)
         case .switchModel:
             PillSwitchHint(model: model)
