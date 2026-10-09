@@ -1694,28 +1694,28 @@ struct PillShortcutChips: View {
     }
 }
 
-/// The hint over the pill while text is selected: what the selection can go to, one line each, the shortcut in full
-/// in a column of its own and what it does beside it ("[fn] [P]  Polish" over "[fn] [D]  Add to dictionary"). A small
-/// dark card, so two lines read at a glance instead of one long capsule.
+/// The hint over the pill while text is selected: what the selection can go to, one line each, like a menu: what it
+/// does on the left and the shortcut in full against the right edge ("Polish  [fn] [P]" over "Add to dictionary
+/// [fn] [D]"). A small dark card, so two lines read at a glance instead of one long capsule.
 struct PillSelectionHint: View {
     let model: PillModel
 
     var body: some View {
         let offer = model.selectionOffer
         let polish = model.settings.shortcuts[.polish], dictionary = model.settings.shortcuts[.addToDictionary]
-        Grid(alignment: .leading, horizontalSpacing: 7, verticalSpacing: 5) {
+        Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 5) {
             if offer.polish {
                 GridRow {
+                    Text(offer.dictionary ? "Polish" : "Polish selection")
                     PillShortcutChips(shortcut: polish, fallback: "P")
                         .gridColumnAlignment(.trailing)
-                    Text(offer.dictionary ? "Polish" : "Polish selection")
                 }
             }
             if offer.dictionary {
                 GridRow {
+                    Text("Add to dictionary")
                     PillShortcutChips(shortcut: dictionary, fallback: "D")
                         .gridColumnAlignment(.trailing)
-                    Text("Add to dictionary")
                 }
             }
         }
