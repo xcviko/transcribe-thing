@@ -126,9 +126,6 @@ final class DictationController {
     /// The user picked this dictation's model (Switch model, the pill's menu), even if it's the main model again:
     /// hands-free then doesn't switch it to its own.
     @ObservationIgnored private var pickedModel = false
-    /// Text selected in the frontmost app as this dictation started (Polish Selection), found through Accessibility.
-    @ObservationIgnored private var selection: String?
-    @ObservationIgnored private var selectionTask: Task<Void, Never>?
     /// Counts recordings: keys held for a lookup belong to the recording they were pressed in.
     @ObservationIgnored private var recordingGeneration = 0
     /// A key took this press's recording over (fn D in push-to-talk, Polish Selection) and fn is still down: another
@@ -140,12 +137,6 @@ final class DictationController {
     /// waits with them (`heldRelease`), so what the press was is decided by its keys, not by when fn came up.
     @ObservationIgnored private var heldKeys: [(action: ShortcutAction, key: KeyStroke?)] = []
     @ObservationIgnored private var heldRelease: DictationMachine.Input?
-    /// What the selection can go to (it was there when the last hint went up): Polish Selection, the dictionary. The
-    /// hint itself hides after `PillTiming.chipHold`; the keys stay.
-    @ObservationIgnored private var selectionOffer = PillSelectionOffer()
-    @ObservationIgnored private var selectionHintTask: Task<Void, Never>?
-    /// The selection hint has had its moment in this press: it shows once, when the selection is first found.
-    @ObservationIgnored private var selectionHintShown = false
     /// Polish Selection under way: the pill shows it (the polish circle, then the count) until its card comes up.
     @ObservationIgnored private var selectionPolish: SelectionPolish?
     /// This dictation is polished (`Polish`, fn P while it's on Gemini). It lasts while the dictation records, as
@@ -477,9 +468,6 @@ final class DictationController {
         } else {
             execute(effects)
         }
-        if startsRecording, !input.isResume {
-            lookForSelection()
-        }
         if !machine.isRecording {
             pendingRefusal = nil
             // A tap (a double press's first, say) is no dictation: nothing to report.
@@ -490,8 +478,6 @@ final class DictationController {
             if modelOverride != nil { modelOverride = nil }
             pickedModel = false
             if isPolishing { isPolishing = false }
-            selectionTask?.cancel()
-            selection = nil
         }
         // A hold the main model refused isn't a start (`deferredRefusal`); hands-free taking it over is.
         if (!wasRecording || wasArming) && deferredRefusal == nil || startsAfterRefusal,
@@ -2215,29 +2201,6 @@ final class DictationController {
         settings.shortcuts[.addToDictionary].map { !$0.isModifierOnly } ?? false
     }
 
-    /// The selection is worth looking for: something can be done with it.
-    private var canLookForSelection: Bool {
-        canPolishSelection || canAddToDictionary
-    }
-
-    /// As a dictation starts: text selected in the frontmost app, read through Accessibility off the main thread (the
-    /// clipboard is never touched). Its hint shows once it's there.
-    private func lookForSelection() {
-        selectionTask?.cancel()
-        selection = nil
-        guard canLookForSelection else { return }
-        let override = selectionOverride
-        selectionTask = Task { [weak self] in
-            let text = if let override { await override() } else { await Self.lookUpSelection(when: "start").text }
-            guard let self, !Task.isCancelled else { return }
-            if self.machine.isRecording, let text {
-                DiagnosticLog.shared.event(.dictation, "selection.found", ["characters": text.count])
-                self.selection = text
-            }
-            self.stateDidChange()
-        }
-    }
-
     /// A key for the selection, decided by what's selected right when it's pressed (in a long hands-free dictation,
     /// not what was selected as it started; text selected after fn went down counts too). With text selected the key
     /// does its work on it (on Gemini, fn P is Polish's). With nothing selected fn D says to select a word first, and
@@ -2307,46 +2270,6 @@ final class DictationController {
             return false
         }
         return true
-    }
-
-    /// While there's a selection, the polish key polishes it off Gemini (on Gemini it's Polish's). The hint over
-    /// the pill says what the selection can go to for a moment, as the model chip does, once a press: when the
-    /// selection is found. After that a switch of model shows the chip, naming the model, and what the keys do follows
-    /// the model without a word. It comes without a sound.
-    private func updateSelectionHint() {
-        if !machine.isRecording { selectionHintShown = false }
-        let selected = selection != nil && machine.isRecording
-        let offer = PillSelectionOffer(polish: selected && effectiveChoice != .gemini && canPolishSelection,
-                                       dictionary: selected && canAddToDictionary
-                                           && UserDictionary.normalized(selection ?? "") != nil)
-        let previous = selectionOffer
-        guard offer != previous else { return }
-        selectionOffer = offer
-        let gains = offer.polish && !previous.polish || offer.dictionary && !previous.dictionary
-        guard pillModel.selectionHint != .handoff else { return }
-        guard gains, !selectionHintShown else {
-            if !gains { hideSelectionHint() }
-            return
-        }
-        selectionHintShown = true
-        selectionHintTask?.cancel()
-        if pillModel.selectionOffer != offer { pillModel.selectionOffer = offer }
-        pillModel.selectionHint = .shown
-        if pillModel.showsTabHint { pillModel.showsTabHint = false }
-        guard runsTimers else { return }
-        let hold = pillModel.timing.chipHold
-        selectionHintTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(hold))
-            guard !Task.isCancelled, let self, self.pillModel.selectionHint == .shown else { return }
-            self.pillModel.selectionHint = .hidden
-        }
-    }
-
-    /// The hint goes at once (not its handoff into the pill): the chip can show again.
-    private func hideSelectionHint() {
-        guard pillModel.selectionHint == .shown else { return }
-        selectionHintTask?.cancel()
-        pillModel.selectionHint = .hidden
     }
 
     /// The polish key where it can't polish (off Gemini, nothing selected): it says so over the pill for a moment, and
@@ -2430,18 +2353,11 @@ final class DictationController {
         return lookup
     }
 
-    /// Text is selected and the polish key would polish it (Polish Selection): the keys over it are live.
-    var polishesSelection: Bool { selectionOffer.polish }
-
-    /// The polish key over the hint: the dictation gives way without a trace (the cancel cue, then Polish's sound), the
-    /// hint drops into the pill as it turns into the polish, and the selection goes to Gemini 3.8 Flash
+    /// The polish key over selected text: the dictation gives way without a trace (the cancel cue, then Polish's sound),
+    /// the pill turns into the polish, and the selection goes to Gemini 3.8 Flash
     /// (`PolishSelectionModel.asked`). Its message comes up on a card, to paste over the selection or copy, and History
     /// keeps it.
     private func polishSelection(_ text: String) {
-        selectionTask?.cancel()
-        selectionHintTask?.cancel()
-        selection = nil
-        selectionOffer = PillSelectionOffer()
         settleSelection()
         let entries = history.entries
         let work = SelectionPolish(estimates: Dictionary(uniqueKeysWithValues: PolishSelectionModel.asked.map {
@@ -2449,8 +2365,7 @@ final class DictationController {
         }))
         selectionPolish = work
         DiagnosticLog.shared.event(.dictation, "selection.polish", ["characters": text.count])
-        pillModel.selectionHint = .handoff
-        // The chip would come back over the polish circle once the hint has gone, naming the dictation's model.
+        // The chip would come back over the polish, naming the dictation's model.
         pillModel.endChipFlash()
         playCue(.cancel)
         pressTakenByKey = true
@@ -2459,8 +2374,6 @@ final class DictationController {
             try? await Task.sleep(for: .milliseconds(110))
             // Not for a polish Esc has already stopped.
             if self?.selectionPolish === work, !work.settled { self?.playCue(.polishOn) }
-            try? await Task.sleep(for: .milliseconds(220))
-            if self?.pillModel.selectionHint == .handoff { self?.pillModel.selectionHint = .hidden }
         }
         let override = selectionPolishOverride
         let transcription = transcription
@@ -2612,8 +2525,7 @@ final class DictationController {
 
     /// The dictionary key over a selection: the selection goes into the dictionary (`UserDictionary`), and a card
     /// says what happened, with Undo. A push-to-talk hold was only the way to the key, so its dictation gives way
-    /// (kept for Undo only if something was said in it), the hint dropping into the pill; a hands-free dictation goes
-    /// on, fn's release included.
+    /// (kept for Undo only if something was said in it); a hands-free dictation goes on, fn's release included.
     private func addToDictionary(_ text: String) {
         let before = settings.dictionary
         let result = settings.dictionary.add(text)
@@ -2621,17 +2533,8 @@ final class DictationController {
             send(.keyUsed)
         } else {
             pressTakenByKey = true
-            selectionTask?.cancel()
-            selectionHintTask?.cancel()
-            selection = nil
-            selectionOffer = PillSelectionOffer()
-            pillModel.selectionHint = .handoff
             pillModel.endChipFlash()
             send(.discard)
-            Task { [weak self] in
-                try? await Task.sleep(for: .milliseconds(330))
-                if self?.pillModel.selectionHint == .handoff { self?.pillModel.selectionHint = .hidden }
-            }
         }
         switch result {
         case .added(let word, let replaced):
@@ -2687,14 +2590,12 @@ final class DictationController {
                       lifetime: .seconds(10), sound: .success)
     }
 
-    /// Another choice for this dictation: the pill's chip (in place of the selection's hint), and for the user's own
+    /// Another choice for this dictation: the pill's chip, and for the user's own
     /// pick a soft tick. Polish goes off away from Gemini.
     private func switchModel(to choice: ModelChoice?, byUser: Bool = true) {
         modelOverride = choice
         if byUser { pickedModel = true }
         if isPolishing, effectiveChoice != .gemini { isPolishing = false }
-        // The chip names the new model: the selection's hint, still up from the press, makes way for it.
-        hideSelectionHint()
         pillModel.engineChipPulse &+= 1
         if pillModel.showsTabHint { pillModel.showsTabHint = false }
         if byUser { playCue(.modelSwitch) }
@@ -2895,7 +2796,6 @@ final class DictationController {
         let returnFinishes = settings.returnFinishesHandsFree && machine.mode == .handsFree && machine.isRecording
             && !menuIsOpen
         if hotkeys.returnFinishes != returnFinishes { hotkeys.returnFinishes = returnFinishes }
-        updateSelectionHint()
         syncCardKeys()
         updateSwitchHint()
         let count = queue.count + (isDelivering ? 1 : 0)

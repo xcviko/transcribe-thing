@@ -67,10 +67,6 @@ final class PillModel {
     private(set) var isChipFlashing = false
     /// The Switch model discovery hint next to a long push-to-talk hold (its first few times).
     var showsTabHint = false
-    /// Polish Selection's hint over the pill: text is selected, and the polish key would polish it.
-    var selectionHint: PillSelectionHintState = .hidden
-    /// What the hint offers for the selected text.
-    var selectionOffer = PillSelectionOffer()
     /// A word over the pill about a key that did nothing where it was pressed ("Polish works on Gemini only"), for
     /// `timing.keyHintHold`. It takes the chip's place.
     private(set) var keyHint: String?
@@ -402,21 +398,6 @@ final class PillModel {
             body(self)
         }
     }
-}
-
-/// What the selected text can go to while dictating: Polish Selection (off Gemini, with a key that can pay) and the
-/// dictionary (on any model).
-struct PillSelectionOffer: Equatable, Sendable {
-    var polish = false
-    var dictionary = false
-
-    var isEmpty: Bool { !polish && !dictionary }
-}
-
-/// Polish Selection's hint over the recording pill. `handoff`: its key was pressed, so the hint drops into the pill
-/// and dissolves as the pill turns into the polish.
-enum PillSelectionHintState: Equatable, Sendable {
-    case hidden, shown, handoff
 }
 
 /// Buttons of the hands-free pill.

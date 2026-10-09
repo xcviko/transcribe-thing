@@ -79,12 +79,6 @@ struct PillCanvasView: View {
             && model.settings.shortcuts[.switchModel] != nil
     }
 
-    /// Polish Selection's hint over a recording with text selected, and as it drops into the pill.
-    private var showsSelectionHint: Bool {
-        model.isPresented && model.settings.showsPillHints && model.selectionHint != .hidden
-            && (model.visiblePhase.isRecording || model.selectionHint == .handoff)
-    }
-
     /// A word about a key that did nothing (`PillModel.keyHint`), over a dictation, while hints above the pill are on.
     private var showsKeyHint: Bool {
         model.isPresented && model.settings.showsPillHints && model.keyHint != nil && model.visiblePhase.isRecording
@@ -95,7 +89,7 @@ struct PillCanvasView: View {
         let chip = model.isPillAllowed && model.showsChip
             && (model.visiblePhase.isRecording || model.visiblePhase == .processing
                 || model.visiblePhase == .error && model.errorMessage != nil)
-        return model.isPresented && (chip || showsKeyHint || showsSelectionHint && model.visiblePhase.isRecording)
+        return model.isPresented && (chip || showsKeyHint)
     }
 
     /// The pill keeps its place under the toasts while it shows a dictation (or the hello); otherwise (at rest, hidden
@@ -169,7 +163,6 @@ struct PillCanvasView: View {
     private var hint: PillHint? {
         if showsRestTooltip { return .rest(hello: model.isHelloActive) }
         if showsKeyHint, let text = model.keyHint { return .key(text) }
-        if showsSelectionHint { return .selection(handoff: model.selectionHint == .handoff) }
         if showsSwitchHint { return .switchModel }
         return nil
     }
@@ -186,8 +179,6 @@ struct PillCanvasView: View {
                         .allowsHitTesting(false)
                 }
             }
-            .animation(reduceMotion ? .easeInOut(duration: 0.15) : .spring(duration: 0.3, bounce: 0.1),
-                       value: model.selectionHint)
             .padding(PillMetrics.hoverMargin)
             .contentShape(Rectangle())
             .onTapGesture {
@@ -221,14 +212,6 @@ struct PillCanvasView: View {
         case .key(let text):
             PillKeyHint(text: text)
                 .offset(y: -PillMetrics.chipLift)
-        case .selection(let handoff):
-            // Its bottom a chip's gap over the pill, however many lines it has. Handed off, it drops into the pill
-            // and dissolves while the pill becomes the polish.
-            PillSelectionHint(model: model)
-                .scaleEffect(handoff && !reduceMotion ? 0.6 : 1, anchor: .bottom)
-                .offset(y: handoff && !reduceMotion ? PillMetrics.chipHeight : -PillMetrics.chipGap)
-                .frame(height: 0, alignment: .bottom)
-                .opacity(handoff ? 0 : 1)
         case .switchModel:
             PillSwitchHint(model: model)
                 .offset(y: -PillMetrics.chipLift)
@@ -248,7 +231,5 @@ enum PillHint: Equatable {
     case rest(hello: Bool)
     /// A key that did nothing (`PillModel.keyHint`).
     case key(String)
-    /// Polish Selection's offer; `handoff`: dropping into the pill.
-    case selection(handoff: Bool)
     case switchModel
 }

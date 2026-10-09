@@ -263,16 +263,6 @@ import Testing
         rig.h.controller.handle(.heldForSelection(.addToDictionary, d))
     }
 
-    /// Holding the key over a selection offers both: Polish Selection and the dictionary.
-    @Test func theHintOffersBoth() async throws {
-        let (rig, _) = Self.make()
-        Switch.hold(rig)
-        try await waitUntil { rig.h.pill.selectionHint == .shown }
-        #expect(rig.h.pill.selectionOffer == PillSelectionOffer(polish: true, dictionary: true))
-        #expect(rig.h.controller.polishesSelection)
-        rig.h.controller.send(.pillCancel)
-    }
-
     /// fn D: the word goes in, the push-to-talk dictation goes without a trace, and a card says so with Undo.
     @Test func fnDAddsTheSelection() async throws {
         let (rig, _) = Self.make()
@@ -323,46 +313,19 @@ import Testing
         #expect(rig.h.settings.dictionary.words.isEmpty)
     }
 
-    /// The hint shows once a press, as fn goes down: a switch of model hides it so the chip names the model, and it
-    /// doesn't come back, not even off Gemini, where Polish Selection is there again (its key still works).
-    @Test func aSwitchShowsTheChipAndTheHintStaysGone() async throws {
-        let (rig, _) = Self.make()
-        let c = rig.h.controller
-        Switch.hold(rig)
-        try await waitUntil { rig.h.pill.selectionHint == .shown }
-        c.handle(.cycleEngine)
-        #expect(c.effectiveChoice != .parakeet && rig.h.pill.selectionHint == .hidden, "the chip, not the hint")
-        #expect(rig.h.pill.showsChip && rig.h.pill.keyHint == nil, "nothing stands in the chip's way")
-        c.handle(.cycleEngine)
-        #expect(c.effectiveChoice == .gemini && rig.h.pill.selectionHint == .hidden)
-        c.handle(.cycleEngine)
-        #expect(c.effectiveChoice == .parakeet && rig.h.pill.selectionHint == .hidden)
-        #expect(c.polishesSelection, "the polish key polishes the selection again")
-        c.send(.pillCancel)
-        // The next press shows it again.
-        Switch.hold(rig)
-        try await waitUntil { rig.h.pill.selectionHint == .shown }
-        c.send(.pillCancel)
-    }
-
     /// On Gemini fn P is Polish's, but fn D still adds.
     @Test func fnDWorksOnGemini() async throws {
         let (rig, _) = Self.make()
         rig.h.settings.lineup.main = .gemini
         Switch.hold(rig)
-        try await waitUntil { rig.h.pill.selectionHint == .shown }
-        #expect(rig.h.pill.selectionOffer == PillSelectionOffer(polish: false, dictionary: true))
         Self.pressD(rig)
         try await waitUntil { rig.h.settings.dictionary.words == ["Wispr Flow"] }
     }
 
-    /// Without an OpenRouter key Polish Selection isn't offered, but the dictionary is.
+    /// Without an OpenRouter key there is no Polish Selection, but fn D still adds.
     @Test func fnDWorksWithoutAKey() async throws {
         let (rig, _) = Self.make(key: .missing)
         Switch.hold(rig)
-        try await waitUntil { rig.h.pill.selectionHint == .shown }
-        #expect(rig.h.pill.selectionOffer == PillSelectionOffer(polish: false, dictionary: true))
-        #expect(!rig.h.controller.polishesSelection)
         Self.pressD(rig)
         try await waitUntil { rig.h.settings.dictionary.words == ["Wispr Flow"] }
     }
@@ -374,7 +337,7 @@ import Testing
         var current = "start of the dictation"
         rig.h.controller.selectionOverride = { current }
         rig.h.controller.send(.handsFreeToggle)
-        try await waitUntil { rig.h.pill.selectionHint == .shown }
+        try await waitUntil { rig.h.controller.machine.isRecording }
         current = "Kubernetes"
         Self.pressD(rig)
         try await waitUntil { rig.h.settings.dictionary.words == ["Kubernetes"] }
@@ -456,15 +419,6 @@ import Testing
         Self.pressD(rig)
         try await waitUntil { rig.h.settings.dictionary.words == ["Wispr Flow"] }
         #expect(rig.notice("dictation.canceled") != nil && rig.transcribed.isEmpty)
-    }
-
-    /// The hint offers the dictionary only for what could go in.
-    @Test func aParagraphIsntOfferedToTheDictionary() async throws {
-        let (rig, _) = Self.make(selection: "First line.\nSecond line.")
-        Switch.hold(rig)
-        try await waitUntil { rig.h.pill.selectionHint == .shown }
-        #expect(rig.h.pill.selectionOffer == PillSelectionOffer(polish: true, dictionary: false))
-        rig.h.controller.send(.pillCancel)
     }
 
     /// Nothing selected right then: no "d" lands in the app; the pill says to select a word, and the dictation goes on.

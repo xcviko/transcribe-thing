@@ -93,17 +93,7 @@ enum PillSnapshots {
             SnapshotEntry("pill-models-hint", width: 640, height: 150) { _ in
                 CanvasScene(model: hintModel(), notices: [])
             },
-            // Polish Selection (`--only pill-selection`): the hint over a hold with text selected, the polish while
-            // the models write, and the cards.
-            SnapshotEntry("pill-selection-hint", width: 640, height: 150) { _ in
-                CanvasScene(model: selectionModel(.listening), notices: [])
-            },
-            // On Gemini fn P is Polish's: only the dictionary is offered.
-            SnapshotEntry("pill-selection-hint-gemini", width: 640, height: 150) { _ in
-                CanvasScene(model: selectionModel(.listening, choice: .gemini,
-                                                  offer: PillSelectionOffer(polish: false, dictionary: true)),
-                            notices: [])
-            },
+            // Polish Selection (`--only pill-selection`): the polish while the models write, and the cards.
             SnapshotEntry("pill-dictionary-added", width: 640, height: 260) { _ in
                 CanvasScene(model: restModel(), notices: [DictationController.dictionaryCard(added: "Wispr Flow", before: UserDictionary(), after: UserDictionary(words: ["Wispr Flow"]))])
             },
@@ -214,19 +204,11 @@ enum PillSnapshots {
         return model
     }
 
-    /// Polish Selection: a hold over selected text with its hint, or the polish being written by `choice`'s model.
-    @MainActor private static func selectionModel(_ phase: PillPhase, choice: ModelChoice = .parakeet,
-                                                  offer: PillSelectionOffer = PillSelectionOffer(polish: true,
-                                                                                                 dictionary: true))
-        -> PillModel {
+    /// Polish Selection: the polish being written by `choice`'s model.
+    @MainActor private static func selectionModel(_ phase: PillPhase, choice: ModelChoice = .parakeet) -> PillModel {
         let model = PillModelSheet.model(phase, choice: choice, level: 0.7, chip: false)
-        if phase.isRecording {
-            model.selectionOffer = offer
-            model.selectionHint = .shown
-        } else {
-            model.polishes = true
-            model.selectionPolishing = true
-        }
+        model.polishes = true
+        model.selectionPolishing = true
         return model
     }
 

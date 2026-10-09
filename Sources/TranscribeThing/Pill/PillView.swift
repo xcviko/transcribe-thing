@@ -800,7 +800,7 @@ struct PillFace: View {
     /// What the chip names while it's up (`PillModel.showsChip`): the dictation's model. Content shrinking away
     /// keeps its own choice's chip.
     private var chipChoice: ModelChoice? {
-        carriesModel && model.showsChip && model.selectionHint == .hidden && model.keyHint == nil ? choice : nil
+        carriesModel && model.showsChip && model.keyHint == nil ? choice : nil
     }
 
     /// What the content's layer draws: `content`, laid out on the capsule when it's the capsule's own, shrinking into
@@ -1691,62 +1691,6 @@ struct PillShortcutChips: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(shortcut?.spokenDescription ?? fallback)
-    }
-}
-
-/// The hint over the pill while text is selected: what the selection can go to, one line each, like a menu: what it
-/// does on the left and the shortcut in full against the right edge ("Polish  [fn] [P]" over "Add to dictionary
-/// [fn] [D]"). A small dark card, so two lines read at a glance instead of one long capsule.
-struct PillSelectionHint: View {
-    let model: PillModel
-
-    var body: some View {
-        let offer = model.selectionOffer
-        let polish = model.settings.shortcuts[.polish], dictionary = model.settings.shortcuts[.addToDictionary]
-        Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 5) {
-            if offer.polish {
-                GridRow {
-                    Text(offer.dictionary ? "Polish" : "Polish selection")
-                    PillShortcutChips(shortcut: polish, fallback: "P")
-                        .gridColumnAlignment(.trailing)
-                }
-            }
-            if offer.dictionary {
-                GridRow {
-                    Text("Add to dictionary")
-                    PillShortcutChips(shortcut: dictionary, fallback: "D")
-                        .gridColumnAlignment(.trailing)
-                }
-            }
-        }
-        .font(.system(size: 10.5, weight: .semibold))
-        .foregroundStyle(.white.opacity(0.85))
-        .lineLimit(1)
-        .padding(.horizontal, 9)
-        .padding(.vertical, 7)
-        .background { PillHintCard() }
-        .environment(\.colorScheme, .dark)
-        .fixedSize()
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(accessibilityLabel(offer, polish: polish, dictionary: dictionary))
-    }
-
-    private func accessibilityLabel(_ offer: PillSelectionOffer, polish: Shortcut?, dictionary: Shortcut?) -> String {
-        let parts = [
-            offer.polish ? "\(polish?.spokenDescription ?? "P") to polish it" : nil,
-            offer.dictionary ? "\(dictionary?.spokenDescription ?? "D") to add it to your dictionary" : nil,
-        ].compactMap { $0 }
-        return "Text selected. Press " + parts.joined(separator: ", or ")
-    }
-}
-
-/// The selection hint's card: the chip's dark fill, hairline and shadow, on a rounded rectangle for its two lines.
-private struct PillHintCard: View {
-    var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
-        shape.fill(PillPalette.fill)
-            .overlay { shape.ring(1).fill(PillPalette.hairline, style: FillStyle(eoFill: true)) }
-            .shadow(color: .black.opacity(0.2), radius: 5, x: 0, y: 2)
     }
 }
 

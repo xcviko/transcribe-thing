@@ -1045,14 +1045,14 @@ import Testing
         c.handle(.cancel)
     }
 
-    /// The selection's keys work without their hint.
-    @Test func theSelectionsKeysWorkWithoutTheHint() async throws {
+    /// The selection's keys work with the hints above the pill off.
+    @Test func theSelectionsKeysWorkWithHintsOff() async throws {
         let (rig, _) = SwitchModelControllerTests.make()
         rig.h.controller.start()
         rig.h.settings.showsPillHints = false
         rig.h.controller.selectionOverride = { "Wispr" }
         SwitchModelControllerTests.hold(rig)
-        try await waitUntil { rig.h.controller.polishesSelection }
+        try await waitUntil { rig.h.controller.machine.isRecording }
         rig.h.controller.handle(.heldForSelection(.addToDictionary, AddToDictionaryTests.d))
         try await waitUntil { rig.h.settings.dictionary.words == ["Wispr"] }
     }
