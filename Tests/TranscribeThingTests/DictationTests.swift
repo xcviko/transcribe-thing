@@ -941,10 +941,67 @@ final class FakeRecorder: DictationRecorder {
         #expect(pastedLast == ["Hello", "Hello. "])
 
         let card = try #require(h.toasts.notices.first { $0.transcript == "Hello." })
-        #expect(card.actions.first?.kind == .pasteText("Hello.", by: .gemini))
+        #expect(card.actions.first?.kind == .pasteText("Hello.", by: .gemini, in: .pushToTalk))
         h.controller.perform(try #require(card.actions.first), from: card)
         try await waitUntil { !pastedHere.isEmpty }
         #expect(pastedHere == ["Hello. "])
+    }
+
+    /// Pasting's rules go by how the text was dictated too: a hands-free dictation pastes by the hands-free ones, and
+    /// so do its Paste Last, its card's Paste Here and the Retry of one that failed.
+    @Test func pastingFollowsHowTheTextWasDictated() async throws {
+        let h = Self.make()
+        h.settings.modelsAddingSpace = [.parakeet]
+        h.settings.modesAddingSpace = [.pushToTalk]
+        h.settings.modelsRemovingFinalPeriod = [.parakeet]
+        h.settings.modesRemovingFinalPeriod = [.handsFree]
+        var transcriptionFails = false
+        h.controller.transcribeOverride = { _, engine in
+            if transcriptionFails { throw AppError.timeout(engine) }
+            return TranscriptResult(text: "Hello.", engine: engine, processingTime: 0.1)
+        }
+        var pasted: [String] = []
+        var pasteFails = false
+        h.controller.insertOverride = { text in pasted.append(text); return pasteFails ? .failed("no ⌘V") : .pasted }
+        var pastedLast: [String] = []
+        h.controller.pasteLastOverride = { pastedLast.append($0); return .pasted }
+        var pastedHere: [String] = []
+        h.controller.pasteNowOverride = { pastedHere.append($0); return .pasted }
+
+        h.controller.send(.handsFreeToggle)
+        h.controller.send(.pillStop)
+        try await waitUntil { pasted.count == 1 }
+        #expect(pasted == ["Hello"], "hands-free: no period, no space")
+        #expect(h.history.entries.first?.mode == .handsFree)
+        h.controller.pasteLast()
+        try await waitUntil { pastedLast.count == 1 }
+        #expect(pastedLast == ["Hello"])
+
+        h.controller.enqueue(Self.recording(), engine: .parakeet)
+        try await waitUntil { pasted.count == 2 }
+        #expect(pasted.last == "Hello. ", "held: the period stays, and a space goes after")
+
+        pasteFails = true
+        h.controller.send(.handsFreeToggle)
+        h.controller.send(.pillStop)
+        try await waitUntil { pasted.count == 3 && h.controller.machine.activeJobs == 0 }
+        let card = try #require(h.toasts.notices.first { $0.title == "Couldn’t paste" })
+        h.controller.perform(try #require(card.actions.first { $0.title == "Paste Here" }), from: card)
+        try await waitUntil { !pastedHere.isEmpty }
+        #expect(pastedHere == ["Hello"])
+
+        pasteFails = false
+        transcriptionFails = true
+        h.controller.send(.handsFreeToggle)
+        h.controller.send(.pillStop)
+        try await waitUntil {
+            h.controller.machine.activeJobs == 0 && h.toasts.notices.contains { $0.actions.contains { $0.kind == .retry } }
+        }
+        let failed = try #require(h.toasts.notices.first { $0.actions.contains { $0.kind == .retry } })
+        transcriptionFails = false
+        h.controller.perform(try #require(failed.actions.first { $0.kind == .retry }), from: failed)
+        try await waitUntil { pasted.count == 4 }
+        #expect(pasted.last == "Hello")
     }
 
     @Test func aFailureInTheMiddleDoesntBlockTheQueue() async throws {
@@ -1052,7 +1109,7 @@ final class FakeRecorder: DictationRecorder {
         try await waitUntil { h.controller.machine.activeJobs == 0 }
         let card = try #require(h.toasts.notices.first { $0.transcript != nil })
         #expect(card.transcript == "Hello there")
-        #expect(card.actions.map(\.kind) == [.pasteText("Hello there", by: .parakeet), .copyText("Hello there")])
+        #expect(card.actions.map(\.kind) == [.pasteText("Hello there", by: .parakeet, in: .pushToTalk), .copyText("Hello there")])
         #expect(h.history.entries.first?.text == "Hello there")
     }
 
@@ -1772,7 +1829,7 @@ final class FakeRecorder: DictationRecorder {
         let card = try #require(h.toasts.notices.first)
         #expect(card.title == title)
         #expect(card.transcript == "last words")
-        #expect(card.actions.contains { $0.kind == .pasteText("last words", by: .parakeet) } == offersPasteHere)
+        #expect(card.actions.contains { $0.kind == .pasteText("last words", by: .parakeet, in: .pushToTalk) } == offersPasteHere)
         h.controller.perform(try #require(card.actions.first { $0.kind == .copyText("last words") }), from: card)
         #expect(copied == ["last words"])
     }
@@ -1814,14 +1871,14 @@ final class FakeRecorder: DictationRecorder {
         h.controller.enqueue(Self.recording(), engine: .parakeet)
         try await waitUntil { h.controller.machine.activeJobs == 0 }
         let card = try #require(h.toasts.notices.first { $0.transcript == "Hello there" })
-        let pasteHere = try #require(card.actions.first { $0.kind == .pasteText("Hello there", by: .parakeet) })
+        let pasteHere = try #require(card.actions.first { $0.kind == .pasteText("Hello there", by: .parakeet, in: .pushToTalk) })
 
         h.controller.pasteNowOverride = { _ in .failed("no event source") }
         h.controller.perform(pasteHere, from: card)
         try await waitUntil { h.toasts.notices.contains { $0.transcript == "Hello there" && $0.id != card.id } }
 
         let again = try #require(h.toasts.notices.first { $0.transcript == "Hello there" })
-        let retry = try #require(again.actions.first { $0.kind == .pasteText("Hello there", by: .parakeet) })
+        let retry = try #require(again.actions.first { $0.kind == .pasteText("Hello there", by: .parakeet, in: .pushToTalk) })
         h.controller.pasteNowOverride = { _ in .accessibilityMissing }
         h.controller.perform(retry, from: again)
         try await waitUntil { h.toasts.notices.contains { $0.dedupeKey == "error.accessibilityMissing" } }

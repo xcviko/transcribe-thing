@@ -279,8 +279,8 @@ struct ModelToggleChips: View {
         HStack(spacing: 6) {
             ForEach(order) { choice in
                 let isOn = selection.contains(choice)
-                ModelToggleChip(title: choice.shortName, symbol: choice.symbolName(parakeet: parakeet), rule: rule,
-                                isOn: isOn) {
+                RuleToggleChip(title: choice.shortName, symbol: choice.symbolName(parakeet: parakeet), rule: rule,
+                               isOn: isOn) {
                     withAnimation(Theme.Motion.snappy) {
                         if isOn { selection.remove(choice) } else { selection.insert(choice) }
                     }
@@ -293,7 +293,48 @@ struct ModelToggleChips: View {
     }
 }
 
-private struct ModelToggleChip: View {
+/// The dictations a General → Pasting rule holds for, beside its models: held, hands-free, or both. A chip each,
+/// switched on and off like the models'.
+struct ModeToggleChips: View {
+    @Binding var selection: Set<DictationMachine.Mode>
+    /// What the chips switch, which each chip's VoiceOver label names after the mode.
+    var rule: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(DictationMachine.Mode.allCases, id: \.self) { mode in
+                let isOn = selection.contains(mode)
+                RuleToggleChip(title: mode.chipTitle, symbol: mode.action.symbolName, rule: rule, isOn: isOn) {
+                    withAnimation(Theme.Motion.snappy) {
+                        if isOn { selection.remove(mode) } else { selection.insert(mode) }
+                    }
+                }
+                .help(mode.action.title)
+            }
+        }
+        .fixedSize()
+        .accessibilityElement(children: .contain)
+    }
+}
+
+private extension DictationMachine.Mode {
+    /// The shortcut that starts a dictation this way: its symbol and, as the chip's help, its name.
+    var action: ShortcutAction {
+        switch self {
+        case .pushToTalk: .pushToTalk
+        case .handsFree: .handsFree
+        }
+    }
+
+    var chipTitle: String {
+        switch self {
+        case .pushToTalk: "Hold"
+        case .handsFree: "Hands-free"
+        }
+    }
+}
+
+private struct RuleToggleChip: View {
     var title: String
     var symbol: String
     var rule: String

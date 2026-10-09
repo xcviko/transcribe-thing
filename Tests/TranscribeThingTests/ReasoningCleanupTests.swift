@@ -524,7 +524,7 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         #expect(entry.versions.map(\.kind) == [.transcription(.parakeet)])
         let card = try #require(h.toasts.notices.first { $0.transcript == "raw text" })
         #expect(card.title == "Clean-up canceled")
-        #expect(card.actions.map(\.kind) == [.pasteText("raw text", by: .parakeet), .copyText("raw text")])
+        #expect(card.actions.map(\.kind) == [.pasteText("raw text", by: .parakeet, in: .pushToTalk), .copyText("raw text")])
         #expect(!h.toasts.notices.contains { $0.dedupeKey == "dictation.canceled" })
         try await Task.sleep(for: .milliseconds(50))
         #expect(h.history.entry(id: r.id)?.versions.count == 1)

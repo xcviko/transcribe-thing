@@ -186,6 +186,8 @@ final class DictationController {
     @ObservationIgnored private var cleanupIDs: Set<UUID> = []
     /// Kept recordings of polished dictations (canceled or failed): Undo and Retry polish them again.
     @ObservationIgnored private var polishIDs: Set<UUID> = []
+    /// How the recording under way is dictated, still set once it's over: a canceled one goes to History with it.
+    @ObservationIgnored private var recordingMode: DictationMachine.Mode = .pushToTalk
     @ObservationIgnored private var switchHintTask: Task<Void, Never>?
     /// The push-to-talk hold (its key-down time) the hint timer runs for.
     @ObservationIgnored private var switchHintHold: TimeInterval?
@@ -421,6 +423,7 @@ final class DictationController {
         let wasIdle = machine.capture == .idle
         let wasHandsFree = machine.mode == .handsFree
         let wasRecording = machine.isRecording
+        if let mode = machine.mode { recordingMode = mode }
         let effects = machine.handle(input, now: clock())
         let startsRecording = !wasRecording && machine.isRecording
         if startsRecording {
@@ -546,9 +549,10 @@ final class DictationController {
                 // (no lock sound or pill for a session that never started).
                 execute(machine.handle(.captureFailed(failure), now: clock()))
                 return
-            case .stopCaptureAndTranscribe:
+            case .stopCaptureAndTranscribe(let mode):
                 // A vanished device has no tail worth waiting for.
-                finishCapture(tail: effects.contains(.notice(.deviceLostTranscribing)) ? 0 : AudioRecorder.stopTail)
+                finishCapture(tail: effects.contains(.notice(.deviceLostTranscribing)) ? 0 : AudioRecorder.stopTail,
+                              mode: mode)
             case .cancelCapture(let keepForUndo, let notify):
                 cancelCapture(keepForUndo: keepForUndo, notify: notify)
             case .discardCapture:
@@ -659,13 +663,14 @@ final class DictationController {
     }
 
     /// Queues the job right away (FIFO order is decided at release), then waits for the recorder's tail.
-    private func finishCapture(tail: TimeInterval) {
+    private func finishCapture(tail: TimeInterval, mode: DictationMachine.Mode) {
         let resumedID = continuing?.id
         continuing = nil
         guard captureDevice.isCapturing else { return }
         // A resumed dictation keeps the canceled recording's id, already while its tail is captured.
         let job = Job(recording: nil, engine: effectiveEngine, id: resumedID)
         job.cleansUp = effectiveChoice.cleansUp
+        job.mode = mode
         // The main model may have changed under it (Models, a notice's "Use Parakeet v3"): only Gemini polishes.
         job.polishes = isPolishing && effectiveChoice == .gemini
         queue.append(job)
@@ -683,7 +688,8 @@ final class DictationController {
     private func captured(_ recording: Recording, for job: Job) {
         if job.isCancelled {
             // Esc during the tail: the job already left the queue and the cancel cue has played.
-            keepCancelled(recording, engine: job.engine, cleansUp: job.cleansUp, polishes: job.polishes, notify: true)
+            keepCancelled(recording, engine: job.engine, mode: job.mode, cleansUp: job.cleansUp, polishes: job.polishes,
+                          notify: true)
             return
         }
         // A new recording may already be running (re-pressed during the tail): keep the cue out of it.
@@ -741,18 +747,18 @@ final class DictationController {
             DiagnosticLog.shared.event(.dictation, "dictation.canceled",
                                        ["seconds": recording?.duration, "voiced": recording?.speech.voicedSeconds])
             guard let recording else { return }
-            keepCancelled(recording, engine: effectiveEngine, cleansUp: effectiveChoice.cleansUp,
+            keepCancelled(recording, engine: effectiveEngine, mode: recordingMode, cleansUp: effectiveChoice.cleansUp,
                           polishes: isPolishing, notify: notify)
         } else if let resumed {
             // A resumed dictation whose mic failed: its audio (the kept part at least) stays for another Undo.
-            keepCancelled(recording ?? resumed, engine: effectiveEngine, cleansUp: effectiveChoice.cleansUp,
-                          polishes: isPolishing, notify: true)
+            keepCancelled(recording ?? resumed, engine: effectiveEngine, mode: recordingMode,
+                          cleansUp: effectiveChoice.cleansUp, polishes: isPolishing, notify: true)
         }
     }
 
     /// Keeps a canceled recording for Undo (and in history when it's long).
-    private func keepCancelled(_ recording: Recording, engine: EngineID, cleansUp: Bool = false,
-                               polishes: Bool = false, notify: Bool) {
+    private func keepCancelled(_ recording: Recording, engine: EngineID, mode: DictationMachine.Mode,
+                               cleansUp: Bool = false, polishes: Bool = false, notify: Bool) {
         guard recording.duration >= Self.undoMinimumDuration else { return }
         retain(recording)
         cancelledEngines[recording.id] = engine
@@ -764,7 +770,7 @@ final class DictationController {
             history.upsert(TranscriptEntry(
                 id: recording.id, createdAt: recording.startedAt, text: "", engine: engine,
                 status: .cancelled, audioDuration: recording.duration, voicedSeconds: recording.speech.voicedSeconds,
-                audioFileName: file))
+                mode: mode, audioFileName: file))
         }
         guard notify else { return }
         postCanceled(recording)
@@ -879,6 +885,8 @@ final class DictationController {
         var cleansUp = false
         /// A polished dictation (`Polish`): its audio goes to Gemini with Polish's prompt.
         var polishes = false
+        /// Held or hands-free: its paste follows General → Pasting's rules for that.
+        var mode: DictationMachine.Mode = .pushToTalk
         /// Its text is with the clean-up model now: the transcription itself is done.
         var isCleaningUp: Bool { uncleaned != nil }
         /// The finished transcript being cleaned up, kept should the clean-up be canceled.
@@ -909,11 +917,13 @@ final class DictationController {
     /// Starts transcribing right away; the result is pasted at the cursor after every older job's. A
     /// recording that is already queued, being delivered, being recorded on or worked on from Home is never queued
     /// twice.
-    /// `cleansUp`: a dictation on clean-up, picked up again; `polishes`: a polished one.
-    func enqueue(_ recording: Recording, engine: EngineID, cleansUp: Bool = false, polishes: Bool = false) {
+    /// `cleansUp`: a dictation on clean-up, picked up again; `polishes`: a polished one; `mode`: how it was dictated.
+    func enqueue(_ recording: Recording, engine: EngineID, cleansUp: Bool = false, polishes: Bool = false,
+                 mode: DictationMachine.Mode = .pushToTalk) {
         guard !isInFlight(recording.id) else { return }
         let job = Job(recording: recording, engine: engine)
         job.cleansUp = cleansUp
+        job.mode = mode
         job.polishes = polishes && engine == .geminiFlash
         queue.append(job)
         _ = machine.handle(.jobStarted, now: clock())
@@ -1154,7 +1164,8 @@ final class DictationController {
         if let recording = job.recording, let uncleaned = job.uncleaned, job.outcome == nil {
             keepUncleaned(job, recording, uncleaned)
         } else if let recording = job.recording {
-            keepCancelled(recording, engine: job.engine, cleansUp: job.cleansUp, polishes: job.polishes, notify: true)
+            keepCancelled(recording, engine: job.engine, mode: job.mode, cleansUp: job.cleansUp, polishes: job.polishes,
+                          notify: true)
         }
         drain()
         return true
@@ -1169,10 +1180,10 @@ final class DictationController {
         let version = result.version(text: text)
         history.upsert(TranscriptEntry(
             id: job.id, createdAt: recording.startedAt, engine: result.engine, status: .success,
-            audioDuration: recording.duration, voicedSeconds: recording.speech.voicedSeconds,
+            audioDuration: recording.duration, voicedSeconds: recording.speech.voicedSeconds, mode: job.mode,
             audioFileName: history.saveAudio(recording), versions: [version]))
         resolveGeneration(of: version, entryID: job.id)
-        toasts.post(transcriptCard(text, by: version.kind.dictationModel, title: "Clean-up canceled",
+        toasts.post(transcriptCard(text, by: version.kind.dictationModel, in: job.mode, title: "Clean-up canceled",
                                    body: "The original is in History. Paste it here, or copy it.", pasteHere: true))
     }
 
@@ -1220,14 +1231,14 @@ final class DictationController {
             // a failed or canceled row had it: an Undo-resumed dictation's file holds only the part before the cancel.
             history.upsert(TranscriptEntry(
                 id: job.id, createdAt: recording.startedAt, engine: result.engine, status: .success,
-                audioDuration: recording.duration, voicedSeconds: recording.speech.voicedSeconds,
+                audioDuration: recording.duration, voicedSeconds: recording.speech.voicedSeconds, mode: job.mode,
                 audioFileName: history.saveAudio(recording), versions: versions))
             for version in versions { resolveGeneration(of: version, entryID: job.id) }
-            // Only what is pasted follows General → Pasting, by the model that wrote it: History, the cards and Copy
-            // keep the text as it came.
+            // Only what is pasted follows General → Pasting, by the model that wrote it and how it was dictated:
+            // History, the cards and Copy keep the text as it came.
             let model = deliveredKind.dictationModel
-            let insertion = await insert(pasted(delivered, by: model))
-            handleInsertion(insertion, text: delivered, by: model, isDictation: true)
+            let insertion = await insert(pasted(delivered, by: model, in: job.mode))
+            handleInsertion(insertion, text: delivered, by: model, in: job.mode, isDictation: true)
             if cleanupFailed { postCleanupFallback(error: cleanupError, model: cleanupModel) }
         }
     }
@@ -1328,7 +1339,8 @@ final class DictationController {
         history.upsert(TranscriptEntry(
             id: job.id, createdAt: recording.startedAt, text: "", engine: job.engine, status: .failed,
             audioDuration: recording.duration, voicedSeconds: recording.speech.voicedSeconds,
-            errorMessage: notice.title, audioFileName: file ?? history.entry(id: job.id)?.audioFileName))
+            errorMessage: notice.title, mode: job.mode,
+            audioFileName: file ?? history.entry(id: job.id)?.audioFileName))
         Log.engine.error("Transcription failed: \(error.code, privacy: .public)")
         postFailure(notice)
         flashError()
@@ -1345,19 +1357,20 @@ final class DictationController {
         if let copyOverride { copyOverride(text) } else { inserter.copy(text) }
     }
 
-    /// `text` as the app pastes it, by General → Pasting's rules for `model`, the one that wrote it: a space after it,
-    /// no final period (`PastedText`). Polish Selection's (nil) goes as written: it takes the selection's place.
-    private func pasted(_ text: String, by model: ModelChoice?) -> String {
+    /// `text` as the app pastes it, by General → Pasting's rules for `model`, the one that wrote it, in a dictation of
+    /// `mode`: a space after it, no final period (`PastedText`). Polish Selection's (nil) goes as written: it takes
+    /// the selection's place.
+    private func pasted(_ text: String, by model: ModelChoice?, in mode: DictationMachine.Mode) -> String {
         guard let model else { return text }
-        return PastedText.prepare(text, addsSpace: settings.modelsAddingSpace.contains(model),
-                                  removesFinalPeriod: settings.modelsRemovingFinalPeriod.contains(model))
+        return PastedText.prepare(text, addsSpace: settings.addsSpace(by: model, in: mode),
+                                  removesFinalPeriod: settings.removesFinalPeriod(by: model, in: mode))
     }
 
     /// `isDictation`: a dictation's own delivery, not paste-last or a toast's Paste Here. The pasted text is the
     /// confirmation; the pill just goes back to rest. `quiet`: a card's Paste Here, which pastes without a sound.
-    /// `model` wrote `text`: a card's Paste Here follows its rules.
-    private func handleInsertion(_ outcome: InsertionOutcome, text: String, by model: ModelChoice?, isDictation: Bool,
-                                 quiet: Bool = false) {
+    /// `model` wrote `text` in a dictation of `mode`: a card's Paste Here follows their rules.
+    private func handleInsertion(_ outcome: InsertionOutcome, text: String, by model: ModelChoice?,
+                                 in mode: DictationMachine.Mode, isDictation: Bool, quiet: Bool = false) {
         Log.app.notice("Insertion outcome: \(String(describing: outcome), privacy: .public)")
         DiagnosticLog.shared.event(.dictation, "paste", ["outcome": outcome, "dictation": isDictation])
         switch outcome {
@@ -1366,7 +1379,7 @@ final class DictationController {
             if !quiet, !machine.isRecording { sounds.play(.paste) }
             if isDictation { onDictationDelivered?() }
         case .passwordField:
-            toasts.post(transcriptCard(text, by: model, title: "Not pasted into a password field",
+            toasts.post(transcriptCard(text, by: model, in: mode, title: "Not pasted into a password field",
                                        body: "Dictated text never goes into one.", pasteHere: false))
         case .accessibilityMissing:
             // Nothing goes on the clipboard unasked: the card holds the text until the user copies it.
@@ -1377,16 +1390,17 @@ final class DictationController {
             toasts.post(notice)
         case .failed(let reason):
             Log.app.error("Paste failed: \(reason, privacy: .public)")
-            toasts.post(transcriptCard(text, by: model, title: "Couldn’t paste", body: "Copy it, or try pasting again.",
-                                       pasteHere: true))
+            toasts.post(transcriptCard(text, by: model, in: mode, title: "Couldn’t paste",
+                                       body: "Copy it, or try pasting again.", pasteHere: true))
         }
     }
 
-    private func transcriptCard(_ text: String, by model: ModelChoice?, title: String, body: String,
-                                pasteHere: Bool) -> Notice {
+    private func transcriptCard(_ text: String, by model: ModelChoice?, in mode: DictationMachine.Mode, title: String,
+                                body: String, pasteHere: Bool) -> Notice {
         var actions: [NoticeAction] = []
         if pasteHere {
-            actions.append(NoticeAction(title: "Paste Here", kind: .pasteText(text, by: model), isPrimary: true))
+            actions.append(NoticeAction(title: "Paste Here", kind: .pasteText(text, by: model, in: mode),
+                                        isPrimary: true))
         }
         actions.append(NoticeAction(title: "Copy", kind: .copyText(text), isPrimary: !pasteHere))
         return Notice(dedupeKey: "transcript.\(text.hashValue)", style: .info, symbol: "doc.on.clipboard",
@@ -1409,17 +1423,17 @@ final class DictationController {
                                title: "Nothing to paste yet", lifetime: .seconds(3)))
             return
         }
-        let text = last.text, model = last.currentKind?.dictationModel
+        let text = last.text, model = last.currentKind?.dictationModel, mode = last.mode
         Task { [weak self] in
             guard let self else { return }
             let outcome: InsertionOutcome
-            let pasted = self.pasted(text, by: model)
+            let pasted = self.pasted(text, by: model, in: mode)
             if let override = self.pasteLastOverride {
                 outcome = await override(pasted)
             } else {
                 outcome = await self.inserter.insert(pasted)
             }
-            self.handleInsertion(outcome, text: text, by: model, isDictation: false)
+            self.handleInsertion(outcome, text: text, by: model, in: mode, isDictation: false)
         }
     }
 
@@ -1434,20 +1448,20 @@ final class DictationController {
                 selectionPicked(model, pasted: false)
             }
             return
-        case .pasteText(let text, let model):
+        case .pasteText(let text, let model, let mode):
             toasts.dismiss(notice.id)
             if let model = Self.selectionModel(ofCard: notice) { selectionPicked(model, pasted: true) }
             Task { [weak self] in
                 guard let self else { return }
                 let outcome: InsertionOutcome
-                let pasted = self.pasted(text, by: model)
+                let pasted = self.pasted(text, by: model, in: mode)
                 if let override = self.pasteNowOverride {
                     outcome = await override(pasted)
                 } else {
                     outcome = await self.inserter.pasteNow(pasted)
                 }
                 // Anything but a paste brings the text back (a card, or the Accessibility notice).
-                self.handleInsertion(outcome, text: text, by: model, isDictation: false, quiet: true)
+                self.handleInsertion(outcome, text: text, by: model, in: mode, isDictation: false, quiet: true)
             }
             return
         default:
@@ -1671,7 +1685,7 @@ final class DictationController {
             } else {
                 history.upsert(TranscriptEntry(
                     id: id, createdAt: recording.startedAt, engine: result.engine, status: .success,
-                    audioDuration: recording.duration, voicedSeconds: recording.speech.voicedSeconds,
+                    audioDuration: recording.duration, voicedSeconds: recording.speech.voicedSeconds, mode: entry.mode,
                     audioFileName: history.saveAudio(recording), versions: [version]))
             }
             resolveGeneration(of: version, entryID: id)
@@ -1697,7 +1711,7 @@ final class DictationController {
         history.upsert(TranscriptEntry(
             id: id, createdAt: recording.startedAt, text: "", engine: engine, status: .failed,
             audioDuration: recording.duration, voicedSeconds: recording.speech.voicedSeconds,
-            errorMessage: reason, audioFileName: history.saveAudio(recording) ?? entry.audioFileName))
+            errorMessage: reason, mode: entry.mode, audioFileName: history.saveAudio(recording) ?? entry.audioFileName))
     }
 
     /// Why a version asked for from Home didn't come, as its row says it after "Couldn't transcribe with Gemini
@@ -1780,7 +1794,7 @@ final class DictationController {
         }
         let chosen = engine ?? history.entry(id: id)?.engine ?? settings.mainEngine
         enqueue(recording, engine: chosen, cleansUp: cleanupIDs.contains(id),
-                polishes: polishIDs.contains(id))
+                polishes: polishIDs.contains(id), mode: history.entry(id: id)?.mode ?? .pushToTalk)
     }
 
     /// Undo of a cancel: the dictation picks up again hands-free, its kept audio first, and nothing is transcribed
@@ -2535,7 +2549,8 @@ final class DictationController {
         let seconds = (6 + Double(words) / 20) * ToastCountdown.speed
         return Notice(dedupeKey: selectionCardKey(model), style: .info, symbol: "wand.and.sparkles",
                       title: "Polished by \(model.modelName)", transcript: text,
-                      actions: [NoticeAction(title: "Paste Here", kind: .pasteText(text, by: nil), isPrimary: true),
+                      actions: [NoticeAction(title: "Paste Here", kind: .pasteText(text, by: nil, in: .pushToTalk),
+                                             isPrimary: true),
                                 NoticeAction(title: "Copy", kind: .copyText(text))],
                       lifetime: .seconds(seconds), sound: .polishReady, takesCardKeys: true)
     }

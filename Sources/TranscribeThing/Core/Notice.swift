@@ -30,8 +30,9 @@ enum NoticeActionKind: Sendable, Equatable {
     /// Undo of fn D adding `word`, the dictionary going from `before` to `after`: the word goes, and a spelling it
     /// replaced or a word it pushed out comes back (`UserDictionary.undoAdding`).
     case undoDictionaryAdd(String, before: UserDictionary, after: UserDictionary)
-    /// The text and the model that wrote it, whose General → Pasting rules the paste follows (nil: as written).
-    case pasteText(String, by: ModelChoice?)
+    /// The text, the model that wrote it and how it was dictated, whose General → Pasting rules the paste follows
+    /// (no model: as written).
+    case pasteText(String, by: ModelChoice?, in: DictationMachine.Mode)
     case chooseMicrophone
     case useBuiltInMicrophone
     /// Open Software Update and install the newest release there, where its progress shows.

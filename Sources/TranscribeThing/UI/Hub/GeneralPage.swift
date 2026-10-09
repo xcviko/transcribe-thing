@@ -16,11 +16,6 @@ struct GeneralPage: View {
     @State private var recordingsBytes: Int64?
     /// An Auto-delete period that would delete entries at once, waiting for the user to confirm it.
     @State private var pendingAutoDelete: Int?
-    /// Narrow window: Pasting's model chips go under each rule's text.
-    @State private var stackedPasting = false
-
-    /// Below this width Pasting's chips, beside a rule, would squeeze its title onto two lines.
-    static let stackedPastingWidth: CGFloat = 600
 
     var body: some View {
         @Bindable var settings = settings
@@ -70,15 +65,13 @@ struct GeneralPage: View {
                     }
                 }
             }
-            HubGroup("Pasting", footer: "Each rule applies to the models picked beside it.") {
+            HubGroup("Pasting", footer: "A rule applies when both the model and the way you dictated are picked.") {
                 SettingsGroup {
                     PastingRuleRow(title: "Add a space after the text", systemImage: "space",
-                                   models: $settings.modelsAddingSpace, stacked: stackedPasting)
+                                   models: $settings.modelsAddingSpace, modes: $settings.modesAddingSpace)
                     PastingRuleRow(title: "Remove the final period", systemImage: "delete.backward",
-                                   models: $settings.modelsRemovingFinalPeriod, stacked: stackedPasting)
-                }
-                .onGeometryChange(for: Bool.self) { $0.size.width < Self.stackedPastingWidth } action: { stacked in
-                    stackedPasting = stacked
+                                   models: $settings.modelsRemovingFinalPeriod,
+                                   modes: $settings.modesRemovingFinalPeriod)
                 }
             }
             HubGroup("History") {
@@ -384,35 +377,38 @@ private struct AboutCard: View {
     }
 }
 
-/// A General → Pasting rule and the models it applies to: the chips beside its text, or under it in a narrow window.
+/// A General → Pasting rule and the models and dictations it applies to, in chips under its text: beside it, five
+/// chips would squeeze the text onto two lines even at the page's widest.
 private struct PastingRuleRow: View {
     var title: String
     var subtitle: String?
     var systemImage: String
     @Binding var models: Set<ModelChoice>
-    var stacked: Bool
+    @Binding var modes: Set<DictationMachine.Mode>
 
     @Environment(AppSettings.self) private var settings
 
     var body: some View {
-        if stacked {
-            VStack(alignment: .leading, spacing: 0) {
-                SettingsRow(title: title, subtitle: subtitle, systemImage: systemImage, iconTint: .inkSecondary)
-                // Lined up with the text, past the row's icon.
-                chips
-                    .padding(.leading, Theme.Spacing.md + 28 + Theme.Spacing.sm)
-                    .padding(.top, -2)
-                    .padding(.bottom, Theme.Spacing.sm)
-            }
-        } else {
-            SettingsRow(title: title, subtitle: subtitle, systemImage: systemImage, iconTint: .inkSecondary) {
-                chips
-            }
+        VStack(alignment: .leading, spacing: 0) {
+            SettingsRow(title: title, subtitle: subtitle, systemImage: systemImage, iconTint: .inkSecondary)
+            // Lined up with the text, past the row's icon.
+            chips
+                .padding(.leading, Theme.Spacing.md + 28 + Theme.Spacing.sm)
+                .padding(.top, -2)
+                .padding(.bottom, Theme.Spacing.sm)
         }
     }
 
     private var chips: some View {
-        ModelToggleChips(order: settings.lineup.order, parakeet: settings.parakeetEngine, selection: $models,
-                         rule: title)
+        HStack(spacing: 10) {
+            ModelToggleChips(order: settings.lineup.order, parakeet: settings.parakeetEngine, selection: $models,
+                             rule: title)
+            Rectangle()
+                .fill(Color.stroke)
+                .frame(width: 1, height: 16)
+                .accessibilityHidden(true)
+            ModeToggleChips(selection: $modes, rule: title)
+        }
+        .fixedSize()
     }
 }

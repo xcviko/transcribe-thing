@@ -3,7 +3,8 @@ import Foundation
 /// Pure dictation reducer (SPEC §4.11, wispr-ux §2.2–2.5). `HotkeyMonitor` only recognizes key gestures;
 /// every dictation decision lives here. Time is injected as monotonic seconds so tests can drive it.
 struct DictationMachine: Equatable {
-    enum Mode: Equatable { case pushToTalk, handsFree }
+    /// Raw values are stored: General → Pasting's rules (`AppSettings`) and History's entries.
+    enum Mode: String, Codable, CaseIterable, Sendable { case pushToTalk, handsFree }
 
     enum Capture: Equatable {
         case idle

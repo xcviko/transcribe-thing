@@ -11,6 +11,9 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
     var audioDuration: TimeInterval
     var voicedSeconds: TimeInterval
     var errorMessage: String?
+    /// Held or hands-free: a Retry or Paste Last pastes it by General → Pasting's rules for that. Push to talk for an
+    /// entry from before it was kept.
+    var mode: DictationMachine.Mode
     /// The recording, for Retry and Transcribe With, kept as long as the entry (it goes with a delete, Auto-delete and
     /// the oldest entries past `HistoryStore.maxEntries`). nil only where an older build pruned it or none was saved.
     var audioFileName: String?
@@ -28,11 +31,11 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
     init(id: UUID = UUID(), createdAt: Date = Date(), text: String, engine: EngineID,
          status: TranscriptStatus = .success, audioDuration: TimeInterval, voicedSeconds: TimeInterval,
          processingTime: TimeInterval? = nil, costUSD: Double? = nil, errorMessage: String? = nil,
-         audioFileName: String? = nil, provider: String? = nil) {
+         mode: DictationMachine.Mode = .pushToTalk, audioFileName: String? = nil, provider: String? = nil) {
         let version = TranscriptVersion(text: text, engine: engine, provider: provider, costUSD: costUSD,
                                         processingTime: processingTime, createdAt: createdAt)
         self.init(id: id, createdAt: createdAt, engine: engine, status: status, audioDuration: audioDuration,
-                  voicedSeconds: voicedSeconds, errorMessage: errorMessage, audioFileName: audioFileName,
+                  voicedSeconds: voicedSeconds, errorMessage: errorMessage, mode: mode, audioFileName: audioFileName,
                   versions: status == .success ? [version] : [])
     }
 
@@ -40,13 +43,15 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
     /// last. Versions of a kind already listed are dropped.
     init(id: UUID = UUID(), createdAt: Date = Date(), engine: EngineID, status: TranscriptStatus = .success,
          audioDuration: TimeInterval, voicedSeconds: TimeInterval, errorMessage: String? = nil,
-         audioFileName: String? = nil, versions: [TranscriptVersion], current: TranscriptVersionKind? = nil) {
+         mode: DictationMachine.Mode = .pushToTalk, audioFileName: String? = nil, versions: [TranscriptVersion],
+         current: TranscriptVersionKind? = nil) {
         self.id = id
         self.createdAt = createdAt
         self.status = status
         self.audioDuration = audioDuration
         self.voicedSeconds = voicedSeconds
         self.errorMessage = errorMessage
+        self.mode = mode
         self.audioFileName = audioFileName
         self.attemptedEngine = engine
         var unique: [TranscriptVersion] = []
@@ -135,7 +140,7 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
     // MARK: Coding
 
     private enum CodingKeys: String, CodingKey {
-        case id, createdAt, status, audioDuration, voicedSeconds, errorMessage, audioFileName, versions
+        case id, createdAt, status, audioDuration, voicedSeconds, errorMessage, mode, audioFileName, versions
         case currentKind = "currentVersion"
         /// The current version, flat, as older builds read it; and what an entry from before versions holds.
         case text, engine, provider, costUSD, processingTime
@@ -155,6 +160,8 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
         audioDuration = try c.decode(TimeInterval.self, forKey: .audioDuration)
         voicedSeconds = try c.decode(TimeInterval.self, forKey: .voicedSeconds)
         errorMessage = try c.decodeIfPresent(String.self, forKey: .errorMessage)
+        // A mode from a newer build reads as push to talk, not as an unreadable entry.
+        mode = (try? c.decodeIfPresent(DictationMachine.Mode.self, forKey: .mode)).flatMap { $0 } ?? .pushToTalk
         audioFileName = try c.decodeIfPresent(String.self, forKey: .audioFileName)
         attemptedEngine = try Self.decodeEngine(from: c, forKey: .engine)
 
@@ -190,6 +197,7 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
         try c.encode(audioDuration, forKey: .audioDuration)
         try c.encode(voicedSeconds, forKey: .voicedSeconds)
         try c.encodeIfPresent(errorMessage, forKey: .errorMessage)
+        try c.encode(mode, forKey: .mode)
         try c.encodeIfPresent(audioFileName, forKey: .audioFileName)
         // An older build that can't read the current kind takes the flat fields for the current version, as a
         // transcription by `engine`, in place of that transcription. For a clean-up it can't read, they hold the

@@ -898,6 +898,36 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         }
     }
 
+    /// Pasting's rules hold for held and hands-free dictations alike until one is unpicked; a rule holds only where
+    /// both its model and the way the text was dictated are picked. A mode this build doesn't know is dropped.
+    @Test func pastingRulesHoldPerModelAndPerMode() throws {
+        try withSuite { defaults in
+            let settings = AppSettings(defaults: defaults)
+            #expect(settings.modesAddingSpace == [.pushToTalk, .handsFree])
+            #expect(settings.modesRemovingFinalPeriod == [.pushToTalk, .handsFree])
+
+            settings.modelsAddingSpace = [.gemini]
+            settings.modesAddingSpace = [.handsFree]
+            settings.modelsRemovingFinalPeriod = [.parakeet]
+            #expect(settings.addsSpace(by: .gemini, in: .handsFree))
+            #expect(!settings.addsSpace(by: .gemini, in: .pushToTalk), "held: not picked")
+            #expect(!settings.addsSpace(by: .parakeet, in: .handsFree), "Parakeet: not picked")
+            #expect(settings.removesFinalPeriod(by: .parakeet, in: .pushToTalk))
+            #expect(settings.removesFinalPeriod(by: .parakeet, in: .handsFree))
+
+            let stored = defaults.data(forKey: "tt.modesAddingSpace").map { String(decoding: $0, as: UTF8.self) }
+            #expect(stored == #"["handsFree"]"#)
+            let reloaded = AppSettings(defaults: defaults)
+            #expect(reloaded.modesAddingSpace == [.handsFree])
+            #expect(reloaded.modesRemovingFinalPeriod == [.pushToTalk, .handsFree])
+
+            settings.modesRemovingFinalPeriod = []
+            #expect(AppSettings(defaults: defaults).modesRemovingFinalPeriod.isEmpty, "none picked stays none")
+            defaults.set(Data(#"["pushToTalk","whisper"]"#.utf8), forKey: "tt.modesAddingSpace")
+            #expect(AppSettings(defaults: defaults).modesAddingSpace == [.pushToTalk])
+        }
+    }
+
     /// "Maximum recording length", "Restore the clipboard after pasting" and the two audio retention choices are
     /// gone: what an older build stored goes at load.
     @Test func removedSettingsAreRemovedAtLoad() throws {

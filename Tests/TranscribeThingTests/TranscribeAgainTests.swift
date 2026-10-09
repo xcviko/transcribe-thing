@@ -202,6 +202,24 @@ import Testing
         #expect(entry.audioFileName == nil)
     }
 
+    /// How a dictation was dictated stays with its entry, for a Retry or Paste Last to paste it by Pasting's rules for
+    /// that. An entry from before, or with a mode from a newer build, reads as held.
+    @Test func theWayItWasDictatedIsKept() throws {
+        let entry = TranscriptEntry(text: "hello", engine: .parakeet, audioDuration: 2, voicedSeconds: 1,
+                                    mode: .handsFree)
+        #expect(try roundTrip(entry).mode == .handsFree)
+        let old = try decode("""
+        {"audioDuration":4.5,"createdAt":"2026-09-20T10:00:00Z","engine":"parakeet","id":"\(UUID().uuidString)",
+         "status":"success","text":"hello","voicedSeconds":3}
+        """)
+        #expect(old.mode == .pushToTalk)
+        let newer = try decode("""
+        {"audioDuration":4.5,"createdAt":"2026-09-20T10:00:00Z","engine":"parakeet","id":"\(UUID().uuidString)",
+         "status":"success","text":"hello","voicedSeconds":3,"mode":"whisperMode"}
+        """)
+        #expect(newer.mode == .pushToTalk && newer.text == "hello")
+    }
+
     @Test func aPreviousTextBecomesTheOlderVersion() throws {
         let entry = try decode("""
         {"audioDuration":4.5,"createdAt":"2026-09-20T10:00:00Z","engine":"geminiPro","id":"\(UUID().uuidString)",

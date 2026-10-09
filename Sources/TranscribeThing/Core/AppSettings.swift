@@ -99,6 +99,24 @@ final class AppSettings {
     var modelsRemovingFinalPeriod: Set<ModelChoice> = [] {
         didSet { store.setJSON(ModelChoice.stored(modelsRemovingFinalPeriod), .modelsRemovingFinalPeriod) }
     }
+    /// The dictations, held or hands-free, whose text gets that space. Both by default.
+    var modesAddingSpace: Set<DictationMachine.Mode> = Set(DictationMachine.Mode.allCases) {
+        didSet { store.setJSON(DictationMachine.Mode.stored(modesAddingSpace), .modesAddingSpace) }
+    }
+    /// The dictations, held or hands-free, whose text loses its final period. Both by default.
+    var modesRemovingFinalPeriod: Set<DictationMachine.Mode> = Set(DictationMachine.Mode.allCases) {
+        didSet { store.setJSON(DictationMachine.Mode.stored(modesRemovingFinalPeriod), .modesRemovingFinalPeriod) }
+    }
+
+    /// General → Pasting's space, for text `model` wrote in a dictation of `mode`: both have to be picked.
+    func addsSpace(by model: ModelChoice, in mode: DictationMachine.Mode) -> Bool {
+        modelsAddingSpace.contains(model) && modesAddingSpace.contains(mode)
+    }
+
+    /// General → Pasting's final period, for text `model` wrote in a dictation of `mode`: both have to be picked.
+    func removesFinalPeriod(by model: ModelChoice, in mode: DictationMachine.Mode) -> Bool {
+        modelsRemovingFinalPeriod.contains(model) && modesRemovingFinalPeriod.contains(mode)
+    }
     /// Words, names and terms Gemini 3.8 Flash and GPT-6 Luna get as a hint, with their spelling (Hub → Dictionary, fn D).
     var dictionary = UserDictionary() {
         didSet {
@@ -274,6 +292,10 @@ final class AppSettings {
         }
         store.remove(.addSpaceAfterText)
         store.remove(.removeFinalPeriod)
+        if let v: [String] = store.json(.modesAddingSpace) { modesAddingSpace = DictationMachine.Mode.read(v) }
+        if let v: [String] = store.json(.modesRemovingFinalPeriod) {
+            modesRemovingFinalPeriod = DictationMachine.Mode.read(v)
+        }
         if let v: UserDictionary = store.json(.dictionary) {
             var loaded = v
             if let grouping: UserDictionary.Grouping = store.json(.dictionaryGroups) { loaded.grouping = grouping }
@@ -394,6 +416,7 @@ enum SettingsKey: String, CaseIterable {
     /// once into `modelsAddingSpace` and `modelsRemovingFinalPeriod` and removed at load.
     case addSpaceAfterText, removeFinalPeriod, autoDeleteHistoryDays, lineup, modelColors, keychainKeyMigrated
     case handsFreeModel, modelsAddingSpace, modelsRemovingFinalPeriod, dictionary
+    case modesAddingSpace, modesRemovingFinalPeriod
     /// The Dictionary page's groups, apart from the words (`UserDictionary.Grouping`).
     case dictionaryGroups
     /// Stored under its first name, from when Return also sent what it finished.
@@ -405,6 +428,18 @@ enum SettingsKey: String, CaseIterable {
     case polishSelectionModel
 
     var defaultsKey: String { "tt.\(rawValue)" }
+}
+
+extension DictationMachine.Mode {
+    /// A set of modes as stored (General → Pasting's): raw values in declaration order, so the value is stable.
+    static func stored(_ modes: Set<Self>) -> [String] {
+        allCases.filter(modes.contains).map(\.rawValue)
+    }
+
+    /// A stored set, read leniently: a mode this build doesn't know is dropped.
+    static func read(_ raw: [String]) -> Set<Self> {
+        Set(raw.compactMap(Self.init(rawValue:)))
+    }
 }
 
 /// UserDefaults when given one, otherwise a dictionary. A named suite would still write a plist

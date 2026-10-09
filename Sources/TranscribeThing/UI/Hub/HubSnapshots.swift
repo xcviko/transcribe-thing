@@ -201,6 +201,7 @@ enum HubSnapshots {
             hub("hub-general", .general, height: 1080) { c in
                 c.settings.modelsAddingSpace = [.cleanup, .gemini]
                 c.settings.modelsRemovingFinalPeriod = [.parakeet]
+                c.settings.modesRemovingFinalPeriod = [.pushToTalk]
             },
             // The whole page, down to Troubleshooting's Export Logs….
             hub("hub-general-full", .general, height: 1360),
@@ -209,10 +210,11 @@ enum HubSnapshots {
                 c.settings.pillMode = .always
                 c.settings.soundsEnabled = false
             },
-            // The narrowest window: Pasting's model chips beside rows whose captions wrap.
+            // The narrowest window: Pasting's five chips still fit under each rule.
             hub("hub-general-pasting-compact", .general, width: 820, height: 1080) { c in
                 c.settings.modelsAddingSpace = [.cleanup, .gemini]
                 c.settings.modelsRemovingFinalPeriod = [.parakeet]
+                c.settings.modesRemovingFinalPeriod = [.pushToTalk]
             },
             hub("hub-general-permissions", .general, height: 1080) { c in
                 c.permissions = .preview(mic: .granted, ax: .denied)
