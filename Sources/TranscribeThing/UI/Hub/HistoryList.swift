@@ -132,7 +132,19 @@ struct HistoryRow: View, Equatable {
 
     // MARK: Content
 
+    /// A row made from a file names it over its transcript (or its failure), so it never passes for a dictation.
     @ViewBuilder private var content: some View {
+        if let file = entry.importedFrom, entry.status != .cancelled {
+            VStack(alignment: .leading, spacing: 5) {
+                ImportedFileLabel(fileName: file)
+                statusContent
+            }
+        } else {
+            statusContent
+        }
+    }
+
+    @ViewBuilder private var statusContent: some View {
         switch entry.status {
         case .success where isEmptySuccess:
             VStack(alignment: .leading, spacing: 7) {
@@ -165,10 +177,15 @@ struct HistoryRow: View, Equatable {
             }
         case .cancelled:
             VStack(alignment: .leading, spacing: 6) {
-                Text("Canceled recording (\(Fmt.duration(entry.audioDuration)))")
-                    .font(.system(size: 13))
-                    .italic()
-                    .foregroundStyle(.inkSecondary)
+                if let file = entry.importedFrom {
+                    // A file not transcribed yet: its first transcription is running, or was canceled.
+                    ImportedFileLabel(fileName: file, duration: entry.audioDuration)
+                } else {
+                    Text("Canceled recording (\(Fmt.duration(entry.audioDuration)))")
+                        .font(.system(size: 13))
+                        .italic()
+                        .foregroundStyle(.inkSecondary)
+                }
                 inlineRetry(title: "Transcribe", symbol: "waveform")
             }
         }
@@ -290,6 +307,8 @@ struct HistoryRow: View, Equatable {
                     .font(.system(size: 11.5))
                     .monospacedDigit()
                     .foregroundStyle(.inkTertiary)
+                    // A file's "45:10" never gives way to the transcript beside it.
+                    .fixedSize()
                     .frame(minWidth: 28, alignment: .trailing)
             }
         }
@@ -460,6 +479,33 @@ private struct VersionCount: View {
 /// checked and each one's time, cost and thinking, then "Transcribe With" the engines not used on it yet and a clean-up
 /// of each Parakeet version. Unavailable items stay listed, disabled, with the reason. A failed or canceled
 /// dictation lists only the engines to retry with.
+/// The file a row was made from ("interview.mp3"), with the glyph that says it was imported rather than dictated. With
+/// `duration`, the row's main line (a file not transcribed yet); without, a caption over its transcript.
+struct ImportedFileLabel: View {
+    var fileName: String
+    var duration: TimeInterval?
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
+            Image(systemName: "arrow.down.doc")
+                .font(.system(size: duration == nil ? 10.5 : 12, weight: .medium))
+            Text(fileName)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            if let duration {
+                Text("(\(Fmt.duration(duration)))")
+                    .monospacedDigit()
+                    .layoutPriority(1)
+            }
+        }
+        .font(.system(size: duration == nil ? 11.5 : 13, weight: duration == nil ? .medium : .regular))
+        .foregroundStyle(duration == nil ? Color.inkTertiary : Color.inkSecondary)
+        .help("Imported from \(fileName)")
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Imported from \(fileName)")
+    }
+}
+
 struct VersionsMenuItems: View {
     var entry: TranscriptEntry
     @Environment(HubContext.self) private var hub

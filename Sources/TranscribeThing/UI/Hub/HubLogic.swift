@@ -73,6 +73,7 @@ enum HistoryGrouping {
         return entries.filter { entry in
             entry.text.range(of: needle, options: options) != nil
                 || (entry.errorMessage?.range(of: needle, options: options) != nil)
+                || (entry.importedFrom?.range(of: needle, options: options) != nil)
         }
     }
 }
@@ -320,6 +321,18 @@ struct VersionsMenu: Equatable {
     /// `title` without making the rest of the menu.
     static func title(for entry: TranscriptEntry) -> String {
         entry.status == .success ? "Versions" : "Retry With"
+    }
+}
+
+/// What a file dropped on Home can be transcribed with (`ImportedAudio`): each offered engine, the main model's first,
+/// then Polish with Gemini. Each says why it can't run right now, as the Versions menu's actions do.
+enum ImportChoices {
+    static func make(main: EngineID, readiness: (EngineID) -> EngineReadiness) -> [VersionsMenu.Action] {
+        let engines = EngineID.offered.filter { $0 == main } + EngineID.offered.filter { $0 != main }
+        let kinds = engines.map(TranscriptVersionKind.transcription) + [.polish]
+        return kinds.map { kind in
+            VersionsMenu.Action(kind: kind, blocker: readiness(kind.engine).unavailableReason.map(VersionsMenu.Blocker.engine))
+        }
     }
 }
 

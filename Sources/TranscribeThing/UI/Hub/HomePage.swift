@@ -1,6 +1,8 @@
+import AppKit
 import SwiftUI
 
-/// Greeting, what needs attention, weekly stats and the searchable history.
+/// Greeting, what needs attention, weekly stats and the searchable history. Audio or video dropped on it (or picked
+/// with Transcribe File…) is transcribed into the history, by the model picked for it.
 struct HomePage: View {
     @Environment(HubContext.self) private var hub
     @Environment(HistoryStore.self) private var history
@@ -14,6 +16,14 @@ struct HomePage: View {
     @State private var recentlyDeleted: TranscriptEntry?
     @State private var undoToken = 0
     @State private var hoverGate = ScrollHoverGate()
+    /// Files are being dragged over the page.
+    @State private var dropTargeted = false
+    /// The files being read, by name, before the model is asked for.
+    @State private var reading: [String] = []
+    /// Files read, waiting for the model to transcribe them with.
+    @State private var pendingFiles: [ImportedAudio] = []
+    /// Files that couldn't be read, or no model to transcribe them with: said in an alert.
+    @State private var importProblem: ImportProblem?
 
     var body: some View {
         ScrollView {
@@ -33,15 +43,42 @@ struct HomePage: View {
             .padding(.bottom, HubLayout.pageBottom + 20)
             .frame(maxWidth: HubLayout.readableWidth, alignment: .leading)
             .frame(maxWidth: .infinity)
+            // Under files dragged over it the page steps back, so the drop target reads alone.
+            .opacity(showsDropTarget ? 0.06 : 1)
         }
         // Rows passing under a resting pointer don't light up one after another while the page moves.
         .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, _ in hoverGate.scrolled() }
         .environment(\.scrollHoverGate, hoverGate)
+        .overlay { if showsDropTarget { DropTarget() } }
         .overlay(alignment: .bottom) { undoBar }
+        .overlay(alignment: .bottom) { readingBar }
+        .dropDestination(for: URL.self) { urls, _ in
+            let files = urls.filter(\.isFileURL)
+            guard !files.isEmpty else { return false }
+            read(files)
+            return true
+        } isTargeted: { targeted in
+            withAnimation(Theme.Motion.fade) { dropTargeted = targeted }
+        }
+        .confirmationDialog(importTitle, isPresented: Binding(get: { !pendingFiles.isEmpty },
+                                                              set: { if !$0 { pendingFiles = [] } }),
+                            titleVisibility: .visible) {
+            importButtons
+        } message: {
+            Text(importMessage)
+        }
+        .alert(importProblem?.title ?? "", isPresented: Binding(get: { importProblem != nil },
+                                                               set: { if !$0 { importProblem = nil } })) {
+            Button("OK") { importProblem = nil }
+        } message: {
+            Text(importProblem?.message ?? "")
+        }
         .onAppear {
             if query.isEmpty { query = hub.initialSearch }
         }
     }
+
+    private var showsDropTarget: Bool { dropTargeted || hub.previewDropTarget }
 
     // MARK: Header
 
@@ -56,6 +93,13 @@ struct HomePage: View {
                     .accessibilityAddTraits(.isHeader)
             }
             Spacer(minLength: Theme.Spacing.md)
+            Button(action: pickFiles) {
+                Image(systemName: "arrow.down.doc")
+            }
+            .buttonStyle(IconButtonStyle(size: 28))
+            .keyboardShortcut("o", modifiers: .command)
+            .help("Transcribe a File… (⌘O)")
+            .accessibilityLabel("Transcribe a File")
             HubSearchField(text: $query, prompt: "Search transcripts", focused: $searchFocused)
                 .frame(width: 220)
                 .background {
@@ -112,6 +156,111 @@ struct HomePage: View {
         }
     }
 
+    // MARK: Transcribe a file
+
+    /// Transcribe File…: audio or video, one or more.
+    private func pickFiles() {
+        guard !hub.isPreview else { return }
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = ImportedAudio.contentTypes
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.message = "Choose audio or video to transcribe."
+        panel.prompt = "Transcribe"
+        panel.begin { response in
+            guard response == .OK else { return }
+            read(panel.urls)
+        }
+    }
+
+    /// Reads the files one after another (the bar at the bottom names the one being read), then asks which model
+    /// transcribes them, or says which couldn't be read.
+    private func read(_ urls: [URL]) {
+        guard reading.isEmpty, pendingFiles.isEmpty else { return }
+        withAnimation(Theme.Motion.fade) { reading = urls.map(\.lastPathComponent) }
+        Task { @MainActor in
+            var files: [ImportedAudio] = []
+            var failures: [(name: String, error: ImportedAudio.ReadError)] = []
+            for url in urls {
+                do throws(ImportedAudio.ReadError) {
+                    files.append(try await ImportedAudio.read(url))
+                } catch {
+                    failures.append((url.lastPathComponent, error))
+                }
+                withAnimation(Theme.Motion.fade) { if !reading.isEmpty { reading.removeFirst() } }
+            }
+            reading = []
+            if let failure = failures.first {
+                let more = failures.count > 1 ? " (and \(failures.count - 1) more)" : ""
+                importProblem = ImportProblem(title: "Can’t transcribe “\(failure.name)”\(more)",
+                                              message: failure.error.message)
+            }
+            guard !files.isEmpty else { return }
+            guard !importChoices.isEmpty else {
+                let reason = ImportChoices.make(main: settings.mainEngine, readiness: hub.readiness(of:))
+                    .first?.blocker?.label ?? "No model is ready"
+                importProblem = ImportProblem(title: "No model can transcribe it right now",
+                                              message: "\(reason). Set one up in Models.")
+                return
+            }
+            // A failure's alert first: the dialog follows once it's dismissed.
+            if importProblem != nil {
+                try? await Task.sleep(for: .milliseconds(300))
+                while importProblem != nil { try? await Task.sleep(for: .milliseconds(200)) }
+            }
+            pendingFiles = files
+        }
+    }
+
+    /// The models that can transcribe a file right now, the main one first.
+    private var importChoices: [VersionsMenu.Action] {
+        ImportChoices.make(main: settings.mainEngine, readiness: hub.readiness(of:)).filter(\.isEnabled)
+    }
+
+    private var importTitle: String {
+        pendingFiles.count == 1 ? "Transcribe “\(pendingFiles[0].fileName)”?" : "Transcribe \(pendingFiles.count) files?"
+    }
+
+    private var importMessage: String {
+        let seconds = pendingFiles.reduce(0) { $0 + $1.duration }
+        return "\(Fmt.duration(seconds)) of audio. The transcript shows up in your history, marked with the file’s name."
+    }
+
+    @ViewBuilder private var importButtons: some View {
+        let files = pendingFiles
+        ForEach(Array(importChoices.enumerated()), id: \.element.id) { index, choice in
+            Button(choice.name) {
+                pendingFiles = []
+                for file in files { hub.dictation.transcribe(file, as: choice.kind) }
+            }
+            .keyboardShortcut(index == 0 ? .defaultAction : nil)
+        }
+        Button("Cancel", role: .cancel) { pendingFiles = [] }
+    }
+
+    @ViewBuilder private var readingBar: some View {
+        if let name = reading.first {
+            HStack(spacing: 10) {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(.white)
+                Text("Reading \(name)…")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 36)
+            .frame(maxWidth: 420)
+            .fixedSize()
+            .background(Capsule(style: .continuous).fill(Color.pillFill))
+            .shadow(color: .black.opacity(0.18), radius: 12, y: 6)
+            .padding(.bottom, 18)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+
     // MARK: Delete with undo
 
     private func delete(_ entry: TranscriptEntry) {
@@ -156,6 +305,36 @@ struct HomePage: View {
             .padding(.bottom, 18)
             .transition(.move(edge: .bottom).combined(with: .opacity))
         }
+    }
+}
+
+/// Why a file dropped on Home wasn't transcribed.
+private struct ImportProblem: Equatable {
+    var title: String
+    var message: String
+}
+
+/// Over the page while files are dragged onto it.
+private struct DropTarget: View {
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color.ink.opacity(0.35), style: StrokeStyle(lineWidth: 1.5, dash: [7, 5]))
+            VStack(spacing: 10) {
+                Image(systemName: "arrow.down.doc")
+                    .font(.system(size: 30, weight: .regular))
+                    .foregroundStyle(.ink)
+                Text("Drop audio or video to transcribe")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.ink)
+                Text("You’ll pick the model next.")
+                    .typeface(.callout)
+                    .foregroundStyle(.inkSecondary)
+            }
+        }
+        .padding(14)
+        .allowsHitTesting(false)
+        .transition(.opacity)
     }
 }
 

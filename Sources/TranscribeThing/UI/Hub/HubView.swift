@@ -39,6 +39,8 @@ final class HubContext: Observable {
     var previewFailures: [UUID: HomeFailure]?
     /// A History row drawn as hovered, its actions showing (snapshots).
     var previewHoveredEntry: UUID?
+    /// Home drawn with files dragged over it (snapshots).
+    var previewDropTarget = false
 
     init(env: AppEnvironment) {
         settings = env.settings

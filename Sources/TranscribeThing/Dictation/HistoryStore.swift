@@ -17,6 +17,9 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
     /// The recording, for Retry and Transcribe With, kept as long as the entry (it goes with a delete, Auto-delete and
     /// the oldest entries past `HistoryStore.maxEntries`). nil only where an older build pruned it or none was saved.
     var audioFileName: String?
+    /// The name of the audio file this entry was made from (dropped on Home, or picked with Transcribe File…); nil for
+    /// a dictation. Its row shows it, and the stats (words, speed, time saved) leave it out: it isn't the user talking.
+    var importedFrom: String?
     /// Every transcript of the recording, oldest first, at most one of each kind (one per model). Empty for failed
     /// and canceled entries. Change them through `addVersion`, `selectVersion` and `updateMetadata`.
     private(set) var versions: [TranscriptVersion]
@@ -31,20 +34,21 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
     init(id: UUID = UUID(), createdAt: Date = Date(), text: String, engine: EngineID,
          status: TranscriptStatus = .success, audioDuration: TimeInterval, voicedSeconds: TimeInterval,
          processingTime: TimeInterval? = nil, costUSD: Double? = nil, errorMessage: String? = nil,
-         mode: DictationMachine.Mode = .pushToTalk, audioFileName: String? = nil, provider: String? = nil) {
+         mode: DictationMachine.Mode = .pushToTalk, audioFileName: String? = nil, importedFrom: String? = nil,
+         provider: String? = nil) {
         let version = TranscriptVersion(text: text, engine: engine, provider: provider, costUSD: costUSD,
                                         processingTime: processingTime, createdAt: createdAt)
         self.init(id: id, createdAt: createdAt, engine: engine, status: status, audioDuration: audioDuration,
                   voicedSeconds: voicedSeconds, errorMessage: errorMessage, mode: mode, audioFileName: audioFileName,
-                  versions: status == .success ? [version] : [])
+                  importedFrom: importedFrom, versions: status == .success ? [version] : [])
     }
 
     /// An entry with these versions (success only; ignored otherwise). `current`: the one it shows, by default the
     /// last. Versions of a kind already listed are dropped.
     init(id: UUID = UUID(), createdAt: Date = Date(), engine: EngineID, status: TranscriptStatus = .success,
          audioDuration: TimeInterval, voicedSeconds: TimeInterval, errorMessage: String? = nil,
-         mode: DictationMachine.Mode = .pushToTalk, audioFileName: String? = nil, versions: [TranscriptVersion],
-         current: TranscriptVersionKind? = nil) {
+         mode: DictationMachine.Mode = .pushToTalk, audioFileName: String? = nil, importedFrom: String? = nil,
+         versions: [TranscriptVersion], current: TranscriptVersionKind? = nil) {
         self.id = id
         self.createdAt = createdAt
         self.status = status
@@ -53,6 +57,7 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
         self.errorMessage = errorMessage
         self.mode = mode
         self.audioFileName = audioFileName
+        self.importedFrom = importedFrom
         self.attemptedEngine = engine
         var unique: [TranscriptVersion] = []
         for version in versions where !unique.contains(where: { $0.kind == version.kind }) { unique.append(version) }
@@ -140,7 +145,8 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
     // MARK: Coding
 
     private enum CodingKeys: String, CodingKey {
-        case id, createdAt, status, audioDuration, voicedSeconds, errorMessage, mode, audioFileName, versions
+        case id, createdAt, status, audioDuration, voicedSeconds, errorMessage, mode, audioFileName, importedFrom
+        case versions
         case currentKind = "currentVersion"
         /// The current version, flat, as older builds read it; and what an entry from before versions holds.
         case text, engine, provider, costUSD, processingTime
@@ -163,6 +169,7 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
         // A mode from a newer build reads as push to talk, not as an unreadable entry.
         mode = (try? c.decodeIfPresent(DictationMachine.Mode.self, forKey: .mode)).flatMap { $0 } ?? .pushToTalk
         audioFileName = try c.decodeIfPresent(String.self, forKey: .audioFileName)
+        importedFrom = try c.decodeIfPresent(String.self, forKey: .importedFrom)
         attemptedEngine = try Self.decodeEngine(from: c, forKey: .engine)
 
         var decoded = ((try? c.decodeIfPresent([LossyVersion].self, forKey: .versions)) ?? []).compactMap(\.value)
@@ -199,6 +206,7 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
         try c.encodeIfPresent(errorMessage, forKey: .errorMessage)
         try c.encode(mode, forKey: .mode)
         try c.encodeIfPresent(audioFileName, forKey: .audioFileName)
+        try c.encodeIfPresent(importedFrom, forKey: .importedFrom)
         // An older build that can't read the current kind takes the flat fields for the current version, as a
         // transcription by `engine`, in place of that transcription. For a clean-up it can't read, they hold the
         // transcription the clean-up tidied, so an older build keeps that text rather than the clean-up's under its
@@ -274,7 +282,7 @@ struct HistoryStats: Equatable, Sendable {
         var speaking: TimeInterval = 0
         var voiced: TimeInterval = 0
         var count = 0
-        for entry in entries where entry.status == .success && !entry.isSelection {
+        for entry in entries where entry.status == .success && !entry.isSelection && entry.importedFrom == nil {
             let n = entry.wordCount
             count += 1
             words += n
@@ -568,6 +576,11 @@ final class HistoryStore {
         var recording = Recording(id: entry.id, samples: samples, startedAt: entry.createdAt, speech: speech)
         if RecordingFile.isAAC(url.lastPathComponent) { recording.aacFile = url }
         return recording
+    }
+
+    /// Where a recording named `name` is kept (`saveAudio`'s name), whether or not it's written yet.
+    func recordingURL(named name: String) -> URL {
+        paths.recordingURL(fileName: name)
     }
 
     func audioURL(for entry: TranscriptEntry) -> URL? {

@@ -68,6 +68,15 @@ dictation spells "Wispr Flow" the way you do; Parakeet takes no hints. Add one w
 app's Dictionary page, where you can also sort them into groups by dragging. Groups are only for you: the models get
 every word.
 
+## Transcribe a file
+
+Have a recording already, say a voice note or a call? Drop the file on Home, or press ⌘O there, and pick the model.
+The transcript shows up in History under the file's name instead of being pasted. From there it works like any
+dictation: transcribe it again with another model, clean it up or polish it.
+
+It takes MP3, M4A, WAV, Telegram voice notes (.ogg) and the sound of a video, up to three hours. Files don't count
+toward your words, speed or time saved.
+
 ## Your data
 
 History, the recordings, your dictionary and your OpenRouter key stay on your Mac, in
@@ -79,8 +88,8 @@ Flash dictation and every clean-up.
 The same folder keeps a log of what the app did in the last 7 days, without your dictations, your selected text or
 your key. It stays there until you send it: General → Troubleshooting → Export Logs… saves it as a file.
 
-History keeps every dictation with its recording until you delete it, so you can transcribe it again with another
-model or polish it. General → History can delete entries older than 1, 7, 30 or 90 days.
+History keeps every dictation with its recording, and a copy of the sound of every file you transcribe, until you
+delete it, so you can transcribe it again with another model or polish it. General → History can delete entries older than 1, 7, 30 or 90 days.
 
 ## If something doesn't work
 

@@ -63,6 +63,15 @@ enum HubSnapshots {
                 if let failed = entries.first(where: { $0.status == .failed }) { running[failed.id] = .transcription(.parakeet) }
                 c.previewRunning = running
             },
+            // Files dropped on Home: one transcribed, one Gemini is transcribing now, one that failed.
+            hub("hub-home-imported", .home, height: 900) { c in
+                let imported = Samples.importedEntries()
+                c.history = .preview(entries: imported + c.history.entries)
+                c.previewRunning = [imported[1].id: .transcription(.geminiFlash)]
+            },
+            hub("hub-home-drop", .home) { c in
+                c.previewDropTarget = true
+            },
 
             hub("hub-models", .models),
             hub("hub-models-full", .models, height: 1080),
@@ -315,6 +324,24 @@ enum HubSnapshots {
         /// Home work that didn't come, in the words the controller uses: Gemini Flash on the newest row, a clean-up of
         /// cloud Parakeet on the second, and Parakeet · Cloud on the third and Parakeet on the failed row, whose
         /// recordings couldn't be read.
+        /// Rows made from files: a transcript, one not transcribed yet, one that failed.
+        static func importedEntries() -> [TranscriptEntry] {
+            let now = Date()
+            return [
+                TranscriptEntry(createdAt: now.addingTimeInterval(-60),
+                                text: "Okay, so the plan for the release: we ship the import on Friday, and Pasha checks the long files over the weekend.",
+                                engine: .geminiFlash, audioDuration: 754, voicedSeconds: 600, costUSD: 0.012,
+                                audioFileName: "a.m4a", importedFrom: "Standup 2026-10-09.m4a"),
+                TranscriptEntry(createdAt: now.addingTimeInterval(-120), text: "", engine: .geminiFlash,
+                                status: .cancelled, audioDuration: 2_710, voicedSeconds: 2_400, audioFileName: "b.m4a",
+                                importedFrom: "Interview with Anna, part 2.mp3"),
+                TranscriptEntry(createdAt: now.addingTimeInterval(-180), text: "", engine: .parakeetCloud,
+                                status: .failed, audioDuration: 41, voicedSeconds: 30,
+                                errorMessage: "Parakeet v3 · Cloud took too long", audioFileName: "c.m4a",
+                                importedFrom: "voice_2026-10-08.ogg"),
+            ]
+        }
+
         static func homeFailures(_ entries: [TranscriptEntry], keyMissing: Bool = false) -> [UUID: HomeFailure] {
             var failures: [UUID: HomeFailure] = [:]
             if let first = entries.first {

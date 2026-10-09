@@ -1534,13 +1534,7 @@ final class DictationController {
             homeFailures[id] = .recordingGone(kind)
             return
         }
-        beginHomeWork(kind, for: id)
-        homeTasks[id] = Task { [weak self] in
-            guard let self else { return }
-            let outcome = await self.transcribe(recording, engine: engine, background: true)
-            guard self.endHomeWork(for: id) else { return }
-            self.land(outcome, of: recording, engine: engine)
-        }
+        transcribeInHome(recording, as: kind)
     }
 
     /// Clean Up from Home: `model` tidies the entry's `source` transcript, which becomes a new version and the
@@ -1592,17 +1586,44 @@ final class DictationController {
             homeFailures[id] = .recordingGone(.polish)
             return
         }
-        beginHomeWork(.polish, for: id)
+        transcribeInHome(recording, as: .polish)
+    }
+
+    /// Home work on a recording: a transcription by `kind`'s engine, or Polish (Gemini with Polish's prompt), landing
+    /// in the recording's row (`land`).
+    private func transcribeInHome(_ recording: Recording, as kind: TranscriptVersionKind) {
+        let id = recording.id
+        let engine = kind.engine
+        let polishes = kind == .polish
+        beginHomeWork(kind, for: id)
         homeTasks[id] = Task { [weak self] in
             guard let self else { return }
-            var outcome = await self.transcribe(recording, engine: .geminiFlash, prompt: Polish.prompt, background: true)
+            var outcome = await self.transcribe(recording, engine: engine, prompt: polishes ? Polish.prompt : nil,
+                                                background: true)
             guard self.endHomeWork(for: id) else { return }
-            if case .success(var result, let cleanup) = outcome {
+            if polishes, case .success(var result, let cleanup) = outcome {
                 result.text = Polish.message(from: result.text)
                 outcome = .success(result, cleanup: cleanup)
             }
-            self.land(outcome, of: recording, engine: .geminiFlash, as: .polish)
+            self.land(outcome, of: recording, engine: engine, as: polishes ? .polish : nil)
         }
+    }
+
+    /// An audio or video file dropped on Home (or picked with Transcribe File…): it becomes a History row of its own,
+    /// as a dictation would, marked with the file's name, and `kind` (a transcription, or Polish) makes its first
+    /// version as Home work. From there it's a row like any other: Transcribe With, Clean Up, Retry. It pastes nothing.
+    func transcribe(_ file: ImportedAudio, as kind: TranscriptVersionKind) {
+        guard !kind.isCleanup, !kind.isSelection else { return }
+        var recording = Recording(samples: file.samples, startedAt: Date(), speech: file.speech)
+        let audioFileName = history.saveAudio(recording)
+        // `land` saves the recording again with its transcript: this keeps the file just written.
+        if let audioFileName { recording.aacFile = history.recordingURL(named: audioFileName) }
+        history.upsert(TranscriptEntry(
+            id: recording.id, createdAt: recording.startedAt, text: "", engine: kind.engine, status: .cancelled,
+            audioDuration: recording.duration, voicedSeconds: file.speech.voicedSeconds, audioFileName: audioFileName,
+            importedFrom: file.fileName))
+        DiagnosticLog.shared.event(.dictation, "home.imported", ["seconds": recording.duration, "polish": kind == .polish])
+        transcribeInHome(recording, as: kind)
     }
 
     /// Home's Cancel in the row: stops what is being made for the recording. Nothing of it lands; the entry stays as
@@ -1672,7 +1693,7 @@ final class DictationController {
                 history.upsert(TranscriptEntry(
                     id: id, createdAt: recording.startedAt, engine: result.engine, status: .success,
                     audioDuration: recording.duration, voicedSeconds: recording.speech.voicedSeconds, mode: entry.mode,
-                    audioFileName: history.saveAudio(recording), versions: [version]))
+                    audioFileName: history.saveAudio(recording), importedFrom: entry.importedFrom, versions: [version]))
             }
             resolveGeneration(of: version, entryID: id)
             DiagnosticLog.shared.event(.dictation, "home.finished", [
@@ -1697,7 +1718,8 @@ final class DictationController {
         history.upsert(TranscriptEntry(
             id: id, createdAt: recording.startedAt, text: "", engine: engine, status: .failed,
             audioDuration: recording.duration, voicedSeconds: recording.speech.voicedSeconds,
-            errorMessage: reason, mode: entry.mode, audioFileName: history.saveAudio(recording) ?? entry.audioFileName))
+            errorMessage: reason, mode: entry.mode, audioFileName: history.saveAudio(recording) ?? entry.audioFileName,
+            importedFrom: entry.importedFrom))
     }
 
     /// Why a version asked for from Home didn't come, as its row says it after "Couldn't transcribe with Gemini
