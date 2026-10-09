@@ -47,8 +47,6 @@ manager may still keep the selected text.
 
 - **Parakeet v3** (the default) runs on your Mac. It's the fastest, works offline, and recognizes 25 European
   languages by itself. It can also run through OpenRouter instead, for about $0.09 per hour of audio.
-- **Parakeet v3 + GPT-6 Luna** cleans up Parakeet's text before it's pasted: filler words, false starts,
-  punctuation.
 - **Gemini 3.8 Flash** is the most accurate. It thinks before it writes, so it's slower. It can also polish: press
   fn P while you talk, and it pastes the message you meant, without the false starts, detours and repeats.
 
@@ -58,13 +56,12 @@ card, and Paste Here puts it in place of the selection.
 The cloud models run on your own [OpenRouter](https://openrouter.ai) key, and you pay OpenRouter per use. Each cloud
 dictation sends its request twice at once and pastes the first answer, stopping the other, so it can cost up to twice
 as much: a model that stops to think on one request doesn't hold you up. In Models, choose which model every
-dictation starts on, which one hands-free dictations switch to, which ones fn ⇥ steps through, and each one's pill
-color.
+dictation starts on, whether hands-free dictations and fn ⇥ switch to the other one, and each one's pill color.
 
 ## Dictionary
 
-Words, names and terms you use, and how they're spelled. Gemini 3.8 Flash and GPT-6 Luna get them as a hint, so a
-dictation spells "Wispr Flow" the way you do; Parakeet takes no hints. Add one with fn D over selected text, or in the
+Words, names and terms you use, and how they're spelled. Gemini 3.8 Flash gets them as a hint, so a dictation
+spells "Wispr Flow" the way you do; Parakeet takes no hints. Add one with fn D over selected text, or in the
 app's Dictionary page, where you can also sort them into groups by dragging. Groups are only for you: the models get
 every word.
 
@@ -72,7 +69,7 @@ every word.
 
 Have a recording already, say a voice note or a call? Drop the file on Home, or press ⌘O there, and pick the model.
 The transcript shows up in History under the file's name instead of being pasted. From there it works like any
-dictation: transcribe it again with another model, clean it up or polish it.
+dictation: transcribe it again with another model or polish it.
 
 It takes MP3, M4A, WAV, Telegram voice notes (.ogg) and the sound of a video, up to three hours. Files don't count
 toward your words, speed or time saved.
@@ -81,9 +78,8 @@ toward your words, speed or time saved.
 
 History, the recordings, your dictionary and your OpenRouter key stay on your Mac, in
 `~/Library/Application Support/transcribe-thing`. The key is in a file only you can read. Audio leaves your Mac only
-when a cloud model transcribes it. Text leaves it only when a model works on it: GPT-6 Luna cleaning up a transcript,
-or Gemini 3.8 Flash polishing text you selected. Your dictionary's words go along with every Gemini 3.8
-Flash dictation and every clean-up.
+when a cloud model transcribes it. Text leaves it only when Gemini 3.8 Flash polishes text you selected. Your
+dictionary's words go along with everything sent to Gemini 3.8 Flash.
 
 The same folder keeps a log of what the app did in the last 7 days, without your dictations, your selected text or
 your key. It stays there until you send it: General → Troubleshooting → Export Logs… saves it as a file.
@@ -121,7 +117,6 @@ The binary also works without the UI, for checking the models:
 ```sh
 .build/debug/transcribe-thing --transcribe memo.m4a --engine parakeet --download
 .build/debug/transcribe-thing --transcribe memo.m4a --engine geminiFlash
-.build/debug/transcribe-thing --transcribe memo.m4a --engine parakeet --clean-up
 ```
 
 Cloud runs use the app's saved key, or `OPENROUTER_API_KEY` when it's set. `Sources/TranscribeThing/App/EngineCLI.swift`

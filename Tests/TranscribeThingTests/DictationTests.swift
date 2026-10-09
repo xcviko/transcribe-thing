@@ -899,15 +899,15 @@ final class FakeRecorder: DictationRecorder {
         #expect(pastedLast == ["Hello "])
     }
 
-    /// Whose Pasting rules a transcript's paste follows: the model that wrote it. Polish is Gemini's; Polish Selection,
-    /// which takes the selection's place, goes as written.
+    /// Whose Pasting rules a transcript's paste follows: the model that wrote it. Polish is Gemini's, an old clean-up
+    /// Parakeet's (it tidied Parakeet's text); Polish Selection, which takes the selection's place, goes as written.
     @Test func eachKindOfTranscriptPastesByItsModel() {
         #expect(TranscriptVersionKind.transcription(.parakeet).dictationModel == .parakeet)
         #expect(TranscriptVersionKind.transcription(.parakeetCloud).dictationModel == .parakeet)
         #expect(TranscriptVersionKind.transcription(.geminiFlash).dictationModel == .gemini)
         #expect(TranscriptVersionKind.transcription(.geminiPro).dictationModel == .gemini)
-        #expect(TranscriptVersionKind.cleanup(of: .parakeet, by: .gpt6Luna).dictationModel == .cleanup)
-        #expect(TranscriptVersionKind.cleanup(of: .parakeetCloud, by: .geminiFlashLite).dictationModel == .cleanup)
+        #expect(TranscriptVersionKind.cleanup(of: .parakeet, by: .gpt6Luna).dictationModel == .parakeet)
+        #expect(TranscriptVersionKind.cleanup(of: .parakeetCloud, by: .geminiFlashLite).dictationModel == .parakeet)
         #expect(TranscriptVersionKind.polish.dictationModel == .gemini)
         for model in PolishSelectionModel.allCases {
             #expect(TranscriptVersionKind.selection(model).dictationModel == nil)
@@ -1994,42 +1994,6 @@ final class FakeRecorder: DictationRecorder {
         try await waitUntil { h.controller.machine.activeJobs == 0 }
     }
 
-    /// On clean-up, Parakeet's part has nothing to count; GPT-6 Luna's answer does, calibrated by its own history.
-    @Test func aCleanupJobCountsOnlyItsWriting() async throws {
-        let h = harness()
-        // Luna wrote 100 characters for 50 tokens before; Gemini's ratio must not leak into it.
-        let raw = TranscriptResult(text: "raw", engine: .parakeet, processingTime: 1)
-        var luna = TranscriptResult(text: String(repeating: "a", count: 100), engine: .parakeet, processingTime: 1)
-        luna.modelID = "openai/gpt-6-luna-20260922"
-        luna.usage = TokenUsage(completionTokens: 50, reasoningTokens: 0)
-        var gemini = TranscriptResult(text: String(repeating: "b", count: 100), engine: .geminiFlash, processingTime: 1)
-        gemini.modelID = "google/gemini-3.8-flash"
-        gemini.usage = TokenUsage(completionTokens: 900, reasoningTokens: 0)
-        h.history.upsert(TranscriptEntry(engine: .parakeet, audioDuration: 5, voicedSeconds: 4,
-                                         versions: [raw.version(), luna.version(.cleanup(of: .parakeet, by: .gpt6Luna))]))
-        h.history.upsert(TranscriptEntry(engine: .geminiFlash, audioDuration: 5, voicedSeconds: 4,
-                                         versions: [gemini.version()]))
-        let transcription = Gate(), cleanup = Gate()
-        hold(h, transcription)
-        h.controller.cleanupOverride = { text, source in
-            try await cleanup.wait()
-            return TranscriptResult(text: "Dictated.", engine: source, processingTime: 0.2)
-        }
-        let r = H.recording()
-        h.controller.enqueue(r, engine: .parakeet, cleansUp: true)
-        h.controller.streamed(ChatStreamProgress(outputCharacters: 40), for: r.id)
-        #expect(h.pill.tokenCount == nil, "Parakeet streams nothing")
-        transcription.isOpen = true
-        try await waitUntil { h.controller.runningVersions[r.id] == .cleanup(of: .parakeet, by: .gpt6Luna) }
-        #expect(h.pill.tokenCount == nil, "the clean-up starts from nothing")
-        h.controller.streamed(ChatStreamProgress(outputCharacters: 40), for: r.id)
-        #expect(h.pill.tokenCount == PillTokenCount(phase: .writing, tokens: 20), "Luna's half a token a character")
-        #expect(h.pill.sessionModel == .cleanup)
-        cleanup.isOpen = true
-        try await waitUntil { h.controller.machine.activeJobs == 0 }
-        #expect(h.pill.tokenCount == nil)
-    }
-
     /// With several dictations in flight the pill speaks for the newest, its count as its tint.
     @Test func theCountFollowsTheNewestJob() async throws {
         let h = harness()
@@ -2083,18 +2047,6 @@ final class FakeRecorder: DictationRecorder {
         #expect(h.pill.tokenCount == PillTokenCount(phase: .thinking, tokens: 110), "440 characters, 4 a token")
         try await waitUntil { h.pill.showsCounter }
         #expect(StubURLProtocol.registry.requests(for: host).count == 2, "a dictation asks twice at once")
-        h.controller.handle(.cancel)
-        #expect(h.controller.machine.activeJobs == 0 && h.pill.tokenCount == nil)
-    }
-
-    /// A clean-up's stream counts its writing, once Parakeet's text is in.
-    @Test func aCleanupStreamMovesThePillsCount() async throws {
-        let (h, _) = streamingHarness([openStream([SSE.chunk(content: String(repeating: "Tidy. ", count: 10))])])
-        h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "um tidy", engine: engine, processingTime: 0.1) }
-        h.controller.enqueue(H.recording(), engine: .parakeet, cleansUp: true)
-        try await waitUntil { h.pill.tokenCount != nil }
-        #expect(h.pill.tokenCount == PillTokenCount(phase: .writing, tokens: 24), "60 characters, 2.5 a token")
-        #expect(h.pill.sessionModel == .cleanup)
         h.controller.handle(.cancel)
         #expect(h.controller.machine.activeJobs == 0 && h.pill.tokenCount == nil)
     }
@@ -2195,8 +2147,7 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
         #expect(WindowCoordinator.settingsPage == .general)
     }
 
-    /// The status line names the main model, whichever it is, and its status: clean-up's is Parakeet's until it's
-    /// ready, then the key's.
+    /// The status line names the main model, whichever it is, and its status.
     @Test func theStatusLineNamesTheMainModel() throws {
         let env = AppEnvironment.preview()
         func status() throws -> String {
@@ -2204,19 +2155,17 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
         }
         env.settings.lineup.main = .gemini
         #expect(try status() == "Gemini 3.8 Flash · Ready")
-        env.settings.lineup.main = .cleanup
-        #expect(try status() == "Parakeet v3 + GPT-6 Luna · Ready")
         env.settings.parakeetEngine = .parakeetCloud
         env.settings.lineup.main = .parakeet
         #expect(try status() == "Parakeet v3 · Cloud · Ready")
         let keyless = OpenRouterAccount.preview(status: .missing)
         #expect(MenuBuilder.status(of: .gemini, parakeet: .parakeet, models: env.models, account: keyless).text
             == "Needs key")
-        #expect(MenuBuilder.status(of: .cleanup, parakeet: .parakeet, models: env.models, account: keyless).text
+        #expect(MenuBuilder.status(of: .parakeet, parakeet: .parakeetCloud, models: env.models, account: keyless).text
             == "Needs key")
         let bare = ModelStore.preview(states: [.parakeet: .notInstalled])
-        #expect(MenuBuilder.status(of: .cleanup, parakeet: .parakeet, models: bare, account: keyless).text
-            == "Not downloaded", "Parakeet first")
+        #expect(MenuBuilder.status(of: .parakeet, parakeet: .parakeet, models: bare, account: keyless).text
+            == "Not downloaded")
     }
 
     /// The model is chosen in Models (and per dictation, from the pill): neither menu offers it.

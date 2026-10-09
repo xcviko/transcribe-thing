@@ -2,8 +2,8 @@ import Foundation
 import Testing
 @testable import TranscribeThing
 
-/// What the History row shows of its versions: the menu item text, the clean-up names when there are two to
-/// choose from, and the engine badge's tooltip (`VersionDetails`).
+/// What the History row shows of its versions: the menu item text, old clean-ups as versions but never as something
+/// to make, and the engine badge's tooltip (`VersionDetails`).
 @Suite struct VersionsMenuItemTests {
     private func menu(_ entry: TranscriptEntry, running: TranscriptVersionKind? = nil) -> VersionsMenu {
         VersionsMenu.make(for: entry, running: running, readiness: {
@@ -26,14 +26,20 @@ import Testing
         #expect(bare.itemTitle == "Parakeet v3 + Clean-up by GPT-6 Luna")
     }
 
-    @Test func oneTextToCleanUpNamesOnlyTheModelTwoNameTheirText() {
-        #expect(menu(transcript()).actions.filter(\.kind.isCleanup).map(\.name) == ["Clean Up with GPT-6 Luna"])
+    /// Clean-up is gone: no transcript offers it, whatever Parakeet texts it has, and one GPT-6 Luna already tidied
+    /// keeps that version to switch to.
+    @Test func nothingOffersACleanUp() {
+        #expect(menu(transcript()).actions.map(\.kind) == [.transcription(.parakeetCloud), .transcription(.geminiFlash),
+                                                           .polish])
         var entry = transcript(.parakeet)
         entry.addVersion(TranscriptVersion(text: "cloud", engine: .parakeetCloud))
-        let cleanups = menu(entry).actions.filter { $0.kind.isCleanup }
-        #expect(cleanups.map(\.name) == ["Clean Up Parakeet v3 with GPT-6 Luna",
-                                          "Clean Up Parakeet v3 · Cloud with GPT-6 Luna"])
-        #expect(cleanups.map(\.title) == cleanups.map(\.name))
+        entry.addVersion(TranscriptVersion(kind: .cleanup(of: .parakeet, by: .gpt6Luna), text: "Hello.",
+                                           metadata: TranscriptMetadata()))
+        let m = menu(entry)
+        #expect(!m.actions.contains { $0.kind.isCleanup })
+        #expect(!m.actions.contains { $0.name.contains("Clean Up") || $0.name.contains("Luna") })
+        #expect(m.versions.map(\.title) == ["Parakeet v3", "Parakeet v3 · Cloud", "Parakeet v3 + Clean-up by GPT-6 Luna"])
+        #expect(m.versions.last?.isCurrent == true)
     }
 
     /// Gemini 3.1 Pro and Flash Lite's clean-ups stay in the menu as versions, but nothing offers to run them: not
@@ -54,13 +60,13 @@ import Testing
         let tidiedMenu = menu(tidied)
         #expect(tidiedMenu.versions.map(\.title) == ["Parakeet v3", "Parakeet v3 + Clean-up by Flash Lite"])
         #expect(tidiedMenu.actions.map(\.kind) == [.transcription(.parakeetCloud), .transcription(.geminiFlash),
-                                                   .cleanup(of: .parakeet, by: .gpt6Luna), .polish])
+                                                   .polish])
 
         var failed = TranscriptEntry(text: "", engine: .geminiPro, status: .failed, audioDuration: 20, voicedSeconds: 10,
                                      audioFileName: "a.wav")
         #expect(menu(failed).actions.map(\.kind) == EngineID.offered.map(TranscriptVersionKind.transcription) + [.polish])
         failed.status = .cancelled
-        #expect(!menu(failed).actions.contains { $0.kind.engine.isRetired || $0.kind.cleanupModel?.isRetired == true })
+        #expect(!menu(failed).actions.contains { $0.kind.engine.isRetired || $0.kind.isCleanup })
     }
 
     /// Rows name the submenu without making the menu (`VersionsMenu.title(for:)`).
@@ -75,8 +81,8 @@ import Testing
     @Test func whileSomethingRunsEveryActionIsBusyButVersionsStaySwitchable() {
         var entry = transcript()
         entry.addVersion(TranscriptVersion(text: "g", engine: .geminiFlash))
-        let m = menu(entry, running: .cleanup(of: .parakeet, by: .gpt6Luna))
-        #expect(m.runningTitle == "Cleaning up with GPT-6 Luna…")
+        let m = menu(entry, running: .polish)
+        #expect(m.runningTitle == "Polishing with Gemini Flash…")
         #expect(m.actions.allSatisfy { !$0.isEnabled && $0.title.hasSuffix(" · Busy") })
         #expect(m.versions.count == 2)
         #expect(menu(entry, running: .transcription(.parakeetCloud)).runningTitle
@@ -104,7 +110,7 @@ import Testing
 
     @Test func aCleanUpSaysWhoCleanedItAndACutOffAnswerSaysSo() {
         let version = TranscriptVersion(kind: .cleanup(of: .parakeet, by: .geminiFlashLite), text: "t", metadata: TranscriptMetadata(
-            modelID: CleanupModel.geminiFlashLite.openRouterModelID, reasoningEffort: .minimal, generationTime: 0.8,
+            modelID: "google/gemini-3.5-flash-lite", reasoningEffort: .minimal, generationTime: 0.8,
             usedSystemPrompt: true, finishReason: "length"))
         #expect(VersionDetails.lines(for: version) == [
             "Parakeet v3 + Clean-up by Flash Lite",

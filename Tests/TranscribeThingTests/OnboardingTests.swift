@@ -681,7 +681,7 @@ import Testing
         }
         #expect(usable(Self.lineup(on: [.gemini]), valid))
         #expect(!usable(Self.lineup(on: []), valid), "nothing to step to")
-        #expect(!usable(Self.lineup(on: [.cleanup]), .missing))
+        #expect(!usable(Self.lineup(on: [.gemini]), .missing))
         #expect(!usable(Self.lineup(on: [.gemini]), .invalid("401")))
         #expect(usable(Self.lineup(on: [.gemini]), .offline))
         #expect(usable(Self.lineup(main: .gemini, on: [.parakeet]), .missing), "Parakeet on this Mac needs no key")
@@ -699,25 +699,21 @@ import Testing
         #expect(!custom.contains("fn"))
         #expect(note(nil, Self.lineup(on: [.gemini])).contains("Settings"))
         #expect(note(.fnTab, Self.lineup(on: [])).contains("Settings"))
-        let cleanup = note(.fnTab, Self.lineup(on: [.cleanup]))
-        #expect(cleanup.contains("cleaned up") && !cleanup.contains("Gemini"))
-        var geminiFirst = Self.lineup(on: [.cleanup, .gemini])
-        geminiFirst.move(.gemini, to: 1)
-        #expect(note(.fnTab, geminiFirst).hasPrefix("Press fn\u{00A0}⇥ while dictating to use Gemini for a long talk"))
+        #expect(!note(.fnTab, Self.lineup(on: [.gemini])).contains("cleaned up"))
     }
 
-    @Test func theDefaultNoteIsUnchanged() {
+    @Test func theDefaultNoteNamesGemini() {
         #expect(OnboardingGate.lineupNote(binding: .fnTab, lineup: .default, parakeet: .parakeet)
-            == "Press fn\u{00A0}⇥ while dictating to have the text cleaned up, or again to use Gemini for a long talk "
-                + "where every word counts. It uses the same OpenRouter key.")
+            == "For a long talk where every word counts, press fn\u{00A0}⇥ while dictating to use Gemini. "
+                + "It uses the same OpenRouter key.")
     }
 
     @Test func theNoteNamesAMainModelOtherThanParakeet() {
         #expect(OnboardingGate.lineupNote(binding: .fnTab, lineup: Self.lineup(main: .gemini, on: [.parakeet]),
                                           parakeet: .parakeet)
             == "Your dictations start on Gemini 3.8 Flash, your main model. Change it anytime in Models.")
-        #expect(OnboardingGate.lineupNote(binding: nil, lineup: Self.lineup(main: .cleanup, on: []), parakeet: .parakeet)
-            == "Your dictations start on Parakeet v3 + GPT-6 Luna, your main model. Change it anytime in Models.")
+        #expect(OnboardingGate.lineupNote(binding: nil, lineup: Self.lineup(main: .gemini, on: []), parakeet: .parakeetCloud)
+            == "Your dictations start on Gemini 3.8 Flash, your main model. Change it anytime in Models.")
     }
 }
 
@@ -745,12 +741,8 @@ import Testing
     @Test func switchModelLessonShowsOnlyWhenAStepWouldAnswer() {
         #expect(makeModel().showsSwitchModelLesson, "the preview key is valid")
         #expect(!makeModel { ctx in ctx.account = .preview(status: .missing) }.showsSwitchModelLesson)
-        #expect(makeModel { ctx in ctx.settings.lineup.setSwitchable(.gemini, false) }.showsSwitchModelLesson,
-                "clean-up alone")
-        #expect(!makeModel { ctx in
-            ctx.settings.lineup.setSwitchable(.gemini, false)
-            ctx.settings.lineup.setSwitchable(.cleanup, false)
-        }.showsSwitchModelLesson)
+        #expect(!makeModel { ctx in ctx.settings.lineup.setSwitchable(.gemini, false) }.showsSwitchModelLesson,
+                "nothing to step to")
     }
 
     /// The practice step's checks follow the main model: Gemini needs the key, Parakeet on this Mac doesn't.
@@ -763,10 +755,7 @@ import Testing
         }
         #expect(gemini.gateInputs.engine == .geminiFlash)
         #expect(gemini.practiceReadiness != .ready)
-        let cleanup = makeModel { ctx in
-            ctx.settings.parakeetEngine = .parakeetCloud
-            ctx.settings.lineup.main = .cleanup
-        }
-        #expect(cleanup.gateInputs.engine == .parakeetCloud)
+        let cloud = makeModel { ctx in ctx.settings.parakeetEngine = .parakeetCloud }
+        #expect(cloud.gateInputs.engine == .parakeetCloud)
     }
 }

@@ -155,7 +155,7 @@ private struct CloudEngineCard: View {
     }
 }
 
-/// One line under the models: clean-up and Gemini aren't picked here, they're a key press away while dictating.
+/// One line under the models: Gemini isn't picked here, it's a key press away while dictating.
 private struct SwitchModelNote: View {
     var text: String
 

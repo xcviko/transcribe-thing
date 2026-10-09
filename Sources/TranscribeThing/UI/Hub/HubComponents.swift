@@ -633,16 +633,18 @@ struct EngineGlyph: View {
     var engine: EngineID
     /// The OpenRouter provider that served the transcript, for the tooltip.
     var provider: String?
-    /// The transcript shown is this model's clean-up of `engine`'s: a wand follows the letter.
+    /// The transcript shown is this model's clean-up of `engine`'s (an old one: nothing makes clean-ups any more): a
+    /// wand follows the letter.
     var cleanupModel: CleanupModel?
     /// The tooltip in full (`VersionDetails`), in place of the engine and provider alone.
     var details: String?
     /// The models' colors (`AppSettings.modelColors`).
     var colors: ModelColors = .default
 
-    /// The color of the model that made it: the retired Gemini 3.1 Pro wears Gemini's, cloud Parakeet Parakeet's.
+    /// The color of the model that made it: the retired Gemini 3.1 Pro wears Gemini's, cloud Parakeet and an old
+    /// clean-up of Parakeet's text Parakeet's.
     var color: ModelColor {
-        colors[ModelChoice(engine: engine, cleansUp: cleanupModel != nil)]
+        colors[ModelChoice(engine: engine)]
     }
 
     var body: some View {

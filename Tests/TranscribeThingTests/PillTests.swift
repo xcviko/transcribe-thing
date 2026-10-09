@@ -1415,11 +1415,8 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         model.engineChipPulse += 1
         model.sessionModel = .gemini
         #expect(model.chipModel == .gemini)
-        model.engineChipPulse += 1
-        model.sessionModel = .cleanup
-        #expect(model.chipModel == .cleanup)
         try await waitUntil { !model.showsChip }
-        #expect(model.chipModel == nil && model.sessionModel == .cleanup, "the dictation stays on clean-up")
+        #expect(model.chipModel == nil && model.sessionModel == .gemini, "the dictation stays on Gemini")
     }
 
     @Test func switchingBackNamesTheMainModelThenFades() async throws {
@@ -1469,11 +1466,10 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
 
     @Test func theMenuOffersTheLineupFromTheMainModel() {
         let model = makeModel()
-        #expect(model.menuChoices == [.parakeet, .cleanup, .gemini])
+        #expect(model.menuChoices == [.parakeet, .gemini])
         model.settings.lineup.setSwitchable(.gemini, false)
-        #expect(model.menuChoices == [.parakeet, .cleanup])
+        #expect(model.menuChoices == [.parakeet])
         model.settings.lineup.setSwitchable(.gemini, true)
-        model.settings.lineup.setSwitchable(.cleanup, false)
         model.settings.lineup.main = .gemini
         #expect(model.menuChoices == [.gemini, .parakeet], "from the main model on, wrapping around")
     }
@@ -1482,16 +1478,15 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
     @Test func eachModelKeepsItsColorWhateverTheMainModel() {
         let colors = ModelColors.default
         #expect(PillPalette.accent(for: .gemini, in: colors) == PillAccent(ringHex: 0x7F77DD, markHex: 0xAFA9EC))
-        #expect(PillPalette.accent(for: .cleanup, in: colors) == PillAccent(ringHex: 0xE58A5F, markHex: 0xFFB896))
         #expect(PillPalette.accent(for: .parakeet, in: colors) == nil && PillPalette.accent(for: nil, in: colors) == nil)
 
         var picked = ModelColors.default
         picked[.parakeet] = .teal
         picked[.gemini] = .graphite
-        picked[.cleanup] = .teal
         #expect(PillPalette.accent(for: .parakeet, in: picked) == PillPalette.accent(for: ModelColor.teal))
         #expect(PillPalette.accent(for: .gemini, in: picked) == nil, "graphite is the plain pill")
-        #expect(PillPalette.accent(for: .cleanup, in: picked) == PillPalette.accent(for: .parakeet, in: picked),
+        picked[.gemini] = .teal
+        #expect(PillPalette.accent(for: .gemini, in: picked) == PillPalette.accent(for: .parakeet, in: picked),
                 "two may share one")
         // The main model changes nothing the pill draws.
         let model = makeModel()
@@ -1515,16 +1510,16 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
 
     @Test func theModelMenuChecksTheCurrentChoiceAndDisablesWhatCantRun() throws {
         var picked: [ModelChoice] = []
-        let menu = PillController.modelMenu(choices: [.gemini, .parakeet, .cleanup], current: .cleanup,
+        let menu = PillController.modelMenu(choices: [.gemini, .parakeet], current: .gemini,
                                             parakeet: .parakeetCloud,
                                             unavailableReason: { $0 == .parakeet ? "Needs key" : nil }) {
             picked.append($0)
         }
         // The cycle as it is, the main model first: no separators.
         #expect(menu.items.allSatisfy { !$0.isSeparatorItem })
-        #expect(menu.items.map(\.title) == ["Gemini 3.8 Flash", "Parakeet v3 · Cloud  Needs key", "Parakeet v3 + GPT-6 Luna"])
-        #expect(menu.items.map(\.state) == [.off, .off, .on])
-        #expect(menu.items.map(\.isEnabled) == [true, false, true])
+        #expect(menu.items.map(\.title) == ["Gemini 3.8 Flash", "Parakeet v3 · Cloud  Needs key"])
+        #expect(menu.items.map(\.state) == [.on, .off])
+        #expect(menu.items.map(\.isEnabled) == [true, false])
         #expect(menu.items[0].attributedTitle == nil, "a suffix only for what can't run")
         let gemini = try #require(menu.items.first)
         _ = (gemini.target as AnyObject?)?.perform(gemini.action, with: gemini)
@@ -1533,10 +1528,8 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
 
     @Test func theHintNamesTheOneStepOrWhatTheyShare() {
         #expect(PillSwitchHint.label(for: [.gemini]) == "Gemini 3.8 Flash")
-        #expect(PillSwitchHint.label(for: [.cleanup]) == "GPT-6 Luna clean-up")
         #expect(PillSwitchHint.label(for: [.parakeet]) == "Parakeet v3")
-        #expect(PillSwitchHint.label(for: [.cleanup, .gemini]) == "Clean-up, Gemini")
-        #expect(PillSwitchHint.label(for: [.parakeet, .cleanup]) == "Parakeet, Clean-up")
+        #expect(PillSwitchHint.label(for: [.parakeet, .gemini]) == "Parakeet, Gemini")
     }
 
     @Test func toastsClearTheChip() {
@@ -1571,7 +1564,6 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
 
     @Test func theDefaultsAreTodaysAndPinkIsTheRetiredOne() {
         #expect(ModelColors.default[.parakeet] == .graphite)
-        #expect(ModelColors.default[.cleanup] == .orange)
         #expect(ModelColors.default[.gemini] == .violet)
         #expect(ModelChoice.allCases.allSatisfy { ModelColors.default[$0] == $0.defaultColor })
         #expect(PillPalette.accent(for: ModelColor.violet) == PillAccent(ringHex: 0x7F77DD, markHex: 0xAFA9EC))
@@ -1622,7 +1614,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
             #expect(ring.distance(to: Self.stop) >= 0.11, "\(color)'s ring and Stop")
             #expect(mark.distance(to: Self.stop) >= 0.11 && mark.distance(to: Self.error) >= 0.11,
                     "\(color)'s marks and Stop, the error")
-            // Clean-up's ring has always been this close to the error's red.
+            // Orange's ring (the removed clean-up's) has always been this close to the error's red.
             #expect(ring.distance(to: Self.error) >= (color == .orange ? 0.07 : 0.11), "\(color)'s ring and the error")
         }
     }
@@ -1729,11 +1721,11 @@ private struct SRGB {
 
     @Test func theRestMorphShrinksTheChipWithTheContent() {
         var stage = PillStage()
-        stage.record(.processing(afterHandsFree: false), choice: .cleanup)
+        stage.record(.processing(afterHandsFree: false), choice: .gemini)
         let morphing = stage.frame(for: .rest, choice: nil)
-        #expect(morphing.choice == .cleanup && morphing.morph == 1)
+        #expect(morphing.choice == .gemini && morphing.morph == 1)
         stage.record(.rest, choice: nil)
-        #expect(stage.frame(for: .rest, choice: nil).choice == .cleanup)
+        #expect(stage.frame(for: .rest, choice: nil).choice == .gemini)
         stage.settle(stage.generation, visual: .rest)
         #expect(stage.frame(for: .rest, choice: nil).choice == nil)
     }

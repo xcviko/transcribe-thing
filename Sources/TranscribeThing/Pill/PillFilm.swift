@@ -110,35 +110,35 @@ private struct FilmScenario {
 private enum FilmScript {
     @MainActor static let all: [FilmScenario] = [
         FilmScenario(name: "handsfree-start-accent", mode: .always,
-                     note: "fn Space on Parakeet, clean-up the hands-free model: graphite, no ring → locked, orange ring") { s in
+                     note: "fn Space on Parakeet, Gemini the hands-free model: graphite, no ring → locked, violet ring") { s in
             s.record(.listening, on: .parakeet)
             s.wait(0.8)
-            s.film("listening (Parakeet) → locked (clean-up)") {
-                s.switchModel(to: .cleanup)
-                s.record(.locked, on: .cleanup)
+            s.film("listening (Parakeet) → locked (Gemini)") {
+                s.switchModel(to: .gemini)
+                s.record(.locked, on: .gemini)
             }
         },
-        FilmScenario(name: "handsfree-stop", mode: .always, note: "Stop in hands-free on clean-up") { s in
-            s.record(.locked, on: .cleanup, startedAgo: 14)
+        FilmScenario(name: "handsfree-stop", mode: .always, note: "Stop in hands-free on Gemini") { s in
+            s.record(.locked, on: .gemini, startedAgo: 14)
             s.wait(0.8)
-            s.film("locked → processing after hands-free") { s.process(on: .cleanup) }
+            s.film("locked → processing after hands-free") { s.process(on: .gemini) }
         },
         FilmScenario(name: "nospeech-to-listening", mode: .always,
-                     note: "A clean-up dictation of nothing, then fn again within the flash’s hold") { s in
-            s.record(.listening, on: .cleanup)
+                     note: "A Gemini dictation of nothing, then fn again within the flash’s hold") { s in
+            s.record(.listening, on: .gemini)
             s.wait(0.6)
-            s.process(on: .cleanup)
+            s.process(on: .gemini)
             s.wait(0.6)
-            s.film("processing → “No speech detected” (clean-up ring)") { s.noSpeech(on: .cleanup) }
+            s.film("processing → “No speech detected” (Gemini ring)") { s.noSpeech(on: .gemini) }
             s.film("“No speech detected” → listening (Parakeet)") { s.record(.listening, on: .parakeet) }
         },
         FilmScenario(name: "nospeech-to-hidden", mode: .whileDictating,
-                     note: "“No speech detected” on clean-up, left alone until its hold runs out") { s in
-            s.record(.listening, on: .cleanup)
+                     note: "“No speech detected” on Gemini, left alone until its hold runs out") { s in
+            s.record(.listening, on: .gemini)
             s.wait(0.6)
-            s.process(on: .cleanup)
+            s.process(on: .gemini)
             s.wait(0.6)
-            s.noSpeech(on: .cleanup)
+            s.noSpeech(on: .gemini)
             s.film("“No speech detected” → hidden (hold over)", when: { s.model.visiblePhase != .error })
         },
         FilmScenario(name: "canceled-undo", mode: .always, area: FilmScenario.toast,
@@ -251,7 +251,7 @@ private enum FilmScript {
             s.record(.listening, on: .parakeet)
             s.wait(0.6)
             s.film("switch to Gemini: chip up, violet ring") { s.switchModel(to: .gemini) }
-            s.film("switch to clean-up: chip rolls, orange ring") { s.switchModel(to: .cleanup) }
+            s.film("back to Parakeet: chip rolls, ring goes") { s.switchModel(to: .parakeet) }
             s.film("chip goes", when: { !s.model.isChipFlashing })
         },
         FilmScenario(name: "polish-toggle", mode: .always,

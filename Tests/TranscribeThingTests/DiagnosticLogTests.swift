@@ -281,7 +281,7 @@ private enum Fixture {
         let header = text.components(separatedBy: "\n\n").first ?? ""
         for line in ["transcribe-thing logs", "Exported: 2026-10-03T14:03:22.481+04:00", "App: ", "macOS: ", "Mac: ",
                      "OpenRouter key saved: no",
-                     "Settings: main=parakeet steps=cleanup,gemini parakeet=local handsFreeModel=main "
+                     "Settings: main=parakeet steps=gemini parakeet=local handsFreeModel=main "
                          + #"shortcut.pushToTalk=fn shortcut.handsFree="fn Space""#,
                      "pill=whileDictating sounds=on doublePress=off dictionaryWords=0 keySaved=no"] {
             #expect(header.contains(line), "header has \(line)")

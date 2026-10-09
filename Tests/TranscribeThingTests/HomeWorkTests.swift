@@ -4,7 +4,7 @@ import Testing
 
 // MARK: - Home work stays in Home
 
-/// Transcribe With, Clean Up and a failed row's Retry, started from Home: they show only in their row, never in
+/// Transcribe With, Polish and a failed row's Retry, started from Home: they show only in their row, never in
 /// the pill, a notice, a cue, the menu bar or Esc, and never hold a dictation back.
 @MainActor
 @Suite(.serialized) struct HomeWorkTests {
@@ -70,7 +70,7 @@ import Testing
     @Test func homeWorkNeverShowsOutsideHome() async throws {
         let h = harness()
         defer { removeFiles(h) }
-        let transcribed = try await transcript(h), tidied = try await transcript(h)
+        let transcribed = try await transcript(h), polished = try await transcript(h)
         let failed = try await failedDictation(h)
         let outside = Outside(h)
         let shakes = h.pill.shakeCount
@@ -82,17 +82,12 @@ import Testing
             if fails { throw AppError.timeout(engine) }
             return TranscriptResult(text: "by \(engine.rawValue)", engine: engine, processingTime: 1)
         }
-        h.controller.cleanupOverride = { _, source in
-            try await Task.sleep(for: .milliseconds(80))
-            if fails { throw AppError.openRouterServer("HTTP 500") }
-            return TranscriptResult(text: "Clean.", engine: source, processingTime: 1)
-        }
         h.controller.insertOverride = { _ in Issue.record("Home work is never pasted"); return .pasted }
 
         for failing in [true, false] {
             fails = failing
             h.controller.makeVersion(.transcription(.geminiFlash), of: try #require(h.history.entry(id: transcribed)))
-            h.controller.makeVersion(.cleanup(of: .parakeet, by: .gpt6Luna), of: try #require(h.history.entry(id: tidied)))
+            h.controller.makeVersion(.polish, of: try #require(h.history.entry(id: polished)))
             h.controller.makeVersion(.transcription(.parakeetCloud), of: try #require(h.history.entry(id: failed)))
             #expect(h.controller.homeWork.count == 3)
             #expect(h.controller.pendingJobCount == 0 && h.controller.machine.activeJobs == 0)
@@ -102,13 +97,13 @@ import Testing
             try await waitUntil { h.controller.homeWork.isEmpty }
             #expect(h.toasts.notices.isEmpty)
             if failing {
-                #expect(Set(h.controller.homeFailures.keys) == [transcribed, tidied], "why, in each transcript's row")
+                #expect(Set(h.controller.homeFailures.keys) == [transcribed, polished], "why, in each transcript's row")
                 #expect(h.history.entry(id: failed)?.errorMessage == "\(EngineID.parakeetCloud.shortName) took too long",
                         "and in the failed row itself")
             }
         }
         #expect(h.history.entry(id: transcribed)?.currentKind == .transcription(.geminiFlash))
-        #expect(h.history.entry(id: tidied)?.currentKind == .cleanup(of: .parakeet, by: .gpt6Luna))
+        #expect(h.history.entry(id: polished)?.currentKind == .polish)
         #expect(h.history.entry(id: failed)?.status == .success)
         #expect(h.controller.homeFailures.isEmpty, "each success cleared its row's failure")
         #expect(outside.sawNothing)
@@ -177,17 +172,13 @@ import Testing
         var landed: [String] = []
         var pasted: [String] = []
         h.controller.insertOverride = { text in pasted.append(text); return .pasted }
-        h.controller.cleanupOverride = { _, source in
-            try await Task.sleep(for: .milliseconds(150))
-            landed.append("clean-up")
-            return TranscriptResult(text: "Clean.", engine: source, processingTime: 1)
-        }
         h.controller.transcribeOverride = { recording, engine in
             try await Task.sleep(for: .milliseconds(150))
             if recording.id == failed { landed.append("retry") }
+            if recording.id == id { landed.append("polish") }
             return TranscriptResult(text: "dictated", engine: engine, processingTime: 1)
         }
-        h.controller.makeVersion(.cleanup(of: .parakeet, by: .gpt6Luna), of: try #require(h.history.entry(id: id)))
+        h.controller.makeVersion(.polish, of: try #require(h.history.entry(id: id)))
         h.controller.retry(try #require(h.history.entry(id: failed)), with: .parakeet)
         h.controller.enqueue(H.recording(), engine: .parakeet)
         #expect(h.controller.homeWork.count == 2)
@@ -208,15 +199,14 @@ import Testing
         let h = harness()
         defer { removeFiles(h) }
         let id = try await transcript(h)
-        let cleanUp = TranscriptVersionKind.cleanup(of: .parakeet, by: .gpt6Luna)
-        h.controller.cleanupOverride = { _, _ in throw AppError.openRouterServer("HTTP 500") }
-        h.controller.makeVersion(cleanUp, of: try #require(h.history.entry(id: id)))
+        h.controller.transcribeOverride = { _, _ in throw AppError.openRouterServer("HTTP 500") }
+        h.controller.makeVersion(.polish, of: try #require(h.history.entry(id: id)))
         try await waitUntil { h.controller.homeFailures[id] != nil }
-        #expect(h.controller.homeFailures[id] == HomeFailure(kind: cleanUp, reason: "OpenRouter ran into a problem."))
+        #expect(h.controller.homeFailures[id] == HomeFailure(kind: .polish, reason: "OpenRouter ran into a problem."))
         h.controller.dismissHomeFailure(for: id)
         #expect(h.controller.homeFailures.isEmpty)
 
-        h.controller.makeVersion(cleanUp, of: try #require(h.history.entry(id: id)))
+        h.controller.makeVersion(.polish, of: try #require(h.history.entry(id: id)))
         try await waitUntil { h.controller.homeFailures[id] != nil }
         var release = false
         h.controller.transcribeOverride = { _, engine in
@@ -232,20 +222,16 @@ import Testing
         #expect(h.toasts.notices.isEmpty)
     }
 
-    /// A key that can't work is a reason in the row like any other, and costs no request.
+    /// A key that can't work is a reason in the row like any other, the same for Polish and a transcription.
     @Test func aKeyProblemReadsAsTheRowsReason() async throws {
         let h = harness(.missing)
         defer { removeFiles(h) }
         let id = try await transcript(h)
-        h.controller.cleanupOverride = { _, source in
-            Issue.record("no request with a key that can't work")
-            return TranscriptResult(text: "x", engine: source, processingTime: 1)
-        }
-        h.controller.makeVersion(.cleanup(of: .parakeet, by: .gpt6Luna), of: try #require(h.history.entry(id: id)))
+        h.controller.transcribeOverride = { _, _ in throw AppError.openRouterMissingKey }
+        h.controller.makeVersion(.polish, of: try #require(h.history.entry(id: id)))
         try await waitUntil { h.controller.homeFailures[id] != nil }
         #expect(h.controller.homeFailures[id]?.reason == "Add your OpenRouter key in Models.")
 
-        h.controller.transcribeOverride = { _, _ in throw AppError.openRouterMissingKey }
         h.controller.makeVersion(.transcription(.geminiFlash), of: try #require(h.history.entry(id: id)))
         try await waitUntil { h.controller.homeFailures[id]?.kind == .transcription(.geminiFlash) }
         #expect(h.controller.homeFailures[id]?.reason == "Add your OpenRouter key in Models.", "the same words")
@@ -253,29 +239,26 @@ import Testing
     }
 
     /// The row's title names the model ("Couldn't transcribe with Gemini Flash"), so the reason after it says "It";
-    /// a key, credit or connection problem reads the same for a transcription and a clean-up.
+    /// a key, credit or connection problem reads the same for a transcription and Polish.
     @Test func reasonsDontNameTheModelTwice() {
         let reason = DictationController.homeFailureReason(_:making:)
         let flash = TranscriptVersionKind.transcription(.geminiFlash)
-        let luna = TranscriptVersionKind.cleanup(of: .parakeet, by: .gpt6Luna)
+        let polish = TranscriptVersionKind.polish
         #expect(flash.failureTitle == "Couldn’t transcribe with Gemini Flash")
-        #expect(luna.failureTitle == "Couldn’t clean up with GPT-6 Luna")
+        #expect(polish.failureTitle == "Couldn’t polish with Gemini Flash")
         #expect(reason(.timeout(.geminiFlash), flash) == "It took too long.")
-        #expect(reason(.timeout(.parakeet), luna) == "It took too long.")
+        #expect(reason(.timeout(.geminiFlash), polish) == "It took too long.")
         #expect(reason(.engineFailed(.parakeet, "CoreML"), .transcription(.parakeet)) == "It ran into a problem.")
         #expect(reason(.modelLoadFailed(.parakeet, "corrupt"), .transcription(.parakeet)) == "It couldn’t be loaded.")
-        #expect(reason(nil, luna) == "It returned no text.")
+        #expect(reason(nil, polish) == "It returned no text.")
         #expect(reason(.openRouterBadRequest(""), flash) == "It couldn’t process this recording.")
-        #expect(reason(.openRouterBadRequest(""), luna) == "It couldn’t process the text.")
-        #expect(reason(.openRouterProviderUnavailable(""), luna) == "OpenAI is unavailable.")
         #expect(reason(.openRouterProviderUnavailable(""), flash) == "Google AI Studio is unavailable")
         #expect(reason(.openRouterProviderUnavailable(""), .transcription(.parakeetCloud))
                 == "OpenRouter couldn’t reach its provider.")
         #expect(reason(.noSpeech, flash) == "No speech detected")
         for error: AppError in [.openRouterMissingKey, .openRouterInvalidKey(""), .openRouterNoCredits(""), .offline,
                                 .openRouterRateLimited(retryAfter: nil), .openRouterServer("")] {
-            #expect(reason(error, flash) == reason(error, luna))
-            #expect(reason(error, flash) == DictationController.cleanupFailureReason(error, model: .gpt6Luna))
+            #expect(reason(error, flash) == reason(error, polish))
         }
     }
 
@@ -349,15 +332,15 @@ import Testing
     @Test func deletingARowCancelsItsHomeWork() async throws {
         let h = harness()
         defer { removeFiles(h) }
-        let transcribed = try await transcript(h), tidied = try await transcript(h)
+        let transcribed = try await transcript(h), polished = try await transcript(h)
+        h.controller.transcribeOverride = { _, _ in throw AppError.openRouterServer("HTTP 500") }
+        h.controller.makeVersion(.polish, of: try #require(h.history.entry(id: polished)))
+        try await waitUntil { h.controller.homeFailures[polished] != nil }
         var stopped = 0
         h.controller.transcribeOverride = { _, engine in
             do { try await Task.sleep(for: .seconds(5)) } catch { stopped += 1; throw error }
             return TranscriptResult(text: "late", engine: engine, processingTime: 1)
         }
-        h.controller.cleanupOverride = { _, _ in throw AppError.openRouterServer("HTTP 500") }
-        h.controller.makeVersion(.cleanup(of: .parakeet, by: .gpt6Luna), of: try #require(h.history.entry(id: tidied)))
-        try await waitUntil { h.controller.homeFailures[tidied] != nil }
         h.controller.retry(try #require(h.history.entry(id: transcribed)), with: .geminiFlash)
         #expect(h.controller.homeWork[transcribed] != nil)
 
@@ -369,15 +352,11 @@ import Testing
         #expect(h.toasts.notices.isEmpty)
     }
 
-    /// A transcript with no text (a legacy "No speech detected" row) has nothing to clean up.
+    /// Nothing cleans up any more: not even a transcript with no text (a legacy "No speech detected" row).
     @Test func anEmptyTranscriptIsntCleanedUp() {
         let h = H.make(keyStatus: .valid(KeyInfo()))
         let entry = TranscriptEntry(text: "", engine: .parakeet, audioDuration: 4, voicedSeconds: 0)
         h.history.upsert(entry)
-        h.controller.cleanupOverride = { _, source in
-            Issue.record("no request for no text")
-            return TranscriptResult(text: "x", engine: source, processingTime: 1)
-        }
         h.controller.makeVersion(.cleanup(of: .parakeet, by: .gpt6Luna), of: entry)
         #expect(h.controller.homeWork.isEmpty && h.controller.homeFailures.isEmpty)
         let menu = VersionsMenu.make(for: entry, running: nil, readiness: { _ in .ready })

@@ -28,18 +28,18 @@ enum HubSnapshots {
             hub("hub-home-row-menu", .home, height: 900) { c in
                 c.previewHoveredEntry = c.history.entries.first?.id
             },
-            // Home work under way, each with its × to cancel it: a clean-up on the newest row, Gemini Flash
-            // transcribing the second, a Retry on the failed one.
+            // Home work under way, each with its × to cancel it: Polish on the newest row, Gemini Flash transcribing
+            // the second, a Retry on the failed one.
             hub("hub-home-transcribing", .home, height: 900) { c in
                 let entries = c.history.entries
                 var running: [UUID: TranscriptVersionKind] = [:]
-                if let first = entries.first { running[first.id] = .cleanup(of: .parakeet, by: .default) }
+                if let first = entries.first { running[first.id] = .polish }
                 if entries.count > 1 { running[entries[1].id] = .transcription(.geminiFlash) }
                 if let failed = entries.first(where: { $0.status == .failed }) { running[failed.id] = .transcription(.parakeet) }
                 c.previewRunning = running
             },
             // Home work that didn't come, said in its row with Retry and a × to dismiss it: Gemini Flash took too long
-            // on the newest row, a clean-up failed on the second. The third's recording couldn't be read (nothing to
+            // on the newest row, Polish failed on the second. The third's recording couldn't be read (nothing to
             // retry), nor the failed row's, which says it's no longer kept.
             hub("hub-home-work-failed", .home, height: 900) { c in
                 c.previewFailures = Samples.homeFailures(c.history.entries)
@@ -54,9 +54,8 @@ enum HubSnapshots {
             hub("hub-home-work-compact", .home, width: 820, height: 900) { c in
                 let entries = c.history.entries
                 guard entries.count > 2 else { return }
-                let cleanUp = TranscriptVersionKind.cleanup(of: .parakeet, by: .default)
                 c.previewFailures = [
-                    entries[0].id: Samples.homeFailure(cleanUp, .openRouterProviderUnavailable("")),
+                    entries[0].id: Samples.homeFailure(.polish, .openRouterProviderUnavailable("")),
                     entries[2].id: Samples.homeFailure(.transcription(.parakeetCloud), .timeout(.parakeetCloud)),
                 ]
                 var running = [entries[1].id: TranscriptVersionKind.transcription(.geminiFlash)]
@@ -108,10 +107,9 @@ enum HubSnapshots {
             hub("hub-models-key-missing", .models, height: 1100) { c in
                 c.account = .preview(status: .missing)
             },
-            // Switch model rebound to right ⌘, clean-up left out: the line above the lineup shows the real binding.
+            // Switch model rebound to right ⌘: the line above the lineup shows the real binding.
             hub("hub-models-extra-custom", .models, height: 1100) { c in
                 c.settings.shortcuts[.switchModel] = .rightCommand
-                c.settings.lineup.setSwitchable(.cleanup, false)
             },
             hub("hub-models-compact-key-missing", .models, width: 820, height: 1140) { c in
                 c.account = .preview(status: .missing)
@@ -123,19 +121,17 @@ enum HubSnapshots {
             hub("hub-models-main-gemini", .models, height: 1100) { c in
                 c.settings.lineup.main = .gemini
             },
-            // Clean-up as the main model, with Parakeet through OpenRouter.
-            hub("hub-models-main-cleanup-cloud", .models, height: 1100) { c in
+            // Gemini as the main model, with Parakeet through OpenRouter.
+            hub("hub-models-main-gemini-cloud", .models, height: 1100) { c in
                 c.settings.parakeetEngine = .parakeetCloud
-                c.settings.lineup.main = .cleanup
+                c.settings.lineup.main = .gemini
             },
-            // Dragged into Gemini, clean-up, Parakeet: the line follows the new order from the main model.
+            // Dragged into Gemini, Parakeet: the line follows the new order from the main model.
             hub("hub-models-reordered", .models, height: 1100) { c in
                 c.settings.lineup.move(.gemini, to: 0)
-                c.settings.lineup.move(.cleanup, to: 1)
             },
             // Only the main model takes part: the line says how to reach another.
             hub("hub-models-only-main", .models, height: 1100) { c in
-                c.settings.lineup.setSwitchable(.cleanup, false)
                 c.settings.lineup.setSwitchable(.gemini, false)
             },
             // Colors picked in Models: every tile wears its model's, the Where Parakeet runs tiles and the sidebar chip
@@ -184,7 +180,6 @@ enum HubSnapshots {
                 c.devices = .preview(devices: AudioDeviceCatalog.preview().devices, defaultUID: "preview-airpods")
             },
 
-            // Pasting set per model: quick Parakeet searches go in bare, Clean-up and Gemini get a space after.
             hub("hub-dictionary", .dictionary, height: 720) { c in
                 c.settings.dictionary = UserDictionary(words: [
                     "Wispr Flow", "OpenRouter", "Parakeet", "GPT-6 Luna", "Gemini 3.8 Flash", "SwiftUI", "Claude Code",
@@ -207,8 +202,9 @@ enum HubSnapshots {
                 c.settings.dictionary = dictionary
             },
             hub("hub-dictionary-empty", .dictionary, height: 560),
+            // Pasting set per model: quick Parakeet searches go in bare, Gemini gets a space after.
             hub("hub-general", .general, height: 1080) { c in
-                c.settings.modelsAddingSpace = [.cleanup, .gemini]
+                c.settings.modelsAddingSpace = [.gemini]
                 c.settings.modelsRemovingFinalPeriod = [.parakeet]
                 c.settings.modesRemovingFinalPeriod = [.pushToTalk]
             },
@@ -219,9 +215,9 @@ enum HubSnapshots {
                 c.settings.pillMode = .always
                 c.settings.soundsEnabled = false
             },
-            // The narrowest window: Pasting's five chips still fit under each rule.
+            // The narrowest window: Pasting's chips still fit under each rule.
             hub("hub-general-pasting-compact", .general, width: 820, height: 1080) { c in
-                c.settings.modelsAddingSpace = [.cleanup, .gemini]
+                c.settings.modelsAddingSpace = [.gemini]
                 c.settings.modelsRemovingFinalPeriod = [.parakeet]
                 c.settings.modesRemovingFinalPeriod = [.pushToTalk]
             },
@@ -303,10 +299,9 @@ enum HubSnapshots {
         }
         static let newVersion = AppVersion(major: 0, minor: 3, patch: 0)
 
-        /// Colors other than the defaults, one each: Parakeet teal, clean-up pink, Gemini blue.
+        /// Colors other than the defaults, one each: Parakeet teal, Gemini blue.
         @MainActor static func pickColors(_ context: HubContext) {
             context.settings.modelColors[.parakeet] = .teal
-            context.settings.modelColors[.cleanup] = .pink
             context.settings.modelColors[.gemini] = .blue
         }
 
@@ -321,9 +316,6 @@ enum HubSnapshots {
         static let downloading = DownloadProgress(fraction: 0.42, bytesReceived: 265_600_000, totalBytes: 632_321_326,
                                                   bytesPerSecond: 9_800_000, secondsRemaining: 38)
 
-        /// Home work that didn't come, in the words the controller uses: Gemini Flash on the newest row, a clean-up of
-        /// cloud Parakeet on the second, and Parakeet · Cloud on the third and Parakeet on the failed row, whose
-        /// recordings couldn't be read.
         /// Rows made from files: a transcript, one not transcribed yet, one that failed.
         static func importedEntries() -> [TranscriptEntry] {
             let now = Date()
@@ -342,6 +334,8 @@ enum HubSnapshots {
             ]
         }
 
+        /// Home work that didn't come, in the words the controller uses: Gemini Flash on the newest row, Polish on the
+        /// second, and Parakeet · Cloud on the third and Parakeet on the failed row, whose recordings couldn't be read.
         static func homeFailures(_ entries: [TranscriptEntry], keyMissing: Bool = false) -> [UUID: HomeFailure] {
             var failures: [UUID: HomeFailure] = [:]
             if let first = entries.first {
@@ -349,7 +343,7 @@ enum HubSnapshots {
                                                  keyMissing ? .openRouterMissingKey : .timeout(.geminiFlash))
             }
             if entries.count > 1 {
-                failures[entries[1].id] = homeFailure(.cleanup(of: .parakeetCloud, by: .default),
+                failures[entries[1].id] = homeFailure(.polish,
                                                       keyMissing ? .openRouterMissingKey : .openRouterProviderUnavailable(""))
             }
             if entries.count > 2 { failures[entries[2].id] = .recordingGone(.transcription(.parakeetCloud)) }

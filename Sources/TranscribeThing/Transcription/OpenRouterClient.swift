@@ -226,26 +226,25 @@ final class OpenRouterClient: Sendable {
         return result
     }
 
-    /// Clean-up of `transcript` over chat completions by the model, provider and effort of `route`: text in, text
+    /// `text` over chat completions by the model, provider and effort of `route` (Polish Selection): text in, text
     /// out, with `systemPrompt` as the instructions, streamed to `progress` like transcription. Same retry policy; a
-    /// failure is mapped as a Gemini one. Cancelling stops OpenAI's generation and its bill. The returned text is the
+    /// failure is mapped as a Gemini one. Cancelling stops the generation and its bill. The returned text is the
     /// model's reply without any tags or quotes it put around it.
-    func cleanUp(transcript: String, route: CleanupRoute, systemPrompt: String, apiKey: String,
-                 timeout: TimeInterval, progress: (@Sendable (ChatStreamProgress) -> Void)? = nil,
-                 generation: (@Sendable (String) -> Void)? = nil) async throws -> CloudResult {
+    func sendText(_ text: String, route: TextRoute, systemPrompt: String, apiKey: String,
+                  timeout: TimeInterval, progress: (@Sendable (ChatStreamProgress) -> Void)? = nil,
+                  generation: (@Sendable (String) -> Void)? = nil) async throws -> CloudResult {
         let engine = EngineID.geminiFlash
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw AppError.openRouterMissingKey }
         let body: Data
         do {
-            body = try OpenRouterChatRequest.cleanup(route: route, systemPrompt: systemPrompt,
-                                                     transcript: transcript).encoded()
+            body = try OpenRouterChatRequest.text(route: route, systemPrompt: systemPrompt, text: text).encoded()
         } catch {
             throw AppError.openRouterBadRequest("Couldn’t build the request.")
         }
         let request = makeTranscriptionRequest(body: body, apiKey: key, timeout: timeout)
         var result = try await streamWithRetry(request, engine: engine, progress: progress, generation: generation)
-        result.text = CleanupModel.cleanedText(from: result.text)
+        result.text = TextRoute.answerText(from: result.text)
         return result
     }
 
@@ -523,7 +522,7 @@ final class OpenRouterClient: Sendable {
     /// the same HTTP status.
     static let quickFailureWindow: Duration = .seconds(10)
 
-    /// A chat completions request (Gemini, clean-up). Asks for `openrouter_metadata`, which carries the generation
+    /// A chat completions request (Gemini, Polish Selection). Asks for `openrouter_metadata`, which carries the generation
     /// time. `timeout` is how long the stream may go without a byte.
     func makeTranscriptionRequest(body: Data, apiKey: String, timeout: TimeInterval) -> URLRequest {
         var request = makeRequest(path: "chat/completions", body: body, apiKey: apiKey, timeout: timeout)

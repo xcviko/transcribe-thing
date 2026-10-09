@@ -135,7 +135,7 @@ import Testing
                                     processingTime: 0.3)
         entry.addVersion(gemini)
         entry.addVersion(TranscriptVersion(kind: .cleanup(of: .parakeet, by: .geminiFlashLite), text: "Parakeet text.",
-                                           metadata: TranscriptMetadata(modelID: CleanupModel.geminiFlashLite.openRouterModelID,
+                                           metadata: TranscriptMetadata(modelID: "google/gemini-3.5-flash-lite",
                                                                         reasoningEffort: .minimal, usedSystemPrompt: true)),
                          makeCurrent: false)
         let decoded = try roundTrip(entry)
@@ -392,15 +392,13 @@ import Testing
         m.actions.first { $0.kind == kind }
     }
 
-    @Test func aTranscriptListsItsVersionAndOffersEveryOtherEngineAndCleanUp() {
+    @Test func aTranscriptListsItsVersionAndOffersEveryOtherEngineAndPolish() {
         let m = menu(transcript(.parakeet))
         #expect(m.title == "Versions" && !m.isRetry && m.runningTitle == nil)
         #expect(m.versions == [VersionsMenu.Version(kind: .transcription(.parakeet), summary: "0.4 s", isCurrent: true)])
-        #expect(m.actions.map(\.kind) == [.transcription(.parakeetCloud), .transcription(.geminiFlash),
-                                          .cleanup(of: .parakeet, by: .gpt6Luna), .polish])
+        #expect(m.actions.map(\.kind) == [.transcription(.parakeetCloud), .transcription(.geminiFlash), .polish])
         #expect(m.actions.allSatisfy { $0.isEnabled })
-        #expect(m.actions.map(\.title) == ["Parakeet v3 · Cloud", "Gemini 3.8 Flash", "Clean Up with GPT-6 Luna",
-                                           "Polish with Gemini 3.8 Flash"])
+        #expect(m.actions.map(\.title) == ["Parakeet v3 · Cloud", "Gemini 3.8 Flash", "Polish with Gemini 3.8 Flash"])
     }
 
     @Test func aModelAlreadyUsedIsAVersionNotAnAction() {
@@ -412,17 +410,16 @@ import Testing
         #expect(m.versions.map(\.kind) == [.transcription(.parakeet), .transcription(.geminiFlash), flashLite])
         #expect(m.versions.map(\.isCurrent) == [false, true, false])
         #expect(m.versions[1].summary == "3.0 s · $0.002")
-        #expect(m.actions.map(\.kind) == [.transcription(.parakeetCloud), .cleanup(of: .parakeet, by: .gpt6Luna),
-                                          .polish],
-                "Flash Lite already cleaned it up; Luna still can")
+        #expect(m.actions.map(\.kind) == [.transcription(.parakeetCloud), .polish], "no clean-up, ever")
     }
 
-    @Test func eachCleanUpModelTidiesTheSameTextOnce() {
+    /// Old clean-ups stay versions to switch to; nothing offers another.
+    @Test func oldCleanUpsAreVersionsNeverActions() {
         var entry = transcript(.parakeet)
         entry.addVersion(TranscriptVersion(kind: .cleanup(of: .parakeet, by: .gpt6Luna), text: "l",
                                            metadata: TranscriptMetadata(processingTime: 1.1)))
         var m = menu(entry)
-        #expect(!m.actions.contains { $0.kind.isCleanup }, "Luna has tidied it")
+        #expect(!m.actions.contains { $0.kind.isCleanup })
         #expect(m.versions.last?.itemTitle == "Parakeet v3 + Clean-up by GPT-6 Luna\u{2003}1.1 s")
         entry.addVersion(TranscriptVersion(kind: .cleanup(of: .parakeet, by: .geminiFlashLite), text: "f",
                                            metadata: TranscriptMetadata()))
@@ -444,15 +441,16 @@ import Testing
         #expect(action(menu(gone), .polish)?.isEnabled == false)
     }
 
-    @Test func geminiTranscriptsAreNeverCleanedUp() {
-        #expect(!menu(transcript(.geminiFlash)).actions.contains { $0.kind.isCleanup })
-        #expect(menu(transcript(.parakeetCloud)).actions.contains { $0.kind == .cleanup(of: .parakeetCloud, by: .gpt6Luna) })
+    @Test func noTranscriptIsCleanedUp() {
+        for engine in EngineID.offered {
+            #expect(!menu(transcript(engine)).actions.contains { $0.kind.isCleanup }, "\(engine)")
+        }
     }
 
     @Test func withoutAKeyCloudActionsSaySo() {
         let m = menu(transcript(.parakeet), key: .missing)
         #expect(m.actions.map(\.title) == ["Parakeet v3 · Cloud · Needs key", "Gemini 3.8 Flash · Needs key",
-                                           "Clean Up with GPT-6 Luna · Needs key", "Polish with Gemini 3.8 Flash · Needs key"])
+                                           "Polish with Gemini 3.8 Flash · Needs key"])
         #expect(action(menu(transcript(.parakeetCloud), key: .invalid("401")), .transcription(.geminiFlash))?.title
                 == "Gemini 3.8 Flash · Key rejected")
         #expect(action(menu(transcript(.parakeetCloud), key: .missing), .transcription(.parakeet))?.isEnabled == true)
@@ -462,14 +460,14 @@ import Testing
         #expect(menu(transcript(.parakeet, duration: 60 * 60)).actions.allSatisfy { $0.isEnabled })
     }
 
-    @Test func withoutAudioVersionsStaySwitchableAndCleanUpStillWorks() {
+    @Test func withoutAudioVersionsStaySwitchable() {
         var entry = transcript(.parakeet, audio: false)
         entry.addVersion(TranscriptVersion(text: "g", engine: .geminiFlash))
         let m = menu(entry)
         #expect(m.versions.count == 2)
         #expect(action(m, .transcription(.parakeetCloud))?.blocker == .recordingGone)
         #expect(action(m, .transcription(.parakeetCloud))?.title == "Parakeet v3 · Cloud · Recording no longer kept")
-        #expect(action(m, .cleanup(of: .parakeet, by: .gpt6Luna))?.isEnabled == true)
+        #expect(action(m, .polish)?.blocker == .recordingGone)
     }
 
     @Test func somethingRunningBlocksEveryActionButNotSwitching() {
@@ -477,8 +475,7 @@ import Testing
         #expect(m.runningTitle == "Transcribing with Gemini Flash…")
         #expect(m.actions.allSatisfy { $0.blocker == .running(.transcription(.geminiFlash)) })
         #expect(m.versions.count == 1)
-        #expect(menu(transcript(), running: .cleanup(of: .parakeet, by: .gpt6Luna)).runningTitle
-                == "Cleaning up with GPT-6 Luna…")
+        #expect(menu(transcript(), running: .polish).runningTitle == "Polishing with Gemini Flash…")
     }
 
     @Test func aFailedDictationRetriesWithAnyEngineItsOwnIncluded() {

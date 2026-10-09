@@ -1,8 +1,8 @@
 import Foundation
 
 /// The user's dictionary (Hub → Dictionary, or fn D over selected text): words, names and terms that Gemini 3.8 Flash
-/// and the clean-up model get as a hint: they exist, and this is how they're spelled (`prompt(_:with:)`). Parakeet
-/// hears without instructions and can't use it. Words keep the order they came in, each once (case aside); one JSON
+/// gets as a hint (Polish and Polish Selection too): they exist, and this is how they're spelled (`prompt(_:with:)`).
+/// Parakeet hears without instructions and can't use it. Words keep the order they came in, each once (case aside); one JSON
 /// array under `SettingsKey.dictionary`. The user may sort them into groups (`Group`) for their own overview on the
 /// Dictionary page; the prompts get every word alike, and the groups are kept apart (`grouping`).
 struct UserDictionary: Equatable, Sendable {
@@ -244,7 +244,7 @@ struct UserDictionary: Equatable, Sendable {
 
     /// `prompt` followed by the dictionary as a hint, not a rule: these words exist and are usually spelled this way,
     /// and the model decides what to make of it. For Gemini (`heard`: it hears the words, in audio) or a model that
-    /// reads a text (the clean-up, Polish Selection's). In the prompt's own language: Russian when most of its letters
+    /// reads a text (Polish Selection's). In the prompt's own language: Russian when most of its letters
     /// are Cyrillic (an English prompt may quote a Russian example), else English. With no words, or an empty prompt
     /// (the CLI's `--prompt ""` sends only the audio), `prompt` as it is.
     static func prompt(_ prompt: String, with words: [String], heard: Bool) -> String {

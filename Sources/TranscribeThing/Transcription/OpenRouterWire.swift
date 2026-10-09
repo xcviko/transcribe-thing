@@ -13,7 +13,7 @@ struct OpenRouterChatRequest: Encodable, Equatable {
     let provider: Provider
     let maxTokens: Int
     let stream: Bool
-    /// Sent only when set (a clean-up route's, from `EngineCLI --cleanup-bench`): otherwise the model's default.
+    /// Sent only when set: otherwise the model's default (every request the app sends).
     var temperature: Double? = nil
 
     struct Reasoning: Encodable, Equatable {
@@ -28,10 +28,6 @@ struct OpenRouterChatRequest: Encodable, Equatable {
 
         /// Google AI Studio and nothing else, no fallbacks: every Gemini request.
         static let googleAIStudio = Provider(only: ["google-ai-studio"], allowFallbacks: false)
-        /// OpenAI's fast tier and nothing else, no fallbacks: GPT-6 Luna (the clean-up, Polish Selection). Twice the
-        /// price of its standard tier, and about 0.3 s sooner on a dictation's clean-up (1.2 s against 1.5 in the
-        /// bench, 0.9 against 1.0 for a short one). A base slug never reaches it: the tier is named outright.
-        static let openAIFast = Provider(only: ["openai/fast"], allowFallbacks: false)
     }
 
     enum CodingKeys: String, CodingKey {
@@ -63,23 +59,21 @@ struct OpenRouterChatRequest: Encodable, Equatable {
             stream: true)
     }
 
-    /// Clean-up of a transcript: the prompt as the system message, then the transcript as plain user text inside
-    /// `<transcript>` tags. `route` names the model, the provider it's pinned to (no fallbacks) and the effort as
-    /// sent (`CleanupModel.route`, or any model for `EngineCLI --cleanup-bench`). Streamed like transcription, with no
-    /// temperature; reasoning excluded (GPT-6 Luna doesn't think at "none") unless the route streams it. `max_tokens`
-    /// grows with the text
-    /// (`CleanupModel.maxTokens`).
-    static func cleanup(route: CleanupRoute, systemPrompt: String, transcript: String) -> OpenRouterChatRequest {
+    /// Text in, text out (Polish Selection): the prompt as the system message, then the text as plain user text inside
+    /// `<transcript>` tags (`TextRoute.userMessage(for:)`). `route` names the model, the provider it's pinned to (no
+    /// fallbacks) and the effort as sent. Streamed like transcription; reasoning excluded unless the route streams it.
+    /// `max_tokens` grows with the text (`TextRoute.maxTokens`).
+    static func text(route: TextRoute, systemPrompt: String, text: String) -> OpenRouterChatRequest {
         var messages: [OpenRouterMessage] = []
         let prompt = systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
         if !prompt.isEmpty { messages.append(.system(prompt)) }
-        messages.append(.user(CleanupModel.userMessage(for: transcript)))
+        messages.append(.user(TextRoute.userMessage(for: text)))
         return OpenRouterChatRequest(
             model: route.model,
             messages: messages,
             reasoning: Reasoning(effort: route.effort, exclude: !route.streamsReasoning),
             provider: route.provider,
-            maxTokens: CleanupModel.maxTokens(forCharacterCount: transcript.count, effort: route.budget),
+            maxTokens: TextRoute.maxTokens(forCharacterCount: text.count, effort: route.budget),
             stream: true,
             temperature: route.temperature)
     }
@@ -92,20 +86,20 @@ struct OpenRouterChatRequest: Encodable, Equatable {
     }
 }
 
-/// Where a clean-up request goes and how hard the model thinks. The app sends the clean-up model's
-/// (`CleanupModel.route`): GPT-6 Luna on OpenAI's fast tier, thinking off.
-struct CleanupRoute: Equatable, Sendable {
+/// Where a text request (`OpenRouterChatRequest.text`, Polish Selection's) goes and how hard the model thinks, and
+/// how such a request is sized and read.
+struct TextRoute: Equatable, Sendable {
     var model: String
     var provider: OpenRouterChatRequest.Provider
-    /// `reasoning.effort` as sent: a `ReasoningEffort`, or a level no clean-up model offers ("xhigh", for the bench).
+    /// `reasoning.effort` as sent.
     var effort: String
-    /// The level `max_tokens` is sized for (`CleanupModel.maxTokens`).
+    /// The level `max_tokens` is sized for (`maxTokens`).
     var budget: ReasoningEffort
     /// Its thinking streams in, as a Gemini transcription's does (Polish Selection's Gemini): the answer has started
     /// with its first thought, and the pill counts them. Off, the model's first word is the start, which a thinking
     /// model reaches only after all of its thinking.
     var streamsReasoning = false
-    /// The model's default when nil (every clean-up model the app offers).
+    /// The model's default when nil.
     var temperature: Double?
 
     init(model: String, effort: ReasoningEffort, provider: OpenRouterChatRequest.Provider) {
@@ -118,11 +112,60 @@ struct CleanupRoute: Equatable, Sendable {
         self.effort = effort
         self.budget = budget
     }
+
+    /// How long a text request waits for its answer to start, and how long its stream may then go without a byte:
+    /// 12 s, plus about 1 s per 200 characters of text, with no cap (60,000 characters get 312 s). An answer that
+    /// streams is never cut off for taking long.
+    static func timeout(forCharacterCount count: Int) -> TimeInterval {
+        12 + Double(max(0, count)) / 200
+    }
+
+    /// `max_tokens` for `count` characters of text. Reasoning counts against it, and every request in flight reserves
+    /// it from OpenRouter's in-flight budget, so it grows with the text instead of being huge: about two characters
+    /// per token (a pessimistic figure for Cyrillic) doubled for slack, plus room to think. No thinking gets the room
+    /// of minimal. At most 128,000.
+    static func maxTokens(forCharacterCount count: Int, effort: ReasoningEffort) -> Int {
+        let headroom = switch effort {
+        case .off, .minimal: 1_024
+        case .low: 2_048
+        case .medium: 8_192
+        case .high: 16_384
+        }
+        return min(128_000, max(4_096, max(0, count) + headroom))
+    }
+
+    /// The text goes to the model as data inside tags, so a sentence like "Can you remove…" reads as text to work on,
+    /// not as a request.
+    static func userMessage(for text: String) -> String {
+        "<transcript>\n\(text)\n</transcript>"
+    }
+
+    /// The model's answer without anything it may have wrapped around the text: the transcript tags, a code fence,
+    /// surrounding quotes.
+    static func answerText(from reply: String) -> String {
+        var text = reply.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.hasPrefix("```"), text.hasSuffix("```"), text.count >= 6 {
+            text = String(text.dropFirst(3).dropLast(3))
+            if let newline = text.firstIndex(of: "\n"), !text[..<newline].contains(" ") {
+                text = String(text[text.index(after: newline)...])
+            }
+            text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if text.hasPrefix("<transcript>") { text = String(text.dropFirst("<transcript>".count)) }
+        if text.hasSuffix("</transcript>") { text = String(text.dropLast("</transcript>".count)) }
+        text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        for (open, close) in [("\"", "\""), ("“", "”"), ("«", "»")]
+        where text.count >= 2 && text.hasPrefix(open) && text.hasSuffix(close)
+            && !text.dropFirst().dropLast().contains(where: { String($0) == open || String($0) == close }) {
+            text = String(text.dropFirst().dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return text
+    }
 }
 
 enum OpenRouterMessage: Encodable, Equatable {
     case system(String)
-    /// Plain text from the user (the transcript a clean-up works on).
+    /// Plain text from the user (the text Polish Selection works on).
     case user(String)
     case userAudio(base64: String, format: String)
 
@@ -801,7 +844,7 @@ enum OpenRouterErrorMapper {
             || lowered.contains("no endpoints found")
         if noRoute { return .openRouterNoRoute(join(message, noRouteHint(for: engine))) }
 
-        // A request too large to take, reported as a bad request. Only these phrases: a clean-up's errors come
+        // A request too large to take, reported as a bad request. Only these phrases: a text request's errors come
         // through here too.
         if status == 400, Self.tooLargePhrases.contains(where: lowered.contains) { return .recordingTooLarge }
 

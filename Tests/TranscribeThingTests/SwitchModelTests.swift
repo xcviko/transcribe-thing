@@ -71,11 +71,9 @@ import Testing
 @Suite struct SwitchModelShortcutTests {
     static let quiet = ShortcutPolicyTests.stock(fnUsage: .doNothing)
 
-    /// The chip names Parakeet just "Parakeet" wherever it runs, and clean-up by its model after the wand (headed by
-    /// Parakeet's name).
+    /// The chip names Parakeet just "Parakeet" wherever it runs, and Gemini in full.
     @Test func theChipNamesEachModel() {
         #expect(ModelChoice.parakeet.chipName == "Parakeet")
-        #expect(ModelChoice.cleanup.chipName == "GPT-6 Luna")
         #expect(ModelChoice.gemini.chipName == "Gemini 3.8 Flash")
     }
 
@@ -172,7 +170,6 @@ import Testing
         let (rig, cues) = Self.make()
         let c = rig.h.controller
         rig.h.settings.lineup.main = .gemini
-        Self.cleansUp(rig)
         var used: [EngineID] = []
         rig.result = { _, engine in
             used.append(engine)
@@ -181,14 +178,14 @@ import Testing
         Self.hold(rig)
         #expect(c.modelOverride == nil && c.effectiveChoice == .gemini && c.effectiveEngine == .geminiFlash)
         var choices: [ModelChoice?] = []
-        for _ in 0..<3 {
+        for _ in 0..<2 {
             c.handle(.cycleEngine)
             choices.append(c.modelOverride)
             #expect(rig.h.pill.sessionModel == c.effectiveChoice)
         }
-        #expect(choices == [.parakeet, .cleanup, nil])
-        #expect(rig.h.pill.engineChipPulse == 3, "back to the main model pulses too")
-        #expect(cues.played.filter { $0 == .modelSwitch }.count == 3)
+        #expect(choices == [.parakeet, nil])
+        #expect(rig.h.pill.engineChipPulse == 2, "back to the main model pulses too")
+        #expect(cues.played.filter { $0 == .modelSwitch }.count == 2)
         #expect(c.machine.capture.isListeningOrLocked, "switching never stops the recording")
         try await Self.release(rig)
 
@@ -201,11 +198,10 @@ import Testing
         c.handle(.cycleEngine)
         try await Self.release(rig)
 
-        #expect(used == [.geminiFlash, .parakeet, .parakeet])
-        #expect(rig.pasted == ["words", "words", "Clean."])
+        #expect(used == [.geminiFlash, .parakeet, .geminiFlash])
+        #expect(rig.pasted == ["words", "words", "words"])
         let entries = rig.h.history.entries.sorted { $0.createdAt < $1.createdAt }
-        #expect(entries.map(\.engine) == [.geminiFlash, .parakeet, .parakeet], "history records the engine used")
-        #expect(entries.last?.currentKind == .cleanup(of: .parakeet, by: .gpt6Luna))
+        #expect(entries.map(\.engine) == [.geminiFlash, .parakeet, .geminiFlash], "history records the engine used")
     }
 
     @Test func theOrderOfModelsIsTheOrderOfSteps() {
@@ -218,14 +214,13 @@ import Testing
             c.cycleEngine()
             choices.append(c.modelOverride)
         }
-        #expect(choices == [.gemini, .cleanup, nil])
+        #expect(choices == [.gemini, nil, .gemini])
         c.send(.pillCancel)
     }
 
     @Test func aModelSwitchedOffIsNotAStep() {
         let (rig, cues) = Self.make()
         let c = rig.h.controller
-        rig.h.settings.lineup.setSwitchable(.cleanup, false)
         c.send(.handsFreeToggle)
         c.cycleEngine()
         #expect(c.effectiveEngine == .geminiFlash)
@@ -259,11 +254,11 @@ import Testing
         #expect(!cues.played.contains(.modelSwitch))
         let notice = try #require(rig.notice(DictationController.switchModelNoticeKey))
         if case .noCredit = key {
-            #expect(notice.title == "Clean-up and Gemini need OpenRouter credit")
+            #expect(notice.title == "Gemini needs OpenRouter credit")
             #expect(notice.body == "Add credit to switch models.")
             #expect(notice.primaryAction?.kind == .openURL(OpenRouterLinks.credits))
         } else {
-            #expect(notice.title == "Clean-up and Gemini need an OpenRouter key")
+            #expect(notice.title == "Gemini needs an OpenRouter key")
             #expect(notice.primaryAction?.title == "Add Key")
             try rig.click(.openHub(.models), in: DictationController.switchModelNoticeKey)
             #expect(opened == [.models])
@@ -274,21 +269,21 @@ import Testing
     /// A model that can't take the dictation now is stepped over; with none to land on, the press is rejected with
     /// the reason.
     @Test func aStepThatCantRunIsSkipped() throws {
-        // Parakeet on this Mac as the main model, and no credit for clean-up or Gemini.
+        // Parakeet on this Mac as the main model, and no credit for Gemini.
         let (broke, _) = Self.make(key: .noCredit(nil))
         broke.h.controller.send(.handsFreeToggle)
         let shakes = broke.h.pill.shakeCount
         broke.h.controller.cycleEngine()
         #expect(broke.h.controller.modelOverride == nil && broke.h.pill.shakeCount == shakes + 1)
         #expect(broke.notice(DictationController.switchModelNoticeKey)?.title
-            == "Clean-up and Gemini need OpenRouter credit")
+            == "Gemini needs OpenRouter credit")
         broke.h.controller.send(.pillCancel)
 
-        // Gemini as the main model, Parakeet on this Mac not downloaded: Parakeet and clean-up can't run.
+        // Gemini as the main model, Parakeet on this Mac not downloaded: Parakeet can't run.
         let (bare, _) = Self.make(models: [.parakeet: .notInstalled])
         bare.h.settings.lineup.main = .gemini
         bare.h.controller.send(.handsFreeToggle)
-        #expect(bare.h.settings.lineup.cycle == [.gemini, .parakeet, .cleanup])
+        #expect(bare.h.settings.lineup.cycle == [.gemini, .parakeet])
         #expect(!bare.h.controller.canSwitchModels)
         let bareShakes = bare.h.pill.shakeCount
         bare.h.controller.cycleEngine()
@@ -298,7 +293,8 @@ import Testing
         #expect(notice.actions.first?.kind == .download(.parakeet))
         bare.h.controller.send(.pillCancel)
 
-        // Gemini as the main model and no credit: Parakeet on this Mac still answers, clean-up is stepped over.
+        // Gemini as the main model and no credit: Parakeet on this Mac still answers, and the main model is always
+        // there to go back to.
         let (skip, cues) = Self.make(key: .noCredit(nil))
         skip.h.settings.lineup.main = .gemini
         skip.h.controller.send(.handsFreeToggle)
@@ -306,7 +302,7 @@ import Testing
         skip.h.controller.cycleEngine()
         #expect(skip.h.controller.modelOverride == .parakeet)
         skip.h.controller.cycleEngine()
-        #expect(skip.h.controller.modelOverride == nil, "past clean-up, back to Gemini")
+        #expect(skip.h.controller.modelOverride == nil, "back to Gemini")
         #expect(skip.h.pill.shakeCount == skipShakes && skip.notice(DictationController.switchModelNoticeKey) == nil)
         #expect(cues.played.filter { $0 == .modelSwitch }.count == 2)
         skip.h.controller.send(.pillCancel)
@@ -319,7 +315,6 @@ import Testing
         c.runsTimers = false
         let monitor = HotkeyMonitor(settings: rig.h.settings)
         #expect(monitor.currentConfig().switchesModels)
-        rig.h.settings.lineup.setSwitchable(.cleanup, false)
         rig.h.settings.lineup.setSwitchable(.gemini, false)
         #expect(!monitor.currentConfig().switchesModels)
         Self.hold(rig)
@@ -327,14 +322,6 @@ import Testing
         c.showSwitchHintIfDue()
         #expect(!rig.h.pill.showsTabHint)
         c.handle(.cancel)
-    }
-
-    /// Clean-up alone after the main model is a step too: the shortcut is intercepted for it.
-    @Test func aCleanupOnlyCycleInterceptsTheShortcut() {
-        let settings = AppSettings.inMemory()
-        settings.lineup.setSwitchable(.gemini, false)
-        #expect(settings.lineup.cycle == [.parakeet, .cleanup])
-        #expect(HotkeyMonitor(settings: settings).currentConfig().switchesModels)
     }
 
     /// Color means the model, whichever is main: a Gemini main model tints the pill while it listens and while it
@@ -477,14 +464,16 @@ import Testing
     @Test func handsFreeLeavesAPickedOrMainModelAlone() async throws {
         let (rig, cues) = Self.make()
         let c = rig.h.controller
-        rig.h.settings.handsFreeModel = .gemini
+        rig.h.settings.lineup.main = .gemini
+        rig.h.settings.handsFreeModel = .parakeet
         Self.hold(rig)
         c.handle(.cycleEngine)
-        #expect(c.modelOverride == .cleanup)
+        c.handle(.cycleEngine)
+        #expect(c.modelOverride == nil, "Gemini picked again with fn ⇥")
         c.handle(.handsFreeToggle)
         try await Task.sleep(for: .milliseconds(300))
-        #expect(c.modelOverride == .cleanup)
-        #expect(cues.played.filter { $0 == .modelSwitch }.count == 1, "only fn ⇥'s own tick")
+        #expect(c.modelOverride == nil && c.effectiveEngine == .geminiFlash)
+        #expect(cues.played.filter { $0 == .modelSwitch }.count == 2, "only fn ⇥'s own ticks")
         c.send(.pillCancel)
 
         let (main, mainCues) = Self.make()
@@ -659,91 +648,11 @@ import Testing
         c.send(.pillCancel)
     }
 
-    /// Tidies whatever it's given into "Clean.", as the selected clean-up model.
-    static func cleansUp(_ rig: Rig, into text: String = "Clean.", asked: @escaping (String) -> Void = { _ in }) {
-        rig.h.controller.cleanupOverride = { raw, source in
-            asked(raw)
-            return TranscriptResult(text: text, engine: source, processingTime: 0.1)
-        }
-    }
-
-    /// The first press puts the dictation on clean-up: Parakeet transcribes, the clean-up model tidies what's pasted,
-    /// and the chip says so until the text lands. The next dictation isn't cleaned up.
-    @Test func cleanupTidiesThisDictationOnly() async throws {
-        let (rig, _) = Self.make()
-        let c = rig.h.controller
-        var asked: [String] = []
-        Self.cleansUp(rig) { asked.append($0) }
-        var used: [EngineID] = []
-        rig.result = { _, engine in
-            used.append(engine)
-            try await Task.sleep(for: .milliseconds(60))
-            return "um raw words"
-        }
-        Self.hold(rig)
-        c.handle(.cycleEngine)
-        #expect(c.modelOverride == .cleanup && c.effectiveEngine == .parakeet)
-        #expect(rig.h.pill.sessionModel == .cleanup)
-        rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
-        rig.now += 2
-        c.handle(.pttUp)
-        #expect(rig.h.pill.sessionModel == .cleanup, "the chip stays while it's transcribed and tidied")
-        try await waitUntil { rig.pasted == ["Clean."] && c.machine.activeJobs == 0 }
-        #expect(used == [.parakeet] && asked == ["um raw words"])
-        #expect(rig.h.history.entries.first?.currentKind == .cleanup(of: .parakeet, by: .gpt6Luna))
-        #expect(rig.h.pill.sessionModel == nil)
-
-        // The next dictation is on Parakeet alone.
-        rig.result = { _, _ in "plain words" }
-        Self.hold(rig)
-        #expect(c.modelOverride == nil)
-        try await Self.release(rig)
-        #expect(rig.pasted.last == "plain words" && asked.count == 1)
-    }
-
-    /// Clean-up as the main model tidies every dictation.
-    @Test func aCleanupMainModelTidiesEveryDictation() async throws {
-        let (rig, _) = Self.make()
-        rig.h.settings.lineup.main = .cleanup
-        Self.cleansUp(rig)
-        rig.result = { _, _ in "um raw" }
-        Self.hold(rig)
-        #expect(rig.h.pill.sessionModel == .cleanup)
-        try await Self.release(rig)
-        Self.hold(rig)
-        try await Self.release(rig)
-        #expect(rig.pasted == ["Clean.", "Clean."])
-    }
-
-    /// Undo of a canceled dictation on clean-up picks it up on clean-up again.
-    @Test func undoKeepsCleanup() async throws {
-        let (rig, _) = Self.make()
-        let c = rig.h.controller
-        Self.cleansUp(rig)
-        rig.result = { _, _ in "resumed raw" }
-        rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
-        Self.hold(rig)
-        c.handle(.cycleEngine)
-        rig.now += 2
-        c.handle(.cancel)
-        #expect(c.modelOverride == nil)
-
-        rig.now += 1
-        try rig.click(.undoCancel, in: "dictation.canceled")
-        #expect(c.modelOverride == .cleanup)
-        #expect(rig.h.pill.sessionModel == .cleanup)
-        rig.h.recorder.next = DictationResumeTests.speech(seconds: 1)
-        rig.now += 1
-        c.send(.pillStop)
-        try await waitUntil { rig.pasted == ["Clean."] && c.machine.activeJobs == 0 }
-    }
-
     /// A recording has no length limit: an hour in, the shortcut still steps to Gemini like at the start.
     @Test func anHourLongRecordingStillStepsToGemini() {
         let (rig, _) = Self.make()
         let c = rig.h.controller
         c.runsTimers = false
-        rig.h.settings.lineup.setSwitchable(.cleanup, false)
         c.send(.handsFreeToggle)
         rig.now += 3600
         let shakes = rig.h.pill.shakeCount
@@ -759,14 +668,14 @@ import Testing
         let c = rig.h.controller
         Self.hold(rig)
         c.handle(.cycleEngine)
-        #expect(c.modelOverride == .cleanup)
+        #expect(c.modelOverride == .gemini)
         var steps: [ModelChoice?] = []
         for _ in 0..<5 {
             rig.now += 0.03
             c.handle(.cycleEngineRepeat)
             steps.append(c.modelOverride)
         }
-        #expect(steps == [.gemini, nil, .cleanup, .gemini, nil])
+        #expect(steps == [nil, .gemini, nil, .gemini, nil])
         #expect(cues.played.filter { $0 == .modelSwitch }.count == 6)
         #expect(c.machine.capture.isListeningOrLocked)
         c.handle(.cancel)
@@ -806,16 +715,14 @@ import Testing
 
     /// The notice without a key names what it keeps out of reach, in cycle order.
     @Test func theKeyNoticeNamesWhatItBlocks() {
-        #expect(DictationController.switchWithoutKeyNotice(.missing, blocked: [.cleanup]).title
-            == "Clean-up needs an OpenRouter key")
         #expect(DictationController.switchWithoutKeyNotice(.missing, blocked: [.gemini]).title
             == "Gemini needs an OpenRouter key")
         #expect(DictationController.switchWithoutKeyNotice(.missing, blocked: [.parakeet]).title
             == "Parakeet needs an OpenRouter key")
-        #expect(DictationController.switchWithoutKeyNotice(.noCredit(nil), blocked: [.cleanup, .gemini]).title
-            == "Clean-up and Gemini need OpenRouter credit")
-        let all = DictationController.switchWithoutKeyNotice(.invalid("401"), blocked: [.parakeet, .cleanup, .gemini])
-        #expect(all.title == "Parakeet, Clean-up and Gemini need an OpenRouter key")
+        #expect(DictationController.switchWithoutKeyNotice(.noCredit(nil), blocked: [.parakeet, .gemini]).title
+            == "Parakeet and Gemini need OpenRouter credit")
+        let all = DictationController.switchWithoutKeyNotice(.invalid("401"), blocked: [.parakeet, .gemini])
+        #expect(all.title == "Parakeet and Gemini need an OpenRouter key")
         #expect(all.body == "OpenRouter rejected yours. Update it to switch models.")
         #expect(DictationController.switchWithoutKeyNotice(.missing, blocked: [.gemini]).body
             == "Add one to switch models while dictating.")
@@ -832,7 +739,7 @@ import Testing
         c.handle(.cycleEngine)
         c.handle(.pttUp)
         #expect(c.machine.capture.isListeningOrLocked)
-        #expect(c.modelOverride == .cleanup)
+        #expect(c.modelOverride == .gemini)
         c.handle(.pttDown)
         c.handle(.pttUp)
         #expect(c.machine.capture == .idle)
@@ -842,7 +749,7 @@ import Testing
         let (rig, cues) = Self.make()
         let c = rig.h.controller
         c.start()
-        #expect(rig.h.pill.menuChoices == [.parakeet, .cleanup, .gemini])
+        #expect(rig.h.pill.menuChoices == [.parakeet, .gemini])
         c.selectModelForCurrentDictation(.gemini)
         #expect(c.modelOverride == nil, "no dictation, nothing to pick for")
         c.send(.handsFreeToggle)
@@ -850,13 +757,11 @@ import Testing
         #expect(c.effectiveEngine == .geminiFlash)
         #expect(rig.h.pill.sessionModel == .gemini)
         c.selectModelForCurrentDictation(.gemini)
-        c.selectModelForCurrentDictation(.cleanup)
-        #expect(c.modelOverride == .cleanup && c.effectiveEngine == .parakeet)
-        #expect(rig.h.pill.sessionModel == .cleanup)
         c.selectModelForCurrentDictation(rig.h.settings.lineup.main)
-        #expect(c.modelOverride == nil)
-        #expect(rig.h.pill.engineChipPulse == 3)
-        #expect(cues.played.filter { $0 == .modelSwitch }.count == 3)
+        #expect(c.modelOverride == nil && c.effectiveEngine == .parakeet)
+        #expect(rig.h.pill.sessionModel == .parakeet)
+        #expect(rig.h.pill.engineChipPulse == 2)
+        #expect(cues.played.filter { $0 == .modelSwitch }.count == 2)
         let reason = try #require(rig.h.pill.unavailableReason)
         #expect(ModelChoice.allCases.allSatisfy { reason($0) == nil }, "the key works: everything can run")
         c.send(.pillCancel)
@@ -869,7 +774,7 @@ import Testing
         c.start()
         let reason = try #require(rig.h.pill.unavailableReason)
         #expect(reason(.parakeet) == nil, "the main model always can")
-        #expect(reason(.cleanup) == "Needs key" && reason(.gemini) == "Needs key")
+        #expect(reason(.gemini) == "Needs key")
         c.send(.handsFreeToggle)
         c.selectModelForCurrentDictation(.gemini)
         #expect(c.modelOverride == nil && !cues.played.contains(.modelSwitch))
@@ -916,7 +821,6 @@ import Testing
             let (rig, _) = Self.make(key: key)
             let c = rig.h.controller
             c.runsTimers = false
-            rig.h.settings.lineup.setSwitchable(.cleanup, others)
             rig.h.settings.lineup.setSwitchable(.gemini, others)
             Self.hold(rig)
             rig.now += 2
@@ -1000,7 +904,6 @@ import Testing
         rig.result = { _, _ in "" }
         SwitchModelControllerTests.hold(rig)
         rig.h.controller.handle(.cycleEngine)
-        rig.h.controller.handle(.cycleEngine)
         #expect(rig.h.controller.effectiveChoice == .gemini && rig.h.settings.lineup.main != .gemini)
         rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
         rig.now += 2
@@ -1013,7 +916,6 @@ import Testing
     @Test func silenceBeforeTheModelWearsItToo() async throws {
         let (rig, _) = SwitchModelControllerTests.make()
         SwitchModelControllerTests.hold(rig)
-        rig.h.controller.handle(.cycleEngine)
         rig.h.controller.handle(.cycleEngine)
         rig.h.recorder.next = Recording(samples: Array(repeating: 0.01, count: 32_000),
                                         speech: SpeechStats(voicedSeconds: 0.1, peakDBFS: -40, isSilent: false))

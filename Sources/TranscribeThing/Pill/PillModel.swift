@@ -42,7 +42,7 @@ final class PillModel {
         didSet { if tokenCount != oldValue { updateCounter() } }
     }
     /// The processing pill shows `tokenCount` in place of its dots. Only once a count has been there for
-    /// `timing.counterDelay`, so a quick answer (the clean-up of a short dictation) never flashes a number; then until
+    /// `timing.counterDelay`, so a quick answer (Gemini on a short dictation) never flashes a number; then until
     /// the count goes or the pill stops processing.
     private(set) var showsCounter = false
 

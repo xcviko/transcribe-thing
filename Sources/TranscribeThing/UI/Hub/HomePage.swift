@@ -125,7 +125,6 @@ struct HomePage: View {
             localState: models.state(of: settings.mainEngine),
             keyStatus: account.status,
             localError: models.lastErrors[settings.mainEngine],
-            cleansUp: settings.lineup.main == .cleanup,
             shortcutUnavailable: hub.dictation.isShortcutUnavailable))
         if !items.isEmpty {
             VStack(spacing: Theme.Spacing.xs) {

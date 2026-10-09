@@ -891,10 +891,10 @@ final class ProgressLog: @unchecked Sendable {
     @Test func aRequestThatCantReachOpenRouterEndsAsOffline() async throws {
         let watch = ConnectionWatch(probeAfter: 0.2, probeAgainAfter: 5) { false }
         let (client, _) = StubURLProtocol.client([.init(hangs: true)], connectionWatch: watch)
-        let route = try #require(CleanupModel.gpt6Luna.route)
+        let route = try #require(PolishSelectionModel.geminiFlash.route)
         let started = ContinuousClock.now
         await #expect(throws: AppError.offline) {
-            try await client.cleanUp(transcript: "raw", route: route, systemPrompt: "Tidy.", apiKey: "k", timeout: 60)
+            try await client.sendText("raw", route: route, systemPrompt: "Polish.", apiKey: "k", timeout: 60)
         }
         #expect(started.duration(to: .now) < .seconds(5))
     }
@@ -914,15 +914,14 @@ final class ProgressLog: @unchecked Sendable {
         let blocked = StubURLProtocol.Reply(status: 403, headers: ["Server": "cloudflare"],
                                             body: #"{ "success": false, "error": "Access denied by security policy." }"#)
         let (client, host) = StubURLProtocol.client([blocked, .stream(SSE.answer("Tidied."))])
-        let route = try #require(CleanupModel.gpt6Luna.route)
-        let cleaned = try await client.cleanUp(transcript: "raw", route: route, systemPrompt: "Tidy.", apiKey: "k",
-                                               timeout: 12)
-        #expect(cleaned.text == "Tidied.")
+        let route = try #require(PolishSelectionModel.geminiFlash.route)
+        let polished = try await client.sendText("raw", route: route, systemPrompt: "Polish.", apiKey: "k", timeout: 12)
+        #expect(polished.text == "Tidied.")
         #expect(StubURLProtocol.registry.requests(for: host).count == 2)
 
         let (twice, _) = StubURLProtocol.client([blocked, blocked])
         await #expect(throws: AppError.connectionBlocked) {
-            try await twice.cleanUp(transcript: "raw", route: route, systemPrompt: "Tidy.", apiKey: "k", timeout: 12)
+            try await twice.sendText("raw", route: route, systemPrompt: "Polish.", apiKey: "k", timeout: 12)
         }
     }
 
@@ -936,28 +935,27 @@ final class ProgressLog: @unchecked Sendable {
         var reply = StubURLProtocol.Reply.stream(SSE.answer("Tidied."))
         reply.responseDelay = 1
         let (client, _) = StubURLProtocol.client([reply], connectionWatch: watch)
-        let route = try #require(CleanupModel.gpt6Luna.route)
-        let cleaned = try await client.cleanUp(transcript: "raw", route: route, systemPrompt: "Tidy.", apiKey: "k",
-                                               timeout: 60)
-        #expect(cleaned.text == "Tidied.")
+        let route = try #require(PolishSelectionModel.geminiFlash.route)
+        let polished = try await client.sendText("raw", route: route, systemPrompt: "Polish.", apiKey: "k", timeout: 60)
+        #expect(polished.text == "Tidied.")
         #expect(probes.withLock { $0 } >= 1)
     }
 
-    /// What goes on the wire: streamed, Gemini's reasoning included for its count, the clean-up's left out.
+    /// What goes on the wire: streamed, Gemini's reasoning included for its count, in a transcription and in Polish
+    /// Selection's text request alike.
     @Test func theRequestsAskForAStream() async throws {
         let (client, host) = StubURLProtocol.client([Fixtures.success, .stream(SSE.answer("Tidied."))])
         _ = try await transcribe(client)
-        let route = try #require(CleanupModel.gpt6Luna.route)
-        let cleaned = try await client.cleanUp(transcript: "raw", route: route, systemPrompt: "Tidy.", apiKey: "k",
-                                               timeout: 12)
-        #expect(cleaned.text == "Tidied.")
+        let route = try #require(PolishSelectionModel.geminiFlash.route)
+        let polished = try await client.sendText("raw", route: route, systemPrompt: "Polish.", apiKey: "k", timeout: 12)
+        #expect(polished.text == "Tidied.")
         let bodies = try StubURLProtocol.registry.bodies(for: host).map {
             try #require(JSONSerialization.jsonObject(with: $0) as? [String: Any])
         }
         #expect(bodies.map { $0["stream"] as? Bool } == [true, true])
-        #expect(bodies.map { ($0["reasoning"] as? [String: Any])?["exclude"] as? Bool } == [false, true])
+        #expect(bodies.map { ($0["reasoning"] as? [String: Any])?["exclude"] as? Bool } == [false, false])
         let requests = StubURLProtocol.registry.requests(for: host)
-        #expect(requests.map(\.timeoutInterval) == [120, 12], "a stall timeout, and the clean-up's deadline")
+        #expect(requests.map(\.timeoutInterval) == [120, 12], "a stall timeout, and the text request's deadline")
         #expect(requests.allSatisfy { $0.value(forHTTPHeaderField: "X-OpenRouter-Metadata") == "enabled" })
     }
 

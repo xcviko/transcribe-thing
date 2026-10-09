@@ -62,7 +62,8 @@ enum PreviewFixtures {
 
     /// Newest first, spread across the past week, English, Russian and German, incl. one failed and one canceled
     /// entry, cloud transcripts that record who served them, today's audio kept for Transcribe Again, one
-    /// transcript already transcribed again with Gemini and one cleaned up by GPT-6 Luna.
+    /// transcript already transcribed again with Gemini and one cleaned up by GPT-6 Luna (from when clean-up was a
+    /// model).
     static func history(now: Date = Date()) -> [TranscriptEntry] {
         func ago(_ minutes: Double) -> Date { now.addingTimeInterval(-minutes * 60) }
         return [
@@ -105,7 +106,7 @@ enum PreviewFixtures {
                         kind: .cleanup(of: .parakeet, by: .gpt6Luna),
                         text: "Quick note for the release: the pill should collapse a little faster than it expands, and the error toast needs the retry button first.",
                         metadata: TranscriptMetadata(
-                            createdAt: ago(60 * 26), modelID: CleanupModel.gpt6Luna.openRouterModelID, provider: "OpenAI",
+                            createdAt: ago(60 * 26), modelID: "openai/gpt-6-luna", provider: "OpenAI",
                             generationID: "gen-preview-2", reasoningEffort: .off,
                             usage: TokenUsage(promptTokens: 410, completionTokens: 34),
                             costUSD: 0.00006, processingTime: 1.1, generationTime: 0.9, usedSystemPrompt: true,

@@ -107,12 +107,10 @@ final class MenuBuilder {
         var color: NSColor
     }
 
-    /// A model's status: its engine's, and for clean-up Parakeet's until it's ready, then the OpenRouter key's.
+    /// A model's status: its engine's.
     static func status(of choice: ModelChoice, parakeet: EngineID, models: ModelStore,
                        account: OpenRouterAccount) -> EngineStatus {
-        let transcriber = engineStatus(choice.engine(parakeet: parakeet), models: models, account: account)
-        guard choice.cleansUp, transcriber.text == "Ready" else { return transcriber }
-        return engineStatus(.geminiFlash, models: models, account: account)
+        engineStatus(choice.engine(parakeet: parakeet), models: models, account: account)
     }
 
     static func engineStatus(_ engine: EngineID, models: ModelStore, account: OpenRouterAccount) -> EngineStatus {

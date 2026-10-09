@@ -1,63 +1,60 @@
 import Foundation
 
-/// What a dictation goes to. Models lists all three in the user's order (`ModelLineup`): one is the main model every
-/// dictation starts on, and Switch model steps through the others that are switched on. Raw values are persisted (the
+/// What a dictation goes to. Models lists both in the user's order (`ModelLineup`): one is the main model every
+/// dictation starts on, and Switch model steps to the other when it's switched on. Raw values are persisted (the
 /// lineup): never rename them. Declaration order is the default order.
+///
+/// Clean-up ("cleanup", Parakeet's text tidied by GPT-6 Luna) was a third model until it was removed: a stored value
+/// that names it is read as Parakeet where it was the main or hands-free model, and dropped elsewhere
+/// (`retiredCleanup`).
 enum ModelChoice: String, Codable, CaseIterable, Identifiable, Sendable {
-    /// Parakeet v3 alone, where `AppSettings.parakeetEngine` runs it.
+    /// Parakeet v3, where `AppSettings.parakeetEngine` runs it.
     case parakeet
-    /// The same Parakeet v3, then `CleanupModel.default` tidies its text before it's pasted. A pass over Parakeet's
-    /// words, not a model that hears the audio.
-    case cleanup
     /// Gemini 3.8 Flash (`EngineID.geminiFlash`), which hears the audio itself.
     case gemini
 
     var id: String { rawValue }
 
+    /// The raw value of the removed clean-up model, as older builds stored it.
+    static let retiredCleanup = "cleanup"
+
     /// The choice a job or a kept recording was made with (Undo, the processing pill): any chat-completions engine
-    /// (the retired Gemini 3.1 Pro too) is Gemini, and Parakeet anywhere is Parakeet, cleaned up or not.
-    init(engine: EngineID, cleansUp: Bool) {
-        if engine.cloudAPI == .chatCompletions {
-            self = .gemini
-        } else {
-            self = cleansUp ? .cleanup : .parakeet
-        }
+    /// (the retired Gemini 3.1 Pro too) is Gemini, and Parakeet anywhere is Parakeet.
+    init(engine: EngineID) {
+        self = engine.cloudAPI == .chatCompletions ? .gemini : .parakeet
     }
 
     /// The engine that hears the audio: Parakeet where `parakeet` runs it, or Gemini 3.8 Flash.
     func engine(parakeet: EngineID) -> EngineID {
         switch self {
-        case .parakeet, .cleanup: parakeet
+        case .parakeet: parakeet
         case .gemini: .geminiFlash
         }
     }
 
-    var cleansUp: Bool { self == .cleanup }
-
-    /// It goes through the OpenRouter key: clean-up and Gemini always, Parakeet when it runs there.
+    /// It goes through the OpenRouter key: Gemini always, Parakeet when it runs there.
     func needsOpenRouter(parakeet: EngineID) -> Bool {
         switch self {
         case .parakeet: parakeet.isCloud
-        case .cleanup, .gemini: true
+        case .gemini: true
         }
     }
 
     /// It needs Parakeet on this Mac (downloaded, loaded).
     func usesLocalParakeet(parakeet: EngineID) -> Bool {
         switch self {
-        case .parakeet, .cleanup: parakeet.isLocal
+        case .parakeet: parakeet.isLocal
         case .gemini: false
         }
     }
 }
 
 extension ModelChoice {
-    /// The model's own name, wherever it runs: "Parakeet v3", "Parakeet v3 + GPT-6 Luna", "Gemini 3.8 Flash". The
-    /// Models rows, which say where Parakeet runs in a section of their own.
+    /// The model's own name, wherever it runs: "Parakeet v3", "Gemini 3.8 Flash". The Models rows, which say where
+    /// Parakeet runs in a section of their own.
     var modelName: String {
         switch self {
         case .parakeet: EngineID.parakeet.modelName
-        case .cleanup: "\(EngineID.parakeet.modelName) + \(CleanupModel.default.modelName)"
         case .gemini: EngineID.geminiFlash.modelName
         }
     }
@@ -67,49 +64,43 @@ extension ModelChoice {
     func title(parakeet: EngineID) -> String {
         switch self {
         case .parakeet: parakeet.displayName
-        case .cleanup, .gemini: modelName
+        case .gemini: modelName
         }
     }
 
-    /// One word for chains and sentences: "Parakeet → Clean-up → Gemini", "Clean-up and Gemini need…".
+    /// One word for chains and sentences: "Parakeet → Gemini", "Parakeet and Gemini need…".
     var shortName: String {
         switch self {
         case .parakeet: "Parakeet"
-        case .cleanup: "Clean-up"
         case .gemini: "Gemini"
         }
     }
 
-    /// The sidebar chip's name: "Parakeet v3 · Cloud", "Parakeet + Luna", "Gemini Flash".
+    /// The sidebar chip's name: "Parakeet v3 · Cloud", "Gemini Flash".
     func compactName(parakeet: EngineID) -> String {
         switch self {
         case .parakeet: parakeet.shortName
-        case .cleanup: "Parakeet + Luna"
         case .gemini: EngineID.geminiFlash.shortName
         }
     }
 
-    /// The pill chip's name after its symbol: "Parakeet", "Gemini 3.8 Flash"; for clean-up the model after the wand,
-    /// "GPT-6 Luna", which the chip heads with Parakeet's name dimmed.
+    /// The pill chip's name after its symbol: "Parakeet", "Gemini 3.8 Flash".
     var chipName: String {
         switch self {
         case .parakeet: "Parakeet"
-        case .cleanup: CleanupModel.default.modelName
         case .gemini: EngineID.geminiFlash.modelName
         }
     }
 
-    /// Parakeet's bolt (a cloud bolt through OpenRouter), clean-up's wand, Gemini's sparkles.
+    /// Parakeet's bolt (a cloud bolt through OpenRouter), Gemini's sparkles.
     func symbolName(parakeet: EngineID) -> String {
         switch self {
         case .parakeet: parakeet.symbolName
-        case .cleanup: "wand.and.stars"
         case .gemini: "sparkles"
         }
     }
 
-    /// Short names in a sentence, and whether it takes a plural verb: "Gemini", "Clean-up and Gemini", "Parakeet,
-    /// Clean-up and Gemini".
+    /// Short names in a sentence, and whether it takes a plural verb: "Gemini", "Parakeet and Gemini".
     static func sentenceList(_ choices: [ModelChoice]) -> (names: String, isPlural: Bool) {
         let names = choices.map(\.shortName)
         guard let last = names.last else { return ("", false) }
@@ -122,14 +113,14 @@ extension ModelChoice {
         allCases.filter(choices.contains).map(\.rawValue)
     }
 
-    /// A stored set, read leniently: a model this build doesn't know is dropped.
+    /// A stored set, read leniently: a model this build doesn't know (the removed clean-up too) is dropped.
     static func read(_ raw: [String]) -> Set<ModelChoice> {
         Set(raw.compactMap(ModelChoice.init(rawValue:)))
     }
 }
 
-/// The three models as Models lists them: the user's order, the main model every dictation starts on, and which
-/// others Switch model steps to. One JSON value under `SettingsKey.lineup`.
+/// The models as Models lists them: the user's order, the main model every dictation starts on, and which others
+/// Switch model steps to. One JSON value under `SettingsKey.lineup`.
 struct ModelLineup: Equatable, Sendable {
     /// Every `ModelChoice` exactly once, in the user's order.
     private(set) var order: [ModelChoice]
@@ -142,9 +133,8 @@ struct ModelLineup: Equatable, Sendable {
     /// main, and is switched on when it stops being main (`main`).
     private(set) var switchable: Set<ModelChoice>
 
-    /// What every install starts with, and what builds before the lineup did: Parakeet, then clean-up, then Gemini.
-    static let `default` = ModelLineup(order: [.parakeet, .cleanup, .gemini], main: .parakeet,
-                                       switchable: [.cleanup, .gemini])
+    /// What every install starts with, and what builds before the lineup did: Parakeet, then Gemini.
+    static let `default` = ModelLineup(order: [.parakeet, .gemini], main: .parakeet, switchable: [.gemini])
 
     /// `order` loses duplicates and gets every missing choice appended, in `allCases` order.
     init(order: [ModelChoice], main: ModelChoice, switchable: Set<ModelChoice>) {
@@ -190,15 +180,18 @@ extension ModelLineup: Codable {
     }
 
     /// Lenient, as a stored value outlives builds: unknown values and duplicates are dropped, a missing choice is
-    /// appended and switched off, and an unknown main model is Parakeet.
+    /// appended and switched off, and an unknown main model is Parakeet. The removed clean-up was Parakeet's text
+    /// tidied, so Parakeet stands in for it: as the main model, and switched on where clean-up was; it leaves the order.
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let order = (try? container.decodeIfPresent([String].self, forKey: .order)) ?? []
         let switchable = (try? container.decodeIfPresent([String].self, forKey: .switchable)) ?? []
         let main = (try? container.decodeIfPresent(String.self, forKey: .main)) ?? nil
+        var switchOn = Set(switchable.compactMap(ModelChoice.init(rawValue:)))
+        if switchable.contains(ModelChoice.retiredCleanup) { switchOn.insert(.parakeet) }
         self.init(order: order.compactMap(ModelChoice.init(rawValue:)),
                   main: main.flatMap(ModelChoice.init(rawValue:)) ?? .parakeet,
-                  switchable: Set(switchable.compactMap(ModelChoice.init(rawValue:))))
+                  switchable: switchOn)
     }
 
     /// `switchable` in `order` order, so the stored JSON is stable.
@@ -233,19 +226,17 @@ enum ModelColor: String, Codable, CaseIterable, Identifiable, Sendable {
 }
 
 extension ModelChoice {
-    /// Its color until one is picked, as before colors could be: Parakeet the plain pill, clean-up orange (its wand),
-    /// Gemini violet.
+    /// Its color until one is picked, as before colors could be: Parakeet the plain pill, Gemini violet.
     var defaultColor: ModelColor {
         switch self {
         case .parakeet: .graphite
-        case .cleanup: .orange
         case .gemini: .violet
         }
     }
 }
 
 /// Each model's color; two models may share one. One JSON object under `SettingsKey.modelColors`, keyed by
-/// `ModelChoice` raw value: {"cleanup":"orange","gemini":"violet","parakeet":"graphite"}.
+/// `ModelChoice` raw value: {"gemini":"violet","parakeet":"graphite"}. The removed clean-up's color is ignored.
 struct ModelColors: Equatable, Sendable {
     private var colors: [ModelChoice: ModelColor]
 

@@ -76,7 +76,7 @@ struct HistoryRow: View, Equatable {
     /// The recording is kept, and Home hasn't found it unreadable.
     private var hasAudio: Bool { entry.audioFileName != nil && failure?.isRecordingGone != true }
     private var isEmptySuccess: Bool { entry.status == .success && entry.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-    /// What is being made for the recording right now: a transcription (Retry, Transcribe With) or a clean-up.
+    /// What is being made for the recording right now: a transcription (Retry, Transcribe With) or a polish.
     private var running: TranscriptVersionKind? { hub.runningVersion(for: entry.id) }
     /// Why the last version asked for here didn't come.
     private var failure: HomeFailure? { hub.homeFailure(for: entry.id) }
@@ -369,8 +369,8 @@ struct HistoryRow: View, Equatable {
     }
 }
 
-/// "Transcribing with Gemini Flash…" or "Cleaning up with GPT-6 Luna…" under a row whose recording is being
-/// worked on, with a × to cancel it when Home started it.
+/// "Transcribing with Gemini Flash…" or "Polishing with Gemini Flash…" under a row whose recording is being worked
+/// on, with a × to cancel it when Home started it.
 private struct RunningLine: View {
     var kind: TranscriptVersionKind
     var onCancel: (() -> Void)?
@@ -475,10 +475,6 @@ private struct VersionCount: View {
     }
 }
 
-/// A row's Versions menu (`VersionsMenu`): what is running for it, the versions it has with the current one
-/// checked and each one's time, cost and thinking, then "Transcribe With" the engines not used on it yet and a clean-up
-/// of each Parakeet version. Unavailable items stay listed, disabled, with the reason. A failed or canceled
-/// dictation lists only the engines to retry with.
 /// The file a row was made from ("interview.mp3"), with the glyph that says it was imported rather than dictated. With
 /// `duration`, the row's main line (a file not transcribed yet); without, a caption over its transcript.
 struct ImportedFileLabel: View {
@@ -506,6 +502,10 @@ struct ImportedFileLabel: View {
     }
 }
 
+/// A row's Versions menu (`VersionsMenu`): what is running for it, the versions it has (old clean-ups too) with the
+/// current one checked and each one's time, cost and thinking, then "Transcribe With" the engines not used on it yet
+/// and Polish. Unavailable items stay listed, disabled, with the reason. A failed or canceled dictation lists only
+/// what to retry with.
 struct VersionsMenuItems: View {
     var entry: TranscriptEntry
     @Environment(HubContext.self) private var hub
@@ -535,7 +535,7 @@ struct VersionsMenuItems: View {
                     Button {
                         hub.dictation.makeVersion(action.kind, of: entry)
                     } label: {
-                        Label(action.title, systemImage: action.kind.isCleanup ? "wand.and.stars" : "waveform")
+                        Label(action.title, systemImage: "waveform")
                     }
                     .disabled(!action.isEnabled)
                 }

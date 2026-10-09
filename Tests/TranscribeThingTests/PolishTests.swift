@@ -37,7 +37,7 @@ import Testing
         c.send(.pillCancel)
     }
 
-    /// On Parakeet or clean-up the key does nothing at all; switching away from Gemini turns Polish off.
+    /// On Parakeet the key does nothing at all; switching away from Gemini turns Polish off.
     @Test func onlyGeminiPolishes() {
         let (rig, cues) = Switch.make()
         let c = rig.h.controller
@@ -48,7 +48,7 @@ import Testing
         c.selectModelForCurrentDictation(.gemini)
         c.handle(.polish)
         #expect(c.isPolishing)
-        c.selectModelForCurrentDictation(.cleanup)
+        c.selectModelForCurrentDictation(.parakeet)
         #expect(!c.isPolishing, "off once it's not Gemini")
         c.send(.pillCancel)
     }

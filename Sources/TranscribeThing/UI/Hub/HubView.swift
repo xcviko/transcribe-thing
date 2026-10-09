@@ -92,7 +92,7 @@ final class HubContext: Observable {
                                   keyStatus: account.status, localError: models.lastErrors[parakeet])
     }
 
-    /// What is being made for a History row's recording right now (a transcription or a clean-up), if anything.
+    /// What is being made for a History row's recording right now (a transcription or a polish), if anything.
     func runningVersion(for id: UUID) -> TranscriptVersionKind? {
         (previewRunning ?? dictation.runningVersions)[id]
     }

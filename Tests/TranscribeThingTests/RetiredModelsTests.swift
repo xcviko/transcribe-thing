@@ -141,7 +141,7 @@ private let historyFile = #"""
             // Gemini 3.1 Pro was the main model: Gemini 3.8 Flash is, and Parakeet runs on this Mac.
             #expect(settings.parakeetEngine == .parakeet)
             #expect(settings.lineup.main == .gemini)
-            #expect(settings.lineup.cycle == [.gemini, .parakeet, .cleanup])
+            #expect(settings.lineup.cycle == [.gemini, .parakeet])
             for key in [SettingsKey.reasoningEfforts, .cleanupModel, .cleanupReasoningEfforts, .cleanupReasoningEffort] {
                 #expect(defaults.object(forKey: key.defaultsKey) == nil, "\(key) is removed at load")
             }
@@ -150,12 +150,12 @@ private let historyFile = #"""
         try withDefaults { defaults in
             try storeOldSettings(defaults, switchEngines: ["geminiPro"])
             let settings = load(defaults)
-            #expect(!settings.lineup.switchable.contains(.gemini) && settings.lineup.switchable.contains(.cleanup),
+            #expect(!settings.lineup.switchable.contains(.gemini) && settings.lineup.switchable.contains(.parakeet),
                     "Pro alone taking part isn't Flash taking part")
         }
     }
 
-    /// The old levels never reach a request: Gemini 3.8 Flash thinks at medium and GPT-6 Luna not at all.
+    /// The old levels never reach a request: Gemini 3.8 Flash thinks at medium.
     @Test func oldStoredLevelsNeverReachTheWire() async throws {
         let suite = NSTemporaryDirectory() + "transcribe-thing-tests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -165,22 +165,19 @@ private let historyFile = #"""
         }
         try storeOldSettings(defaults, switchEngines: ["geminiFlash", "geminiPro"])
         _ = load(defaults)
-        let replies = [StubURLProtocol.Reply.stream(SSE.answer("Hallo.")), StubURLProtocol.Reply.stream(SSE.answer("Hallo!"))]
+        let replies = [StubURLProtocol.Reply.stream(SSE.answer("Hallo."))]
         let (client, host) = StubURLProtocol.client(replies)
         let keyStore = KeyFileStore.inMemory("sk-or-v1-test")
         let account = OpenRouterAccount(keyStore: keyStore, client: client, debounce: .zero)
         let service = TranscriptionService(models: ModelStore.preview(states: [:]), account: account, client: client)
         let transcribed = try await service.transcribe(Recording(samples: [Float](repeating: 0.1, count: 16_000)),
                                                        engine: .geminiFlash)
-        let cleaned = try await service.cleanUp(transcribed.text, of: .parakeet)
-        #expect(transcribed.reasoningEffort == .medium && cleaned.reasoningEffort == .off)
+        #expect(transcribed.reasoningEffort == .medium)
         let bodies = try StubURLProtocol.registry.bodies(for: host).map {
             try #require(JSONSerialization.jsonObject(with: $0) as? [String: Any])
         }
-        #expect(bodies.map { $0["model"] as? String } == ["google/gemini-3.8-flash", "openai/gpt-6-luna"])
-        #expect(bodies.map { $0["reasoning"] as? [String: AnyHashable] }
-                == [["effort": "medium", "exclude": false], ["effort": "none", "exclude": true]])
-        #expect((bodies[1]["provider"] as? [String: Any])?["only"] as? [String] == ["openai/fast"])
+        #expect(bodies.map { $0["model"] as? String } == ["google/gemini-3.8-flash"])
+        #expect(bodies.map { $0["reasoning"] as? [String: AnyHashable] } == [["effort": "medium", "exclude": false]])
     }
 }
 
@@ -200,13 +197,13 @@ private let historyFile = #"""
     }
 
     @Test func nothingOffersARetiredModel() {
-        #expect(!EngineID.offered.contains(.geminiPro) && !CleanupModel.offered.contains(.geminiFlashLite))
+        #expect(!EngineID.offered.contains(.geminiPro))
         #expect(!EngineID.parakeetRuntimes.contains(.geminiPro))
         #expect(AppSettings.inMemory().lineup.cycle.map { $0.engine(parakeet: .parakeet) }
-                == [.parakeet, .parakeet, .geminiFlash])
+                == [.parakeet, .geminiFlash])
         for engine in EngineID.allCases {
             #expect(!DictationController.fallbackCandidates(for: engine, parakeet: .parakeet).contains(.geminiPro))
         }
-        #expect(ModelChoice(engine: .geminiPro, cleansUp: false) == .gemini, "a job it made reads as Gemini")
+        #expect(ModelChoice(engine: .geminiPro) == .gemini, "a job it made reads as Gemini")
     }
 }

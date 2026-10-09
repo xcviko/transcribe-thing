@@ -824,7 +824,7 @@ struct EngineIcon: View {
     }
 }
 
-/// A model's mark: its symbol (Parakeet's bolt where `parakeet` runs it, clean-up's wand, Gemini's sparkles) in the
+/// A model's mark: its symbol (Parakeet's bolt where `parakeet` runs it, Gemini's sparkles) in the
 /// model's own color (`AppSettings.modelColors`), so a row in Models, the sidebar chip and the pill agree.
 struct ModelChoiceIcon: View {
     var choice: ModelChoice

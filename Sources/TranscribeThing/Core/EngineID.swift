@@ -45,7 +45,7 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
 
     var isCloud: Bool { !isLocal }
 
-    /// Parakeet v3, on this Mac or through OpenRouter: what Parakeet and clean-up (`ModelChoice`) run on.
+    /// Parakeet v3, on this Mac or through OpenRouter: what `ModelChoice.parakeet` runs on.
     var isParakeet: Bool {
         switch self {
         case .parakeet, .parakeetCloud: true

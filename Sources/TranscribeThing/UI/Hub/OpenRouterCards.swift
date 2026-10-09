@@ -48,7 +48,7 @@ struct OpenRouterKeyCard: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.ink)
                 // Who pays, and for what: worth saying every time.
-                Text("Gemini, clean-up and cloud Parakeet run on it. You pay OpenRouter per use.")
+                Text("Gemini and cloud Parakeet run on it. You pay OpenRouter per use.")
                     .typeface(.callout)
                     .foregroundStyle(.inkSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -143,7 +143,7 @@ struct OpenRouterKeyCard: View {
     @ViewBuilder private var statusLine: some View {
         switch account.status {
         case .missing:
-            status("key.slash", .inkTertiary, "No key yet. The cloud models and Clean-up need one.")
+            status("key.slash", .inkTertiary, "No key yet. The cloud models need one.")
         case .checking:
             HStack(spacing: 7) {
                 ProgressView().controlSize(.mini)

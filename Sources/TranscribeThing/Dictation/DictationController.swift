@@ -83,8 +83,6 @@ final class DictationController {
     @ObservationIgnored var cancelledGenerationDelay: Duration = .seconds(3)
     /// Replaces the whole generation lookup (provider, timing); wins over `providerLookupOverride`.
     @ObservationIgnored var generationLookupOverride: (@MainActor (String) async -> GenerationDetails?)?
-    /// Replaces the clean-up request: the transcript and the engine that wrote it (the model is the job's).
-    @ObservationIgnored var cleanupOverride: (@MainActor (String, EngineID) async throws -> TranscriptResult)?
     /// Tests: the selected text Polish Selection finds as a dictation starts, instead of asking Accessibility.
     @ObservationIgnored var selectionOverride: (@MainActor () async -> String?)?
     /// Tests: why `selectionOverride` found nothing (nothing selected, unless this says the app couldn't tell).
@@ -94,8 +92,6 @@ final class DictationController {
     @ObservationIgnored var selectionCopyOverride: (@MainActor () async -> TextInserter.SelectionCopy)?
     /// Tests: the model's answer for Polish Selection (its `<message>` tags included), instead of OpenRouter.
     @ObservationIgnored var selectionPolishOverride: (@MainActor (String, PolishSelectionModel) async throws -> TranscriptResult)?
-    /// Replaces how long a clean-up may take to start answering (`CleanupModel.timeout(forCharacterCount:)`).
-    @ObservationIgnored var cleanupTimeoutOverride: TimeInterval?
     /// Replaces how long a job waits for its local model before saying so (`modelWaitNoticeDelay`).
     @ObservationIgnored var waitNoticeDelayOverride: TimeInterval?
     /// TCC's answer right now (about 25 ms), asked only while the cached permission isn't granted.
@@ -109,8 +105,7 @@ final class DictationController {
     private(set) var activity: DictationActivity = .idle
     /// Recordings waiting to be transcribed or delivered, oldest first.
     private(set) var pendingJobCount = 0
-    /// What is being made for each recording right now, by recording id: a dictation's transcription or clean-up,
-    /// or Home work (`homeWork`). History shows it in the row, and its Versions menu offers nothing else for that
+    /// What is being made for each recording right now, by recording id: a dictation's transcription, or Home work (`homeWork`). History shows it in the row, and its Versions menu offers nothing else for that
     /// recording meanwhile.
     private(set) var runningVersions: [UUID: TranscriptVersionKind] = [:]
     /// What Home is making for each recording right now, by recording id (its row can cancel it).
@@ -173,8 +168,6 @@ final class DictationController {
     @ObservationIgnored private var lastCancelledID: UUID?
     /// The engine each canceled recording kept for Undo was dictated with (Undo resumes on its model).
     @ObservationIgnored private var cancelledEngines: [UUID: EngineID] = [:]
-    /// Kept recordings of dictations on clean-up (canceled or failed): Undo and Retry pick them up on clean-up again.
-    @ObservationIgnored private var cleanupIDs: Set<UUID> = []
     /// Kept recordings of polished dictations (canceled or failed): Undo and Retry polish them again.
     @ObservationIgnored private var polishIDs: Set<UUID> = []
     /// How the recording under way is dictated, still set once it's over: a canceled one goes to History with it.
@@ -655,7 +648,6 @@ final class DictationController {
         guard captureDevice.isCapturing else { return }
         // A resumed dictation keeps the canceled recording's id, already while its tail is captured.
         let job = Job(recording: nil, engine: effectiveEngine, id: resumedID)
-        job.cleansUp = effectiveChoice.cleansUp
         job.mode = mode
         // The main model may have changed under it (Models, a notice's "Use Parakeet v3"): only Gemini polishes.
         job.polishes = isPolishing && effectiveChoice == .gemini
@@ -674,15 +666,14 @@ final class DictationController {
     private func captured(_ recording: Recording, for job: Job) {
         if job.isCancelled {
             // Esc during the tail: the job already left the queue and the cancel cue has played.
-            keepCancelled(recording, engine: job.engine, mode: job.mode, cleansUp: job.cleansUp, polishes: job.polishes,
-                          notify: true)
+            keepCancelled(recording, engine: job.engine, mode: job.mode, polishes: job.polishes, notify: true)
             return
         }
         // A new recording may already be running (re-pressed during the tail): keep the cue out of it.
         if job.playsStopCue { playCue(.stop) }
         DiagnosticLog.shared.event(.dictation, "dictation.stopped",
                                    ["seconds": recording.duration, "voiced": recording.speech.voicedSeconds])
-        guard passesPreflight(recording, model: ModelChoice(engine: job.engine, cleansUp: job.cleansUp)) else {
+        guard passesPreflight(recording, model: ModelChoice(engine: job.engine)) else {
             DiagnosticLog.shared.event(.dictation, "job.finished", [
                 "engine": job.engine, "outcome": recording.speech.isSilent ? "silent" : "noSpeech", "sent": false])
             queue.removeAll { $0 === job }
@@ -733,22 +724,21 @@ final class DictationController {
             DiagnosticLog.shared.event(.dictation, "dictation.canceled",
                                        ["seconds": recording?.duration, "voiced": recording?.speech.voicedSeconds])
             guard let recording else { return }
-            keepCancelled(recording, engine: effectiveEngine, mode: recordingMode, cleansUp: effectiveChoice.cleansUp,
-                          polishes: isPolishing, notify: notify)
+            keepCancelled(recording, engine: effectiveEngine, mode: recordingMode, polishes: isPolishing,
+                          notify: notify)
         } else if let resumed {
             // A resumed dictation whose mic failed: its audio (the kept part at least) stays for another Undo.
             keepCancelled(recording ?? resumed, engine: effectiveEngine, mode: recordingMode,
-                          cleansUp: effectiveChoice.cleansUp, polishes: isPolishing, notify: true)
+                          polishes: isPolishing, notify: true)
         }
     }
 
     /// Keeps a canceled recording for Undo (and in history when it's long).
     private func keepCancelled(_ recording: Recording, engine: EngineID, mode: DictationMachine.Mode,
-                               cleansUp: Bool = false, polishes: Bool = false, notify: Bool) {
+                               polishes: Bool = false, notify: Bool) {
         guard recording.duration >= Self.undoMinimumDuration else { return }
         retain(recording)
         cancelledEngines[recording.id] = engine
-        if cleansUp { cleanupIDs.insert(recording.id) } else { cleanupIDs.remove(recording.id) }
         if polishes { polishIDs.insert(recording.id) } else { polishIDs.remove(recording.id) }
         lastCancelledID = recording.id
         if recording.duration >= Self.saveCancelledMinimumDuration {
@@ -845,15 +835,8 @@ final class DictationController {
     // MARK: - Jobs (concurrent transcription, FIFO delivery)
 
     fileprivate enum Outcome {
-        /// `cleanup`: how the clean-up of the text went, when the dictation was cleaned up.
-        case success(TranscriptResult, cleanup: CleanupOutcome? = nil)
+        case success(TranscriptResult)
         case failure(AppError)
-    }
-
-    fileprivate enum CleanupOutcome {
-        case cleaned(TranscriptResult)
-        /// Timed out, failed or came back empty (nil): the original text stands.
-        case failed(AppError?)
     }
 
     @MainActor
@@ -867,16 +850,10 @@ final class DictationController {
         var generation = 0
         var playsStopCue = false
         var isCancelled = false
-        /// A dictation on clean-up: its transcript is tidied before it's pasted.
-        var cleansUp = false
         /// A polished dictation (`Polish`): its audio goes to Gemini with Polish's prompt.
         var polishes = false
         /// Held or hands-free: its paste follows General → Pasting's rules for that.
         var mode: DictationMachine.Mode = .pushToTalk
-        /// Its text is with the clean-up model now: the transcription itself is done.
-        var isCleaningUp: Bool { uncleaned != nil }
-        /// The finished transcript being cleaned up, kept should the clean-up be canceled.
-        var uncleaned: TranscriptResult?
         /// How many tokens its model is thinking or writing, as far as the stream shows (`streamed(_:for:)`): nil until
         /// the first streamed character, and always for Parakeet. The processing pill shows the newest job's.
         var count: PillTokenCount?
@@ -903,12 +880,11 @@ final class DictationController {
     /// Starts transcribing right away; the result is pasted at the cursor after every older job's. A
     /// recording that is already queued, being delivered, being recorded on or worked on from Home is never queued
     /// twice.
-    /// `cleansUp`: a dictation on clean-up, picked up again; `polishes`: a polished one; `mode`: how it was dictated.
-    func enqueue(_ recording: Recording, engine: EngineID, cleansUp: Bool = false, polishes: Bool = false,
+    /// `polishes`: a polished dictation, picked up again; `mode`: how it was dictated.
+    func enqueue(_ recording: Recording, engine: EngineID, polishes: Bool = false,
                  mode: DictationMachine.Mode = .pushToTalk) {
         guard !isInFlight(recording.id) else { return }
         let job = Job(recording: recording, engine: engine)
-        job.cleansUp = cleansUp
         job.mode = mode
         job.polishes = polishes && engine == .geminiFlash
         queue.append(job)
@@ -926,7 +902,6 @@ final class DictationController {
         job.outcome = nil
         let generation = job.generation
         let engine = job.engine
-        job.uncleaned = nil
         job.count = nil
         job.estimate = TokenEstimate.learned(from: history.entries, modelID: engine.openRouterModelID)
         // Only a streamed answer has tokens to count: Gemini's (Parakeet has none).
@@ -937,24 +912,9 @@ final class DictationController {
                                                 prompt: job.polishes ? Polish.prompt : nil,
                                                 hedge: .race, progress: progress)
             guard !Task.isCancelled, job.generation == generation else { return }
-            if job.polishes, case .success(var result, _) = outcome {
+            if job.polishes, case .success(var result) = outcome {
                 result.text = Polish.message(from: result.text)
                 outcome = .success(result)
-            }
-            if case .success(let result, _) = outcome, self.cleansUp(job, result) {
-                // Still processing as far as the pill goes: the text is pasted once it's tidied (or given up on).
-                job.uncleaned = result
-                job.count = nil
-                job.estimate = TokenEstimate.learned(from: self.history.entries,
-                                                     modelID: CleanupModel.default.openRouterModelID)
-                job.hintTask?.cancel()
-                self.dismissWaitNotice(for: job.id)
-                self.stateDidChange()
-                let cleanup = await self.runCleanup(result.text, of: result.engine, by: .default,
-                                                    hedge: .race,
-                                                    progress: self.streamProgress(for: job, generation: generation))
-                guard !Task.isCancelled, job.generation == generation else { return }
-                outcome = .success(result, cleanup: cleanup)
             }
             job.outcome = outcome
             job.hintTask?.cancel()
@@ -967,8 +927,7 @@ final class DictationController {
         let hintDelay = waitNoticeDelayOverride ?? Self.modelWaitNoticeDelay
         job.hintTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(hintDelay))
-            guard !Task.isCancelled, let self, job.outcome == nil, !job.isCleaningUp,
-                  job.generation == generation else { return }
+            guard !Task.isCancelled, let self, job.outcome == nil, job.generation == generation else { return }
             self.postModelWaitNotice(for: job)
         }
     }
@@ -985,11 +944,11 @@ final class DictationController {
     }
 
     /// A dictation's stream has come this far: its count, for the processing pill. Only a streamed request counts:
-    /// Gemini's, or a clean-up's (not the Parakeet transcript before it). Ignored once the job has its outcome or
-    /// isn't queued any more (canceled, delivered), and for anything else (Home's work never counts).
+    /// Gemini's. Ignored once the job has its outcome or isn't queued any more (canceled, delivered), and for anything
+    /// else (Home's work never counts).
     func streamed(_ progress: ChatStreamProgress, for id: UUID) {
         guard let job = queue.first(where: { $0.id == id }), job.outcome == nil,
-              job.engine.cloudAPI == .chatCompletions || job.isCleaningUp else { return }
+              job.engine.cloudAPI == .chatCompletions else { return }
         job.count = job.estimate.count(for: progress)
         refreshPill()
     }
@@ -1020,48 +979,8 @@ final class DictationController {
         }
     }
 
-    /// A dictation on clean-up is tidied before it's delivered.
-    private func cleansUp(_ job: Job, _ result: TranscriptResult) -> Bool {
-        job.cleansUp && CleanupModel.canClean(result.engine)
-            && !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    /// Tidies `text` (written by `source`) with the clean-up model `model`, giving up when its answer hasn't started
-    /// within its timeout (`TranscriptionService.cleanUp`: one that streams runs to its end). Never throws: a failure,
-    /// a timeout or an empty answer is `.failed`, and the original text stands. `progress`: a dictation's, for the
-    /// pill (Home never passes one).
-    private func runCleanup(_ text: String, of source: EngineID, by model: CleanupModel, hedge: CloudHedge? = nil,
-                            progress: (@Sendable (ChatStreamProgress) -> Void)? = nil) async -> CleanupOutcome {
-        // A key already known not to work would fail the request too: no round trip, and the notice says why.
-        if let keyProblem = openRouterKeyProblem {
-            Log.engine.info("Clean-up skipped: \(keyProblem.code, privacy: .public)")
-            return .failed(keyProblem)
-        }
-        let timeout = cleanupTimeoutOverride ?? CleanupModel.timeout(forCharacterCount: text.count)
-        do {
-            var result: TranscriptResult
-            if let cleanupOverride {
-                result = try await Self.within(timeout, source: source) { try await cleanupOverride(text, source) }
-            } else {
-                result = try await transcription.cleanUp(text, of: source, by: model, timeout: timeout, hedge: hedge,
-                                                         progress: progress)
-            }
-            result.text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !result.text.isEmpty else {
-                Log.engine.info("Clean-up returned no text; keeping the original")
-                return .failed(nil)
-            }
-            return .cleaned(result)
-        } catch let error as AppError {
-            Log.engine.error("Clean-up failed: \(error.code, privacy: .public)")
-            return .failed(error)
-        } catch {
-            return .failed(nil)
-        }
-    }
-
     /// Why the OpenRouter key can't pay for a request right now, as far as the account knows (nil while it may: a
-    /// check in progress, offline, a failed check). Clean-up and Switch model ask before any round trip.
+    /// check in progress, offline, a failed check). Switch model and Polish ask before any round trip.
     private var openRouterKeyProblem: AppError? {
         switch account.status {
         case .missing: .openRouterMissingKey
@@ -1070,22 +989,6 @@ final class DictationController {
         case .noCredit: .openRouterNoCredits("")
         case .failed where account.isKeyUnreadable: .openRouterKeyUnreadable
         case .checking, .valid, .offline, .failed: nil
-        }
-    }
-
-    /// `work`, or `AppError.timeout(source)` once `seconds` pass (then `work` is cancelled): the deadline of
-    /// `cleanupOverride`, which streams nothing.
-    private static func within(_ seconds: TimeInterval, source: EngineID,
-                               _ work: @escaping @MainActor () async throws -> TranscriptResult) async throws -> TranscriptResult {
-        try await withThrowingTaskGroup(of: TranscriptResult?.self) { group in
-            group.addTask { @MainActor in try await work() }
-            group.addTask {
-                try await Task.sleep(for: .seconds(seconds))
-                return nil
-            }
-            defer { group.cancelAll() }
-            guard let first = try await group.next(), let result = first else { throw AppError.timeout(source) }
-            return result
         }
     }
 
@@ -1141,36 +1044,17 @@ final class DictationController {
     @discardableResult
     private func cancelNewestJob() -> Bool {
         guard let job = queue.last else { return false }
-        DiagnosticLog.shared.event(.dictation, "job.canceled", ["engine": job.engine, "cleaningUp": job.isCleaningUp])
+        DiagnosticLog.shared.event(.dictation, "job.canceled", ["engine": job.engine])
         queue.removeLast()
         job.stop()
         job.isCancelled = true
         dismissWaitNotice(for: job.id)
         _ = machine.handle(.jobEnded, now: clock())
-        if let recording = job.recording, let uncleaned = job.uncleaned, job.outcome == nil {
-            keepUncleaned(job, recording, uncleaned)
-        } else if let recording = job.recording {
-            keepCancelled(recording, engine: job.engine, mode: job.mode, cleansUp: job.cleansUp, polishes: job.polishes,
-                          notify: true)
+        if let recording = job.recording {
+            keepCancelled(recording, engine: job.engine, mode: job.mode, polishes: job.polishes, notify: true)
         }
         drain()
         return true
-    }
-
-    /// Canceled while its transcript was being cleaned up: only the clean-up and the paste are called off. The
-    /// finished transcript goes to History, with a card to paste it from; Retry would only make it again.
-    private func keepUncleaned(_ job: Job, _ recording: Recording, _ result: TranscriptResult) {
-        let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        forget(job.id)
-        toasts.dismiss(recordingID: job.id)
-        let version = result.version(text: text)
-        history.upsert(TranscriptEntry(
-            id: job.id, createdAt: recording.startedAt, engine: result.engine, status: .success,
-            audioDuration: recording.duration, voicedSeconds: recording.speech.voicedSeconds, mode: job.mode,
-            audioFileName: history.saveAudio(recording), versions: [version]))
-        resolveGeneration(of: version, entryID: job.id)
-        toasts.post(transcriptCard(text, by: version.kind.dictationModel, in: job.mode, title: "Clean-up canceled",
-                                   body: "The original is in History. Paste it here, or copy it.", pasteHere: true))
     }
 
     private func deliver(_ job: Job, _ outcome: Outcome) async {
@@ -1180,7 +1064,7 @@ final class DictationController {
             deliverSilence(job)
         case .failure(let error):
             deliverFailure(job, error)
-        case .success(let result, let cleanup):
+        case .success(let result):
             let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
             // The engine answered and heard nothing: the user was silent. Not an error.
             guard !text.isEmpty else {
@@ -1190,54 +1074,24 @@ final class DictationController {
             forget(job.id)
             // An older notice's Retry or Undo would transcribe it yet again, or record on, now that its audio is kept.
             toasts.dismiss(recordingID: job.id)
-            // The raw transcript is always a version (a polished one is the only one); a clean-up that worked is
-            // another, and the one delivered.
-            var versions = [result.version(job.polishes ? .polish : nil, text: text)]
-            var delivered = text
-            var deliveredKind = versions[0].kind
-            var cleanupFailed = false
-            var cleanupError: AppError?
-            let cleanupModel = CleanupModel.default
-            switch cleanup {
-            case .cleaned(let cleaned)?:
-                versions.append(cleaned.version(.cleanup(of: result.engine, by: cleanupModel)))
-                delivered = cleaned.text
-                deliveredKind = .cleanup(of: result.engine, by: cleanupModel)
-            case .failed(let error)?:
-                cleanupFailed = true
-                cleanupError = error
-            case nil:
-                break
-            }
+            // The transcript is the entry's one version (a polished dictation's is its polish).
+            let version = result.version(job.polishes ? .polish : nil, text: text)
             DiagnosticLog.shared.event(.dictation, "job.finished", [
                 "engine": result.engine, "outcome": "success", "seconds": result.processingTime,
-                "retry": history.entry(id: job.id)?.status == .failed, "polished": job.polishes,
-                "cleanup": cleanup.map { _ in cleanupFailed ? "failed" : "cleaned" }, "cleanupError": cleanupError])
+                "retry": history.entry(id: job.id)?.status == .failed, "polished": job.polishes])
             // Kept as long as the entry, so History can transcribe it again with another model. Saved again even when
             // a failed or canceled row had it: an Undo-resumed dictation's file holds only the part before the cancel.
             history.upsert(TranscriptEntry(
                 id: job.id, createdAt: recording.startedAt, engine: result.engine, status: .success,
                 audioDuration: recording.duration, voicedSeconds: recording.speech.voicedSeconds, mode: job.mode,
-                audioFileName: history.saveAudio(recording), versions: versions))
-            for version in versions { resolveGeneration(of: version, entryID: job.id) }
+                audioFileName: history.saveAudio(recording), versions: [version]))
+            resolveGeneration(of: version, entryID: job.id)
             // Only what is pasted follows General → Pasting, by the model that wrote it and how it was dictated:
             // History, the cards and Copy keep the text as it came.
-            let model = deliveredKind.dictationModel
-            let insertion = await insert(pasted(delivered, by: model, in: job.mode))
-            handleInsertion(insertion, text: delivered, by: model, in: job.mode, isDictation: true)
-            if cleanupFailed { postCleanupFallback(error: cleanupError, model: cleanupModel) }
+            let model = version.kind.dictationModel
+            let insertion = await insert(pasted(text, by: model, in: job.mode))
+            handleInsertion(insertion, text: text, by: model, in: job.mode, isDictation: true)
         }
-    }
-
-    /// The quiet word that a dictation's clean-up didn't happen: its original text was pasted instead. A key
-    /// problem (every dictation would hit it until it's fixed or clean-up is off) points to Models.
-    private func postCleanupFallback(error: AppError?, model: CleanupModel) {
-        let keyProblem = error?.stopsEveryCloudModel == true && error != .offline
-        toasts.post(Notice(dedupeKey: "cleanup.fallback", style: .info, symbol: "wand.and.sparkles",
-                           title: "Couldn’t clean up · pasted the original",
-                           body: Self.cleanupFailureReason(error, model: model),
-                           actions: keyProblem ? [NoticeAction(title: "Open Models", kind: .openHub(.models), isPrimary: true)] : [],
-                           lifetime: .seconds(keyProblem ? 6 : 4)))
     }
 
     /// Asks OpenRouter about a delivered cloud version in the background when its response left something out: the
@@ -1308,17 +1162,16 @@ final class DictationController {
         let hadRow = history.entry(id: job.id).map { $0.status != .success } ?? false
         if hadRow { history.delete(job.id) }
         Log.engine.info("No speech from \(job.engine.rawValue, privacy: .public)")
-        reportNoSpeech(model: ModelChoice(engine: job.engine, cleansUp: job.cleansUp))
+        reportNoSpeech(model: ModelChoice(engine: job.engine))
     }
 
     private func deliverFailure(_ job: Job, _ error: AppError) {
         guard let recording = job.recording else { return }
         DiagnosticLog.shared.event(.dictation, "job.finished", [
             "engine": job.engine, "outcome": "failure", "code": error,
-            "retry": history.entry(id: job.id)?.status == .failed, "polished": job.polishes, "cleansUp": job.cleansUp])
+            "retry": history.entry(id: job.id)?.status == .failed, "polished": job.polishes])
         let file = history.saveAudio(recording)
         retain(recording)
-        if job.cleansUp { cleanupIDs.insert(job.id) }
         if job.polishes { polishIDs.insert(job.id) } else { polishIDs.remove(job.id) }
         // Its Retry is the same model: another one for this recording is the user's call, from History.
         let notice = error.notice(recordingID: job.id, fallbackEngine: nil, engine: job.engine)
@@ -1501,8 +1354,8 @@ final class DictationController {
     }
 
     /// Home's Versions menu (and a failed or canceled row's Retry): makes the version of `kind` the entry doesn't
-    /// have yet, into history only. A transcription needs the recording; a clean-up only the text it tidies. A
-    /// version the entry already has is shown instead of being made twice.
+    /// have yet, into history only, from the recording. A version the entry already has is shown instead of being
+    /// made twice.
     ///
     /// Home work stays in Home. It runs in a task of its own beside dictations, never in their queue, so it never
     /// holds a dictation's paste back, and Esc neither waits for it nor cancels it. The local model still takes one
@@ -1512,10 +1365,10 @@ final class DictationController {
     func makeVersion(_ kind: TranscriptVersionKind, of entry: TranscriptEntry) {
         switch kind {
         case .transcription(let engine): retry(entry, with: engine)
-        case .cleanup(let source, let model): cleanUp(entry, of: source, by: model)
         case .polish: polish(entry)
-        // A selection has no recording to make another version from.
-        case .selection: break
+        // Nothing makes clean-ups any more (History only reads old ones), and a selection has no recording to make
+        // another version from.
+        case .cleanup, .selection: break
         }
     }
 
@@ -1535,42 +1388,6 @@ final class DictationController {
             return
         }
         transcribeInHome(recording, as: kind)
-    }
-
-    /// Clean Up from Home: `model` tidies the entry's `source` transcript, which becomes a new version and the
-    /// current one. Works without the audio. Nothing happens while something else runs for the recording, or for a
-    /// transcript with no text.
-    private func cleanUp(_ entry: TranscriptEntry, of source: EngineID, by model: CleanupModel) {
-        let id = entry.id
-        guard entry.status == .success, CleanupModel.canClean(source), !isInFlight(id),
-              let raw = history.entry(id: id)?.version(.transcription(source)),
-              !raw.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        let kind = TranscriptVersionKind.cleanup(of: source, by: model)
-        guard !(history.entry(id: id)?.hasVersion(kind) ?? false) else {
-            showVersion(kind, of: id)
-            return
-        }
-        beginHomeWork(kind, for: id)
-        homeTasks[id] = Task { [weak self] in
-            guard let self else { return }
-            let outcome = await self.runCleanup(raw.text, of: source, by: model)
-            guard self.endHomeWork(for: id) else { return }
-            switch outcome {
-            case .cleaned(let result):
-                DiagnosticLog.shared.event(.dictation, "home.finished",
-                                           ["cleanup": source, "outcome": "success", "seconds": result.processingTime])
-                let version = result.version(kind)
-                guard var current = self.history.entry(id: id), current.status == .success else { return }
-                current.addVersion(version)
-                self.history.upsert(current)
-                self.resolveGeneration(of: version, entryID: id)
-            case .failed(let error):
-                DiagnosticLog.shared.event(.dictation, "home.finished",
-                                           ["cleanup": source, "outcome": "failure", "code": error])
-                guard self.history.entry(id: id) != nil else { return }
-                self.homeFailures[id] = HomeFailure(kind: kind, reason: Self.homeFailureReason(error, making: kind))
-            }
-        }
     }
 
     /// Home's Polish of a row: Gemini on its recording again, with Polish's prompt. Lands as Retry and Transcribe With
@@ -1601,9 +1418,9 @@ final class DictationController {
             var outcome = await self.transcribe(recording, engine: engine, prompt: polishes ? Polish.prompt : nil,
                                                 background: true)
             guard self.endHomeWork(for: id) else { return }
-            if polishes, case .success(var result, let cleanup) = outcome {
+            if polishes, case .success(var result) = outcome {
                 result.text = Polish.message(from: result.text)
-                outcome = .success(result, cleanup: cleanup)
+                outcome = .success(result)
             }
             self.land(outcome, of: recording, engine: engine, as: polishes ? .polish : nil)
         }
@@ -1611,7 +1428,7 @@ final class DictationController {
 
     /// An audio or video file dropped on Home (or picked with Transcribe File…): it becomes a History row of its own,
     /// as a dictation would, marked with the file's name, and `kind` (a transcription, or Polish) makes its first
-    /// version as Home work. From there it's a row like any other: Transcribe With, Clean Up, Retry. It pastes nothing.
+    /// version as Home work. From there it's a row like any other: Transcribe With, Polish, Retry. It pastes nothing.
     func transcribe(_ file: ImportedAudio, as kind: TranscriptVersionKind) {
         guard !kind.isCleanup, !kind.isSelection else { return }
         var recording = Recording(samples: file.samples, startedAt: Date(), speech: file.speech)
@@ -1675,7 +1492,7 @@ final class DictationController {
         guard let entry = history.entry(id: id) else { return }
         let failure: AppError
         switch outcome {
-        case .success(let result, _):
+        case .success(let result):
             let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else {
                 failure = .noSpeech
@@ -1723,17 +1540,16 @@ final class DictationController {
     }
 
     /// Why a version asked for from Home didn't come, as its row says it after "Couldn't transcribe with Gemini
-    /// Flash" or "Couldn't clean up with GPT-6 Luna": that names the model already, so this says "It". A key, credit
-    /// or connection problem reads the same whichever model it stopped.
+    /// Flash": that names the model already, so this says "It". A key, credit or connection problem reads the same
+    /// whichever model it stopped.
     nonisolated static func homeFailureReason(_ error: AppError?, making kind: TranscriptVersionKind) -> String {
         switch (error, kind) {
         case (nil, _): "It returned no text."
         case (.timeout?, _): "It took too long."
         case (.openRouterTruncated?, _): "It stopped before finishing."
-        case (.openRouterRefused?, .cleanup), (.openRouterBadRequest?, .cleanup): "It couldn’t process the text."
-        case (let error?, .cleanup(_, let model)): cleanupFailureReason(error, model: model)
-        case (let error?, .polish), (let error?, .selection):
-            accountFailureReason(error) ?? error.notice(recordingID: nil, fallbackEngine: nil, engine: .geminiFlash).title
+        // A clean-up is never made any more: it only completes the switch.
+        case (let error?, .polish), (let error?, .selection), (let error?, .cleanup):
+            accountFailureReason(error) ?? error.notice(recordingID: nil, fallbackEngine: nil, engine: kind.engine).title
         case (.openRouterRefused?, _), (.openRouterBadRequest?, _): "It couldn’t process this recording."
         case (.engineFailed?, _): "It ran into a problem."
         case (.modelNotDownloaded?, _): "It isn’t downloaded yet."
@@ -1743,22 +1559,6 @@ final class DictationController {
             "OpenRouter couldn’t reach its provider."
         case (let error?, .transcription(let engine)):
             accountFailureReason(error) ?? error.notice(recordingID: nil, fallbackEngine: nil, engine: engine).title
-        }
-    }
-
-    /// Why a clean-up didn't happen, in a sentence about the text and the clean-up model that tried (the error
-    /// notices' own titles speak of Gemini and recordings).
-    nonisolated static func cleanupFailureReason(_ error: AppError?, model cleanupModel: CleanupModel) -> String {
-        if let error, let reason = accountFailureReason(error) { return reason }
-        let model = cleanupModel.shortName
-        return switch error {
-        case nil: "\(model) returned no text."
-        case .timeout?: "\(model) took too long."
-        case .openRouterNoRoute?: "OpenRouter found no \(cleanupModel.providerName) route for your key."
-        case .openRouterProviderUnavailable?: "\(cleanupModel.providerName) is unavailable."
-        case .openRouterTruncated?: "\(model) stopped before finishing."
-        case .openRouterRefused?, .openRouterBadRequest?: "\(model) couldn’t process the text."
-        case let error?: error.notice(recordingID: nil, fallbackEngine: nil).title
         }
     }
 
@@ -1786,7 +1586,7 @@ final class DictationController {
         guard let id = recordingID else { return }
         if let waiting = queue.first(where: { $0.id == id }) {
             // Still in the queue ("Use Parakeet v3 · Cloud Instead" while Parakeet loads): switch engines in place.
-            if let engine, engine != waiting.engine, waiting.outcome == nil, !waiting.isCleaningUp {
+            if let engine, engine != waiting.engine, waiting.outcome == nil {
                 waiting.engine = engine
                 run(waiting)
                 stateDidChange()
@@ -1801,8 +1601,8 @@ final class DictationController {
             return
         }
         let chosen = engine ?? history.entry(id: id)?.engine ?? settings.mainEngine
-        enqueue(recording, engine: chosen, cleansUp: cleanupIDs.contains(id),
-                polishes: polishIDs.contains(id), mode: history.entry(id: id)?.mode ?? .pushToTalk)
+        enqueue(recording, engine: chosen, polishes: polishIDs.contains(id),
+                mode: history.entry(id: id)?.mode ?? .pushToTalk)
     }
 
     /// Undo of a cancel: the dictation picks up again hands-free, its kept audio first, and nothing is transcribed
@@ -1821,7 +1621,7 @@ final class DictationController {
             return
         }
         let engine = cancelledEngines[id] ?? history.entry(id: id)?.engine ?? settings.mainEngine
-        let choice = ModelChoice(engine: engine, cleansUp: cleanupIDs.contains(id))
+        let choice = ModelChoice(engine: engine)
         resumeRequest = recording
         // The same dictation goes on, with the model it had; `send` drops it if the mic won't start.
         modelOverride = choice == settings.lineup.main ? nil : choice
@@ -2037,7 +1837,6 @@ final class DictationController {
             let evicted = retainedOrder.removeFirst()
             retained[evicted] = nil
             cancelledEngines[evicted] = nil
-            cleanupIDs.remove(evicted)
             polishIDs.remove(evicted)
         }
         // Past `retainedSecondsLimit` of audio, the oldest recordings whose audio History keeps on disk let go of
@@ -2057,7 +1856,6 @@ final class DictationController {
         retained[id] = nil
         retainedOrder.removeAll { $0 == id }
         cancelledEngines[id] = nil
-        cleanupIDs.remove(id)
         polishIDs.remove(id)
     }
 
@@ -2383,7 +2181,7 @@ final class DictationController {
         settleSelection()
         let entries = history.entries
         let work = SelectionPolish(estimates: Dictionary(uniqueKeysWithValues: PolishSelectionModel.asked.map {
-            ($0, TokenEstimate.learned(from: entries, modelID: $0.route.model))
+            ($0, TokenEstimate.learned(from: entries, modelID: $0.route?.model))
         }))
         selectionPolish = work
         DiagnosticLog.shared.event(.dictation, "selection.polish", ["characters": text.count])
@@ -2412,9 +2210,11 @@ final class DictationController {
                 do {
                     let result = if let override {
                         try await override(text, model)
+                    } else if let route = model.route {
+                        try await transcription.polishText(text, route: route, prompt: Polish.textPrompt,
+                                                           progress: progress)
                     } else {
-                        try await transcription.cleanUp(text, of: .geminiFlash, route: model.route,
-                                                        prompt: Polish.textPrompt, progress: progress)
+                        throw AppError.engineFailed(.geminiFlash, "\(model.modelName) no longer polishes.")
                     }
                     outcome = .success(result)
                 } catch let error as AppError {
@@ -2600,9 +2400,9 @@ final class DictationController {
     nonisolated static func dictionaryCard(added word: String, replacing replaced: String? = nil,
                                            before: UserDictionary, after: UserDictionary) -> Notice {
         let body = if let replaced {
-            "“\(word)” replaces “\(replaced)”. Gemini and GPT-6 Luna get it as a hint."
+            "“\(word)” replaces “\(replaced)”. Gemini gets it as a hint."
         } else {
-            "Gemini and GPT-6 Luna now know “\(word)” and how it’s spelled."
+            "Gemini now knows “\(word)” and how it’s spelled."
         }
         return Notice(dedupeKey: dictionaryCardKey, style: .info, symbol: "character.book.closed",
                       title: "Added to your dictionary", body: body,
@@ -2641,7 +2441,7 @@ final class DictationController {
     }
 
     /// What a switch to models the OpenRouter key can't pay for (`blocked`, in cycle order) says: "Gemini needs an
-    /// OpenRouter key", "Clean-up and Gemini need OpenRouter credit".
+    /// OpenRouter key", "Parakeet and Gemini need OpenRouter credit".
     static func switchWithoutKeyNotice(_ status: KeyStatus, blocked: [ModelChoice]) -> Notice {
         let list = ModelChoice.sentenceList(blocked.isEmpty ? [.gemini] : blocked)
         let subject = "\(list.names) \(list.isPlural ? "need" : "needs")"
@@ -2781,7 +2581,7 @@ final class DictationController {
         let session: ModelChoice? = if phase.isRecording || modelOverride != nil {
             effectiveChoice
         } else if phase == .processing, let job = pillJob {
-            ModelChoice(engine: job.engine, cleansUp: job.cleansUp)
+            ModelChoice(engine: job.engine)
         } else if phase == .processing, selectionRuns {
             ModelChoice.gemini
         } else {
@@ -2824,8 +2624,7 @@ final class DictationController {
         if pendingJobCount != count { pendingJobCount = count }
         var running = homeWork
         for job in (deliveringJob.map { [$0] } ?? []) + queue where job.recording != nil {
-            running[job.id] = job.isCleaningUp ? .cleanup(of: job.engine, by: .default)
-                : job.polishes ? .polish : .transcription(job.engine)
+            running[job.id] = job.polishes ? .polish : .transcription(job.engine)
         }
         if runningVersions != running { runningVersions = running }
         refreshPill()

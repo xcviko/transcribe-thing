@@ -1,8 +1,8 @@
 import Foundation
 import os
 
-/// Two identical requests at once to the same model: every dictation's cloud request (Gemini 3.8 Flash, its clean-up,
-/// cloud Parakeet). A model's time varies a lot from one request to the next (Gemini 3.8 Flash thinks anywhere from
+/// Two identical requests at once to the same model: every dictation's cloud request (Gemini 3.8 Flash, cloud
+/// Parakeet). A model's time varies a lot from one request to the next (Gemini 3.8 Flash thinks anywhere from
 /// none to thousands of tokens), so the first of two answers is often much sooner than either one alone.
 enum CloudHedge: Sendable, Equatable {
     /// The first answer is used and the other request is cancelled, whatever it's doing. What it cost is looked up
@@ -12,8 +12,8 @@ enum CloudHedge: Sendable, Equatable {
     /// first one came is measured (`Measurement`, logged as `hedge.measured`).
     case measure
 
-    /// What the log calls the request: "transcription", "cleanup".
-    enum Kind: String, Sendable { case transcription, cleanup }
+    /// What the log calls the request: "transcription".
+    enum Kind: String, Sendable { case transcription }
 
     /// What a request hears as it goes: its stream's progress (nil when nobody listens), and its generation id once
     /// OpenRouter names it.

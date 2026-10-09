@@ -31,15 +31,15 @@ final class AppSettings {
     var onboardingCompleted: Bool = false { didSet { store.set(onboardingCompleted, .onboardingCompleted) } }
     /// Resume point for onboarding: an `OnboardingStep` raw value (five steps).
     var onboardingStep: Int = 0 { didSet { store.set(onboardingStep, .onboardingResumeStep) } }
-    /// Where Parakeet v3 runs, on this Mac or through OpenRouter: for Parakeet alone and for clean-up
-    /// (`ModelChoice`). Anything but Parakeet leaves the default. Stored under `SettingsKey.selectedEngine`.
+    /// Where Parakeet v3 runs, on this Mac or through OpenRouter (`ModelChoice.parakeet`). Anything but Parakeet
+    /// leaves the default. Stored under `SettingsKey.selectedEngine`.
     var parakeetEngine: EngineID = .default {
         didSet {
             if !parakeetEngine.isParakeet { parakeetEngine = .default }
             store.set(parakeetEngine.rawValue, .selectedEngine)
         }
     }
-    /// The three models as Models lists them: their order, the main model every dictation starts on, and which
+    /// The models as Models lists them: their order, the main model every dictation starts on, and which
     /// others the Switch model shortcut steps to.
     var lineup: ModelLineup = .default {
         didSet {
@@ -117,7 +117,7 @@ final class AppSettings {
     func removesFinalPeriod(by model: ModelChoice, in mode: DictationMachine.Mode) -> Bool {
         modelsRemovingFinalPeriod.contains(model) && modesRemovingFinalPeriod.contains(mode)
     }
-    /// Words, names and terms Gemini 3.8 Flash and GPT-6 Luna get as a hint, with their spelling (Hub → Dictionary, fn D).
+    /// Words, names and terms Gemini 3.8 Flash gets as a hint, with their spelling (Hub → Dictionary, fn D).
     var dictionary = UserDictionary() {
         didSet {
             store.setJSON(dictionary, .dictionary)
@@ -181,17 +181,25 @@ final class AppSettings {
     }
 
     /// The lineup that stands for what an older build stored, or nil when it stored nothing the lineup replaces (the
-    /// engine is Parakeet or absent, and neither switch flag is there). Clean-up and Gemini take part unless their
-    /// old flags said no; a Gemini selection from builds before 0.2.0 (Gemini 3.1 Pro too) is the main model again.
+    /// engine is Parakeet or absent, and neither switch flag is there). Gemini takes part unless its old flag said no
+    /// (the clean-up flag has nothing left to say: clean-up is gone); a Gemini selection from builds before 0.2.0
+    /// (Gemini 3.1 Pro too) is the main model again.
     nonisolated static func migratedLineup(storedEngine: EngineID?, switchCleanup: Bool?,
                                            switchEngines: [String]?) -> ModelLineup? {
         let geminiWasMain = storedEngine?.cloudAPI == .chatCompletions
         guard geminiWasMain || switchCleanup != nil || switchEngines != nil else { return nil }
         var lineup = ModelLineup.default
-        lineup.setSwitchable(.cleanup, switchCleanup ?? true)
         lineup.setSwitchable(.gemini, switchEngines.map { $0.contains(EngineID.geminiFlash.rawValue) } ?? true)
         if geminiWasMain { lineup.main = .gemini }
         return lineup
+    }
+
+    /// The stored hands-free model, read leniently. The removed clean-up was Parakeet's text tidied, so it becomes
+    /// Parakeet while Switch model reaches Parakeet (`ModelLineup` turns Parakeet on where clean-up was), and
+    /// otherwise no model of its own: the main model, which is then Parakeet or one Parakeet was switched off for.
+    nonisolated static func handsFreeModel(stored raw: String?, lineup: ModelLineup) -> ModelChoice? {
+        guard raw == ModelChoice.retiredCleanup else { return raw.flatMap(ModelChoice.init(rawValue:)) }
+        return lineup.steps.contains(.parakeet) ? .parakeet : nil
     }
 
     /// Onboarding had six steps (welcome, permissions, model, shortcuts, try it, done) until shortcuts and try it
@@ -257,15 +265,15 @@ final class AppSettings {
         microphoneUID = store.string(.microphoneUID)
         migrateBuiltInOverBluetoothOnce()
         if let v = store.bool(.showDockIcon) { showDockIcon = v }
-        // The prompts are fixed in code now (`EngineID.geminiSystemPrompt`, `CleanupModel.systemPrompt`) and change
-        // only with the app: one stored by an older build, edited or not, goes.
+        // Gemini's prompt is fixed in code now (`EngineID.geminiSystemPrompt`) and changes only with the app, and
+        // clean-up is gone: a prompt stored by an older build, edited or not, goes.
         store.remove(.geminiSystemPrompt)
         store.remove(.cleanupSystemPrompt)
         store.remove(.cleanupEnabled)
         // Polish Selection asks both its models at once now (to pick the better answer): the stored choice goes.
         store.remove(.polishSelectionModel)
-        // Every model thinks at its own fixed level now, and GPT-6 Luna is the only clean-up model: the stored
-        // levels and choice have no meaning any more.
+        // Every model thinks at its own fixed level now, and clean-up is gone: the stored levels and clean-up model
+        // choice have no meaning any more.
         for key in [SettingsKey.reasoningEfforts, .cleanupModel, .cleanupReasoningEfforts, .cleanupReasoningEffort] {
             store.remove(key)
         }
@@ -277,9 +285,9 @@ final class AppSettings {
         }
         if let v = store.bool(.doublePressForHandsFree) { doublePressForHandsFree = v }
         if let v = store.bool(.returnFinishesHandsFree) { returnFinishesHandsFree = v }
-        handsFreeModel = store.string(.handsFreeModel).flatMap(ModelChoice.init(rawValue:))
+        handsFreeModel = Self.handsFreeModel(stored: store.string(.handsFreeModel), lineup: lineup)
         // Pasting's two switches held for every model; each is picked per model now. One an older build turned on
-        // holds for all three, once: the old keys go.
+        // holds for all of them, once: the old keys go. The removed clean-up drops out of the sets (`ModelChoice.read`).
         if let v: [String] = store.json(.modelsAddingSpace) {
             modelsAddingSpace = ModelChoice.read(v)
         } else if store.bool(.addSpaceAfterText) == true {
@@ -398,19 +406,18 @@ enum SettingsKey: String, CaseIterable {
     case maxRecordingMinutes, doublePressForHandsFree
     case restoreClipboard, keepFailedRecordingsDays, keepSuccessfulRecordingsDays, shortcuts, hasShownWelcomeHello
     case checkForUpdatesAutomatically, announcedUpdateVersion, lastLaunchedVersion, updatedVersionToAnnounce
-    /// `switchEngines` (the extra models Switch model stepped to) and `switchCleanup` (whether it stepped to clean-up)
-    /// are folded into `lineup` once and removed at load.
+    /// `switchEngines` (the extra models Switch model stepped to) and `switchCleanup` (whether it stepped to the
+    /// removed clean-up) are folded into `lineup` once and removed at load.
     case switchEngines, switchCleanup, switchHintShownCount, microphoneChoiceMigrated
     /// `cleanupEnabled` is the removed "Clean up Parakeet transcripts" switch (every dictation), removed at load:
-    /// clean-up is one of the models in `lineup` now.
+    /// clean-up became a model in `lineup`, and is gone now.
     /// `reasoningEfforts` (each Gemini model's Thinking level), `cleanupModel` (the clean-up model choice),
     /// `cleanupReasoningEfforts` (each clean-up model's level) and `cleanupReasoningEffort` (Flash Lite's level from
-    /// before that choice) are removed at load: every model thinks at a fixed level, and GPT-6 Luna is the only
-    /// clean-up model.
+    /// before that choice) are removed at load: every model thinks at a fixed level, and clean-up is gone.
     case reasoningEfforts, cleanupEnabled, cleanupReasoningEffort
     case cleanupModel, cleanupReasoningEfforts
-    /// `geminiSystemPrompt` and `cleanupSystemPrompt` are the prompts Models used to edit, removed at load: both are
-    /// fixed in code now.
+    /// `geminiSystemPrompt` and `cleanupSystemPrompt` are the prompts Models used to edit, removed at load: Gemini's
+    /// is fixed in code now, and clean-up is gone.
     case geminiSystemPrompt, cleanupSystemPrompt
     /// `addSpaceAfterText` and `removeFinalPeriod` are Pasting's switches from when they held for every model, read
     /// once into `modelsAddingSpace` and `modelsRemovingFinalPeriod` and removed at load.

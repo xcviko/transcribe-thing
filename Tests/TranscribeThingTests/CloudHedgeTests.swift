@@ -47,7 +47,8 @@ import Testing
 
     @Test func aFailedRequestLeavesTheOtherToAnswer() async throws {
         let calls = Calls()
-        let result = try await CloudHedge.run(.race, .cleanup, engine: .parakeet, modelName: "Clean-up", progress: nil,
+        let result = try await CloudHedge.run(.race, .transcription, engine: .parakeetCloud, modelName: "Parakeet",
+                                              progress: nil,
                                               work(calls, delays: [0.01, 0.1], texts: ["x", "answer"],
                                                    failures: [0: .openRouterProviderUnavailable("")]))
         #expect(result.text == "answer")
@@ -56,7 +57,7 @@ import Testing
     @Test func whenBothFailTheFirstFailureIsThrown() async {
         let calls = Calls()
         await #expect(throws: AppError.timeout(.parakeet)) {
-            try await CloudHedge.run(.race, .cleanup, engine: .parakeet, modelName: "Clean-up", progress: nil,
+            try await CloudHedge.run(.race, .transcription, engine: .parakeetCloud, modelName: "Parakeet", progress: nil,
                                      work(calls, delays: [0.01, 0.05],
                                           failures: [0: .timeout(.parakeet), 1: .openRouterTruncated("")]))
         }
@@ -106,12 +107,14 @@ import Testing
 /// The service sends the very same request twice.
 @MainActor
 @Suite(.serialized) struct CloudHedgeServiceTests {
-    @Test func aCleanUpGoesTwiceWithTheSameBody() async throws {
+    private let recording = Recording(samples: [Float](repeating: 0.1, count: 16_000))
+
+    @Test func aGeminiRequestGoesTwiceWithTheSameBody() async throws {
         let replies = [StubURLProtocol.Reply.stream(SSE.answer("Hello.")), .stream(SSE.answer("Hello."))]
         let (client, host) = StubURLProtocol.client(replies)
         let account = OpenRouterAccount(keyStore: KeyFileStore.inMemory("sk-or-v1-test"), client: client, debounce: .zero)
         let service = TranscriptionService(models: ModelStore.preview(states: [:]), account: account, client: client)
-        let result = try await service.cleanUp("hello", of: .parakeet, hedge: .race)
+        let result = try await service.transcribe(recording, engine: .geminiFlash, hedge: .race)
         #expect(result.text == "Hello.")
         let bodies = try StubURLProtocol.registry.bodies(for: host)
         #expect(bodies.count == 2)
@@ -123,7 +126,7 @@ import Testing
         let (client, host) = StubURLProtocol.client([.stream(SSE.answer("Hello."))])
         let account = OpenRouterAccount(keyStore: KeyFileStore.inMemory("sk-or-v1-test"), client: client, debounce: .zero)
         let service = TranscriptionService(models: ModelStore.preview(states: [:]), account: account, client: client)
-        _ = try await service.cleanUp("hello", of: .parakeet)
+        _ = try await service.transcribe(recording, engine: .geminiFlash)
         #expect(try StubURLProtocol.registry.bodies(for: host).count == 1)
     }
 }
@@ -138,20 +141,19 @@ import Testing
         defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
         h.controller.cancelledGenerationDelay = .zero
         h.controller.generationLookupOverride = { id in
-            id == "gen-other" ? GenerationDetails(provider: "OpenAI", costUSD: 0.00002) : nil
+            id == "gen-other" ? GenerationDetails(provider: "Google AI Studio", costUSD: 0.00002) : nil
         }
-        h.controller.cleanupOverride = { _, engine in
+        h.controller.transcribeOverride = { _, engine in
             var result = TranscriptResult(text: "Hello there.", engine: engine, processingTime: 0.9, costUSD: 0.00005,
-                                          provider: "OpenAI", generationID: "gen-won")
-            result.modelID = CleanupModel.gpt6Luna.openRouterModelID
+                                          provider: "Google AI Studio", generationID: "gen-won")
+            result.modelID = engine.openRouterModelID
             result.otherGenerationIDs = ["gen-other"]
             return result
         }
-        h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "hello there", engine: engine, processingTime: 0.2) }
         h.controller.insertOverride = { _ in .pasted }
         let r = H.recording()
-        h.controller.enqueue(r, engine: .parakeet, cleansUp: true)
-        let kind = TranscriptVersionKind.cleanup(of: .parakeet, by: .gpt6Luna)
+        h.controller.enqueue(r, engine: .geminiFlash)
+        let kind = TranscriptVersionKind.transcription(.geminiFlash)
         try await waitUntil { h.history.entry(id: r.id)?.version(kind)?.metadata.pendingGenerationIDs == nil
             && h.history.entry(id: r.id)?.version(kind) != nil }
         let cost = try #require(h.history.entry(id: r.id)?.version(kind)?.metadata.costUSD)
@@ -165,9 +167,9 @@ import Testing
     @Test func theStreamNamesItsGenerationEarly() async throws {
         let (client, _) = StubURLProtocol.client([.stream(SSE.answer("Hello."))])
         let named = OSAllocatedUnfairLock(initialState: [String]())
-        let result = try await client.cleanUp(transcript: "hello", route: try #require(CleanupModel.gpt6Luna.route),
-                                              systemPrompt: "Tidy it.", apiKey: "sk-or-v1-test", timeout: 10,
-                                              generation: { id in named.withLock { $0.append(id) } })
+        let result = try await client.sendText("hello", route: try #require(PolishSelectionModel.geminiFlash.route),
+                                               systemPrompt: "Polish it.", apiKey: "sk-or-v1-test", timeout: 10,
+                                               generation: { id in named.withLock { $0.append(id) } })
         let ids = named.withLock { $0 }
         #expect(ids.count == 1 && ids.first == result.generationID && result.generationID != nil)
     }

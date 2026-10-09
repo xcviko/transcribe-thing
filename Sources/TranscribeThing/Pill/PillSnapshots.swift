@@ -46,12 +46,11 @@ enum PillSnapshots {
                 ])
             },
             // The token count (`--only pill-counter`): the dots give way to it, it counts through thinking and
-            // writing (a clean-up only writes), and the pill leaves with its last number.
-            SnapshotEntry("pill-counter", width: PillFilmSheet.width(cell: 158, columns: 11), height: 330) { _ in
+            // writing, and the pill leaves with its last number.
+            SnapshotEntry("pill-counter", width: PillFilmSheet.width(cell: 158, columns: 11), height: 230) { _ in
                 PillFilmSheet(cell: 158, columns: 11, strips: [
                     .counter("No tint", choice: nil),
                     .counter("Gemini Flash", choice: .gemini),
-                    .counter("Clean-up", choice: .cleanup),
                 ])
             },
             SnapshotEntry("pill-counter-rest", width: PillFilmSheet.width(cell: 158, columns: 11), height: 120) { _ in
@@ -70,22 +69,20 @@ enum PillSnapshots {
                     .morph("Hover ends", from: .peek, model: .preview(phase: .rest, isHovering: true)),
                 ])
             },
-            // Film strips of a Gemini or clean-up pill leaving: the chip and the tint go with it.
-            SnapshotEntry("pill-exit-models", width: PillFilmSheet.width(cell: 132, columns: 11), height: 480) { _ in
+            // Film strips of a Gemini pill leaving: the chip and the tint go with it.
+            SnapshotEntry("pill-exit-models", width: PillFilmSheet.width(cell: 132, columns: 11), height: 300) { _ in
                 PillFilmSheet(cell: 132, columns: 11, cellHeight: 92, strips: [
                     .exit("Processing · Gemini Flash → hidden", .processing(afterHandsFree: false),
                           model: .preview(phase: .processing), choice: .gemini),
-                    .exit("Processing · Clean-up → hidden", .processing(afterHandsFree: false),
-                          model: .preview(phase: .processing), choice: .cleanup),
                     .morph("Processing · Gemini Flash → rest (Always)", from: .processing(afterHandsFree: false),
                            model: .preview(phase: .processing), choice: .gemini),
                 ])
             },
             // Models (`--only pill-models`): the chip, the tint, the hint and the no-key notice.
-            SnapshotEntry("pill-models", width: 760, height: 44 + 14 * 92) { _ in PillModelSheet() },
+            SnapshotEntry("pill-models", width: 760, height: 44 + 9 * 92) { _ in PillModelSheet() },
             SnapshotEntry("pill-polish", width: 760, height: 44 + 4 * 92) { _ in PolishSheet() },
             // fn ⇥ while the chip is up: its names roll on, frame by frame of the spring.
-            SnapshotEntry("pill-chip-roll", width: 2040, height: 340) { _ in ChipRollSheet() },
+            SnapshotEntry("pill-chip-roll", width: 2040, height: 220) { _ in ChipRollSheet() },
             // fn P on Parakeet with nothing selected: it says Polish is Gemini's, and the dictation goes on.
             SnapshotEntry("pill-polish-gemini-only", width: 640, height: 150) { _ in
                 CanvasScene(model: polishGeminiOnlyModel(), notices: [])
@@ -124,7 +121,7 @@ enum PillSnapshots {
             },
             SnapshotEntry("pill-models-no-key", width: 640, height: 270) { _ in
                 CanvasScene(model: .preview(phase: .listening, level: 0.7),
-                            notices: [DictationController.switchWithoutKeyNotice(.missing, blocked: [.cleanup, .gemini])])
+                            notices: [DictationController.switchWithoutKeyNotice(.missing, blocked: [.gemini])])
             },
             SnapshotEntry("pill-models-toast", width: 640, height: 290) { _ in
                 CanvasScene(model: PillModelSheet.model(.locked, choice: .gemini, recordingFor: 362),
@@ -578,14 +575,12 @@ private struct PillFilmSheet: View {
         }
 
         /// A streamed answer: the dots, then its count as it thinks and writes (the capsule has widened for it),
-        /// then the pill leaving with its last number. A clean-up (GPT-6 Luna, which doesn't think) only writes.
+        /// then the pill leaving with its last number.
         @MainActor static func counter(_ title: String, choice: ModelChoice?) -> Strip {
             let dots = PillVisual.processing(afterHandsFree: false)
             let counting = PillVisual.processing(afterHandsFree: false, counting: true)
-            let counts = choice == .cleanup
-                ? [40, 120, 640, 1_800].map { PillTokenCount(phase: .writing, tokens: $0) }
-                : [PillTokenCount(phase: .thinking, tokens: 340), PillTokenCount(phase: .thinking, tokens: 2_400),
-                   PillTokenCount(phase: .writing, tokens: 120), PillTokenCount(phase: .writing, tokens: 1_800)]
+            let counts = [PillTokenCount(phase: .thinking, tokens: 340), PillTokenCount(phase: .thinking, tokens: 2_400),
+                          PillTokenCount(phase: .writing, tokens: 120), PillTokenCount(phase: .writing, tokens: 1_800)]
             let model = PillModel.preview(phase: .processing)
             let last = PillModel.preview(phase: .processing).previewCounter(counts[counts.count - 1])
             let stills = [Frame(caption: "dots") { _ in
@@ -598,8 +593,7 @@ private struct PillFilmSheet: View {
             }
             let exit = exitFrames(counting, reduceMotion: false, steps: [0, 2, 4, 6, 8, 10], choice: choice)
                 .map { frame in Frame(caption: frame.caption) { _ in frame.face(last) } }
-            let steps = choice == .cleanup ? "processing → writing → hidden" : "processing → thinking → writing → hidden"
-            return Strip(title: "\(title): \(steps)", model: model,
+            return Strip(title: "\(title): processing → thinking → writing → hidden", model: model,
                          frames: stills + exit)
         }
 
@@ -698,18 +692,12 @@ private struct PillModelSheet: View {
             Row(id: "gemini-main", caption: "Push-to-talk · Gemini (main)") {
                 Self.model(.listening, choice: .gemini, chip: false, main: .gemini)
             },
-            Row(id: "cleanup", caption: "Push-to-talk · Clean-up") { Self.model(.listening, choice: .cleanup) },
-            Row(id: "cleanup-later", caption: "Clean-up · chip gone") {
-                Self.model(.listening, choice: .cleanup, chip: false)
-            },
             Row(id: "flash", caption: "Push-to-talk · Gemini Flash") { Self.model(.listening, choice: .gemini) },
             Row(id: "flash-later", caption: "Gemini Flash · chip gone") {
                 Self.model(.listening, choice: .gemini, chip: false)
             },
             Row(id: "back", caption: "Back to Parakeet") { Self.model(.listening, choice: .parakeet) },
-            Row(id: "locked-cleanup", caption: "Hands-free · Clean-up") { Self.model(.locked, choice: .cleanup, level: 0.5) },
             Row(id: "locked-flash", caption: "Hands-free · Gemini Flash") { Self.model(.locked, choice: .gemini, level: 0.5) },
-            Row(id: "processing-cleanup", caption: "Processing · Clean-up") { Self.model(.processing, choice: .cleanup) },
             Row(id: "processing-flash", caption: "Processing · Gemini Flash") { Self.model(.processing, choice: .gemini) },
             Row(id: "processing-thinking-gemini", caption: "Thinking · Gemini Flash") {
                 Self.model(.processing, choice: .gemini, chip: false)
@@ -718,10 +706,6 @@ private struct PillModelSheet: View {
             Row(id: "processing-writing-gemini", caption: "Writing · Gemini Flash") {
                 Self.model(.processing, choice: .gemini, chip: false)
                     .previewCounter(PillTokenCount(phase: .writing, tokens: 17_700))
-            },
-            Row(id: "processing-writing-cleanup", caption: "Writing · Clean-up") {
-                Self.model(.processing, choice: .cleanup, chip: false)
-                    .previewCounter(PillTokenCount(phase: .writing, tokens: 340))
             },
         ]
     }
@@ -834,8 +818,8 @@ private struct PolishSheet: View {
     }
 }
 
-/// Each model color in a row, as every model's tint: listening, a Gemini chip, the clean-up chip over a count, the
-/// processing dots, hands-free's ring beside Stop, and in the Hub a model's tile and History's mark. On a white
+/// Each model color in a row, as every model's tint: listening, a Gemini chip, the chip over a count, the processing
+/// dots, hands-free's ring beside Stop, and in the Hub a model's tile and History's mark. On a white
 /// document in the light appearance (where a ring is hardest to see), on a dark editor in the dark one.
 private struct ModelColorSheet: View {
     private struct Column {
@@ -869,12 +853,12 @@ private struct ModelColorSheet: View {
     private static let columns: [Column] = [
         Column(title: "Listening", width: 140) { standing(pill($0, .listening, choice: .parakeet)) },
         Column(title: "Gemini chip", width: 170) { standing(pill($0, .listening, choice: .gemini, chip: true)) },
-        // The chip's dimmed "Parakeet" and the counter's word are the dimmest text on the fill.
-        Column(title: "Clean-up chip", width: 200) {
-            standing(pill($0, .processing, choice: .cleanup, chip: true)
+        // The counter's word is the dimmest text on the fill.
+        Column(title: "Chip over a count", width: 200) {
+            standing(pill($0, .processing, choice: .gemini, chip: true)
                 .previewCounter(PillTokenCount(phase: .writing, tokens: 340)))
         },
-        Column(title: "Processing", width: 130) { standing(pill($0, .processing, choice: .cleanup)) },
+        Column(title: "Processing", width: 130) { standing(pill($0, .processing, choice: .parakeet)) },
         Column(title: "Hands-free", width: 230) {
             standing(pill($0, .locked, choice: .gemini, level: 0.5, recordingFor: 42))
         },
@@ -1040,7 +1024,7 @@ private struct PillStateSheet: View {
 /// The chip's roll between two models, every 40 ms of its spring (`PillChipRoll`), on the pill's dark ground.
 private struct ChipRollSheet: View {
     private let settings = AppSettings.inMemory()
-    private let rolls: [(ModelChoice, ModelChoice)] = [(.cleanup, .gemini), (.gemini, .parakeet), (.parakeet, .cleanup)]
+    private let rolls: [(ModelChoice, ModelChoice)] = [(.parakeet, .gemini), (.gemini, .parakeet)]
     private let times = Array(0...9).map { Double($0) * 0.04 }
 
     var body: some View {
@@ -1050,7 +1034,7 @@ private struct ChipRollSheet: View {
                 ForEach(Array(times.enumerated()), id: \.offset) { index, _ in
                     let position = Double(index) / Double(times.count - 1) * 3
                     VStack(spacing: 6) {
-                        PillChipRoll(names: [.cleanup, .gemini, .parakeet, .cleanup], position: position,
+                        PillChipRoll(names: [.parakeet, .gemini, .parakeet, .gemini], position: position,
                                      settings: settings)
                             .frame(width: 200, height: 30)
                         Text(String(format: "%.2f", position))

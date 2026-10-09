@@ -9,8 +9,6 @@ import Foundation
 ///            --engine parakeet|parakeetCloud|geminiFlash
 ///            [--download] [--prompt <text>] [--repeat <n>] [--effort low|medium|high]
 ///            [--upload wav|m4a|flac]
-///            [--clean-up [--clean-up-model gpt6Luna] [--clean-up-prompt <text>]
-///                        [--clean-up-effort none|minimal|low|medium|high]]
 ///     transcribe-thing --model-status
 ///
 /// Hidden comparison (not in the usage text): `--provider <slug>` sends Gemini to another endpoint than Google AI
@@ -42,19 +40,9 @@ import Foundation
 /// what went up (`UPLOAD:` format and bytes, per segment for Parakeet) and what the app records of it (`USAGE:`
 /// tokens, billed seconds, cost, provider, generation id, time to first token, generation and total time), asking
 /// OpenRouter's generation record (every segment's, for Parakeet) for what the response left out.
-/// `--clean-up` sends the last transcript to the clean-up model (GPT-6 Luna; `--clean-up-effort` replaces its fixed
-/// none) with the app's clean-up prompt (`CleanupModel.systemPrompt`, unless `--clean-up-prompt` replaces it) and
-/// prints the cleaned text. Only the models the app offers are accepted. Settings are in-memory: the CLI never
-/// changes the app's.
+/// Settings are in-memory: the CLI never changes the app's.
 /// An engine that answers with no text heard no speech: that prints `NO SPEECH` instead of `TEXT:` and exits 0,
 /// like any other answer. Only real failures print `ERROR:` and exit non-zero.
-///
-/// Hidden benchmark (not in the usage text), for comparing clean-up models on real dictations:
-///
-///     transcribe-thing --cleanup-bench --history <history.json> --model <openrouter slug> --effort <level>
-///            [--count <n> | --entry <id>] [--provider <slug>] [--out <report.json>]
-///
-/// See `CleanupBench`. It reads the history file only, never the app's settings, and pays for `--count` requests.
 ///
 /// Hidden check (not in the usage text) of how History keeps a recording, free, with no model and no key:
 ///
@@ -68,7 +56,7 @@ import Foundation
 enum EngineCLI {
     static func handles(_ arguments: [String]) -> Bool {
         arguments.contains("--transcribe") || arguments.contains("--model-status")
-            || arguments.contains(CleanupBench.flag) || arguments.contains(Recompress.flag)
+            || arguments.contains(Recompress.flag)
     }
 
     /// Runs the CLI mode and exits the process.
@@ -94,9 +82,6 @@ enum EngineCLI {
         if arguments.contains("--model-status") {
             await printModelStatus()
             return ExitCode.ok
-        }
-        if arguments.contains(CleanupBench.flag) {
-            return await runCleanupBench(arguments)
         }
         if arguments.contains(Recompress.flag) {
             return await recompress(arguments)
@@ -126,9 +111,7 @@ enum EngineCLI {
         static let usage = """
         usage: transcribe-thing --transcribe <audio file> \
         --engine parakeet|parakeetCloud|geminiFlash \
-        [--download] [--prompt <text>] [--repeat <n>] [--effort low|medium|high] [--upload wav|m4a|flac] \
-        [--clean-up [--clean-up-model gpt6Luna] [--clean-up-prompt <text>] \
-        [--clean-up-effort none|minimal|low|medium|high]]
+        [--download] [--prompt <text>] [--repeat <n>] [--effort low|medium|high] [--upload wav|m4a|flac]
                transcribe-thing --model-status
         """
 
@@ -141,10 +124,6 @@ enum EngineCLI {
         var effort: ReasoningEffort?
         /// The format a cloud model gets the audio in instead of its own.
         var upload: UploadFormat?
-        var cleanUp: Bool
-        var cleanupPrompt: String?
-        var cleanupEffort: ReasoningEffort?
-        var cleanupModel: CleanupModel?
         /// Another model on the transcriptions endpoint in cloud Parakeet's place.
         var speechModel: String?
         /// The request twice at once (`--hedge`).
@@ -177,17 +156,6 @@ enum EngineCLI {
                     return nil
                 }
                 upload = format
-            }
-            cleanUp = arguments.contains("--clean-up")
-            cleanupPrompt = value("--clean-up-prompt")
-            if arguments.contains("--clean-up-effort") {
-                guard let level = value("--clean-up-effort").flatMap(ReasoningEffort.init(rawValue:)) else { return nil }
-                cleanupEffort = level
-            }
-            if arguments.contains("--clean-up-model") {
-                guard let name = value("--clean-up-model"),
-                      let model = CleanupModel.offered.first(where: { $0.rawValue == name }) else { return nil }
-                cleanupModel = model
             }
             if arguments.contains("--speech-model") {
                 guard engine.cloudAPI == .transcriptions, let slug = value("--speech-model"), slug.contains("/") else {
@@ -282,7 +250,7 @@ enum EngineCLI {
             let code = try await prepareLocal(options, store: store)
             guard code == ExitCode.ok else { return code }
         }
-        if options.engine.isCloud || options.cleanUp {
+        if options.engine.isCloud {
             let key: String?
             do {
                 key = try keyStore(paths: paths).lookup()
@@ -341,18 +309,6 @@ enum EngineCLI {
             print(last.text.isEmpty ? "NO SPEECH" : "TEXT: \(last.text)")
             if let tags = last.answerTags { print("TAGS: \(tags.rawValue)") }
             if let best = runTimes.min() { print("TRANSCRIBE: first \(format(runTimes[0], digits: 3)) s · best \(format(best, digits: 3)) s") }
-            if options.cleanUp, !last.text.isEmpty {
-                let model = options.cleanupModel ?? .default
-                let route = options.cleanupEffort.map(model.route(effort:))
-                let cleaned = try await service.cleanUp(last.text, of: last.engine, by: model, route: route,
-                                                        prompt: options.cleanupPrompt)
-                let level = cleaned.reasoningEffort?.rawValue ?? "?"
-                var line = "CLEAN-UP: \(model.modelName) · \(level) · \(format(cleaned.processingTime, digits: 3)) s"
-                if let cost = cleaned.costUSD { line += " · $\(String(format: "%.5f", cost))" }
-                if let reasoning = cleaned.usage?.reasoningTokens { line += " · \(reasoning) reasoning tokens" }
-                print(line)
-                print(cleaned.text.isEmpty ? "CLEANED: (empty)" : "CLEANED: \(cleaned.text)")
-            }
         }
         return ExitCode.ok
     }
@@ -553,345 +509,6 @@ enum EngineCLI {
         parts.append("generated in \(known(result.generationTime) { format($0, digits: 3) }) s")
         parts.append("total \(format(result.processingTime, digits: 3)) s")
         return "USAGE: " + parts.joined(separator: " · ")
-    }
-
-    // MARK: Clean-up bench
-
-    @MainActor
-    private static func runCleanupBench(_ arguments: [String]) async -> Int32 {
-        guard let options = CleanupBench.Options(arguments) else {
-            printError(CleanupBench.Options.usage)
-            return ExitCode.usage
-        }
-        let entries: [TranscriptEntry]
-        do {
-            entries = try HistoryStore.readEntries(from: Data(contentsOf: options.history))
-        } catch {
-            printError("ERROR: couldn’t read \(options.history.path): \(error.localizedDescription)")
-            return ExitCode.failed
-        }
-        let items = CleanupBench.select(options.entry.map { id in entries.filter { $0.id == id } } ?? entries,
-                                        count: options.count)
-        guard !items.isEmpty else {
-            printError("ERROR: no entry in \(options.history.path) has a Parakeet transcript")
-            return ExitCode.failed
-        }
-
-        // The key as the app reads it: OpenRouterAccount over its key file (OPENROUTER_API_KEY wins when set).
-        // Nothing about the key is printed.
-        let client = OpenRouterClient()
-        let keyStore = keyStore()
-        let account = OpenRouterAccount(keyStore: keyStore, client: client)
-        guard account.apiKey() != nil else {
-            if account.isKeyUnreadable {
-                printError("ERROR: key file: \(OpenRouterAccount.keyUnreadableMessage)")
-            } else {
-                printError("ERROR: no OpenRouter key: set OPENROUTER_API_KEY or add the key in the app")
-            }
-            return ExitCode.failed
-        }
-        print("KEY: read from \(keyStore.isInMemory ? "OPENROUTER_API_KEY" : "the key file")")
-
-        let store = ModelStore(paths: .temporary(), settings: .inMemory(), engines: [:], gate: .shared,
-                               freeDiskBytes: { 0 })
-        let service = TranscriptionService(models: store, account: account, client: client)
-        let route = options.route
-        print("BENCH: \(route.model) · effort \(route.effort) · provider \(route.provider.only.joined(separator: ","))\(route.temperature.map { " · temperature \($0)" } ?? "") · \(items.count) dictations")
-
-        let startedAt = Date()
-        let rows = await CleanupBench.run(items, route: route, prompt: options.prompt, service: service) { index, row in
-            var line = "[\(index + 1)/\(items.count)] \(row.wallMs) ms"
-            if let generation = row.generationMs { line += " · gen \(generation) ms" }
-            if let cost = row.costUSD { line += " · $\(String(format: "%.6f", cost))" }
-            if let tokens = row.completionTokens { line += " · \(tokens) out" }
-            if let reasoning = row.reasoningTokens, reasoning > 0 { line += " · \(reasoning) reasoning" }
-            if let provider = row.provider { line += " · \(provider)" }
-            if let tier = row.serviceTier { line += " · \(tier)" }
-            if let error = row.error { line += " · ERROR \(error)" } else if row.identical == true { line += " · unchanged" }
-            print(line)
-        }
-        let report = CleanupBench.Report(model: route.model, provider: route.provider.only, effort: route.effort,
-                                         temperature: route.temperature,
-                                         maxTokensSizedFor: route.budget.rawValue,
-                                         prompt: options.promptFile ?? "CleanupModel.systemPrompt",
-                                         history: options.history.path, startedAt: startedAt, items: rows,
-                                         summary: CleanupBench.summarize(rows))
-        let summary = report.summary
-        print("SUMMARY: \(summary.succeeded)/\(summary.count) ok · median \(summary.medianWallMs.map(String.init) ?? "-") ms · p90 \(summary.p90WallMs.map(String.init) ?? "-") ms · $\(String(format: "%.6f", summary.totalCostUSD)) total · \(summary.identicalToInput) unchanged")
-        do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-            encoder.dateEncodingStrategy = .iso8601
-            let data = try encoder.encode(report)
-            if let out = options.out {
-                try data.write(to: out, options: .atomic)
-                print("REPORT: \(out.path)")
-            } else {
-                print(String(decoding: data, as: UTF8.self))
-            }
-        } catch {
-            printError("ERROR: couldn’t write the report: \(error.localizedDescription)")
-            return ExitCode.failed
-        }
-        return summary.succeeded > 0 ? ExitCode.ok : ExitCode.failed
-    }
-
-    /// `--cleanup-bench`: the most recent Parakeet transcripts of a history file, each cleaned up once by another
-    /// model through the app's own clean-up request (`TranscriptionService.cleanUp` with a `CleanupRoute`: the
-    /// app's clean-up prompt as the system message, the transcript in `<transcript>` tags, reasoning excluded,
-    /// `max_tokens` sized like the app's, the provider pinned without fallbacks), one after another. The report
-    /// keeps each input and output with its timing, tokens and cost, next to the entry's Gemini 3.8 Flash
-    /// transcript and its existing Flash Lite clean-up, when it has them.
-    enum CleanupBench {
-        static let flag = "--cleanup-bench"
-
-        struct Options: Equatable {
-            static let usage = """
-            usage: transcribe-thing --cleanup-bench --history <history.json> --model <openrouter slug> \
-            --effort none|minimal|low|medium|high|xhigh|max [--count <n> | --entry <id>] [--provider <slug>] \
-            [--temperature <0-2>] [--prompt-file <prompt.txt>] [--out <report.json>]
-            """
-            static let efforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
-            static let defaultCount = 20
-            static let maxCount = 200
-
-            var history: URL
-            var count: Int
-            /// Just this entry, whatever its age.
-            var entry: UUID?
-            var route: CleanupRoute
-            /// A system prompt to try instead of `CleanupModel.systemPrompt`, read from `--prompt-file`.
-            var prompt: String?
-            var promptFile: String?
-            var out: URL?
-
-            init?(_ arguments: [String]) {
-                func value(_ flag: String) -> String? {
-                    guard let index = arguments.firstIndex(of: flag), index + 1 < arguments.count else { return nil }
-                    let value = arguments[index + 1]
-                    return value.hasPrefix("--") ? nil : value
-                }
-                guard arguments.contains(CleanupBench.flag), let path = value("--history"),
-                      let model = value("--model")?.trimmingCharacters(in: .whitespaces), model.contains("/"),
-                      let effort = value("--effort")?.lowercased(), Self.efforts.contains(effort)
-                else { return nil }
-                history = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
-                if arguments.contains("--entry") {
-                    guard let id = value("--entry").flatMap(UUID.init(uuidString:)) else { return nil }
-                    entry = id
-                }
-                if arguments.contains("--count") {
-                    guard let count = value("--count").flatMap(Int.init), (1...Self.maxCount).contains(count) else {
-                        return nil
-                    }
-                    self.count = count
-                } else {
-                    count = Self.defaultCount
-                }
-                let provider: String
-                if arguments.contains("--provider") {
-                    guard let name = value("--provider"), !name.isEmpty else { return nil }
-                    provider = name
-                } else {
-                    guard let name = Self.provider(forModel: model) else { return nil }
-                    provider = name
-                }
-                route = CleanupRoute(model: model,
-                                     provider: .init(only: [provider], allowFallbacks: false),
-                                     effort: effort, budget: Self.budget(for: effort))
-                if arguments.contains("--temperature") {
-                    guard let temperature = value("--temperature").flatMap(Double.init), (0...2).contains(temperature)
-                    else { return nil }
-                    route.temperature = temperature
-                }
-                if arguments.contains("--prompt-file") {
-                    guard let path = value("--prompt-file") else { return nil }
-                    let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
-                    guard let text = try? String(contentsOf: url, encoding: .utf8),
-                          !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-                    prompt = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                    promptFile = url.path
-                }
-                out = value("--out").map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
-            }
-
-            /// The first-party provider each model is pinned to, as the app pins it: Google AI Studio, OpenAI's fast tier.
-            static func provider(forModel model: String) -> String? {
-                if model.hasPrefix("google/") { return "google-ai-studio" }
-                if model.hasPrefix("openai/") { return "openai/fast" }
-                return nil
-            }
-
-            /// The `ReasoningEffort` that sizes `max_tokens`: "none" gets the least room (as much as minimal),
-            /// levels above high the most.
-            static func budget(for effort: String) -> ReasoningEffort {
-                ReasoningEffort(rawValue: effort) ?? .high
-            }
-        }
-
-        struct Item: Equatable, Sendable {
-            var id: UUID
-            var createdAt: Date
-            var parakeet: String
-            /// The entry's Gemini 3.8 Flash transcript, as a reference.
-            var geminiFlash: String?
-            /// The entry's existing Flash Lite clean-up of the Parakeet text, and the level it thought at.
-            var flashLite: String?
-            var flashLiteEffort: String?
-        }
-
-        /// The `count` most recent entries with a non-empty Parakeet (on this Mac) transcript, newest first.
-        static func select(_ entries: [TranscriptEntry], count: Int) -> [Item] {
-            let items = entries.sorted { $0.createdAt > $1.createdAt }.compactMap { entry -> Item? in
-                guard entry.status == .success, let parakeet = entry.version(.transcription(.parakeet)) else {
-                    return nil
-                }
-                let text = parakeet.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !text.isEmpty else { return nil }
-                let cleanup = entry.version(.cleanup(of: .parakeet, by: .geminiFlashLite))
-                return Item(id: entry.id, createdAt: entry.createdAt, parakeet: text,
-                            geminiFlash: entry.version(.transcription(.geminiFlash))?.text,
-                            flashLite: cleanup?.text, flashLiteEffort: cleanup?.metadata.reasoningEffort?.rawValue)
-            }
-            return Array(items.prefix(max(0, count)))
-        }
-
-        struct Row: Codable, Equatable, Sendable {
-            var entryID: UUID
-            var createdAt: Date
-            var input: String
-            var inputCharacters: Int
-            var output: String?
-            /// The output is the input unchanged (nil after a failure).
-            var identical: Bool?
-            /// Wall clock on this Mac around the whole request, retry included.
-            var wallMs: Int
-            /// OpenRouter's `openrouter_metadata.generation_time`.
-            var generationMs: Int?
-            var promptTokens: Int?
-            var completionTokens: Int?
-            var reasoningTokens: Int?
-            var costUSD: Double?
-            var finishReason: String?
-            var provider: String?
-            var serviceTier: String?
-            var model: String?
-            var generationID: String?
-            var error: String?
-            var referenceGeminiFlash: String?
-            var existingFlashLite: String?
-            var existingFlashLiteEffort: String?
-        }
-
-        struct Summary: Codable, Equatable, Sendable {
-            var count: Int
-            var succeeded: Int
-            var failures: Int
-            var identicalToInput: Int
-            var medianWallMs: Int?
-            var p90WallMs: Int?
-            var meanWallMs: Int?
-            var medianGenerationMs: Int?
-            var meanPromptTokens: Double?
-            var meanCompletionTokens: Double?
-            var meanReasoningTokens: Double?
-            var totalCostUSD: Double
-            /// Total cost over the dictations that succeeded.
-            var costPerDictationUSD: Double?
-            var providers: [String]
-            var serviceTiers: [String]
-        }
-
-        struct Report: Codable, Sendable {
-            var model: String
-            var provider: [String]
-            var effort: String
-            /// nil: the model's default.
-            var temperature: Double?
-            var maxTokensSizedFor: String
-            var prompt: String
-            var history: String
-            var startedAt: Date
-            var items: [Row]
-            var summary: Summary
-        }
-
-        /// Cleans up every item in turn; a failure becomes a row with `error`, and the run goes on.
-        @MainActor
-        static func run(_ items: [Item], route: CleanupRoute, prompt: String? = nil, service: TranscriptionService,
-                        progress: (Int, Row) -> Void = { _, _ in }) async -> [Row] {
-            var rows: [Row] = []
-            for (index, item) in items.enumerated() {
-                var row = Row(entryID: item.id, createdAt: item.createdAt, input: item.parakeet,
-                              inputCharacters: item.parakeet.count, wallMs: 0, referenceGeminiFlash: item.geminiFlash,
-                              existingFlashLite: item.flashLite, existingFlashLiteEffort: item.flashLiteEffort)
-                let started = ContinuousClock.now
-                do {
-                    let result = try await service.cleanUp(item.parakeet, of: .parakeet, route: route, prompt: prompt)
-                    row.wallMs = milliseconds(started.duration(to: .now))
-                    row.output = result.text
-                    row.identical = result.text == item.parakeet
-                    row.generationMs = result.generationTime.map { Int(($0 * 1000).rounded()) }
-                    row.promptTokens = result.usage?.promptTokens
-                    row.completionTokens = result.usage?.completionTokens
-                    row.reasoningTokens = result.usage?.reasoningTokens
-                    row.costUSD = result.costUSD
-                    row.finishReason = result.finishReason
-                    row.provider = result.provider
-                    row.serviceTier = result.serviceTier
-                    row.model = result.modelID
-                    row.generationID = result.generationID
-                } catch let error as AppError {
-                    row.wallMs = milliseconds(started.duration(to: .now))
-                    row.error = [error.code, error.detail].compactMap { $0 }.joined(separator: ": ")
-                } catch {
-                    row.wallMs = milliseconds(started.duration(to: .now))
-                    row.error = String(describing: error)
-                }
-                progress(index, row)
-                rows.append(row)
-            }
-            return rows
-        }
-
-        static func summarize(_ rows: [Row]) -> Summary {
-            let ok = rows.filter { $0.error == nil }
-            let walls = ok.map(\.wallMs).sorted()
-            let generations = ok.compactMap(\.generationMs).sorted()
-            func mean(_ values: [Int]) -> Double? {
-                values.isEmpty ? nil : Double(values.reduce(0, +)) / Double(values.count)
-            }
-            let total = rows.compactMap(\.costUSD).reduce(0, +)
-            return Summary(
-                count: rows.count, succeeded: ok.count, failures: rows.count - ok.count,
-                identicalToInput: ok.filter { $0.identical == true }.count,
-                medianWallMs: median(walls), p90WallMs: percentile(walls, 0.9),
-                meanWallMs: mean(walls).map { Int($0.rounded()) }, medianGenerationMs: median(generations),
-                meanPromptTokens: mean(ok.compactMap(\.promptTokens)),
-                meanCompletionTokens: mean(ok.compactMap(\.completionTokens)),
-                meanReasoningTokens: mean(ok.compactMap(\.reasoningTokens)),
-                totalCostUSD: total, costPerDictationUSD: ok.isEmpty ? nil : total / Double(ok.count),
-                providers: Array(Set(ok.compactMap(\.provider))).sorted(),
-                serviceTiers: Array(Set(ok.compactMap(\.serviceTier))).sorted())
-        }
-
-        /// The middle value of sorted `values` (the mean of the two middle ones for an even count).
-        static func median(_ values: [Int]) -> Int? {
-            guard !values.isEmpty else { return nil }
-            let mid = values.count / 2
-            return values.count.isMultiple(of: 2) ? Int((Double(values[mid - 1] + values[mid]) / 2).rounded()) : values[mid]
-        }
-
-        /// Nearest-rank percentile of sorted `values`.
-        static func percentile(_ values: [Int], _ fraction: Double) -> Int? {
-            guard !values.isEmpty else { return nil }
-            let rank = Int((fraction * Double(values.count)).rounded(.up))
-            return values[min(values.count, max(1, rank)) - 1]
-        }
-
-        private static func milliseconds(_ duration: Duration) -> Int {
-            Int((TranscriptionService.seconds(duration) * 1000).rounded())
-        }
     }
 
     // MARK: Recompress

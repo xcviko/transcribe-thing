@@ -157,8 +157,8 @@ enum PillPalette {
     static let tooltipFill = fill
 
     /// A model color on the pill; graphite is the plain pill. The new colors sit at one depth (OKLCH L 0.645 for the
-    /// ring, 0.79 for the marks), so each reads on the fill at least as well as violet does; orange and violet are
-    /// clean-up's and Gemini's as they always were, and pink is the retired Gemini 3.1 Pro's.
+    /// ring, 0.79 for the marks), so each reads on the fill at least as well as violet does; violet is Gemini's as it
+    /// always was, orange the removed clean-up's, and pink the retired Gemini 3.1 Pro's.
     static func accent(for color: ModelColor) -> PillAccent? {
         switch color {
         case .graphite: nil
@@ -173,8 +173,7 @@ enum PillPalette {
     }
 
     /// Color means the model, whichever is main: the one Models gives it (`AppSettings.modelColors`). By default
-    /// Gemini violet, clean-up orange (like its wand, a pass over Parakeet's words), and Parakeet graphite, the plain
-    /// pill. nil at rest.
+    /// Gemini violet and Parakeet graphite, the plain pill. nil at rest.
     static func accent(for choice: ModelChoice?, in colors: ModelColors) -> PillAccent? {
         choice.flatMap { accent(for: colors[$0]) }
     }
@@ -965,7 +964,7 @@ struct PillCapsule: View {
 
 /// The capsule's hairline, or the model's ring in its place: one ring whose color changes, never a ring that comes or
 /// goes. A ring on its way out is no longer laid out, so it stayed the old size while the capsule changed under it (a
-/// clean-up's orange "No speech detected" ring around a narrowing Parakeet pill).
+/// colored "No speech detected" ring around a narrowing Parakeet pill).
 ///
 /// Only the color fades (a color picked mid-dictation, the next dictation's model): the animation is scoped to it. On
 /// the whole face, it also animated whatever changed with the color, so a pill appearing on a colored model grew out
@@ -1385,8 +1384,7 @@ private struct PillControlButton: View {
 }
 
 /// The dictation's model, floating above the pill for a moment after a switch, by its full name: sparkles and
-/// "Gemini 3.8 Flash" in its color; clean-up as the pass it is, "Parakeet → GPT-6 Luna" with Parakeet dimmed ahead of
-/// the wand; or a bolt and "Parakeet". It comes up naming the new model. One chip for the whole cycle: each switch while
+/// "Gemini 3.8 Flash" in its color, or a bolt and "Parakeet". It comes up naming the new model. One chip for the whole cycle: each switch while
 /// it's up puts the new name at the end of a strip, and the strip rolls on to it (`PillChipRoll`). The strip only ever
 /// moves on, so switches in a row (fn ⇥ held down) keep it rolling: the spring takes each new end in its stride and
 /// never starts over. In hands-free it stays while the pointer is on it, and opens the model menu (the controller pops
@@ -1499,13 +1497,6 @@ struct PillChipRoll: View, Animatable {
 
     @MainActor static func label(_ choice: ModelChoice, parakeet: EngineID, accent: PillAccent?) -> some View {
         HStack(spacing: 4) {
-            if choice == .cleanup {
-                Text(ModelChoice.parakeet.chipName)
-                    .foregroundStyle(.white.opacity(0.5))
-                Image(systemName: "arrow.right")
-                    .font(.system(size: 7.5, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.35))
-            }
             Image(systemName: choice.symbolName(parakeet: parakeet))
                 .font(.system(size: 9.5, weight: .semibold))
                 .foregroundStyle(accent?.mark ?? .white.opacity(0.75))
@@ -1579,7 +1570,7 @@ struct PillChipCapsule<Content: View>: View {
     }
 }
 
-/// "[fn][tab] · Clean-up, Gemini": the Switch model shortcut, shown faintly above a long push-to-talk hold its first
+/// "[fn][tab] · Gemini 3.8 Flash": the Switch model shortcut, shown faintly above a long push-to-talk hold its first
 /// few times. The keys follow the user's binding.
 struct PillSwitchHint: View {
     let model: PillModel
@@ -1588,7 +1579,7 @@ struct PillSwitchHint: View {
     /// in order.
     static func label(for steps: [ModelChoice]) -> String {
         guard steps.count == 1, let step = steps.first else { return steps.map(\.shortName).joined(separator: ", ") }
-        return step == .cleanup ? "\(CleanupModel.default.shortName) clean-up" : step.modelName
+        return step.modelName
     }
 
     private var label: String {

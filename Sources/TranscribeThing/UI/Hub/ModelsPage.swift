@@ -1,10 +1,10 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The three models in the user's order: the main model every dictation starts on (a radio), which others the Switch
-/// model shortcut steps to (a switch each), the order it steps in (drag a row by its handle), and each one's color on
-/// the pill (its tile). Then where Parakeet runs (on this Mac: download, use, delete, storage; or through OpenRouter),
-/// for Parakeet and clean-up alike, and the OpenRouter key.
+/// The models in the user's order: the main model every dictation starts on (a radio), which other the Switch model
+/// shortcut steps to (a switch), the order it steps in (drag a row by its handle), and each one's color on the pill
+/// (its tile). Then where Parakeet runs (on this Mac: download, use, delete, storage; or through OpenRouter), and the
+/// OpenRouter key.
 struct ModelsPage: View {
     @Environment(HubContext.self) private var hub
     @Environment(ModelStore.self) private var models
@@ -498,7 +498,7 @@ private struct StateCapsule: View {
 
 // MARK: - Where Parakeet runs
 
-/// Parakeet v3 on this Mac (download, use, delete) or through OpenRouter: where Parakeet and clean-up run
+/// Parakeet v3 on this Mac (download, use, delete) or through OpenRouter: where Parakeet runs
 /// (`AppSettings.parakeetEngine`).
 private struct ModelRow: View {
     var engine: EngineID

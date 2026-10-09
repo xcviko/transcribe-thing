@@ -24,7 +24,7 @@ enum Polish {
     """
 
     /// Polish Selection's prompt: Polish's, for text selected in another app instead of audio. The text comes inside
-    /// the clean-up's `<transcript>` tags (`CleanupModel.userMessage(for:)`); the message goes back in `<message>` tags.
+    /// `<transcript>` tags (`TextRoute.userMessage(for:)`); the message goes back in `<message>` tags.
     static let textPrompt = """
     Я пришлю тебе текст между тегами <transcript> и </transcript>: черновик сообщения, который я написал или надиктовал и по ходу думал вслух - начинал, передумывал, возвращался, повторялся. Напиши сообщение, которое я бы отправил, если бы с самого начала знал, что хочу сказать. Верни его между тегами <message> и </message> и ничего вне их.
 
@@ -47,9 +47,9 @@ enum Polish {
     }
 }
 
-/// The models that have polished a selection. Gemini 3.8 Flash does it now, as Polish does (`asked`). GPT-6 Luna, the
-/// clean-up model, was asked alongside it to see which answer gets picked; Gemini's was, so Luna is no longer asked, and
-/// stays only so History reads the versions it wrote. Raw values are persisted (History): never rename them.
+/// The models that have polished a selection. Gemini 3.8 Flash does it now, as Polish does (`asked`). GPT-6 Luna was
+/// asked alongside it to see which answer gets picked; Gemini's was, so Luna is no longer asked, and stays only so
+/// History reads the versions it wrote. Raw values are persisted (History): never rename them.
 enum PolishSelectionModel: String, CaseIterable, Codable, Sendable {
     case geminiFlash
     case gpt6Luna
@@ -66,24 +66,19 @@ enum PolishSelectionModel: String, CaseIterable, Codable, Sendable {
     }
 
     /// Text in, text out over chat completions: Gemini at the level it always thinks at, its thinking streamed (so
-    /// it counts as an answer under way, as for a dictation), and Luna at clean-up's.
-    var route: CleanupRoute {
+    /// it counts as an answer under way, as for a dictation). nil for Luna, which is no longer asked.
+    var route: TextRoute? {
         switch self {
         case .geminiFlash:
-            var route = CleanupRoute(model: EngineID.geminiFlash.openRouterModelID ?? "google/gemini-3.8-flash",
-                                     effort: EngineID.geminiFlash.reasoningEffort ?? .medium, provider: .googleAIStudio)
+            var route = TextRoute(model: EngineID.geminiFlash.openRouterModelID ?? "google/gemini-3.8-flash",
+                                  effort: EngineID.geminiFlash.reasoningEffort ?? .medium, provider: .googleAIStudio)
             route.streamsReasoning = true
             return route
         case .gpt6Luna:
-            return CleanupModel.gpt6Luna.route(effort: CleanupModel.gpt6Luna.reasoningEffort ?? .off)
+            return nil
         }
     }
 
-    /// The model whose color the pill and History wear: Gemini's, or clean-up's for Luna.
-    var choice: ModelChoice {
-        switch self {
-        case .geminiFlash: .gemini
-        case .gpt6Luna: .cleanup
-        }
-    }
+    /// The model whose color the pill and History wear: Gemini's, Polish Selection being Gemini's now.
+    var choice: ModelChoice { .gemini }
 }

@@ -94,8 +94,6 @@ import Testing
         #expect(gemini.hasSuffix("<dictionary>\nWispr\nFlow\n</dictionary>"))
         let selection = UserDictionary.prompt(Polish.textPrompt, with: ["Wispr"], heard: false)
         #expect(selection.contains("Если встретишь в тексте"))
-        let cleanup = UserDictionary.prompt(CleanupModel.systemPrompt, with: ["Wispr"], heard: false)
-        #expect(cleanup.contains("A hint") && cleanup.contains("Use your judgment"))
     }
 
     @MainActor @Test func itPersistsInTheSettings() throws {
@@ -138,18 +136,19 @@ import Testing
         #expect(prompt.hasPrefix("Я пришлю тебе аудио") && prompt.hasSuffix("<dictionary>\nWispr Flow\n</dictionary>"))
     }
 
-    @Test func lunaCleansUpWithTheDictionary() async throws {
-        let (service, host) = service([.stream(SSE.answer("Wispr Flow.", model: "openai/gpt-6-luna"))],
-                                      words: ["Wispr Flow"])
-        _ = try await service.cleanUp("виспр флоу", of: .parakeet)
+    private var route: TextRoute { PolishSelectionModel.geminiFlash.route! }
+
+    @Test func polishSelectionReadsWithTheDictionary() async throws {
+        let (service, host) = service([.stream(SSE.answer("<message>Wispr Flow.</message>"))], words: ["Wispr Flow"])
+        _ = try await service.polishText("виспр флоу", route: route, prompt: Polish.textPrompt)
         let prompt = try systemMessage(host)
-        #expect(prompt.hasPrefix("Clean up the transcript") && prompt.contains("<dictionary>\nWispr Flow\n</dictionary>"))
+        #expect(prompt.hasPrefix("Я пришлю тебе текст") && prompt.contains("<dictionary>\nWispr Flow\n</dictionary>"))
     }
 
     @Test func anEmptyDictionaryLeavesThePromptAlone() async throws {
-        let (service, host) = service([.stream(SSE.answer("Hi.", model: "openai/gpt-6-luna"))], words: [])
-        _ = try await service.cleanUp("hi", of: .parakeet)
-        #expect(try systemMessage(host) == CleanupModel.systemPrompt)
+        let (service, host) = service([.stream(SSE.answer("<message>Hi.</message>"))], words: [])
+        _ = try await service.polishText("hi", route: route, prompt: Polish.textPrompt)
+        #expect(try systemMessage(host) == Polish.textPrompt.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 }
 

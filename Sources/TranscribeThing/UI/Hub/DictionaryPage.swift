@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The user's dictionary (`UserDictionary`): words, names and terms Gemini 3.8 Flash and GPT-6 Luna get as a hint.
+/// The user's dictionary (`UserDictionary`): words, names and terms Gemini 3.8 Flash gets as a hint.
 /// Most come from fn D over selected text; the field here adds one by hand. Newest first, as chips that wrap.
 struct DictionaryPage: View {
     @Environment(AppSettings.self) private var settings
@@ -19,7 +19,7 @@ struct DictionaryPage: View {
     static let searchFrom = 16
 
     var body: some View {
-        HubPage("Dictionary", subtitle: "How you spell words and names: a hint for Gemini and clean-up. Parakeet doesn’t use it.") {
+        HubPage("Dictionary", subtitle: "How you spell words and names: a hint for Gemini. Parakeet doesn’t use it.") {
             HubGroup("Add") {
                 SettingsGroup {
                     addRow

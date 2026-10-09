@@ -14,7 +14,7 @@ struct TranscriptResult: Sendable, Equatable {
     var generationID: String? = nil
     /// The OpenRouter model slug; nil for the local model.
     var modelID: String? = nil
-    /// The level the model was asked to think at (Gemini, the clean-up model); nil for models that don't reason.
+    /// The level the model was asked to think at (Gemini); nil for models that don't reason.
     var reasoningEffort: ReasoningEffort? = nil
     var usage: TokenUsage? = nil
     /// A system prompt went with the request; nil for the local model.
@@ -24,7 +24,7 @@ struct TranscriptResult: Sendable, Equatable {
     var generationTime: TimeInterval? = nil
     /// Seconds of audio the speech endpoint billed.
     var audioSeconds: Double? = nil
-    /// The chat response's `service_tier`, when it names one (set by clean-up only; not kept in history).
+    /// The chat response's `service_tier`, when it names one (set by text requests only; not kept in history).
     var serviceTier: String? = nil
     /// Characters of reasoning the answer streamed (for Gemini, the summaries of its thoughts).
     var reasoningCharacters: Int? = nil
@@ -73,8 +73,8 @@ final class TranscriptionService {
     /// The format Parakeet's segments go in: FLAC, the WAV's samples in a little over half its bytes, until OpenRouter
     /// refuses it; WAV from then on, for as long as the app runs.
     private(set) var speechFormat: UploadFormat = .flac
-    /// The user's dictionary (`UserDictionary`), at the moment each request goes: after Gemini's prompt and the
-    /// clean-up's, whichever prompt they get. The app reads it from its settings; the CLI sends none.
+    /// The user's dictionary (`UserDictionary`), at the moment each request goes: after Gemini's prompt and Polish
+    /// Selection's, whichever prompt they get. The app reads it from its settings; the CLI sends none.
     var vocabulary: @MainActor () -> [String] = { [] }
     /// A request sent twice to measure (`CloudHedge.measure`) has both its answers: the app says how much sooner the
     /// first one came.
@@ -287,54 +287,35 @@ final class TranscriptionService {
         return known.isEmpty ? nil : known.reduce(0, +)
     }
 
-    // MARK: Clean-up
+    // MARK: Text
 
-    /// Tidies `transcript` (written by `source`) with the clean-up model `model`, following
-    /// `CleanupModel.systemPrompt` at that model's fixed reasoning level (`CleanupModel.route`). The result is a
-    /// version of kind `.cleanup(of: source, by: model)`; its text is empty when the model returned nothing. Gives up
-    /// with `AppError.timeout` when the answer hasn't started within `timeout` (by default
-    /// `CleanupModel.timeout(forCharacterCount:)`); once it streams, it may take as long as it keeps coming, and the
-    /// same `timeout` without a byte ends it. Throws `AppError` only, or `CancellationError`. A retired model never
-    /// runs.
-    /// `route` sends it to any other model or level instead, and `prompt` replaces the fixed prompt: Polish
-    /// Selection's (`PolishSelectionModel.route`, `Polish.textPrompt`), or the CLI's (`--cleanup-bench`,
-    /// `--clean-up-effort`, `--clean-up-prompt`). `progress` hears how much of the answer has streamed in. `hedge`: the
-    /// request goes twice at once (`CloudHedge`).
-    func cleanUp(_ transcript: String, of source: EngineID, by model: CleanupModel = .default,
-                 timeout: TimeInterval? = nil, route: CleanupRoute? = nil, prompt: String? = nil,
-                 hedge: CloudHedge? = nil,
-                 progress: (@Sendable (ChatStreamProgress) -> Void)? = nil) async throws -> TranscriptResult {
-        guard let route = route ?? model.route else {
-            throw AppError.engineFailed(source, "\(model.modelName) no longer cleans up.")
-        }
-        let prompt = UserDictionary.prompt(prompt ?? CleanupModel.systemPrompt, with: vocabulary(), heard: false)
+    /// Polish Selection: `text` to the model of `route`, with `prompt` (`Polish.textPrompt`) as its instructions. Gives
+    /// up with `AppError.timeout` when the answer hasn't started within `TextRoute.timeout(forCharacterCount:)`; once it
+    /// streams, it may take as long as it keeps coming, and the same time without a byte ends it. Throws `AppError`
+    /// only, or `CancellationError`. `progress` hears how much of the answer has streamed in. Errors are Gemini's.
+    /// `timeout` replaces that deadline (tests).
+    func polishText(_ text: String, route: TextRoute, prompt: String, timeout: TimeInterval? = nil,
+                    progress: (@Sendable (ChatStreamProgress) -> Void)? = nil) async throws -> TranscriptResult {
+        let source = EngineID.geminiFlash
+        let prompt = UserDictionary.prompt(prompt, with: vocabulary(), heard: false)
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        // A replacement with no instruction would have the model reply to the transcript instead of tidying it.
-        guard !prompt.isEmpty else { throw AppError.engineFailed(source, "The clean-up prompt is empty.") }
+        // A request with no instruction would have the model reply to the text instead of working on it.
+        guard !prompt.isEmpty else { throw AppError.engineFailed(source, "The prompt is empty.") }
         guard let key = account.apiKey() else {
             throw account.isKeyUnreadable ? AppError.openRouterKeyUnreadable : AppError.openRouterMissingKey
         }
         let effort = ReasoningEffort(rawValue: route.effort)
-        let limit = timeout ?? CleanupModel.timeout(forCharacterCount: transcript.count)
+        let limit = timeout ?? TextRoute.timeout(forCharacterCount: text.count)
         let client = client
         let started = ContinuousClock.now
         let answer = AnswerStart()
         do {
-            let send: @Sendable (CloudHedge.Hooks) async throws -> CloudResult = { hooks in
-                try await client.cleanUp(transcript: transcript, route: route, systemPrompt: prompt, apiKey: key,
-                                         timeout: limit, progress: { streamed in
-                    if streamed.outputCharacters > 0 || streamed.reasoningCharacters > 0 { answer.mark() }
-                    hooks.progress?(streamed)
-                }, generation: hooks.generation)
-            }
-            let measured = measuredReporter, modelName = model.modelName
             let cloud = try await Self.untilAnswerStarts(limit, answer, source: source) {
-                if let hedge {
-                    try await CloudHedge.run(hedge, .cleanup, engine: source, modelName: modelName, progress: progress,
-                                             measured: measured, send)
-                } else {
-                    try await send(CloudHedge.Hooks(progress: progress) { _ in })
-                }
+                try await client.sendText(text, route: route, systemPrompt: prompt, apiKey: key, timeout: limit,
+                                          progress: { streamed in
+                    if streamed.outputCharacters > 0 || streamed.reasoningCharacters > 0 { answer.mark() }
+                    progress?(streamed)
+                })
             }
             account.noteCloudSuccess()
             var result = TranscriptResult(text: cloud.text, engine: source,
@@ -355,9 +336,9 @@ final class TranscriptionService {
             return result
         } catch let error as AppError {
             account.noteCloudFailure(error)
-            Log.engine.error("Clean-up failed: \(error.code, privacy: .public)")
-            DiagnosticLog.shared.event(.engine, "cleanup.failed", [
-                "source": source, "code": error, "seconds": Self.seconds(started.duration(to: .now))])
+            Log.engine.error("Text request failed: \(error.code, privacy: .public)")
+            DiagnosticLog.shared.event(.engine, "text.failed", [
+                "code": error, "seconds": Self.seconds(started.duration(to: .now))])
             throw error
         } catch {
             if error is CancellationError || Task.isCancelled { throw CancellationError() }
@@ -366,8 +347,8 @@ final class TranscriptionService {
     }
 
     /// `work`, or `AppError.timeout(source)` when `answer` hasn't started once `seconds` pass (the request is cancelled
-    /// then). An answer that has started runs to its end: a long clean-up writes for minutes, and cutting it off
-    /// would pay for the tokens and paste the original anyway.
+    /// then). An answer that has started runs to its end: a long polish writes for minutes, and cutting it off would
+    /// pay for the tokens and leave nothing.
     private static func untilAnswerStarts<T: Sendable>(_ seconds: TimeInterval, _ answer: AnswerStart, source: EngineID,
                                                        _ work: @escaping @Sendable () async throws -> T) async throws -> T {
         try await withThrowingTaskGroup(of: T?.self) { group in

@@ -73,7 +73,7 @@ import Testing
         context.history = .preview(entries: empty + entries)
         context.previewRunning = [entries[0].id: .transcription(.geminiFlash), empty[0].id: .transcription(.geminiFlash)]
         context.previewFailures = [
-            entries[1].id: HomeFailure(kind: .cleanup(of: .parakeetCloud, by: .gpt6Luna), reason: "It took too long."),
+            entries[1].id: HomeFailure(kind: .polish, reason: "It took too long."),
             empty[1].id: HomeFailure(kind: .transcription(.geminiFlash), reason: "It took too long."),
             entries[2].id: .recordingGone(.transcription(.parakeetCloud)),
             failed.id: .recordingGone(.transcription(.parakeet)),
@@ -81,7 +81,7 @@ import Testing
         env.windows.hubSection = .home
         let labels = Self.accessibleButtons(HubView(context: context).appTheme(), height: 1100)
         #expect(labels.filter { $0 == "Cancel" }.count == 2)
-        #expect(labels.filter { $0 == "Retry" }.count == 2, "the clean-up's and the empty transcript's failures")
+        #expect(labels.filter { $0 == "Retry" }.count == 2, "Polish's and the empty transcript's failures")
         #expect(labels.filter { $0 == "Dismiss" }.count == 3)
     }
 
@@ -90,7 +90,6 @@ import Testing
     @Test func onlyHomeWorkCanBeCanceledInTheRow() async throws {
         let env = AppEnvironment.preview()
         let entries = env.history.entries
-        let transcript = try #require(entries.first { $0.currentKind == .transcription(.parakeet) })
         let failed = try #require(entries.first { $0.status == .failed })
         let dictation = env.dictation
         var release = false
@@ -99,18 +98,18 @@ import Testing
             while !release { try await Task.sleep(for: .milliseconds(5)) }
             return TranscriptResult(text: "retried", engine: engine, processingTime: 1)
         }
-        dictation.cleanupOverride = { text, source in
-            while !release { try await Task.sleep(for: .milliseconds(5)) }
-            return TranscriptResult(text: text, engine: source, processingTime: 1)
-        }
         dictation.enqueue(Recording(id: failed.id, samples: Array(repeating: 0.1, count: 16_000)), engine: .geminiFlash)
-        dictation.makeVersion(.cleanup(of: .parakeet, by: .gpt6Luna), of: transcript)
+        // Home work that needs no kept audio: a file dropped on Home.
+        dictation.transcribe(ImportedAudio(fileName: "memo.m4a", samples: Array(repeating: 0.1, count: 16_000),
+                                           speech: SpeechStats(voicedSeconds: 0.8, peakDBFS: -10, isSilent: false)),
+                             as: .transcription(.parakeet))
+        let imported = try #require(env.history.entries.first { $0.importedFrom == "memo.m4a" })
         #expect(dictation.runningVersions.count == 2 && dictation.homeWork.count == 1)
         let context = HubContext(env: env)
         env.windows.hubSection = .home
         let labels = Self.accessibleButtons(HubView(context: context).appTheme())
-        #expect(labels.filter { $0 == "Cancel" }.count == 1, "the clean-up's")
-        #expect(context.runsHomeWork(for: transcript.id) && !context.runsHomeWork(for: failed.id))
+        #expect(labels.filter { $0 == "Cancel" }.count == 1, "the file's")
+        #expect(context.runsHomeWork(for: imported.id) && !context.runsHomeWork(for: failed.id))
         release = true
         try await waitUntil(timeout: .seconds(10)) { dictation.runningVersions.isEmpty }
     }

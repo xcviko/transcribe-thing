@@ -133,18 +133,8 @@ enum OnboardingGate {
         case .ready(let binding):
             // "fn ⇥" stays on one line inside running copy.
             let key = binding.compactDescription.replacingOccurrences(of: " ", with: "\u{00A0}")
-            let steps = lineup.steps
-            let cleanup = "have the text cleaned up", gemini = "use Gemini for a long talk where every word counts"
-            switch (steps.firstIndex(of: .cleanup), steps.firstIndex(of: .gemini)) {
-            case let (c?, g?):
-                let (first, then) = c < g ? (cleanup, gemini) : (gemini, cleanup)
-                return "Press \(key) while dictating to \(first), or again to \(then). It uses the same OpenRouter key."
-            case (_?, nil):
-                return "Press \(key) while dictating to \(cleanup). It uses the same OpenRouter key."
-            case (nil, _):
-                return "For a long talk where every word counts, press \(key) while dictating to use Gemini. "
-                    + "It uses the same OpenRouter key."
-            }
+            return "For a long talk where every word counts, press \(key) while dictating to use Gemini. "
+                + "It uses the same OpenRouter key."
         case .alone, .unbound:
             return "Gemini is there for long talks where every word counts. Set it up later in Settings."
         }

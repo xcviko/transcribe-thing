@@ -1,12 +1,12 @@
 import Foundation
 
-/// What wrote a transcript of a recording: an engine hearing the audio, or a clean-up model tidying the text an
-/// engine wrote. An entry has at most one version of each kind, so the same model never runs twice on a recording
-/// (each clean-up model can tidy the same text once). Kinds by retired models (Gemini 3.1 Pro, Flash Lite's
-/// clean-ups) are read and named like any other; nothing makes new ones.
+/// What wrote a transcript of a recording: an engine hearing the audio, Polish, Polish Selection, or (in entries from
+/// before clean-up was removed) a clean-up model tidying the text an engine wrote. An entry has at most one version of
+/// each kind, so the same model never runs twice on a recording. Kinds by retired models (Gemini 3.1 Pro, every
+/// clean-up) are read, named, shown and switched to like any other; nothing makes new ones.
 enum TranscriptVersionKind: Hashable, Sendable, Codable {
     case transcription(EngineID)
-    /// `model` over the text of `.transcription(engine)`.
+    /// `model` over the text of `.transcription(engine)`. History only: nothing makes clean-ups any more.
     case cleanup(of: EngineID, by: CleanupModel)
     /// Polish (`Polish`): Gemini 3.8 Flash's message from the audio.
     case polish
@@ -33,12 +33,12 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
     }
 
     /// The model in Models that wrote it, whose General → Pasting rules its paste follows: Parakeet for its own
-    /// transcript, clean-up for a clean-up, Gemini for its transcript and Polish. nil for Polish Selection, which
+    /// transcript and an old clean-up of it, Gemini for its transcript and Polish. nil for Polish Selection, which
     /// isn't a dictation.
     var dictationModel: ModelChoice? {
         switch self {
-        case .transcription(let engine): ModelChoice(engine: engine, cleansUp: false)
-        case .cleanup: .cleanup
+        case .transcription(let engine): ModelChoice(engine: engine)
+        case .cleanup(let engine, _): ModelChoice(engine: engine)
         case .polish: .gemini
         case .selection: nil
         }
@@ -78,7 +78,7 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
         }
     }
 
-    /// What is under way while it's being made: "Transcribing with Gemini Flash…", "Cleaning up with GPT-6 Luna…".
+    /// What is under way while it's being made: "Transcribing with Gemini Flash…", "Polishing with Gemini Flash…".
     var progressTitle: String {
         switch self {
         case .transcription(let engine): "Transcribing with \(engine.shortName)…"
@@ -88,8 +88,8 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
         }
     }
 
-    /// What didn't happen when making it failed: "Couldn’t transcribe with Gemini Flash", "Couldn’t clean up with
-    /// GPT-6 Luna".
+    /// What didn't happen when making it failed: "Couldn’t transcribe with Gemini Flash", "Couldn’t polish with
+    /// Gemini Flash".
     var failureTitle: String {
         switch self {
         case .transcription(let engine): "Couldn’t transcribe with \(engine.shortName)"
@@ -100,8 +100,9 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
     }
 
     /// Persisted: "parakeet", "cleanup:parakeet" (Flash Lite's: the form from before the choice of clean-up model,
-    /// which older builds read), "cleanup:parakeet:gpt6Luna", "polish", "selection:geminiFlash". Never rename. An older build can't read a kind with a model and drops that
-    /// version, not the entry (`TranscriptEntry.encode(to:)` keeps the text it tidied intact for them).
+    /// which older builds read), "cleanup:parakeet:gpt6Luna", "polish", "selection:geminiFlash". Never rename. An older
+    /// build can't read a kind with a model and drops that version, not the entry (`TranscriptEntry.encode(to:)` keeps
+    /// the text it tidied intact for them).
     var rawValue: String {
         switch self {
         case .transcription(let engine): engine.rawValue
@@ -113,7 +114,7 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
     }
 
     /// Engines removed long ago read as their successors (`TranscriptEntry.retiredEngines`); retired models
-    /// (`EngineID.isRetired`, `CleanupModel.isRetired`) read as themselves. nil for an engine or a clean-up model
+    /// (`EngineID.isRetired`, every `CleanupModel`) read as themselves. nil for an engine or a clean-up model
     /// this build doesn't know.
     init?(rawValue: String) {
         func engine(_ raw: Substring) -> EngineID? {
@@ -173,16 +174,16 @@ struct TranscriptMetadata: Codable, Equatable, Sendable {
     var usage: TokenUsage?
     var costUSD: Double?
     /// Wall clock on this Mac: for a transcription from the end of recording to the text (encoding and any wait
-    /// for the model included), for a clean-up the request alone.
+    /// for the model included), for a text request (Polish Selection, an old clean-up) the request alone.
     var processingTime: TimeInterval?
-    /// Until the first word of the answer, from a streamed request (Gemini, a clean-up).
+    /// Until the first word of the answer, from a streamed request (Gemini, Polish Selection, an old clean-up).
     var timeToFirstToken: TimeInterval?
     /// Seconds OpenRouter measured for the generation itself.
     var generationTime: TimeInterval?
     /// OpenRouter's `latency` for the generation, in seconds (its meaning is unverified; see
     /// `OpenRouterGeneration.latency`).
     var latency: TimeInterval?
-    /// A system prompt went with the request (Gemini's own prompt, the clean-up prompt).
+    /// A system prompt went with the request (Gemini's own prompt, Polish's, an old clean-up's).
     var usedSystemPrompt: Bool?
     var finishReason: String?
     /// Seconds of audio billed by OpenRouter's speech endpoint.

@@ -182,23 +182,20 @@ enum EngineReadiness: Equatable {
         }
     }
 
-    /// A model's readiness: its transcriber's (Parakeet where `parakeet` runs it, or Gemini) first; once that is
-    /// usable, clean-up's OpenRouter key's. `localState` and `localError` are `parakeet`'s.
+    /// A model's readiness: its transcriber's (Parakeet where `parakeet` runs it, or Gemini). `localState` and
+    /// `localError` are `parakeet`'s.
     static func of(_ choice: ModelChoice, parakeet: EngineID, localState: LocalModelState, keyStatus: KeyStatus,
                    localError: AppError? = nil) -> EngineReadiness {
-        let transcriber = of(choice.engine(parakeet: parakeet), localState: localState, keyStatus: keyStatus,
-                             localError: localError)
-        guard choice.cleansUp, transcriber.isUsable else { return transcriber }
-        return of(.geminiFlash, localState: localState, keyStatus: keyStatus)
+        of(choice.engine(parakeet: parakeet), localState: localState, keyStatus: keyStatus, localError: localError)
     }
 }
 
 // MARK: - Versions
 
 /// A History row's Versions menu: the transcripts the recording already has (`versions`, the current one checked,
-/// retired models' included) and what can still make another one (`actions`): each offered engine not used on it
-/// yet, and a clean-up of each Parakeet version with text by each offered clean-up model that hasn't tidied it yet.
-/// A model never runs twice on the same text, and a retired one never runs. A failed or canceled dictation has no
+/// retired models' included, old clean-ups too) and what can still make another one (`actions`): each offered engine
+/// not used on it yet, and Polish. A model never runs twice on the same recording, and a retired one (every clean-up
+/// model) never runs. A failed or canceled dictation has no
 /// versions, and every offered engine retries it, its own included. Unavailable actions stay listed, disabled, with
 /// the reason; versions can always be switched to, even without the audio.
 struct VersionsMenu: Equatable {
@@ -206,7 +203,7 @@ struct VersionsMenu: Equatable {
     enum Blocker: Equatable {
         /// The engine or the key isn't ready: "Needs key", "Key rejected", "Not downloaded" (`EngineReadiness`).
         case engine(String)
-        /// The audio is no longer kept (a clean-up needs only the text, so never this).
+        /// The audio is no longer kept.
         case recordingGone
         /// Something is already running for this recording.
         case running(TranscriptVersionKind)
@@ -236,17 +233,15 @@ struct VersionsMenu: Equatable {
     struct Action: Equatable, Identifiable {
         var kind: TranscriptVersionKind
         var blocker: Blocker?
-        /// A clean-up names the text it tidies: the recording has more than one Parakeet version to clean up.
-        var namesSource = false
 
         var id: TranscriptVersionKind { kind }
         var isEnabled: Bool { blocker == nil }
-        /// "Gemini 3.8 Flash", "Clean Up with GPT-6 Luna", "Clean Up Parakeet v3 · Cloud with GPT-6 Luna".
+        /// "Gemini 3.8 Flash", "Polish with Gemini 3.8 Flash".
         var name: String {
             switch kind {
             case .transcription(let engine): engine.displayName
-            case .cleanup(let source, let model):
-                namesSource ? "Clean Up \(source.displayName) with \(model.modelName)" : "Clean Up with \(model.modelName)"
+            // Never an action: nothing makes clean-ups any more.
+            case .cleanup: kind.displayName
             case .polish: "Polish with \(EngineID.geminiFlash.modelName)"
             case .selection(let model): "Polish with \(model.modelName)"
             }
@@ -263,17 +258,15 @@ struct VersionsMenu: Equatable {
     var title: String
     /// Oldest first.
     var versions: [Version]
-    /// Engines in `EngineID.offered` order, then clean-ups: by source, each in `CleanupModel.offered` order, then
-    /// Polish.
+    /// Engines in `EngineID.offered` order, then Polish.
     var actions: [Action]
-    /// What is running for the recording right now: "Transcribing with Gemini Flash…", "Cleaning up with GPT-6 Luna…".
+    /// What is running for the recording right now: "Transcribing with Gemini Flash…", "Polishing with Gemini Flash…".
     var runningTitle: String?
 
     static let versionsSectionTitle = "Versions"
     static let actionsSectionTitle = "Transcribe With"
 
-    /// `running`: what is being made for this recording right now. `readiness`: each engine's (a clean-up needs the
-    /// OpenRouter key like Gemini, so it goes by Gemini Flash's).
+    /// `running`: what is being made for this recording right now. `readiness`: each engine's.
     static func make(for entry: TranscriptEntry, running: TranscriptVersionKind?,
                      readiness: (EngineID) -> EngineReadiness) -> VersionsMenu {
         let isRetry = entry.status != .success
@@ -291,20 +284,6 @@ struct VersionsMenu: Equatable {
             let blocker = busy ?? (hasAudio ? nil : .recordingGone)
                 ?? readiness(engine).unavailableReason.map(Blocker.engine)
             return Action(kind: .transcription(engine), blocker: blocker)
-        }
-        if !isRetry {
-            // A transcript with no text (a legacy "No speech detected" row) has nothing to tidy.
-            for version in entry.versions where !version.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                guard case .transcription(let source) = version.kind, CleanupModel.canClean(source) else { continue }
-                for model in CleanupModel.offered where !entry.hasVersion(.cleanup(of: source, by: model)) {
-                    let blocker = busy ?? readiness(.geminiFlash).unavailableReason.map(Blocker.engine)
-                    actions.append(Action(kind: .cleanup(of: source, by: model), blocker: blocker))
-                }
-            }
-            let cleanups = actions.indices.filter { actions[$0].kind.isCleanup }
-            if Set(cleanups.map { actions[$0].kind.engine }).count > 1 {
-                for index in cleanups { actions[index].namesSource = true }
-            }
         }
         // Polish: Gemini on the recording again, with Polish's prompt. A failed or canceled dictation can be polished
         // too, as it can be transcribed.
@@ -392,21 +371,18 @@ enum VersionDetails {
 }
 
 /// A model's name and status in a line: the sidebar footer chip for the main model ("Parakeet v3 · Ready",
-/// "Parakeet + Luna · Needs key", "Gemini Flash · Ready"), and each model's status on the Models page.
+/// "Gemini Flash · Needs key"), and each model's status on the Models page.
 struct EngineSummary: Equatable {
     var name: String
     var status: String
     var tone: StatusTone
 
-    /// `choice` by `ModelChoice.compactName`: its transcriber's status, and for clean-up once Parakeet is ready, the
-    /// OpenRouter key's. `localState` and `localError` are `parakeet`'s.
+    /// `choice` by `ModelChoice.compactName`: its transcriber's status. `localState` and `localError` are
+    /// `parakeet`'s.
     static func make(choice: ModelChoice, parakeet: EngineID, localState: LocalModelState, keyStatus: KeyStatus,
                      localError: AppError? = nil) -> EngineSummary {
         var summary = make(engine: choice.engine(parakeet: parakeet), localState: localState, keyStatus: keyStatus,
                            localError: localError)
-        if choice.cleansUp, summary.tone == .positive {
-            summary = make(engine: .geminiFlash, localState: localState, keyStatus: keyStatus)
-        }
         summary.name = choice.compactName(parakeet: parakeet)
         return summary
     }
@@ -517,8 +493,6 @@ enum HubAttention {
         var keyStatus: KeyStatus
         /// The error ModelStore kept for a failed local model.
         var localError: AppError? = nil
-        /// The main model is clean-up: Parakeet on this Mac needs the OpenRouter key too.
-        var cleansUp = false
         /// The shortcut's event tap has stayed down (it can while Accessibility still reads as granted).
         var shortcutUnavailable = false
     }
@@ -593,19 +567,7 @@ enum HubAttention {
                     actionTitle: "Retry", action: .download(input.engine)))
             }
         }
-        if input.engine.isLocal, input.cleansUp {
-            switch input.keyStatus {
-            case .valid, .checking, .offline, .failed:
-                break
-            case .missing:
-                items.append(AttentionItem(
-                    id: "key", tone: .error, symbol: "key.fill", title: "Add your OpenRouter key",
-                    body: "Clean-up needs a key to tidy your text.",
-                    actionTitle: "Add Key", action: .openModels))
-            case .invalid, .noCredit:
-                items.append(keyItem(input.keyStatus, service: "clean-up"))
-            }
-        } else if !input.engine.isLocal {
+        if !input.engine.isLocal {
             // Same naming as the OpenRouter notices: "Gemini" for either Gemini, the model for cloud speech.
             let service = input.engine.cloudAPI == .transcriptions ? input.engine.shortName : "Gemini"
             switch input.keyStatus {
@@ -631,7 +593,7 @@ enum HubAttention {
     }
 
     /// The card for a key OpenRouter rejects or that can't pay: `service` is what it keeps from working ("Gemini",
-    /// "clean-up"). Only for `.invalid` and `.noCredit`.
+    /// "Parakeet v3"). Only for `.invalid` and `.noCredit`.
     private static func keyItem(_ status: KeyStatus, service: String) -> AttentionItem {
         switch status {
         case .noCredit where status.isKeyLimitReached:

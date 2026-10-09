@@ -314,27 +314,25 @@ import Testing
         var lineup = ModelLineup.default
         let fnTab = Shortcut.fnTab.spokenDescription
         #expect(SwitchModelLine.explanation(.ready(.fnTab), lineup: lineup)
-            == "Press \(fnTab) while dictating to step from Parakeet to Clean-up, then Gemini.")
+            == "Press \(fnTab) while dictating to step from Parakeet to Gemini.")
         lineup.main = .gemini
         #expect(SwitchModelLine.explanation(.ready(.fnTab), lineup: lineup)
-            == "Press \(fnTab) while dictating to step from Gemini to Parakeet, then Clean-up.")
+            == "Press \(fnTab) while dictating to step from Gemini to Parakeet.")
         lineup.move(.gemini, to: 0)
-        #expect(lineup.order == [.gemini, .parakeet, .cleanup])
-        lineup.move(.cleanup, to: 1)
-        #expect(SwitchModelLine.explanation(.ready(.fnTab), lineup: lineup)
-            == "Press \(fnTab) while dictating to step from Gemini to Clean-up, then Parakeet.")
-        lineup.setSwitchable(.parakeet, false)
+        #expect(lineup.order == [.gemini, .parakeet])
         #expect(SwitchModelLine.explanation(.ready(rightCommand), lineup: lineup)
-            == "Press \(rightCommand.spokenDescription) while dictating to step from Gemini to Clean-up.")
+            == "Press \(rightCommand.spokenDescription) while dictating to step from Gemini to Parakeet.")
     }
 
     /// Steps that can't run now (no key yet) stay in the line, which says so: Switch model skips them.
     @Test func lineupLineSaysWhichStepsArentReady() {
         let fnTab = Shortcut.fnTab.spokenDescription
-        #expect(SwitchModelLine.explanation(.ready(.fnTab), lineup: .default, blocked: [.cleanup, .gemini])
-            == "Press \(fnTab) while dictating to step from Parakeet to Clean-up, then Gemini. Clean-up and Gemini aren’t ready yet.")
         #expect(SwitchModelLine.explanation(.ready(.fnTab), lineup: .default, blocked: [.gemini])
-            == "Press \(fnTab) while dictating to step from Parakeet to Clean-up, then Gemini. Gemini isn’t ready yet.")
+            == "Press \(fnTab) while dictating to step from Parakeet to Gemini. Gemini isn’t ready yet.")
+        var parakeetCloudStep = ModelLineup.default
+        parakeetCloudStep.main = .gemini
+        #expect(SwitchModelLine.explanation(.ready(.fnTab), lineup: parakeetCloudStep, blocked: [.parakeet])
+            == "Press \(fnTab) while dictating to step from Gemini to Parakeet. Parakeet isn’t ready yet.")
         var geminiMain = ModelLineup.default
         geminiMain.main = .gemini
         #expect(!SwitchModelLine.explanation(.ready(.fnTab), lineup: geminiMain, blocked: [.gemini]).contains("ready yet"),
@@ -343,7 +341,6 @@ import Testing
 
     @Test func lineupLineStatuses() {
         var alone = ModelLineup.default
-        alone.setSwitchable(.cleanup, false)
         alone.setSwitchable(.gemini, false)
         #expect(SwitchModelLine.status(binding: .fnTab, lineup: .default) == .ready(.fnTab))
         #expect(SwitchModelLine.status(binding: nil, lineup: .default) == .unbound)
@@ -362,15 +359,11 @@ import Testing
 }
 
 @Suite struct ModelChoiceHubTests {
-    /// Clean-up needs Parakeet first, then the key: a download says so before the key does.
-    @Test func cleanupReadinessPutsParakeetFirstThenTheKey() {
-        #expect(EngineReadiness.of(.cleanup, parakeet: .parakeet, localState: .notInstalled, keyStatus: .missing)
+    /// A model is as ready as the engine that hears it: Parakeet where it runs, or Gemini.
+    @Test func aModelsReadinessIsItsEngines() {
+        #expect(EngineReadiness.of(.parakeet, parakeet: .parakeet, localState: .notInstalled, keyStatus: .missing)
             == .needsDownload)
-        #expect(EngineReadiness.of(.cleanup, parakeet: .parakeet, localState: .ready, keyStatus: .missing) == .needsKey)
-        #expect(EngineReadiness.of(.cleanup, parakeet: .parakeet, localState: .downloading(.zero),
-                                   keyStatus: .invalid("401")) == .keyProblem("Key rejected"))
-        #expect(EngineReadiness.of(.cleanup, parakeet: .parakeet, localState: .ready, keyStatus: .valid(KeyInfo())) == .ready)
-        #expect(EngineReadiness.of(.cleanup, parakeet: .parakeetCloud, localState: .notInstalled, keyStatus: .missing)
+        #expect(EngineReadiness.of(.parakeet, parakeet: .parakeetCloud, localState: .notInstalled, keyStatus: .missing)
             == .needsKey, "on OpenRouter Parakeet needs the key itself")
         #expect(EngineReadiness.of(.parakeet, parakeet: .parakeet, localState: .ready, keyStatus: .missing) == .ready)
         #expect(EngineReadiness.of(.gemini, parakeet: .parakeet, localState: .notInstalled, keyStatus: .valid(KeyInfo()))
@@ -378,10 +371,10 @@ import Testing
     }
 
     @Test func theSidebarChipNamesTheMainModel() {
-        #expect(EngineSummary.make(choice: .cleanup, parakeet: .parakeet, localState: .ready, keyStatus: .missing)
-            == EngineSummary(name: "Parakeet + Luna", status: "Needs key", tone: .warning))
-        #expect(EngineSummary.make(choice: .cleanup, parakeet: .parakeet, localState: .preparing(since: Date()),
-                                   keyStatus: .missing).status == "Loading model…", "Parakeet first")
+        #expect(EngineSummary.make(choice: .parakeet, parakeet: .parakeet, localState: .ready, keyStatus: .missing)
+            == EngineSummary(name: "Parakeet v3", status: "Ready", tone: .positive))
+        #expect(EngineSummary.make(choice: .parakeet, parakeet: .parakeet, localState: .preparing(since: Date()),
+                                   keyStatus: .missing).status == "Loading model…")
         #expect(EngineSummary.make(choice: .gemini, parakeet: .parakeet, localState: .notInstalled,
                                    keyStatus: .valid(KeyInfo()))
             == EngineSummary(name: "Gemini Flash", status: "Ready", tone: .positive))
@@ -419,36 +412,33 @@ import Testing
     }
 
     /// Each mark in the color of the model that made it: cloud Parakeet Parakeet's, the retired Gemini 3.1 Pro
-    /// Gemini's.
+    /// Gemini's, an old clean-up of Parakeet's text Parakeet's (with its wand).
     @Test func historyMarksWearTheirModelsColor() {
         var picked = ModelColors.default
         picked[.parakeet] = .teal
-        picked[.cleanup] = .pink
         picked[.gemini] = .blue
         #expect(EngineGlyph(engine: .parakeet, colors: picked).color == .teal)
         #expect(EngineGlyph(engine: .parakeetCloud, colors: picked).color == .teal)
-        #expect(EngineGlyph(engine: .parakeet, cleanupModel: .default, colors: picked).color == .pink)
+        #expect(EngineGlyph(engine: .parakeet, cleanupModel: .gpt6Luna, colors: picked).color == .teal)
         #expect(EngineGlyph(engine: .geminiFlash, colors: picked).color == .blue)
         #expect(EngineGlyph(engine: .geminiPro, colors: picked).color == .blue)
         #expect(EngineGlyph(engine: .parakeet).color == .graphite)
-        #expect(EngineGlyph(engine: .parakeetCloud, cleanupModel: .default).color == .orange)
+        #expect(EngineGlyph(engine: .parakeetCloud, cleanupModel: .gpt6Luna).color == .graphite)
+        #expect(EngineGlyph(engine: .parakeet, cleanupModel: .gpt6Luna).label == "Parakeet v3 + Clean-up by GPT-6 Luna")
         #expect(EngineGlyph(engine: .geminiFlash).color == .violet)
     }
 
-    @Test func aCleanupMainWithoutAKeyShowsTheKeyCard() throws {
-        func items(_ key: KeyStatus, cleansUp: Bool = true) -> [AttentionItem] {
+    /// Parakeet on this Mac needs no key, whatever happens to it: no key card.
+    @Test func aParakeetMainWithoutAKeyShowsNoKeyCard() throws {
+        func items(_ key: KeyStatus, engine: EngineID = .parakeet) -> [AttentionItem] {
             HubAttention.items(HubAttention.Input(microphone: .granted, accessibility: .granted,
                                                   accessibilityLikelyStale: false, fnKeyUsage: .doNothing,
-                                                  pushToTalkUsesFn: true, engine: .parakeet, localState: .ready,
-                                                  keyStatus: key, cleansUp: cleansUp))
+                                                  pushToTalkUsesFn: true, engine: engine, localState: .ready,
+                                                  keyStatus: key))
         }
-        let missing = try #require(items(.missing).first)
-        #expect(missing.title == "Add your OpenRouter key")
-        #expect(missing.body == "Clean-up needs a key to tidy your text.")
-        #expect(missing.action == .openModels)
-        #expect(items(.invalid("401")).first?.title == "Your OpenRouter key stopped working")
-        #expect(items(.noCredit(nil)).first?.body == "Add credit to keep using clean-up.")
-        #expect(items(.valid(KeyInfo())).isEmpty)
-        #expect(items(.missing, cleansUp: false).isEmpty, "Parakeet alone needs no key")
+        #expect(items(.missing).isEmpty, "Parakeet alone needs no key")
+        #expect(items(.invalid("401")).isEmpty)
+        let missing = try #require(items(.missing, engine: .parakeetCloud).first)
+        #expect(missing.title == "Add your OpenRouter key" && missing.action == .openModels)
     }
 }
