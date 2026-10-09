@@ -30,7 +30,7 @@ import Testing
     /// keeps that version to switch to.
     @Test func nothingOffersACleanUp() {
         #expect(menu(transcript()).actions.map(\.kind) == [.transcription(.parakeetCloud), .transcription(.geminiFlash),
-                                                           .polish])
+                                                           .polish, .translation(polished: false)])
         var entry = transcript(.parakeet)
         entry.addVersion(TranscriptVersion(text: "cloud", engine: .parakeetCloud))
         entry.addVersion(TranscriptVersion(kind: .cleanup(of: .parakeet, by: .gpt6Luna), text: "Hello.",
@@ -51,7 +51,7 @@ import Testing
         #expect(proMenu.versions.map(\.kind) == [.transcription(.geminiPro)])
         #expect(proMenu.versions.map(\.title) == ["Gemini 3.1 Pro"])
         #expect(proMenu.actions.map(\.kind) == [.transcription(.parakeet), .transcription(.parakeetCloud),
-                                                .transcription(.geminiFlash), .polish],
+                                                .transcription(.geminiFlash), .polish, .translation(polished: false)],
                 "Pro's text isn't cleaned up either")
 
         var tidied = transcript()
@@ -60,11 +60,12 @@ import Testing
         let tidiedMenu = menu(tidied)
         #expect(tidiedMenu.versions.map(\.title) == ["Parakeet v3", "Parakeet v3 + Clean-up by Flash Lite"])
         #expect(tidiedMenu.actions.map(\.kind) == [.transcription(.parakeetCloud), .transcription(.geminiFlash),
-                                                   .polish])
+                                                   .polish, .translation(polished: false)])
 
         var failed = TranscriptEntry(text: "", engine: .geminiPro, status: .failed, audioDuration: 20, voicedSeconds: 10,
                                      audioFileName: "a.wav")
-        #expect(menu(failed).actions.map(\.kind) == EngineID.offered.map(TranscriptVersionKind.transcription) + [.polish])
+        #expect(menu(failed).actions.map(\.kind)
+                == EngineID.offered.map(TranscriptVersionKind.transcription) + [.polish, .translation(polished: false)])
         failed.status = .cancelled
         #expect(!menu(failed).actions.contains { $0.kind.engine.isRetired || $0.kind.isCleanup })
     }

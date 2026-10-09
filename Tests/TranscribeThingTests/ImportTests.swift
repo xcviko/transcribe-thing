@@ -148,13 +148,13 @@ import Testing
         #expect(HistoryGrouping.filter([entry], query: "standup").count == 1)
     }
 
-    /// The dialog's models: the main one first, Polish last, and each says why it can't run.
+    /// The dialog's models: the main one first, then Polish and Translate, and each says why it can't run.
     @Test func theMainModelComesFirst() {
         let choices = ImportChoices.make(main: .geminiFlash) { engine in
             engine.isLocal ? .needsDownload : .ready
         }
         #expect(choices.first?.kind == .transcription(.geminiFlash))
-        #expect(choices.last?.kind == .polish)
+        #expect(choices.suffix(2).map(\.kind) == [.polish, .translation(polished: false)])
         #expect(choices.filter { !$0.isEnabled }.allSatisfy { $0.kind.engine.isLocal })
         #expect(Set(choices.map(\.kind)).count == choices.count)
     }

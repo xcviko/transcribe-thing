@@ -74,6 +74,22 @@ struct GeneralPage: View {
                                    modes: $settings.modesRemovingFinalPeriod)
                 }
             }
+            HubGroup("Translate", footer: "On Gemini, Translate writes your dictation in the other language; with text "
+                        + "selected, it translates that. Any other language comes out in the second one.") {
+                SettingsGroup {
+                    SettingsRow(title: "Translate between", systemImage: "translate", iconTint: .inkSecondary) {
+                        HStack(spacing: 8) {
+                            HubMenuPicker(options: TranslationLanguage.allCases, selection: language(\.first),
+                                          label: \.name)
+                            Text("and")
+                                .typeface(.callout)
+                                .foregroundStyle(.inkSecondary)
+                            HubMenuPicker(options: TranslationLanguage.allCases, selection: language(\.second),
+                                          label: \.name)
+                        }
+                    }
+                }
+            }
             HubGroup("History") {
                 SettingsGroup {
                     SettingsRow(title: "Auto-delete history", systemImage: "clock.arrow.circlepath",
@@ -141,6 +157,18 @@ struct GeneralPage: View {
         } message: {
             Text("Their recordings go too. This can’t be undone.")
         }
+    }
+
+    /// One language of Translate's pair. Picking the one the other side has swaps them, so the two always differ.
+    private func language(_ side: WritableKeyPath<TranslationPair, TranslationLanguage>) -> Binding<TranslationLanguage> {
+        let settings = settings
+        return Binding(get: { settings.translationPair[keyPath: side] }, set: { language in
+            var pair = settings.translationPair
+            let other: WritableKeyPath<TranslationPair, TranslationLanguage> = side == \.first ? \.second : \.first
+            if pair[keyPath: other] == language { pair[keyPath: other] = pair[keyPath: side] }
+            pair[keyPath: side] = language
+            settings.translationPair = pair
+        })
     }
 
     /// Auto-delete's period. One that deletes transcripts right away asks first (as Delete All does); a longer one,

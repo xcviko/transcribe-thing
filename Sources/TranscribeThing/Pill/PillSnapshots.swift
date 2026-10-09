@@ -80,7 +80,7 @@ enum PillSnapshots {
             },
             // Models (`--only pill-models`): the chip, the tint, the hint and the no-key notice.
             SnapshotEntry("pill-models", width: 760, height: 44 + 9 * 92) { _ in PillModelSheet() },
-            SnapshotEntry("pill-polish", width: 760, height: 44 + 4 * 92) { _ in PolishSheet() },
+            SnapshotEntry("pill-polish", width: 760, height: 44 + 8 * 92) { _ in PolishSheet() },
             // fn ⇥ while the chip is up: its names roll on, frame by frame of the spring.
             SnapshotEntry("pill-chip-roll", width: 2040, height: 220) { _ in ChipRollSheet() },
             // fn P on Parakeet with nothing selected: it says Polish is Gemini's, and the dictation goes on.
@@ -96,6 +96,9 @@ enum PillSnapshots {
             },
             SnapshotEntry("pill-selection-polishing", width: 640, height: 150) { _ in
                 CanvasScene(model: selectionModel(.processing, choice: .gemini), notices: [])
+            },
+            SnapshotEntry("pill-selection-translating", width: 640, height: 150) { _ in
+                CanvasScene(model: selectionModel(.processing, choice: .gemini, translates: true), notices: [])
             },
             SnapshotEntry("pill-selection-counting", width: 640, height: 150) { _ in
                 CanvasScene(model: selectionModel(.processing, choice: .gemini)
@@ -201,10 +204,12 @@ enum PillSnapshots {
         return model
     }
 
-    /// Polish Selection: the polish being written by `choice`'s model.
-    @MainActor private static func selectionModel(_ phase: PillPhase, choice: ModelChoice = .parakeet) -> PillModel {
+    /// Polish Selection: the polish (or translation) being written by `choice`'s model.
+    @MainActor private static func selectionModel(_ phase: PillPhase, choice: ModelChoice = .parakeet,
+                                                  translates: Bool = false) -> PillModel {
         let model = PillModelSheet.model(phase, choice: choice, level: 0.7, chip: false)
-        model.polishes = true
+        model.polishes = !translates
+        model.translates = translates
         model.selectionPolishing = true
         return model
     }
@@ -759,9 +764,11 @@ private struct PolishSheet: View {
         let make: @MainActor () -> PillModel
     }
 
-    @MainActor static func model(_ phase: PillPhase, level: Float = 0.7) -> PillModel {
+    @MainActor static func model(_ phase: PillPhase, level: Float = 0.7, polishes: Bool = true,
+                                 translates: Bool = false) -> PillModel {
         let model = PillModelSheet.model(phase, choice: .gemini, level: level, chip: false)
-        model.polishes = true
+        model.polishes = polishes
+        model.translates = translates
         return model
     }
 
@@ -772,6 +779,17 @@ private struct PolishSheet: View {
             Row(id: "processing", caption: "Processing · Polish") { Self.model(.processing) },
             Row(id: "thinking", caption: "Thinking · Polish") {
                 Self.model(.processing).previewCounter(PillTokenCount(phase: .thinking, tokens: 1_200))
+            },
+            Row(id: "translate", caption: "Push-to-talk · Translate") {
+                Self.model(.listening, polishes: false, translates: true)
+            },
+            Row(id: "both", caption: "Push-to-talk · Both") { Self.model(.listening, translates: true) },
+            Row(id: "locked-both", caption: "Hands-free · Both") {
+                Self.model(.locked, level: 0.5, translates: true)
+            },
+            Row(id: "translating", caption: "Writing · Translate") {
+                Self.model(.processing, polishes: false, translates: true)
+                    .previewCounter(PillTokenCount(phase: .writing, tokens: 140))
             },
         ]
     }

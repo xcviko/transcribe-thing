@@ -40,6 +40,7 @@ struct ShortcutsPage: View {
                     }
                     row(.switchModel)
                     row(.polish)
+                    row(.translate)
                     row(.addToDictionary)
                 }
             }

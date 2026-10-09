@@ -30,6 +30,8 @@ When a new version is out, the app tells you, and Update Now in General → Soft
 | Switch model while you talk | **fn ⇥** |
 | Get the message you meant, not every word (Gemini) | **fn P** while you talk |
 | Polish text you've selected (on Parakeet) | select it, hold **fn**, press **P** |
+| Get what you say in the other language (Gemini) | **fn T** while you talk |
+| Translate text you've selected (on Parakeet) | select it, hold **fn**, press **T** |
 | Teach the cloud models a word or a name | select it, hold **fn**, press **D** |
 | Paste the last transcript again | **⌘ fn V** |
 
@@ -39,7 +41,7 @@ General → Show the pill chooses always, only while you dictate, or never.
 Pasting leaves your clipboard as it was. To copy a transcript, use Copy Last Transcript in the menu bar or Copy in
 History.
 
-fn P and fn D read the selected text through Accessibility. In apps that don't share it that way (Chrome, and
+fn P, fn T and fn D read the selected text through Accessibility. In apps that don't share it that way (Chrome, and
 Electron apps such as VS Code or Claude), they copy it with ⌘C and put your clipboard back right after. A clipboard
 manager may still keep the selected text.
 
@@ -50,8 +52,12 @@ manager may still keep the selected text.
 - **Gemini 3.8 Flash** is the most accurate. It thinks before it writes, so it's slower. It can also polish: press
   fn P while you talk, and it pastes the message you meant, without the false starts, detours and repeats.
 
-On another model, fn P polishes the text you've selected instead: Gemini 3.8 Flash writes the polished version on a
-card, and Paste Here puts it in place of the selection.
+Gemini can also translate: press fn T while you talk, and it pastes what you said in the other language. Russian
+becomes English and English becomes Russian; pick another pair in General → Translate. With fn P on too, you get the
+message you meant, translated.
+
+On another model, fn P polishes and fn T translates the text you've selected instead: Gemini 3.8 Flash writes the
+result on a card, and Paste Here puts it in place of the selection.
 
 The cloud models run on your own [OpenRouter](https://openrouter.ai) key, and you pay OpenRouter per use. Each cloud
 dictation sends its request twice at once and pastes the first answer, stopping the other, so it can cost up to twice
@@ -69,7 +75,7 @@ every word.
 
 Have a recording already, say a voice note or a call? Drop the file on Home, or press ⌘O there, and pick the model.
 The transcript shows up in History under the file's name instead of being pasted. From there it works like any
-dictation: transcribe it again with another model or polish it.
+dictation: transcribe it again with another model, polish it or translate it.
 
 It takes MP3, M4A, WAV, Telegram voice notes (.ogg) and the sound of a video, up to three hours. Files don't count
 toward your words, speed or time saved.
@@ -78,14 +84,15 @@ toward your words, speed or time saved.
 
 History, the recordings, your dictionary and your OpenRouter key stay on your Mac, in
 `~/Library/Application Support/transcribe-thing`. The key is in a file only you can read. Audio leaves your Mac only
-when a cloud model transcribes it. Text leaves it only when Gemini 3.8 Flash polishes text you selected. Your
+when a cloud model transcribes it. Text leaves it only when Gemini 3.8 Flash polishes or translates text you selected. Your
 dictionary's words go along with everything sent to Gemini 3.8 Flash.
 
 The same folder keeps a log of what the app did in the last 7 days, without your dictations, your selected text or
 your key. It stays there until you send it: General → Troubleshooting → Export Logs… saves it as a file.
 
 History keeps every dictation with its recording, and a copy of the sound of every file you transcribe, until you
-delete it, so you can transcribe it again with another model or polish it. General → History can delete entries older than 1, 7, 30 or 90 days.
+delete it, so you can transcribe it again with another model, polish it or translate it. General → History can
+delete entries older than 1, 7, 30 or 90 days.
 
 ## If something doesn't work
 

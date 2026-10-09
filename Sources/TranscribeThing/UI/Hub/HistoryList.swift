@@ -296,9 +296,10 @@ struct HistoryRow: View, Equatable {
                 VersionCount(count: entry.versions.count)
             }
             // Observed: a color picked in Models redraws the row, `equatable()` or not.
-            if case .selection(let model)? = entry.currentKind {
-                // No recording: the wand in its model's color, and no duration.
-                SelectionGlyph(model: model, details: entry.currentVersion.map(VersionDetails.tooltip),
+            if let kind = entry.currentKind, let model = kind.selectionModel {
+                // No recording: the wand (or Translate's glyph) in its model's color, and no duration.
+                SelectionGlyph(model: model, translated: !(kind == .selection(model)),
+                               details: entry.currentVersion.map(VersionDetails.tooltip),
                                colors: hub.settings.modelColors)
             } else {
                 EngineGlyph(engine: entry.engine, provider: entry.provider, cleanupModel: entry.currentKind?.cleanupModel,

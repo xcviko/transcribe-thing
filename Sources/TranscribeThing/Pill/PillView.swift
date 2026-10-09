@@ -128,10 +128,16 @@ enum PillMetrics {
     /// What a selection's polish says until the model's count comes.
     static let polishingText = "Polishing"
     /// A selection's polish before its count: the wand and "Polishing", with the counter's padding and nothing more.
-    static let polishingSize = CGSize(
-        width: (2 * counterPadding + counterWandSize + 2 + counterWandGap
-                + textWidth(polishingText, size: captionFontSize, weight: .medium, rounded: true)).rounded(.up),
-        height: listeningSize.height)
+    static let polishingSize = labelSize(polishingText)
+    /// What a selection's translation says until the model's count comes.
+    static let translatingText = "Translating"
+    static let translatingSize = labelSize(translatingText)
+
+    private static func labelSize(_ text: String) -> CGSize {
+        CGSize(width: (2 * counterPadding + counterWandSize + 2 + counterWandGap
+                       + textWidth(text, size: captionFontSize, weight: .medium, rounded: true)).rounded(.up),
+               height: listeningSize.height)
+    }
 
     /// Width of a single line of `text` in the system font, as SwiftUI's `Font.system` draws it.
     static func textWidth(_ text: String, size: CGFloat, weight: NSFont.Weight, rounded: Bool,
@@ -196,10 +202,34 @@ extension EnvironmentValues {
 
 // MARK: - Visual state
 
-/// What a polish is written from: a dictation (its audio, so the processing wave stays) or selected text (nothing
-/// was heard, so the pill says "Polishing").
+/// What a polish (or translation) is written from: a dictation (its audio, so the processing wave stays) or selected
+/// text (nothing was heard, so the pill says "Polishing", or "Translating" for `translatedSelection`).
 enum PillPolish: Hashable, Sendable {
-    case dictation, selection
+    case dictation, selection, translatedSelection
+
+    var isSelection: Bool { self != .dictation }
+}
+
+/// What a dictation is rewritten into, shown by one glyph left of its bars or wave: Polish's wand, Translate's glyph,
+/// or Translate's with a sparkle for both.
+enum PillRewrite: Hashable, Sendable {
+    case polish, translate, both
+
+    init?(polishes: Bool, translates: Bool) {
+        switch (polishes, translates) {
+        case (true, true): self = .both
+        case (true, false): self = .polish
+        case (false, true): self = .translate
+        case (false, false): return nil
+        }
+    }
+
+    var translates: Bool { self != .polish }
+}
+
+extension EnvironmentValues {
+    /// The glyph the pill's wand slot shows (`PillWand`).
+    @Entry var pillRewrite: PillRewrite = .polish
 }
 
 /// What a token count's capsule has to fit: its number with every digit as an 8 ("~8.8k"; digits are all one width)
@@ -258,6 +288,7 @@ enum PillVisual: Equatable, Sendable {
         case .processing(_, counting: true, polish: .some, _): PillMetrics.polishCounterSize
         case .processing(_, counting: true, polish: nil, _): PillMetrics.counterSize
         case .processing(_, counting: false, polish: .selection, _): PillMetrics.polishingSize
+        case .processing(_, counting: false, polish: .translatedSelection, _): PillMetrics.translatingSize
         case .processing(_, counting: false, polish: .dictation, _), .listening(polishes: true):
             PillMetrics.polishWaveSize
         case .listening, .hello, .processing: PillMetrics.listeningSize
@@ -357,6 +388,8 @@ struct PillView: View {
     @State private var stage = PillStage()
     /// 0 → 1 as the pill leaves (`PillExitEffect`).
     @State private var exitProgress: CGFloat = 0
+    /// The glyph in the wand's slot: the last rewrite on screen, kept while a wand leaving after its dictation fades.
+    @State private var shownRewrite: PillRewrite = .polish
 
     init(model: PillModel) {
         self.model = model
@@ -387,12 +420,13 @@ struct PillView: View {
         case .hidden, .rest:
             return model.isHovering ? .peek : .rest
         case .listening:
-            return .listening(polishes: model.polishes)
+            return .listening(polishes: model.rewrite != nil)
         case .locked:
-            return .locked(hours: model.showsHours, polishes: model.polishes)
+            return .locked(hours: model.showsHours, polishes: model.rewrite != nil)
         case .processing:
+            let selection: PillPolish = model.translates ? .translatedSelection : .selection
             return .processing(afterHandsFree: model.processingOrigin == .locked, counting: model.showsCounter,
-                               polish: model.polishes ? (model.selectionPolishing ? .selection : .dictation) : nil,
+                               polish: model.rewrite == nil ? nil : model.selectionPolishing ? selection : .dictation,
                                label: model.showsCounter ? model.tokenCount.map(PillCountLabel.init) : nil)
         case .error:
             if let text = model.errorMessage { return .message(text) }
@@ -420,6 +454,10 @@ struct PillView: View {
             PillFace(model: model, regions: regions, capsule: frame.capsule, content: frame.content, morph: frame.morph,
                      size: size, choice: frame.choice, appearsAtOnce: appears)
         }
+            .environment(\.pillRewrite, model.rewrite ?? shownRewrite)
+            .onChange(of: model.rewrite, initial: true) { _, new in
+                if let new { shownRewrite = new }
+            }
             .id(session)
             // Capsule and content leave together, as one composited piece.
             .modifier(PillExitEffect(progress: appears ? 0 : exitProgress, reduceMotion: reduceMotion))
@@ -475,8 +513,8 @@ struct PillView: View {
         case .rest, .peek, .hello: "transcribe-thing. Click to start hands-free dictation"
         case .listening: "transcribe-thing is listening"
         case .locked: "transcribe-thing is listening, hands-free"
-        // A polish (a dictation's or a selection's, both by Gemini) names no model.
-        case .processing(_, _, polish: .some, _): "transcribe-thing is polishing"
+        // A polish or translation (a dictation's or a selection's, all by Gemini) names no model.
+        case .processing(_, _, polish: .some, _): "transcribe-thing is \(model.translates ? "translating" : "polishing")"
         case .processing: "transcribe-thing is transcribing"
         case .error: "Dictation failed"
         case .message(let text): text
@@ -1108,7 +1146,7 @@ private struct ProcessingContent: View {
 
     var body: some View {
         ZStack {
-            ProcessingWaveView(startOffset: startOffset, tint: tint, showsDots: !isCounting && polish != .selection,
+            ProcessingWaveView(startOffset: startOffset, tint: tint, showsDots: !isCounting && polish?.isSelection != true,
                                glow: polish == nil ? nil : tint,
                                dotsShift: polish == .dictation ? PillMetrics.polishDotsShift : 0)
             // Live while it fades, where it stood: through a removal it would freeze against the capsule's left end
@@ -1122,8 +1160,9 @@ private struct ProcessingContent: View {
                     // Left of the dots: the wand, its gap and the dots centered together in the capsule.
                     PillWand(tint: tint, pulses: reduceMotion && !staticRendering)
                         .offset(x: -(PillMetrics.counterWandGap + PillMetrics.barFieldWidth) / 2)
-                case .selection:
-                    PillPolishingLabel(pulses: reduceMotion && !staticRendering)
+                case .selection, .translatedSelection:
+                    PillPolishingLabel(text: polish == .selection ? PillMetrics.polishingText : PillMetrics.translatingText,
+                                       pulses: reduceMotion && !staticRendering)
                 }
             }
             if isCounting, let shown = count ?? lastCount {
@@ -1144,14 +1183,16 @@ private struct ProcessingContent: View {
     }
 }
 
-/// A selection's polish before its count: the wand and "Polishing", the capsule just around them.
+/// A selection's polish before its count: the wand and "Polishing" (Translate's glyph and "Translating"), the capsule
+/// just around them.
 private struct PillPolishingLabel: View {
+    var text: String
     var pulses = false
 
     var body: some View {
         HStack(spacing: PillMetrics.counterWandGap) {
             PillWand(tint: .white, pulses: pulses)
-            Text(PillMetrics.polishingText)
+            Text(text)
                 .font(PillMetrics.captionFont)
                 .foregroundStyle(.white.opacity(0.92))
                 .fixedSize()
@@ -1160,11 +1201,12 @@ private struct PillPolishingLabel: View {
     }
 }
 
-/// Polish's wand inside the capsule. `pulses`: Reduce Motion, where the shimmer over it
-/// stops, so it breathes once a second instead, as the processing dots do.
+/// Polish's wand inside the capsule, or Translate's glyph (`pillRewrite`). `pulses`: Reduce Motion, where the shimmer
+/// over it stops, so it breathes once a second instead, as the processing dots do.
 private struct PillWand: View {
     var tint: Color
     var pulses = false
+    @Environment(\.pillRewrite) private var rewrite
 
     var body: some View {
         if pulses {
@@ -1179,9 +1221,18 @@ private struct PillWand: View {
     }
 
     private var wand: some View {
-        Image(systemName: "wand.and.sparkles")
-            .font(.system(size: PillMetrics.counterWandSize, weight: .semibold))
+        Image(systemName: rewrite.translates ? "translate" : "wand.and.sparkles")
+            .font(.system(size: PillMetrics.counterWandSize - (rewrite.translates ? 2.5 : 0), weight: .semibold))
             .foregroundStyle(tint)
+            .overlay(alignment: .topTrailing) {
+                // Polish and Translate both on: Translate's glyph with Polish's sparkle.
+                if rewrite == .both {
+                    Image(systemName: "sparkle")
+                        .font(.system(size: 6, weight: .bold))
+                        .foregroundStyle(tint)
+                        .offset(x: 3.5, y: -3.5)
+                }
+            }
             .frame(width: PillMetrics.counterWandSize + 2)
             .accessibilityHidden(true)
     }
@@ -1193,6 +1244,7 @@ private struct PillWand: View {
 struct PillTokenCounter: View {
     let count: PillTokenCount
     var polishes = false
+    @Environment(\.pillRewrite) private var rewrite
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -1206,7 +1258,8 @@ struct PillTokenCounter: View {
         .animation(.easeInOut(duration: reduceMotion ? 0.15 : 0.2), value: count.phase)
         .padding(.horizontal, PillMetrics.counterPadding)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(polishes ? "Polishing, \(count.spokenDescription)" : count.spokenDescription)
+        .accessibilityLabel(polishes ? "\(rewrite.translates ? "Translating" : "Polishing"), \(count.spokenDescription)"
+                                : count.spokenDescription)
         .accessibilityAddTraits(.updatesFrequently)
     }
 

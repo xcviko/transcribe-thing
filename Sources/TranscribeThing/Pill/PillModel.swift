@@ -55,6 +55,10 @@ final class PillModel {
     }
     /// The dictation on screen is polished (`Polish`): the wand sits left of its bars, then of its wave.
     var polishes = false
+    /// The dictation on screen is translated (`Translate`): its glyph takes the wand's place (both, with Polish on too).
+    var translates = false
+    /// What stands left of the bars or the wave, if anything: the wand, Translate's glyph, or both in one.
+    var rewrite: PillRewrite? { PillRewrite(polishes: polishes, translates: translates) }
     /// The polish on screen is a selection's (Polish Selection): nothing was heard, so the pill says "Polishing" where
     /// a dictation's shows the wave.
     var selectionPolishing = false

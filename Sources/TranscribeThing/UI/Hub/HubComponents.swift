@@ -606,16 +606,18 @@ struct CountBadge: View {
 
 /// The engine mark on history rows: P, F, Pro, in the model's color (`ModelColor.markTint`, as the pill wears it).
 /// Cloud Parakeet shares the local letter and color, so it carries a small cloud; a clean-up, a wand after the letter.
-/// A selection's polish in History: the wand, in the color of the model that wrote it.
+/// A selection's polish in History: the wand (Translate's glyph for its translation), in the color of the model that
+/// wrote it.
 struct SelectionGlyph: View {
     var model: PolishSelectionModel
+    var translated = false
     /// The tooltip in full (`VersionDetails`).
     var details: String?
     var colors: ModelColors = .default
 
     var body: some View {
         let tint = colors[model.choice].markTint
-        Image(systemName: "wand.and.sparkles")
+        Image(systemName: translated ? "translate" : "wand.and.sparkles")
             .font(.system(size: 8.5, weight: .bold))
             .foregroundStyle(tint)
             .padding(.horizontal, 4)
@@ -626,7 +628,9 @@ struct SelectionGlyph: View {
             .accessibilityLabel(label)
     }
 
-    private var label: String { TranscriptVersionKind.selection(model).displayName }
+    private var label: String {
+        (translated ? TranscriptVersionKind.selectionTranslation(model) : .selection(model)).displayName
+    }
 }
 
 struct EngineGlyph: View {

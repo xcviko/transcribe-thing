@@ -247,6 +247,10 @@ struct HotkeyRouter: Equatable, Sendable {
                       let polish = liveDuringDictation(config).first(where: { $0.action == .polish }),
                       polish.shortcut.keyCode == key, matchesDuringDictation(polish.shortcut, config.bindings) {
                 decision.events.append(.polishRepeat)
+            } else if input.isRepeat,
+                      let translate = liveDuringDictation(config).first(where: { $0.action == .translate }),
+                      translate.shortcut.keyCode == key, matchesDuringDictation(translate.shortcut, config.bindings) {
+                decision.events.append(.translateRepeat)
             }
             return decision
         }
@@ -398,7 +402,7 @@ struct HotkeyRouter: Equatable, Sendable {
         switch action {
         case .handsFree: event = .handsFreeToggle
         case .pasteLast: event = .pasteLast
-        case .pushToTalk, .switchModel, .polish, .addToDictionary: return
+        case .pushToTalk, .switchModel, .polish, .addToDictionary, .translate: return
         }
         if gesture != .idle, action == .pasteLast {
             decision.events.append(.pttInterrupted)
@@ -428,7 +432,7 @@ struct HotkeyRouter: Equatable, Sendable {
     }
 
     /// The bindings live during a dictation only (a held PTT counts): Switch model with another model to switch to,
-    /// Polish, Add to dictionary.
+    /// Polish, Add to dictionary, Translate.
     private func liveDuringDictation(_ config: Config) -> [(action: ShortcutAction, shortcut: Shortcut)] {
         guard config.isRecording || gesture != .idle else { return [] }
         return ShortcutAction.allCases.compactMap { action in
@@ -444,6 +448,7 @@ struct HotkeyRouter: Equatable, Sendable {
         switch action {
         case .switchModel: .cycleEngine
         case .polish: .polish
+        case .translate: .translate
         case .pushToTalk, .handsFree, .pasteLast, .addToDictionary: nil
         }
     }

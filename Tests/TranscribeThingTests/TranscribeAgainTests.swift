@@ -396,9 +396,11 @@ import Testing
         let m = menu(transcript(.parakeet))
         #expect(m.title == "Versions" && !m.isRetry && m.runningTitle == nil)
         #expect(m.versions == [VersionsMenu.Version(kind: .transcription(.parakeet), summary: "0.4 s", isCurrent: true)])
-        #expect(m.actions.map(\.kind) == [.transcription(.parakeetCloud), .transcription(.geminiFlash), .polish])
+        #expect(m.actions.map(\.kind) == [.transcription(.parakeetCloud), .transcription(.geminiFlash), .polish,
+                                          .translation(polished: false)])
         #expect(m.actions.allSatisfy { $0.isEnabled })
-        #expect(m.actions.map(\.title) == ["Parakeet v3 · Cloud", "Gemini 3.8 Flash", "Polish with Gemini 3.8 Flash"])
+        #expect(m.actions.map(\.title) == ["Parakeet v3 · Cloud", "Gemini 3.8 Flash", "Polish with Gemini 3.8 Flash",
+                                           "Translate with Gemini 3.8 Flash"])
     }
 
     @Test func aModelAlreadyUsedIsAVersionNotAnAction() {
@@ -410,7 +412,8 @@ import Testing
         #expect(m.versions.map(\.kind) == [.transcription(.parakeet), .transcription(.geminiFlash), flashLite])
         #expect(m.versions.map(\.isCurrent) == [false, true, false])
         #expect(m.versions[1].summary == "3.0 s · $0.002")
-        #expect(m.actions.map(\.kind) == [.transcription(.parakeetCloud), .polish], "no clean-up, ever")
+        #expect(m.actions.map(\.kind) == [.transcription(.parakeetCloud), .polish, .translation(polished: false)],
+                "no clean-up, ever")
     }
 
     /// Old clean-ups stay versions to switch to; nothing offers another.
@@ -450,7 +453,8 @@ import Testing
     @Test func withoutAKeyCloudActionsSaySo() {
         let m = menu(transcript(.parakeet), key: .missing)
         #expect(m.actions.map(\.title) == ["Parakeet v3 · Cloud · Needs key", "Gemini 3.8 Flash · Needs key",
-                                           "Polish with Gemini 3.8 Flash · Needs key"])
+                                           "Polish with Gemini 3.8 Flash · Needs key",
+                                           "Translate with Gemini 3.8 Flash · Needs key"])
         #expect(action(menu(transcript(.parakeetCloud), key: .invalid("401")), .transcription(.geminiFlash))?.title
                 == "Gemini 3.8 Flash · Key rejected")
         #expect(action(menu(transcript(.parakeetCloud), key: .missing), .transcription(.parakeet))?.isEnabled == true)
@@ -483,8 +487,9 @@ import Testing
                                      audioFileName: "f.wav")
         let m = menu(failed)
         #expect(m.title == "Retry With" && m.isRetry && m.versions.isEmpty)
-        #expect(m.actions.map(\.kind) == EngineID.offered.map { .transcription($0) } + [.polish],
-                "any engine, or Polish")
+        #expect(m.actions.map(\.kind)
+                == EngineID.offered.map { .transcription($0) } + [.polish, .translation(polished: false)],
+                "any engine, Polish or Translate")
         var gone = failed
         gone.audioFileName = nil
         #expect(menu(gone).actions.allSatisfy { $0.blocker == .recordingGone })

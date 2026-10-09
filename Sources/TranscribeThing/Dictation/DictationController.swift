@@ -137,6 +137,8 @@ final class DictationController {
     /// This dictation is polished (`Polish`, fn P while it's on Gemini). It lasts while the dictation records, as
     /// `modelOverride` does: its job keeps it, the next dictation starts without.
     private(set) var isPolishing = false
+    /// This dictation is translated (`Translate`, fn T while it's on Gemini), for as long as Polish would be.
+    private(set) var isTranslating = false
     /// How long a push-to-talk hold lasts before the pill hints at Switch model.
     @ObservationIgnored var switchHintDelay: TimeInterval = 1.5
     /// How long the tap may stay down before the user is told (its own retries and brief drops stay quiet).
@@ -170,6 +172,8 @@ final class DictationController {
     @ObservationIgnored private var cancelledEngines: [UUID: EngineID] = [:]
     /// Kept recordings of polished dictations (canceled or failed): Undo and Retry polish them again.
     @ObservationIgnored private var polishIDs: Set<UUID> = []
+    /// Kept recordings of translated dictations: Undo and Retry translate them again.
+    @ObservationIgnored private var translateIDs: Set<UUID> = []
     /// How the recording under way is dictated, still set once it's over: a canceled one goes to History with it.
     @ObservationIgnored private var recordingMode: DictationMachine.Mode = .pushToTalk
     @ObservationIgnored private var switchHintTask: Task<Void, Never>?
@@ -345,6 +349,16 @@ final class DictationController {
         case .polishRepeat:
             // Held down: Polish on and off again on Gemini; elsewhere the first press has said what it could.
             if machine.isRecording, effectiveChoice == .gemini { send(.polish) }
+        case .translate:
+            // As the polish key: Translate's on Gemini, the selection's translation off it.
+            guard machine.isRecording else { return }
+            if effectiveChoice != .gemini, canTranslateSelection {
+                actOnceSelectionIsKnown(.translate, nil)
+            } else {
+                _ = acted(on: .translate, selection: nil)
+            }
+        case .translateRepeat:
+            if machine.isRecording, effectiveChoice == .gemini { send(.translate) }
         case .heldForSelection(let action, let key):
             actOnceSelectionIsKnown(action, key)
         case .finishHandsFree:
@@ -471,12 +485,14 @@ final class DictationController {
             if modelOverride != nil { modelOverride = nil }
             pickedModel = false
             if isPolishing { isPolishing = false }
+            if isTranslating { isTranslating = false }
         }
         // A hold the main model refused isn't a start (`deferredRefusal`); hands-free taking it over is.
         if (!wasRecording || wasArming) && deferredRefusal == nil || startsAfterRefusal,
            machine.capture.isListeningOrLocked {
             DiagnosticLog.shared.event(.dictation, "dictation.started", [
                 "mode": machine.mode, "model": effectiveChoice, "engine": effectiveEngine, "polish": isPolishing,
+                "translate": isTranslating ? true : nil,
                 "undo": input.isResume ? true : nil, "mic": recorder.lastChoice?.device.transport])
         }
         stateDidChange()
@@ -561,6 +577,8 @@ final class DictationController {
                 advanceEngine()
             case .polish:
                 togglePolish()
+            case .translate:
+                toggleTranslate()
             }
         }
     }
@@ -651,6 +669,7 @@ final class DictationController {
         job.mode = mode
         // The main model may have changed under it (Models, a notice's "Use Parakeet v3"): only Gemini polishes.
         job.polishes = isPolishing && effectiveChoice == .gemini
+        job.translates = isTranslating && effectiveChoice == .gemini
         queue.append(job)
         _ = machine.handle(.jobStarted, now: clock())
         finishingJob = job
@@ -666,7 +685,8 @@ final class DictationController {
     private func captured(_ recording: Recording, for job: Job) {
         if job.isCancelled {
             // Esc during the tail: the job already left the queue and the cancel cue has played.
-            keepCancelled(recording, engine: job.engine, mode: job.mode, polishes: job.polishes, notify: true)
+            keepCancelled(recording, engine: job.engine, mode: job.mode, polishes: job.polishes,
+                          translates: job.translates, notify: true)
             return
         }
         // A new recording may already be running (re-pressed during the tail): keep the cue out of it.
@@ -725,21 +745,22 @@ final class DictationController {
                                        ["seconds": recording?.duration, "voiced": recording?.speech.voicedSeconds])
             guard let recording else { return }
             keepCancelled(recording, engine: effectiveEngine, mode: recordingMode, polishes: isPolishing,
-                          notify: notify)
+                          translates: isTranslating, notify: notify)
         } else if let resumed {
             // A resumed dictation whose mic failed: its audio (the kept part at least) stays for another Undo.
             keepCancelled(recording ?? resumed, engine: effectiveEngine, mode: recordingMode,
-                          polishes: isPolishing, notify: true)
+                          polishes: isPolishing, translates: isTranslating, notify: true)
         }
     }
 
     /// Keeps a canceled recording for Undo (and in history when it's long).
     private func keepCancelled(_ recording: Recording, engine: EngineID, mode: DictationMachine.Mode,
-                               polishes: Bool = false, notify: Bool) {
+                               polishes: Bool = false, translates: Bool = false, notify: Bool) {
         guard recording.duration >= Self.undoMinimumDuration else { return }
         retain(recording)
         cancelledEngines[recording.id] = engine
         if polishes { polishIDs.insert(recording.id) } else { polishIDs.remove(recording.id) }
+        if translates { translateIDs.insert(recording.id) } else { translateIDs.remove(recording.id) }
         lastCancelledID = recording.id
         if recording.duration >= Self.saveCancelledMinimumDuration {
             let file = history.saveAudio(recording)
@@ -852,6 +873,11 @@ final class DictationController {
         var isCancelled = false
         /// A polished dictation (`Polish`): its audio goes to Gemini with Polish's prompt.
         var polishes = false
+        /// A translated dictation (`Translate`): its audio goes to Gemini with Translate's prompt (Polish's translated,
+        /// when it polishes too).
+        var translates = false
+        /// What Gemini writes for it instead of its transcript, if anything.
+        var rewrite: TranscriptVersionKind? { DictationController.rewriteKind(polishes: polishes, translates: translates) }
         /// Held or hands-free: its paste follows General → Pasting's rules for that.
         var mode: DictationMachine.Mode = .pushToTalk
         /// How many tokens its model is thinking or writing, as far as the stream shows (`streamed(_:for:)`): nil until
@@ -880,13 +906,14 @@ final class DictationController {
     /// Starts transcribing right away; the result is pasted at the cursor after every older job's. A
     /// recording that is already queued, being delivered, being recorded on or worked on from Home is never queued
     /// twice.
-    /// `polishes`: a polished dictation, picked up again; `mode`: how it was dictated.
-    func enqueue(_ recording: Recording, engine: EngineID, polishes: Bool = false,
+    /// `polishes`, `translates`: a polished or translated dictation, picked up again; `mode`: how it was dictated.
+    func enqueue(_ recording: Recording, engine: EngineID, polishes: Bool = false, translates: Bool = false,
                  mode: DictationMachine.Mode = .pushToTalk) {
         guard !isInFlight(recording.id) else { return }
         let job = Job(recording: recording, engine: engine)
         job.mode = mode
         job.polishes = polishes && engine == .geminiFlash
+        job.translates = translates && engine == .geminiFlash
         queue.append(job)
         _ = machine.handle(.jobStarted, now: clock())
         run(job)
@@ -906,13 +933,14 @@ final class DictationController {
         job.estimate = TokenEstimate.learned(from: history.entries, modelID: engine.openRouterModelID)
         // Only a streamed answer has tokens to count: Gemini's (Parakeet has none).
         let progress = engine.cloudAPI == .chatCompletions ? streamProgress(for: job, generation: generation) : nil
+        let rewrite = job.rewrite
+        let prompt = rewrite.flatMap(geminiPrompt(for:))
         job.task = Task { [weak self] in
             guard let self else { return }
-            var outcome = await self.transcribe(recording, engine: engine,
-                                                prompt: job.polishes ? Polish.prompt : nil,
-                                                hedge: .race, progress: progress)
+            var outcome = await self.transcribe(recording, engine: engine, prompt: prompt, hedge: .race,
+                                                progress: progress)
             guard !Task.isCancelled, job.generation == generation else { return }
-            if job.polishes, case .success(var result) = outcome {
+            if rewrite?.answersInMessageTags == true, case .success(var result) = outcome {
                 result.text = Polish.message(from: result.text)
                 outcome = .success(result)
             }
@@ -955,7 +983,7 @@ final class DictationController {
 
     /// `background`: Home's work, which lets dictations have the local model first. `progress`: a dictation's, for
     /// the pill (Home never passes one).
-    /// `prompt`: another prompt for Gemini (`Polish.prompt`).
+    /// `prompt`: another prompt for Gemini (Polish's, Translate's: `geminiPrompt(for:)`).
     /// `hedge`: a dictation's cloud request goes twice at once (`CloudHedge.race`); Home's never does.
     private func transcribe(_ recording: Recording, engine: EngineID, prompt: String? = nil, background: Bool = false,
                             hedge: CloudHedge? = nil,
@@ -1051,7 +1079,8 @@ final class DictationController {
         dismissWaitNotice(for: job.id)
         _ = machine.handle(.jobEnded, now: clock())
         if let recording = job.recording {
-            keepCancelled(recording, engine: job.engine, mode: job.mode, polishes: job.polishes, notify: true)
+            keepCancelled(recording, engine: job.engine, mode: job.mode, polishes: job.polishes,
+                          translates: job.translates, notify: true)
         }
         drain()
         return true
@@ -1074,11 +1103,12 @@ final class DictationController {
             forget(job.id)
             // An older notice's Retry or Undo would transcribe it yet again, or record on, now that its audio is kept.
             toasts.dismiss(recordingID: job.id)
-            // The transcript is the entry's one version (a polished dictation's is its polish).
-            let version = result.version(job.polishes ? .polish : nil, text: text)
+            // The transcript is the entry's one version (a polished or translated dictation's is that).
+            let version = result.version(job.rewrite, text: text)
             DiagnosticLog.shared.event(.dictation, "job.finished", [
                 "engine": result.engine, "outcome": "success", "seconds": result.processingTime,
-                "retry": history.entry(id: job.id)?.status == .failed, "polished": job.polishes])
+                "retry": history.entry(id: job.id)?.status == .failed, "polished": job.polishes,
+                "translated": job.translates ? true : nil])
             // Kept as long as the entry, so History can transcribe it again with another model. Saved again even when
             // a failed or canceled row had it: an Undo-resumed dictation's file holds only the part before the cancel.
             history.upsert(TranscriptEntry(
@@ -1157,7 +1187,7 @@ final class DictationController {
     private func deliverSilence(_ job: Job) {
         DiagnosticLog.shared.event(.dictation, "job.finished", [
             "engine": job.engine, "outcome": "noSpeech", "retry": history.entry(id: job.id)?.status == .failed,
-            "polished": job.polishes])
+            "polished": job.polishes, "translated": job.translates ? true : nil])
         forget(job.id)
         let hadRow = history.entry(id: job.id).map { $0.status != .success } ?? false
         if hadRow { history.delete(job.id) }
@@ -1169,10 +1199,12 @@ final class DictationController {
         guard let recording = job.recording else { return }
         DiagnosticLog.shared.event(.dictation, "job.finished", [
             "engine": job.engine, "outcome": "failure", "code": error,
-            "retry": history.entry(id: job.id)?.status == .failed, "polished": job.polishes])
+            "retry": history.entry(id: job.id)?.status == .failed, "polished": job.polishes,
+            "translated": job.translates ? true : nil])
         let file = history.saveAudio(recording)
         retain(recording)
         if job.polishes { polishIDs.insert(job.id) } else { polishIDs.remove(job.id) }
+        if job.translates { translateIDs.insert(job.id) } else { translateIDs.remove(job.id) }
         // Its Retry is the same model: another one for this recording is the user's call, from History.
         let notice = error.notice(recordingID: job.id, fallbackEngine: nil, engine: job.engine)
         history.upsert(TranscriptEntry(
@@ -1365,10 +1397,10 @@ final class DictationController {
     func makeVersion(_ kind: TranscriptVersionKind, of entry: TranscriptEntry) {
         switch kind {
         case .transcription(let engine): retry(entry, with: engine)
-        case .polish: polish(entry)
+        case .polish, .translation: rewrite(entry, as: kind)
         // Nothing makes clean-ups any more (History only reads old ones), and a selection has no recording to make
         // another version from.
-        case .cleanup, .selection: break
+        case .cleanup, .selection, .selectionTranslation: break
         }
     }
 
@@ -1390,45 +1422,66 @@ final class DictationController {
         transcribeInHome(recording, as: kind)
     }
 
-    /// Home's Polish of a row: Gemini on its recording again, with Polish's prompt. Lands as Retry and Transcribe With
-    /// do: a new version of a transcript, or the text of a failed or canceled dictation.
-    private func polish(_ entry: TranscriptEntry) {
+    /// Home's Polish or Translate of a row: Gemini on its recording again, with Polish's or Translate's prompt. Lands
+    /// as Retry and Transcribe With do: a new version of a transcript, or the text of a failed or canceled dictation.
+    private func rewrite(_ entry: TranscriptEntry, as kind: TranscriptVersionKind) {
         let id = entry.id
         guard !isInFlight(id) else { return }
-        if let current = history.entry(id: id), current.status == .success, current.hasVersion(.polish) {
-            showVersion(.polish, of: id)
+        if let current = history.entry(id: id), current.status == .success, current.hasVersion(kind) {
+            showVersion(kind, of: id)
             return
         }
         guard let recording = recording(for: id) else {
-            homeFailures[id] = .recordingGone(.polish)
+            homeFailures[id] = .recordingGone(kind)
             return
         }
-        transcribeInHome(recording, as: .polish)
+        transcribeInHome(recording, as: kind)
     }
 
-    /// Home work on a recording: a transcription by `kind`'s engine, or Polish (Gemini with Polish's prompt), landing
-    /// in the recording's row (`land`).
+    /// Home work on a recording: a transcription by `kind`'s engine, or Gemini's Polish or Translate, landing in the
+    /// recording's row (`land`).
     private func transcribeInHome(_ recording: Recording, as kind: TranscriptVersionKind) {
         let id = recording.id
         let engine = kind.engine
-        let polishes = kind == .polish
+        let made: TranscriptVersionKind? = if case .transcription = kind { nil } else { kind }
+        let prompt = made.flatMap(geminiPrompt(for:))
         beginHomeWork(kind, for: id)
         homeTasks[id] = Task { [weak self] in
             guard let self else { return }
-            var outcome = await self.transcribe(recording, engine: engine, prompt: polishes ? Polish.prompt : nil,
-                                                background: true)
+            var outcome = await self.transcribe(recording, engine: engine, prompt: prompt, background: true)
             guard self.endHomeWork(for: id) else { return }
-            if polishes, case .success(var result) = outcome {
+            if made?.answersInMessageTags == true, case .success(var result) = outcome {
                 result.text = Polish.message(from: result.text)
                 outcome = .success(result)
             }
-            self.land(outcome, of: recording, engine: engine, as: polishes ? .polish : nil)
+            self.land(outcome, of: recording, engine: engine, as: made)
+        }
+    }
+
+    /// Gemini's prompt for a version of a recording other than its plain transcript: Polish's, Translate's (to the
+    /// pair in General → Translate), or both at once. nil for a transcription, which takes the engine's own.
+    func geminiPrompt(for kind: TranscriptVersionKind) -> String? {
+        switch kind {
+        case .polish: Polish.prompt
+        case .translation(polished: false): Translate.prompt(settings.translationPair)
+        case .translation(polished: true): Translate.polishedPrompt(settings.translationPair)
+        case .transcription, .cleanup, .selection, .selectionTranslation: nil
+        }
+    }
+
+    /// What Gemini writes for a dictation with Polish and Translate on or off: its transcript (nil), Polish's message,
+    /// the translation, or the message translated.
+    nonisolated static func rewriteKind(polishes: Bool, translates: Bool) -> TranscriptVersionKind? {
+        switch (polishes, translates) {
+        case (false, false): nil
+        case (true, false): .polish
+        case (_, true): .translation(polished: polishes)
         }
     }
 
     /// An audio or video file dropped on Home (or picked with Transcribe File…): it becomes a History row of its own,
-    /// as a dictation would, marked with the file's name, and `kind` (a transcription, or Polish) makes its first
-    /// version as Home work. From there it's a row like any other: Transcribe With, Polish, Retry. It pastes nothing.
+    /// as a dictation would, marked with the file's name, and `kind` (a transcription, Polish or Translate) makes its
+    /// first version as Home work. From there it's a row like any other: Transcribe With, Polish, Retry. It pastes nothing.
     func transcribe(_ file: ImportedAudio, as kind: TranscriptVersionKind) {
         guard !kind.isCleanup, !kind.isSelection else { return }
         var recording = Recording(samples: file.samples, startedAt: Date(), speech: file.speech)
@@ -1439,7 +1492,7 @@ final class DictationController {
             id: recording.id, createdAt: recording.startedAt, text: "", engine: kind.engine, status: .cancelled,
             audioDuration: recording.duration, voicedSeconds: file.speech.voicedSeconds, audioFileName: audioFileName,
             importedFrom: file.fileName))
-        DiagnosticLog.shared.event(.dictation, "home.imported", ["seconds": recording.duration, "polish": kind == .polish])
+        DiagnosticLog.shared.event(.dictation, "home.imported", ["seconds": recording.duration, "kind": kind.rawValue])
         transcribeInHome(recording, as: kind)
     }
 
@@ -1514,7 +1567,7 @@ final class DictationController {
             }
             resolveGeneration(of: version, entryID: id)
             DiagnosticLog.shared.event(.dictation, "home.finished", [
-                "engine": result.engine, "polish": made == .polish, "outcome": "success",
+                "engine": result.engine, "made": made?.rawValue ?? "transcription", "outcome": "success",
                 "seconds": result.processingTime])
             return
         case .failure(let error):
@@ -1522,7 +1575,7 @@ final class DictationController {
         }
         Log.engine.error("Home transcription failed: \(failure.code, privacy: .public)")
         DiagnosticLog.shared.event(.dictation, "home.finished",
-                                   ["engine": engine, "polish": made == .polish, "outcome": "failure", "code": failure])
+                                   ["engine": engine, "made": made?.rawValue ?? "transcription", "outcome": "failure", "code": failure])
         let kind = made ?? .transcription(engine)
         guard entry.status != .success else {
             homeFailures[id] = HomeFailure(kind: kind, reason: Self.homeFailureReason(failure, making: kind))
@@ -1548,7 +1601,8 @@ final class DictationController {
         case (.timeout?, _): "It took too long."
         case (.openRouterTruncated?, _): "It stopped before finishing."
         // A clean-up is never made any more: it only completes the switch.
-        case (let error?, .polish), (let error?, .selection), (let error?, .cleanup):
+        case (let error?, .polish), (let error?, .selection), (let error?, .cleanup), (let error?, .translation),
+             (let error?, .selectionTranslation):
             accountFailureReason(error) ?? error.notice(recordingID: nil, fallbackEngine: nil, engine: kind.engine).title
         case (.openRouterRefused?, _), (.openRouterBadRequest?, _): "It couldn’t process this recording."
         case (.engineFailed?, _): "It ran into a problem."
@@ -1601,7 +1655,7 @@ final class DictationController {
             return
         }
         let chosen = engine ?? history.entry(id: id)?.engine ?? settings.mainEngine
-        enqueue(recording, engine: chosen, polishes: polishIDs.contains(id),
+        enqueue(recording, engine: chosen, polishes: polishIDs.contains(id), translates: translateIDs.contains(id),
                 mode: history.entry(id: id)?.mode ?? .pushToTalk)
     }
 
@@ -1626,6 +1680,7 @@ final class DictationController {
         // The same dictation goes on, with the model it had; `send` drops it if the mic won't start.
         modelOverride = choice == settings.lineup.main ? nil : choice
         isPolishing = polishIDs.contains(id)
+        isTranslating = translateIDs.contains(id)
         send(.resume(prefix: recording.duration))
         resumeRequest = nil
         if continuing?.id != id {
@@ -1838,6 +1893,7 @@ final class DictationController {
             retained[evicted] = nil
             cancelledEngines[evicted] = nil
             polishIDs.remove(evicted)
+            translateIDs.remove(evicted)
         }
         // Past `retainedSecondsLimit` of audio, the oldest recordings whose audio History keeps on disk let go of
         // their samples (Undo and Retry read them back, and keep their model); the newest always stays.
@@ -1857,6 +1913,7 @@ final class DictationController {
         retainedOrder.removeAll { $0 == id }
         cancelledEngines[id] = nil
         polishIDs.remove(id)
+        translateIDs.remove(id)
     }
 
     // MARK: - Switch model
@@ -1917,12 +1974,13 @@ final class DictationController {
 
     /// Hands-free switches to `AppSettings.handsFreeModel` as it starts, as Switch model would but without its tick:
     /// the lock cue is the one sound. A model already picked for this dictation (Switch model while holding the key,
-    /// even back to the main one) stays, and so does Gemini with Polish on; one that can't take it now is refused as
+    /// even back to the main one) stays, and so does Gemini with Polish or Translate on; one that can't take it now is refused as
     /// Switch model would.
     /// Hands-free would switch this push-to-talk hold to its own model, and that one can start: a hold the main model
     /// refused may still become a dictation (fn Space, or a double press).
     private var handsFreeCouldTakeOver: Bool {
-        guard machine.mode == .pushToTalk, let choice = settings.handsFreeChoice, !pickedModel, !isPolishing else {
+        guard machine.mode == .pushToTalk, let choice = settings.handsFreeChoice, !pickedModel, !isPolishing,
+              !isTranslating else {
             return false
         }
         return switchRefusal(choice) == nil
@@ -1950,7 +2008,7 @@ final class DictationController {
     }
 
     private func switchToHandsFreeModel() {
-        guard let choice = settings.handsFreeChoice, !pickedModel, !isPolishing else { return }
+        guard let choice = settings.handsFreeChoice, !pickedModel, !isPolishing, !isTranslating else { return }
         if let refusal = switchRefusal(choice) {
             rejectSwitch(blocked: [(choice, refusal)])
             return
@@ -1968,6 +2026,14 @@ final class DictationController {
         playCue(isPolishing ? .polishOn : .polishOff)
     }
 
+    /// The translate shortcut while dictating: Translate on for this dictation (its glyph in the pill), or off when
+    /// pressed again. On Gemini only, as Polish; with Polish on too, the polished message comes out translated.
+    private func toggleTranslate() {
+        guard effectiveChoice == .gemini else { return }
+        isTranslating.toggle()
+        playCue(isTranslating ? .polishOn : .polishOff)
+    }
+
     // MARK: - Polish Selection
 
     /// Polish Selection's cards, one per model, by their dedupe keys: "polish.selection.geminiFlash".
@@ -1983,10 +2049,11 @@ final class DictationController {
         return PolishSelectionModel(rawValue: String(notice.dedupeKey.dropFirst(selectionCardPrefix.count)))
     }
 
-    /// Polish Selection: the models asked (`PolishSelectionModel.asked`), how far each has streamed, and the History
-    /// entry their answers land in. `settled` once an answer is pasted or the cards are closed: what comes after is
-    /// dropped.
+    /// Polish Selection, or the selection translated (`translates`): the models asked (`PolishSelectionModel.asked`),
+    /// how far each has streamed, and the History entry their answers land in. `settled` once an answer is pasted or
+    /// the cards are closed: what comes after is dropped.
     final class SelectionPolish {
+        let translates: Bool
         var pending: Set<PolishSelectionModel>
         let estimates: [PolishSelectionModel: TokenEstimate]
         var counts: [PolishSelectionModel: PillTokenCount] = [:]
@@ -1996,13 +2063,18 @@ final class DictationController {
         /// An answer was copied: the user took it elsewhere, so ↩ goes back to the app.
         var copied = false
 
-        init(estimates: [PolishSelectionModel: TokenEstimate]) {
+        init(estimates: [PolishSelectionModel: TokenEstimate], translates: Bool = false) {
+            self.translates = translates
             self.pending = Set(estimates.keys)
             self.estimates = estimates
         }
 
         /// The pill shows the polish while a model still writes.
         var isRunning: Bool { !pending.isEmpty && !settled }
+        /// The version its answers are: a selection's polish or its translation.
+        func kind(_ model: PolishSelectionModel) -> TranscriptVersionKind {
+            translates ? .selectionTranslation(model) : .selection(model)
+        }
         /// The count the pill shows: the first model's that still writes.
         var count: PillTokenCount? {
             PolishSelectionModel.asked.first { pending.contains($0) && counts[$0] != nil }.flatMap { counts[$0] }
@@ -2013,6 +2085,11 @@ final class DictationController {
     /// stays the app's and no hint promises a polish that would only fail).
     private var canPolishSelection: Bool {
         settings.shortcuts[.polish] != nil && openRouterKeyProblem == nil
+    }
+
+    /// The selection can be translated: the translate key is bound, and the OpenRouter key can pay for it.
+    private var canTranslateSelection: Bool {
+        settings.shortcuts[.translate] != nil && openRouterKeyProblem == nil
     }
 
     /// fn D can add the selection to the dictionary: its key is bound (with a key: a modifier-only binding can't be
@@ -2075,15 +2152,21 @@ final class DictationController {
     }
 
     /// What a key for the selection does once the selection is known; false when it does nothing, and goes to the
-    /// app. The polish key never does: where it can't polish, it says so.
+    /// app. The polish and translate keys never do: where they can't work, they say so.
     private func acted(on action: ShortcutAction, selection: String?) -> Bool {
         switch action {
         case .polish where effectiveChoice == .gemini:
             send(.polish)
         case .polish where canPolishSelection && selection != nil:
-            polishSelection(selection ?? "")
+            rewriteSelection(selection ?? "", translates: false)
         case .polish:
             explainPolish()
+        case .translate where effectiveChoice == .gemini:
+            send(.translate)
+        case .translate where canTranslateSelection && selection != nil:
+            rewriteSelection(selection ?? "", translates: true)
+        case .translate:
+            explainTranslate()
         case .addToDictionary where selection != nil:
             addToDictionary(selection ?? "")
         default:
@@ -2097,6 +2180,13 @@ final class DictationController {
     private func explainPolish() {
         send(.keyUsed)
         showKeyHint(canPolishSelection ? "Polish works on Gemini, or on selected text" : "Polish works on Gemini only")
+    }
+
+    /// The translate key where it can't translate, as the polish key's `explainPolish`.
+    private func explainTranslate() {
+        send(.keyUsed)
+        showKeyHint(canTranslateSelection ? "Translate works on Gemini, or on selected text"
+                        : "Translate works on Gemini only")
     }
 
     /// Accessibility couldn't say what's selected, but ⌘C can: the app shows no focused element (Chrome, Electron
@@ -2173,18 +2263,20 @@ final class DictationController {
         return lookup
     }
 
-    /// The polish key over selected text: the dictation gives way without a trace (the cancel cue, then Polish's sound),
-    /// the pill turns into the polish, and the selection goes to Gemini 3.8 Flash
-    /// (`PolishSelectionModel.asked`). Its message comes up on a card, to paste over the selection or copy, and History
-    /// keeps it.
-    private func polishSelection(_ text: String) {
+    /// The polish key over selected text (or the translate key, `translates`): the dictation gives way without a
+    /// trace (the cancel cue, then Polish's sound), the pill turns into the polish, and the selection goes to Gemini
+    /// 3.8 Flash (`PolishSelectionModel.asked`). Its message (or translation) comes up on a card, to paste over the
+    /// selection or copy, and History keeps it.
+    private func rewriteSelection(_ text: String, translates: Bool) {
         settleSelection()
         let entries = history.entries
         let work = SelectionPolish(estimates: Dictionary(uniqueKeysWithValues: PolishSelectionModel.asked.map {
             ($0, TokenEstimate.learned(from: entries, modelID: $0.route?.model))
-        }))
+        }), translates: translates)
         selectionPolish = work
-        DiagnosticLog.shared.event(.dictation, "selection.polish", ["characters": text.count])
+        let prompt = translates ? Translate.textPrompt(settings.translationPair) : Polish.textPrompt
+        DiagnosticLog.shared.event(.dictation, translates ? "selection.translate" : "selection.polish",
+                                   ["characters": text.count])
         // The chip would come back over the polish, naming the dictation's model.
         pillModel.endChipFlash()
         playCue(.cancel)
@@ -2211,8 +2303,7 @@ final class DictationController {
                     let result = if let override {
                         try await override(text, model)
                     } else if let route = model.route {
-                        try await transcription.polishText(text, route: route, prompt: Polish.textPrompt,
-                                                           progress: progress)
+                        try await transcription.polishText(text, route: route, prompt: prompt, progress: progress)
                     } else {
                         throw AppError.engineFailed(.geminiFlash, "\(model.modelName) no longer polishes.")
                     }
@@ -2245,7 +2336,7 @@ final class DictationController {
             DiagnosticLog.shared.event(.dictation, "selection.finished", [
                 "model": model.rawValue, "outcome": "success", "seconds": result.processingTime,
                 "words": message.split(whereSeparator: \.isWhitespace).count])
-            let version = result.version(.selection(model), text: message)
+            let version = result.version(work.kind(model), text: message)
             if let id = work.entryID {
                 // Deleted from History while this model wrote: the answer comes up on its card only.
                 if var entry = history.entry(id: id) {
@@ -2259,31 +2350,35 @@ final class DictationController {
                 work.entryID = entry.id
                 resolveGeneration(of: version, entryID: entry.id)
             }
-            toasts.post(Self.selectionCard(message, by: model))
+            toasts.post(Self.selectionCard(message, by: model, translated: work.translates))
         case .failure(let error):
             Log.engine.error("Polish Selection failed: \(error.code, privacy: .public)")
             DiagnosticLog.shared.event(.dictation, "selection.finished",
                                        ["model": model.rawValue, "outcome": "failure", "code": error.code])
-            selectionFailed(model, reason: Self.homeFailureReason(error, making: .selection(model)))
+            selectionFailed(model, reason: Self.homeFailureReason(error, making: work.kind(model)))
         }
     }
 
     private func selectionFailed(_ model: PolishSelectionModel, reason: String) {
         // Only a pill that shows the polish shakes: not a dictation recording or transcribing meanwhile.
         if !machine.isRecording, !hasPendingWork { pillModel.shakeTrigger += 1 }
+        let translates = selectionPolish?.translates == true
         toasts.post(Notice(dedupeKey: "polish.selection.failed.\(model.rawValue)", style: .warning,
-                           symbol: "wand.and.sparkles", title: "Couldn’t polish with \(model.modelName)", body: reason,
+                           symbol: translates ? "translate" : "wand.and.sparkles",
+                           title: "Couldn’t \(translates ? "translate" : "polish") with \(model.modelName)", body: reason,
                            lifetime: .seconds(8), sound: .alert))
     }
 
-    /// "Polished by Gemini 3.8 Flash": the message, Paste Here (over the selection still selected) and Copy. Up for
-    /// 6 s and a second for every 20 words, longer while the pointer is over it. ↩ pastes it while it's the only one,
-    /// Esc closes every one.
-    nonisolated static func selectionCard(_ text: String, by model: PolishSelectionModel) -> Notice {
+    /// "Polished by Gemini 3.8 Flash" ("Translated by…"): the message, Paste Here (over the selection still selected)
+    /// and Copy. Up for 6 s and a second for every 20 words, longer while the pointer is over it. ↩ pastes it while
+    /// it's the only one, Esc closes every one.
+    nonisolated static func selectionCard(_ text: String, by model: PolishSelectionModel,
+                                          translated: Bool = false) -> Notice {
         let words = text.split(whereSeparator: \.isWhitespace).count
         let seconds = (6 + Double(words) / 20) * ToastCountdown.speed
-        return Notice(dedupeKey: selectionCardKey(model), style: .info, symbol: "wand.and.sparkles",
-                      title: "Polished by \(model.modelName)", transcript: text,
+        return Notice(dedupeKey: selectionCardKey(model), style: .info,
+                      symbol: translated ? "translate" : "wand.and.sparkles",
+                      title: "\(translated ? "Translated" : "Polished") by \(model.modelName)", transcript: text,
                       actions: [NoticeAction(title: "Paste Here", kind: .pasteText(text, by: nil, in: .pushToTalk),
                                              isPrimary: true),
                                 NoticeAction(title: "Copy", kind: .copyText(text))],
@@ -2308,8 +2403,8 @@ final class DictationController {
     private func selectionPicked(_ model: PolishSelectionModel, pasted: Bool) {
         DiagnosticLog.shared.event(.dictation, "selection.picked", ["model": model.rawValue,
                                                                    "how": pasted ? "pasted" : "copied"])
-        if let id = selectionPolish?.entryID, history.entry(id: id)?.hasVersion(.selection(model)) == true {
-            history.selectVersion(.selection(model), of: id)
+        if let work = selectionPolish, let id = work.entryID, history.entry(id: id)?.hasVersion(work.kind(model)) == true {
+            history.selectVersion(work.kind(model), of: id)
         }
         if pasted {
             settleSelection()
@@ -2413,11 +2508,12 @@ final class DictationController {
     }
 
     /// Another choice for this dictation: the pill's chip, and for the user's own
-    /// pick a soft tick. Polish goes off away from Gemini.
+    /// pick a soft tick. Polish and Translate go off away from Gemini.
     private func switchModel(to choice: ModelChoice?, byUser: Bool = true) {
         modelOverride = choice
         if byUser { pickedModel = true }
         if isPolishing, effectiveChoice != .gemini { isPolishing = false }
+        if isTranslating, effectiveChoice != .gemini { isTranslating = false }
         pillModel.engineChipPulse &+= 1
         if pillModel.showsTabHint { pillModel.showsTabHint = false }
         if byUser { playCue(.modelSwitch) }
@@ -2589,11 +2685,15 @@ final class DictationController {
         }
         if pillModel.sessionModel != session { pillModel.sessionModel = session }
         // A dictation in flight speaks for the processing pill before a selection's polish does.
+        let selectionTranslates = selectionPolish?.translates == true
         let polishes = phase.isRecording ? isPolishing && effectiveChoice == .gemini
-            : phase == .processing && (pillJob.map(\.polishes) ?? selectionRuns)
+            : phase == .processing && (pillJob.map(\.polishes) ?? (selectionRuns && !selectionTranslates))
         if pillModel.polishes != polishes { pillModel.polishes = polishes }
+        let translates = phase.isRecording ? isTranslating && effectiveChoice == .gemini
+            : phase == .processing && (pillJob.map(\.translates) ?? (selectionRuns && selectionTranslates))
+        if pillModel.translates != translates { pillModel.translates = translates }
         // No job on the pill: the polish is the selection's, with no audio behind it.
-        let selectionPolishing = polishes && phase == .processing && pillJob == nil
+        let selectionPolishing = (polishes || translates) && phase == .processing && pillJob == nil
         if pillModel.selectionPolishing != selectionPolishing { pillModel.selectionPolishing = selectionPolishing }
         // The same job's count: with several in flight, the newest one's.
         let count = phase == .processing ? (pillJob.map(\.count) ?? (selectionRuns ? selectionPolish?.count : nil)) : nil
@@ -2624,7 +2724,7 @@ final class DictationController {
         if pendingJobCount != count { pendingJobCount = count }
         var running = homeWork
         for job in (deliveringJob.map { [$0] } ?? []) + queue where job.recording != nil {
-            running[job.id] = job.polishes ? .polish : .transcription(job.engine)
+            running[job.id] = job.rewrite ?? .transcription(job.engine)
         }
         if runningVersions != running { runningVersions = running }
         refreshPill()

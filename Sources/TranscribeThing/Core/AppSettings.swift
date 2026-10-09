@@ -117,6 +117,11 @@ final class AppSettings {
     func removesFinalPeriod(by model: ModelChoice, in mode: DictationMachine.Mode) -> Bool {
         modelsRemovingFinalPeriod.contains(model) && modesRemovingFinalPeriod.contains(mode)
     }
+    /// The two languages Translate (fn T) goes between (General → Translate). Two different languages: picking one the
+    /// other already has swaps them.
+    var translationPair: TranslationPair = .default {
+        didSet { store.setJSON(translationPair, .translationPair) }
+    }
     /// Words, names and terms Gemini 3.8 Flash gets as a hint, with their spelling (Hub → Dictionary, fn D).
     var dictionary = UserDictionary() {
         didSet {
@@ -304,6 +309,8 @@ final class AppSettings {
         if let v: [String] = store.json(.modesRemovingFinalPeriod) {
             modesRemovingFinalPeriod = DictationMachine.Mode.read(v)
         }
+        // A language this build doesn't know (from a newer one) leaves the default pair.
+        if let v: TranslationPair = store.json(.translationPair), v.first != v.second { translationPair = v }
         if let v: UserDictionary = store.json(.dictionary) {
             var loaded = v
             if let grouping: UserDictionary.Grouping = store.json(.dictionaryGroups) { loaded.grouping = grouping }
@@ -432,7 +439,7 @@ enum SettingsKey: String, CaseIterable {
     case polishMovedToFnP, showsPillHints
     /// The day-old switches of asking twice (`CloudHedge`), removed at load: every dictation asks twice now.
     case sendsTwice, measuresSendingTwice
-    case polishSelectionModel
+    case polishSelectionModel, translationPair
 
     var defaultsKey: String { "tt.\(rawValue)" }
 }

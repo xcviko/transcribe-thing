@@ -189,7 +189,8 @@ private let historyFile = #"""
         let m = menu(try entries()[0])
         #expect(m.versions.map(\.title) == ["Parakeet v3", "Parakeet v3 + Clean-up by GPT-6 Luna"])
         #expect(m.versions.map(\.isCurrent) == [false, true])
-        #expect(m.actions.map(\.kind) == [.transcription(.parakeetCloud), .transcription(.geminiFlash), .polish])
+        #expect(m.actions.map(\.kind) == [.transcription(.parakeetCloud), .transcription(.geminiFlash), .polish,
+                                          .translation(polished: false)])
         #expect(!m.actions.contains { $0.kind.isCleanup || $0.title.contains("Clean Up") })
     }
 

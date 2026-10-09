@@ -14,6 +14,10 @@ enum HotkeyEvent: Equatable, Sendable {
     case polish
     /// Its key held down: an autorepeat, which turns Polish on and off again on Gemini (and does nothing elsewhere).
     case polishRepeat
+    /// The translate shortcut, during a dictation: Translate on or off for it, or the selection translated.
+    case translate
+    /// Its key held down: Translate on and off again on Gemini (and nothing elsewhere).
+    case translateRepeat
     /// Return during a hands-free dictation: finish it, as fn does (`AppSettings.returnFinishesHandsFree`).
     case finishHandsFree
     /// A key the tap held for the selection (Add to dictionary's: it reads what's selected now). What the key does with

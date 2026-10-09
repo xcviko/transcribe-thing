@@ -35,6 +35,7 @@ enum KeyCode {
     static let ansiV = UInt16(kVK_ANSI_V)               // 9
     static let ansiD = UInt16(kVK_ANSI_D)               // 2
     static let ansiP = UInt16(kVK_ANSI_P)               // 35
+    static let ansiT = UInt16(kVK_ANSI_T)               // 17
     static let ansiC = UInt16(kVK_ANSI_C)               // 8
     static let f13 = UInt16(kVK_F13)                    // 105
 
@@ -195,6 +196,7 @@ struct Shortcut: Codable, Hashable, Sendable {
     static let fnReturn = Shortcut(modifiers: [.init(.function)], keyCode: KeyCode.returnKey)
     static let fnD = Shortcut(modifiers: [.init(.function)], keyCode: KeyCode.ansiD)
     static let fnP = Shortcut(modifiers: [.init(.function)], keyCode: KeyCode.ansiP)
+    static let fnT = Shortcut(modifiers: [.init(.function)], keyCode: KeyCode.ansiT)
     static let escape = Shortcut(modifiers: [], keyCode: KeyCode.escape)
     static let commandFnV = Shortcut(modifiers: [.init(.command), .init(.function)], keyCode: KeyCode.ansiV)
     static let rightOption = Shortcut(modifiers: [.init(.option, .right)])
@@ -277,13 +279,16 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
     case polish
     /// While dictating with text selected: the selection goes into the user's dictionary (`UserDictionary`).
     case addToDictionary
+    /// Translate this dictation (`Translate`) while it's on Gemini; off Gemini, with text selected, that text
+    /// translated. Declared last: bindings are stored in declaration order.
+    case translate
 
     var id: String { rawValue }
 
     /// Live only while a dictation records: outside one its keys reach apps.
     var isDuringDictation: Bool {
         switch self {
-        case .switchModel, .polish, .addToDictionary: true
+        case .switchModel, .polish, .addToDictionary, .translate: true
         case .pushToTalk, .handsFree, .pasteLast: false
         }
     }
@@ -296,6 +301,7 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
         case .switchModel: "Switch model"
         case .polish: "Polish"
         case .addToDictionary: "Add to dictionary"
+        case .translate: "Translate"
         }
     }
 
@@ -305,6 +311,7 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
         case .switchModel: "While you dictate."
         case .polish: "On Gemini, the message you meant. With text selected, that text polished."
         case .addToDictionary: "With a word selected, while you dictate."
+        case .translate: "On Gemini, your dictation translated. With text selected, that text translated."
         case .pushToTalk, .handsFree, .pasteLast: nil
         }
     }
@@ -317,6 +324,7 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
         case .switchModel: "sparkles"
         case .polish: "wand.and.sparkles"
         case .addToDictionary: "character.book.closed"
+        case .translate: "translate"
         }
     }
 
@@ -344,6 +352,7 @@ struct ShortcutBindings: Codable, Equatable, Sendable {
         // P for Polish, D for Dictionary; ↩ is kept for finishing hands-free (`AppSettings.returnFinishesHandsFree`).
         .polish: .fnP,
         .addToDictionary: .fnD,
+        .translate: .fnT,
     ])
 
     subscript(_ action: ShortcutAction) -> Shortcut? {

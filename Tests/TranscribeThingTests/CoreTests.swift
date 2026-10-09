@@ -198,6 +198,7 @@ import Testing
         .switchModel: .fnTab,
         .polish: .fnP,
         .addToDictionary: .fnD,
+        .translate: .fnT,
     ])
 
     @Test func conflictsAndSwap() {

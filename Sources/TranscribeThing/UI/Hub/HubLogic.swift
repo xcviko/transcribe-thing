@@ -244,6 +244,9 @@ struct VersionsMenu: Equatable {
             case .cleanup: kind.displayName
             case .polish: "Polish with \(EngineID.geminiFlash.modelName)"
             case .selection(let model): "Polish with \(model.modelName)"
+            case .translation(polished: false): "Translate with \(EngineID.geminiFlash.modelName)"
+            case .translation(polished: true): "Polish and Translate with \(EngineID.geminiFlash.modelName)"
+            case .selectionTranslation(let model): "Translate with \(model.modelName)"
             }
         }
         /// `name`, with the reason when it can't run: "Gemini 3.8 Flash · Needs key".
@@ -292,6 +295,13 @@ struct VersionsMenu: Equatable {
                 ?? readiness(.geminiFlash).unavailableReason.map(Blocker.engine)
             actions.append(Action(kind: .polish, blocker: blocker))
         }
+        // Translate: Gemini on the recording again, writing it in the other language (`Translate`).
+        let translation = TranscriptVersionKind.translation(polished: false)
+        if isRetry || !entry.hasVersion(translation) {
+            let blocker = busy ?? (hasAudio ? nil : .recordingGone)
+                ?? readiness(.geminiFlash).unavailableReason.map(Blocker.engine)
+            actions.append(Action(kind: translation, blocker: blocker))
+        }
         let runningTitle = running.map(\.progressTitle)
         return VersionsMenu(isRetry: isRetry, title: title(for: entry), versions: versions, actions: actions,
                             runningTitle: runningTitle)
@@ -304,11 +314,11 @@ struct VersionsMenu: Equatable {
 }
 
 /// What a file dropped on Home can be transcribed with (`ImportedAudio`): each offered engine, the main model's first,
-/// then Polish with Gemini. Each says why it can't run right now, as the Versions menu's actions do.
+/// then Polish and Translate with Gemini. Each says why it can't run right now, as the Versions menu's actions do.
 enum ImportChoices {
     static func make(main: EngineID, readiness: (EngineID) -> EngineReadiness) -> [VersionsMenu.Action] {
         let engines = EngineID.offered.filter { $0 == main } + EngineID.offered.filter { $0 != main }
-        let kinds = engines.map(TranscriptVersionKind.transcription) + [.polish]
+        let kinds = engines.map(TranscriptVersionKind.transcription) + [.polish, .translation(polished: false)]
         return kinds.map { kind in
             VersionsMenu.Action(kind: kind, blocker: readiness(kind.engine).unavailableReason.map(VersionsMenu.Blocker.engine))
         }
