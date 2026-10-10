@@ -159,3 +159,118 @@ import Testing
         #expect(Set(choices.map(\.kind)).count == choices.count)
     }
 }
+
+// MARK: - Reading and asking
+
+/// What happens between a drop and the model dialog, whichever page is showing (`FileImport` lives with the Hub).
+@MainActor
+@Suite(.serialized) struct FileImportTests {
+    private final class Started {
+        var files: [(name: String, kind: TranscriptVersionKind)] = []
+    }
+
+    /// Each file reads in `delay`; a ".txt" isn't audio. Every model is ready unless `ready` says otherwise.
+    private static func make(delay: Duration = .milliseconds(20), ready: Bool = true) -> (FileImport, Started) {
+        let imports = FileImport()
+        let started = Started()
+        imports.settle = .zero
+        imports.read = { url async throws(ImportedAudio.ReadError) -> ImportedAudio in
+            try? await Task.sleep(for: delay)
+            guard url.pathExtension != "txt" else { throw .unreadable }
+            return ImportedAudio(fileName: url.lastPathComponent, samples: Array(repeating: 0.1, count: 64_000),
+                                 speech: SpeechStats(voicedSeconds: 3, peakDBFS: -10, isSilent: false))
+        }
+        imports.choices = { seconds in
+            ImportChoices.make(main: .parakeet, seconds: seconds) { _ in ready ? .ready : .needsKey }
+        }
+        imports.start = { file, kind in started.files.append((file.fileName, kind)) }
+        return (imports, started)
+    }
+
+    private static func url(_ name: String) -> URL { URL(fileURLWithPath: "/tmp/\(name)") }
+
+    /// A second drop (or ⌘O) while the first files are read isn't ignored: its files join theirs, in one dialog.
+    @Test func filesAddedWhileOthersAreReadJoinTheirBatch() async throws {
+        let (imports, started) = Self.make()
+        imports.add([Self.url("one.mp3")])
+        imports.add([Self.url("two.m4a")])
+        #expect(imports.reading == ["one.mp3", "two.m4a"])
+        try await waitUntil { imports.prompt == .models }
+        #expect(imports.pending.map(\.fileName) == ["one.mp3", "two.m4a"] && imports.reading.isEmpty)
+        imports.transcribe(imports.pending, as: .transcription(.parakeet))
+        #expect(started.files.map(\.name) == ["one.mp3", "two.m4a"])
+        #expect(started.files.allSatisfy { $0.kind == .transcription(.parakeet) })
+        #expect(imports.pending.isEmpty && imports.prompt == nil)
+    }
+
+    /// Files read while the dialog is up are asked about with the ones it shows.
+    @Test func filesAddedWhileTheDialogIsUpJoinIt() async throws {
+        let (imports, _) = Self.make()
+        imports.add([Self.url("one.mp3")])
+        try await waitUntil { imports.prompt == .models }
+        imports.add([Self.url("two.mp3")])
+        try await waitUntil { imports.pending.count == 2 && imports.prompt == .models }
+        imports.dialogDismissed()
+        #expect(imports.pending.isEmpty && imports.prompt == nil)
+    }
+
+    /// A file that can't be read is said first; the dialog for the others follows once the alert is dismissed.
+    @Test func aFileThatCantBeReadIsSaidBeforeTheDialog() async throws {
+        let (imports, started) = Self.make()
+        imports.settle = .milliseconds(10)
+        imports.add([Self.url("talk.mp3"), Self.url("notes.txt")])
+        try await waitUntil { imports.prompt == .problem }
+        #expect(imports.problem?.title == "Can’t transcribe “notes.txt”")
+        #expect(imports.pending.map(\.fileName) == ["talk.mp3"])
+        imports.problemDismissed()
+        #expect(imports.prompt == nil, "the alert goes before the dialog comes")
+        try await waitUntil { imports.prompt == .models }
+        #expect(imports.problem == nil && started.files.isEmpty)
+    }
+
+    @Test func noModelReadySaysSoAndKeepsNothing() async throws {
+        let (imports, _) = Self.make(ready: false)
+        imports.add([Self.url("talk.mp3")])
+        try await waitUntil { imports.prompt == .problem }
+        #expect(imports.problem == FileImport.Problem(title: "No model can transcribe it right now",
+                                                      message: "Needs key. Set one up in Models."))
+        #expect(imports.pending.isEmpty)
+        imports.problemDismissed()
+        #expect(imports.prompt == nil && imports.problem == nil)
+    }
+}
+
+// MARK: - Too long for Gemini
+
+@Suite struct GeminiLengthTests {
+    /// One Gemini request holds just under 1 h 48 min (16 kbps AAC in 19 MB of base64); Parakeet takes any length.
+    @Test func oneRequestHoldsAboutAnHourAndThreeQuarters() {
+        let limit = CloudAudio.maxChatSeconds()
+        #expect(limit > 6_400 && limit < 6_500)
+        #expect(CloudAudio.fitsChat(seconds: limit) && !CloudAudio.fitsChat(seconds: limit + 1))
+        #expect(CloudAudio.fitsChat(seconds: 3_600))
+    }
+
+    /// A file past it isn't offered Gemini, Polish or Translate; Parakeet still is.
+    @Test func aLongFileIsOfferedOnlyParakeet() {
+        let choices = ImportChoices.make(main: .geminiFlash, seconds: 2 * 3_600) { _ in .ready }
+        let gemini = choices.filter { $0.kind.engine.cloudAPI == .chatCompletions }
+        #expect(gemini.map(\.kind) == [.transcription(.geminiFlash), .polish, .translation(polished: false)])
+        #expect(gemini.allSatisfy { $0.blocker == .tooLongForGemini })
+        #expect(gemini.first?.title == "Gemini 3.8 Flash · Too long, Parakeet takes any length")
+        #expect(choices.filter(\.isEnabled).map(\.kind) == [.transcription(.parakeet), .transcription(.parakeetCloud)])
+        let hour = ImportChoices.make(main: .geminiFlash, seconds: 3_600) { _ in .ready }
+        #expect(hour.allSatisfy { $0.isEnabled })
+    }
+
+    /// A long row's Versions menu says the same of Gemini's actions.
+    @Test func aLongRowsVersionsMenuPointsAtParakeet() {
+        let entry = TranscriptEntry(text: "a podcast", engine: .parakeet, audioDuration: 3 * 3_600,
+                                    voicedSeconds: 10_000, audioFileName: "x.m4a", importedFrom: "episode.mp3")
+        let menu = VersionsMenu.make(for: entry, running: nil) { _ in .ready }
+        #expect(menu.actions.first { $0.kind == .transcription(.parakeetCloud) }?.isEnabled == true)
+        for kind: TranscriptVersionKind in [.transcription(.geminiFlash), .polish, .translation(polished: false)] {
+            #expect(menu.actions.first { $0.kind == kind }?.blocker == .tooLongForGemini)
+        }
+    }
+}

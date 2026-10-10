@@ -72,10 +72,26 @@ enum CloudAudio {
     /// OpenRouter finds too large comes back as `recordingTooLarge`.
     static func aacBitRate(seconds: TimeInterval, budget: Int) -> Int {
         for bitRate in [32_000, 24_000, 16_000] {
-            let estimate = Int((Double(bitRate) / 8 * max(0, seconds) * 1.1).rounded(.up)) + 4_096
-            if OpenRouterClient.base64Length(ofByteCount: estimate) <= budget { return bitRate }
+            if fits(seconds: seconds, bitRate: bitRate, budget: budget) { return bitRate }
         }
         return 16_000
+    }
+
+    /// `seconds` of audio fit one Gemini request: at 16 kbps, the lowest `aacBitRate`, up to `maxChatSeconds`.
+    /// Longer, Gemini can't take it, and Parakeet, in segments, takes any length.
+    static func fitsChat(seconds: TimeInterval, budget: Int = OpenRouterClient.maxBase64Bytes) -> Bool {
+        fits(seconds: seconds, bitRate: 16_000, budget: budget)
+    }
+
+    /// The longest audio `fitsChat` takes, in whole seconds: 1 h 47 min 55 s for the app's budget.
+    static func maxChatSeconds(budget: Int = OpenRouterClient.maxBase64Bytes) -> TimeInterval {
+        (Double(budget / 4 * 3 - 4_096) / (16_000 / 8 * 1.1)).rounded(.down)
+    }
+
+    /// The file's estimate (`bitRate / 8 × seconds × 1.1 + 4,096` bytes) fits `budget` as base64.
+    private static func fits(seconds: TimeInterval, bitRate: Int, budget: Int) -> Bool {
+        let estimate = Int((Double(bitRate) / 8 * max(0, seconds) * 1.1).rounded(.up)) + 4_096
+        return OpenRouterClient.base64Length(ofByteCount: estimate) <= budget
     }
 
     /// 16 kHz mono AAC-LC in an MPEG-4 container (.m4a) at `bitRate`: about 15.8, 12.2 and 8.8 MB an hour at 32, 24

@@ -24,6 +24,8 @@ final class HubContext: Observable {
     let paths: AppPaths
     /// General → Troubleshooting's Export Logs….
     let diagnostics: DiagnosticsCenter
+    /// Files dropped on Home, read and asked about whichever page is showing.
+    let imports = FileImport()
     let isPreview: Bool
     /// Stand-in traffic lights so snapshots read like the real window.
     var drawsWindowControls = false
@@ -61,6 +63,10 @@ final class HubContext: Observable {
         diagnostics = env.diagnostics
         isPreview = env.isPreview
         firstName = HubGreeting.firstName(fullName: NSFullUserName(), accountName: NSUserName())
+        imports.choices = { [unowned self] seconds in
+            ImportChoices.make(main: self.settings.mainEngine, seconds: seconds, readiness: self.readiness(of:))
+        }
+        imports.start = { [dictation] file, kind in dictation.transcribe(file, as: kind) }
     }
 
     var now: Date { fixedNow ?? Date() }

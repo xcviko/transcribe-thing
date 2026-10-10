@@ -207,13 +207,21 @@ struct VersionsMenu: Equatable {
         case recordingGone
         /// Something is already running for this recording.
         case running(TranscriptVersionKind)
+        /// Gemini (its transcript, Polish, Translate) on audio longer than one request holds (`CloudAudio.fitsChat`).
+        case tooLongForGemini
 
         var label: String {
             switch self {
             case .engine(let reason): reason
             case .recordingGone: "Recording no longer kept"
             case .running: "Busy"
+            case .tooLongForGemini: "Too long, Parakeet takes any length"
             }
+        }
+
+        /// `.tooLongForGemini` for Gemini's kinds on `seconds` of audio it can't take in one request.
+        static func length(_ seconds: TimeInterval, for kind: TranscriptVersionKind) -> Blocker? {
+            kind.engine.cloudAPI == .chatCompletions && !CloudAudio.fitsChat(seconds: seconds) ? .tooLongForGemini : nil
         }
     }
 
@@ -283,24 +291,24 @@ struct VersionsMenu: Equatable {
                                 runningTitle: nil)
         }
         let busy = running.map(Blocker.running)
+        // Gemini's kinds on a recording too long for one request point at Parakeet.
+        func action(_ kind: TranscriptVersionKind) -> Action {
+            let blocker = busy ?? (hasAudio ? nil : .recordingGone) ?? Blocker.length(entry.audioDuration, for: kind)
+                ?? readiness(kind.engine).unavailableReason.map(Blocker.engine)
+            return Action(kind: kind, blocker: blocker)
+        }
         var actions = EngineID.offered.filter { isRetry || !entry.hasVersion(.transcription($0)) }.map { engine in
-            let blocker = busy ?? (hasAudio ? nil : .recordingGone)
-                ?? readiness(engine).unavailableReason.map(Blocker.engine)
-            return Action(kind: .transcription(engine), blocker: blocker)
+            action(.transcription(engine))
         }
         // Polish: Gemini on the recording again, with Polish's prompt. A failed or canceled dictation can be polished
         // too, as it can be transcribed.
         if isRetry || !entry.hasVersion(.polish) {
-            let blocker = busy ?? (hasAudio ? nil : .recordingGone)
-                ?? readiness(.geminiFlash).unavailableReason.map(Blocker.engine)
-            actions.append(Action(kind: .polish, blocker: blocker))
+            actions.append(action(.polish))
         }
         // Translate: Gemini on the recording again, writing it in the other language (`Translate`).
         let translation = TranscriptVersionKind.translation(polished: false)
         if isRetry || !entry.hasVersion(translation) {
-            let blocker = busy ?? (hasAudio ? nil : .recordingGone)
-                ?? readiness(.geminiFlash).unavailableReason.map(Blocker.engine)
-            actions.append(Action(kind: translation, blocker: blocker))
+            actions.append(action(translation))
         }
         let runningTitle = running.map(\.progressTitle)
         return VersionsMenu(isRetry: isRetry, title: title(for: entry), versions: versions, actions: actions,
@@ -314,13 +322,16 @@ struct VersionsMenu: Equatable {
 }
 
 /// What a file dropped on Home can be transcribed with (`ImportedAudio`): each offered engine, the main model's first,
-/// then Polish and Translate with Gemini. Each says why it can't run right now, as the Versions menu's actions do.
+/// then Polish and Translate with Gemini. Each says why it can't run right now, as the Versions menu's actions do:
+/// Gemini's when `seconds` (the longest file's) is more than one request holds, too.
 enum ImportChoices {
-    static func make(main: EngineID, readiness: (EngineID) -> EngineReadiness) -> [VersionsMenu.Action] {
+    static func make(main: EngineID, seconds: TimeInterval = 0,
+                     readiness: (EngineID) -> EngineReadiness) -> [VersionsMenu.Action] {
         let engines = EngineID.offered.filter { $0 == main } + EngineID.offered.filter { $0 != main }
         let kinds = engines.map(TranscriptVersionKind.transcription) + [.polish, .translation(polished: false)]
         return kinds.map { kind in
-            VersionsMenu.Action(kind: kind, blocker: readiness(kind.engine).unavailableReason.map(VersionsMenu.Blocker.engine))
+            VersionsMenu.Action(kind: kind, blocker: VersionsMenu.Blocker.length(seconds, for: kind)
+                                    ?? readiness(kind.engine).unavailableReason.map(VersionsMenu.Blocker.engine))
         }
     }
 }
