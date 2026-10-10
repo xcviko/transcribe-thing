@@ -189,6 +189,7 @@ private struct LineupRow: View {
     @Environment(ModelStore.self) private var models
     @Environment(AppSettings.self) private var settings
     @Environment(OpenRouterAccount.self) private var account
+    @Environment(\.inNativeForm) private var inNativeForm
     @State private var hovering = false
 
     private var isMain: Bool { settings.lineup.main == choice }
@@ -216,10 +217,11 @@ private struct LineupRow: View {
                 trailing
             }
         }
-        .padding(.leading, Theme.Spacing.md - 6)
-        .padding(.trailing, Theme.Spacing.md)
-        .padding(.vertical, 12)
-        .frame(minHeight: 76)
+        // In a form, the form's row insets.
+        .padding(.leading, inNativeForm ? 0 : Theme.Spacing.md - 6)
+        .padding(.trailing, inNativeForm ? 0 : Theme.Spacing.md)
+        .padding(.vertical, inNativeForm ? 4 : 12)
+        .frame(minHeight: inNativeForm ? 0 : 76)
         .background { RowHighlight(isSelected: isMain, isHovering: hovering) }
         .contentShape(Rectangle())
         .onTapGesture(perform: chooseMain)
@@ -512,6 +514,7 @@ private struct ModelRow: View {
     @Environment(ModelStore.self) private var models
     @Environment(OpenRouterAccount.self) private var account
     @Environment(AppSettings.self) private var settings
+    @Environment(\.inNativeForm) private var inNativeForm
     @State private var hovering = false
     @State private var confirmingDelete = false
 
@@ -543,9 +546,10 @@ private struct ModelRow: View {
             Spacer(minLength: 8)
             actions
         }
-        .padding(.horizontal, Theme.Spacing.md)
-        .padding(.vertical, 12)
-        .frame(minHeight: 76)
+        // In a form, the form's row insets.
+        .padding(.horizontal, inNativeForm ? 0 : Theme.Spacing.md)
+        .padding(.vertical, inNativeForm ? 4 : 12)
+        .frame(minHeight: inNativeForm ? 0 : 76)
         .background { RowHighlight(isSelected: isSelected, isHovering: hovering) }
         .contentShape(Rectangle())
         .onTapGesture(perform: choose)
