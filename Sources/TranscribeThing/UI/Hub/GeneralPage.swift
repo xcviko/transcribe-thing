@@ -65,14 +65,8 @@ struct GeneralPage: View {
                     }
                 }
             }
-            HubGroup("Pasting", footer: "A rule applies when both the model and the way you dictated are picked.") {
-                SettingsGroup {
-                    PastingRuleRow(title: "Add a space after the text", systemImage: "space",
-                                   models: $settings.modelsAddingSpace, modes: $settings.modesAddingSpace)
-                    PastingRuleRow(title: "Remove the final period", systemImage: "delete.backward",
-                                   models: $settings.modelsRemovingFinalPeriod,
-                                   modes: $settings.modesRemovingFinalPeriod)
-                }
+            HubGroup("Pasting", footer: "A rule applies when both the model and the way you dictated are checked.") {
+                PastingRules()
             }
             HubGroup("Translate", footer: "On Gemini, Translate writes your dictation in the other language; with text "
                         + "selected, it translates that. Any other language comes out in the second one.") {
@@ -405,38 +399,79 @@ private struct AboutCard: View {
     }
 }
 
-/// A General → Pasting rule and the models and dictations it applies to, in chips under its text: beside it, five
-/// chips would squeeze the text onto two lines even at the page's widest.
-private struct PastingRuleRow: View {
-    var title: String
-    var subtitle: String?
-    var systemImage: String
-    @Binding var models: Set<ModelChoice>
-    @Binding var modes: Set<DictationMachine.Mode>
-
+/// General → Pasting as a table: a rule a row, a column for each model and each way of dictating, a checkbox where
+/// they cross. A rule applies to text from a checked model dictated a checked way.
+private struct PastingRules: View {
     @Environment(AppSettings.self) private var settings
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            SettingsRow(title: title, subtitle: subtitle, systemImage: systemImage, iconTint: .inkSecondary)
-            // Lined up with the text, past the row's icon.
-            chips
-                .padding(.leading, Theme.Spacing.md + 28 + Theme.Spacing.sm)
-                .padding(.top, -2)
-                .padding(.bottom, Theme.Spacing.sm)
+        @Bindable var settings = settings
+        let order = settings.lineup.order
+        Grid(alignment: .center, horizontalSpacing: 16, verticalSpacing: 12) {
+            GridRow {
+                Color.clear
+                    .gridCellUnsizedAxes([.horizontal, .vertical])
+                ForEach(order) { choice in
+                    columnHeader(choice.shortName, symbol: choice.symbolName(parakeet: settings.parakeetEngine))
+                        .help(choice.title(parakeet: settings.parakeetEngine))
+                }
+                ForEach(Array(DictationMachine.Mode.allCases.enumerated()), id: \.element) { index, mode in
+                    columnHeader(mode.chipTitle, symbol: mode.action.symbolName)
+                        .padding(.leading, index == 0 ? Self.groupGap : 0)
+                        .help(mode.action.title)
+                }
+            }
+            rule("Add a space after the text", symbol: "space", order: order,
+                 models: $settings.modelsAddingSpace, modes: $settings.modesAddingSpace)
+            rule("Remove the final period", symbol: "delete.backward", order: order,
+                 models: $settings.modelsRemovingFinalPeriod, modes: $settings.modesRemovingFinalPeriod)
+        }
+        .padding(.vertical, 2)
+    }
+
+    /// Between the models' columns and the ways of dictating.
+    private static let groupGap: CGFloat = 14
+
+    private func columnHeader(_ title: String, symbol: String) -> some View {
+        Label(title, systemImage: symbol)
+            .labelStyle(.titleAndIcon)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .fixedSize()
+    }
+
+    private func rule(_ title: String, symbol: String, order: [ModelChoice], models: Binding<Set<ModelChoice>>,
+                      modes: Binding<Set<DictationMachine.Mode>>) -> some View {
+        GridRow {
+            HStack(spacing: Theme.Spacing.sm) {
+                Image(systemName: symbol)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.inkSecondary)
+                    .frame(width: 28, height: 28)
+                    .background(Color.inkSecondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                Text(title)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.ink)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .gridColumnAlignment(.leading)
+            ForEach(order) { choice in
+                check(models, choice, label: "\(choice.shortName): \(title)")
+            }
+            ForEach(Array(DictationMachine.Mode.allCases.enumerated()), id: \.element) { index, mode in
+                check(modes, mode, label: "\(mode.chipTitle): \(title)")
+                    .padding(.leading, index == 0 ? Self.groupGap : 0)
+            }
         }
     }
 
-    private var chips: some View {
-        HStack(spacing: 10) {
-            ModelToggleChips(order: settings.lineup.order, parakeet: settings.parakeetEngine, selection: $models,
-                             rule: title)
-            Rectangle()
-                .fill(Color.stroke)
-                .frame(width: 1, height: 16)
-                .accessibilityHidden(true)
-            ModeToggleChips(selection: $modes, rule: title)
-        }
-        .fixedSize()
+    private func check<Value: Hashable>(_ set: Binding<Set<Value>>, _ value: Value, label: String) -> some View {
+        Toggle(label, isOn: Binding(get: { set.wrappedValue.contains(value) }, set: { on in
+            if on { set.wrappedValue.insert(value) } else { set.wrappedValue.remove(value) }
+        }))
+        .toggleStyle(.checkbox)
+        .labelsHidden()
     }
 }
