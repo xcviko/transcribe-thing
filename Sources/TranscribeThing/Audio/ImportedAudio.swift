@@ -19,7 +19,9 @@ struct ImportedAudio: Sendable, Identifiable {
     static let maxDuration: TimeInterval = 3 * 60 * 60
 
     enum ReadError: Error, Equatable {
-        /// Not a file AVFoundation can decode (a document, an Ogg voice note), or one it failed on.
+        /// Neither AVFoundation's asset reader nor the audio file reader it falls back to (`AudioFileLoader`) can
+        /// decode it (a document), or both failed on it. An Ogg Opus voice note isn't this: the asset reader takes
+        /// it on macOS 26, and the fallback does too.
         case unreadable
         /// A video with no sound, or a file with nothing in it.
         case noAudio
@@ -39,14 +41,15 @@ struct ImportedAudio: Sendable, Identifiable {
     }
 
     /// Reads `url` off the main thread: through AVFoundation's asset reader, which takes audio and video alike and
-    /// converts to 16 kHz mono itself, else through the audio file reader recordings use.
-    nonisolated static func read(_ url: URL) async throws(ReadError) -> ImportedAudio {
+    /// converts to 16 kHz mono itself, else through the audio file reader recordings use. Longer than `limit`
+    /// (`maxDuration`; tests pass less) is `.tooLong`.
+    nonisolated static func read(_ url: URL, limit: TimeInterval = maxDuration) async throws(ReadError) -> ImportedAudio {
         let samples: [Float]
         do {
-            samples = try await readAsset(url)
+            samples = try await readAsset(url, limit: limit)
         } catch .unreadable {
             guard let read = try? AudioFileLoader.load16kMono(url) else { throw .unreadable }
-            guard Double(read.count) / Recording.sampleRate <= maxDuration else { throw .tooLong }
+            guard Double(read.count) / Recording.sampleRate <= limit else { throw .tooLong }
             samples = read
         }
         guard !samples.isEmpty else { throw .noAudio }
@@ -55,7 +58,7 @@ struct ImportedAudio: Sendable, Identifiable {
         return ImportedAudio(fileName: url.lastPathComponent, samples: samples, speech: speech)
     }
 
-    private nonisolated static func readAsset(_ url: URL) async throws(ReadError) -> [Float] {
+    private nonisolated static func readAsset(_ url: URL, limit: TimeInterval) async throws(ReadError) -> [Float] {
         let asset = AVURLAsset(url: url)
         let tracks: [AVAssetTrack]
         let duration: CMTime
@@ -70,7 +73,7 @@ struct ImportedAudio: Sendable, Identifiable {
         guard !tracks.isEmpty else {
             throw (try? await asset.loadTracks(withMediaType: .video).isEmpty) == false ? .noAudio : .unreadable
         }
-        if duration.isNumeric, duration.seconds > maxDuration { throw .tooLong }
+        if duration.isNumeric, duration.seconds > limit { throw .tooLong }
         guard let reader = try? AVAssetReader(asset: asset) else { throw .unreadable }
         let output = AVAssetReaderAudioMixOutput(audioTracks: tracks, audioSettings: [
             AVFormatIDKey: kAudioFormatLinearPCM,

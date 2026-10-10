@@ -36,7 +36,9 @@ final class FileImport {
     @ObservationIgnored var choices: (_ seconds: TimeInterval) -> [VersionsMenu.Action] = { _ in [] }
     /// Transcribes a file into History (`DictationController.transcribe(_:as:)`).
     @ObservationIgnored var start: (ImportedAudio, TranscriptVersionKind) -> Void = { _, _ in }
-    @ObservationIgnored var read: (URL) async throws(ImportedAudio.ReadError) -> ImportedAudio = ImportedAudio.read
+    @ObservationIgnored var read: (URL) async throws(ImportedAudio.ReadError) -> ImportedAudio = {
+        url async throws(ImportedAudio.ReadError) in try await ImportedAudio.read(url)
+    }
     /// How long a new alert or dialog waits for the one before it to go: a sheet asked for while another is closing
     /// doesn't show.
     @ObservationIgnored var settle: Duration = .milliseconds(300)
