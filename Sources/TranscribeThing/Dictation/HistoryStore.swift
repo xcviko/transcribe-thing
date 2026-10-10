@@ -563,15 +563,28 @@ final class HistoryStore {
     /// When the file the entry names can't be read, the same recording in the other format is: the WAV a failed
     /// encode just kept, say, which the entry names only once `finishSaving` has run.
     func loadRecording(for entry: TranscriptEntry) -> Recording? {
-        guard let name = entry.audioFileName else { return nil }
-        let urls = [name, RecordingFile.otherFormat(of: name)].map { paths.recordingURL(fileName: $0) }
+        guard let urls = recordingURLs(for: entry) else { return nil }
         // Waits for a pending write of the same file to land first.
-        guard let (url, samples) = io.sync({ () -> (URL, [Float])? in
-            for url in urls {
-                if let samples = RecordingFile.read(url), !samples.isEmpty { return (url, samples) }
-            }
-            return nil
-        }) else { return nil }
+        return io.sync { Self.readRecording(at: urls, for: entry) }
+    }
+
+    /// `loadRecording`, read on the store's IO queue while the caller waits: an imported file hours long takes
+    /// seconds to decode and measure, and the window doesn't stop for it.
+    func loadRecordingInBackground(for entry: TranscriptEntry) async -> Recording? {
+        guard let urls = recordingURLs(for: entry) else { return nil }
+        return await io.value { Self.readRecording(at: urls, for: entry) }
+    }
+
+    /// The entry's recording in either format, the one it names first.
+    private func recordingURLs(for entry: TranscriptEntry) -> [URL]? {
+        guard let name = entry.audioFileName else { return nil }
+        return [name, RecordingFile.otherFormat(of: name)].map { paths.recordingURL(fileName: $0) }
+    }
+
+    private nonisolated static func readRecording(at urls: [URL], for entry: TranscriptEntry) -> Recording? {
+        guard let (url, samples) = urls.lazy.compactMap({ url in
+            RecordingFile.read(url).flatMap { $0.isEmpty ? nil : (url, $0) }
+        }).first else { return nil }
         var speech = SpeechAnalyzer.stats(for: samples)
         if speech.voicedSeconds == 0 && entry.voicedSeconds > 0 { speech.voicedSeconds = entry.voicedSeconds }
         var recording = Recording(id: entry.id, samples: samples, startedAt: entry.createdAt, speech: speech)

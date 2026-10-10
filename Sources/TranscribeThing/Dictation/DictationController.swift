@@ -1378,11 +1378,7 @@ final class DictationController {
             showVersion(kind, of: id)
             return
         }
-        guard let recording = recording(for: id) else {
-            homeFailures[id] = .recordingGone(kind)
-            return
-        }
-        transcribeInHome(recording, as: kind)
+        transcribeInHome(id, as: kind)
     }
 
     /// Home's Polish or Translate of a row: Gemini on its recording again, with Polish's or Translate's prompt. Lands
@@ -1394,31 +1390,57 @@ final class DictationController {
             showVersion(kind, of: id)
             return
         }
-        guard let recording = recording(for: id) else {
+        transcribeInHome(id, as: kind)
+    }
+
+    /// Home work on a row's recording: the one kept in memory, else read back from History off the main actor (an
+    /// imported file hours long takes seconds to decode), the row showing the work running while it's read. One that
+    /// can't be read leaves the row saying it's no longer kept.
+    private func transcribeInHome(_ id: UUID, as kind: TranscriptVersionKind) {
+        if let kept = retained[id] {
+            transcribeInHome(kept, as: kind)
+            return
+        }
+        guard let entry = history.entry(id: id), entry.audioFileName != nil else {
             homeFailures[id] = .recordingGone(kind)
             return
         }
-        transcribeInHome(recording, as: kind)
+        beginHomeWork(kind, for: id)
+        homeTasks[id] = Task { [weak self] in
+            guard let self else { return }
+            let recording = await self.history.loadRecordingInBackground(for: entry)
+            guard !Task.isCancelled else { return }
+            guard let recording else {
+                _ = self.endHomeWork(for: id)
+                self.homeFailures[id] = .recordingGone(kind)
+                return
+            }
+            await self.makeInHome(kind, from: recording)
+        }
     }
 
     /// Home work on a recording: a transcription by `kind`'s engine, or Gemini's Polish or Translate, landing in the
     /// recording's row (`land`).
     private func transcribeInHome(_ recording: Recording, as kind: TranscriptVersionKind) {
         let id = recording.id
+        beginHomeWork(kind, for: id)
+        homeTasks[id] = Task { [weak self] in
+            await self?.makeInHome(kind, from: recording)
+        }
+    }
+
+    /// The body of a Home task (`homeTasks`), once it has the recording.
+    private func makeInHome(_ kind: TranscriptVersionKind, from recording: Recording) async {
         let engine = kind.engine
         let made: TranscriptVersionKind? = if case .transcription = kind { nil } else { kind }
         let prompt = made.flatMap(geminiPrompt(for:))
-        beginHomeWork(kind, for: id)
-        homeTasks[id] = Task { [weak self] in
-            guard let self else { return }
-            var outcome = await self.transcribe(recording, engine: engine, prompt: prompt, background: true)
-            guard self.endHomeWork(for: id) else { return }
-            if made?.answersInMessageTags == true, case .success(var result) = outcome {
-                result.text = Polish.message(from: result.text)
-                outcome = .success(result)
-            }
-            self.land(outcome, of: recording, engine: engine, as: made)
+        var outcome = await transcribe(recording, engine: engine, prompt: prompt, background: true)
+        guard endHomeWork(for: recording.id) else { return }
+        if made?.answersInMessageTags == true, case .success(var result) = outcome {
+            result.text = Polish.message(from: result.text)
+            outcome = .success(result)
         }
+        land(outcome, of: recording, engine: engine, as: made)
     }
 
     /// Gemini's prompt for a version of a recording other than its plain transcript: Polish's, Translate's (to the

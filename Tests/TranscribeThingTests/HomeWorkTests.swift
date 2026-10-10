@@ -336,13 +336,15 @@ import Testing
         h.controller.transcribeOverride = { _, _ in throw AppError.openRouterServer("HTTP 500") }
         h.controller.makeVersion(.polish, of: try #require(h.history.entry(id: polished)))
         try await waitUntil { h.controller.homeFailures[polished] != nil }
-        var stopped = 0
+        var started = false, stopped = 0
         h.controller.transcribeOverride = { _, engine in
+            started = true
             do { try await Task.sleep(for: .seconds(5)) } catch { stopped += 1; throw error }
             return TranscriptResult(text: "late", engine: engine, processingTime: 1)
         }
         h.controller.retry(try #require(h.history.entry(id: transcribed)), with: .geminiFlash)
-        #expect(h.controller.homeWork[transcribed] != nil)
+        #expect(h.controller.homeWork[transcribed] != nil, "running from the moment the recording is being read")
+        try await waitUntil { started }
 
         h.history.delete(transcribed)
         #expect(h.controller.homeWork.isEmpty && h.controller.runningVersions.isEmpty)
@@ -350,6 +352,34 @@ import Testing
         h.history.clearAll()
         #expect(h.controller.homeFailures.isEmpty)
         #expect(h.toasts.notices.isEmpty)
+    }
+
+    /// A row's recording is read back off the main actor (an imported file hours long takes seconds): the row shows
+    /// the work running while it's read, Cancel then stops it before any model is asked, and a recording gone from
+    /// disk says so in the row.
+    @Test func theRecordingIsReadInTheBackground() async throws {
+        let h = harness()
+        defer { removeFiles(h) }
+        let id = try await transcript(h)
+        let entry = try #require(h.history.entry(id: id))
+        try await waitUntil { h.history.audioURL(for: entry) != nil }
+        var asked = 0
+        h.controller.transcribeOverride = { _, engine in
+            asked += 1
+            return TranscriptResult(text: "again", engine: engine, processingTime: 0.1)
+        }
+        h.controller.retry(entry, with: .geminiFlash)
+        #expect(h.controller.runningVersions[id] == .transcription(.geminiFlash))
+        h.controller.cancelHomeWork(for: id)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(asked == 0 && h.history.entry(id: id)?.versions.count == 1)
+        #expect(h.controller.runningVersions.isEmpty && h.controller.homeFailures.isEmpty)
+
+        try FileManager.default.removeItem(at: try #require(h.history.audioURL(for: entry)))
+        h.controller.retry(entry, with: .geminiFlash)
+        try await waitUntil { h.controller.homeFailures[id] != nil }
+        #expect(h.controller.homeFailures[id] == .recordingGone(.transcription(.geminiFlash)) && asked == 0)
+        #expect(h.controller.runningVersions.isEmpty)
     }
 
     /// Nothing cleans up any more: not even a transcript with no text (a legacy "No speech detected" row).
