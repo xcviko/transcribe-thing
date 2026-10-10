@@ -20,7 +20,9 @@ struct HistorySection: View {
         } else if days.isEmpty {
             NoMatches(query: query, onClear: onClearSearch)
         } else {
-            LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+            // Day headers scroll with their days, as a form's section headers do: pinned, they needed a band of
+            // background of their own, which showed as a square strip across the page.
+            LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(days) { day in
                     Section {
                         ForEach(day.entries) { entry in
@@ -40,7 +42,13 @@ struct HistorySection: View {
                             .transition(.opacity)
                         }
                     } header: {
-                        SectionHeader(day.title) {
+                        // Set like the settings pages' section headers: "Today", bold, over its card.
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(day.title)
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.ink)
+                                .accessibilityAddTraits(.isHeader)
+                            Spacer(minLength: 8)
                             if day.words > 0 {
                                 Text(Fmt.words(day.words))
                                     .font(.system(size: 11, weight: .medium))
@@ -48,10 +56,9 @@ struct HistorySection: View {
                                     .foregroundStyle(.inkTertiary)
                             }
                         }
+                        .padding(.horizontal, 4)
                         .padding(.top, 6)
-                        .padding(.bottom, 2)
                         .frame(maxWidth: .infinity)
-                        .background(Color.bgCanvas)
                     }
                 }
             }
