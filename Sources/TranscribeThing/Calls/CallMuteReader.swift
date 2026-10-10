@@ -13,6 +13,8 @@ final class CallMuteReader: @unchecked Sendable {
         /// For a browser: the tab holding the call, nil when none looks like one.
         var tab: BrowserTabs.CallTab?
         var windowCount = 0
+        /// For a browser: whether a tab other than the call's says it plays sound.
+        var otherTabPlaysAudio = false
         /// While mute is unknown: the controls that were read, to learn the app's labels from.
         var dump: [String]?
 
@@ -133,7 +135,9 @@ final class CallMuteReader: @unchecked Sendable {
         }
         var report = Report(read: MuteRead(state: .unknown("no tab records or is titled like a call"), inCall: nil, detail: ""),
                             isBrowser: true, windowCount: windows.count)
-        guard let tab = BrowserTabs.callTab(in: windows, following: following) else { return report }
+        let callTab = BrowserTabs.callTab(in: windows, following: following)
+        report.otherTabPlaysAudio = BrowserTabs.otherTabPlaysAudio(in: windows, besides: callTab)
+        guard let tab = callTab else { return report }
         report.tab = tab
         guard let service = tab.service else {
             report.read.state = .unknown("not a call service it knows")

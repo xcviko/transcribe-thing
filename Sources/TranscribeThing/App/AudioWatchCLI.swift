@@ -75,34 +75,29 @@ private final class AudioWatch {
     private let listeners = HALListenerSet(queue: .main)
     private var watchedObjects: Set<AudioObjectID> = []
     private var activities: [pid_t: Activity] = [:]
-    /// The app each process with audio belongs to, looked up once per process.
-    private var apps: [pid_t: CallApp?] = [:]
-    private var detector: CallDetector
+    /// The detector and the window reads, as `CallMonitor` has them.
+    private let calls: CallWatch
     private var suspectedAt: TimeInterval?
     private var micReleasedAt: TimeInterval?
-    /// Reads of the followed app's window that arrived since the last poll, for the detector.
-    private var windows: [CallApp: CallDetector.Window] = [:]
     private var deviceInUse: [AudioDeviceID: Bool] = [:]
     private var timer: DispatchSourceTimer?
     private let accessibility = AXIsProcessTrusted()
-    private let muteReader = CallMuteReader()
-    private let muteQueue = DispatchQueue(label: "dev.transcribe-thing.audio-watch.mute")
-    private var mute = MuteWatch()
+    private var shown = Shown()
 
-    /// The app whose mute is read, and what was last printed for it.
-    private struct MuteWatch {
+    /// What was last printed for the followed app's window.
+    private struct Shown {
         var app: CallApp?
-        var reading = false
-        var lastRead: Date?
-        var lastKnown = false
         var tabLine: String?
         var muteLine: String?
         var dump: (lines: [String], at: Date)?
     }
 
     init(settings: CallDetector.Settings) {
-        detector = CallDetector(settings: settings)
+        calls = CallWatch(settings: settings, sensors: .live())
+        calls.onRead = { [weak self] report, app in self?.show(report, for: app) }
     }
+
+    private var detector: CallDetector { calls.detector }
 
     func start() {
         let settings = detector.settings
@@ -126,9 +121,7 @@ private final class AudioWatch {
         listeners.invalidate()
         let now = Date()
         let followed = detector.followed
-        report(detector.stop(at: now.timeIntervalSince(started)), followed: followed)
-        let reader = muteReader
-        muteQueue.sync { reader.release() }
+        report(calls.stop(at: now.timeIntervalSince(started)), followed: followed)
         for activity in activities.values.sorted(by: { $0.name < $1.name }) {
             if let since = activity.input { line("\(activity.name): still on mic for \(span(since, now))") }
             if let since = activity.output { line("\(activity.name): still playing sound for \(span(since, now))") }
@@ -141,68 +134,34 @@ private final class AudioWatch {
         if let listener { line("listener: \(listener)") }
         let now = Date()
         var seen: Set<pid_t> = []
-        var processes: [(CallApp?, CallDetector.Activity)] = []
+        var records: [CoreAudioHAL.ProcessRecord] = []
         for object in CoreAudioHAL.processObjectIDs() {
             watch(object)
             guard let record = CoreAudioHAL.processRecord(object), record.pid != getpid() else { continue }
             seen.insert(record.pid)
             update(record, at: now)
-            guard record.isRunningInput || record.isRunningOutput else { continue }
-            let app = apps[record.pid] ?? CallApp.of(record)
-            apps[record.pid] = app
-            processes.append((app, CallDetector.Activity(mic: record.isRunningInput, sound: record.isRunningOutput)))
+            records.append(record)
         }
         for pid in activities.keys where !seen.contains(pid) {
             update(CoreAudioHAL.ProcessRecord(objectID: 0, pid: pid, bundleID: nil, isRunningInput: false,
                                               isRunningOutput: false, inputDevices: [], outputDevices: []), at: now)
             activities[pid] = nil
         }
-        for pid in apps.keys where !seen.contains(pid) { apps[pid] = nil }
         let followed = detector.followed
-        report(detector.feed(CallApp.activity(processes), windows: windows, at: now.timeIntervalSince(started)),
-               followed: followed)
-        windows = [:]
+        report(calls.poll(at: now.timeIntervalSince(started), records: records), followed: followed)
         pollDevices()
-        readMute(at: now)
     }
 
-    // MARK: Mute
+    // MARK: Windows
 
-    /// Reads the followed app's mute control on the reader's queue: once a second while it's known, every 3 s while
-    /// it isn't (the walk that looks for it costs the app more), never two reads at once.
-    private func readMute(at now: Date) {
-        guard accessibility else { return }
-        let app = detector.followed?.app
-        let following = detector.followed?.tab?.key
-        if app != mute.app {
-            if mute.app != nil {
-                let reader = muteReader
-                muteQueue.async { reader.release() }
-            }
-            mute = MuteWatch(app: app)
-        }
-        guard let app, !mute.reading,
-              now.timeIntervalSince(mute.lastRead ?? .distantPast) >= (mute.lastKnown ? 1 : 3) else { return }
-        mute.reading = true
-        mute.lastRead = now
-        let pids = NSRunningApplication.runningApplications(withBundleIdentifier: app.id).map(\.processIdentifier)
-        let reader = muteReader
-        muteQueue.async {
-            let report = reader.read(app, pids: pids, following: following)
-            DispatchQueue.main.async { MainActor.assumeIsolated { self.show(report, for: app) } }
-        }
-    }
-
+    /// Prints what a read of the followed app's window found, when it changed.
     private func show(_ report: CallMuteReader.Report, for app: CallApp) {
-        guard app == mute.app else { return }
-        mute.reading = false
-        mute.lastKnown = report.read.state.isKnown
-        if let window = report.window { windows[app] = window }
+        if app != shown.app { shown = Shown(app: app) }
         var name = app.name
         if report.isBrowser {
             let tabLine = Self.tabLine(report, browser: name)
-            if tabLine != mute.tabLine { line(tabLine) }
-            mute.tabLine = tabLine
+            if tabLine != shown.tabLine { line(tabLine) }
+            shown.tabLine = tabLine
             if let tab = report.tab {
                 name += " · \(tab.service?.name ?? "unknown service")\(tab.active ? "" : " (background tab)")"
             }
@@ -210,12 +169,12 @@ private final class AudioWatch {
         let read = report.read
         let inCall = read.inCall.map { $0 ? " · in call" : " · no Leave button" } ?? ""
         let muteLine = "MUTE \(name): \(read.state)" + (read.detail.isEmpty ? "" : " (\(read.detail))") + inCall
-        if muteLine != mute.muteLine { line(muteLine) }
-        mute.muteLine = muteLine
+        if muteLine != shown.muteLine { line(muteLine) }
+        shown.muteLine = muteLine
         // A dump again when the controls change, but at most every 10 s: some carry a timer or a count.
-        if let dump = report.dump, !dump.isEmpty, dump != mute.dump?.lines,
-           Date().timeIntervalSince(mute.dump?.at ?? .distantPast) >= 10 {
-            mute.dump = (dump, Date())
+        if let dump = report.dump, !dump.isEmpty, dump != shown.dump?.lines,
+           Date().timeIntervalSince(shown.dump?.at ?? .distantPast) >= 10 {
+            shown.dump = (dump, Date())
             line("AX DUMP \(name), \(dump.count) controls (role, t= title, d= description, v= value, id=):")
             for entry in dump { print("           " + entry) }
         }

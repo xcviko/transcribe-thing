@@ -217,7 +217,7 @@ struct MuteRules: Equatable, Sendable {
 // MARK: - Services
 
 /// A call service, in its desktop app or in a browser tab.
-enum CallService: String, CaseIterable, Equatable, Sendable {
+enum CallService: String, CaseIterable, Codable, Equatable, Sendable {
     case meet, zoom, discord, telegram, slack, telemost
 
     var name: String {
@@ -311,7 +311,7 @@ enum CallAppKind: Equatable, Sendable {
         "com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.dev", "com.google.Chrome.canary",
         "company.thebrowser.Browser", "com.microsoft.edgemac", "com.microsoft.edgemac.Beta", "com.microsoft.edgemac.Dev",
         "com.brave.Browser", "ru.yandex.desktop.yandex-browser", "com.apple.Safari", "com.apple.SafariTechnologyPreview",
-        "com.vivaldi.Vivaldi", "com.operasoftware.Opera",
+        "com.vivaldi.Vivaldi", "com.operasoftware.Opera", "org.mozilla.firefox",
     ]
 
     static func of(_ bundleID: String) -> CallAppKind {

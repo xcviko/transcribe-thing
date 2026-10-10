@@ -55,6 +55,24 @@ enum BrowserTabs {
             + russian.flatMap { [" - " + $0, " – " + $0, ", " + $0, ": " + $0] }
     }()
 
+    /// Whether the browser marks the tab as playing sound ("YouTube - Audio playing"). Chrome's wording; Safari and
+    /// Firefox put no such mark in the title, so for them it's never known.
+    static func isPlayingAudio(_ title: String) -> Bool {
+        ["Audio playing", "воспроизводится аудио"].contains { title.range(of: $0, options: .caseInsensitive) != nil }
+    }
+
+    /// Whether a tab other than `callTab` plays sound: then the call's recording, which takes the whole browser's
+    /// sound, has that tab's too.
+    static func otherTabPlaysAudio(in windows: [Window], besides callTab: CallTab?) -> Bool {
+        for (windowIndex, window) in windows.enumerated() {
+            for (tabIndex, tab) in window.tabs.enumerated()
+            where !(callTab?.window == windowIndex && callTab?.tab == tabIndex) && isPlayingAudio(tab.title) {
+                return true
+            }
+        }
+        return false
+    }
+
     /// `title` without what the browser added, and what it records, if it says. The page's title ends at the first
     /// mark or alert, whatever follows it; a recording mark counts wherever it is. An unread mark in front ("(3) ",
     /// "• ") goes too.
