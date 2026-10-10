@@ -243,6 +243,8 @@ struct DictionarySection: View {
     @State private var targeted = false
     @State private var name = ""
     @State private var confirmingDelete = false
+    /// The word whose × was clicked, waiting for Remove (Return) or Cancel (Escape).
+    @State private var confirmingRemoval: String?
     @FocusState private var nameFocused: Bool
 
     var body: some View {
@@ -257,9 +259,7 @@ struct DictionarySection: View {
                 } else {
                     FlowLayout(spacing: 6, lineSpacing: 6) {
                         ForEach(model.words, id: \.self) { word in
-                            DictionaryChip(word: word, group: model.group?.id) {
-                                withAnimation(Theme.Motion.snappy) { settings.dictionary.remove(word) }
-                            }
+                            DictionaryChip(word: word, group: model.group?.id) { confirmingRemoval = word }
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -279,6 +279,15 @@ struct DictionarySection: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Kept, its words move to Ungrouped.")
+        }
+        .alert("Remove “\(confirmingRemoval ?? "")” from the Dictionary?",
+               isPresented: Binding(get: { confirmingRemoval != nil }, set: { if !$0 { confirmingRemoval = nil } }),
+               presenting: confirmingRemoval) { word in
+            Button("Remove", role: .destructive) {
+                withAnimation(Theme.Motion.snappy) { settings.dictionary.remove(word) }
+            }
+            .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {}
         }
     }
 

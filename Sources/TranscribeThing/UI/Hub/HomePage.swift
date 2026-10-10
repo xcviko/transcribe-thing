@@ -13,6 +13,8 @@ struct HomePage: View {
 
     @State private var query = ""
     @FocusState private var searchFocused: Bool
+    /// The transcript whose trash was clicked, waiting for Delete (Return) or Cancel (Escape).
+    @State private var confirmingDelete: TranscriptEntry?
     @State private var recentlyDeleted: TranscriptEntry?
     @State private var undoToken = 0
     @State private var hoverGate = ScrollHoverGate()
@@ -35,7 +37,7 @@ struct HomePage: View {
                     isEmpty: history.entries.isEmpty,
                     days: history.days(matching: query, now: hub.now),
                     query: query,
-                    onDelete: delete,
+                    onDelete: { confirmingDelete = $0 },
                     onClearSearch: { query = "" })
             }
             .padding(.horizontal, HubLayout.pageHorizontal)
@@ -91,6 +93,16 @@ struct HomePage: View {
             Button("OK") { importProblem = nil }
         } message: {
             Text(importProblem?.message ?? "")
+        }
+        .alert("Delete This Transcript?", isPresented: Binding(get: { confirmingDelete != nil },
+                                                              set: { if !$0 { confirmingDelete = nil } }),
+               presenting: confirmingDelete) { entry in
+            Button("Delete", role: .destructive) { delete(entry) }
+                .keyboardShortcut(.defaultAction)
+            Button("Cancel", role: .cancel) {}
+        } message: { entry in
+            Text(entry.audioFileName == nil ? "You can undo it for a few seconds."
+                 : "Its recording goes too. You can undo it for a few seconds.")
         }
         .onAppear {
             if query.isEmpty { query = hub.initialSearch }
