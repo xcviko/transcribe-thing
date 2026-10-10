@@ -305,9 +305,13 @@ struct HistoryStats: Equatable, Sendable {
 /// (`RecordingFile`: AAC, or WAV from older builds until `compressLegacyRecordings` converts it), so failed or
 /// canceled dictations can be retried and any transcript transcribed again with another model. An entry and its
 /// recording go together: deleted, cleared, auto-deleted (`AppSettings.autoDeleteHistoryDays`) or past `maxEntries`.
+/// A dictation is on disk before it gets here too (`RecordingJournal`): one an earlier run never finished comes back
+/// at launch as a failed entry (`recoverJournals`).
 @MainActor @Observable
 final class HistoryStore {
     static let maxEntries = 2000
+    /// What a dictation brought back from its journal says in place of an engine's error.
+    static let interruptedMessage = "The app quit before it was transcribed"
 
     @ObservationIgnored private let paths: AppPaths
     @ObservationIgnored private let settings: AppSettings
@@ -333,6 +337,13 @@ final class HistoryStore {
     @ObservationIgnored var isInUse: (UUID) -> Bool = { _ in false }
     /// Replaces the AAC encoder (`RecordingFile.aac`) for saves and conversions: tests.
     @ObservationIgnored var encodeOverride: RecordingFile.Encoder?
+    /// Where dictations are kept while they're recorded and transcribed (`AudioRecorder` writes them); nil for a
+    /// preview store.
+    @ObservationIgnored let journal: RecordingJournal?
+    /// Recordings saved since history.json was last written, by id, with how many samples were saved: their journals
+    /// go once it names them (`removeSavedJournals`).
+    @ObservationIgnored private var savedJournals: [UUID: Int] = [:]
+    @ObservationIgnored private var recoveryTask: Task<Void, Never>?
 
     /// Newest first, at most `maxEntries`.
     private(set) var entries: [TranscriptEntry] = []
@@ -345,12 +356,14 @@ final class HistoryStore {
         self.paths = paths
         self.settings = settings
         self.persists = true
+        self.journal = RecordingJournal(directory: paths.journals)
     }
 
     private init(previewEntries: [TranscriptEntry], settings: AppSettings) {
         self.paths = .temporary()
         self.settings = settings
         self.persists = false
+        self.journal = nil
         self.entries = Self.normalized(previewEntries)
         self.isLoaded = true
         self.didLoad = true
@@ -437,6 +450,7 @@ final class HistoryStore {
         }
         isLoaded = true
         deleteExpired()
+        recoveryTask = Task { [weak self] in await self?.recoverJournals() }
     }
 
     /// Writes immediately (used at quit).
@@ -445,6 +459,7 @@ final class HistoryStore {
         saveTask?.cancel()
         saveTask = nil
         io.writeSync(entries, to: paths.historyFile)
+        removeSavedJournals()
     }
 
     private func changed(save: Bool = true) {
@@ -456,6 +471,7 @@ final class HistoryStore {
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled, let self else { return }
             self.io.write(self.entries, to: self.paths.historyFile)
+            self.removeSavedJournals()
         }
     }
 
@@ -533,6 +549,7 @@ final class HistoryStore {
     func saveAudio(_ recording: Recording) -> String? {
         guard persists, !recording.samples.isEmpty else { return nil }
         let id = recording.id
+        if journal != nil { savedJournals[id] = max(savedJournals[id] ?? 0, recording.samples.count) }
         let name = RecordingFile.name(for: id)
         let url = paths.recordingURL(fileName: name)
         let samples = recording.samples
@@ -557,6 +574,101 @@ final class HistoryStore {
               saved == RecordingFile.otherFormat(of: name) else { return }
         entry.audioFileName = saved
         upsert(entry)
+    }
+
+    // MARK: - Journals
+
+    /// A recording that ends without History keeping it (too short, silent, canceled for good): its journal goes, or
+    /// the next launch would bring it back.
+    func discardJournal(of id: UUID) {
+        journal?.remove(id)
+    }
+
+    /// Once history.json names them (this runs right after it's written, on the same queue), the journals of the
+    /// recordings saved since go: where the recording's file is there, or its entry went meanwhile. One whose save
+    /// failed stays for the next launch, which saves it again.
+    private func removeSavedJournals() {
+        guard let journal, !savedJournals.isEmpty else { return }
+        let saved = savedJournals
+        savedJournals = [:]
+        let files = saved.keys.reduce(into: [UUID: [URL]]()) { files, id in
+            if let entry = entry(id: id) { files[id] = recordingURLs(for: entry) ?? [] }
+        }
+        io.perform {
+            for (id, samples) in saved {
+                if let urls = files[id], !urls.contains(where: { FileManager.default.fileExists(atPath: $0.path) }) {
+                    continue
+                }
+                journal.remove(id, ifAtMost: samples)
+            }
+        }
+    }
+
+    /// Returns once the launch's `recoverJournals` is done: tests.
+    func waitForRecovery() async {
+        await recoveryTask?.value
+    }
+
+    /// Brings back the dictations an earlier run was recording or transcribing when it ended (a crash, a kill, a power
+    /// cut): each journal it left becomes a failed entry with its recording, so Retry and Transcribe With work on it
+    /// from Home. Nothing is transcribed by itself: a cloud model costs money. A journal too short or without speech
+    /// to be worth it, one older than Auto-delete keeps, or one History already has goes; a success whose recording
+    /// went missing gets it back and keeps its text. One at a time, read off the main thread.
+    private func recoverJournals() async {
+        guard let journal else { return }
+        let days = settings.autoDeleteHistoryDays
+        let cutoff = days > 0 ? Date().addingTimeInterval(-Double(days) * 86_400) : nil
+        for leftover in await journal.leftovers() {
+            let id = leftover.id
+            guard !isInUse(id) else { continue }
+            let url = leftover.audio
+            guard let (samples, speech) = await Task.detached(priority: .utility, operation: {
+                RecordingJournal.read(url).map { ($0, SpeechAnalyzer.stats(for: $0)) }
+            }).value else {
+                Log.app.error("Removed a dictation kept on disk that can't be read: \(id.uuidString, privacy: .public)")
+                journal.remove(id)
+                continue
+            }
+            let duration = Double(samples.count) / Recording.sampleRate
+            let startedAt = leftover.info?.startedAt ?? leftover.created ?? Date()
+            let existing = entry(id: id)
+            let isWorthIt = duration >= AudioRecorder.minimumUndoDuration && !speech.isSilent
+                && speech.voicedSeconds >= Self.minimumRecoveredVoicedSeconds
+            let isKept = existing.map { entry in
+                hasRecordingFile(entry) && (entry.status == .success || entry.audioDuration >= duration - 0.5)
+            } ?? false
+            guard isWorthIt, !isKept, cutoff.map({ startedAt >= $0 }) ?? true else {
+                journal.remove(id)
+                continue
+            }
+            let recording = Recording(id: id, samples: samples, startedAt: startedAt, speech: speech,
+                                      deviceName: leftover.info?.deviceName)
+            let file = saveAudio(recording)
+            if var entry = existing, entry.status == .success {
+                entry.audioFileName = file
+                upsert(entry)
+            } else {
+                let engine = existing?.engine
+                    ?? leftover.info?.engine.flatMap { EngineID(rawValue: $0) ?? TranscriptEntry.retiredEngines[$0] }
+                    ?? settings.mainEngine
+                let mode = leftover.info?.mode.flatMap(DictationMachine.Mode.init(rawValue:)) ?? .pushToTalk
+                upsert(TranscriptEntry(
+                    id: id, createdAt: existing?.createdAt ?? startedAt, text: "", engine: engine, status: .failed,
+                    audioDuration: duration, voicedSeconds: speech.voicedSeconds,
+                    // A failure whose recording didn't make it to disk keeps saying why it failed.
+                    errorMessage: existing?.status == .failed ? existing?.errorMessage : Self.interruptedMessage,
+                    mode: existing?.mode ?? mode, audioFileName: file))
+            }
+            Log.app.info("Brought back a dictation the app quit before transcribing (\(duration, format: .fixed(precision: 1), privacy: .public) s)")
+            DiagnosticLog.shared.event(.dictation, "dictation.recovered", ["seconds": duration, "had": existing?.status.rawValue])
+        }
+    }
+
+    /// Speech a journal must hold to come back: what a dictation needs to be transcribed at all.
+    private static let minimumRecoveredVoicedSeconds = 0.25
+
+    private func hasRecordingFile(_ entry: TranscriptEntry) -> Bool {
+        recordingURLs(for: entry)?.contains { FileManager.default.fileExists(atPath: $0.path) } ?? false
     }
 
     /// The entry's recording read back, either format (`RecordingFile`); nil when it has none or it can't be read.

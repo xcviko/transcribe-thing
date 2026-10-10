@@ -94,6 +94,10 @@ History keeps every dictation with its recording, and a copy of the sound of eve
 delete it, so you can transcribe it again with another model, polish it or translate it. General → History can
 delete entries older than 1, 7, 30 or 90 days.
 
+If the app quits or crashes, or the Mac shuts down, while you dictate or wait for the transcript, the recording isn't
+lost. The next time the app starts, it's in History marked "Couldn't transcribe", with Retry. Nothing goes to a model
+until you click it.
+
 ## If something doesn't work
 
 - **fn opens the emoji picker or switches the keyboard layout:** set System Settings → Keyboard → "Press 🌐 key to"

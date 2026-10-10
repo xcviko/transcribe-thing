@@ -27,6 +27,10 @@ final class AudioRecorder {
     private let settings: AppSettings?
 
     var onEvent: ((AudioRecorderEvent) -> Void)?
+    /// Where each capture is kept on disk as it's recorded, until History has it (`RecordingJournal`); nil: nowhere.
+    var journal: RecordingJournal?
+    /// The model and mode of the dictation being recorded, for its journal: asked as a capture starts and as it ends.
+    var journalLabel: (() -> (engine: EngineID, mode: DictationMachine.Mode)?)?
     private(set) var isCapturing = false
     /// Whether `start` may open the mic. The TCC probe blocks the calling thread (the main one, at key-down) for
     /// about 25 ms; the app answers from `PermissionsCenter`'s cached state first.
@@ -41,6 +45,8 @@ final class AudioRecorder {
     private var prefix: Recording?
     private var generation = 0
     private var startedAt = Date()
+    /// The id of the current (or last) capture's recording: the canceled one's it continues, or its own.
+    private var recordingID = UUID()
     private var lastDeviceName: String?
     private var hasFailed = false
 
@@ -63,6 +69,7 @@ final class AudioRecorder {
         let began = AudioClock.now()
         if let session {
             _ = session.finishNow(discard: true)
+            journal?.discard(recordingID)
             endSession()
         }
         guard isMicrophoneAllowed() else { throw AppError.microphonePermissionDenied }
@@ -83,9 +90,19 @@ final class AudioRecorder {
         lastChoice = choice
         lastDeviceName = record.device.name
         startedAt = Date()
+        recordingID = prefix?.id ?? UUID()
         self.prefix = prefix
         hasFailed = false
         isCapturing = true
+        if let journal, options.keepsSamples {
+            let label = journalLabel?()
+            let info = RecordingJournal.Info(id: recordingID, startedAt: prefix?.startedAt ?? startedAt,
+                                             engine: label?.engine.rawValue, mode: label?.mode.rawValue,
+                                             deviceName: record.device.name, continues: prefix != nil)
+            journal.begin(info, prefix: prefix?.samples ?? []) { [session] from in
+                session.samples(from: from, keepingBack: RecordingJournal.holdBackSamples)
+            }
+        }
         session.start()
         // Time the main thread spent here, at key-down (the device itself starts on the session's queue).
         let blocked = (AudioClock.now() - began) * 1000
@@ -95,9 +112,10 @@ final class AudioRecorder {
     /// Stops right away and returns everything captured so far, with `SpeechStats`.
     /// Prefer `finish()`, which also keeps the 150 ms tail.
     func stop() -> Recording {
-        guard let session else { return makeRecording([]) }
+        guard let session else { return Recording(samples: []) }
         let samples = session.finishNow(discard: false)
         let prefix = prefix
+        endJournal(samples)
         endSession()
         return Self.joined(prefix, makeRecording(samples))
     }
@@ -105,18 +123,25 @@ final class AudioRecorder {
     /// Ends the capture after `tail` more seconds of audio (the pill can show processing at once), then
     /// returns the recording. `isCapturing` turns false immediately, so a new `start` is allowed meanwhile.
     func finish(tail: TimeInterval = AudioRecorder.stopTail) async -> Recording {
-        guard let session else { return makeRecording([]) }
+        guard let session else { return Recording(samples: []) }
         let startedAt = startedAt
         let prefix = prefix
         let name = session.device.name
+        let id = recordingID
+        labelJournal()
         endSession()
+        let journal = journal
         let samples = await withCheckedContinuation { (continuation: CheckedContinuation<[Float], Never>) in
-            session.finish(tail: tail) { continuation.resume(returning: $0) }
+            session.finish(tail: tail) { samples in
+                // The tail too, before anyone hears of the recording.
+                journal?.end(id, samples: samples)
+                continuation.resume(returning: samples)
+            }
         }
         // Analysis and the join (an hour of audio, or more) stay off the main thread.
         return await Task.detached(priority: .userInitiated) {
-            let own = Recording(samples: samples, startedAt: startedAt, speech: SpeechAnalyzer.stats(for: samples),
-                                deviceName: name)
+            let own = Recording(id: id, samples: samples, startedAt: startedAt,
+                                speech: SpeechAnalyzer.stats(for: samples), deviceName: name)
             return AudioRecorder.joined(prefix, own)
         }.value
     }
@@ -126,9 +151,14 @@ final class AudioRecorder {
         guard let session else { return nil }
         let samples = session.finishNow(discard: false)
         let prefix = prefix
-        endSession()
         let count = samples.count + (prefix?.samples.count ?? 0)
-        guard Double(count) / Recording.sampleRate >= Self.minimumUndoDuration else { return nil }
+        guard Double(count) / Recording.sampleRate >= Self.minimumUndoDuration else {
+            journal?.discard(recordingID)
+            endSession()
+            return nil
+        }
+        endJournal(samples)
+        endSession()
         return Self.joined(prefix, makeRecording(samples))
     }
 
@@ -182,8 +212,20 @@ final class AudioRecorder {
     }
 
     private func makeRecording(_ samples: [Float]) -> Recording {
-        Recording(samples: samples, startedAt: startedAt, speech: SpeechAnalyzer.stats(for: samples),
+        Recording(id: recordingID, samples: samples, startedAt: startedAt, speech: SpeechAnalyzer.stats(for: samples),
                   deviceName: lastDeviceName)
+    }
+
+    /// The journal names the model and mode the dictation ended with (Switch model, hands-free).
+    private func labelJournal() {
+        guard let journal, let label = journalLabel?() else { return }
+        journal.label(recordingID, engine: label.engine.rawValue, mode: label.mode.rawValue)
+    }
+
+    /// The capture's journal gets the rest of its audio and is closed: it stays until History has the recording.
+    private func endJournal(_ samples: [Float]) {
+        labelJournal()
+        journal?.end(recordingID, samples: samples)
     }
 
     private func handle(_ event: CaptureSessionEvent, generation: Int) {

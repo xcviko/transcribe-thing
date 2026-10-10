@@ -102,6 +102,16 @@ final class CaptureSession: @unchecked Sendable {
         box.withLock { Double($0.samples.count) / Recording.sampleRate }
     }
 
+    /// A copy of the captured audio from sample `index` on, but for the last `keepingBack` samples (where a cue's
+    /// duck may still land); empty once the session has finished. For `RecordingJournal`, off the audio thread.
+    func samples(from index: Int, keepingBack: Int) -> [Float] {
+        box.withLock { state in
+            let end = state.samples.count - max(0, keepingBack)
+            guard state.keepsSamples, index >= 0, end > index else { return [] }
+            return Array(state.samples[index..<end])
+        }
+    }
+
     /// Stops appending immediately and returns everything captured (empty when `discard`).
     func finishNow(discard: Bool) -> [Float] {
         let (samples, pending) = box.withLock { $0.finalizeTakingCompletion(discard: discard) }

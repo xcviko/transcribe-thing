@@ -13,6 +13,9 @@ struct AppPaths: Sendable {
     var models: URL { root.appendingPathComponent("Models", isDirectory: true) }
     /// root/Recordings: each History entry's recording (`RecordingFile`).
     var recordings: URL { root.appendingPathComponent("Recordings", isDirectory: true) }
+    /// root/Recordings in Progress: the dictation being recorded or transcribed, on disk until History has it
+    /// (`RecordingJournal`). Created when the first one starts.
+    var journals: URL { root.appendingPathComponent("Recordings in Progress", isDirectory: true) }
     /// root/history.json
     var historyFile: URL { root.appendingPathComponent("history.json", isDirectory: false) }
     /// root/updates.json: the last release feed GitHub sent, its ETag and when it was checked.

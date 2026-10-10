@@ -166,6 +166,8 @@ final class AppEnvironment {
         dictation.installUpdate = { [weak self] in self?.installUpdate() }
         updates.isDictationActive = { [weak dictation] in (dictation?.activity ?? .idle) != .idle }
         history.isInUse = { [weak dictation] id in dictation?.isInFlight(id) ?? false }
+        // Each dictation is on disk while it's recorded and transcribed, until History has it (none in a preview).
+        recorder.journal = history.journal
         let builder = menuBar.builder
         pillModel.contextMenuProvider = { builder.makeMenu(includeQuit: false) }
         inserter.eventTapActive = { [weak hotkeys] in hotkeys?.isTapActive ?? false }

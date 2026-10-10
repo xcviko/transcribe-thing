@@ -661,6 +661,9 @@ final class FakeRecorder: DictationRecorder {
     /// What the capture in progress records; a start that continues a recording puts that one first.
     var next = Recording(samples: Array(repeating: 0.1, count: 16_000 * 2),
                          speech: SpeechStats(voicedSeconds: 1.5, peakDBFS: -12, isSilent: false))
+    /// Keeps each capture on disk as `AudioRecorder` does: begun at the start (set `next` before it), all of `next`
+    /// once it ends, and thrown away with a cancel too short to keep.
+    var journal: RecordingJournal?
     private var prefix: Recording?
 
     func start(preferredDeviceUID: String?, continuing prefix: Recording?) throws {
@@ -670,6 +673,10 @@ final class FakeRecorder: DictationRecorder {
         isCapturing = true
         self.prefix = prefix
         lastPrefix = prefix
+        let whose = prefix ?? next
+        journal?.begin(RecordingJournal.Info(id: whose.id, startedAt: whose.startedAt, engine: nil, mode: nil,
+                                             deviceName: nil, continues: prefix != nil),
+                       prefix: prefix?.samples ?? []) { _ in [] }
     }
 
     func finish(tail: TimeInterval) async -> Recording {
@@ -680,12 +687,18 @@ final class FakeRecorder: DictationRecorder {
 
     func cancel() -> Recording? {
         isCapturing = false
-        return take()
+        let recording = take()
+        if let journal, recording.duration < AudioRecorder.minimumUndoDuration {
+            journal.discard(recording.id)
+            return nil
+        }
+        return recording
     }
 
     private func take() -> Recording {
         let recording = AudioRecorder.joined(prefix, next)
         prefix = nil
+        journal?.end(recording.id, samples: next.samples)
         return recording
     }
 

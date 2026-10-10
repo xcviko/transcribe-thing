@@ -233,6 +233,9 @@ final class DictationController {
         self.pillModel = pillModel
         self.toasts = toasts
         self.captureDevice = recorder
+        recorder.journalLabel = { [weak self] in
+            self.map { ($0.effectiveEngine, $0.machine.mode ?? $0.recordingMode) }
+        }
     }
 
     /// Wires hotkey, pill, recorder and toast callbacks.
@@ -553,7 +556,7 @@ final class DictationController {
         if captureDevice.isCapturing {
             guard prefix != nil else { return nil }
             // A stray capture would leave the kept audio out; start over with it.
-            _ = captureDevice.cancel()
+            if let stray = captureDevice.cancel() { discardJournal(of: stray.id) }
         }
         do {
             try captureDevice.start(preferredDeviceUID: settings.microphoneUID, continuing: prefix)
@@ -659,6 +662,7 @@ final class DictationController {
         guard passesPreflight(recording, model: ModelChoice(engine: job.engine)) else {
             DiagnosticLog.shared.event(.dictation, "job.finished", [
                 "engine": job.engine, "outcome": recording.speech.isSilent ? "silent" : "noSpeech", "sent": false])
+            discardJournal(of: recording.id)
             queue.removeAll { $0 === job }
             _ = machine.handle(.jobEnded, now: clock())
             drain()
@@ -713,13 +717,19 @@ final class DictationController {
             // A resumed dictation whose mic failed: its audio (the kept part at least) stays for another Undo.
             keepCancelled(recording ?? resumed, engine: effectiveEngine, mode: recordingMode,
                           polishes: isPolishing, translates: isTranslating, notify: true)
+        } else if let recording {
+            discardJournal(of: recording.id)
         }
     }
 
-    /// Keeps a canceled recording for Undo (and in history when it's long).
+    /// Keeps a canceled recording for Undo (and in history when it's long). Only one History keeps is kept on disk:
+    /// the rest is the user's to Undo while the app runs, not to find again after a crash.
     private func keepCancelled(_ recording: Recording, engine: EngineID, mode: DictationMachine.Mode,
                                polishes: Bool = false, translates: Bool = false, notify: Bool) {
-        guard recording.duration >= Self.undoMinimumDuration else { return }
+        guard recording.duration >= Self.undoMinimumDuration else {
+            discardJournal(of: recording.id)
+            return
+        }
         retain(recording)
         cancelledEngines[recording.id] = engine
         if polishes { polishIDs.insert(recording.id) } else { polishIDs.remove(recording.id) }
@@ -731,6 +741,8 @@ final class DictationController {
                 id: recording.id, createdAt: recording.startedAt, text: "", engine: engine,
                 status: .cancelled, audioDuration: recording.duration, voicedSeconds: recording.speech.voicedSeconds,
                 mode: mode, audioFileName: file))
+        } else {
+            discardJournal(of: recording.id)
         }
         guard notify else { return }
         postCanceled(recording)
@@ -743,6 +755,13 @@ final class DictationController {
                            title: "Dictation canceled", body: note,
                            actions: [NoticeAction(title: "Undo", kind: .undoCancel, isPrimary: true)],
                            lifetime: .seconds(note == nil ? 6 : 10), recordingID: recording.id))
+    }
+
+    /// A dictation's recording that ends here without History keeping it (thrown away, or kept in memory for Undo
+    /// only): its journal goes, or the next launch would bring it back as a failed entry. Every recording that
+    /// leaves the recorder ends either here or in `HistoryStore.saveAudio`, which removes its journal once saved.
+    private func discardJournal(of id: UUID) {
+        history.discardJournal(of: id)
     }
 
     /// Posts a failure notice; the same failure again within `repeatedFailureQuietPeriod` of its last sound
@@ -1152,6 +1171,7 @@ final class DictationController {
             "engine": job.engine, "outcome": "noSpeech", "retry": history.entry(id: job.id)?.status == .failed,
             "polished": job.polishes, "translated": job.translates ? true : nil])
         forget(job.id)
+        discardJournal(of: job.id)
         let hadRow = history.entry(id: job.id).map { $0.status != .success } ?? false
         if hadRow { history.delete(job.id) }
         Log.engine.info("No speech from \(job.engine.rawValue, privacy: .public)")
