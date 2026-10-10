@@ -693,10 +693,18 @@ final class HistoryStore {
         return [name, RecordingFile.otherFormat(of: name)].map { paths.recordingURL(fileName: $0) }
     }
 
-    private nonisolated static func readRecording(at urls: [URL], for entry: TranscriptEntry) -> Recording? {
-        guard let (url, samples) = urls.lazy.compactMap({ url in
-            RecordingFile.read(url).flatMap { $0.isEmpty ? nil : (url, $0) }
-        }).first else { return nil }
+    /// Reads each file once. (`lazy.compactMap(...).first` read the one it found twice and force-unwrapped the second
+    /// read: a file deleted or rewritten in between, by a delete or another copy of the app, crashed the app.)
+    nonisolated static func readRecording(at urls: [URL], for entry: TranscriptEntry,
+                                          read: (URL) -> [Float]? = RecordingFile.read) -> Recording? {
+        var found: (url: URL, samples: [Float])?
+        for url in urls {
+            if let samples = read(url), !samples.isEmpty {
+                found = (url, samples)
+                break
+            }
+        }
+        guard let (url, samples) = found else { return nil }
         var speech = SpeechAnalyzer.stats(for: samples)
         if speech.voicedSeconds == 0 && entry.voicedSeconds > 0 { speech.voicedSeconds = entry.voicedSeconds }
         var recording = Recording(id: entry.id, samples: samples, startedAt: entry.createdAt, speech: speech)

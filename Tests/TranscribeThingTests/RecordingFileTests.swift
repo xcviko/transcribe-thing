@@ -640,4 +640,33 @@ private final class Calls: Sendable {
         #expect(oldest.allSatisfy { s.history.entry(id: $0.id) == nil })
         #expect(s.files.isEmpty)
     }
+
+    /// A recording file that goes while it's being read back (deleted, or rewritten by another copy of the app):
+    /// each file is read once, so what that read got is the answer. Reading it a second time to hand it over found
+    /// nothing and crashed (Home's Retry on a row, then the row deleted).
+    @Test func aRecordingIsReadOnceAndAFileThatGoesMeanwhileDoesntCrash() {
+        let id = UUID()
+        let name = RecordingFile.name(for: id)
+        let urls = [name, RecordingFile.otherFormat(of: name)].map { URL(fileURLWithPath: "/nonexistent/\($0)") }
+        let samples = speechLike(seconds: 1)
+        // The file is there for the first read only.
+        let reads = Calls()
+        let recording = HistoryStore.readRecording(at: urls, for: entry(id, file: name)) { _ in
+            reads.add()
+            return reads.value == 1 ? samples : nil
+        }
+        #expect(recording?.samples.count == samples.count)
+        #expect(recording?.id == id)
+        #expect(reads.value == 1, "the file found is read once, the other format not at all")
+
+        // The first format can't be read: the other one is, once.
+        var asked: [URL] = []
+        let fromOther = HistoryStore.readRecording(at: urls, for: entry(id, file: name)) { url in
+            asked.append(url)
+            return url == urls[1] ? samples : []
+        }
+        #expect(fromOther?.samples.count == samples.count)
+        #expect(asked == urls)
+        #expect(HistoryStore.readRecording(at: urls, for: entry(id, file: name)) { _ in nil } == nil)
+    }
 }
