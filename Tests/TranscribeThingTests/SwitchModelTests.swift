@@ -593,6 +593,51 @@ import Testing
         #expect(rig.h.toasts.notices.contains { $0.style != .info }, "the refusal")
     }
 
+    /// The main model refused the hold (Gemini without a key) and fn Tab moves it to Parakeet, before the hold is
+    /// confirmed or after: the mic opens for Parakeet, the dictation is Parakeet's, and Gemini's refusal is never told.
+    @Test func switchingAwayFromARefusedHoldRecordsOnTheNewModel() async throws {
+        for confirmedFirst in [false, true] {
+            let (rig, _) = Self.make(key: .missing)
+            let c = rig.h.controller
+            c.runsTimers = false
+            rig.h.settings.lineup.main = .gemini
+            // With hands-free's model able to start, a confirmed hold's refusal waits for fn Space (deferred).
+            rig.h.settings.handsFreeModel = .parakeet
+            var used: [EngineID] = []
+            rig.result = { _, engine in
+                used.append(engine)
+                return "words"
+            }
+            c.handle(.pttDown)
+            if confirmedFirst { c.send(.timer(.arming)) }
+            #expect(rig.h.recorder.starts == 0)
+            c.handle(.cycleEngine)
+            #expect(c.effectiveEngine == .parakeet && rig.h.recorder.starts == 1, "confirmed first: \(confirmedFirst)")
+            if !confirmedFirst { c.send(.timer(.arming)) }
+            #expect(c.machine.capture.isListeningOrLocked)
+            try await Self.release(rig)
+            #expect(used == [.parakeet])
+            #expect(rig.h.toasts.notices.allSatisfy { $0.style == .info }, "nothing refused")
+        }
+    }
+
+    /// The model switched to can't start either (the mic fails): its own problem is told, not the main model's.
+    @Test func aSwitchThatCantStartEitherTellsItsOwnProblem() {
+        let (rig, _) = Self.make(key: .missing)
+        let c = rig.h.controller
+        c.runsTimers = false
+        rig.h.settings.lineup.main = .gemini
+        c.handle(.pttDown)
+        let micFails = AppError.microphoneNotResponding("busy")
+        rig.h.recorder.startError = micFails
+        c.handle(.cycleEngine)
+        #expect(c.effectiveEngine == .parakeet)
+        c.send(.timer(.arming))
+        #expect(!c.machine.isRecording)
+        #expect(rig.notice("error.\(micFails.code)") != nil)
+        #expect(rig.notice("error.\(AppError.openRouterMissingKey.code)") == nil)
+    }
+
     /// Hands-free's model is one Switch model reaches: one that becomes the main model, or that Switch model stops
     /// reaching, is forgotten.
     @Test func handsFreesModelIsOneOfTheCycle() {

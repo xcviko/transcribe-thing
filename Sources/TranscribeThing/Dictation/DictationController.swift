@@ -2487,6 +2487,22 @@ final class DictationController {
         pillModel.engineChipPulse &+= 1
         if pillModel.showsTabHint { pillModel.showsTabHint = false }
         if byUser { playCue(.modelSwitch) }
+        // Hands-free's own switch is settled by `send`, which knows whether fn Space came.
+        if byUser { retryRefusedCapture() }
+    }
+
+    /// The model the hold was refused for (`pendingRefusal`, `deferredRefusal`) is no longer the dictation's: the mic
+    /// opens for the new one, and the old refusal is never told. Only the new model's own refusal is, when it has one.
+    private func retryRefusedCapture() {
+        guard pendingRefusal != nil || deferredRefusal != nil else { return }
+        pendingRefusal = nil
+        clearDeferredRefusal()
+        guard let failure = beginCapture() else { return }
+        if machine.capture.isArming {
+            pendingRefusal = failure
+        } else {
+            execute(machine.handle(.captureFailed(failure), now: clock()))
+        }
     }
 
     /// A switch that can't happen: the model stays, the pill shakes, and a notice says why. What the OpenRouter key
