@@ -4,18 +4,21 @@ import Foundation
 
 /// Headless probe for call detection, dispatched by TranscribeThingMain before the app starts:
 ///
-///     transcribe-thing --audio-watch [--for <seconds>] [--call-after <seconds>]
+///     transcribe-thing --audio-watch [--for <seconds>] [--call-after <seconds>] [--end-after <seconds>]
 ///
-/// Prints, as they happen, which apps start and stop using a microphone and playing sound, with how long each
-/// lasted, and `CALL?` when one app has done both at once for `--call-after` seconds (default 20). It polls
-/// the HAL twice a second and also listens for its change notifications, printing `listener:` when one
-/// arrives, to show whether they can be relied on. It only reads: no recording, no settings, no network.
+/// Prints, as they happen, which processes start and stop using a microphone and playing sound, with how long
+/// each lasted, and what `CallDetector` makes of them per app (`CallApp`): `CALL?` when one app has both at once,
+/// `CALL STARTED` once that has lasted `--call-after` seconds (default 20), `CALL MIC RELEASED` and `CALL MIC BACK`
+/// around a mute the app shows, and `CALL ENDED` once it has been silent for `--end-after` seconds (default 60) or
+/// the probe stops. It polls the HAL twice a second and also listens for its change notifications, printing
+/// `listener:` when one arrives, to show whether they can be relied on. It only reads: no recording, no settings,
+/// no network.
 enum AudioWatchCLI {
     static func handles(_ arguments: [String]) -> Bool {
         arguments.contains("--audio-watch")
     }
 
-    static let usage = "usage: transcribe-thing --audio-watch [--for <seconds>] [--call-after <seconds>]"
+    static let usage = "usage: transcribe-thing --audio-watch [--for <seconds>] [--call-after <seconds>] [--end-after <seconds>]"
 
     /// Runs until `--for` runs out or Ctrl-C, then exits the process.
     @MainActor
@@ -26,11 +29,15 @@ enum AudioWatchCLI {
             guard index + 1 < arguments.count, let value = Double(arguments[index + 1]), value > 0 else { return nil }
             return .some(value)
         }
-        guard let duration = seconds("--for"), let callAfter = seconds("--call-after") else {
+        guard let duration = seconds("--for"), let callAfter = seconds("--call-after"), let endAfter = seconds("--end-after")
+        else {
             FileHandle.standardError.write(Data((usage + "\n").utf8))
             exit(2)
         }
-        let watch = AudioWatch(callAfter: callAfter ?? 20)
+        var settings = CallDetector.Settings()
+        settings.confirmAfter = callAfter ?? settings.confirmAfter
+        settings.endAfter = endAfter ?? settings.endAfter
+        let watch = AudioWatch(settings: settings)
         watch.start()
         if let duration {
             DispatchQueue.main.asyncAfter(deadline: .now() + duration) {
@@ -51,24 +58,27 @@ private final class AudioWatch {
         var name: String
         var input: Date?
         var output: Date?
-        var both: Date?
-        var announcedCall = false
     }
 
-    private let callAfter: TimeInterval
     private let started = Date()
     private let listeners = HALListenerSet(queue: .main)
     private var watchedObjects: Set<AudioObjectID> = []
     private var activities: [pid_t: Activity] = [:]
+    /// The app each process with audio belongs to, looked up once per process.
+    private var apps: [pid_t: CallApp?] = [:]
+    private var detector: CallDetector
+    private var suspectedAt: TimeInterval?
     private var deviceInUse: [AudioDeviceID: Bool] = [:]
     private var timer: DispatchSourceTimer?
 
-    init(callAfter: TimeInterval) {
-        self.callAfter = callAfter
+    init(settings: CallDetector.Settings) {
+        detector = CallDetector(settings: settings)
     }
 
     func start() {
-        print("AUDIO WATCH: polling every 0.5 s plus HAL notifications · CALL? after \(Int(callAfter)) s of mic and sound together")
+        let settings = detector.settings
+        print("AUDIO WATCH: polling every 0.5 s plus HAL notifications · a call after \(Int(settings.confirmAfter)) s of "
+              + "one app's mic and sound together, over after \(Int(settings.endAfter)) s of silence")
         print("Ctrl-C to stop. pid \(getpid()) is this probe and is left out.")
         listeners.add(CoreAudioHAL.systemObject, kAudioHardwarePropertyProcessObjectList) { [weak self] in
             MainActor.assumeIsolated { self?.poll(listener: "process list changed") }
@@ -85,6 +95,7 @@ private final class AudioWatch {
         timer?.cancel()
         listeners.invalidate()
         let now = Date()
+        report(detector.stop(at: now.timeIntervalSince(started)))
         for activity in activities.values.sorted(by: { $0.name < $1.name }) {
             if let since = activity.input { line("\(activity.name): still on mic for \(span(since, now))") }
             if let since = activity.output { line("\(activity.name): still playing sound for \(span(since, now))") }
@@ -97,17 +108,24 @@ private final class AudioWatch {
         if let listener { line("listener: \(listener)") }
         let now = Date()
         var seen: Set<pid_t> = []
+        var processes: [(CallApp?, CallDetector.Activity)] = []
         for object in CoreAudioHAL.processObjectIDs() {
             watch(object)
             guard let record = CoreAudioHAL.processRecord(object), record.pid != getpid() else { continue }
             seen.insert(record.pid)
             update(record, at: now)
+            guard record.isRunningInput || record.isRunningOutput else { continue }
+            let app = apps[record.pid] ?? CallApp.of(record)
+            apps[record.pid] = app
+            processes.append((app, CallDetector.Activity(mic: record.isRunningInput, sound: record.isRunningOutput)))
         }
         for pid in activities.keys where !seen.contains(pid) {
             update(CoreAudioHAL.ProcessRecord(objectID: 0, pid: pid, bundleID: nil, isRunningInput: false,
                                               isRunningOutput: false, inputDevices: [], outputDevices: []), at: now)
             activities[pid] = nil
         }
+        for pid in apps.keys where !seen.contains(pid) { apps[pid] = nil }
+        report(detector.feed(CallApp.activity(processes), at: now.timeIntervalSince(started)))
         pollDevices()
     }
 
@@ -141,21 +159,35 @@ private final class AudioWatch {
             activity.output = nil
             line("\(activity.name): sound off after \(span(since, now))")
         }
-        if activity.input != nil, activity.output != nil {
-            let since = activity.both ?? now
-            activity.both = since
-            if !activity.announcedCall, now.timeIntervalSince(since) >= callAfter {
-                activity.announcedCall = true
-                line("CALL? \(activity.name): mic and sound together for \(span(since, now))")
-            }
-        } else if let since = activity.both {
-            activity.both = nil
-            if activity.announcedCall {
-                activity.announcedCall = false
-                line("CALL? \(activity.name): mic and sound together ended after \(span(since, now))")
+        activities[record.pid] = activity.input == nil && activity.output == nil ? nil : activity
+    }
+
+    /// What the detector made of the last look. Its times are seconds since the probe started, like the lines',
+    /// and can be up to 1.5 s before the line: a signal only counts as off once it has stayed off.
+    private func report(_ events: [CallDetector.Event]) {
+        for event in events {
+            switch event {
+            case .suspected(let app, let at):
+                suspectedAt = at
+                line("CALL? \(app.name): mic and sound together since \(time(at)), keeping audio from there")
+            case .dropped(let app, let at):
+                line("CALL? \(app.name): not a call, mic and sound together for only \(span(suspectedAt ?? at, at))")
+                suspectedAt = nil
+            case .started(let call):
+                line("CALL STARTED \(call.app.name): mic and sound together since \(time(call.startedAt))")
+                suspectedAt = nil
+            case .micReleased(let app, let at):
+                line("CALL MIC RELEASED (muted?) \(app.name) at \(time(at)), sound goes on")
+            case .micBack(let app, let at):
+                let released = detector.call?.mutes.last.map { " after \(span($0.lowerBound, $0.upperBound))" } ?? ""
+                line("CALL MIC BACK \(app.name) at \(time(at))\(released)")
+            case .ended(let call):
+                let mutes = call.mutes.isEmpty ? "no mute seen"
+                    : "muted " + call.mutes.map { "\(time($0.lowerBound)) to \(time($0.upperBound))" }.joined(separator: ", ")
+                line("CALL ENDED \(call.app.name) after \(span(call.startedAt, call.lastAudioAt)) "
+                     + "(\(time(call.startedAt)) to \(time(call.lastAudioAt))), \(mutes)")
             }
         }
-        activities[record.pid] = activity.input == nil && activity.output == nil ? nil : activity
     }
 
     /// Whether anyone at all uses each microphone, as the device reports it: what apps without per-process
@@ -187,8 +219,16 @@ private final class AudioWatch {
     }
 
     private func span(_ from: Date, _ to: Date) -> String {
-        let seconds = to.timeIntervalSince(from)
+        span(from.timeIntervalSinceReferenceDate, to.timeIntervalSinceReferenceDate)
+    }
+
+    private func span(_ from: TimeInterval, _ to: TimeInterval) -> String {
+        let seconds = to - from
         return seconds < 60 ? String(format: "%.1f s", seconds) : String(format: "%d min %02d s", Int(seconds) / 60, Int(seconds) % 60)
+    }
+
+    private func time(_ seconds: TimeInterval) -> String {
+        String(format: "%.1f", seconds)
     }
 
     private func line(_ text: String) {
