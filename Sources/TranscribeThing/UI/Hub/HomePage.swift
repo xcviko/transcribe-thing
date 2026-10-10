@@ -443,10 +443,8 @@ private struct StatTile<Accessory: View>: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.inkSecondary)
                     .lineLimit(1)
-                if help != nil {
-                    Image(systemName: "info.circle")
-                        .font(.system(size: 9.5, weight: .medium))
-                        .foregroundStyle(.inkTertiary)
+                if let help {
+                    InfoHint(text: help)
                 }
             }
             Spacer(minLength: 6)
@@ -461,10 +459,10 @@ private struct StatTile<Accessory: View>: View {
         .padding(.bottom, 12)
         .frame(maxWidth: .infinity, minHeight: 76, maxHeight: 76, alignment: .leading)
         .background(Color.sectionFill, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
-        .help(help ?? "")
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label)
         .accessibilityValue(parts.map { "\($0.value) \($0.unit)" }.joined(separator: " "))
+        .accessibilityHint(help ?? "")
     }
 
     private var value: some View {
@@ -492,6 +490,41 @@ private struct StatTile<Accessory: View>: View {
 extension StatTile where Accessory == EmptyView {
     init(label: String, parts: [StatPart], help: String? = nil) {
         self.init(label: label, parts: parts, help: help) { EmptyView() }
+    }
+}
+
+/// The ⓘ beside a stat: what it means, in a popover as the pointer rests on it (or on a click). A tooltip on the whole
+/// tile came only after the system's long delay, and nothing said it was there.
+private struct InfoHint: View {
+    var text: String
+    @State private var hovering = false
+    @State private var shown = false
+
+    var body: some View {
+        Image(systemName: "info.circle")
+            .font(.system(size: 9.5, weight: .medium))
+            .foregroundStyle(hovering || shown ? Color.inkSecondary : Color.inkTertiary)
+            .padding(5)
+            .contentShape(Rectangle())
+            .padding(-5)
+            .onHover { inside in
+                hovering = inside
+                if !inside { shown = false }
+            }
+            .task(id: hovering) {
+                guard hovering else { return }
+                try? await Task.sleep(for: .milliseconds(250))
+                if !Task.isCancelled, hovering { shown = true }
+            }
+            .onTapGesture { shown.toggle() }
+            .popover(isPresented: $shown, arrowEdge: .bottom) {
+                Text(text)
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: 240, alignment: .leading)
+                    .padding(12)
+            }
+            .accessibilityLabel(text)
     }
 }
 

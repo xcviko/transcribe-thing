@@ -167,6 +167,9 @@ private struct HubRoot: View {
             page(windows.hubSection)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .navigationTitle(windows.hubSection.title)
+                // Every page keeps a toolbar, tools or none: a page without one lost the window's toolbar, and the
+                // sidebar then started under a separate title bar instead of reaching up around the window buttons.
+                .toolbar { ToolbarSpacer(.flexible) }
         }
         .frame(minWidth: 820, minHeight: 560)
         .overlay(alignment: .topLeading) {
