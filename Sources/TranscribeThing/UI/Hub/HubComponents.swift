@@ -170,44 +170,44 @@ struct RadioDot: View {
     }
 }
 
-/// A pop-up of choices: the system's menu button, "Never ⌃⌄".
+/// A pop-up of choices: the system's menu button, "Never ⌃⌄". `title` isn't shown (the row says it): VoiceOver reads it.
 struct HubMenuPicker<Value: Hashable>: View {
+    var title: String
     var options: [Value]
     @Binding var selection: Value
     var label: (Value) -> String
 
     var body: some View {
-        Picker(selection: $selection) {
+        Picker(title, selection: $selection) {
             ForEach(options, id: \.self) { option in
                 Text(label(option)).tag(option)
             }
-        } label: {
-            EmptyView()
         }
         .pickerStyle(.menu)
         .labelsHidden()
         .fixedSize()
+        .accessibilityLabel(title)
     }
 }
 
-/// A few mutually exclusive choices: the system's segmented control.
+/// A few mutually exclusive choices: the system's segmented control. `title` is VoiceOver's, as the menu picker's.
 struct HubSegmentedPicker<Value: Hashable>: View {
+    var title: String
     var options: [Value]
     var selection: Value
     var label: (Value) -> String
     var onPick: (Value) -> Void
 
     var body: some View {
-        Picker(selection: Binding(get: { selection }, set: { onPick($0) })) {
+        Picker(title, selection: Binding(get: { selection }, set: { onPick($0) })) {
             ForEach(options, id: \.self) { option in
                 Text(label(option)).tag(option)
             }
-        } label: {
-            EmptyView()
         }
         .pickerStyle(.segmented)
         .labelsHidden()
         .fixedSize()
+        .accessibilityLabel(title)
     }
 }
 

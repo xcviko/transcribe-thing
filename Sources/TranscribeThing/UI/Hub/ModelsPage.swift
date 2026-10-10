@@ -35,8 +35,8 @@ struct ModelsPage: View {
                     SettingsGroup {
                         SettingsRow(title: "Hands-free dictations use", subtitle: handsFreeSubtitle,
                                     systemImage: "lock.fill", iconTint: .inkSecondary) {
-                            HubMenuPicker(options: handsFreeOptions, selection: handsFreeModel,
-                                          label: handsFreeLabel)
+                            HubMenuPicker(title: "Hands-free dictations use", options: handsFreeOptions,
+                                          selection: handsFreeModel, label: handsFreeLabel)
                         }
                     }
                 }

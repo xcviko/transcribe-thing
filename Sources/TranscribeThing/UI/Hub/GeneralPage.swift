@@ -73,13 +73,13 @@ struct GeneralPage: View {
                 SettingsGroup {
                     SettingsRow(title: "Translate between", systemImage: "translate", iconTint: .inkSecondary) {
                         HStack(spacing: 8) {
-                            HubMenuPicker(options: TranslationLanguage.allCases, selection: language(\.first),
-                                          label: \.name)
+                            HubMenuPicker(title: "First language", options: TranslationLanguage.allCases,
+                                          selection: language(\.first), label: \.name)
                             Text("and")
                                 .typeface(.callout)
                                 .foregroundStyle(.inkSecondary)
-                            HubMenuPicker(options: TranslationLanguage.allCases, selection: language(\.second),
-                                          label: \.name)
+                            HubMenuPicker(title: "Second language", options: TranslationLanguage.allCases,
+                                          selection: language(\.second), label: \.name)
                         }
                     }
                 }
@@ -88,8 +88,8 @@ struct GeneralPage: View {
                 SettingsGroup {
                     SettingsRow(title: "Auto-delete history", systemImage: "clock.arrow.circlepath",
                                 iconTint: .inkSecondary) {
-                        HubMenuPicker(options: AutoDeleteChoice.days, selection: autoDeleteDays,
-                                      label: AutoDeleteChoice.label)
+                        HubMenuPicker(title: "Auto-delete history", options: AutoDeleteChoice.days,
+                                      selection: autoDeleteDays, label: AutoDeleteChoice.label)
                     }
                     SettingsRow(title: "Clear history", subtitle: clearSubtitle,
                                 systemImage: "trash", iconTint: .danger) {
@@ -196,10 +196,10 @@ struct GeneralPage: View {
 
     private var pillRow: some View {
         SettingsRow(title: "Show the pill", systemImage: "capsule", iconTint: .inkSecondary) {
-            HubSegmentedPicker(options: PillMode.allCases, selection: settings.pillMode, label: \.title) { mode in
+            HubSegmentedPicker(title: "Show the pill", options: PillMode.allCases, selection: settings.pillMode,
+                               label: \.title) { mode in
                 settings.pillMode = mode
             }
-            .accessibilityLabel("Show the pill")
         }
     }
 
