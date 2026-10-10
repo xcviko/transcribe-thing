@@ -458,4 +458,24 @@ import Testing
         #expect(rig.h.controller.machine.isRecording)
         rig.h.controller.send(.pillCancel)
     }
+
+    /// fn D, Esc, then fn pressed and let go again before the lookup answered: the new dictation's release doesn't
+    /// wait for the canceled one's key, so it finishes (the mic doesn't stay open), and the old fn D adds nothing.
+    @Test func aNewPressAfterEscIsntHeldByTheCanceledLookup() async throws {
+        let (rig, _) = Self.make()
+        let lookup = PolishSelectionTests.Lookup()
+        rig.h.controller.selectionOverride = { await lookup.wait(); return "Wispr Flow" }
+        rig.result = { _, _ in "words" }
+        Switch.hold(rig)
+        Self.pressD(rig)
+        rig.h.controller.handle(.cancel)
+        rig.h.controller.handle(.pttUp)
+        #expect(!rig.h.controller.machine.isRecording)
+        Switch.hold(rig)
+        try await Switch.release(rig)
+        #expect(!rig.h.controller.machine.isRecording && !rig.h.recorder.isCapturing)
+        lookup.isOpen = true
+        try await Task.sleep(for: .milliseconds(60))
+        #expect(rig.h.settings.dictionary.words.isEmpty && rig.pasted.count == 1)
+    }
 }

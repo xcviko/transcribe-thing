@@ -131,6 +131,9 @@ final class DictationController {
     /// waits with them (`heldRelease`), so what the press was is decided by its keys, not by when fn came up.
     @ObservationIgnored private var heldKeys: [(action: ShortcutAction, key: KeyStroke?)] = []
     @ObservationIgnored private var heldRelease: DictationMachine.Input?
+    /// The recording `heldKeys` were pressed in. A newer one's release (Esc, then fn again before the lookup
+    /// answered) doesn't wait for them: they're dropped with the recording they belonged to.
+    @ObservationIgnored private var heldKeysGeneration = 0
     /// Polish Selection under way: the pill shows it (the polish circle, then the count) until its card comes up.
     @ObservationIgnored private var selectionPolish: SelectionPolish?
     /// This dictation is polished (`Polish`, fn P while it's on Gemini). It lasts while the dictation records, as
@@ -289,10 +292,10 @@ final class DictationController {
         case .pttDown:
             pressTakenByKey = false
             send(.pttDown)
-        case .pttUp where !heldKeys.isEmpty:
+        case .pttUp where holdsRelease:
             // The press's polish key is still being decided: its release follows the decision.
             heldRelease = .pttUp
-        case .pttInterrupted where !heldKeys.isEmpty:
+        case .pttInterrupted where holdsRelease:
             heldRelease = .pttInterrupted
         case .pttUp:
             pressTakenByKey = false
@@ -2070,6 +2073,7 @@ final class DictationController {
         guard heldKeys.count == 1 else { return }
         let override = selectionOverride, missing = selectionMissingOverride ?? .nothingSelected
         let generation = recordingGeneration
+        heldKeysGeneration = generation
         Task { [weak self] in
             var fresh = if let override {
                 await override().map { FocusInspector.SelectionLookup(text: $0, outcome: .found) }
@@ -2109,6 +2113,12 @@ final class DictationController {
                 self.send(release)
             }
         }
+    }
+
+    /// fn's release waits for the keys held in its own recording; with none, or only a canceled recording's, it goes
+    /// through.
+    private var holdsRelease: Bool {
+        !heldKeys.isEmpty && heldKeysGeneration == recordingGeneration
     }
 
     /// What a key for the selection does once the selection is known; false when it does nothing, and goes to the
