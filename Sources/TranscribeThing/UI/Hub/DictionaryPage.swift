@@ -51,12 +51,15 @@ struct DictionaryPage: View {
                             .foregroundStyle(.inkSecondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                } else {
-                    // A row each in the form, with its separator.
-                    ForEach(sections) { section in
-                        if !isSearching || !section.words.isEmpty {
-                            DictionarySection(model: section, renaming: $renaming)
-                        }
+                } else if let ungrouped = shownSections.first(where: { $0.group == nil }) {
+                    DictionarySection(model: ungrouped, renaming: $renaming)
+                }
+            }
+            // The groups on a card of their own under Ungrouped's, a row each.
+            if !groupSections.isEmpty {
+                Section {
+                    ForEach(groupSections) { section in
+                        DictionarySection(model: section, renaming: $renaming)
                     }
                 }
             }
@@ -80,6 +83,18 @@ struct DictionaryPage: View {
 
     /// Ungrouped first (only named once there are groups), then each group, each newest first and narrowed by the
     /// search while its field is there.
+    /// The sections that show: every one, or those with words matching the search.
+    private var shownSections: [DictionarySection.Model] {
+        sections.filter { !isSearching || !$0.words.isEmpty }
+    }
+
+    /// The groups' sections, unless there is nothing to show at all.
+    private var groupSections: [DictionarySection.Model] {
+        let empty = settings.dictionary.words.isEmpty && settings.dictionary.groups.isEmpty
+        let noMatch = isSearching && sections.allSatisfy { $0.words.isEmpty }
+        return empty || noMatch ? [] : shownSections.filter { $0.group != nil }
+    }
+
     private var sections: [DictionarySection.Model] {
         let dictionary = settings.dictionary
         let query = search.trimmingCharacters(in: .whitespaces)
