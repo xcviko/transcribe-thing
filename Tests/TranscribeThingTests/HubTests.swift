@@ -63,6 +63,17 @@ import Testing
         #expect(days.map(\.words) == [5, 1])
     }
 
+    /// A file's transcript is listed under its day, but its words aren't the user's: the header leaves them out, as
+    /// the stats do.
+    @Test func aDaysWordsLeaveOutFiles() {
+        let imported = TranscriptEntry(createdAt: now.addingTimeInterval(-3600), text: "a b c d e f", engine: .parakeet,
+                                       audioDuration: 60, voicedSeconds: 50, importedFrom: "talk.mp3")
+        let days = HistoryGrouping.days([entry(hoursAgo: 2, text: "one two three"), imported], now: now,
+                                        calendar: calendar)
+        #expect(days.map(\.entries.count) == [2])
+        #expect(days.map(\.words) == [3])
+    }
+
     @Test func emptyHistoryHasNoDays() {
         #expect(HistoryGrouping.days([], now: now, calendar: calendar).isEmpty)
     }

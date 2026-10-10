@@ -44,7 +44,7 @@ struct HistoryDay: Identifiable, Equatable {
     let id: Date
     let title: String
     var entries: [TranscriptEntry]
-    /// Words in the day's transcripts, for the header.
+    /// Words in the day's dictations, for the header: as in the stats, not a polished selection's or a file's.
     var words = 0
 }
 
@@ -60,7 +60,7 @@ enum HistoryGrouping {
                                        entries: []))
             }
             days[days.count - 1].entries.append(entry)
-            if !entry.isSelection { days[days.count - 1].words += entry.wordCount }
+            if !entry.isSelection, entry.importedFrom == nil { days[days.count - 1].words += entry.wordCount }
         }
         return days
     }
