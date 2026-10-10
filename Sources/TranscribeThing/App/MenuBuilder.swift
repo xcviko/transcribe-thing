@@ -87,19 +87,23 @@ final class MenuBuilder {
         let parakeet = env.settings.parakeetEngine
         let main = env.dictation.activity == .recording ? env.dictation.effectiveChoice : env.settings.lineup.main
         let status = Self.status(of: main, parakeet: parakeet, models: env.models, account: env.account)
-        let activity: String? = switch env.dictation.activity {
-        case .recording: "Listening…"
-        case .processing: "Transcribing…"
-        case .polishing: "Polishing…"
-        case .idle: nil
-        }
-        // Polish Selection isn't the dictation's model: the line names the polish instead.
-        let title = env.dictation.activity == .polishing ? "Polish Selection · Polishing…"
-            : "\(main.title(parakeet: parakeet)) · \(activity ?? status.text)"
+        let title = Self.statusTitle(env.dictation.activity, model: main.title(parakeet: parakeet), status: status.text)
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         item.isEnabled = false
-        item.image = Self.dot(activity == nil ? status.color : .systemRed)
+        item.image = Self.dot(env.dictation.activity == .idle ? status.color : .systemRed)
         return item
+    }
+
+    /// The status line's words: the model and what it's doing, or its status when idle. Work on a selection isn't
+    /// the dictation's model: the line names that work instead.
+    static func statusTitle(_ activity: DictationActivity, model: String, status: String) -> String {
+        switch activity {
+        case .idle: "\(model) · \(status)"
+        case .recording: "\(model) · Listening…"
+        case .processing: "\(model) · Transcribing…"
+        case .polishing: "Polish Selection · Polishing…"
+        case .translating: "Translate Selection · Translating…"
+        }
     }
 
     struct EngineStatus {

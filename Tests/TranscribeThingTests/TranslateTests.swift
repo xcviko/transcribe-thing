@@ -184,6 +184,21 @@ import Testing
         #expect(rig.pasted.isEmpty)
     }
 
+    /// While the selection is being translated the app says so (the menu bar reads "Translating", not "Polishing"),
+    /// and Esc stops it.
+    @Test func translatingASelectionIsTheAppsActivity() async throws {
+        let (rig, _, asked) = PolishSelectionTests.make(selection: "привет")
+        asked.hold(.geminiFlash)
+        Switch.hold(rig)
+        try await waitUntil { rig.h.controller.machine.isRecording }
+        rig.h.controller.handle(.translate)
+        try await waitUntil { asked.calls.count == 1 }
+        #expect(rig.h.controller.activity == .translating)
+        rig.h.controller.handle(.cardClose)
+        #expect(rig.h.controller.activity == .idle)
+        asked.release(.geminiFlash)
+    }
+
     /// Nothing selected, off Gemini: the key says where Translate works; the dictation goes on.
     @Test func withoutASelectionTheKeySaysWhereItWorks() async throws {
         let (rig, _, asked) = PolishSelectionTests.make(selection: nil)

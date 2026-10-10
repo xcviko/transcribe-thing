@@ -2028,6 +2028,17 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
             == "Not downloaded")
     }
 
+    /// What the app is doing replaces the status; work on a selection names itself instead of the model.
+    @Test func theStatusLineSaysWhatTheAppIsDoing() {
+        let model = "Parakeet v3"
+        #expect(MenuBuilder.statusTitle(.idle, model: model, status: "Ready") == "Parakeet v3 · Ready")
+        #expect(MenuBuilder.statusTitle(.recording, model: model, status: "Ready") == "Parakeet v3 · Listening…")
+        #expect(MenuBuilder.statusTitle(.processing, model: model, status: "Ready") == "Parakeet v3 · Transcribing…")
+        #expect(MenuBuilder.statusTitle(.polishing, model: model, status: "Ready") == "Polish Selection · Polishing…")
+        #expect(MenuBuilder.statusTitle(.translating, model: model, status: "Ready")
+                == "Translate Selection · Translating…")
+    }
+
     /// The model is chosen in Models (and per dictation, from the pill): neither menu offers it.
     @Test func theMenuHasNoModelItem() {
         let env = AppEnvironment.preview()

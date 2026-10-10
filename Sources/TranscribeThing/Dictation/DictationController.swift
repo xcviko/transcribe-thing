@@ -3,7 +3,8 @@ import Observation
 
 /// What the menu bar icon reflects.
 /// `polishing`: Polish Selection under way, with no dictation recording or transcribing.
-enum DictationActivity: Equatable, Sendable { case idle, recording, processing, polishing }
+/// `polishing` and `translating`: Polish Selection, or the translate key over a selection, under way.
+enum DictationActivity: Equatable, Sendable { case idle, recording, processing, polishing, translating }
 
 /// Why a version asked for from Home didn't come: its row says so until it's dismissed or something else is made
 /// for the recording.
@@ -2690,9 +2691,13 @@ final class DictationController {
             deviceNoticeDue = false
             if let notice = deviceNotice(for: recorder.lastChoice) { toasts.post(notice) }
         }
-        let polishesSelection = selectionPolish?.isRunning == true
+        let selectionWork: DictationActivity? = if let selectionPolish, selectionPolish.isRunning {
+            selectionPolish.translates ? .translating : .polishing
+        } else {
+            nil
+        }
         let next: DictationActivity = machine.capture.isListeningOrLocked ? .recording
-            : hasPendingWork ? .processing : polishesSelection ? .polishing : .idle
+            : hasPendingWork ? .processing : selectionWork ?? .idle
         if next != activity {
             activity = next
             sounds.setDictationActive(next != .idle)
