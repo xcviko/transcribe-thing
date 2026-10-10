@@ -195,7 +195,7 @@ final class PermissionsCenter {
         switch pane {
         case .microphone: microphone
         case .accessibility: accessibility
-        case .inputMonitoring, .keyboard, .sound, .storage: nil
+        case .inputMonitoring, .keyboard, .sound, .storage, .systemAudio: nil
         }
     }
 

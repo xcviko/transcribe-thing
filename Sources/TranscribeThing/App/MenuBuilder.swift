@@ -43,13 +43,14 @@ final class MenuBuilder {
         menu.addItem(copy)
         menu.addItem(.separator())
 
-        menu.addItem(callItem(env))
+        for item in callItems(env) { menu.addItem(item) }
         menu.addItem(.separator())
 
         menu.addItem(submenuItem("Microphone", symbol: "mic", microphoneMenu(env)))
         menu.addItem(.separator())
 
         menu.addItem(MenuActionItem(title: "Home") { [weak env] in env?.windows.showHub(.home) })
+        menu.addItem(MenuActionItem(title: "Calls") { [weak env] in env?.windows.showHub(.calls) })
         menu.addItem(MenuActionItem(title: "Settings…") { [weak env] in env?.windows.showSettings() })
         if let update = updateItem(env) { menu.addItem(update) }
 
@@ -71,13 +72,24 @@ final class MenuBuilder {
 
     // MARK: - Calls
 
-    /// Stop Call Recording while a call is recorded and kept (it's transcribed); otherwise Start Call Recording, which
-    /// keeps a noticed call or records the mic and everything the Mac plays.
-    private func callItem(_ env: AppEnvironment) -> NSMenuItem {
-        if case .recording = env.callMonitor.state {
-            return MenuActionItem(title: "Stop Call Recording") { [weak env] in env?.callMonitor.stop(keep: true) }
+    /// While a kept call records: Stop Call Recording (it's transcribed) and Discard This Call. While one waits for
+    /// "Transcribe your call?": Transcribe This Call and Discard This Call. Otherwise Start Call Recording, which keeps
+    /// a noticed call or records the mic and everything the Mac plays.
+    private func callItems(_ env: AppEnvironment) -> [NSMenuItem] {
+        switch env.callMonitor.state {
+        case .recording:
+            return [
+                MenuActionItem(title: "Stop Call Recording") { [weak env] in env?.callMonitor.stop(keep: true) },
+                MenuActionItem(title: "Discard This Call") { [weak env] in env?.callMonitor.stop(keep: false) },
+            ]
+        case .asking:
+            return [
+                MenuActionItem(title: "Transcribe This Call") { [weak env] in env?.callMonitor.keep() },
+                MenuActionItem(title: "Discard This Call") { [weak env] in env?.callMonitor.discard() },
+            ]
+        case .idle, .suspected, .ending:
+            return [MenuActionItem(title: "Start Call Recording") { [weak env] in env?.callMonitor.startManual() }]
         }
-        return MenuActionItem(title: "Start Call Recording") { [weak env] in env?.callMonitor.startManual() }
     }
 
     // MARK: - Updates
@@ -98,6 +110,15 @@ final class MenuBuilder {
     /// "Parakeet v3 · Ready", "Gemini 3.8 Flash · Needs key": the main model, or what the app is doing (while
     /// recording, with the model the dictation is on: switched, or hands-free's).
     private func statusItem(_ env: AppEnvironment) -> NSMenuItem {
+        // A call being recorded says so while no dictation runs: "Recording call · Google Meet · 12:34". A click opens
+        // Calls.
+        if env.dictation.activity == .idle, let call = CallsList.liveInfo(env.callMonitor.state) {
+            let item = MenuActionItem(title: CallsCopy.menuStatus(call, now: Date())) { [weak env] in
+                env?.windows.showHub(.calls)
+            }
+            item.image = Self.dot(.systemRed)
+            return item
+        }
         let parakeet = env.settings.parakeetEngine
         let main = env.dictation.activity == .recording ? env.dictation.effectiveChoice : env.settings.lineup.main
         let status = Self.status(of: main, parakeet: parakeet, models: env.models, account: env.account)

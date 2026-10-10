@@ -84,6 +84,7 @@ struct GeneralPage: View {
                     }
                 }
             }
+            CallsSettingsGroup()
             HubGroup("History") {
                 SettingsGroup {
                     SettingsRow(title: "Auto-delete history", systemImage: "clock.arrow.circlepath",
@@ -473,5 +474,39 @@ private struct PastingRules: View {
         }))
         .toggleStyle(.checkbox)
         .labelsHidden()
+    }
+}
+
+/// General → Calls: whether calls are noticed (and asked about), where, and the permission their other side needs.
+struct CallsSettingsGroup: View {
+    @Environment(HubContext.self) private var hub
+    @Environment(AppSettings.self) private var settings
+
+    var body: some View {
+        @Bindable var settings = settings
+        HubGroup("Calls", footer: CallsCopy.settingsFooter) {
+            SettingsGroup {
+                SettingsRow(title: "Record calls", subtitle: modeSubtitle, systemImage: "phone",
+                            iconTint: .inkSecondary) {
+                    HubMenuPicker(title: "Record calls", options: CallRecordingMode.pickerOrder,
+                                  selection: $settings.callRecording, label: \.title)
+                }
+                SettingsRow(title: "System Audio Recording",
+                            subtitle: "Lets the app record the other side of a call. macOS doesn’t say whether it’s "
+                                + "on: a call whose other side came out silent tells you.",
+                            systemImage: "speaker.wave.2", iconTint: .inkSecondary) {
+                    Button("Open Settings") { hub.openSettings(.systemAudio) }
+                        .buttonStyle(SecondaryButtonStyle(size: .small))
+                }
+            }
+        }
+    }
+
+    private var modeSubtitle: String {
+        switch settings.callRecording {
+        case .off: "Only Start Call Recording in the menu bar records."
+        case .ask: "A call is recorded, and you’re asked whether to transcribe it."
+        case .automatic: "Every call is recorded and transcribed."
+        }
     }
 }

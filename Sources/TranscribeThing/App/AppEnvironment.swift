@@ -195,8 +195,8 @@ final class AppEnvironment {
         wireCalls()
     }
 
-    /// A call's question is a toast until the Calls tab has its own; deleting a call stops its transcription, or its
-    /// recording.
+    /// A call's question is a toast (sticky: unanswered, the call waits in the Calls tab); deleting a call stops its
+    /// transcription, or its recording.
     private func wireCalls() {
         callTranscriber.userName = { HubGreeting.firstName(fullName: NSFullUserName(), accountName: NSUserName()) }
         calls.onRemove = { [weak self] ids in
@@ -251,6 +251,7 @@ final class AppEnvironment {
         }
         observeAutoDelete()
         observeCallRecording()
+        observeCallState()
         scheduleMaintenance()
         scheduleCompression()
         updates.start()
@@ -336,6 +337,16 @@ final class AppEnvironment {
             Task { @MainActor [weak self] in self?.observeCallRecording() }
         }
         if mode == .off { callMonitor.stop() } else { callMonitor.start() }
+    }
+
+    /// The menu bar's red dot while a call is recorded, asked about or kept.
+    private func observeCallState() {
+        let state = withObservationTracking {
+            callMonitor.state
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in self?.observeCallState() }
+        }
+        menuBar.showCall(recording: CallsList.liveInfo(state) != nil)
     }
 
     /// transcribe-thing runs for weeks at a time: Auto-delete runs every hour, not only at launch (loading the

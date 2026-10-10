@@ -142,21 +142,27 @@ extension Notice {
     static func callQuestionKey(_ id: UUID) -> String { "call.ask.\(id.uuidString)" }
 
     /// A call is being recorded: transcribe it? Sticky until answered, or until the call is gone without an answer
-    /// mattering (dropped, deleted). An unanswered call that ends waits in the Calls store, and so does this.
+    /// mattering (dropped, deleted). An unanswered call that ends waits in the Calls tab, with a badge, and so does
+    /// this. Closed without an answer, the call waits there too.
     static func transcribeCall(_ id: UUID, service: String) -> Notice {
         Notice(dedupeKey: callQuestionKey(id), style: .info, symbol: "phone.badge.waveform",
                title: "Transcribe your call in \(service)?",
-               body: "It’s being recorded. No deletes the recording.",
-               actions: [NoticeAction(title: "Yes", kind: .keepCall(id), isPrimary: true),
-                         NoticeAction(title: "No", kind: .discardCall(id))],
+               body: callQuestionBody,
+               actions: [NoticeAction(title: "Transcribe", kind: .keepCall(id), isPrimary: true),
+                         NoticeAction(title: "Don’t Keep", kind: .discardCall(id))],
                lifetime: .sticky)
     }
+
+    static let callQuestionBody = "It’s being recorded. Don’t Keep deletes the recording; without an answer, it "
+        + "waits in Calls."
 }
 
 // MARK: - Destinations
 
 enum SettingsPane: String, Sendable {
     case microphone, accessibility, inputMonitoring, keyboard, sound, storage
+    /// Screen & System Audio Recording, whose System Audio Recording Only lets a call's other side be recorded.
+    case systemAudio
 
     /// System Settings deep link (verified anchors, macos-input.md §3.4).
     var url: URL {
@@ -167,33 +173,39 @@ enum SettingsPane: String, Sendable {
         case .keyboard: "x-apple.systempreferences:com.apple.preference.keyboard"
         case .sound: "x-apple.systempreferences:com.apple.preference.sound?input"
         case .storage: "x-apple.systempreferences:com.apple.settings.Storage"
+        case .systemAudio: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
         }
         return URL(string: raw)!
     }
 }
 
 enum HubSection: String, CaseIterable, Sendable, Identifiable {
-    case home, models, shortcuts, dictionary, microphone, general
+    case home, calls, models, shortcuts, dictionary, microphone, general
     /// A sub-page of General (no sidebar item of its own), like a pane inside System Settings.
     case softwareUpdate
+    /// One call, the one `WindowCoordinator.openCallID` names: a sub-page of Calls.
+    case callDetail
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .home: "Home"
+        case .calls: "Calls"
         case .models: "Models"
         case .shortcuts: "Shortcuts"
         case .dictionary: "Dictionary"
         case .microphone: "Microphone"
         case .general: "General"
         case .softwareUpdate: "Software Update"
+        case .callDetail: "Call"
         }
     }
 
     var symbolName: String {
         switch self {
         case .home: "house"
+        case .calls, .callDetail: "phone"
         case .models: "square.stack.3d.up"
         case .shortcuts: "keyboard"
         case .dictionary: "character.book.closed"
@@ -202,6 +214,9 @@ enum HubSection: String, CaseIterable, Sendable, Identifiable {
         case .softwareUpdate: "arrow.down.circle"
         }
     }
+
+    /// Pages reached from another one, with a Back button, and no sidebar item of their own.
+    var isSubPage: Bool { self == .softwareUpdate || self == .callDetail }
 }
 
 enum OpenRouterLinks {

@@ -15,6 +15,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         // The toolbar names the page, as System Settings' does.
         didSet { hubWindow?.title = hubSection.title }
     }
+    /// The call the Calls tab's detail page shows (`HubSection.callDetail`).
+    var openCallID: UUID?
 
     @ObservationIgnored weak var environment: AppEnvironment?
     @ObservationIgnored private let settings: AppSettings

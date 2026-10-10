@@ -80,6 +80,28 @@ dictation: transcribe it again with another model, polish it or translate it.
 It takes MP3, M4A, WAV, Telegram voice notes (.ogg) and the sound of a video, up to three hours. Files don't count
 toward your words, speed or time saved.
 
+## Calls
+
+The app records your calls and transcribes them with who said what. They're in the Calls tab.
+
+Calls are noticed in the Telegram, Zoom, Discord, Slack and Telemost apps, and in Google Meet, Zoom, Discord, Telegram
+Web, Slack and Telemost in Chrome, Arc, Edge, Brave, Vivaldi, Opera, Yandex Browser, Safari and Firefox. For any other
+call, Start Call Recording in the menu bar records your mic and everything the Mac plays.
+
+When a call starts, recording starts too, and the app asks "Transcribe your call in Google Meet?". Transcribe keeps it.
+Don't Keep deletes the recording. If you don't answer, the call waits in the Calls tab, and nothing is sent until you
+click Transcribe there. To transcribe every call without asking, or to stop noticing calls, change General → Calls →
+Record calls.
+
+Gemini 3.8 Flash writes the transcript, on your OpenRouter key. Someone whose name comes up in the call is named; the
+rest are "Participant 1", "Participant 2". On the call's page, click a name to rename them, or a time to play the call
+from there. What you said while muted is marked "muted", in the apps where the app can tell.
+
+To record the other side, turn on transcribe-thing in System Settings → Privacy & Security → Screen & System Audio
+Recording, under System Audio Recording Only. Without it, their side comes out silent and the call says so. In a
+browser, the app finds the call's tab through Accessibility (already on for pasting) and records all of the browser's
+sound, so music in another tab ends up in the recording.
+
 ## Your data
 
 History, the recordings, your dictionary and your OpenRouter key stay on your Mac, in
@@ -92,11 +114,12 @@ your key. It stays there until you send it: General → Troubleshooting → Expo
 
 History keeps every dictation with its recording, and a copy of the sound of every file you transcribe, until you
 delete it, so you can transcribe it again with another model, polish it or translate it. General → History can
-delete entries older than 1, 7, 30 or 90 days.
+delete entries older than 1, 7, 30 or 90 days. Calls are kept in the same folder until you delete them, and that
+setting deletes old calls too.
 
 If the app quits or crashes, or the Mac shuts down, while you dictate or wait for the transcript, the recording isn't
 lost. The next time the app starts, it's in History marked "Couldn't transcribe", with Retry. Nothing goes to a model
-until you click it.
+until you click it. A call the app was recording then is kept up to that point, in the Calls tab with Transcribe.
 
 ## If something doesn't work
 

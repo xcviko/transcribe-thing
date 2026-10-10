@@ -301,15 +301,23 @@ import Testing
 @Suite struct HubSidebarTests {
     @Test func everyPageHasASidebarItem() {
         // Pill & Sounds is gone (its settings live in General): the sidebar lists every section but the
-        // sub-pages, in case order.
-        #expect(HubSection.sidebar == [.home, .models, .shortcuts, .dictionary, .microphone, .general])
-        #expect(HubSection.sidebar == HubSection.allCases.filter { $0 != .softwareUpdate })
+        // sub-pages, in case order. Calls sits under Home, above Settings.
+        #expect(HubSection.sidebar == [.home, .calls, .models, .shortcuts, .dictionary, .microphone, .general])
+        #expect(HubSection.sidebar == HubSection.allCases.filter { !$0.isSubPage })
+        #expect(HubSection.sidebarTop == [.home, .calls])
     }
 
     @Test func softwareUpdateSelectsGeneral() {
         #expect(HubSection.softwareUpdate.sidebarItem == .general)
         #expect(HubSection.softwareUpdate.shortcutDigit == nil)
         #expect(HubSection.sidebar.allSatisfy { $0.sidebarItem == $0 })
+    }
+
+    /// A call's page keeps Calls selected, and a click on Calls goes back to the list.
+    @Test func callDetailSelectsCalls() {
+        #expect(HubSection.callDetail.sidebarItem == .calls)
+        #expect(HubSection.callDetail.shortcutDigit == nil)
+        #expect(HubSection.callDetail.pageOpened(byClicking: .calls) == .calls)
     }
 
     /// General reads as selected on Software Update, and a click on it goes back to General; a click on the page
@@ -322,7 +330,9 @@ import Testing
     }
 
     @Test func commandDigitsFollowTheSidebar() {
-        #expect(HubSection.sidebar.compactMap(\.shortcutDigit) == ["1", "2", "3", "4", "5", "6"])
+        #expect(HubSection.sidebar.compactMap(\.shortcutDigit) == ["1", "2", "3", "4", "5", "6", "7"])
+        #expect(HubSection.calls.shortcutDigit == "2")
+        #expect(HubSection.general.shortcutDigit == "7")
     }
 }
 

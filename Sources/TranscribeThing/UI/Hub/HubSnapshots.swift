@@ -72,6 +72,54 @@ enum HubSnapshots {
                 c.previewDropTarget = true
             },
 
+            // Calls (`--only hub-call`): every state a call can be in, by day, with the badge on the sidebar.
+            hub("hub-calls", .calls, configure: Samples.calls),
+            hub("hub-calls-full", .calls, height: 1120, configure: Samples.calls),
+            hub("hub-calls-compact", .calls, width: 820, height: 560, configure: Samples.calls),
+            // The Meet call hovered: Copy Transcript and Delete.
+            hub("hub-calls-hover", .calls) { c in
+                Samples.calls(c)
+                c.previewHoveredCall = PreviewFixtures.callID(2)
+            },
+            // A Meet call being recorded and asked about, 12:34 in: the question in its row, and in the badge.
+            hub("hub-calls-asking", .calls) { c in
+                Samples.calls(c)
+                Samples.live(c, kept: false)
+            },
+            // The same call kept, still recording.
+            hub("hub-calls-recording", .calls) { c in
+                Samples.calls(c)
+                Samples.live(c, kept: true)
+            },
+            hub("hub-calls-search", .calls) { c in
+                Samples.calls(c)
+                c.initialSearch = "аня"
+            },
+            hub("hub-calls-off", .calls) { c in
+                Samples.calls(c)
+                c.settings.callRecording = .off
+            },
+            hub("hub-calls-empty", .calls),
+            hub("hub-calls-empty-off", .calls) { c in c.settings.callRecording = .off },
+            // The Meet call: three speakers besides Sam, Matvey renamed, a phrase said muted, another tab's sound.
+            hub("hub-call-detail", .callDetail, height: 900) { c in Samples.openCall(c, 2) },
+            hub("hub-call-detail-compact", .callDetail, width: 820, height: 560) { c in Samples.openCall(c, 2) },
+            // Telemost's other side came out silent: the permission, with Open Settings.
+            hub("hub-call-detail-silent", .callDetail) { c in Samples.openCall(c, 6) },
+            hub("hub-call-detail-unconfirmed", .callDetail) { c in Samples.openCall(c, 4) },
+            hub("hub-call-detail-failed", .callDetail) { c in Samples.openCall(c, 3) },
+            hub("hub-call-detail-transcribing", .callDetail) { c in Samples.openCall(c, 1) },
+            // A speaker's name clicked: the field that renames them (a popover doesn't render in a page snapshot).
+            SnapshotEntry("hub-call-rename", width: 300, height: 170) { _ in
+                SpeakerRenameForm(original: "Participant 1", current: "Matvey") { _ in }
+                    .background(Color.bgElevated, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .padding(12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .background(Color.bgCanvas)
+            },
+            // General → Calls, on its own (the page is taller than a window).
+            hub("hub-general-calls", .general, height: 1700),
+
             hub("hub-models", .models),
             hub("hub-models-full", .models, height: 1080),
             // Hands-free switches to Gemini.
@@ -298,6 +346,31 @@ enum HubSnapshots {
             Calendar.current.date(bySettingHour: 14, minute: 5, second: 0, of: Date()) ?? Date()
         }
         static let newVersion = AppVersion(major: 0, minor: 3, patch: 0)
+
+        /// The fixture calls (`PreviewFixtures.calls`).
+        @MainActor static func calls(_ context: HubContext) {
+            context.calls = .preview(calls: PreviewFixtures.calls(), settings: context.settings)
+        }
+
+        /// A Meet call recorded now, 12:34 in: kept (in the store, as the monitor puts it) or asked about.
+        @MainActor static func live(_ context: HubContext, kept: Bool) {
+            let now = Date()
+            let info = PreviewFixtures.liveCall(startedAt: now.addingTimeInterval(-754))
+            context.fixedNow = now
+            context.previewCallState = kept ? .recording(info) : .asking(info)
+            guard kept else { return }
+            var record = CallRecord(id: info.id, startedAt: info.startedAt, appName: info.appName,
+                                    bundleID: info.bundleID, service: info.service, pageTitle: info.pageTitle,
+                                    status: .recording)
+            record.muteKnown = true
+            context.calls = .preview(calls: [record] + PreviewFixtures.calls(), settings: context.settings)
+        }
+
+        /// The Calls tab's call `n` (`PreviewFixtures.callID`) open on its page.
+        @MainActor static func openCall(_ context: HubContext, _ n: Int) {
+            calls(context)
+            context.windows.openCallID = PreviewFixtures.callID(n)
+        }
 
         /// Colors other than the defaults, one each: Parakeet teal, Gemini blue.
         @MainActor static func pickColors(_ context: HubContext) {

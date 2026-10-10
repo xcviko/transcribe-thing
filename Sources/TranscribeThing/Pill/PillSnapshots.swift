@@ -180,6 +180,17 @@ enum PillSnapshots {
             SnapshotEntry("pill-toast-update", width: 640, height: 270) { _ in
                 CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.updateAvailable])
             },
+            // "Transcribe your call in Google Meet?": sticky, Transcribe first. Over the resting pill, during a
+            // dictation, and with the pill hidden.
+            SnapshotEntry("pill-toast-call", width: 640, height: 270) { _ in
+                CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.callQuestion])
+            },
+            SnapshotEntry("pill-toast-call-dictating", width: 640, height: 290) { _ in
+                CanvasScene(model: .preview(phase: .listening, level: 0.6), notices: [PillSnapshotFixtures.callQuestion])
+            },
+            SnapshotEntry("pill-toast-call-never", width: 640, height: 230) { _ in
+                CanvasScene(model: neverModel(), notices: [PillSnapshotFixtures.callQuestion])
+            },
             SnapshotEntry("pill-toast-updated", width: 640, height: 220) { _ in
                 CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.updated])
             },
@@ -247,6 +258,9 @@ enum PillSnapshots {
 // MARK: - Fixtures
 
 enum PillSnapshotFixtures {
+    /// What a call in Google Meet asks once it's confirmed (`CallMonitor.onAsk`).
+    static let callQuestion = Notice.transcribeCall(PreviewFixtures.callID(99), service: "Google Meet")
+
     static let canceled = Notice(
         dedupeKey: "dictation.canceled", style: .info, symbol: "xmark.circle", title: "Dictation canceled",
         actions: [NoticeAction(title: "Undo", kind: .undoCancel, isPrimary: true)], lifetime: .seconds(6), sound: .cancel)

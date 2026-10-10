@@ -11,11 +11,11 @@ import Observation
 @MainActor @Observable
 final class CallStore {
     /// What an interrupted call says in place of an error.
-    static let interruptedMessage = "The app quit while it recorded this call"
+    nonisolated static let interruptedMessage = "The app quit while it recorded this call"
     /// What a call the app quit transcribing says.
-    static let quitTranscribingMessage = "The app quit while it transcribed this call"
+    nonisolated static let quitTranscribingMessage = "The app quit while it transcribed this call"
     /// What a remote track of digital silence says: what a tap gives without the permission.
-    static let silentTapMessage = "No sound came from the call app. Allow transcribe-thing in System Settings → "
+    nonisolated static let silentTapMessage = "No sound came from the call app. Allow transcribe-thing in System Settings → "
         + "Privacy & Security → Screen & System Audio Recording, under System Audio Recording Only."
 
     /// Newest first.

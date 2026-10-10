@@ -11,6 +11,10 @@ final class HubContext: Observable {
     var models: ModelStore
     var account: OpenRouterAccount
     var history: HistoryStore
+    /// Recorded calls (the Calls tab), and what records and transcribes them.
+    var calls: CallStore
+    let callMonitor: CallMonitor
+    let callTranscriber: CallTranscriber
     var permissions: PermissionsCenter
     var devices: AudioDeviceCatalog
     var launchAtLogin: LaunchAtLogin
@@ -43,12 +47,21 @@ final class HubContext: Observable {
     var previewHoveredEntry: UUID?
     /// Home drawn with files dragged over it (snapshots).
     var previewDropTarget = false
+    /// The live call as the Calls tab shows it, in place of the monitor's (snapshots).
+    var previewCallState: CallMonitor.State?
+    /// A Calls row drawn as hovered, its actions showing (snapshots).
+    var previewHoveredCall: UUID?
+    /// The call's transcript row whose speaker is being renamed, its field open (snapshots).
+    var previewRenaming: String?
 
     init(env: AppEnvironment) {
         settings = env.settings
         models = env.models
         account = env.account
         history = env.history
+        calls = env.calls
+        callMonitor = env.callMonitor
+        callTranscriber = env.callTranscriber
         permissions = env.permissions
         devices = env.devices
         launchAtLogin = env.launchAtLogin
@@ -74,6 +87,23 @@ final class HubContext: Observable {
     /// Picks a page: it's there at once, as a pane in System Settings is.
     func show(_ section: HubSection) {
         windows.hubSection = section
+    }
+
+    /// Opens a call's page, over the Calls tab.
+    func showCall(_ id: UUID) {
+        windows.openCallID = id
+        windows.hubSection = .callDetail
+    }
+
+    /// The live call: the monitor's, or the snapshot's.
+    var callState: CallMonitor.State {
+        previewCallState ?? callMonitor.state
+    }
+
+    /// Opens the folder a call's audio is kept in, in Finder.
+    func revealCall(_ id: UUID) {
+        guard !isPreview else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([calls.folder(for: id)])
     }
 
     func copy(_ text: String) {
@@ -149,6 +179,8 @@ struct HubView: View {
             .environment(context.models)
             .environment(context.account)
             .environment(context.history)
+            .environment(context.calls)
+            .environment(context.callMonitor)
             .environment(context.permissions)
             .environment(context.devices)
             .environment(context.launchAtLogin)
@@ -172,7 +204,7 @@ private struct HubRoot: View {
         } detail: {
             page(windows.hubSection)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .navigationTitle(windows.hubSection.title)
+                .navigationTitle(title)
                 // Every page keeps a toolbar, tools or none: a page without one lost the window's toolbar, and the
                 // sidebar then started under a separate title bar instead of reaching up around the window buttons.
                 .toolbar { ToolbarSpacer(.flexible) }
@@ -185,9 +217,18 @@ private struct HubRoot: View {
         .task { hub.account.refreshIfStale(maxAge: 300) }
     }
 
+    /// The page's name; a call's page is named by the call.
+    private var title: String {
+        guard windows.hubSection == .callDetail, let id = windows.openCallID,
+              let call = hub.calls.call(id: id) else { return windows.hubSection.title }
+        return CallFormat.shortTitle(call)
+    }
+
     @ViewBuilder private func page(_ section: HubSection) -> some View {
         switch section {
         case .home: HomePage()
+        case .calls: CallsPage()
+        case .callDetail: CallDetailPage()
         case .models: ModelsPage()
         case .shortcuts: ShortcutsPage()
         case .dictionary: DictionaryPage()
@@ -200,18 +241,22 @@ private struct HubRoot: View {
 
 // MARK: - Sidebar
 
-/// The pages, as a source list: Home, then Settings. Software Update keeps General selected, and an update waiting
-/// (with reminders on) puts a count on General, as System Settings does. ⌘1…⌘N follow `HubSection.sidebar`.
+/// The pages, as a source list: Home and Calls, then Settings. Software Update keeps General selected, and an update
+/// waiting (with reminders on) puts a count on General, as System Settings does; calls waiting for an answer or a
+/// Retry put theirs on Calls. ⌘1…⌘N follow `HubSection.sidebar`.
 private struct HubSidebar: View {
     @Environment(HubContext.self) private var hub
     @Environment(WindowCoordinator.self) private var windows
     @Environment(UpdateCenter.self) private var updates
+    @Environment(CallStore.self) private var calls
 
     var body: some View {
         List(selection: selection) {
-            row(.home)
+            ForEach(HubSection.sidebarTop) { section in
+                row(section)
+            }
             Section("Settings") {
-                ForEach(HubSection.sidebar.filter { $0 != .home }) { section in
+                ForEach(HubSection.sidebar.filter { !HubSection.sidebarTop.contains($0) }) { section in
                     row(section)
                 }
             }
@@ -245,10 +290,24 @@ private struct HubSidebar: View {
             .simultaneousGesture(TapGesture().onEnded {
                 if let page = windows.hubSection.pageOpened(byClicking: section) { hub.show(page) }
             })
-            .badge(section == .general && updates.showsBadge ? 1 : 0)
+            .badge(badge(section))
             .tag(section)
-            .accessibilityLabel(section == .general && updates.showsBadge ? "\(section.title), update available"
-                                    : section.title)
+            .accessibilityLabel(accessibilityLabel(section))
+    }
+
+    private func badge(_ section: HubSection) -> Int {
+        switch section {
+        case .general: updates.showsBadge ? 1 : 0
+        case .calls: CallsList.badgeCount(calls.calls, live: hub.callState)
+        default: 0
+        }
+    }
+
+    private func accessibilityLabel(_ section: HubSection) -> String {
+        let count = badge(section)
+        guard count > 0 else { return section.title }
+        return section == .general ? "\(section.title), update available"
+            : "\(section.title), \(count) waiting"
     }
 
     /// ⌘1…⌘N: a page each, as the sidebar lists them.

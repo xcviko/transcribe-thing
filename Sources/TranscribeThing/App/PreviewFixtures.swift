@@ -137,4 +137,94 @@ enum PreviewFixtures {
                 engine: .parakeet, audioDuration: 5.8, voicedSeconds: 4.9, processingTime: 0.33),
         ]
     }
+
+    // MARK: Calls
+
+    /// The calls of the Calls tab, newest first: a Telegram call being transcribed, a Google Meet call in Chrome done
+    /// with three speakers besides Sam, two mutes (something said in one) and another tab's sound, a Zoom call that
+    /// failed, a Discord call never answered about, a Slack huddle the app quit during, and a Telemost call whose
+    /// other side came out silent.
+    static func calls(now: Date = Date(), calendar: Calendar = .current) -> [CallRecord] {
+        let today = calendar.startOfDay(for: now)
+        func at(daysAgo: Int, _ hour: Int, _ minute: Int) -> Date {
+            let day = calendar.date(byAdding: .day, value: -daysAgo, to: today) ?? today
+            return calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day) ?? day
+        }
+        func call(_ id: Int, _ start: Date, app: String, bundleID: String, service: CallService?, page: String? = nil,
+                  seconds: TimeInterval, status: CallStatus) -> CallRecord {
+            var record = CallRecord(id: callID(id), startedAt: start, endedAt: start.addingTimeInterval(seconds),
+                                    appName: app, bundleID: bundleID, service: service, pageTitle: page, status: status)
+            record.micFile = "mic.m4a"
+            record.remoteFile = "remote.m4a"
+            record.micSeconds = seconds
+            record.remoteSeconds = seconds
+            record.muteKnown = true
+            return record
+        }
+
+        var telegram = call(1, at(daysAgo: 0, 9, 40), app: "Telegram", bundleID: "ru.keepcoder.Telegram",
+                            service: .telegram, seconds: 492, status: .transcribing)
+        telegram.muteIntervals = [CallInterval(start: 120, end: 151)]
+
+        var meet = call(2, at(daysAgo: 0, 8, 5), app: "Google Chrome", bundleID: "com.google.Chrome", service: .meet,
+                        page: "Meet – abc-defg-hij", seconds: 1934, status: .done)
+        meet.muteIntervals = [CallInterval(start: 158, end: 170), CallInterval(start: 842, end: 910)]
+        meet.otherBrowserAudio = [CallInterval(start: 1210, end: 1236)]
+        meet.costUSD = 0.043
+        meet.speakerNames = ["Participant 1": "Matvey"]
+        meet.transcript = CallTranscript(segments: [
+            .init(start: 4, end: 9, side: .remote, speaker: "Participant 1",
+                  text: "Okay, I think everyone’s here. Let’s start with the release plan."),
+            .init(start: 10, end: 17, side: .remote, speaker: "Аня",
+                  text: "Привет! Я посмотрела сборку: импорт файлов работает, но длинные файлы грузятся долго."),
+            .init(start: 18, end: 26, side: .local, speaker: "Sam",
+                  text: "Yeah, that’s the request limit. I’ll split them into chunks before they’re sent."),
+            .init(start: 27, end: 30, side: .local, speaker: "Sam",
+                  text: "It’s maybe a day of work, with tests."),
+            .init(start: 31, end: 34, side: .remote, speaker: "Participant 2", text: "Can we ship on Friday then?"),
+            .init(start: 160, end: 164, side: .local, speaker: "Sam", text: "Ugh, my coffee’s gone cold again.",
+                  duringMute: true),
+            .init(start: 171, end: 179, side: .remote, speaker: "Participant 1",
+                  text: "Friday works. Аня, can you check the long files over the weekend?"),
+            .init(start: 180, end: 182, side: .remote, speaker: "Аня", text: "Да, без проблем."),
+            .init(start: 184, end: 190, side: .local, speaker: "Sam",
+                  text: "Great. I’ll send the notes after the call, with who does what."),
+        ])
+
+        var zoom = call(3, at(daysAgo: 1, 16, 30), app: "zoom.us", bundleID: "us.zoom.xos", service: .zoom,
+                        seconds: 2710, status: .failed)
+        zoom.error = "Gemini 3.8 Flash took too long"
+
+        let discord = call(4, at(daysAgo: 1, 11, 12), app: "Discord", bundleID: "com.hnc.Discord", service: .discord,
+                           seconds: 1260, status: .unconfirmed)
+
+        var slack = call(5, at(daysAgo: 3, 15, 0), app: "Slack", bundleID: "com.tinyspeck.slackmacgap",
+                         service: .slack, seconds: 845, status: .interrupted)
+        slack.error = CallStore.interruptedMessage
+        slack.muteKnown = false
+
+        var telemost = call(6, at(daysAgo: 4, 10, 0), app: "Telemost", bundleID: "ru.yandex.desktop.telemost",
+                            service: .telemost, seconds: 1505, status: .done)
+        telemost.remoteProblem = CallStore.silentTapMessage
+        telemost.costUSD = 0.011
+        telemost.transcript = CallTranscript(segments: [
+            .init(start: 3, end: 9, side: .local, speaker: "Sam",
+                  text: "Да, слышу. Давайте начнём с бюджета на следующий квартал."),
+            .init(start: 40, end: 47, side: .local, speaker: "Sam",
+                  text: "Хорошо, тогда я пришлю таблицу до пятницы."),
+        ])
+
+        return [telegram, meet, zoom, discord, slack, telemost]
+    }
+
+    /// The fixture calls' ids, stable so snapshots can pick one.
+    static func callID(_ n: Int) -> UUID {
+        UUID(uuidString: String(format: "00000000-0000-4000-8000-%012d", n))!
+    }
+
+    /// A Google Meet call in Chrome being recorded now, `seconds` in: as the monitor knows it.
+    static func liveCall(startedAt: Date) -> CallMonitor.CallInfo {
+        CallMonitor.CallInfo(id: callID(99), appName: "Google Chrome", bundleID: "com.google.Chrome", service: .meet,
+                             pageTitle: "Meet – xyz-abcd-efg", startedAt: startedAt, muteKnown: true)
+    }
 }

@@ -1,8 +1,8 @@
 import AppKit
 import QuartzCore
 
-/// The menu bar extra: template icon, a red dot while recording, a slow pulse while transcribing,
-/// and the shared transcribe-thing menu (rebuilt each time it opens).
+/// The menu bar extra: template icon, a red dot while recording (a dictation, or a call), a slow pulse while
+/// transcribing, and the shared transcribe-thing menu (rebuilt each time it opens).
 @MainActor
 final class MenuBarController: NSObject, NSMenuDelegate {
     weak var environment: AppEnvironment? {
@@ -13,6 +13,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private var recordingDot: NSView?
     private(set) var activity: DictationActivity = .idle
+    /// A call is being recorded (asked about or kept).
+    private(set) var isRecordingCall = false
 
     override init() {
         super.init()
@@ -43,17 +45,34 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     /// Reflects the dictation state in the icon.
     func show(_ activity: DictationActivity) {
         self.activity = activity
+        refresh()
+    }
+
+    /// A call started or stopped being recorded: the red dot stays while it records, as it does for a dictation.
+    func showCall(recording: Bool) {
+        isRecordingCall = recording
+        refresh()
+    }
+
+    private func refresh() {
         guard let button = statusItem?.button else { return }
-        setRecordingDot(activity == .recording, on: button)
+        setRecordingDot(Self.showsRecordingDot(activity: activity, recordingCall: isRecordingCall), on: button)
         setPulsing(activity != .idle && activity != .recording, on: button)
-        let value = switch activity {
-        case .idle: "Idle"
+        button.setAccessibilityValue(Self.accessibilityValue(activity: activity, recordingCall: isRecordingCall))
+    }
+
+    static func showsRecordingDot(activity: DictationActivity, recordingCall: Bool) -> Bool {
+        activity == .recording || recordingCall
+    }
+
+    static func accessibilityValue(activity: DictationActivity, recordingCall: Bool) -> String {
+        switch activity {
+        case .idle: recordingCall ? "Recording call" : "Idle"
         case .recording: "Recording"
         case .processing: "Transcribing"
         case .polishing: "Polishing"
         case .translating: "Translating"
         }
-        button.setAccessibilityValue(value)
     }
 
     private func setRecordingDot(_ visible: Bool, on button: NSStatusBarButton) {
