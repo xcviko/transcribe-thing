@@ -700,7 +700,7 @@ final class StepLog: @unchecked Sendable {
         """)
         #expect(blocks == [
             .heading(level: 1, text: "Title"),
-            .paragraph("First line\nsecond line"),
+            .paragraph("First line second line"),
             .heading(level: 3, text: "Fixes"),
             .rule,
             .heading(level: 1, text: "Setext"),
@@ -722,7 +722,7 @@ final class StepLog: @unchecked Sendable {
         """)
         #expect(blocks == [
             .list(ReleaseNotesList(ordered: false, start: 1, items: [
-                ReleaseNotesListItem(text: "One\ncontinued"),
+                ReleaseNotesListItem(text: "One continued"),
                 ReleaseNotesListItem(text: "Two", children: [
                     .list(ReleaseNotesList(ordered: false, start: 1, items: [
                         ReleaseNotesListItem(text: "Two a", children: [
@@ -772,6 +772,73 @@ final class StepLog: @unchecked Sendable {
             .list(ReleaseNotesList(ordered: false, start: 1, items: [ReleaseNotesListItem(text: "item")])),
             .code("code"),
         ], "an unindented fence ends the list")
+    }
+
+    @Test func aWrappedParagraphReadsAsOneLine() {
+        let blocks = ReleaseNotes.blocks("""
+        Hands-free shows a gray X and a white check instead
+        of the red Stop.
+
+        Next paragraph.
+        """)
+        #expect(blocks == [
+            .paragraph("Hands-free shows a gray X and a white check instead of the red Stop."),
+            .paragraph("Next paragraph."),
+        ])
+    }
+
+    @Test func aWrappedBulletReadsAsOneLine() {
+        let blocks = ReleaseNotes.blocks("""
+        - **A smaller pill.** Hands-free shows a gray X instead
+          of the red Stop.
+        - **Return finishes.** It works like fn
+        and is lazy here.
+        1. First
+           wrapped
+        """)
+        #expect(blocks == [
+            .list(ReleaseNotesList(ordered: false, start: 1, items: [
+                ReleaseNotesListItem(text: "**A smaller pill.** Hands-free shows a gray X instead of the red Stop."),
+                ReleaseNotesListItem(text: "**Return finishes.** It works like fn and is lazy here."),
+            ])),
+            .list(ReleaseNotesList(ordered: true, start: 1, items: [ReleaseNotesListItem(text: "First wrapped")])),
+        ])
+    }
+
+    @Test func bulletsInARowStayApart() {
+        #expect(ReleaseNotes.blocks("- One\n- Two\n* Three") == [
+            .list(ReleaseNotesList(ordered: false, start: 1, items: [
+                ReleaseNotesListItem(text: "One"), ReleaseNotesListItem(text: "Two"), ReleaseNotesListItem(text: "Three"),
+            ])),
+        ])
+        #expect(ReleaseNotes.blocks("- One\n\n  Second paragraph\n  wrapped") == [
+            .list(ReleaseNotesList(ordered: false, start: 1, items: [
+                ReleaseNotesListItem(text: "One\n\nSecond paragraph wrapped"),
+            ])),
+        ], "a blank line inside an item starts its next paragraph")
+    }
+
+    @Test func codeKeepsItsLineBreaks() {
+        #expect(ReleaseNotes.blocks("Run:\n```\nfirst line\nsecond line  \n```\nafter") == [
+            .paragraph("Run:"), .code("first line\nsecond line  "), .paragraph("after"),
+        ])
+        #expect(ReleaseNotes.blocks("Run:\n\n    first\n\n      second\nafter") == [
+            .paragraph("Run:"), .code("first\n\n  second"), .paragraph("after"),
+        ], "indented code")
+        #expect(ReleaseNotes.blocks("Wrapped\n    not code") == [.paragraph("Wrapped not code")],
+                "an indented line goes on with the paragraph")
+    }
+
+    @Test func hardBreaksStay() {
+        #expect(ReleaseNotes.blocks("Two spaces  \nbreak\\\nbackslash\nsoft  ") == [
+            .paragraph("Two spaces\nbreak\nbackslash soft"),
+        ])
+        #expect(ReleaseNotes.blocks("- item  \n  broken") == [
+            .list(ReleaseNotesList(ordered: false, start: 1, items: [ReleaseNotesListItem(text: "item\nbroken")])),
+        ])
+        #expect(ReleaseNotes.blocks("Ends in \\") == [.paragraph("Ends in \\")], "nothing to break after the last line")
+        #expect(ReleaseNotes.blocks(ReleaseNotes.tidy("Line<br>\nnext<br>")) == [.paragraph("Line\nnext")],
+                "<br> at the end of a line")
     }
 
     @Test func boldIsNotABullet() {

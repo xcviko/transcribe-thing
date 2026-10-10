@@ -22,10 +22,12 @@ enum PreviewFixtures {
         }
         let all = [
             release("0.3.0", daysAgo: 2, size: 12_400_000, notes: """
-                Hands-free dictation now keeps going through short pauses, and the pill’s waveform only moves while you speak.
+                Hands-free dictation now keeps going through short pauses,
+                and the pill’s waveform only moves while you speak.
 
                 ### New
-                - **Pause-tolerant hands-free**: stop talking for a moment without ending the dictation
+                - **Pause-tolerant hands-free**: stop talking for a moment without ending the dictation. A short
+                  silence no longer finishes it; only fn, Return or the check button do.
                 - Software Update checks GitHub for new versions and installs them in one click
                 - Retry any failed dictation with another model:
                   - from the toast, right after it fails

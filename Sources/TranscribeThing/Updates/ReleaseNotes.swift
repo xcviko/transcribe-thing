@@ -6,7 +6,7 @@ import Foundation
 enum ReleaseNotesBlock: Equatable, Sendable {
     /// 1...6
     case heading(level: Int, text: String)
-    /// Lines keep their breaks, as on GitHub.
+    /// Wrapped lines joined with a space; "\n" only for hard breaks (two trailing spaces, a trailing backslash).
     case paragraph(String)
     case list(ReleaseNotesList)
     case code(String)
@@ -21,6 +21,7 @@ struct ReleaseNotesList: Equatable, Sendable {
 }
 
 struct ReleaseNotesListItem: Equatable, Sendable {
+    /// Joined like a paragraph; "\n\n" between the item's paragraphs.
     var text: String
     /// Nested lists and code blocks, in order.
     var children: [ReleaseNotesBlock] = []
@@ -53,9 +54,11 @@ enum ReleaseNotes {
                 output.append("[Full changelog](\(full))")
                 continue
             }
-            let tidied = outsideInlineCode(pullRequestCredits(line)) { linkBareURLs(stripTags($0)) }
+            var tidied = outsideInlineCode(pullRequestCredits(line)) { linkBareURLs(stripTags($0)) }
             // A line that was only tags goes, so it doesn't split the list or paragraph around it.
             if !trimmed.isEmpty, tidied.trimmingCharacters(in: .whitespaces).isEmpty { continue }
+            // "<br>" ending a line keeps the break as two trailing spaces, since wrapped lines are joined.
+            if endsWithBreakTag(trimmed) { tidied = dropTrailingWhitespace(tidied) + "  " }
             output.append(tidied)
         }
         return output.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -71,6 +74,12 @@ enum ReleaseNotes {
             result.removeSubrange(open.lowerBound..<close.upperBound)
         }
         return result
+    }
+
+    private static let breakTagPattern = try! NSRegularExpression(pattern: #"<br\s*/?>$"#, options: [.caseInsensitive])
+
+    private static func endsWithBreakTag(_ line: String) -> Bool {
+        breakTagPattern.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)) != nil
     }
 
     private static func isWhatsChangedHeading(_ line: String) -> Bool {
@@ -199,6 +208,36 @@ enum ReleaseNotes {
             ?? AttributedString(text)
     }
 
+    /// A paragraph's source lines (indentation already gone) joined as CommonMark and GitHub read them: a wrapped
+    /// line goes on after a space, two trailing spaces or a trailing backslash keep the line break, and an empty
+    /// line separates paragraphs (of a list item) with "\n\n".
+    static func joinLines(_ lines: [String]) -> String {
+        lines.split(whereSeparator: { $0.allSatisfy(\.isWhitespace) }).map { group in
+            var result = ""
+            for (index, line) in group.enumerated() {
+                var text = dropTrailingWhitespace(line)
+                // The last line has nothing to break.
+                guard index < group.count - 1 else {
+                    result += text
+                    break
+                }
+                if text.reversed().prefix(while: { $0 == "\\" }).count % 2 == 1 {
+                    text.removeLast()
+                    result += dropTrailingWhitespace(text) + "\n"
+                } else if line.count - text.count >= 2 {
+                    result += text + "\n"
+                } else {
+                    result += text + " "
+                }
+            }
+            return result
+        }.joined(separator: "\n\n")
+    }
+
+    private static func dropTrailingWhitespace(_ text: some StringProtocol) -> String {
+        String(text.reversed().drop(while: \.isWhitespace).reversed())
+    }
+
     /// One plain line for the pill's toast: the first sentence of the first paragraph or list item that isn't a
     /// heading or the changelog link, without its pull request number, at most `limit` characters.
     static func summary(_ markdown: String, limit: Int = 90) -> String? {
@@ -266,7 +305,7 @@ enum ReleaseNotes {
         }
 
         var value: ReleaseNotesListItem {
-            ReleaseNotesListItem(text: lines.joined(separator: "\n"), children: children.map { child in
+            ReleaseNotesListItem(text: ReleaseNotes.joinLines(lines), children: children.map { child in
                 switch child {
                 case .list(let list): .list(list.value)
                 case .code(let code): .code(code)
@@ -290,6 +329,8 @@ enum ReleaseNotes {
         var stack: [ListNode] = []
         /// An open code block; `owner` is the list item it's nested in, whose indentation its lines lose.
         var fence: (marker: String, lines: [String], owner: ItemNode?)?
+        /// An open indented (4 spaces) code block, its indentation gone; blank lines inside it are kept.
+        var indentedCode: [String]?
         var previousBlank = false
 
         mutating func consume(_ rawLine: String) {
@@ -307,12 +348,23 @@ enum ReleaseNotes {
                 }
                 return
             }
+            if var code = indentedCode {
+                if trimmed.isEmpty || indent >= 4 {
+                    code.append(String(line.dropFirst(min(indent, 4))))
+                    indentedCode = code
+                    previousBlank = trimmed.isEmpty
+                    return
+                }
+                closeIndentedCode()
+            }
             if trimmed.isEmpty {
                 flushParagraph()
                 previousBlank = true
                 return
             }
             defer { previousBlank = false }
+            // Indentation goes; trailing spaces stay until the lines are joined (two of them keep the line break).
+            let text = String(line.dropFirst(indent))
 
             if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
                 // Indented under an open item, the code belongs to it (and the list goes on after it).
@@ -334,14 +386,19 @@ enum ReleaseNotes {
                 return
             }
             if indent < 4, !paragraph.isEmpty, stack.isEmpty, let level = Self.setextLevel(trimmed) {
-                let text = paragraph.joined(separator: "\n")
+                let title = ReleaseNotes.joinLines(paragraph)
                 paragraph = []
-                blocks.append(.heading(level: level, text: text))
+                blocks.append(.heading(level: level, text: title))
                 return
             }
             if indent < 4, Self.isRule(trimmed) {
                 flushAll()
                 blocks.append(.rule)
+                return
+            }
+            // Indented 4 spaces outside a list and not continuing a paragraph: code, kept as written.
+            if indent >= 4, stack.isEmpty, paragraph.isEmpty {
+                indentedCode = [String(line.dropFirst(4))]
                 return
             }
             if let marker = Self.marker(line) {
@@ -353,19 +410,28 @@ enum ReleaseNotes {
                 // Indented far enough for an open item, or a lazy continuation right under it.
                 let owner = stack.last?.items.last
                 if let item = deepestItem(acceptingIndent: indent) ?? (previousBlank ? nil : owner) {
-                    item.lines.append(trimmed)
+                    // After a blank line it's the item's next paragraph.
+                    if previousBlank { item.lines.append("") }
+                    item.lines.append(text)
                     return
                 }
                 flushList()
             }
-            let text = trimmed.hasPrefix(">") ? String(trimmed.dropFirst()).trimmingCharacters(in: .whitespaces) : trimmed
-            paragraph.append(text)
+            paragraph.append(text.hasPrefix(">") ? String(text.dropFirst().drop(while: { $0 == " " })) : text)
         }
 
         mutating func finish() -> [ReleaseNotesBlock] {
             closeFence()
+            closeIndentedCode()
             flushAll()
             return blocks
+        }
+
+        private mutating func closeIndentedCode() {
+            guard var code = indentedCode else { return }
+            while code.last?.allSatisfy(\.isWhitespace) == true { code.removeLast() }
+            blocks.append(.code(code.joined(separator: "\n")))
+            indentedCode = nil
         }
 
         private mutating func closeFence() {
@@ -427,7 +493,7 @@ enum ReleaseNotes {
 
         private mutating func flushParagraph() {
             guard !paragraph.isEmpty else { return }
-            blocks.append(.paragraph(paragraph.joined(separator: "\n")))
+            blocks.append(.paragraph(ReleaseNotes.joinLines(paragraph)))
             paragraph = []
         }
 
@@ -473,8 +539,8 @@ enum ReleaseNotes {
                 let after = rest.dropFirst()
                 guard after.first == " " else { return nil }
                 let spaces = min(4, after.prefix(while: { $0 == " " }).count)
-                let text = after.trimmingCharacters(in: .whitespaces)
-                guard !text.isEmpty else { return nil }
+                let text = String(after.drop(while: { $0 == " " }))
+                guard !text.allSatisfy(\.isWhitespace) else { return nil }
                 return Marker(indent: indent, contentIndent: indent + 1 + spaces, ordered: false, number: 1, text: text)
             }
             let digits = rest.prefix(while: \.isNumber)
@@ -484,8 +550,8 @@ enum ReleaseNotes {
             let body = after.dropFirst()
             guard body.first == " " else { return nil }
             let spaces = min(4, body.prefix(while: { $0 == " " }).count)
-            let text = body.trimmingCharacters(in: .whitespaces)
-            guard !text.isEmpty else { return nil }
+            let text = String(body.drop(while: { $0 == " " }))
+            guard !text.allSatisfy(\.isWhitespace) else { return nil }
             return Marker(indent: indent, contentIndent: indent + digits.count + 1 + spaces, ordered: true,
                           number: number, text: text)
         }
