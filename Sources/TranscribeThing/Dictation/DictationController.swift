@@ -1524,10 +1524,19 @@ final class DictationController {
     /// row, date and audio; the others stay in its Versions menu); a failed or canceled dictation becomes that
     /// transcript. When it doesn't come, a transcript stays as it was and its row says why; a failed or canceled
     /// dictation's row says why itself, as History always has. An entry deleted meanwhile isn't brought back.
+    /// What Gemini wrote before it stopped short lands as the version all the same, its details saying it finished
+    /// for length, and the row says it may be cut off: an hour of a file's transcript isn't thrown away.
     private func land(_ outcome: Outcome, of recording: Recording, engine: EngineID,
                       as made: TranscriptVersionKind? = nil) {
         let id = recording.id
         guard let entry = history.entry(id: id) else { return }
+        var outcome = outcome
+        var cutOff = false
+        if case .failure(.openRouterTruncated(let partial)) = outcome,
+           !partial.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            outcome = .success(TranscriptResult(text: partial, engine: engine, processingTime: 0, finishReason: "length"))
+            cutOff = true
+        }
         let failure: AppError
         switch outcome {
         case .success(let result):
@@ -1539,7 +1548,9 @@ final class DictationController {
             forget(id)
             // An older notice's Retry or Undo would transcribe it yet again, or record on.
             toasts.dismiss(recordingID: id)
-            let version = result.version(made, text: text)
+            var version = result.version(made, text: text)
+            // Nothing timed it: the error carried only the text.
+            if cutOff { version.metadata.processingTime = nil }
             if entry.status == .success {
                 var updated = entry
                 updated.addVersion(version)
@@ -1552,8 +1563,12 @@ final class DictationController {
             }
             resolveGeneration(of: version, entryID: id)
             DiagnosticLog.shared.event(.dictation, "home.finished", [
-                "engine": result.engine, "made": made?.rawValue ?? "transcription", "outcome": "success",
-                "seconds": result.processingTime])
+                "engine": result.engine, "made": made?.rawValue ?? "transcription",
+                "outcome": cutOff ? "truncated" : "success", "seconds": result.processingTime])
+            if cutOff {
+                homeFailures[id] = HomeFailure(kind: version.kind,
+                                               reason: "It stopped before finishing, so the text above may be cut off")
+            }
             return
         case .failure(let error):
             failure = error

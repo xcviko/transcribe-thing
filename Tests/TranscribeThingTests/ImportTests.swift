@@ -118,6 +118,28 @@ import Testing
         #expect(h.history.entry(id: id)?.importedFrom == "interview.mp3")
     }
 
+    /// Gemini stopping short of the end keeps what it wrote: the row has that text, its details say it finished for
+    /// length, and the row says it may be cut off. With nothing written, the row fails as before.
+    @Test func whatGeminiWroteBeforeStoppingShortIsKept() async throws {
+        let h = H.make(keyStatus: .valid(KeyInfo()))
+        h.controller.transcribeOverride = { _, _ in throw AppError.openRouterTruncated("The first hour of the talk.") }
+        h.controller.transcribe(Self.file(), as: .transcription(.geminiFlash))
+        let id = try #require(h.history.entries.first?.id)
+        try await waitUntil { h.history.entry(id: id)?.status == .success }
+        let entry = try #require(h.history.entry(id: id))
+        #expect(entry.text == "The first hour of the talk." && entry.importedFrom == "interview.mp3")
+        #expect(entry.currentVersion?.metadata.finishReason == "length")
+        #expect(entry.currentVersion?.metadata.processingTime == nil)
+        let failure = try #require(h.controller.homeFailures[id])
+        #expect(failure.kind == .transcription(.geminiFlash) && failure.reason.contains("may be cut off"))
+        #expect(h.toasts.notices.isEmpty)
+
+        h.controller.transcribeOverride = { _, _ in throw AppError.openRouterTruncated(" ") }
+        h.controller.transcribe(Self.file(), as: .transcription(.geminiFlash))
+        let empty = try #require(h.history.entries.first?.id)
+        try await waitUntil { h.history.entry(id: empty)?.status == .failed }
+    }
+
     @Test func polishWorksOnAFile() async throws {
         let h = H.make(keyStatus: .valid(KeyInfo()))
         h.controller.transcribeOverride = { _, engine in
