@@ -390,10 +390,11 @@ final class HistoryStore {
     }
 
     /// The newest dictation with text: what Paste Last and Copy Last Transcript use. A polished selection isn't one
-    /// (its card had its own Paste Here, and closing it said no).
+    /// (its card had its own Paste Here, and closing it said no), nor is a file's transcript (a whole podcast).
     var lastSuccessful: TranscriptEntry? {
         entries.first {
-            $0.status == .success && !$0.isSelection && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            $0.status == .success && !$0.isSelection && $0.importedFrom == nil
+                && !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
     }
 

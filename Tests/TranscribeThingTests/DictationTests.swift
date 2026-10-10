@@ -552,6 +552,17 @@ import Testing
         #expect(store.lastSuccessful?.text == "keep me")
     }
 
+    /// Paste Last pastes the last dictation, never a file's transcript (a whole podcast).
+    @Test func lastSuccessfulSkipsImportedFiles() {
+        let store = HistoryStore.preview(entries: [
+            TranscriptEntry(createdAt: Date(), text: "an hour of podcast", engine: .parakeet, audioDuration: 3_600,
+                            voicedSeconds: 3_000, importedFrom: "episode.mp3"),
+            TranscriptEntry(createdAt: Date().addingTimeInterval(-10), text: "dictated", engine: .parakeet,
+                            audioDuration: 3, voicedSeconds: 2),
+        ])
+        #expect(store.lastSuccessful?.text == "dictated")
+    }
+
     @Test func historyIsCappedAt2000() {
         let store = HistoryStore.preview(entries: [])
         let base = Date()
