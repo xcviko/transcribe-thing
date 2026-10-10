@@ -189,8 +189,10 @@ final class OpenRouterClient: Sendable {
     /// failures reported quickly inside the stream before any of the answer) and only when the wait is at most 8 s;
     /// never after a timeout (the user already waited). Cancelling stops the stream, though not the bill: Google AI
     /// Studio doesn't support stream cancellation, so the model finishes and is paid for in full.
+    /// With `extractsTags` false the answer comes back exactly as the model wrote it, a cut-off one too
+    /// (`openRouterTruncated`): a call's transcript (`CallTranscriber`) has its own format and asks for no tags.
     func transcribe(audio: Data, format: String, model: String, systemPrompt: String?, effort: ReasoningEffort,
-                    maxTokens: Int, apiKey: String, timeout: TimeInterval,
+                    maxTokens: Int, apiKey: String, timeout: TimeInterval, extractsTags: Bool = true,
                     progress: (@Sendable (ChatStreamProgress) -> Void)? = nil,
                     generation: (@Sendable (String) -> Void)? = nil,
                     provider: OpenRouterChatRequest.Provider = .googleAIStudio) async throws -> CloudResult {
@@ -211,6 +213,9 @@ final class OpenRouterClient: Sendable {
         let (open, close) = systemPrompt?.contains(Polish.open) == true ? (Polish.open, Polish.close)
             : (TaggedTranscript.open, TaggedTranscript.close)
         var result: CloudResult
+        guard extractsTags else {
+            return try await streamWithRetry(request, engine: engine, progress: progress, generation: generation)
+        }
         do {
             result = try await streamWithRetry(request, engine: engine, progress: progress, generation: generation)
         } catch AppError.openRouterTruncated(let partial) {

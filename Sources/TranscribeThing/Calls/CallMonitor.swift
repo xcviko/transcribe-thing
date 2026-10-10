@@ -129,6 +129,9 @@ final class CallMonitor {
     @ObservationIgnored var onAsk: ((CallInfo) -> Void)?
     /// The question about this call is answered or moot: hide it.
     @ObservationIgnored var onAnswered: ((UUID) -> Void)?
+    /// Where events go (what was noticed, asked, answered, how a call ended; never a page's title): a test's own log
+    /// in tests.
+    @ObservationIgnored var log: DiagnosticLog = .shared
 
     @ObservationIgnored private let settings: AppSettings
     @ObservationIgnored private let store: CallStore
@@ -224,7 +227,18 @@ final class CallMonitor {
 
     /// Yes: the live call is kept (transcribed when it ends).
     func keep() {
+        keepLive(how: "keep")
+    }
+
+    /// The live call kept: answered Yes (`how` "keep"), by the Automatic setting, from the menu bar, or as the
+    /// continuation of a call the app quit recording.
+    private func keepLive(how: String) {
         guard var live, live.consent != .kept else { return }
+        if how == "keep" {
+            logEvent("call.answered", live, ["answer": "keep"])
+        } else {
+            logEvent("call.kept", live, ["reason": how])
+        }
         live.consent = .kept
         live.confirmed = true
         self.live = live
@@ -238,20 +252,31 @@ final class CallMonitor {
     func keep(callID: UUID) {
         if live?.info.id == callID { return keep() }
         guard let call = store.call(id: callID), call.status == .unconfirmed else { return }
+        log.event(.calls, "call.answered", ["call": CallTranscriber.shortID(callID), "answer": "keep", "late": true])
         onAnswered?(callID)
         transcriber.transcribe(callID)
     }
 
     /// No: the live call's recording is deleted, and that call isn't recorded again.
     func discard() {
-        guard live != nil else { return }
+        guard let live else { return }
+        logEvent("call.answered", live, ["answer": "discard"])
         discardLive()
     }
 
     /// No, about a call by id: the live one, or one that ended unanswered, deleted with its audio.
     func discard(callID: UUID) {
-        if live?.info.id == callID { return discardLive() }
+        drop(callID: callID, answer: "discard")
+    }
+
+    /// No or Never for ..., about the live call or one that ended unanswered.
+    private func drop(callID: UUID, answer: String) {
+        if let live, live.info.id == callID {
+            logEvent("call.answered", live, ["answer": answer])
+            return discardLive()
+        }
         guard store.call(id: callID)?.status == .unconfirmed else { return }
+        log.event(.calls, "call.answered", ["call": CallTranscriber.shortID(callID), "answer": answer, "late": true])
         onAnswered?(callID)
         store.delete(callID)
     }
@@ -280,7 +305,7 @@ final class CallMonitor {
             settings.excludeFromCalls(exclusion)
             Log.audio.info("Calls in \(exclusion.name, privacy: .public) are excluded from now on")
         }
-        discard(callID: callID)
+        drop(callID: callID, answer: "never")
     }
 
     /// Start Call Recording: during a noticed call, keeps it; otherwise records the mic and everything the Mac plays.
@@ -301,14 +326,18 @@ final class CallMonitor {
         ignored = watch.detector.followed?.app
         store.upsert(record(of: live, status: .recording))
         state = .recording(info)
+        logEvent("call.manual", live)
     }
 
     /// Stop Call Recording: ends the live recording, kept and transcribed, or deleted. That call isn't recorded again.
     func stop(keep: Bool) {
         guard let live else { return }
         if let app = live.app ?? watch.detector.followed?.app { ignored = app }
-        guard keep else { return discardLive() }
-        if live.consent != .kept { self.keep() }
+        guard keep else {
+            logEvent("call.answered", live, ["answer": "discard", "from": "menu"])
+            return discardLive()
+        }
+        if live.consent != .kept { keepLive(how: "menu") }
         guard let kept = self.live else { return }
         end(kept, status: .transcribing)
     }
@@ -338,12 +367,14 @@ final class CallMonitor {
             case .dropped(let app, _):
                 if ignored == app { ignored = nil }
                 guard let live, live.app == app else { continue }
+                logEvent("call.dropped", live, ["reason": "notACall"])
                 if live.consent == .kept { end(live, status: .transcribing) } else { discardLive(ignore: false) }
             case .started(let call):
                 if live == nil, mayRecord(call.app) { begin(call.app, at: time) }
                 guard var live, live.app == call.app else { continue }
                 live.confirmed = true
                 self.live = live
+                logEvent("call.started", live, ["classified": live.classified])
                 if live.classified { confirm() }
             case .ended(let call):
                 if ignored == call.app { ignored = nil }
@@ -354,8 +385,12 @@ final class CallMonitor {
                 live.recorder.update { $0.mutes = mutes }
                 switch live.consent {
                 case .kept: end(live, status: .transcribing)
-                case .asking: end(live, status: .unconfirmed)
-                case .suspected: discardLive(ignore: false)
+                case .asking:
+                    logEvent("call.answered", live, ["answer": "unanswered"])
+                    end(live, status: .unconfirmed)
+                case .suspected:
+                    logEvent("call.dropped", live, ["reason": "endedUnconfirmed"])
+                    discardLive(ignore: false)
                 }
             case .micReleased, .micBack:
                 break
@@ -384,22 +419,33 @@ final class CallMonitor {
                                     sources: deps.makeSources(.processes(processes)))
         // A browser waits for its call tab, unless its windows can't be read at all: then it's any app.
         let classified = !Self.isBrowser(app) || !deps.sensors.canReadWindows()
-        live = Live(recorder: recorder, info: info, app: app, consent: .suspected, classified: classified,
-                    tapProcesses: processes)
+        let suspected = Live(recorder: recorder, info: info, app: app, consent: .suspected, classified: classified,
+                             tapProcesses: processes)
+        live = suspected
         state = .suspected(info)
         Log.audio.info("Recording a possible call in \(info.appName, privacy: .public)")
+        logEvent("call.suspected", suspected, ["muteKnown": info.muteKnown])
     }
 
     /// The call is confirmed and known: ask about it, or keep it.
     private func confirm() {
         guard var live, live.consent == .suspected else { return }
         if settings.callRecording == .automatic {
-            return keep()
+            return keepLive(how: "automatic")
+        }
+        // The app was quit (or reinstalled) during this call, which the person kept: it goes on kept, and is joined
+        // onto what was recorded before once it ends (`CallStore.adopt`).
+        if let earlier = store.interruptedCall(continuedBy: live.info.bundleID, service: live.info.service,
+                                               pageTitle: live.info.pageTitle, manual: live.info.manual,
+                                               startedAt: live.info.startedAt) {
+            logEvent("call.continues", live, ["earlier": CallTranscriber.shortID(earlier.id)])
+            return keepLive(how: "continuation")
         }
         live.consent = .asking
         self.live = live
         live.recorder.update { $0.consent = .asking }
         state = .asking(live.info)
+        logEvent("call.asked", live)
         onAsk?(live.info)
     }
 
@@ -418,6 +464,7 @@ final class CallMonitor {
             if let tab = followed.tab, Self.isBrowser(app) {
                 if settings.callExclusions.excludes(service: tab.service, page: tab.page) {
                     Log.audio.info("Not recorded: the call's site is excluded")
+                    logEvent("call.dropped", live, ["reason": "excluded"])
                     return discardLive()
                 }
                 // A tab using the mic, any site; or one titled like a call service (Safari and Firefox mark nothing).
@@ -432,6 +479,7 @@ final class CallMonitor {
         if !live.classified, time - live.origin >= Self.classifyWithin {
             guard !live.tabsRead else {
                 Log.audio.info("Not a call: no tab in the browser uses the microphone")
+                logEvent("call.dropped", live, ["reason": "noCallTab"])
                 return discardLive()
             }
             // None of its windows could be read: the browser is taken as a whole, like any app.
@@ -489,8 +537,18 @@ final class CallMonitor {
             var info = await live.recorder.finish() ?? fallback
             info.otherBrowserAudio = other
             info.mutes = live.info.mutes
-            await self.store.adopt(info, status: status, endedAt: endedAt)
-            if status == .transcribing { self.transcriber.transcribe(id) }
+            let record = await self.store.adopt(info, status: status, endedAt: endedAt)
+            let tapProblem: String? = record.remoteProblem.map { $0 == CallStore.silentTapMessage ? "silent" : "other" }
+            self.log.event(.calls, "call.ended", [
+                "call": CallTranscriber.shortID(id), "status": status.rawValue,
+                "joinedOnto": record.id == id ? nil : CallTranscriber.shortID(record.id),
+                "seconds": record.duration, "mic": record.micFile == nil ? nil : record.micSeconds,
+                "remote": record.remoteFile == nil ? nil : record.remoteSeconds,
+                "mutes": info.mutes.count, "muteKnown": info.muteKnown, "tapProblem": tapProblem,
+                "micProblem": info.micProblem == nil ? nil : true,
+            ])
+            // A continuation joined onto the call the app quit recording: that one is transcribed, whole.
+            if status == .transcribing { self.transcriber.transcribe(record.id) }
             self.endings[id] = nil
             if self.state == .ending { self.state = .idle }
             Log.audio.info("Call recording ended (\(status.rawValue, privacy: .public))")
@@ -510,6 +568,15 @@ final class CallMonitor {
     }
 
     // MARK: Helpers
+
+    /// An event about the live call: its id, app and service (never a page's title), then `fields`.
+    private func logEvent(_ name: String, _ live: Live, _ fields: KeyValuePairs<String, (any DiagnosticValue)?> = [:]) {
+        var all = [DiagnosticField("call", CallTranscriber.shortID(live.info.id)),
+                   DiagnosticField("app", live.info.manual ? "manual" : (live.info.bundleID ?? "unknown"))]
+        if let service = live.info.service { all.append(DiagnosticField("service", service.rawValue)) }
+        all += fields.compactMap { key, value in value.map { DiagnosticField(key, $0.diagnosticText) } }
+        log.event(.calls, name, fields: all)
+    }
 
     private func intervals(_ ranges: [ClosedRange<TimeInterval>], origin: TimeInterval) -> [CallInterval] {
         ranges.compactMap { range in

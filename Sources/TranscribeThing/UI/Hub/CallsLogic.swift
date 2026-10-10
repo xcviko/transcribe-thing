@@ -157,6 +157,9 @@ enum CallFormat {
         if !call.otherBrowserAudio.isEmpty {
             notes.append("Another tab played sound during the call, so it may be mixed into their side.")
         }
+        if let cut = call.cutOffAt {
+            notes.append("The transcript may be cut off at \(CallPrompts.clock(cut)): Gemini’s answer ran out of room there.")
+        }
         return notes
     }
 

@@ -20,15 +20,37 @@ enum CallAudio {
     /// The journal's 16-bit WAV at `wav` as AAC at History's 32 kbps (`RecordingFile.bitRate`) in `m4a`. Throws when
     /// the WAV can't be read or the encoder fails.
     static func encode(journal wav: URL, to m4a: URL) throws -> Encoded {
+        try join(nil, then: wav, at: 0, to: m4a)
+    }
+
+    /// One track of a call the app quit recording and its continuation as one .m4a: the first `offset` samples of
+    /// `earlier` (an .m4a; silence where it has fewer, none for nil), then the journal's WAV at `wav`. The two parts
+    /// stay on the call's clock: the continuation starts at sample `offset` whatever the earlier part had.
+    static func join(_ earlier: URL?, then wav: URL, at offset: Int, to m4a: URL) throws -> Encoded {
         let handle = try FileHandle(forReadingFrom: wav)
         defer { try? handle.close() }
         let total = RecordingJournal.sampleCount(of: wav) ?? 0
         try handle.seek(toOffset: UInt64(RecordingJournal.headerSize))
+        let kept = try earlier.map { min(try sampleCount(of: $0), offset) } ?? 0
         var written = 0
         var peak: Float = 0
         try FileManager.default.createDirectory(at: m4a.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try CloudAudio.writeM4A(bitRate: RecordingFile.bitRate, reservingSeconds: Double(total) / Recording.sampleRate,
-                                to: m4a) { append in
+        try CloudAudio.writeM4A(bitRate: RecordingFile.bitRate,
+                                reservingSeconds: Double(offset + total) / Recording.sampleRate, to: m4a) { append in
+            if let earlier {
+                while written < kept {
+                    let piece = try read(earlier, range: written..<min(kept, written + block))
+                    if piece.isEmpty { break }
+                    peak = piece.reduce(peak) { max($0, abs($1)) }
+                    try append(piece)
+                    written += piece.count
+                }
+            }
+            while written < offset {
+                let count = min(block, offset - written)
+                try append([Float](repeating: 0, count: count))
+                written += count
+            }
             while let data = try handle.read(upToCount: block * 2), data.count >= 2 {
                 let count = data.count / 2
                 var ints = [Int16](repeating: 0, count: count)

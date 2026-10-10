@@ -5,7 +5,8 @@ import Foundation
 ///     transcribe-thing --calls-status [--transcript]
 ///
 /// Prints each call in calls.json (`CallStore`), newest first: when, which app and service, how long each track is,
-/// its status, mutes, problems and cost; with `--transcript`, its transcript too. Then any call still in
+/// its status, mutes, problems, cost, its last error and the answers Gemini gave (`Calls/<id>/answers`: file names and
+/// sizes); with `--transcript`, its transcript too. Then any call still in
 /// `Calls in Progress` (`CallJournal`): one being recorded now, or one the app left when it quit. Only reads: nothing
 /// is written, moved or deleted, and nothing goes over the network.
 enum CallsCLI {
@@ -69,8 +70,21 @@ enum CallsCLI {
             lines.append("  other tabs played sound: "
                          + call.otherBrowserAudio.map { "\(clock($0.start))-\(clock($0.end))" }.joined(separator: ", "))
         }
-        if let error = call.error { lines.append("  error: \(error)") }
+        if let error = call.error { lines.append("  last error: \(error)") }
+        if let cut = call.cutOffAt { lines.append("  cut off at \(clock(cut))") }
         if let cost = call.costUSD { lines.append(String(format: "  cost: $%.4f", cost)) }
+        let answers = folder.appendingPathComponent("answers", isDirectory: true)
+        let names = ((try? FileManager.default.contentsOfDirectory(atPath: answers.path)) ?? []).sorted {
+            $0.localizedStandardCompare($1) == .orderedAscending
+        }
+        if !names.isEmpty {
+            lines.append("  answers (\(answers.path)):")
+            for name in names {
+                let attributes = try? FileManager.default.attributesOfItem(atPath: answers.appendingPathComponent(name).path)
+                let size = (attributes?[.size] as? Int).map { "\($0) bytes" } ?? "?"
+                lines.append("    \(name)  \(size)")
+            }
+        }
         if let segments = call.transcript?.segments {
             let speakers = call.transcript?.speakers.map(call.name(of:)).joined(separator: ", ") ?? ""
             lines.append("  transcript: \(segments.count) phrases · \(speakers)")

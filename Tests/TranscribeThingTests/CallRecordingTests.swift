@@ -290,7 +290,7 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
         #expect(segments[2].speaker == "Participant 1" && segments[2].end == 60)
         #expect(try CallTranscriptParser.segments(from: "[]", side: .local, duration: 10).isEmpty)
         #expect(try CallTranscriptParser.segments(from: "```json\n```", side: .local, duration: 10).isEmpty)
-        #expect(throws: CallTranscriber.Failure.unreadableAnswer) {
+        #expect(throws: CallTranscriber.Failure.unreadableAnswer(track: .mic, chunk: 1, chunks: 1, lines: 1)) {
             try CallTranscriptParser.segments(from: "I can't hear anything.", side: .local, duration: 10)
         }
         #expect(CallTranscriptParser.seconds("1:02:03") == 3723)
@@ -442,13 +442,14 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
         var sources: [[CallJournal.Track: FakeSource]] = []
         var asked: [CallMonitor.CallInfo] = []
         var answered: [UUID] = []
-        let paths = AppPaths.temporary()
+        let paths: AppPaths
         let settings = AppSettings.inMemory()
         let store: CallStore
         let transcriber: CallTranscriber
         var monitor: CallMonitor!
 
-        init(mode: CallRecordingMode = .ask) {
+        init(mode: CallRecordingMode = .ask, paths: AppPaths = .temporary()) {
+            self.paths = paths
             settings.callRecording = mode
             store = CallStore(paths: paths, settings: settings)
             store.load()
@@ -849,5 +850,344 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
         await other.store.journal?.settle()
         #expect(other.journalFiles.isEmpty)
         #expect(other.store.calls.isEmpty)
+    }
+}
+
+// MARK: - Answers, a line per phrase
+
+@Suite struct CallAnswerFormatTests {
+    @Test func linesAreReadWhateverTheModelAddsAround() throws {
+        let answer = """
+            Here is the transcript:
+
+            [00:01-00:04] Аня: Привет, как дела? [смеётся]
+            [0:05.5-0:07] Participant 2: «Нормально», сказал он: "да".
+
+            - **[01:02:03 - 01:02:05] HR: Аня:** Ок
+            [12] Participant 2: Plain seconds
+            00:20-00:22 Participant 1: A bare time
+            [00:30–00:33] [смеётся]
+            [00:40] Participant [3]: (тихо) "Brackets" in the name
+            ```
+            That's everything I heard.
+            """
+        let parsed = CallTranscriptParser.parse(answer, side: .remote, duration: 4000, speakers: ["HR: Аня"])
+        #expect(parsed.format == .lines)
+        // The remark before and after; blank lines and the fence aren't counted.
+        #expect(parsed.skipped == 2)
+        let s = parsed.segments
+        #expect(s.map(\.speaker) == ["Аня", "Participant 2", "HR: Аня", "Participant 2", "Participant 1",
+                                     "Participant 1", "Participant [3]"])
+        #expect(s.map(\.text) == ["Привет, как дела? [смеётся]", "«Нормально», сказал он: \"да\".", "Ок",
+                                  "Plain seconds", "A bare time", "[смеётся]", "(тихо) \"Brackets\" in the name"])
+        #expect(s[0].start == 1 && s[0].end == 4)
+        #expect(s[1].start == 5.5 && s[1].end == 7)
+        #expect(s[2].start == 3723 && s[2].end == 3725)
+        // No end: up to the next phrase.
+        #expect(s[3].start == 12 && s[3].end == 20)
+        #expect(s[5].start == 30 && s[5].end == 33)
+        #expect(s.allSatisfy { $0.side == .remote })
+    }
+
+    @Test func aLineWithoutANameIsTheSpeakerBeforeAndListNumbersArentTimes() {
+        let answer = """
+            1. [00:02-00:03] Sam: Первое
+            [00:04-00:05] и продолжение
+            2. Not a phrase
+            2024 was a year: not a phrase either
+            """
+        let parsed = CallTranscriptParser.parse(answer, side: .local, duration: 60, defaultSpeaker: "Sam")
+        #expect(parsed.segments.map(\.speaker) == ["Sam", "Sam"])
+        #expect(parsed.segments.map(\.text) == ["Первое", "и продолжение"])
+        #expect(parsed.skipped == 2)
+        // The first line names nobody: the side's own voice.
+        let alone = CallTranscriptParser.parse("[00:01] [кашляет]", side: .local, duration: 60, defaultSpeaker: "Sam")
+        #expect(alone.segments.map(\.speaker) == ["Sam"])
+    }
+
+    @Test func noSpeechIsNotAFailureButWordsWithNoPhraseAre() throws {
+        for answer in ["", "NO SPEECH", "\n  \n", "[]", "```\n```", "(No speech.)"] {
+            let parsed = CallTranscriptParser.parse(answer, side: .remote, duration: 10)
+            #expect(parsed.format == .empty, "\(answer)")
+            #expect(try CallTranscriptParser.segments(from: answer, side: .remote, duration: 10).isEmpty)
+        }
+        let words = CallTranscriptParser.parse("I can't make out any speech.\nSorry.", side: .remote, duration: 10)
+        #expect(words.format == .unreadable && words.skipped == 2)
+        #expect(throws: CallTranscriber.Failure.unreadableAnswer(track: .remote, chunk: 1, chunks: 1, lines: 2)) {
+            try CallTranscriptParser.segments(from: "I can't make out any speech.\nSorry.", side: .remote,
+                                              duration: 10)
+        }
+    }
+
+    @Test func aBrokenJSONArrayGivesUpOnlyItsBrokenObjects() {
+        // A quote left unescaped, then an answer that stops mid-object.
+        let answer = """
+            [{"start": "00:01", "end": "00:02", "speaker": "Аня", "text": "Он сказал "да" и ушёл"},
+             {"start": "00:03", "end": "00:04", "speaker": "Sam", "text": "Ок, {понял}"},
+             {"start": 5, "end": 6.5, "speaker": "Аня", "text": "Пока"},
+             {"start": "00:07", "speak
+            """
+        let parsed = CallTranscriptParser.parse(answer, side: .remote, duration: 60)
+        #expect(parsed.format == .salvaged)
+        #expect(parsed.segments.map(\.text) == ["Он сказал \"да\" и ушёл", "Пока"])
+        #expect(parsed.segments.map(\.start) == [1, 5])
+        #expect(parsed.skipped == 1, "the object with braces in its text")
+        // A whole array is still read as JSON.
+        let whole = CallTranscriptParser.parse(#"[{"start":"00:01","end":"00:02","speaker":"Аня","text":"Да"}]"#,
+                                               side: .remote, duration: 60)
+        #expect(whole.format == .json && whole.segments.map(\.text) == ["Да"])
+    }
+
+    @Test func thePromptAsksForLines() {
+        let prompt = CallPrompts.remote(roster: [], service: "Telegram")
+        #expect(prompt.contains("[start-end] Speaker: what they said"))
+        #expect(prompt.contains(CallPrompts.noSpeech))
+        #expect(!prompt.contains("JSON"))
+    }
+}
+
+// MARK: - Answers kept, cut off, logged
+
+@MainActor
+@Suite(.serialized) struct CallAnswerKeepingTests {
+    private static func store() -> (CallStore, CallRecord) {
+        let store = CallStore(paths: .temporary(), settings: .inMemory())
+        store.load()
+        var call = CallRecord(id: UUID(), startedAt: Date(), appName: "Telegram", service: .telegram, status: .done)
+        call.micFile = "mic.m4a"
+        call.micSeconds = 10
+        call.remoteFile = "remote.m4a"
+        call.remoteSeconds = 10
+        store.upsert(call)
+        return (store, call)
+    }
+
+    private static func log() -> (DiagnosticLog, URL) {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("calls-log-\(UUID().uuidString)", isDirectory: true)
+        let log = DiagnosticLog()
+        log.start(directory: folder)
+        return (log, folder)
+    }
+
+    @Test func answersAreKeptWithTheCallAndGoWithIt() async throws {
+        let (store, call) = Self.store()
+        let speech = speechLike(seconds: 10)
+        let transcriber = CallTranscriber(store: store) { _, prompt, _ in
+            CloudResult(text: prompt.contains("the other participants") ? "[00:01-00:02] Аня: Привет"
+                        : "Sure!\n[00:03-00:04] Sam: Hi")
+        }
+        transcriber.read = { _, range in Array(speech[range]) }
+        transcriber.transcribe(call.id)
+        await transcriber.waitUntilIdle()
+        let answers = store.answersFolder(for: call.id)
+        #expect(files(in: answers) == ["1-remote.txt", "1-mic.txt"])
+        #expect(try String(contentsOf: answers.appendingPathComponent("1-mic.txt"), encoding: .utf8)
+                == "Sure!\n[00:03-00:04] Sam: Hi")
+        #expect(store.call(id: call.id)?.transcript?.segments.map(\.text) == ["Привет", "Hi"])
+        store.delete(call.id)
+        await store.flush()
+        #expect(!FileManager.default.fileExists(atPath: store.folder(for: call.id).path))
+    }
+
+    @Test func anUnreadableAnswerSaysHowMuchAndWhereItIs() async throws {
+        let (store, call) = Self.store()
+        let speech = speechLike(seconds: 10)
+        let transcriber = CallTranscriber(store: store) { _, _, _ in
+            CloudResult(text: "I'm sorry,\nI can't transcribe this.\nIt is too quiet.")
+        }
+        transcriber.read = { _, range in Array(speech[range]) }
+        transcriber.transcribe(call.id)
+        await transcriber.waitUntilIdle()
+        let failed = try #require(store.call(id: call.id))
+        #expect(failed.status == .failed)
+        let error = try #require(failed.error)
+        #expect(error.contains("their side") && error.contains("any of its 3 lines") && error.contains("Show in Finder"))
+        #expect(files(in: store.answersFolder(for: call.id)) == ["1-remote.txt"])
+    }
+
+    @Test func aCutOffAnswerIsReadAsFarAsItGoes() async throws {
+        let (store, call) = Self.store()
+        let speech = speechLike(seconds: 30)
+        let mic = OSAllocatedUnfairLock(initialState: 0)
+        let transcriber = CallTranscriber(store: store) { _, prompt, _ in
+            if prompt.contains("the other participants") {
+                throw AppError.openRouterTruncated("[00:01-00:03] Аня: Первая фраза\n[00:12-00:14] Аня: Вторая\n[00:15-00")
+            }
+            mic.withLock { $0 += 1 }
+            return CloudResult(text: "[00:20-00:21] Sam: Да")
+        }
+        transcriber.read = { _, range in Array(speech[range]) }
+        store.update(call.id) {
+            $0.micSeconds = 30
+            $0.remoteSeconds = 30
+        }
+        transcriber.transcribe(call.id)
+        await transcriber.waitUntilIdle()
+        let done = try #require(store.call(id: call.id))
+        #expect(done.status == .done)
+        #expect(mic.withLock { $0 } == 1, "the mic is still asked")
+        #expect(done.transcript?.segments.map(\.text) == ["Первая фраза", "Вторая", "Да"])
+        #expect(done.cutOffAt == 14)
+        #expect(CallFormat.notes(done).contains { $0.contains("may be cut off at 00:14") })
+        // The partial answer is kept as it came.
+        #expect(try String(contentsOf: store.answersFolder(for: call.id).appendingPathComponent("1-remote.txt"),
+                           encoding: .utf8).hasSuffix("[00:15-00"))
+    }
+
+    @Test func eachRequestIsLoggedWithoutWhatWasSaid() async throws {
+        let (log, folder) = Self.log()
+        defer {
+            log.stop()
+            log.flush()
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let (store, call) = Self.store()
+        let quiet = [Float](repeating: 0, count: Int(10 * rate))
+        let speech = speechLike(seconds: 10)
+        let transcriber = CallTranscriber(store: store) { _, _, _ in
+            var result = CloudResult(text: "Note: one phrase\n[00:01-00:02] Sam: секретные слова")
+            result.costUSD = 0.004
+            result.finishReason = "stop"
+            return result
+        }
+        transcriber.log = log
+        transcriber.read = { url, range in url.lastPathComponent == "remote.m4a" ? Array(quiet[range]) : Array(speech[range]) }
+        transcriber.transcribe(call.id)
+        await transcriber.waitUntilIdle()
+        log.flush()
+        let text = log.retainedText()
+        let id = CallTranscriber.shortID(call.id)
+        #expect(text.contains("[calls] transcription.started call=\(id) chunks=1 remote=10 mic=10 mutes=0"))
+        #expect(text.contains("[calls] transcription.skipped call=\(id) track=remote chunk=1"))
+        #expect(text.contains("[calls] transcription.request call=\(id) track=mic chunk=1 chunks=1 audio=10 chars=51 "
+                              + "format=lines phrases=1 skipped=1 finish=stop cost=0"))
+        #expect(text.contains("[calls] transcription.finished call=\(id) phrases=1 requests=1 skippedSilent=1"))
+        #expect(!text.contains("секрет"), "never what was said")
+    }
+}
+
+// MARK: - A call split by a relaunch
+
+@MainActor
+@Suite(.serialized) struct CallContinuationTests {
+    private static let now = Date(timeIntervalSince1970: 1_790_000_000)
+
+    /// A kept Telegram call an earlier run left in the journal: `seconds` of speech on both tracks, started so it
+    /// stopped `gap` seconds before `now`, muted from 1 to 1.5 s.
+    private static func leaveInterruptedCall(in paths: AppPaths, seconds: Double, gap: Double) async -> UUID {
+        var info = CallJournal.Info(startedAt: now.addingTimeInterval(-seconds - gap), appName: "Telegram",
+                                    bundleID: "ru.keepcoder.Telegram", service: .telegram, consent: .kept)
+        info.mutes = [CallInterval(start: 1, end: 1.5)]
+        info.muteKnown = true
+        let journal = CallJournal(directory: paths.callJournals)
+        let mic = FakeSource(), remote = FakeSource()
+        journal.begin(info, origin: 0, sources: [.mic: mic, .remote: remote])
+        mic.push(speechLike(seconds: seconds), at: 0)
+        remote.push(speechLike(seconds: seconds), at: 0)
+        _ = await journal.end(info.id)
+        return info.id
+    }
+
+    private static func rms(_ samples: [Float]) -> Float {
+        samples.isEmpty ? 0 : (samples.reduce(0) { $0 + $1 * $1 } / Float(samples.count)).squareRoot()
+    }
+
+    @Test func aCallSplitByARelaunchIsOneCallWithItsTracksInLine() async throws {
+        let paths = AppPaths.temporary()
+        let earlier = await Self.leaveInterruptedCall(in: paths, seconds: 2, gap: 5)
+        let (log, logs) = (DiagnosticLog(), FileManager.default.temporaryDirectory.appendingPathComponent("calls-log-\(UUID().uuidString)", isDirectory: true))
+        log.start(directory: logs)
+        defer {
+            log.stop()
+            log.flush()
+            try? FileManager.default.removeItem(at: logs)
+        }
+        let rig = CallMonitorTests.Rig(mode: .ask, paths: paths)
+        rig.monitor.log = log
+        rig.store.log = log
+        await rig.store.waitForRecovery()
+        #expect(rig.store.call(id: earlier)?.status == .interrupted)
+
+        // The same call, noticed again right after the relaunch: kept without asking, it was kept before.
+        rig.app("ru.keepcoder.Telegram", mic: true, sound: true)
+        rig.poll([0, 21])
+        guard case .recording(let info) = rig.monitor.state else { Issue.record("not kept"); return }
+        #expect(rig.asked.isEmpty)
+        rig.sources.first?[.mic]?.push(speechLike(seconds: 3), at: 0)
+        rig.sources.first?[.remote]?.push(speechLike(seconds: 3), at: 0)
+        rig.app("ru.keepcoder.Telegram", mic: false, sound: false)
+        rig.poll(stride(from: 22.0, through: 101, by: 1))
+        await rig.monitor.waitForEndings()
+        await rig.transcriber.waitUntilIdle()
+
+        #expect(rig.store.calls.map(\.id) == [earlier], "one call, the earlier one")
+        let call = try #require(rig.store.call(id: earlier))
+        #expect(call.status == .done && call.error == nil)
+        #expect(call.transcript?.segments.map(\.text) == ["Hello there"])
+        // 2 s, the 5 s gap as silence, then 3 s: both tracks the same length, the continuation at 7 s on both.
+        #expect(abs(call.micSeconds - 10) < 0.05 && abs(call.remoteSeconds - 10) < 0.05)
+        for track in CallJournal.Track.allCases {
+            let url = try #require(rig.store.audioURL(of: call, track: track))
+            let before = try CallAudio.read(url, range: Int(0.2 * rate)..<Int(1.8 * rate))
+            let gap = try CallAudio.read(url, range: Int(2.5 * rate)..<Int(6.5 * rate))
+            let after = try CallAudio.read(url, range: Int(7.5 * rate)..<Int(9.5 * rate))
+            #expect(Self.rms(before) > 0.01 && Self.rms(after) > 0.01, "\(track)")
+            #expect(Self.rms(gap) < 0.001, "\(track)")
+        }
+        #expect(call.muteIntervals.first == CallInterval(start: 1, end: 1.5))
+        #expect(!FileManager.default.fileExists(atPath: rig.store.folder(for: info.id).path))
+        await rig.store.journal?.settle()
+        #expect(files(in: paths.callJournals).isEmpty)
+        log.flush()
+        let text = log.retainedText()
+        #expect(text.contains("call.continues call=\(CallTranscriber.shortID(info.id)) app=ru.keepcoder.Telegram"))
+        #expect(text.contains("call.joined call=\(CallTranscriber.shortID(earlier))"))
+    }
+
+    @Test func onlyACallSoonAfterInTheSameAppContinuesIt() async throws {
+        let paths = AppPaths.temporary()
+        let earlier = await Self.leaveInterruptedCall(in: paths, seconds: 2, gap: 5)
+        let store = CallStore(paths: paths, settings: .inMemory())
+        store.load()
+        await store.waitForRecovery()
+        let telegram = "ru.keepcoder.Telegram"
+        #expect(store.interruptedCall(continuedBy: telegram, service: .telegram, pageTitle: nil, manual: false,
+                                      startedAt: Self.now)?.id == earlier)
+        #expect(store.interruptedCall(continuedBy: telegram, service: .telegram, pageTitle: nil, manual: false,
+                                      startedAt: Self.now.addingTimeInterval(CallStore.continuationWindow)) == nil)
+        #expect(store.interruptedCall(continuedBy: "us.zoom.xos", service: .zoom, pageTitle: nil, manual: false,
+                                      startedAt: Self.now) == nil)
+        #expect(store.interruptedCall(continuedBy: telegram, service: .telegram, pageTitle: nil, manual: true,
+                                      startedAt: Self.now) == nil)
+        // Once transcribed (Transcribe on the interrupted call), it's a call of its own.
+        store.update(earlier) { $0.status = .done }
+        #expect(store.interruptedCall(continuedBy: telegram, service: .telegram, pageTitle: nil, manual: false,
+                                      startedAt: Self.now) == nil)
+    }
+
+    @Test func aCallInterruptedTwiceComesBackAsOne() async throws {
+        let paths = AppPaths.temporary()
+        let first = await Self.leaveInterruptedCall(in: paths, seconds: 2, gap: 8)
+        // The continuation was cut off too, before it was joined: both come back at the next launch.
+        var info = CallJournal.Info(startedAt: Self.now.addingTimeInterval(-4), appName: "Telegram",
+                                    bundleID: "ru.keepcoder.Telegram", service: .telegram, consent: .kept)
+        info.mutes = [CallInterval(start: 0.5, end: 1)]
+        info.muteKnown = true
+        let journal = CallJournal(directory: paths.callJournals)
+        let mic = FakeSource()
+        journal.begin(info, origin: 0, sources: [.mic: mic])
+        mic.push(speechLike(seconds: 3), at: 0)
+        _ = await journal.end(info.id)
+
+        let store = CallStore(paths: paths, settings: .inMemory())
+        store.load()
+        await store.waitForRecovery()
+        #expect(store.calls.map(\.id) == [first])
+        let call = try #require(store.call(id: first))
+        #expect(call.status == .interrupted && call.error == CallStore.interruptedMessage)
+        // Started 10 s before now; the second part 6 s in, 3 s long. It had no remote track: the earlier one stays.
+        #expect(abs(call.micSeconds - 9) < 0.05)
+        #expect(abs(call.remoteSeconds - 2) < 0.05)
+        #expect(call.muteIntervals == [CallInterval(start: 1, end: 1.5), CallInterval(start: 6.5, end: 7)])
     }
 }

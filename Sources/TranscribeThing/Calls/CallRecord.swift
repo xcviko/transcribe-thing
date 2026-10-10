@@ -101,6 +101,8 @@ struct CallRecord: Codable, Equatable, Identifiable, Sendable {
     var transcript: CallTranscript?
     /// What the transcription requests cost, summed; nil before any answered.
     var costUSD: Double?
+    /// Where the transcript may stop short, in seconds from the call's start: an answer ran out of room there.
+    var cutOffAt: TimeInterval?
     /// Speakers renamed by the person: the model's name → theirs.
     var speakerNames: [String: String] = [:]
 
@@ -130,7 +132,7 @@ struct CallRecord: Codable, Equatable, Identifiable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id, startedAt, endedAt, appName, bundleID, service, pageTitle, manual, muteIntervals, muteKnown
         case otherBrowserAudio, micFile, remoteFile, micSeconds, remoteSeconds, micProblem, remoteProblem, status
-        case error, transcript, costUSD, speakerNames
+        case error, transcript, costUSD, cutOffAt, speakerNames
     }
 
     /// Lenient: anything but the id, the start, the app and the status may be missing (written by another build).
@@ -158,6 +160,7 @@ struct CallRecord: Codable, Equatable, Identifiable, Sendable {
         error = try c.decodeIfPresent(String.self, forKey: .error)
         transcript = try? c.decodeIfPresent(CallTranscript.self, forKey: .transcript)
         costUSD = try c.decodeIfPresent(Double.self, forKey: .costUSD)
+        cutOffAt = try? c.decodeIfPresent(TimeInterval.self, forKey: .cutOffAt)
         speakerNames = try c.decodeIfPresent([String: String].self, forKey: .speakerNames) ?? [:]
     }
 
@@ -184,6 +187,7 @@ struct CallRecord: Codable, Equatable, Identifiable, Sendable {
         try c.encodeIfPresent(error, forKey: .error)
         try c.encodeIfPresent(transcript, forKey: .transcript)
         try c.encodeIfPresent(costUSD, forKey: .costUSD)
+        try c.encodeIfPresent(cutOffAt, forKey: .cutOffAt)
         if !speakerNames.isEmpty { try c.encode(speakerNames, forKey: .speakerNames) }
     }
 }

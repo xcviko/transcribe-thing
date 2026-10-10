@@ -7,7 +7,10 @@ import Observation
 ///
 /// A call comes here from its journal (`CallJournal`) once it ends (`adopt`); one an earlier run left in the journal
 /// comes back at launch (`recoverJournals`): kept ones as `.interrupted`, unanswered ones as `.unconfirmed`, ones
-/// never confirmed as calls are deleted.
+/// never confirmed as calls are deleted. A kept call that starts in the same app within `continuationWindow` of where
+/// an interrupted one stopped (the app was quit or reinstalled mid-call) is that call going on: once it ends, it's
+/// joined onto the interrupted record (`interruptedCall(continuedBy:)`), its tracks after a silence as long as the
+/// gap, so there's one call, not two halves.
 @MainActor @Observable
 final class CallStore {
     /// What an interrupted call says in place of an error.
@@ -34,6 +37,12 @@ final class CallStore {
     @ObservationIgnored private var recoveryTask: Task<Void, Never>?
     /// Calls just removed, by id: deleted or auto-deleted.
     @ObservationIgnored var onRemove: (([UUID]) -> Void)?
+    /// Where events go; a test's own log in tests.
+    @ObservationIgnored var log: DiagnosticLog = .shared
+
+    /// How soon after an interrupted call stopped a new call of the same app still continues it: a relaunch, a
+    /// reinstall.
+    nonisolated static let continuationWindow: TimeInterval = 120
 
     init(paths: AppPaths, settings: AppSettings) {
         self.paths = paths
@@ -62,6 +71,11 @@ final class CallStore {
     /// The call's folder: Calls/<id>.
     func folder(for id: UUID) -> URL {
         paths.calls.appendingPathComponent(id.uuidString, isDirectory: true)
+    }
+
+    /// Calls/<id>/answers: each transcription request's answer as it came (`CallTranscriber`), "1-remote.txt".
+    func answersFolder(for id: UUID) -> URL {
+        folder(for: id).appendingPathComponent("answers", isDirectory: true)
     }
 
     /// A track's .m4a, when the call has one.
@@ -181,6 +195,12 @@ final class CallStore {
     /// the main thread, then the record saved, and only then the journal removed. Returns the record.
     @discardableResult
     func adopt(_ info: CallJournal.Info, status: CallStatus, endedAt: Date? = nil) async -> CallRecord {
+        if status == .transcribing || status == .interrupted,
+           let earlier = interruptedCall(continuedBy: info.bundleID, service: info.service, pageTitle: info.pageTitle,
+                                         manual: info.manual, startedAt: info.startedAt, besides: info.id),
+           let joined = await join(info, onto: earlier, status: status, endedAt: endedAt) {
+            return joined
+        }
         var record = info.record(status: status)
         if let existing = call(id: info.id) {
             record.speakerNames = existing.speakerNames
@@ -217,6 +237,119 @@ final class CallStore {
         upsert(record)
         await flush()
         journal?.remove(info.id)
+        return record
+    }
+
+    /// The interrupted call a call of `bundleID` starting at `startedAt` continues: the same app (in a browser, the
+    /// same service, or page when no service is known), not a menu bar recording, with audio, that stopped at most
+    /// `continuationWindow` before. The latest such one; nil when there's none.
+    func interruptedCall(continuedBy bundleID: String?, service: CallService?, pageTitle: String?, manual: Bool,
+                         startedAt: Date, besides id: UUID? = nil) -> CallRecord? {
+        guard let bundleID, !manual else { return nil }
+        let isBrowser = CallAppKind.of(bundleID) == .browser
+        return calls.filter { call in
+            guard call.id != id, call.status == .interrupted, !call.manual, call.bundleID == bundleID,
+                  call.micFile != nil || call.remoteFile != nil else { return false }
+            if isBrowser {
+                guard call.service == service else { return false }
+                if service == nil, call.pageTitle != pageTitle { return false }
+            }
+            let gap = startedAt.timeIntervalSince(Self.end(of: call))
+            return gap >= -10 && gap <= Self.continuationWindow
+        }.max { Self.end(of: $0) < Self.end(of: $1) }
+    }
+
+    /// When a call's recording stopped.
+    nonisolated static func end(of call: CallRecord) -> Date {
+        call.endedAt ?? call.startedAt.addingTimeInterval(call.duration)
+    }
+
+    /// `info`'s recording onto the end of `earlier`, which it continues: each track is `earlier`'s, silence up to
+    /// where `info` started on `earlier`'s clock, then `info`'s, written over `earlier`'s files only once every track
+    /// is encoded; mutes and other tabs' sound move by as much. The one record takes `status`, and the continuation's
+    /// own record and journal go. nil, with nothing changed, when a track can't be joined: then it stays a call of its
+    /// own.
+    private func join(_ info: CallJournal.Info, onto earlier: CallRecord, status: CallStatus,
+                      endedAt: Date?) async -> CallRecord? {
+        guard let journal, persists else { return nil }
+        let offset = max(0, info.startedAt.timeIntervalSince(earlier.startedAt))
+        let offsetSamples = Int((offset * Recording.sampleRate).rounded())
+        let folder = folder(for: earlier.id)
+        let sources = CallJournal.Track.allCases.map { track in
+            (track, audioURL(of: earlier, track: track), journal.audioURL(for: info.id, track: track))
+        }
+        let encoded = await Task.detached(priority: .utility) { () -> [CallJournal.Track: CallAudio.Encoded]? in
+            var encoded: [CallJournal.Track: CallAudio.Encoded] = [:]
+            var written: [URL] = []
+            let fm = FileManager.default
+            for (track, old, wav) in sources {
+                let old = old.flatMap { fm.fileExists(atPath: $0.path) ? $0 : nil }
+                // Nothing new on this track: the earlier part's file stays as it is.
+                guard (RecordingJournal.sampleCount(of: wav) ?? 0) > 0 else { continue }
+                let temporary = folder.appendingPathComponent("\(track.rawValue).joining.m4a", isDirectory: false)
+                do {
+                    encoded[track] = try CallAudio.join(old, then: wav, at: offsetSamples, to: temporary)
+                    written.append(temporary)
+                } catch {
+                    Log.audio.error("Couldn't join the call's \(track.rawValue, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                    for url in written + [temporary] { try? fm.removeItem(at: url) }
+                    return nil
+                }
+            }
+            for track in encoded.keys {
+                let temporary = folder.appendingPathComponent("\(track.rawValue).joining.m4a", isDirectory: false)
+                let final = folder.appendingPathComponent("\(track.rawValue).m4a", isDirectory: false)
+                try? fm.removeItem(at: final)
+                do {
+                    try fm.moveItem(at: temporary, to: final)
+                } catch {
+                    Log.audio.error("Couldn't keep the joined call's \(track.rawValue, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                    encoded[track] = nil
+                }
+            }
+            return encoded
+        }.value
+        guard let encoded else { return nil }
+        var record = earlier
+        record.status = status
+        record.error = nil
+        record.transcript = nil
+        record.costUSD = nil
+        record.cutOffAt = nil
+        record.muteIntervals = earlier.muteIntervals + info.mutes.map {
+            CallInterval(start: $0.start + offset, end: $0.end + offset)
+        }
+        record.muteKnown = earlier.muteKnown && info.muteKnown
+        record.otherBrowserAudio = earlier.otherBrowserAudio + info.otherBrowserAudio.map {
+            CallInterval(start: $0.start + offset, end: $0.end + offset)
+        }
+        record.micProblem = earlier.micProblem ?? info.micProblem
+        record.remoteProblem = earlier.remoteProblem == Self.silentTapMessage ? nil : earlier.remoteProblem
+        record.remoteProblem = record.remoteProblem ?? info.remoteProblem
+        if let mic = encoded[.mic] {
+            record.micFile = "mic.m4a"
+            record.micSeconds = mic.seconds
+        }
+        if let remote = encoded[.remote] {
+            record.remoteFile = "remote.m4a"
+            record.remoteSeconds = remote.seconds
+            if remote.peak == 0, remote.seconds >= 10, record.remoteProblem == nil {
+                record.remoteProblem = Self.silentTapMessage
+            }
+        }
+        record.endedAt = endedAt ?? record.startedAt.addingTimeInterval(record.duration)
+        // The continuation's own record (kept while it recorded) is now this one.
+        calls.removeAll { $0.id == info.id }
+        upsert(record)
+        await flush()
+        journal.remove(info.id)
+        removeFolder(of: info.id)
+        let gap = info.startedAt.timeIntervalSince(Self.end(of: earlier))
+        log.event(.calls, "call.joined", [
+            "call": CallTranscriber.shortID(earlier.id), "continuation": CallTranscriber.shortID(info.id),
+            "gap": gap, "seconds": record.duration,
+        ])
+        Log.app.info("Joined a call the app quit recording with its continuation (gap \(gap, format: .fixed(precision: 0), privacy: .public) s)")
         return record
     }
 
