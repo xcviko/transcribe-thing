@@ -36,6 +36,9 @@ final class CallMuteReader: @unchecked Sendable {
     /// Apps asked for AXManualAccessibility, and whether it was this reader that turned it on.
     private var manual: [pid_t: Bool] = [:]
 
+    /// Why a browser call's mute is unknown when its tab isn't the one shown: a background tab's controls can't be read.
+    nonisolated static let tabNotActive = "tab not active"
+
     private static let maxDepth = 40
     private static let maxNodes = 4000
     private static let controlRoles: Set<String> = [
@@ -144,7 +147,7 @@ final class CallMuteReader: @unchecked Sendable {
             return report
         }
         guard tab.active else {
-            report.read.state = .unknown("tab not active")
+            report.read.state = .unknown(Self.tabNotActive)
             return report
         }
         let controls = self.controls(in: windowElements[tab.window], rules: service.rules, deadline: deadline)

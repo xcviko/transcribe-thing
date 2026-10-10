@@ -127,6 +127,9 @@ final class AppSettings {
     var callRecording: CallRecordingMode = .ask { didSet { store.set(callRecording.rawValue, .callRecording) } }
     /// Apps and sites whose calls are never noticed ("Never for …" on the question, General → Calls), oldest first.
     var callExclusions: [CallExclusion] = [] { didSet { store.setJSON(callExclusions, .callExclusions) } }
+    /// Brief, silent notices above the pill about the call being recorded: noticed, muted or unmuted, mute not
+    /// followed, ended (`CallNotices`).
+    var showsCallNotices: Bool = true { didSet { store.set(showsCallNotices, .showsCallNotices) } }
     /// Days a transcript and its recording stay in History; 0 = Never deleted (`HistoryStore.deleteExpired`).
     var autoDeleteHistoryDays: Int = 0 { didSet { store.set(autoDeleteHistoryDays, .autoDeleteHistoryDays) } }
     var shortcuts: ShortcutBindings = .defaults { didSet { store.setJSON(shortcuts, .shortcuts) } }
@@ -332,6 +335,7 @@ final class AppSettings {
         if let v = store.int(.autoDeleteHistoryDays), v >= 0 { autoDeleteHistoryDays = v }
         if let v = store.string(.callRecording).flatMap(CallRecordingMode.init(rawValue:)) { callRecording = v }
         if let v: [CallExclusion] = store.json(.callExclusions) { callExclusions = v }
+        if let v = store.bool(.showsCallNotices) { showsCallNotices = v }
         if let v: ShortcutBindings = store.json(.shortcuts) { shortcuts = v }
         // Polish moved from fn ↩ to fn P (when ↩ finished a hands-free dictation): a build that had it on fn ↩ by default
         // moves it, once, unless fn P is taken. Bound to fn ↩ again after that, it stays.
@@ -458,7 +462,7 @@ enum SettingsKey: String, CaseIterable {
     case sendsTwice, measuresSendingTwice
     case polishSelectionModel, translationPair
     /// How calls are recorded (`CallRecordingMode`), and the apps and sites never recorded.
-    case callRecording, callExclusions
+    case callRecording, callExclusions, showsCallNotices
 
     var defaultsKey: String { "tt.\(rawValue)" }
 }

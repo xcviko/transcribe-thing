@@ -132,6 +132,10 @@ final class CallMonitor {
     /// Where events go (what was noticed, asked, answered, how a call ended; never a page's title): a test's own log
     /// in tests.
     @ObservationIgnored var log: DiagnosticLog = .shared
+    /// The brief notices about the live call (noticed, muted, ended); none without it.
+    @ObservationIgnored var notices: CallNotices?
+    /// The time of the last look, on the detector's clock.
+    @ObservationIgnored private var lastTime: TimeInterval = 0
 
     @ObservationIgnored private let settings: AppSettings
     @ObservationIgnored private let store: CallStore
@@ -219,8 +223,10 @@ final class CallMonitor {
     /// call it with their own time.
     func poll(at time: TimeInterval? = nil) {
         let time = time ?? deps.clock()
+        lastTime = time
         handle(watch.poll(at: time), at: time)
         follow(at: time)
+        notices?.tick(at: time)
     }
 
     // MARK: Answers (the UI's)
@@ -242,6 +248,7 @@ final class CallMonitor {
         live.consent = .kept
         live.confirmed = true
         self.live = live
+        if !live.info.manual { notices?.confirmed(live.info.id, at: lastTime) }
         live.recorder.update { $0.consent = .kept }
         store.upsert(record(of: live, status: .recording))
         state = .recording(live.info)
@@ -349,6 +356,7 @@ final class CallMonitor {
         live.recorder.discard()
         self.live = nil
         state = .idle
+        notices?.dropped()
     }
 
     /// Returns once every ended call is in the store: tests.
@@ -431,6 +439,7 @@ final class CallMonitor {
     private func confirm() {
         guard var live, live.consent == .suspected else { return }
         if settings.callRecording == .automatic {
+            notices?.detected(title: live.info.title, at: lastTime)
             return keepLive(how: "automatic")
         }
         // The app was quit (or reinstalled) during this call, which the person kept: it goes on kept, and is joined
@@ -439,12 +448,14 @@ final class CallMonitor {
                                                pageTitle: live.info.pageTitle, manual: live.info.manual,
                                                startedAt: live.info.startedAt) {
             logEvent("call.continues", live, ["earlier": CallTranscriber.shortID(earlier.id)])
+            notices?.detected(title: live.info.title, at: lastTime)
             return keepLive(how: "continuation")
         }
         live.consent = .asking
         self.live = live
         live.recorder.update { $0.consent = .asking }
         state = .asking(live.info)
+        notices?.confirmed(live.info.id, at: lastTime)
         logEvent("call.asked", live)
         onAsk?(live.info)
     }
@@ -501,6 +512,7 @@ final class CallMonitor {
             live.recorder.retarget(processes)
         }
         self.live = live
+        if live.consent != .suspected { notices?.observe(muteObservation(of: live), title: live.info.title, at: time) }
         guard live.info != before.info || live.otherAudio != before.otherAudio
                 || live.otherAudioSince != before.otherAudioSince else { return }
         let info = live.info
@@ -547,6 +559,7 @@ final class CallMonitor {
                 "mutes": info.mutes.count, "muteKnown": info.muteKnown, "tapProblem": tapProblem,
                 "micProblem": info.micProblem == nil ? nil : true,
             ])
+            self.notices?.ended(seconds: record.duration, transcribing: status == .transcribing, at: self.lastTime)
             // A continuation joined onto the call the app quit recording: that one is transcribed, whole.
             if status == .transcribing { self.transcriber.transcribe(record.id) }
             self.endings[id] = nil
@@ -563,11 +576,35 @@ final class CallMonitor {
         live.recorder.discard()
         self.live = nil
         state = .idle
+        notices?.dropped()
         if store.call(id: live.info.id) != nil { store.delete(live.info.id) }
         onAnswered?(live.info.id)
     }
 
     // MARK: Helpers
+
+    /// What can be seen of the live call's mute now, and how: Telegram's mic, the Mute button, Zoom's menu; a
+    /// browser tab in the background; an app nobody knows the controls of.
+    private func muteObservation(of live: Live) -> CallNotices.MuteObservation {
+        guard let app = live.app else { return .init() }
+        let kind = CallAppKind.of(app.id)
+        let followed = watch.detector.followed.flatMap { $0.app == app ? $0 : nil }
+        let service = live.info.service ?? followed?.service
+        if let service, service.releasesMicOnMute {
+            guard let followed else { return .init() }
+            return .init(muted: followed.micReleasedAt != nil, source: .micRelease(service.name))
+        }
+        if kind == .other { return .init(unfollowable: true) }
+        guard let read = watch.lastRead else { return .init() }
+        switch read.read.state {
+        case .muted: return .init(muted: true, source: kind == .zoomDesktop ? .zoomMenu : .button)
+        case .live: return .init(muted: false, source: kind == .zoomDesktop ? .zoomMenu : .button)
+        case .unknown(let reason):
+            if reason == CallMuteReader.tabNotActive { return .init(hiddenTab: CallNotices.tabName(service)) }
+            // A site no service is known for: nobody knows its controls.
+            return .init(unfollowable: kind == .browser && service == nil && read.tab != nil)
+        }
+    }
 
     /// An event about the live call: its id, app and service (never a page's title), then `fields`.
     private func logEvent(_ name: String, _ live: Live, _ fields: KeyValuePairs<String, (any DiagnosticValue)?> = [:]) {

@@ -68,6 +68,9 @@ struct Notice: Identifiable, Equatable, Sendable {
     var symbol: String
     var title: String
     var body: String?
+    /// A small second line under the title of a one-row toast (a call notice's "From the Mute button"); unlike
+    /// `body`, it keeps the toast a single compact pill.
+    var detail: String?
     /// Non-nil renders the notice as a transcript card with selectable text.
     var transcript: String?
     /// At most two.
@@ -89,6 +92,7 @@ struct Notice: Identifiable, Equatable, Sendable {
         symbol: String,
         title: String,
         body: String? = nil,
+        detail: String? = nil,
         transcript: String? = nil,
         actions: [NoticeAction] = [],
         link: NoticeAction? = nil,
@@ -103,6 +107,7 @@ struct Notice: Identifiable, Equatable, Sendable {
         self.symbol = symbol
         self.title = title
         self.body = body
+        self.detail = detail
         self.transcript = transcript
         self.actions = Array(actions.prefix(2))
         self.link = link

@@ -198,6 +198,28 @@ enum PillSnapshots {
             SnapshotEntry("pill-toast-call-app", width: 640, height: 270) { _ in
                 CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.callQuestionApp])
             },
+            // The call's brief notices (`CallNotices`): noticed, mute and how it was known, mute not followed, ended.
+            SnapshotEntry("pill-toast-call-notices", width: 640, height: 230) { _ in
+                CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.callDetected,
+                                                          PillSnapshotFixtures.callMuted])
+            },
+            SnapshotEntry("pill-toast-call-notice-telegram", width: 640, height: 190) { _ in
+                CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.callUnmutedTelegram])
+            },
+            SnapshotEntry("pill-toast-call-notice-zoom", width: 640, height: 190) { _ in
+                CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.callMutedZoom])
+            },
+            SnapshotEntry("pill-toast-call-notice-not-followed", width: 640, height: 230) { _ in
+                CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.callNotFollowed,
+                                                          PillSnapshotFixtures.callEnded])
+            },
+            // The mute slot: a background tab, then its "followed again", which takes its place.
+            SnapshotEntry("pill-toast-call-notice-background", width: 640, height: 190) { _ in
+                CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.callHidden])
+            },
+            SnapshotEntry("pill-toast-call-notice-again", width: 640, height: 190) { _ in
+                CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.callFollowedAgain])
+            },
             SnapshotEntry("pill-toast-updated", width: 640, height: 220) { _ in
                 CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.updated])
             },
@@ -266,6 +288,14 @@ enum PillSnapshots {
 
 enum PillSnapshotFixtures {
     /// What a call in Google Meet asks once it's confirmed (`CallMonitor.onAsk`).
+    static let callDetected = Notice.callStatus(.detected(title: "Google Meet"))
+    static let callMuted = Notice.callStatus(.mute(true, title: "Google Meet", source: .button))
+    static let callUnmutedTelegram = Notice.callStatus(.mute(false, title: "Telegram", source: .micRelease("Telegram")))
+    static let callMutedZoom = Notice.callStatus(.mute(true, title: "Zoom", source: .zoomMenu))
+    static let callNotFollowed = Notice.callStatus(.muteNotFollowed(title: "FaceTime"))
+    static let callHidden = Notice.callStatus(.muteHidden(tab: "Meet"))
+    static let callFollowedAgain = Notice.callStatus(.muteBack)
+    static let callEnded = Notice.callStatus(.ended(seconds: 24 * 60 + 37, transcribing: true))
     static let callQuestion = Notice.transcribeCall(PreviewFixtures.callID(99), service: "Google Meet",
                                                     never: "Never for Google Meet")
     /// A call in a site no service is known for.

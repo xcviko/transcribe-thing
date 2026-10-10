@@ -491,6 +491,14 @@ struct CallsSettingsGroup: View {
                     HubMenuPicker(title: "Record calls", options: CallRecordingMode.pickerOrder,
                                   selection: $settings.callRecording, label: \.title)
                 }
+                SettingsRow(title: "Show call notices",
+                            subtitle: "A brief note above the pill when a call is noticed, when you mute or unmute, "
+                                + "and when it ends.",
+                            systemImage: "text.bubble", iconTint: .inkSecondary) {
+                    Toggle("", isOn: $settings.showsCallNotices)
+                        .toggleStyle(.appSwitch)
+                        .labelsHidden()
+                }
                 SettingsRow(title: "System Audio Recording",
                             subtitle: "Lets the app record the other side of a call. macOS doesn’t say whether it’s "
                                 + "on: a call whose other side came out silent tells you.",

@@ -1191,3 +1191,176 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
         #expect(call.muteIntervals == [CallInterval(start: 1, end: 1.5), CallInterval(start: 6.5, end: 7)])
     }
 }
+
+// MARK: - Call notices
+
+@MainActor
+@Suite(.serialized) struct CallNoticesTests {
+    /// A notice center that keeps every notice it showed, in order.
+    @MainActor final class Shown {
+        let toasts = ToastCenter(clock: { Date() }, schedulesExpiry: false)
+        let settings = AppSettings.inMemory()
+        var dictating = false
+        private var seen: [UUID] = []
+        private(set) var shown: [String] = []
+        let notices: CallNotices
+
+        init() {
+            notices = CallNotices(toasts: toasts, settings: settings)
+            notices.isDictating = { [unowned self] in dictating }
+            toasts.onNoticesChange = { [unowned self] in
+                for notice in toasts.notices where !seen.contains(notice.id) {
+                    seen.append(notice.id)
+                    shown.append(notice.title)
+                }
+            }
+        }
+    }
+
+    private typealias Seen = CallNotices.MuteObservation
+
+    @Test func eachEventSaysWhatHappened() {
+        func text(_ event: CallNotices.Event) -> String {
+            let notice = Notice.callStatus(event)
+            return notice.title + (notice.detail.map { " / " + $0 } ?? "")
+        }
+        #expect(text(.detected(title: "Google Meet")) == "Call detected · Google Meet")
+        #expect(text(.mute(true, title: "Google Meet", source: .button)) == "You’re muted · Google Meet / From the Mute button")
+        #expect(text(.mute(false, title: "Zoom", source: .zoomMenu)) == "You’re unmuted · Zoom / From Zoom’s Meeting menu")
+        #expect(text(.mute(true, title: "Telegram", source: .micRelease("Telegram")))
+                == "You’re muted · Telegram / Telegram let go of the mic")
+        #expect(text(.muteNotFollowed(title: "FaceTime")) == "Mute isn’t followed in FaceTime")
+        #expect(text(.muteHidden(tab: CallNotices.tabName(.meet))) == "Can’t see mute while the Meet tab is in the background")
+        #expect(text(.muteBack) == "Mute is followed again")
+        #expect(text(.ended(seconds: 24 * 60 + 37, transcribing: true)) == "Call ended · 24:37 · transcribing")
+        #expect(text(.ended(seconds: 65, transcribing: false)) == "Call ended · 01:05")
+        // Brief, silent, one row.
+        let notice = Notice.callStatus(.mute(true, title: "Meet", source: .button))
+        #expect(notice.sound == nil && notice.lifetime == .seconds(3.6) && notice.actions.isEmpty)
+        #expect(ToastCard.isCompact(notice))
+    }
+
+    @Test func aMuteShowsOnceItHoldsAndAFlickerShowsNothing() {
+        let s = Shown()
+        s.notices.confirmed(UUID(), at: 0)
+        let live = Seen(muted: false, source: .button)
+        let muted = Seen(muted: true, source: .button)
+        s.notices.observe(live, title: "Meet", at: 0)
+        s.notices.observe(live, title: "Meet", at: 0.5)
+        #expect(s.shown.isEmpty)
+        // The first state known is shown once.
+        s.notices.observe(live, title: "Meet", at: 1)
+        #expect(s.shown == ["You’re unmuted · Meet"])
+        // A click that flickers back.
+        s.notices.observe(muted, title: "Meet", at: 2)
+        s.notices.observe(live, title: "Meet", at: 2.5)
+        s.notices.observe(live, title: "Meet", at: 4)
+        #expect(s.shown.count == 1)
+        for time in [5.0, 5.5, 6] { s.notices.observe(muted, title: "Meet", at: time) }
+        #expect(s.shown == ["You’re unmuted · Meet", "You’re muted · Meet"])
+        // Staying muted says nothing more.
+        for time in [7.0, 8, 9] { s.notices.observe(muted, title: "Meet", at: time) }
+        #expect(s.shown.count == 2)
+    }
+
+    @Test func muteNotFollowedAndABackgroundTabShowOncePerCallAndPerStretch() {
+        let s = Shown()
+        s.notices.confirmed(UUID(), at: 0)
+        for time in stride(from: 0.0, through: 15, by: 0.5) { s.notices.observe(Seen(), title: "Discord", at: time) }
+        #expect(s.shown == ["Mute isn’t followed in Discord"])
+
+        let meet = Shown()
+        meet.notices.confirmed(UUID(), at: 0)
+        let hidden = Seen(hiddenTab: "Meet")
+        let live = Seen(muted: false, source: .button)
+        for time in [0.0, 0.5, 1] { meet.notices.observe(live, title: "Meet", at: time) }
+        for time in stride(from: 2.0, through: 6, by: 0.5) { meet.notices.observe(hidden, title: "Meet", at: time) }
+        meet.notices.observe(live, title: "Meet", at: 7)
+        // A quick switch away and back says nothing.
+        meet.notices.observe(hidden, title: "Meet", at: 8)
+        meet.notices.observe(live, title: "Meet", at: 8.5)
+        for time in stride(from: 10.0, through: 12, by: 0.5) { meet.notices.observe(hidden, title: "Meet", at: time) }
+        #expect(meet.shown == ["You’re unmuted · Meet", "Can’t see mute while the Meet tab is in the background",
+                               "Mute is followed again", "Can’t see mute while the Meet tab is in the background"])
+
+        // An app nobody knows the controls of: at once, and once.
+        let app = Shown()
+        app.notices.confirmed(UUID(), at: 0)
+        for time in [0.0, 0.5, 1] { app.notices.observe(Seen(unfollowable: true), title: "FaceTime", at: time) }
+        #expect(app.shown == ["Mute isn’t followed in FaceTime"])
+        // A new call starts over.
+        app.notices.ended(seconds: 3, transcribing: false, at: 2)
+        app.notices.confirmed(UUID(), at: 3)
+        app.notices.observe(Seen(unfollowable: true), title: "FaceTime", at: 3)
+        #expect(app.shown == ["Mute isn’t followed in FaceTime", "Call ended · 00:03", "Mute isn’t followed in FaceTime"])
+    }
+
+    @Test func nothingCoversADictationAndOnlyTheLatestFreshShowsAfter() {
+        let s = Shown()
+        s.dictating = true
+        s.notices.detected(title: "Zoom", at: 0)
+        s.notices.confirmed(UUID(), at: 0)
+        for time in [0.0, 0.5, 1, 1.5] { s.notices.observe(Seen(muted: false, source: .zoomMenu), title: "Zoom", at: time) }
+        for time in [2.0, 2.5, 3, 3.5] { s.notices.observe(Seen(muted: true, source: .zoomMenu), title: "Zoom", at: time) }
+        s.notices.tick(at: 3.5)
+        #expect(s.shown.isEmpty)
+        s.dictating = false
+        s.notices.tick(at: 4)
+        // The call's state, and the mute as it is now: not the unmute before it.
+        #expect(s.shown == ["Call detected · Zoom", "You’re muted · Zoom"])
+
+        // Held back longer than `staleAfter`: dropped.
+        let late = Shown()
+        late.dictating = true
+        late.notices.detected(title: "Zoom", at: 0)
+        late.dictating = false
+        late.notices.tick(at: CallNotices.staleAfter + 1)
+        #expect(late.shown.isEmpty)
+    }
+
+    @Test func theSettingOffShowsNothingAndOtherToastsArentPushedOut() {
+        let s = Shown()
+        s.settings.showsCallNotices = false
+        s.notices.detected(title: "Zoom", at: 0)
+        s.notices.ended(seconds: 10, transcribing: true, at: 1)
+        #expect(s.shown.isEmpty)
+
+        let busy = Shown()
+        busy.toasts.post(Notice(dedupeKey: "a", style: .info, symbol: "x", title: "A"))
+        busy.toasts.post(Notice(dedupeKey: "b", style: .info, symbol: "x", title: "B"))
+        busy.notices.detected(title: "Zoom", at: 0)
+        #expect(busy.toasts.notices.map(\.title) == ["A", "B"])
+    }
+
+    @Test func aTelegramCallIsNoticedMutedAndEnded() async throws {
+        let rig = CallMonitorTests.Rig(mode: .automatic)
+        let s = Shown()
+        rig.monitor.notices = s.notices
+        rig.app("ru.keepcoder.Telegram", mic: true, sound: true)
+        rig.poll([0, 21])
+        guard case .recording = rig.monitor.state else { Issue.record("not kept"); return }
+        rig.sources.first?[.mic]?.push(speechLike(seconds: 12), at: 0)
+        rig.poll([21.5, 22.5])
+        // Telegram mutes by giving the mic back.
+        rig.app("ru.keepcoder.Telegram", mic: false, sound: true)
+        rig.poll(stride(from: 25.0, through: 29, by: 0.5))
+        rig.app("ru.keepcoder.Telegram", mic: true, sound: true)
+        rig.poll(stride(from: 30.0, through: 34, by: 0.5))
+        rig.app("ru.keepcoder.Telegram", mic: false, sound: false)
+        rig.poll(stride(from: 40.0, through: 101, by: 1))
+        await rig.monitor.waitForEndings()
+        await rig.transcriber.waitUntilIdle()
+        #expect(s.shown == ["Call detected · Telegram", "You’re unmuted · Telegram", "You’re muted · Telegram",
+                            "You’re unmuted · Telegram", "Call ended · 00:12 · transcribing"])
+    }
+
+    @Test func askingShowsTheQuestionNotCallDetected() {
+        let rig = CallMonitorTests.Rig(mode: .ask)
+        let s = Shown()
+        rig.monitor.notices = s.notices
+        rig.app("us.zoom.xos", mic: true, sound: true)
+        rig.poll([0, 21])
+        #expect(rig.asked.count == 1)
+        #expect(!s.shown.contains { $0.hasPrefix("Call detected") })
+    }
+}

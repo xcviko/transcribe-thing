@@ -31,6 +31,8 @@ enum ToastMetrics {
     static let compactButtonInset: CGFloat = 6
     static let buttonHeight: CGFloat = compactHeight - 2 * compactButtonInset
     static let titleFont = Font.system(size: 13, weight: .medium)
+    /// A one-row toast's second line (`Notice.detail`).
+    static let detailFont = Font.system(size: 11)
     /// The countdown's bar along the bottom edge, inside the card's curve.
     static let countdownHeight: CGFloat = 2.5
     /// A transcript's text in its box: 13 pt, 2 pt between lines, inset 12 by 10.
@@ -444,7 +446,7 @@ struct ToastCard: View {
             .overlay(alignment: .topLeading) { closeButton }
             .contentShape(RoundedRectangle(cornerRadius: ToastMetrics.radius, style: .continuous))
             .accessibilityElement(children: .contain)
-            .accessibilityLabel([notice.title, notice.body].compactMap { $0 }.joined(separator: ". "))
+            .accessibilityLabel([notice.title, notice.body, notice.detail].compactMap { $0 }.joined(separator: ". "))
     }
 
     @ViewBuilder
@@ -489,7 +491,10 @@ struct ToastCard: View {
     static func preferredWidth(for notice: Notice) -> CGFloat {
         if notice.transcript != nil { return ToastMetrics.transcriptWidth }
         guard isCompact(notice) else { return ToastMetrics.width }
-        let title = ceil((notice.title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 13, weight: .medium)]).width)
+        var title = ceil((notice.title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 13, weight: .medium)]).width)
+        if let detail = notice.detail {
+            title = max(title, ceil((detail as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 11)]).width))
+        }
         var width = ToastMetrics.compactLeading + title
         if let action = notice.actions.first {
             let label = ceil((action.title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: .semibold)]).width)
@@ -523,11 +528,19 @@ struct ToastCard: View {
 
     private var compactRow: some View {
         HStack(spacing: 14) {
-            Text(notice.title)
-                .font(ToastMetrics.titleFont)
-                .foregroundStyle(ToastPalette.title)
-                .lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(notice.title)
+                    .font(ToastMetrics.titleFont)
+                    .foregroundStyle(ToastPalette.title)
+                    .lineLimit(2)
+                if let detail = notice.detail {
+                    Text(detail)
+                        .font(ToastMetrics.detailFont)
+                        .foregroundStyle(ToastPalette.body)
+                        .lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
             if let action = actions.first {
                 actionButton(action, isFilled: false)
                     .fixedSize()

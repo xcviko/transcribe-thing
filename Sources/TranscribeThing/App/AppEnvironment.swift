@@ -208,6 +208,10 @@ final class AppEnvironment {
         }
         callMonitor.onAnswered = { [weak toasts] id in toasts?.dismiss(dedupeKey: Notice.callQuestionKey(id)) }
         dictation.answerCall = { [weak callMonitor] id, answer in callMonitor?.answer(answer, callID: id) }
+        // What the call engine notices, as brief notices above the pill; never over a dictation's pill.
+        callMonitor.notices = CallNotices(toasts: toasts, settings: settings) { [weak dictation] in
+            (dictation?.activity ?? .idle) != .idle
+        }
     }
 
     /// Starts services in the SPEC §4.14 order.
