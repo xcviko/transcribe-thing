@@ -66,14 +66,19 @@ enum CoreAudioHAL {
     /// The input devices this process is doing IO with right now, as the HAL itself sees it: the check that
     /// capture opened only the device it meant to.
     static func processInputDeviceIDs() -> [AudioDeviceID] {
+        guard let process = processObjectID(pid: getpid()) else { return [] }
+        return objectList(process, kAudioProcessPropertyDevices, scope: kAudioObjectPropertyScopeInput)
+    }
+
+    /// The HAL's object for a process connected to coreaudiod (this one, once it has done any audio).
+    static func processObjectID(pid: pid_t) -> AudioObjectID? {
         var address = propertyAddress(kAudioHardwarePropertyTranslatePIDToProcessObject)
-        var pid = getpid()
+        var pid = pid
         var process = AudioObjectID(kAudioObjectUnknown)
         var size = UInt32(MemoryLayout<AudioObjectID>.size)
         let status = AudioObjectGetPropertyData(systemObject, &address, UInt32(MemoryLayout<pid_t>.size), &pid,
                                                 &size, &process)
-        guard status == noErr, process != kAudioObjectUnknown else { return [] }
-        return objectList(process, kAudioProcessPropertyDevices, scope: kAudioObjectPropertyScopeInput)
+        return status == noErr && process != kAudioObjectUnknown ? process : nil
     }
 
     /// A client of coreaudiod and the audio IO it is running right now, as the HAL reports it (macOS 14+).

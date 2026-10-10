@@ -112,6 +112,14 @@ final class CaptureSession: @unchecked Sendable {
         }
     }
 
+    /// Takes the audio captured so far out of the session, which keeps no copy, with the `AudioClock` time its first
+    /// sample was captured; nil when there is none yet. For a capture that runs for an hour (a call's mic), whose audio
+    /// goes to disk as it comes instead of piling up here. Not together with `samples(from:keepingBack:)`, whose
+    /// indices this moves.
+    func takeSamples() -> (samples: [Float], start: TimeInterval)? {
+        box.withLock { $0.take() }
+    }
+
     /// Stops appending immediately and returns everything captured (empty when `discard`).
     func finishNow(discard: Bool) -> [Float] {
         let (samples, pending) = box.withLock { $0.finalizeTakingCompletion(discard: discard) }
@@ -548,6 +556,16 @@ struct CaptureState {
         ducks.removeAll()
         anchors.removeAll()
         return result
+    }
+
+    /// Hands over what is captured so far, with the capture time of its first sample, and keeps none of it
+    /// (`CaptureSession.takeSamples`).
+    mutating func take() -> (samples: [Float], start: TimeInterval)? {
+        guard keepsSamples, phase != .finished, !samples.isEmpty else { return nil }
+        let start = time(ofFrame: samplesBase)
+        let taken = samples
+        samples.removeAll(keepingCapacity: true)
+        return (taken, start)
     }
 
     mutating func addDuck(_ window: DuckWindow) {

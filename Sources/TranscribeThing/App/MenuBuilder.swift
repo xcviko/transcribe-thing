@@ -43,6 +43,9 @@ final class MenuBuilder {
         menu.addItem(copy)
         menu.addItem(.separator())
 
+        menu.addItem(callItem(env))
+        menu.addItem(.separator())
+
         menu.addItem(submenuItem("Microphone", symbol: "mic", microphoneMenu(env)))
         menu.addItem(.separator())
 
@@ -64,6 +67,17 @@ final class MenuBuilder {
         case .locked, .lockedStopPending: true
         default: false
         }
+    }
+
+    // MARK: - Calls
+
+    /// Stop Call Recording while a call is recorded and kept (it's transcribed); otherwise Start Call Recording, which
+    /// keeps a noticed call or records the mic and everything the Mac plays.
+    private func callItem(_ env: AppEnvironment) -> NSMenuItem {
+        if case .recording = env.callMonitor.state {
+            return MenuActionItem(title: "Stop Call Recording") { [weak env] in env?.callMonitor.stop(keep: true) }
+        }
+        return MenuActionItem(title: "Start Call Recording") { [weak env] in env?.callMonitor.startManual() }
     }
 
     // MARK: - Updates

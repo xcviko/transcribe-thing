@@ -148,6 +148,15 @@ final class RecordingJournal: @unchecked Sendable {
         return WAVEncoder.decode(data)
     }
 
+    /// A journal file's start: the WAV header with its sizes left open (the file is as long as what was written, and
+    /// `WAVEncoder.decode` reads to its end), then `prefix`.
+    static func openHeader(_ prefix: [Float] = []) -> Data {
+        var data = WAVEncoder.pcm16(prefix)
+        data.replaceSubrange(4..<8, with: [0xFF, 0xFF, 0xFF, 0xFF])
+        data.replaceSubrange(40..<44, with: [0xFF, 0xFF, 0xFF, 0xFF])
+        return data
+    }
+
     /// The samples a journal holds, from its length.
     static func sampleCount(of url: URL) -> Int? {
         guard let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber else {
@@ -165,11 +174,7 @@ final class RecordingJournal: @unchecked Sendable {
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             writeInfo(info)
-            var data = WAVEncoder.pcm16(prefix)
-            // Sizes left open: the file is as long as what was written.
-            data.replaceSubrange(4..<8, with: [0xFF, 0xFF, 0xFF, 0xFF])
-            data.replaceSubrange(40..<44, with: [0xFF, 0xFF, 0xFF, 0xFF])
-            try data.write(to: url)
+            try Self.openHeader(prefix).write(to: url)
             let handle = try FileHandle(forWritingTo: url)
             try handle.seekToEnd()
             let writer = Writer(info: info, handle: handle, source: source)

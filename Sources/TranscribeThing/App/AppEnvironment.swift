@@ -15,6 +15,11 @@ final class AppEnvironment {
     let models: ModelStore
     let transcription: TranscriptionService
     let history: HistoryStore
+    /// Recorded calls, apart from History (`CallStore`), how they're noticed and recorded (`CallMonitor`), and
+    /// transcribed (`CallTranscriber`).
+    let calls: CallStore
+    let callTranscriber: CallTranscriber
+    let callMonitor: CallMonitor
     let permissions: PermissionsCenter
     let hotkeys: HotkeyMonitor
     let inserter: TextInserter
@@ -41,7 +46,7 @@ final class AppEnvironment {
     init(paths: AppPaths, settings: AppSettings, keyStore: KeyFileStore, levelMeter: LevelMeter,
          devices: AudioDeviceCatalog, recorder: AudioRecorder, openRouterClient: OpenRouterClient,
          account: OpenRouterAccount, models: ModelStore, transcription: TranscriptionService,
-         history: HistoryStore, permissions: PermissionsCenter, hotkeys: HotkeyMonitor,
+         history: HistoryStore, calls: CallStore, permissions: PermissionsCenter, hotkeys: HotkeyMonitor,
          inserter: TextInserter, secureInput: SecureInputMonitor, launchAtLogin: LaunchAtLogin,
          sounds: SoundPlayer, pillModel: PillModel, toasts: ToastCenter, pill: PillController,
          dictation: DictationController, updates: UpdateCenter, windows: WindowCoordinator,
@@ -57,6 +62,11 @@ final class AppEnvironment {
         self.models = models
         self.transcription = transcription
         self.history = history
+        self.calls = calls
+        callTranscriber = CallTranscriber(store: calls,
+                                          send: CallTranscriber.openRouter(client: openRouterClient, account: account))
+        callMonitor = CallMonitor(settings: settings, store: calls, transcriber: callTranscriber,
+                                  dependencies: .live(settings: settings))
         self.permissions = permissions
         self.hotkeys = hotkeys
         self.inserter = inserter
@@ -90,6 +100,7 @@ final class AppEnvironment {
             makeAccount: { keyStore, client in OpenRouterAccount(keyStore: keyStore, client: client) },
             models: ModelStore(paths: paths, settings: settings),
             history: HistoryStore(paths: paths, settings: settings),
+            calls: CallStore(paths: paths, settings: settings),
             permissions: PermissionsCenter(),
             hotkeys: HotkeyMonitor(settings: settings),
             secureInput: SecureInputMonitor(),
@@ -113,6 +124,7 @@ final class AppEnvironment {
             makeAccount: { _, _ in .preview(status: .valid(PreviewFixtures.keyInfo)) },
             models: .preview(states: [.parakeet: .ready]),
             history: .preview(entries: PreviewFixtures.history()),
+            calls: .preview(calls: []),
             permissions: .preview(mic: .granted, ax: .granted),
             hotkeys: .preview(),
             secureInput: .preview(),
@@ -126,7 +138,8 @@ final class AppEnvironment {
         paths: AppPaths, settings: AppSettings, keyStore: KeyFileStore, levelMeter: LevelMeter,
         devices: AudioDeviceCatalog,
         makeAccount: (KeyFileStore, OpenRouterClient) -> OpenRouterAccount,
-        models: ModelStore, history: HistoryStore, permissions: PermissionsCenter, hotkeys: HotkeyMonitor,
+        models: ModelStore, history: HistoryStore, calls: CallStore, permissions: PermissionsCenter,
+        hotkeys: HotkeyMonitor,
         secureInput: SecureInputMonitor, launchAtLogin: LaunchAtLogin,
         makeUpdates: (AppSettings, ToastCenter) -> UpdateCenter, isPreview: Bool
     ) -> AppEnvironment {
@@ -147,7 +160,7 @@ final class AppEnvironment {
         return AppEnvironment(
             paths: paths, settings: settings, keyStore: keyStore, levelMeter: levelMeter, devices: devices,
             recorder: recorder, openRouterClient: client, account: account, models: models,
-            transcription: transcription, history: history, permissions: permissions, hotkeys: hotkeys,
+            transcription: transcription, history: history, calls: calls, permissions: permissions, hotkeys: hotkeys,
             inserter: inserter, secureInput: secureInput, launchAtLogin: launchAtLogin, sounds: sounds,
             pillModel: pillModel, toasts: toasts, pill: pill, dictation: dictation,
             updates: makeUpdates(settings, toasts),
@@ -179,6 +192,22 @@ final class AppEnvironment {
         recorder.isMicrophoneAllowed = { [weak permissions] in
             permissions?.microphone == .granted || AudioRecorder.isMicrophoneAuthorized
         }
+        wireCalls()
+    }
+
+    /// A call's question is a toast until the Calls tab has its own; deleting a call stops its transcription, or its
+    /// recording.
+    private func wireCalls() {
+        callTranscriber.userName = { HubGreeting.firstName(fullName: NSFullUserName(), accountName: NSUserName()) }
+        calls.onRemove = { [weak self] ids in
+            for id in ids { self?.callTranscriber.cancel(id) }
+            self?.callMonitor.removed(ids)
+        }
+        callMonitor.onAsk = { [weak toasts] info in toasts?.post(.transcribeCall(info.id, service: info.title)) }
+        callMonitor.onAnswered = { [weak toasts] id in toasts?.dismiss(dedupeKey: Notice.callQuestionKey(id)) }
+        dictation.answerCall = { [weak callMonitor] id, keep in
+            if keep { callMonitor?.keep(callID: id) } else { callMonitor?.discard(callID: id) }
+        }
     }
 
     /// Starts services in the SPEC §4.14 order.
@@ -197,6 +226,7 @@ final class AppEnvironment {
         // After the migration, so the settings line knows whether a key is saved.
         diagnostics.start()
         history.load()
+        calls.load()
         devices.start()
         permissions.refresh()
         models.start()
@@ -220,6 +250,7 @@ final class AppEnvironment {
             windows.showOnboarding()
         }
         observeAutoDelete()
+        observeCallRecording()
         scheduleMaintenance()
         scheduleCompression()
         updates.start()
@@ -291,9 +322,20 @@ final class AppEnvironment {
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 self?.history.deleteExpired()
+                self?.calls.deleteExpired()
                 self?.observeAutoDelete()
             }
         }
+    }
+
+    /// Calls are noticed while the setting isn't Off, from launch and from the moment it changes.
+    private func observeCallRecording() {
+        let mode = withObservationTracking {
+            settings.callRecording
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in self?.observeCallRecording() }
+        }
+        if mode == .off { callMonitor.stop() } else { callMonitor.start() }
     }
 
     /// transcribe-thing runs for weeks at a time: Auto-delete runs every hour, not only at launch (loading the
@@ -304,6 +346,7 @@ final class AppEnvironment {
                 try? await Task.sleep(for: .seconds(3600))
                 guard !Task.isCancelled else { return }
                 self?.history.deleteExpired()
+                self?.calls.deleteExpired()
             }
         }
     }

@@ -1,0 +1,685 @@
+import CoreAudio
+import Foundation
+import os
+import Testing
+@testable import TranscribeThing
+
+// Recording calls: the two tracks on one clock and on disk while recorded (`TrackAligner`, `CallJournal`), the Calls
+// store and what it brings back after a crash (`CallStore`), the transcription's prompts, answers and chunks
+// (`CallTranscriber`), and noticing calls in allowed apps, asking, keeping and discarding (`CallMonitor`). No real
+// mic, tap or request: the sources, the HAL, the windows and Gemini are fakes.
+
+private let rate = Recording.sampleRate
+
+/// `seconds` of something SpeechAnalyzer hears as speech: a voice with harmonics in syllables, over faint noise.
+private func speechLike(seconds: Double) -> [Float] {
+    var seed: UInt32 = 12_345
+    return (0..<Int(seconds * rate)).map { i in
+        let t = Double(i) / rate
+        let inPause = t.truncatingRemainder(dividingBy: 1) >= 0.75
+        let syllable = inPause ? 0 : pow(sin(.pi * (t * 4).truncatingRemainder(dividingBy: 1)), 2)
+        var voice = 0.0
+        for harmonic in 1...12 { voice += sin(2 * .pi * 140 * Double(harmonic) * t) / Double(harmonic) }
+        seed = seed &* 1_664_525 &+ 1_013_904_223
+        let noise = Double(seed >> 8) / Double(1 << 24) - 0.5
+        return Float(0.08 * syllable * voice + 0.002 * noise)
+    }
+}
+
+/// A track source that hands over what a test pushes.
+final class FakeSource: CallTrackSource, Sendable {
+    private let state = OSAllocatedUnfairLock(initialState: (pending: [TimedAudio](), started: false, stopped: false,
+                                                             retargets: [[AudioObjectID]]()))
+    let fixedProblem: String?
+
+    init(problem: String? = nil) {
+        fixedProblem = problem
+    }
+
+    func push(_ samples: [Float], at start: TimeInterval?) {
+        state.withLock { $0.pending.append(TimedAudio(samples: samples, start: start)) }
+    }
+
+    func start() { state.withLock { $0.started = true } }
+    func stop() { state.withLock { $0.stopped = true } }
+    func drain() -> [TimedAudio] {
+        state.withLock { state in
+            defer { state.pending = [] }
+            return state.pending
+        }
+    }
+    var problem: String? { fixedProblem }
+    func retarget(_ processes: [AudioObjectID]) { state.withLock { $0.retargets.append(processes) } }
+
+    var started: Bool { state.withLock { $0.started } }
+    var stopped: Bool { state.withLock { $0.stopped } }
+    var retargets: [[AudioObjectID]] { state.withLock { $0.retargets } }
+}
+
+private func files(in folder: URL) -> Set<String> {
+    Set((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [])
+}
+
+private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .kept) -> CallJournal.Info {
+    CallJournal.Info(id: id, startedAt: Date(timeIntervalSince1970: 1_790_000_000), appName: "Telegram",
+                     bundleID: "ru.keepcoder.Telegram", service: .telegram, consent: consent)
+}
+
+// MARK: - Tracks on disk
+
+@Suite struct CallJournalTests {
+    @Test func alignerPadsLateStretchesAndTrimsEarlyOnes() {
+        var aligner = TrackAligner(origin: 100)
+        // Starts 0.5 s into the call: half a second of silence first.
+        #expect(aligner.place(TimedAudio(samples: [Float](repeating: 1, count: 1600), start: 100.5)).count == 8000 + 1600)
+        #expect(aligner.written == 9600)
+        // Straight on, unstamped.
+        #expect(aligner.place(TimedAudio(samples: [1, 1], start: nil)) == [1, 1])
+        // Within the tolerance of where the track is: just follows on.
+        #expect(aligner.place(TimedAudio(samples: [2, 2], start: 100.6 + 0.02)).count == 2)
+        // 0.1 s (1,600 samples) earlier than the track has reached (9,604): that much is already there, and goes.
+        let early = aligner.place(TimedAudio(samples: [Float](repeating: 3, count: 3200), start: 100 + 8004 / rate))
+        #expect(early.count == 3200 - 1600)
+        // Before the call began: dropped whole.
+        var fresh = TrackAligner(origin: 10)
+        #expect(fresh.place(TimedAudio(samples: [Float](repeating: 1, count: 800), start: 9)) == [])
+        #expect(fresh.written == 0)
+    }
+
+    @Test func twoTracksShareTheCallsClock() async throws {
+        let directory = AppPaths.temporary().callJournals
+        let journal = CallJournal(directory: directory)
+        let mic = FakeSource(), remote = FakeSource(problem: "no permission")
+        let info = journalInfo()
+        journal.begin(info, origin: 100, sources: [.mic: mic, .remote: remote])
+        #expect(mic.started && remote.started)
+        let voice = speechLike(seconds: 1)
+        mic.push(voice, at: 100)
+        mic.push(voice, at: nil)
+        // The other side's first sound one second in.
+        remote.push([Float](repeating: 0.25, count: 8000), at: 101)
+        journal.update(info.id) { $0.mutes = [CallInterval(start: 0.5, end: 1.0)] }
+        let ended = try #require(await journal.end(info.id))
+        #expect(mic.stopped && remote.stopped)
+        #expect(ended.mutes == [CallInterval(start: 0.5, end: 1.0)])
+        #expect(ended.remoteProblem == "no permission")
+        let micSamples = try #require(RecordingJournal.read(journal.audioURL(for: info.id, track: .mic)))
+        let remoteSamples = try #require(RecordingJournal.read(journal.audioURL(for: info.id, track: .remote)))
+        #expect(micSamples.count == 32_000)
+        #expect(remoteSamples.count == 16_000 + 8000)
+        #expect(remoteSamples[..<16_000].allSatisfy { $0 == 0 })
+        #expect(abs(remoteSamples[16_000] - 0.25) < 0.001)
+        // The sidecar says what `end` said: a crash after this brings it back as such.
+        let sidecar = try JSONDecoder().decode(CallJournal.Info.self, from: Data(contentsOf: journal.infoURL(for: info.id)))
+        #expect(sidecar == ended)
+        // Closed, not removed: the store removes it once it has the call.
+        #expect(files(in: directory).count == 3)
+        journal.remove(info.id)
+        await journal.settle()
+        #expect(files(in: directory).isEmpty)
+    }
+
+    @Test func discardDeletesEverything() async {
+        let directory = AppPaths.temporary().callJournals
+        let journal = CallJournal(directory: directory)
+        let mic = FakeSource()
+        let info = journalInfo(consent: .suspected)
+        journal.begin(info, origin: 0, sources: [.mic: mic, .remote: FakeSource()])
+        mic.push(speechLike(seconds: 0.5), at: 0)
+        await journal.settle()
+        #expect(!files(in: directory).isEmpty)
+        journal.discard(info.id)
+        await journal.settle()
+        #expect(files(in: directory).isEmpty)
+        #expect(mic.stopped)
+    }
+
+    @Test func journalFileNames() {
+        let id = UUID()
+        #expect(CallJournal.parse(fileName: "\(id.uuidString)-mic.wav")! == (id, .mic))
+        #expect(CallJournal.parse(fileName: "\(id.uuidString)-remote.wav")! == (id, .remote))
+        #expect(CallJournal.parse(fileName: "\(id.uuidString).json") == nil)
+        #expect(CallJournal.parse(fileName: "\(id.uuidString)-other.wav") == nil)
+    }
+
+    @Test func tracksBecomeM4AsReadableInPieces() throws {
+        let folder = AppPaths.temporary().root
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let wav = folder.appendingPathComponent("track.wav")
+        let samples = speechLike(seconds: 3)
+        var data = RecordingJournal.openHeader()
+        WAVEncoder.int16(samples).withUnsafeBytes { data.append(contentsOf: $0) }
+        try data.write(to: wav)
+        let m4a = folder.appendingPathComponent("call/mic.m4a")
+        let encoded = try CallAudio.encode(journal: wav, to: m4a)
+        #expect(encoded.samples == samples.count)
+        #expect(encoded.peak > 0.05)
+        let count = try CallAudio.sampleCount(of: m4a)
+        #expect(abs(count - samples.count) < 2048)
+        let piece = try CallAudio.read(m4a, range: 16_000..<24_000)
+        #expect(piece.count == 8000)
+        #expect(SpeechAnalyzer.stats(for: try CallAudio.read(m4a, range: 0..<count)).voicedSeconds > 1)
+    }
+}
+
+// MARK: - Store
+
+@MainActor
+@Suite(.serialized) struct CallStoreTests {
+    @Test func callsPersistAndReadLeniently() async throws {
+        let paths = AppPaths.temporary()
+        let store = CallStore(paths: paths, settings: .inMemory())
+        store.load()
+        var call = CallRecord(id: UUID(), startedAt: Date(timeIntervalSince1970: 1_790_000_000), appName: "Google Chrome",
+                              bundleID: "com.google.Chrome", service: .meet, pageTitle: "Meet – abc", status: .done)
+        call.muteIntervals = [CallInterval(start: 3, end: 7)]
+        call.muteKnown = true
+        call.transcript = CallTranscript(segments: [
+            .init(start: 1, end: 2, side: .remote, speaker: "Аня", text: "Привет"),
+            .init(start: 3, end: 4, side: .local, speaker: "Sam", text: "Hi", duringMute: true),
+        ])
+        call.costUSD = 0.02
+        store.upsert(call)
+        store.rename(speaker: "Аня", to: "Anna", in: call.id)
+        await store.flush()
+
+        let again = CallStore(paths: paths, settings: .inMemory())
+        again.load()
+        let read = try #require(again.call(id: call.id))
+        #expect(read.transcript == call.transcript)
+        #expect(read.name(of: "Аня") == "Anna")
+        #expect(read.service == .meet && read.muteIntervals == call.muteIntervals)
+        // A call another build wrote with a status and service this one doesn't know, and one that's broken.
+        let json = """
+            {"version":1,"calls":[{"id":"\(UUID().uuidString)","startedAt":"2026-10-01T10:00:00Z","appName":"X",
+            "status":"archived","service":"teams"},{"id":"nope"}]}
+            """
+        let lenient = try CallStore.readRecords(from: Data(json.utf8))
+        #expect(lenient.count == 1)
+        #expect(lenient[0].status == .failed && lenient[0].service == nil)
+    }
+
+    @Test func autoDeleteFollowsHistoryAndTakesTheAudio() async throws {
+        let paths = AppPaths.temporary()
+        let settings = AppSettings.inMemory()
+        let store = CallStore(paths: paths, settings: settings)
+        store.load()
+        let old = CallRecord(id: UUID(), startedAt: Date().addingTimeInterval(-10 * 86_400), appName: "Zoom",
+                             status: .done)
+        let recent = CallRecord(id: UUID(), startedAt: Date().addingTimeInterval(-86_400), appName: "Zoom", status: .done)
+        for call in [old, recent] {
+            store.upsert(call)
+            try FileManager.default.createDirectory(at: store.folder(for: call.id), withIntermediateDirectories: true)
+            try Data([1]).write(to: store.folder(for: call.id).appendingPathComponent("mic.m4a"))
+        }
+        var removed: [UUID] = []
+        store.onRemove = { removed += $0 }
+        store.deleteExpired()
+        #expect(store.calls.count == 2)
+        settings.autoDeleteHistoryDays = 7
+        store.deleteExpired()
+        #expect(store.calls.map(\.id) == [recent.id])
+        #expect(removed == [old.id])
+        await store.flush()
+        #expect(!FileManager.default.fileExists(atPath: store.folder(for: old.id).path))
+        #expect(FileManager.default.fileExists(atPath: store.folder(for: recent.id).path))
+        store.delete(recent.id)
+        await store.flush()
+        #expect(store.calls.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: store.folder(for: recent.id).path))
+    }
+
+    /// What an earlier run left in the journal: a kept call, one asked about, one only suspected.
+    @Test func callsLeftInTheJournalComeBack() async throws {
+        let paths = AppPaths.temporary()
+        // A call the earlier run had as recording whose journal is gone.
+        let lost = CallRecord(id: UUID(), startedAt: Date(), appName: "Zoom", status: .recording)
+        let earlier = CallStore(paths: paths, settings: .inMemory())
+        earlier.load()
+        await earlier.waitForRecovery()
+        earlier.upsert(lost)
+        await earlier.flush()
+        let journal = CallJournal(directory: paths.callJournals)
+        var ids: [CallJournal.Consent: UUID] = [:]
+        for consent in [CallJournal.Consent.kept, .asking, .suspected] {
+            let info = journalInfo(consent: consent)
+            ids[consent] = info.id
+            let mic = FakeSource()
+            journal.begin(info, origin: 0, sources: [.mic: mic, .remote: FakeSource()])
+            mic.push(speechLike(seconds: 2), at: 0)
+            _ = await journal.end(info.id)
+        }
+
+        let store = CallStore(paths: paths, settings: .inMemory())
+        store.load()
+        await store.waitForRecovery()
+        let kept = try #require(store.call(id: ids[.kept]!))
+        #expect(kept.status == .interrupted)
+        #expect(kept.error == CallStore.interruptedMessage)
+        #expect(kept.micFile == "mic.m4a" && abs(kept.micSeconds - 2) < 0.01)
+        #expect(kept.remoteFile == nil)
+        #expect(FileManager.default.fileExists(atPath: try #require(store.audioURL(of: kept, track: .mic)).path))
+        #expect(store.call(id: ids[.asking]!)?.status == .unconfirmed)
+        #expect(store.call(id: ids[.suspected]!) == nil)
+        #expect(store.call(id: lost.id)?.status == .interrupted)
+        await store.journal?.settle()
+        #expect(files(in: paths.callJournals).isEmpty)
+    }
+}
+
+// MARK: - Transcription
+
+@Suite struct CallTranscriberTests {
+    @Test func answersAreReadForgivingly() throws {
+        let fenced = """
+            Here you go:
+            ```json
+            [{"start": "00:01", "end": "00:04", "speaker": "Аня", "text": "Привет, как дела?"},
+             {"start": "0:05.5", "speaker": "Participant 2", "text": " Нормально "},
+             {"start": 7, "end": "01:30", "speaker": "", "text": "Ок"},
+             {"start": "00:08", "text": ""}]
+            ```
+            """
+        let segments = try CallTranscriptParser.segments(from: fenced, side: .remote, duration: 60)
+        #expect(segments.count == 3)
+        #expect(segments[0] == .init(start: 1, end: 4, side: .remote, speaker: "Аня", text: "Привет, как дела?"))
+        // No end: up to the next phrase.
+        #expect(segments[1].start == 5.5 && segments[1].end == 7 && segments[1].text == "Нормально")
+        // No speaker: the side's default; an end past the audio: clamped.
+        #expect(segments[2].speaker == "Participant 1" && segments[2].end == 60)
+        #expect(try CallTranscriptParser.segments(from: "[]", side: .local, duration: 10).isEmpty)
+        #expect(try CallTranscriptParser.segments(from: "```json\n```", side: .local, duration: 10).isEmpty)
+        #expect(throws: CallTranscriber.Failure.unreadableAnswer) {
+            try CallTranscriptParser.segments(from: "I can't hear anything.", side: .local, duration: 10)
+        }
+        #expect(CallTranscriptParser.seconds("1:02:03") == 3723)
+        #expect(CallTranscriptParser.seconds("12:3x") == nil)
+    }
+
+    @Test func longCallsAreCutIntoEqualChunks() {
+        let total = Int(100 * 60 * rate)
+        let chunks = CallTranscriber.chunks(totalSamples: total, maxSeconds: 45 * 60)
+        #expect(chunks.count == 3)
+        #expect(chunks.first?.lowerBound == 0 && chunks.last?.upperBound == total)
+        for (a, b) in zip(chunks, chunks.dropFirst()) { #expect(a.upperBound == b.lowerBound) }
+        #expect(chunks.allSatisfy { Double($0.count) / rate <= 45 * 60 })
+        #expect(CallTranscriber.chunks(totalSamples: 10, maxSeconds: 45 * 60) == [0..<10])
+        #expect(CallTranscriber.chunks(totalSamples: 0, maxSeconds: 45 * 60).isEmpty)
+    }
+
+    @Test func mergeOrdersBySideAndMarksMutes() {
+        let segments: [CallTranscript.Segment] = [
+            .init(start: 10, end: 14, side: .local, speaker: "Sam", text: "muted mostly"),
+            .init(start: 2, end: 3, side: .local, speaker: "Sam", text: "answer"),
+            .init(start: 2, end: 2.5, side: .remote, speaker: "Аня", text: "question"),
+            .init(start: 20, end: 21, side: .local, speaker: "Sam", text: "barely muted"),
+            .init(start: 30, end: 30, side: .local, speaker: "Sam", text: "point in a mute"),
+        ]
+        let mutes = [CallInterval(start: 9, end: 13), CallInterval(start: 20.8, end: 25), CallInterval(start: 29, end: 31)]
+        let merged = CallTranscriptMerge.merge(segments, mutes: mutes)
+        #expect(merged.segments.map(\.text) == ["question", "answer", "muted mostly", "barely muted", "point in a mute"])
+        #expect(merged.segments.map(\.duringMute) == [false, false, true, false, true])
+        #expect(merged.speakers == ["Аня", "Sam"])
+    }
+
+    /// The prompts each request got, and Gemini's made-up answers.
+    private final class FakeGemini: Sendable {
+        let prompts = OSAllocatedUnfairLock(initialState: [String]())
+
+        func send(_ audio: Data, _ prompt: String, _ seconds: TimeInterval) async throws -> CloudResult {
+            let index = prompts.withLock { $0.append(prompt); return $0.count }
+            #expect(!audio.isEmpty)
+            let isRemote = prompt.contains("the other participants")
+            let text = isRemote
+                ? #"[{"start":"00:01","end":"00:03","speaker":"Аня","text":"Привет, ты меня слышишь? (\#(index))"}]"#
+                : #"[{"start":"00:04","end":"00:06","speaker":"Sam","text":"Да, слышу (\#(index))"},{"start":"00:20","end":"00:24","speaker":"Sam","text":"Это про себя"}]"#
+            var result = CloudResult(text: text)
+            result.costUSD = 0.01
+            return result
+        }
+    }
+
+    @Test func bothSidesAreAskedWithEchoAndMutesThenMerged() async throws {
+        let gemini = FakeGemini()
+        let samples = speechLike(seconds: 30)
+        let plan = CallTranscriber.Plan(remote: URL(fileURLWithPath: "/remote.m4a"), mic: URL(fileURLWithPath: "/mic.m4a"),
+                                        remoteSamples: samples.count, micSamples: samples.count,
+                                        mutes: [CallInterval(start: 19, end: 26)], userName: "Sam", service: "Telegram")
+        let outcome = try await CallTranscriber.run(plan, send: { try await gemini.send($0, $1, $2) }) { _, range in Array(samples[range]) }
+        let prompts = gemini.prompts.withLock { $0 }
+        #expect(prompts.count == 2)
+        #expect(prompts[0].contains("on Telegram") && prompts[0].contains("Participant 1"))
+        // The mic's prompt has the other side's words as echo, the person's name, and the mute.
+        #expect(prompts[1].contains("[00:01] Аня: Привет, ты меня слышишь? (1)"))
+        #expect(prompts[1].contains("\"Sam\"") && prompts[1].contains("00:19 to 00:26"))
+        #expect(outcome.transcript.segments.map(\.side) == [.remote, .local, .local])
+        #expect(outcome.transcript.segments.map(\.duringMute) == [false, false, true])
+        #expect(abs((outcome.costUSD ?? 0) - 0.02) < 1e-9)
+    }
+
+    @Test func silentTracksAreNotSent() async throws {
+        let gemini = FakeGemini()
+        let speech = speechLike(seconds: 10)
+        let plan = CallTranscriber.Plan(remote: URL(fileURLWithPath: "/remote.m4a"), mic: URL(fileURLWithPath: "/mic.m4a"),
+                                        remoteSamples: speech.count, micSamples: speech.count, mutes: [], userName: nil,
+                                        service: nil)
+        let outcome = try await CallTranscriber.run(plan, send: { try await gemini.send($0, $1, $2) }) { url, range in
+            url.lastPathComponent == "remote.m4a" ? [Float](repeating: 0, count: range.count) : Array(speech[range])
+        }
+        let prompts = gemini.prompts.withLock { $0 }
+        #expect(prompts.count == 1)
+        // Without the person's name, they're "Me"; nothing heard from the other side, so no echo.
+        #expect(prompts[0].contains("\"Me\"") && !prompts[0].contains("echo"))
+        #expect(outcome.transcript.segments.allSatisfy { $0.side == .local })
+    }
+
+    @Test func chunksCarryTheSpeakersAndTheirTimes() async throws {
+        let gemini = FakeGemini()
+        let samples = speechLike(seconds: 25)
+        let plan = CallTranscriber.Plan(remote: URL(fileURLWithPath: "/remote.m4a"), mic: nil,
+                                        remoteSamples: samples.count, micSamples: 0, mutes: [], userName: "Sam",
+                                        service: "Zoom")
+        let outcome = try await CallTranscriber.run(plan, maxChunkSeconds: 10, send: { try await gemini.send($0, $1, $2) }) { _, range in
+            Array(samples[range])
+        }
+        let prompts = gemini.prompts.withLock { $0 }
+        #expect(prompts.count == 3)
+        #expect(!prompts[0].contains("Earlier in this call"))
+        #expect(prompts[1].contains("Earlier in this call these speakers were heard: Аня."))
+        // Each chunk's times on the call's clock: 25 s in three chunks of 25/3 s.
+        let starts = outcome.transcript.segments.map(\.start)
+        let chunk = Double(Int(25 * rate + 2) / 3) / rate
+        #expect(starts.count == 3)
+        for (index, start) in starts.enumerated() { #expect(abs(start - (1 + Double(index) * chunk)) < 0.01) }
+    }
+
+    @MainActor
+    @Test func transcribingACallUpdatesItsRecord() async throws {
+        let paths = AppPaths.temporary()
+        let store = CallStore(paths: paths, settings: .inMemory())
+        store.load()
+        var call = CallRecord(id: UUID(), startedAt: Date(), appName: "Telegram", service: .telegram, status: .done)
+        call.micFile = "mic.m4a"
+        call.micSeconds = 10
+        store.upsert(call)
+        let speech = speechLike(seconds: 10)
+        let failing = OSAllocatedUnfairLock(initialState: true)
+        let transcriber = CallTranscriber(store: store) { _, _, _ in
+            if failing.withLock({ $0 }) { throw AppError.openRouterMissingKey }
+            return CloudResult(text: #"[{"start":"00:01","end":"00:02","speaker":"Sam","text":"Hello"}]"#)
+        }
+        transcriber.read = { _, range in Array(speech[range]) }
+        transcriber.transcribe(call.id)
+        #expect(store.call(id: call.id)?.status == .transcribing)
+        await transcriber.waitUntilIdle()
+        #expect(store.call(id: call.id)?.status == .failed)
+        #expect(store.call(id: call.id)?.error != nil)
+        failing.withLock { $0 = false }
+        transcriber.retranscribe(call.id)
+        await transcriber.waitUntilIdle()
+        let done = try #require(store.call(id: call.id))
+        #expect(done.status == .done && done.error == nil)
+        #expect(done.transcript?.segments.map(\.text) == ["Hello"])
+    }
+}
+
+// MARK: - Monitor
+
+@MainActor
+@Suite(.serialized) struct CallMonitorTests {
+    /// A made-up Mac: which apps use the mic and play sound, what the browser's tabs say, and the track sources each
+    /// recording got.
+    @MainActor final class Rig {
+        var records: [CoreAudioHAL.ProcessRecord] = []
+        var tabs: [String] = []
+        var sources: [[CallJournal.Track: FakeSource]] = []
+        var asked: [CallMonitor.CallInfo] = []
+        var answered: [UUID] = []
+        let paths = AppPaths.temporary()
+        let settings = AppSettings.inMemory()
+        let store: CallStore
+        let transcriber: CallTranscriber
+        var monitor: CallMonitor!
+
+        init(mode: CallRecordingMode = .ask) {
+            settings.callRecording = mode
+            store = CallStore(paths: paths, settings: settings)
+            store.load()
+            transcriber = CallTranscriber(store: store) { _, prompt, _ in
+                CloudResult(text: prompt.contains("the other participants") ? "[]"
+                            : #"[{"start":"00:01","end":"00:03","speaker":"Sam","text":"Hello there"}]"#)
+            }
+            let sensors = CallWatch.Sensors(
+                processRecords: { [unowned self] in records },
+                app: { CallApp(bundleID: $0.bundleID) },
+                pids: { _ in [] },
+                canReadWindows: { true },
+                readWindow: { [unowned self] app, _, following, done in
+                    let windows = [BrowserTabs.Window(title: tabs.first, tabs: tabs.map { BrowserTabs.Tab(title: $0, selected: nil) })]
+                    let isBrowser = CallAppKind.of(app.id) == .browser
+                    done(CallMuteReader.Report(
+                        read: MuteRead(state: .unknown("test"), inCall: nil, detail: ""), isBrowser: isBrowser,
+                        tab: isBrowser ? BrowserTabs.callTab(in: windows, following: following) : nil,
+                        windowCount: 1, otherTabPlaysAudio: BrowserTabs.otherTabPlaysAudio(
+                            in: windows, besides: BrowserTabs.callTab(in: windows, following: following))))
+                },
+                releaseWindows: {})
+            let deps = CallMonitor.Dependencies(
+                sensors: sensors, clock: { 0 }, now: { Date(timeIntervalSince1970: 1_790_000_000) },
+                makeSources: { [unowned self] _ in
+                    let made = [CallJournal.Track.mic: FakeSource(), .remote: FakeSource()]
+                    sources.append(made)
+                    return made
+                },
+                appName: { $0.id == "com.google.Chrome" ? "Google Chrome" : $0.id })
+            monitor = CallMonitor(settings: settings, store: store, transcriber: transcriber, dependencies: deps)
+            monitor.onAsk = { [unowned self] in asked.append($0) }
+            monitor.onAnswered = { [unowned self] in answered.append($0) }
+        }
+
+        func app(_ bundleID: String, pid: pid_t = 100, object: AudioObjectID = 10, mic: Bool, sound: Bool) {
+            records.removeAll { $0.pid == pid }
+            records.append(CoreAudioHAL.ProcessRecord(objectID: object, pid: pid, bundleID: bundleID,
+                                                      isRunningInput: mic, isRunningOutput: sound,
+                                                      inputDevices: [], outputDevices: []))
+        }
+
+        func poll(_ times: some Sequence<Double>) {
+            for time in times { monitor.poll(at: time) }
+        }
+
+        var journalFiles: Set<String> { files(in: paths.callJournals) }
+    }
+
+    private static let meet = "Meet – abc-defg-hij - Camera and microphone recording"
+
+    @Test func aMeetTabIsAskedAboutOnceItsACall() async throws {
+        let rig = Rig()
+        rig.tabs = ["YouTube - Audio playing", Self.meet]
+        rig.app("com.google.Chrome", mic: true, sound: true)
+        rig.poll([0, 0.5])
+        guard case .suspected(let info) = rig.monitor.state else { Issue.record("not suspected"); return }
+        #expect(info.service == .meet && info.pageTitle == "Meet – abc-defg-hij")
+        #expect(rig.asked.isEmpty)
+        rig.poll([21])
+        guard case .asking(let asking) = rig.monitor.state else { Issue.record("not asking"); return }
+        #expect(rig.asked.map(\.id) == [asking.id])
+        #expect(asking.title == "Google Meet")
+        // Recording since the suspicion: the journal is there.
+        await rig.store.journal?.settle()
+        #expect(rig.journalFiles.contains("\(asking.id.uuidString)-mic.wav"))
+        // A tap of Chrome's processes; a new helper joins it.
+        rig.app("com.google.Chrome", pid: 101, object: 11, mic: false, sound: true)
+        rig.poll([21.5])
+        #expect(rig.sources.first?[.remote]?.retargets == [[10, 11]])
+
+        // No: the recording goes, and that call isn't recorded again.
+        rig.monitor.discard()
+        #expect(rig.monitor.state == .idle)
+        #expect(rig.answered == [asking.id])
+        await rig.store.journal?.settle()
+        #expect(rig.journalFiles.isEmpty)
+        rig.poll([22, 23, 50])
+        #expect(rig.monitor.state == .idle)
+        #expect(rig.sources.count == 1)
+        #expect(rig.store.calls.isEmpty)
+    }
+
+    /// The tap takes all of Chrome's sound: another tab playing meanwhile is noted, so the transcript can be read
+    /// with that in mind.
+    @Test func anotherTabsSoundIsNoted() async throws {
+        let rig = Rig(mode: .automatic)
+        rig.tabs = [Self.meet]
+        rig.app("com.google.Chrome", mic: true, sound: true)
+        rig.poll([0, 0.5, 21])
+        guard case .recording(let info) = rig.monitor.state else { Issue.record("not kept"); return }
+        // Its window is read every 3 s (no Mute button known here): at 24 and at 30.
+        rig.tabs = [Self.meet, "Lo-fi beats - YouTube - Audio playing"]
+        rig.poll([24, 25])
+        rig.tabs = [Self.meet]
+        rig.poll([30, 31])
+        rig.monitor.stop(keep: true)
+        await rig.monitor.waitForEndings()
+        await rig.transcriber.waitUntilIdle()
+        let call = try #require(rig.store.call(id: info.id))
+        #expect(call.otherBrowserAudio == [CallInterval(start: 24, end: 30)])
+        #expect(call.service == .meet && call.pageTitle == "Meet – abc-defg-hij")
+        #expect(BrowserTabs.isPlayingAudio("YouTube – воспроизводится аудио"))
+        #expect(!BrowserTabs.isPlayingAudio("Meet – abc"))
+    }
+
+    @Test func appsNotAllowedAreLeftAlone() async {
+        let rig = Rig(mode: .automatic)
+        rig.app("com.apple.garageband10", mic: true, sound: true)
+        rig.poll([0, 0.5, 21, 22])
+        #expect(rig.monitor.state == .idle)
+        #expect(rig.sources.isEmpty)
+        // It doesn't stand in the way of a call that starts meanwhile.
+        rig.app("ru.keepcoder.Telegram", pid: 200, object: 20, mic: true, sound: true)
+        rig.poll([23])
+        guard case .suspected(let telegram) = rig.monitor.state else { Issue.record("Telegram not noticed"); return }
+        #expect(telegram.service == .telegram)
+        // A browser tab that isn't a call service: recorded while unknown, then dropped as soon as it's read.
+        let browser = Rig(mode: .automatic)
+        browser.tabs = ["Voice Recorder Online - Microphone recording"]
+        browser.app("com.google.Chrome", mic: true, sound: true)
+        browser.poll([0])
+        #expect(browser.monitor.isRecording)
+        browser.poll([0.5])
+        #expect(browser.monitor.state == .idle)
+        await browser.store.journal?.settle()
+        #expect(browser.journalFiles.isEmpty)
+        browser.poll([21, 22])
+        #expect(browser.monitor.state == .idle && browser.sources.count == 1)
+        // Off: nothing is noticed.
+        let off = Rig(mode: .off)
+        off.app("ru.keepcoder.Telegram", mic: true, sound: true)
+        off.poll([0, 21])
+        #expect(off.monitor.state == .idle && off.sources.isEmpty)
+    }
+
+    @Test func aSuspicionThatDropsIsDeleted() async {
+        let rig = Rig()
+        rig.app("ru.keepcoder.Telegram", mic: true, sound: true)
+        rig.poll([0])
+        #expect(rig.monitor.isRecording)
+        // A voice note played back while recording another: not 20 s of both.
+        rig.app("ru.keepcoder.Telegram", mic: false, sound: false)
+        rig.poll([5, 7])
+        #expect(rig.monitor.state == .idle)
+        await rig.store.journal?.settle()
+        #expect(rig.journalFiles.isEmpty)
+        #expect(rig.asked.isEmpty)
+    }
+
+    @Test func aKeptCallEndsInTheStoreTranscribed() async throws {
+        let rig = Rig()
+        rig.app("ru.keepcoder.Telegram", mic: true, sound: true)
+        rig.poll([0, 21])
+        guard case .asking(let info) = rig.monitor.state else { Issue.record("not asking"); return }
+        #expect(info.muteKnown)
+        let mic = try #require(rig.sources.first?[.mic])
+        let remote = try #require(rig.sources.first?[.remote])
+        mic.push(speechLike(seconds: 12), at: 0)
+        remote.push([Float](repeating: 0, count: Int(12 * rate)), at: 0)
+        rig.monitor.keep()
+        guard case .recording = rig.monitor.state else { Issue.record("not recording"); return }
+        #expect(rig.store.call(id: info.id)?.status == .recording)
+        // Telegram mutes by giving the mic back.
+        rig.app("ru.keepcoder.Telegram", mic: false, sound: true)
+        rig.poll([25, 27])
+        rig.app("ru.keepcoder.Telegram", mic: true, sound: true)
+        rig.poll([30])
+        rig.app("ru.keepcoder.Telegram", mic: false, sound: false)
+        rig.poll(stride(from: 40.0, through: 101, by: 1))
+        #expect(rig.monitor.state == .ending || rig.monitor.state == .idle)
+        await rig.monitor.waitForEndings()
+        await rig.transcriber.waitUntilIdle()
+        #expect(rig.monitor.state == .idle)
+        let call = try #require(rig.store.call(id: info.id))
+        #expect(call.status == .done)
+        #expect(call.service == .telegram && call.muteKnown)
+        #expect(call.muteIntervals.count == 1)
+        #expect(abs((call.muteIntervals.first?.start ?? 0) - 25) < 0.01)
+        #expect(abs(call.micSeconds - 12) < 0.01)
+        #expect(call.remoteProblem == CallStore.silentTapMessage)
+        #expect(call.transcript?.segments.map(\.text) == ["Hello there"])
+        await rig.store.journal?.settle()
+        #expect(rig.journalFiles.isEmpty)
+    }
+
+    @Test func aCallEndingUnansweredWaitsForTheAnswer() async throws {
+        let rig = Rig()
+        rig.app("us.zoom.xos", mic: true, sound: true)
+        rig.poll([0, 21])
+        guard case .asking(let info) = rig.monitor.state else { Issue.record("not asking"); return }
+        rig.sources.first?[.mic]?.push(speechLike(seconds: 3), at: 0)
+        rig.app("us.zoom.xos", mic: false, sound: false)
+        rig.poll(stride(from: 22.0, through: 90, by: 1))
+        await rig.monitor.waitForEndings()
+        #expect(rig.store.call(id: info.id)?.status == .unconfirmed)
+        #expect(rig.answered.isEmpty)
+        rig.monitor.keep(callID: info.id)
+        await rig.transcriber.waitUntilIdle()
+        #expect(rig.store.call(id: info.id)?.status == .done)
+        #expect(rig.answered == [info.id])
+    }
+
+    @Test func manualRecordingTakesEverythingAndConfirmsANoticedCall() async throws {
+        let rig = Rig()
+        rig.monitor.startManual()
+        guard case .recording(let manual) = rig.monitor.state else { Issue.record("not recording"); return }
+        #expect(manual.manual && manual.appName == CallMonitor.manualName)
+        // A call noticed meanwhile is the manual recording's.
+        rig.app("com.hnc.Discord", mic: true, sound: true)
+        rig.poll([0, 21])
+        guard case .recording(let still) = rig.monitor.state, still.id == manual.id else {
+            Issue.record("manual recording replaced")
+            return
+        }
+        rig.sources.first?[.mic]?.push(speechLike(seconds: 2), at: 0)
+        rig.monitor.stop(keep: true)
+        await rig.monitor.waitForEndings()
+        await rig.transcriber.waitUntilIdle()
+        #expect(rig.store.call(id: manual.id)?.manual == true)
+        #expect(rig.store.call(id: manual.id)?.status == .done)
+        // The Discord call goes on, and isn't picked up again.
+        rig.poll([22, 23])
+        #expect(rig.monitor.state == .idle)
+
+        // During a noticed call, Start Call Recording keeps it.
+        let other = Rig()
+        other.app("com.tinyspeck.slackmacgap", mic: true, sound: true)
+        other.poll([0])
+        other.monitor.startManual()
+        guard case .recording(let kept) = other.monitor.state else { Issue.record("not kept"); return }
+        #expect(!kept.manual && kept.service == .slack)
+        other.poll([21])
+        guard case .recording = other.monitor.state else { Issue.record("asked anyway"); return }
+        #expect(other.asked.isEmpty)
+        other.monitor.stop(keep: false)
+        await other.store.journal?.settle()
+        #expect(other.journalFiles.isEmpty)
+        #expect(other.store.calls.isEmpty)
+    }
+}

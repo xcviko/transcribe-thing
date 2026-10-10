@@ -109,6 +109,16 @@ enum CloudAudio {
     /// this length (`kAudioFilePropertyReserveDuration`), with the index up front: left to itself the writer pads every
     /// file with about 20 KB, more than a short dictation's audio takes.
     static func writeM4A(_ samples: [Float], bitRate: Int, to url: URL) throws {
+        try writeM4A(bitRate: bitRate, reservingSeconds: Double(samples.count) / Recording.sampleRate, to: url) { append in
+            try append(samples)
+        }
+    }
+
+    /// Writes an .m4a as `writeM4A(_:bitRate:to:)` does, from audio `body` hands to `append` a piece at a time (a
+    /// call's hour, read off its journal), so it never has to be in memory at once. `reservingSeconds` is how long it
+    /// will be, for the header's room.
+    static func writeM4A(bitRate: Int, reservingSeconds: TimeInterval, to url: URL,
+                         _ body: (_ append: ([Float]) throws -> Void) throws -> Void) throws {
         var aac = AudioStreamBasicDescription(mSampleRate: Recording.sampleRate, mFormatID: kAudioFormatMPEG4AAC,
                                               mFormatFlags: 0, mBytesPerPacket: 0, mFramesPerPacket: 1024,
                                               mBytesPerFrame: 0, mChannelsPerFrame: 1, mBitsPerChannel: 0, mReserved: 0)
@@ -140,12 +150,12 @@ enum CloudAudio {
         size = UInt32(MemoryLayout<AudioFileID?>.size)
         try check(ExtAudioFileGetProperty(file, kExtAudioFileProperty_AudioFile, &size, &audioFile))
         if let audioFile {
-            var seconds = Double(samples.count) / Recording.sampleRate
+            var seconds = reservingSeconds
             try check(AudioFileSetProperty(audioFile, kAudioFilePropertyReserveDuration,
                                            UInt32(MemoryLayout<Double>.size), &seconds))
         }
 
-        try write(samples, to: file)
+        try body { samples in try write(samples, to: file) }
         isOpen = false
         try check(ExtAudioFileDispose(file))
     }

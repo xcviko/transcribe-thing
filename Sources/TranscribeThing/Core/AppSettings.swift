@@ -122,6 +122,10 @@ final class AppSettings {
             if dictionary.grouping != oldValue.grouping { store.setJSON(dictionary.grouping, .dictionaryGroups) }
         }
     }
+    /// Whether calls in Telegram, Zoom, Discord, Slack, Telemost and those services' browser tabs are noticed and
+    /// recorded, asking first (the default) or not (`CallMonitor`). The menu bar's Start Call Recording works whatever
+    /// this says.
+    var callRecording: CallRecordingMode = .ask { didSet { store.set(callRecording.rawValue, .callRecording) } }
     /// Days a transcript and its recording stay in History; 0 = Never deleted (`HistoryStore.deleteExpired`).
     var autoDeleteHistoryDays: Int = 0 { didSet { store.set(autoDeleteHistoryDays, .autoDeleteHistoryDays) } }
     var shortcuts: ShortcutBindings = .defaults { didSet { store.setJSON(shortcuts, .shortcuts) } }
@@ -312,6 +316,7 @@ final class AppSettings {
             dictionary = loaded
         }
         if let v = store.int(.autoDeleteHistoryDays), v >= 0 { autoDeleteHistoryDays = v }
+        if let v = store.string(.callRecording).flatMap(CallRecordingMode.init(rawValue:)) { callRecording = v }
         if let v: ShortcutBindings = store.json(.shortcuts) { shortcuts = v }
         // Polish moved from fn ↩ to fn P (when ↩ finished a hands-free dictation): a build that had it on fn ↩ by default
         // moves it, once, unless fn P is taken. Bound to fn ↩ again after that, it stays.
@@ -437,6 +442,8 @@ enum SettingsKey: String, CaseIterable {
     /// The day-old switches of asking twice (`CloudHedge`), removed at load: every dictation asks twice now.
     case sendsTwice, measuresSendingTwice
     case polishSelectionModel, translationPair
+    /// How calls are recorded (`CallRecordingMode`).
+    case callRecording
 
     var defaultsKey: String { "tt.\(rawValue)" }
 }

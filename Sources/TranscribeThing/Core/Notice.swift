@@ -37,6 +37,9 @@ enum NoticeActionKind: Sendable, Equatable {
     case useBuiltInMicrophone
     /// Open Software Update and install the newest release there, where its progress shows.
     case installUpdate
+    /// "Transcribe your call?": Yes keeps the call (`CallMonitor.keep(callID:)`), No deletes its recording.
+    case keepCall(UUID)
+    case discardCall(UUID)
     case dismiss
 }
 
@@ -132,6 +135,21 @@ extension Notice {
                       actions: [NoticeAction(title: fixTitle, kind: .openSettingsPane(.accessibility), isPrimary: true),
                                 NoticeAction(title: "Dismiss", kind: .dismiss)],
                       lifetime: .sticky)
+    }
+}
+
+extension Notice {
+    static func callQuestionKey(_ id: UUID) -> String { "call.ask.\(id.uuidString)" }
+
+    /// A call is being recorded: transcribe it? Sticky until answered, or until the call is gone without an answer
+    /// mattering (dropped, deleted). An unanswered call that ends waits in the Calls store, and so does this.
+    static func transcribeCall(_ id: UUID, service: String) -> Notice {
+        Notice(dedupeKey: callQuestionKey(id), style: .info, symbol: "phone.badge.waveform",
+               title: "Transcribe your call in \(service)?",
+               body: "It’s being recorded. No deletes the recording.",
+               actions: [NoticeAction(title: "Yes", kind: .keepCall(id), isPrimary: true),
+                         NoticeAction(title: "No", kind: .discardCall(id))],
+               lifetime: .sticky)
     }
 }
 
