@@ -100,8 +100,8 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
         switch self {
         case .parakeet: "Parakeet v3"
         case .parakeetCloud: "Parakeet v3 · Cloud"
-        case .geminiFlash: "Gemini Flash"
-        case .geminiPro: "Gemini Pro"
+        // With the version: "Gemini Flash" alone doesn't say which model it is.
+        case .geminiFlash, .geminiPro: modelName
         }
     }
 

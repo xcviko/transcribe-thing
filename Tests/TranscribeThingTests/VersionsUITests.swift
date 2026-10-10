@@ -83,7 +83,7 @@ import Testing
         var entry = transcript()
         entry.addVersion(TranscriptVersion(text: "g", engine: .geminiFlash))
         let m = menu(entry, running: .polish)
-        #expect(m.runningTitle == "Polishing with Gemini Flash…")
+        #expect(m.runningTitle == "Polishing with Gemini 3.8 Flash…")
         #expect(m.actions.allSatisfy { !$0.isEnabled && $0.title.hasSuffix(" · Busy") })
         #expect(m.versions.count == 2)
         #expect(menu(entry, running: .transcription(.parakeetCloud)).runningTitle
@@ -155,7 +155,7 @@ import Testing
             "Cost: $0.0094",
             "Took 6.8 s",
         ])
-        #expect(EngineID.geminiPro.glyph == "Pro" && EngineID.geminiPro.shortName == "Gemini Pro")
+        #expect(EngineID.geminiPro.glyph == "Pro" && EngineID.geminiPro.shortName == "Gemini 3.1 Pro")
         #expect(EngineGlyph(engine: .geminiPro, provider: "Google AI Studio").label
                 == "Gemini 3.1 Pro · via Google AI Studio")
     }

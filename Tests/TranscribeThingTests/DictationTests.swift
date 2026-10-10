@@ -506,11 +506,11 @@ import Testing
         #expect(stats.averageWPM == nil)
     }
 
-    @Test func timeSavedComparesWithTypingAt40WPM() {
-        // 400 words take 10 min to type; speaking took 150 s -> 450 s saved.
+    @Test func timeSavedComparesWithTypingAt80WPM() {
+        // 400 words take 5 min to type; speaking took 150 s -> 150 s saved.
         let entries = [Self.entry(daysAgo: 1, words: 400, audio: 150, voiced: 130)]
         let stats = HistoryStats.compute(entries, now: Self.now, calendar: Self.calendar)
-        #expect(stats.timeSavedSeconds == 450)
+        #expect(stats.timeSavedSeconds == 150)
     }
 
     @Test func timeSavedNeverGoesNegative() {
@@ -980,7 +980,7 @@ final class FakeRecorder: DictationRecorder {
         #expect(pasted == ["a", "c"])
         let failed = try #require(h.history.entry(id: b.id))
         #expect(failed.status == .failed)
-        #expect(failed.errorMessage == "Gemini Flash took too long")
+        #expect(failed.errorMessage == "Gemini 3.8 Flash took too long")
         let notice = try #require(h.toasts.notices.first { $0.recordingID == b.id })
         #expect(notice.actions.map(\.kind) == [.retry])
     }

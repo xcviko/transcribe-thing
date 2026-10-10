@@ -176,7 +176,7 @@ import Testing
         #expect(EngineSummary.make(engine: .parakeet, localState: .downloading(DownloadProgress(fraction: 0.42)), keyStatus: .missing).status
             == "Downloading 42%")
         #expect(EngineSummary.make(engine: .geminiFlash, localState: .notInstalled, keyStatus: .missing)
-            == EngineSummary(name: "Gemini Flash", status: "Needs key", tone: .warning))
+            == EngineSummary(name: "Gemini 3.8 Flash", status: "Needs key", tone: .warning))
     }
 }
 
@@ -397,7 +397,7 @@ import Testing
                                    keyStatus: .missing).status == "Loading model…")
         #expect(EngineSummary.make(choice: .gemini, parakeet: .parakeet, localState: .notInstalled,
                                    keyStatus: .valid(KeyInfo()))
-            == EngineSummary(name: "Gemini Flash", status: "Ready", tone: .positive))
+            == EngineSummary(name: "Gemini 3.8 Flash", status: "Ready", tone: .positive))
         #expect(EngineSummary.make(choice: .parakeet, parakeet: .parakeetCloud, localState: .notInstalled,
                                    keyStatus: .valid(KeyInfo())).name == "Parakeet v3 · Cloud")
     }

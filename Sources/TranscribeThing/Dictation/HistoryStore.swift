@@ -271,8 +271,8 @@ struct HistoryStats: Equatable, Sendable {
     static let empty = HistoryStats(wordsThisWeek: 0, dailyWords: Array(repeating: 0, count: 7),
                                     averageWPM: nil, timeSavedSeconds: 0, totalDictations: 0)
 
-    /// Typing speed the "time saved" tile compares against.
-    static let typingWPM: Double = 40
+    /// Typing speed the "time saved" tile compares against: a practiced typist's.
+    static let typingWPM: Double = 80
 
     /// Pure stats math over any set of entries (only successful ones count).
     static func compute(_ entries: [TranscriptEntry], now: Date, calendar: Calendar) -> HistoryStats {

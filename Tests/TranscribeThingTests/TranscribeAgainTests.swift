@@ -476,10 +476,10 @@ import Testing
 
     @Test func somethingRunningBlocksEveryActionButNotSwitching() {
         let m = menu(transcript(), running: .transcription(.geminiFlash))
-        #expect(m.runningTitle == "Transcribing with Gemini Flash…")
+        #expect(m.runningTitle == "Transcribing with Gemini 3.8 Flash…")
         #expect(m.actions.allSatisfy { $0.blocker == .running(.transcription(.geminiFlash)) })
         #expect(m.versions.count == 1)
-        #expect(menu(transcript(), running: .polish).runningTitle == "Polishing with Gemini Flash…")
+        #expect(menu(transcript(), running: .polish).runningTitle == "Polishing with Gemini 3.8 Flash…")
     }
 
     @Test func aFailedDictationRetriesWithAnyEngineItsOwnIncluded() {

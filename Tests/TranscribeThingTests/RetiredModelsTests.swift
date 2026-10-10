@@ -51,7 +51,7 @@ private let historyFile = #"""
         #expect(pro.engine == .geminiPro && pro.status == .success)
         #expect(pro.versions.map(\.kind) == [.transcription(.geminiPro)])
         #expect(pro.currentKind == .transcription(.geminiPro) && pro.text == "Only Pro heard this.")
-        #expect(pro.currentKind?.displayName == "Gemini 3.1 Pro" && pro.engine.shortName == "Gemini Pro")
+        #expect(pro.currentKind?.displayName == "Gemini 3.1 Pro" && pro.engine.shortName == "Gemini 3.1 Pro")
         #expect(pro.engine.glyph == "Pro" && pro.costUSD == 0.0094 && pro.provider == "Google AI Studio")
         let version = try #require(pro.currentVersion)
         #expect(VersionDetails.lines(for: version) == [

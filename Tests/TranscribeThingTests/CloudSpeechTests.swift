@@ -834,7 +834,7 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
 // MARK: - Notices
 
 @Suite struct CloudSpeechNoticeTests {
-    /// Errors that name a Gemini engine themselves ("Gemini Flash took too long") are about Gemini either way.
+    /// Errors that name a Gemini engine themselves ("Gemini 3.8 Flash took too long") are about Gemini either way.
     static let errorsWithoutGemini = NoticeCopyTests.allErrors.filter { !$0.code.lowercased().contains("gemini") }
 
     @Test(arguments: errorsWithoutGemini)

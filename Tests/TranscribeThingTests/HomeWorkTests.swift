@@ -55,7 +55,7 @@ import Testing
         return r.id
     }
 
-    /// A dictation Gemini Flash failed: a failed row with its audio. Its notice is dismissed, and its shake over.
+    /// A dictation Gemini 3.8 Flash failed: a failed row with its audio. Its notice is dismissed, and its shake over.
     private func failedDictation(_ h: H.Harness) async throws -> UUID {
         h.pill.timing.errorHold = 0.01
         h.controller.transcribeOverride = { _, engine in throw AppError.timeout(engine) }
@@ -238,14 +238,14 @@ import Testing
         #expect(h.toasts.notices.isEmpty)
     }
 
-    /// The row's title names the model ("Couldn't transcribe with Gemini Flash"), so the reason after it says "It";
+    /// The row's title names the model ("Couldn't transcribe with Gemini 3.8 Flash"), so the reason after it says "It";
     /// a key, credit or connection problem reads the same for a transcription and Polish.
     @Test func reasonsDontNameTheModelTwice() {
         let reason = DictationController.homeFailureReason(_:making:)
         let flash = TranscriptVersionKind.transcription(.geminiFlash)
         let polish = TranscriptVersionKind.polish
-        #expect(flash.failureTitle == "Couldn’t transcribe with Gemini Flash")
-        #expect(polish.failureTitle == "Couldn’t polish with Gemini Flash")
+        #expect(flash.failureTitle == "Couldn’t transcribe with Gemini 3.8 Flash")
+        #expect(polish.failureTitle == "Couldn’t polish with Gemini 3.8 Flash")
         #expect(reason(.timeout(.geminiFlash), flash) == "It took too long.")
         #expect(reason(.timeout(.geminiFlash), polish) == "It took too long.")
         #expect(reason(.engineFailed(.parakeet, "CoreML"), .transcription(.parakeet)) == "It ran into a problem.")

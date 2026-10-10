@@ -1326,7 +1326,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         #expect(ModelChoice.allCases.map(\.modelName) == ["Parakeet v3", "Gemini 3.8 Flash"])
         #expect(ModelChoice.parakeet.title(parakeet: .parakeetCloud) == "Parakeet v3 · Cloud")
         #expect(ModelChoice.allCases.map(\.shortName) == ["Parakeet", "Gemini"])
-        #expect(ModelChoice.allCases.map { $0.compactName(parakeet: .parakeet) } == ["Parakeet v3", "Gemini Flash"])
+        #expect(ModelChoice.allCases.map { $0.compactName(parakeet: .parakeet) } == ["Parakeet v3", "Gemini 3.8 Flash"])
         #expect(ModelChoice.allCases.map { $0.symbolName(parakeet: .parakeetCloud) } == ["cloud.bolt.fill", "sparkles"])
         #expect(ModelChoice.allCases.map { $0.needsOpenRouter(parakeet: .parakeet) } == [false, true])
         #expect(ModelChoice.allCases.map { $0.usesLocalParakeet(parakeet: .parakeet) } == [true, false])
