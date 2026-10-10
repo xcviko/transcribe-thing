@@ -8,7 +8,11 @@ import SwiftUI
 // MARK: - Palette
 
 enum Palette {
-    static let bgCanvas = dynamic("bgCanvas", light: .hex(0xF7F7F7), dark: .hex(0x111111))
+    /// The window's own background, as every macOS window has it.
+    static let bgCanvas = NSColor.windowBackgroundColor
+    /// A card on the canvas, as a grouped form's sections are drawn (measured off System Settings' forms): the
+    /// background a shade darker on light, a shade lighter on dark.
+    static let sectionFill = dynamic("sectionFill", light: .hex(0x000000, alpha: 0.03), dark: .hex(0xFFFFFF, alpha: 0.03))
     static let bgSurface = dynamic("bgSurface", light: .hex(0xFFFFFF), dark: .hex(0x1A1A1A))
     static let bgSunken = dynamic("bgSunken", light: .hex(0xEFEFEF), dark: .hex(0x0B0B0B))
     static let bgElevated = dynamic("bgElevated", light: .hex(0xFFFFFF), dark: .hex(0x242424))
@@ -71,6 +75,7 @@ extension NSColor {
 
 extension Color {
     static let bgCanvas = Color(nsColor: Palette.bgCanvas)
+    static let sectionFill = Color(nsColor: Palette.sectionFill)
     static let bgSurface = Color(nsColor: Palette.bgSurface)
     static let bgSunken = Color(nsColor: Palette.bgSunken)
     static let bgElevated = Color(nsColor: Palette.bgElevated)
@@ -186,7 +191,7 @@ enum Theme {
     }
 
     enum Radius {
-        static let card: CGFloat = 16
+        static let card: CGFloat = 12
         static let row: CGFloat = 12
         static let control: CGFloat = 8
         static let chip: CGFloat = 6
@@ -236,8 +241,9 @@ extension Font {
 extension View {
     /// Window-root styling: iris tint for switches, sliders, pickers and focus rings.
     /// Applied to every transcribe-thing window root and every snapshot.
+    /// Controls take the accent the user picked in System Settings, as every native app's do.
     func appTheme() -> some View {
-        tint(.accent)
+        self
     }
 
     /// Font + line height + tracking of a type token.
@@ -258,11 +264,14 @@ private struct CardShadow: ViewModifier {
     @Environment(\.colorScheme) private var scheme
 
     func body(content: Content) -> some View {
-        let dark = scheme == .dark
-        content
-            .shadow(color: .black.opacity(dark ? 0.35 : 0.045), radius: dark ? 1 : 1, x: 0, y: 1)
-            .shadow(color: .black.opacity(dark ? 0.28 : (elevated ? 0.10 : 0.055)),
-                    radius: elevated ? 22 : 14, x: 0, y: elevated ? 10 : 6)
+        // Flat, as a grouped form's sections are: only an elevated card (one over other content) keeps a shadow.
+        if elevated {
+            let dark = scheme == .dark
+            content
+                .shadow(color: .black.opacity(dark ? 0.28 : 0.10), radius: 22, x: 0, y: 10)
+        } else {
+            content
+        }
     }
 }
 

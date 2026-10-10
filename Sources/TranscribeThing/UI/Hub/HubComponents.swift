@@ -6,10 +6,6 @@ import SwiftUI
 // MARK: - Extra tokens
 
 enum HubPalette {
-    /// Sidebar: a shade deeper than the canvas so the content reads as the lit "page".
-    static let sidebar = Color(nsColor: Palette.dynamic("hub.sidebar", light: .hex(0xEFEFEF), dark: .hex(0x0B0B0B)))
-    /// Selected sidebar row.
-    static let sidebarSelection = Color(nsColor: Palette.dynamic("hub.sidebarSelection", light: .hex(0xFFFFFF), dark: .hex(0x242424)))
     /// Apricot dark enough for text on light surfaces.
     static let apricotInk = Color(nsColor: Palette.dynamic("hub.apricotInk", light: .hex(0xB85A2A), dark: .hex(0xFFB38F)))
     /// Field fill on cards (search, key field, code in release notes).
@@ -18,8 +14,9 @@ enum HubPalette {
 
 // MARK: - Page scaffold
 
-/// A Hub page: title + subtitle header, then sections, in a centered readable column. A sub-page (Software
-/// Update) gets a "‹ General" link above its title.
+/// A Hub page, as a pane of System Settings: a native grouped `Form` (its rounded sections, rows and separators), the
+/// title the window's (in the toolbar, `HubRoot`), a subtitle on a card at the top. A sub-page (Software Update)
+/// gets a Back button in the toolbar.
 struct HubPage<Content: View, Accessory: View>: View {
     var title: String
     var subtitle: String?
@@ -37,37 +34,37 @@ struct HubPage<Content: View, Accessory: View>: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Theme.Spacing.section) {
-                HStack(alignment: .lastTextBaseline, spacing: Theme.Spacing.md) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        if let back {
-                            BackLinkButton(link: back)
-                                .padding(.bottom, 2)
+        page
+            .toolbar {
+                if let back {
+                    ToolbarItem(placement: .navigation) {
+                        Button(action: back.action) {
+                            Label("Back to \(back.title)", systemImage: "chevron.backward")
                         }
-                        Text(title)
-                            .typeface(.title)
-                            .foregroundStyle(.ink)
-                            .accessibilityAddTraits(.isHeader)
-                        if let subtitle {
-                            Text(subtitle)
-                                .typeface(.body)
-                                .foregroundStyle(.inkSecondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
+                        .keyboardShortcut("[", modifiers: .command)
+                        .help("Back to \(back.title)")
                     }
-                    Spacer(minLength: 0)
-                    accessory
                 }
-                content
+                ToolbarItemGroup(placement: .primaryAction) { accessory }
             }
-            .padding(.horizontal, HubLayout.pageHorizontal)
-            .padding(.top, HubLayout.pageTop)
-            .padding(.bottom, HubLayout.pageBottom)
-            .frame(maxWidth: HubLayout.readableWidth, alignment: .leading)
-            .frame(maxWidth: .infinity)
+    }
+
+    private var page: some View {
+        Form {
+            if let subtitle {
+                // What the page is for, on a card of its own at the top, as System Settings' panes open.
+                Section {
+                    Text(subtitle)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            content
         }
-        .scrollIndicators(.automatic)
+        .formStyle(.grouped)
+        // A page opens at its top, not scrolled to the first control that can take focus.
+        .defaultScrollAnchor(.top)
+        .environment(\.inNativeForm, true)
     }
 }
 
@@ -77,58 +74,28 @@ extension HubPage where Accessory == EmptyView {
     }
 }
 
-/// Where a sub-page's back link goes: "‹ General". ⌘[ follows it too.
+/// Where a sub-page's back button goes: "‹ General". ⌘[ follows it too.
 struct HubBackLink {
     var title: String
     var action: () -> Void
 }
 
-private struct BackLinkButton: View {
-    var link: HubBackLink
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: link.action) {
-            HStack(spacing: 3) {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 10.5, weight: .semibold))
-                Text(link.title)
-                    .font(.system(size: 12.5, weight: .medium))
-            }
-            .foregroundStyle(hovering ? Color.ink : Color.accent)
-            .padding(.horizontal, 6)
-            .frame(height: 22)
-            .background {
-                RoundedRectangle(cornerRadius: 6, style: .continuous).fill(hovering ? Color.hover : .clear)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .padding(.leading, -6)
-        .onHover { hovering = $0 }
-        .animation(Theme.Motion.hover, value: hovering)
-        .keyboardShortcut("[", modifiers: .command)
-        .help("Back to \(link.title)")
-        .accessibilityLabel("Back to \(link.title)")
-    }
-}
-
 enum HubLayout {
     static let sidebarWidth: CGFloat = 212
-    /// Clear band at the top of the detail column for the transparent titlebar (window drag area).
-    static let titlebar: CGFloat = 28
-    static let pageTop: CGFloat = 14
+    static let pageTop: CGFloat = 20
     static let pageBottom: CGFloat = 36
     static let pageHorizontal: CGFloat = 36
     static let readableWidth: CGFloat = 780
 }
 
-/// A titled group of settings: uppercase caption above a card.
+/// A titled group of settings: in a form, one of its native sections (title above, footer below); elsewhere an
+/// uppercase caption above a card.
 struct HubGroup<Content: View, Trailing: View>: View {
     var title: String
     var footer: String?
     @ViewBuilder var trailing: Trailing
     @ViewBuilder var content: Content
+    @Environment(\.inNativeForm) private var inNativeForm
 
     init(_ title: String, footer: String? = nil, @ViewBuilder trailing: () -> Trailing,
          @ViewBuilder content: () -> Content) {
@@ -139,16 +106,34 @@ struct HubGroup<Content: View, Trailing: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-            SectionHeader(title) { trailing }
-            content
-            if let footer {
-                Text(footer)
-                    .typeface(.callout)
-                    .foregroundStyle(.inkTertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 4)
-                    .padding(.top, 2)
+        if inNativeForm {
+            Section {
+                content
+            } header: {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(title)
+                    Spacer(minLength: 8)
+                    trailing
+                }
+            } footer: {
+                if let footer {
+                    Text(footer)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        } else {
+            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                SectionHeader(title) { trailing }
+                content
+                if let footer {
+                    Text(footer)
+                        .typeface(.callout)
+                        .foregroundStyle(.inkTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 4)
+                        .padding(.top, 2)
+                }
             }
         }
     }
@@ -185,84 +170,44 @@ struct RadioDot: View {
     }
 }
 
-/// Compact menu that looks like a secondary capsule: "Never ⌃⌄".
+/// A pop-up of choices: the system's menu button, "Never ⌃⌄".
 struct HubMenuPicker<Value: Hashable>: View {
     var options: [Value]
     @Binding var selection: Value
     var label: (Value) -> String
 
     var body: some View {
-        Menu {
-            Picker(selection: $selection) {
-                ForEach(options, id: \.self) { option in
-                    Text(label(option)).tag(option)
-                }
-            } label: {
-                EmptyView()
+        Picker(selection: $selection) {
+            ForEach(options, id: \.self) { option in
+                Text(label(option)).tag(option)
             }
-            .pickerStyle(.inline)
-            .labelsHidden()
         } label: {
-            HStack(spacing: 6) {
-                Text(label(selection))
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(.inkTertiary)
-            }
+            EmptyView()
         }
-        .menuStyle(.button)
-        .menuIndicator(.hidden)
-        .buttonStyle(SecondaryButtonStyle(size: .small))
+        .pickerStyle(.menu)
+        .labelsHidden()
         .fixedSize()
     }
 }
 
-/// A few mutually exclusive choices in a sunken capsule; the chosen one sits raised on a white chip.
+/// A few mutually exclusive choices: the system's segmented control.
 struct HubSegmentedPicker<Value: Hashable>: View {
     var options: [Value]
     var selection: Value
     var label: (Value) -> String
     var onPick: (Value) -> Void
-    @Namespace private var chip
-    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        HStack(spacing: 2) {
+        Picker(selection: Binding(get: { selection }, set: { onPick($0) })) {
             ForEach(options, id: \.self) { option in
-                segment(option)
+                Text(label(option)).tag(option)
             }
-        }
-        .padding(2)
-        .background(Color.bgSunken, in: Capsule(style: .continuous))
-        .overlay { Capsule(style: .continuous).ring(1).fill(Color.stroke, style: FillStyle(eoFill: true)) }
-        .fixedSize()
-        .accessibilityElement(children: .contain)
-    }
-
-    private func segment(_ option: Value) -> some View {
-        let selected = option == selection
-        return Button {
-            withAnimation(Theme.Motion.snappy) { onPick(option) }
         } label: {
-            Text(label(option))
-                .font(.system(size: 12, weight: selected ? .semibold : .medium))
-                .foregroundStyle(selected ? Color.ink : Color.inkSecondary)
-                .lineLimit(1)
-                .padding(.horizontal, 11)
-                .frame(height: Theme.Metrics.smallButtonHeight - 4)
-                .background {
-                    if selected {
-                        Capsule(style: .continuous)
-                            .fill(HubPalette.sidebarSelection)
-                            .overlay { Capsule(style: .continuous).strokeBorder(Color.stroke, lineWidth: scheme == .dark ? 1 : 0) }
-                            .shadow(color: .black.opacity(scheme == .dark ? 0.3 : 0.08), radius: 1.5, y: 1)
-                            .matchedGeometryEffect(id: "chip", in: chip)
-                    }
-                }
-                .contentShape(Capsule())
+            EmptyView()
         }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
     }
 }
 
@@ -743,8 +688,14 @@ private enum AppIconSource {
 struct RowHighlight: View {
     var isSelected: Bool
     var isHovering: Bool
+    @Environment(\.inNativeForm) private var inNativeForm
 
+    /// In a form the row is the form's own, which marks nothing: the row's radio or check says what's picked.
     var body: some View {
+        if !inNativeForm { highlight }
+    }
+
+    private var highlight: some View {
         RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
             .fill(isSelected ? Color.accentSoft.opacity(0.7) : (isHovering ? Color.hover : .clear))
             .padding(4)

@@ -52,11 +52,10 @@ struct DictionaryPage: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 } else {
-                    VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                        ForEach(sections) { section in
-                            if !isSearching || !section.words.isEmpty {
-                                DictionarySection(model: section, renaming: $renaming)
-                            }
+                    // A row each in the form, with its separator.
+                    ForEach(sections) { section in
+                        if !isSearching || !section.words.isEmpty {
+                            DictionarySection(model: section, renaming: $renaming)
                         }
                     }
                 }
@@ -122,6 +121,7 @@ struct DictionaryPage: View {
                         .foregroundStyle(.inkTertiary)
                     TextField("", text: $draft)
                         .textFieldStyle(.plain)
+                        .labelsHidden()
                         .fieldPlaceholder("A word, a name or a term", isShown: draft.isEmpty)
                         .font(.system(size: 13))
                         .foregroundStyle(.ink)
@@ -286,6 +286,7 @@ struct DictionarySection: View {
                     .accessibilityHidden(true)
                 TextField("", text: $name)
                     .textFieldStyle(.plain)
+                    .labelsHidden()
                     .fieldPlaceholder("Group name", isShown: name.isEmpty)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.ink)

@@ -4,10 +4,17 @@ import SwiftUI
 
 // MARK: - Card
 
+extension EnvironmentValues {
+    /// The view is inside a native grouped `Form` (a Hub page, `HubPage`): the form draws the rounded sections, their
+    /// separators and their insets, so cards, groups and rows leave theirs out.
+    @Entry var inNativeForm = false
+}
+
 struct Card<Content: View>: View {
     var padding: CGFloat
     var elevated: Bool
     @ViewBuilder var content: Content
+    @Environment(\.inNativeForm) private var inNativeForm
 
     init(padding: CGFloat = Theme.Spacing.cardPadding, elevated: Bool = false, @ViewBuilder content: () -> Content) {
         self.padding = padding
@@ -16,14 +23,20 @@ struct Card<Content: View>: View {
     }
 
     var body: some View {
+        if inNativeForm {
+            // A row of the form's section: the section is the card.
+            content
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            card
+        }
+    }
+
+    private var card: some View {
         content
             .padding(padding)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.bgSurface, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
-                    .strokeBorder(.stroke, lineWidth: Theme.Metrics.hairline)
-            }
+            .background(Color.sectionFill, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
             .cardShadow(elevated: elevated)
     }
 }
@@ -50,11 +63,7 @@ private struct CardSegment: ViewModifier {
             .background {
                 // `clipped()` only clips drawing: without this, the band's hidden run-on past the row would take
                 // the clicks and hovers of the rows it reaches under.
-                band { shape.fill(.bgSurface).cardShadow() }
-                    .allowsHitTesting(false)
-            }
-            .overlay {
-                band { shape.strokeBorder(.stroke, lineWidth: Theme.Metrics.hairline) }
+                band { shape.fill(Color.sectionFill) }
                     .allowsHitTesting(false)
             }
     }
@@ -80,12 +89,24 @@ private struct CardSegment: ViewModifier {
 /// Rows separated by inset hairlines inside one card (System Settings-style group).
 struct SettingsGroup<Content: View>: View {
     @ViewBuilder var content: Content
+    @Environment(\.inNativeForm) private var inNativeForm
 
     init(@ViewBuilder content: () -> Content) {
         self.content = content()
     }
 
     var body: some View {
+        if inNativeForm {
+            // Each row a row of the form's section, with the form's own separators. Handed over as they are: rows
+            // re-made from `Group(subviews:)` carry ids that repeat from one section to the next, and the form mixed
+            // its sections up over them.
+            content
+        } else {
+            card
+        }
+    }
+
+    private var card: some View {
         Card(padding: 0) {
             Group(subviews: content) { subviews in
                 VStack(spacing: 0) {
@@ -291,231 +312,112 @@ enum ButtonSize {
     }
 }
 
-/// Ink capsule, 32 pt: the one primary action on a surface (black on light, white on dark).
-struct PrimaryButtonStyle: ButtonStyle {
+// The app's buttons are the system's (Liquid Glass on macOS 26): these styles only pick which, and at what size, so
+// call sites keep naming a role (primary, secondary, quiet, icon) rather than a look.
+
+extension ButtonSize {
+    var controlSize: ControlSize {
+        switch self {
+        case .small: .small
+        case .regular: .regular
+        case .large: .large
+        }
+    }
+}
+
+/// The one primary action on a surface: the system's prominent button, in the accent color (or `tint`).
+struct PrimaryButtonStyle: PrimitiveButtonStyle {
     var size: ButtonSize = .regular
     var fullWidth = false
-    var tint: Color = .accentFill
+    var tint: Color?
 
     func makeBody(configuration: Configuration) -> some View {
-        PrimaryButtonBody(configuration: configuration, size: size, fullWidth: fullWidth, tint: tint)
+        Button(role: configuration.role, action: configuration.trigger) {
+            configuration.label
+                .lineLimit(1)
+                .frame(maxWidth: fullWidth ? .infinity : nil)
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(size.controlSize)
+        .tint(tint)
     }
 }
 
-private struct PrimaryButtonBody: View {
-    let configuration: ButtonStyleConfiguration
-    let size: ButtonSize
-    let fullWidth: Bool
-    let tint: Color
-    @Environment(\.isEnabled) private var isEnabled
-    @Environment(\.colorScheme) private var scheme
-    @State private var hovering = false
-
-    var body: some View {
-        let pressed = configuration.isPressed
-        configuration.label
-            .font(size.font)
-            .foregroundStyle(.onAccent)
-            .lineLimit(1)
-            .padding(.horizontal, size.horizontalPadding)
-            .frame(maxWidth: fullWidth ? .infinity : nil)
-            .frame(height: size.height)
-            .background {
-                Capsule(style: .continuous)
-                    .fill(tint)
-                    .opacity(pressed ? 0.8 : (hovering ? 0.88 : 1))
-            }
-            .shadow(color: .black.opacity(scheme == .dark ? 0.3 : 0.08), radius: 1, x: 0, y: 1)
-            .scaleEffect(pressed ? 0.975 : 1)
-            .opacity(isEnabled ? 1 : 0.45)
-            .contentShape(Capsule())
-            .onSettledHover { hovering = $0 }
-            .animation(Theme.Motion.hover, value: hovering)
-            .animation(Theme.Motion.hover, value: pressed)
-    }
-}
-
-/// Quiet capsule on the surface color with a hairline edge.
-struct SecondaryButtonStyle: ButtonStyle {
+/// A plain push button; `isDestructive` in red.
+struct SecondaryButtonStyle: PrimitiveButtonStyle {
     var size: ButtonSize = .regular
     var fullWidth = false
     var isDestructive = false
 
     func makeBody(configuration: Configuration) -> some View {
-        SecondaryButtonBody(configuration: configuration, size: size, fullWidth: fullWidth, isDestructive: isDestructive)
+        Button(role: configuration.role, action: configuration.trigger) {
+            configuration.label
+                .lineLimit(1)
+                .foregroundStyle(isDestructive ? Color.red : Color.primary)
+                .frame(maxWidth: fullWidth ? .infinity : nil)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(size.controlSize)
     }
 }
 
-private struct SecondaryButtonBody: View {
-    let configuration: ButtonStyleConfiguration
-    let size: ButtonSize
-    let fullWidth: Bool
-    let isDestructive: Bool
-    @Environment(\.isEnabled) private var isEnabled
-    @Environment(\.colorScheme) private var scheme
-    @State private var hovering = false
-
-    var body: some View {
-        let pressed = configuration.isPressed
-        configuration.label
-            .font(size.font.weight(.medium))
-            .foregroundStyle(isDestructive ? Color.danger : Color.ink)
-            .lineLimit(1)
-            .padding(.horizontal, size.horizontalPadding)
-            .frame(maxWidth: fullWidth ? .infinity : nil)
-            .frame(height: size.height)
-            .background {
-                Capsule(style: .continuous)
-                    .fill(scheme == .dark ? Color.white.opacity(0.07) : Color.bgSurface)
-                    .overlay { Capsule(style: .continuous).fill(pressed ? Color.pressed : (hovering ? Color.hover : .clear)) }
-                    .overlay { Capsule(style: .continuous).ring(1).fill(Color.strokeStrong, style: FillStyle(eoFill: true)) }
-            }
-            .shadow(color: .black.opacity(scheme == .dark ? 0 : 0.04), radius: 1, x: 0, y: 1)
-            .scaleEffect(pressed ? 0.98 : 1)
-            .opacity(isEnabled ? 1 : 0.45)
-            .contentShape(Capsule())
-            .onSettledHover { hovering = $0 }
-            .animation(Theme.Motion.hover, value: hovering)
-            .animation(Theme.Motion.hover, value: pressed)
-    }
-}
-
-/// Text-only action ("Skip for now"): tinted label, hover wash.
-struct QuietButtonStyle: ButtonStyle {
-    var tint: Color = .accent
+/// Text-only action ("Skip for now"): a borderless button in `tint`.
+struct QuietButtonStyle: PrimitiveButtonStyle {
+    var tint: Color = .accentColor
     var size: ButtonSize = .small
 
     func makeBody(configuration: Configuration) -> some View {
-        QuietButtonBody(configuration: configuration, tint: tint, size: size)
+        Button(role: configuration.role, action: configuration.trigger) {
+            configuration.label
+                .foregroundStyle(tint)
+        }
+        .buttonStyle(.borderless)
+        .controlSize(size.controlSize)
     }
 }
 
-private struct QuietButtonBody: View {
-    let configuration: ButtonStyleConfiguration
-    let tint: Color
-    let size: ButtonSize
-    @Environment(\.isEnabled) private var isEnabled
-    @State private var hovering = false
-
-    var body: some View {
-        configuration.label
-            .font(size.font.weight(.medium))
-            .foregroundStyle(tint)
-            .padding(.horizontal, 8)
-            .frame(height: size.height)
-            .background {
-                RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
-                    .fill(configuration.isPressed ? Color.pressed : (hovering ? Color.hover : .clear))
-            }
-            .opacity(isEnabled ? (configuration.isPressed ? 0.8 : 1) : 0.45)
-            .contentShape(Rectangle())
-            .onSettledHover { hovering = $0 }
-            .animation(Theme.Motion.hover, value: hovering)
-    }
-}
-
-/// Square icon button (toolbar, row actions): quiet until hovered.
-struct IconButtonStyle: ButtonStyle {
+/// Square icon button (row actions): borderless, `size` points square. `isActive`: in the accent color.
+struct IconButtonStyle: PrimitiveButtonStyle {
     var size: CGFloat = 28
-    var tint: Color = .inkSecondary
+    var tint: Color = .secondary
     var isActive = false
 
     func makeBody(configuration: Configuration) -> some View {
-        IconButtonBody(configuration: configuration, size: size, tint: tint, isActive: isActive)
+        Button(role: configuration.role, action: configuration.trigger) {
+            configuration.label
+                .font(.system(size: size * 0.46, weight: .medium))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(isActive ? Color.accentColor : tint)
+                .frame(width: size, height: size)
+                .contentShape(RoundedRectangle(cornerRadius: size / 3, style: .continuous))
+        }
+        .buttonStyle(.borderless)
     }
 }
 
-private struct IconButtonBody: View {
-    let configuration: ButtonStyleConfiguration
-    let size: CGFloat
-    let tint: Color
-    let isActive: Bool
-    @Environment(\.isEnabled) private var isEnabled
-    @State private var hovering = false
-
-    var body: some View {
-        let pressed = configuration.isPressed
-        configuration.label
-            .font(.system(size: size * 0.46, weight: .medium))
-            .symbolRenderingMode(.hierarchical)
-            .foregroundStyle(isActive ? Color.accent : (hovering ? Color.ink : tint))
-            .frame(width: size, height: size)
-            .background {
-                RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
-                    .fill(isActive ? Color.accentSoft : (pressed ? Color.pressed : (hovering ? Color.hover : .clear)))
-            }
-            .opacity(isEnabled ? 1 : 0.4)
-            .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous))
-            .onSettledHover { hovering = $0 }
-            .animation(Theme.Motion.hover, value: hovering)
-    }
-}
-
-extension ButtonStyle where Self == PrimaryButtonStyle {
+extension PrimitiveButtonStyle where Self == PrimaryButtonStyle {
     static var appPrimary: PrimaryButtonStyle { PrimaryButtonStyle() }
 }
 
-extension ButtonStyle where Self == SecondaryButtonStyle {
+extension PrimitiveButtonStyle where Self == SecondaryButtonStyle {
     static var appSecondary: SecondaryButtonStyle { SecondaryButtonStyle() }
 }
 
-extension ButtonStyle where Self == QuietButtonStyle {
+extension PrimitiveButtonStyle where Self == QuietButtonStyle {
     static var appQuiet: QuietButtonStyle { QuietButtonStyle() }
 }
 
-extension ButtonStyle where Self == IconButtonStyle {
+extension PrimitiveButtonStyle where Self == IconButtonStyle {
     static var appIcon: IconButtonStyle { IconButtonStyle() }
 }
 
 // MARK: - Switch
 
-/// Ink switch drawn in SwiftUI, so it looks identical in windows and offscreen snapshots: on, a black track with a
-/// white knob on light, a white track with a black knob on dark.
+/// The system's switch.
 struct AppSwitchStyle: ToggleStyle {
-    var width: CGFloat = 34
-    var height: CGFloat = 20
-
     func makeBody(configuration: Configuration) -> some View {
-        AppSwitch(configuration: configuration, width: width, height: height)
-    }
-}
-
-private struct AppSwitch: View {
-    let configuration: ToggleStyleConfiguration
-    let width: CGFloat
-    let height: CGFloat
-    @Environment(\.isEnabled) private var isEnabled
-    @Environment(\.colorScheme) private var scheme
-
-    var body: some View {
-        let on = configuration.isOn
-        let inset: CGFloat = 2
-        let knob = height - inset * 2
-        HStack(spacing: Theme.Spacing.xs) {
-            configuration.label
-            ZStack(alignment: on ? .trailing : .leading) {
-                Capsule(style: .continuous)
-                    .fill(on ? Color.accentFill : (scheme == .dark ? Color.white.opacity(0.16) : Color.ink.opacity(0.13)))
-                Capsule(style: .continuous).ring(0.5)
-                    .fill(Color.black.opacity(on ? 0.06 : 0.04), style: FillStyle(eoFill: true))
-                Circle()
-                    .fill(on && scheme == .dark ? Color(nsColor: .hex(0x111111)) : .white)
-                    .shadow(color: .black.opacity(0.22), radius: 1, x: 0, y: 0.5)
-                    .shadow(color: .black.opacity(0.10), radius: 3, x: 0, y: 1.5)
-                    .frame(width: knob, height: knob)
-                    .padding(inset)
-            }
-            .frame(width: width, height: height)
-            .contentShape(Capsule())
-            .onTapGesture {
-                withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) { configuration.isOn.toggle() }
-            }
-        }
-        .opacity(isEnabled ? 1 : 0.45)
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isToggle)
-        .accessibilityValue(on ? "On" : "Off")
-        .accessibilityAction { configuration.isOn.toggle() }
+        Toggle(configuration)
+            .toggleStyle(.switch)
     }
 }
 
@@ -753,6 +655,7 @@ struct SettingsRow<Trailing: View>: View {
     var systemImage: String?
     var iconTint: Color = .accent
     @ViewBuilder var trailing: Trailing
+    @Environment(\.inNativeForm) private var inNativeForm
 
     init(title: String, subtitle: String? = nil, systemImage: String? = nil, iconTint: Color = .accent,
          @ViewBuilder trailing: () -> Trailing) {
@@ -786,9 +689,10 @@ struct SettingsRow<Trailing: View>: View {
             Spacer(minLength: Theme.Spacing.md)
             trailing
         }
-        .padding(.horizontal, Theme.Spacing.md)
-        .padding(.vertical, Theme.Spacing.sm)
-        .frame(minHeight: 48)
+        // In a form, the form's row insets.
+        .padding(.horizontal, inNativeForm ? 0 : Theme.Spacing.md)
+        .padding(.vertical, inNativeForm ? 2 : Theme.Spacing.sm)
+        .frame(minHeight: inNativeForm ? 0 : 48)
     }
 }
 

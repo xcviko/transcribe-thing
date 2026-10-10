@@ -20,10 +20,10 @@ struct GeneralPage: View {
     var body: some View {
         @Bindable var settings = settings
         HubPage("General") {
-            HubGroup("Updates") {
-                SettingsGroup {
-                    SoftwareUpdateRow()
-                }
+            // As System Settings → General opens: what this app is, then Software Update.
+            Section {
+                AboutCard()
+                SoftwareUpdateRow()
             }
             HubGroup("Startup") {
                 SettingsGroup {
@@ -129,9 +129,6 @@ struct GeneralPage: View {
                 SettingsGroup {
                     LogsRow()
                 }
-            }
-            HubGroup("About") {
-                AboutCard()
             }
         }
         // Approval in Login Items (or removal there) happens outside transcribe-thing.
@@ -256,30 +253,33 @@ struct GeneralPage: View {
 private struct SoftwareUpdateRow: View {
     @Environment(HubContext.self) private var hub
     @Environment(UpdateCenter.self) private var updates
-    @State private var hovering = false
 
+    /// A row that opens a pane, as System Settings' do: the whole row and its chevron. Not a Button around the row,
+    /// which a form draws as a control of its own.
     var body: some View {
-        Button {
-            hub.show(.softwareUpdate)
-        } label: {
-            SettingsRow(title: "Software Update", subtitle: UpdateFormat.summary(updates, now: hub.now),
-                        systemImage: HubSection.softwareUpdate.symbolName,
-                        iconTint: updates.showsBadge ? .accent : .inkSecondary) {
-                HStack(spacing: 8) {
-                    if updates.showsBadge {
-                        CountBadge(count: 1)
-                    }
+        SettingsRow(title: "Software Update", subtitle: UpdateFormat.summary(updates, now: hub.now),
+                    systemImage: HubSection.softwareUpdate.symbolName,
+                    iconTint: updates.showsBadge ? .accent : .inkSecondary) {
+            HStack(spacing: 8) {
+                if updates.showsBadge {
+                    CountBadge(count: 1)
+                }
+                Button {
+                    hub.show(.softwareUpdate)
+                } label: {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.inkTertiary)
+                        .foregroundStyle(.tertiary)
                 }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Open Software Update")
             }
-            .background { RowHighlight(isSelected: false, isHovering: hovering) }
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .accessibilityLabel("Software Update, \(UpdateFormat.summary(updates, now: hub.now))")
+        .background {
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture { hub.show(.softwareUpdate) }
+        }
     }
 }
 

@@ -49,6 +49,25 @@ struct HomePage: View {
         // Rows passing under a resting pointer don't light up one after another while the page moves.
         .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, _ in hoverGate.scrolled() }
         .environment(\.scrollHoverGate, hoverGate)
+        // The window's own search field and the file button, in the toolbar as Finder has them.
+        .searchable(text: $query, placement: .toolbar, prompt: "Search transcripts")
+        .searchFocused($searchFocused)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button(action: pickFiles) {
+                    Label("Transcribe a File…", systemImage: "arrow.down.doc")
+                }
+                .keyboardShortcut("o", modifiers: .command)
+                .help("Transcribe a File… (⌘O)")
+            }
+        }
+        .background {
+            Button("Search") { searchFocused = true }
+                .keyboardShortcut("f", modifiers: .command)
+                .opacity(0)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        }
         .overlay { if showsDropTarget { DropTarget() } }
         .overlay(alignment: .bottom) { undoBar }
         .overlay(alignment: .bottom) { readingBar }
@@ -92,23 +111,7 @@ struct HomePage: View {
                     .minimumScaleFactor(0.8)
                     .accessibilityAddTraits(.isHeader)
             }
-            Spacer(minLength: Theme.Spacing.md)
-            Button(action: pickFiles) {
-                Image(systemName: "arrow.down.doc")
-            }
-            .buttonStyle(IconButtonStyle(size: 28))
-            .keyboardShortcut("o", modifiers: .command)
-            .help("Transcribe a File… (⌘O)")
-            .accessibilityLabel("Transcribe a File")
-            HubSearchField(text: $query, prompt: "Search transcripts", focused: $searchFocused)
-                .frame(width: 220)
-                .background {
-                    Button("Search") { searchFocused = true }
-                        .keyboardShortcut("f", modifiers: .command)
-                        .opacity(0)
-                        .frame(width: 0, height: 0)
-                        .accessibilityHidden(true)
-                }
+            Spacer(minLength: 0)
         }
     }
 
@@ -457,11 +460,7 @@ private struct StatTile<Accessory: View>: View {
         .padding(.top, 12)
         .padding(.bottom, 12)
         .frame(maxWidth: .infinity, minHeight: 76, maxHeight: 76, alignment: .leading)
-        .background(Color.bgSurface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.stroke, lineWidth: 1)
-        }
-        .cardShadow()
+        .background(Color.sectionFill, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
         .help(help ?? "")
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label)

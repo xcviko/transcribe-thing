@@ -448,10 +448,10 @@ private struct FooterNote: View {
 }
 
 /// Type-erased button style so the local card can swap primary/secondary without duplicating the button.
-struct AnyButtonStyle: ButtonStyle {
+struct AnyButtonStyle: PrimitiveButtonStyle {
     private let make: (Configuration) -> AnyView
 
-    init<S: ButtonStyle>(_ style: S) {
+    init<S: PrimitiveButtonStyle>(_ style: S) {
         make = { AnyView(style.makeBody(configuration: $0)) }
     }
 

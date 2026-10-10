@@ -11,7 +11,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     static let onboardingSize = CGSize(width: 820, height: 600)
 
     /// Selected Hub page; HubView binds to it so `showHub(_:)` can switch pages of an open window.
-    var hubSection: HubSection = .home
+    var hubSection: HubSection = .home {
+        // The toolbar names the page, as System Settings' does.
+        didSet { hubWindow?.title = hubSection.title }
+    }
 
     @ObservationIgnored weak var environment: AppEnvironment?
     @ObservationIgnored private let settings: AppSettings
@@ -82,10 +85,11 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             .appTheme()
         let hosting = NSHostingController(rootView: root)
         hosting.sizingOptions = [.minSize]
+        // The page's title and its tools (search, Transcribe a File…, Back) go into the window's toolbar.
+        hosting.sceneBridgingOptions = [.toolbars, .title]
         let window = NSWindow(contentViewController: hosting)
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
-        window.title = "transcribe-thing"
-        window.titlebarAppearsTransparent = true
+        window.title = hubSection.title
         window.toolbarStyle = .unified
         window.isReleasedWhenClosed = false
         window.contentMinSize = Self.hubMinimumSize

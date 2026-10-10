@@ -65,8 +65,9 @@ final class HubContext: Observable {
 
     var now: Date { fixedNow ?? Date() }
 
+    /// Picks a page: it's there at once, as a pane in System Settings is.
     func show(_ section: HubSection) {
-        withAnimation(Theme.Motion.snappy) { windows.hubSection = section }
+        windows.hubSection = section
     }
 
     func copy(_ text: String) {
@@ -156,35 +157,18 @@ private struct HubRoot: View {
     @Environment(HubContext.self) private var hub
     @Environment(WindowCoordinator.self) private var windows
 
+    /// The window as macOS draws its own (Finder, System Settings): a sidebar of Liquid Glass with the pages, and the
+    /// page's title and tools in the toolbar. A page shows at once when picked, as theirs do: no fade between pages.
     var body: some View {
-        HStack(spacing: 0) {
+        NavigationSplitView {
             HubSidebar()
-                .frame(width: HubLayout.sidebarWidth)
-            Rectangle()
-                .fill(Color.stroke)
-                .frame(width: 1)
-            VStack(spacing: 0) {
-                // Transparent titlebar band: keeps page content clear of it and stays draggable.
-                Color.clear.frame(height: HubLayout.titlebar)
-                page(windows.hubSection)
-                    .id(windows.hubSection)
-                    .transition(.opacity)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    .overlay(alignment: .top) {
-                        // Content softens as it scrolls under the titlebar band instead of being cut off.
-                        LinearGradient(colors: [Color.bgCanvas, Color.bgCanvas.opacity(0)], startPoint: .top, endPoint: .bottom)
-                            .frame(height: 8)
-                            .allowsHitTesting(false)
-                    }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.bgCanvas)
+                .navigationSplitViewColumnWidth(min: 190, ideal: HubLayout.sidebarWidth, max: 280)
+        } detail: {
+            page(windows.hubSection)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .navigationTitle(windows.hubSection.title)
         }
-        .animation(Theme.Motion.fade, value: windows.hubSection)
-        .background(Color.bgCanvas)
-        .ignoresSafeArea()
         .frame(minWidth: 820, minHeight: 560)
-        .background(HubWindowChrome())
         .overlay(alignment: .topLeading) {
             if hub.drawsWindowControls { PreviewTrafficLights() }
         }
@@ -207,142 +191,63 @@ private struct HubRoot: View {
 
 // MARK: - Sidebar
 
+/// The pages, as a source list: Home, then Settings. Software Update keeps General selected, and an update waiting
+/// (with reminders on) puts a count on General, as System Settings does. ⌘1…⌘N follow `HubSection.sidebar`.
 private struct HubSidebar: View {
     @Environment(HubContext.self) private var hub
     @Environment(WindowCoordinator.self) private var windows
-    @Environment(AppSettings.self) private var settings
-    @Environment(ModelStore.self) private var models
-    @Environment(OpenRouterAccount.self) private var account
     @Environment(UpdateCenter.self) private var updates
-    @Namespace private var selection
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Room for the traffic lights.
-            Color.clear.frame(height: 40)
-            HStack(spacing: 9) {
-                AppIconMark(size: 22)
-                Text(Brand.name)
-                    .font(.system(size: 17, weight: .semibold, design: .serif))
-                    .tracking(-0.2)
-                    .foregroundStyle(.ink)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-            }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 18)
-
-            VStack(alignment: .leading, spacing: 2) {
-                item(.home)
-                Text("SETTINGS")
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .tracking(0.6)
-                    .foregroundStyle(.inkTertiary)
-                    .padding(.horizontal, 10)
-                    .padding(.top, 16)
-                    .padding(.bottom, 4)
+        List(selection: selection) {
+            row(.home)
+            Section("Settings") {
                 ForEach(HubSection.sidebar.filter { $0 != .home }) { section in
-                    item(section)
+                    row(section)
                 }
             }
-            .padding(.horizontal, 10)
-
-            Spacer(minLength: 16)
-
-            footer
-                .padding(.horizontal, 12)
-                .padding(.bottom, 14)
         }
-        .frame(maxHeight: .infinity, alignment: .top)
-        .background(HubPalette.sidebar)
-    }
-
-    /// ⌘1…⌘N follow `HubSection.sidebar`. Software Update keeps General selected, and an update waiting
-    /// (with reminders on) puts a red count on General, as System Settings does.
-    private func item(_ section: HubSection) -> some View {
-        SidebarItem(section: section, isSelected: windows.hubSection.sidebarItem == section,
-                    badge: section == .general && updates.showsBadge ? 1 : nil, namespace: selection) {
-            hub.show(section)
+        .listStyle(.sidebar)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            // Just the version: the main model and how it's doing are in Models, and a problem with it is on Home.
+            Text(hub.versionLine)
+                .font(.footnote)
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 12)
         }
-        .keyboardShortcut(section.shortcutDigit.map { KeyboardShortcut(KeyEquivalent($0), modifiers: .command) })
+        .background { shortcuts }
     }
 
-    /// Just the version: the main model and how it's doing are in Models, and a problem with it is on Home.
-    private var footer: some View {
-        Text(hub.versionLine)
-            .font(.system(size: 11))
-            .foregroundStyle(.inkTertiary)
-            .padding(.horizontal, 6)
+    private var selection: Binding<HubSection?> {
+        let hub = hub, windows = windows
+        return Binding(get: { windows.hubSection.sidebarItem }, set: { section in
+            if let section, section != windows.hubSection.sidebarItem { hub.show(section) }
+        })
     }
-}
 
-private struct SidebarItem: View {
-    var section: HubSection
-    var isSelected: Bool
-    var badge: Int?
-    var namespace: Namespace.ID
-    var action: () -> Void
-    @State private var hovering = false
-    @Environment(\.colorScheme) private var scheme
+    private func row(_ section: HubSection) -> some View {
+        Label(section.title, systemImage: section.symbolName)
+            .badge(section == .general && updates.showsBadge ? 1 : 0)
+            .tag(section)
+            .accessibilityLabel(section == .general && updates.showsBadge ? "\(section.title), update available"
+                                    : section.title)
+    }
 
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 9) {
-                Image(systemName: section.symbolName)
-                    .symbolVariant(isSelected ? .fill : .none)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(isSelected ? Color.accent : Color.inkSecondary)
-                    .frame(width: 20)
-                Text(section.title)
-                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
-                    .foregroundStyle(Color.ink)
-                Spacer(minLength: 0)
-                if let badge {
-                    CountBadge(count: badge)
-                        .transition(.scale.combined(with: .opacity))
+    /// ⌘1…⌘N: a page each, as the sidebar lists them.
+    private var shortcuts: some View {
+        ZStack {
+            ForEach(HubSection.sidebar) { section in
+                if let digit = section.shortcutDigit {
+                    Button(section.title) { hub.show(section) }
+                        .keyboardShortcut(KeyEquivalent(digit), modifiers: .command)
                 }
             }
-            .padding(.horizontal, 10)
-            .frame(height: 30)
-            .background {
-                if isSelected {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(HubPalette.sidebarSelection)
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .strokeBorder(Color.stroke, lineWidth: 1)
-                        }
-                        .shadow(color: .black.opacity(scheme == .dark ? 0.3 : 0.05), radius: 1.5, y: 1)
-                        .matchedGeometryEffect(id: "selection", in: namespace)
-                } else if hovering {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.hover)
-                }
-            }
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .animation(Theme.Motion.hover, value: hovering)
-        .animation(Theme.Motion.snappy, value: badge)
-        .accessibilityLabel(badge == nil ? section.title : "\(section.title), update available")
-        .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
-    }
-}
-
-// MARK: - Window chrome
-
-/// Hides the window title (the sidebar carries the name) once the view is in its window.
-private struct HubWindowChrome: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView { ChromeView() }
-    func updateNSView(_ nsView: NSView, context: Context) {}
-
-    private final class ChromeView: NSView {
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            guard let window, window.styleMask.contains(.titled) else { return }
-            window.titleVisibility = .hidden
-            window.titlebarAppearsTransparent = true
-        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
     }
 }
 
