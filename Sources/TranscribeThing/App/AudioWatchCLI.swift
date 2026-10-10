@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import CoreAudio
 import Foundation
 
@@ -11,8 +12,14 @@ import Foundation
 /// `CALL STARTED` once that has lasted `--call-after` seconds (default 20), `CALL MIC RELEASED` and `CALL MIC BACK`
 /// around a mute the app shows, and `CALL ENDED` once it has been silent for `--end-after` seconds (default 60) or
 /// the probe stops. It polls the HAL twice a second and also listens for its change notifications, printing
-/// `listener:` when one arrives, to show whether they can be relied on. It only reads: no recording, no settings,
-/// no network.
+/// `listener:` when one arrives, to show whether they can be relied on.
+///
+/// While a call is suspected or on, it also reads the app's own mute control through Accessibility once a second
+/// (`CallMuteReader`) and prints `MUTE` when that changes; for a browser, `TAB` says which tab holds the call. When
+/// mute can't be read, `AX DUMP` lists the app's buttons, to learn its labels from. That needs the Accessibility
+/// permission, which the installed app has and a `swift build` binary doesn't; without it these lines are left out.
+/// It only reads: no recording, no settings, no network. The one thing it changes is asking an Electron app or a
+/// browser in a call for its web Accessibility tree, turned back off when the call is over.
 enum AudioWatchCLI {
     static func handles(_ arguments: [String]) -> Bool {
         arguments.contains("--audio-watch")
@@ -70,6 +77,21 @@ private final class AudioWatch {
     private var suspectedAt: TimeInterval?
     private var deviceInUse: [AudioDeviceID: Bool] = [:]
     private var timer: DispatchSourceTimer?
+    private let accessibility = AXIsProcessTrusted()
+    private let muteReader = CallMuteReader()
+    private let muteQueue = DispatchQueue(label: "dev.transcribe-thing.audio-watch.mute")
+    private var mute = MuteWatch()
+
+    /// The app whose mute is read, and what was last printed for it.
+    private struct MuteWatch {
+        var app: CallApp?
+        var reading = false
+        var lastRead: Date?
+        var lastKnown = false
+        var tabLine: String?
+        var muteLine: String?
+        var dump: (lines: [String], at: Date)?
+    }
 
     init(settings: CallDetector.Settings) {
         detector = CallDetector(settings: settings)
@@ -80,6 +102,7 @@ private final class AudioWatch {
         print("AUDIO WATCH: polling every 0.5 s plus HAL notifications · a call after \(Int(settings.confirmAfter)) s of "
               + "one app's mic and sound together, over after \(Int(settings.endAfter)) s of silence")
         print("Ctrl-C to stop. pid \(getpid()) is this probe and is left out.")
+        if !accessibility { print("AX: no Accessibility permission (run the installed app's binary)") }
         listeners.add(CoreAudioHAL.systemObject, kAudioHardwarePropertyProcessObjectList) { [weak self] in
             MainActor.assumeIsolated { self?.poll(listener: "process list changed") }
         }
@@ -96,6 +119,8 @@ private final class AudioWatch {
         listeners.invalidate()
         let now = Date()
         report(detector.stop(at: now.timeIntervalSince(started)))
+        let reader = muteReader
+        muteQueue.sync { reader.release() }
         for activity in activities.values.sorted(by: { $0.name < $1.name }) {
             if let since = activity.input { line("\(activity.name): still on mic for \(span(since, now))") }
             if let since = activity.output { line("\(activity.name): still playing sound for \(span(since, now))") }
@@ -127,6 +152,75 @@ private final class AudioWatch {
         for pid in apps.keys where !seen.contains(pid) { apps[pid] = nil }
         report(detector.feed(CallApp.activity(processes), at: now.timeIntervalSince(started)))
         pollDevices()
+        readMute(at: now)
+    }
+
+    // MARK: Mute
+
+    /// Reads the followed app's mute control on the reader's queue: once a second while it's known, every 3 s while
+    /// it isn't (the walk that looks for it costs the app more), never two reads at once.
+    private func readMute(at now: Date) {
+        guard accessibility else { return }
+        let app: CallApp? = switch detector.phase {
+        case .idle: nil
+        case .suspected(let app, _): app
+        case .call(let call): call.app
+        }
+        if app != mute.app {
+            if mute.app != nil {
+                let reader = muteReader
+                muteQueue.async { reader.release() }
+            }
+            mute = MuteWatch(app: app)
+        }
+        guard let app, !mute.reading,
+              now.timeIntervalSince(mute.lastRead ?? .distantPast) >= (mute.lastKnown ? 1 : 3) else { return }
+        mute.reading = true
+        mute.lastRead = now
+        let pids = NSRunningApplication.runningApplications(withBundleIdentifier: app.id).map(\.processIdentifier)
+        let reader = muteReader
+        muteQueue.async {
+            let report = reader.read(app, pids: pids)
+            DispatchQueue.main.async { MainActor.assumeIsolated { self.show(report, for: app) } }
+        }
+    }
+
+    private func show(_ report: CallMuteReader.Report, for app: CallApp) {
+        guard app == mute.app else { return }
+        mute.reading = false
+        mute.lastKnown = report.read.state.isKnown
+        var name = app.name
+        if report.isBrowser {
+            let tabLine = Self.tabLine(report, browser: name)
+            if tabLine != mute.tabLine { line(tabLine) }
+            mute.tabLine = tabLine
+            if let tab = report.tab {
+                name += " · \(tab.service?.name ?? "unknown service")\(tab.active ? "" : " (background tab)")"
+            }
+        }
+        let read = report.read
+        let inCall = read.inCall.map { $0 ? " · in call" : " · no Leave button" } ?? ""
+        let muteLine = "MUTE \(name): \(read.state)" + (read.detail.isEmpty ? "" : " (\(read.detail))") + inCall
+        if muteLine != mute.muteLine { line(muteLine) }
+        mute.muteLine = muteLine
+        // A dump again when the controls change, but at most every 10 s: some carry a timer or a count.
+        if let dump = report.dump, !dump.isEmpty, dump != mute.dump?.lines,
+           Date().timeIntervalSince(mute.dump?.at ?? .distantPast) >= 10 {
+            mute.dump = (dump, Date())
+            line("AX DUMP \(name), \(dump.count) controls (role, t= title, d= description, v= value, id=):")
+            for entry in dump { print("           " + entry) }
+        }
+    }
+
+    private static func tabLine(_ report: CallMuteReader.Report, browser: String) -> String {
+        guard let tab = report.tab else {
+            return "TAB \(browser): no tab records or is titled like a call (\(report.windowCount) windows)"
+        }
+        let window = "window \(tab.window + 1) of \(report.windowCount)"
+            + (tab.active ? "" : ", which shows \"\(CallLabels.safe(tab.windowTitle ?? "?", limit: 60))\"")
+        let what = tab.recording.map { "is recording (\(tab.active ? "active" : "background"), \($0.name))" }
+            ?? "looks like a call by its title, no recording mark (\(tab.active ? "active" : "background"))"
+        return "TAB \(browser): \"\(CallLabels.safe(tab.page))\" \(what) · \(tab.service?.name ?? "unknown service") · \(window)"
     }
 
     private func watch(_ object: AudioObjectID) {
