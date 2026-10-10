@@ -26,45 +26,42 @@ struct DictionaryPage: View {
                 }
                 tip
             }
-            // Ungrouped words lie straight on the page in the section's header (a form draws no background there),
-            // and the groups follow on the section's card, a row each.
-            Section {
+            HubGroup(wordsTitle) {
+                Button {
+                    withAnimation(Theme.Motion.snappy) { renaming = settings.dictionary.addGroup() }
+                } label: {
+                    Label("New Group", systemImage: "plus")
+                }
+                .buttonStyle(SecondaryButtonStyle(size: .small))
+            } content: {
+                if settings.dictionary.words.count >= Self.searchFrom {
+                    HubSearchField(text: $search, prompt: "Search the dictionary", focused: $searchFocused)
+                }
                 if settings.dictionary.words.isEmpty && settings.dictionary.groups.isEmpty {
-                    Text("No words yet")
-                        .typeface(.callout)
-                        .foregroundStyle(.inkSecondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Card(padding: Theme.Spacing.md) {
+                        Text("No words yet")
+                            .typeface(.callout)
+                            .foregroundStyle(.inkSecondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 } else if isSearching && sections.allSatisfy({ $0.words.isEmpty }) {
-                    Text("Nothing matches “\(search)”.")
-                        .typeface(.callout)
-                        .foregroundStyle(.inkSecondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
+                    Card(padding: Theme.Spacing.md) {
+                        Text("Nothing matches “\(search)”.")
+                            .typeface(.callout)
+                            .foregroundStyle(.inkSecondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                } else if let ungrouped = shownSections.first(where: { $0.group == nil }) {
+                    DictionarySection(model: ungrouped, renaming: $renaming)
+                }
+            }
+            // The groups on a card of their own under Ungrouped's, a row each.
+            if !groupSections.isEmpty {
+                Section {
                     ForEach(groupSections) { section in
                         DictionarySection(model: section, renaming: $renaming)
                     }
                 }
-            } header: {
-                VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(wordsTitle)
-                        Spacer(minLength: 8)
-                        Button {
-                            withAnimation(Theme.Motion.snappy) { renaming = settings.dictionary.addGroup() }
-                        } label: {
-                            Label("New Group", systemImage: "plus")
-                        }
-                        .buttonStyle(SecondaryButtonStyle(size: .small))
-                    }
-                    if settings.dictionary.words.count >= Self.searchFrom {
-                        HubSearchField(text: $search, prompt: "Search the dictionary", focused: $searchFocused)
-                    }
-                    if let ungrouped = shownUngrouped {
-                        DictionarySection(model: ungrouped, renaming: $renaming)
-                            .padding(.bottom, Theme.Spacing.xs)
-                    }
-                }
-                .textCase(nil)
             }
         }
         // Typing again clears what the last Add said (the field emptied by an Add keeps it).
@@ -89,13 +86,6 @@ struct DictionaryPage: View {
     /// The sections that show: every one, or those with words matching the search.
     private var shownSections: [DictionarySection.Model] {
         sections.filter { !isSearching || !$0.words.isEmpty }
-    }
-
-    /// Ungrouped's section when it has words to show (or is the only one).
-    private var shownUngrouped: DictionarySection.Model? {
-        let empty = settings.dictionary.words.isEmpty && settings.dictionary.groups.isEmpty
-        let noMatch = isSearching && sections.allSatisfy { $0.words.isEmpty }
-        return empty || noMatch ? nil : shownSections.first { $0.group == nil }
     }
 
     /// The groups' sections, unless there is nothing to show at all.
