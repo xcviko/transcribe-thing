@@ -517,8 +517,8 @@ private struct CallsEmptyState: View {
             Text("No calls yet")
                 .font(.system(size: 17, weight: .semibold, design: .serif))
                 .foregroundStyle(.ink)
-            Text("Calls in the \(CallsCopy.apps) apps, and in Google Meet and the others in your browser, are "
-                 + "recorded here, then transcribed with who said what.")
+            Text("Calls are recorded here, then transcribed with who said what. \(CallsCopy.whatIsACall) "
+                 + "Mute is followed in \(CallsCopy.muteFollowed).")
                 .font(.system(size: 13))
                 .foregroundStyle(.inkSecondary)
                 .multilineTextAlignment(.center)
@@ -538,7 +538,7 @@ private struct CallsEmptyState: View {
                               selection: $settings.callRecording, label: \.title)
             }
             .padding(.top, 4)
-            Text("Any other call: Start Call Recording in the menu bar records your mic and everything the Mac plays.")
+            Text("Anything else: Start Call Recording in the menu bar records your mic and everything the Mac plays.")
                 .font(.system(size: 12))
                 .foregroundStyle(.inkTertiary)
                 .multilineTextAlignment(.center)

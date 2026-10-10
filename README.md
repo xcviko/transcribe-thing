@@ -84,23 +84,36 @@ toward your words, speed or time saved.
 
 The app records your calls and transcribes them with who said what. They're in the Calls tab.
 
-Calls are noticed in the Telegram, Zoom, Discord, Slack and Telemost apps, and in Google Meet, Zoom, Discord, Telegram
-Web, Slack and Telemost in Chrome, Arc, Edge, Brave, Vivaldi, Opera, Yandex Browser, Safari and Firefox. For any other
-call, Start Call Recording in the menu bar records your mic and everything the Mac plays.
+A call is any app that uses your microphone and plays sound at the same time for 20 seconds: Zoom, Telegram, FaceTime,
+Teams, WhatsApp or anything else. Music and recording apps never count: GarageBand, Logic Pro, Ableton Live, OBS,
+QuickTime Player, Voice Memos, Simulator, Audio Hijack, Loopback, Final Cut Pro, DaVinci Resolve and Audacity.
 
-When a call starts, recording starts too, and the app asks "Transcribe your call in Google Meet?". Transcribe keeps it.
-Don't Keep deletes the recording. If you don't answer, the call waits in the Calls tab, and nothing is sent until you
-click Transcribe there. To transcribe every call without asking, or to stop noticing calls, change General → Calls →
-Record calls.
+In a browser, a call is a tab. In Chrome, Arc, Edge, Brave, Vivaldi, Opera and Yandex Browser, any tab that uses the
+microphone counts, and the call is named after the page. Safari and Firefox don't show which tab uses the microphone,
+so there only Google Meet, Zoom, Discord, Telegram Web, Slack and Telemost tabs count. The app finds the tab through
+Accessibility (already on for pasting); without it, the whole browser counts as the call. To record anything else,
+Start Call Recording in the menu bar records your mic and everything the Mac plays.
+
+When a call starts, recording starts too, and the app asks "Transcribe your call in Google Meet?":
+
+- **Transcribe** keeps it.
+- **Don't Keep** deletes the recording.
+- **Never for Google Meet** (or Never for FaceTime, Never for This Site) deletes the recording, and calls in that app or
+  on that site are never recorded again, in any browser. A site other than the services above is known by the start
+  of its page title, up to the first separator such as " - " or " | ". To undo it, click − next to it in General → Calls → Never
+  recorded.
+
+If you don't answer, the call waits in the Calls tab, and nothing is sent until you click Transcribe there. To transcribe
+every call without asking, or to stop noticing calls, change General → Calls → Record calls.
 
 Gemini 3.8 Flash writes the transcript, on your OpenRouter key. Someone whose name comes up in the call is named; the
 rest are "Participant 1", "Participant 2". On the call's page, click a name to rename them, or a time to play the call
-from there. What you said while muted is marked "muted", in the apps where the app can tell.
+from there. What you said while muted is marked "muted" in Zoom, Discord, Slack, Google Meet, Telemost and Telegram. In
+other apps, what you said while muted may end up in the transcript.
 
 To record the other side, turn on transcribe-thing in System Settings → Privacy & Security → Screen & System Audio
 Recording, under System Audio Recording Only. Without it, their side comes out silent and the call says so. In a
-browser, the app finds the call's tab through Accessibility (already on for pasting) and records all of the browser's
-sound, so music in another tab ends up in the recording.
+browser, the app records all of the browser's sound, so music in another tab ends up in the recording.
 
 ## Your data
 

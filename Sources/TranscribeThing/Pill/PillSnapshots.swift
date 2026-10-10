@@ -191,6 +191,13 @@ enum PillSnapshots {
             SnapshotEntry("pill-toast-call-never", width: 640, height: 230) { _ in
                 CanvasScene(model: neverModel(), notices: [PillSnapshotFixtures.callQuestion])
             },
+            // Never for … for a site no service is known for, and for an app nobody knows.
+            SnapshotEntry("pill-toast-call-site", width: 640, height: 270) { _ in
+                CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.callQuestionSite])
+            },
+            SnapshotEntry("pill-toast-call-app", width: 640, height: 270) { _ in
+                CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.callQuestionApp])
+            },
             SnapshotEntry("pill-toast-updated", width: 640, height: 220) { _ in
                 CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.updated])
             },
@@ -259,7 +266,14 @@ enum PillSnapshots {
 
 enum PillSnapshotFixtures {
     /// What a call in Google Meet asks once it's confirmed (`CallMonitor.onAsk`).
-    static let callQuestion = Notice.transcribeCall(PreviewFixtures.callID(99), service: "Google Meet")
+    static let callQuestion = Notice.transcribeCall(PreviewFixtures.callID(99), service: "Google Meet",
+                                                    never: "Never for Google Meet")
+    /// A call in a site no service is known for.
+    static let callQuestionSite = Notice.transcribeCall(PreviewFixtures.callID(98), service: "ChatGPT",
+                                                        never: "Never for This Site")
+    /// A call in an app nobody knows.
+    static let callQuestionApp = Notice.transcribeCall(PreviewFixtures.callID(97), service: "FaceTime",
+                                                       never: "Never for FaceTime")
 
     static let canceled = Notice(
         dedupeKey: "dictation.canceled", style: .info, symbol: "xmark.circle", title: "Dictation canceled",

@@ -498,6 +498,11 @@ struct CallsSettingsGroup: View {
                     Button("Open Settings") { hub.openSettings(.systemAudio) }
                         .buttonStyle(SecondaryButtonStyle(size: .small))
                 }
+                SettingsRow(title: "Never recorded", subtitle: CallsCopy.exclusionsSubtitle(empty: settings.callExclusions.isEmpty),
+                            systemImage: "nosign", iconTint: .inkSecondary)
+                ForEach(settings.callExclusions) { exclusion in
+                    CallExclusionRow(exclusion: exclusion) { settings.removeCallExclusion(exclusion) }
+                }
             }
         }
     }
@@ -507,6 +512,57 @@ struct CallsSettingsGroup: View {
         case .off: "Only Start Call Recording in the menu bar records."
         case .ask: "A call is recorded, and you’re asked whether to transcribe it."
         case .automatic: "Every call is recorded and transcribed."
+        }
+    }
+}
+
+/// One app or site under Never recorded: its icon, its name, what it is, and − to notice its calls again.
+private struct CallExclusionRow: View {
+    var exclusion: CallExclusion
+    var onRemove: () -> Void
+    @Environment(\.inNativeForm) private var inNativeForm
+
+    var body: some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            icon
+                .frame(width: 28, height: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(exclusion.name)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.ink)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Text(exclusion.kindTitle)
+                    .typeface(.callout)
+                    .foregroundStyle(.inkSecondary)
+            }
+            Spacer(minLength: Theme.Spacing.md)
+            Button(action: onRemove) {
+                Image(systemName: "minus")
+                    .font(.system(size: 11, weight: .bold))
+                    .frame(width: 22, height: 22)
+                    .background(Color.inkSecondary.opacity(0.12), in: Circle())
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.inkSecondary)
+            .help("Notice calls in \(exclusion.name) again")
+            .accessibilityLabel("Remove \(exclusion.name)")
+        }
+        .padding(.horizontal, inNativeForm ? 0 : Theme.Spacing.md)
+        .padding(.vertical, inNativeForm ? 2 : Theme.Spacing.sm)
+        .frame(minHeight: inNativeForm ? 0 : 48)
+    }
+
+    @ViewBuilder
+    private var icon: some View {
+        if exclusion.kind == .app, let image = CallAppIcons.image(for: exclusion.key) {
+            Image(nsImage: image)
+                .resizable()
+                .interpolation(.high)
+                .aspectRatio(contentMode: .fit)
+        } else {
+            IconTile(symbol: exclusion.kind == .app ? "app.dashed" : "globe", tint: .inkSecondary)
         }
     }
 }

@@ -60,6 +60,9 @@ final class CallWatch {
     /// The apps whose mic and sound the detector hears; nil: every app. The others are never followed, so they
     /// neither take the place of a call nor have their windows read.
     var includes: ((CallApp) -> Bool)?
+    /// The followed apps whose windows are read; nil: every one. An app whose controls nobody knows only gets its
+    /// controls dumped (`CallMuteReader`), which the probe wants and a recording doesn't.
+    var readsWindow: ((CallApp) -> Bool)?
 
     private let sensors: Sensors
     /// The app each process belongs to, looked up once per process.
@@ -120,7 +123,7 @@ final class CallWatch {
     /// that looks for it costs the app more), never two reads at once.
     private func readWindow(at time: TimeInterval) {
         guard sensors.canReadWindows() else { return }
-        let app = detector.followed?.app
+        let app = detector.followed.flatMap { readsWindow?($0.app) ?? true ? $0.app : nil }
         let following = detector.followed?.tab?.key
         if app != reading.app {
             if reading.app != nil { sensors.releaseWindows() }

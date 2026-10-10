@@ -37,9 +37,11 @@ enum NoticeActionKind: Sendable, Equatable {
     case useBuiltInMicrophone
     /// Open Software Update and install the newest release there, where its progress shows.
     case installUpdate
-    /// "Transcribe your call?": Yes keeps the call (`CallMonitor.keep(callID:)`), No deletes its recording.
+    /// "Transcribe your call?": Yes keeps the call (`CallMonitor.keep(callID:)`), No deletes its recording, Never for …
+    /// deletes it too and never notices that app's or site's calls again (`CallMonitor.never(callID:)`).
     case keepCall(UUID)
     case discardCall(UUID)
+    case neverForCall(UUID)
     case dismiss
 }
 
@@ -70,6 +72,8 @@ struct Notice: Identifiable, Equatable, Sendable {
     var transcript: String?
     /// At most two.
     var actions: [NoticeAction]
+    /// A rarer answer, as a small link beside the buttons (under them when it doesn't fit): Never for ….
+    var link: NoticeAction?
     var lifetime: NoticeLifetime
     var sound: SoundEffect?
     /// Recording the retry/undo actions refer to.
@@ -87,6 +91,7 @@ struct Notice: Identifiable, Equatable, Sendable {
         body: String? = nil,
         transcript: String? = nil,
         actions: [NoticeAction] = [],
+        link: NoticeAction? = nil,
         lifetime: NoticeLifetime = .seconds(5),
         sound: SoundEffect? = nil,
         recordingID: UUID? = nil,
@@ -100,6 +105,7 @@ struct Notice: Identifiable, Equatable, Sendable {
         self.body = body
         self.transcript = transcript
         self.actions = Array(actions.prefix(2))
+        self.link = link
         self.lifetime = lifetime
         self.sound = sound
         self.recordingID = recordingID
@@ -143,13 +149,15 @@ extension Notice {
 
     /// A call is being recorded: transcribe it? Sticky until answered, or until the call is gone without an answer
     /// mattering (dropped, deleted). An unanswered call that ends waits in the Calls tab, with a badge, and so does
-    /// this. Closed without an answer, the call waits there too.
-    static func transcribeCall(_ id: UUID, service: String) -> Notice {
+    /// this. Closed without an answer, the call waits there too. `never` is the third answer's title
+    /// (`CallExclusion.actionTitle`: "Never for FaceTime", "Never for This Site"), when the call can be excluded.
+    static func transcribeCall(_ id: UUID, service: String, never: String? = nil) -> Notice {
         Notice(dedupeKey: callQuestionKey(id), style: .info, symbol: "phone.badge.waveform",
                title: "Transcribe your call in \(service)?",
                body: callQuestionBody,
                actions: [NoticeAction(title: "Transcribe", kind: .keepCall(id), isPrimary: true),
                          NoticeAction(title: "Don’t Keep", kind: .discardCall(id))],
+               link: never.map { NoticeAction(title: $0, kind: .neverForCall(id)) },
                lifetime: .sticky)
     }
 

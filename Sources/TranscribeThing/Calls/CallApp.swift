@@ -9,7 +9,7 @@ struct CallApp: Hashable, Sendable, Comparable, CustomStringConvertible {
     let id: String
 
     /// The app `bundleID`'s process belongs to, or nil for one that isn't an app's call: us, and system daemons
-    /// (systemsoundserverd plays alert sounds and has no bundle id). `ownerBundleID` is the app that started or is
+    /// (`CallDenylist`; systemsoundserverd plays alert sounds and has no bundle id). `ownerBundleID` is the app that started or is
     /// responsible for the process, when known (`CallApp.of(_:)` looks it up); otherwise helpers are told apart by
     /// their bundle id alone.
     init?(bundleID: String?, ownerBundleID: String? = nil, ownBundleID: String = SingleInstance.bundleIdentifier) {
@@ -17,15 +17,9 @@ struct CallApp: Hashable, Sendable, Comparable, CustomStringConvertible {
         if let bundleID, Self.mainBundleID(of: bundleID) == own { return nil }
         guard let candidate = ownerBundleID ?? bundleID else { return nil }
         let main = Self.mainBundleID(of: candidate)
-        guard main != own, !Self.systemProcesses.contains(main.lowercased()) else { return nil }
+        guard main != own, !CallDenylist.isSystemProcess(main) else { return nil }
         id = main
     }
-
-    /// Daemons that play sound for nobody's call, in case one reports a bundle id; they usually report none.
-    static let systemProcesses: Set<String> = [
-        "com.apple.systemsoundserverd", "com.apple.audio.coreaudiod", "com.apple.coreaudiod",
-        "com.apple.audio.systemsoundserver-osx",
-    ]
 
     /// `bundleID` without a helper's suffix: Chromium and Electron name their processes `<app>.helper`,
     /// `<app>.helper.Renderer`, `.helper.GPU` and `.helper.Plugin` (the "… Helper (Renderer)" process names), so

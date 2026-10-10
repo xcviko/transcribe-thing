@@ -120,8 +120,9 @@ struct CallRecord: Codable, Equatable, Identifiable, Sendable {
     /// The longer track's length: the call's.
     var duration: TimeInterval { max(micSeconds, remoteSeconds) }
 
-    /// "Google Meet", "Telegram", "All sound": what the call is named by.
-    var title: String { service?.name ?? appName }
+    /// "Google Meet", "Telegram", "ChatGPT" (a site no service is known for, by its page), "FaceTime", "All sound":
+    /// what the call is named by.
+    var title: String { service?.name ?? pageTitle.flatMap { $0.isEmpty ? nil : $0 } ?? appName }
 
     /// `speaker` as the person renamed them.
     func name(of speaker: String) -> String { speakerNames[speaker] ?? speaker }
@@ -193,6 +194,6 @@ enum CallRecordingMode: String, Codable, CaseIterable, Sendable {
     case off
     /// A call starts recording as soon as it's suspected, and the app asks whether to transcribe it: No deletes it.
     case ask
-    /// Every call in an allowed app is recorded and transcribed.
+    /// Every call noticed is recorded and transcribed.
     case automatic
 }

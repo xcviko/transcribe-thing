@@ -6,8 +6,9 @@ import Testing
 
 // Recording calls: the two tracks on one clock and on disk while recorded (`TrackAligner`, `CallJournal`), the Calls
 // store and what it brings back after a crash (`CallStore`), the transcription's prompts, answers and chunks
-// (`CallTranscriber`), and noticing calls in allowed apps, asking, keeping and discarding (`CallMonitor`). No real
-// mic, tap or request: the sources, the HAL, the windows and Gemini are fakes.
+// (`CallTranscriber`), and noticing calls in any app or browser tab (save `CallDenylist` and `CallExclusion`s),
+// asking, keeping, discarding and excluding (`CallMonitor`). No real mic, tap or request: the sources, the HAL, the
+// windows and Gemini are fakes.
 
 private let rate = Recording.sampleRate
 
@@ -432,6 +433,12 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
     @MainActor final class Rig {
         var records: [CoreAudioHAL.ProcessRecord] = []
         var tabs: [String] = []
+        /// Accessibility allowed.
+        var canReadWindows = true
+        /// The browser shows its windows to Accessibility.
+        var windowsReadable = true
+        /// The apps whose windows were read, a read at a time.
+        var reads: [String] = []
         var sources: [[CallJournal.Track: FakeSource]] = []
         var asked: [CallMonitor.CallInfo] = []
         var answered: [UUID] = []
@@ -453,14 +460,17 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
                 processRecords: { [unowned self] in records },
                 app: { CallApp(bundleID: $0.bundleID) },
                 pids: { _ in [] },
-                canReadWindows: { true },
+                canReadWindows: { [unowned self] in canReadWindows },
                 readWindow: { [unowned self] app, _, following, done in
-                    let windows = [BrowserTabs.Window(title: tabs.first, tabs: tabs.map { BrowserTabs.Tab(title: $0, selected: nil) })]
+                    reads.append(app.id)
+                    let windows = windowsReadable
+                        ? [BrowserTabs.Window(title: tabs.first, tabs: tabs.map { BrowserTabs.Tab(title: $0, selected: nil) })]
+                        : []
                     let isBrowser = CallAppKind.of(app.id) == .browser
                     done(CallMuteReader.Report(
                         read: MuteRead(state: .unknown("test"), inCall: nil, detail: ""), isBrowser: isBrowser,
                         tab: isBrowser ? BrowserTabs.callTab(in: windows, following: following) : nil,
-                        windowCount: 1, otherTabPlaysAudio: BrowserTabs.otherTabPlaysAudio(
+                        windowCount: windows.count, otherTabPlaysAudio: BrowserTabs.otherTabPlaysAudio(
                             in: windows, besides: BrowserTabs.callTab(in: windows, following: following))))
                 },
                 releaseWindows: {})
@@ -471,11 +481,14 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
                     sources.append(made)
                     return made
                 },
-                appName: { $0.id == "com.google.Chrome" ? "Google Chrome" : $0.id })
+                appName: { Self.names[$0.id] ?? $0.id })
             monitor = CallMonitor(settings: settings, store: store, transcriber: transcriber, dependencies: deps)
             monitor.onAsk = { [unowned self] in asked.append($0) }
             monitor.onAnswered = { [unowned self] in answered.append($0) }
         }
+
+        static let names = ["com.google.Chrome": "Google Chrome", "com.apple.FaceTime": "FaceTime",
+                            "com.microsoft.teams2": "Microsoft Teams", "net.whatsapp.WhatsApp": "WhatsApp"]
 
         func app(_ bundleID: String, pid: pid_t = 100, object: AudioObjectID = 10, mic: Bool, sound: Bool) {
             records.removeAll { $0.pid == pid }
@@ -548,34 +561,189 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
         #expect(!BrowserTabs.isPlayingAudio("Meet – abc"))
     }
 
-    @Test func appsNotAllowedAreLeftAlone() async {
-        let rig = Rig(mode: .automatic)
-        rig.app("com.apple.garageband10", mic: true, sound: true)
-        rig.poll([0, 0.5, 21, 22])
-        #expect(rig.monitor.state == .idle)
-        #expect(rig.sources.isEmpty)
-        // It doesn't stand in the way of a call that starts meanwhile.
-        rig.app("ru.keepcoder.Telegram", pid: 200, object: 20, mic: true, sound: true)
-        rig.poll([23])
-        guard case .suspected(let telegram) = rig.monitor.state else { Issue.record("Telegram not noticed"); return }
-        #expect(telegram.service == .telegram)
-        // A browser tab that isn't a call service: recorded while unknown, then dropped as soon as it's read.
-        let browser = Rig(mode: .automatic)
-        browser.tabs = ["Voice Recorder Online - Microphone recording"]
-        browser.app("com.google.Chrome", mic: true, sound: true)
-        browser.poll([0])
-        #expect(browser.monitor.isRecording)
-        browser.poll([0.5])
-        #expect(browser.monitor.state == .idle)
-        await browser.store.journal?.settle()
-        #expect(browser.journalFiles.isEmpty)
-        browser.poll([21, 22])
-        #expect(browser.monitor.state == .idle && browser.sources.count == 1)
+    /// No list of call apps: Teams, WhatsApp, FaceTime are calls like any other, named by the app, mute unknown, and
+    /// their windows aren't read (nobody knows their controls).
+    @Test func anyAppWithMicAndSoundIsACall() {
+        for bundleID in ["com.microsoft.teams2", "net.whatsapp.WhatsApp", "com.apple.FaceTime"] {
+            let rig = Rig()
+            rig.app(bundleID, mic: true, sound: true)
+            rig.poll([0, 0.5, 21])
+            guard case .asking(let info) = rig.monitor.state else { Issue.record("\(bundleID) not asked about"); continue }
+            #expect(info.title == Rig.names[bundleID])
+            #expect(info.service == nil && !info.muteKnown)
+            #expect(rig.asked.map(\.id) == [info.id])
+            #expect(rig.reads.isEmpty)
+        }
+        // A known service's app still reads its window for mute.
+        let slack = Rig()
+        slack.app("com.tinyspeck.slackmacgap", mic: true, sound: true)
+        slack.poll([0])
+        #expect(slack.reads == ["com.tinyspeck.slackmacgap"])
+        // Telemost's desktop app is a call like any, and still Telemost.
+        let telemost = Rig()
+        telemost.app("ru.yandex.desktop.telemost", mic: true, sound: true)
+        telemost.poll([0, 21])
+        #expect(telemost.monitor.current?.title == "Telemost")
+    }
+
+    @Test func musicAndRecordingAppsAreNeverCalls() {
+        for bundleID in ["com.apple.garageband10", "com.obsproject.obs-studio", "com.ableton.live.11"] {
+            let rig = Rig(mode: .automatic)
+            rig.app(bundleID, mic: true, sound: true)
+            rig.poll([0, 0.5, 21, 22])
+            #expect(rig.monitor.state == .idle, "\(bundleID)")
+            #expect(rig.sources.isEmpty)
+            // It doesn't stand in the way of a call that starts meanwhile.
+            rig.app("ru.keepcoder.Telegram", pid: 200, object: 20, mic: true, sound: true)
+            rig.poll([23])
+            guard case .suspected(let telegram) = rig.monitor.state else { Issue.record("Telegram not noticed"); return }
+            #expect(telegram.service == .telegram)
+        }
+        #expect(CallDenylist.denies(CallApp(bundleID: "com.apple.QuickTimePlayerX")!))
+        #expect(CallDenylist.denies(CallApp(bundleID: "com.ableton.live")!))
+        #expect(!CallDenylist.denies(CallApp(bundleID: "com.ableton.livestream")!))
+        #expect(!CallDenylist.denies(CallApp(bundleID: "com.apple.FaceTime")!))
         // Off: nothing is noticed.
         let off = Rig(mode: .off)
         off.app("ru.keepcoder.Telegram", mic: true, sound: true)
         off.poll([0, 21])
         #expect(off.monitor.state == .idle && off.sources.isEmpty)
+    }
+
+    /// Any site whose tab says it records the mic is a call, titled by its page.
+    @Test func aBrowserTabUsingTheMicIsACallTitledByItsPage() async throws {
+        let rig = Rig()
+        rig.tabs = ["(2) Inbox - Gmail", "ChatGPT - Microphone recording"]
+        rig.app("com.google.Chrome", mic: true, sound: true)
+        rig.poll([0, 0.5, 21])
+        guard case .asking(let info) = rig.monitor.state else { Issue.record("not asking"); return }
+        #expect(info.title == "ChatGPT" && info.service == nil && info.pageTitle == "ChatGPT")
+        #expect(!info.muteKnown)
+        #expect(CallExclusion.of(info) == CallExclusion(kind: .site, key: "page: chatgpt", name: "ChatGPT"))
+        #expect(CallExclusion.of(info)?.actionTitle == "Never for This Site")
+        rig.monitor.keep()
+        rig.monitor.stop(keep: true)
+        await rig.monitor.waitForEndings()
+        await rig.transcriber.waitUntilIdle()
+        let call = try #require(rig.store.call(id: info.id))
+        #expect(call.title == "ChatGPT" && CallFormat.title(call) == "ChatGPT")
+        #expect(CallFormat.place(call) == "In Google Chrome")
+
+        // A browser with mic and sound but no tab that says so (a camera only, nothing at all): dropped once it's
+        // had its time to say.
+        let none = Rig(mode: .automatic)
+        none.tabs = ["Photo Booth Online - Camera recording", "Lo-fi beats - YouTube - Audio playing"]
+        none.app("com.google.Chrome", mic: true, sound: true)
+        none.poll([0, 0.5, 5])
+        #expect(none.monitor.isRecording)
+        none.poll([CallMonitor.classifyWithin + 0.5])
+        #expect(none.monitor.state == .idle)
+        await none.store.journal?.settle()
+        #expect(none.journalFiles.isEmpty)
+        none.poll([21, 22])
+        #expect(none.monitor.state == .idle && none.sources.count == 1)
+    }
+
+    /// With no window of the browser to read (no Accessibility, or a browser that shows none), it's any app.
+    @Test func aBrowserWhoseTabsCantBeReadIsTakenWhole() {
+        let rig = Rig()
+        rig.canReadWindows = false
+        rig.app("com.google.Chrome", mic: true, sound: true)
+        rig.poll([0, 0.5, 21])
+        guard case .asking(let info) = rig.monitor.state else { Issue.record("not asking"); return }
+        #expect(info.title == "Google Chrome" && info.service == nil)
+        #expect(CallExclusion.of(info) == .app(bundleID: "com.google.Chrome", name: "Google Chrome"))
+
+        let hidden = Rig()
+        hidden.windowsReadable = false
+        hidden.app("com.google.Chrome", mic: true, sound: true)
+        hidden.poll([0, 0.5, 5, CallMonitor.classifyWithin + 0.5])
+        guard case .suspected = hidden.monitor.state else { Issue.record("dropped"); return }
+        hidden.poll([21])
+        guard case .asking(let whole) = hidden.monitor.state else { Issue.record("not asking"); return }
+        #expect(whole.title == "Google Chrome")
+    }
+
+    @Test func excludedAppsAndSitesAreNeverFollowed() async {
+        let app = Rig(mode: .automatic)
+        app.settings.excludeFromCalls(.app(bundleID: "com.apple.FaceTime", name: "FaceTime"))
+        app.app("com.apple.FaceTime", mic: true, sound: true)
+        app.poll([0, 0.5, 21, 22])
+        #expect(app.monitor.state == .idle && app.sources.isEmpty)
+        // Not followed, so a call elsewhere is noticed at once.
+        app.app("com.hnc.Discord", pid: 200, object: 20, mic: true, sound: true)
+        app.poll([23])
+        #expect(app.monitor.current?.service == .discord)
+
+        // Google Meet's site: every meeting, in any browser.
+        let meet = Rig(mode: .automatic)
+        meet.settings.excludeFromCalls(CallExclusion.site(service: .meet, page: "Meet – other-meet-ing")!)
+        meet.tabs = [Self.meet]
+        meet.app("com.apple.Safari", mic: true, sound: true)
+        meet.poll([0, 0.5])
+        #expect(meet.monitor.state == .idle)
+        meet.poll([21, 22, 40])
+        #expect(meet.monitor.state == .idle && meet.sources.count == 1)
+        await meet.store.journal?.settle()
+        #expect(meet.journalFiles.isEmpty)
+
+        // An unknown site, by the start of its title.
+        let site = Rig(mode: .automatic)
+        site.settings.excludeFromCalls(CallExclusion.site(service: nil, page: "ChatGPT | voice")!)
+        site.tabs = ["ChatGPT - Microphone recording"]
+        site.app("com.google.Chrome", mic: true, sound: true)
+        site.poll([0, 0.5, 21])
+        #expect(site.monitor.state == .idle && site.store.calls.isEmpty)
+        // Another site in the same browser still is a call.
+        let other = Rig(mode: .automatic)
+        other.settings.excludeFromCalls(CallExclusion.site(service: nil, page: "ChatGPT")!)
+        other.tabs = ["Voice Recorder Online - Microphone recording"]
+        other.app("com.google.Chrome", mic: true, sound: true)
+        other.poll([0, 0.5, 21])
+        guard case .recording(let info) = other.monitor.state else { Issue.record("not recorded"); return }
+        #expect(info.title == "Voice Recorder Online")
+    }
+
+    /// Never for …: the call goes as with Don't Keep, and the app (or site) is on the list from then on.
+    @Test func neverForFromTheQuestionDiscardsAndExcludes() async {
+        let rig = Rig()
+        rig.app("com.apple.FaceTime", mic: true, sound: true)
+        rig.poll([0, 21])
+        guard case .asking(let info) = rig.monitor.state else { Issue.record("not asking"); return }
+        let notice = Notice.transcribeCall(info.id, service: info.title, never: CallExclusion.of(info)?.actionTitle)
+        #expect(notice.link?.title == "Never for FaceTime")
+        #expect(notice.link?.kind == .neverForCall(info.id))
+        rig.monitor.answer(.never, callID: info.id)
+        #expect(rig.monitor.state == .idle)
+        #expect(rig.answered == [info.id])
+        #expect(rig.settings.callExclusions == [.app(bundleID: "com.apple.FaceTime", name: "FaceTime")])
+        await rig.store.journal?.settle()
+        #expect(rig.journalFiles.isEmpty)
+        #expect(rig.store.calls.isEmpty)
+        // The call goes on and ends, another starts: neither is recorded.
+        rig.app("com.apple.FaceTime", mic: false, sound: false)
+        rig.poll(stride(from: 22.0, through: 90, by: 1))
+        rig.app("com.apple.FaceTime", mic: true, sound: true)
+        rig.poll([91, 92, 120])
+        #expect(rig.monitor.state == .idle && rig.sources.count == 1)
+
+        // On a call that ended unanswered: deleted, and its site excluded.
+        let ended = Rig()
+        ended.tabs = [Self.meet]
+        ended.app("com.google.Chrome", mic: true, sound: true)
+        ended.poll([0, 0.5, 21])
+        guard case .asking(let meet) = ended.monitor.state else { Issue.record("not asking"); return }
+        ended.app("com.google.Chrome", mic: false, sound: false)
+        ended.poll(stride(from: 22.0, through: 90, by: 1))
+        await ended.monitor.waitForEndings()
+        #expect(ended.store.call(id: meet.id)?.status == .unconfirmed)
+        ended.monitor.answer(.never, callID: meet.id)
+        #expect(ended.store.call(id: meet.id) == nil)
+        #expect(ended.settings.callExclusions.map(\.name) == ["Google Meet"])
+        #expect(ended.settings.callExclusions.first?.actionTitle == "Never for Google Meet")
+        // Twice is still once.
+        ended.settings.excludeFromCalls(CallExclusion.site(service: .meet, page: "Meet – x")!)
+        #expect(ended.settings.callExclusions.count == 1)
     }
 
     @Test func aSuspicionThatDropsIsDeleted() async {

@@ -119,6 +119,15 @@ enum HubSnapshots {
             },
             // General → Calls, on its own (the page is taller than a window).
             hub("hub-general-calls", .general, height: 1700),
+            // The same, with apps and sites never recorded: an app with its icon, an unknown one, two sites.
+            hub("hub-general-calls-exclusions", .general, height: 1900) { c in
+                c.settings.callExclusions = [
+                    .app(bundleID: "com.apple.FaceTime", name: "FaceTime"),
+                    .app(bundleID: "net.whatsapp.WhatsApp", name: "WhatsApp"),
+                    CallExclusion.site(service: .meet, page: "Meet – abc-defg-hij")!,
+                    CallExclusion.site(service: nil, page: "ChatGPT")!,
+                ]
+            },
 
             hub("hub-models", .models),
             hub("hub-models-full", .models, height: 1080),

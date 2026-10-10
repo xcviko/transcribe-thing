@@ -2,19 +2,9 @@ import CoreAudio
 import Foundation
 import Observation
 
-/// The apps whose calls are noticed: the call apps themselves, and browsers only for a tab of a known call service
-/// (`CallService`, read from the tab strip). Anything else with mic and sound at once (a game, GarageBand) is left
-/// alone.
-enum CallAllowlist {
-    static let apps: Set<String> = [
-        "ru.keepcoder.Telegram", "com.tdesktop.Telegram", "us.zoom.xos", "com.hnc.Discord",
-        "com.tinyspeck.slackmacgap", "ru.yandex.desktop.telemost",
-    ]
-
-    static func isBrowser(_ app: CallApp) -> Bool { CallAppKind.of(app.id) == .browser }
-
-    /// Whether `app`'s mic and sound may be a call worth recording: a call app, or a browser (until its tab says).
-    static func mayBeCall(_ app: CallApp) -> Bool { apps.contains(app.id) || isBrowser(app) }
+/// An answer to "Transcribe your call?": Transcribe, Don't Keep, Never for ….
+enum CallAnswer: Equatable, Sendable {
+    case keep, discard, never
 }
 
 /// One call being recorded: its journal (`CallJournal`) and the sources of its two tracks.
@@ -56,12 +46,14 @@ final class CallRecorder {
 }
 
 /// Notices calls and records them (SPEC: call recording v1). While `settings.callRecording` isn't `.off` it looks at
-/// the HAL twice a second (`CallWatch`, as the `--audio-watch` probe does): an allowed app with mic and sound at once
-/// starts a recording at once (`.suspected`), so the call's start isn't lost; once `CallDetector` confirms the call,
-/// `.ask` asks "Transcribe your call in <service>?" (`.asking`, `onAsk`) and `.automatic` keeps it (`.recording`). A
-/// suspicion that drops, or No, deletes what was recorded. A kept call that ends goes to the Calls store
-/// (`CallStore.adopt`) and is transcribed (`CallTranscriber`); one that ends unanswered waits there as
-/// `.unconfirmed`. A browser counts only once its call tab is read as a known service.
+/// the HAL twice a second (`CallWatch`, as the `--audio-watch` probe does): any app with mic and sound at once (save
+/// `CallDenylist`'s and the person's `CallExclusion`s) starts a recording at once (`.suspected`), so the call's start
+/// isn't lost; once `CallDetector` confirms the call, `.ask` asks "Transcribe your call in <service>?" (`.asking`,
+/// `onAsk`) and `.automatic` keeps it (`.recording`). A suspicion that drops, No, or Never for ... deletes what was
+/// recorded. A kept call that ends goes to the Calls store (`CallStore.adopt`) and is transcribed
+/// (`CallTranscriber`); one that ends unanswered waits there as `.unconfirmed`. A browser counts only once a tab says
+/// it records the mic, or is titled like a known service (`BrowserTabs.callTab`); when none of its windows can be
+/// read (no Accessibility), it counts as a whole, like any app.
 ///
 /// The menu bar's Start Call Recording records the mic and everything the Mac plays, whatever the setting, mute not
 /// followed; during a noticed call it just keeps that call. Dictation is never touched: it has its own capture.
@@ -70,10 +62,10 @@ final class CallMonitor {
     /// What's known about the live call.
     struct CallInfo: Equatable, Sendable {
         var id: UUID
-        /// "Telegram", "Google Chrome", "All sound" for a manual recording.
+        /// "Telegram", "Google Chrome", "FaceTime", "All sound" for a manual recording.
         var appName: String
         var bundleID: String?
-        /// Known for a call app at once, for a browser once its tab is read.
+        /// Known for a known call app at once, for a browser once its tab is read; nil for any other app or site.
         var service: CallService?
         /// For a browser: the call tab's page.
         var pageTitle: String?
@@ -84,8 +76,8 @@ final class CallMonitor {
         var muteKnown = false
         var manual = false
 
-        /// "Google Meet", "Telegram", "All sound".
-        var title: String { service?.name ?? appName }
+        /// "Google Meet", "Telegram", "ChatGPT" (a site no service is known for, by its page), "FaceTime", "All sound".
+        var title: String { service?.name ?? pageTitle.flatMap { $0.isEmpty ? nil : $0 } ?? appName }
     }
 
     enum State: Equatable, Sendable {
@@ -122,7 +114,8 @@ final class CallMonitor {
         }
     }
 
-    /// How long a browser's tab has to be read as a call service, once recording; after that it's left alone.
+    /// How long a browser has, once recording, for a tab to say it holds the call; after that it's left alone (or,
+    /// when none of its windows could be read, taken as a whole).
     static let classifyWithin: TimeInterval = 10
     static let pollInterval: TimeInterval = 0.5
     static let manualName = "All sound"
@@ -131,8 +124,8 @@ final class CallMonitor {
     /// Looking for calls (the setting isn't `.off`).
     private(set) var isWatching = false
 
-    /// A call to ask about: show "Transcribe your call in \(info.title)?" with Yes (`keep(callID:)`) and No
-    /// (`discard(callID:)`).
+    /// A call to ask about: show "Transcribe your call in \(info.title)?" with Yes (`keep(callID:)`), No
+    /// (`discard(callID:)`) and Never for ... (`never(callID:)`).
     @ObservationIgnored var onAsk: ((CallInfo) -> Void)?
     /// The question about this call is answered or moot: hide it.
     @ObservationIgnored var onAnswered: ((UUID) -> Void)?
@@ -144,8 +137,8 @@ final class CallMonitor {
     @ObservationIgnored private let watch: CallWatch
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var live: Live?
-    /// A call app (or browser) whose current call isn't recorded: discarded, stopped, or not a call service. Until
-    /// the detector drops or ends it.
+    /// An app (or browser) whose current call isn't recorded: discarded, stopped, excluded, or a browser with no call
+    /// tab. Until the detector drops or ends it.
     @ObservationIgnored private var ignored: CallApp?
     @ObservationIgnored private var endings: [UUID: Task<Void, Never>] = [:]
 
@@ -157,8 +150,10 @@ final class CallMonitor {
         var consent: CallJournal.Consent
         /// The detector has confirmed the call (asked or kept once the browser's tab says what it is).
         var confirmed = false
-        /// A browser whose call tab is read as a known service; true for a call app.
+        /// A browser whose call tab is found (or taken as a whole, its windows unreadable); true for any other app.
         var classified: Bool
+        /// For a browser: some read of its windows found at least one, so its tabs can tell.
+        var tabsRead = false
         var otherAudio: [CallInterval] = []
         var otherAudioSince: TimeInterval?
         var tapProcesses: [AudioObjectID]
@@ -171,8 +166,12 @@ final class CallMonitor {
         self.transcriber = transcriber
         deps = dependencies
         watch = CallWatch(sensors: dependencies.sensors)
-        // A game or GarageBand with mic and sound is never followed: it would stand in the way of a real call.
-        watch.includes = { CallAllowlist.mayBeCall($0) }
+        // GarageBand, OBS or an app the person excluded is never followed: it would stand in the way of a real call.
+        watch.includes = { [weak settings] app in
+            !CallDenylist.denies(app) && !(settings?.callExclusions.excludes(app) ?? false)
+        }
+        // Only the apps whose controls are known have their windows read: the rest have nothing to tell.
+        watch.readsWindow = { CallAppKind.of($0.id) != .other }
     }
 
     /// The live call, whatever its state.
@@ -257,6 +256,33 @@ final class CallMonitor {
         store.delete(callID)
     }
 
+    /// The question's answer, from its toast.
+    func answer(_ answer: CallAnswer, callID: UUID) {
+        switch answer {
+        case .keep: keep(callID: callID)
+        case .discard: discard(callID: callID)
+        case .never: never(callID: callID)
+        }
+    }
+
+    /// Never for ...: the call is deleted, as with No, and its app (or, in a browser, its site) is never noticed again
+    /// (`AppSettings.callExclusions`). Works on the live call and on one that ended unanswered.
+    func never(callID: UUID) {
+        let exclusion: CallExclusion?
+        if let live, live.info.id == callID {
+            exclusion = CallExclusion.of(live.info)
+        } else if let call = store.call(id: callID), call.status == .unconfirmed {
+            exclusion = CallExclusion.of(call)
+        } else {
+            return
+        }
+        if let exclusion {
+            settings.excludeFromCalls(exclusion)
+            Log.audio.info("Calls in \(exclusion.name, privacy: .public) are excluded from now on")
+        }
+        discard(callID: callID)
+    }
+
     /// Start Call Recording: during a noticed call, keeps it; otherwise records the mic and everything the Mac plays.
     func startManual() {
         if live != nil { return keep() }
@@ -338,11 +364,11 @@ final class CallMonitor {
     }
 
     private func mayRecord(_ app: CallApp) -> Bool {
-        guard settings.callRecording != .off, ignored != app, store.journal != nil, CallAllowlist.mayBeCall(app)
-        else { return false }
-        // A browser's tab can only be told by reading its window.
-        return !CallAllowlist.isBrowser(app) || deps.sensors.canReadWindows()
+        settings.callRecording != .off && ignored != app && store.journal != nil && !CallDenylist.denies(app)
+            && !settings.callExclusions.excludes(app)
     }
+
+    private static func isBrowser(_ app: CallApp) -> Bool { CallAppKind.of(app.id) == .browser }
 
     /// Starts recording `app`'s call: its mic and a tap of all its processes.
     private func begin(_ app: CallApp, at time: TimeInterval) {
@@ -356,7 +382,9 @@ final class CallMonitor {
         let processes = watch.processes[app] ?? []
         let recorder = CallRecorder(journal: journal, info: journalInfo, origin: time,
                                     sources: deps.makeSources(.processes(processes)))
-        live = Live(recorder: recorder, info: info, app: app, consent: .suspected, classified: !CallAllowlist.isBrowser(app),
+        // A browser waits for its call tab, unless its windows can't be read at all: then it's any app.
+        let classified = !Self.isBrowser(app) || !deps.sensors.canReadWindows()
+        live = Live(recorder: recorder, info: info, app: app, consent: .suspected, classified: classified,
                     tapProcesses: processes)
         state = .suspected(info)
         Log.audio.info("Recording a possible call in \(info.appName, privacy: .public)")
@@ -387,24 +415,31 @@ final class CallMonitor {
             if let since = followed.mutedSince { mutes.append(since...max(since, time)) }
             if followed.micReleaseIsMute, let since = followed.micReleasedAt { mutes.append(since...max(since, time)) }
             live.info.mutes = intervals(mutes, origin: live.origin)
-            if let tab = followed.tab, CallAllowlist.isBrowser(app) {
-                if let service = tab.service {
-                    live.info.service = service
+            if let tab = followed.tab, Self.isBrowser(app) {
+                if settings.callExclusions.excludes(service: tab.service, page: tab.page) {
+                    Log.audio.info("Not recorded: the call's site is excluded")
+                    return discardLive()
+                }
+                // A tab using the mic, any site; or one titled like a call service (Safari and Firefox mark nothing).
+                if tab.service != nil || tab.recording?.hasMic == true {
+                    live.info.service = tab.service
                     live.info.pageTitle = tab.page
                     live.classified = true
-                } else if !live.classified {
-                    // A page recording the mic that no call service is: a voice recorder, a game.
-                    Log.audio.info("Not a call: the browser's tab isn't a call service")
-                    return discardLive()
                 }
             }
         }
+        if Self.isBrowser(app), (watch.lastRead?.windowCount ?? 0) > 0 { live.tabsRead = true }
         if !live.classified, time - live.origin >= Self.classifyWithin {
-            Log.audio.info("Not a call: no call tab found in the browser")
-            return discardLive()
+            guard !live.tabsRead else {
+                Log.audio.info("Not a call: no tab in the browser uses the microphone")
+                return discardLive()
+            }
+            // None of its windows could be read: the browser is taken as a whole, like any app.
+            Log.audio.info("No browser window could be read: recording the whole browser")
+            live.classified = true
         }
         live.info.muteKnown = live.info.service?.releasesMicOnMute == true || watch.muteEverKnown
-        if CallAllowlist.isBrowser(app), let read = watch.lastRead {
+        if Self.isBrowser(app), let read = watch.lastRead {
             if read.otherTabPlaysAudio, live.otherAudioSince == nil {
                 live.otherAudioSince = time
             } else if !read.otherTabPlaysAudio, let since = live.otherAudioSince {

@@ -203,11 +203,11 @@ final class AppEnvironment {
             for id in ids { self?.callTranscriber.cancel(id) }
             self?.callMonitor.removed(ids)
         }
-        callMonitor.onAsk = { [weak toasts] info in toasts?.post(.transcribeCall(info.id, service: info.title)) }
-        callMonitor.onAnswered = { [weak toasts] id in toasts?.dismiss(dedupeKey: Notice.callQuestionKey(id)) }
-        dictation.answerCall = { [weak callMonitor] id, keep in
-            if keep { callMonitor?.keep(callID: id) } else { callMonitor?.discard(callID: id) }
+        callMonitor.onAsk = { [weak toasts] info in
+            toasts?.post(.transcribeCall(info.id, service: info.title, never: CallExclusion.of(info)?.actionTitle))
         }
+        callMonitor.onAnswered = { [weak toasts] id in toasts?.dismiss(dedupeKey: Notice.callQuestionKey(id)) }
+        dictation.answerCall = { [weak callMonitor] id, answer in callMonitor?.answer(answer, callID: id) }
     }
 
     /// Starts services in the SPEC §4.14 order.

@@ -457,7 +457,7 @@ struct ToastCard: View {
                 if let transcript = notice.transcript {
                     transcriptBlock(transcript)
                 }
-                if !actions.isEmpty {
+                if !actions.isEmpty || notice.link != nil {
                     actionRow
                 }
             }
@@ -501,7 +501,7 @@ struct ToastCard: View {
     }
 
     static func isCompact(_ notice: Notice) -> Bool {
-        notice.body == nil && notice.transcript == nil && notice.actions.count <= 1
+        notice.body == nil && notice.transcript == nil && notice.actions.count <= 1 && notice.link == nil
     }
 
     private var header: some View {
@@ -588,13 +588,32 @@ struct ToastCard: View {
     /// Only one white button per card: the first action flagged primary.
     private var primaryID: UUID? { actions.first(where: \.isPrimary)?.id }
 
+    /// The buttons, and the notice's link under them, in line with the words above: three buttons don't fit a card,
+    /// and the link is the answer given least.
     private var actionRow: some View {
-        HStack(spacing: 6) {
-            ForEach(actions) { action in
-                actionButton(action, isFilled: action.id == primaryID)
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 6) {
+                buttons
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
+            if let link = notice.link {
+                linkButton(link)
+                    .padding(.leading, 2)
+            }
         }
+    }
+
+    private var buttons: some View {
+        ForEach(actions) { action in
+            actionButton(action, isFilled: action.id == primaryID)
+        }
+    }
+
+    private func linkButton(_ action: NoticeAction) -> some View {
+        Button(action.title) { center.perform(action, on: notice) }
+            .buttonStyle(ToastLinkStyle())
+            .fixedSize()
+            .accessibilityLabel(action.title)
     }
 
     private func actionButton(_ action: NoticeAction, isFilled: Bool) -> some View {
@@ -692,6 +711,32 @@ private struct ToastActionStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         ToastActionBody(configuration: configuration, isFilled: isFilled)
+    }
+}
+
+/// A toast's link (`Notice.link`): small quiet words, brighter and underlined under the pointer.
+private struct ToastLinkStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        ToastLinkBody(configuration: configuration)
+    }
+}
+
+private struct ToastLinkBody: View {
+    let configuration: ButtonStyleConfiguration
+    @State private var hovering = false
+
+    var body: some View {
+        configuration.label
+            .font(.system(size: 11.5, weight: .medium))
+            .foregroundStyle(hovering || configuration.isPressed ? ToastPalette.title : ToastPalette.body)
+            .underline(hovering)
+            .lineLimit(1)
+            // A taller target than the words, without moving them.
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+            .padding(.vertical, -4)
+            .onHover { hovering = $0 }
+            .animation(Theme.Motion.hover, value: hovering)
     }
 }
 

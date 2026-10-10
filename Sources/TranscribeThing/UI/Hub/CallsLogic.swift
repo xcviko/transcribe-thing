@@ -241,15 +241,28 @@ extension CallRecordingMode {
 }
 
 enum CallsCopy {
-    /// Where calls are noticed: apps, and the services' pages in browsers.
-    static let apps = "Telegram, Zoom, Discord, Slack and Telemost"
-    static let webServices = "Google Meet, Zoom, Discord, Telegram Web, Slack and Telemost"
-    static let browsers = "Chrome, Arc, Edge, Brave, Vivaldi, Opera, Yandex Browser, Safari and Firefox"
+    /// How long the mic and sound have to stay on together: "20 seconds".
+    static var confirmAfter: String { "\(Int(CallDetector.Settings().confirmAfter)) seconds" }
+    /// Where mute is followed, in their apps and in the browser.
+    static let muteFollowed = "Zoom, Discord, Slack, Google Meet, Telemost and Telegram"
+
+    /// What counts as a call, for General → Calls and the empty Calls tab.
+    static var whatIsACall: String {
+        "A call is any app or browser tab that uses your microphone and plays sound for \(confirmAfter)."
+    }
 
     /// General → Calls' footer.
-    static let settingsFooter = "Noticed in the \(apps) apps, and in \(webServices) in \(browsers). In a browser, "
-        + "the call’s tab is found through Accessibility (already on for pasting), and all of the browser’s sound is "
-        + "recorded."
+    static var settingsFooter: String {
+        "\(whatIsACall) Mute is followed in \(muteFollowed). Music and recording apps like GarageBand, Logic Pro "
+            + "and OBS never count. In a browser, the call’s tab is found through Accessibility (already on for "
+            + "pasting), and all of the browser’s sound is recorded."
+    }
+
+    /// General → Calls → Never recorded, under its title.
+    static func exclusionsSubtitle(empty: Bool) -> String {
+        empty ? "Nothing yet. Choose Never for… when you’re asked about a call, and that app or site is left alone."
+              : "Calls in these apps and sites aren’t noticed. Remove one to notice its calls again."
+    }
 
     /// The menu bar's line while a call is recorded: "Recording call · Google Meet · 12:34".
     static func menuStatus(_ info: CallMonitor.CallInfo, now: Date) -> String {

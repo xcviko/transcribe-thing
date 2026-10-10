@@ -251,6 +251,66 @@ private func info(_ id: UUID = UUID(), startedAt: Date = now) -> CallMonitor.Cal
         #expect(notice.primaryAction?.kind == .keepCall(id))
         #expect(notice.actions.last?.kind == .discardCall(id))
         #expect(notice.dedupeKey == Notice.callQuestionKey(id))
+        #expect(notice.link == nil)
+        // Never for … is a third answer, as a link under the buttons: the card keeps its two.
+        let never = Notice.transcribeCall(id, service: "FaceTime", never: "Never for FaceTime")
+        #expect(never.actions.map(\.title) == ["Transcribe", "Don’t Keep"])
+        #expect(never.link?.title == "Never for FaceTime")
+        #expect(never.link?.kind == .neverForCall(id))
+        #expect(!ToastCard.isCompact(never))
+    }
+
+    /// What an exclusion is named and keyed by: an app by its bundle id, a call service by the service, any other
+    /// site by its title up to the first separator.
+    @Test func callExclusions() {
+        #expect(CallExclusion.siteName(page: "(3) ChatGPT - Voice mode") == "ChatGPT")
+        #expect(CallExclusion.siteName(page: "Voice Recorder Online | Free") == "Voice Recorder Online")
+        #expect(CallExclusion.siteName(page: "Whereby: Room") == "Whereby")
+        #expect(CallExclusion.siteName(page: "ChatGPT") == "ChatGPT")
+        #expect(CallExclusion.site(service: nil, page: "  ") == nil)
+        let meet = CallExclusion.site(service: .meet, page: "Meet – abc-defg-hij")
+        #expect(meet == CallExclusion(kind: .site, key: "service: meet", name: "Google Meet"))
+        #expect(meet?.excludes(service: .meet, page: "Meet – other") == true)
+        #expect(meet?.excludes(service: nil, page: "Google Meet") == false)
+        #expect(CallExclusion.site(service: nil, page: "ChatGPT")?.excludes(service: nil, page: "chatgpt - x") == true)
+        let app = CallExclusion.app(bundleID: "com.apple.FaceTime", name: "FaceTime")
+        #expect(app.excludes(CallApp(bundleID: "com.apple.FaceTime")!))
+        #expect(!app.excludes(CallApp(bundleID: "com.apple.Safari")!))
+        #expect(app.actionTitle == "Never for FaceTime" && app.kindTitle == "App")
+        // A menu bar recording can't be excluded; a browser without a tab read is excluded whole.
+        #expect(CallExclusion.of(bundleID: nil, appName: "All sound", service: nil, pageTitle: nil, manual: true) == nil)
+        #expect(CallExclusion.of(bundleID: "com.apple.Safari", appName: "Safari", service: nil, pageTitle: nil)
+                == .app(bundleID: "com.apple.Safari", name: "Safari"))
+        #expect(CallExclusion.of(bundleID: "us.zoom.xos", appName: "zoom.us", service: .zoom, pageTitle: nil)
+                == .app(bundleID: "us.zoom.xos", name: "zoom.us"))
+    }
+
+    @Test func callExclusionsPersist() throws {
+        let suite = NSTemporaryDirectory() + "transcribe-thing-tests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(atPath: suite + ".plist")
+        }
+        let settings = AppSettings(defaults: defaults, microphoneProbe: { MicrophoneMigrationProbe() })
+        #expect(settings.callExclusions.isEmpty)
+        let app = CallExclusion.app(bundleID: "net.whatsapp.WhatsApp", name: "WhatsApp")
+        let site = try #require(CallExclusion.site(service: nil, page: "ChatGPT"))
+        settings.excludeFromCalls(app)
+        settings.excludeFromCalls(site)
+        settings.excludeFromCalls(app)
+        let again = AppSettings(defaults: defaults, microphoneProbe: { MicrophoneMigrationProbe() })
+        #expect(again.callExclusions == [app, site])
+        again.removeCallExclusion(app)
+        let third = AppSettings(defaults: defaults, microphoneProbe: { MicrophoneMigrationProbe() })
+        #expect(third.callExclusions == [site])
+    }
+
+    @Test func callsCopyNamesNoAppList() {
+        #expect(CallsCopy.whatIsACall.contains("any app or browser tab"))
+        #expect(CallsCopy.whatIsACall.contains("20 seconds"))
+        #expect(CallsCopy.settingsFooter.contains("Mute is followed in Zoom, Discord, Slack, Google Meet, Telemost and Telegram"))
+        #expect(!CallsCopy.exclusionsSubtitle(empty: true).isEmpty)
     }
 
     @Test func recordCallsChoices() {
