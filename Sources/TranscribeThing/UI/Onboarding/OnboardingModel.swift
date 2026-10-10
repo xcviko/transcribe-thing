@@ -372,11 +372,10 @@ final class OnboardingModel {
     @ObservationIgnored private var activationObserver: NSObjectProtocol?
     @ObservationIgnored private var isAttached = false
     @ObservationIgnored private var pttDownAt: Date?
-    @ObservationIgnored private var lastPTTTapAt: Date?
     @ObservationIgnored private var stopArmed = false
     @ObservationIgnored private var recordingStartedAt: Date?
     @ObservationIgnored private var lastRecordingSpan: (start: Date, end: Date)?
-    /// The recording under way went hands-free at some point (fn + space, a double press, or Undo resuming it).
+    /// The recording under way went hands-free at some point (fn + space, or Undo resuming it).
     @ObservationIgnored private var recordingWentHandsFree = false
     @ObservationIgnored private var lastRecordingWasHandsFree = false
     @ObservationIgnored private var dictatedMessages = 0
@@ -847,10 +846,6 @@ final class OnboardingModel {
             pttDownAt = now
             if handsFreeLatched {
                 stopArmed = true
-            } else if ctx.settings.doublePressForHandsFree, let tap = lastPTTTapAt, now.timeIntervalSince(tap) <= 0.5 {
-                handsFreeLatched = true
-                markTriedHandsFree()
-                lastPTTTapAt = nil
             } else {
                 schedule("hold", after: 0.45) { model in
                     if model.isHoldingPushToTalk { model.markHeldPushToTalk() }
@@ -863,8 +858,6 @@ final class OnboardingModel {
             if handsFreeLatched && stopArmed {
                 handsFreeLatched = false
                 stopArmed = false
-            } else if held < 0.3 && !handsFreeLatched {
-                lastPTTTapAt = now
             }
             pttDownAt = nil
         }
@@ -902,7 +895,6 @@ final class OnboardingModel {
             if old == .locked {
                 handsFreeLatched = false
                 stopArmed = false
-                lastPTTTapAt = nil
             }
         }
         guard step == .tryIt else { return }

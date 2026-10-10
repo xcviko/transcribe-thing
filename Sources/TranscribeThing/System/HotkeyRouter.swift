@@ -57,8 +57,6 @@ struct HotkeyRouter: Equatable, Sendable {
         /// Switch model has another model to step to (`ModelLineup.cycle`); without one its shortcut is never
         /// intercepted.
         var switchesModels = true
-        /// A hands-free dictation records and Return (with no modifier) finishes it.
-        var returnFinishes = false
         /// Polish Selection's cards: ↩ (with no modifier) is theirs unless a dictation records, and Esc closes them
         /// unless one is busy.
         var cardPaste = false
@@ -271,14 +269,6 @@ struct HotkeyRouter: Equatable, Sendable {
                 if !input.isRepeat { decision.events.append(.cardClose) }
                 return decision
             }
-        }
-
-        // Hands-free: Return finishes the dictation (and goes no further), unless it's a key the user bound themselves.
-        if config.returnFinishes, modifiers.isEmpty, gesture == .idle,
-           key == KeyCode.returnKey || key == KeyCode.keypadEnter, !config.bindings.claims(bareKey: key) {
-            consume(physical, into: &decision)
-            if !input.isRepeat { decision.events.append(.finishHandsFree) }
-            return decision
         }
 
         let bindings = config.bindings

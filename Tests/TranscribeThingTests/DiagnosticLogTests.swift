@@ -283,7 +283,7 @@ private enum Fixture {
                      "OpenRouter key saved: no",
                      "Settings: main=parakeet steps=gemini parakeet=local handsFreeModel=main "
                          + #"shortcut.pushToTalk=fn shortcut.handsFree="fn Space""#,
-                     "pill=whileDictating sounds=on doublePress=off dictionaryWords=0 keySaved=no"] {
+                     "pill=whileDictating sounds=on dictionaryWords=0 keySaved=no"] {
             #expect(header.contains(line), "header has \(line)")
         }
         let older = try #require(text.range(of: "[app] older")), newer = try #require(text.range(of: "[app] newer"))

@@ -25,7 +25,7 @@ When a new version is out, the app tells you, and Update Now in General → Soft
 | To | Press |
 |---|---|
 | Dictate | hold **fn**, speak, let go |
-| Dictate without holding a key | **fn Space** to start, **fn** or **return** to finish |
+| Dictate without holding a key | **fn Space** to start, **fn** to finish |
 | Cancel | **esc** (Undo brings it back) |
 | Switch model while you talk | **fn ⇥** |
 | Get the message you meant, not every word (Gemini) | **fn P** while you talk |

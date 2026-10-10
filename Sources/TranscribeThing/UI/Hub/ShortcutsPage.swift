@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Rebindable shortcuts, the double-press toggle and a Secure Input note.
+/// Rebindable shortcuts and a Secure Input note.
 struct ShortcutsPage: View {
     @Environment(AppSettings.self) private var settings
     @Environment(SecureInputMonitor.self) private var secureInput
@@ -26,18 +26,6 @@ struct ShortcutsPage: View {
                 SettingsGroup {
                     row(.pushToTalk)
                     row(.handsFree)
-                    SettingsRow(title: "Double-press to go hands-free", systemImage: "hand.tap",
-                                iconTint: .inkSecondary) {
-                        Toggle("", isOn: $settings.doublePressForHandsFree)
-                            .toggleStyle(.appSwitch)
-                            .labelsHidden()
-                    }
-                    SettingsRow(title: "Return finishes a hands-free dictation", systemImage: "return",
-                                iconTint: .inkSecondary) {
-                        Toggle("", isOn: $settings.returnFinishesHandsFree)
-                            .toggleStyle(.appSwitch)
-                            .labelsHidden()
-                    }
                     row(.switchModel)
                     row(.polish)
                     row(.translate)

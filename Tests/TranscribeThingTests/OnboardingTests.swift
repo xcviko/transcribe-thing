@@ -394,15 +394,16 @@ import Testing
         #expect(model.livePhase == .rest)
     }
 
-    @Test func doublePressLatchesHandsFree() {
+    /// fn pressed twice quickly is two taps: hands-free starts only with fn Space.
+    @Test func aDoublePressDoesNotLatchHandsFree() {
         let model = makeModel(step: 3)
-        model.ctx.settings.doublePressForHandsFree = true
         let t0 = Date()
         model.handleRawKey(RawKeyEvent(key: .fn, isDown: true), now: t0)
         model.handleRawKey(RawKeyEvent(key: .fn, isDown: false), now: t0.addingTimeInterval(0.12))
         model.handleRawKey(RawKeyEvent(key: .fn, isDown: true), now: t0.addingTimeInterval(0.3))
-        #expect(model.handsFreeLatched)
-        #expect(model.triedHandsFree)
+        #expect(!model.handsFreeLatched)
+        #expect(!model.triedHandsFree)
+        model.handleRawKey(RawKeyEvent(key: .fn, isDown: false), now: t0.addingTimeInterval(0.4))
     }
 
     @Test func repeatedKeyDownsAreIgnored() {
@@ -455,11 +456,10 @@ import Testing
         #expect(model.messages.map(\.sender) == [.alex, .me, .alex, .me, .alex, .me, .alex])
     }
 
-    @Test func doublePressingIntoHandsFreeCountsAsHandsFree() {
+    @Test func aHoldThatGoesHandsFreeCountsAsHandsFree() {
         let model = makeModel(step: 3)
-        model.ctx.settings.doublePressForHandsFree = true
         let t0 = Date()
-        // The pill starts held, then the second press latches it.
+        // The pill starts held, then fn Space latches it.
         model.pillPhaseChanged(from: .hidden, to: .listening, now: t0)
         model.pillPhaseChanged(from: .listening, to: .locked, now: t0.addingTimeInterval(0.4))
         model.pillPhaseChanged(from: .locked, to: .processing, now: t0.addingTimeInterval(5))
@@ -511,8 +511,8 @@ import Testing
         var phase: PillPhase = .rest
     }
 
-    /// A quick fn tap brings the pill up for the double-press window, but it isn't a recording: a paste or an
-    /// autocorrect right after it isn't taken for dictation.
+    /// fn down brings the pill up before the press commits, but that isn't a recording yet: a paste or an
+    /// autocorrect then isn't taken for dictation.
     @Test func aTapThatShowsThePillIsNotARecording() {
         let committed = DictationPhaseBox()
         let model = makeModel(step: 3) { ctx in ctx.dictationPhase = { committed.phase } }
@@ -525,8 +525,8 @@ import Testing
     }
 
     /// Keys that only reach the event tap: the real pill stands in for a hold only while it really records, not
-    /// while it waits out the double-press window after a short press.
-    @Test func theFallbackHoldCheckIgnoresTheTapWindow() async throws {
+    /// while it shows a press that hasn't committed.
+    @Test func theFallbackHoldCheckIgnoresAnUncommittedPress() async throws {
         let committed = DictationPhaseBox()
         let model = makeModel(step: 3) { ctx in
             ctx.dictationPhase = { committed.phase }
@@ -534,7 +534,7 @@ import Testing
         }
         committed.phase = .listening
         model.pillPhaseChanged(from: .rest, to: .listening)
-        // Released right after the confirm: the pill stays up for a second press, but nothing records.
+        // The pill still shows the press, but nothing records.
         model.ctx.pillModel.phase = .listening
         committed.phase = .rest
         model.pillPhaseChanged(from: .listening, to: .rest)
@@ -547,7 +547,7 @@ import Testing
         #expect(model.heldPushToTalk, "a real hold still counts")
     }
 
-    @Test func escInTheTapWindowDoesntCompleteTheCancelLesson() {
+    @Test func escBeforeThePressCommitsDoesntCompleteTheCancelLesson() {
         let committed = DictationPhaseBox()
         let model = makeModel(step: 3) { ctx in ctx.dictationPhase = { committed.phase } }
         model.ctx.pillModel.phase = .listening

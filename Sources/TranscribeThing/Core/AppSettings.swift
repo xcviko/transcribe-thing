@@ -73,13 +73,6 @@ final class AppSettings {
     /// keeps Automatic.
     @ObservationIgnored var microphoneUIDBeforeFallback: String?
     var showDockIcon: Bool = false { didSet { store.set(showDockIcon, .showDockIcon) } }
-    /// Off by default. Stored only once the user flips it (Shortcuts), so an install that never did gets the
-    /// default of the build it runs.
-    var doublePressForHandsFree: Bool = false { didSet { store.set(doublePressForHandsFree, .doublePressForHandsFree) } }
-    /// Return during a hands-free dictation finishes it, as fn or Stop does.
-    var returnFinishesHandsFree: Bool = true {
-        didSet { store.set(returnFinishesHandsFree, .returnFinishesHandsFree) }
-    }
     /// The model a hands-free dictation switches to as it starts (Models), as if Switch model had stepped to it: a long
     /// dictation is usually one for Gemini. nil: the main model, as when holding the key.
     var handsFreeModel: ModelChoice? = nil { didSet { store.set(handsFreeModel?.rawValue, .handsFreeModel) } }
@@ -288,8 +281,10 @@ final class AppSettings {
                     .keepSuccessfulRecordingsDays] {
             store.remove(key)
         }
-        if let v = store.bool(.doublePressForHandsFree) { doublePressForHandsFree = v }
-        if let v = store.bool(.returnFinishesHandsFree) { returnFinishesHandsFree = v }
+        // A double press of push-to-talk no longer starts hands-free, and Return no longer finishes it (fn and the
+        // pill's check button do): both switches have no meaning any more.
+        store.remove(.doublePressForHandsFree)
+        store.remove(.returnFinishesHandsFree)
         handsFreeModel = Self.handsFreeModel(stored: store.string(.handsFreeModel), lineup: lineup)
         // Pasting's two switches held for every model; each is picked per model now. One an older build turned on
         // holds for all of them, once: the old keys go. The removed clean-up drops out of the sets (`ModelChoice.read`).
@@ -318,7 +313,7 @@ final class AppSettings {
         }
         if let v = store.int(.autoDeleteHistoryDays), v >= 0 { autoDeleteHistoryDays = v }
         if let v: ShortcutBindings = store.json(.shortcuts) { shortcuts = v }
-        // Polish moved from fn ↩ to fn P (↩ finishes a hands-free dictation): a build that had it on fn ↩ by default
+        // Polish moved from fn ↩ to fn P (when ↩ finished a hands-free dictation): a build that had it on fn ↩ by default
         // moves it, once, unless fn P is taken. Bound to fn ↩ again after that, it stays.
         if store.bool(.polishMovedToFnP) != true {
             if shortcuts[.polish] == .fnReturn, shortcuts.conflict(for: .fnP, excluding: .polish) == nil {
@@ -409,7 +404,8 @@ enum SettingsKey: String, CaseIterable {
     case soundsEnabled, soundVolume, microphoneUID, preferBuiltInMicOverBluetooth, showDockIcon
     /// `maxRecordingMinutes` (the removed "Maximum recording length"), `restoreClipboard` (the removed "Restore the
     /// clipboard after pasting"), `keepFailedRecordingsDays` and `keepSuccessfulRecordingsDays` (how long audio was
-    /// kept, now as long as its entry) are removed at load.
+    /// kept, now as long as its entry) are removed at load. So is `doublePressForHandsFree` (the removed
+    /// "Double-press to go hands-free").
     case maxRecordingMinutes, doublePressForHandsFree
     case restoreClipboard, keepFailedRecordingsDays, keepSuccessfulRecordingsDays, shortcuts, hasShownWelcomeHello
     case checkForUpdatesAutomatically, announcedUpdateVersion, lastLaunchedVersion, updatedVersionToAnnounce
@@ -433,7 +429,8 @@ enum SettingsKey: String, CaseIterable {
     case modesAddingSpace, modesRemovingFinalPeriod
     /// The Dictionary page's groups, apart from the words (`UserDictionary.Grouping`).
     case dictionaryGroups
-    /// Stored under its first name, from when Return also sent what it finished.
+    /// The removed "Return finishes a hands-free dictation", removed at load. Stored under its first name, from when
+    /// Return also sent what it finished.
     case returnFinishesHandsFree = "returnSendsHandsFree"
     /// Polish's default left fn ↩ for fn P: set once its old default has been moved (`load`).
     case polishMovedToFnP, showsPillHints

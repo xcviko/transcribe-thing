@@ -948,23 +948,22 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         }
     }
 
-    /// Double-press for hands-free is off unless the user turned it on: an install that never touched it gets the
-    /// new default, one that turned it on keeps it.
-    @Test func doublePressIsOffUnlessTheUserTurnedItOn() throws {
+    /// The removed "Double-press to go hands-free" and "Return finishes a hands-free dictation" leave nothing
+    /// behind: whatever an older build stored for them goes at load.
+    @Test func theRemovedHandsFreeSwitchesAreRemovedAtLoad() throws {
         let suite = NSTemporaryDirectory() + "transcribe-thing-tests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer {
             defaults.removePersistentDomain(forName: suite)
             try? FileManager.default.removeItem(atPath: suite + ".plist")
         }
-        let key = SettingsKey.doublePressForHandsFree.defaultsKey
-        #expect(!AppSettings(defaults: defaults).doublePressForHandsFree)
-        #expect(defaults.object(forKey: key) == nil, "nothing is stored until the user flips it")
-        #expect(!AppSettings.inMemory().doublePressForHandsFree)
-        #expect(DictationMachine.Config().doublePressEnabled, "the machine follows the setting, copied by the controller")
-
-        AppSettings(defaults: defaults).doublePressForHandsFree = true
-        #expect(AppSettings(defaults: defaults).doublePressForHandsFree)
+        defaults.set(true, forKey: "tt.doublePressForHandsFree")
+        defaults.set(false, forKey: "tt.returnSendsHandsFree")
+        #expect(SettingsKey.doublePressForHandsFree.defaultsKey == "tt.doublePressForHandsFree")
+        #expect(SettingsKey.returnFinishesHandsFree.defaultsKey == "tt.returnSendsHandsFree")
+        _ = AppSettings(defaults: defaults)
+        #expect(defaults.object(forKey: "tt.doublePressForHandsFree") == nil)
+        #expect(defaults.object(forKey: "tt.returnSendsHandsFree") == nil)
     }
 
     /// Shortcuts saved by a build that still had Copy last transcript load as they were, minus that one.

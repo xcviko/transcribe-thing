@@ -126,8 +126,6 @@ final class DictationController {
     /// A key took this press's recording over (fn D in push-to-talk, Polish Selection) and fn is still down: another
     /// fn D in the same press still adds what's selected.
     @ObservationIgnored private var pressTakenByKey = false
-    /// One of the app's own menus is open (the menu bar's, the pill's model menu): Return is for choosing in it.
-    @ObservationIgnored private var menuIsOpen = false
     /// Keys the tap held for the selection, waiting for a lookup, in the order they came: the press's own release
     /// waits with them (`heldRelease`), so what the press was is decided by its keys, not by when fn came up.
     @ObservationIgnored private var heldKeys: [(action: ShortcutAction, key: KeyStroke?)] = []
@@ -150,13 +148,12 @@ final class DictationController {
     @ObservationIgnored private var deliveringJob: Job?
     /// A refusal found at key-down, reported only if the user commits to dictating (fn+← must stay silent).
     @ObservationIgnored private var pendingRefusal: AppError?
-    /// A hold the main model refused that hands-free's own model could still take (fn Space on its way, or a double
-    /// press's first tap): told once the hold is a push-to-talk past a tap (`reportDeferredRefusal`).
+    /// A hold the main model refused that hands-free's own model could still take (fn Space on its way): told once the hold is a push-to-talk past a tap (`reportDeferredRefusal`).
     @ObservationIgnored private var deferredRefusal: AppError?
     @ObservationIgnored private var deferredRefusalTask: Task<Void, Never>?
     /// When the last error shake was requested (pill clicks during it open the Hub instead of recording).
     @ObservationIgnored private var lastErrorFlashAt: TimeInterval?
-    /// A shake that came while the pill showed a press that hasn't committed (arming, the tap window). It
+    /// A shake that came while the pill showed a press that hasn't committed (arming). It
     /// plays when the press folds away; a press that commits drops it, as a recording cuts one on screen.
     @ObservationIgnored private var isErrorFlashDeferred = false
     /// The words the deferred flash carries ("No speech detected"), or nil for the plain shake.
@@ -260,8 +257,6 @@ final class DictationController {
         }
         history.onRemove = { [weak self] ids in self?.entriesRemoved(ids) }
         observeMicrophonePermission()
-        observeReturnFinishes()
-        observeMenus()
         stateDidChange()
     }
 
@@ -275,34 +270,6 @@ final class DictationController {
                 guard let self else { return }
                 if self.permissions.microphone == .granted { self.dismissMicrophoneNotices() }
                 self.observeMicrophonePermission()
-            }
-        }
-    }
-
-    /// Shortcuts → "Return finishes" turned on or off reaches a hands-free dictation already recording.
-    private func observeReturnFinishes() {
-        withObservationTracking {
-            _ = settings.returnFinishesHandsFree
-            _ = settings.shortcuts
-        } onChange: { [weak self] in
-            Task { @MainActor [weak self] in
-                self?.stateDidChange()
-                self?.observeReturnFinishes()
-            }
-        }
-    }
-
-    /// While one of the app's menus is open (the menu bar's, the pill's model menu), Return chooses in it instead of
-    /// finishing a hands-free dictation.
-    private func observeMenus() {
-        let center = NotificationCenter.default
-        for (name, open) in [(NSMenu.didBeginTrackingNotification, true), (NSMenu.didEndTrackingNotification, false)] {
-            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    guard let self, self.menuIsOpen != open else { return }
-                    self.menuIsOpen = open
-                    self.stateDidChange()
-                }
             }
         }
     }
@@ -361,9 +328,6 @@ final class DictationController {
             if machine.isRecording, effectiveChoice == .gemini { send(.translate) }
         case .heldForSelection(let action, let key):
             actOnceSelectionIsKnown(action, key)
-        case .finishHandsFree:
-            guard machine.mode == .handsFree, machine.isRecording else { return }
-            send(.pillStop)
         case .cardPaste: pasteSelectionCard()
         case .cardClose:
             // Esc stops a polish still under way too, with the cancel cue.
@@ -416,7 +380,6 @@ final class DictationController {
     }
 
     func send(_ input: DictationMachine.Input) {
-        syncConfig()
         let wasArming = machine.capture.isArming
         let wasIdle = machine.capture == .idle
         let wasHandsFree = machine.mode == .handsFree
@@ -435,7 +398,7 @@ final class DictationController {
         } else if wasIdle {
             pressKeepsProcessing = hasPendingWork
         }
-        // Hands-free from the key, a double press or the pill; an Undo goes on with the model it had. Before the mic
+        // Hands-free from the key or the pill; an Undo goes on with the model it had. Before the mic
         // opens, so what's checked is whether the hands-free model can take the dictation.
         let entersHandsFree = !wasHandsFree && machine.mode == .handsFree && !input.isResume
         if entersHandsFree { switchToHandsFreeModel() }
@@ -477,7 +440,7 @@ final class DictationController {
         }
         if !machine.isRecording {
             pendingRefusal = nil
-            // A tap (a double press's first, say) is no dictation: nothing to report.
+            // A tap is no dictation: nothing to report.
             clearDeferredRefusal()
             if heldKeys.isEmpty { heldRelease = nil }
             // The dictation is over (its job and any kept recording hold the choice): the next one starts on the
@@ -518,10 +481,6 @@ final class DictationController {
         case .configurationChanged:
             break
         }
-    }
-
-    private func syncConfig() {
-        machine.config.doublePressEnabled = settings.doublePressForHandsFree
     }
 
     // MARK: - Effects
@@ -1977,7 +1936,7 @@ final class DictationController {
     /// even back to the main one) stays, and so does Gemini with Polish or Translate on; one that can't take it now is refused as
     /// Switch model would.
     /// Hands-free would switch this push-to-talk hold to its own model, and that one can start: a hold the main model
-    /// refused may still become a dictation (fn Space, or a double press).
+    /// refused may still become a dictation (fn Space).
     private var handsFreeCouldTakeOver: Bool {
         guard machine.mode == .pushToTalk, let choice = settings.handsFreeChoice, !pickedModel, !isPolishing,
               !isTranslating else {
@@ -2662,8 +2621,6 @@ final class DictationController {
             // gone, the held key shows its dots again unless the job's shake is still on screen.
             let showsShake = pillModel.visiblePhase == .error
             phase = pressKeepsProcessing && (hasPendingWork || showsShake) ? idle : .listening
-        case .tapPending:
-            phase = pressKeepsProcessing ? idle : .listening
         case .listening:
             phase = .listening
         case .locked, .lockedStopPending:
@@ -2715,9 +2672,6 @@ final class DictationController {
     private func stateDidChange() {
         if hotkeys.isBusy != machine.isBusy { hotkeys.isBusy = machine.isBusy }
         if hotkeys.isRecording != machine.isRecording { hotkeys.isRecording = machine.isRecording }
-        let returnFinishes = settings.returnFinishesHandsFree && machine.mode == .handsFree && machine.isRecording
-            && !menuIsOpen
-        if hotkeys.returnFinishes != returnFinishes { hotkeys.returnFinishes = returnFinishes }
         syncCardKeys()
         updateSwitchHint()
         let count = queue.count + (isDelivering ? 1 : 0)
@@ -2752,21 +2706,15 @@ extension DictationMachine.Capture {
         if case .arming = self { true } else { false }
     }
 
-    /// Key down but not committed yet: arming, or the double-press window after a quick tap. The pill shows it,
-    /// but nothing counts it as a recording.
-    var isUncommittedPress: Bool {
-        switch self {
-        case .arming, .tapPending: true
-        case .idle, .listening, .locked, .lockedStopPending: false
-        }
-    }
+    /// Key down but not committed yet (arming). The pill shows it, but nothing counts it as a recording.
+    var isUncommittedPress: Bool { isArming }
 
     /// Recording past the confirm delay. Arming already shows the pill and plays the start sound, but notices and
     /// the menu bar state wait, so fn combos and quick taps show nothing else.
     var isListeningOrLocked: Bool {
         switch self {
         case .listening, .locked, .lockedStopPending: true
-        case .idle, .arming, .tapPending: false
+        case .idle, .arming: false
         }
     }
 }

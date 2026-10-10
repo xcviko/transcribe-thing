@@ -46,8 +46,7 @@ struct TryItStep: View {
     }
 
     private var handsFreeDetail: String {
-        let base = "Press once, talk as long as you like, press \(model.pushToTalkLabel) to finish."
-        return settings.doublePressForHandsFree ? base + " Or double-press \(model.pushToTalkLabel)." : base
+        "Press once, talk as long as you like, press \(model.pushToTalkLabel) to finish."
     }
 
     /// "fn Space" stays on one line inside running copy.

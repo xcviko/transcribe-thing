@@ -30,15 +30,14 @@ import Testing
         #expect(m.handle(.pttUp, now: 40.1).contains(.stopCaptureAndTranscribe(mode: .handsFree)))
     }
 
-    /// A quick fn+Tab isn't a tap: the model it chose would be dropped, and a following fn press would lock
-    /// hands-free on the main model. It cancels quietly instead, like fn+←.
+    /// A quick fn+Tab isn't a tap: it cancels quietly, like fn+←.
     @Test func aQuickReleaseAfterSwitchingCancelsQuietly() {
         var m = T.arming()
         #expect(m.handle(.cycleEngine, now: 10.0625) == [.cycleEngine])
         #expect(m.handle(.pttUp, now: 10.09375)
             == [.cancelTimer(.arming), .cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)])
         #expect(m.capture == .idle)
-        #expect(m.handle(.pttDown, now: 10.25).contains(.startCapture), "no double-press: a fresh hold")
+        #expect(m.handle(.pttDown, now: 10.25).contains(.startCapture), "a fresh hold")
         #expect(m.capture == .arming(downAt: 10.25))
 
         var listening = T.listening()
@@ -53,13 +52,13 @@ import Testing
         _ = m.handle(.cycleEngine, now: 10.5)
         #expect(m.handle(.pttUp, now: 12).contains(.stopCaptureAndTranscribe(mode: .pushToTalk)))
         _ = m.handle(.pttDown, now: 20)
-        _ = m.handle(.pttUp, now: 20.0625)
-        #expect(m.capture == .tapPending(firstDownAt: 20), "the switch belonged to the last press only")
+        let tap = m.handle(.pttUp, now: 20.0625)
+        #expect(tap == [.cancelTimer(.arming), .cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)],
+                "the switch belonged to the last press only")
     }
 
-    @Test(arguments: ["idle", "tapPending"])
-    func withoutARecordingNothingHappens(_ name: String) {
-        var m = T.state(name)
+    @Test func withoutARecordingNothingHappens() {
+        var m = DictationMachine()
         let before = m.capture
         #expect(m.handle(.cycleEngine, now: 40).isEmpty)
         #expect(m.capture == before)
@@ -594,27 +593,6 @@ import Testing
         #expect(rig.h.toasts.notices.contains { $0.style != .info }, "the refusal")
     }
 
-    /// Double press for hands-free, its first tap held past the confirm delay: not reported, and the second press
-    /// starts hands-free on its own model.
-    @Test func aDoublePressAfterARefusedTapStartsHandsFree() {
-        let (rig, _) = Self.make(key: .missing)
-        let c = rig.h.controller
-        c.runsTimers = false
-        rig.h.settings.lineup.main = .gemini
-        rig.h.settings.handsFreeModel = .parakeet
-        rig.h.settings.doublePressForHandsFree = true
-        c.handle(.pttDown)
-        c.send(.timer(.arming))
-        rig.now += 0.2
-        c.handle(.pttUp)
-        #expect(rig.h.toasts.notices.isEmpty, "a tap")
-        rig.now += 0.1
-        c.handle(.pttDown)
-        #expect(c.machine.capture.isListeningOrLocked && c.machine.mode == .handsFree && c.effectiveEngine == .parakeet)
-        #expect(rig.h.toasts.notices.allSatisfy { $0.style == .info })
-        c.send(.pillCancel)
-    }
-
     /// Hands-free's model is one Switch model reaches: one that becomes the main model, or that Switch model stops
     /// reaching, is forgotten.
     @Test func handsFreesModelIsOneOfTheCycle() {
@@ -838,60 +816,6 @@ import Testing
         #expect(rig.h.hotkeys.isRecording)
         c.send(.pillCancel)
         #expect(!rig.h.hotkeys.isRecording)
-    }
-}
-
-// MARK: - Return in hands-free
-
-@MainActor
-@Suite(.serialized) struct ReturnFinishesTests {
-    typealias Switch = SwitchModelControllerTests
-
-    /// Return in hands-free finishes the dictation as fn does: it's pasted, and nothing more is pressed.
-    @Test func returnFinishesAndPastes() async throws {
-        let (rig, _) = Switch.make()
-        let c = rig.h.controller
-        rig.result = { _, _ in "Hello there" }
-        c.send(.handsFreeToggle)
-        #expect(rig.h.hotkeys.currentConfig().returnFinishes)
-        rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
-        rig.now += 2
-        c.handle(.finishHandsFree)
-        #expect(!rig.h.hotkeys.currentConfig().returnFinishes, "Return is the app's again at once")
-        try await waitUntil { rig.pasted.count == 1 && c.machine.activeJobs == 0 }
-    }
-
-    /// Push-to-talk never takes Return.
-    @Test func pushToTalkLeavesReturnAlone() {
-        let (rig, _) = Switch.make()
-        Switch.hold(rig)
-        #expect(!rig.h.hotkeys.currentConfig().returnFinishes)
-        rig.h.controller.send(.pillCancel)
-    }
-
-    @Test func itCanBeTurnedOff() async throws {
-        let (rig, _) = Switch.make()
-        rig.h.controller.start()
-        rig.h.settings.returnFinishesHandsFree = false
-        rig.h.controller.send(.handsFreeToggle)
-        #expect(!rig.h.hotkeys.currentConfig().returnFinishes)
-        rig.h.settings.returnFinishesHandsFree = true
-        try await waitUntil { rig.h.hotkeys.currentConfig().returnFinishes }
-        rig.h.settings.returnFinishesHandsFree = false
-        try await waitUntil { !rig.h.hotkeys.currentConfig().returnFinishes }
-        rig.h.controller.send(.pillCancel)
-    }
-
-    /// While one of the app's menus is open, Return chooses in it.
-    @Test func aMenuOpenKeepsReturnForIt() async throws {
-        let (rig, _) = Switch.make()
-        rig.h.controller.start()
-        rig.h.controller.send(.handsFreeToggle)
-        NotificationCenter.default.post(name: NSMenu.didBeginTrackingNotification, object: NSMenu())
-        try await waitUntil { !rig.h.hotkeys.currentConfig().returnFinishes }
-        NotificationCenter.default.post(name: NSMenu.didEndTrackingNotification, object: NSMenu())
-        try await waitUntil { rig.h.hotkeys.currentConfig().returnFinishes }
-        rig.h.controller.send(.pillCancel)
     }
 }
 

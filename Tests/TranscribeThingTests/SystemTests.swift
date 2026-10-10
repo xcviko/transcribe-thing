@@ -1912,35 +1912,25 @@ private func copyScreenshotAndFile(to pasteboard: NSPasteboard) {
 
 // MARK: - Return in hands-free
 
-@Suite struct ReturnFinishesRouterTests {
-    /// In hands-free, Return finishes the dictation; ⌘↩ stays the app's, and so does Return otherwise.
-    @Test func returnFinishesAHandsFreeDictation() {
+@MainActor
+@Suite(.serialized) struct ReturnInHandsFreeTests {
+    /// Return and Keypad Enter during a hands-free dictation are the app's: the tap neither takes them nor reports
+    /// anything, and the dictation records on. Only fn and the pill's check button finish it.
+    @Test func returnDuringHandsFreeGoesToTheApp() {
+        let (rig, _) = SwitchModelControllerTests.make()
+        let c = rig.h.controller
+        c.send(.handsFreeToggle)
+        #expect(c.machine.mode == .handsFree && c.machine.isRecording)
         var kb = Keyboard()
-        kb.config.isRecording = true
-        kb.config.returnFinishes = true
-        let enter = kb.down(kVK_Return)
-        #expect(enter.events == [.finishHandsFree] && enter.swallow)
-        #expect(kb.down(kVK_Return, isRepeat: true).events.isEmpty, "once per press")
-        #expect(kb.up(kVK_Return).swallow)
-        kb.press(.leftCommand)
-        #expect(!kb.down(kVK_Return).swallow)
-        kb.up(kVK_Return)
-        kb.release(.leftCommand)
-        kb.config.returnFinishes = false
-        #expect(!kb.down(kVK_Return).swallow)
-    }
-
-    /// A bare Return or Keypad Enter the user bound stays theirs, and Stop's tooltip doesn't promise it.
-    @Test func aReturnTheUserBoundStaysTheirs() {
-        var kb = Keyboard()
-        kb.config.isRecording = true
-        kb.config.returnFinishes = true
-        kb.config.bindings[.pasteLast] = Shortcut(modifiers: [], keyCode: KeyCode.keypadEnter)
-        #expect(kb.down(kVK_ANSI_KeypadEnter).events == [.pasteLast])
-        kb.up(kVK_ANSI_KeypadEnter)
-        #expect(kb.down(kVK_Return).events == [.finishHandsFree], "Return itself still finishes")
-        kb.up(kVK_Return)
-        #expect(kb.config.bindings.claims(bareKey: KeyCode.keypadEnter))
-        #expect(!kb.config.bindings.claims(bareKey: KeyCode.returnKey) && !ShortcutBindings.defaults.claims(bareKey: KeyCode.returnKey))
+        kb.config = rig.h.hotkeys.currentConfig()
+        #expect(kb.config.isRecording && kb.config.isBusy)
+        for key in [kVK_Return, kVK_ANSI_KeypadEnter] {
+            let down = kb.down(key)
+            #expect(down.events.isEmpty && !down.swallow, "key \(key) reaches the app")
+            #expect(!kb.down(key, isRepeat: true).swallow)
+            #expect(!kb.up(key).swallow)
+        }
+        #expect(c.machine.mode == .handsFree && c.machine.isRecording, "still recording")
+        c.send(.pillCancel)
     }
 }

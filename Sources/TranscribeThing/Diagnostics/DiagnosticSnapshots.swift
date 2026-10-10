@@ -62,7 +62,6 @@ struct DiagnosticSettingsSummary: Equatable, Sendable {
         fields += [
             DiagnosticField("pill", settings.pillMode.rawValue),
             DiagnosticField("sounds", settings.soundsEnabled ? "on" : "off"),
-            DiagnosticField("doublePress", settings.doublePressForHandsFree ? "on" : "off"),
             // How many, never which: the words are the user's own.
             DiagnosticField("dictionaryWords", "\(settings.dictionary.words.count)"),
             DiagnosticField("keySaved", keySaved ? "yes" : "no"),

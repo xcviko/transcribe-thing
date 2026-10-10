@@ -18,8 +18,6 @@ enum HotkeyEvent: Equatable, Sendable {
     case translate
     /// Its key held down: Translate on and off again on Gemini (and nothing elsewhere).
     case translateRepeat
-    /// Return during a hands-free dictation: finish it, as fn does (`AppSettings.returnFinishesHandsFree`).
-    case finishHandsFree
     /// A key the tap held for the selection (Add to dictionary's: it reads what's selected now). What the key does with
     /// the selection if there is one; with none, the pill says to select a word first.
     case heldForSelection(ShortcutAction, KeyStroke)
@@ -59,10 +57,6 @@ final class HotkeyMonitor {
     /// Swallow the Switch model and Polish shortcuts only while a dictation records.
     var isRecording = false {
         didSet { if isRecording != oldValue { pushConfig() } }
-    }
-    /// A hands-free dictation records and Return finishes it: Return is taken, as `.finishHandsFree`.
-    var returnFinishes = false {
-        didSet { if returnFinishes != oldValue { pushConfig() } }
     }
     /// Polish Selection's cards are up: ↩ is theirs (it pastes the one card; with two it couldn't tell which, and does
     /// nothing), Esc closes them.
@@ -154,7 +148,7 @@ final class HotkeyMonitor {
     /// model to step to.
     func currentConfig() -> HotkeyRouter.Config {
         HotkeyRouter.Config(bindings: settings.shortcuts, isBusy: isBusy, isRecording: isRecording,
-                            switchesModels: settings.lineup.cycle.count > 1, returnFinishes: returnFinishes,
+                            switchesModels: settings.lineup.cycle.count > 1,
                             cardPaste: cardPaste, cardClose: cardClose,
                             isSuspended: suspendCount > 0, forwardsRawKeys: onRawKey != nil)
     }

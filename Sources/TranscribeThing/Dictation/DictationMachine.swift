@@ -17,9 +17,6 @@ struct DictationMachine: Equatable {
         case locked(startedAt: TimeInterval)
         /// Hands-free + PTT key went down: stop on clean release, resume if it was a combo (fn+←, fn+Space).
         case lockedStopPending(startedAt: TimeInterval)
-        /// Quick tap; waiting for a second press (double-press → hands-free). The mic is off but the pill stays up
-        /// until the window closes, so a double-press grows straight into hands-free instead of blinking.
-        case tapPending(firstDownAt: TimeInterval)
     }
 
     enum Input: Equatable {
@@ -41,7 +38,7 @@ struct DictationMachine: Equatable {
         /// kept for Undo only if something was said in it (`discardCapture`).
         case discard
         /// A key the press was for that changes nothing here (fn D, the polish key off Gemini saying why it can't):
-        /// the release isn't a tap, and doesn't finish hands-free.
+        /// in hands-free, the push-to-talk key's release then doesn't finish it.
         case keyUsed
         case timer(TimerID)
         case captureFailed(AppError), deviceLost
@@ -53,7 +50,7 @@ struct DictationMachine: Equatable {
         }
     }
 
-    enum TimerID: Equatable, Hashable, CaseIterable { case arming, doublePressWindow }
+    enum TimerID: Equatable, Hashable, CaseIterable { case arming }
 
     enum Effect: Equatable {
         case startCapture
@@ -84,16 +81,11 @@ struct DictationMachine: Equatable {
     struct Config: Equatable {
         var armingDelay = 0.12
         var tapThreshold = 0.30
-        var doublePressWindow = 0.50
         var quietInterruptWindow = 1.5
-        var doublePressEnabled = true
     }
 
     private(set) var capture: Capture = .idle
     private(set) var activeJobs: Int = 0
-    /// The push-to-talk press switched the model: a quick release is then not a tap (a double-press would lock
-    /// hands-free on the main model, the choice already dropped) but a quiet cancel.
-    private(set) var switchedDuringPress = false
     var config: Config
 
     init(config: Config = Config()) {
@@ -103,7 +95,7 @@ struct DictationMachine: Equatable {
     var isRecording: Bool {
         switch capture {
         case .arming, .listening, .locked, .lockedStopPending: true
-        case .idle, .tapPending: false
+        case .idle: false
         }
     }
 
@@ -115,7 +107,7 @@ struct DictationMachine: Equatable {
         switch capture {
         case .arming, .listening: .pushToTalk
         case .locked, .lockedStopPending: .handsFree
-        case .idle, .tapPending: nil
+        case .idle: nil
         }
     }
 
@@ -123,7 +115,7 @@ struct DictationMachine: Equatable {
     var recordingStartedAt: TimeInterval? {
         switch capture {
         case .arming(let t), .listening(let t), .locked(let t), .lockedStopPending(let t): t
-        case .idle, .tapPending: nil
+        case .idle: nil
         }
     }
 
@@ -140,18 +132,10 @@ struct DictationMachine: Equatable {
         case .discard:
             guard isRecording else { return [] }
             capture = .idle
-            switchedDuringPress = false
             return cancelAllTimers + [.discardCapture, .showPill(.rest)]
         default:
-            break
+            return reduce(input, now: now)
         }
-
-        let effects = reduce(input, now: now)
-        switch capture {
-        case .arming, .listening: break
-        default: switchedDuringPress = false
-        }
-        return effects
     }
 
     private mutating func reduce(_ input: Input, now: TimeInterval) -> [Effect] {
@@ -166,8 +150,6 @@ struct DictationMachine: Equatable {
             return handleLocked(input, startedAt: startedAt, now: now)
         case .lockedStopPending(let startedAt):
             return handleLockedStopPending(input, startedAt: startedAt, now: now)
-        case .tapPending(let firstDownAt):
-            return handleTapPending(input, firstDownAt: firstDownAt, now: now)
         }
     }
 
@@ -192,11 +174,8 @@ struct DictationMachine: Equatable {
             // The pill and the start sound came at key-down; this only confirms a real hold.
             capture = .listening(downAt: downAt)
             return []
-        case .pttUp where switchedDuringPress:
-            capture = .idle
-            return [.cancelTimer(.arming), .cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)]
         case .pttUp:
-            return [.cancelTimer(.arming)] + releaseTap(firstDownAt: downAt, now: now)
+            return [.cancelTimer(.arming)] + releaseTap()
         case .pttInterrupted:
             capture = .idle
             return [.cancelTimer(.arming), .cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)]
@@ -206,14 +185,9 @@ struct DictationMachine: Equatable {
         case .cancel, .pillCancel:
             return cancelRecording()
         case .cycleEngine:
-            switchedDuringPress = true
             return [.cycleEngine]
         case .polish, .translate:
-            switchedDuringPress = true
             return [input == .polish ? .polish : .translate]
-        case .keyUsed:
-            switchedDuringPress = true
-            return []
         case .deviceLost:
             capture = .idle
             return [.cancelTimer(.arming), .cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)]
@@ -227,11 +201,8 @@ struct DictationMachine: Equatable {
     private mutating func handleListening(_ input: Input, downAt: TimeInterval, now: TimeInterval) -> [Effect] {
         let held = now - downAt
         switch input {
-        case .pttUp where held < config.tapThreshold && switchedDuringPress:
-            capture = .idle
-            return [.cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)]
         case .pttUp where held < config.tapThreshold:
-            return releaseTap(firstDownAt: downAt, now: now)
+            return releaseTap()
         case .pttUp:
             capture = .idle
             return [.stopCaptureAndTranscribe(mode: .pushToTalk), .playSound(.stop)]
@@ -247,14 +218,9 @@ struct DictationMachine: Equatable {
         case .cancel, .pillCancel:
             return cancelRecording()
         case .cycleEngine:
-            switchedDuringPress = true
             return [.cycleEngine]
         case .polish, .translate:
-            switchedDuringPress = true
             return [input == .polish ? .polish : .translate]
-        case .keyUsed:
-            switchedDuringPress = true
-            return []
         case .deviceLost:
             capture = .idle
             return [.stopCaptureAndTranscribe(mode: .pushToTalk), .notice(.deviceLostTranscribing)]
@@ -271,8 +237,8 @@ struct DictationMachine: Equatable {
             capture = .lockedStopPending(startedAt: startedAt)
             return []
         case .pttUp, .pttInterrupted:
-            // Release of the key that locked it (fn+Space, or the second press of a double-press), or that press
-            // became a combo (fn+←): the recording goes on.
+            // Release of the key that locked it (fn+Space), or that press became a combo (fn+←): the recording
+            // goes on.
             return []
         case .handsFreeToggle:
             // Already hands-free: the shortcut only starts it. The PTT key finishes, Esc cancels.
@@ -323,25 +289,6 @@ struct DictationMachine: Equatable {
         }
     }
 
-    private mutating func handleTapPending(_ input: Input, firstDownAt: TimeInterval, now: TimeInterval) -> [Effect] {
-        switch input {
-        case .pttDown where config.doublePressEnabled && now - firstDownAt <= config.doublePressWindow:
-            capture = .locked(startedAt: now)
-            return [.cancelTimer(.doublePressWindow), .startCapture, .showPill(.locked), .playSound(.lock)]
-        case .pttDown:
-            return [.cancelTimer(.doublePressWindow)] + arm(now: now)
-        case .timer(.doublePressWindow):
-            capture = .idle
-            return [.showPill(.rest)]
-        case .handsFreeToggle, .pillClick:
-            return lockFromRest(now: now)
-        case .resume(let prefix):
-            return resumeFromRest(prefix: prefix, now: now)
-        default:
-            return []
-        }
-    }
-
     // MARK: - Shared transitions
 
     /// Key down: the pill comes first, in this very turn, so the mic open never delays its first frame. The start
@@ -351,28 +298,22 @@ struct DictationMachine: Equatable {
         return [.showPill(.listening), .startCapture, .playSound(.start), .schedule(.arming, after: config.armingDelay)]
     }
 
-    /// A quick tap: the mic closes without a sound. With double-press on, the pill stays up for the rest of the
-    /// window (a second press locks it where it is); otherwise it folds away at once.
-    private mutating func releaseTap(firstDownAt: TimeInterval, now: TimeInterval) -> [Effect] {
-        guard config.doublePressEnabled else {
-            capture = .idle
-            return [.cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)]
-        }
-        capture = .tapPending(firstDownAt: firstDownAt)
-        return [.cancelCapture(keepForUndo: false, notify: false),
-                .schedule(.doublePressWindow, after: doublePressRemaining(firstDownAt: firstDownAt, now: now))]
+    /// A quick tap: the mic closes without a sound and the pill folds away at once.
+    private mutating func releaseTap() -> [Effect] {
+        capture = .idle
+        return [.cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)]
     }
 
     private mutating func lockFromRest(now: TimeInterval) -> [Effect] {
         capture = .locked(startedAt: now)
-        return [.cancelTimer(.doublePressWindow), .startCapture, .showPill(.locked), .playSound(.lock)]
+        return [.startCapture, .showPill(.locked), .playSound(.lock)]
     }
 
     /// Hands-free again, as if recording had never stopped: the timer counts the kept audio too.
     private mutating func resumeFromRest(prefix: TimeInterval, now: TimeInterval) -> [Effect] {
         let startedAt = now - max(0, prefix)
         capture = .locked(startedAt: startedAt)
-        return [.cancelTimer(.doublePressWindow), .resumeCapture, .showPill(.locked), .playSound(.lock)]
+        return [.resumeCapture, .showPill(.locked), .playSound(.lock)]
     }
 
     private mutating func finishHandsFree() -> [Effect] {
@@ -392,8 +333,4 @@ struct DictationMachine: Equatable {
     }
 
     private var cancelAllTimers: [Effect] { TimerID.allCases.map { .cancelTimer($0) } }
-
-    private func doublePressRemaining(firstDownAt: TimeInterval, now: TimeInterval) -> TimeInterval {
-        max(0, firstDownAt + config.doublePressWindow - now)
-    }
 }

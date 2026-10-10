@@ -349,7 +349,7 @@ struct ShortcutBindings: Codable, Equatable, Sendable {
         .handsFree: .fnSpace,
         .pasteLast: .commandFnV,
         .switchModel: .fnTab,
-        // P for Polish, D for Dictionary; ↩ is kept for finishing hands-free (`AppSettings.returnFinishesHandsFree`).
+        // P for Polish, D for Dictionary, T for Translate.
         .polish: .fnP,
         .addToDictionary: .fnD,
         .translate: .fnT,
@@ -360,8 +360,8 @@ struct ShortcutBindings: Codable, Equatable, Sendable {
         set { bindings[action] = newValue }
     }
 
-    /// The user bound this key on its own (bare Return for push-to-talk, say): the app's own uses of it (Return
-    /// sending a hands-free dictation, a card's Return and Esc) leave it alone.
+    /// The user bound this key on its own (bare Return for push-to-talk, say): the app's own uses of it (a card's
+    /// Return and Esc) leave it alone.
     func claims(bareKey keyCode: UInt16) -> Bool {
         bindings.values.contains { $0.matches(keyCode: keyCode, modifiers: ModifierSnapshot()) }
     }
