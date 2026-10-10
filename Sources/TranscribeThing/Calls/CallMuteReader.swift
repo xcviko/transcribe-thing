@@ -15,6 +15,18 @@ final class CallMuteReader: @unchecked Sendable {
         var windowCount = 0
         /// While mute is unknown: the controls that were read, to learn the app's labels from.
         var dump: [String]?
+
+        /// What `CallDetector` takes from the read; nil for a browser none of whose windows could be read, which
+        /// says nothing about its tabs.
+        var window: CallDetector.Window? {
+            if isBrowser, windowCount == 0 { return nil }
+            let muted: Bool? = switch read.state {
+            case .muted: true
+            case .live: false
+            case .unknown: nil
+            }
+            return CallDetector.Window(tab: tab.map(CallDetector.Tab.init), muted: muted, inCall: read.inCall)
+        }
     }
 
     private let timeout: Float
@@ -36,8 +48,9 @@ final class CallMuteReader: @unchecked Sendable {
         self.budget = budget
     }
 
-    /// One read of `app`, whose processes with windows are `pids`. Call on the reader's queue.
-    func read(_ app: CallApp, pids: [pid_t]) -> Report {
+    /// One read of `app`, whose processes with windows are `pids`; for a browser, `following` is the key of the tab
+    /// the call was in (`BrowserTabs.callTab`). Call on the reader's queue.
+    func read(_ app: CallApp, pids: [pid_t], following: String? = nil) -> Report {
         let deadline = Date() + budget
         switch CallAppKind.of(app.id) {
         case .telegramDesktop:
@@ -47,7 +60,7 @@ final class CallMuteReader: @unchecked Sendable {
         case .electron(let service):
             return readWindows(pids, rules: service.rules, manual: true, deadline: deadline)
         case .browser:
-            return readBrowser(pids, deadline: deadline)
+            return readBrowser(pids, following: following, deadline: deadline)
         case .other:
             return readWindows(pids, rules: nil, manual: false, deadline: deadline)
         }
@@ -104,7 +117,7 @@ final class CallMuteReader: @unchecked Sendable {
         return Report(read: read, windowCount: windowCount, dump: read.state.isKnown ? nil : CallControl.dump(controls))
     }
 
-    private func readBrowser(_ pids: [pid_t], deadline: Date) -> Report {
+    private func readBrowser(_ pids: [pid_t], following: String?, deadline: Date) -> Report {
         var windows: [BrowserTabs.Window] = []
         var windowElements: [AXUIElement] = []
         for pid in pids {
@@ -120,7 +133,7 @@ final class CallMuteReader: @unchecked Sendable {
         }
         var report = Report(read: MuteRead(state: .unknown("no tab records or is titled like a call"), inCall: nil, detail: ""),
                             isBrowser: true, windowCount: windows.count)
-        guard let tab = BrowserTabs.callTab(in: windows) else { return report }
+        guard let tab = BrowserTabs.callTab(in: windows, following: following) else { return report }
         report.tab = tab
         guard let service = tab.service else {
             report.read.state = .unknown("not a call service it knows")

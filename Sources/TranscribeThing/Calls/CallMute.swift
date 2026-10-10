@@ -157,15 +157,22 @@ struct MuteRules: Equatable, Sendable {
     var liveWhenOn: Set<String>
     /// Shown only during a call: Leave call, Disconnect.
     var inCall: Set<String>
+    /// Shown while the person's mic isn't in the call yet, enabled or not: Zoom's "join audio" before joining it.
+    var notJoined: Set<String>
+    /// Why mute is unknown when none of these labels shows: the app has no mute control at all, or none was found.
+    var noControl: String
 
     init(muted: [String] = [], live: [String] = [], mutedWhenOn: [String] = [], liveWhenOn: [String] = [],
-         inCall: [String] = []) {
+         inCall: [String] = [], notJoined: [String] = [], noControl: String? = nil) {
         func set(_ labels: [String]) -> Set<String> { Set(labels.map(CallLabels.normalize)) }
         self.muted = set(muted)
         self.live = set(live)
         self.mutedWhenOn = set(mutedWhenOn)
         self.liveWhenOn = set(liveWhenOn)
         self.inCall = set(inCall)
+        self.notJoined = set(notJoined)
+        let isEmpty = muted.isEmpty && live.isEmpty && mutedWhenOn.isEmpty && liveWhenOn.isEmpty
+        self.noControl = noControl ?? (isEmpty ? "no labels known for it yet" : "no mute control found")
     }
 
     var isEmpty: Bool { muted.isEmpty && live.isEmpty && mutedWhenOn.isEmpty && liveWhenOn.isEmpty }
@@ -182,13 +189,17 @@ struct MuteRules: Equatable, Sendable {
         return nil
     }
 
-    /// The first enabled control the tables know decides; a Leave button anywhere says the call is on.
+    /// The first enabled control the tables know decides; a Leave button anywhere says the call is on. Without one,
+    /// a "join audio" says the mic isn't in the call yet.
     func read(_ controls: [CallControl]) -> MuteRead {
         var match: (state: MuteState, detail: String)?
         var leaveSeen = false
+        var notJoined: String?
         for control in controls {
             for text in control.texts {
-                if inCall.contains(CallLabels.normalize(text)) { leaveSeen = true }
+                let label = CallLabels.normalize(text)
+                if inCall.contains(label) { leaveSeen = true }
+                if notJoined == nil, self.notJoined.contains(label) { notJoined = control.summary(matching: text) }
                 if match == nil, control.enabled != false, let state = state(of: control, text: text) {
                     match = (state, control.summary(matching: text))
                 }
@@ -196,8 +207,8 @@ struct MuteRules: Equatable, Sendable {
         }
         let inCall = self.inCall.isEmpty ? nil : leaveSeen
         guard let match else {
-            let reason = isEmpty ? "no labels known for it yet" : "no mute control found"
-            return MuteRead(state: .unknown(reason), inCall: inCall, detail: "\(controls.count) controls read")
+            if let notJoined { return MuteRead(state: .unknown("audio not joined yet"), inCall: inCall, detail: notJoined) }
+            return MuteRead(state: .unknown(noControl), inCall: inCall, detail: "\(controls.count) controls read")
         }
         return MuteRead(state: match.state, inCall: inCall, detail: match.detail)
     }
@@ -220,6 +231,16 @@ enum CallService: String, CaseIterable, Equatable, Sendable {
         }
     }
 
+    /// Whether muting gives the mic back. Telegram's 1:1 calls do, in the app and on the web, so a released mic is
+    /// its mute. Meet, Zoom, Discord, Slack and Telemost keep the mic while muted: for them a released mic means
+    /// the person left (or is reconnecting), and mute is only read from their Mute button.
+    var releasesMicOnMute: Bool { self == .telegram }
+
+    /// Whether the page's title names the call: Meet's is the meeting's code ("Meet – abc-defg-hij"), so another
+    /// meeting is another call. Discord, Slack and Telegram retitle the tab as you move around them mid-call, and
+    /// Telemost and Zoom as the call starts and ends, so for them the service is all that tells calls apart.
+    var pageNamesTheCall: Bool { self == .meet }
+
     /// The web client's labels, which the Electron apps share. Russian ones marked "guess" haven't been seen yet.
     var rules: MuteRules {
         switch self {
@@ -228,13 +249,15 @@ enum CallService: String, CaseIterable, Equatable, Sendable {
                       live: ["Turn off microphone", "Выключить микрофон"],
                       inCall: ["Leave call", "Покинуть видеовстречу"])
         case .zoom:
+            // On the web: "join audio" until the person joins the meeting's audio, then "mute my microphone".
             MuteRules(muted: ["unmute my microphone", "Unmute"], live: ["mute my microphone", "Mute"],
-                      inCall: ["Leave", "Leave meeting"])
+                      inCall: ["Leave", "Leave meeting", "End", "Завершить"], notJoined: ["join audio"])
         case .discord:
-            // "Откл. микрофон" and "Вкл. микрофон" are guesses at the Russian client.
+            // The Russian client's mute switch is "Заглушить" (only its value says which way it is); "Откл. звук"
+            // beside it is Deafen, not Mute. "Откл. микрофон", "Вкл. микрофон" and "Отключиться" are guesses.
             MuteRules(muted: ["Unmute", "Вкл. микрофон", "Включить микрофон"],
                       live: ["Mute", "Откл. микрофон", "Отключить микрофон"],
-                      mutedWhenOn: ["Mute", "Откл. микрофон", "Отключить микрофон"],
+                      mutedWhenOn: ["Mute", "Заглушить", "Откл. микрофон", "Отключить микрофон"],
                       inCall: ["Disconnect", "Отключиться"])
         case .slack:
             MuteRules(muted: ["Unmute microphone", "Unmute mic"], live: ["Mute microphone", "Mute mic"],
@@ -244,18 +267,17 @@ enum CallService: String, CaseIterable, Equatable, Sendable {
                       live: ["Выключить микрофон", "Turn off microphone"],
                       inCall: ["Покинуть", "Покинуть встречу", "Leave", "Завершить звонок"])
         case .telegram:
-            MuteRules()
+            // Telegram Web's call bar says "Mute" whether or not the mic is muted: muting releases the mic instead.
+            MuteRules(inCall: ["End"], noControl: "its Mute button doesn't change, a released mic is its mute")
         }
     }
 
-    /// The service a web page is, from its title as the tab shows it (an unread count like "(3) " ignored):
-    /// "Meet - abc-defg-hij", "Zoom Meeting", "#general | Server | Discord", "Telegram Web", "Телемост".
+    /// The service a web page is, from its title as the tab shows it (an unread mark like "(3) " or "• " ignored):
+    /// "Meet – abc-defg-hij", "Zoom Meeting", "#general | Server | Discord", "Discord | Friends", "Telegram Web",
+    /// "Идёт звонок · Яндекс Телемост".
     static func of(pageTitle: String) -> CallService? {
-        var title = pageTitle.lowercased().split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-        if title.hasPrefix("("), let close = title.firstIndex(of: ")"),
-           title[title.index(after: title.startIndex)..<close].allSatisfy(\.isNumber) {
-            title = title[title.index(after: close)...].trimmingCharacters(in: .whitespaces)
-        }
+        let title = BrowserTabs.withoutUnreadMark(pageTitle).lowercased()
+            .split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
         func ends(_ name: String) -> Bool {
             title == name || ["| ", "- ", "– ", "— "].contains { title.hasSuffix(" " + $0 + name) }
         }
@@ -264,8 +286,8 @@ enum CallService: String, CaseIterable, Equatable, Sendable {
         }
         if starts("meet") || title.contains("google meet") { return .meet }
         if title.contains("телемост") || title.contains("telemost") { return .telemost }
-        if title.contains("zoom meeting") || title.hasPrefix("zoom ") || ends("zoom") || title == "zoom" { return .zoom }
-        if starts("discord") || ends("discord") { return .discord }
+        if title.contains("zoom meeting") || title.hasPrefix("zoom ") || starts("zoom") || ends("zoom") { return .zoom }
+        if starts("discord") || ends("discord") || title.contains("| discord") { return .discord }
         if title.hasPrefix("telegram") || ends("telegram") { return .telegram }
         if starts("slack") || ends("slack") || title.contains("huddle") { return .slack }
         return nil
@@ -301,6 +323,16 @@ enum CallAppKind: Equatable, Sendable {
         case "ru.yandex.desktop.telemost": return .electron(.telemost)
         case "ru.keepcoder.Telegram", "com.tdesktop.Telegram": return .telegramDesktop
         default: return .other
+        }
+    }
+
+    /// The service a desktop app is: nil for a browser, whose tab says, and for an app nobody knows.
+    var service: CallService? {
+        switch self {
+        case .zoomDesktop: .zoom
+        case .electron(let service): service
+        case .telegramDesktop: .telegram
+        case .browser, .other: nil
         }
     }
 }

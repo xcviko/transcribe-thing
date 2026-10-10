@@ -85,9 +85,54 @@ import Testing
         #expect(state(.meet, [button("Mute")]) == .unknown("no mute control found"))
     }
 
-    @Test func telegramWebHasNoLabelsYet() {
-        let read = CallService.telegram.rules.read([button("Mute"), button("Leave")])
-        #expect(read == MuteRead(state: .unknown("no labels known for it yet"), inCall: nil, detail: "2 controls read"))
+    /// Telegram Web's call bar from the log (/a): "Mute" whether muted or not, so only "End" says anything.
+    @Test func telegramWebShowsOnlyThatItsInACall() {
+        let bar = [button("New Chats"), button("     "), button("Mute"), button("Open call"), button("End"),
+                   CallControl(role: "AXButton", title: "Camera"), CallControl(role: "AXButton", title: "Screen"),
+                   CallControl(role: "AXButton", title: "Mute"), CallControl(role: "AXButton", title: "Accept")]
+        let read = CallService.telegram.rules.read(bar)
+        #expect(read == MuteRead(state: .unknown("its Mute button doesn't change, a released mic is its mute"),
+                                 inCall: true, detail: "9 controls read"))
+        #expect(CallService.telegram.rules.read([button("New Chats"), button("Mute")]).inCall == false)
+    }
+
+    /// Discord's Russian client from the log: the mute switch is "Заглушить", and "Откл. звук" (Deafen) isn't it.
+    @Test func discordInRussian() {
+        func toggle(_ title: String, _ value: Int?) -> CallControl {
+            CallControl(role: "AXCheckBox", subrole: "AXSwitch", title: title, label: title, value: value)
+        }
+        #expect(state(.discord, [toggle("Заглушить", 1), toggle("Откл. звук", 0)]) == .muted)
+        #expect(state(.discord, [toggle("Откл. звук", 1), toggle("Заглушить", 0)]) == .live)
+        #expect(state(.discord, [toggle("Откл. звук", 1)]) == .unknown("no mute control found"), "deafen isn't mute")
+        #expect(state(.discord, [toggle("Заглушить", nil)]) == .unknown("no mute control found"),
+                "without its value the switch says nothing")
+        #expect(state(.discord, [toggle("Mute", 1), toggle("Deafen", 0)]) == .muted)
+        #expect(CallService.discord.rules.read([toggle("Заглушить", 0), button("Отключиться")]).inCall == true)
+        #expect(CallService.discord.rules.read([toggle("Mute", 0), button("Disconnect")]).inCall == true)
+    }
+
+    /// Zoom on the web from the log: "join audio" (disabled) before joining the meeting's audio, "Завершить" (End)
+    /// to leave in Russian.
+    @Test func zoomOnTheWebBeforeAndAfterJoiningAudio() {
+        let before = [button("Meeting information"), button("Switch to Zoom Workplace Client"),
+                      button("join audio", enabled: false), button("start my video", enabled: false),
+                      button("open the chat panel"), button("Поделиться"), button("Host tools"), button("Завершить")]
+        #expect(CallService.zoom.rules.read(before)
+            == MuteRead(state: .unknown("audio not joined yet"), inCall: true, detail: "AXButton \"join audio\""))
+        let joined = [button("mute my microphone"), button("start my video"), button("Завершить")]
+        #expect(CallService.zoom.rules.read(joined)
+            == MuteRead(state: .live, inCall: true, detail: "AXButton \"mute my microphone\""))
+        #expect(state(.zoom, [button("unmute my microphone"), button("End")]) == .muted)
+        #expect(CallService.zoom.rules.read([button("Войти в систему")]).inCall == false)
+    }
+
+    @Test func onlyTelegramReleasesTheMicToMute() {
+        #expect(CallService.allCases.filter(\.releasesMicOnMute) == [.telegram])
+        #expect(CallAppKind.of("ru.keepcoder.Telegram").service == .telegram)
+        #expect(CallAppKind.of("com.hnc.Discord").service == .discord)
+        #expect(CallAppKind.of("us.zoom.xos").service == .zoom)
+        #expect(CallAppKind.of("com.google.Chrome").service == nil, "a browser's service is its tab's")
+        #expect(CallAppKind.of("com.apple.FaceTime").service == nil)
     }
 
     @Test func appsByBundleID() {
@@ -159,6 +204,126 @@ import Testing
         #expect(parse("Meet - abc - Audio playing - Microphone recording") == .init(page: "Meet - abc", recording: .mic))
         #expect(parse("YouTube - Audio playing") == .init(page: "YouTube", recording: nil))
         #expect(parse("Плейлист") == .init(page: "Плейлист", recording: nil))
+    }
+
+    /// Every tab title in the log of Meet, Discord, Zoom, Slack, Telemost and Telegram Web in one Chrome: the page,
+    /// what it records, the service.
+    @Test func everyTabTitleFromTheLog() {
+        let titles: [(String, String, BrowserTabs.Recording?, CallService?)] = [
+            ("Meet – gkz-omip-mob - Camera and microphone recording", "Meet – gkz-omip-mob", .cameraAndMic, .meet),
+            ("Meet – gkz-omip-mob - Microphone recording", "Meet – gkz-omip-mob", .mic, .meet),
+            ("Meet – gkz-omip-mob - Audio playing - Memory usage - 446 MB", "Meet – gkz-omip-mob", nil, .meet),
+            ("Meet – gkz-omip-mob - Memory usage - 453 MB", "Meet – gkz-omip-mob", nil, .meet),
+            ("Meet – gkz-omip-mob - Permission requested, press ⌘ + Option + Up arrow to respond",
+             "Meet – gkz-omip-mob", nil, .meet),
+            ("Meet – gkz-omip-mob - Permission requested, press ⌘ + Option + Up arrow to resp…",
+             "Meet – gkz-omip-mob", nil, .meet),
+            ("Google Meet", "Google Meet", nil, .meet),
+            ("Google Meet - Memory usage - 463 MB", "Google Meet", nil, .meet),
+            ("Discord", "Discord", nil, .discord),
+            ("• Discord | Друзья", "Discord | Друзья", nil, .discord),
+            ("• Discord | #основной | Сервер package.json", "Discord | #основной | Сервер package.json", nil, .discord),
+            ("• Discord | #основной | Сервер package.json - Microphone recording",
+             "Discord | #основной | Сервер package.json", .mic, .discord),
+            ("• Discord | #основной | Сервер package.json - Audio playing",
+             "Discord | #основной | Сервер package.json", nil, .discord),
+            ("Zoom: Единая платформа для связи", "Zoom: Единая платформа для связи", nil, .zoom),
+            ("Войти в систему | Zoom", "Войти в систему | Zoom", nil, .zoom),
+            ("Я согласен с условиями обслуживания - Zoom", "Я согласен с условиями обслуживания - Zoom", nil, .zoom),
+            ("Главная - Zoom", "Главная - Zoom", nil, .zoom),
+            ("Присоединиться к конференции | Zoom", "Присоединиться к конференции | Zoom", nil, .zoom),
+            ("Присоединиться через приложение Zoom Workplace - Zoom",
+             "Присоединиться через приложение Zoom Workplace - Zoom", nil, .zoom),
+            ("Zoom", "Zoom", nil, .zoom),
+            ("Zoom - Memory usage - 660 MB", "Zoom", nil, .zoom),
+            ("Zoom Meeting Matvey Litvin - Permission requested, press ⌘ + Option + Up arrow …",
+             "Zoom Meeting Matvey Litvin", nil, .zoom),
+            ("Zoom Meeting Matvey Litvin - Microphone recording", "Zoom Meeting Matvey Litvin", .mic, .zoom),
+            ("Matvey Litvin (AI) (DM) - V-Soft - Slack", "Matvey Litvin (AI) (DM) - V-Soft - Slack", nil, .slack),
+            ("Huddles - V-Soft - Slack - Memory usage - 283 MB", "Huddles - V-Soft - Slack", nil, .slack),
+            ("Идёт звонок · Яндекс Телемост - Camera and microphone recording", "Идёт звонок · Яндекс Телемост",
+             .cameraAndMic, .telemost),
+            ("Яндекс Телемост - Memory usage - 271 MB", "Яндекс Телемост", nil, .telemost),
+            ("Telegram Web", "Telegram Web", nil, .telegram),
+            ("Telegram Web - Microphone recording", "Telegram Web", .mic, .telegram),
+            ("Telegram Web - Memory usage - 178 MB", "Telegram Web", nil, .telegram),
+            ("Telegram Web - Audio playing - Memory usage - 178 MB", "Telegram Web", nil, .telegram),
+            ("LION Мыло-пенка для рук Kirei Kirei \"Воздушное\"", "LION Мыло-пенка для рук Kirei Kirei \"Воздушное\"",
+             nil, nil),
+            ("Вход – Google Аккаунты", "Вход – Google Аккаунты", nil, nil),
+            ("New Tab", "New Tab", nil, nil),
+        ]
+        for (title, page, recording, service) in titles {
+            let parsed = BrowserTabs.parse(title)
+            #expect(parsed == .init(page: page, recording: recording), "\(title)")
+            #expect(CallService.of(pageTitle: parsed.page) == service, "\(title)")
+        }
+    }
+
+    @Test func unreadMarksAndTheOtherAlertsGo() {
+        #expect(BrowserTabs.withoutUnreadMark("(3) Inbox") == "Inbox")
+        #expect(BrowserTabs.withoutUnreadMark("(99+) Telegram Web") == "Telegram Web")
+        #expect(BrowserTabs.withoutUnreadMark("• Discord | Друзья") == "Discord | Друзья")
+        #expect(BrowserTabs.withoutUnreadMark("(2) • Discord") == "Discord")
+        #expect(BrowserTabs.withoutUnreadMark("(draft) notes") == "(draft) notes")
+        #expect(BrowserTabs.parse("YouTube - Audio muted - Memory usage - 1.2 GB") == .init(page: "YouTube", recording: nil))
+        #expect(BrowserTabs.parse("Meet – abc – Audio playing") == .init(page: "Meet – abc", recording: nil))
+        #expect(BrowserTabs.parse("Telegram Web, воспроизводится аудио") == .init(page: "Telegram Web", recording: nil))
+        #expect(BrowserTabs.parse("Telegram Web - Использование памяти: 178 МБ") == .init(page: "Telegram Web", recording: nil))
+        #expect(BrowserTabs.parse("(1) Meet – abc - Memory usage - 90 MB - Microphone recording")
+            == .init(page: "Meet – abc", recording: .mic), "a recording mark counts wherever it is")
+    }
+
+    /// One call is told from another by its service, and a Meet meeting by its code: Discord, Telemost and Zoom
+    /// retitle their tab during a call.
+    @Test func tabKeys() {
+        #expect(BrowserTabs.key(service: .meet, page: "Meet – gkz-omip-mob") != BrowserTabs.key(service: .meet, page: "Meet – abc-defg-hij"))
+        #expect(BrowserTabs.key(service: .meet, page: "Meet – gkz-omip-mob") == BrowserTabs.key(service: .meet, page: "Meet  –  GKZ-omip-mob"))
+        #expect(BrowserTabs.key(service: .discord, page: "Discord | Друзья")
+            == BrowserTabs.key(service: .discord, page: "Discord | #основной | Сервер package.json"))
+        #expect(BrowserTabs.key(service: .telemost, page: "Идёт звонок · Яндекс Телемост")
+            == BrowserTabs.key(service: .telemost, page: "Яндекс Телемост"))
+        #expect(BrowserTabs.key(service: .zoom, page: "Zoom") == BrowserTabs.key(service: .zoom, page: "Zoom Meeting Matvey Litvin"))
+        #expect(BrowserTabs.key(service: nil, page: "Some call") != BrowserTabs.key(service: nil, page: "Another call"))
+        #expect(BrowserTabs.key(service: .discord, page: "Discord") != BrowserTabs.key(service: .meet, page: "Google Meet"))
+    }
+
+    /// The log at 551.4: Meet's tab after leaving, in another window, and Discord's in front; neither records.
+    @Test func withoutARecordingMarkTheCallFollowedThenTheTabInFront() throws {
+        let windows = [
+            BrowserTabs.Window(title: "• Discord | Друзья - Google Chrome - Matvey", tabs: [
+                .init(title: "• Discord | Друзья", selected: nil)]),
+            BrowserTabs.Window(title: "New Tab - Google Chrome - Matvey", tabs: [
+                .init(title: "Meet – gkz-omip-mob - Memory usage - 446 MB", selected: false),
+                .init(title: "New Tab", selected: true)]),
+        ]
+        let front = try #require(BrowserTabs.callTab(in: windows))
+        #expect(front.service == .discord && front.active && front.page == "Discord | Друзья")
+        let meetKey = BrowserTabs.key(service: .meet, page: "Meet – gkz-omip-mob")
+        let followed = try #require(BrowserTabs.callTab(in: windows, following: meetKey))
+        #expect(followed.service == .meet && !followed.active && followed.key == meetKey)
+    }
+
+    /// "Permission requested" takes the place of the recording mark, so a tab asking it is found by its title.
+    @Test func aTabAskingPermissionIsFoundByItsTitle() throws {
+        let windows = [BrowserTabs.Window(title: "x", tabs: [
+            .init(title: "Google Meet - Memory usage - 463 MB", selected: false),
+            .init(title: "Zoom Meeting Matvey Litvin - Permission requested, press ⌘ + Option + Up arrow to respond",
+                  selected: true),
+        ])]
+        let tab = try #require(BrowserTabs.callTab(in: windows))
+        #expect(tab.service == .zoom && tab.recording == nil && tab.page == "Zoom Meeting Matvey Litvin")
+    }
+
+    /// Two tabs recording: the one the call is in stays it, whichever is in front.
+    @Test func ofTwoRecordingTabsTheCallFollowedStays() throws {
+        let windows = [BrowserTabs.Window(title: "x", tabs: [
+            .init(title: "Meet – abc-defg-hij - Microphone recording", selected: false),
+            .init(title: "Zoom Meeting - Microphone recording", selected: true),
+        ])]
+        #expect(try #require(BrowserTabs.callTab(in: windows)).service == .zoom)
+        let meet = BrowserTabs.key(service: .meet, page: "Meet – abc-defg-hij")
+        #expect(try #require(BrowserTabs.callTab(in: windows, following: meet)).service == .meet)
     }
 
     @Test func russianTabTitles() {

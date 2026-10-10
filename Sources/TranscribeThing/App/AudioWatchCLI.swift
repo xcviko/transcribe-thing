@@ -10,14 +10,18 @@ import Foundation
 /// Prints, as they happen, which processes start and stop using a microphone and playing sound, with how long
 /// each lasted, and what `CallDetector` makes of them per app (`CallApp`): `CALL?` when one app has both at once,
 /// `CALL STARTED` once that has lasted `--call-after` seconds (default 20), `CALL MIC RELEASED` and `CALL MIC BACK`
-/// around a mute the app shows, and `CALL ENDED` once it has been silent for `--end-after` seconds (default 60) or
-/// the probe stops. It polls the HAL twice a second and also listens for its change notifications, printing
+/// when the app gives the mic back and takes it again (Telegram's mute; leaving, for the apps that keep the mic while
+/// muted), and `CALL ENDED` once it has been silent for `--end-after` seconds (default 60), was hung up, or the
+/// probe stops. A browser's call is named by its tab's service and page: `CALL STARTED Google Chrome · Google Meet
+/// "Meet – abc-defg-hij"`. It polls the HAL twice a second and also listens for its change notifications, printing
 /// `listener:` when one arrives, to show whether they can be relied on.
 ///
 /// While a call is suspected or on, it also reads the app's own mute control through Accessibility once a second
-/// (`CallMuteReader`) and prints `MUTE` when that changes; for a browser, `TAB` says which tab holds the call. When
-/// mute can't be read, `AX DUMP` lists the app's buttons, to learn its labels from. That needs the Accessibility
-/// permission, which the installed app has and a `swift build` binary doesn't; without it these lines are left out.
+/// (`CallMuteReader`) and prints `MUTE` when that changes; for a browser, `TAB` says which tab holds the call. Both go
+/// to the detector: a tab of another service ends the call and starts the next, and the Mute button gives the mutes
+/// of the apps that keep the mic. When mute can't be read, `AX DUMP` lists the app's buttons, to learn its labels
+/// from. That needs the Accessibility permission, which the installed app has and a `swift build` binary doesn't;
+/// without it these lines are left out.
 /// It only reads: no recording, no settings, no network. The one thing it changes is asking an Electron app or a
 /// browser in a call for its web Accessibility tree, turned back off when the call is over.
 enum AudioWatchCLI {
@@ -75,6 +79,9 @@ private final class AudioWatch {
     private var apps: [pid_t: CallApp?] = [:]
     private var detector: CallDetector
     private var suspectedAt: TimeInterval?
+    private var micReleasedAt: TimeInterval?
+    /// Reads of the followed app's window that arrived since the last poll, for the detector.
+    private var windows: [CallApp: CallDetector.Window] = [:]
     private var deviceInUse: [AudioDeviceID: Bool] = [:]
     private var timer: DispatchSourceTimer?
     private let accessibility = AXIsProcessTrusted()
@@ -118,7 +125,8 @@ private final class AudioWatch {
         timer?.cancel()
         listeners.invalidate()
         let now = Date()
-        report(detector.stop(at: now.timeIntervalSince(started)))
+        let followed = detector.followed
+        report(detector.stop(at: now.timeIntervalSince(started)), followed: followed)
         let reader = muteReader
         muteQueue.sync { reader.release() }
         for activity in activities.values.sorted(by: { $0.name < $1.name }) {
@@ -150,7 +158,10 @@ private final class AudioWatch {
             activities[pid] = nil
         }
         for pid in apps.keys where !seen.contains(pid) { apps[pid] = nil }
-        report(detector.feed(CallApp.activity(processes), at: now.timeIntervalSince(started)))
+        let followed = detector.followed
+        report(detector.feed(CallApp.activity(processes), windows: windows, at: now.timeIntervalSince(started)),
+               followed: followed)
+        windows = [:]
         pollDevices()
         readMute(at: now)
     }
@@ -161,11 +172,8 @@ private final class AudioWatch {
     /// it isn't (the walk that looks for it costs the app more), never two reads at once.
     private func readMute(at now: Date) {
         guard accessibility else { return }
-        let app: CallApp? = switch detector.phase {
-        case .idle: nil
-        case .suspected(let app, _): app
-        case .call(let call): call.app
-        }
+        let app = detector.followed?.app
+        let following = detector.followed?.tab?.key
         if app != mute.app {
             if mute.app != nil {
                 let reader = muteReader
@@ -180,7 +188,7 @@ private final class AudioWatch {
         let pids = NSRunningApplication.runningApplications(withBundleIdentifier: app.id).map(\.processIdentifier)
         let reader = muteReader
         muteQueue.async {
-            let report = reader.read(app, pids: pids)
+            let report = reader.read(app, pids: pids, following: following)
             DispatchQueue.main.async { MainActor.assumeIsolated { self.show(report, for: app) } }
         }
     }
@@ -189,6 +197,7 @@ private final class AudioWatch {
         guard app == mute.app else { return }
         mute.reading = false
         mute.lastKnown = report.read.state.isKnown
+        if let window = report.window { windows[app] = window }
         var name = app.name
         if report.isBrowser {
             let tabLine = Self.tabLine(report, browser: name)
@@ -256,32 +265,53 @@ private final class AudioWatch {
         activities[record.pid] = activity.input == nil && activity.output == nil ? nil : activity
     }
 
-    /// What the detector made of the last look. Its times are seconds since the probe started, like the lines',
-    /// and can be up to 1.5 s before the line: a signal only counts as off once it has stayed off.
-    private func report(_ events: [CallDetector.Event]) {
+    /// What the detector made of the last look, `followed` being the call it followed before. Its times are seconds
+    /// since the probe started, like the lines', and can be up to 1.5 s before the line: a signal only counts as off
+    /// once it has stayed off.
+    private func report(_ events: [CallDetector.Event], followed: CallDetector.Call?) {
+        /// The call `app`'s event is about: the one followed now, or the one that just ended.
+        func call(of app: CallApp) -> CallDetector.Call? {
+            [detector.followed, followed].compactMap { $0 }.first { $0.app == app }
+        }
         for event in events {
             switch event {
             case .suspected(let app, let at):
                 suspectedAt = at
-                line("CALL? \(app.name): mic and sound together since \(time(at)), keeping audio from there")
+                let name = detector.followed.map { $0.app == app ? Self.name(of: $0) : app.name } ?? app.name
+                line("CALL? \(name): mic and sound together since \(time(at)), keeping audio from there")
             case .dropped(let app, let at):
                 line("CALL? \(app.name): not a call, mic and sound together for only \(span(suspectedAt ?? at, at))")
                 suspectedAt = nil
             case .started(let call):
-                line("CALL STARTED \(call.app.name): mic and sound together since \(time(call.startedAt))")
+                line("CALL STARTED \(Self.name(of: call)): mic and sound together since \(time(call.startedAt))")
                 suspectedAt = nil
             case .micReleased(let app, let at):
-                line("CALL MIC RELEASED (muted?) \(app.name) at \(time(at)), sound goes on")
+                micReleasedAt = at
+                if let call = call(of: app), !call.micReleaseIsMute {
+                    line("CALL MIC RELEASED \(Self.name(of: call)) at \(time(at)): \(call.service?.name ?? "it") keeps "
+                         + "the mic while muted, so leaving or reconnecting, not a mute")
+                } else {
+                    line("CALL MIC RELEASED (muted?) \(call(of: app).map(Self.name) ?? app.name) at \(time(at)), "
+                         + "sound goes on")
+                }
             case .micBack(let app, let at):
-                let released = detector.call?.mutes.last.map { " after \(span($0.lowerBound, $0.upperBound))" } ?? ""
-                line("CALL MIC BACK \(app.name) at \(time(at))\(released)")
+                let released = micReleasedAt.map { " after \(span($0, at))" } ?? ""
+                line("CALL MIC BACK \(call(of: app).map(Self.name) ?? app.name) at \(time(at))\(released)")
+                micReleasedAt = nil
             case .ended(let call):
                 let mutes = call.mutes.isEmpty ? "no mute seen"
                     : "muted " + call.mutes.map { "\(time($0.lowerBound)) to \(time($0.upperBound))" }.joined(separator: ", ")
-                line("CALL ENDED \(call.app.name) after \(span(call.startedAt, call.lastAudioAt)) "
+                line("CALL ENDED \(Self.name(of: call)) after \(span(call.startedAt, call.lastAudioAt)) "
                      + "(\(time(call.startedAt)) to \(time(call.lastAudioAt))), \(mutes)")
+                micReleasedAt = nil
             }
         }
+    }
+
+    /// The call's app, and for a browser its tab: `Google Chrome · Google Meet "Meet – abc-defg-hij"`.
+    private static func name(of call: CallDetector.Call) -> String {
+        guard let tab = call.tab else { return call.app.name }
+        return "\(call.app.name) · \(tab.service?.name ?? "unknown service") \"\(CallLabels.safe(tab.page, limit: 60))\""
     }
 
     /// Whether anyone at all uses each microphone, as the device reports it: what apps without per-process
