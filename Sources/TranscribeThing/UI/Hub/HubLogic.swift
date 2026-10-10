@@ -674,5 +674,11 @@ extension HubSection {
         case .home, .models, .shortcuts, .dictionary, .microphone, .general: self
         }
     }
+
+    /// The page a click on the sidebar's `item` opens from this one: the item's own, even when it already reads as
+    /// selected (General from Software Update goes back to General); nil when it's the page showing.
+    func pageOpened(byClicking item: HubSection) -> HubSection? {
+        item == self ? nil : item
+    }
 }
 

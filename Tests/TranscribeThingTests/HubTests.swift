@@ -301,6 +301,15 @@ import Testing
         #expect(HubSection.sidebar.allSatisfy { $0.sidebarItem == $0 })
     }
 
+    /// General reads as selected on Software Update, and a click on it goes back to General; a click on the page
+    /// showing does nothing.
+    @Test func clickingGeneralLeavesSoftwareUpdate() {
+        #expect(HubSection.softwareUpdate.pageOpened(byClicking: .general) == .general)
+        #expect(HubSection.softwareUpdate.pageOpened(byClicking: .home) == .home)
+        #expect(HubSection.general.pageOpened(byClicking: .general) == nil)
+        #expect(HubSection.home.pageOpened(byClicking: .models) == .models)
+    }
+
     @Test func commandDigitsFollowTheSidebar() {
         #expect(HubSection.sidebar.compactMap(\.shortcutDigit) == ["1", "2", "3", "4", "5", "6"])
     }

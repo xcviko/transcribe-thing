@@ -226,12 +226,19 @@ private struct HubSidebar: View {
     private var selection: Binding<HubSection?> {
         let hub = hub, windows = windows
         return Binding(get: { windows.hubSection.sidebarItem }, set: { section in
-            if let section, section != windows.hubSection.sidebarItem { hub.show(section) }
+            if let page = section.flatMap(windows.hubSection.pageOpened(byClicking:)) { hub.show(page) }
         })
     }
 
     private func row(_ section: HubSection) -> some View {
         Label(section.title, systemImage: section.symbolName)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            // Software Update keeps General selected, and a click on a row already selected changes no selection:
+            // the click itself goes back to General.
+            .simultaneousGesture(TapGesture().onEnded {
+                if let page = windows.hubSection.pageOpened(byClicking: section) { hub.show(page) }
+            })
             .badge(section == .general && updates.showsBadge ? 1 : 0)
             .tag(section)
             .accessibilityLabel(section == .general && updates.showsBadge ? "\(section.title), update available"
