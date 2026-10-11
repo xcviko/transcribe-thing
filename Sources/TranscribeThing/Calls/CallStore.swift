@@ -73,7 +73,8 @@ final class CallStore {
         paths.calls.appendingPathComponent(id.uuidString, isDirectory: true)
     }
 
-    /// Calls/<id>/answers: each transcription request's answer as it came (`CallTranscriber`), "1-remote.txt".
+    /// Calls/<id>/answers: each transcription request's answer as it came (`CallTranscriber`), "1-mix.txt" (a call
+    /// transcribed before the tracks were mixed has "1-remote.txt" and "1-mic.txt").
     func answersFolder(for id: UUID) -> URL {
         folder(for: id).appendingPathComponent("answers", isDirectory: true)
     }
@@ -192,7 +193,9 @@ final class CallStore {
     // MARK: From the journal
 
     /// A call whose journal is closed becomes a record with `status`: each track encoded into the call's folder off
-    /// the main thread, then the record saved, and only then the journal removed. Returns the record.
+    /// the main thread, the mic silent in the call's mutes (the journal already zeroed what it could; a mute noted
+    /// too late for it, or one still going on when the app quit, is zeroed here), then the record saved, and only
+    /// then the journal removed. Returns the record.
     @discardableResult
     func adopt(_ info: CallJournal.Info, status: CallStatus, endedAt: Date? = nil) async -> CallRecord {
         if status == .transcribing || status == .interrupted,
@@ -209,12 +212,14 @@ final class CallStore {
             let id = info.id
             let folder = folder(for: id)
             let sources = CallJournal.Track.allCases.map { ($0, journal.audioURL(for: id, track: $0)) }
+            let silencing = Self.silencing(info)
             let encoded = await Task.detached(priority: .utility) { () -> [CallJournal.Track: CallAudio.Encoded] in
                 var encoded: [CallJournal.Track: CallAudio.Encoded] = [:]
                 for (track, wav) in sources where (RecordingJournal.sampleCount(of: wav) ?? 0) > 0 {
                     let m4a = folder.appendingPathComponent("\(track.rawValue).m4a", isDirectory: false)
                     do {
-                        encoded[track] = try CallAudio.encode(journal: wav, to: m4a)
+                        encoded[track] = try CallAudio.encode(journal: wav, to: m4a,
+                                                              silencing: track == .mic ? silencing : [])
                     } catch {
                         Log.audio.error("Couldn't keep the call's \(track.rawValue, privacy: .public): \(error.localizedDescription, privacy: .public)")
                     }
@@ -232,12 +237,23 @@ final class CallStore {
                     record.remoteProblem = Self.silentTapMessage
                 }
             }
+            record.micSilencedWhenMuted = true
+        }
+        // A mute still going on when the recording stopped lasts to its end.
+        if let since = info.mutedSince {
+            record.muteIntervals = CallInterval.union(record.muteIntervals
+                                                      + [CallInterval(start: since, end: max(since, record.duration))])
         }
         record.endedAt = endedAt ?? record.startedAt.addingTimeInterval(record.duration)
         upsert(record)
         await flush()
         journal?.remove(info.id)
         return record
+    }
+
+    /// Where a journal's mic is silenced: its mutes, and a mute still going on from its start to the end.
+    nonisolated static func silencing(_ info: CallJournal.Info) -> [CallInterval] {
+        info.mutes + (info.mutedSince.map { [CallInterval(start: $0, end: .infinity)] } ?? [])
     }
 
     /// The interrupted call a call of `bundleID` starting at `startedAt` continues: the same app (in a browser, the
@@ -278,6 +294,10 @@ final class CallStore {
         let sources = CallJournal.Track.allCases.map { track in
             (track, audioURL(of: earlier, track: track), journal.audioURL(for: info.id, track: track))
         }
+        // Both parts' mutes on the joined clock: the earlier part's mic is silenced too, if it wasn't yet.
+        let silencing = earlier.muteIntervals + Self.silencing(info).map {
+            CallInterval(start: $0.start + offset, end: $0.end + offset)
+        }
         let encoded = await Task.detached(priority: .utility) { () -> [CallJournal.Track: CallAudio.Encoded]? in
             var encoded: [CallJournal.Track: CallAudio.Encoded] = [:]
             var written: [URL] = []
@@ -288,7 +308,8 @@ final class CallStore {
                 guard (RecordingJournal.sampleCount(of: wav) ?? 0) > 0 else { continue }
                 let temporary = folder.appendingPathComponent("\(track.rawValue).joining.m4a", isDirectory: false)
                 do {
-                    encoded[track] = try CallAudio.join(old, then: wav, at: offsetSamples, to: temporary)
+                    encoded[track] = try CallAudio.join(old, then: wav, at: offsetSamples, to: temporary,
+                                                        silencing: track == .mic ? silencing : [])
                     written.append(temporary)
                 } catch {
                     Log.audio.error("Couldn't join the call's \(track.rawValue, privacy: .public): \(error.localizedDescription, privacy: .public)")
@@ -320,6 +341,7 @@ final class CallStore {
             CallInterval(start: $0.start + offset, end: $0.end + offset)
         }
         record.muteKnown = earlier.muteKnown && info.muteKnown
+        record.micSilencedWhenMuted = encoded[.mic] != nil || earlier.micSilencedWhenMuted
         record.otherBrowserAudio = earlier.otherBrowserAudio + info.otherBrowserAudio.map {
             CallInterval(start: $0.start + offset, end: $0.end + offset)
         }
@@ -336,6 +358,11 @@ final class CallStore {
             if remote.peak == 0, remote.seconds >= 10, record.remoteProblem == nil {
                 record.remoteProblem = Self.silentTapMessage
             }
+        }
+        if let since = info.mutedSince {
+            record.muteIntervals = CallInterval.union(record.muteIntervals + [
+                CallInterval(start: since + offset, end: max(since + offset, record.duration)),
+            ])
         }
         record.endedAt = endedAt ?? record.startedAt.addingTimeInterval(record.duration)
         // The continuation's own record (kept while it recorded) is now this one.

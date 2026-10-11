@@ -146,8 +146,10 @@ enum CallFormat {
         let mutes = call.muteIntervals
         if !mutes.isEmpty {
             let total = Fmt.duration(mutes.reduce(0) { $0 + $1.duration })
-            notes.append(mutes.count == 1 ? "You were muted once (\(total))."
-                                          : "You were muted \(mutes.count) times (\(total) in all).")
+            let muted = mutes.count == 1 ? "You were muted once (\(total))"
+                                         : "You were muted \(mutes.count) times (\(total) in all)"
+            // A call recorded before the mic was silenced while muted still has what was said then.
+            notes.append(call.micSilencedWhenMuted ? "\(muted); your mic wasn’t recorded then." : "\(muted).")
         }
         if call.manual {
             notes.append("Mute isn’t followed in a menu bar recording: what you said while muted is in the transcript.")

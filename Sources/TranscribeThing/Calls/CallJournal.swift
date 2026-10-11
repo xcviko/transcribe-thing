@@ -69,6 +69,15 @@ struct TrackAligner: Equatable, Sendable {
 /// All file work runs on one serial queue. Every `RecordingJournal.flushInterval` each track's source is drained and
 /// appended; every `syncInterval` the files go to the disk itself. One still here at launch is a call an earlier run
 /// never finished: `CallStore.recoverJournals` brings it back.
+///
+/// What the mic hears while the person is muted never reaches the disk: the mic's last `micHoldBack` seconds are held
+/// in memory, and before any of it is written, whatever falls in the sidecar's mutes (`Info.mutes`, and
+/// `Info.mutedSince` for a mute still going on) is zeroed, so the track keeps its length and its clock. A mute is
+/// noticed late (Telegram's mic given back, a Mute button read about once a second), but it's noted from when it
+/// began, which the hold-back still covers. An unmute is noted when it's seen: up to about a second of the
+/// first words after it may be silenced with the mute. A mute noted later than the hold-back (a window read that hung) leaves
+/// what was already written; the store zeroes it again when it encodes the call (`CallStore.adopt`). A crash
+/// loses the mic's held-back seconds.
 final class CallJournal: @unchecked Sendable {
     enum Track: String, CaseIterable, Codable, Sendable {
         /// This Mac's mic: the person recording, and whoever is in the room.
@@ -97,6 +106,9 @@ final class CallJournal: @unchecked Sendable {
         var manual: Bool = false
         var consent: Consent
         var mutes: [CallInterval] = []
+        /// The mute going on now, in seconds from the call's start: the mic is silenced from there on. Also in `mutes`,
+        /// up to the last look.
+        var mutedSince: TimeInterval?
         var muteKnown: Bool = false
         var otherBrowserAudio: [CallInterval] = []
         var micProblem: String?
@@ -138,6 +150,10 @@ final class CallJournal: @unchecked Sendable {
         var created: Date?
     }
 
+    /// How much of the mic stays in memory before it's written: longer than a mute takes to be noticed.
+    static let micHoldBack: TimeInterval = 2
+    static var micHoldBackSamples: Int { Int(micHoldBack * Recording.sampleRate) }
+
     let directory: URL
     private let queue = DispatchQueue(label: "dev.transcribe-thing.calls.journal", qos: .utility)
     // Queue state.
@@ -161,10 +177,17 @@ final class CallJournal: @unchecked Sendable {
         let source: any CallTrackSource
         let handle: FileHandle?
         var aligner: TrackAligner
+        /// Samples kept back before they're written, for a mute noticed late to still be cut: the mic's.
+        let holdBack: Int
+        /// Placed on the call's clock, not written yet.
+        var held: [Float] = []
+        /// The call-clock index of `held[0]`: what's been written.
+        var flushed = 0
 
-        init(source: any CallTrackSource, handle: FileHandle?, origin: TimeInterval) {
+        init(source: any CallTrackSource, handle: FileHandle?, origin: TimeInterval, holdBack: Int) {
             self.source = source
             self.handle = handle
+            self.holdBack = holdBack
             aligner = TrackAligner(origin: origin)
         }
     }
@@ -228,6 +251,11 @@ final class CallJournal: @unchecked Sendable {
         }
     }
 
+    /// Drains the sources and writes what's due now (the timer does every `flushInterval`).
+    func pump(_ id: UUID) {
+        queue.async { self.pumpOnQueue(id) }
+    }
+
     /// Returns once everything asked before is done.
     func settle() async {
         await withCheckedContinuation { continuation in queue.async { continuation.resume() } }
@@ -274,7 +302,8 @@ final class CallJournal: @unchecked Sendable {
                 Log.audio.error("Couldn't keep the call's \(track.rawValue, privacy: .public) on disk: \(error.localizedDescription, privacy: .public)")
                 handle = nil
             }
-            writer.tracks[track] = TrackWriter(source: source, handle: handle, origin: origin)
+            writer.tracks[track] = TrackWriter(source: source, handle: handle, origin: origin,
+                                               holdBack: track == .mic ? Self.micHoldBackSamples : 0)
         }
         let timer = DispatchSource.makeTimerSource(queue: queue)
         let interval = RecordingJournal.flushInterval
@@ -286,12 +315,24 @@ final class CallJournal: @unchecked Sendable {
         writers[id] = writer
     }
 
-    private func pumpOnQueue(_ id: UUID) {
+    /// Each source's new audio onto its track; `final` writes what's held back too (the call is over).
+    private func pumpOnQueue(_ id: UUID, final: Bool = false) {
         guard let writer = writers[id] else { return }
         for track in Track.allCases {
             guard let trackWriter = writer.tracks[track] else { continue }
-            let audio = trackWriter.source.drain()
-            for stretch in audio { append(trackWriter.aligner.place(stretch), to: trackWriter, track: track) }
+            for stretch in trackWriter.source.drain() { trackWriter.held += trackWriter.aligner.place(stretch) }
+            let due = final ? trackWriter.held.count : max(0, trackWriter.held.count - trackWriter.holdBack)
+            if due > 0 {
+                // Only what's written now is silenced: an unmute seen later still lets through what's held.
+                var out = Array(trackWriter.held.prefix(due))
+                if track == .mic {
+                    CallMix.silence(&out, first: trackWriter.flushed, mutes: writer.info.mutes,
+                                    mutedSince: writer.info.mutedSince)
+                }
+                append(out, to: trackWriter, track: track)
+                trackWriter.held.removeFirst(due)
+                trackWriter.flushed += due
+            }
             notice(trackWriter.source.problem, of: track, in: writer)
         }
         if AudioClock.now() - writer.lastSync >= RecordingJournal.syncInterval { sync(writer) }
@@ -313,7 +354,7 @@ final class CallJournal: @unchecked Sendable {
         guard let writer = writers[id] else { return nil }
         writer.timer?.cancel()
         for track in writer.tracks.values { track.source.stop() }
-        pumpOnQueue(id)
+        pumpOnQueue(id, final: true)
         let info = writer.info
         close(id, sync: true)
         return info

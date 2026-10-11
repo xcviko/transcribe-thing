@@ -134,6 +134,24 @@ private func info(_ id: UUID = UUID(), startedAt: Date = now) -> CallMonitor.Cal
         #expect(CallFormat.speakers(record(1)) == nil)
     }
 
+    /// A call transcribed before the tracks were mixed (an answer for each side, the mic's with what was said muted)
+    /// reads as it did.
+    @Test func aCallTranscribedSideBySideStillReads() throws {
+        let json = """
+            {"version":1,"calls":[{"id":"\(UUID().uuidString)","startedAt":"2026-10-01T10:00:00Z","appName":"Telegram",
+            "service":"telegram","status":"done","muteKnown":true,"muteIntervals":[{"start":3,"end":7}],
+            "micFile":"mic.m4a","remoteFile":"remote.m4a","micSeconds":10,"remoteSeconds":10,
+            "transcript":{"segments":[{"start":1,"end":2,"side":"remote","speaker":"Аня","text":"Привет","duringMute":false},
+            {"start":4,"end":5,"side":"local","speaker":"Sam","text":"Hi","duringMute":true}]}}]}
+            """
+        let call = try #require(CallStore.readRecords(from: Data(json.utf8)).first)
+        #expect(!call.micSilencedWhenMuted)
+        #expect(CallFormat.notes(call).first == "You were muted once (\(Fmt.duration(4))).")
+        #expect(CallFormat.copyText(call) == "[00:01] Аня: Привет\n[00:04] Sam (muted): Hi")
+        let slots = CallSpeakerPalette.slots(call.transcript)
+        #expect(slots["Аня"]?.side == .remote && slots["Sam"]?.side == .local)
+    }
+
     @Test func notesAndProblems() {
         var call = record(1)
         call.muteKnown = true
@@ -143,6 +161,12 @@ private func info(_ id: UUID = UUID(), startedAt: Date = now) -> CallMonitor.Cal
             "You were muted 2 times (1:00 in all).",
             "Another tab played sound during the call, so it may be mixed into their side.",
         ])
+        // Recorded since the mic is silenced while muted: nothing said then was kept.
+        call.micSilencedWhenMuted = true
+        #expect(CallFormat.notes(call).first == "You were muted 2 times (1:00 in all); your mic wasn’t recorded then.")
+        call.muteIntervals = [CallInterval(start: 10, end: 90)]
+        #expect(CallFormat.notes(call).first == "You were muted once (1:20); your mic wasn’t recorded then.")
+        call.micSilencedWhenMuted = false
         call.muteIntervals = []
         call.otherBrowserAudio = []
         call.muteKnown = false

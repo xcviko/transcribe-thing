@@ -165,6 +165,7 @@ enum PreviewFixtures {
         var telegram = call(1, at(daysAgo: 0, 9, 40), app: "Telegram", bundleID: "ru.keepcoder.Telegram",
                             service: .telegram, seconds: 492, status: .transcribing)
         telegram.muteIntervals = [CallInterval(start: 120, end: 151)]
+        telegram.micSilencedWhenMuted = true
 
         var meet = call(2, at(daysAgo: 0, 8, 5), app: "Google Chrome", bundleID: "com.google.Chrome", service: .meet,
                         page: "Meet – abc-defg-hij", seconds: 1934, status: .done)

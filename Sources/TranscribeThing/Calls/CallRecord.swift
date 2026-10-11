@@ -53,7 +53,8 @@ struct CallTranscript: Codable, Equatable, Sendable {
         /// "Me"), "Nearby 1". `CallRecord.speakerNames` renames them for display.
         var speaker: String
         var text: String
-        /// Said into the mic while the person was muted in the call app: the other side didn't hear it.
+        /// Said into the mic while the person was muted in the call app: the other side didn't hear it. Calls
+        /// recorded since the mic is silenced while muted (`CallRecord.micSilencedWhenMuted`) rarely have one.
         var duringMute: Bool = false
     }
 
@@ -85,6 +86,9 @@ struct CallRecord: Codable, Equatable, Identifiable, Sendable {
     /// Whether mute could be followed at all: false when the app's Mute button couldn't be read, so
     /// `muteIntervals` being empty says nothing.
     var muteKnown: Bool = false
+    /// The mic's track is silent in `muteIntervals`: zeroed as it was recorded and again when it was kept
+    /// (`CallJournal`, `CallStore.adopt`). False for a call recorded before that, whose mic has what was said muted.
+    var micSilencedWhenMuted: Bool = false
     /// For a browser: when another tab played sound, which the other side's track has too.
     var otherBrowserAudio: [CallInterval] = []
     /// File names in the call's folder; nil when that track has no audio.
@@ -131,6 +135,7 @@ struct CallRecord: Codable, Equatable, Identifiable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, startedAt, endedAt, appName, bundleID, service, pageTitle, manual, muteIntervals, muteKnown
+        case micSilencedWhenMuted
         case otherBrowserAudio, micFile, remoteFile, micSeconds, remoteSeconds, micProblem, remoteProblem, status
         case error, transcript, costUSD, cutOffAt, speakerNames
     }
@@ -148,6 +153,7 @@ struct CallRecord: Codable, Equatable, Identifiable, Sendable {
         manual = try c.decodeIfPresent(Bool.self, forKey: .manual) ?? false
         muteIntervals = try c.decodeIfPresent([CallInterval].self, forKey: .muteIntervals) ?? []
         muteKnown = try c.decodeIfPresent(Bool.self, forKey: .muteKnown) ?? false
+        micSilencedWhenMuted = try c.decodeIfPresent(Bool.self, forKey: .micSilencedWhenMuted) ?? false
         otherBrowserAudio = try c.decodeIfPresent([CallInterval].self, forKey: .otherBrowserAudio) ?? []
         micFile = try c.decodeIfPresent(String.self, forKey: .micFile)
         remoteFile = try c.decodeIfPresent(String.self, forKey: .remoteFile)
@@ -176,6 +182,7 @@ struct CallRecord: Codable, Equatable, Identifiable, Sendable {
         try c.encode(manual, forKey: .manual)
         try c.encode(muteIntervals, forKey: .muteIntervals)
         try c.encode(muteKnown, forKey: .muteKnown)
+        if micSilencedWhenMuted { try c.encode(micSilencedWhenMuted, forKey: .micSilencedWhenMuted) }
         try c.encode(otherBrowserAudio, forKey: .otherBrowserAudio)
         try c.encodeIfPresent(micFile, forKey: .micFile)
         try c.encodeIfPresent(remoteFile, forKey: .remoteFile)

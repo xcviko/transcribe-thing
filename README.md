@@ -113,10 +113,14 @@ When a call starts, recording starts too, and the app asks "Transcribe your call
 If you don't answer, the call waits in the Calls tab, and nothing is sent until you click Transcribe there. To transcribe
 every call without asking, or to stop noticing calls, change General → Calls → Record calls.
 
-Gemini 3.8 Flash writes the transcript, on your OpenRouter key or through your Vertex proxy. Someone whose name comes up in the call is named; the
-rest are "Participant 1", "Participant 2". On the call's page, click a name to rename them, or a time to play the call
-from there. What you said while muted is marked "muted" in Zoom, Discord, Slack, Google Meet, Telemost and Telegram. In
-other apps, what you said while muted may end up in the transcript.
+Gemini 3.8 Flash writes the transcript, on your OpenRouter key or through your Vertex proxy. Someone whose name comes up
+in the call is named; the rest are "Participant 1", "Participant 2", and anyone in the room with you is "Nearby 1". On
+the call's page, click a name to rename them, or a time to play the call from there.
+
+In Zoom, Discord, Slack, Google Meet, Telemost and Telegram, the app follows your mute: while you're muted, your
+microphone isn't recorded, so what you say then is neither kept nor transcribed. Your first words right after you unmute
+may be cut too. In other apps, and in a menu bar recording, what you say while muted is recorded and may end up in the
+transcript.
 
 To record the other side, turn on transcribe-thing in System Settings → Privacy & Security → Screen & System Audio
 Recording, under System Audio Recording Only. Without it, their side comes out silent and the call says so. In a

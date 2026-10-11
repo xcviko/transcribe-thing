@@ -163,6 +163,8 @@ final class CallMonitor {
         var tabsRead = false
         var otherAudio: [CallInterval] = []
         var otherAudioSince: TimeInterval?
+        /// When the mute going on now began, in seconds from the call's start: the journal silences the mic from there.
+        var mutedSince: TimeInterval?
         var tapProcesses: [AudioObjectID]
         var origin: TimeInterval { recorder.origin }
     }
@@ -469,9 +471,18 @@ final class CallMonitor {
         let before = live
         if let followed = watch.detector.followed, followed.app == app {
             var mutes = followed.mutes
-            if let since = followed.mutedSince { mutes.append(since...max(since, time)) }
-            if followed.micReleaseIsMute, let since = followed.micReleasedAt { mutes.append(since...max(since, time)) }
+            var open: [TimeInterval] = []
+            if let since = followed.mutedSince {
+                mutes.append(since...max(since, time))
+                open.append(since)
+            }
+            if followed.micReleaseIsMute, let since = followed.micReleasedAt {
+                mutes.append(since...max(since, time))
+                open.append(since)
+            }
             live.info.mutes = intervals(mutes, origin: live.origin)
+            // From when the detector says the mute began, not when it was seen: the journal still holds that audio.
+            live.mutedSince = open.min().map { max(0, $0 - live.origin) }
             if let tab = followed.tab, Self.isBrowser(app) {
                 if settings.callExclusions.excludes(service: tab.service, page: tab.page) {
                     Log.audio.info("Not recorded: the call's site is excluded")
@@ -514,11 +525,13 @@ final class CallMonitor {
         self.live = live
         if live.consent != .suspected { notices?.observe(muteObservation(of: live), title: live.info.title, at: time) }
         guard live.info != before.info || live.otherAudio != before.otherAudio
-                || live.otherAudioSince != before.otherAudioSince else { return }
+                || live.otherAudioSince != before.otherAudioSince || live.mutedSince != before.mutedSince else { return }
         let info = live.info
+        let mutedSince = live.mutedSince
         let other = otherAudio(of: live, at: time)
         live.recorder.update {
             $0.mutes = info.mutes
+            $0.mutedSince = mutedSince
             $0.muteKnown = info.muteKnown
             $0.service = info.service
             $0.pageTitle = info.pageTitle
@@ -536,7 +549,18 @@ final class CallMonitor {
     // MARK: Ending
 
     /// The recording stops; its call goes to the store as `status` (`.transcribing` is transcribed then).
+    /// A mute still going on lasts to the end: the journal silences the mic up to its last sample.
     private func end(_ live: Live, status: CallStatus) {
+        var live = live
+        let now = max(deps.clock(), lastTime)
+        if let since = live.mutedSince {
+            live.info.mutes = CallInterval.union(live.info.mutes + [CallInterval(start: since, end: now - live.origin)])
+        }
+        let mutes = live.info.mutes, mutedSince = live.mutedSince
+        live.recorder.update {
+            $0.mutes = mutes
+            $0.mutedSince = mutedSince
+        }
         self.live = nil
         state = .ending
         let fallback = journalInfo(of: live)
@@ -548,7 +572,8 @@ final class CallMonitor {
             guard let self else { return }
             var info = await live.recorder.finish() ?? fallback
             info.otherBrowserAudio = other
-            info.mutes = live.info.mutes
+            info.mutes = mutes
+            info.mutedSince = mutedSince
             let record = await self.store.adopt(info, status: status, endedAt: endedAt)
             let tapProblem: String? = record.remoteProblem.map { $0 == CallStore.silentTapMessage ? "silent" : "other" }
             self.log.event(.calls, "call.ended", [
@@ -632,6 +657,7 @@ final class CallMonitor {
                                     bundleID: live.info.bundleID, service: live.info.service,
                                     pageTitle: live.info.pageTitle, manual: live.info.manual, consent: live.consent)
         info.mutes = live.info.mutes
+        info.mutedSince = live.mutedSince
         info.muteKnown = live.info.muteKnown
         return info
     }

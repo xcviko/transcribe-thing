@@ -17,16 +17,19 @@ enum CallAudio {
         var seconds: TimeInterval { Double(samples) / Recording.sampleRate }
     }
 
-    /// The journal's 16-bit WAV at `wav` as AAC at History's 32 kbps (`RecordingFile.bitRate`) in `m4a`. Throws when
-    /// the WAV can't be read or the encoder fails.
-    static func encode(journal wav: URL, to m4a: URL) throws -> Encoded {
-        try join(nil, then: wav, at: 0, to: m4a)
+    /// The journal's 16-bit WAV at `wav` as AAC at History's 32 kbps (`RecordingFile.bitRate`) in `m4a`, silent in
+    /// `silencing` (the mic's mutes, seconds on the call's clock). Throws when the WAV can't be read or the encoder
+    /// fails.
+    static func encode(journal wav: URL, to m4a: URL, silencing: [CallInterval] = []) throws -> Encoded {
+        try join(nil, then: wav, at: 0, to: m4a, silencing: silencing)
     }
 
     /// One track of a call the app quit recording and its continuation as one .m4a: the first `offset` samples of
     /// `earlier` (an .m4a; silence where it has fewer, none for nil), then the journal's WAV at `wav`. The two parts
-    /// stay on the call's clock: the continuation starts at sample `offset` whatever the earlier part had.
-    static func join(_ earlier: URL?, then wav: URL, at offset: Int, to m4a: URL) throws -> Encoded {
+    /// stay on the call's clock: the continuation starts at sample `offset` whatever the earlier part had. Silent in
+    /// `silencing`, seconds on the joined call's clock.
+    static func join(_ earlier: URL?, then wav: URL, at offset: Int, to m4a: URL,
+                     silencing: [CallInterval] = []) throws -> Encoded {
         let handle = try FileHandle(forReadingFrom: wav)
         defer { try? handle.close() }
         let total = RecordingJournal.sampleCount(of: wav) ?? 0
@@ -39,8 +42,9 @@ enum CallAudio {
                                 reservingSeconds: Double(offset + total) / Recording.sampleRate, to: m4a) { append in
             if let earlier {
                 while written < kept {
-                    let piece = try read(earlier, range: written..<min(kept, written + block))
+                    var piece = try read(earlier, range: written..<min(kept, written + block))
                     if piece.isEmpty { break }
+                    CallMix.silence(&piece, first: written, mutes: silencing)
                     peak = piece.reduce(peak) { max($0, abs($1)) }
                     try append(piece)
                     written += piece.count
@@ -55,7 +59,8 @@ enum CallAudio {
                 let count = data.count / 2
                 var ints = [Int16](repeating: 0, count: count)
                 _ = ints.withUnsafeMutableBytes { data.copyBytes(to: $0, count: count * 2) }
-                let samples = ints.map { Float($0) / 32_768 }
+                var samples = ints.map { Float($0) / 32_768 }
+                CallMix.silence(&samples, first: written, mutes: silencing)
                 peak = samples.reduce(peak) { max($0, abs($1)) }
                 try append(samples)
                 written += samples.count
