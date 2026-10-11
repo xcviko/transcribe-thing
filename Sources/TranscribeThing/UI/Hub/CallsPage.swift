@@ -268,6 +268,12 @@ struct CallRow: View {
 
     private var meta: some View {
         HStack(spacing: 8) {
+            // What its transcription cost, as Home's rows say a dictation's.
+            if let cost = call.costUSD, cost > 0 {
+                Text(Fmt.usd(cost))
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.inkTertiary)
+            }
             Text(Fmt.time(call.startedAt))
                 .font(.system(size: 11.5))
                 .foregroundStyle(.inkTertiary)
