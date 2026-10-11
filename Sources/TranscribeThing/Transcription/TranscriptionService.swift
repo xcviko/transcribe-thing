@@ -59,11 +59,15 @@ struct TranscriptResult: Sendable, Equatable {
 
 /// Routes a recording to the local model, Gemini, or OpenRouter speech-to-text, and returns trimmed text. An engine
 /// that answers with no text heard no speech, so that comes back as an empty result, never as an error.
+/// Gemini (its transcripts, Polish, Translate, Polish Selection) goes to the user's Vertex proxy instead of OpenRouter
+/// while the proxy routes it (`VertexProxyAccount.routesGemini`), with no fallback to OpenRouter.
 @MainActor
 final class TranscriptionService {
     private let models: ModelStore
     private let account: OpenRouterAccount
     private let client: OpenRouterClient
+    /// The Vertex proxy, when the app has one to offer (nil: Gemini always goes through OpenRouter).
+    let proxy: VertexProxyAccount?
     private let providerLookupDelay: Duration
     /// `hedgeMeasured`, from any thread.
     private var measuredReporter: @Sendable (CloudHedge.Measurement) -> Void {
@@ -81,11 +85,44 @@ final class TranscriptionService {
     var hedgeMeasured: @MainActor (CloudHedge.Measurement) -> Void = { _ in }
 
     init(models: ModelStore, account: OpenRouterAccount, client: OpenRouterClient,
-         providerLookupDelay: Duration = .milliseconds(1500)) {
+         proxy: VertexProxyAccount? = nil, providerLookupDelay: Duration = .milliseconds(1500)) {
         self.models = models
         self.account = account
         self.client = client
+        self.proxy = proxy
         self.providerLookupDelay = providerLookupDelay
+    }
+
+    /// Where a Gemini request goes right now: the client, its key, and who hears how it went.
+    private struct ChatAccess {
+        var client: OpenRouterClient
+        var key: String
+        var provider: CloudProvider
+        var noteFailure: @MainActor (AppError) -> Void
+        var noteSuccess: @MainActor () -> Void
+    }
+
+    /// The Vertex proxy while it routes Gemini, else OpenRouter. Throws the missing or unreadable key of whichever
+    /// it is: a proxy that's set up never hands its requests to OpenRouter.
+    private func chatAccess() throws -> ChatAccess {
+        if let proxy, proxy.routesGemini {
+            guard let key = proxy.apiKey(), let client = proxy.client() else {
+                throw AppError.vertexProxy(.keyUnreadable)
+            }
+            return ChatAccess(client: client, key: key, provider: .vertexProxy,
+                              noteFailure: { proxy.noteCloudFailure($0) }, noteSuccess: { proxy.noteCloudSuccess() })
+        }
+        guard let key = account.apiKey() else {
+            throw account.isKeyUnreadable ? AppError.openRouterKeyUnreadable : AppError.openRouterMissingKey
+        }
+        let account = account
+        return ChatAccess(client: client, key: key, provider: .openRouter,
+                          noteFailure: { account.noteCloudFailure($0) }, noteSuccess: { account.noteCloudSuccess() })
+    }
+
+    /// Where `engine`'s requests go now: nil for the local model.
+    func provider(for engine: EngineID) -> CloudProvider? {
+        CloudRoute.provider(for: engine, proxy: proxy)
     }
 
     /// Throws `AppError` only, or `CancellationError` when the calling task is cancelled. A retired model never runs.
@@ -161,20 +198,25 @@ final class TranscriptionService {
               let api = engine.cloudAPI else {
             throw AppError.engineFailed(engine, "No cloud model for \(engine.displayName).")
         }
+        if api == .chatCompletions {
+            let access = try chatAccess()
+            do {
+                let result = try await transcribeWithChat(recording, engine: engine, model: model, access: access,
+                                                          effort: effort ?? .medium, prompt: prompt, upload: upload,
+                                                          hedge: hedge, provider: provider, progress: progress)
+                access.noteSuccess()
+                return result
+            } catch let error as AppError {
+                access.noteFailure(error)
+                throw error
+            }
+        }
         guard let key = account.apiKey() else {
             throw account.isKeyUnreadable ? AppError.openRouterKeyUnreadable : AppError.openRouterMissingKey
         }
         do {
-            let result: CloudResult
-            switch api {
-            case .chatCompletions:
-                result = try await transcribeWithChat(recording, engine: engine, model: model, key: key,
-                                                      effort: effort ?? .medium, prompt: prompt, upload: upload,
-                                                      hedge: hedge, provider: provider, progress: progress)
-            case .transcriptions:
-                result = try await transcribeSpeech(recording.samples, engine: engine, model: model, key: key,
+            let result = try await transcribeSpeech(recording.samples, engine: engine, model: model, key: key,
                                                     upload: upload, hedge: hedge)
-            }
             account.noteCloudSuccess()
             return result
         } catch let error as AppError {
@@ -190,7 +232,7 @@ final class TranscriptionService {
     /// Gemini: the whole recording in one request, with its system prompt, whatever its length, as AAC in an .m4a
     /// (`CloudAudio.forChat`: History's own file as it is, when it has one that fits, otherwise encoded off the main
     /// actor); the answer's token budget grows with the audio, and it streams, so no wait for it has to.
-    private func transcribeWithChat(_ recording: Recording, engine: EngineID, model: String, key: String,
+    private func transcribeWithChat(_ recording: Recording, engine: EngineID, model: String, access: ChatAccess,
                                     effort: ReasoningEffort, prompt: String, upload: UploadFormat?,
                                     hedge: CloudHedge? = nil, provider: OpenRouterChatRequest.Provider? = nil,
                                     progress: (@Sendable (ChatStreamProgress) -> Void)?) async throws -> CloudResult {
@@ -201,7 +243,7 @@ final class TranscriptionService {
         guard let audio else { throw AppError.engineFailed(engine, "Couldn’t compress the recording.") }
         try Task.checkCancellation()
         let maxTokens = OpenRouterClient.transcriptionMaxTokens(audioSeconds: Double(samples.count) / Recording.sampleRate)
-        let client = client, timeout = engine.cloudTimeout
+        let client = access.client, key = access.key, timeout = engine.cloudTimeout
         let send: @Sendable (CloudHedge.Hooks) async throws -> CloudResult = { hooks in
             try await client.transcribe(audio: audio, format: format.rawValue, model: model, systemPrompt: prompt,
                                         effort: effort, maxTokens: maxTokens, apiKey: key, timeout: timeout,
@@ -301,12 +343,11 @@ final class TranscriptionService {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         // A request with no instruction would have the model reply to the text instead of working on it.
         guard !prompt.isEmpty else { throw AppError.engineFailed(source, "The prompt is empty.") }
-        guard let key = account.apiKey() else {
-            throw account.isKeyUnreadable ? AppError.openRouterKeyUnreadable : AppError.openRouterMissingKey
-        }
+        let access = try chatAccess()
+        let key = access.key
         let effort = ReasoningEffort(rawValue: route.effort)
         let limit = timeout ?? TextRoute.timeout(forCharacterCount: text.count)
-        let client = client
+        let client = access.client
         let started = ContinuousClock.now
         let answer = AnswerStart()
         do {
@@ -317,7 +358,7 @@ final class TranscriptionService {
                     progress?(streamed)
                 })
             }
-            account.noteCloudSuccess()
+            access.noteSuccess()
             var result = TranscriptResult(text: cloud.text, engine: source,
                                           processingTime: Self.seconds(started.duration(to: .now)))
             result.costUSD = cloud.costUSD
@@ -335,7 +376,7 @@ final class TranscriptionService {
             result.otherGenerationIDs = cloud.otherGenerationIDs
             return result
         } catch let error as AppError {
-            account.noteCloudFailure(error)
+            access.noteFailure(error)
             Log.engine.error("Text request failed: \(error.code, privacy: .public)")
             DiagnosticLog.shared.event(.engine, "text.failed", [
                 "code": error, "seconds": Self.seconds(started.duration(to: .now))])

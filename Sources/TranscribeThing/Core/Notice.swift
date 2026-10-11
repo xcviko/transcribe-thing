@@ -288,6 +288,9 @@ enum AppError: Error, Equatable, Sendable {
     case noSpeech
     case engineFailed(EngineID, String)
     case recordingTooLarge
+    /// A Gemini request through the user's Vertex proxy failed in a way only the proxy can (`VertexProxyFailure`).
+    /// What any service says the same way (a cut-off answer, a refusal by the model, a timeout) keeps its own case.
+    case vertexProxy(VertexProxyFailure)
 
     /// Re-running the same recording on the same engine could succeed.
     var isRetryable: Bool {
@@ -297,6 +300,11 @@ enum AppError: Error, Equatable, Sendable {
              .openRouterRateLimited, .openRouterProviderUnavailable, .openRouterServer, .openRouterTruncated,
              .timeout, .offline, .regionBlocked, .connectionBlocked, .engineFailed:
             true
+        case .vertexProxy(let failure):
+            switch failure {
+            case .unreachable, .rateLimited, .unavailable: true
+            case .keyUnreadable, .keyRejected, .spendLimit, .forbidden, .badRequest, .tooLarge: false
+            }
         case .microphonePermissionDenied, .noMicrophone, .microphoneNotResponding, .microphoneSilent,
              .accessibilityMissing, .modelNotDownloaded, .downloadFailed, .notEnoughDisk,
              .openRouterMissingKey, .openRouterKeyUnreadable, .openRouterInvalidKey, .openRouterNoCredits,
@@ -310,12 +318,13 @@ enum AppError: Error, Equatable, Sendable {
     var isTransientCloudFailure: Bool {
         switch self {
         case .openRouterRateLimited, .openRouterProviderUnavailable, .openRouterServer: true
+        case .vertexProxy(let failure): failure.isTransient
         default: false
         }
     }
 
     /// The key, the credit or the connection failed: every cloud model would fail the same way, so only the local
-    /// model can take over.
+    /// model can take over. Never the Vertex proxy's: cloud Parakeet still goes through OpenRouter.
     var stopsEveryCloudModel: Bool {
         switch self {
         case .openRouterMissingKey, .openRouterKeyUnreadable, .openRouterInvalidKey, .openRouterNoCredits,
@@ -333,7 +342,7 @@ enum AppError: Error, Equatable, Sendable {
              .openRouterMissingKey, .openRouterKeyUnreadable, .openRouterInvalidKey, .openRouterNoCredits,
              .openRouterKeyLimit, .openRouterRateLimited, .openRouterNoRoute, .openRouterProviderUnavailable,
              .openRouterRefused, .openRouterBadRequest, .openRouterServer, .openRouterTruncated, .timeout, .offline,
-             .regionBlocked, .connectionBlocked, .engineFailed, .recordingTooLarge:
+             .regionBlocked, .connectionBlocked, .engineFailed, .recordingTooLarge, .vertexProxy:
             true
         case .microphonePermissionDenied, .noMicrophone, .microphoneNotResponding, .microphoneDisconnected,
              .microphoneSilent, .accessibilityMissing, .downloadFailed, .notEnoughDisk, .noSpeech:
@@ -375,6 +384,7 @@ enum AppError: Error, Equatable, Sendable {
         case .noSpeech: "noSpeech"
         case .engineFailed(let e, _): "engineFailed.\(e.rawValue)"
         case .recordingTooLarge: "recordingTooLarge"
+        case .vertexProxy(let failure): "vertexProxy.\(failure.code)"
         }
     }
 
@@ -386,6 +396,8 @@ enum AppError: Error, Equatable, Sendable {
              .openRouterProviderUnavailable(let s), .openRouterRefused(let s), .openRouterBadRequest(let s),
              .openRouterServer(let s), .engineFailed(_, let s):
             s.isEmpty ? nil : s
+        case .vertexProxy(let failure):
+            failure.detail
         default:
             nil
         }
@@ -419,6 +431,7 @@ extension AppError {
         // Retry is always the same model, wherever another one could have helped too: switching models for this
         // recording is the user's call, from History (Transcribe With).
         let canRetry = hasAudio && (isRetryable || fallbackCanHelp) && self != .recordingTooLarge
+            && self != .vertexProxy(.tooLarge)
         let retryTitle = if case .microphoneDisconnected = self { "Transcribe It" } else { "Retry" }
         let switchEngine: (String, NoticeActionKind)? = if !hasAudio, copy.offersSwitch, let fallback {
             ("Use \(fallback.shortName)", .selectEngine(fallback))
@@ -710,6 +723,64 @@ extension AppError {
             return Copy(symbol: "waveform.badge.exclamationmark",
                         title: "Too large to send to OpenRouter",
                         body: "OpenRouter refused this recording as too large. "
+                            + "\(EngineID.parakeet.displayName) on this Mac takes any length.",
+                        order: .fallbackFirst)
+        case .vertexProxy(let failure):
+            return Self.copy(for: failure)
+        }
+    }
+
+    /// The Vertex proxy's failures: each names the proxy, and a fix points to Models, where its card is (nothing can
+    /// be fixed on openrouter.ai).
+    private static func copy(for failure: VertexProxyFailure) -> Copy {
+        let models = Fix(title: "Open Models", kind: .openHub(.models))
+        switch failure {
+        case .keyUnreadable:
+            return Copy(symbol: "key.fill",
+                        title: "\(Brand.name) can’t read your Vertex proxy key",
+                        body: "The key saved on this Mac couldn’t be read. Paste it again in Models.",
+                        fixes: [Fix(title: "Update Key", kind: .openHub(.models))],
+                        order: .fixFirst, offersSwitch: true)
+        case .keyRejected:
+            return Copy(symbol: "key.fill",
+                        title: "Your Vertex proxy rejected the key",
+                        body: "It may have been revoked or mistyped. Check it in Models.",
+                        fixes: [Fix(title: "Update Key", kind: .openHub(.models))],
+                        order: .fixFirst, offersSwitch: true)
+        case .spendLimit:
+            return Copy(symbol: "creditcard",
+                        title: "Your Vertex proxy hit its spend limit",
+                        body: "Raise the limit on the proxy, or switch Gemini back to OpenRouter in Models.",
+                        fixes: [models],
+                        order: .fixFirst, offersSwitch: true)
+        case .unreachable:
+            return Copy(symbol: "wifi.slash",
+                        title: "Can’t reach your Vertex proxy",
+                        body: "Check your connection and the proxy’s address in Models.",
+                        fixes: [models],
+                        order: .fallbackFirst, offersSwitch: true)
+        case .rateLimited(let retryAfter):
+            let wait = retryAfter.map { $0 >= 1 ? "Try again in about \(Int($0.rounded(.up))) s." : nil } ?? nil
+            return Copy(symbol: "hourglass",
+                        title: "Gemini is busy on your Vertex proxy",
+                        body: wait ?? "Google had no capacity for it. Wait a few seconds and try again.")
+        case .forbidden(let message):
+            return Copy(symbol: "hand.raised.fill",
+                        title: "Google Cloud refused your Vertex proxy",
+                        body: oneLine(message) ?? "Check the proxy’s Google Cloud project and its billing.",
+                        order: .fallbackFirst, offersSwitch: true)
+        case .unavailable:
+            return Copy(symbol: "icloud.slash",
+                        title: "Your Vertex proxy ran into a problem",
+                        body: "This is usually temporary. Try again in a moment.")
+        case .badRequest(let message):
+            return Copy(title: "Your Vertex proxy couldn’t process this",
+                        body: oneLine(message) ?? "The proxy rejected the request.",
+                        order: .fallbackFirst)
+        case .tooLarge:
+            return Copy(symbol: "waveform.badge.exclamationmark",
+                        title: "Too large to send to your Vertex proxy",
+                        body: "The proxy refused this recording as too large. "
                             + "\(EngineID.parakeet.displayName) on this Mac takes any length.",
                         order: .fallbackFirst)
         }

@@ -10,6 +10,7 @@ final class DiagnosticsCenter {
     private let settings: AppSettings
     private let keyStore: KeyFileStore
     private let account: OpenRouterAccount
+    private let proxy: VertexProxyAccount?
     private let permissions: PermissionsCenter
     private let devices: AudioDeviceCatalog
 
@@ -27,11 +28,12 @@ final class DiagnosticsCenter {
     private var loggedMicrophones: DiagnosticMicrophones?
 
     init(log: DiagnosticLog, settings: AppSettings, keyStore: KeyFileStore, account: OpenRouterAccount,
-         permissions: PermissionsCenter, devices: AudioDeviceCatalog) {
+         proxy: VertexProxyAccount? = nil, permissions: PermissionsCenter, devices: AudioDeviceCatalog) {
         self.log = log
         self.settings = settings
         self.keyStore = keyStore
         self.account = account
+        self.proxy = proxy
         self.permissions = permissions
         self.devices = devices
     }
@@ -58,7 +60,8 @@ final class DiagnosticsCenter {
 
     /// The settings as the log and the export's header show them.
     func currentSettings() -> DiagnosticSettingsSummary {
-        DiagnosticSettingsSummary(settings: settings, keySaved: keyStore.hasFile)
+        DiagnosticSettingsSummary(settings: settings, keySaved: keyStore.hasFile,
+                                  vertexProxy: DiagnosticSettingsSummary.vertexProxyState(proxy))
     }
 
     // MARK: Export
@@ -89,6 +92,7 @@ final class DiagnosticsCenter {
             _ = currentSettings()
             // A key saved or removed.
             _ = account.status
+            _ = proxy?.maskedKey
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in self?.settingsChanged() }
         }

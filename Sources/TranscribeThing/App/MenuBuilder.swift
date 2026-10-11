@@ -121,7 +121,8 @@ final class MenuBuilder {
         }
         let parakeet = env.settings.parakeetEngine
         let main = env.dictation.activity == .recording ? env.dictation.effectiveChoice : env.settings.lineup.main
-        let status = Self.status(of: main, parakeet: parakeet, models: env.models, account: env.account)
+        let status = Self.status(of: main, parakeet: parakeet, models: env.models, account: env.account,
+                                 proxy: env.proxy)
         let title = Self.statusTitle(env.dictation.activity, model: main.title(parakeet: parakeet), status: status.text)
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         item.isEnabled = false
@@ -148,11 +149,13 @@ final class MenuBuilder {
 
     /// A model's status: its engine's.
     static func status(of choice: ModelChoice, parakeet: EngineID, models: ModelStore,
-                       account: OpenRouterAccount) -> EngineStatus {
-        engineStatus(choice.engine(parakeet: parakeet), models: models, account: account)
+                       account: OpenRouterAccount, proxy: VertexProxyAccount? = nil) -> EngineStatus {
+        engineStatus(choice.engine(parakeet: parakeet), models: models, account: account, proxy: proxy)
     }
 
-    static func engineStatus(_ engine: EngineID, models: ModelStore, account: OpenRouterAccount) -> EngineStatus {
+    /// `proxy`: Gemini's status is the Vertex proxy's while it routes Gemini.
+    static func engineStatus(_ engine: EngineID, models: ModelStore, account: OpenRouterAccount,
+                             proxy: VertexProxyAccount? = nil) -> EngineStatus {
         if engine.isLocal {
             switch models.state(of: engine) {
             case .ready, .installed:
@@ -167,7 +170,8 @@ final class MenuBuilder {
                 return EngineStatus(text: "Needs attention", color: Palette.danger)
             }
         }
-        switch account.status {
+        let status = CloudRoute.keyStatus(for: engine, account: account, proxy: proxy)
+        switch status {
         case .valid:
             return EngineStatus(text: "Ready", color: Palette.success)
         case .checking:
@@ -177,8 +181,9 @@ final class MenuBuilder {
         case .invalid:
             return EngineStatus(text: "Key rejected", color: Palette.danger)
         case .noCredit:
-            return EngineStatus(text: account.status.isKeyLimitReached ? "Key limit reached" : "Out of credit",
-                                color: Palette.danger)
+            let text = status.isProxySpendLimit ? "Spend limit reached"
+                : status.isKeyLimitReached ? "Key limit reached" : "Out of credit"
+            return EngineStatus(text: text, color: Palette.danger)
         case .offline:
             return EngineStatus(text: "Offline", color: Palette.warning)
         case .failed:

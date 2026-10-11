@@ -40,7 +40,9 @@ import Foundation
 /// what went up (`UPLOAD:` format and bytes, per segment for Parakeet) and what the app records of it (`USAGE:`
 /// tokens, billed seconds, cost, provider, generation id, time to first token, generation and total time), asking
 /// OpenRouter's generation record (every segment's, for Parakeet) for what the response left out.
-/// Settings are in-memory: the CLI never changes the app's.
+/// Settings are in-memory: the CLI never changes the app's. Gemini goes where the app sends it: through the Vertex
+/// proxy when the app has one set up and on (its address and switch read from the app's settings, its key from its
+/// key file, read only), else through OpenRouter. `--model-status` says which, never the key.
 /// An engine that answers with no text heard no speech: that prints `NO SPEECH` instead of `TEXT:` and exits 0,
 /// like any other answer. Only real failures print `ERROR:` and exit non-zero.
 ///
@@ -236,7 +238,8 @@ enum EngineCLI {
         let client = OpenRouterClient()
         // A copy of the key in memory: nothing the run does changes the app's key file.
         let account = OpenRouterAccount(keyStore: .inMemory(), client: client)
-        let service = TranscriptionService(models: store, account: account, client: client)
+        let proxy = appVertexProxy(paths: paths)
+        let service = TranscriptionService(models: store, account: account, client: client, proxy: proxy)
         if let url = options.vocabulary {
             let words = try String(contentsOf: url, encoding: .utf8).split(whereSeparator: \.isNewline)
                 .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
@@ -250,7 +253,11 @@ enum EngineCLI {
             let code = try await prepareLocal(options, store: store)
             guard code == ExitCode.ok else { return code }
         }
-        if options.engine.isCloud {
+        let viaProxy = service.provider(for: options.engine) == .vertexProxy
+        if viaProxy, let proxy {
+            print("ROUTE: Vertex proxy · \(proxy.baseURL.map(VertexProxy.displayHost) ?? "?") · key \(proxy.maskedKey ?? "unreadable")")
+        }
+        if options.engine.isCloud, !viaProxy {
             let key: String?
             do {
                 key = try keyStore(paths: paths).lookup()
@@ -675,6 +682,38 @@ enum EngineCLI {
         }
         let envKey = ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"].map { !$0.isEmpty } ?? false
         print("OpenRouter key: \(envKey ? "OPENROUTER_API_KEY is set" : "not in the environment (the app keeps it in \(paths.keyFile.path))")")
+        print("Gemini goes through: \(geminiRouteLine(appVertexProxy(paths: paths)))")
+        print("\(EngineID.parakeetCloud.displayName) goes through: OpenRouter")
+    }
+
+    /// Where Gemini's requests go, as `--model-status` says it: never the key, only whether one is saved.
+    @MainActor
+    static func geminiRouteLine(_ proxy: VertexProxyAccount?) -> String {
+        guard let proxy, let base = proxy.baseURL else { return "OpenRouter (no Vertex proxy set up)" }
+        let host = VertexProxy.displayHost(base)
+        let key = proxy.isKeyUnreadable ? "key unreadable" : (proxy.maskedKey != nil ? "key saved" : "no key")
+        if proxy.routesGemini { return "Vertex proxy (\(host), \(key))" }
+        if !proxy.isConfigured { return "OpenRouter (Vertex proxy at \(host) has no key)" }
+        return "OpenRouter (Vertex proxy at \(host) is switched off)"
+    }
+
+    /// The app's Vertex proxy, read only: its address and switch from the app's settings (`dev.transcribe-thing.app`),
+    /// its key from its key file, copied into memory so nothing the run does changes either. nil without an address.
+    @MainActor
+    static func appVertexProxy(paths: AppPaths) -> VertexProxyAccount? {
+        let defaults = UserDefaults(suiteName: "dev.transcribe-thing.app")
+        guard let url = defaults?.string(forKey: SettingsKey.vertexProxyURL.defaultsKey), !url.isEmpty else { return nil }
+        let settings = AppSettings.inMemory()
+        settings.vertexProxyURL = url
+        settings.vertexProxyEnabled = defaults?.object(forKey: SettingsKey.vertexProxyEnabled.defaultsKey) as? Bool ?? true
+        let keyStore: KeyFileStore
+        do {
+            keyStore = .inMemory(try KeyFileStore(url: paths.vertexProxyKeyFile).lookup())
+        } catch {
+            keyStore = .inMemory("unreadable")
+            keyStore.simulateReadFailure(true)
+        }
+        return VertexProxyAccount(keyStore: keyStore, settings: settings)
     }
 
     // MARK: Formatting

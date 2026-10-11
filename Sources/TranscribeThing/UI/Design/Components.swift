@@ -870,6 +870,8 @@ struct ModelStatusText: View {
             return ("Connected", .positive)
         case .invalid:
             return ("Key rejected", .negative)
+        case .noCredit where status.isProxySpendLimit:
+            return ("Spend limit reached", .warning)
         case .noCredit:
             return (status.isKeyLimitReached ? "Key limit reached" : "Out of credit", .warning)
         case .offline:

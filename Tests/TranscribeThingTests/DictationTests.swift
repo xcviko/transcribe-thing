@@ -724,7 +724,8 @@ final class FakeRecorder: DictationRecorder {
                      modelErrors: [EngineID: AppError] = [:], store: ModelStore? = nil,
                      mic: PermissionState = .granted, micLive: Bool = false, keyStatus: KeyStatus = .missing,
                      meter: LevelMeter = .preview(level: 0), persistsHistory: Bool = false,
-                     client: OpenRouterClient? = nil, inserter: TextInserter? = nil) -> Harness {
+                     client: OpenRouterClient? = nil, inserter: TextInserter? = nil,
+                     proxy: VertexProxyAccount? = nil) -> Harness {
         let settings = AppSettings.inMemory()
         let paths: AppPaths? = persistsHistory ? .temporary() : nil
         let devices = AudioDeviceCatalog.preview()
@@ -740,7 +741,7 @@ final class FakeRecorder: DictationRecorder {
         let hotkeys = HotkeyMonitor.preview()
         let controller = DictationController(
             settings: settings, recorder: AudioRecorder(levelMeter: meter, devices: devices),
-            transcription: TranscriptionService(models: store, account: account, client: client),
+            transcription: TranscriptionService(models: store, account: account, client: client, proxy: proxy),
             models: store, account: account, history: history, inserter: inserter ?? .inert(),
             hotkeys: hotkeys, permissions: .preview(mic: mic, ax: .granted), sounds: SoundPlayer(settings: settings),
             pillModel: pill, toasts: toasts)

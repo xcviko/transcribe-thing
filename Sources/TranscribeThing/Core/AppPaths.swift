@@ -28,6 +28,8 @@ struct AppPaths: Sendable {
     var updateFeedFile: URL { root.appendingPathComponent("updates.json", isDirectory: false) }
     /// root/openrouter-key: the OpenRouter key (`KeyFileStore`), readable by the user only.
     var keyFile: URL { root.appendingPathComponent("openrouter-key", isDirectory: false) }
+    /// root/vertex-proxy-key: the Vertex proxy's key (`KeyFileStore`), readable by the user only.
+    var vertexProxyKeyFile: URL { root.appendingPathComponent("vertex-proxy-key", isDirectory: false) }
     /// root/Logs: the diagnostic log, a file per day (`DiagnosticLog`). Created by the log when it first writes.
     var logs: URL { root.appendingPathComponent("Logs", isDirectory: true) }
 

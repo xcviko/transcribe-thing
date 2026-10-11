@@ -10,8 +10,9 @@ struct OpenRouterChatRequest: Encodable, Equatable {
     let model: String
     let messages: [OpenRouterMessage]
     let reasoning: Reasoning
-    let provider: Provider
-    let maxTokens: Int
+    /// OpenRouter's routing; nil leaves it out (the Vertex proxy has a single provider, Vertex AI).
+    var provider: Provider?
+    var maxTokens: Int
     let stream: Bool
     /// Sent only when set: otherwise the model's default (every request the app sends).
     var temperature: Double? = nil

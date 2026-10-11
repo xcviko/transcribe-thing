@@ -591,6 +591,16 @@ final class DictationController {
         }
         let engine = effectiveEngine
         if engine.isLocal { return localRefusal(engine) }
+        if transcription.provider(for: engine) == .vertexProxy, let proxy = transcription.proxy {
+            switch proxy.keyStatus {
+            case .invalid(let message):
+                // As OpenRouter's below: a key fixed on the proxy since works again after the background check.
+                proxy.refreshIfStale(maxAge: 30)
+                return .vertexProxy(.keyRejected(message))
+            case .failed where proxy.isKeyUnreadable: return .vertexProxy(.keyUnreadable)
+            case .missing, .checking, .valid, .noCredit, .offline, .failed: return nil
+            }
+        }
         switch account.status {
         case .missing: return .openRouterMissingKey
         case .invalid(let message):
@@ -1001,6 +1011,28 @@ final class DictationController {
         case .noCredit: .openRouterNoCredits("")
         case .failed where account.isKeyUnreadable: .openRouterKeyUnreadable
         case .checking, .valid, .offline, .failed: nil
+        }
+    }
+
+    /// Why the Vertex proxy can't take a request right now, as far as its account knows (nil while it may).
+    private var vertexProxyKeyProblem: AppError? {
+        guard let proxy = transcription.proxy else { return nil }
+        let status = proxy.keyStatus
+        return switch status {
+        case .invalid(let message): .vertexProxy(.keyRejected(message))
+        case .noCredit: .vertexProxy(.spendLimit(""))
+        case .failed where proxy.isKeyUnreadable: .vertexProxy(.keyUnreadable)
+        case .missing, .checking, .valid, .offline, .failed: nil
+        }
+    }
+
+    /// Why the key `engine`'s requests go with can't pay for one now: the Vertex proxy's for Gemini while it routes
+    /// Gemini, else OpenRouter's. nil for a local engine.
+    private func keyProblem(for engine: EngineID) -> AppError? {
+        switch transcription.provider(for: engine) {
+        case nil: nil
+        case .vertexProxy?: vertexProxyKeyProblem
+        case .openRouter?: openRouterKeyProblem
         }
     }
 
@@ -1657,7 +1689,22 @@ final class DictationController {
         case .offline: "Couldn’t reach OpenRouter. Check your internet or VPN."
         case .regionBlocked: "It isn’t available in your region. Turn on your VPN."
         case .connectionBlocked: "OpenRouter’s firewall turned your network away. Try another VPN server."
+        case .vertexProxy(let failure): vertexProxyFailureReason(failure)
         default: nil
+        }
+    }
+
+    /// The Vertex proxy's own failures, in the same plain words; nil for one its notice's title says best.
+    private nonisolated static func vertexProxyFailureReason(_ failure: VertexProxyFailure) -> String? {
+        switch failure {
+        case .keyUnreadable: "Your saved Vertex proxy key couldn’t be read. Paste it again in Models."
+        case .keyRejected: "Your Vertex proxy rejected the key."
+        case .spendLimit: "Your Vertex proxy hit its spend limit."
+        case .unreachable: "Couldn’t reach your Vertex proxy. Check its address in Models."
+        case .rateLimited: "Gemini is busy on your Vertex proxy. Try again in a moment."
+        case .unavailable: "Your Vertex proxy ran into a problem."
+        case .forbidden: "Google Cloud refused your Vertex proxy."
+        case .badRequest, .tooLarge: nil
         }
     }
 
@@ -1950,7 +1997,8 @@ final class DictationController {
     /// through it (`openRouterKeyProblem`), then Parakeet on this Mac when it uses it (`localRefusal`).
     private func switchRefusal(_ choice: ModelChoice) -> AppError? {
         let parakeet = settings.parakeetEngine
-        if choice.needsOpenRouter(parakeet: parakeet), let keyProblem = openRouterKeyProblem { return keyProblem }
+        if choice.needsOpenRouter(parakeet: parakeet),
+           let keyProblem = keyProblem(for: choice.engine(parakeet: parakeet)) { return keyProblem }
         if choice.usesLocalParakeet(parakeet: parakeet) { return localRefusal(parakeet) }
         return nil
     }
@@ -1960,8 +2008,11 @@ final class DictationController {
     private func unavailableReason(_ choice: ModelChoice) -> String? {
         guard choice != settings.lineup.main, switchRefusal(choice) != nil else { return nil }
         let parakeet = settings.parakeetEngine
+        let engine = choice.engine(parakeet: parakeet)
         return EngineReadiness.of(choice, parakeet: parakeet, localState: models.state(of: parakeet),
-                                  keyStatus: account.status, localError: models.lastErrors[parakeet])
+                                  keyStatus: CloudRoute.keyStatus(for: engine, account: account,
+                                                                  proxy: transcription.proxy),
+                                  localError: models.lastErrors[parakeet])
             .unavailableReason ?? "Unavailable"
     }
 
@@ -2112,12 +2163,12 @@ final class DictationController {
     /// Polish Selection can happen: its key is bound, and the OpenRouter key can pay for it (without one, the key
     /// stays the app's and no hint promises a polish that would only fail).
     private var canPolishSelection: Bool {
-        settings.shortcuts[.polish] != nil && openRouterKeyProblem == nil
+        settings.shortcuts[.polish] != nil && keyProblem(for: .geminiFlash) == nil
     }
 
     /// The selection can be translated: the translate key is bound, and the OpenRouter key can pay for it.
     private var canTranslateSelection: Bool {
-        settings.shortcuts[.translate] != nil && openRouterKeyProblem == nil
+        settings.shortcuts[.translate] != nil && keyProblem(for: .geminiFlash) == nil
     }
 
     /// fn D can add the selection to the dictionary: its key is bound (with a key: a modifier-only binding can't be

@@ -64,6 +64,13 @@ dictation sends its request twice at once and pastes the first answer, stopping 
 as much: a model that stops to think on one request doesn't hold you up. In Models, choose which model every
 dictation starts on, whether hands-free dictations and fn ⇥ switch to the other one, and each one's pill color.
 
+If you run your own Vertex proxy, Gemini can go through it instead of OpenRouter and be paid from your Google Cloud
+credits. In Models → Vertex proxy, enter its address and its key (it starts with `sk-vp-`). The app checks the key
+without spending anything and says whether it works. While "Use for Gemini" is on, every Gemini request goes to the
+proxy: dictations, Polish, Translate, selected text, files and calls. If the proxy fails, nothing is sent to OpenRouter
+instead, and the error says it came from the proxy. Costs in History are the proxy's estimates. Parakeet v3 · Cloud
+still needs an OpenRouter key. Turn "Use for Gemini" off to go back to OpenRouter; the address and key stay saved.
+
 ## Dictionary
 
 Words, names and terms you use, and how they're spelled. Gemini 3.8 Flash gets them as a hint, so a dictation
@@ -106,7 +113,7 @@ When a call starts, recording starts too, and the app asks "Transcribe your call
 If you don't answer, the call waits in the Calls tab, and nothing is sent until you click Transcribe there. To transcribe
 every call without asking, or to stop noticing calls, change General → Calls → Record calls.
 
-Gemini 3.8 Flash writes the transcript, on your OpenRouter key. Someone whose name comes up in the call is named; the
+Gemini 3.8 Flash writes the transcript, on your OpenRouter key or through your Vertex proxy. Someone whose name comes up in the call is named; the
 rest are "Participant 1", "Participant 2". On the call's page, click a name to rename them, or a time to play the call
 from there. What you said while muted is marked "muted" in Zoom, Discord, Slack, Google Meet, Telemost and Telegram. In
 other apps, what you said while muted may end up in the transcript.
@@ -117,9 +124,9 @@ browser, the app records all of the browser's sound, so music in another tab end
 
 ## Your data
 
-History, the recordings, your dictionary and your OpenRouter key stay on your Mac, in
-`~/Library/Application Support/transcribe-thing`. The key is in a file only you can read. Audio leaves your Mac only
-when a cloud model transcribes it. Text leaves it only when Gemini 3.8 Flash polishes or translates text you selected. Your
+History, the recordings, your dictionary and your OpenRouter and Vertex proxy keys stay on your Mac, in
+`~/Library/Application Support/transcribe-thing`. Each key is in a file only you can read. Audio leaves your Mac only
+when a cloud model transcribes it: through OpenRouter, or for Gemini through your Vertex proxy when it's on. Text leaves it only when Gemini 3.8 Flash polishes or translates text you selected. Your
 dictionary's words go along with everything sent to Gemini 3.8 Flash.
 
 The same folder keeps a log of what the app did in the last 7 days, without your dictations, your selected text or
@@ -166,7 +173,8 @@ The binary also works without the UI, for checking the models:
 .build/debug/transcribe-thing --transcribe memo.m4a --engine geminiFlash
 ```
 
-Cloud runs use the app's saved key, or `OPENROUTER_API_KEY` when it's set. `Sources/TranscribeThing/App/EngineCLI.swift`
+Cloud runs use the app's saved key, or `OPENROUTER_API_KEY` when it's set. Gemini runs go through the Vertex proxy
+when the app has it on, and `--model-status` says which way Gemini goes. `Sources/TranscribeThing/App/EngineCLI.swift`
 lists every flag.
 
 ### Releasing

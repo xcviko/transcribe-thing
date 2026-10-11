@@ -8,7 +8,6 @@ struct HomePage: View {
     @Environment(HistoryStore.self) private var history
     @Environment(AppSettings.self) private var settings
     @Environment(ModelStore.self) private var models
-    @Environment(OpenRouterAccount.self) private var account
     @Environment(PermissionsCenter.self) private var permissions
 
     @State private var query = ""
@@ -134,8 +133,9 @@ struct HomePage: View {
             pushToTalkUsesFn: settings.shortcuts[.pushToTalk]?.usesFunctionKey ?? false,
             engine: settings.mainEngine,
             localState: models.state(of: settings.mainEngine),
-            keyStatus: account.status,
+            keyStatus: hub.keyStatus(for: settings.mainEngine),
             localError: models.lastErrors[settings.mainEngine],
+            provider: hub.provider(for: settings.mainEngine) ?? .openRouter,
             shortcutUnavailable: hub.dictation.isShortcutUnavailable))
         if !items.isEmpty {
             VStack(spacing: Theme.Spacing.xs) {

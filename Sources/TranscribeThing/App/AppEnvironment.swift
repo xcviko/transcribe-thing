@@ -12,6 +12,8 @@ final class AppEnvironment {
     let recorder: AudioRecorder
     let openRouterClient: OpenRouterClient
     let account: OpenRouterAccount
+    /// The user's Vertex proxy, which takes Gemini's requests instead of OpenRouter while it's set up and on.
+    let proxy: VertexProxyAccount
     let models: ModelStore
     let transcription: TranscriptionService
     let history: HistoryStore
@@ -45,7 +47,8 @@ final class AppEnvironment {
 
     init(paths: AppPaths, settings: AppSettings, keyStore: KeyFileStore, levelMeter: LevelMeter,
          devices: AudioDeviceCatalog, recorder: AudioRecorder, openRouterClient: OpenRouterClient,
-         account: OpenRouterAccount, models: ModelStore, transcription: TranscriptionService,
+         account: OpenRouterAccount, proxy: VertexProxyAccount, models: ModelStore,
+         transcription: TranscriptionService,
          history: HistoryStore, calls: CallStore, permissions: PermissionsCenter, hotkeys: HotkeyMonitor,
          inserter: TextInserter, secureInput: SecureInputMonitor, launchAtLogin: LaunchAtLogin,
          sounds: SoundPlayer, pillModel: PillModel, toasts: ToastCenter, pill: PillController,
@@ -59,12 +62,14 @@ final class AppEnvironment {
         self.recorder = recorder
         self.openRouterClient = openRouterClient
         self.account = account
+        self.proxy = proxy
         self.models = models
         self.transcription = transcription
         self.history = history
         self.calls = calls
         callTranscriber = CallTranscriber(store: calls,
-                                          send: CallTranscriber.openRouter(client: openRouterClient, account: account))
+                                          send: CallTranscriber.openRouter(client: openRouterClient, account: account,
+                                                                           proxy: proxy))
         callMonitor = CallMonitor(settings: settings, store: calls, transcriber: callTranscriber,
                                   dependencies: .live(settings: settings))
         self.permissions = permissions
@@ -82,7 +87,7 @@ final class AppEnvironment {
         self.menuBar = menuBar
         self.isPreview = isPreview
         diagnostics = DiagnosticsCenter(log: .shared, settings: settings, keyStore: keyStore, account: account,
-                                        permissions: permissions, devices: devices)
+                                        proxy: proxy, permissions: permissions, devices: devices)
         windows.environment = self
         menuBar.environment = self
         wire()
@@ -98,6 +103,7 @@ final class AppEnvironment {
             levelMeter: LevelMeter(),
             devices: AudioDeviceCatalog(),
             makeAccount: { keyStore, client in OpenRouterAccount(keyStore: keyStore, client: client) },
+            proxy: VertexProxyAccount(keyStore: KeyFileStore(url: paths.vertexProxyKeyFile), settings: settings),
             models: ModelStore(paths: paths, settings: settings),
             history: HistoryStore(paths: paths, settings: settings),
             calls: CallStore(paths: paths, settings: settings),
@@ -122,6 +128,7 @@ final class AppEnvironment {
             levelMeter: .preview(level: 0.55),
             devices: .preview(),
             makeAccount: { _, _ in .preview(status: .valid(PreviewFixtures.keyInfo)) },
+            proxy: .preview(status: .notSet, settings: settings),
             models: .preview(states: [.parakeet: .ready]),
             history: .preview(entries: PreviewFixtures.history()),
             calls: .preview(calls: []),
@@ -138,6 +145,7 @@ final class AppEnvironment {
         paths: AppPaths, settings: AppSettings, keyStore: KeyFileStore, levelMeter: LevelMeter,
         devices: AudioDeviceCatalog,
         makeAccount: (KeyFileStore, OpenRouterClient) -> OpenRouterAccount,
+        proxy: VertexProxyAccount,
         models: ModelStore, history: HistoryStore, calls: CallStore, permissions: PermissionsCenter,
         hotkeys: HotkeyMonitor,
         secureInput: SecureInputMonitor, launchAtLogin: LaunchAtLogin,
@@ -146,7 +154,7 @@ final class AppEnvironment {
         let recorder = AudioRecorder(levelMeter: levelMeter, devices: devices, settings: settings)
         let client = OpenRouterClient()
         let account = makeAccount(keyStore, client)
-        let transcription = TranscriptionService(models: models, account: account, client: client)
+        let transcription = TranscriptionService(models: models, account: account, client: client, proxy: proxy)
         transcription.vocabulary = { [settings] in settings.dictionary.words }
         let inserter = TextInserter()
         let sounds = SoundPlayer(settings: settings)
@@ -159,7 +167,7 @@ final class AppEnvironment {
             permissions: permissions, sounds: sounds, pillModel: pillModel, toasts: toasts)
         return AppEnvironment(
             paths: paths, settings: settings, keyStore: keyStore, levelMeter: levelMeter, devices: devices,
-            recorder: recorder, openRouterClient: client, account: account, models: models,
+            recorder: recorder, openRouterClient: client, account: account, proxy: proxy, models: models,
             transcription: transcription, history: history, calls: calls, permissions: permissions, hotkeys: hotkeys,
             inserter: inserter, secureInput: secureInput, launchAtLogin: launchAtLogin, sounds: sounds,
             pillModel: pillModel, toasts: toasts, pill: pill, dictation: dictation,
@@ -236,6 +244,8 @@ final class AppEnvironment {
         models.start()
         let account = account
         Task { await account.validate() }
+        let proxy = proxy
+        if proxy.isConfigured { Task { await proxy.validate() } }
         sounds.preload()
         pill.start()
         dictation.start()
@@ -273,6 +283,8 @@ final class AppEnvironment {
         case .invalid, .noCredit: account.refreshIfStale(maxAge: 30)
         default: break
         }
+        // A proxy key the proxy rejected may have been fixed on the proxy since.
+        if case .keyRejected = proxy.status { proxy.refreshIfStale(maxAge: 30) }
     }
 
     /// Called at quit: persist what's pending and release the event tap.

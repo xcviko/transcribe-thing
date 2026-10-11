@@ -10,6 +10,8 @@ final class HubContext: Observable {
     var settings: AppSettings
     var models: ModelStore
     var account: OpenRouterAccount
+    /// The Vertex proxy, which takes Gemini's requests while it's set up and on.
+    var proxy: VertexProxyAccount
     var history: HistoryStore
     /// Recorded calls (the Calls tab), and what records and transcribes them.
     var calls: CallStore
@@ -58,6 +60,7 @@ final class HubContext: Observable {
         settings = env.settings
         models = env.models
         account = env.account
+        proxy = env.proxy
         history = env.history
         calls = env.calls
         callMonitor = env.callMonitor
@@ -118,7 +121,7 @@ final class HubContext: Observable {
     }
 
     func readiness(of engine: EngineID) -> EngineReadiness {
-        EngineReadiness.of(engine, localState: models.state(of: engine), keyStatus: account.status,
+        EngineReadiness.of(engine, localState: models.state(of: engine), keyStatus: keyStatus(for: engine),
                            localError: models.lastErrors[engine])
     }
 
@@ -126,7 +129,19 @@ final class HubContext: Observable {
     func readiness(of choice: ModelChoice) -> EngineReadiness {
         let parakeet = settings.parakeetEngine
         return EngineReadiness.of(choice, parakeet: parakeet, localState: models.state(of: parakeet),
-                                  keyStatus: account.status, localError: models.lastErrors[parakeet])
+                                  keyStatus: keyStatus(for: choice.engine(parakeet: parakeet)),
+                                  localError: models.lastErrors[parakeet])
+    }
+
+    /// The status of the key `engine`'s requests go with: the Vertex proxy's for Gemini while it routes Gemini,
+    /// else OpenRouter's.
+    func keyStatus(for engine: EngineID) -> KeyStatus {
+        CloudRoute.keyStatus(for: engine, account: account, proxy: proxy)
+    }
+
+    /// Where `engine`'s requests go; nil for the local model.
+    func provider(for engine: EngineID) -> CloudProvider? {
+        CloudRoute.provider(for: engine, proxy: proxy)
     }
 
     /// What is being made for a History row's recording right now (a transcription or a polish), if anything.
@@ -178,6 +193,7 @@ struct HubView: View {
             .environment(context.settings)
             .environment(context.models)
             .environment(context.account)
+            .environment(context.proxy)
             .environment(context.history)
             .environment(context.calls)
             .environment(context.callMonitor)
@@ -214,7 +230,10 @@ private struct HubRoot: View {
             if hub.drawsWindowControls { PreviewTrafficLights() }
         }
         // The key's status (and credit left) is a snapshot from the last check: refresh a stale one.
-        .task { hub.account.refreshIfStale(maxAge: 300) }
+        .task {
+            hub.account.refreshIfStale(maxAge: 300)
+            hub.proxy.refreshIfStale(maxAge: 300)
+        }
     }
 
     /// The page's name; a call's page is named by the call.

@@ -164,6 +164,28 @@ enum HubSnapshots {
             hub("hub-models-key-missing", .models, height: 1100) { c in
                 c.account = .preview(status: .missing)
             },
+            // The Vertex proxy's card, at the bottom: not set up, working, its key rejected, and the proxy alone (no
+            // OpenRouter key: Gemini ready through it, cloud Parakeet needing a key).
+            hub("hub-models-proxy-unset", .models, height: 1500),
+            hub("hub-models-proxy-works", .models, height: 1500) { c in
+                c.proxy = .preview(status: .works, settings: c.settings)
+            },
+            hub("hub-models-proxy-rejected", .models, height: 1500) { c in
+                c.proxy = .preview(status: .keyRejected("API key not valid. Please pass a valid API key."),
+                                   settings: c.settings)
+            },
+            hub("hub-models-proxy-off", .models, height: 1500) { c in
+                c.proxy = .preview(status: .works, settings: c.settings, enabled: false)
+            },
+            hub("hub-models-proxy-only", .models, height: 1500) { c in
+                c.account = .preview(status: .missing)
+                c.proxy = .preview(status: .works, settings: c.settings)
+                c.settings.lineup.main = .gemini
+            },
+            hub("hub-home-proxy-rejected", .home) { c in
+                c.settings.lineup.main = .gemini
+                c.proxy = .preview(status: .keyRejected("API key not valid."), settings: c.settings)
+            },
             // Switch model rebound to right ⌘: the line above the lineup shows the real binding.
             hub("hub-models-extra-custom", .models, height: 1100) { c in
                 c.settings.shortcuts[.switchModel] = .rightCommand

@@ -273,6 +273,8 @@ struct OnboardingContext {
     var permissions: PermissionsCenter
     var models: ModelStore
     var account: OpenRouterAccount
+    /// The Vertex proxy: Gemini is usable through it, without an OpenRouter key, while it's set up and on.
+    var proxy: VertexProxyAccount?
     var hotkeys: HotkeyMonitor
     var launchAtLogin: LaunchAtLogin
     var history: HistoryStore
@@ -293,6 +295,7 @@ struct OnboardingContext {
         permissions = env.permissions
         models = env.models
         account = env.account
+        proxy = env.proxy
         hotkeys = env.hotkeys
         launchAtLogin = env.launchAtLogin
         history = env.history
@@ -408,8 +411,9 @@ final class OnboardingModel {
             accessibility: ctx.permissions.accessibility,
             engine: engine,
             localState: ctx.models.state(of: engine),
-            keyStatus: ctx.account.status,
-            hasStoredKey: ctx.account.maskedKey != nil)
+            keyStatus: CloudRoute.keyStatus(for: engine, account: ctx.account, proxy: ctx.proxy),
+            hasStoredKey: CloudRoute.provider(for: engine, proxy: ctx.proxy) == .vertexProxy
+                ? ctx.proxy?.maskedKey != nil : ctx.account.maskedKey != nil)
     }
 
     var canContinue: Bool { OnboardingGate.canContinue(step, gateInputs) }

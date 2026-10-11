@@ -40,19 +40,38 @@ final class CallTranscriber {
         self.send = send
     }
 
-    /// The live request: Gemini 3.8 Flash through OpenRouter at its own reasoning level, with the account's key. The
-    /// answer comes back as the model wrote it (no `<transcript>` tags are asked for or taken off).
-    static func openRouter(client: OpenRouterClient, account: OpenRouterAccount) -> Send {
+    /// The live request: Gemini 3.8 Flash at its own reasoning level, through the Vertex proxy while it routes Gemini
+    /// (`VertexProxyAccount.routesGemini`, decided for each request), else through OpenRouter with the account's key.
+    /// A proxy that's set up never hands a request to OpenRouter. The answer comes back as the model wrote it (no
+    /// `<transcript>` tags are asked for or taken off).
+    static func openRouter(client: OpenRouterClient, account: OpenRouterAccount,
+                           proxy: VertexProxyAccount? = nil) -> Send {
         let engine = EngineID.geminiFlash
         let model = engine.openRouterModelID ?? "google/gemini-3.8-flash"
         let effort = engine.reasoningEffort ?? .medium
         return { audio, prompt, seconds in
-            let key = await MainActor.run { account.apiKey() }
-            guard let key else { throw AppError.openRouterMissingKey }
-            return try await client.transcribe(audio: audio, format: UploadFormat.m4a.rawValue, model: model,
-                                               systemPrompt: prompt, effort: effort,
-                                               maxTokens: OpenRouterClient.transcriptionMaxTokens(audioSeconds: seconds),
-                                               apiKey: key, timeout: engine.cloudTimeout, extractsTags: false)
+            let route = await MainActor.run { () -> Result<(OpenRouterClient, String), AppError> in
+                if let proxy, proxy.routesGemini {
+                    guard let key = proxy.apiKey(), let proxyClient = proxy.client() else {
+                        return .failure(.vertexProxy(.keyUnreadable))
+                    }
+                    return .success((proxyClient, key))
+                }
+                guard let key = account.apiKey() else { return .failure(.openRouterMissingKey) }
+                return .success((client, key))
+            }
+            let (target, key) = try route.get()
+            do {
+                let result = try await target.transcribe(
+                    audio: audio, format: UploadFormat.m4a.rawValue, model: model, systemPrompt: prompt, effort: effort,
+                    maxTokens: OpenRouterClient.transcriptionMaxTokens(audioSeconds: seconds), apiKey: key,
+                    timeout: engine.cloudTimeout, extractsTags: false)
+                if target.service == .vertexProxy, let proxy { await MainActor.run { proxy.noteCloudSuccess() } }
+                return result
+            } catch let error as AppError {
+                if target.service == .vertexProxy, let proxy { await MainActor.run { proxy.noteCloudFailure(error) } }
+                throw error
+            }
         }
     }
 

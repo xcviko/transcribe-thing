@@ -8,6 +8,7 @@ struct OpenRouterKeyCard: View {
 
     @Environment(HubContext.self) private var hub
     @Environment(OpenRouterAccount.self) private var account
+    @Environment(VertexProxyAccount.self) private var proxy
     @State private var replacing = false
     @State private var draft = ""
     @State private var saving = false
@@ -48,7 +49,9 @@ struct OpenRouterKeyCard: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.ink)
                 // Who pays, and for what: worth saying every time.
-                Text("Gemini and cloud Parakeet run on it. You pay OpenRouter per use.")
+                Text(proxy.routesGemini
+                     ? "Cloud Parakeet runs on it; Gemini goes through your Vertex proxy. You pay OpenRouter per use."
+                     : "Gemini and cloud Parakeet run on it. You pay OpenRouter per use.")
                     .typeface(.callout)
                     .foregroundStyle(.inkSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -143,7 +146,9 @@ struct OpenRouterKeyCard: View {
     @ViewBuilder private var statusLine: some View {
         switch account.status {
         case .missing:
-            status("key.slash", .inkTertiary, "No key yet. The cloud models need one.")
+            status("key.slash", .inkTertiary, proxy.routesGemini
+                   ? "No key yet. \(EngineID.parakeetCloud.displayName) needs one."
+                   : "No key yet. The cloud models need one.")
         case .checking:
             HStack(spacing: 7) {
                 ProgressView().controlSize(.mini)

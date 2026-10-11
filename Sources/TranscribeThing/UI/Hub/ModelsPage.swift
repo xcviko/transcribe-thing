@@ -3,8 +3,8 @@ import UniformTypeIdentifiers
 
 /// The models in the user's order: the main model every dictation starts on (a radio), which other the Switch model
 /// shortcut steps to (a switch), the order it steps in (drag a row by its handle), and each one's color on the pill
-/// (its tile). Then where Parakeet runs (on this Mac: download, use, delete, storage; or through OpenRouter), and the
-/// OpenRouter key.
+/// (its tile). Then where Parakeet runs (on this Mac: download, use, delete, storage; or through OpenRouter), the
+/// OpenRouter key, and the Vertex proxy that can take Gemini's requests instead.
 struct ModelsPage: View {
     @Environment(HubContext.self) private var hub
     @Environment(ModelStore.self) private var models
@@ -12,6 +12,7 @@ struct ModelsPage: View {
     @Environment(OpenRouterAccount.self) private var account
 
     @State private var keyFocusRequest = 0
+    @State private var proxyFocusRequest = 0
     /// The model being dragged by its handle, while it is.
     @State private var dragged: ModelChoice?
 
@@ -27,7 +28,7 @@ struct ModelsPage: View {
                         ForEach(settings.lineup.order) { choice in
                             LineupRow(choice: choice, dragged: $dragged,
                                       chooseMain: { chooseMain(choice, proxy: proxy) },
-                                      focusKey: { focusKey(proxy) })
+                                      focusKey: { focusKey(for: choice, proxy) })
                         }
                     }
                 }
@@ -50,6 +51,10 @@ struct ModelsPage: View {
                     OpenRouterKeyCard(focusRequest: keyFocusRequest)
                         .id(ModelsAnchor.key)
                 }
+                HubGroup("Vertex proxy") {
+                    VertexProxyCard(focusRequest: proxyFocusRequest)
+                        .id(ModelsAnchor.proxy)
+                }
             }
         }
         // A row's drag let go anywhere else on the page (or canceled, then the page left) ends here too.
@@ -58,7 +63,10 @@ struct ModelsPage: View {
             return false
         }
         .onDisappear { dragged = nil }
-        .task { account.refreshIfStale(maxAge: 300) }
+        .task {
+            account.refreshIfStale(maxAge: 300)
+            hub.proxy.refreshIfStale(maxAge: 300)
+        }
     }
 
     private func row(_ engine: EngineID, proxy: ScrollViewProxy) -> some View {
@@ -80,9 +88,9 @@ struct ModelsPage: View {
         guard settings.lineup.main != choice else { return }
         let parakeet = settings.parakeetEngine
         if choice.needsOpenRouter(parakeet: parakeet) {
-            switch hub.readiness(of: .geminiFlash) {
+            switch hub.readiness(of: choice) {
             case .needsKey, .keyProblem:
-                focusKey(proxy)
+                focusKey(for: choice, proxy)
                 return
             case .ready, .warming, .needsDownload, .failed:
                 break
@@ -120,6 +128,16 @@ struct ModelsPage: View {
         keyFocusRequest += 1
     }
 
+    /// The key `choice` goes with: the Vertex proxy's card while it takes Gemini's requests, else the OpenRouter key.
+    private func focusKey(for choice: ModelChoice, _ proxy: ScrollViewProxy) {
+        guard hub.provider(for: choice.engine(parakeet: settings.parakeetEngine)) == .vertexProxy else {
+            focusKey(proxy)
+            return
+        }
+        withAnimation(Theme.Motion.expand) { proxy.scrollTo(ModelsAnchor.proxy, anchor: .top) }
+        proxyFocusRequest += 1
+    }
+
     // MARK: Hands-free
 
     /// The main model (no switch), then the models Switch model steps to.
@@ -152,7 +170,7 @@ struct ModelsPage: View {
 }
 
 enum ModelsAnchor: Hashable {
-    case key
+    case key, proxy
 }
 
 // MARK: - Your models
@@ -279,7 +297,8 @@ private struct LineupRow: View {
 
     private var status: some View {
         let summary = EngineSummary.make(choice: choice, parakeet: parakeet, localState: models.state(of: parakeet),
-                                         keyStatus: account.status, localError: models.lastErrors[parakeet])
+                                         keyStatus: hub.keyStatus(for: choice.engine(parakeet: parakeet)),
+                                         localError: models.lastErrors[parakeet])
         return HStack(spacing: 4) {
             StatusDot(color: summary.tone.color, size: 6, pulsing: summary.tone == .progress)
                 .frame(width: 12, height: 12)

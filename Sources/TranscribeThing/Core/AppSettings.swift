@@ -151,6 +151,12 @@ final class AppSettings {
     /// The OpenRouter key older builds kept in the login keychain is settled: moved to its key file, never there, or
     /// a key was saved or removed since (`KeychainMigration`). From then on the Keychain is never asked again.
     var keychainKeyMigrated: Bool = false { didSet { store.set(keychainKeyMigrated, .keychainKeyMigrated) } }
+    /// The user's Vertex proxy (Models → Vertex proxy): its base URL as `VertexProxy.normalizedBaseURL` gives it, nil
+    /// when none is set. Its key is in its own key file (`AppPaths.vertexProxyKeyFile`), never here.
+    var vertexProxyURL: String? = nil { didSet { store.set(vertexProxyURL, .vertexProxyURL) } }
+    /// "Use for Gemini": with a proxy set up, every Gemini request goes to it instead of OpenRouter. Off keeps the
+    /// proxy's address and key, and Gemini goes through OpenRouter again.
+    var vertexProxyEnabled: Bool = true { didSet { store.set(vertexProxyEnabled, .vertexProxyEnabled) } }
 
     @ObservationIgnored private let store: SettingsStore
     /// Read once at most, by the migration of the removed built-in-over-Bluetooth switch.
@@ -336,6 +342,8 @@ final class AppSettings {
         if let v = store.string(.callRecording).flatMap(CallRecordingMode.init(rawValue:)) { callRecording = v }
         if let v: [CallExclusion] = store.json(.callExclusions) { callExclusions = v }
         if let v = store.bool(.showsCallNotices) { showsCallNotices = v }
+        if let v = store.string(.vertexProxyURL), !v.isEmpty { vertexProxyURL = v }
+        if let v = store.bool(.vertexProxyEnabled) { vertexProxyEnabled = v }
         if let v: ShortcutBindings = store.json(.shortcuts) { shortcuts = v }
         // Polish moved from fn ↩ to fn P (when ↩ finished a hands-free dictation): a build that had it on fn ↩ by default
         // moves it, once, unless fn P is taken. Bound to fn ↩ again after that, it stays.
@@ -463,6 +471,8 @@ enum SettingsKey: String, CaseIterable {
     case polishSelectionModel, translationPair
     /// How calls are recorded (`CallRecordingMode`), and the apps and sites never recorded.
     case callRecording, callExclusions, showsCallNotices
+    /// The Vertex proxy's address and whether Gemini goes through it.
+    case vertexProxyURL, vertexProxyEnabled
 
     var defaultsKey: String { "tt.\(rawValue)" }
 }
