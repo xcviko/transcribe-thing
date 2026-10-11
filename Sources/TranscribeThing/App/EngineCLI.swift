@@ -703,7 +703,9 @@ enum EngineCLI {
     /// either. nil without a base URL.
     @MainActor
     static func appVertexProxy(paths: AppPaths) -> VertexProxyAccount? {
-        let defaults = UserDefaults(suiteName: "dev.transcribe-thing.app")
+        // A suite named after this process's own bundle id comes back nil: the installed app's binary reads its own.
+        let domain = "dev.transcribe-thing.app"
+        let defaults = Bundle.main.bundleIdentifier == domain ? UserDefaults.standard : UserDefaults(suiteName: domain)
         guard let url = defaults?.string(forKey: SettingsKey.vertexProxyURL.defaultsKey), !url.isEmpty else { return nil }
         let settings = AppSettings.inMemory()
         settings.vertexProxyURL = url
