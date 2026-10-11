@@ -149,6 +149,9 @@ final class CallMonitor {
     @ObservationIgnored private var ignored: CallApp?
     @ObservationIgnored private var endings: [UUID: Task<Void, Never>] = [:]
 
+    /// Kept after the call app's last mic or sound: the end of a word it cut off, or a hang-up a moment late.
+    static let endPadding: TimeInterval = 1
+
     private struct Live {
         var recorder: CallRecorder
         var info: CallInfo
@@ -162,6 +165,8 @@ final class CallMonitor {
         /// For a browser: some read of its windows found at least one, so its tabs can tell.
         var tabsRead = false
         var otherAudio: [CallInterval] = []
+        /// Where the call ended on the recording's clock, once the detector says it's over: what's after isn't kept.
+        var endsAt: TimeInterval?
         var otherAudioSince: TimeInterval?
         /// When the mute going on now began, in seconds from the call's start: the journal silences the mic from there.
         var mutedSince: TimeInterval?
@@ -390,6 +395,9 @@ final class CallMonitor {
                 if ignored == call.app { ignored = nil }
                 guard var live, live.app == call.app else { continue }
                 live.info.mutes = intervals(call.mutes, origin: live.origin)
+                // The call ended at its app's last mic or sound, a second kept after it: not after the minute of
+                // silence that told it was over.
+                live.endsAt = max(0, call.lastAudioAt - live.origin) + Self.endPadding
                 self.live = live
                 let mutes = live.info.mutes
                 live.recorder.update { $0.mutes = mutes }
@@ -566,7 +574,8 @@ final class CallMonitor {
         let fallback = journalInfo(of: live)
         let other = otherAudio(of: live, at: deps.clock())
         let id = live.info.id
-        let endedAt = deps.now()
+        let endsAt = live.endsAt
+        let endedAt = endsAt.map { live.info.startedAt.addingTimeInterval($0) } ?? deps.now()
         if status != .unconfirmed { onAnswered?(id) }
         endings[id] = Task { [weak self] in
             guard let self else { return }
@@ -574,6 +583,7 @@ final class CallMonitor {
             info.otherBrowserAudio = other
             info.mutes = mutes
             info.mutedSince = mutedSince
+            info.endsAt = endsAt
             let record = await self.store.adopt(info, status: status, endedAt: endedAt)
             let tapProblem: String? = record.remoteProblem.map { $0 == CallStore.silentTapMessage ? "silent" : "other" }
             self.log.event(.calls, "call.ended", [

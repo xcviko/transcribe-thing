@@ -20,16 +20,18 @@ enum CallAudio {
     /// The journal's 16-bit WAV at `wav` as AAC at History's 32 kbps (`RecordingFile.bitRate`) in `m4a`, silent in
     /// `silencing` (the mic's mutes, seconds on the call's clock). Throws when the WAV can't be read or the encoder
     /// fails.
-    static func encode(journal wav: URL, to m4a: URL, silencing: [CallInterval] = []) throws -> Encoded {
-        try join(nil, then: wav, at: 0, to: m4a, silencing: silencing)
+    static func encode(journal wav: URL, to m4a: URL, silencing: [CallInterval] = [],
+                       limit: Int? = nil) throws -> Encoded {
+        try join(nil, then: wav, at: 0, to: m4a, silencing: silencing, limit: limit)
     }
 
     /// One track of a call the app quit recording and its continuation as one .m4a: the first `offset` samples of
     /// `earlier` (an .m4a; silence where it has fewer, none for nil), then the journal's WAV at `wav`. The two parts
     /// stay on the call's clock: the continuation starts at sample `offset` whatever the earlier part had. Silent in
     /// `silencing`, seconds on the joined call's clock.
+    /// `limit`: the joined call's length in samples, when it ended before its recording did; nothing past it is written.
     static func join(_ earlier: URL?, then wav: URL, at offset: Int, to m4a: URL,
-                     silencing: [CallInterval] = []) throws -> Encoded {
+                     silencing: [CallInterval] = [], limit: Int? = nil) throws -> Encoded {
         let handle = try FileHandle(forReadingFrom: wav)
         defer { try? handle.close() }
         let total = RecordingJournal.sampleCount(of: wav) ?? 0
@@ -55,7 +57,8 @@ enum CallAudio {
                 try append([Float](repeating: 0, count: count))
                 written += count
             }
-            while let data = try handle.read(upToCount: block * 2), data.count >= 2 {
+            while written < (limit ?? .max), let data = try handle.read(upToCount: min(block, (limit ?? .max) - written) * 2),
+                  data.count >= 2 {
                 let count = data.count / 2
                 var ints = [Int16](repeating: 0, count: count)
                 _ = ints.withUnsafeMutableBytes { data.copyBytes(to: $0, count: count * 2) }

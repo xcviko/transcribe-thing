@@ -109,6 +109,9 @@ final class CallJournal: @unchecked Sendable {
         /// The mute going on now, in seconds from the call's start: the mic is silenced from there on. Also in `mutes`,
         /// up to the last look.
         var mutedSince: TimeInterval?
+        /// Where the call ended, in seconds on its clock: the call app's last mic or sound. The recording runs on through
+        /// the minute of silence that tells a call ended from a pause; that minute isn't the call and isn't kept.
+        var endsAt: TimeInterval?
         var muteKnown: Bool = false
         var otherBrowserAudio: [CallInterval] = []
         var micProblem: String?

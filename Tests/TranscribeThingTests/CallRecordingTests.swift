@@ -1173,6 +1173,30 @@ private func voiceTrack(seconds: Double, speech: [(at: Double, length: Double)],
         #expect(CallFormat.notes(call).first?.hasSuffix("; your mic wasn’t recorded then.") == true)
     }
 
+    /// The minute of silence that tells a hang-up from a pause isn't the call: the room after it isn't kept.
+    @Test func aCallIsKeptToItsEndNotTheMinuteAfter() async throws {
+        let rig = Rig(mode: .automatic)
+        rig.app("ru.keepcoder.Telegram", mic: true, sound: true)
+        rig.poll([0, 21])
+        guard case .recording(let info) = rig.monitor.state else { Issue.record("not kept"); return }
+        let mic = try #require(rig.sources.first?[.mic])
+        let voice = speechLike(seconds: 100)
+        mic.push(Array(voice[0..<Int(40 * rate)]), at: 0)
+        rig.poll([40])
+        rig.app("ru.keepcoder.Telegram", mic: false, sound: false)
+        // The room goes on being heard while the app waits out the minute.
+        mic.push(Array(voice[Int(40 * rate)..<Int(100 * rate)]), at: nil)
+        rig.poll(stride(from: 41.0, through: 101, by: 1))
+        await rig.monitor.waitForEndings()
+        await rig.transcriber.waitUntilIdle()
+
+        let call = try #require(rig.store.call(id: info.id))
+        #expect(call.duration > 39 && call.duration < 43, "kept \(call.duration) s")
+        #expect(call.micSeconds < 43)
+        let ended = try #require(call.endedAt)
+        #expect(ended.timeIntervalSince(call.startedAt) < 43)
+    }
+
     @Test func aCallEndingUnansweredWaitsForTheAnswer() async throws {
         let rig = Rig()
         rig.app("us.zoom.xos", mic: true, sound: true)

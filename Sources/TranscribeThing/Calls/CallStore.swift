@@ -224,13 +224,14 @@ final class CallStore {
             let folder = folder(for: id)
             let sources = CallJournal.Track.allCases.map { ($0, journal.audioURL(for: id, track: $0)) }
             let silencing = Self.silencing(info)
+            let limit = info.endsAt.map { Int(($0 * Recording.sampleRate).rounded(.up)) }
             let encoded = await Task.detached(priority: .utility) { () -> [CallJournal.Track: CallAudio.Encoded] in
                 var encoded: [CallJournal.Track: CallAudio.Encoded] = [:]
                 for (track, wav) in sources where (RecordingJournal.sampleCount(of: wav) ?? 0) > 0 {
                     let m4a = folder.appendingPathComponent("\(track.rawValue).m4a", isDirectory: false)
                     do {
                         encoded[track] = try CallAudio.encode(journal: wav, to: m4a,
-                                                              silencing: track == .mic ? silencing : [])
+                                                              silencing: track == .mic ? silencing : [], limit: limit)
                     } catch {
                         Log.audio.error("Couldn't keep the call's \(track.rawValue, privacy: .public): \(error.localizedDescription, privacy: .public)")
                     }
@@ -320,7 +321,10 @@ final class CallStore {
                 let temporary = folder.appendingPathComponent("\(track.rawValue).joining.m4a", isDirectory: false)
                 do {
                     encoded[track] = try CallAudio.join(old, then: wav, at: offsetSamples, to: temporary,
-                                                        silencing: track == .mic ? silencing : [])
+                                                        silencing: track == .mic ? silencing : [],
+                                                        limit: info.endsAt.map {
+                                                            offsetSamples + Int(($0 * Recording.sampleRate).rounded(.up))
+                                                        })
                     written.append(temporary)
                 } catch {
                     Log.audio.error("Couldn't join the call's \(track.rawValue, privacy: .public): \(error.localizedDescription, privacy: .public)")
