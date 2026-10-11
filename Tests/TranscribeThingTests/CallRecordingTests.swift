@@ -135,6 +135,74 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
         #expect(mic.stopped)
     }
 
+    /// The mic is held back two seconds before it's written, so a mute noticed a second late is still silenced from
+    /// when it began; the track keeps its length; an unmute lets the mic through from when it's seen.
+    @Test func aMuteNoticedLateIsSilencedFromItsStart() async throws {
+        let journal = CallJournal(directory: AppPaths.temporary().callJournals)
+        let mic = FakeSource(), remote = FakeSource()
+        let info = journalInfo()
+        journal.begin(info, origin: 0, sources: [.mic: mic, .remote: remote])
+        let micURL = journal.audioURL(for: info.id, track: .mic)
+        func written() async -> [Float] {
+            await journal.settle()
+            return RecordingJournal.read(micURL) ?? []
+        }
+        func sidecar() throws -> CallJournal.Info {
+            try JSONDecoder().decode(CallJournal.Info.self, from: Data(contentsOf: journal.infoURL(for: info.id)))
+        }
+        let voice = [Float](repeating: 0.5, count: Int(2 * rate))
+        mic.push(voice + voice.prefix(Int(rate)), at: 0)
+        remote.push(voice + voice.prefix(Int(rate)), at: 0)
+        journal.pump(info.id)
+        // 3 s in: the mic's last 2 s are held back, the other side's written at once.
+        #expect(await written().count == Int(rate))
+        #expect(RecordingJournal.read(journal.audioURL(for: info.id, track: .remote))?.count == Int(3 * rate))
+
+        // Seen muted a second late: muted since 2 s.
+        journal.update(info.id) {
+            $0.mutes = [CallInterval(start: 2, end: 3)]
+            $0.mutedSince = 2
+        }
+        mic.push(voice, at: nil)
+        journal.pump(info.id)
+        let muted = await written()
+        #expect(muted.count == Int(3 * rate))
+        #expect(muted[..<Int(2 * rate)].allSatisfy { abs($0 - 0.5) < 0.001 })
+        #expect(muted[Int(2 * rate)...].allSatisfy { $0 == 0 }, "from when the mute began, not when it was seen")
+        #expect(try sidecar().mutedSince == 2 && sidecar().mutes == [CallInterval(start: 2, end: 3)])
+
+        // Unmuted at 4 s, seen then.
+        journal.update(info.id) {
+            $0.mutes = [CallInterval(start: 2, end: 4)]
+            $0.mutedSince = nil
+        }
+        mic.push(voice, at: nil)
+        let ended = try #require(await journal.end(info.id))
+        #expect(ended.mutes == [CallInterval(start: 2, end: 4)] && ended.mutedSince == nil)
+        let all = try #require(RecordingJournal.read(micURL))
+        #expect(all.count == Int(7 * rate), "silenced, not cut out")
+        #expect(all[Int(2 * rate)..<Int(4 * rate)].allSatisfy { $0 == 0 })
+        #expect(all[Int(4 * rate)...].allSatisfy { abs($0 - 0.5) < 0.001 })
+        #expect(try sidecar() == ended)
+    }
+
+    /// A mute still going on when the call ends silences the mic to its last sample.
+    @Test func aMuteGoingOnAtTheEndSilencesTheRest() async throws {
+        let journal = CallJournal(directory: AppPaths.temporary().callJournals)
+        let mic = FakeSource()
+        let info = journalInfo()
+        journal.begin(info, origin: 0, sources: [.mic: mic])
+        mic.push([Float](repeating: 0.5, count: Int(3 * rate)), at: 0)
+        journal.update(info.id) {
+            $0.mutes = [CallInterval(start: 1, end: 1.5)]
+            $0.mutedSince = 1
+        }
+        _ = await journal.end(info.id)
+        let all = try #require(RecordingJournal.read(journal.audioURL(for: info.id, track: .mic)))
+        #expect(all.count == Int(3 * rate))
+        #expect(all[..<Int(rate)].allSatisfy { $0 != 0 } && all[Int(rate)...].allSatisfy { $0 == 0 })
+    }
+
     @Test func journalFileNames() {
         let id = UUID()
         #expect(CallJournal.parse(fileName: "\(id.uuidString)-mic.wav")! == (id, .mic))
@@ -266,6 +334,36 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
         await store.journal?.settle()
         #expect(files(in: paths.callJournals).isEmpty)
     }
+    /// The app quit while the person was muted, in a journal whose mic still has their voice (written before the mute
+    /// was seen): it comes back with the mic silent in every mute, the one going on to the end.
+    @Test func aCallLeftMutedComesBackSilencedThere() async throws {
+        let paths = AppPaths.temporary()
+        let journal = CallJournal(directory: paths.callJournals)
+        var info = journalInfo()
+        info.mutes = [CallInterval(start: 1, end: 2), CallInterval(start: 3, end: 4)]
+        info.mutedSince = 3
+        info.muteKnown = true
+        try FileManager.default.createDirectory(at: paths.callJournals, withIntermediateDirectories: true)
+        var wav = RecordingJournal.openHeader()
+        WAVEncoder.int16(speechLike(seconds: 5)).withUnsafeBytes { wav.append(contentsOf: $0) }
+        try wav.write(to: journal.audioURL(for: info.id, track: .mic))
+        try JSONEncoder().encode(info).write(to: journal.infoURL(for: info.id))
+
+        let store = CallStore(paths: paths, settings: .inMemory())
+        store.load()
+        await store.waitForRecovery()
+        let call = try #require(store.call(id: info.id))
+        #expect(call.status == .interrupted && call.micSilencedWhenMuted)
+        #expect(call.muteIntervals == [CallInterval(start: 1, end: 2), CallInterval(start: 3, end: 5)])
+        let url = try #require(store.audioURL(of: call, track: .mic))
+        func level(_ from: Double, _ to: Double) throws -> Float {
+            let samples = try CallAudio.read(url, range: Int(from * rate)..<Int(to * rate))
+            return (samples.reduce(0) { $0 + $1 * $1 } / Float(max(1, samples.count))).squareRoot()
+        }
+        #expect(try level(0.1, 0.7) > 0.01 && level(2.1, 2.7) > 0.01)
+        #expect(try level(1.1, 1.9) < 0.001)
+        #expect(try level(3.1, 4.9) < 0.001)
+    }
 }
 
 // MARK: - Transcription
@@ -290,7 +388,7 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
         #expect(segments[2].speaker == "Participant 1" && segments[2].end == 60)
         #expect(try CallTranscriptParser.segments(from: "[]", side: .local, duration: 10).isEmpty)
         #expect(try CallTranscriptParser.segments(from: "```json\n```", side: .local, duration: 10).isEmpty)
-        #expect(throws: CallTranscriber.Failure.unreadableAnswer(track: .mic, chunk: 1, chunks: 1, lines: 1)) {
+        #expect(throws: CallTranscriber.Failure.unreadableAnswer(chunk: 1, chunks: 1, lines: 1)) {
             try CallTranscriptParser.segments(from: "I can't hear anything.", side: .local, duration: 10)
         }
         #expect(CallTranscriptParser.seconds("1:02:03") == 3723)
@@ -323,24 +421,35 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
         #expect(merged.speakers == ["Аня", "Sam"])
     }
 
-    /// The prompts each request got, and Gemini's made-up answers.
+    /// The prompts each request got, and Gemini's made-up answers: by default both sides of the call, the person,
+    /// someone in their room, and what they said muted.
     private final class FakeGemini: Sendable {
         let prompts = OSAllocatedUnfairLock(initialState: [String]())
+        let audio = OSAllocatedUnfairLock(initialState: [Data]())
+        let answer: @Sendable (_ index: Int) -> String
+
+        init(answer: @escaping @Sendable (_ index: Int) -> String = { index in
+            """
+            [00:01-00:03] Аня: Привет, ты меня слышишь? (\(index))
+            [00:04-00:06] Sam: Да, слышу (\(index))
+            [00:07-00:08] Nearby 1: Ужин готов!
+            [00:20-00:24] Sam: Это про себя
+            """
+        }) {
+            self.answer = answer
+        }
 
         func send(_ audio: Data, _ prompt: String, _ seconds: TimeInterval) async throws -> CloudResult {
             let index = prompts.withLock { $0.append(prompt); return $0.count }
+            self.audio.withLock { $0.append(audio) }
             #expect(!audio.isEmpty)
-            let isRemote = prompt.contains("the other participants")
-            let text = isRemote
-                ? #"[{"start":"00:01","end":"00:03","speaker":"Аня","text":"Привет, ты меня слышишь? (\#(index))"}]"#
-                : #"[{"start":"00:04","end":"00:06","speaker":"Sam","text":"Да, слышу (\#(index))"},{"start":"00:20","end":"00:24","speaker":"Sam","text":"Это про себя"}]"#
-            var result = CloudResult(text: text)
+            var result = CloudResult(text: answer(index))
             result.costUSD = 0.01
             return result
         }
     }
 
-    @Test func bothSidesAreAskedWithEchoAndMutesThenMerged() async throws {
+    @Test func bothSidesGoInOneRequestThatNamesThePersonAndTheirMutes() async throws {
         let gemini = FakeGemini()
         let samples = speechLike(seconds: 30)
         let plan = CallTranscriber.Plan(remote: URL(fileURLWithPath: "/remote.m4a"), mic: URL(fileURLWithPath: "/mic.m4a"),
@@ -348,19 +457,28 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
                                         mutes: [CallInterval(start: 19, end: 26)], userName: "Sam", service: "Telegram")
         let outcome = try await CallTranscriber.run(plan, send: { try await gemini.send($0, $1, $2) }) { _, range in Array(samples[range]) }
         let prompts = gemini.prompts.withLock { $0 }
-        #expect(prompts.count == 2)
-        #expect(prompts[0].contains("on Telegram") && prompts[0].contains("Participant 1"))
-        // The mic's prompt has the other side's words as echo, the person's name, and the mute.
-        #expect(prompts[1].contains("[00:01] Аня: Привет, ты меня слышишь? (1)"))
-        #expect(prompts[1].contains("\"Sam\"") && prompts[1].contains("00:19 to 00:26"))
-        #expect(outcome.transcript.segments.map(\.side) == [.remote, .local, .local])
-        #expect(outcome.transcript.segments.map(\.duringMute) == [false, false, true])
-        #expect(abs((outcome.costUSD ?? 0) - 0.02) < 1e-9)
+        #expect(prompts.count == 1, "one request for both sides")
+        let prompt = prompts[0]
+        #expect(prompt.contains("a call on Telegram, both sides mixed into one track"))
+        #expect(prompt.contains("The person who recorded it is Sam: call them \"Sam\"."))
+        #expect(prompt.contains("\"Nearby 1\"") && prompt.contains("\"Participant 1\""))
+        #expect(prompt.contains("heard twice, a moment apart: write each phrase once"))
+        #expect(prompt.contains("Sam was muted in the call during 00:19 to 00:26."))
+        #expect(prompt.contains("never \"Sam\""))
+        #expect(prompt.contains(CallPrompts.format) && !prompt.contains("echo"))
+        #expect(!prompt.contains("Earlier in this call"))
+        // Sides come from who spoke: the person and the room are this Mac's side.
+        #expect(outcome.transcript.segments.map(\.speaker) == ["Аня", "Sam", "Nearby 1", "Sam"])
+        #expect(outcome.transcript.segments.map(\.side) == [.remote, .local, .local, .local])
+        #expect(outcome.transcript.segments.map(\.duringMute) == [false, false, false, true])
+        #expect(outcome.requests == 1 && outcome.skippedSilent == 0)
+        #expect(abs((outcome.costUSD ?? 0) - 0.01) < 1e-9)
     }
 
-    @Test func silentTracksAreNotSent() async throws {
-        let gemini = FakeGemini()
-        let speech = speechLike(seconds: 10)
+    @Test func aChunkGoesWholeAndOnlyASilentOneIsLeftOut() async throws {
+        let gemini = FakeGemini(answer: { _ in "[00:04-00:06] Me: Hello" })
+        // Speech in the first two seconds only, then 28 s of quiet: all 30 s go.
+        let speech = speechLike(seconds: 2) + [Float](repeating: 0, count: Int(28 * rate))
         let plan = CallTranscriber.Plan(remote: URL(fileURLWithPath: "/remote.m4a"), mic: URL(fileURLWithPath: "/mic.m4a"),
                                         remoteSamples: speech.count, micSamples: speech.count, mutes: [], userName: nil,
                                         service: nil)
@@ -369,29 +487,105 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
         }
         let prompts = gemini.prompts.withLock { $0 }
         #expect(prompts.count == 1)
-        // Without the person's name, they're "Me"; nothing heard from the other side, so no echo.
-        #expect(prompts[0].contains("\"Me\"") && !prompts[0].contains("echo"))
-        #expect(outcome.transcript.segments.allSatisfy { $0.side == .local })
+        // Without the person's name, they're "Me"; no service named.
+        #expect(prompts[0].contains("Call the person who recorded it \"Me\".") && prompts[0].contains("a call, both sides"))
+        #expect(outcome.transcript.segments.map(\.side) == [.local])
+        let sent = try #require(gemini.audio.withLock { $0.first })
+        #expect(sent.count > 2000, "an .m4a of the whole chunk")
+
+        // Nothing said on either side: nothing sent.
+        let quiet = FakeGemini()
+        let silent = try await CallTranscriber.run(plan, send: { try await quiet.send($0, $1, $2) }) { _, range in
+            [Float](repeating: 0, count: range.count)
+        }
+        #expect(quiet.prompts.withLock { $0 }.isEmpty)
+        #expect(silent.requests == 0 && silent.skippedSilent == 1 && silent.transcript.segments.isEmpty)
     }
 
     @Test func chunksCarryTheSpeakersAndTheirTimes() async throws {
-        let gemini = FakeGemini()
+        let gemini = FakeGemini(answer: { index in
+            index == 1 ? "[00:01-00:02] Аня: Привет\n[00:03-00:04] Sam: Hi\n[00:05-00:06] Nearby 1: Пока"
+                : "[00:01-00:02] Аня: Ещё (\(index))"
+        })
         let samples = speechLike(seconds: 25)
-        let plan = CallTranscriber.Plan(remote: URL(fileURLWithPath: "/remote.m4a"), mic: nil,
-                                        remoteSamples: samples.count, micSamples: 0, mutes: [], userName: "Sam",
-                                        service: "Zoom")
+        let plan = CallTranscriber.Plan(remote: URL(fileURLWithPath: "/remote.m4a"), mic: URL(fileURLWithPath: "/mic.m4a"),
+                                        remoteSamples: samples.count, micSamples: samples.count / 2, mutes: [],
+                                        userName: "Sam", service: "Zoom")
         let outcome = try await CallTranscriber.run(plan, maxChunkSeconds: 10, send: { try await gemini.send($0, $1, $2) }) { _, range in
             Array(samples[range])
         }
         let prompts = gemini.prompts.withLock { $0 }
-        #expect(prompts.count == 3)
+        #expect(prompts.count == 3, "one request a chunk, the mic over after the second")
         #expect(!prompts[0].contains("Earlier in this call"))
-        #expect(prompts[1].contains("Earlier in this call these speakers were heard: Аня."))
+        #expect(prompts[1].contains("Earlier in this call these speakers were heard: Аня, Sam (who recorded the call), "
+                                    + "Nearby 1 (in the room with Sam). Use the same names"))
         // Each chunk's times on the call's clock: 25 s in three chunks of 25/3 s.
-        let starts = outcome.transcript.segments.map(\.start)
         let chunk = Double(Int(25 * rate + 2) / 3) / rate
-        #expect(starts.count == 3)
-        for (index, start) in starts.enumerated() { #expect(abs(start - (1 + Double(index) * chunk)) < 0.01) }
+        let annas = outcome.transcript.segments.filter { $0.speaker == "Аня" }
+        #expect(annas.count == 3)
+        for (index, segment) in annas.enumerated() { #expect(abs(segment.start - (1 + Double(index) * chunk)) < 0.01) }
+        #expect(outcome.transcript.segments.filter { $0.side == .local }.map(\.speaker) == ["Sam", "Nearby 1"])
+    }
+
+    /// The two tracks add sample by sample, each at -3 dB, and the limiter keeps the sum under full scale.
+    @Test func theMixIsAlignedWithHeadroomAndNeverClips() {
+        var mic = [Float](repeating: 0, count: 1000), remote = [Float](repeating: 0, count: 800)
+        mic[100] = 0.5
+        remote[200] = 0.5
+        let mixed = CallMix.mix(mic: mic, remote: remote, length: 1200)
+        #expect(mixed.count == 1200)
+        #expect(abs(mixed[100] - 0.5 * CallMix.gain) < 1e-6 && abs(mixed[200] - 0.5 * CallMix.gain) < 1e-6)
+        #expect(mixed.enumerated().allSatisfy { $0.offset == 100 || $0.offset == 200 || $0.element == 0 })
+        // Both loud at once: over the knee, bent, never 1.
+        let loud = CallMix.mix(mic: [1, -1, 0.9], remote: [1, -1, 0.9], length: 3)
+        #expect(loud.allSatisfy { abs($0) < 1 && abs($0) > CallMix.knee })
+        #expect(loud[0] == -loud[1])
+        #expect(CallMix.limit(0.5) == 0.5 && CallMix.limit(CallMix.knee) == CallMix.knee)
+        #expect(CallMix.limit(1.2) > CallMix.limit(1.0) && CallMix.limit(1.0) > CallMix.limit(0.9))
+        #expect(CallMix.limit(100) == CallMix.ceiling && CallMix.limit(-100) == -CallMix.ceiling)
+        // One track only: the mix is that track, as it is.
+        #expect(CallMix.mix(mic: [0.25, 0.5], remote: nil, length: 3) == [0.25, 0.5, 0])
+        #expect(CallMix.mix(mic: nil, remote: [0.25, 0.5, 0.75, 1], length: 3) == [0.25, 0.5, 0.75])
+    }
+
+    /// What the mic heard in a mute never reaches the mix, even from a call whose track still has it; the other side
+    /// does.
+    @Test func theMicIsSilencedInMutesBeforeItsMixed() throws {
+        let plan = CallTranscriber.Plan(remote: URL(fileURLWithPath: "/remote.m4a"), mic: URL(fileURLWithPath: "/mic.m4a"),
+                                        remoteSamples: Int(4 * rate), micSamples: Int(4 * rate),
+                                        mutes: [CallInterval(start: 1, end: 2)], userName: nil, service: nil)
+        let read: @Sendable (URL, Range<Int>) throws -> [Float] = { _, range in [Float](repeating: 0.25, count: range.count) }
+        // From half a second in: the mute is 0.5 to 1.5 s into this stretch.
+        let mixed = try CallTranscriber.mixed(plan, Int(0.5 * rate)..<Int(3.5 * rate), read: read)
+        #expect(mixed.count == Int(3 * rate))
+        let both = 0.5 * CallMix.gain, remoteOnly = 0.25 * CallMix.gain
+        #expect(abs(mixed[Int(0.25 * rate)] - both) < 1e-6)
+        #expect(mixed[Int(0.5 * rate)..<Int(1.5 * rate)].allSatisfy { abs($0 - remoteOnly) < 1e-6 })
+        #expect(abs(mixed[Int(1.5 * rate)] - both) < 1e-6)
+        // A mic muted all through the stretch leaves the other side alone, at full level.
+        var muted = plan
+        muted.mutes = [CallInterval(start: 0, end: 10)]
+        #expect(try CallTranscriber.mixed(muted, 0..<100, read: read) == [Float](repeating: 0.25, count: 100))
+    }
+
+    /// A phrase's side is who said it: the person by name or "Me", and "Nearby" people are this Mac's; a rename on
+    /// the page doesn't move anyone.
+    @Test func sidesComeFromWhoSpoke() {
+        var sides = CallSides(me: "Sam")
+        #expect(sides.side(of: "Sam") == .local && sides.side(of: "sam") == .local && sides.side(of: "Me") == .local)
+        #expect(sides.side(of: "Nearby 2") == .local && sides.side(of: "nearby 1") == .local)
+        #expect(sides.side(of: "Аня") == .remote && sides.side(of: "Participant 1") == .remote)
+        #expect(sides.side(of: "Nearby Bob") == .remote)
+        #expect(sides.speakers == ["Sam", "sam", "Me", "Nearby 2", "nearby 1"])
+        var call = CallRecord(id: UUID(), startedAt: Date(), appName: "Zoom", status: .done)
+        call.transcript = CallTranscript(segments: [
+            .init(start: 1, end: 2, side: .local, speaker: "Nearby 1", text: "a"),
+            .init(start: 3, end: 4, side: .remote, speaker: "Participant 1", text: "b"),
+        ])
+        call.speakerNames = ["Nearby 1": "Оля", "Participant 1": "Sam"]
+        let slots = CallSpeakerPalette.slots(call.transcript)
+        #expect(slots["Nearby 1"]?.side == .local && slots["Participant 1"]?.side == .remote)
+        #expect(call.name(of: "Nearby 1") == "Оля")
     }
 
     @MainActor
@@ -453,9 +647,8 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
             settings.callRecording = mode
             store = CallStore(paths: paths, settings: settings)
             store.load()
-            transcriber = CallTranscriber(store: store) { _, prompt, _ in
-                CloudResult(text: prompt.contains("the other participants") ? "[]"
-                            : #"[{"start":"00:01","end":"00:03","speaker":"Sam","text":"Hello there"}]"#)
+            transcriber = CallTranscriber(store: store) { _, _, _ in
+                CloudResult(text: #"[{"start":"00:01","end":"00:03","speaker":"Sam","text":"Hello there"}]"#)
             }
             let sensors = CallWatch.Sensors(
                 processRecords: { [unowned self] in records },
@@ -797,6 +990,54 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
         #expect(rig.journalFiles.isEmpty)
     }
 
+    /// Telegram mutes by giving the mic back: the sidecar says so as it's seen, from when it began, and the kept
+    /// call's mic is silent there.
+    @Test func aMuteSilencesTheMicFromWhenItBegan() async throws {
+        let rig = Rig(mode: .automatic)
+        rig.app("ru.keepcoder.Telegram", mic: true, sound: true)
+        rig.poll([0, 21])
+        guard case .recording(let info) = rig.monitor.state else { Issue.record("not kept"); return }
+        let journal = try #require(rig.store.journal)
+        func sidecar() async throws -> CallJournal.Info {
+            await journal.settle()
+            return try JSONDecoder().decode(CallJournal.Info.self, from: Data(contentsOf: journal.infoURL(for: info.id)))
+        }
+        // The mic's audio comes as the call goes, up to each look: the journal writes it meanwhile.
+        let mic = try #require(rig.sources.first?[.mic])
+        let voice = speechLike(seconds: 40)
+        func upTo(_ from: Double, _ to: Double) -> [Float] { Array(voice[Int(from * rate)..<Int(to * rate)]) }
+        mic.push(upTo(0, 25), at: 0)
+        rig.app("ru.keepcoder.Telegram", mic: false, sound: true)
+        rig.poll([25])
+        mic.push(upTo(25, 26.5), at: nil)
+        rig.poll([26.5])
+        let muted = try await sidecar()
+        #expect(abs((muted.mutedSince ?? 0) - 25) < 0.01)
+        #expect(abs((muted.mutes.last?.start ?? 0) - 25) < 0.01)
+        mic.push(upTo(26.5, 30), at: nil)
+        rig.app("ru.keepcoder.Telegram", mic: true, sound: true)
+        rig.poll([30])
+        let unmuted = try await sidecar()
+        #expect(unmuted.mutedSince == nil && unmuted.mutes.count == 1)
+        mic.push(upTo(30, 40), at: nil)
+        rig.app("ru.keepcoder.Telegram", mic: false, sound: false)
+        rig.poll(stride(from: 40.0, through: 101, by: 1))
+        await rig.monitor.waitForEndings()
+        await rig.transcriber.waitUntilIdle()
+
+        let call = try #require(rig.store.call(id: info.id))
+        #expect(call.micSilencedWhenMuted && call.muteIntervals.count == 1)
+        let url = try #require(rig.store.audioURL(of: call, track: .mic))
+        func level(_ from: Double, _ to: Double) throws -> Float {
+            let samples = try CallAudio.read(url, range: Int(from * rate)..<Int(to * rate))
+            return (samples.reduce(0) { $0 + $1 * $1 } / Float(max(1, samples.count))).squareRoot()
+        }
+        #expect(try level(25.2, 29.8) < 0.001)
+        #expect(try level(20.1, 24.7) > 0.01)
+        #expect(try level(30.2, 34.7) > 0.01)
+        #expect(CallFormat.notes(call).first?.hasSuffix("; your mic wasn’t recorded then.") == true)
+    }
+
     @Test func aCallEndingUnansweredWaitsForTheAnswer() async throws {
         let rig = Rig()
         rig.app("us.zoom.xos", mic: true, sound: true)
@@ -913,7 +1154,7 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
         }
         let words = CallTranscriptParser.parse("I can't make out any speech.\nSorry.", side: .remote, duration: 10)
         #expect(words.format == .unreadable && words.skipped == 2)
-        #expect(throws: CallTranscriber.Failure.unreadableAnswer(track: .remote, chunk: 1, chunks: 1, lines: 2)) {
+        #expect(throws: CallTranscriber.Failure.unreadableAnswer(chunk: 1, chunks: 1, lines: 2)) {
             try CallTranscriptParser.segments(from: "I can't make out any speech.\nSorry.", side: .remote,
                                               duration: 10)
         }
@@ -939,7 +1180,7 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
     }
 
     @Test func thePromptAsksForLines() {
-        let prompt = CallPrompts.remote(roster: [], service: "Telegram")
+        let prompt = CallPrompts.call(me: "Me", service: "Telegram", roster: [], mutes: [])
         #expect(prompt.contains("[start-end] Speaker: what they said"))
         #expect(prompt.contains(CallPrompts.noSpeech))
         #expect(!prompt.contains("JSON"))
@@ -972,17 +1213,16 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
     @Test func answersAreKeptWithTheCallAndGoWithIt() async throws {
         let (store, call) = Self.store()
         let speech = speechLike(seconds: 10)
-        let transcriber = CallTranscriber(store: store) { _, prompt, _ in
-            CloudResult(text: prompt.contains("the other participants") ? "[00:01-00:02] Аня: Привет"
-                        : "Sure!\n[00:03-00:04] Sam: Hi")
+        let transcriber = CallTranscriber(store: store) { _, _, _ in
+            CloudResult(text: "Sure!\n[00:01-00:02] Аня: Привет\n[00:03-00:04] Sam: Hi")
         }
         transcriber.read = { _, range in Array(speech[range]) }
         transcriber.transcribe(call.id)
         await transcriber.waitUntilIdle()
         let answers = store.answersFolder(for: call.id)
-        #expect(files(in: answers) == ["1-remote.txt", "1-mic.txt"])
-        #expect(try String(contentsOf: answers.appendingPathComponent("1-mic.txt"), encoding: .utf8)
-                == "Sure!\n[00:03-00:04] Sam: Hi")
+        #expect(files(in: answers) == ["1-mix.txt"], "one answer for both sides")
+        #expect(try String(contentsOf: answers.appendingPathComponent("1-mix.txt"), encoding: .utf8)
+                == "Sure!\n[00:01-00:02] Аня: Привет\n[00:03-00:04] Sam: Hi")
         #expect(store.call(id: call.id)?.transcript?.segments.map(\.text) == ["Привет", "Hi"])
         store.delete(call.id)
         await store.flush()
@@ -1001,21 +1241,20 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
         let failed = try #require(store.call(id: call.id))
         #expect(failed.status == .failed)
         let error = try #require(failed.error)
-        #expect(error.contains("their side") && error.contains("any of its 3 lines") && error.contains("Show in Finder"))
-        #expect(files(in: store.answersFolder(for: call.id)) == ["1-remote.txt"])
+        #expect(error.hasPrefix("Gemini’s answer wasn’t a transcript") && error.contains("any of its 3 lines")
+                && error.contains("Show in Finder"))
+        #expect(files(in: store.answersFolder(for: call.id)) == ["1-mix.txt"])
     }
 
     @Test func aCutOffAnswerIsReadAsFarAsItGoes() async throws {
         let (store, call) = Self.store()
         let speech = speechLike(seconds: 30)
-        let mic = OSAllocatedUnfairLock(initialState: 0)
-        let transcriber = CallTranscriber(store: store) { _, prompt, _ in
-            if prompt.contains("the other participants") {
-                throw AppError.openRouterTruncated("[00:01-00:03] Аня: Первая фраза\n[00:12-00:14] Аня: Вторая\n[00:15-00")
-            }
-            mic.withLock { $0 += 1 }
-            return CloudResult(text: "[00:20-00:21] Sam: Да")
+        let requests = OSAllocatedUnfairLock(initialState: 0)
+        let transcriber = CallTranscriber(store: store) { _, _, _ in
+            requests.withLock { $0 += 1 }
+            throw AppError.openRouterTruncated("[00:01-00:03] Аня: Первая фраза\n[00:12-00:14] Sam: Вторая\n[00:15-00")
         }
+        transcriber.userName = { "Sam" }
         transcriber.read = { _, range in Array(speech[range]) }
         store.update(call.id) {
             $0.micSeconds = 30
@@ -1025,12 +1264,13 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
         await transcriber.waitUntilIdle()
         let done = try #require(store.call(id: call.id))
         #expect(done.status == .done)
-        #expect(mic.withLock { $0 } == 1, "the mic is still asked")
-        #expect(done.transcript?.segments.map(\.text) == ["Первая фраза", "Вторая", "Да"])
+        #expect(requests.withLock { $0 } == 1)
+        #expect(done.transcript?.segments.map(\.text) == ["Первая фраза", "Вторая"])
+        #expect(done.transcript?.segments.map(\.side) == [.remote, .local])
         #expect(done.cutOffAt == 14)
         #expect(CallFormat.notes(done).contains { $0.contains("may be cut off at 00:14") })
         // The partial answer is kept as it came.
-        #expect(try String(contentsOf: store.answersFolder(for: call.id).appendingPathComponent("1-remote.txt"),
+        #expect(try String(contentsOf: store.answersFolder(for: call.id).appendingPathComponent("1-mix.txt"),
                            encoding: .utf8).hasSuffix("[00:15-00"))
     }
 
@@ -1058,10 +1298,11 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
         let text = log.retainedText()
         let id = CallTranscriber.shortID(call.id)
         #expect(text.contains("[calls] transcription.started call=\(id) chunks=1 remote=10 mic=10 mutes=0"))
-        #expect(text.contains("[calls] transcription.skipped call=\(id) track=remote chunk=1"))
-        #expect(text.contains("[calls] transcription.request call=\(id) track=mic chunk=1 chunks=1 audio=10 chars=51 "
+        // Their side was silent: the mix is the mic alone, still one request.
+        #expect(!text.contains("transcription.skipped"))
+        #expect(text.contains("[calls] transcription.request call=\(id) chunk=1 chunks=1 audio=10 chars=51 "
                               + "format=lines phrases=1 skipped=1 finish=stop cost=0"))
-        #expect(text.contains("[calls] transcription.finished call=\(id) phrases=1 requests=1 skippedSilent=1"))
+        #expect(text.contains("[calls] transcription.finished call=\(id) phrases=1 requests=1 skippedSilent=0"))
         #expect(!text.contains("секрет"), "never what was said")
     }
 }

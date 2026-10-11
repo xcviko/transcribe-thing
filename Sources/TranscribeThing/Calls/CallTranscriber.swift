@@ -1,18 +1,19 @@
 import Foundation
 
-/// Transcribes a recorded call with Gemini 3.8 Flash, side by side. Gemini merges a stereo file's channels into one,
-/// so the two tracks never go as one file: the other side's track goes first, alone (who said what among the
-/// participants), then the mic's, with that transcript in its prompt so the other side heard through the speakers
-/// (echo) is left out, and the person's mutes, so what they said muted is still transcribed but marked. Each answer is
-/// a line per phrase, "[MM:SS-MM:SS] Speaker: text" (`CallPrompts.format`, read by `CallTranscriptParser`, which
-/// still takes the JSON array earlier builds asked for); they're merged here by time (`CallTranscriptMerge`).
+/// Transcribes a recorded call with Gemini 3.8 Flash, one request per chunk. The two tracks, the mic's and the other
+/// side's, are mixed into one mono track (`CallMix`), the mic silent while the person was muted; the tracks stay apart on
+/// disk, for the player. The prompt (`CallPrompts.call`) names the person ("Sam", or "Me"), says when they were muted,
+/// and asks for every voice: theirs, the other participants', anyone in the room with them ("Nearby 1"). The answer is a
+/// line per phrase, "[MM:SS-MM:SS] Speaker: text" (`CallPrompts.format`, read by `CallTranscriptParser`, which still
+/// takes the JSON array earlier builds asked for). A phrase is this Mac's side when its speaker is the person or someone
+/// nearby, else the other side's (`CallSides`).
 ///
-/// A call longer than `maxChunkSeconds` goes in chunks, each track cut at the same places, the speakers named so far
-/// carried into the next chunk's prompt. A chunk of a track with no speech in it (`SpeechAnalyzer`) isn't sent: it
-/// would cost money for nothing. Every answer is kept as it came, in the call's folder (`CallStore.answersFolder`),
-/// so a transcript that went wrong can be looked at. An answer cut off by its token limit is read as far as it goes
-/// and the call says where (`CallRecord.cutOffAt`). Runs once a kept call ends, and again on Retry
-/// (`retranscribe`). What happens goes to the diagnostic log, never what was said.
+/// A call longer than `maxChunkSeconds` goes in chunks, both tracks cut at the same places, the speakers named so far
+/// carried into the next chunk's prompt. Each chunk goes whole, its silences too; only a chunk with no speech in it at
+/// all (`SpeechAnalyzer`) isn't sent: it would cost money for nothing. Every answer is kept as it came, in the call's
+/// folder (`CallStore.answersFolder`), so a transcript that went wrong can be looked at. An answer cut off by its token
+/// limit is read as far as it goes and the call says where (`CallRecord.cutOffAt`). Runs once a kept call ends, and
+/// again on Retry (`retranscribe`). What happens goes to the diagnostic log, never what was said.
 @MainActor
 final class CallTranscriber {
     /// One request: the chunk's audio as an .m4a, the system prompt, the chunk's length. Throws `AppError`; an answer
@@ -170,10 +171,11 @@ final class CallTranscriber {
         var mic: URL?
         var remoteSamples: Int
         var micSamples: Int
+        /// When the person was muted: their mic is silenced there before it's mixed, and the prompt says so.
         var mutes: [CallInterval]
         var userName: String?
         var service: String?
-        /// Where each answer is kept as it came (`<chunk>-<track>.txt`); nil keeps none.
+        /// Where each answer is kept as it came (`<chunk>-mix.txt`); nil keeps none.
         var answers: URL?
         /// For the log.
         var callID: UUID?
@@ -197,22 +199,21 @@ final class CallTranscriber {
         var costUSD: Double?
         /// Where the transcript may stop short, on the call's clock: the end of what a cut-off answer had.
         var cutOffAt: TimeInterval?
-        /// Requests sent, and chunks of a track left out as silent.
+        /// Requests sent (one per chunk), and chunks left out as silent.
         var requests = 0
         var skippedSilent = 0
     }
 
     enum Failure: Error, LocalizedError, Equatable {
         /// An answer with something in it and nothing readable as a transcript: `lines` lines, none of them a phrase.
-        case unreadableAnswer(track: CallJournal.Track, chunk: Int, chunks: Int, lines: Int)
+        case unreadableAnswer(chunk: Int, chunks: Int, lines: Int)
 
         var errorDescription: String? {
             switch self {
-            case .unreadableAnswer(let track, let chunk, let chunks, let lines):
-                let side = track == .remote ? "their side" : "your side"
-                let part = chunks > 1 ? " (part \(chunk) of \(chunks))" : ""
+            case .unreadableAnswer(let chunk, let chunks, let lines):
+                let part = chunks > 1 ? " for part \(chunk) of \(chunks)" : ""
                 let none = lines == 1 ? "its one line" : "any of its \(lines) lines"
-                return "Gemini’s answer for \(side)\(part) wasn’t a transcript: \(Brand.name) couldn’t read \(none). "
+                return "Gemini’s answer\(part) wasn’t a transcript: \(Brand.name) couldn’t read \(none). "
                     + "The answer is kept with the call: Show in Finder, then the answers folder."
             }
         }
@@ -224,7 +225,7 @@ final class CallTranscriber {
         }
     }
 
-    /// Every chunk of at most `maxChunkSeconds`, the other side's track then the mic's, one request at a time.
+    /// Every chunk of at most `maxChunkSeconds`, both tracks mixed, one request at a time.
     nonisolated static func run(_ plan: Plan, maxChunkSeconds: TimeInterval = maxChunkSeconds, send: Send,
                                 read: @Sendable (URL, Range<Int>) throws -> [Float],
                                 log: DiagnosticLog = .shared) async throws -> Outcome {
@@ -245,14 +246,25 @@ final class CallTranscriber {
         }
         var segments: [CallTranscript.Segment] = []
         var costs: [Double] = []
-        var remoteRoster: [String] = []
-        var localRoster: [String] = []
+        var roster: [String] = []
+        var sides = CallSides(me: me)
         var outcome = Outcome(transcript: CallTranscript(segments: []))
 
-        /// One request, its answer kept and read. Throws `Failure.unreadableAnswer` for an answer with nothing
-        /// readable in it, unless it was cut off (then whatever it had is what there is).
-        func ask(_ track: CallJournal.Track, chunk: Int, audio: (data: Data, seconds: TimeInterval), prompt: String,
-                 speakers: [String], defaultSpeaker: String?) async throws -> [CallTranscript.Segment] {
+        for (index, range) in ranges.enumerated() {
+            try Task.checkCancellation()
+            let chunk = index + 1
+            let offset = Double(range.lowerBound) / Recording.sampleRate
+            guard let audio = try await chunkAudio(plan, range, read: read) else {
+                outcome.skippedSilent += 1
+                log.event(.calls, "transcription.skipped", ["call": call, "chunk": chunk])
+                continue
+            }
+            let mutes = plan.mutes.compactMap { mute -> CallInterval? in
+                guard mute.overlap(offset, offset + audio.seconds) > 0 else { return nil }
+                return CallInterval(start: max(0, mute.start - offset), end: min(audio.seconds, mute.end - offset))
+            }
+            let prompt = CallPrompts.call(me: me, service: plan.service, roster: roster, local: sides.speakers,
+                                          mutes: mutes)
             let started = ContinuousClock.now
             var text: String
             var result: CloudResult?
@@ -266,91 +278,78 @@ final class CallTranscriber {
             let elapsed = started.duration(to: .now)
             outcome.requests += 1
             if let answers = plan.answers {
-                let file = answers.appendingPathComponent("\(chunk)-\(track.rawValue).txt", isDirectory: false)
+                let file = answers.appendingPathComponent("\(chunk)-mix.txt", isDirectory: false)
                 do {
                     try Data(text.utf8).write(to: file, options: .atomic)
                 } catch {
                     Log.engine.error("Couldn't keep a call's answer: \(error.localizedDescription, privacy: .public)")
                 }
             }
-            let side: CallSide = track == .remote ? .remote : .local
-            let parsed = CallTranscriptParser.parse(text, side: side, duration: audio.seconds,
-                                                    defaultSpeaker: defaultSpeaker, speakers: speakers)
+            let parsed = CallTranscriptParser.parse(text, side: .remote, duration: audio.seconds,
+                                                    speakers: [me] + roster)
             let truncated = result == nil
             costs += [result?.costUSD].compactMap { $0 }
             log.event(.calls, "transcription.request", [
-                "call": call, "track": track.rawValue, "chunk": chunk, "chunks": ranges.count, "audio": audio.seconds,
+                "call": call, "chunk": chunk, "chunks": ranges.count, "audio": audio.seconds,
                 "chars": text.count, "format": parsed.format.rawValue, "phrases": parsed.segments.count,
                 "skipped": parsed.skipped, "finish": truncated ? "length" : result?.finishReason,
                 "cost": result?.costUSD, "seconds": Double(elapsed.components.seconds)
                     + Double(elapsed.components.attoseconds) / 1e18,
             ])
             if parsed.format == .unreadable, !truncated {
-                throw Failure.unreadableAnswer(track: track, chunk: chunk, chunks: ranges.count, lines: parsed.skipped)
+                throw Failure.unreadableAnswer(chunk: chunk, chunks: ranges.count, lines: parsed.skipped)
             }
             if truncated {
-                let offset = Double(ranges[chunk - 1].lowerBound) / Recording.sampleRate
                 let reached = offset + (parsed.segments.map(\.end).max() ?? 0)
                 outcome.cutOffAt = min(outcome.cutOffAt ?? reached, reached)
                 Log.engine.error("A call's answer was cut off at \(CallPrompts.clock(reached), privacy: .public)")
             }
-            return parsed.segments
-        }
-
-        for (index, range) in ranges.enumerated() {
-            try Task.checkCancellation()
-            let chunk = index + 1
-            let offset = Double(range.lowerBound) / Recording.sampleRate
-            let length = Double(range.count) / Recording.sampleRate
-            var heard: [CallTranscript.Segment] = []
-            if let remote = plan.remote, range.lowerBound < plan.remoteSamples {
-                if let audio = try await chunkAudio(remote, range.clamped(to: 0..<plan.remoteSamples), read: read) {
-                    let prompt = CallPrompts.remote(roster: remoteRoster, service: plan.service)
-                    heard = try await ask(.remote, chunk: chunk, audio: audio, prompt: prompt, speakers: remoteRoster,
-                                          defaultSpeaker: nil)
-                    remoteRoster = roster(remoteRoster, adding: heard)
-                } else {
-                    outcome.skippedSilent += 1
-                    log.event(.calls, "transcription.skipped", ["call": call, "track": "remote", "chunk": chunk])
-                }
+            let said = parsed.segments.map { segment -> CallTranscript.Segment in
+                var segment = segment
+                segment.side = sides.side(of: segment.speaker)
+                return segment
             }
-            if let mic = plan.mic, range.lowerBound < plan.micSamples {
-                if let audio = try await chunkAudio(mic, range.clamped(to: 0..<plan.micSamples), read: read) {
-                    let mutes = plan.mutes.compactMap { mute -> CallInterval? in
-                        guard mute.overlap(offset, offset + length) > 0 else { return nil }
-                        return CallInterval(start: max(0, mute.start - offset), end: min(length, mute.end - offset))
-                    }
-                    let prompt = CallPrompts.local(me: me, roster: localRoster, echo: heard, mutes: mutes)
-                    let said = try await ask(.mic, chunk: chunk, audio: audio, prompt: prompt,
-                                             speakers: [me] + localRoster, defaultSpeaker: me)
-                    localRoster = roster(localRoster, adding: said)
-                    segments += said.map { $0.shifted(by: offset) }
-                } else {
-                    outcome.skippedSilent += 1
-                    log.event(.calls, "transcription.skipped", ["call": call, "track": "mic", "chunk": chunk])
-                }
-            }
-            segments += heard.map { $0.shifted(by: offset) }
+            roster = Self.roster(roster, adding: said)
+            segments += said.map { $0.shifted(by: offset) }
         }
         outcome.transcript = CallTranscriptMerge.merge(segments, mutes: plan.mutes)
         outcome.costUSD = costs.isEmpty ? nil : costs.reduce(0, +)
         return outcome
     }
 
-    /// The chunk of a track as one request's .m4a, or nil when it has no speech worth sending.
+    /// The chunk as one request's .m4a, or nil when it has no speech worth sending.
     private nonisolated static func chunkAudio(
-        _ url: URL, _ range: Range<Int>, read: @Sendable (URL, Range<Int>) throws -> [Float]
+        _ plan: Plan, _ range: Range<Int>, read: @Sendable (URL, Range<Int>) throws -> [Float]
     ) async throws -> (data: Data, seconds: TimeInterval)? {
         guard !range.isEmpty else { return nil }
-        let samples = try read(url, range)
+        let samples = try mixed(plan, range, read: read)
         let speech = SpeechAnalyzer.stats(for: samples)
         guard !speech.isSilent, speech.voicedSeconds >= minimumVoicedSeconds else { return nil }
         let data = try await Task.detached(priority: .userInitiated) { try CloudAudio.forChat(samples) }.value
         return (data, Double(samples.count) / Recording.sampleRate)
     }
 
+    /// Samples `range` of the call as one track: each track's stretch read (a track over before it, or silent all
+    /// through it, left out), the mic zeroed in the mutes (again: a call recorded before the journal did, or a mute
+    /// noted late), both mixed (`CallMix.mix`).
+    nonisolated static func mixed(_ plan: Plan, _ range: Range<Int>,
+                                  read: @Sendable (URL, Range<Int>) throws -> [Float]) throws -> [Float] {
+        func track(_ url: URL?, samples: Int) throws -> [Float]? {
+            guard let url, range.lowerBound < samples else { return nil }
+            let stretch = try read(url, range.clamped(to: 0..<samples))
+            return stretch.contains { $0 != 0 } ? stretch : nil
+        }
+        let remote = try track(plan.remote, samples: plan.remoteSamples)
+        var mic = try track(plan.mic, samples: plan.micSamples)
+        if var samples = mic {
+            CallMix.silence(&samples, first: range.lowerBound, mutes: plan.mutes)
+            mic = samples.contains { $0 != 0 } ? samples : nil
+        }
+        return CallMix.mix(mic: mic, remote: remote, length: range.count)
+    }
+
     /// Where a call of `totalSamples` is cut into requests: as few chunks as keep each within `maxSeconds`, all the
-    /// same length. Both tracks are cut at the same places, so a chunk's echo is the other side's same chunk.
+    /// same length, both tracks cut at the same places.
     nonisolated static func chunks(totalSamples: Int, maxSeconds: TimeInterval) -> [Range<Int>] {
         guard totalSamples > 0 else { return [] }
         let maxLength = max(1, Int(maxSeconds * Recording.sampleRate))
@@ -367,11 +366,44 @@ final class CallTranscriber {
     }
 }
 
+// MARK: - Sides
+
+/// Which side of the call a speaker in the mixed answer is on: the person recording ("Sam", or "Me") and anyone in
+/// the room with them ("Nearby 1") are this Mac's side, everyone else the other side. Kept per call, by the names the
+/// model gave, which a rename on the call's page never changes, so a renamed speaker keeps their side.
+struct CallSides: Sendable {
+    let me: String
+    /// This Mac's side's speakers so far, the person first.
+    private(set) var speakers: [String]
+
+    init(me: String) {
+        self.me = me
+        speakers = [me]
+    }
+
+    /// The person ("Me" too, whatever their name), or "Nearby" with a number.
+    func isLocal(_ speaker: String) -> Bool {
+        let name = speaker.trimmingCharacters(in: .whitespacesAndNewlines)
+        if speakers.contains(name) { return true }
+        if name.caseInsensitiveCompare(me) == .orderedSame || name.caseInsensitiveCompare("Me") == .orderedSame {
+            return true
+        }
+        return name.range(of: #"^nearby(\s*\d+)?$"#, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    /// `speaker`'s side, remembered for the chunks after.
+    mutating func side(of speaker: String) -> CallSide {
+        guard isLocal(speaker) else { return .remote }
+        if !speakers.contains(speaker) { speakers.append(speaker) }
+        return .local
+    }
+}
+
 // MARK: - Prompts
 
-/// The system prompts of a call's requests. English instructions; the transcript stays in the language spoken.
+/// The system prompt of a call's requests. English instructions; the transcript stays in the language spoken.
 enum CallPrompts {
-    /// What the mic's main voice is called: the person's first name, else "Me".
+    /// What the person recording is called: their first name, else "Me".
     static func speakerName(for userName: String?) -> String {
         let name = userName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return name.isEmpty ? "Me" : name
@@ -391,46 +423,39 @@ enum CallPrompts {
         \(noSpeech).
         """
 
-    /// The other side's track, alone: who said what among the participants.
-    static func remote(roster: [String], service: String?) -> String {
+    /// One chunk of the call, both sides mixed. `me` is the person recording; `roster`, the speakers of the chunks
+    /// before, `local` the ones on this Mac's side; `mutes`, when the person was muted, from the chunk's start.
+    static func call(me: String, service: String?, roster: [String], local: [String] = [],
+                     mutes: [CallInterval]) -> String {
+        let named = me != "Me"
         var lines = [
-            "This audio is one side of a call\(service.map { " on \($0)" } ?? ""): the other participants, as the call app played them. "
-                + "There may be several people.",
-            "Tell the voices apart. Name a speaker by their name when the call makes it clear: they introduce themselves, or "
-                + "someone addresses them by name and they answer (\"Аня, ты как?\" then Аня speaks). Otherwise call them "
-                + "\"Participant 1\", \"Participant 2\" and so on, in the order they first speak. One person keeps one name "
-                + "all through.",
+            "This audio is a recording of a call\(service.map { " on \($0)" } ?? ""), both sides mixed into one track: "
+                + "the person who recorded it, on their own microphone, and the other participants, one or several, as "
+                + "the call app played them, maybe with its codec's sound. People in the same room as the person who "
+                + "recorded it may be heard too.",
+            (named ? "The person who recorded it is \(me): call them \"\(me)\"." : "Call the person who recorded it \"Me\".")
+                + " Theirs is usually the nearest, clearest voice. Call anyone else in the room with them \"Nearby 1\", "
+                + "\"Nearby 2\" and so on.",
+            "Tell the other participants apart. Name one by their name when the call makes it clear: they introduce "
+                + "themselves, or someone addresses them by name and they answer (\"Аня, ты как?\" then Аня speaks). "
+                + "Otherwise call them \"Participant 1\", \"Participant 2\" and so on, in the order they first speak. "
+                + "One person keeps one name all through.",
+            "If \(named ? me : "the person who recorded it") used speakers rather than headphones, the other "
+                + "participants may be heard twice, a moment apart: write each phrase once.",
         ]
-        if !roster.isEmpty {
-            lines.append("Earlier in this call these speakers were heard: \(roster.joined(separator: ", ")). "
-                         + "Use the same names for the same voices; number new ones after them.")
-        }
-        lines.append(format)
-        return lines.joined(separator: "\n\n")
-    }
-
-    /// The mic's track: the person recording and anyone in the room, with the other side's transcript to leave out.
-    static func local(me: String, roster: [String], echo: [CallTranscript.Segment],
-                      mutes: [CallInterval]) -> String {
-        var lines = [
-            "This audio is the microphone of \(me == "Me" ? "the person" : me) who recorded a call. Their voice, the "
-                + "nearest one, is \"\(me)\". Anyone else speaking in the same room is \"Nearby 1\", \"Nearby 2\" and so "
-                + "on, unless the conversation names them.",
-        ]
-        if !roster.isEmpty {
-            lines.append("Earlier in this call these speakers were heard here: \(roster.joined(separator: ", ")). "
-                         + "Use the same names for the same voices.")
-        }
-        if !echo.isEmpty {
-            let said = echo.map { "[\(clock($0.start))] \($0.speaker): \($0.text)" }.joined(separator: "\n")
-            lines.append("The other side of the call can be heard faintly through the speakers. This is what they said "
-                         + "(times from the start of this audio). When you hear these phrases, leave them out: they are "
-                         + "echo, not said here.\n" + said)
-        }
         if !mutes.isEmpty {
             let spans = mutes.map { "\(clock($0.start)) to \(clock($0.end))" }.joined(separator: ", ")
-            lines.append("\(me == "Me" ? "The person" : me) was muted in the call during \(spans): the other side didn't hear "
-                         + "this. Still transcribe what's said then, as usual.")
+            lines.append("\(named ? me : "The person who recorded it") was muted in the call during \(spans). Their "
+                         + "microphone is silent then: any voice heard then is one of the other participants, never "
+                         + "\"\(me)\".")
+        }
+        if !roster.isEmpty {
+            let names = roster.map { name in
+                guard local.contains(name) else { return name }
+                return name == me ? "\(name) (who recorded the call)" : "\(name) (in the room with \(named ? me : "them"))"
+            }
+            lines.append("Earlier in this call these speakers were heard: \(names.joined(separator: ", ")). "
+                         + "Use the same names for the same voices; number new ones after them.")
         }
         lines.append(format)
         return lines.joined(separator: "\n\n")
@@ -479,8 +504,7 @@ enum CallTranscriptParser {
                          speakers: [String] = []) throws -> [CallTranscript.Segment] {
         let parsed = parse(answer, side: side, duration: duration, defaultSpeaker: defaultSpeaker, speakers: speakers)
         if parsed.format == .unreadable {
-            throw CallTranscriber.Failure.unreadableAnswer(track: side == .remote ? .remote : .mic, chunk: 1,
-                                                           chunks: 1, lines: parsed.skipped)
+            throw CallTranscriber.Failure.unreadableAnswer(chunk: 1, chunks: 1, lines: parsed.skipped)
         }
         return parsed.segments
     }
