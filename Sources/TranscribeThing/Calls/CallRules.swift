@@ -46,6 +46,7 @@ enum CallDenylist {
         Entry(name: "Core Audio", bundleID: "com.apple.audio.coreaudiod", reason: .system),
         Entry(name: "Core Audio", bundleID: "com.apple.coreaudiod", reason: .system),
         Entry(name: "System sounds", bundleID: "com.apple.audio.systemsoundserver-osx", reason: .system),
+        Entry(name: "Speech", bundleID: "com.apple.CoreSpeech", reason: .system),
     ]
 
     /// The entry `bundleID` (a main app's) falls under, if any.

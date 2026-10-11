@@ -442,6 +442,7 @@ import Testing
     @Test func daemonsAndWeAreNotApps() {
         #expect(CallApp(bundleID: nil) == nil)
         #expect(CallApp(bundleID: "com.apple.systemsoundserverd") == nil)
+        #expect(CallApp(bundleID: "com.apple.CoreSpeech") == nil, "macOS listening for speech is not a call")
         #expect(CallApp(bundleID: "dev.transcribe-thing.app") == nil)
         #expect(CallApp(bundleID: nil, ownerBundleID: "dev.transcribe-thing.app") == nil)
         #expect(CallApp(bundleID: "dev.transcribe-thing.app", ownerBundleID: "com.apple.Terminal") == nil)

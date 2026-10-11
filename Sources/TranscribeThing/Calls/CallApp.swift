@@ -57,7 +57,16 @@ extension CallApp {
     static func of(_ record: CoreAudioHAL.ProcessRecord) -> CallApp? {
         guard record.pid != getpid() else { return nil }
         if let bundleID = record.bundleID, CallApp(bundleID: bundleID) == nil { return nil }
-        return CallApp(bundleID: record.bundleID, ownerBundleID: ownerBundleID(of: record.pid))
+        guard let app = CallApp(bundleID: record.bundleID, ownerBundleID: ownerBundleID(of: record.pid)),
+              isRunningApp(app.id) else { return nil }
+        return app
+    }
+
+    /// Whether an app (a running .app bundle) has this bundle id. A process no app owns is the system's: CoreSpeech
+    /// holds the mic and plays sound while macOS listens for speech (during a dictation, too), and isn't a call.
+    private static func isRunningApp(_ bundleID: String) -> Bool {
+        NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            .contains { $0.bundleURL?.pathExtension.lowercased() == "app" }
     }
 
     /// The localized name of the app's running copy ("Telegram", "Google Chrome"), or its bundle id.
