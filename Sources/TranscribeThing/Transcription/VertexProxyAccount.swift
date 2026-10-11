@@ -44,7 +44,7 @@ final class VertexProxyAccount {
     /// instead of quietly going to OpenRouter.
     private(set) var isKeyUnreadable = false
 
-    static let keyUnreadableMessage = "\(Brand.name) couldn’t read the key saved on this Mac. Paste it again."
+    nonisolated static let keyUnreadableMessage = "\(Brand.name) couldn’t read the key saved on this Mac. Paste it again."
 
     init(keyStore: KeyFileStore, settings: AppSettings,
          makeClient: @escaping @Sendable (URL) -> OpenRouterClient = { OpenRouterClient.vertexProxy(apiBase: $0) },
