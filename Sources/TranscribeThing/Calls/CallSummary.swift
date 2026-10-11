@@ -133,7 +133,8 @@ enum CallSummaryPrompt {
         <open>
         - one line per question left unresolved
         </open>
-        Write the blocks in the language the call was in. In <tasks>, write one line per task someone took on or was \
+        Write the blocks in the language the call was in, with straight quotes "like this" (never «» or „“) and a \
+        plain hyphen "-" where a dash goes (never — or –). In <tasks>, write one line per task someone took on or was \
         given: owner is who will do it, named exactly as in the transcript ("\(me)", "Participant 1"), left empty if \
         nobody took it; due is when it's due as said in the call ("Friday", "до пятницы"), left empty if nobody said. \
         Keep both "|" even when a part is empty. Only write what was said in the call: when nothing fits a block, leave \

@@ -209,7 +209,7 @@ final class AppEnvironment {
     /// A call's question is a toast (sticky: unanswered, the call waits in the Calls tab); deleting a call stops its
     /// transcription, or its recording.
     private func wireCalls() {
-        callTranscriber.userName = { HubGreeting.firstName(fullName: NSFullUserName(), accountName: NSUserName()) }
+        callTranscriber.userName = { [settings] in settings.displayName }
         calls.onRemove = { [weak self] ids in
             for id in ids { self?.callTranscriber.cancel(id) }
             self?.callMonitor.removed(ids)

@@ -111,7 +111,7 @@ struct HomePage: View {
     private var header: some View {
         HStack(alignment: .center, spacing: Theme.Spacing.md) {
             TimelineView(.everyMinute) { context in
-                Text(HubGreeting.text(for: hub.fixedNow ?? context.date, name: hub.firstName))
+                Text(HubGreeting.text(for: hub.fixedNow ?? context.date, name: settings.userName.isEmpty ? hub.firstName : settings.displayName))
                     .typeface(.greeting)
                     .foregroundStyle(.ink)
                     .lineLimit(1)

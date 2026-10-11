@@ -112,6 +112,19 @@ final class AppSettings {
     }
     /// The two languages Translate (fn T) goes between (General → Translate). Two different languages: picking one the
     /// other already has swaps them.
+    /// What the app calls the person (General → Your name): Home's greeting and their name in call transcripts.
+    /// Empty: the first name of this Mac's account (`macFirstName`).
+    var userName: String = "" { didSet { store.set(userName, .userName) } }
+
+    /// The name the app uses for the person: theirs from General, else the Mac account's first name.
+    var displayName: String? {
+        let own = userName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return own.isEmpty ? Self.macFirstName : own
+    }
+
+    /// The first name of this Mac's account ("Sam Smith" → "Sam").
+    static var macFirstName: String? { HubGreeting.firstName(fullName: NSFullUserName(), accountName: NSUserName()) }
+
     var translationPair: TranslationPair = .default {
         didSet { store.setJSON(translationPair, .translationPair) }
     }
@@ -335,6 +348,7 @@ final class AppSettings {
         }
         // A language this build doesn't know (from a newer one) leaves the default pair.
         if let v: TranslationPair = store.json(.translationPair), v.first != v.second { translationPair = v }
+        if let v = store.string(.userName) { userName = v }
         if let v: UserDictionary = store.json(.dictionary) {
             var loaded = v
             if let grouping: UserDictionary.Grouping = store.json(.dictionaryGroups) { loaded.grouping = grouping }
@@ -470,7 +484,7 @@ enum SettingsKey: String, CaseIterable {
     case polishMovedToFnP, showsPillHints
     /// The day-old switches of asking twice (`CloudHedge`), removed at load: every dictation asks twice now.
     case sendsTwice, measuresSendingTwice
-    case polishSelectionModel, translationPair
+    case polishSelectionModel, translationPair, userName
     /// How calls are recorded (`CallRecordingMode`), and the apps and sites never recorded.
     case callRecording, callExclusions, showsCallNotices
     /// The OpenAI-compatible endpoint's base URL and whether Gemini goes through it.

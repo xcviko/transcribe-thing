@@ -652,7 +652,8 @@ enum CallPrompts {
         Times are MM:SS from the start of this audio (H:MM:SS from an hour on). Keep each phrase on its own single \
         line. Start a new line when the speaker changes, and split a long turn at a sentence end about every 30 \
         seconds. Write what is said in the language it's said in, never translated, with punctuation; leave out \
-        stutters, false starts and filler sounds. Leave out anything that isn't speech. With no speech at all, answer \
+        stutters, false starts and filler sounds. Use straight quotes "like this", never «» or „“, and a plain hyphen \
+        "-" where a dash goes, never a long dash (— or –). Leave out anything that isn't speech. With no speech at all, answer \
         \(noSpeech).
         """
 
