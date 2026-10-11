@@ -109,6 +109,11 @@ struct CallRecord: Codable, Equatable, Identifiable, Sendable {
     var cutOffAt: TimeInterval?
     /// Speakers renamed by the person: the model's name → theirs.
     var speakerNames: [String: String] = [:]
+    /// What the call was about (`CallSummary`); nil before one was made: a call transcribed before summaries, or one
+    /// whose summary failed.
+    var summary: CallSummary?
+    /// Why the last summary failed; Summarize tries again (`CallTranscriber.summarize`).
+    var summaryError: String?
 
     init(id: UUID, startedAt: Date, endedAt: Date? = nil, appName: String, bundleID: String? = nil,
          service: CallService? = nil, pageTitle: String? = nil, manual: Bool = false, status: CallStatus) {
@@ -137,7 +142,7 @@ struct CallRecord: Codable, Equatable, Identifiable, Sendable {
         case id, startedAt, endedAt, appName, bundleID, service, pageTitle, manual, muteIntervals, muteKnown
         case micSilencedWhenMuted
         case otherBrowserAudio, micFile, remoteFile, micSeconds, remoteSeconds, micProblem, remoteProblem, status
-        case error, transcript, costUSD, cutOffAt, speakerNames
+        case error, transcript, costUSD, cutOffAt, speakerNames, summary, summaryError
     }
 
     /// Lenient: anything but the id, the start, the app and the status may be missing (written by another build).
@@ -168,6 +173,8 @@ struct CallRecord: Codable, Equatable, Identifiable, Sendable {
         costUSD = try c.decodeIfPresent(Double.self, forKey: .costUSD)
         cutOffAt = try? c.decodeIfPresent(TimeInterval.self, forKey: .cutOffAt)
         speakerNames = try c.decodeIfPresent([String: String].self, forKey: .speakerNames) ?? [:]
+        summary = try? c.decodeIfPresent(CallSummary.self, forKey: .summary)
+        summaryError = try? c.decodeIfPresent(String.self, forKey: .summaryError)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -196,6 +203,8 @@ struct CallRecord: Codable, Equatable, Identifiable, Sendable {
         try c.encodeIfPresent(costUSD, forKey: .costUSD)
         try c.encodeIfPresent(cutOffAt, forKey: .cutOffAt)
         if !speakerNames.isEmpty { try c.encode(speakerNames, forKey: .speakerNames) }
+        try c.encodeIfPresent(summary, forKey: .summary)
+        try c.encodeIfPresent(summaryError, forKey: .summaryError)
     }
 }
 

@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 /// One call, over the Calls tab (Back, ⌘[): what it was and where it ran, how the transcript was made, both sides
-/// played together, and the transcript, a line per phrase. A phrase's time plays the call from there; a speaker's name
+/// played together, its summary (`CallSummaryView`), and the transcript, a line per phrase. A phrase's time plays the call from there; a speaker's name
 /// renames them all through the call.
 struct CallDetailPage: View {
     @Environment(HubContext.self) private var hub
@@ -54,6 +54,7 @@ struct CallDetailPage: View {
                 if call.micFile != nil || call.remoteFile != nil {
                     CallPlayerBar(player: player(for: call))
                 }
+                CallSummaryView(call: call)
                 CallTranscriptView(call: call, player: player(for: call))
             }
             .padding(.horizontal, HubLayout.pageHorizontal)
@@ -97,6 +98,14 @@ struct CallDetailPage: View {
         }
         .help(call.transcript == nil ? "Transcribe" : "Transcribe Again, with \(EngineID.geminiFlash.shortName)")
         .disabled(!hasAudio || call.status == .recording || call.status == .transcribing)
+        Button {
+            hub.summarizeCall(call)
+        } label: {
+            Label(call.summary == nil ? "Summarize" : "Summarize Again", systemImage: "list.bullet.clipboard")
+        }
+        .help(call.summary == nil ? "Summarize: from the transcript, without sending the audio again"
+              : "Summarize Again, from the transcript")
+        .disabled(!hub.canSummarize(call))
         Button {
             hub.revealCall(call.id)
         } label: {

@@ -1,7 +1,8 @@
 import Foundation
 
 // What the Calls tab shows, worked out apart from its views: the list by day and its search, the badge, each call's
-// words (title, speakers, where it ran, notes, problems), the transcript as text to copy, and the speakers' colors.
+// words (title, speakers, where it ran, notes, problems), the transcript and the summary as text to copy, the tasks
+// ticked off, and the speakers' colors.
 
 /// One day of calls in the Calls tab, newest first.
 struct CallDay: Identifiable, Equatable {
@@ -197,6 +198,56 @@ enum CallFormat {
             let name = call.name(of: segment.speaker) + (segment.duringMute ? " (muted)" : "")
             return "[\(CallPrompts.clock(segment.start))] \(name): \(segment.text)"
         }.joined(separator: "\n")
+    }
+
+    // MARK: Summary
+
+    /// The speaker a task's owner is, as the transcript names them (the model's name, matched case aside); nil for
+    /// an owner who isn't one of the call's speakers, or no owner.
+    static func ownerSpeaker(_ call: CallRecord, _ task: CallTask) -> String? {
+        guard let owner = task.owner?.trimmingCharacters(in: .whitespacesAndNewlines), !owner.isEmpty else { return nil }
+        let speakers = call.transcript?.speakers ?? []
+        if speakers.contains(owner) { return owner }
+        return speakers.first { $0.caseInsensitiveCompare(owner) == .orderedSame }
+    }
+
+    /// A task's owner as the page shows them: renamed when they're one of the call's speakers, else as written.
+    static func ownerName(_ call: CallRecord, _ task: CallTask) -> String? {
+        if let speaker = ownerSpeaker(call, task) { return call.name(of: speaker) }
+        guard let owner = task.owner?.trimmingCharacters(in: .whitespacesAndNewlines), !owner.isEmpty else { return nil }
+        return owner
+    }
+
+    /// "[x] Matvey: Send the notes (Friday)", "[ ] Book the room".
+    static func taskLine(_ call: CallRecord, _ task: CallTask) -> String {
+        let owner = ownerName(call, task).map { "\($0): " } ?? ""
+        let due = task.due.map { " (\($0))" } ?? ""
+        return "[\(task.done ? "x" : " ")] \(owner)\(task.text)\(due)"
+    }
+
+    /// The summary as plain text to copy: each part that has something, under its heading. Empty without a summary.
+    static func summaryText(_ call: CallRecord) -> String {
+        guard let summary = call.summary else { return "" }
+        var sections: [String] = []
+        if !summary.summary.isEmpty { sections.append("Summary\n\(summary.summary)") }
+        func list(_ title: String, _ items: [String]) {
+            guard !items.isEmpty else { return }
+            sections.append(([title] + items.map { "- \($0)" }).joined(separator: "\n"))
+        }
+        list("Key points", summary.keyPoints)
+        list("Decided", summary.decided)
+        if !summary.tasks.isEmpty {
+            sections.append((["Tasks"] + summary.tasks.map { taskLine(call, $0) }).joined(separator: "\n"))
+        }
+        list("Open", summary.open)
+        return sections.joined(separator: "\n\n")
+    }
+
+    /// "2/3 tasks": the summary's tasks ticked off, of all; nil without any.
+    static func taskCount(_ call: CallRecord) -> String? {
+        guard let tasks = call.summary?.tasks, !tasks.isEmpty else { return nil }
+        let done = tasks.filter(\.done).count
+        return "\(done)/\(tasks.count) \(tasks.count == 1 ? "task" : "tasks")"
     }
 
     /// `text` ending in a period.

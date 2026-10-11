@@ -25,6 +25,9 @@ final class CallStore {
     private(set) var calls: [CallRecord] = []
     /// True once calls.json has been read (or there was none).
     private(set) var isLoaded = false
+    /// Calls whose summary is being written on its own (`CallTranscriber.summarize`): never saved, a summary the app
+    /// quit writing is simply not there.
+    var summarizing: Set<UUID> = []
 
     @ObservationIgnored private let paths: AppPaths
     @ObservationIgnored private let settings: AppSettings
@@ -173,6 +176,14 @@ final class CallStore {
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         update(id) { call in
             call.speakerNames[speaker] = name.isEmpty || name == speaker ? nil : name
+        }
+    }
+
+    /// Ticks a task of the call's summary off, or back on; saved at once.
+    func setTask(_ taskID: UUID, done: Bool, in id: UUID) {
+        update(id) { call in
+            guard let index = call.summary?.tasks.firstIndex(where: { $0.id == taskID }) else { return }
+            call.summary?.tasks[index].done = done
         }
     }
 
@@ -335,6 +346,8 @@ final class CallStore {
         record.status = status
         record.error = nil
         record.transcript = nil
+        record.summary = nil
+        record.summaryError = nil
         record.costUSD = nil
         record.cutOffAt = nil
         record.muteIntervals = earlier.muteIntervals + info.mutes.map {

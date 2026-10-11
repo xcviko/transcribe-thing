@@ -70,7 +70,9 @@ final class AppEnvironment {
         self.calls = calls
         callTranscriber = CallTranscriber(store: calls,
                                           send: CallTranscriber.openRouter(client: openRouterClient, account: account,
-                                                                           proxy: proxy))
+                                                                           proxy: proxy),
+                                          sendText: CallTranscriber.openRouterText(client: openRouterClient,
+                                                                                   account: account, proxy: proxy))
         callMonitor = CallMonitor(settings: settings, store: calls, transcriber: callTranscriber,
                                   dependencies: .live(settings: settings))
         self.permissions = permissions

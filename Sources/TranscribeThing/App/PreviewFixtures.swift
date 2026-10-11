@@ -141,9 +141,9 @@ enum PreviewFixtures {
     // MARK: Calls
 
     /// The calls of the Calls tab, newest first: a Telegram call being transcribed, a Google Meet call in Chrome done
-    /// with three speakers besides Sam, two mutes (something said in one) and another tab's sound, a Zoom call that
-    /// failed, a Discord call never answered about, a Slack huddle the app quit during, and a Telemost call whose
-    /// other side came out silent.
+    /// with three speakers besides Sam, two mutes (something said in one), another tab's sound and a summary (two of its
+    /// four tasks done), a Zoom call that failed, a Discord call never answered about, a Slack huddle the app quit
+    /// during, and a Telemost call whose other side came out silent and whose summary failed.
     static func calls(now: Date = Date(), calendar: Calendar = .current) -> [CallRecord] {
         let today = calendar.startOfDay(for: now)
         func at(daysAgo: Int, _ hour: Int, _ minute: Int) -> Date {
@@ -191,6 +191,25 @@ enum PreviewFixtures {
             .init(start: 184, end: 190, side: .local, speaker: "Sam",
                   text: "Great. I’ll send the notes after the call, with who does what."),
         ])
+        meet.summary = CallSummary(
+            summary: "The team went over the release plan. Long files load slowly because of the request limit, so Sam "
+                + "will split them into chunks, and the release moves to Friday.",
+            keyPoints: [
+                "File import works, but long files take a long time to load.",
+                "The cause is the request limit; splitting files into chunks is about a day of work, with tests.",
+                "Аня can test long files over the weekend.",
+            ],
+            decided: ["Ship on Friday."],
+            tasks: [
+                CallTask(id: callTaskID(1), owner: "Sam", text: "Split long files into chunks before they’re sent",
+                         done: true),
+                CallTask(id: callTaskID(2), owner: "Аня", text: "Проверить длинные файлы", due: "на выходных"),
+                CallTask(id: callTaskID(3), owner: "Sam", text: "Send the notes with who does what",
+                         due: "after the call", done: true),
+                CallTask(id: callTaskID(4), owner: "Participant 1", text: "Confirm the Friday release with support"),
+            ],
+            open: ["Whether long files load fast enough once they’re split."],
+            createdAt: meet.startedAt)
 
         var zoom = call(3, at(daysAgo: 1, 16, 30), app: "zoom.us", bundleID: "us.zoom.xos", service: .zoom,
                         seconds: 2710, status: .failed)
@@ -214,6 +233,7 @@ enum PreviewFixtures {
             .init(start: 40, end: 47, side: .local, speaker: "Sam",
                   text: "Хорошо, тогда я пришлю таблицу до пятницы."),
         ])
+        telemost.summaryError = "Gemini 3.8 Flash took too long"
 
         return [telegram, meet, zoom, discord, slack, telemost]
     }
@@ -221,6 +241,11 @@ enum PreviewFixtures {
     /// The fixture calls' ids, stable so snapshots can pick one.
     static func callID(_ n: Int) -> UUID {
         UUID(uuidString: String(format: "00000000-0000-4000-8000-%012d", n))!
+    }
+
+    /// The fixture summaries' task ids.
+    static func callTaskID(_ n: Int) -> UUID {
+        UUID(uuidString: String(format: "00000000-0000-4000-9000-%012d", n))!
     }
 
     /// A Google Meet call in Chrome being recorded now, `seconds` in: as the monitor knows it.

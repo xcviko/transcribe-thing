@@ -95,6 +95,24 @@ extension HubContext {
         }
     }
 
+    /// Summarize: the summary from the call's transcript alone, text only (a call transcribed before summaries, or
+    /// one whose summary failed).
+    func summarizeCall(_ call: CallRecord) {
+        guard !isPreview else { return }
+        callTranscriber.summarize(call.id)
+    }
+
+    /// Whether Summarize can run on the call now: done, with something said, and not being summed up already.
+    func canSummarize(_ call: CallRecord) -> Bool {
+        call.status == .done && call.transcript.map { !$0.segments.isEmpty } == true
+            && !calls.summarizing.contains(call.id)
+    }
+
+    /// Ticks a task of the call's summary off, or back on (a preview's store keeps it for the page only).
+    func setTask(_ task: CallTask, done: Bool, in call: CallRecord) {
+        calls.setTask(task.id, done: done, in: call.id)
+    }
+
     /// Deletes the call and its audio. A call waiting for an answer is answered No, so its question goes too; a call
     /// being recorded stops.
     func deleteCall(_ call: CallRecord) {
@@ -222,10 +240,21 @@ struct CallRow: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 if let speakers = CallFormat.speakers(call) {
-                    Text(speakers)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.inkSecondary)
-                        .lineLimit(1)
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(speakers)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.inkSecondary)
+                            .lineLimit(1)
+                        if let tasks = CallFormat.taskCount(call) {
+                            Label(tasks, systemImage: "checklist")
+                                .font(.system(size: 11))
+                                .monospacedDigit()
+                                .foregroundStyle(.inkTertiary)
+                                .labelStyle(.titleAndIcon)
+                                .fixedSize()
+                                .help("Tasks from the call’s summary, ticked off of all")
+                        }
+                    }
                 }
                 CallStatusLine(call: call, isAsking: isAsking, onDelete: onDelete)
                     .padding(.top, call.status == .done && CallFormat.problems(call).isEmpty ? 0 : 3)
@@ -308,6 +337,11 @@ struct CallRow: View {
         Button("Open") { hub.showCall(call.id) }
         if call.transcript.map({ !$0.segments.isEmpty }) == true {
             Button("Copy Transcript") { hub.copy(CallFormat.copyText(call)) }
+        }
+        if call.summary != nil {
+            Button("Copy Summary") { hub.copy(CallFormat.summaryText(call)) }
+        } else if hub.canSummarize(call) {
+            Button("Summarize") { hub.summarizeCall(call) }
         }
         if call.micFile != nil || call.remoteFile != nil {
             Button("Show in Finder") { hub.revealCall(call.id) }

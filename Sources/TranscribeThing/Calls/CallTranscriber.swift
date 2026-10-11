@@ -19,6 +19,13 @@ import Foundation
 /// folder (`CallStore.answersFolder`), so a transcript that went wrong can be looked at. An answer cut off by its token
 /// limit is read as far as it goes and the call says where (`CallRecord.cutOffAt`). Runs once a kept call ends, and
 /// again on Retry (`retranscribe`). What happens goes to the diagnostic log, never what was said.
+///
+/// The call is summed up too (`CallSummary`). A call of one chunk gets its summary in the same answer, in tagged blocks
+/// after the transcript (`CallPrompts.call` with `summary`). A longer one asks only for the transcript in each chunk,
+/// then sends the whole transcript, text only, in one more request (`sendText`, `CallSummaryPrompt.text`), kept as
+/// `answers/summary.txt` and added to what the call cost; so does a one-chunk answer that came without any of the
+/// blocks. A summary that fails leaves the call done with its transcript, and says why (`CallRecord.summaryError`):
+/// Summarize (`summarize`) tries again, and sums up a call transcribed before summaries, from its transcript alone.
 @MainActor
 final class CallTranscriber {
     /// One request: the chunk's audio as an .m4a, the system prompt, the chunk's length, and the sample of the
@@ -26,6 +33,9 @@ final class CallTranscriber {
     /// `AppError`; an answer cut off by its token limit as `AppError.openRouterTruncated` with what came of it.
     typealias Send = @Sendable (_ audio: Data, _ prompt: String, _ seconds: TimeInterval,
                                 _ voiceSample: Data?) async throws -> CloudResult
+    /// One text-only request: the transcript to sum up, and the system prompt. Throws `AppError`; an answer cut off by
+    /// its token limit as `AppError.openRouterTruncated` with what came of it.
+    typealias SendText = @Sendable (_ text: String, _ prompt: String) async throws -> CloudResult
 
     /// Longest chunk in one request: well under the ~1 h 47 min a request's budget takes at 16 kbps, so the answer's
     /// tokens (a line for every phrase, `OpenRouterClient.transcriptionMaxTokens`) are never the limit.
@@ -35,6 +45,8 @@ final class CallTranscriber {
 
     private let store: CallStore
     private let send: Send
+    /// The summary's text-only request; nil leaves a long call without a summary (tests that don't test it).
+    private let sendText: SendText?
     /// The person's first name, which the mic's speaker gets; "Me" without one.
     var userName: @MainActor () -> String? = { nil }
     /// Reads a stretch of a track's file; replaceable in tests.
@@ -42,10 +54,13 @@ final class CallTranscriber {
     /// Where events go; a test's own log in tests.
     var log: DiagnosticLog = .shared
     private var tasks: [UUID: Task<Void, Never>] = [:]
+    /// Summaries being written on their own (`summarize`).
+    private var summaryTasks: [UUID: Task<Void, Never>] = [:]
 
-    init(store: CallStore, send: @escaping Send) {
+    init(store: CallStore, send: @escaping Send, sendText: SendText? = nil) {
         self.store = store
         self.send = send
+        self.sendText = sendText
     }
 
     /// The live request: Gemini 3.8 Flash at its own reasoning level, through the Vertex proxy while it routes Gemini
@@ -58,17 +73,7 @@ final class CallTranscriber {
         let model = engine.openRouterModelID ?? "google/gemini-3.8-flash"
         let effort = engine.reasoningEffort ?? .medium
         return { audio, prompt, seconds, voiceSample in
-            let route = await MainActor.run { () -> Result<(OpenRouterClient, String), AppError> in
-                if let proxy, proxy.routesGemini {
-                    guard let key = proxy.apiKey(), let proxyClient = proxy.client() else {
-                        return .failure(.vertexProxy(.keyUnreadable))
-                    }
-                    return .success((proxyClient, key))
-                }
-                guard let key = account.apiKey() else { return .failure(.openRouterMissingKey) }
-                return .success((client, key))
-            }
-            let (target, key) = try route.get()
+            let (target, key) = try await route(client: client, account: account, proxy: proxy)
             do {
                 let result = try await target.transcribe(
                     audio: audio, format: UploadFormat.m4a.rawValue, model: model, systemPrompt: prompt, effort: effort,
@@ -83,7 +88,47 @@ final class CallTranscriber {
         }
     }
 
+    /// The summary's live request: the transcript as text to Gemini 3.8 Flash at its own reasoning level, the same
+    /// way a call's audio goes (`openRouter`). No audio, so it costs a fraction of the transcript.
+    static func openRouterText(client: OpenRouterClient, account: OpenRouterAccount,
+                               proxy: VertexProxyAccount? = nil) -> SendText {
+        let engine = EngineID.geminiFlash
+        let textRoute = TextRoute(model: engine.openRouterModelID ?? "google/gemini-3.8-flash",
+                                  effort: engine.reasoningEffort ?? .medium, provider: .googleAIStudio)
+        return { text, prompt in
+            let (target, key) = try await route(client: client, account: account, proxy: proxy)
+            let timeout = max(engine.cloudTimeout, TextRoute.timeout(forCharacterCount: text.count))
+            do {
+                let result = try await target.sendText(text, route: textRoute, systemPrompt: prompt, apiKey: key,
+                                                       timeout: timeout)
+                if target.service == .vertexProxy, let proxy { await MainActor.run { proxy.noteCloudSuccess() } }
+                return result
+            } catch let error as AppError {
+                if target.service == .vertexProxy, let proxy { await MainActor.run { proxy.noteCloudFailure(error) } }
+                throw error
+            }
+        }
+    }
+
+    /// Where a call's request goes, and with which key: the Vertex proxy while it routes Gemini, else OpenRouter.
+    private nonisolated static func route(client: OpenRouterClient, account: OpenRouterAccount,
+                                          proxy: VertexProxyAccount?) async throws -> (OpenRouterClient, String) {
+        let route = await MainActor.run { () -> Result<(OpenRouterClient, String), AppError> in
+            if let proxy, proxy.routesGemini {
+                guard let key = proxy.apiKey(), let proxyClient = proxy.client() else {
+                    return .failure(.vertexProxy(.keyUnreadable))
+                }
+                return .success((proxyClient, key))
+            }
+            guard let key = account.apiKey() else { return .failure(.openRouterMissingKey) }
+            return .success((client, key))
+        }
+        return try route.get()
+    }
+
     func isTranscribing(_ id: UUID) -> Bool { tasks[id] != nil }
+
+    func isSummarizing(_ id: UUID) -> Bool { summaryTasks[id] != nil }
 
     /// Transcribes the call (again): `.transcribing`, then `.done` with the transcript and what it cost, or `.failed`
     /// with why. A transcription of it already running goes on.
@@ -97,6 +142,8 @@ final class CallTranscriber {
             }
             return
         }
+        // Transcribe Again makes the summary again too.
+        stopSummary(id)
         store.update(id) {
             $0.status = .transcribing
             $0.error = nil
@@ -106,11 +153,11 @@ final class CallTranscriber {
                         micSamples: Int(call.micSeconds * Recording.sampleRate),
                         mutes: call.muteIntervals, userName: userName(), service: call.service?.name,
                         answers: store.answersFolder(for: id), callID: id)
-        let send = send, read = read, log = log
+        let send = send, sendText = sendText, read = read, log = log
         tasks[id] = Task { [weak self] in
             let outcome: Result<Outcome, any Error>
             do {
-                outcome = .success(try await Self.run(plan, send: send, read: read, log: log))
+                outcome = .success(try await Self.run(plan, send: send, summarize: sendText, read: read, log: log))
             } catch {
                 outcome = .failure(error)
             }
@@ -123,14 +170,63 @@ final class CallTranscriber {
         transcribe(id)
     }
 
-    /// Stops a transcription (the call was deleted).
-    func cancel(_ id: UUID) {
-        tasks.removeValue(forKey: id)?.cancel()
+    /// Sums up a done call from its transcript alone, text only, no audio: a call transcribed before summaries, or
+    /// one whose summary failed. The new summary keeps the ticks of the old one's tasks; what it cost is added to the
+    /// call's. Nothing while the call is being transcribed or summed up already.
+    func summarize(_ id: UUID) {
+        guard tasks[id] == nil, summaryTasks[id] == nil, let sendText, let call = store.call(id: id),
+              call.status == .done, let transcript = call.transcript, !transcript.segments.isEmpty else { return }
+        store.summarizing.insert(id)
+        store.update(id) { $0.summaryError = nil }
+        let me = CallPrompts.speakerName(for: userName())
+        let service = call.service?.name, answers = store.answersFolder(for: id), log = log
+        summaryTasks[id] = Task { [weak self] in
+            let outcome: Result<SummaryOutcome, any Error>
+            do {
+                outcome = .success(try await Self.summarize(transcript, me: me, service: service, answers: answers,
+                                                            sendText: sendText, log: log, callID: id))
+            } catch {
+                outcome = .failure(error)
+            }
+            self?.finishSummary(id, outcome)
+        }
     }
 
-    /// Returns once no transcription runs: tests.
+    /// Stops a transcription, and a summary being written (the call was deleted).
+    func cancel(_ id: UUID) {
+        tasks.removeValue(forKey: id)?.cancel()
+        stopSummary(id)
+    }
+
+    private func stopSummary(_ id: UUID) {
+        summaryTasks.removeValue(forKey: id)?.cancel()
+        store.summarizing.remove(id)
+    }
+
+    /// Returns once no transcription or summary runs: tests.
     func waitUntilIdle() async {
-        while let task = tasks.values.first { await task.value }
+        while let task = tasks.values.first ?? summaryTasks.values.first { await task.value }
+    }
+
+    private func finishSummary(_ id: UUID, _ outcome: Result<SummaryOutcome, any Error>) {
+        summaryTasks[id] = nil
+        store.summarizing.remove(id)
+        switch outcome {
+        case .success(let outcome):
+            log.event(.calls, "summary.finished", [
+                "call": Self.shortID(id), "tasks": outcome.summary.tasks.count, "cost": outcome.costUSD,
+            ])
+            store.update(id) {
+                $0.summary = outcome.summary.keepingDone(from: $0.summary)
+                $0.summaryError = nil
+                if let cost = outcome.costUSD { $0.costUSD = ($0.costUSD ?? 0) + cost }
+            }
+        case .failure(let error):
+            guard !(error is CancellationError) else { return }
+            Log.engine.error("Call summary failed: \(String(describing: error), privacy: .public)")
+            log.event(.calls, "summary.failed", ["call": Self.shortID(id), "error": Self.code(of: error)])
+            store.update(id) { $0.summaryError = error.localizedDescription }
+        }
     }
 
     private func finish(_ id: UUID, _ outcome: Result<Outcome, any Error>) {
@@ -141,6 +237,7 @@ final class CallTranscriber {
                 "call": Self.shortID(id), "phrases": outcome.transcript.segments.count,
                 "requests": outcome.requests, "skippedSilent": outcome.skippedSilent, "sample": outcome.sampleSeconds,
                 "cutOff": outcome.cutOffAt.map(CallPrompts.clock), "cost": outcome.costUSD,
+                "summary": outcome.summary != nil ? "ok" : (outcome.summaryError != nil ? "failed" : "none"),
             ])
             store.update(id) {
                 $0.status = .done
@@ -148,6 +245,8 @@ final class CallTranscriber {
                 $0.costUSD = outcome.costUSD
                 $0.cutOffAt = outcome.cutOffAt
                 $0.error = nil
+                $0.summary = outcome.summary?.keepingDone(from: $0.summary)
+                $0.summaryError = outcome.summaryError
             }
         case .failure(let error):
             guard !(error is CancellationError) else { return }
@@ -211,11 +310,21 @@ final class CallTranscriber {
         var skippedSilent = 0
         /// The sample of the person's voice each request carried, pauses included; nil without one.
         var sampleSeconds: TimeInterval?
+        /// What the call was about; nil with no speech, or when it failed (`summaryError` says why).
+        var summary: CallSummary?
+        var summaryError: String?
+    }
+
+    struct SummaryOutcome: Sendable {
+        var summary: CallSummary
+        var costUSD: Double?
     }
 
     enum Failure: Error, LocalizedError, Equatable {
         /// An answer with something in it and nothing readable as a transcript: `lines` lines, none of them a phrase.
         case unreadableAnswer(chunk: Int, chunks: Int, lines: Int)
+        /// A summary's answer without any of its blocks whole.
+        case noSummary
 
         var errorDescription: String? {
             switch self {
@@ -224,18 +333,23 @@ final class CallTranscriber {
                 let none = lines == 1 ? "its one line" : "any of its \(lines) lines"
                 return "Gemini’s answer\(part) wasn’t a transcript: \(Brand.name) couldn’t read \(none). "
                     + "The answer is kept with the call: Show in Finder, then the answers folder."
+            case .noSummary:
+                return "Gemini’s answer had no summary in it"
             }
         }
 
         var code: String {
             switch self {
             case .unreadableAnswer: "unreadableAnswer"
+            case .noSummary: "noSummary"
             }
         }
     }
 
-    /// Every chunk of at most `maxChunkSeconds`, both tracks mixed, one request at a time.
+    /// Every chunk of at most `maxChunkSeconds`, both tracks mixed, one request at a time, then the summary: from the
+    /// answer of a call of one chunk, else (or when that answer had none of it) from `summarize`'s text-only request.
     nonisolated static func run(_ plan: Plan, maxChunkSeconds: TimeInterval = maxChunkSeconds, send: Send,
+                                summarize: SendText? = nil,
                                 read: @Sendable (URL, Range<Int>) throws -> [Float],
                                 log: DiagnosticLog = .shared) async throws -> Outcome {
         let total = max(plan.remote == nil ? 0 : plan.remoteSamples, plan.mic == nil ? 0 : plan.micSamples)
@@ -260,6 +374,9 @@ final class CallTranscriber {
         var sides = CallSides(me: me)
         var outcome = Outcome(transcript: CallTranscript(segments: []))
         outcome.sampleSeconds = sample?.seconds
+        // A call of one chunk is summed up in the same answer as its transcript.
+        let inlineSummary = ranges.count == 1
+        var summary: CallSummary?
 
         for (index, range) in ranges.enumerated() {
             try Task.checkCancellation()
@@ -278,7 +395,7 @@ final class CallTranscriber {
                 return CallInterval(start: max(0, mute.start - offset), end: min(audio.seconds, mute.end - offset))
             }
             let prompt = CallPrompts.call(me: me, service: plan.service, roster: roster, local: sides.speakers,
-                                          mutes: mutes, voiceSample: sample != nil)
+                                          mutes: mutes, voiceSample: sample != nil, summary: inlineSummary)
             let started = ContinuousClock.now
             var text: String
             var result: CloudResult?
@@ -303,12 +420,14 @@ final class CallTranscriber {
                                                     speakers: [me] + roster)
             let truncated = result == nil
             costs += [result?.costUSD].compactMap { $0 }
+            if inlineSummary { summary = CallSummaryParser.parse(text) }
             log.event(.calls, "transcription.request", [
                 "call": call, "chunk": chunk, "chunks": ranges.count, "audio": audio.seconds,
                 "chars": text.count, "format": parsed.format.rawValue, "phrases": parsed.segments.count,
                 "skipped": parsed.skipped, "finish": truncated ? "length" : result?.finishReason,
                 "cost": result?.costUSD, "seconds": Double(elapsed.components.seconds)
                     + Double(elapsed.components.attoseconds) / 1e18, "sample": sample?.seconds,
+                "summaryBlocks": inlineSummary ? CallSummaryParser.blocksFound(in: text) : nil,
             ])
             if parsed.format == .unreadable, !truncated {
                 throw Failure.unreadableAnswer(chunk: chunk, chunks: ranges.count, lines: parsed.skipped)
@@ -327,8 +446,69 @@ final class CallTranscriber {
             segments += said.map { $0.shifted(by: offset) }
         }
         outcome.transcript = CallTranscriptMerge.merge(segments, mutes: plan.mutes)
+        if !outcome.transcript.segments.isEmpty {
+            if let summary {
+                outcome.summary = summary
+            } else if let summarize {
+                do {
+                    let summed = try await Self.summarize(outcome.transcript, me: me, service: plan.service,
+                                                          answers: plan.answers, sendText: summarize, log: log,
+                                                          callID: plan.callID)
+                    outcome.summary = summed.summary
+                    costs += [summed.costUSD].compactMap { $0 }
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    // The transcript stands: Summarize tries again.
+                    Log.engine.error("Call summary failed: \(String(describing: error), privacy: .public)")
+                    log.event(.calls, "summary.failed", ["call": call, "error": code(of: error)])
+                    outcome.summaryError = error.localizedDescription
+                }
+            } else if inlineSummary {
+                outcome.summaryError = Failure.noSummary.localizedDescription
+            }
+        }
         outcome.costUSD = costs.isEmpty ? nil : costs.reduce(0, +)
         return outcome
+    }
+
+    /// The summary of `transcript` from one text-only request, its answer kept as `answers/summary.txt`. Throws the
+    /// request's failure, or `Failure.noSummary` for an answer without any of the blocks whole; a cut-off answer is
+    /// read as far as it goes.
+    nonisolated static func summarize(_ transcript: CallTranscript, me: String, service: String?, answers: URL?,
+                                      sendText: SendText, log: DiagnosticLog,
+                                      callID: UUID?) async throws -> SummaryOutcome {
+        let call = callID.map(shortID)
+        let text = CallSummaryPrompt.transcript(transcript)
+        let started = ContinuousClock.now
+        var answer: String
+        var result: CloudResult?
+        do {
+            let answered = try await sendText(text, CallSummaryPrompt.text(me: me, service: service))
+            result = answered
+            answer = answered.text
+        } catch AppError.openRouterTruncated(let partial) {
+            answer = partial
+        }
+        let elapsed = started.duration(to: .now)
+        if let answers {
+            do {
+                try FileManager.default.createDirectory(at: answers, withIntermediateDirectories: true)
+                try Data(answer.utf8).write(to: answers.appendingPathComponent("summary.txt", isDirectory: false),
+                                            options: .atomic)
+            } catch {
+                Log.engine.error("Couldn't keep a call's summary answer: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        let summary = CallSummaryParser.parse(answer)
+        log.event(.calls, "summary.request", [
+            "call": call, "phrases": transcript.segments.count, "chars": text.count, "answerChars": answer.count,
+            "blocks": CallSummaryParser.blocksFound(in: answer), "tasks": summary?.tasks.count,
+            "finish": result == nil ? "length" : result?.finishReason, "cost": result?.costUSD,
+            "seconds": Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18,
+        ])
+        guard let summary else { throw Failure.noSummary }
+        return SummaryOutcome(summary: summary, costUSD: result?.costUSD)
     }
 
     /// The chunk as one request's .m4a within `budget` (base64 bytes), or nil when it has no speech worth sending.
@@ -453,6 +633,18 @@ enum CallPrompts {
     /// What an answer with no speech in it says.
     static let noSpeech = "NO SPEECH"
 
+    /// How the answer is written: the transcript alone, or (`summary`) the transcript, then the summary's blocks after
+    /// it (`CallSummaryPrompt.blocks`).
+    static func format(summary: Bool, me: String = "Me") -> String {
+        guard summary else { return format }
+        return format.replacingOccurrences(of: transcriptOnly, with: transcriptFirst)
+            + "\n\nAfter the transcript, on a new line: " + CallSummaryPrompt.blocks(me: me)
+            + " With no speech at all, answer only \(noSpeech), with no blocks."
+    }
+
+    private static let transcriptOnly = "Answer with only the transcript, nothing before or after it:"
+    private static let transcriptFirst = "Answer with the transcript first, nothing before it:"
+
     static let format = """
         Answer with only the transcript, nothing before or after it: one line per phrase, in order, each line \
         [start-end] Speaker: what they said
@@ -467,9 +659,10 @@ enum CallPrompts {
     /// One chunk of the call, both sides mixed. `me` is the person recording; `roster`, the speakers of the chunks
     /// before, `local` the ones on this Mac's side; `mutes`, when the person was muted, from the chunk's start.
     /// `voiceSample`: the request's first audio is a sample of the person's voice (`CallVoiceSample`), the chunk the
-    /// second, and the prompt says so first.
+    /// second, and the prompt says so first. `summary`: the answer sums up the call after its transcript (a call of
+    /// one chunk).
     static func call(me: String, service: String?, roster: [String], local: [String] = [],
-                     mutes: [CallInterval], voiceSample: Bool = false) -> String {
+                     mutes: [CallInterval], voiceSample: Bool = false, summary: Bool = false) -> String {
         let named = me != "Me"
         var lines: [String] = []
         if voiceSample {
@@ -505,7 +698,7 @@ enum CallPrompts {
             lines.append("Earlier in this call these speakers were heard: \(names.joined(separator: ", ")). "
                          + "Use the same names for the same voices; number new ones after them.")
         }
-        lines.append(format)
+        lines.append(format(summary: summary, me: me))
         return lines.joined(separator: "\n\n")
     }
 
@@ -572,6 +765,8 @@ enum CallTranscriptParser {
     /// it is still one name.
     static func parse(_ answer: String, side: CallSide, duration: TimeInterval, defaultSpeaker: String? = nil,
                       speakers: [String] = []) -> Parsed {
+        // The summary's blocks after the transcript (`CallSummaryParser`) are no part of it.
+        let answer = CallSummaryParser.transcriptPart(of: answer)
         let fallback = defaultSpeaker ?? (side == .remote ? "Participant 1" : "Me")
         let known = (speakers + [defaultSpeaker].compactMap { $0 }).filter { !$0.isEmpty }
             .sorted { $0.count > $1.count }

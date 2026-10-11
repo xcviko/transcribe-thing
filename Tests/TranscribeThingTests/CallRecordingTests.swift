@@ -468,7 +468,7 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
         #expect(prompt.contains("heard twice, a moment apart: write each phrase once"))
         #expect(prompt.contains("Sam was muted in the call during 00:19 to 00:26."))
         #expect(prompt.contains("never \"Sam\""))
-        #expect(prompt.contains(CallPrompts.format) && !prompt.contains("echo"))
+        #expect(prompt.contains(CallPrompts.format(summary: true, me: "Sam")) && !prompt.contains("echo"))
         #expect(!prompt.contains("Earlier in this call"))
         // Sides come from who spoke: the person and the room are this Mac's side.
         #expect(outcome.transcript.segments.map(\.speaker) == ["Аня", "Sam", "Nearby 1", "Sam"])

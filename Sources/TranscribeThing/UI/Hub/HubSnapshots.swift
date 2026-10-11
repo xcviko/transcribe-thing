@@ -104,6 +104,20 @@ enum HubSnapshots {
             // The Meet call: three speakers besides Sam, Matvey renamed, a phrase said muted, another tab's sound.
             hub("hub-call-detail", .callDetail, height: 900) { c in Samples.openCall(c, 2) },
             hub("hub-call-detail-compact", .callDetail, width: 820, height: 560) { c in Samples.openCall(c, 2) },
+            // The Meet call's summary whole (two of its four tasks done), then the transcript.
+            hub("hub-call-detail-summary", .callDetail, height: 1260) { c in Samples.openCall(c, 2) },
+            // The same call transcribed before summaries: Summarize, and the same while it runs.
+            hub("hub-call-detail-no-summary", .callDetail) { c in
+                Samples.openCall(c, 2)
+                c.calls.update(PreviewFixtures.callID(2)) { $0.summary = nil }
+            },
+            hub("hub-call-detail-summarizing", .callDetail) { c in
+                Samples.openCall(c, 2)
+                c.calls.update(PreviewFixtures.callID(2)) { $0.summary = nil }
+                c.calls.summarizing.insert(PreviewFixtures.callID(2))
+            },
+            // Telemost's summary failed: why, and Summarize.
+            hub("hub-call-detail-summary-failed", .callDetail) { c in Samples.openCall(c, 6) },
             // Telemost's other side came out silent: the permission, with Open Settings.
             hub("hub-call-detail-silent", .callDetail) { c in Samples.openCall(c, 6) },
             hub("hub-call-detail-unconfirmed", .callDetail) { c in Samples.openCall(c, 4) },

@@ -123,6 +123,13 @@ Gemini 3.8 Flash writes the transcript, on your OpenRouter key or through your o
 up in the call is named; the rest are "Participant 1", "Participant 2", and anyone in the room with you is "Nearby 1". On
 the call's page, click a name to rename them, or a time to play the call from there.
 
+Above the transcript, each call gets a summary in the call's language: what it was about, the key points, what was
+decided, the tasks people took on, and the questions left open. Tick a task off when it's done; the Calls tab shows how
+many are, like "2/3 tasks". A call up to 45 minutes gets its summary in the same request as its transcript. A longer one
+sends its transcript once more, as text, which costs a little extra. Calls transcribed before summaries have Summarize
+on their page: it works from the transcript and doesn't send the audio again. If a summary fails, the transcript is
+still there, and Summarize tries again.
+
 In Zoom, Discord, Slack, Google Meet, Telemost and Telegram, the app follows your mute: while you're muted, your
 microphone isn't recorded, so what you say then is neither kept nor transcribed. Your first words right after you unmute
 may be cut too. In other apps, and in a menu bar recording, what you say while muted is recorded and may end up in the
