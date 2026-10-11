@@ -1,14 +1,41 @@
 import AppKit
 import SwiftUI
 
+/// Models' "API keys": one group (a section of the page's form) with the OpenRouter key, the user's own
+/// OpenAI-compatible endpoint (base URL, API key, status) and "Use for Gemini", which sends Gemini through the
+/// endpoint. Cloud Parakeet always uses OpenRouter.
+struct APIKeysGroup: View {
+    /// Incremented by the page to scroll to the OpenRouter key and focus its field ("Add key", "Update key").
+    var keyFocusRequest: Int
+    /// Incremented by the page to scroll to the endpoint and focus the field that needs filling (Gemini's row while
+    /// Gemini goes through the endpoint).
+    var endpointFocusRequest: Int
+
+    var body: some View {
+        HubGroup("API keys", footer: Self.footer) {
+            SettingsGroup {
+                OpenRouterKeyRow(focusRequest: keyFocusRequest)
+                    .id(ModelsAnchor.key)
+                EndpointRow(focusRequest: endpointFocusRequest)
+                    .id(ModelsAnchor.proxy)
+                UseEndpointForGeminiRow()
+            }
+        }
+    }
+
+    static let footer = "Gemini goes through your endpoint when it’s set up and Use for Gemini is on. "
+        + "\(EngineID.parakeetCloud.displayName) always uses OpenRouter."
+}
+
 /// The OpenRouter key: masked key with Replace/Remove, or a field to add one, and its live status.
-struct OpenRouterKeyCard: View {
+struct OpenRouterKeyRow: View {
     /// Incremented by the page to scroll here and focus the field ("Add key", "Update key").
     var focusRequest: Int
 
     @Environment(HubContext.self) private var hub
     @Environment(OpenRouterAccount.self) private var account
     @Environment(VertexProxyAccount.self) private var proxy
+    @Environment(\.inNativeForm) private var inNativeForm
     @State private var replacing = false
     @State private var draft = ""
     @State private var saving = false
@@ -19,13 +46,12 @@ struct OpenRouterKeyCard: View {
     private var draftLooksValid: Bool { draftTrimmed.hasPrefix("sk-or-") && draftTrimmed.count > 12 }
 
     var body: some View {
-        Card {
-            VStack(alignment: .leading, spacing: 14) {
-                header
-                if showsField { field } else { storedKey }
-                statusLine
-            }
+        VStack(alignment: .leading, spacing: 14) {
+            header
+            if showsField { field } else { storedKey }
+            statusLine
         }
+        .keysRowPadding(inNativeForm: inNativeForm)
         .onChange(of: focusRequest) {
             if account.maskedKey != nil, isProblem { replacing = true }
             fieldFocused = true
@@ -45,12 +71,12 @@ struct OpenRouterKeyCard: View {
         HStack(alignment: .top, spacing: 12) {
             IconTile(symbol: "key.fill", tint: .inkSecondary, size: 30)
             VStack(alignment: .leading, spacing: 2) {
-                Text("OpenRouter key")
+                Text("OpenRouter")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.ink)
                 // Who pays, and for what: worth saying every time.
                 Text(proxy.routesGemini
-                     ? "Cloud Parakeet runs on it; Gemini goes through your Vertex proxy. You pay OpenRouter per use."
+                     ? "Cloud Parakeet runs on it; Gemini goes through your endpoint. You pay OpenRouter per use."
                      : "Gemini and cloud Parakeet run on it. You pay OpenRouter per use.")
                     .typeface(.callout)
                     .foregroundStyle(.inkSecondary)

@@ -1014,7 +1014,7 @@ final class DictationController {
         }
     }
 
-    /// Why the Vertex proxy can't take a request right now, as far as its account knows (nil while it may).
+    /// Why the custom endpoint can't take a request right now, as far as its account knows (nil while it may).
     private var vertexProxyKeyProblem: AppError? {
         guard let proxy = transcription.proxy else { return nil }
         let status = proxy.keyStatus
@@ -1026,7 +1026,7 @@ final class DictationController {
         }
     }
 
-    /// Why the key `engine`'s requests go with can't pay for one now: the Vertex proxy's for Gemini while it routes
+    /// Why the key `engine`'s requests go with can't pay for one now: the custom endpoint's for Gemini while it routes
     /// Gemini, else OpenRouter's. nil for a local engine.
     private func keyProblem(for engine: EngineID) -> AppError? {
         switch transcription.provider(for: engine) {
@@ -1694,16 +1694,17 @@ final class DictationController {
         }
     }
 
-    /// The Vertex proxy's own failures, in the same plain words; nil for one its notice's title says best.
+    /// The OpenAI-compatible endpoint's own failures, in the same plain words; nil for one its notice's title says
+    /// best.
     private nonisolated static func vertexProxyFailureReason(_ failure: VertexProxyFailure) -> String? {
         switch failure {
-        case .keyUnreadable: "Your saved Vertex proxy key couldn’t be read. Paste it again in Models."
-        case .keyRejected: "Your Vertex proxy rejected the key."
-        case .spendLimit: "Your Vertex proxy hit its spend limit."
-        case .unreachable: "Couldn’t reach your Vertex proxy. Check its address in Models."
-        case .rateLimited: "Gemini is busy on your Vertex proxy. Try again in a moment."
-        case .unavailable: "Your Vertex proxy ran into a problem."
-        case .forbidden: "Google Cloud refused your Vertex proxy."
+        case .keyUnreadable: "Your endpoint’s saved API key couldn’t be read. Paste it again in Models."
+        case .keyRejected: "Your endpoint rejected the API key."
+        case .spendLimit: "Your endpoint hit a spend limit."
+        case .unreachable: "Couldn’t reach your endpoint. Check its base URL in Models."
+        case .rateLimited: "Gemini is busy on your endpoint. Try again in a moment."
+        case .unavailable: "Your endpoint ran into a problem."
+        case .forbidden: "Your endpoint refused the request."
         case .badRequest, .tooLarge: nil
         }
     }

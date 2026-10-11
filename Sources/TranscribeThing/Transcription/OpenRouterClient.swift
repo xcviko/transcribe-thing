@@ -53,9 +53,9 @@ struct ConnectionWatch: Sendable {
         }
     }
 
-    /// The Vertex proxy runs on Cloud Run, which starts an instance on demand: its first answer can take several
+    /// The user's own endpoint may start an instance on demand (Cloud Run, say): its first answer can take several
     /// seconds, so it's probed later and given longer than OpenRouter. Any answer counts, the 401 of a request
-    /// without a key included (`GET <base>/api/v1/models`, which never reaches Google, so it costs nothing).
+    /// without a key included (`GET <base>/models`, which costs nothing).
     static func vertexProxy(apiBase: URL) -> ConnectionWatch {
         ConnectionWatch(probeAfter: 15, probeAgainAfter: 30, unreachable: .vertexProxy(.unreachable)) { () async -> Bool in
             let config = URLSessionConfiguration.ephemeral
@@ -161,10 +161,11 @@ struct TokenUsage: Codable, Equatable, Sendable {
 /// Transcription through OpenRouter: Gemini over chat completions, Parakeet over the speech-to-text endpoint.
 /// Every failure surfaces as `AppError` (or `CancellationError` when the calling task is cancelled), but for a speech
 /// upload refused for its format (`AudioFormatRefused`).
-/// The same client talks to the user's Vertex proxy (`service` `.vertexProxy`, `vertexProxy(apiBase:)`), which
-/// speaks OpenRouter's chat completions: there it sends no OpenRouter routing or headers, asks for at most
-/// `VertexProxy.maxOutputTokens`, names Vertex AI as the provider, keeps no generation ids (the proxy has no
-/// generation records to look up) and reports failures as the proxy's (`VertexProxyErrorMapper`).
+/// The same client talks to the user's OpenAI-compatible endpoint (`service` `.vertexProxy`, `vertexProxy(apiBase:)`),
+/// which takes the same chat completions: there it sends no OpenRouter routing or headers, asks for at most
+/// `VertexProxy.maxOutputTokens`, names the provider as the stream does or else by the endpoint's host, keeps no
+/// generation ids (the endpoint has no generation records to look up) and reports failures as the endpoint's
+/// (`VertexProxyErrorMapper`).
 final class OpenRouterClient: Sendable {
     static let referer = "http://localhost/transcribe-thing"
     static let title = "transcribe-thing"
@@ -180,7 +181,7 @@ final class OpenRouterClient: Sendable {
     private let retryDelay: TimeInterval
     /// nil: requests wait out their stall timeouts (tests that don't test this).
     private let connectionWatch: ConnectionWatch?
-    /// Who's at `baseURL`: OpenRouter, or the Vertex proxy's OpenRouter-style API.
+    /// Who's at `baseURL`: OpenRouter, or the user's OpenAI-compatible endpoint.
     let service: CloudProvider
 
     init(session: URLSession = .openRouterCloud) {
@@ -200,7 +201,7 @@ final class OpenRouterClient: Sendable {
         self.service = service
     }
 
-    /// The Vertex proxy at `apiBase` (`<base>/api/v1`, `VertexProxy.apiBase`).
+    /// The user's endpoint at `apiBase` (the URL that ends in /v1: `VertexProxy.normalizedBaseURL`).
     static func vertexProxy(apiBase: URL, session: URLSession = .openRouterCloud) -> OpenRouterClient {
         OpenRouterClient(session: session, baseURL: apiBase, retryDelay: 1.5,
                          connectionWatch: .vertexProxy(apiBase: apiBase), service: .vertexProxy)
@@ -208,8 +209,8 @@ final class OpenRouterClient: Sendable {
 
     private var isProxy: Bool { service == .vertexProxy }
 
-    /// A chat request as this service takes it: the proxy gets no OpenRouter routing and at most the output tokens
-    /// Vertex allows.
+    /// A chat request as this service takes it: the endpoint gets no OpenRouter routing and at most the output tokens
+    /// Gemini allows.
     private func adjusted(_ request: OpenRouterChatRequest) -> OpenRouterChatRequest {
         guard isProxy else { return request }
         var request = request
@@ -218,7 +219,7 @@ final class OpenRouterClient: Sendable {
         return request
     }
 
-    /// A failure in this service's terms (`VertexProxyErrorMapper.adapt` for the proxy).
+    /// A failure in this service's terms (`VertexProxyErrorMapper.adapt` for the endpoint).
     private func adapted(_ error: AppError) -> AppError {
         isProxy ? VertexProxyErrorMapper.adapt(error) : error
     }
@@ -405,7 +406,7 @@ final class OpenRouterClient: Sendable {
             let body = try await Self.prefix(of: bytes, limit: 64 * 1024)
             throw statusFailure(http, body: body, engine: engine)
         }
-        // The proxy's ids name no record anyone can look up: they're never passed on.
+        // The endpoint's ids name no record anyone can look up: they're never passed on.
         var named = isProxy
         if !named, let id = Self.header("X-Generation-Id", in: http) {
             generation?(id)
@@ -480,7 +481,7 @@ final class OpenRouterClient: Sendable {
             do {
                 result = try stream.result(engine: engine)
             } catch let error as AppError where isProxy {
-                // The proxy reports a failure inside the stream with its HTTP status as the code.
+                // The endpoint reports a failure inside the stream with its HTTP status as the code.
                 if let body = stream.error {
                     throw VertexProxyErrorMapper.map(body, status: 502, retryAfter: nil, engine: engine)
                 }
@@ -498,7 +499,8 @@ final class OpenRouterClient: Sendable {
                                  retryAfter: nil)
         }
         if isProxy {
-            result.provider = VertexProxy.providerName
+            // Who served it as the stream or the response says, else the endpoint by its host (History's provider).
+            result.provider = result.provider ?? Self.header("X-Provider-Name", in: http) ?? baseURL.host
             result.generationID = nil
         } else {
             if result.provider == nil { result.provider = Self.header("X-Provider-Name", in: http) }
@@ -561,7 +563,7 @@ final class OpenRouterClient: Sendable {
         let said = (try? JSONDecoder().decode(OpenRouterErrorEnvelope.self, from: body))?.error.logSummary
             ?? String(decoding: body.prefix(1000), as: UTF8.self).split(whereSeparator: \.isNewline).joined(separator: " ")
         Log.net.error("\(self.service.name, privacy: .public) HTTP \(http.statusCode) from \(server, privacy: .public) (\(error.code, privacy: .public)): \(said, privacy: .public)")
-        DiagnosticLog.shared.event(.net, isProxy ? "vertexProxy.http" : "openrouter.http", [
+        DiagnosticLog.shared.event(.net, isProxy ? "endpoint.http" : "openrouter.http", [
             "engine": engine, "status": http.statusCode, "server": server, "code": error, "said": said])
         // A firewall's no never reached OpenRouter: nothing was billed, and its verdict can change a moment later.
         let retryable = (Self.retryableStatuses.contains(http.statusCode) && error.isTransientCloudFailure)
@@ -647,11 +649,12 @@ final class OpenRouterClient: Sendable {
         }
     }
 
-    // MARK: Vertex proxy
+    // MARK: Custom endpoint
 
-    /// `GET /api/v1/models` on the Vertex proxy with `apiKey`: the proxy checks the key there and answers from its own
-    /// catalog without asking Google, so the check costs nothing. Returns when the key works; throws the failure as a
-    /// request would (`.vertexProxy(.keyRejected)` for a 401, `.unreachable` when the address doesn't answer).
+    /// `GET <base>/models` on the user's endpoint with `apiKey`: an OpenAI-compatible API checks the key there and
+    /// lists its models (`{"data": [...]}`) without running one, so the check costs nothing. Returns when the key
+    /// works; throws the failure as a request would (`.vertexProxy(.keyRejected)` for a 401, `.unreachable` when the
+    /// URL doesn't answer).
     func checkProxyKey(apiKey: String) async throws {
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw AppError.vertexProxy(.keyUnreadable) }
@@ -667,16 +670,16 @@ final class OpenRouterClient: Sendable {
                     retryAfter: OpenRouterErrorMapper.retryAfter(http.value(forHTTPHeaderField: "Retry-After")),
                     engine: .geminiFlash)
             }
-            // Something else at this address (a page that answers anything) isn't the proxy.
+            // Something else at this URL (a page that answers anything) isn't an OpenAI-compatible API.
             guard (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["data"] is [Any] else {
-                throw AppError.vertexProxy(.badRequest(VertexProxy.notAProxyMessage))
+                throw AppError.vertexProxy(.badRequest(VertexProxy.notAnAPIMessage))
             }
         } catch let failure as AttemptFailure {
             throw failure.error
         }
     }
 
-    /// Cloud Run may start an instance for the check: longer than OpenRouter's key check.
+    /// The endpoint may start an instance for the check: longer than OpenRouter's key check.
     static let proxyCheckTimeout: TimeInterval = 30
 
     // MARK: Generation
@@ -755,7 +758,7 @@ final class OpenRouterClient: Sendable {
             let (body, response) = try await call()
             guard let http = response as? HTTPURLResponse else {
                 throw AttemptFailure(
-                    error: adapted(.openRouterServer("\(service.name) sent a response \(Brand.name) couldn’t read.")),
+                    error: adapted(.openRouterServer("OpenRouter sent a response \(Brand.name) couldn’t read.")),
                     retryable: false, retryAfter: nil)
             }
             return (body, http)
@@ -787,14 +790,14 @@ final class OpenRouterClient: Sendable {
         }
     }
 
-    /// The Vertex proxy's address not answering, however it fails (no network, a host that doesn't exist, a TLS
-    /// failure, a refused connection), is one thing to fix: the connection or the address.
+    /// The endpoint's URL not answering, however it fails (no network, a host that doesn't exist, a TLS failure, a
+    /// refused connection), is one thing to fix: the connection or the URL.
     private static func proxyTransportFailure(_ error: URLError, engine: EngineID) -> AttemptFailure {
         switch error.code {
         case .timedOut:
             AttemptFailure(error: .timeout(engine), retryable: false, retryAfter: nil)
         case .networkConnectionLost:
-            AttemptFailure(error: .vertexProxy(.unavailable("The connection to the Vertex proxy was lost.")),
+            AttemptFailure(error: .vertexProxy(.unavailable("The connection to your endpoint was lost.")),
                            retryable: true, retryAfter: nil)
         case .notConnectedToInternet, .dataNotAllowed, .internationalRoamingOff, .cannotFindHost, .dnsLookupFailed,
              .cannotConnectToHost, .secureConnectionFailed, .serverCertificateUntrusted, .serverCertificateHasBadDate,

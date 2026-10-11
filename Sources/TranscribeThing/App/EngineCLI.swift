@@ -40,9 +40,10 @@ import Foundation
 /// what went up (`UPLOAD:` format and bytes, per segment for Parakeet) and what the app records of it (`USAGE:`
 /// tokens, billed seconds, cost, provider, generation id, time to first token, generation and total time), asking
 /// OpenRouter's generation record (every segment's, for Parakeet) for what the response left out.
-/// Settings are in-memory: the CLI never changes the app's. Gemini goes where the app sends it: through the Vertex
-/// proxy when the app has one set up and on (its address and switch read from the app's settings, its key from its
-/// key file, read only), else through OpenRouter. `--model-status` says which, never the key.
+/// Settings are in-memory: the CLI never changes the app's. Gemini goes where the app sends it: through the user's
+/// OpenAI-compatible endpoint when the app has one set up and on (its base URL and switch read from the app's
+/// settings, its key from its key file, read only), else through OpenRouter. `--model-status` says which, never the
+/// key.
 /// An engine that answers with no text heard no speech: that prints `NO SPEECH` instead of `TEXT:` and exits 0,
 /// like any other answer. Only real failures print `ERROR:` and exit non-zero.
 ///
@@ -255,7 +256,7 @@ enum EngineCLI {
         }
         let viaProxy = service.provider(for: options.engine) == .vertexProxy
         if viaProxy, let proxy {
-            print("ROUTE: Vertex proxy · \(proxy.baseURL.map(VertexProxy.displayHost) ?? "?") · key \(proxy.maskedKey ?? "unreadable")")
+            print("ROUTE: \(VertexProxy.label) · \(proxy.baseURL.map(VertexProxy.displayHost) ?? "?") · key \(proxy.maskedKey ?? "unreadable")")
         }
         if options.engine.isCloud, !viaProxy {
             let key: String?
@@ -689,16 +690,17 @@ enum EngineCLI {
     /// Where Gemini's requests go, as `--model-status` says it: never the key, only whether one is saved.
     @MainActor
     static func geminiRouteLine(_ proxy: VertexProxyAccount?) -> String {
-        guard let proxy, let base = proxy.baseURL else { return "OpenRouter (no Vertex proxy set up)" }
+        guard let proxy, let base = proxy.baseURL else { return "OpenRouter (no custom endpoint set up)" }
         let host = VertexProxy.displayHost(base)
         let key = proxy.isKeyUnreadable ? "key unreadable" : (proxy.maskedKey != nil ? "key saved" : "no key")
-        if proxy.routesGemini { return "Vertex proxy (\(host), \(key))" }
-        if !proxy.isConfigured { return "OpenRouter (Vertex proxy at \(host) has no key)" }
-        return "OpenRouter (Vertex proxy at \(host) is switched off)"
+        if proxy.routesGemini { return "Custom endpoint (\(host), \(key))" }
+        if !proxy.isConfigured { return "OpenRouter (custom endpoint at \(host) has no key)" }
+        return "OpenRouter (custom endpoint at \(host) is switched off)"
     }
 
-    /// The app's Vertex proxy, read only: its address and switch from the app's settings (`dev.transcribe-thing.app`),
-    /// its key from its key file, copied into memory so nothing the run does changes either. nil without an address.
+    /// The app's OpenAI-compatible endpoint, read only: its base URL and switch from the app's settings
+    /// (`dev.transcribe-thing.app`), its key from its key file, copied into memory so nothing the run does changes
+    /// either. nil without a base URL.
     @MainActor
     static func appVertexProxy(paths: AppPaths) -> VertexProxyAccount? {
         let defaults = UserDefaults(suiteName: "dev.transcribe-thing.app")

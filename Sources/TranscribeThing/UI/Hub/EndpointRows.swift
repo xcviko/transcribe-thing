@@ -1,13 +1,14 @@
 import AppKit
 import SwiftUI
 
-/// The user's own Vertex proxy: its address, its key (masked, with Replace and Remove, or a field to add one), its
-/// live status, and "Use for Gemini", which sends Gemini through it instead of OpenRouter once it's set up.
-struct VertexProxyCard: View {
+/// The user's own OpenAI-compatible endpoint, a row of Models' "API keys": its base URL and its key (each saved one
+/// shown with Change or Replace and Remove, or a field to add it) and its live status.
+struct EndpointRow: View {
     /// Incremented by the page to scroll here and focus the first field that needs filling.
     var focusRequest: Int
 
     @Environment(VertexProxyAccount.self) private var proxy
+    @Environment(\.inNativeForm) private var inNativeForm
     @State private var urlDraft = ""
     @State private var urlProblem: VertexProxy.URLProblem?
     @State private var editingURL = false
@@ -19,34 +20,30 @@ struct VertexProxyCard: View {
 
     private enum Field: Hashable { case url, key }
 
+    private var showsURLField: Bool { proxy.baseURL == nil || editingURL }
     private var showsKeyField: Bool { proxy.maskedKey == nil || replacingKey }
     private var keyTrimmed: String { keyDraft.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var urlTrimmed: String { urlDraft.trimmingCharacters(in: .whitespacesAndNewlines) }
-    /// The field holds something other than the saved address.
+    /// The field holds something other than the saved base URL.
     private var urlChanged: Bool { !urlTrimmed.isEmpty && urlTrimmed != proxy.urlText }
 
     var body: some View {
-        Card {
-            VStack(alignment: .leading, spacing: 14) {
-                header
-                VStack(alignment: .leading, spacing: 8) {
-                    labeled("Address") {
-                        if proxy.baseURL == nil || editingURL { urlField } else { storedURL }
-                    }
-                    labeled("Key") { if showsKeyField { keyField } else { storedKey } }
-                }
-                statusLine
-                Divider().overlay(Color.stroke)
-                useForGemini
+        VStack(alignment: .leading, spacing: 14) {
+            header
+            VStack(alignment: .leading, spacing: 8) {
+                labeled("Base URL") { if showsURLField { urlField } else { storedURL } }
+                labeled("API key") { if showsKeyField { keyField } else { storedKey } }
             }
+            statusLine
         }
+        .keysRowPadding(inNativeForm: inNativeForm)
         .onAppear { urlDraft = proxy.urlText }
         .onChange(of: proxy.urlText) { _, saved in if focus != .url { urlDraft = saved } }
         .onChange(of: focusRequest) {
             if proxy.baseURL == nil {
                 focus = .url
             } else if proxy.isConfigured, !isKeyProblem, proxy.status != .works {
-                // Reachability or the proxy itself: the address is what to look at.
+                // Reachability or the endpoint itself: the base URL is what to look at.
                 urlDraft = proxy.urlText
                 editingURL = true
                 focus = .url
@@ -70,11 +67,12 @@ struct VertexProxyCard: View {
         HStack(alignment: .top, spacing: 12) {
             IconTile(symbol: "server.rack", tint: .inkSecondary, size: 30)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Vertex proxy")
+                Text("OpenAI-compatible endpoint")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.ink)
-                // Who pays: worth saying every time, as the OpenRouter card does.
-                Text("Your own proxy to Vertex AI. Gemini runs on your Google Cloud credits instead of OpenRouter’s.")
+                // Who pays: worth saying every time, as OpenRouter's row does.
+                Text("Any service with an OpenAI-compatible API that serves Gemini. "
+                     + "Gemini can go there instead of OpenRouter, and you pay that service.")
                     .typeface(.callout)
                     .foregroundStyle(.inkSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -88,7 +86,7 @@ struct VertexProxyCard: View {
             Text(title)
                 .typeface(.callout)
                 .foregroundStyle(.inkSecondary)
-                .frame(width: 56, alignment: .leading)
+                .frame(width: 60, alignment: .leading)
             VStack(alignment: .leading, spacing: 6) { content() }
         }
     }
@@ -98,7 +96,7 @@ struct VertexProxyCard: View {
             HStack(spacing: 8) {
                 TextField("", text: $urlDraft)
                     .textFieldStyle(.plain)
-                    .fieldPlaceholder("https://vertex-proxy-….run.app", isShown: urlDraft.isEmpty)
+                    .fieldPlaceholder("https://api.example.com/v1", isShown: urlDraft.isEmpty)
                     .typeface(.mono)
                     .foregroundStyle(.ink)
                     .multilineTextAlignment(.leading)
@@ -107,7 +105,7 @@ struct VertexProxyCard: View {
                     .focused($focus, equals: .url)
                     .onSubmit(saveURL)
                     .onChange(of: urlDraft) { urlProblem = nil }
-                    .accessibilityLabel("Vertex proxy address")
+                    .accessibilityLabel("Endpoint base URL")
                     .modifier(FieldChrome(isFocused: focus == .url))
                 Button("Save", action: saveURL)
                     .buttonStyle(PrimaryButtonStyle(size: .small))
@@ -124,9 +122,17 @@ struct VertexProxyCard: View {
                 Text(urlProblem.message)
                     .typeface(.callout)
                     .foregroundStyle(.warning)
+            } else {
+                Text(Self.urlHelp)
+                    .typeface(.callout)
+                    .foregroundStyle(.inkTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
+
+    /// What URL the field wants, and the one rule for a URL without a path (`VertexProxy.normalizedBaseURL`).
+    static let urlHelp = "The URL that ends in /v1. One without a path is read as …/api/v1."
 
     private var storedURL: some View {
         HStack(spacing: 8) {
@@ -187,13 +193,13 @@ struct VertexProxyCard: View {
             HStack(spacing: 8) {
                 SecureField("", text: $keyDraft)
                     .textFieldStyle(.plain)
-                    .fieldPlaceholder("\(VertexProxy.keyPrefix)…", isShown: keyDraft.isEmpty)
+                    .fieldPlaceholder("Your endpoint’s API key", isShown: keyDraft.isEmpty)
                     .typeface(.mono)
                     .foregroundStyle(.ink)
                     .focused($focus, equals: .key)
                     .onSubmit(saveKey)
                     .onChange(of: keyDraft) { keyProblem = nil }
-                    .accessibilityLabel("Vertex proxy key")
+                    .accessibilityLabel("Endpoint API key")
                     .modifier(FieldChrome(isFocused: focus == .key))
                 Button("Paste", action: pasteKey)
                     .buttonStyle(SecondaryButtonStyle(size: .small))
@@ -212,8 +218,8 @@ struct VertexProxyCard: View {
                     .buttonStyle(.appQuiet)
                 }
             }
-            if let problem = keyProblem ?? VertexProxy.keyProblem(keyTrimmed) {
-                Text(problem)
+            if let keyProblem {
+                Text(keyProblem)
                     .typeface(.callout)
                     .foregroundStyle(.warning)
             }
@@ -227,31 +233,31 @@ struct VertexProxyCard: View {
         case .checking:
             HStack(spacing: 7) {
                 ProgressView().controlSize(.mini)
-                Text("Checking the proxy…").typeface(.callout).foregroundStyle(.inkSecondary)
+                Text("Checking your endpoint…").typeface(.callout).foregroundStyle(.inkSecondary)
             }
         case .works:
             status("checkmark.circle.fill", .success, proxy.isEnabled
-                ? "Works · paid from your Google Cloud credits"
+                ? "Works · Gemini goes through it"
                 : "Works · Gemini goes through OpenRouter while Use for Gemini is off")
         case .keyRejected:
             HStack(spacing: 8) {
-                status("xmark.octagon.fill", .danger, "The proxy didn’t accept this key. Copy it again from its dashboard.")
+                status("xmark.octagon.fill", .danger, "Your endpoint didn’t accept this key. Copy it again from where you got it.")
                 checkAgain
             }
         case .spendLimit:
             HStack(spacing: 8) {
-                status("exclamationmark.triangle.fill", .warning, "The proxy’s spend limit is reached. Raise it on the proxy.")
+                status("exclamationmark.triangle.fill", .warning, "Your endpoint’s spend limit is reached. Raise it there.")
                 checkAgain
             }
         case .unreachable:
             HStack(spacing: 8) {
-                status("wifi.slash", .warning, "Can’t reach the proxy at this address.")
+                status("wifi.slash", .warning, "Can’t reach your endpoint at this URL.")
                 checkAgain
             }
         case .failed(let message):
             HStack(spacing: 8) {
                 status("exclamationmark.circle.fill", .warning,
-                       message.isEmpty ? "Couldn’t check the proxy." : "Couldn’t check the proxy. \(message)")
+                       message.isEmpty ? "Couldn’t check your endpoint." : "Couldn’t check your endpoint. \(message)")
                 checkAgain
             }
         }
@@ -259,37 +265,10 @@ struct VertexProxyCard: View {
 
     private var notSetText: String {
         switch (proxy.baseURL != nil, proxy.maskedKey != nil) {
-        case (false, false): "Add its address and key to send Gemini through it."
-        case (false, true): "Add its address to send Gemini through it."
-        default: "Add its key to send Gemini through it."
+        case (false, false): "Add its base URL and API key to send Gemini through it."
+        case (false, true): "Add its base URL to send Gemini through it."
+        default: "Add its API key to send Gemini through it."
         }
-    }
-
-    private var useForGemini: some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Use for Gemini")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(proxy.isConfigured ? Color.ink : Color.inkTertiary)
-                Text("Gemini goes through your proxy instead of OpenRouter. "
-                     + "\(EngineID.parakeetCloud.displayName) still uses OpenRouter.")
-                    .typeface(.callout)
-                    .foregroundStyle(.inkSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            Spacer(minLength: 8)
-            Toggle("", isOn: enabled)
-                .toggleStyle(.appSwitch)
-                .labelsHidden()
-                .disabled(!proxy.isConfigured)
-                .accessibilityLabel("Use the Vertex proxy for Gemini")
-        }
-    }
-
-    private var enabled: Binding<Bool> {
-        let proxy = proxy
-        return Binding(get: { proxy.isConfigured && proxy.isEnabled },
-                       set: { on in withAnimation(Theme.Motion.snappy) { proxy.isEnabled = on } })
     }
 
     private var checkAgain: some View {
@@ -350,7 +329,38 @@ struct VertexProxyCard: View {
     }
 }
 
-/// The look of the card's fields, as the OpenRouter key's.
+/// "Use for Gemini": sends Gemini through the endpoint once it has a base URL and a key. Off keeps both.
+struct UseEndpointForGeminiRow: View {
+    @Environment(VertexProxyAccount.self) private var proxy
+
+    var body: some View {
+        SettingsRow(title: "Use for Gemini",
+                    subtitle: proxy.isConfigured ? nil : "Add your endpoint’s base URL and API key first.") {
+            Toggle("", isOn: enabled)
+                .toggleStyle(.appSwitch)
+                .labelsHidden()
+                .disabled(!proxy.isConfigured)
+                .accessibilityLabel("Use your OpenAI-compatible endpoint for Gemini")
+        }
+    }
+
+    private var enabled: Binding<Bool> {
+        let proxy = proxy
+        return Binding(get: { proxy.isConfigured && proxy.isEnabled },
+                       set: { on in withAnimation(Theme.Motion.snappy) { proxy.isEnabled = on } })
+    }
+}
+
+extension View {
+    /// A row of "API keys": in the page's form, the form's insets and a little air; elsewhere, a card's padding.
+    func keysRowPadding(inNativeForm: Bool) -> some View {
+        frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, inNativeForm ? 6 : Theme.Spacing.cardPadding)
+            .padding(.horizontal, inNativeForm ? 0 : Theme.Spacing.cardPadding)
+    }
+}
+
+/// The look of the endpoint's fields, as the OpenRouter key's.
 private struct FieldChrome: ViewModifier {
     var isFocused: Bool
     var isStatic = false

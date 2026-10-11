@@ -10,7 +10,7 @@ final class HubContext: Observable {
     var settings: AppSettings
     var models: ModelStore
     var account: OpenRouterAccount
-    /// The Vertex proxy, which takes Gemini's requests while it's set up and on.
+    /// The custom endpoint, which takes Gemini's requests while it's set up and on.
     var proxy: VertexProxyAccount
     var history: HistoryStore
     /// Recorded calls (the Calls tab), and what records and transcribes them.
@@ -133,7 +133,7 @@ final class HubContext: Observable {
                                   localError: models.lastErrors[parakeet])
     }
 
-    /// The status of the key `engine`'s requests go with: the Vertex proxy's for Gemini while it routes Gemini,
+    /// The status of the key `engine`'s requests go with: the custom endpoint's for Gemini while it routes Gemini,
     /// else OpenRouter's.
     func keyStatus(for engine: EngineID) -> KeyStatus {
         CloudRoute.keyStatus(for: engine, account: account, proxy: proxy)

@@ -1,35 +1,39 @@
 import Foundation
 
-/// The service a cloud engine's requests go to: OpenRouter, or the user's own Vertex proxy for Gemini
-/// (`VertexProxyAccount.routesGemini`). Cloud Parakeet always goes through OpenRouter.
+/// The service a cloud engine's requests go to: OpenRouter, or the user's own OpenAI-compatible endpoint for Gemini
+/// (`VertexProxyAccount.routesGemini`). Cloud Parakeet always goes through OpenRouter. (`vertexProxy` and the
+/// `VertexProxy…` names are what the endpoint was called when it could only be the user's Vertex proxy; the app calls
+/// it "OpenAI-compatible endpoint", "Custom endpoint" for short, and "your endpoint" in sentences.)
 enum CloudProvider: String, Sendable, Equatable, CaseIterable {
     case openRouter, vertexProxy
 
-    /// "OpenRouter", "Vertex proxy": what copy calls the service.
+    /// "OpenRouter", "Custom endpoint": what a short label calls the service.
     var name: String {
         switch self {
         case .openRouter: "OpenRouter"
-        case .vertexProxy: "Vertex proxy"
+        case .vertexProxy: "Custom endpoint"
         }
     }
 }
 
-/// The user's own proxy in front of Vertex AI (paid from their Google Cloud credits), which speaks OpenRouter's chat
-/// completions at `<base>/api/v1`. What it is told and how its address and keys look; pure, so tests drive it.
+/// The user's own OpenAI-compatible endpoint: any service that takes OpenAI's (and OpenRouter's) chat completions at
+/// `<base URL>/chat/completions` and lists its models at `<base URL>/models`. What it is told and how its address
+/// and keys look; pure, so tests drive it.
+///
+/// The base URL is the one that ends in `/v1` (`https://api.example.com/v1`, `https://example.com/api/v1`). One rule
+/// covers a URL without a path: it means `<host>/api/v1`. That is how the app read the host-only address it saved
+/// when the endpoint could only be the user's Vertex proxy (whose OpenRouter-style API is at `/api/v1`), so that
+/// setup keeps working as it is, and a new entry without a path means the same.
 enum VertexProxy {
-    /// Every key the proxy issues starts with this (its `KEY_PREFIX`).
-    static let keyPrefix = "sk-vp-"
-    /// Who served a request that went through the proxy, as History names it.
-    static let providerName = "Vertex AI"
-    /// What the proxy's answers are labeled with where a key status carries a label (`KeyInfo.label`).
-    static let label = "Vertex proxy"
-    /// The OpenRouter-style API under the base URL.
-    static let apiPath = "api/v1"
-    /// The most output tokens Vertex takes for Gemini (65,536); a request asking for more is refused there, so
-    /// requests through the proxy never ask for more.
+    /// What a key status is labeled with when it is the endpoint's (`KeyInfo.label`).
+    static let label = "Custom endpoint"
+    /// The API path a base URL without one stands for.
+    static let defaultAPIPath = "/api/v1"
+    /// The most output tokens a request through the endpoint asks for (65,536, Gemini's most): some refuse a request
+    /// that asks for more, so requests through the endpoint never do.
     static let maxOutputTokens = 65_536
-    /// A check that reached something other than the proxy: a page that answers anything.
-    static let notAProxyMessage = "Something answered at this address, but it isn’t a Vertex proxy."
+    /// A check that reached something other than an OpenAI-compatible API: a page that answers anything.
+    static let notAnAPIMessage = "Something answered at this URL, but not as an OpenAI-compatible API."
 
     /// Why a base URL can't be used.
     enum URLProblem: Error, Equatable, Sendable {
@@ -40,22 +44,22 @@ enum VertexProxy {
 
         var message: String {
             switch self {
-            case .empty: "Enter your proxy’s address."
-            case .notHTTPS: "The address has to start with https://."
+            case .empty: "Enter your endpoint’s base URL."
+            case .notHTTPS: "The URL has to start with https://."
             case .invalid: "That doesn’t look like a web address."
             }
         }
     }
 
-    /// The proxy's base URL from what the user typed or pasted: https only, with a host, without a query or fragment.
-    /// Whitespace, trailing slashes, a trailing `/api/v1` and a trailing `/api/v1/chat/completions` (the endpoint
-    /// pasted whole) come off, so every spelling of the same proxy gives the same base:
-    /// `https://vertex-proxy-xyz.a.run.app`.
+    /// The endpoint's API base from what the user typed or pasted: https only, with a host, without a query, a
+    /// fragment or credentials. Whitespace, trailing slashes and a trailing `/chat/completions` (the endpoint pasted
+    /// whole) come off; a missing scheme is taken as https; the path is kept as given, and an empty one means
+    /// `/api/v1` (`defaultAPIPath`). Requests go to `<result>/chat/completions`, the key check to `<result>/models`.
     static func normalizedBaseURL(_ raw: String) -> Result<URL, URLProblem> {
         var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return .failure(.empty) }
         if !text.contains("://") {
-            // A bare host ("vertex-proxy.a.run.app") is taken as https; "http:" isn't.
+            // A bare host ("api.example.com/v1") is taken as https; "http:" isn't.
             if text.lowercased().hasPrefix("http:") { return .failure(.notHTTPS) }
             text = "https://" + text
         }
@@ -70,10 +74,12 @@ enum VertexProxy {
         }
         var path = components.path
         while path.hasSuffix("/") { path.removeLast() }
-        for suffix in ["/chat/completions", "/api/v1"] where path.lowercased().hasSuffix(suffix) {
-            path.removeLast(suffix.count)
+        let endpoint = "/chat/completions"
+        if path.lowercased().hasSuffix(endpoint) {
+            path.removeLast(endpoint.count)
             while path.hasSuffix("/") { path.removeLast() }
         }
+        if path.isEmpty { path = defaultAPIPath }
         components.scheme = "https"
         components.host = host.lowercased()
         components.path = path
@@ -81,62 +87,59 @@ enum VertexProxy {
         return .success(url)
     }
 
-    /// `<base>/api/v1`: where its chat completions and models are.
-    static func apiBase(_ base: URL) -> URL {
-        base.appendingPathComponent("api", isDirectory: false).appendingPathComponent("v1", isDirectory: false)
-    }
-
-    /// Why `key` isn't a proxy key, or nil when it looks like one.
-    static func keyProblem(_ key: String) -> String? {
-        let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty else { return nil }
-        if !key.hasPrefix(keyPrefix) { return "Vertex proxy keys start with “\(keyPrefix)”." }
-        if key.count <= keyPrefix.count + 4 { return "That key looks too short." }
-        return nil
-    }
-
-    /// Whether `key` can be saved: it starts with `keyPrefix` and has more after it.
+    /// Whether `key` can be saved: anything that isn't empty once whitespace (and a pasted "Bearer ") is off.
     static func looksLikeKey(_ key: String) -> Bool {
-        let key = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !key.isEmpty && keyProblem(key) == nil
+        !OpenRouterAccount.sanitize(key).isEmpty
     }
 
-    /// "sk-vp-••••3f9a": never more of the key than its prefix and last four characters.
+    /// "sk-proj-••••3f9a", "••••3f9a": never more of the key than a kind prefix it starts with (lowercase letters,
+    /// digits and dashes, ending in a dash, within its first 8 characters: "sk-", "sk-proj-") and, for a key long
+    /// enough, its last four.
     static func mask(_ key: String) -> String {
-        let prefix = key.hasPrefix(keyPrefix) ? keyPrefix : ""
-        let tail = key.count > prefix.count + 8 ? String(key.suffix(4)) : ""
+        let head = key.prefix(8)
+        let prefix = head.lastIndex(of: "-").map { String(head[...$0]) }
+            .flatMap { $0.allSatisfy { $0 == "-" || ($0.isASCII && ($0.isLowercase || $0.isNumber)) } ? $0 : nil } ?? ""
+        let tail = key.count >= prefix.count + 12 ? String(key.suffix(4)) : ""
         return "\(prefix)••••\(tail)"
     }
 
-    /// "vertex-proxy-xyz.a.run.app": the address as the card and the CLI show it, without the scheme.
+    /// "api.example.com/v1": the base URL as the card and the CLI show it, without the scheme.
     static func displayHost(_ base: URL) -> String {
         let host = base.host ?? base.absoluteString
         let path = base.path == "/" ? "" : base.path
         return host + path
     }
+
+    /// `message` (one the shared readers wrote about OpenRouter) about the endpoint instead.
+    static func reword(_ message: String) -> String {
+        var text = message
+        if text.hasPrefix("OpenRouter") { text = "Your endpoint" + text.dropFirst("OpenRouter".count) }
+        return text.replacingOccurrences(of: "OpenRouter", with: "your endpoint")
+    }
 }
 
-/// How a request through the Vertex proxy failed, in the words its card and notices use. The proxy answers like
-/// OpenRouter (an `error` object with a message), but its own limits and failures differ: a 401 is the proxy's key,
-/// a 429 that says "spend limit" is the proxy's spend limit, and nothing can be fixed on openrouter.ai.
+/// How a request through the endpoint failed, in the words its card and notices use. The endpoint answers like
+/// OpenAI or OpenRouter (an `error` object with a message), but its limits and failures are its own: a 401 is the
+/// endpoint's key, a 402 or a 429 that says "spend limit" is its spend limit, and nothing can be fixed on
+/// openrouter.ai.
 enum VertexProxyFailure: Equatable, Sendable {
     /// The key file is there but can't be read.
     case keyUnreadable
-    /// 401: the proxy doesn't know this key (revoked, mistyped).
+    /// 401: the endpoint doesn't know this key (revoked, mistyped).
     case keyRejected(String)
-    /// 429 "Proxy spend limit reached" or "Spend limit for key … reached": the proxy stopped taking requests.
+    /// 402, or a 429 that names a spend limit or a used-up quota: the endpoint stopped taking requests.
     case spendLimit(String)
-    /// The address doesn't answer: no network, a wrong host, a proxy that's down.
+    /// The address doesn't answer: no network, a wrong host, an endpoint that's down.
     case unreachable
-    /// 429 without a spend limit: Vertex was out of capacity even after the proxy's own retries.
+    /// 429 without a spend limit: the model was out of capacity even after the endpoint's own retries.
     case rateLimited(retryAfter: Double?)
-    /// 403: Google Cloud refused the proxy (billing disabled when the trial ends, a missing role).
+    /// 403: the endpoint, or the service behind it, refused (billing disabled, a missing permission).
     case forbidden(String)
     /// 5xx, or an answer that couldn't be read: usually brief.
     case unavailable(String)
     /// 400, 404, 422: the request itself was refused.
     case badRequest(String)
-    /// 413: the recording is larger than the proxy takes in one request.
+    /// 413: the recording is larger than the endpoint takes in one request.
     case tooLarge
 
     var code: String {
@@ -171,12 +174,11 @@ enum VertexProxyFailure: Equatable, Sendable {
     }
 }
 
-/// Maps the proxy's answers to `AppError`. Its error bodies are OpenAI's (`{"error": {"message", "type", "code"}}`,
-/// `code` a Google status like "RESOURCE_EXHAUSTED"), and an error after a 200 comes as a chunk with an `error` whose
-/// `code` is the HTTP status.
+/// Maps the endpoint's answers to `AppError`. Its error bodies are OpenAI's (`{"error": {"message", "type", "code"}}`),
+/// and an error after a 200 comes as a chunk with an `error` whose `code` is the HTTP status.
 enum VertexProxyErrorMapper {
-    /// How the proxy says a spend limit stopped it (lowercased): the proxy-wide `SPEND_LIMIT_USD` and a key's own.
-    static let spendLimitPhrases = ["spend limit"]
+    /// How an endpoint says a spend limit or a used-up quota stopped it (lowercased).
+    static let spendLimitPhrases = ["spend limit", "exceeded your current quota"]
 
     static func httpError(status: Int, data: Data, retryAfter: Double?, engine: EngineID) -> AppError {
         let message: String
@@ -202,6 +204,7 @@ enum VertexProxyErrorMapper {
         }
         switch status {
         case 401: return .vertexProxy(.keyRejected(message))
+        case 402: return .vertexProxy(.spendLimit(message))
         case 403: return .vertexProxy(.forbidden(message))
         case 408, 504: return .timeout(engine)
         case 413: return .vertexProxy(.tooLarge)
@@ -212,8 +215,8 @@ enum VertexProxyErrorMapper {
         }
     }
 
-    /// An `AppError` the shared stream and response readers made, in the proxy's terms: anything that names
-    /// OpenRouter or its settings becomes the proxy's own failure. What any service says the same way (a cut-off
+    /// An `AppError` the shared stream and response readers made, in the endpoint's terms: anything that names
+    /// OpenRouter or its settings becomes the endpoint's own failure. What any service says the same way (a cut-off
     /// answer, a refusal by the model, a timeout, no speech) stays as it is.
     static func adapt(_ error: AppError) -> AppError {
         switch error {
@@ -223,7 +226,7 @@ enum VertexProxyErrorMapper {
         case .openRouterRateLimited(let retryAfter): .vertexProxy(.rateLimited(retryAfter: retryAfter))
         case .openRouterNoRoute(let message), .openRouterBadRequest(let message): .vertexProxy(.badRequest(message))
         case .openRouterProviderUnavailable(let message), .openRouterServer(let message):
-            .vertexProxy(.unavailable(message.replacingOccurrences(of: "OpenRouter", with: CloudProvider.vertexProxy.name)))
+            .vertexProxy(.unavailable(VertexProxy.reword(message)))
         case .offline, .connectionBlocked: .vertexProxy(.unreachable)
         case .recordingTooLarge: .vertexProxy(.tooLarge)
         default: error

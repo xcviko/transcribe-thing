@@ -12,7 +12,8 @@ final class AppEnvironment {
     let recorder: AudioRecorder
     let openRouterClient: OpenRouterClient
     let account: OpenRouterAccount
-    /// The user's Vertex proxy, which takes Gemini's requests instead of OpenRouter while it's set up and on.
+    /// The user's OpenAI-compatible endpoint, which takes Gemini's requests instead of OpenRouter while it's set up
+    /// and on.
     let proxy: VertexProxyAccount
     let models: ModelStore
     let transcription: TranscriptionService

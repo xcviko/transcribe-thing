@@ -59,14 +59,14 @@ struct TranscriptResult: Sendable, Equatable {
 
 /// Routes a recording to the local model, Gemini, or OpenRouter speech-to-text, and returns trimmed text. An engine
 /// that answers with no text heard no speech, so that comes back as an empty result, never as an error.
-/// Gemini (its transcripts, Polish, Translate, Polish Selection) goes to the user's Vertex proxy instead of OpenRouter
-/// while the proxy routes it (`VertexProxyAccount.routesGemini`), with no fallback to OpenRouter.
+/// Gemini (its transcripts, Polish, Translate, Polish Selection) goes to the user's OpenAI-compatible endpoint instead
+/// of OpenRouter while the endpoint routes it (`VertexProxyAccount.routesGemini`), with no fallback to OpenRouter.
 @MainActor
 final class TranscriptionService {
     private let models: ModelStore
     private let account: OpenRouterAccount
     private let client: OpenRouterClient
-    /// The Vertex proxy, when the app has one to offer (nil: Gemini always goes through OpenRouter).
+    /// The custom endpoint, when the app has one to offer (nil: Gemini always goes through OpenRouter).
     let proxy: VertexProxyAccount?
     private let providerLookupDelay: Duration
     /// `hedgeMeasured`, from any thread.
@@ -102,7 +102,7 @@ final class TranscriptionService {
         var noteSuccess: @MainActor () -> Void
     }
 
-    /// The Vertex proxy while it routes Gemini, else OpenRouter. Throws the missing or unreadable key of whichever
+    /// The custom endpoint while it routes Gemini, else OpenRouter. Throws the missing or unreadable key of whichever
     /// it is: a proxy that's set up never hands its requests to OpenRouter.
     private func chatAccess() throws -> ChatAccess {
         if let proxy, proxy.routesGemini {

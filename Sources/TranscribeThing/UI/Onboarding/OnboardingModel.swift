@@ -273,7 +273,7 @@ struct OnboardingContext {
     var permissions: PermissionsCenter
     var models: ModelStore
     var account: OpenRouterAccount
-    /// The Vertex proxy: Gemini is usable through it, without an OpenRouter key, while it's set up and on.
+    /// The custom endpoint: Gemini is usable through it, without an OpenRouter key, while it's set up and on.
     var proxy: VertexProxyAccount?
     var hotkeys: HotkeyMonitor
     var launchAtLogin: LaunchAtLogin

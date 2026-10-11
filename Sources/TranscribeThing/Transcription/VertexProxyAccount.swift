@@ -1,27 +1,28 @@
 import Foundation
 import Observation
 
-/// What the Vertex proxy's card says about it.
+/// What the OpenAI-compatible endpoint's section of Models says about it.
 enum VertexProxyStatus: Equatable, Sendable {
-    /// No address or no key yet.
+    /// No base URL or no key yet.
     case notSet
     case checking
-    /// The proxy took the key (`GET /api/v1/models`), or a request just went through.
+    /// The endpoint took the key (`GET <base>/models`), or a request just went through.
     case works
     case keyRejected(String)
-    /// A request found the proxy's spend limit reached.
+    /// A request found the endpoint's spend limit reached.
     case spendLimit(String)
-    /// The address doesn't answer.
+    /// The URL doesn't answer.
     case unreachable
     case failed(String)
 }
 
-/// The user's own Vertex proxy: its address (`AppSettings.vertexProxyURL`), its key (in its own key file, like the
-/// OpenRouter key: `KeyFileStore`), whether Gemini goes through it (`AppSettings.vertexProxyEnabled`), and whether it
-/// works. The key is never logged or shown past its mask.
+/// The user's own OpenAI-compatible endpoint (named for the Vertex proxy it started as): its base URL
+/// (`AppSettings.vertexProxyURL`), its key (in its own key file, like the OpenRouter key: `KeyFileStore`), whether
+/// Gemini goes through it (`AppSettings.vertexProxyEnabled`), and whether it works. The key is never logged or shown
+/// past its mask.
 ///
-/// With an address and a key and "Use for Gemini" on (`routesGemini`), every Gemini request goes to the proxy, and
-/// none to OpenRouter: a failure there is the proxy's, never retried on OpenRouter (that would spend OpenRouter
+/// With a base URL and a key and "Use for Gemini" on (`routesGemini`), every Gemini request goes to the endpoint, and
+/// none to OpenRouter: a failure there is the endpoint's, never retried on OpenRouter (that would spend OpenRouter
 /// credit). Cloud Parakeet always goes through OpenRouter.
 @MainActor @Observable
 final class VertexProxyAccount {
@@ -38,14 +39,15 @@ final class VertexProxyAccount {
     @ObservationIgnored private var lastRefreshAt: Date?
 
     private(set) var status: VertexProxyStatus = .notSet
-    /// "sk-vp-••••3f9a"
+    /// "sk-••••3f9a"
     private(set) var maskedKey: String?
-    /// A key file is there, but it couldn't be read: the proxy still counts as set up, so Gemini fails as the proxy's
-    /// instead of quietly going to OpenRouter.
+    /// A key file is there, but it couldn't be read: the endpoint still counts as set up, so Gemini fails as the
+    /// endpoint's instead of quietly going to OpenRouter.
     private(set) var isKeyUnreadable = false
 
     nonisolated static let keyUnreadableMessage = "\(Brand.name) couldn’t read the key saved on this Mac. Paste it again."
 
+    /// `makeClient` gets the API base (`baseURL`, the URL that ends in /v1).
     init(keyStore: KeyFileStore, settings: AppSettings,
          makeClient: @escaping @Sendable (URL) -> OpenRouterClient = { OpenRouterClient.vertexProxy(apiBase: $0) },
          debounce: Duration = .milliseconds(350)) {
@@ -62,12 +64,12 @@ final class VertexProxyAccount {
         }
     }
 
-    /// A fixed `status` that never checks itself, with an address and a key when it isn't `.notSet`.
+    /// A fixed `status` that never checks itself, with a base URL and a key when it isn't `.notSet`.
     static func preview(status: VertexProxyStatus, settings: AppSettings? = nil,
-                        url: String = "https://vertex-proxy-2pthtwqema-uc.a.run.app",
+                        url: String = "https://llm.example.com/v1",
                         enabled: Bool = true) -> VertexProxyAccount {
         let settings = settings ?? .inMemory()
-        let keyStore = KeyFileStore.inMemory(status == .notSet ? nil : "sk-vp-preview0000000000000000003f9a")
+        let keyStore = KeyFileStore.inMemory(status == .notSet ? nil : "sk-preview00000000000000000003f9a")
         if status != .notSet { settings.vertexProxyURL = url }
         settings.vertexProxyEnabled = enabled
         let account = VertexProxyAccount(keyStore: keyStore, settings: settings)
@@ -76,17 +78,18 @@ final class VertexProxyAccount {
         return account
     }
 
-    // MARK: Address
+    // MARK: Base URL
 
-    /// The proxy's base URL, without `/api/v1`; nil when none is set.
+    /// The endpoint's API base (`VertexProxy.normalizedBaseURL` of what's saved: a saved host-only address means
+    /// `<host>/api/v1`); nil when none is set.
     var baseURL: URL? {
         settings.vertexProxyURL.flatMap { try? VertexProxy.normalizedBaseURL($0).get() }
     }
 
-    /// The address as stored, for the field: "https://vertex-proxy-xyz.a.run.app".
+    /// The base URL as requests use it, for the field: "https://api.example.com/v1".
     var urlText: String { baseURL?.absoluteString ?? "" }
 
-    /// Saves the address (normalized), or removes it when `raw` is empty, then checks the proxy. A bad address
+    /// Saves the base URL (normalized), or removes it when `raw` is empty, then checks the endpoint. A bad URL
     /// isn't saved: its problem comes back for the field to show.
     @discardableResult
     func setURL(_ raw: String) async -> VertexProxy.URLProblem? {
@@ -101,7 +104,7 @@ final class VertexProxyAccount {
         case .failure(let problem):
             return problem
         case .success(let url):
-            let changed = url.absoluteString != settings.vertexProxyURL
+            let changed = url != baseURL
             settings.vertexProxyURL = url.absoluteString
             if changed || status != .works { await validate() }
             return nil
@@ -127,8 +130,8 @@ final class VertexProxyAccount {
         }
     }
 
-    /// Stores the key and checks it. Only a key that looks like the proxy's (`VertexProxy.looksLikeKey`) is saved; an
-    /// empty one removes the key. Returns why a key wasn't saved, for the field to show.
+    /// Stores the key and checks it. Any key that isn't empty is saved; an empty one removes the key. Returns why a
+    /// key wasn't saved, for the field to show (nil: it was, or it was removed).
     @discardableResult
     func setKey(_ raw: String) async -> String? {
         let key = OpenRouterAccount.sanitize(raw)
@@ -136,11 +139,10 @@ final class VertexProxyAccount {
             removeKey()
             return nil
         }
-        if let problem = VertexProxy.keyProblem(key) { return problem }
         do {
             try keyStore.write(key)
         } catch {
-            Log.app.error("Couldn't save the Vertex proxy key: \(String(describing: error), privacy: .public)")
+            Log.app.error("Couldn't save the endpoint's key: \(String(describing: error), privacy: .public)")
             generation += 1
             status = .failed("Couldn’t save the key on this Mac.")
             return nil
@@ -169,23 +171,23 @@ final class VertexProxyAccount {
         set { settings.vertexProxyEnabled = newValue }
     }
 
-    /// An address and a key (one that can't be read counts: Gemini then fails as the proxy's).
+    /// A base URL and a key (one that can't be read counts: Gemini then fails as the endpoint's).
     var isConfigured: Bool { baseURL != nil && (maskedKey != nil || isKeyUnreadable) }
 
-    /// Gemini's requests go to the proxy, not OpenRouter.
+    /// Gemini's requests go to the endpoint, not OpenRouter.
     var routesGemini: Bool { isEnabled && isConfigured }
 
-    /// The client for the address set now; nil without one.
+    /// The client for the base URL set now; nil without one.
     func client() -> OpenRouterClient? {
         guard let base = baseURL else { return nil }
         if let cached = clientCache, cached.base == base { return cached.client }
-        let client = makeClient(VertexProxy.apiBase(base))
+        let client = makeClient(base)
         clientCache = (base, client)
         return client
     }
 
-    /// The proxy as a key status, for the readiness of the models it serves (`EngineReadiness`, notices): works is
-    /// `.valid`, a spend limit `.noCredit` labeled as the proxy's (`KeyStatus.isProxySpendLimit`), unreachable
+    /// The endpoint as a key status, for the readiness of the models it serves (`EngineReadiness`, notices): works is
+    /// `.valid`, a spend limit `.noCredit` labeled as the endpoint's (`KeyStatus.isProxySpendLimit`), unreachable
     /// `.offline`.
     var keyStatus: KeyStatus {
         if isKeyUnreadable { return .failed(Self.keyUnreadableMessage) }
@@ -202,7 +204,7 @@ final class VertexProxyAccount {
 
     // MARK: Checking
 
-    /// Checks the address and key with `GET /api/v1/models`, which costs nothing. Calls in quick succession collapse
+    /// Checks the base URL and key with `GET <base>/models`, which costs nothing. Calls in quick succession collapse
     /// into one request, and an answer that arrives after a newer check started is dropped. `quietly` keeps the
     /// current status on screen until the answer comes.
     func validate(quietly: Bool = false) async {
@@ -236,10 +238,10 @@ final class VertexProxyAccount {
         guard current == generation else { return }
         lastCheckedAt = Date()
         status = outcome.map(Self.status(for:)) ?? .works
-        DiagnosticLog.shared.event(.net, "vertexProxy.checked", ["status": Self.code(of: status)])
+        DiagnosticLog.shared.event(.net, "endpoint.checked", ["status": Self.code(of: status)])
     }
 
-    /// A failed request corrects the status: a key the proxy no longer takes, a spend limit reached.
+    /// A failed request corrects the status: a key the endpoint no longer takes, a spend limit reached.
     func noteCloudFailure(_ error: AppError) {
         switch error {
         case .vertexProxy(.keyRejected(let message)):
@@ -253,14 +255,14 @@ final class VertexProxyAccount {
         }
     }
 
-    /// A request went through: whatever an earlier one said, the proxy works now.
+    /// A request went through: whatever an earlier one said, the endpoint works now.
     func noteCloudSuccess() {
         guard status != .works, !isKeyUnreadable, isConfigured else { return }
         generation += 1
         status = .works
     }
 
-    /// Checks again when the last check is older than `maxAge` (Models appeared). Never without an address and a key.
+    /// Checks again when the last check is older than `maxAge` (Models appeared). Never without a base URL and a key.
     func refreshIfStale(maxAge: TimeInterval, now: Date = Date()) {
         guard !isPreview, !isKeyUnreadable, isConfigured, status != .checking else { return }
         let last = [lastCheckedAt, lastRefreshAt].compactMap { $0 }.max()
@@ -276,21 +278,21 @@ final class VertexProxyAccount {
         guard let error = error as? AppError else { return .failed(error.localizedDescription) }
         switch error {
         case .vertexProxy(.keyRejected(let message)):
-            return .keyRejected(message.isEmpty ? "The proxy didn’t accept this key." : message)
+            return .keyRejected(message.isEmpty ? "Your endpoint didn’t accept this key." : message)
         case .vertexProxy(.spendLimit(let message)): return .spendLimit(message)
         case .vertexProxy(.unreachable), .offline: return .unreachable
         case .vertexProxy(.keyUnreadable): return .failed(keyUnreadableMessage)
-        case .timeout: return .failed("The proxy didn’t answer in time.")
-        case .vertexProxy(.badRequest(let message)) where message == VertexProxy.notAProxyMessage:
+        case .timeout: return .failed("Your endpoint didn’t answer in time.")
+        case .vertexProxy(.badRequest(let message)) where message == VertexProxy.notAnAPIMessage:
             return .failed(message)
         case .vertexProxy(.badRequest):
-            // A 404 or the like: the address answers, but not as a proxy does.
-            return .failed("No Vertex proxy answers at this address.")
+            // A 404 or the like: the URL answers, but not as an OpenAI-compatible API does.
+            return .failed("No OpenAI-compatible API answers at this URL. Check that it’s the one that ends in /v1.")
         default: return .failed(error.detail ?? error.localizedDescription)
         }
     }
 
-    /// The status as the log names it: never a message, which could quote the address.
+    /// The status as the log names it: never a message, which could quote the URL.
     nonisolated static func code(of status: VertexProxyStatus) -> String {
         switch status {
         case .notSet: "notSet"
@@ -305,15 +307,15 @@ final class VertexProxyAccount {
 }
 
 extension KeyStatus {
-    /// The Vertex proxy's spend limit, as `VertexProxyAccount.keyStatus` reports it.
+    /// The endpoint's spend limit, as `VertexProxyAccount.keyStatus` reports it.
     var isProxySpendLimit: Bool {
         guard case .noCredit(let info?) = self else { return false }
         return info.label == VertexProxy.label
     }
 }
 
-/// Where a cloud engine's requests go, and the key status that decides whether it can run: Gemini through the Vertex
-/// proxy while it routes Gemini (`VertexProxyAccount.routesGemini`), everything else through OpenRouter.
+/// Where a cloud engine's requests go, and the key status that decides whether it can run: Gemini through the
+/// endpoint while it routes Gemini (`VertexProxyAccount.routesGemini`), everything else through OpenRouter.
 @MainActor
 enum CloudRoute {
     /// nil for a local engine.

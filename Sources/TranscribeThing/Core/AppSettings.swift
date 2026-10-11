@@ -151,11 +151,13 @@ final class AppSettings {
     /// The OpenRouter key older builds kept in the login keychain is settled: moved to its key file, never there, or
     /// a key was saved or removed since (`KeychainMigration`). From then on the Keychain is never asked again.
     var keychainKeyMigrated: Bool = false { didSet { store.set(keychainKeyMigrated, .keychainKeyMigrated) } }
-    /// The user's Vertex proxy (Models → Vertex proxy): its base URL as `VertexProxy.normalizedBaseURL` gives it, nil
-    /// when none is set. Its key is in its own key file (`AppPaths.vertexProxyKeyFile`), never here.
+    /// The user's OpenAI-compatible endpoint (Models → API keys): its base URL as `VertexProxy.normalizedBaseURL`
+    /// gives it, nil when none is set. A host-only value (what builds before the endpoint was generic saved for the
+    /// Vertex proxy) still reads as `<host>/api/v1`. The name is from then, kept so a saved URL needs no migration.
+    /// Its key is in its own key file (`AppPaths.vertexProxyKeyFile`), never here.
     var vertexProxyURL: String? = nil { didSet { store.set(vertexProxyURL, .vertexProxyURL) } }
-    /// "Use for Gemini": with a proxy set up, every Gemini request goes to it instead of OpenRouter. Off keeps the
-    /// proxy's address and key, and Gemini goes through OpenRouter again.
+    /// "Use for Gemini": with an endpoint set up, every Gemini request goes to it instead of OpenRouter. Off keeps
+    /// the endpoint's URL and key, and Gemini goes through OpenRouter again.
     var vertexProxyEnabled: Bool = true { didSet { store.set(vertexProxyEnabled, .vertexProxyEnabled) } }
 
     @ObservationIgnored private let store: SettingsStore
@@ -471,7 +473,7 @@ enum SettingsKey: String, CaseIterable {
     case polishSelectionModel, translationPair
     /// How calls are recorded (`CallRecordingMode`), and the apps and sites never recorded.
     case callRecording, callExclusions, showsCallNotices
-    /// The Vertex proxy's address and whether Gemini goes through it.
+    /// The OpenAI-compatible endpoint's base URL and whether Gemini goes through it.
     case vertexProxyURL, vertexProxyEnabled
 
     var defaultsKey: String { "tt.\(rawValue)" }

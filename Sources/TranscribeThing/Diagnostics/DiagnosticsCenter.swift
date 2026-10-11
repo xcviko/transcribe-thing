@@ -61,7 +61,7 @@ final class DiagnosticsCenter {
     /// The settings as the log and the export's header show them.
     func currentSettings() -> DiagnosticSettingsSummary {
         DiagnosticSettingsSummary(settings: settings, keySaved: keyStore.hasFile,
-                                  vertexProxy: DiagnosticSettingsSummary.vertexProxyState(proxy))
+                                  endpoint: DiagnosticSettingsSummary.endpointState(proxy))
     }
 
     // MARK: Export

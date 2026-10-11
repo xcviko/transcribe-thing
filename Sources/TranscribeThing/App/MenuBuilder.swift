@@ -153,7 +153,7 @@ final class MenuBuilder {
         engineStatus(choice.engine(parakeet: parakeet), models: models, account: account, proxy: proxy)
     }
 
-    /// `proxy`: Gemini's status is the Vertex proxy's while it routes Gemini.
+    /// `proxy`: Gemini's status is the custom endpoint's while it routes Gemini.
     static func engineStatus(_ engine: EngineID, models: ModelStore, account: OpenRouterAccount,
                              proxy: VertexProxyAccount? = nil) -> EngineStatus {
         if engine.isLocal {

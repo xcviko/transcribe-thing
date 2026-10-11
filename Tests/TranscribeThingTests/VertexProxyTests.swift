@@ -2,8 +2,9 @@ import Foundation
 import Testing
 @testable import TranscribeThing
 
-// The Vertex proxy: its address and key, the check that costs nothing, and Gemini's requests going to it (and only
-// to it) while it's set up and on. No network: every request goes to `StubURLProtocol`.
+// The user's OpenAI-compatible endpoint (once only their Vertex proxy, hence the type names): its base URL and key,
+// the check that costs nothing, and Gemini's requests going to it (and only to it) while it's set up and on. No
+// network: every request goes to `StubURLProtocol`.
 
 @MainActor
 enum ProxyFixture {
@@ -17,13 +18,15 @@ enum ProxyFixture {
         return URLSession(configuration: config)
     }
 
-    /// A proxy at a host of its own whose requests get `replies`, with `key` saved (none for nil).
+    /// An endpoint at a host of its own whose requests get `replies`, with `key` saved (none for nil). `path` is the
+    /// saved base URL's path: none by default, as the app saved the user's Vertex proxy (read as `/api/v1`).
     static func proxy(_ replies: [StubURLProtocol.Reply] = [], key: String? = key, enabled: Bool = true,
-                      settings: AppSettings? = nil, keyReadFails: Bool = false) -> (VertexProxyAccount, String) {
+                      settings: AppSettings? = nil, keyReadFails: Bool = false,
+                      path: String = "") -> (VertexProxyAccount, String) {
         let settings = settings ?? .inMemory()
         let host = "proxy-\(UUID().uuidString.lowercased()).test"
         StubURLProtocol.registry.enqueue(replies, host: host)
-        settings.vertexProxyURL = "https://\(host)"
+        settings.vertexProxyURL = "https://\(host)\(path)"
         settings.vertexProxyEnabled = enabled
         let keyStore = KeyFileStore.inMemory(key)
         keyStore.simulateReadFailure(keyReadFails)
@@ -34,11 +37,11 @@ enum ProxyFixture {
         return (account, host)
     }
 
-    /// A client straight to a proxy at its own host.
-    static func client(_ replies: [StubURLProtocol.Reply]) -> (OpenRouterClient, String) {
+    /// A client straight to an endpoint at its own host, its API at `path`.
+    static func client(_ replies: [StubURLProtocol.Reply], path: String = "/api/v1") -> (OpenRouterClient, String) {
         let host = "proxy-\(UUID().uuidString.lowercased()).test"
         StubURLProtocol.registry.enqueue(replies, host: host)
-        let client = OpenRouterClient(session: session, baseURL: URL(string: "https://\(host)/api/v1")!,
+        let client = OpenRouterClient(session: session, baseURL: URL(string: "https://\(host)\(path)")!,
                                       retryDelay: 0.01, service: .vertexProxy)
         return (client, host)
     }
@@ -84,6 +87,8 @@ enum ProxyFixture {
 // MARK: - Address and key
 
 @Suite struct VertexProxyAddressTests {
+    /// The address the app saved for the user's Vertex proxy before the endpoint was generic, host only, and every
+    /// way of writing the same OpenRouter-style API under it: all mean `<host>/api/v1`.
     @Test(arguments: [
         "https://vertex-proxy-2pthtwqema-uc.a.run.app",
         "https://vertex-proxy-2pthtwqema-uc.a.run.app/",
@@ -92,44 +97,69 @@ enum ProxyFixture {
         "  https://Vertex-Proxy-2pthtwqema-uc.a.run.app/api/v1/chat/completions \n",
         "vertex-proxy-2pthtwqema-uc.a.run.app",
     ])
-    func everySpellingOfTheSameProxyGivesOneBase(_ raw: String) throws {
+    func aHostOnlyURLStillMeansTheAPIUnderApiV1(_ raw: String) throws {
         let base = try VertexProxy.normalizedBaseURL(raw).get()
-        #expect(base.absoluteString == "https://vertex-proxy-2pthtwqema-uc.a.run.app")
-        #expect(VertexProxy.apiBase(base).absoluteString == "https://vertex-proxy-2pthtwqema-uc.a.run.app/api/v1")
+        #expect(base.absoluteString == "https://vertex-proxy-2pthtwqema-uc.a.run.app/api/v1")
     }
 
-    @Test func aPathBeforeTheAPIIsKept() throws {
-        let base = try VertexProxy.normalizedBaseURL("https://example.com/proxy/api/v1/").get()
-        #expect(base.absoluteString == "https://example.com/proxy")
-        #expect(VertexProxy.apiBase(base).appendingPathComponent("chat/completions").absoluteString
-                == "https://example.com/proxy/api/v1/chat/completions")
+    @Test(arguments: [
+        "https://api.example.com/v1",
+        "https://api.example.com/v1/",
+        "api.example.com/v1",
+        " https://API.example.com/v1/chat/completions/ ",
+    ])
+    func aV1BaseIsKeptAsGiven(_ raw: String) throws {
+        let base = try VertexProxy.normalizedBaseURL(raw).get()
+        #expect(base.absoluteString == "https://api.example.com/v1")
+        #expect(base.appendingPathComponent("chat/completions").absoluteString
+                == "https://api.example.com/v1/chat/completions")
+        #expect(VertexProxy.displayHost(base) == "api.example.com/v1")
+    }
+
+    @Test func anyPathIsKeptAsGiven() throws {
+        #expect(try VertexProxy.normalizedBaseURL("https://example.com/proxy/api/v1/").get().absoluteString
+                == "https://example.com/proxy/api/v1")
+        #expect(try VertexProxy.normalizedBaseURL("https://example.com/openai/v1beta").get().absoluteString
+                == "https://example.com/openai/v1beta")
+        #expect(try VertexProxy.normalizedBaseURL("https://example.com/v1/chat/completions").get().absoluteString
+                == "https://example.com/v1")
     }
 
     @Test func badAddressesAreRefusedWithAReason() {
         #expect(VertexProxy.normalizedBaseURL("   ") == .failure(.empty))
-        #expect(VertexProxy.normalizedBaseURL("http://vertex-proxy.a.run.app") == .failure(.notHTTPS))
-        #expect(VertexProxy.normalizedBaseURL("http:vertex-proxy") == .failure(.notHTTPS))
-        #expect(VertexProxy.normalizedBaseURL("ftp://vertex-proxy.a.run.app") == .failure(.notHTTPS))
-        #expect(VertexProxy.normalizedBaseURL("https://vertex-proxy.a.run.app/?key=sk-vp-x") == .failure(.invalid))
-        #expect(VertexProxy.normalizedBaseURL("https://user:pw@vertex-proxy.a.run.app") == .failure(.invalid))
+        #expect(VertexProxy.normalizedBaseURL("http://api.example.com/v1") == .failure(.notHTTPS))
+        #expect(VertexProxy.normalizedBaseURL("http:api.example.com") == .failure(.notHTTPS))
+        #expect(VertexProxy.normalizedBaseURL("ftp://api.example.com/v1") == .failure(.notHTTPS))
+        #expect(VertexProxy.normalizedBaseURL("https://api.example.com/v1?key=sk-x") == .failure(.invalid))
+        #expect(VertexProxy.normalizedBaseURL("https://user:pw@api.example.com/v1") == .failure(.invalid))
+        #expect(VertexProxy.normalizedBaseURL("https://api.example.com/v1#x") == .failure(.invalid))
         #expect(VertexProxy.normalizedBaseURL("https://") == .failure(.invalid))
     }
 
-    @Test func keysMustStartWithThePrefix() {
-        #expect(VertexProxy.keyProblem("sk-or-v1-abcdef") == "Vertex proxy keys start with “sk-vp-”.")
-        #expect(VertexProxy.keyProblem("sk-vp-ab") == "That key looks too short.")
-        #expect(VertexProxy.keyProblem(ProxyFixture.key) == nil)
-        #expect(VertexProxy.keyProblem("") == nil, "nothing typed yet says nothing")
+    @Test func anyKeyThatIsntEmptyCanBeSaved() {
         #expect(VertexProxy.looksLikeKey(ProxyFixture.key))
-        #expect(!VertexProxy.looksLikeKey("sk-or-v1-0123456789abcdef"))
+        #expect(VertexProxy.looksLikeKey("sk-or-v1-0123456789abcdef"))
+        #expect(VertexProxy.looksLikeKey("AIzaSyA-short"))
+        #expect(VertexProxy.looksLikeKey("x"))
         #expect(!VertexProxy.looksLikeKey(""))
+        #expect(!VertexProxy.looksLikeKey("  \n"))
     }
 
-    @Test func theMaskShowsOnlyThePrefixAndLastFour() {
+    @Test func theMaskShowsOnlyADashedPrefixAndTheLastFour() {
         let masked = VertexProxy.mask(ProxyFixture.key)
         #expect(masked == "sk-vp-••••rstu")
         #expect(!masked.contains("TestKey"))
-        #expect(VertexProxy.mask("sk-vp-ab") == "sk-vp-••••")
+        #expect(VertexProxy.mask("sk-proj-abcdefghijklmnop1234") == "sk-proj-••••1234")
+        #expect(VertexProxy.mask("AIzaSyAbcdefghijklmnop9876") == "••••9876")
+        #expect(VertexProxy.mask("sk-vp-ab") == "sk-vp-••••", "a short key shows no tail")
+        #expect(VertexProxy.mask("abcdefgh") == "••••")
+        #expect(VertexProxy.mask("AIzaSyA-bcdefghijklmnop9876") == "••••9876", "no prefix that isn't a kind")
+    }
+
+    @Test func messagesAboutOpenRouterAreReworded() {
+        #expect(VertexProxy.reword("OpenRouter sent a response it couldn’t read.")
+                == "Your endpoint sent a response it couldn’t read.")
+        #expect(VertexProxy.reword("The connection to OpenRouter was lost.") == "The connection to your endpoint was lost.")
     }
 }
 
@@ -145,8 +175,8 @@ enum ProxyFixture {
         #expect(result.text == "Привет.")
         #expect(result.costUSD == 0.0042, "usage.cost, the proxy's estimate, is kept")
         #expect(result.usage?.reasoningTokens == 12)
-        #expect(result.provider == "Vertex AI")
-        #expect(result.generationID == nil, "no generation record to look up on the proxy")
+        #expect(result.provider == host, "no provider in the stream: History names the endpoint by its host")
+        #expect(result.generationID == nil, "no generation record to look up on the endpoint")
 
         let request = try #require(StubURLProtocol.registry.requests(for: host).first)
         #expect(request.url?.absoluteString == "https://\(host)/api/v1/chat/completions")
@@ -162,6 +192,31 @@ enum ProxyFixture {
         #expect((body["reasoning"] as? [String: Any])?["effort"] as? String == "medium")
         let content = (body["messages"] as? [[String: Any]])?.last?["content"] as? [[String: Any]]
         #expect(content?.first?["type"] as? String == "input_audio")
+    }
+
+    /// A `/v1` base (the user's proxy serves the same chat completions there, with the same model ids and the same
+    /// `reasoning` object): the same request goes to `<base>/chat/completions`, the check to `<base>/models`.
+    @Test func aV1BaseGetsTheSameRequestUnderV1() async throws {
+        let (client, host) = ProxyFixture.client([ProxyFixture.models, ProxyFixture.answer("Hi.")], path: "/v1")
+        try await client.checkProxyKey(apiKey: ProxyFixture.key)
+        let result = try await client.transcribe(audio: Data([1]), format: "m4a", model: "google/gemini-3.8-flash",
+                                                 systemPrompt: "Transcribe.", effort: .low, maxTokens: 1000,
+                                                 apiKey: ProxyFixture.key, timeout: 30)
+        #expect(result.text == "Hi.")
+        let urls = StubURLProtocol.registry.requests(for: host).map { $0.url?.absoluteString }
+        #expect(urls == ["https://\(host)/v1/models", "https://\(host)/v1/chat/completions"])
+        let body = ProxyFixture.json(try #require(StubURLProtocol.registry.bodies(for: host).last))
+        #expect(body["model"] as? String == "google/gemini-3.8-flash")
+        #expect((body["reasoning"] as? [String: Any])?["effort"] as? String == "low")
+    }
+
+    @Test func theProviderTheStreamNamesIsKept() async throws {
+        let (client, _) = ProxyFixture.client([.stream(SSE.answer("<transcript>Hi.</transcript>",
+                                                                  provider: "Google AI Studio", usage: #"{"cost":0.001}"#))])
+        let result = try await client.transcribe(audio: Data([1]), format: "m4a", model: "google/gemini-3.8-flash",
+                                                 systemPrompt: "Transcribe.", effort: .low, maxTokens: 1000,
+                                                 apiKey: ProxyFixture.key, timeout: 30)
+        #expect(result.provider == "Google AI Studio")
     }
 
     @Test func aTextRequestAsksForNoMoreTokensThanVertexAllows() async throws {
@@ -205,6 +260,13 @@ enum ProxyFixture {
         let keyLimit = "Spend limit for key 'mac' reached: estimated $5.00 >= $5.00. Raise the key limit in the dashboard to continue."
         let (keyError, _) = await failure([ProxyFixture.error(429, keyLimit, code: "RESOURCE_EXHAUSTED")])
         #expect(keyError == .vertexProxy(.spendLimit(keyLimit)))
+        // Other endpoints say it as a 402, or as a used-up quota.
+        let (payment, paid) = await failure([ProxyFixture.error(402, "Insufficient credits", code: "402")])
+        #expect(payment == .vertexProxy(.spendLimit("Insufficient credits")))
+        #expect(paid == 1)
+        let quota = "You exceeded your current quota, please check your plan and billing details."
+        let (quotaError, _) = await failure([ProxyFixture.error(429, quota, code: "insufficient_quota")])
+        #expect(quotaError == .vertexProxy(.spendLimit(quota)))
     }
 
     @Test func vertexOutOfCapacityIsRetriedOnceThenReported() async {
@@ -254,7 +316,7 @@ enum ProxyFixture {
     @Test func aStreamThatStopsIsTheProxysLostConnection() async {
         let cut = StubURLProtocol.Reply.stream(SSE.stream([SSE.chunk(content: "Hal")], done: false))
         let (error, _) = await failure([cut, cut])
-        #expect(error == .vertexProxy(.unavailable("The connection to Vertex proxy was lost.")))
+        #expect(error == .vertexProxy(.unavailable("The connection to your endpoint was lost.")))
     }
 
     @Test func theKeyCheckListsModelsAndSpendsNothing() async throws {
@@ -279,7 +341,7 @@ enum ProxyFixture {
         #expect(await check(ProxyFixture.error(401, "API key not valid.", code: "UNAUTHENTICATED"))
                 == .vertexProxy(.keyRejected("API key not valid.")))
         #expect(await check(StubURLProtocol.Reply(body: "<html>hello</html>"))
-                == .vertexProxy(.badRequest(VertexProxy.notAProxyMessage)))
+                == .vertexProxy(.badRequest(VertexProxy.notAnAPIMessage)))
         #expect(await check(StubURLProtocol.Reply(error: .cannotFindHost)) == .vertexProxy(.unreachable))
     }
 }
@@ -293,12 +355,42 @@ enum ProxyFixture {
         let (proxy, host) = ProxyFixture.proxy([ProxyFixture.models], settings: settings)
         settings.vertexProxyURL = nil
         #expect(!proxy.isConfigured)
-        let problem = await proxy.setURL("  \(host)/api/v1/ ")
+        let problem = await proxy.setURL("  \(host)/v1/chat/completions ")
         #expect(problem == nil)
-        #expect(settings.vertexProxyURL == "https://\(host)")
+        #expect(settings.vertexProxyURL == "https://\(host)/v1")
+        #expect(proxy.urlText == "https://\(host)/v1")
         #expect(proxy.status == .works)
         #expect(proxy.routesGemini)
-        #expect(StubURLProtocol.registry.requests(for: host).count == 1)
+        #expect(StubURLProtocol.registry.requests(for: host).map { $0.url?.path } == ["/v1/models"])
+    }
+
+    /// What the app saved for the user's Vertex proxy: the host alone. It still means `<host>/api/v1`, for the check
+    /// and for Gemini's requests, with no migration; the field shows it as that.
+    @Test func aSavedHostOnlyURLKeepsWorkingUnderApiV1() async throws {
+        let settings = AppSettings.inMemory()
+        let (proxy, host) = ProxyFixture.proxy([ProxyFixture.models, ProxyFixture.answer("Как раньше.")],
+                                               settings: settings)
+        #expect(settings.vertexProxyURL == "https://\(host)", "the saved value isn't rewritten")
+        #expect(proxy.urlText == "https://\(host)/api/v1")
+        #expect(proxy.baseURL.map(VertexProxy.displayHost) == "\(host)/api/v1")
+        await proxy.validate()
+        #expect(proxy.status == .works)
+        let (service, openRouterHost) = ProxyFixture.service(proxy: proxy)
+        let result = try await service.transcribe(ProxyFixture.speech(), engine: .geminiFlash)
+        #expect(result.text == "Как раньше.")
+        #expect(StubURLProtocol.registry.requests(for: host).map { $0.url?.path }
+                == ["/api/v1/models", "/api/v1/chat/completions"])
+        #expect(StubURLProtocol.registry.requests(for: openRouterHost).isEmpty)
+        let body = ProxyFixture.json(try #require(StubURLProtocol.registry.bodies(for: host).last))
+        #expect(body["model"] as? String == "google/gemini-3.8-flash", "the same model id as before")
+    }
+
+    @Test func aV1BaseSavedFromTheFieldRoutesGeminiThere() async throws {
+        let (proxy, host) = ProxyFixture.proxy([ProxyFixture.answer("Через v1.")], path: "/v1")
+        let (service, _) = ProxyFixture.service(proxy: proxy)
+        let result = try await service.transcribe(ProxyFixture.speech(), engine: .geminiFlash)
+        #expect(result.text == "Через v1.")
+        #expect(StubURLProtocol.registry.requests(for: host).map { $0.url?.path } == ["/v1/chat/completions"])
     }
 
     @Test func aBadAddressIsNotSaved() async {
@@ -313,14 +405,15 @@ enum ProxyFixture {
         #expect(!proxy.routesGemini)
     }
 
-    @Test func aKeyWithoutThePrefixIsNotSaved() async {
-        let (proxy, host) = ProxyFixture.proxy(key: nil)
-        let problem = await proxy.setKey("sk-or-v1-0123456789abcdef0123456789")
-        #expect(problem == "Vertex proxy keys start with “sk-vp-”.")
-        #expect(proxy.maskedKey == nil)
-        #expect(proxy.apiKey() == nil)
-        #expect(!proxy.routesGemini)
-        #expect(StubURLProtocol.registry.requests(for: host).isEmpty, "nothing is checked")
+    @Test func aKeyOfAnyShapeIsSavedAndChecked() async {
+        let (proxy, host) = ProxyFixture.proxy([ProxyFixture.models], key: nil)
+        let problem = await proxy.setKey("AIzaSyA0123456789abcdef")
+        #expect(problem == nil)
+        #expect(proxy.apiKey() == "AIzaSyA0123456789abcdef")
+        #expect(proxy.maskedKey == "••••cdef")
+        #expect(proxy.status == .works)
+        #expect(proxy.routesGemini)
+        #expect(StubURLProtocol.registry.requests(for: host).count == 1)
     }
 
     @Test func aSavedKeyIsCheckedAndOnlyItsMaskShows() async {
@@ -343,8 +436,8 @@ enum ProxyFixture {
             (ProxyFixture.error(401, "API key not valid.", code: "UNAUTHENTICATED"), .keyRejected("API key not valid.")),
             (StubURLProtocol.Reply(error: .cannotFindHost), .unreachable),
             (StubURLProtocol.Reply(status: 404, body: #"{"detail":"Not Found"}"#),
-             .failed("No Vertex proxy answers at this address.")),
-            (StubURLProtocol.Reply(body: "<html></html>"), .failed(VertexProxy.notAProxyMessage)),
+             .failed("No OpenAI-compatible API answers at this URL. Check that it’s the one that ends in /v1.")),
+            (StubURLProtocol.Reply(body: "<html></html>"), .failed(VertexProxy.notAnAPIMessage)),
         ]
         for (reply, expected) in cases {
             let (proxy, _) = ProxyFixture.proxy([reply])
@@ -374,7 +467,7 @@ enum ProxyFixture {
         proxy.noteCloudSuccess()
         #expect(proxy.status == .works)
         #expect(EngineSummary.make(engine: .geminiFlash, localState: .notInstalled, keyStatus: proxy.keyStatus).status
-                == "Ready · Vertex proxy")
+                == "Ready · Custom endpoint")
         proxy.noteCloudFailure(.vertexProxy(.keyRejected("no")))
         #expect(proxy.keyStatus == .invalid("no"))
         #expect(EngineReadiness.of(.geminiFlash, localState: .notInstalled, keyStatus: proxy.keyStatus)
@@ -398,7 +491,7 @@ enum ProxyFixture {
         let (service, openRouterHost) = ProxyFixture.service(proxy: proxy)
         let result = try await service.transcribe(ProxyFixture.speech(), engine: .geminiFlash)
         #expect(result.text == "Через прокси.")
-        #expect(result.provider == "Vertex AI")
+        #expect(result.provider == proxyHost, "History names the endpoint by its host")
         #expect(result.costUSD == 0.0042)
         #expect(result.modelID == "google/gemini-3.8-flash")
         #expect(StubURLProtocol.registry.requests(for: proxyHost).count == 1)
@@ -437,7 +530,7 @@ enum ProxyFixture {
         let route = try #require(PolishSelectionModel.geminiFlash.route)
         let result = try await service.polishText("some text", route: route, prompt: "Fix it.", timeout: 10)
         #expect(result.text == "Better text.")
-        #expect(result.provider == "Vertex AI")
+        #expect(result.provider == proxyHost, "History names the endpoint by its host")
         #expect(result.costUSD == 0.001)
         #expect(StubURLProtocol.registry.requests(for: proxyHost).count == 1)
         #expect(StubURLProtocol.registry.requests(for: openRouterHost).isEmpty)
@@ -540,13 +633,15 @@ enum ProxyFixture {
 
 @MainActor
 @Suite struct VertexProxyCopyTests {
-    @Test func everyProxyFailureNamesTheProxyAndPointsToModels() {
-        let failures: [VertexProxyFailure] = [.keyUnreadable, .keyRejected("x"), .spendLimit("x"), .unreachable,
-                                              .forbidden("x"), .unavailable("x"), .badRequest("x"), .tooLarge]
-        for failure in failures {
+    static let failures: [VertexProxyFailure] = [.keyUnreadable, .keyRejected("x"), .spendLimit("x"), .unreachable,
+                                                 .rateLimited(retryAfter: nil), .forbidden(""), .unavailable("x"),
+                                                 .badRequest(""), .tooLarge]
+
+    @Test func everyEndpointFailureSaysYourEndpointAndPointsToModels() {
+        for failure in Self.failures {
             let notice = AppError.vertexProxy(failure).notice(recordingID: UUID(), fallbackEngine: .parakeet,
                                                               engine: .geminiFlash)
-            #expect(notice.title.contains("Vertex proxy"), "\(failure)")
+            #expect(notice.title.contains("endpoint"), "\(failure)")
             #expect(!notice.title.contains("OpenRouter") && !(notice.body ?? "").contains("openrouter.ai"))
             #expect(!notice.actions.contains { if case .openURL = $0.kind { true } else { false } })
         }
@@ -558,11 +653,97 @@ enum ProxyFixture {
         #expect(!tooLarge.actions.contains { $0.kind == .retry })
     }
 
-    @Test func homeRowsSayWhatTheProxyDid() {
+    @Test func theNoticesSayWhatToDo() {
+        func notice(_ failure: VertexProxyFailure) -> Notice {
+            AppError.vertexProxy(failure).notice(recordingID: nil, fallbackEngine: nil, engine: .geminiFlash)
+        }
+        #expect(notice(.keyRejected("")).title == "Your endpoint rejected the API key")
+        #expect(notice(.unreachable).title == "Can’t reach your endpoint")
+        #expect(notice(.unreachable).body == "Check your connection and the endpoint’s base URL in Models.")
+        #expect(notice(.spendLimit("")).title == "Your endpoint hit a spend limit")
+        #expect(notice(.rateLimited(retryAfter: 3)).title == "Gemini is busy on your endpoint")
+        #expect(notice(.unavailable("x")).title == "Your endpoint ran into a problem")
+        #expect(notice(.forbidden("")).title == "Your endpoint refused the request")
+    }
+
+    @Test func homeRowsSayWhatTheEndpointDid() {
         #expect(DictationController.homeFailureReason(.vertexProxy(.spendLimit("x")), making: .polish)
-                == "Your Vertex proxy hit its spend limit.")
+                == "Your endpoint hit a spend limit.")
         #expect(DictationController.homeFailureReason(.vertexProxy(.unreachable), making: .transcription(.geminiFlash))
-                == "Couldn’t reach your Vertex proxy. Check its address in Models.")
+                == "Couldn’t reach your endpoint. Check its base URL in Models.")
+        #expect(DictationController.homeFailureReason(.vertexProxy(.keyRejected("x")), making: .polish)
+                == "Your endpoint rejected the API key.")
+        #expect(DictationController.homeFailureReason(.vertexProxy(.unavailable("x")), making: .polish)
+                == "Your endpoint ran into a problem.")
+    }
+
+    /// Nothing the app shows or prints names Vertex or a proxy: every notice, Home row, status, field message and
+    /// CLI line about the endpoint.
+    @Test func noUserFacingTextNamesVertexOrAProxy() {
+        let (proxy, host) = ProxyFixture.proxy()
+        var texts: [String] = [CloudProvider.vertexProxy.name, VertexProxy.label, VertexProxy.notAnAPIMessage,
+                               VertexProxyAccount.keyUnreadableMessage, EndpointRow.urlHelp, APIKeysGroup.footer]
+        texts += [VertexProxy.URLProblem.empty, .notHTTPS, .invalid].map(\.message)
+        for failure in Self.failures {
+            let error = AppError.vertexProxy(failure)
+            let notice = error.notice(recordingID: UUID(), fallbackEngine: .parakeet, engine: .geminiFlash)
+            texts += [notice.title, notice.body ?? "", error.localizedDescription]
+            texts += notice.actions.map(\.title)
+            texts.append(DictationController.homeFailureReason(error, making: .polish))
+            texts.append("\(VertexProxyAccount.status(for: error))")
+        }
+        for status in [404, 500] {
+            texts.append("\(VertexProxyAccount.status(for: VertexProxyErrorMapper.map(status: status, message: "", retryAfter: nil, engine: .geminiFlash)))")
+        }
+        texts.append("\(VertexProxyAccount.status(for: AppError.timeout(.geminiFlash)))")
+        texts.append(EngineCLI.geminiRouteLine(proxy))
+        proxy.isEnabled = false
+        texts.append(EngineCLI.geminiRouteLine(proxy))
+        texts.append(EngineCLI.geminiRouteLine(nil))
+        texts.append(EngineSummary.make(engine: .geminiFlash, localState: .notInstalled,
+                                        keyStatus: .valid(KeyInfo(label: VertexProxy.label))).status)
+        for keyStatus in [KeyStatus.invalid("x"), .noCredit(KeyInfo(label: VertexProxy.label))] {
+            let input = HubAttention.Input(microphone: .granted, accessibility: .granted, accessibilityLikelyStale: false,
+                                           fnKeyUsage: .doNothing, pushToTalkUsesFn: true, engine: .geminiFlash,
+                                           localState: .notInstalled, keyStatus: keyStatus, provider: .vertexProxy)
+            texts += HubAttention.items(input).flatMap { [$0.title, $0.body] }
+        }
+        for text in texts.map({ $0.replacingOccurrences(of: host, with: "<host>") }) {
+            #expect(!text.localizedCaseInsensitiveContains("vertex"), "\(text)")
+            #expect(!text.localizedCaseInsensitiveContains("proxy"), "\(text)")
+        }
+    }
+
+    /// The same, read off the sources: no string literal outside Calls (another feature's, with its own tests) names
+    /// Vertex or a proxy, and neither does the README.
+    @Test func noStringLiteralOrReadmeNamesVertex() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let sources = root.appendingPathComponent("Sources/TranscribeThing")
+        let files = try #require(FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil))
+            .compactMap { $0 as? URL }
+            .filter { $0.pathExtension == "swift" && !$0.path.contains("/Calls/") }
+        #expect(files.count > 50)
+        let literal = try Regex(#""[^"\n]*""#)
+        // Code interpolated into a literal ("\(VertexProxy.label)") names the types, not the text.
+        let identifier = try Regex(#"[A-Za-z]*[Vv]ertexProxy[A-Za-z]*"#)
+        for file in files {
+            let lines = try String(contentsOf: file, encoding: .utf8).split(separator: "\n", omittingEmptySubsequences: false)
+            for (number, line) in lines.enumerated() {
+                let code = line.trimmingCharacters(in: .whitespaces)
+                if code.hasPrefix("//") { continue }
+                for match in code.matches(of: literal) {
+                    let text = String(code[match.range]).replacing(identifier, with: "")
+                    #expect(!text.contains("Vertex") && !text.contains("Vertex AI") && !text.contains(" proxy")
+                            && !text.contains("Proxy ") && !text.contains("sk-vp-"),
+                            "\(file.lastPathComponent):\(number + 1): \(text)")
+                }
+            }
+        }
+        let readme = try String(contentsOf: root.appendingPathComponent("README.md"), encoding: .utf8)
+        #expect(!readme.localizedCaseInsensitiveContains("vertex"))
+        #expect(!readme.contains("sk-vp-"))
+        #expect(!readme.contains("—") && !readme.contains("–"), "no em or en dashes")
     }
 
     @Test func homeAsksToFixTheProxyNotOpenRouter() {
@@ -570,10 +751,10 @@ enum ProxyFixture {
                                        fnKeyUsage: .doNothing, pushToTalkUsesFn: true, engine: .geminiFlash,
                                        localState: .notInstalled, keyStatus: .invalid("no"), provider: .vertexProxy)
         let item = HubAttention.items(input).first { $0.id == "key" }
-        #expect(item?.title == "Your Vertex proxy rejected the key")
+        #expect(item?.title == "Your endpoint rejected the API key")
         var spent = input
         spent.keyStatus = .noCredit(KeyInfo(label: VertexProxy.label))
-        #expect(HubAttention.items(spent).first { $0.id == "key" }?.title == "Your Vertex proxy hit its spend limit")
+        #expect(HubAttention.items(spent).first { $0.id == "key" }?.title == "Your endpoint hit a spend limit")
         var openRouter = input
         openRouter.provider = .openRouter
         #expect(HubAttention.items(openRouter).first { $0.id == "key" }?.title == "Your OpenRouter key stopped working")
@@ -583,16 +764,20 @@ enum ProxyFixture {
         let settings = AppSettings.inMemory()
         let (proxy, host) = ProxyFixture.proxy(settings: settings)
         let line = DiagnosticSettingsSummary(settings: settings, keySaved: true,
-                                             vertexProxy: DiagnosticSettingsSummary.vertexProxyState(proxy)).line
-        #expect(line.contains("vertexProxy=gemini"))
+                                             endpoint: DiagnosticSettingsSummary.endpointState(proxy)).line
+        #expect(line.contains("customEndpoint=gemini"))
         #expect(!line.contains(ProxyFixture.key) && !line.contains(host))
         proxy.isEnabled = false
-        #expect(DiagnosticSettingsSummary.vertexProxyState(proxy) == "off")
-        #expect(DiagnosticSettingsSummary.vertexProxyState(nil) == "notSet")
+        #expect(DiagnosticSettingsSummary.endpointState(proxy) == "off")
+        #expect(DiagnosticSettingsSummary.endpointState(nil) == "notSet")
         let route = EngineCLI.geminiRouteLine(proxy)
-        #expect(route.contains("switched off") && !route.contains(ProxyFixture.key))
+        #expect(route == "OpenRouter (custom endpoint at \(host)/api/v1 is switched off)")
+        #expect(!route.contains(ProxyFixture.key))
         proxy.isEnabled = true
-        #expect(EngineCLI.geminiRouteLine(proxy) == "Vertex proxy (\(host), key saved)")
+        #expect(EngineCLI.geminiRouteLine(proxy) == "Custom endpoint (\(host)/api/v1, key saved)")
+        #expect(EngineCLI.geminiRouteLine(nil) == "OpenRouter (no custom endpoint set up)")
+        let (unkeyed, other) = ProxyFixture.proxy(key: nil, path: "/v1")
+        #expect(EngineCLI.geminiRouteLine(unkeyed) == "OpenRouter (custom endpoint at \(other)/v1 has no key)")
     }
 
     @Test func noFailureCarriesTheKey() {
@@ -605,7 +790,7 @@ enum ProxyFixture {
         ]
         for error in errors {
             let text = [error.code, error.detail ?? "", error.localizedDescription].joined(separator: " ")
-            #expect(!text.contains("sk-vp-"))
+            #expect(!text.contains(ProxyFixture.key) && !text.contains("TestKey"))
         }
     }
 }
@@ -635,8 +820,8 @@ enum ProxyFixture {
         let text = DiagnosticLog.shared.retainedText()
         #expect(!text.contains(ProxyFixture.key))
         #expect(!text.contains("TestKey0123"))
-        // Another suite may stop the shared log meanwhile; when it kept running, the proxy's lines are there.
-        if !text.isEmpty { #expect(text.contains("vertexProxy")) }
+        // Another suite may stop the shared log meanwhile; when it kept running, the endpoint's lines are there.
+        if !text.isEmpty { #expect(text.contains("endpoint.")) }
     }
 }
 

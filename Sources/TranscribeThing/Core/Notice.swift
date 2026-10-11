@@ -288,7 +288,8 @@ enum AppError: Error, Equatable, Sendable {
     case noSpeech
     case engineFailed(EngineID, String)
     case recordingTooLarge
-    /// A Gemini request through the user's Vertex proxy failed in a way only the proxy can (`VertexProxyFailure`).
+    /// A Gemini request through the user's OpenAI-compatible endpoint failed in a way only the endpoint can
+    /// (`VertexProxyFailure`).
     /// What any service says the same way (a cut-off answer, a refusal by the model, a timeout) keeps its own case.
     case vertexProxy(VertexProxyFailure)
 
@@ -324,7 +325,7 @@ enum AppError: Error, Equatable, Sendable {
     }
 
     /// The key, the credit or the connection failed: every cloud model would fail the same way, so only the local
-    /// model can take over. Never the Vertex proxy's: cloud Parakeet still goes through OpenRouter.
+    /// model can take over. Never the user's endpoint's: cloud Parakeet still goes through OpenRouter.
     var stopsEveryCloudModel: Bool {
         switch self {
         case .openRouterMissingKey, .openRouterKeyUnreadable, .openRouterInvalidKey, .openRouterNoCredits,
@@ -730,57 +731,58 @@ extension AppError {
         }
     }
 
-    /// The Vertex proxy's failures: each names the proxy, and a fix points to Models, where its card is (nothing can
-    /// be fixed on openrouter.ai).
+    /// The OpenAI-compatible endpoint's failures: each says "your endpoint", and a fix points to Models, where its
+    /// section is (nothing can be fixed on openrouter.ai).
     private static func copy(for failure: VertexProxyFailure) -> Copy {
         let models = Fix(title: "Open Models", kind: .openHub(.models))
         switch failure {
         case .keyUnreadable:
             return Copy(symbol: "key.fill",
-                        title: "\(Brand.name) can’t read your Vertex proxy key",
+                        title: "\(Brand.name) can’t read your endpoint’s API key",
                         body: "The key saved on this Mac couldn’t be read. Paste it again in Models.",
                         fixes: [Fix(title: "Update Key", kind: .openHub(.models))],
                         order: .fixFirst, offersSwitch: true)
         case .keyRejected:
             return Copy(symbol: "key.fill",
-                        title: "Your Vertex proxy rejected the key",
+                        title: "Your endpoint rejected the API key",
                         body: "It may have been revoked or mistyped. Check it in Models.",
                         fixes: [Fix(title: "Update Key", kind: .openHub(.models))],
                         order: .fixFirst, offersSwitch: true)
         case .spendLimit:
             return Copy(symbol: "creditcard",
-                        title: "Your Vertex proxy hit its spend limit",
-                        body: "Raise the limit on the proxy, or switch Gemini back to OpenRouter in Models.",
+                        title: "Your endpoint hit a spend limit",
+                        body: "Raise the limit or add credit where your endpoint is run, or switch Gemini back to "
+                            + "OpenRouter in Models.",
                         fixes: [models],
                         order: .fixFirst, offersSwitch: true)
         case .unreachable:
             return Copy(symbol: "wifi.slash",
-                        title: "Can’t reach your Vertex proxy",
-                        body: "Check your connection and the proxy’s address in Models.",
+                        title: "Can’t reach your endpoint",
+                        body: "Check your connection and the endpoint’s base URL in Models.",
                         fixes: [models],
                         order: .fallbackFirst, offersSwitch: true)
         case .rateLimited(let retryAfter):
             let wait = retryAfter.map { $0 >= 1 ? "Try again in about \(Int($0.rounded(.up))) s." : nil } ?? nil
             return Copy(symbol: "hourglass",
-                        title: "Gemini is busy on your Vertex proxy",
-                        body: wait ?? "Google had no capacity for it. Wait a few seconds and try again.")
+                        title: "Gemini is busy on your endpoint",
+                        body: wait ?? "It had no capacity for this. Wait a few seconds and try again.")
         case .forbidden(let message):
             return Copy(symbol: "hand.raised.fill",
-                        title: "Google Cloud refused your Vertex proxy",
-                        body: oneLine(message) ?? "Check the proxy’s Google Cloud project and its billing.",
+                        title: "Your endpoint refused the request",
+                        body: oneLine(message) ?? "Check the account and the billing behind your endpoint.",
                         order: .fallbackFirst, offersSwitch: true)
         case .unavailable:
             return Copy(symbol: "icloud.slash",
-                        title: "Your Vertex proxy ran into a problem",
+                        title: "Your endpoint ran into a problem",
                         body: "This is usually temporary. Try again in a moment.")
         case .badRequest(let message):
-            return Copy(title: "Your Vertex proxy couldn’t process this",
-                        body: oneLine(message) ?? "The proxy rejected the request.",
+            return Copy(title: "Your endpoint couldn’t process this",
+                        body: oneLine(message) ?? "It rejected the request.",
                         order: .fallbackFirst)
         case .tooLarge:
             return Copy(symbol: "waveform.badge.exclamationmark",
-                        title: "Too large to send to your Vertex proxy",
-                        body: "The proxy refused this recording as too large. "
+                        title: "Too large to send to your endpoint",
+                        body: "Your endpoint refused this recording as too large. "
                             + "\(EngineID.parakeet.displayName) on this Mac takes any length.",
                         order: .fallbackFirst)
         }

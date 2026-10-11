@@ -164,25 +164,29 @@ enum HubSnapshots {
             hub("hub-models-key-missing", .models, height: 1100) { c in
                 c.account = .preview(status: .missing)
             },
-            // The Vertex proxy's card, at the bottom: not set up, working, its key rejected, and the proxy alone (no
-            // OpenRouter key: Gemini ready through it, cloud Parakeet needing a key).
-            hub("hub-models-proxy-unset", .models, height: 1500),
-            hub("hub-models-proxy-works", .models, height: 1500) { c in
+            // API keys, at the bottom: the OpenAI-compatible endpoint not set up, working, its key rejected, switched
+            // off, saved as a bare host (read as …/api/v1), and the endpoint alone (no OpenRouter key: Gemini ready
+            // through it, cloud Parakeet needing a key).
+            hub("hub-models-endpoint-unset", .models, height: 1500),
+            hub("hub-models-endpoint-works", .models, height: 1500) { c in
                 c.proxy = .preview(status: .works, settings: c.settings)
             },
-            hub("hub-models-proxy-rejected", .models, height: 1500) { c in
+            hub("hub-models-endpoint-rejected", .models, height: 1500) { c in
                 c.proxy = .preview(status: .keyRejected("API key not valid. Please pass a valid API key."),
                                    settings: c.settings)
             },
-            hub("hub-models-proxy-off", .models, height: 1500) { c in
+            hub("hub-models-endpoint-off", .models, height: 1500) { c in
                 c.proxy = .preview(status: .works, settings: c.settings, enabled: false)
             },
-            hub("hub-models-proxy-only", .models, height: 1500) { c in
+            hub("hub-models-endpoint-host-only", .models, height: 1500) { c in
+                c.proxy = .preview(status: .works, settings: c.settings, url: "https://llm.example.com")
+            },
+            hub("hub-models-endpoint-only", .models, height: 1500) { c in
                 c.account = .preview(status: .missing)
                 c.proxy = .preview(status: .works, settings: c.settings)
                 c.settings.lineup.main = .gemini
             },
-            hub("hub-home-proxy-rejected", .home) { c in
+            hub("hub-home-endpoint-rejected", .home) { c in
                 c.settings.lineup.main = .gemini
                 c.proxy = .preview(status: .keyRejected("API key not valid."), settings: c.settings)
             },

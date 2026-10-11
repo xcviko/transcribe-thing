@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 /// The models in the user's order: the main model every dictation starts on (a radio), which other the Switch model
 /// shortcut steps to (a switch), the order it steps in (drag a row by its handle), and each one's color on the pill
 /// (its tile). Then where Parakeet runs (on this Mac: download, use, delete, storage; or through OpenRouter), the
-/// OpenRouter key, and the Vertex proxy that can take Gemini's requests instead.
+/// API keys: OpenRouter's, and the user's own OpenAI-compatible endpoint that can take Gemini's requests instead.
 struct ModelsPage: View {
     @Environment(HubContext.self) private var hub
     @Environment(ModelStore.self) private var models
@@ -47,14 +47,7 @@ struct ModelsPage: View {
                         ForEach(EngineID.parakeetRuntimes) { engine in row(engine, proxy: proxy) }
                     }
                 }
-                HubGroup("OpenRouter") {
-                    OpenRouterKeyCard(focusRequest: keyFocusRequest)
-                        .id(ModelsAnchor.key)
-                }
-                HubGroup("Vertex proxy") {
-                    VertexProxyCard(focusRequest: proxyFocusRequest)
-                        .id(ModelsAnchor.proxy)
-                }
+                APIKeysGroup(keyFocusRequest: keyFocusRequest, endpointFocusRequest: proxyFocusRequest)
             }
         }
         // A row's drag let go anywhere else on the page (or canceled, then the page left) ends here too.
@@ -128,7 +121,8 @@ struct ModelsPage: View {
         keyFocusRequest += 1
     }
 
-    /// The key `choice` goes with: the Vertex proxy's card while it takes Gemini's requests, else the OpenRouter key.
+    /// The key `choice` goes with: the endpoint's row of API keys while it takes Gemini's requests, else the
+    /// OpenRouter key.
     private func focusKey(for choice: ModelChoice, _ proxy: ScrollViewProxy) {
         guard hub.provider(for: choice.engine(parakeet: settings.parakeetEngine)) == .vertexProxy else {
             focusKey(proxy)

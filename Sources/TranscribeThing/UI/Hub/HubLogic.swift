@@ -423,7 +423,7 @@ struct EngineSummary: Equatable {
         }
         switch keyStatus {
         case .valid(let info) where info.label == VertexProxy.label:
-            return EngineSummary(name: name, status: "Ready · Vertex proxy", tone: .positive)
+            return EngineSummary(name: name, status: "Ready · \(VertexProxy.label)", tone: .positive)
         case .valid: return EngineSummary(name: name, status: "Ready", tone: .positive)
         case .checking, .missing, .invalid, .noCredit, .offline, .failed:
             // The key's own status, in the key's own words and color (`ModelStatusText`), shortened for offline.
@@ -517,7 +517,7 @@ enum HubAttention {
         var keyStatus: KeyStatus
         /// The error ModelStore kept for a failed local model.
         var localError: AppError? = nil
-        /// Who `keyStatus` is for: the Vertex proxy while it takes the main model's (Gemini's) requests.
+        /// Who `keyStatus` is for: the user's endpoint while it takes the main model's (Gemini's) requests.
         var provider: CloudProvider = .openRouter
         /// The shortcut's event tap has stayed down (it can while Accessibility still reads as granted).
         var shortcutUnavailable = false
@@ -642,18 +642,20 @@ enum HubAttention {
         }
     }
 
-    /// The card for the Vertex proxy when it rejects its key or hit its spend limit: Gemini goes through it, and the
-    /// fix is on its card in Models (or on the proxy itself), never on openrouter.ai.
+    /// The card for the user's endpoint when it rejects its key or hit its spend limit: Gemini goes through it, and
+    /// the fix is in Models (or with the endpoint itself), never on openrouter.ai.
     private static func proxyItem(_ status: KeyStatus) -> AttentionItem {
         if case .noCredit = status {
             return AttentionItem(
-                id: "key", tone: .error, symbol: "creditcard", title: "Your Vertex proxy hit its spend limit",
-                body: "Raise the limit on the proxy, or switch Gemini back to OpenRouter in Models.",
+                id: "key", tone: .error, symbol: "creditcard", title: "Your endpoint hit a spend limit",
+                body: "Raise the limit or add credit where your endpoint is run, or switch Gemini back to "
+                    + "OpenRouter in Models.",
                 actionTitle: "Open Models", action: .openModels)
         }
         return AttentionItem(
-            id: "key", tone: .error, symbol: "key.fill", title: "Your Vertex proxy rejected the key",
-            body: "It may be revoked or mistyped. Gemini goes through the proxy until you fix it or switch it off.",
+            id: "key", tone: .error, symbol: "key.fill", title: "Your endpoint rejected the API key",
+            body: "It may be revoked or mistyped. Gemini goes through your endpoint until you fix the key or "
+                + "switch it off.",
             actionTitle: "Update Key", action: .openModels)
     }
 
