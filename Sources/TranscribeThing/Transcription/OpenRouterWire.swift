@@ -43,14 +43,22 @@ struct OpenRouterChatRequest: Encodable, Equatable {
     /// the audio, in `format` ("m4a"; "wav" or "flac" from `EngineCLI --upload`): no text part, ever. `maxTokens`
     /// grows with the audio (`OpenRouterClient.transcriptionMaxTokens`).
     /// `provider`: another endpoint than Google AI Studio's ("google-ai-studio/priority", `EngineCLI --provider`).
+    /// `voiceSampleBase64` (a call's only, `CallVoiceSample`): the user message carries two audio parts, the sample of
+    /// the person's voice first, then the audio, both in `format`, still no text part; the system prompt says which is
+    /// which. OpenRouter hands Gemini the parts in this order. Nil: the one part, as every other request.
     static func transcription(model: String, audioBase64: String, format: String, systemPrompt: String?,
-                              effort: ReasoningEffort, maxTokens: Int,
-                              provider: Provider = .googleAIStudio) -> OpenRouterChatRequest {
+                              effort: ReasoningEffort, maxTokens: Int, provider: Provider = .googleAIStudio,
+                              voiceSampleBase64: String? = nil) -> OpenRouterChatRequest {
         var messages: [OpenRouterMessage] = []
         if let prompt = systemPrompt?.trimmingCharacters(in: .whitespacesAndNewlines), !prompt.isEmpty {
             messages.append(.system(prompt))
         }
-        messages.append(.userAudio(base64: audioBase64, format: format))
+        if let voiceSampleBase64 {
+            messages.append(.userAudioParts([.init(base64: voiceSampleBase64, format: format),
+                                             .init(base64: audioBase64, format: format)]))
+        } else {
+            messages.append(.userAudio(base64: audioBase64, format: format))
+        }
         return OpenRouterChatRequest(
             model: model,
             messages: messages,
@@ -169,6 +177,14 @@ enum OpenRouterMessage: Encodable, Equatable {
     /// Plain text from the user (the text Polish Selection works on).
     case user(String)
     case userAudio(base64: String, format: String)
+    /// Several audio parts in one user message, in order, and no text: a call's voice sample, then the call
+    /// (`OpenRouterChatRequest.transcription(voiceSampleBase64:)`).
+    case userAudioParts([AudioClip])
+
+    struct AudioClip: Equatable, Sendable {
+        let base64: String
+        let format: String
+    }
 
     private struct AudioPart: Encodable {
         let type = "input_audio"
@@ -191,6 +207,10 @@ enum OpenRouterMessage: Encodable, Equatable {
         case .userAudio(let data, let format):
             try container.encode("user", forKey: .role)
             try container.encode([AudioPart(inputAudio: .init(data: data, format: format))], forKey: .content)
+        case .userAudioParts(let clips):
+            try container.encode("user", forKey: .role)
+            try container.encode(clips.map { AudioPart(inputAudio: .init(data: $0.base64, format: $0.format)) },
+                                 forKey: .content)
         }
     }
 }

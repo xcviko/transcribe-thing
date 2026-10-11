@@ -8,6 +8,11 @@ import Foundation
 /// takes the JSON array earlier builds asked for). A phrase is this Mac's side when its speaker is the person or someone
 /// nearby, else the other side's (`CallSides`).
 ///
+/// So Gemini knows which voice in the mix is the person's, each request carries, before the call's audio, a short
+/// sample of their voice from the same call: stretches where they spoke and the other side was quiet
+/// (`CallVoiceSample`). The prompt says the first audio is that sample, not to be transcribed, and that times are from
+/// the start of the second. Every chunk gets the same sample; a call without enough of it clean goes without one.
+///
 /// A call longer than `maxChunkSeconds` goes in chunks, both tracks cut at the same places, the speakers named so far
 /// carried into the next chunk's prompt. Each chunk goes whole, its silences too; only a chunk with no speech in it at
 /// all (`SpeechAnalyzer`) isn't sent: it would cost money for nothing. Every answer is kept as it came, in the call's
@@ -16,9 +21,11 @@ import Foundation
 /// again on Retry (`retranscribe`). What happens goes to the diagnostic log, never what was said.
 @MainActor
 final class CallTranscriber {
-    /// One request: the chunk's audio as an .m4a, the system prompt, the chunk's length. Throws `AppError`; an answer
-    /// cut off by its token limit as `AppError.openRouterTruncated` with what came of it.
-    typealias Send = @Sendable (_ audio: Data, _ prompt: String, _ seconds: TimeInterval) async throws -> CloudResult
+    /// One request: the chunk's audio as an .m4a, the system prompt, the chunk's length, and the sample of the
+    /// person's voice (`CallVoiceSample`, an .m4a) that goes before the chunk's audio, nil without one. Throws
+    /// `AppError`; an answer cut off by its token limit as `AppError.openRouterTruncated` with what came of it.
+    typealias Send = @Sendable (_ audio: Data, _ prompt: String, _ seconds: TimeInterval,
+                                _ voiceSample: Data?) async throws -> CloudResult
 
     /// Longest chunk in one request: well under the ~1 h 47 min a request's budget takes at 16 kbps, so the answer's
     /// tokens (a line for every phrase, `OpenRouterClient.transcriptionMaxTokens`) are never the limit.
@@ -50,7 +57,7 @@ final class CallTranscriber {
         let engine = EngineID.geminiFlash
         let model = engine.openRouterModelID ?? "google/gemini-3.8-flash"
         let effort = engine.reasoningEffort ?? .medium
-        return { audio, prompt, seconds in
+        return { audio, prompt, seconds, voiceSample in
             let route = await MainActor.run { () -> Result<(OpenRouterClient, String), AppError> in
                 if let proxy, proxy.routesGemini {
                     guard let key = proxy.apiKey(), let proxyClient = proxy.client() else {
@@ -66,7 +73,7 @@ final class CallTranscriber {
                 let result = try await target.transcribe(
                     audio: audio, format: UploadFormat.m4a.rawValue, model: model, systemPrompt: prompt, effort: effort,
                     maxTokens: OpenRouterClient.transcriptionMaxTokens(audioSeconds: seconds), apiKey: key,
-                    timeout: engine.cloudTimeout, extractsTags: false)
+                    timeout: engine.cloudTimeout, extractsTags: false, voiceSample: voiceSample)
                 if target.service == .vertexProxy, let proxy { await MainActor.run { proxy.noteCloudSuccess() } }
                 return result
             } catch let error as AppError {
@@ -132,7 +139,7 @@ final class CallTranscriber {
         case .success(let outcome):
             log.event(.calls, "transcription.finished", [
                 "call": Self.shortID(id), "phrases": outcome.transcript.segments.count,
-                "requests": outcome.requests, "skippedSilent": outcome.skippedSilent,
+                "requests": outcome.requests, "skippedSilent": outcome.skippedSilent, "sample": outcome.sampleSeconds,
                 "cutOff": outcome.cutOffAt.map(CallPrompts.clock), "cost": outcome.costUSD,
             ])
             store.update(id) {
@@ -202,6 +209,8 @@ final class CallTranscriber {
         /// Requests sent (one per chunk), and chunks left out as silent.
         var requests = 0
         var skippedSilent = 0
+        /// The sample of the person's voice each request carried, pauses included; nil without one.
+        var sampleSeconds: TimeInterval?
     }
 
     enum Failure: Error, LocalizedError, Equatable {
@@ -233,11 +242,12 @@ final class CallTranscriber {
         let me = CallPrompts.speakerName(for: plan.userName)
         let ranges = chunks(totalSamples: total, maxSeconds: maxChunkSeconds)
         let call = plan.callID.map(shortID)
+        let sample = ranges.isEmpty ? nil : try await voiceSample(plan, read: read, log: log)
         log.event(.calls, "transcription.started", [
             "call": call, "chunks": ranges.count,
             "remote": plan.remote == nil ? nil : Double(plan.remoteSamples) / Recording.sampleRate,
             "mic": plan.mic == nil ? nil : Double(plan.micSamples) / Recording.sampleRate,
-            "mutes": plan.mutes.count,
+            "mutes": plan.mutes.count, "sample": sample?.seconds, "sampleStretches": sample?.spans.count,
         ])
         if let answers = plan.answers {
             // A Retry's answers replace the last try's.
@@ -249,12 +259,16 @@ final class CallTranscriber {
         var roster: [String] = []
         var sides = CallSides(me: me)
         var outcome = Outcome(transcript: CallTranscript(segments: []))
+        outcome.sampleSeconds = sample?.seconds
 
         for (index, range) in ranges.enumerated() {
             try Task.checkCancellation()
             let chunk = index + 1
             let offset = Double(range.lowerBound) / Recording.sampleRate
-            guard let audio = try await chunkAudio(plan, range, read: read) else {
+            // The sample shares the request's inline-audio budget.
+            let budget = OpenRouterClient.maxBase64Bytes
+                - (sample.map { OpenRouterClient.base64Length(ofByteCount: $0.data.count) } ?? 0)
+            guard let audio = try await chunkAudio(plan, range, budget: budget, read: read) else {
                 outcome.skippedSilent += 1
                 log.event(.calls, "transcription.skipped", ["call": call, "chunk": chunk])
                 continue
@@ -264,12 +278,12 @@ final class CallTranscriber {
                 return CallInterval(start: max(0, mute.start - offset), end: min(audio.seconds, mute.end - offset))
             }
             let prompt = CallPrompts.call(me: me, service: plan.service, roster: roster, local: sides.speakers,
-                                          mutes: mutes)
+                                          mutes: mutes, voiceSample: sample != nil)
             let started = ContinuousClock.now
             var text: String
             var result: CloudResult?
             do {
-                let answered = try await send(audio.data, prompt, audio.seconds)
+                let answered = try await send(audio.data, prompt, audio.seconds, sample?.data)
                 result = answered
                 text = answered.text
             } catch AppError.openRouterTruncated(let partial) {
@@ -294,7 +308,7 @@ final class CallTranscriber {
                 "chars": text.count, "format": parsed.format.rawValue, "phrases": parsed.segments.count,
                 "skipped": parsed.skipped, "finish": truncated ? "length" : result?.finishReason,
                 "cost": result?.costUSD, "seconds": Double(elapsed.components.seconds)
-                    + Double(elapsed.components.attoseconds) / 1e18,
+                    + Double(elapsed.components.attoseconds) / 1e18, "sample": sample?.seconds,
             ])
             if parsed.format == .unreadable, !truncated {
                 throw Failure.unreadableAnswer(chunk: chunk, chunks: ranges.count, lines: parsed.skipped)
@@ -317,16 +331,43 @@ final class CallTranscriber {
         return outcome
     }
 
-    /// The chunk as one request's .m4a, or nil when it has no speech worth sending.
+    /// The chunk as one request's .m4a within `budget` (base64 bytes), or nil when it has no speech worth sending.
     private nonisolated static func chunkAudio(
-        _ plan: Plan, _ range: Range<Int>, read: @Sendable (URL, Range<Int>) throws -> [Float]
+        _ plan: Plan, _ range: Range<Int>, budget: Int, read: @Sendable (URL, Range<Int>) throws -> [Float]
     ) async throws -> (data: Data, seconds: TimeInterval)? {
         guard !range.isEmpty else { return nil }
         let samples = try mixed(plan, range, read: read)
         let speech = SpeechAnalyzer.stats(for: samples)
         guard !speech.isSilent, speech.voicedSeconds >= minimumVoicedSeconds else { return nil }
-        let data = try await Task.detached(priority: .userInitiated) { try CloudAudio.forChat(samples) }.value
+        let data = try await Task.detached(priority: .userInitiated) {
+            try CloudAudio.forChat(samples, budget: budget)
+        }.value
         return (data, Double(samples.count) / Recording.sampleRate)
+    }
+
+    /// The sample of the person's voice every chunk's request carries (`CallVoiceSample`), the same for all of them;
+    /// nil when the call has too little of it clean. A sample that can't be made leaves the requests without one, as
+    /// before: it only helps.
+    nonisolated static func voiceSample(_ plan: Plan, read: @Sendable (URL, Range<Int>) throws -> [Float],
+                                        log: DiagnosticLog) async throws -> CallVoiceSample.Sample? {
+        let call = plan.callID.map(shortID)
+        do {
+            guard let picked = try CallVoiceSample.make(plan, read: read) else {
+                log.event(.calls, "transcription.sample", ["call": call, "sample": "none"])
+                return nil
+            }
+            try Task.checkCancellation()
+            let samples = picked.samples
+            let data = try await Task.detached(priority: .userInitiated) { try CloudAudio.forChat(samples) }.value
+            return CallVoiceSample.Sample(data: data, seconds: Double(samples.count) / Recording.sampleRate,
+                                          spans: picked.spans)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            Log.engine.error("Couldn't make a call's voice sample: \(error.localizedDescription, privacy: .public)")
+            log.event(.calls, "transcription.sample", ["call": call, "sample": "failed", "error": code(of: error)])
+            return nil
+        }
     }
 
     /// Samples `range` of the call as one track: each track's stretch read (a track over before it, or silent all
@@ -425,11 +466,18 @@ enum CallPrompts {
 
     /// One chunk of the call, both sides mixed. `me` is the person recording; `roster`, the speakers of the chunks
     /// before, `local` the ones on this Mac's side; `mutes`, when the person was muted, from the chunk's start.
+    /// `voiceSample`: the request's first audio is a sample of the person's voice (`CallVoiceSample`), the chunk the
+    /// second, and the prompt says so first.
     static func call(me: String, service: String?, roster: [String], local: [String] = [],
-                     mutes: [CallInterval]) -> String {
+                     mutes: [CallInterval], voiceSample: Bool = false) -> String {
         let named = me != "Me"
-        var lines = [
-            "This audio is a recording of a call\(service.map { " on \($0)" } ?? ""), both sides mixed into one track: "
+        var lines: [String] = []
+        if voiceSample {
+            lines.append(voiceSampleParagraph(me: me))
+        }
+        lines += [
+            "\(voiceSample ? "The second audio" : "This audio") is a recording of a call"
+                + "\(service.map { " on \($0)" } ?? ""), both sides mixed into one track: "
                 + "the person who recorded it, on their own microphone, and the other participants, one or several, as "
                 + "the call app played them, maybe with its codec's sound. People in the same room as the person who "
                 + "recorded it may be heard too.",
@@ -459,6 +507,17 @@ enum CallPrompts {
         }
         lines.append(format)
         return lines.joined(separator: "\n\n")
+    }
+
+    /// What the request's first audio is when a sample of the person's voice goes with the call.
+    static func voiceSampleParagraph(me: String) -> String {
+        let named = me != "Me"
+        let whose = named ? "\(me)'s voice" : "the voice of the person who recorded the call (\"Me\")"
+        let them = named ? me : "them"
+        return "You get two audios. The first is a short sample of \(whose), recorded on their own microphone during "
+            + "this call: a few moments when only they spoke, joined with short pauses. Use it only to recognize "
+            + "\(them) in the call; don't transcribe it, nothing in it goes in the transcript. The second audio is the "
+            + "call: transcribe only that one. Times are from the start of the second audio."
     }
 
     /// "MM:SS" ("H:MM:SS" from an hour on).

@@ -426,6 +426,8 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
     private final class FakeGemini: Sendable {
         let prompts = OSAllocatedUnfairLock(initialState: [String]())
         let audio = OSAllocatedUnfairLock(initialState: [Data]())
+        /// The voice sample each request carried.
+        let samples = OSAllocatedUnfairLock(initialState: [Data?]())
         let answer: @Sendable (_ index: Int) -> String
 
         init(answer: @escaping @Sendable (_ index: Int) -> String = { index in
@@ -439,9 +441,10 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
             self.answer = answer
         }
 
-        func send(_ audio: Data, _ prompt: String, _ seconds: TimeInterval) async throws -> CloudResult {
+        func send(_ audio: Data, _ prompt: String, _ seconds: TimeInterval, _ sample: Data?) async throws -> CloudResult {
             let index = prompts.withLock { $0.append(prompt); return $0.count }
             self.audio.withLock { $0.append(audio) }
+            samples.withLock { $0.append(sample) }
             #expect(!audio.isEmpty)
             var result = CloudResult(text: answer(index))
             result.costUSD = 0.01
@@ -455,7 +458,7 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
         let plan = CallTranscriber.Plan(remote: URL(fileURLWithPath: "/remote.m4a"), mic: URL(fileURLWithPath: "/mic.m4a"),
                                         remoteSamples: samples.count, micSamples: samples.count,
                                         mutes: [CallInterval(start: 19, end: 26)], userName: "Sam", service: "Telegram")
-        let outcome = try await CallTranscriber.run(plan, send: { try await gemini.send($0, $1, $2) }) { _, range in Array(samples[range]) }
+        let outcome = try await CallTranscriber.run(plan, send: { try await gemini.send($0, $1, $2, $3) }) { _, range in Array(samples[range]) }
         let prompts = gemini.prompts.withLock { $0 }
         #expect(prompts.count == 1, "one request for both sides")
         let prompt = prompts[0]
@@ -472,6 +475,9 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
         #expect(outcome.transcript.segments.map(\.side) == [.remote, .local, .local, .local])
         #expect(outcome.transcript.segments.map(\.duringMute) == [false, false, false, true])
         #expect(outcome.requests == 1 && outcome.skippedSilent == 0)
+        // Both tracks speak all through: no moment of the person alone, so no sample, and the prompt as before.
+        #expect(gemini.samples.withLock { $0 } == [nil] && outcome.sampleSeconds == nil)
+        #expect(prompt.hasPrefix("This audio is a recording of a call") && !prompt.contains("two audios"))
         #expect(abs((outcome.costUSD ?? 0) - 0.01) < 1e-9)
     }
 
@@ -482,7 +488,7 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
         let plan = CallTranscriber.Plan(remote: URL(fileURLWithPath: "/remote.m4a"), mic: URL(fileURLWithPath: "/mic.m4a"),
                                         remoteSamples: speech.count, micSamples: speech.count, mutes: [], userName: nil,
                                         service: nil)
-        let outcome = try await CallTranscriber.run(plan, send: { try await gemini.send($0, $1, $2) }) { url, range in
+        let outcome = try await CallTranscriber.run(plan, send: { try await gemini.send($0, $1, $2, $3) }) { url, range in
             url.lastPathComponent == "remote.m4a" ? [Float](repeating: 0, count: range.count) : Array(speech[range])
         }
         let prompts = gemini.prompts.withLock { $0 }
@@ -495,7 +501,7 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
 
         // Nothing said on either side: nothing sent.
         let quiet = FakeGemini()
-        let silent = try await CallTranscriber.run(plan, send: { try await quiet.send($0, $1, $2) }) { _, range in
+        let silent = try await CallTranscriber.run(plan, send: { try await quiet.send($0, $1, $2, $3) }) { _, range in
             [Float](repeating: 0, count: range.count)
         }
         #expect(quiet.prompts.withLock { $0 }.isEmpty)
@@ -511,7 +517,7 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
         let plan = CallTranscriber.Plan(remote: URL(fileURLWithPath: "/remote.m4a"), mic: URL(fileURLWithPath: "/mic.m4a"),
                                         remoteSamples: samples.count, micSamples: samples.count / 2, mutes: [],
                                         userName: "Sam", service: "Zoom")
-        let outcome = try await CallTranscriber.run(plan, maxChunkSeconds: 10, send: { try await gemini.send($0, $1, $2) }) { _, range in
+        let outcome = try await CallTranscriber.run(plan, maxChunkSeconds: 10, send: { try await gemini.send($0, $1, $2, $3) }) { _, range in
             Array(samples[range])
         }
         let prompts = gemini.prompts.withLock { $0 }
@@ -599,7 +605,7 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
         store.upsert(call)
         let speech = speechLike(seconds: 10)
         let failing = OSAllocatedUnfairLock(initialState: true)
-        let transcriber = CallTranscriber(store: store) { _, _, _ in
+        let transcriber = CallTranscriber(store: store) { _, _, _, _ in
             if failing.withLock({ $0 }) { throw AppError.openRouterMissingKey }
             return CloudResult(text: #"[{"start":"00:01","end":"00:02","speaker":"Sam","text":"Hello"}]"#)
         }
@@ -615,6 +621,135 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
         let done = try #require(store.call(id: call.id))
         #expect(done.status == .done && done.error == nil)
         #expect(done.transcript?.segments.map(\.text) == ["Hello"])
+    }
+
+    /// The person alone on their mic for a while: every chunk's request carries the same sample of their voice before
+    /// the chunk, the prompt says so, and the answer's times are the chunk's, never moved by the sample.
+    @Test func everyChunkCarriesTheSameVoiceSampleAndTimesStayTheCalls() async throws {
+        let gemini = FakeGemini(answer: { index in "[00:01-00:03] Sam: Привет (\(index))\n[00:04-00:05] Аня: Да" })
+        let mic = voiceTrack(seconds: 40, speech: [(0, 7), (20, 7)])
+        let remote = voiceTrack(seconds: 40, speech: [(9, 8), (29, 8)], noise: false)
+        let answers = AppPaths.temporary().root.appendingPathComponent("answers", isDirectory: true)
+        let plan = CallTranscriber.Plan(remote: URL(fileURLWithPath: "/remote.m4a"), mic: URL(fileURLWithPath: "/mic.m4a"),
+                                        remoteSamples: remote.count, micSamples: mic.count, mutes: [],
+                                        userName: "Sam", service: "Zoom", answers: answers)
+        let outcome = try await CallTranscriber.run(plan, maxChunkSeconds: 20, send: { try await gemini.send($0, $1, $2, $3) }) { url, range in
+            Array((url.lastPathComponent == "mic.m4a" ? mic : remote)[range])
+        }
+        let samples = gemini.samples.withLock { $0 }
+        #expect(samples.count == 2)
+        let sample = try #require(samples[0])
+        #expect(samples[1] == sample, "the same sample for every chunk")
+        #expect(sample.count > 1000, "an .m4a")
+        let seconds = try #require(outcome.sampleSeconds)
+        #expect(seconds >= CallVoiceSample.minSpeech && seconds <= CallVoiceSample.maxSeconds)
+
+        for prompt in gemini.prompts.withLock({ $0 }) {
+            #expect(prompt.hasPrefix(CallPrompts.voiceSampleParagraph(me: "Sam")))
+            #expect(prompt.contains("The first is a short sample of Sam's voice, recorded on their own microphone "
+                                    + "during this call"))
+            #expect(prompt.contains("don't transcribe it") && prompt.contains("Times are from the start of the second audio."))
+            #expect(prompt.contains("The second audio is a recording of a call on Zoom, both sides mixed"))
+            #expect(prompt.contains("The person who recorded it is Sam") && prompt.contains(CallPrompts.format))
+        }
+        // Times are each chunk's, on the call's clock: 1 s and 21 s.
+        let sams = outcome.transcript.segments.filter { $0.speaker == "Sam" }
+        #expect(sams.map(\.start) == [1, 21])
+        // The answers are kept as they came.
+        let kept = try String(contentsOf: answers.appendingPathComponent("1-mix.txt"), encoding: .utf8)
+        #expect(kept == "[00:01-00:03] Sam: Привет (1)\n[00:04-00:05] Аня: Да")
+        #expect(FileManager.default.fileExists(atPath: answers.appendingPathComponent("2-mix.txt").path))
+    }
+}
+
+/// A track `seconds` long with `speech` (start, length) in it, faint noise elsewhere (none with `noise` false).
+private func voiceTrack(seconds: Double, speech: [(at: Double, length: Double)], noise: Bool = true) -> [Float] {
+    var out = [Float](repeating: 0, count: Int(seconds * rate))
+    if noise {
+        var seed: UInt32 = 777
+        for index in out.indices {
+            seed = seed &* 1_664_525 &+ 1_013_904_223
+            out[index] = 0.002 * (Float(seed >> 8) / Float(1 << 24) - 0.5)
+        }
+    }
+    for stretch in speech {
+        let start = Int(stretch.at * rate)
+        for (offset, sample) in speechLike(seconds: stretch.length).enumerated() where start + offset < out.count {
+            out[start + offset] = sample
+        }
+    }
+    return out
+}
+
+/// Which stretches of the person's mic go into the sample of their voice (`CallVoiceSample`).
+@Suite struct CallVoiceSampleTests {
+    private let micURL = URL(fileURLWithPath: "/mic.m4a"), remoteURL = URL(fileURLWithPath: "/remote.m4a")
+
+    private func pick(mic: [Float], remote: [Float]?, mutes: [CallInterval] = [],
+                      remoteFile: Bool = true) throws -> (samples: [Float], spans: [CallInterval])? {
+        let plan = CallTranscriber.Plan(remote: remoteFile ? remoteURL : nil, mic: micURL,
+                                        remoteSamples: remote?.count ?? 0, micSamples: mic.count, mutes: mutes,
+                                        userName: "Sam", service: nil)
+        let remoteSamples = remote ?? []
+        return try CallVoiceSample.make(plan) { url, range in
+            Array((url == micURL ? mic : remoteSamples)[range])
+        }
+    }
+
+    private func speech(_ spans: [CallInterval]) -> TimeInterval { spans.reduce(0) { $0 + $1.duration } }
+
+    @Test func onlyStretchesWhereThePersonSpokeAloneAreTaken() throws {
+        // 0-10: both speak. 20-30 and 40-50: the person alone. 30-38: the other side alone.
+        let mic = voiceTrack(seconds: 60, speech: [(0, 10), (20, 10), (40, 10)])
+        let remote = voiceTrack(seconds: 60, speech: [(0, 10), (30, 8)], noise: false)
+        let picked = try #require(try pick(mic: mic, remote: remote))
+        #expect(!picked.spans.isEmpty)
+        for span in picked.spans {
+            // Each within one of them, give or take `padding` of quiet around the words.
+            let inFirst = span.start >= 19.8 && span.end <= 30.2, inSecond = span.start >= 39.8 && span.end <= 50.2
+            #expect(inFirst || inSecond, "\(span)")
+        }
+        #expect(picked.spans.allSatisfy { $0.duration >= CallVoiceSample.minStretch })
+        let total = speech(picked.spans) + Double(picked.spans.count - 1) * CallVoiceSample.pause
+        #expect(total >= 8 && total <= CallVoiceSample.maxSeconds + 0.01)
+        // The stretches as read, a pause between each two: nothing else.
+        let pauses = (picked.spans.count - 1) * Int(CallVoiceSample.pause * rate)
+        #expect(abs(picked.samples.count - (Int(speech(picked.spans) * rate) + pauses)) <= picked.spans.count)
+        #expect(picked.spans == picked.spans.sorted { $0.start < $1.start }, "in the call's order")
+    }
+
+    @Test func mutedStretchesAreNeverTaken() throws {
+        // A track from before the mic was silenced in mutes still has what was said muted: it's zeroed first.
+        let mic = voiceTrack(seconds: 40, speech: [(0, 40)])
+        let mutes = [CallInterval(start: 0, end: 18), CallInterval(start: 30, end: 34)]
+        let picked = try #require(try pick(mic: mic, remote: nil, mutes: mutes, remoteFile: false))
+        for span in picked.spans {
+            #expect(mutes.allSatisfy { $0.overlap(span.start, span.end) == 0 }, "\(span)")
+        }
+        #expect(speech(picked.spans) >= 8)
+        // Muted all through: nothing to take.
+        #expect(try pick(mic: mic, remote: nil, mutes: [CallInterval(start: 0, end: 40)], remoteFile: false) == nil)
+    }
+
+    @Test func tooLittleCleanSpeechSendsNoSample() throws {
+        // Three seconds alone; the rest over the other side.
+        let mic = voiceTrack(seconds: 40, speech: [(0, 3), (10, 25)])
+        let remote = voiceTrack(seconds: 40, speech: [(9, 30)], noise: false)
+        #expect(try pick(mic: mic, remote: remote) == nil)
+        #expect(try pick(mic: voiceTrack(seconds: 20, speech: [(5, 3)]), remote: nil, remoteFile: false) == nil)
+        #expect(try pick(mic: [Float](repeating: 0, count: Int(20 * rate)), remote: nil, remoteFile: false) == nil)
+    }
+
+    @Test func withoutTheOtherSidesTrackAnySpeechWillDo() throws {
+        let mic = voiceTrack(seconds: 60, speech: [(5, 50)])
+        let alone = try #require(try pick(mic: mic, remote: nil, remoteFile: false))
+        // One long stretch, cut to the most a sample takes.
+        #expect(alone.spans.count == 1)
+        #expect(abs(speech(alone.spans) - CallVoiceSample.maxSeconds) < 0.02)
+        #expect(alone.spans[0].start >= 4.8)
+        // A track for the other side that's silent all through is no track.
+        let silent = try #require(try pick(mic: mic, remote: [Float](repeating: 0, count: mic.count)))
+        #expect(silent.spans == alone.spans)
     }
 }
 
@@ -647,7 +782,7 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
             settings.callRecording = mode
             store = CallStore(paths: paths, settings: settings)
             store.load()
-            transcriber = CallTranscriber(store: store) { _, _, _ in
+            transcriber = CallTranscriber(store: store) { _, _, _, _ in
                 CloudResult(text: #"[{"start":"00:01","end":"00:03","speaker":"Sam","text":"Hello there"}]"#)
             }
             let sensors = CallWatch.Sensors(
@@ -1213,7 +1348,7 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
     @Test func answersAreKeptWithTheCallAndGoWithIt() async throws {
         let (store, call) = Self.store()
         let speech = speechLike(seconds: 10)
-        let transcriber = CallTranscriber(store: store) { _, _, _ in
+        let transcriber = CallTranscriber(store: store) { _, _, _, _ in
             CloudResult(text: "Sure!\n[00:01-00:02] Аня: Привет\n[00:03-00:04] Sam: Hi")
         }
         transcriber.read = { _, range in Array(speech[range]) }
@@ -1232,7 +1367,7 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
     @Test func anUnreadableAnswerSaysHowMuchAndWhereItIs() async throws {
         let (store, call) = Self.store()
         let speech = speechLike(seconds: 10)
-        let transcriber = CallTranscriber(store: store) { _, _, _ in
+        let transcriber = CallTranscriber(store: store) { _, _, _, _ in
             CloudResult(text: "I'm sorry,\nI can't transcribe this.\nIt is too quiet.")
         }
         transcriber.read = { _, range in Array(speech[range]) }
@@ -1250,7 +1385,7 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
         let (store, call) = Self.store()
         let speech = speechLike(seconds: 30)
         let requests = OSAllocatedUnfairLock(initialState: 0)
-        let transcriber = CallTranscriber(store: store) { _, _, _ in
+        let transcriber = CallTranscriber(store: store) { _, _, _, _ in
             requests.withLock { $0 += 1 }
             throw AppError.openRouterTruncated("[00:01-00:03] Аня: Первая фраза\n[00:12-00:14] Sam: Вторая\n[00:15-00")
         }
@@ -1284,7 +1419,7 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
         let (store, call) = Self.store()
         let quiet = [Float](repeating: 0, count: Int(10 * rate))
         let speech = speechLike(seconds: 10)
-        let transcriber = CallTranscriber(store: store) { _, _, _ in
+        let transcriber = CallTranscriber(store: store) { _, _, _, _ in
             var result = CloudResult(text: "Note: one phrase\n[00:01-00:02] Sam: секретные слова")
             result.costUSD = 0.004
             result.finishReason = "stop"
@@ -1303,6 +1438,10 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
         #expect(text.contains("[calls] transcription.request call=\(id) chunk=1 chunks=1 audio=10 chars=51 "
                               + "format=lines phrases=1 skipped=1 finish=stop cost=0"))
         #expect(text.contains("[calls] transcription.finished call=\(id) phrases=1 requests=1 skippedSilent=0"))
+        // The person alone on the mic: a sample of their voice went with the request, its length noted.
+        #expect(text.range(of: #"transcription\.started .* mutes=0 sample=\d+(\.\d+)? sampleStretches=1"#,
+                           options: .regularExpression) != nil)
+        #expect(text.range(of: #"transcription\.request .* sample=\d+(\.\d+)?"#, options: .regularExpression) != nil)
         #expect(!text.contains("секрет"), "never what was said")
     }
 }

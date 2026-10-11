@@ -605,13 +605,28 @@ enum ProxyFixture {
         let (client, openRouterHost) = StubURLProtocol.client([])
         let account = OpenRouterAccount(keyStore: .inMemory(nil), client: client, debounce: .zero)
         let send = CallTranscriber.openRouter(client: client, account: account, proxy: proxy)
-        let result = try await send(Data([1, 2]), "Transcribe the call.", 2)
+        let result = try await send(Data([1, 2]), "Transcribe the call.", 2, nil)
         #expect(result.text == "[00:00-00:02] Anna: Hi.")
         #expect(result.costUSD == 0.03)
         #expect(StubURLProtocol.registry.requests(for: proxyHost).count == 1)
         #expect(StubURLProtocol.registry.requests(for: openRouterHost).isEmpty)
         proxy.isEnabled = false
-        await #expect(throws: AppError.openRouterMissingKey) { try await send(Data([1]), "x", 1) }
+        await #expect(throws: AppError.openRouterMissingKey) { try await send(Data([1]), "x", 1, nil) }
+    }
+
+    /// The endpoint speaks the same format: a call's voice sample goes as the first audio part there too.
+    @Test func aCallsVoiceSampleGoesToTheProxyBeforeTheCall() async throws {
+        let (proxy, proxyHost) = ProxyFixture.proxy([.stream(SSE.answer("[00:00-00:02] Sam: Hi."))])
+        let (client, _) = StubURLProtocol.client([])
+        let account = OpenRouterAccount(keyStore: .inMemory(nil), client: client, debounce: .zero)
+        let send = CallTranscriber.openRouter(client: client, account: account, proxy: proxy)
+        _ = try await send(Data([1, 2]), "The call.", 2, Data([7, 7, 7]))
+        let body = ProxyFixture.json(try #require(StubURLProtocol.registry.bodies(for: proxyHost).first))
+        #expect(body["provider"] == nil)
+        let content = try #require((body["messages"] as? [[String: Any]])?.last?["content"] as? [[String: Any]])
+        let data = content.map { ($0["input_audio"] as? [String: Any])?["data"] as? String }
+        #expect(data == [Data([7, 7, 7]).base64EncodedString(), Data([1, 2]).base64EncodedString()])
+        #expect(content.allSatisfy { $0["type"] as? String == "input_audio" })
     }
 
     @Test func routeAndKeyStatusPerEngine() {

@@ -250,11 +250,14 @@ final class OpenRouterClient: Sendable {
     /// Studio doesn't support stream cancellation, so the model finishes and is paid for in full.
     /// With `extractsTags` false the answer comes back exactly as the model wrote it, a cut-off one too
     /// (`openRouterTruncated`): a call's transcript (`CallTranscriber`) has its own format and asks for no tags.
+    /// `voiceSample`, a call's only: a sample of the person's voice in `format`, sent as an audio part before `audio`
+    /// (`OpenRouterChatRequest.transcription`).
     func transcribe(audio: Data, format: String, model: String, systemPrompt: String?, effort: ReasoningEffort,
                     maxTokens: Int, apiKey: String, timeout: TimeInterval, extractsTags: Bool = true,
                     progress: (@Sendable (ChatStreamProgress) -> Void)? = nil,
                     generation: (@Sendable (String) -> Void)? = nil,
-                    provider: OpenRouterChatRequest.Provider = .googleAIStudio) async throws -> CloudResult {
+                    provider: OpenRouterChatRequest.Provider = .googleAIStudio,
+                    voiceSample: Data? = nil) async throws -> CloudResult {
         let engine = Self.engine(forModel: model)
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw adapted(AppError.openRouterMissingKey) }
@@ -263,7 +266,8 @@ final class OpenRouterClient: Sendable {
         do {
             body = try adjusted(OpenRouterChatRequest.transcription(
                 model: model, audioBase64: audio.base64EncodedString(), format: format, systemPrompt: systemPrompt,
-                effort: effort, maxTokens: maxTokens, provider: provider)).encoded()
+                effort: effort, maxTokens: maxTokens, provider: provider,
+                voiceSampleBase64: voiceSample?.base64EncodedString())).encoded()
         } catch {
             throw adapted(AppError.openRouterBadRequest("Couldn’t build the request."))
         }

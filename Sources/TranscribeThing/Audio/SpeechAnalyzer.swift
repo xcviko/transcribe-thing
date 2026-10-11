@@ -83,22 +83,30 @@ enum SpeechAnalyzer {
 
     /// Number of frames that sit `voicedMarginDB` above the local noise floor, in runs long enough to be speech.
     static func countVoicedFrames(_ frameDB: [Float], parameters: Parameters = Parameters()) -> Int {
-        guard !frameDB.isEmpty else { return 0 }
+        voicedFrames(frameDB, parameters: parameters).reduce(0) { $0 + ($1 ? 1 : 0) }
+    }
+
+    /// Each frame: whether it sits `voicedMarginDB` above the local noise floor, in a run long enough to be speech.
+    static func voicedFrames(_ frameDB: [Float], parameters: Parameters = Parameters()) -> [Bool] {
+        guard !frameDB.isEmpty else { return [] }
         let floors = localFloors(frameDB, parameters: parameters)
         let minimumRun = max(1, Int((parameters.minimumRunSeconds / parameters.frameSeconds).rounded()))
 
-        var voiced = 0
+        var voiced = [Bool](repeating: false, count: frameDB.count)
         var run = 0
+        func close(at end: Int) {
+            if run >= minimumRun { for index in (end - run)..<end { voiced[index] = true } }
+            run = 0
+        }
         for index in frameDB.indices {
             let threshold = max(floors[index], parameters.minimumFloorDBFS) + parameters.voicedMarginDB
             if frameDB[index] > threshold {
                 run += 1
             } else {
-                if run >= minimumRun { voiced += run }
-                run = 0
+                close(at: index)
             }
         }
-        if run >= minimumRun { voiced += run }
+        close(at: frameDB.count)
         return voiced
     }
 
