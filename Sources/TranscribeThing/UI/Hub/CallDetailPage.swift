@@ -259,9 +259,16 @@ private struct CallTranscriptView: View {
                     .accessibilityAddTraits(.isHeader)
                 Spacer(minLength: 8)
                 if call.transcript.map({ !$0.segments.isEmpty }) == true {
-                    Text("Click a name to rename them, a time to play from there.")
+                    Text("Click a phrase to play from there, a name to rename them.")
                         .font(.system(size: 11))
                         .foregroundStyle(.inkTertiary)
+                    Button {
+                        hub.copy(CallFormat.copyText(call))
+                    } label: {
+                        Label("Copy", systemImage: "doc.on.doc")
+                    }
+                    .controlSize(.small)
+                    .help("Copy Transcript")
                 }
             }
             .padding(.horizontal, 4)
@@ -337,21 +344,16 @@ private struct CallSegmentRow: View {
     var isCurrent: Bool
     var player: CallPlayer
 
+    @Environment(HubContext.self) private var hub
+    @State private var hovering = false
+
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Button {
-                player.seek(to: segment.start, play: true)
-            } label: {
-                Text(CallPrompts.clock(segment.start))
-                    .font(.system(size: 11.5, weight: isCurrent ? .semibold : .regular))
-                    .monospacedDigit()
-                    .foregroundStyle(isCurrent ? Color.ink : Color.inkTertiary)
-                    .frame(width: 52, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(!player.canPlay)
-            .help("Play from \(CallPrompts.clock(segment.start))")
+            Text(CallPrompts.clock(segment.start))
+                .font(.system(size: 11.5, weight: isCurrent ? .semibold : .regular))
+                .monospacedDigit()
+                .foregroundStyle(isCurrent ? Color.ink : Color.inkTertiary)
+                .frame(width: 52, alignment: .leading)
             VStack(alignment: .leading, spacing: 3) {
                 if showsName {
                     HStack(spacing: 6) {
@@ -372,13 +374,30 @@ private struct CallSegmentRow: View {
                     .lineSpacing(2)
                     .foregroundStyle(.ink)
                     .opacity(segment.duringMute ? 0.5 : 1)
-                    .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 10)
         .padding(.vertical, 5)
+        // The whole phrase plays from its start: the one playing is lit, the one under the pointer shaded.
+        .background {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(isCurrent ? Color.accentColor.opacity(0.14) : (hovering && player.canPlay ? Color.hover : .clear))
+        }
+        .padding(.horizontal, 6)
+        .contentShape(Rectangle())
+        .onTapGesture { if player.canPlay { player.seek(to: segment.start, play: true) } }
+        .onHover { hovering = $0 }
+        .help(player.canPlay ? "Play from \(CallPrompts.clock(segment.start))" : "")
+        .contextMenu {
+            Button("Play from \(CallPrompts.clock(segment.start))") { player.seek(to: segment.start, play: true) }
+                .disabled(!player.canPlay)
+            Button("Copy Phrase") { hub.copy("\(call.name(of: segment.speaker)): \(segment.text)") }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { if player.canPlay { player.seek(to: segment.start, play: true) } }
     }
 }
 
