@@ -26,7 +26,7 @@ struct GeneralPage: View {
                 SoftwareUpdateRow()
             }
             HubGroup("You", footer: "Home greets you by it, and call transcripts name you with it. Empty: "
-                     + "your Mac account's name.") {
+                     + "your Mac account’s name.") {
                 SettingsGroup {
                     SettingsRow(title: "Your name", systemImage: "person.crop.circle", iconTint: .inkSecondary) {
                         TextField("Your name", text: $settings.userName, prompt: Text(AppSettings.macFirstName ?? "Name"))
