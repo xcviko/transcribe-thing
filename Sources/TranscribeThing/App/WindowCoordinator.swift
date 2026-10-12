@@ -143,7 +143,11 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         guard let closing = notification.object as? NSWindow else { return }
         // Drop the window and its SwiftUI tree so the agent stays light in the background.
-        if closing === hubWindow { hubWindow = nil }
+        if closing === hubWindow {
+            hubWindow = nil
+            // A call played on its page no longer holds the play/pause key once the window is gone.
+            CallNowPlaying.shared.release()
+        }
         if closing === onboardingWindow { onboardingWindow = nil }
         // The closing window still counts as visible during willClose.
         DispatchQueue.main.async { [weak self] in

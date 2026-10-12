@@ -66,19 +66,23 @@ struct CallDetailPage: View {
         .task(id: call.id) {
             guard player == nil || player?.id != call.id else { return }
             player?.stop()
-            player = makePlayer(call)
+            player = makePlayer(call, nowPlaying: hub.isPreview ? nil : .shared)
         }
     }
 
-    /// The page's player, or one standing in for it until the page has made its own (it plays nothing).
+    /// The page's player, or one standing in for it until the page has made its own (it never takes the media keys:
+    /// nothing would let them go).
     private func player(for call: CallRecord) -> CallPlayer {
         if let player, player.id == call.id { return player }
         return makePlayer(call)
     }
 
-    private func makePlayer(_ call: CallRecord) -> CallPlayer {
+    /// `nowPlaying`: the media controls the page's own player takes once it plays (the play/pause key, Control
+    /// Center), until the page closes.
+    private func makePlayer(_ call: CallRecord, nowPlaying: CallNowPlaying? = nil) -> CallPlayer {
         let urls = [CallJournal.Track.mic, .remote].compactMap { store.audioURL(of: call, track: $0) }
-        return CallPlayer(id: call.id, urls: hub.isPreview ? [] : urls, duration: call.duration)
+        return CallPlayer(id: call.id, urls: hub.isPreview ? [] : urls, duration: call.duration,
+                          item: .of(call), nowPlaying: nowPlaying)
     }
 
     @ViewBuilder private func tools(_ call: CallRecord) -> some View {

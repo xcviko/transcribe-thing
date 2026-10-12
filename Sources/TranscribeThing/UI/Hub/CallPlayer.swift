@@ -3,9 +3,10 @@ import Observation
 
 /// Plays a call's two tracks together, as it sounded: the mic's and the other side's, each its own track of one
 /// composition, which the player mixes. Both start at the call's sample 0, so they stay in step. Loaded on the first
-/// Play, not when the page opens.
+/// Play, not when the page opens. From that Play until the page closes (`stop`), it's the Mac's Now Playing
+/// (`CallNowPlaying`): the play/pause key and Control Center pause and play it.
 @MainActor @Observable
-final class CallPlayer {
+final class CallPlayer: NowPlayable {
     private(set) var isPlaying = false
     /// Seconds into the call.
     private(set) var currentTime: TimeInterval = 0
@@ -22,11 +23,19 @@ final class CallPlayer {
 
     /// The call it plays.
     @ObservationIgnored let id: UUID
+    /// What Now Playing shows for it.
+    @ObservationIgnored let nowPlayingItem: NowPlayingItem
+    /// The media controls it takes once it plays; none for a page's stand-in or a preview.
+    @ObservationIgnored private let nowPlaying: CallNowPlaying?
 
-    init(id: UUID, urls: [URL], duration: TimeInterval) {
+    init(id: UUID, urls: [URL], duration: TimeInterval,
+         item: NowPlayingItem = NowPlayingItem(title: "Call", artist: "", album: ""),
+         nowPlaying: CallNowPlaying? = nil) {
         self.id = id
         self.urls = urls
         self.duration = duration
+        self.nowPlayingItem = item
+        self.nowPlaying = nowPlaying
     }
 
     var canPlay: Bool { !urls.isEmpty && problem == nil }
@@ -41,12 +50,14 @@ final class CallPlayer {
             if currentTime >= duration - 0.05 { await seek(player, to: 0) }
             player.play()
             isPlaying = true
+            nowPlaying?.attach(self)
         }
     }
 
     func pause() {
         player?.pause()
         isPlaying = false
+        nowPlaying?.update(self)
     }
 
     /// Moves to `seconds` into the call; `play` starts it from there.
@@ -59,13 +70,17 @@ final class CallPlayer {
             if play {
                 player.play()
                 isPlaying = true
+                nowPlaying?.attach(self)
+            } else {
+                nowPlaying?.update(self)
             }
         }
     }
 
-    /// Stops and lets go of the files: the page closed.
+    /// Stops and lets go of the files and of the media controls: the page closed, or shows another call.
     func stop() {
         pause()
+        nowPlaying?.detach(self)
         if let timeObserver { player?.removeTimeObserver(timeObserver) }
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         timeObserver = nil
@@ -118,6 +133,8 @@ final class CallPlayer {
                 guard let self else { return }
                 self.isPlaying = false
                 self.currentTime = self.duration
+                // Still Now Playing, paused at the end: the play/pause key plays it again from the start.
+                self.nowPlaying?.update(self)
             }
         }
     }
