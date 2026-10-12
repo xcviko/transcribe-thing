@@ -35,6 +35,8 @@ final class CallMuteReader: @unchecked Sendable {
     private let budget: TimeInterval
     /// Apps asked for AXManualAccessibility, and whether it was this reader that turned it on.
     private var manual: [pid_t: Bool] = [:]
+    /// A site no service is known for: what its Mute button has shown during the call.
+    private var generic = GenericMute()
 
     /// Why a browser call's mute is unknown when its tab isn't the one shown: a background tab's controls can't be read.
     nonisolated static let tabNotActive = "tab not active"
@@ -77,6 +79,7 @@ final class CallMuteReader: @unchecked Sendable {
             AXUIElementSetAttributeValue(application(pid), "AXManualAccessibility" as CFString, kCFBooleanFalse)
         }
         manual = [:]
+        generic = GenericMute()
     }
 
     // MARK: Apps
@@ -144,6 +147,15 @@ final class CallMuteReader: @unchecked Sendable {
         report.tab = tab
         guard let service = tab.service else {
             report.read.state = .unknown("not a call service it knows")
+            // A site using the mic that no service is known for: its buttons are tried for a Mute that can be
+            // trusted (`GenericMute`), in the tab's own page only, without a walk of the whole window.
+            guard tab.recording?.hasMic == true, tab.active else { return report }
+            var controls: [CallControl] = []
+            for area in webAreas(in: windowElements[tab.window], deadline: deadline) {
+                controls += search(area, keys: ["AXButtonSearchKey", "AXCheckBoxSearchKey"], deadline: deadline)
+            }
+            let read = generic.read(controls)
+            if read.state.isKnown { report.read = read }
             return report
         }
         guard tab.active else {
@@ -164,7 +176,7 @@ final class CallMuteReader: @unchecked Sendable {
         var found: [CallControl] = []
         if let rules, !rules.isEmpty {
             for area in webAreas(in: window, deadline: deadline) {
-                found += search(area, keys: ["AXButtonSearchKey", "AXCheckBoxSearchKey"])
+                found += search(area, keys: ["AXButtonSearchKey", "AXCheckBoxSearchKey"], deadline: deadline)
             }
             if !found.isEmpty, rules.read(found).state.isKnown { return found }
         }
@@ -186,16 +198,23 @@ final class CallMuteReader: @unchecked Sendable {
         return areas
     }
 
-    /// Chromium's and WebKit's own search: one request for every element of a kind, instead of a walk.
-    private func search(_ area: AXUIElement, keys: [String]) -> [CallControl] {
+    /// Chromium's and WebKit's own search: one request for every element of a kind in the whole page, instead of a
+    /// walk. A busy page (Slack's, whose huddle bar sits after every channel and message) has hundreds of buttons, so
+    /// the limit is high and the results are read until the deadline.
+    private func search(_ area: AXUIElement, keys: [String], deadline: Date) -> [CallControl] {
         keys.flatMap { key -> [CallControl] in
-            let query: [String: Any] = ["AXSearchKey": key, "AXResultsLimit": 500, "AXDirection": "AXDirectionNext",
+            let query: [String: Any] = ["AXSearchKey": key, "AXResultsLimit": 1500, "AXDirection": "AXDirectionNext",
                                         "AXImmediateDescendantsOnly": false, "AXVisibleOnly": false]
             var out: CFTypeRef?
-            guard AXUIElementCopyParameterizedAttributeValue(
+            guard Date() < deadline, AXUIElementCopyParameterizedAttributeValue(
                 area, "AXUIElementsForSearchPredicate" as CFString, query as CFDictionary, &out) == .success,
                 let results = out as? [AXUIElement] else { return [] }
-            return results.compactMap { node($0, children: false)?.control(menu: nil) }
+            var controls: [CallControl] = []
+            for result in results {
+                guard Date() < deadline else { break }
+                if let control = node(result, children: false)?.control(menu: nil) { controls.append(control) }
+            }
+            return controls
         }
     }
 

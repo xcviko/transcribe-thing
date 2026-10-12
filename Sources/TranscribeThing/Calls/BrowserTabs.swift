@@ -108,12 +108,54 @@ enum BrowserTabs {
         }
     }
 
-    /// What tells one call from another in the same browser: the service, with the page for Meet, whose title
-    /// names the meeting (`CallService.pageNamesTheCall`); a page no service is known for, by its title.
+    /// What tells one call from another in the same browser: the service, with the meeting for Meet, whose title
+    /// names it (`CallService.pageNamesTheCall`: its code when the title has one, else the whole title); a page no
+    /// service is known for, by its title.
     static func key(service: CallService?, page: String) -> String {
         let page = page.lowercased().split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
         guard let service else { return "page: " + page }
-        return service.pageNamesTheCall ? "\(service.rawValue): \(page)" : service.rawValue
+        guard service.pageNamesTheCall else { return service.rawValue }
+        return "\(service.rawValue): \(meetingCode(in: page) ?? page)"
+    }
+
+    /// A Meet meeting's code in a title, "abc-defg-hij", lowercased: whatever else the title says around it (an
+    /// extension's emoji, a profile's tag) doesn't make it another meeting.
+    static func meetingCode(in page: String) -> String? {
+        let words = page.lowercased().split { !($0.isASCII && $0.isLetter) && $0 != "-" }
+        return words.first { word in
+            word.split(separator: "-", omittingEmptySubsequences: false).map(\.count) == [3, 4, 3]
+        }.map(String.init)
+    }
+
+    /// The parts of a page's title between " - ", " | ", " · " and dashes, each without what decorates it: an
+    /// unread mark, a bracketed tag ("[Main]", "(Channel)"), emoji and symbols at either end. Lowercased, spaces
+    /// collapsed. "general (Channel) - V-Soft - Slack [Main] 🏠" is "general", "v-soft", "slack".
+    static func components(of title: String) -> [String] {
+        var text = title.lowercased().split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        for separator in [" - ", " | ", " · ", " – ", " — "] {
+            text = text.replacingOccurrences(of: separator, with: "\u{1F}")
+        }
+        return text.split(separator: "\u{1F}").map { bare(String($0)) }.filter { !$0.isEmpty }
+    }
+
+    /// One part of a title without its decorations (`components`).
+    private static func bare(_ part: String) -> String {
+        var text = Substring(withoutUnreadMark(part))
+        func isWordy(_ character: Character) -> Bool { character.isLetter || character.isNumber }
+        while true {
+            let before = text
+            text = text.drop { !isWordy($0) && $0 != "[" && $0 != "(" }
+            while let last = text.last, !isWordy(last), last != "]", last != ")" { text = text.dropLast() }
+            if text.last == "]", let open = text.lastIndex(of: "[") {
+                text = text[..<open]
+            } else if text.last == ")", let open = text.lastIndex(of: "("), open > text.startIndex {
+                text = text[..<open]
+            } else if text.first == "[", let close = text.firstIndex(of: "]") {
+                text = text[text.index(after: close)...]
+            }
+            text = Substring(text.trimmingCharacters(in: .whitespaces))
+            if text == before { return String(text) }
+        }
     }
 
     /// One tab in the strip: its accessible title, and whether it's the window's selected tab when the browser says.
@@ -140,6 +182,9 @@ enum BrowserTabs {
         var service: CallService?
         /// The window's selected tab: its page is the one in the window's web area, so its buttons can be read.
         var active: Bool
+        /// Whether another tab records the mic too: then this one stopping while that one goes on is that tab's call,
+        /// not this one retitled (`CallDetector`).
+        var othersRecordMic = false
 
         /// Which call it is (`BrowserTabs.key`).
         var key: String { BrowserTabs.key(service: service, page: page) }
@@ -167,12 +212,17 @@ enum BrowserTabs {
             }?.element
         }
         let recording = candidates.filter { $0.recording != nil }
-        if !recording.isEmpty {
-            return first(recording) {
+        var chosen = recording.isEmpty
+            ? first(candidates.filter { $0.service != nil }) { [followed($0), $0.active ? 0 : 1] }
+            : first(recording) {
                 [$0.recording?.hasMic == true ? 0 : 1, followed($0), $0.service == nil ? 1 : 0, $0.active ? 0 : 1]
             }
+        if let tab = chosen {
+            chosen?.othersRecordMic = candidates.contains {
+                ($0.window != tab.window || $0.tab != tab.tab) && $0.recording?.hasMic == true
+            }
         }
-        return first(candidates.filter { $0.service != nil }) { [followed($0), $0.active ? 0 : 1] }
+        return chosen
     }
 
     /// Whether a window titled `windowTitle` shows the tab: browsers title the window with its selected page,

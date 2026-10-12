@@ -766,6 +766,8 @@ private func voiceTrack(seconds: Double, speech: [(at: Double, length: Double)],
         var canReadWindows = true
         /// The browser shows its windows to Accessibility.
         var windowsReadable = true
+        /// What the followed app's Mute button says.
+        var mute: MuteState = .unknown("test")
         /// The apps whose windows were read, a read at a time.
         var reads: [String] = []
         var sources: [[CallJournal.Track: FakeSource]] = []
@@ -797,7 +799,7 @@ private func voiceTrack(seconds: Double, speech: [(at: Double, length: Double)],
                         : []
                     let isBrowser = CallAppKind.of(app.id) == .browser
                     done(CallMuteReader.Report(
-                        read: MuteRead(state: .unknown("test"), inCall: nil, detail: ""), isBrowser: isBrowser,
+                        read: MuteRead(state: mute, inCall: nil, detail: ""), isBrowser: isBrowser,
                         tab: isBrowser ? BrowserTabs.callTab(in: windows, following: following) : nil,
                         windowCount: windows.count, otherTabPlaysAudio: BrowserTabs.otherTabPlaysAudio(
                             in: windows, besides: BrowserTabs.callTab(in: windows, following: following))))
@@ -1171,6 +1173,55 @@ private func voiceTrack(seconds: Double, speech: [(at: Double, length: Double)],
         #expect(try level(20.1, 24.7) > 0.01)
         #expect(try level(30.2, 34.7) > 0.01)
         #expect(CallFormat.notes(call).first?.hasSuffix("; your mic wasn’t recorded then.") == true)
+    }
+
+    /// The log of 2026-10-12: a Slack huddle in Chrome, its tab retitled by an extension ("... - Slack [Main] 🏠")
+    /// and again with each channel the person opens, muted from the start. One call, Slack's, named by the page it
+    /// began on; the mic is silenced from its very first second, on disk as it's written and in the store.
+    @Test func aSlackHuddleMutedFromTheStartIsOneCallWithItsMicSilent() async throws {
+        let rig = Rig(mode: .automatic)
+        rig.mute = .muted
+        let general = "general (Channel) - V-Soft - Slack [Main] 🏠"
+        rig.tabs = [general + " - Microphone recording", "Inbox - Gmail"]
+        rig.app("com.google.Chrome", mic: true, sound: true)
+        rig.poll([0, 0.5])
+        guard case .suspected(let info) = rig.monitor.state else { Issue.record("not suspected"); return }
+        #expect(info.service == .slack && info.muteKnown)
+        let journal = try #require(rig.store.journal)
+        func sidecar() async throws -> CallJournal.Info {
+            await journal.settle()
+            return try JSONDecoder().decode(CallJournal.Info.self, from: Data(contentsOf: journal.infoURL(for: info.id)))
+        }
+        #expect(try await sidecar().mutedSince == 0, "muted at the first read: from the call's start")
+
+        let mic = try #require(rig.sources.first?[.mic])
+        let voice = speechLike(seconds: 60)
+        mic.push(Array(voice[..<Int(30 * rate)]), at: 0)
+        rig.poll(stride(from: 1.0, through: 21, by: 1))
+        guard case .recording = rig.monitor.state else { Issue.record("not kept"); return }
+        rig.tabs = ["Jira (DM) - V-Soft - Slack [Main] 🏠 - Microphone recording", "Inbox - Gmail"]
+        rig.poll(stride(from: 22.0, through: 40, by: 1))
+        rig.tabs = ["Matvey Litvin (DM) - V-Soft - Slack [Main] 🏠 - Microphone recording"]
+        rig.poll(stride(from: 41.0, through: 60, by: 1))
+        #expect(rig.monitor.current?.id == info.id && rig.sources.count == 1, "one call through the channel switches")
+        journal.pump(info.id)
+        await journal.settle()
+        let written = try #require(RecordingJournal.read(journal.audioURL(for: info.id, track: .mic)))
+        #expect(!written.isEmpty && written.allSatisfy { $0 == 0 }, "nothing the muted mic heard reached the disk")
+
+        mic.push(Array(voice[Int(30 * rate)...]), at: nil)
+        rig.app("com.google.Chrome", mic: false, sound: false)
+        rig.tabs = []
+        rig.poll(stride(from: 61.0, through: 130, by: 1))
+        await rig.monitor.waitForEndings()
+        await rig.transcriber.waitUntilIdle()
+        #expect(rig.store.calls.count == 1)
+        let call = try #require(rig.store.call(id: info.id))
+        #expect(call.service == .slack && call.pageTitle == general)
+        #expect(call.muteKnown && call.muteIntervals.first?.start == 0)
+        let url = try #require(rig.store.audioURL(of: call, track: .mic))
+        let samples = try CallAudio.read(url, range: 0..<Int(59 * rate))
+        #expect(samples.allSatisfy { abs($0) < 0.001 })
     }
 
     /// The minute of silence that tells a hang-up from a pause isn't the call: the room after it isn't kept.

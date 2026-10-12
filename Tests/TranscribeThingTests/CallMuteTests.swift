@@ -69,6 +69,33 @@ import Testing
         #expect(state(.slack, [CallControl(role: "AXCheckBox", subrole: "AXSwitch", title: "Microphone", value: 0)]) == .muted)
         #expect(state(.slack, [button("Microphone")]) == .unknown("no mute control found"), "a switch without a value says nothing")
         #expect(CallService.slack.rules.read([button("Leave huddle"), button("Mute microphone")]).inCall == true)
+        #expect(state(.slack, [button("Mute mic")]) == .live && state(.slack, [button("Unmute mic")]) == .muted)
+        #expect(state(.slack, [button("Turn off microphone")]) == .live)
+        #expect(state(.slack, [button("Turn on microphone")]) == .muted)
+        #expect(state(.slack, [CallControl(role: "AXCheckBox", subrole: "AXSwitch", label: "Mic", value: 0)]) == .muted)
+        #expect(state(.slack, [CallControl(role: "AXCheckBox", subrole: "AXToggle", label: "Mute mic", value: 1)]) == .muted,
+                "a pressed Mute toggle is muted")
+        #expect(state(.slack, [CallControl(role: "AXCheckBox", subrole: "AXToggle", label: "Mute mic", value: 0)]) == .live)
+        #expect(CallService.slack.rules.read([button("Leave"), button("Unmute mic")]).inCall == true)
+    }
+
+    /// A site no service is known for: a label that only means the mic is trusted at once; a bare Mute or Unmute
+    /// (a video's sound, maybe) only once both have shown during the call. Links, menus and text say nothing.
+    @Test func anUnknownSitesMuteIsTrustedOnlyWhenItCanOnlyBeTheMic() {
+        var generic = GenericMute()
+        #expect(generic.read([button("Unmute microphone")]).state == .muted)
+        #expect(generic.read([button("Turn off microphone (⌘ + d)")]).state == .live)
+        #expect(generic.read([button("Выключить микрофон")]).state == .live)
+        #expect(generic.read([CallControl(role: "AXMenuItem", label: "Unmute microphone")]).state.isKnown == false)
+        #expect(generic.read([CallControl(role: "AXLink", label: "Mute microphone")]).state.isKnown == false)
+
+        var bare = GenericMute()
+        #expect(bare.read([button("Mute")]).state == .unknown("a Mute button not seen turning over yet"))
+        #expect(bare.read([button("Mute")]).state.isKnown == false)
+        #expect(bare.read([button("Unmute")]).state == .muted, "both seen: it turns over with the mic")
+        #expect(bare.read([button("Mute")]).state == .live)
+        #expect(bare.read([button("Share screen")]).state == .unknown("no mute control found"))
+        #expect(bare.read([]).inCall == nil)
     }
 
     @Test func zoomOnTheWebAndTelemost() {
@@ -351,6 +378,58 @@ import Testing
         for (title, service) in titles {
             #expect(CallService.of(pageTitle: title) == service, "\(title)")
         }
+    }
+
+    /// An extension or a Chrome profile may add its own to a title ("[Main] 🏠" after Slack's): the service is still
+    /// found by the part of the title that names it. A name inside a sentence or a longer word isn't one.
+    @Test func theServiceFromATitleSomethingDecorated() {
+        let titles: [(String, CallService?)] = [
+            ("general (Channel) - V-Soft - Slack [Main] 🏠", .slack),
+            ("Jira (DM) - V-Soft - Slack [Main] 🏠", .slack),
+            ("Huddles - V-Soft - Slack", .slack),
+            ("[Work] Slack | general", .slack),
+            ("• Discord | #основной | Сервер package.json [Work]", .discord),
+            ("Meet – abc-defg-hij 🎧", .meet),
+            ("🎧 Google Meet", .meet),
+            ("Zoom Meeting (2) ✨", .zoom),
+            ("Telegram Web [Personal]", .telegram),
+            ("Slacker news", nil),
+            ("Why we slack off on Fridays - Blog", nil),
+            ("Slack outage - Inbox - Gmail", nil),
+            ("Meet the team - Acme", nil),
+            ("Discordant notes | Music", nil),
+        ]
+        for (title, service) in titles {
+            #expect(CallService.of(pageTitle: title) == service, "\(title)")
+        }
+        #expect(BrowserTabs.components(of: "(1) general (Channel) - V-Soft - Slack [Main] 🏠")
+            == ["general", "v-soft", "slack"])
+        #expect(BrowserTabs.components(of: "• Discord | #основной | Сервер package.json [Work]")
+            == ["discord", "основной", "сервер package.json"])
+        // Chrome's own marks still come off first, then the page is matched.
+        let parsed = BrowserTabs.parse("Jira (DM) - V-Soft - Slack [Main] 🏠 - Microphone recording")
+        #expect(parsed == .init(page: "Jira (DM) - V-Soft - Slack [Main] 🏠", recording: .mic))
+        #expect(CallService.of(pageTitle: parsed.page) == .slack)
+        // Meet's meeting is its code, whatever is around it.
+        #expect(BrowserTabs.key(service: .meet, page: "Meet – abc-defg-hij 🎧") == "meet: abc-defg-hij")
+        #expect(BrowserTabs.key(service: .meet, page: "Meet – abc-defg-hij") == "meet: abc-defg-hij")
+        #expect(BrowserTabs.key(service: .meet, page: "Google Meet") == "meet: google meet")
+        #expect(BrowserTabs.key(service: .slack, page: "Jira (DM) - V-Soft - Slack [Main] 🏠") == "slack")
+    }
+
+    /// The call tab says whether another tab records the mic beside it.
+    @Test func theCallTabSaysWhetherAnotherRecordsTheMic() throws {
+        let two = [BrowserTabs.Window(title: "x", tabs: [
+            .init(title: "Some call - Microphone recording", selected: true),
+            .init(title: "Another call - Microphone recording", selected: false),
+            .init(title: "Photo booth - Camera recording", selected: false),
+        ])]
+        #expect(try #require(BrowserTabs.callTab(in: two)).othersRecordMic)
+        let one = [BrowserTabs.Window(title: "x", tabs: [
+            .init(title: "Some call - Microphone recording", selected: true),
+            .init(title: "Photo booth - Camera recording", selected: false),
+        ])]
+        #expect(try #require(BrowserTabs.callTab(in: one)).othersRecordMic == false)
     }
 
     @Test func theCallTabIsTheOneRecordingTheMicWhereverItIs() throws {

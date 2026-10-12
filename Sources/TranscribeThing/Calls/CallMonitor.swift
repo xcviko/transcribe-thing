@@ -498,9 +498,12 @@ final class CallMonitor {
                     return discardLive()
                 }
                 // A tab using the mic, any site; or one titled like a call service (Safari and Firefox mark nothing).
+                // The call keeps the page it was first found on: a tab retitled mid-call (another Slack channel) is
+                // still this call (`CallDetector`), named where it began. Once its service is known, its page is
+                // the one that said so.
                 if tab.service != nil || tab.recording?.hasMic == true {
+                    if live.info.pageTitle == nil || live.info.service != tab.service { live.info.pageTitle = tab.page }
                     live.info.service = tab.service
-                    live.info.pageTitle = tab.page
                     live.classified = true
                 }
             }

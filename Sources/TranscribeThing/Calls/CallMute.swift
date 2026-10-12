@@ -260,8 +260,12 @@ enum CallService: String, CaseIterable, Codable, Equatable, Sendable {
                       mutedWhenOn: ["Mute", "Заглушить", "Откл. микрофон", "Отключить микрофон"],
                       inCall: ["Disconnect", "Отключиться"])
         case .slack:
-            MuteRules(muted: ["Unmute microphone", "Unmute mic"], live: ["Mute microphone", "Mute mic"],
-                      liveWhenOn: ["Microphone"], inCall: ["Leave huddle"])
+            // The huddle bar stays at the foot of every Slack page while the huddle goes on, so these are read
+            // whichever channel is open. A toggle button named "Mute mic" that is pressed is muted.
+            MuteRules(muted: ["Unmute microphone", "Unmute mic", "Turn on microphone"],
+                      live: ["Mute microphone", "Mute mic", "Turn off microphone"],
+                      mutedWhenOn: ["Mute microphone", "Mute mic"], liveWhenOn: ["Microphone", "Mic"],
+                      inCall: ["Leave huddle", "Leave"])
         case .telemost:
             MuteRules(muted: ["Включить микрофон", "Turn on microphone"],
                       live: ["Выключить микрофон", "Turn off microphone"],
@@ -272,25 +276,75 @@ enum CallService: String, CaseIterable, Codable, Equatable, Sendable {
         }
     }
 
-    /// The service a web page is, from its title as the tab shows it (an unread mark like "(3) " or "• " ignored):
-    /// "Meet – abc-defg-hij", "Zoom Meeting", "#general | Server | Discord", "Discord | Friends", "Telegram Web",
-    /// "Идёт звонок · Яндекс Телемост".
+    /// The service a web page is, from its title as the tab shows it: "Meet – abc-defg-hij", "Zoom Meeting",
+    /// "#general | Server | Discord", "Discord | Friends", "Telegram Web", "Идёт звонок · Яндекс Телемост",
+    /// "general (Channel) - V-Soft - Slack [Main] 🏠".
+    ///
+    /// The title is cut into its parts (`BrowserTabs.components`: between " - ", " | ", " · " and dashes, each
+    /// without unread marks, bracketed tags like "[Main]" or "(Channel)", emoji and symbols at its ends), since an
+    /// extension or a Chrome profile may add its own to any title. A part that is the service's name says it is
+    /// that service, wherever it is; the first part may also start with a name that goes with more words ("Zoom
+    /// Meeting Matvey Litvin", "Telegram Web", "Huddle in #design"). A name inside a sentence ("Slacker news", "Why
+    /// we slack off - Blog") says nothing. Telemost's name is nobody else's word, so it counts anywhere ("Встреча в
+    /// Телемосте").
     static func of(pageTitle: String) -> CallService? {
-        let title = BrowserTabs.withoutUnreadMark(pageTitle).lowercased()
-            .split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
-        func ends(_ name: String) -> Bool {
-            title == name || ["| ", "- ", "– ", "— "].contains { title.hasSuffix(" " + $0 + name) }
-        }
-        func starts(_ name: String) -> Bool {
-            title == name || [" | ", " - ", " – ", " — ", ": "].contains { title.hasPrefix(name + $0) }
-        }
-        if starts("meet") || title.contains("google meet") { return .meet }
+        let title = pageTitle.lowercased()
         if title.contains("телемост") || title.contains("telemost") { return .telemost }
-        if title.contains("zoom meeting") || title.hasPrefix("zoom ") || starts("zoom") || ends("zoom") { return .zoom }
-        if starts("discord") || ends("discord") || title.contains("| discord") { return .discord }
-        if title.hasPrefix("telegram") || ends("telegram") { return .telegram }
-        if starts("slack") || ends("slack") || title.contains("huddle") { return .slack }
-        return nil
+        let parts = BrowserTabs.components(of: pageTitle)
+        guard let lead = parts.first else { return nil }
+        func starts(with name: String) -> Bool {
+            guard lead.hasPrefix(name) else { return false }
+            let next = lead.dropFirst(name.count).first
+            return next == nil || next == " " || next == ":"
+        }
+        return names.first { entry in
+            parts.contains { entry.whole.contains($0) } || entry.leading.contains(where: starts(with:))
+        }?.service
+    }
+
+    /// The names `of(pageTitle:)` knows each service by, in the order they're tried: as a whole part, and as the
+    /// start of the first. Meet's and Slack's bare names aren't a start ("Meet the team", "Slack outage - Gmail").
+    private static let names: [(service: CallService, whole: Set<String>, leading: [String])] = [
+        (.meet, ["meet", "google meet"], ["google meet"]),
+        (.zoom, ["zoom", "zoom meeting"], ["zoom"]),
+        (.discord, ["discord"], []),
+        (.telegram, ["telegram", "telegram web"], ["telegram"]),
+        (.slack, ["slack", "huddle", "huddles"], ["huddle"]),
+    ]
+}
+
+/// The Mute button of a site no service is known for, read while its tab records the mic: only its buttons and
+/// switches, with labels any call site might use. A label that can only mean the mic ("Unmute microphone", "Turn off
+/// microphone", "Выключить микрофон") is trusted at once. A bare "Mute" or "Unmute" may be a video's sound instead,
+/// so it's trusted only once both have been seen during the call: the button turning over as the person mutes and
+/// unmutes. Until then the mute stays unknown. Remembers what it has seen until `CallMuteReader.release`.
+struct GenericMute: Equatable, Sendable {
+    static let certain = MuteRules(
+        muted: ["Unmute microphone", "Unmute mic", "Turn on microphone", "Включить микрофон"],
+        live: ["Mute microphone", "Mute mic", "Turn off microphone", "Выключить микрофон"])
+    static let bare = MuteRules(muted: ["Unmute"], live: ["Mute"])
+
+    /// The states a bare "Mute" or "Unmute" has shown so far: true muted, false live.
+    private(set) var seen: Set<Bool> = []
+
+    /// What the tab's controls say, if they can be trusted.
+    mutating func read(_ controls: [CallControl]) -> MuteRead {
+        let controls = controls.filter { $0.role == "AXButton" || $0.isToggle }
+        let certain = Self.certain.read(controls)
+        if certain.state.isKnown { return MuteRead(state: certain.state, inCall: nil, detail: certain.detail) }
+        let bare = Self.bare.read(controls)
+        switch bare.state {
+        case .muted: seen.insert(true)
+        case .live: seen.insert(false)
+        case .unknown: break
+        }
+        guard bare.state.isKnown else {
+            return MuteRead(state: .unknown("no mute control found"), inCall: nil, detail: bare.detail)
+        }
+        guard seen.count == 2 else {
+            return MuteRead(state: .unknown("a Mute button not seen turning over yet"), inCall: nil, detail: bare.detail)
+        }
+        return MuteRead(state: bare.state, inCall: nil, detail: bare.detail)
     }
 }
 

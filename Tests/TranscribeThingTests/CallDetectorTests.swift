@@ -388,6 +388,95 @@ import Testing
         #expect(call.lastAudioAt == 102.1, "the leave chime after Discord gives the mic back is still the call's")
     }
 
+    /// A read of Chrome with one window whose only tab is titled `title` as Chrome shows it, found the way the
+    /// reader finds it (`BrowserTabs.callTab`).
+    private static func tabRead(_ title: String, muted: Bool? = nil, inCall: Bool? = nil) -> CallDetector.Window {
+        let windows = [BrowserTabs.Window(title: nil, tabs: [BrowserTabs.Tab(title: title, selected: true)])]
+        return CallDetector.Window(tab: BrowserTabs.callTab(in: windows).map(CallDetector.Tab.init), muted: muted,
+                                   inCall: inCall)
+    }
+
+    /// The log of 2026-10-12: a Slack huddle in Chrome, the person muted all along, switching channels as it went.
+    /// A tab-renaming extension adds " [Main] 🏠" to Slack's titles. It was split into a call per channel, its mic
+    /// recorded while muted; it's one call of 21 minutes, muted from its first second.
+    @Test func aSlackHuddleThroughChannelSwitchesIsOneCallMutedThroughout() throws {
+        let chrome = Process(bundleID: "com.google.Chrome.helper", mic: [24.8..<1300.3], sound: [24.8..<1300.3])
+        let mark = " - Microphone recording"
+        let reads: [Double: CallDetector.Window] = [
+            25.3: Self.tabRead("Huddles - V-Soft - Slack" + mark, muted: true, inCall: true),
+            42.3: Self.tabRead("general (Channel) - V-Soft - Slack [Main] 🏠" + mark, muted: true, inCall: true),
+            300.3: Self.tabRead("(1) general (Channel) - V-Soft - Slack [Main] 🏠" + mark, muted: true),
+            934.8: Self.tabRead("Jira (DM) - V-Soft - Slack [Main] 🏠" + mark, muted: true, inCall: true),
+            1023.3: Self.tabRead("Matvey Litvin (DM) - V-Soft - Slack [Main] 🏠" + mark, muted: true, inCall: true),
+        ]
+        #expect(reads.values.allSatisfy { $0.tab?.service == .slack && $0.tab?.key == "slack" })
+        var detector = CallDetector()
+        let steps = run([chrome], reads: reads, from: 0.3, to: 1500, detector: &detector)
+        let call = try #require(calls(steps).first)
+        #expect(steps.map(\.event) == [.suspected(Self.chrome, at: 24.8), .started(try #require(started(steps).first)),
+                                       .ended(call)])
+        #expect(call.startedAt == 24.8 && call.lastAudioAt == 1300.3)
+        #expect(call.tab?.service == .slack)
+        #expect(call.mutes == [24.8...1300.3], "muted at the first read, a moment after it began: muted from its start")
+
+        // Had Slack not been recognized, the retitled tab would still be one call.
+        let unknown: [Double: CallDetector.Window] = [
+            25.3: Self.read(nil, "general (Channel) - V-Soft", recording: .mic),
+            300.3: Self.read(nil, "Jira (DM) - V-Soft", recording: .mic),
+            934.8: Self.read(nil, "Matvey Litvin (DM) - V-Soft", recording: .mic),
+        ]
+        var other = CallDetector()
+        let otherSteps = run([chrome], reads: unknown, from: 0.3, to: 1500, detector: &other)
+        #expect(calls(otherSteps).map { $0.startedAt...$0.lastAudioAt } == [24.8...1300.3])
+        #expect(calls(otherSteps).first?.tab?.page == "Matvey Litvin (DM) - V-Soft", "the detector follows the latest")
+    }
+
+    /// While the mic stays on, a recording tab with another title is the same call unless it can't be: another
+    /// known service, another Meet meeting, a tab that recorded beside the call's, or the mic off in between.
+    @Test func aRetitledTabIsTheSameCallOnlyWhileTheMicStaysOn() throws {
+        func pages(_ mic: [Range<Double>], _ reads: [Double: CallDetector.Window]) -> [[String?]] {
+            var detector = CallDetector()
+            let steps = run([Process(bundleID: "com.google.Chrome.helper", mic: mic, sound: [10.1..<150.1])],
+                            reads: reads, from: 10.1, to: 300, detector: &detector)
+            return calls(steps).map { [$0.tab?.page, $0.tab?.service?.rawValue] }
+        }
+        let a = Self.read(nil, "Call A", recording: .mic), b = Self.read(nil, "Call B", recording: .mic)
+        #expect(pages([10.1..<150.1], [11.1: a, 57.1: b]) == [["Call B", nil]])
+        #expect(pages([10.1..<50.1, 51.1..<150.1], [11.1: a, 57.1: b]) == [["Call B", nil]], "a 1 s gap is a flicker")
+        #expect(pages([10.1..<50.1, 55.1..<150.1], [11.1: a, 57.1: b]) == [["Call A", nil], ["Call B", nil]],
+                "the mic off for 5 s before the new tab records: a new call")
+
+        // Another tab recorded the mic beside the call's: once the call's stops, the other's is its own call.
+        var beside = a
+        beside.tab?.othersRecordMic = true
+        #expect(pages([10.1..<150.1], [11.1: beside, 57.1: b]) == [["Call A", nil], ["Call B", nil]])
+
+        // Known services: another one, or another Meet meeting, is another call; Meet's title around the same code,
+        // or a title that doesn't say the service, is the same one.
+        let meet = Self.read(.meet, "Meet – abc-defg-hij", recording: .mic)
+        #expect(pages([10.1..<150.1], [11.1: meet, 57.1: Self.read(.meet, "Meet – xyz-abcd-efg", recording: .mic)]).count == 2)
+        #expect(pages([10.1..<150.1], [11.1: meet, 57.1: Self.read(.meet, "Meet – abc-defg-hij 🎧", recording: .mic)]).count == 1)
+        #expect(pages([10.1..<150.1], [11.1: meet, 57.1: Self.read(.zoom, "Zoom Meeting", recording: .mic)]).count == 2)
+        #expect(pages([10.1..<150.1], [11.1: Self.read(.slack, "Huddles - V-Soft - Slack", recording: .mic),
+                                       57.1: Self.read(nil, "Loading…", recording: .mic)]) == [["Loading…", "slack"]])
+        #expect(pages([10.1..<150.1], [11.1: a, 57.1: Self.read(.slack, "Huddles - Acme - Slack", recording: .mic)])
+            == [["Huddles - Acme - Slack", "slack"]], "a page found to be a service is still its call")
+    }
+
+    /// A mute first seen half a minute or more into the call (its tab was in the background until then) counts from
+    /// when it was seen, not from the start.
+    @Test func aMuteFirstSeenLateCountsFromThen() throws {
+        let chrome = Process(bundleID: "com.google.Chrome.helper", mic: [10.1..<100.1], sound: [10.1..<100.1])
+        let reads: [Double: CallDetector.Window] = [
+            11.1: Self.read(.slack, "Huddles - Acme - Slack", recording: .mic),
+            50.1: Self.read(.slack, "Huddles - Acme - Slack", recording: .mic, muted: true),
+            60.1: Self.read(.slack, "Huddles - Acme - Slack", recording: .mic, muted: false),
+        ]
+        var detector = CallDetector()
+        let call = try #require(calls(run([chrome], reads: reads, from: 10.1, to: 300, detector: &detector)).first)
+        #expect(call.mutes == [50.1...60.1])
+    }
+
     /// Discord keeps the mic while muted: once it's given back, sound after a silence is a notification, not the
     /// call coming back, and it ends 60 s after the chime.
     @Test func soundAfterAppsThatKeepTheMicLetItGoIsntTheirCall() throws {
