@@ -395,7 +395,8 @@ final class CallTranscriber {
                 return CallInterval(start: max(0, mute.start - offset), end: min(audio.seconds, mute.end - offset))
             }
             let prompt = CallPrompts.call(me: me, service: plan.service, roster: roster, local: sides.speakers,
-                                          mutes: mutes, voiceSample: sample != nil, summary: inlineSummary)
+                                          mutes: mutes, seconds: audio.seconds, voiceSample: sample != nil,
+                                          summary: inlineSummary)
             let started = ContinuousClock.now
             var text: String
             var result: CloudResult?
@@ -661,10 +662,12 @@ enum CallPrompts {
     /// before, `local` the ones on this Mac's side; `mutes`, when the person was muted, from the chunk's start.
     /// `voiceSample`: the request's first audio is a sample of the person's voice (`CallVoiceSample`), the chunk the
     /// second, and the prompt says so first. `summary`: the answer sums up the call after its transcript (a call of
-    /// one chunk).
+    /// one chunk). `seconds`, the chunk's length: mutes over `wholeMuteShare` of it say no voice is the person's.
     static func call(me: String, service: String?, roster: [String], local: [String] = [],
-                     mutes: [CallInterval], voiceSample: Bool = false, summary: Bool = false) -> String {
+                     mutes: [CallInterval], seconds: TimeInterval? = nil, voiceSample: Bool = false,
+                     summary: Bool = false) -> String {
         let named = me != "Me"
+        let who = named ? me : "The person who recorded it"
         var lines: [String] = []
         if voiceSample {
             lines.append(voiceSampleParagraph(me: me))
@@ -678,6 +681,10 @@ enum CallPrompts {
             (named ? "The person who recorded it is \(me): call them \"\(me)\"." : "Call the person who recorded it \"Me\".")
                 + " Theirs is usually the nearest, clearest voice. Call anyone else in the room with them \"Nearby 1\", "
                 + "\"Nearby 2\" and so on.",
+            "\(who) may not speak at all in this call: they may be muted or only listening. Name a voice "
+                + "\(named ? me : "\"Me\"") only when "
+                + (voiceSample ? "it matches the sample or the conversation makes it clear" : "the conversation makes it clear")
+                + "; when unsure, it's one of the other participants.",
             "Tell the other participants apart. Name one by their name when the call makes it clear: they introduce "
                 + "themselves, or someone addresses them by name and they answer (\"Аня, ты как?\" then Аня speaks). "
                 + "Otherwise call them \"Participant 1\", \"Participant 2\" and so on, in the order they first speak. "
@@ -685,7 +692,10 @@ enum CallPrompts {
             "If \(named ? me : "the person who recorded it") used speakers rather than headphones, the other "
                 + "participants may be heard twice, a moment apart: write each phrase once.",
         ]
-        if !mutes.isEmpty {
+        if let seconds, seconds > 0,
+           mutes.reduce(0, { $0 + $1.overlap(0, seconds) }) >= wholeMuteShare * seconds {
+            lines.append("\(who) was muted for the whole call: no voice in it is \(named ? me : "\"Me\"").")
+        } else if !mutes.isEmpty {
             let spans = mutes.map { "\(clock($0.start)) to \(clock($0.end))" }.joined(separator: ", ")
             lines.append("\(named ? me : "The person who recorded it") was muted in the call during \(spans). Their "
                          + "microphone is silent then: any voice heard then is one of the other participants, never "
@@ -702,6 +712,10 @@ enum CallPrompts {
         lines.append(format(summary: summary, me: me))
         return lines.joined(separator: "\n\n")
     }
+
+    /// Mutes over this share of a chunk count as the whole of it: a mute noticed a moment late, or let go just
+    /// before the end.
+    static let wholeMuteShare = 0.95
 
     /// What the request's first audio is when a sample of the person's voice goes with the call.
     static func voiceSampleParagraph(me: String) -> String {

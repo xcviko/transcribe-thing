@@ -276,6 +276,9 @@ private extension JSONDecoder {
         #expect(request.text.contains("Sam: Привет (3)"))
         #expect(request.text.components(separatedBy: "\n").count == 6)
         #expect(request.prompt.contains("Sam recorded it.") && request.prompt.contains("a call on Zoom"))
+        // They may only have listened: the summary doesn't make them the one who ran it.
+        #expect(request.prompt.contains("Sam may not have spoken at all, only listened: don't say they led the call or "
+                                        + "said something unless the transcript shows it."))
         #expect(request.prompt.contains("Answer with only the five blocks, nothing before or after them."))
         #expect(request.prompt.contains(CallSummaryPrompt.blocks(me: "Sam")))
         #expect(outcome.summary?.keyPoints.count == 3 && outcome.summaryError == nil)
@@ -346,7 +349,9 @@ private extension JSONDecoder {
         #expect(abs((done.costUSD ?? 0) - 0.052) < 1e-9)
         let request = try #require(text.requests.withLock { $0.first })
         #expect(request.text == "[00:01-00:03] Me: I’ll send the notes.\n[00:04-00:06] Participant 1: Thanks.")
-        #expect(request.prompt.contains("The person who recorded it is called \"Me\"."))
+        #expect(request.prompt.contains("The person who recorded it is called \"Me\". They may not have spoken at all, "
+                                        + "only listened: don't say \"Me\" led the call or said something unless the "
+                                        + "transcript shows it."))
         // A summary that fails says why, and the call stays as it was.
         let failing = FakeText { "I can't." }
         let again = CallTranscriber(store: store, send: { _, _, _, _ in CloudResult(text: "") },

@@ -468,6 +468,10 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
         #expect(prompt.contains("heard twice, a moment apart: write each phrase once"))
         #expect(prompt.contains("Sam was muted in the call during 00:19 to 00:26."))
         #expect(prompt.contains("never \"Sam\""))
+        #expect(!prompt.contains("muted for the whole call"), "7 s of 30")
+        #expect(prompt.contains("Sam may not speak at all in this call: they may be muted or only listening. Name a "
+                                + "voice Sam only when the conversation makes it clear; when unsure, it's one of the "
+                                + "other participants."))
         #expect(prompt.contains(CallPrompts.format(summary: true, me: "Sam")) && !prompt.contains("echo"))
         #expect(!prompt.contains("Earlier in this call"))
         // Sides come from who spoke: the person and the room are this Mac's side.
@@ -479,6 +483,18 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
         #expect(gemini.samples.withLock { $0 } == [nil] && outcome.sampleSeconds == nil)
         #expect(prompt.hasPrefix("This audio is a recording of a call") && !prompt.contains("two audios"))
         #expect(abs((outcome.costUSD ?? 0) - 0.01) < 1e-9)
+    }
+
+    @Test func aCallMutedAllThroughSaysSoInItsRequest() async throws {
+        let gemini = FakeGemini(answer: { _ in "[00:01-00:03] Аня: Привет" })
+        let samples = speechLike(seconds: 30)
+        let plan = CallTranscriber.Plan(remote: URL(fileURLWithPath: "/remote.m4a"), mic: URL(fileURLWithPath: "/mic.m4a"),
+                                        remoteSamples: samples.count, micSamples: samples.count,
+                                        mutes: [CallInterval(start: 0.4, end: 30)], userName: "Матвей", service: "Slack")
+        _ = try await CallTranscriber.run(plan, send: { try await gemini.send($0, $1, $2, $3) }) { _, range in Array(samples[range]) }
+        let prompt = try #require(gemini.prompts.withLock { $0.first })
+        #expect(prompt.contains("Матвей was muted for the whole call: no voice in it is Матвей."))
+        #expect(gemini.samples.withLock { $0 } == [nil], "nothing of theirs to sample")
     }
 
     @Test func aChunkGoesWholeAndOnlyASilentOneIsLeftOut() async throws {
@@ -681,6 +697,16 @@ private func voiceTrack(seconds: Double, speech: [(at: Double, length: Double)],
     return out
 }
 
+/// `seconds` of a voice held without pauses at `gain` of `speechLike`'s loudest, so it's voiced all through even faint.
+private func heldVoice(seconds: Double, gain: Double) -> [Float] {
+    (0..<Int(seconds * rate)).map { i in
+        let t = Double(i) / rate
+        var voice = 0.0
+        for harmonic in 1...12 { voice += sin(2 * .pi * 140 * Double(harmonic) * t) / Double(harmonic) }
+        return Float(gain * 0.08 * (0.75 + 0.25 * sin(2 * .pi * 3 * t)) * voice)
+    }
+}
+
 /// Which stretches of the person's mic go into the sample of their voice (`CallVoiceSample`).
 @Suite struct CallVoiceSampleTests {
     private let micURL = URL(fileURLWithPath: "/mic.m4a"), remoteURL = URL(fileURLWithPath: "/remote.m4a")
@@ -699,9 +725,9 @@ private func voiceTrack(seconds: Double, speech: [(at: Double, length: Double)],
     private func speech(_ spans: [CallInterval]) -> TimeInterval { spans.reduce(0) { $0 + $1.duration } }
 
     @Test func onlyStretchesWhereThePersonSpokeAloneAreTaken() throws {
-        // 0-10: both speak. 20-30 and 40-50: the person alone. 30-38: the other side alone.
-        let mic = voiceTrack(seconds: 60, speech: [(0, 10), (20, 10), (40, 10)])
-        let remote = voiceTrack(seconds: 60, speech: [(0, 10), (30, 8)], noise: false)
+        // 0-6: both speak. 20-30 and 40-50: the person alone. 60-78: the other side alone.
+        let mic = voiceTrack(seconds: 80, speech: [(0, 6), (20, 10), (40, 10)])
+        let remote = voiceTrack(seconds: 80, speech: [(0, 6), (60, 18)], noise: false)
         let picked = try #require(try pick(mic: mic, remote: remote))
         #expect(!picked.spans.isEmpty)
         for span in picked.spans {
@@ -738,6 +764,65 @@ private func voiceTrack(seconds: Double, speech: [(at: Double, length: Double)],
         #expect(try pick(mic: mic, remote: remote) == nil)
         #expect(try pick(mic: voiceTrack(seconds: 20, speech: [(5, 3)]), remote: nil, remoteFile: false) == nil)
         #expect(try pick(mic: [Float](repeating: 0, count: Int(20 * rate)), remote: nil, remoteFile: false) == nil)
+        // Two clean stretches of 2.5 s, well clear of the other side: 5.6 s with the padding, short of `minSpeech`.
+        let remote2 = voiceTrack(seconds: 40, speech: [(0, 5), (30, 8)], noise: false)
+        let two = voiceTrack(seconds: 40, speech: [(0, 5), (10, 2.5), (18, 2.5)])
+        #expect(try pick(mic: two, remote: remote2) == nil)
+        // A third makes enough.
+        let three = voiceTrack(seconds: 40, speech: [(0, 5), (10, 2.5), (18, 2.5), (24, 2.5)])
+        let picked = try #require(try pick(mic: three, remote: remote2))
+        #expect(picked.spans.count == 3 && speech(picked.spans) >= CallVoiceSample.minSpeech)
+    }
+
+    /// A call on speakers with the person saying nothing: their mic hears the other side a moment late and quieter,
+    /// the room ringing on after each phrase, and some of them faintly in the other side's pauses. None of it is the
+    /// person, so there's no sample. Their own voice in the same pauses, much nearer the mic, is.
+    @Test func theOtherSideThroughTheSpeakersIsNeverThePersonsSample() throws {
+        let seconds = 60.0
+        // The other side speaks 8 s, then 5 s of quiet, and so on.
+        let turns: [(at: Double, length: Double)] = [(0, 8), (13, 8), (26, 8), (39, 8), (52, 8)]
+        let remote = voiceTrack(seconds: seconds, speech: turns, noise: false)
+        // What the mic hears of them: 60 ms late, 16 dB down, and the room's reflections fading over half a second.
+        var echo = voiceTrack(seconds: seconds, speech: [])
+        for (delay, gain) in [(0.06, Float(0.15)), (0.15, 0.08), (0.3, 0.04), (0.5, 0.02)] {
+            let shift = Int(delay * rate)
+            for index in shift..<echo.count { echo[index] += gain * remote[index - shift] }
+        }
+        // In each pause, 2.8 s of `voice` well clear of the other side (a second after they stop, more before they
+        // start again).
+        func call(_ voice: [Float]) -> [Float] {
+            var mic = echo
+            for pause in [9.0, 22, 35, 48] {
+                let start = Int(pause * rate)
+                for (offset, sample) in voice.enumerated() { mic[start + offset] += sample }
+            }
+            return mic
+        }
+        #expect(try pick(mic: echo, remote: remote) == nil)
+        // A voice in those pauses no louder than the other side through the speakers (one of them the track missed,
+        // or the room): not the person's, though it's clear of the other side's track and as long as theirs would be.
+        #expect(try pick(mic: call(heldVoice(seconds: 2.8, gain: 0.15)), remote: remote) == nil)
+        // The person's own voice there, near the mic: a sample, from those pauses only.
+        let picked = try #require(try pick(mic: call(speechLike(seconds: 2.8)), remote: remote))
+        #expect(speech(picked.spans) >= CallVoiceSample.minSpeech)
+        for span in picked.spans {
+            #expect([9.0, 22, 35, 48].contains { span.start >= $0 - 0.2 && span.end <= $0 + 3 }, "\(span)")
+        }
+    }
+
+    /// Speech that starts right after the other side stops, or runs up to when they start, may be their voice ringing
+    /// on through the speakers: left out whole. So is a stretch too short to tell.
+    @Test func stretchesNearTheOtherSideOrShortAreLeftOut() throws {
+        let remote = voiceTrack(seconds: 60, speech: [(0, 6), (15, 6), (30, 6), (45, 6)], noise: false)
+        // The other side's voice ends at 5.75, 20.75, 35.75 and 50.75 (the last quarter of each second is a pause).
+        // 6.1: 0.35 s after them. 26.0-29.6: 0.4 s before them. 40: 1.5 s, clear of them.
+        let near = voiceTrack(seconds: 60, speech: [(6.1, 4), (26, 3.6), (40, 1.5)])
+        #expect(try pick(mic: near, remote: remote) == nil)
+        // The same speech a second clear of them on both sides is taken.
+        let clear = voiceTrack(seconds: 60, speech: [(7, 4), (25.5, 3.1), (40, 1.5)])
+        let picked = try #require(try pick(mic: clear, remote: remote))
+        #expect(picked.spans.count == 2, "not the 1.5 s one: \(picked.spans)")
+        #expect(picked.spans.allSatisfy { $0.duration >= CallVoiceSample.minStretch })
     }
 
     @Test func withoutTheOtherSidesTrackAnySpeechWillDo() throws {
@@ -1395,6 +1480,40 @@ private func voiceTrack(seconds: Double, speech: [(at: Double, length: Double)],
         #expect(prompt.contains(CallPrompts.noSpeech))
         #expect(!prompt.contains("JSON"))
     }
+
+    /// The person may say nothing at all (muted, or only listening, on speakers): the prompt never assumes a voice is
+    /// theirs, and a chunk they were muted all through says no voice is.
+    @Test func thePromptNeverAssumesThePersonSpoke() {
+        let withSample = CallPrompts.call(me: "Матвей", service: "Slack", roster: [], mutes: [], seconds: 60,
+                                          voiceSample: true)
+        #expect(withSample.contains("Матвей may not speak at all in this call: they may be muted or only listening. "
+                                    + "Name a voice Матвей only when it matches the sample or the conversation makes it "
+                                    + "clear; when unsure, it's one of the other participants."))
+        #expect(!withSample.contains("muted for the whole call") && !withSample.contains("was muted in the call"))
+        let noSample = CallPrompts.call(me: "Me", service: nil, roster: [], mutes: [])
+        #expect(noSample.contains("The person who recorded it may not speak at all in this call: they may be muted or "
+                                  + "only listening. Name a voice \"Me\" only when the conversation makes it clear; "
+                                  + "when unsure, it's one of the other participants."))
+
+        // Muted from a moment in to a moment before the end: the whole call, and no list of times.
+        let whole = CallPrompts.call(me: "Матвей", service: "Slack", roster: [],
+                                     mutes: [CallInterval(start: 1.5, end: 58.5)], seconds: 60)
+        #expect(whole.contains("Матвей was muted for the whole call: no voice in it is Матвей."))
+        #expect(!whole.contains("was muted in the call during"))
+        // Two mutes that between them cover it count too.
+        let twice = CallPrompts.call(me: "Me", service: nil, roster: [],
+                                     mutes: [CallInterval(start: 0, end: 30), CallInterval(start: 30.5, end: 60)],
+                                     seconds: 60)
+        #expect(twice.contains("The person who recorded it was muted for the whole call: no voice in it is \"Me\"."))
+        // Half of it: the times, as before.
+        let half = CallPrompts.call(me: "Матвей", service: nil, roster: [], mutes: [CallInterval(start: 0, end: 30)],
+                                    seconds: 60)
+        #expect(half.contains("Матвей was muted in the call during 00:00 to 00:30.") && !half.contains("whole call"))
+        // Without the chunk's length, never the whole call.
+        let unknown = CallPrompts.call(me: "Матвей", service: nil, roster: [], mutes: [CallInterval(start: 0, end: 60)])
+        #expect(!unknown.contains("whole call") && unknown.contains("was muted in the call during"))
+    }
+
 }
 
 // MARK: - Answers kept, cut off, logged
