@@ -1,0 +1,7 @@
+// The parts of SpeexDSP the app uses: the echo canceller and the preprocessor (noise and residual echo suppression).
+module CSpeexDSP {
+    header "speex/speexdsp_types.h"
+    header "speex/speex_echo.h"
+    header "speex/speex_preprocess.h"
+    export *
+}

@@ -11,9 +11,24 @@ let package = Package(
         .package(url: "https://github.com/FluidInference/FluidAudio", from: "0.17.4", traits: []),
     ],
     targets: [
+        // SpeexDSP's echo canceller and preprocessor, vendored (Sources/CSpeexDSP/README.md).
+        .target(
+            name: "CSpeexDSP",
+            path: "Sources/CSpeexDSP",
+            exclude: ["COPYING", "README.md"],
+            sources: ["src"],
+            publicHeadersPath: "include",
+            cSettings: [
+                .define("HAVE_CONFIG_H"),
+                .headerSearchPath("src"),
+                // Upstream code as it is: its warnings (an M_PI it defines again) are not ours to fix.
+                .unsafeFlags(["-w"]),
+            ]
+        ),
         .target(
             name: "TranscribeThing",
             dependencies: [
+                "CSpeexDSP",
                 .product(name: "FluidAudio", package: "FluidAudio"),
             ],
             swiftSettings: [.swiftLanguageMode(.v5)]
