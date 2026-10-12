@@ -5,7 +5,7 @@ import Foundation
 ///
 ///     transcribe-thing --calls-aec <call-id> --out <dir> [--seconds N] [--frame N] [--filter N]
 ///                      [--echo-suppress dB] [--echo-suppress-active dB] [--noise-suppress dB|off] [--no-preprocess]
-///                      [--allow-louder]
+///                      [--no-gate] [--min-erle dB] [--reach N] [--plain-noise-only]
 ///
 /// Reads the call's mic (`mic-raw.m4a` when the app already cleaned it, else `mic.m4a`) and `remote.m4a` from the
 /// Calls folder, cleans the mic against the remote as the app does (`EchoCanceller`, the app's settings unless the
@@ -31,6 +31,7 @@ enum CallsEchoCLI {
         do {
             if let frame = try number("--frame", in: arguments) { settings.frame = frame }
             if let filter = try number("--filter", in: arguments) { settings.filterLength = filter }
+            if let reach = try number("--reach", in: arguments) { settings.reach = max(0, reach) }
             if let level = try number("--echo-suppress", in: arguments) { settings.echoSuppress = Int32(level) }
             if let level = try number("--echo-suppress-active", in: arguments) {
                 settings.echoSuppressActive = Int32(level)
@@ -44,7 +45,9 @@ enum CallsEchoCLI {
             fail("\(error)")
         }
         if arguments.contains("--no-preprocess") { settings.preprocess = false }
-        if arguments.contains("--allow-louder") { settings.neverLouder = false }
+        if arguments.contains("--no-gate") { settings.gate = false }
+        if arguments.contains("--plain-noise-only") { settings.plainSuppressesEcho = false }
+        if let erle = value(after: "--min-erle", in: arguments).flatMap(Double.init) { settings.minimumERLE = erle }
         let seconds = (try? number("--seconds", in: arguments)) ?? nil
 
         let folder = paths.calls.appendingPathComponent(id.uuidString, isDirectory: true)
@@ -78,6 +81,7 @@ enum CallsEchoCLI {
         let remoteWAV = try WAVWriter(out.appendingPathComponent("remote.wav"))
         let canceller = EchoCanceller(settings: settings)
         var meter = EchoMeter()
+        var rawJumps = FrameEdgeJumps(frame: settings.frame), cleanJumps = FrameEdgeJumps(frame: settings.frame)
         var processing: TimeInterval = 0
         var taken = 0
         while true {
@@ -86,21 +90,25 @@ enum CallsEchoCLI {
             let far = try remoteStream.next(samples.count)
             let padded = far + [Float](repeating: 0, count: samples.count - far.count)
             meter.add(raw: samples, remote: padded)
+            rawJumps.add(samples)
             try rawWAV.append(samples)
             try remoteWAV.append(padded)
             let began = Date()
             let cleaned = canceller.process(mic: samples, reference: padded)
             processing += Date().timeIntervalSince(began)
             meter.add(cleaned: cleaned)
+            cleanJumps.add(cleaned)
             try cleanWAV.append(cleaned)
             taken += samples.count
         }
         let rest = canceller.finish()
         meter.add(cleaned: rest)
+        cleanJumps.add(rest)
         try cleanWAV.append(rest)
         for writer in [rawWAV, cleanWAV, remoteWAV] { try writer.close() }
 
         let stats = meter.result()
+        let summary = canceller.summary
         let audio = Double(taken) / Recording.sampleRate
         var lines: [String] = []
         let noise = settings.noiseSuppress.map { "\($0) dB" } ?? "off"
@@ -111,6 +119,16 @@ enum CallsEchoCLI {
                         : "no preprocessor"))
         lines.append(String(format: "Cleaned %@ of audio in %.1f s (%.0fx real time)", CallPrompts.clock(audio),
                             processing, processing > 0 ? audio / processing : 0))
+        let erle = summary.erle.compactMap { $0 }.sorted()
+        lines.append(String(format: "Echo canceller used in %d of %d %.0f s stretches (%.0f%%)", summary.echoHops,
+                            summary.hops, settings.hop, summary.echoShare * 100))
+        if !erle.isEmpty {
+            lines.append(String(format: "  what it took away where the other side talked, per stretch: "
+                                + "min %.1f, median %.1f, max %.1f dB (echo from %.0f dB)",
+                                erle[0], erle[erle.count / 2], erle[erle.count - 1], settings.minimumERLE))
+        }
+        lines.append("Jumps over \(FrameEdgeJumps.threshold) at frame edges (clicks): \(rawJumps.count) as recorded, "
+                     + "\(cleanJumps.count) after")
         lines.append(row("", "before", "after"))
         lines.append(row("mic voiced (>= -45 dBFS, 50 ms frames)", percent(stats.before.voicedFraction),
                          percent(stats.after.voicedFraction)))
@@ -138,6 +156,27 @@ enum CallsEchoCLI {
         }
         lines.append("Wrote mic-raw.wav, mic-aec.wav, remote.wav to \(out.path)")
         return lines
+    }
+
+    /// Clicks a frame-by-frame process can leave: sample-to-sample jumps of more than `threshold` (16-bit) right at a
+    /// frame's edge, counted a block at a time. Speech has some anyway, about 1 in `frame` of all its big jumps.
+    struct FrameEdgeJumps {
+        static let threshold = 3_000
+        let frame: Int
+        private(set) var count = 0
+        private var position = 0
+        private var last: Int?
+
+        init(frame: Int) { self.frame = frame }
+
+        mutating func add(_ samples: [Float]) {
+            for sample in samples {
+                let value = Int((sample * 32_768).rounded())
+                if position % frame == 0, let last, abs(value - last) > Self.threshold { count += 1 }
+                last = value
+                position += 1
+            }
+        }
     }
 
     /// Whether `out` is somewhere other than `root` and the folders in it, with links and "..", followed.

@@ -69,8 +69,13 @@ private func dB(_ samples: ArraySlice<Float>) -> Double {
 }
 
 /// Runs `mic` through a canceller in uneven blocks, as the store's reads come.
-private func cancel(_ mic: [Float], reference: [Float]) -> [Float] {
-    let canceller = EchoCanceller()
+private func cancel(_ mic: [Float], reference: [Float], settings: EchoCanceller.Settings = .standard) -> [Float] {
+    cancelling(mic, reference: reference, settings: settings).out
+}
+
+private func cancelling(_ mic: [Float], reference: [Float], settings: EchoCanceller.Settings = .standard)
+    -> (out: [Float], summary: EchoCanceller.Summary) {
+    let canceller = EchoCanceller(settings: settings)
     var out: [Float] = []
     var start = 0
     while start < mic.count {
@@ -79,7 +84,47 @@ private func cancel(_ mic: [Float], reference: [Float]) -> [Float] {
         out += canceller.process(mic: Array(mic[start..<end]), reference: far)
         start = end
     }
-    return out + canceller.finish()
+    out += canceller.finish()
+    return (out, canceller.summary)
+}
+
+/// Clicks at frame edges (`CallsEchoCLI.FrameEdgeJumps`).
+private func edgeJumps(_ samples: some Collection<Float>) -> Int {
+    var jumps = CallsEchoCLI.FrameEdgeJumps(frame: EchoCanceller.Settings.standard.frame)
+    jumps.add(Array(samples))
+    return jumps.count
+}
+
+/// A call on headphones: the other side talks all along, the person from 0.65 s, often over them, and the mic never
+/// hears the other side. Loud, so its own sample-to-sample jumps reach `FrameEdgeJumps.threshold`.
+private struct HeadphonesScene {
+    let remote: [Float]
+    let mic: [Float]
+
+    init(seconds: Double = 20) {
+        remote = voice(seconds: seconds, pitch: 125, seed: 1)
+        let near = voice(seconds: seconds, pitch: 210, seed: 2, from: 0.65)
+        let noise = floor(seconds: seconds)
+        mic = quantized((0..<near.count).map { 4 * near[$0] + noise[$0] })
+    }
+}
+
+/// `samples` as the journal's 16-bit WAV keeps them.
+private func quantized(_ samples: [Float]) -> [Float] {
+    samples.map { Float(Int16(clamping: Int(($0 * 32_768).rounded()))) / 32_768 }
+}
+
+/// Settings that never use the canceller's version, and that always do.
+private var neverCancelling: EchoCanceller.Settings {
+    var settings = EchoCanceller.Settings.standard
+    settings.minimumERLE = .infinity
+    return settings
+}
+
+private var alwaysCancelling: EchoCanceller.Settings {
+    var settings = EchoCanceller.Settings.standard
+    settings.gate = false
+    return settings
 }
 
 @Suite struct EchoCancellerTests {
@@ -127,6 +172,68 @@ private func cancel(_ mic: [Float], reference: [Float]) -> [Float] {
         #expect(echoStats.after.strongestCorrelation.value < 0.6)
         #expect(stats.before.overlapFraction > stats.after.overlapFraction)
         #expect(abs((stats.after.nearDBFS ?? 0) - (stats.before.nearDBFS ?? 0)) <= 3)
+    }
+
+    @Test func withoutEchoTheCancellersVersionIsNeverUsedAndNothingClicks() {
+        let call = HeadphonesScene()
+        var mic = call.mic
+        for i in Int(5 * rate)..<Int(6 * rate) { mic[i] = 0 }
+        let (out, summary) = cancelling(mic, reference: call.remote)
+        #expect(out.count == mic.count)
+        #expect(summary.hops == 4 && summary.echoHops == 0, "\(summary.erle)")
+        // Exactly the recorded mic's version, as if the canceller were never trusted.
+        #expect(out == cancel(mic, reference: call.remote, settings: neverCancelling))
+        // The person keeps their level; the mute stays digital silence.
+        let near = dB(slice(out, 1, 5)) - dB(slice(mic, 1, 5))
+        #expect(abs(near) <= 3, "near end \(near) dB")
+        #expect(out[Int(5 * rate)..<Int(6 * rate)].allSatisfy { $0 == 0 })
+        // No click at a frame's edge that the mic didn't have.
+        let before = edgeJumps(mic), after = edgeJumps(out)
+        #expect(before > 0 && after <= before, "\(before) as recorded, \(after) after")
+    }
+
+    @Test func withNothingElseToDoAMicWithoutEchoComesOutAsRecorded() {
+        // No preprocessor: the mic's own version is the mic, bit for bit, on the same clock.
+        var settings = EchoCanceller.Settings.standard
+        settings.preprocess = false
+        let call = HeadphonesScene()
+        #expect(cancel(call.mic, reference: call.remote, settings: settings) == call.mic)
+    }
+
+    @Test func echoThatStartsLaterIsTakenOutFromThereAfterAFade() throws {
+        // 40 s, the other side talking all along: the first 20 s on headphones (the person talks, the mic doesn't
+        // hear the other side), then on speakers (the mic hears them, the person is quiet).
+        let seconds = 40.0
+        let remote = voice(seconds: seconds, pitch: 125, seed: 1)
+        let near = voice(seconds: seconds, pitch: 210, seed: 2, from: 0.65, to: 18)
+        let echoed = echo(of: remote), noise = floor(seconds: seconds)
+        let speakers = Int(20 * rate)
+        let mic = quantized((0..<remote.count).map { near[$0] + noise[$0] + ($0 >= speakers ? echoed[$0] : 0) })
+        let (out, summary) = cancelling(mic, reference: remote)
+        #expect(summary.echoHops > 0 && summary.echoHops < summary.hops, "\(summary.erle)")
+        let plain = cancel(mic, reference: remote, settings: neverCancelling)
+        let cleaned = cancel(mic, reference: remote, settings: alwaysCancelling)
+        // The recorded mic's version up to the fade, the canceller's from its end: one fade, before the echo starts.
+        let first = try #require(out.indices.first { out[$0] != plain[$0] })
+        let last = try #require(out.indices.last { out[$0] != cleaned[$0] })
+        #expect(first >= Int(5 * rate) && last < speakers, "fade \(first)...\(last)")
+        #expect(last - first >= 800 && last - first <= 3_200, "fade \(last - first) samples")
+        // Through the fade the mix moves smoothly from one to the other, and no sample jumps further than in either.
+        // (The mix is read where the two versions differ enough to read it, and compared 1 ms apart at most.)
+        var mix: (value: Double, at: Int)?
+        var rough = 0, jumps = 0
+        for i in first...last + 1 {
+            let step = abs(out[i] - out[i - 1])
+            if step > max(abs(plain[i] - plain[i - 1]), abs(cleaned[i] - cleaned[i - 1])) + 0.002 { jumps += 1 }
+            guard abs(cleaned[i] - plain[i]) > 0.01 else { continue }
+            let now = Double((out[i] - plain[i]) / (cleaned[i] - plain[i]))
+            if let mix, i - mix.at <= 16, abs(now - mix.value) > 0.05 { rough += 1 }
+            mix = (now, i)
+        }
+        #expect(rough == 0 && jumps == 0, "\(rough) rough steps, \(jumps) jumps")
+        // Once the filter has learned the speakers: at least 15 dB less of the other side.
+        let erle = dB(slice(mic, 25, 40)) - dB(slice(out, 25, 40))
+        #expect(erle >= 15, "ERLE \(erle) dB")
     }
 }
 
@@ -184,6 +291,17 @@ private func cancel(_ mic: [Float], reference: [Float]) -> [Float] {
         store.delete(record.id)
         await store.flush()
         #expect(!FileManager.default.fileExists(atPath: raw.path))
+    }
+
+    @Test func aMicThatNeverHeardTheOtherSideIsCleanedOfNoiseOnly() async throws {
+        let call = HeadphonesScene()
+        let (store, record) = try await recover([.mic: call.mic, .remote: call.remote])
+        #expect(!record.echoCancelled && record.echoReductionDB == nil)
+        let folder = store.folder(for: record.id)
+        let raw = folder.appendingPathComponent(CallStore.rawMicFile)
+        #expect(FileManager.default.fileExists(atPath: raw.path))
+        let mic = try #require(store.audioURL(of: record, track: .mic))
+        #expect(try abs(level(raw, 1, 19) - level(mic, 1, 19)) <= 3)
     }
 
     @Test func withoutTheOtherSidesSoundTheMicStaysAsRecorded() async throws {

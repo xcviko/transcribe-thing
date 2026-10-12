@@ -54,16 +54,22 @@ enum CallAudio {
         return Encoded(samples: written, peak: peak)
     }
 
-    /// What `cancelEcho` did: the mic as recorded, how long the cleaning took, what `EchoMeter` measured.
+    /// What `cancelEcho` did: the mic as recorded, how long the cleaning took, where the echo canceller was used
+    /// (`summary`), what `EchoMeter` measured.
     struct EchoCancelled: Sendable {
         var encoded: Encoded
         var seconds: TimeInterval
+        var summary: EchoCanceller.Summary
         var stats: EchoStats
+
+        /// The echo canceller's version is in some of the mic: there was echo to take out.
+        var tookEchoOut: Bool { summary.echoHops > 0 }
     }
 
-    /// The mic with the other side taken out of it (`EchoCanceller`), a block at a time: `mic` goes to `raw` as
-    /// recorded, and to `m4a` cleaned against `reference` (the other side's track on the same clock; silence where it's
-    /// shorter). Both are silent in `silencing`: a mute stays digital silence after cleaning too.
+    /// The mic cleaned (`EchoCanceller`: the noise out of all of it, the other side out where it was heard), a block
+    /// at a time: `mic` goes to `raw` as recorded, and to `m4a` cleaned against `reference` (the other side's track on
+    /// the same clock; silence where it's shorter). Both are silent in `silencing`: a mute stays digital silence after
+    /// cleaning too.
     static func cancelEcho(_ mic: TrackStream, reference: TrackStream, to m4a: URL, raw: URL,
                            silencing: [CallInterval] = [],
                            settings: EchoCanceller.Settings = .standard) throws -> EchoCancelled {
@@ -99,7 +105,7 @@ enum CallAudio {
             }
         }
         return EchoCancelled(encoded: Encoded(samples: taken, peak: peak), seconds: Date().timeIntervalSince(began),
-                             stats: meter.result())
+                             summary: canceller.summary, stats: meter.result())
     }
 
     /// The loudest sample of `track`, read through: 0 when it's digital silence.

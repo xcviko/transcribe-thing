@@ -89,9 +89,10 @@ struct CallRecord: Codable, Equatable, Identifiable, Sendable {
     /// The mic's track is silent in `muteIntervals`: zeroed as it was recorded and again when it was kept
     /// (`CallJournal`, `CallStore.adopt`). False for a call recorded before that, whose mic has what was said muted.
     var micSilencedWhenMuted: Bool = false
-    /// The other side's voices were taken out of `micFile` (`EchoCanceller`, against the remote track): the mic as
-    /// recorded is kept next to it as `CallStore.rawMicFile`. False when there was nothing to take out (no remote
-    /// track, or a silent one: headphones), and for calls recorded before.
+    /// The other side's voices were taken out of `micFile`, where it heard them (`EchoCanceller`, against the remote
+    /// track). False when there was nothing to take out (no remote track, a silent one, or no echo of it in the mic:
+    /// headphones), and for calls recorded before. Whenever the mic was cleaned at all (its noise too, with any
+    /// remote sound), the mic as recorded is kept next to it as `CallStore.rawMicFile`.
     var echoCancelled: Bool = false
     /// How much quieter the echo got, in dB: the mic's level where only the other side talks, before less after
     /// (`EchoStats.echoReductionDB`); nil when not cancelled or nothing to measure it on.

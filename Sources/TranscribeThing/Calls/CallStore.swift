@@ -2,7 +2,7 @@ import Foundation
 import Observation
 
 /// The recorded calls: calls.json, and a folder per call under Calls/ with its tracks (`mic.m4a`, `remote.m4a`, and
-/// `mic-raw.m4a`, the mic before the other side's voices were taken out of it). Apart
+/// `mic-raw.m4a`, the mic before it was cleaned of noise and the other side's voices). Apart
 /// from History: calls are neither dictations nor counted in Home's stats. A call and its folder go together: deleted,
 /// or auto-deleted after History's Auto-delete period (`AppSettings.autoDeleteHistoryDays`).
 ///
@@ -204,8 +204,8 @@ final class CallStore {
 
     // MARK: From the journal
 
-    /// The mic as recorded, kept next to the cleaned `mic.m4a` when the other side's voices were taken out of it
-    /// (`CallRecord.echoCancelled`): nothing plays or transcribes it, it goes with the call.
+    /// The mic as recorded, kept next to the cleaned `mic.m4a` (`KeptTracks.echo`): nothing plays or transcribes it,
+    /// it goes with the call.
     nonisolated static let rawMicFile = "mic-raw.m4a"
 
     /// A call whose journal is closed becomes a record with `status`: each track encoded into the call's folder off
@@ -240,7 +240,7 @@ final class CallStore {
             if let mic = encoded[.mic] {
                 record.micFile = "mic.m4a"
                 record.micSeconds = mic.seconds
-                record.echoCancelled = kept.echo != nil
+                record.echoCancelled = kept.echo?.tookEchoOut ?? false
                 record.echoReductionDB = kept.echoReductionDB
             }
             if let remote = encoded[.remote] {
@@ -267,7 +267,8 @@ final class CallStore {
     /// What `keepTracks` wrote.
     struct KeptTracks: Sendable {
         var encoded: [CallJournal.Track: CallAudio.Encoded] = [:]
-        /// The mic was cleaned of the other side's voices: what that did.
+        /// The mic was cleaned (its noise, and the other side's voices where it heard them; the mic as recorded kept as
+        /// "mic-raw"): what that did.
         var echo: CallAudio.EchoCancelled?
         /// Why it wasn't, for the log: "noRemote", "silentRemote", "failed"; nil when it was, or the mic had nothing
         /// new.
@@ -275,16 +276,19 @@ final class CallStore {
         /// A track with audio couldn't be written.
         var failed = false
 
-        /// `EchoStats.echoReductionDB` to a tenth of a dB.
-        var echoReductionDB: Double? { echo?.stats.echoReductionDB.map { ($0 * 10).rounded() / 10 } }
+        /// `EchoStats.echoReductionDB` to a tenth of a dB; nil when there was no echo to take out.
+        var echoReductionDB: Double? {
+            guard let echo, echo.tookEchoOut else { return nil }
+            return echo.stats.echoReductionDB.map { ($0 * 10).rounded() / 10 }
+        }
     }
 
     /// Each track of a call as .m4a files in `folder`, named "<track><suffix>.m4a": the earlier part's file
     /// (`earlier`, up to `offset`), then the journal's WAV (`wavs`), nothing past `limit`; a track whose WAV has
     /// nothing is left alone. The remote goes first: when it has any sound, the mic is cleaned against it
-    /// (`CallAudio.cancelEcho`), and the mic as recorded kept as "mic-raw<suffix>.m4a"; otherwise (headphones, no
-    /// tap) the mic is kept as it is. Either way it's silent in `silencing`. A mic that can't be cleaned is kept as it
-    /// is too. Blocking file work: off the main thread.
+    /// (`CallAudio.cancelEcho`: its noise, and the echo where there is some), and the mic as recorded kept as
+    /// "mic-raw<suffix>.m4a"; otherwise (headphones, no tap) the mic is kept as it is. Either way it's silent in
+    /// `silencing`. A mic that can't be cleaned is kept as it is too. Blocking file work: off the main thread.
     nonisolated static func keepTracks(earlier: [CallJournal.Track: URL], then wavs: [CallJournal.Track: URL],
                                        at offset: Int, limit: Int?, silencing: [CallInterval], in folder: URL,
                                        suffix: String = "") -> KeptTracks {
@@ -352,6 +356,7 @@ final class CallStore {
             log.event(.calls, "call.echo", [
                 "call": CallTranscriber.shortID(id), "audio": (echo.encoded.seconds * 10).rounded() / 10,
                 "took": (echo.seconds * 100).rounded() / 100, "reduction": kept.echoReductionDB,
+                "echoShare": (echo.summary.echoShare * 100).rounded() / 100,
             ])
         } else if let reason = kept.echoSkipped {
             log.event(.calls, "call.echo.skipped", ["call": CallTranscriber.shortID(id), "reason": reason])
@@ -476,7 +481,7 @@ final class CallStore {
         if let mic = encoded[.mic] {
             record.micFile = "mic.m4a"
             record.micSeconds = mic.seconds
-            record.echoCancelled = joined.echo != nil
+            record.echoCancelled = joined.echo?.tookEchoOut ?? false
             record.echoReductionDB = joined.echoReductionDB
         }
         if let remote = encoded[.remote] {

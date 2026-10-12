@@ -1710,8 +1710,9 @@ private func heldVoice(seconds: Double, gain: Double) -> [Float] {
             #expect(Self.rms(gap) < 0.001, "\(track)")
         }
         #expect(call.muteIntervals.first == CallInterval(start: 1, end: 1.5))
-        // The joined mic was cleaned of the other side in one pass, the one as recorded kept beside it.
-        #expect(call.echoCancelled)
+        // The joined mic was cleaned in one pass, the one as recorded kept beside it. The other side's voice never
+        // reached this mic, so there was no echo to take out.
+        #expect(!call.echoCancelled)
         #expect(FileManager.default.fileExists(atPath: rig.store.folder(for: earlier)
             .appendingPathComponent(CallStore.rawMicFile).path))
         #expect(!files(in: rig.store.folder(for: earlier)).contains { $0.contains("joining") })
