@@ -89,6 +89,13 @@ struct CallRecord: Codable, Equatable, Identifiable, Sendable {
     /// The mic's track is silent in `muteIntervals`: zeroed as it was recorded and again when it was kept
     /// (`CallJournal`, `CallStore.adopt`). False for a call recorded before that, whose mic has what was said muted.
     var micSilencedWhenMuted: Bool = false
+    /// The other side's voices were taken out of `micFile` (`EchoCanceller`, against the remote track): the mic as
+    /// recorded is kept next to it as `CallStore.rawMicFile`. False when there was nothing to take out (no remote
+    /// track, or a silent one: headphones), and for calls recorded before.
+    var echoCancelled: Bool = false
+    /// How much quieter the echo got, in dB: the mic's level where only the other side talks, before less after
+    /// (`EchoStats.echoReductionDB`); nil when not cancelled or nothing to measure it on.
+    var echoReductionDB: Double?
     /// For a browser: when another tab played sound, which the other side's track has too.
     var otherBrowserAudio: [CallInterval] = []
     /// File names in the call's folder; nil when that track has no audio.
@@ -140,7 +147,7 @@ struct CallRecord: Codable, Equatable, Identifiable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, startedAt, endedAt, appName, bundleID, service, pageTitle, manual, muteIntervals, muteKnown
-        case micSilencedWhenMuted
+        case micSilencedWhenMuted, echoCancelled, echoReductionDB
         case otherBrowserAudio, micFile, remoteFile, micSeconds, remoteSeconds, micProblem, remoteProblem, status
         case error, transcript, costUSD, cutOffAt, speakerNames, summary, summaryError
     }
@@ -159,6 +166,8 @@ struct CallRecord: Codable, Equatable, Identifiable, Sendable {
         muteIntervals = try c.decodeIfPresent([CallInterval].self, forKey: .muteIntervals) ?? []
         muteKnown = try c.decodeIfPresent(Bool.self, forKey: .muteKnown) ?? false
         micSilencedWhenMuted = try c.decodeIfPresent(Bool.self, forKey: .micSilencedWhenMuted) ?? false
+        echoCancelled = try c.decodeIfPresent(Bool.self, forKey: .echoCancelled) ?? false
+        echoReductionDB = try? c.decodeIfPresent(Double.self, forKey: .echoReductionDB)
         otherBrowserAudio = try c.decodeIfPresent([CallInterval].self, forKey: .otherBrowserAudio) ?? []
         micFile = try c.decodeIfPresent(String.self, forKey: .micFile)
         remoteFile = try c.decodeIfPresent(String.self, forKey: .remoteFile)
@@ -190,6 +199,8 @@ struct CallRecord: Codable, Equatable, Identifiable, Sendable {
         try c.encode(muteIntervals, forKey: .muteIntervals)
         try c.encode(muteKnown, forKey: .muteKnown)
         if micSilencedWhenMuted { try c.encode(micSilencedWhenMuted, forKey: .micSilencedWhenMuted) }
+        if echoCancelled { try c.encode(echoCancelled, forKey: .echoCancelled) }
+        try c.encodeIfPresent(echoReductionDB, forKey: .echoReductionDB)
         try c.encode(otherBrowserAudio, forKey: .otherBrowserAudio)
         try c.encodeIfPresent(micFile, forKey: .micFile)
         try c.encodeIfPresent(remoteFile, forKey: .remoteFile)

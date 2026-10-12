@@ -1,7 +1,8 @@
 import Foundation
 import Observation
 
-/// The recorded calls: calls.json, and a folder per call under Calls/ with its tracks (`mic.m4a`, `remote.m4a`). Apart
+/// The recorded calls: calls.json, and a folder per call under Calls/ with its tracks (`mic.m4a`, `remote.m4a`, and
+/// `mic-raw.m4a`, the mic before the other side's voices were taken out of it). Apart
 /// from History: calls are neither dictations nor counted in Home's stats. A call and its folder go together: deleted,
 /// or auto-deleted after History's Auto-delete period (`AppSettings.autoDeleteHistoryDays`).
 ///
@@ -203,10 +204,14 @@ final class CallStore {
 
     // MARK: From the journal
 
+    /// The mic as recorded, kept next to the cleaned `mic.m4a` when the other side's voices were taken out of it
+    /// (`CallRecord.echoCancelled`): nothing plays or transcribes it, it goes with the call.
+    nonisolated static let rawMicFile = "mic-raw.m4a"
+
     /// A call whose journal is closed becomes a record with `status`: each track encoded into the call's folder off
     /// the main thread, the mic silent in the call's mutes (the journal already zeroed what it could; a mute noted
-    /// too late for it, or one still going on when the app quit, is zeroed here), then the record saved, and only
-    /// then the journal removed. Returns the record.
+    /// too late for it, or one still going on when the app quit, is zeroed here) and cleaned of the other side's
+    /// voices (`keepTracks`), then the record saved, and only then the journal removed. Returns the record.
     @discardableResult
     func adopt(_ info: CallJournal.Info, status: CallStatus, endedAt: Date? = nil) async -> CallRecord {
         if status == .transcribing || status == .interrupted,
@@ -222,25 +227,21 @@ final class CallStore {
         if let journal {
             let id = info.id
             let folder = folder(for: id)
-            let sources = CallJournal.Track.allCases.map { ($0, journal.audioURL(for: id, track: $0)) }
+            let wavs = Dictionary(uniqueKeysWithValues: CallJournal.Track.allCases.map {
+                ($0, journal.audioURL(for: id, track: $0))
+            })
             let silencing = Self.silencing(info)
             let limit = info.endsAt.map { Int(($0 * Recording.sampleRate).rounded(.up)) }
-            let encoded = await Task.detached(priority: .utility) { () -> [CallJournal.Track: CallAudio.Encoded] in
-                var encoded: [CallJournal.Track: CallAudio.Encoded] = [:]
-                for (track, wav) in sources where (RecordingJournal.sampleCount(of: wav) ?? 0) > 0 {
-                    let m4a = folder.appendingPathComponent("\(track.rawValue).m4a", isDirectory: false)
-                    do {
-                        encoded[track] = try CallAudio.encode(journal: wav, to: m4a,
-                                                              silencing: track == .mic ? silencing : [], limit: limit)
-                    } catch {
-                        Log.audio.error("Couldn't keep the call's \(track.rawValue, privacy: .public): \(error.localizedDescription, privacy: .public)")
-                    }
-                }
-                return encoded
+            let kept = await Task.detached(priority: .utility) {
+                Self.keepTracks(earlier: [:], then: wavs, at: 0, limit: limit, silencing: silencing, in: folder)
             }.value
+            let encoded = kept.encoded
+            logEcho(kept, call: id)
             if let mic = encoded[.mic] {
                 record.micFile = "mic.m4a"
                 record.micSeconds = mic.seconds
+                record.echoCancelled = kept.echo != nil
+                record.echoReductionDB = kept.echoReductionDB
             }
             if let remote = encoded[.remote] {
                 record.remoteFile = "remote.m4a"
@@ -261,6 +262,100 @@ final class CallStore {
         await flush()
         journal?.remove(info.id)
         return record
+    }
+
+    /// What `keepTracks` wrote.
+    struct KeptTracks: Sendable {
+        var encoded: [CallJournal.Track: CallAudio.Encoded] = [:]
+        /// The mic was cleaned of the other side's voices: what that did.
+        var echo: CallAudio.EchoCancelled?
+        /// Why it wasn't, for the log: "noRemote", "silentRemote", "failed"; nil when it was, or the mic had nothing
+        /// new.
+        var echoSkipped: String?
+        /// A track with audio couldn't be written.
+        var failed = false
+
+        /// `EchoStats.echoReductionDB` to a tenth of a dB.
+        var echoReductionDB: Double? { echo?.stats.echoReductionDB.map { ($0 * 10).rounded() / 10 } }
+    }
+
+    /// Each track of a call as .m4a files in `folder`, named "<track><suffix>.m4a": the earlier part's file
+    /// (`earlier`, up to `offset`), then the journal's WAV (`wavs`), nothing past `limit`; a track whose WAV has
+    /// nothing is left alone. The remote goes first: when it has any sound, the mic is cleaned against it
+    /// (`CallAudio.cancelEcho`), and the mic as recorded kept as "mic-raw<suffix>.m4a"; otherwise (headphones, no
+    /// tap) the mic is kept as it is. Either way it's silent in `silencing`. A mic that can't be cleaned is kept as it
+    /// is too. Blocking file work: off the main thread.
+    nonisolated static func keepTracks(earlier: [CallJournal.Track: URL], then wavs: [CallJournal.Track: URL],
+                                       at offset: Int, limit: Int?, silencing: [CallInterval], in folder: URL,
+                                       suffix: String = "") -> KeptTracks {
+        let fm = FileManager.default
+        func file(_ name: String) -> URL { folder.appendingPathComponent("\(name)\(suffix).m4a", isDirectory: false) }
+        func hasAudio(_ track: CallJournal.Track) -> Bool {
+            wavs[track].map { (RecordingJournal.sampleCount(of: $0) ?? 0) > 0 } ?? false
+        }
+        var kept = KeptTracks()
+        if hasAudio(.remote), let wav = wavs[.remote] {
+            do {
+                kept.encoded[.remote] = try CallAudio.join(earlier[.remote], then: wav, at: offset,
+                                                           to: file(CallJournal.Track.remote.rawValue), limit: limit)
+            } catch {
+                kept.failed = true
+                Log.audio.error("Couldn't keep the call's remote: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        guard hasAudio(.mic), let micWAV = wavs[.mic] else { return kept }
+        let remoteWAV = hasAudio(.remote) ? wavs[.remote] : nil
+        let remoteHasSound: Bool
+        if let remote = kept.encoded[.remote] {
+            remoteHasSound = remote.peak > 0
+        } else if remoteWAV == nil, let old = earlier[.remote] {
+            let stream = try? TrackStream(earlier: old, then: nil, at: offset, limit: limit)
+            remoteHasSound = (stream.flatMap { try? CallAudio.peak(of: $0) } ?? 0) > 0
+        } else {
+            remoteHasSound = false
+        }
+        let micFile = file(CallJournal.Track.mic.rawValue)
+        let rawFile = file("mic-raw")
+        if remoteHasSound {
+            do {
+                let mic = try TrackStream(earlier: earlier[.mic], then: micWAV, at: offset, limit: limit)
+                let reference = try TrackStream(earlier: earlier[.remote], then: remoteWAV, at: offset, limit: limit)
+                let echo = try CallAudio.cancelEcho(mic, reference: reference, to: micFile, raw: rawFile,
+                                                    silencing: silencing)
+                kept.encoded[.mic] = echo.encoded
+                kept.echo = echo
+            } catch {
+                kept.echoSkipped = "failed"
+                try? fm.removeItem(at: rawFile)
+                Log.audio.error(
+                    "Couldn't take the call out of the mic: \(error.localizedDescription, privacy: .public)")
+            }
+        } else {
+            kept.echoSkipped = kept.encoded[.remote] != nil || earlier[.remote] != nil ? "silentRemote" : "noRemote"
+        }
+        if kept.encoded[.mic] == nil {
+            do {
+                kept.encoded[.mic] = try CallAudio.join(earlier[.mic], then: micWAV, at: offset, to: micFile,
+                                                        silencing: silencing, limit: limit)
+            } catch {
+                kept.failed = true
+                Log.audio.error("Couldn't keep the call's mic: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        return kept
+    }
+
+    /// What cleaning the mic did, in the diagnostics: how long it took and how much quieter the echo got, or why it
+    /// didn't run. Numbers only.
+    private func logEcho(_ kept: KeptTracks, call id: UUID) {
+        if let echo = kept.echo {
+            log.event(.calls, "call.echo", [
+                "call": CallTranscriber.shortID(id), "audio": (echo.encoded.seconds * 10).rounded() / 10,
+                "took": (echo.seconds * 100).rounded() / 100, "reduction": kept.echoReductionDB,
+            ])
+        } else if let reason = kept.echoSkipped {
+            log.event(.calls, "call.echo.skipped", ["call": CallTranscriber.shortID(id), "reason": reason])
+        }
     }
 
     /// Where a journal's mic is silenced: its mutes, and a mute still going on from its start to the end.
@@ -303,49 +398,62 @@ final class CallStore {
         let offset = max(0, info.startedAt.timeIntervalSince(earlier.startedAt))
         let offsetSamples = Int((offset * Recording.sampleRate).rounded())
         let folder = folder(for: earlier.id)
-        let sources = CallJournal.Track.allCases.map { track in
-            (track, audioURL(of: earlier, track: track), journal.audioURL(for: info.id, track: track))
+        let fm = FileManager.default
+        // The earlier part as recorded: its mic before it was cleaned, so the whole call is cleaned in one pass.
+        var earlierFiles: [CallJournal.Track: URL] = [:]
+        for track in CallJournal.Track.allCases {
+            var url = audioURL(of: earlier, track: track)
+            if track == .mic {
+                let raw = folder.appendingPathComponent(Self.rawMicFile, isDirectory: false)
+                if fm.fileExists(atPath: raw.path) { url = raw }
+            }
+            earlierFiles[track] = url.flatMap { fm.fileExists(atPath: $0.path) ? $0 : nil }
         }
+        let wavs = Dictionary(uniqueKeysWithValues: CallJournal.Track.allCases.map {
+            ($0, journal.audioURL(for: info.id, track: $0))
+        })
+        let limit = info.endsAt.map { offsetSamples + Int(($0 * Recording.sampleRate).rounded(.up)) }
         // Both parts' mutes on the joined clock: the earlier part's mic is silenced too, if it wasn't yet.
         let silencing = earlier.muteIntervals + Self.silencing(info).map {
             CallInterval(start: $0.start + offset, end: $0.end + offset)
         }
-        let encoded = await Task.detached(priority: .utility) { () -> [CallJournal.Track: CallAudio.Encoded]? in
-            var encoded: [CallJournal.Track: CallAudio.Encoded] = [:]
-            var written: [URL] = []
+        let joined = await Task.detached(priority: .utility) { () -> KeptTracks? in
             let fm = FileManager.default
-            for (track, old, wav) in sources {
-                let old = old.flatMap { fm.fileExists(atPath: $0.path) ? $0 : nil }
-                // Nothing new on this track: the earlier part's file stays as it is.
-                guard (RecordingJournal.sampleCount(of: wav) ?? 0) > 0 else { continue }
-                let temporary = folder.appendingPathComponent("\(track.rawValue).joining.m4a", isDirectory: false)
-                do {
-                    encoded[track] = try CallAudio.join(old, then: wav, at: offsetSamples, to: temporary,
-                                                        silencing: track == .mic ? silencing : [],
-                                                        limit: info.endsAt.map {
-                                                            offsetSamples + Int(($0 * Recording.sampleRate).rounded(.up))
-                                                        })
-                    written.append(temporary)
-                } catch {
-                    Log.audio.error("Couldn't join the call's \(track.rawValue, privacy: .public): \(error.localizedDescription, privacy: .public)")
-                    for url in written + [temporary] { try? fm.removeItem(at: url) }
-                    return nil
+            var kept = Self.keepTracks(earlier: earlierFiles, then: wavs, at: offsetSamples, limit: limit,
+                                       silencing: silencing, in: folder, suffix: ".joining")
+            func temporary(_ name: String) -> URL {
+                folder.appendingPathComponent("\(name).joining.m4a", isDirectory: false)
+            }
+            let names = CallJournal.Track.allCases.map(\.rawValue) + ["mic-raw"]
+            guard !kept.failed else {
+                for name in names { try? fm.removeItem(at: temporary(name)) }
+                return nil
+            }
+            // Nothing new on a track: the earlier part's file stays as it is.
+            var moves = kept.encoded.keys.map { ($0.rawValue, "\($0.rawValue).m4a") }
+            if kept.encoded[.mic] != nil {
+                if kept.echo != nil {
+                    moves.append(("mic-raw", Self.rawMicFile))
+                } else {
+                    // The joined mic is as recorded now: an earlier cleaning's raw file would only be stale.
+                    try? fm.removeItem(at: folder.appendingPathComponent(Self.rawMicFile, isDirectory: false))
                 }
             }
-            for track in encoded.keys {
-                let temporary = folder.appendingPathComponent("\(track.rawValue).joining.m4a", isDirectory: false)
-                let final = folder.appendingPathComponent("\(track.rawValue).m4a", isDirectory: false)
+            for (name, finalName) in moves {
+                let final = folder.appendingPathComponent(finalName, isDirectory: false)
                 try? fm.removeItem(at: final)
                 do {
-                    try fm.moveItem(at: temporary, to: final)
+                    try fm.moveItem(at: temporary(name), to: final)
                 } catch {
-                    Log.audio.error("Couldn't keep the joined call's \(track.rawValue, privacy: .public): \(error.localizedDescription, privacy: .public)")
-                    encoded[track] = nil
+                    Log.audio.error("Couldn't keep the joined call's \(name, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                    if let track = CallJournal.Track(rawValue: name) { kept.encoded[track] = nil }
                 }
             }
-            return encoded
+            return kept
         }.value
-        guard let encoded else { return nil }
+        guard let joined else { return nil }
+        let encoded = joined.encoded
+        logEcho(joined, call: earlier.id)
         var record = earlier
         record.status = status
         record.error = nil
@@ -368,6 +476,8 @@ final class CallStore {
         if let mic = encoded[.mic] {
             record.micFile = "mic.m4a"
             record.micSeconds = mic.seconds
+            record.echoCancelled = joined.echo != nil
+            record.echoReductionDB = joined.echoReductionDB
         }
         if let remote = encoded[.remote] {
             record.remoteFile = "remote.m4a"

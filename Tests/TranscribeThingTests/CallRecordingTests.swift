@@ -12,15 +12,16 @@ import Testing
 
 private let rate = Recording.sampleRate
 
-/// `seconds` of something SpeechAnalyzer hears as speech: a voice with harmonics in syllables, over faint noise.
-private func speechLike(seconds: Double) -> [Float] {
+/// `seconds` of something SpeechAnalyzer hears as speech: a voice with harmonics in syllables, over faint noise. Another
+/// `pitch` is another person: the mic's voice must not be the other side's, or the echo canceller takes it out.
+private func speechLike(seconds: Double, pitch: Double = 140) -> [Float] {
     var seed: UInt32 = 12_345
     return (0..<Int(seconds * rate)).map { i in
         let t = Double(i) / rate
         let inPause = t.truncatingRemainder(dividingBy: 1) >= 0.75
         let syllable = inPause ? 0 : pow(sin(.pi * (t * 4).truncatingRemainder(dividingBy: 1)), 2)
         var voice = 0.0
-        for harmonic in 1...12 { voice += sin(2 * .pi * 140 * Double(harmonic) * t) / Double(harmonic) }
+        for harmonic in 1...12 { voice += sin(2 * .pi * pitch * Double(harmonic) * t) / Double(harmonic) }
         seed = seed &* 1_664_525 &+ 1_013_904_223
         let noise = Double(seed >> 8) / Double(1 << 24) - 0.5
         return Float(0.08 * syllable * voice + 0.002 * noise)
@@ -1656,7 +1657,7 @@ private func heldVoice(seconds: Double, gain: Double) -> [Float] {
         let journal = CallJournal(directory: paths.callJournals)
         let mic = FakeSource(), remote = FakeSource()
         journal.begin(info, origin: 0, sources: [.mic: mic, .remote: remote])
-        mic.push(speechLike(seconds: seconds), at: 0)
+        mic.push(speechLike(seconds: seconds, pitch: 220), at: 0)
         remote.push(speechLike(seconds: seconds), at: 0)
         _ = await journal.end(info.id)
         return info.id
@@ -1687,7 +1688,7 @@ private func heldVoice(seconds: Double, gain: Double) -> [Float] {
         rig.poll([0, 21])
         guard case .recording(let info) = rig.monitor.state else { Issue.record("not kept"); return }
         #expect(rig.asked.isEmpty)
-        rig.sources.first?[.mic]?.push(speechLike(seconds: 3), at: 0)
+        rig.sources.first?[.mic]?.push(speechLike(seconds: 3, pitch: 220), at: 0)
         rig.sources.first?[.remote]?.push(speechLike(seconds: 3), at: 0)
         rig.app("ru.keepcoder.Telegram", mic: false, sound: false)
         rig.poll(stride(from: 22.0, through: 101, by: 1))
@@ -1709,6 +1710,11 @@ private func heldVoice(seconds: Double, gain: Double) -> [Float] {
             #expect(Self.rms(gap) < 0.001, "\(track)")
         }
         #expect(call.muteIntervals.first == CallInterval(start: 1, end: 1.5))
+        // The joined mic was cleaned of the other side in one pass, the one as recorded kept beside it.
+        #expect(call.echoCancelled)
+        #expect(FileManager.default.fileExists(atPath: rig.store.folder(for: earlier)
+            .appendingPathComponent(CallStore.rawMicFile).path))
+        #expect(!files(in: rig.store.folder(for: earlier)).contains { $0.contains("joining") })
         #expect(!FileManager.default.fileExists(atPath: rig.store.folder(for: info.id).path))
         await rig.store.journal?.settle()
         #expect(files(in: paths.callJournals).isEmpty)

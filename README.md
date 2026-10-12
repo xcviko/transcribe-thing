@@ -141,6 +141,11 @@ To record the other side, turn on transcribe-thing in System Settings → Privac
 Recording, under System Audio Recording Only. Without it, their side comes out silent and the call says so. In a
 browser, the app records all of the browser's sound, so music in another tab ends up in the recording.
 
+On your Mac's speakers, your microphone hears the other side too. When a call is kept, the app takes their voices out of
+your microphone's track, using the call app's own sound, so the transcript mixes you up with them less. With headphones
+there's nothing to take out, and your microphone stays as it was recorded. That original is kept in the call's folder as
+`mic-raw.m4a` and deleted with the call.
+
 ## Your data
 
 History, the recordings, your dictionary and your API keys (OpenRouter's and your own endpoint's) stay on your Mac, in

@@ -22,6 +22,9 @@ public enum TranscribeThingMain {
             if AudioWatchCLI.handles(arguments) {
                 AudioWatchCLI.run(arguments)
             }
+            if CallsEchoCLI.handles(arguments) {
+                CallsEchoCLI.run(arguments)
+            }
             if CallsCLI.handles(arguments) {
                 CallsCLI.run(arguments)
             }
