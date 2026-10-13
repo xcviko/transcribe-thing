@@ -74,6 +74,11 @@ enum HubSnapshots {
             hub("hub-home-drop", .home) { c in
                 c.previewDropTarget = true
             },
+            // Selected text polished by Gemini 3.8 Flash and translated by Gemini 4 Argon: each glyph in its model's
+            // color.
+            hub("hub-home-selections", .home, height: 900) { c in
+                c.history = .preview(entries: Samples.selectionEntries() + c.history.entries)
+            },
 
             // Calls (`--only hub-call`): every state a call can be in, by day, with the badge on the sidebar.
             hub("hub-calls", .calls, configure: Samples.calls),
@@ -448,6 +453,23 @@ enum HubSnapshots {
 
         static let downloading = DownloadProgress(fraction: 0.42, bytesReceived: 265_600_000, totalBytes: 632_321_326,
                                                   bytesPerSecond: 9_800_000, secondsRemaining: 38)
+
+        /// Selected text rewritten: translated by Argon, polished by Flash.
+        static func selectionEntries() -> [TranscriptEntry] {
+            let now = Date()
+            func entry(_ text: String, _ kind: TranscriptVersionKind, ago: TimeInterval) -> TranscriptEntry {
+                let version = TranscriptResult(text: text, engine: kind.engine, processingTime: 3.2)
+                    .version(kind)
+                return TranscriptEntry(createdAt: now.addingTimeInterval(-ago), engine: kind.engine,
+                                       audioDuration: 0, voicedSeconds: 0, versions: [version])
+            }
+            return [
+                entry("Tomorrow I'll go again and check how it does with intervals.",
+                      .selectionTranslation(.geminiArgon), ago: 30),
+                entry("We ship the import on Friday, and Pasha checks the long files over the weekend.",
+                      .selection(.geminiFlash), ago: 90),
+            ]
+        }
 
         /// Rows made from files: a transcript, one not transcribed yet, one that failed.
         static func importedEntries() -> [TranscriptEntry] {

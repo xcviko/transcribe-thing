@@ -49,28 +49,47 @@ enum Polish {
     }
 }
 
-/// The models that have polished a selection. Gemini 3.8 Flash does it now, as Polish does (`asked`). GPT-6 Luna was
-/// asked alongside it to see which answer gets picked; Gemini's was, so Luna is no longer asked, and stays only so
-/// History reads the versions it wrote. Raw values are persisted (History): never rename them.
+/// The models that polish or translate a selection: the Gemini model the user dictates with (`chosen`), Gemini 3.8
+/// Flash or Gemini 4 Argon. GPT-6 Luna was asked alongside Flash once to see which answer gets picked; Gemini's was,
+/// so Luna is no longer asked, and stays only so History reads the versions it wrote. Raw values are persisted
+/// (History, and the cards' dedupe keys): never rename them.
 enum PolishSelectionModel: String, CaseIterable, Codable, Sendable {
     case geminiFlash
     case gpt6Luna
+    case geminiArgon
 
-    /// The models Polish Selection asks, each answer on its own card.
-    static let asked: [PolishSelectionModel] = [.geminiFlash]
+    /// The model a selection goes to: the main model when it's a Gemini, else the hands-free model when it's a Gemini
+    /// (`AppSettings.handsFreeChoice`), else Gemini 3.8 Flash. A user who dictates with Argon gets Argon here too.
+    static func chosen(main: ModelChoice, handsFree: ModelChoice?) -> PolishSelectionModel {
+        if let model = PolishSelectionModel(choice: main) { return model }
+        if let handsFree, let model = PolishSelectionModel(choice: handsFree) { return model }
+        return .geminiFlash
+    }
 
-    /// "Gemini 3.8 Flash", "GPT-6 Luna".
+    /// The Gemini model's: Flash for `.gemini`, Argon for `.argon`; nil for Parakeet.
+    init?(choice: ModelChoice) {
+        switch choice {
+        case .gemini: self = .geminiFlash
+        case .argon: self = .geminiArgon
+        case .parakeet: return nil
+        }
+    }
+
+    /// "Gemini 3.8 Flash", "Gemini 4 Argon", "GPT-6 Luna".
     var modelName: String {
         switch self {
         case .geminiFlash: EngineID.geminiFlash.modelName
+        case .geminiArgon: EngineID.geminiArgon.modelName
         case .gpt6Luna: CleanupModel.gpt6Luna.modelName
         }
     }
 
-    /// The engine whose level (Models → Reasoning) the request goes at; nil for Luna, which is no longer asked.
+    /// The engine the request goes to, at the Reasoning level picked for it in Models; nil for Luna, which is no
+    /// longer asked.
     var engine: EngineID? {
         switch self {
         case .geminiFlash: .geminiFlash
+        case .geminiArgon: .geminiArgon
         case .gpt6Luna: nil
         }
     }
@@ -88,6 +107,7 @@ enum PolishSelectionModel: String, CaseIterable, Codable, Sendable {
         return route
     }
 
-    /// The model whose color the pill and History wear: Gemini's, Polish Selection being Gemini's now.
-    var choice: ModelChoice { .gemini }
+    /// The model whose color the pill and History wear: Argon's for Argon, Gemini's for Flash (and for Luna's old
+    /// answers, which have always worn it).
+    var choice: ModelChoice { self == .geminiArgon ? .argon : .gemini }
 }

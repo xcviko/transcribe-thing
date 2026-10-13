@@ -176,11 +176,13 @@ private func json(_ body: Data) throws -> [String: Any] {
         #expect(service.reasoningEffort(.parakeet) == nil)
     }
 
-    /// Polish Selection stays on Gemini 3.8 Flash, at the level picked for Flash.
-    @Test func polishSelectionGoesAtFlashsLevel() throws {
+    /// A selection's model goes at the level it's asked for: Flash's and Argon's own model IDs, Medium by default.
+    @Test func polishSelectionGoesAtTheModelsLevel() throws {
         let route = try #require(PolishSelectionModel.geminiFlash.route(effort: .high))
         #expect(route.model == "google/gemini-3.8-flash" && route.effort == "high" && route.streamsReasoning)
         #expect(PolishSelectionModel.geminiFlash.route?.effort == "medium")
+        let argon = try #require(PolishSelectionModel.geminiArgon.route(effort: .low))
+        #expect(argon.model == "google/gemini-4-argon" && argon.effort == "low" && argon.streamsReasoning)
         #expect(PolishSelectionModel.gpt6Luna.route(effort: .high) == nil)
     }
 

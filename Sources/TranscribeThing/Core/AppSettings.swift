@@ -255,6 +255,12 @@ final class AppSettings {
         reasoningEfforts[engine]
     }
 
+    /// The Gemini model that polishes and translates selected text: the one the user dictates with
+    /// (`PolishSelectionModel.chosen`).
+    var selectionModel: PolishSelectionModel {
+        PolishSelectionModel.chosen(main: lineup.main, handsFree: handsFreeChoice)
+    }
+
     /// The model calls go to, and the level it thinks at, as both a call's requests send them (`CallTranscriber`).
     var callModel: CallModel {
         CallModel(engine: callEngine, effort: reasoningEffort(for: callEngine) ?? .medium)

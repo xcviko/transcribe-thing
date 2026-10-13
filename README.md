@@ -58,8 +58,10 @@ On either Gemini, press fn P while you talk and it pastes the message you meant,
 repeats. Press fn T and it pastes what you said in the other language. Russian becomes English and English becomes
 Russian; pick another pair in General → Translate. With both on, you get the message you meant, translated.
 
-On Parakeet, fn P polishes and fn T translates the text you've selected instead: Gemini 3.8 Flash writes the result on
-a card, and Paste Here puts it in place of the selection.
+On Parakeet, fn P polishes and fn T translates the text you've selected instead: Gemini writes the result on a card,
+and Paste Here puts it in place of the selection. It's the Gemini you dictate with: your main model if it's a Gemini,
+else your hands-free model if it's a Gemini, else Gemini 3.8 Flash. So if you dictate with Gemini 4 Argon, Argon
+writes it.
 
 In Models:
 

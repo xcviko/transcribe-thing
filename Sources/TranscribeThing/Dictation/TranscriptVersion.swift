@@ -25,8 +25,9 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
         switch self {
         case .transcription(let engine), .cleanup(let engine, _), .polish(let engine), .translation(_, let engine):
             engine
-        // Nothing heard any audio: Gemini Flash stands in (the entry is never transcribed again).
-        case .selection, .selectionTranslation: .geminiFlash
+        // Nothing heard any audio: the model that wrote it stands in (Flash for Luna's old ones); the entry is never
+        // transcribed again.
+        case .selection(let model), .selectionTranslation(let model): model.engine ?? .geminiFlash
         }
     }
 
@@ -151,11 +152,11 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
 
     /// Persisted: "parakeet", "cleanup:parakeet" (Flash Lite's: the form from before the choice of clean-up model,
     /// which older builds read), "cleanup:parakeet:gpt6Luna", "polish" (Gemini 3.8 Flash's, as before there was a
-    /// choice), "polish:geminiArgon", "selection:geminiFlash", "translation", "translation:polished",
-    /// "translation:geminiArgon", "translation:polished:geminiArgon", "translated-selection:geminiFlash". Never rename.
-    /// An older
-    /// build can't read a kind with a model and drops that version, not the entry (`TranscriptEntry.encode(to:)` keeps
-    /// the text it tidied intact for them).
+    /// choice), "polish:geminiArgon", "selection:geminiFlash", "selection:gpt6Luna", "selection:geminiArgon",
+    /// "translation", "translation:polished", "translation:geminiArgon", "translation:polished:geminiArgon",
+    /// "translated-selection:geminiFlash", "translated-selection:geminiArgon". Never rename. An older build can't read
+    /// a kind with a model and drops that version, not the entry (`TranscriptEntry.encode(to:)` keeps the text it
+    /// tidied intact for them).
     var rawValue: String {
         switch self {
         case .transcription(let engine): engine.rawValue

@@ -93,8 +93,10 @@ final class DictationController {
     /// Tests: what ⌘C copies where the app couldn't tell (`copiedSelection`). Without it, a test with
     /// `selectionOverride` never copies.
     @ObservationIgnored var selectionCopyOverride: (@MainActor () async -> TextInserter.SelectionCopy)?
-    /// Tests: the model's answer for Polish Selection (its `<message>` tags included), instead of OpenRouter.
-    @ObservationIgnored var selectionPolishOverride: (@MainActor (String, PolishSelectionModel) async throws -> TranscriptResult)?
+    /// Tests: the model's answer for Polish Selection (its `<message>` tags included), instead of OpenRouter. It gets
+    /// the text, the model and the request's route (its model ID and Reasoning level).
+    @ObservationIgnored var selectionPolishOverride:
+        (@MainActor (String, PolishSelectionModel, TextRoute?) async throws -> TranscriptResult)?
     /// Replaces how long a job waits for its local model before saying so (`modelWaitNoticeDelay`).
     @ObservationIgnored var waitNoticeDelayOverride: TimeInterval?
     /// TCC's answer right now (about 25 ms), asked only while the cached permission isn't granted.
@@ -2123,7 +2125,7 @@ final class DictationController {
         return PolishSelectionModel(rawValue: String(notice.dedupeKey.dropFirst(selectionCardPrefix.count)))
     }
 
-    /// Polish Selection, or the selection translated (`translates`): the models asked (`PolishSelectionModel.asked`),
+    /// Polish Selection, or the selection translated (`translates`): the models asked (`AppSettings.selectionModel`),
     /// how far each has streamed, and the History entry their answers land in. `settled` once an answer is pasted or
     /// the cards are closed: what comes after is dropped.
     final class SelectionPolish {
@@ -2149,21 +2151,32 @@ final class DictationController {
         func kind(_ model: PolishSelectionModel) -> TranscriptVersionKind {
             translates ? .selectionTranslation(model) : .selection(model)
         }
+        /// The model whose color the pill wears while it writes: the first asked (Gemini's when none is).
+        var choice: ModelChoice {
+            PolishSelectionModel.allCases.first { estimates[$0] != nil }?.choice ?? .gemini
+        }
         /// The count the pill shows: the first model's that still writes.
         var count: PillTokenCount? {
-            PolishSelectionModel.asked.first { pending.contains($0) && counts[$0] != nil }.flatMap { counts[$0] }
+            PolishSelectionModel.allCases.first { pending.contains($0) && counts[$0] != nil }.flatMap { counts[$0] }
         }
     }
 
-    /// Polish Selection can happen: its key is bound, and the OpenRouter key can pay for it (without one, the key
-    /// stays the app's and no hint promises a polish that would only fail).
+    /// Polish Selection can happen: its key is bound, and the key of the provider the selection's model goes through
+    /// (`AppSettings.selectionModel`: OpenRouter's, or the user's endpoint) can pay for it. Without one, the key stays
+    /// the app's and no hint promises a polish that would only fail.
     private var canPolishSelection: Bool {
-        settings.shortcuts[.polish] != nil && keyProblem(for: .geminiFlash) == nil
+        settings.shortcuts[.polish] != nil && selectionModelIsReady
     }
 
-    /// The selection can be translated: the translate key is bound, and the OpenRouter key can pay for it.
+    /// The selection can be translated: the translate key is bound, and the selection's model can be paid for.
     private var canTranslateSelection: Bool {
-        settings.shortcuts[.translate] != nil && keyProblem(for: .geminiFlash) == nil
+        settings.shortcuts[.translate] != nil && selectionModelIsReady
+    }
+
+    /// The model a selection goes to has a working key with the provider its requests go through.
+    private var selectionModelIsReady: Bool {
+        guard let engine = settings.selectionModel.engine else { return false }
+        return keyProblem(for: engine) == nil
     }
 
     /// fn D can add the selection to the dictionary: its key is bound (with a key: a modifier-only binding can't be
@@ -2345,19 +2358,25 @@ final class DictationController {
     }
 
     /// The polish key over selected text (or the translate key, `translates`): the dictation gives way without a
-    /// trace (the cancel cue, then Polish's sound), the pill turns into the polish, and the selection goes to Gemini
-    /// 3.8 Flash (`PolishSelectionModel.asked`). Its message (or translation) comes up on a card, to paste over the
-    /// selection or copy, and History keeps it.
+    /// trace (the cancel cue, then Polish's sound), the pill turns into the polish, and the selection goes to the
+    /// Gemini model the user dictates with (`AppSettings.selectionModel`), at its Reasoning level. Its message (or
+    /// translation) comes up on a card, to paste over the selection or copy, and History keeps it.
     private func rewriteSelection(_ text: String, translates: Bool) {
         settleSelection()
         let entries = history.entries
-        let work = SelectionPolish(estimates: Dictionary(uniqueKeysWithValues: PolishSelectionModel.asked.map {
-            ($0, TokenEstimate.learned(from: entries, modelID: $0.route?.model))
+        let models = [settings.selectionModel]
+        // Each model at the level picked for it in Models.
+        let routes = Dictionary(uniqueKeysWithValues: models.map { model in
+            (model, model.route(effort: model.engine.flatMap(settings.reasoningEffort(for:))))
+        })
+        let work = SelectionPolish(estimates: Dictionary(uniqueKeysWithValues: models.map {
+            ($0, TokenEstimate.learned(from: entries, modelID: routes[$0]??.model))
         }), translates: translates)
         selectionPolish = work
         let prompt = translates ? Translate.textPrompt(settings.translationPair) : Polish.textPrompt
         DiagnosticLog.shared.event(.dictation, translates ? "selection.translate" : "selection.polish",
-                                   ["characters": text.count])
+                                   ["characters": text.count, "model": models.first?.rawValue,
+                                    "effort": models.first.flatMap { routes[$0] ?? nil }?.effort])
         // The chip would come back over the polish, naming the dictation's model.
         pillModel.endChipFlash()
         playCue(.cancel)
@@ -2370,13 +2389,9 @@ final class DictationController {
         }
         let override = selectionPolishOverride
         let transcription = transcription
-        let settings = settings
-        // Polish Selection stays on Gemini 3.8 Flash whatever the dictation's model: text only, it's quick there. It
-        // thinks at the level picked for Flash.
-        let effort: @MainActor (PolishSelectionModel) -> ReasoningEffort? = { model in
-            model.engine.flatMap(settings.reasoningEffort(for:))
-        }
-        for model in PolishSelectionModel.asked {
+        for model in models {
+            let route = routes[model] ?? nil
+            let engine = model.engine ?? .geminiFlash
             let progress: @Sendable (ChatStreamProgress) -> Void = { [weak self] streamed in
                 Task { @MainActor [weak self] in
                     guard let self, self.selectionPolish === work, let estimate = work.estimates[model] else { return }
@@ -2388,17 +2403,17 @@ final class DictationController {
                 let outcome: Result<TranscriptResult, AppError>
                 do {
                     let result = if let override {
-                        try await override(text, model)
-                    } else if let route = model.route(effort: effort(model)) {
+                        try await override(text, model, route)
+                    } else if let route {
                         try await transcription.polishText(text, route: route, prompt: prompt, progress: progress)
                     } else {
-                        throw AppError.engineFailed(.geminiFlash, "\(model.modelName) no longer polishes.")
+                        throw AppError.engineFailed(engine, "\(model.modelName) no longer polishes.")
                     }
                     outcome = .success(result)
                 } catch let error as AppError {
                     outcome = .failure(error)
                 } catch {
-                    outcome = .failure(.engineFailed(.geminiFlash, ModelStore.oneLine(error)))
+                    outcome = .failure(.engineFailed(engine, ModelStore.oneLine(error)))
                 }
                 self?.finishSelectionPolish(work, model, outcome)
             })
@@ -2432,7 +2447,8 @@ final class DictationController {
                     resolveGeneration(of: version, entryID: id)
                 }
             } else {
-                let entry = TranscriptEntry(engine: .geminiFlash, audioDuration: 0, voicedSeconds: 0, versions: [version])
+                let entry = TranscriptEntry(engine: model.engine ?? .geminiFlash, audioDuration: 0, voicedSeconds: 0,
+                                            versions: [version])
                 history.upsert(entry)
                 work.entryID = entry.id
                 resolveGeneration(of: version, entryID: entry.id)
@@ -2779,8 +2795,8 @@ final class DictationController {
             effectiveChoice
         } else if phase == .processing, let job = pillJob {
             ModelChoice(engine: job.engine)
-        } else if phase == .processing, selectionRuns {
-            ModelChoice.gemini
+        } else if phase == .processing, selectionRuns, let selectionPolish {
+            selectionPolish.choice
         } else {
             nil
         }

@@ -111,6 +111,16 @@ enum PillSnapshots {
                         by: .geminiFlash),
                 ])
             },
+            // Dictating with Gemini 4 Argon: the selection goes to Argon, in Argon's color, and its card says so.
+            SnapshotEntry("pill-selection-argon-translating", width: 640, height: 150) { _ in
+                CanvasScene(model: selectionModel(.processing, choice: .argon, translates: true), notices: [])
+            },
+            SnapshotEntry("pill-selection-argon-card", width: 640, height: 400) { _ in
+                CanvasScene(model: restModel(), notices: [
+                    DictationController.selectionCard("Tomorrow I'll go again and check how it does with intervals.",
+                                                      by: .geminiArgon, translated: true),
+                ])
+            },
             // The tallest it gets: an answer long enough to fill its box, under a pill still processing with its
             // chip. Everything fits the panel.
             SnapshotEntry("pill-selection-card-full", width: 640, height: PillCanvasMetrics.size.height) { _ in
