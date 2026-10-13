@@ -246,7 +246,8 @@ final class CallStore {
             if let remote = encoded[.remote] {
                 record.remoteFile = "remote.m4a"
                 record.remoteSeconds = remote.seconds
-                if remote.peak == 0, remote.seconds >= 10, record.remoteProblem == nil {
+                if remote.peak == 0, remote.seconds >= 10, record.remoteProblem == nil,
+                   SystemAudioPermission.current() != .authorized {
                     record.remoteProblem = Self.silentTapMessage
                 }
             }
@@ -487,7 +488,8 @@ final class CallStore {
         if let remote = encoded[.remote] {
             record.remoteFile = "remote.m4a"
             record.remoteSeconds = remote.seconds
-            if remote.peak == 0, remote.seconds >= 10, record.remoteProblem == nil {
+            if remote.peak == 0, remote.seconds >= 10, record.remoteProblem == nil,
+                   SystemAudioPermission.current() != .authorized {
                 record.remoteProblem = Self.silentTapMessage
             }
         }

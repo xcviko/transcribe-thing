@@ -511,8 +511,7 @@ struct CallsSettingsGroup: View {
                         .labelsHidden()
                 }
                 SettingsRow(title: "System Audio Recording",
-                            subtitle: "Lets the app record the other side of a call. macOS doesn’t say whether it’s "
-                                + "on: a call whose other side came out silent tells you.",
+                            subtitle: systemAudioSubtitle,
                             systemImage: "speaker.wave.2", iconTint: .inkSecondary) {
                     Button("Open Settings") { hub.openSettings(.systemAudio) }
                         .buttonStyle(SecondaryButtonStyle(size: .small))
@@ -523,6 +522,15 @@ struct CallsSettingsGroup: View {
                     CallExclusionRow(exclusion: exclusion) { settings.removeCallExclusion(exclusion) }
                 }
             }
+        }
+    }
+
+    /// What macOS says about recording other apps' sound, read as the page draws.
+    private var systemAudioSubtitle: String {
+        switch SystemAudioPermission.current() {
+        case .authorized: "Allowed: the app records the other side of a call."
+        case .denied: "Not allowed: the other side of a call comes out silent. Turn it on in Privacy & Security."
+        case .unknown: "Lets the app record the other side of a call. macOS asks the first time a call is recorded."
         }
     }
 

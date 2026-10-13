@@ -169,7 +169,10 @@ enum CallFormat {
     /// Why a side wasn't recorded (or stopped), with the Privacy & Security pane that fixes it when there is one.
     static func problems(_ call: CallRecord) -> [CallProblem] {
         var problems: [CallProblem] = []
-        if let problem = call.remoteProblem {
+        // A silent other side said nothing about the permission when it's granted: nobody spoke there (calls saved
+        // before the app asked macOS, too).
+        if let problem = call.remoteProblem,
+           problem != CallStore.silentTapMessage || SystemAudioPermission.current() != .authorized {
             if problem == CallStore.silentTapMessage {
                 problems.append(CallProblem(text: "Their side wasn’t recorded: allow System Audio Recording in "
                                                 + "Privacy & Security.", pane: .systemAudio))
