@@ -29,8 +29,8 @@ import Testing
     /// Clean-up is gone: no transcript offers it, whatever Parakeet texts it has, and one GPT-6 Luna already tidied
     /// keeps that version to switch to.
     @Test func nothingOffersACleanUp() {
-        #expect(menu(transcript()).actions.map(\.kind) == [.transcription(.parakeetCloud), .transcription(.geminiFlash),
-                                                           .polish, .translation(polished: false)])
+        #expect(menu(transcript()).actions.map(\.kind) == [.transcription(.geminiFlash), .transcription(.geminiArgon)]
+                + TranscriptVersionKind.rewrites)
         var entry = transcript(.parakeet)
         entry.addVersion(TranscriptVersion(text: "cloud", engine: .parakeetCloud))
         entry.addVersion(TranscriptVersion(kind: .cleanup(of: .parakeet, by: .gpt6Luna), text: "Hello.",
@@ -50,8 +50,8 @@ import Testing
         let proMenu = menu(pro)
         #expect(proMenu.versions.map(\.kind) == [.transcription(.geminiPro)])
         #expect(proMenu.versions.map(\.title) == ["Gemini 3.1 Pro"])
-        #expect(proMenu.actions.map(\.kind) == [.transcription(.parakeet), .transcription(.parakeetCloud),
-                                                .transcription(.geminiFlash), .polish, .translation(polished: false)],
+        #expect(proMenu.actions.map(\.kind) == [.transcription(.parakeet), .transcription(.geminiFlash),
+                                                .transcription(.geminiArgon)] + TranscriptVersionKind.rewrites,
                 "Pro's text isn't cleaned up either")
 
         var tidied = transcript()
@@ -59,13 +59,13 @@ import Testing
                                             metadata: TranscriptMetadata()))
         let tidiedMenu = menu(tidied)
         #expect(tidiedMenu.versions.map(\.title) == ["Parakeet v3", "Parakeet v3 + Clean-up by Flash Lite"])
-        #expect(tidiedMenu.actions.map(\.kind) == [.transcription(.parakeetCloud), .transcription(.geminiFlash),
-                                                   .polish, .translation(polished: false)])
+        #expect(tidiedMenu.actions.map(\.kind) == [.transcription(.geminiFlash), .transcription(.geminiArgon)]
+                + TranscriptVersionKind.rewrites)
 
         var failed = TranscriptEntry(text: "", engine: .geminiPro, status: .failed, audioDuration: 20, voicedSeconds: 10,
                                      audioFileName: "a.wav")
         #expect(menu(failed).actions.map(\.kind)
-                == EngineID.offered.map(TranscriptVersionKind.transcription) + [.polish, .translation(polished: false)])
+                == EngineID.offered.map(TranscriptVersionKind.transcription) + TranscriptVersionKind.rewrites)
         failed.status = .cancelled
         #expect(!menu(failed).actions.contains { $0.kind.engine.isRetired || $0.kind.isCleanup })
     }
@@ -82,7 +82,7 @@ import Testing
     @Test func whileSomethingRunsEveryActionIsBusyButVersionsStaySwitchable() {
         var entry = transcript()
         entry.addVersion(TranscriptVersion(text: "g", engine: .geminiFlash))
-        let m = menu(entry, running: .polish)
+        let m = menu(entry, running: .polish())
         #expect(m.runningTitle == "Polishing with Gemini 3.8 Flash…")
         #expect(m.actions.allSatisfy { !$0.isEnabled && $0.title.hasSuffix(" · Busy") })
         #expect(m.versions.count == 2)
@@ -100,7 +100,7 @@ import Testing
         #expect(VersionDetails.lines(for: version) == [
             "Gemini 3.8 Flash",
             "google/gemini-3.8-flash via Google AI Studio",
-            "Thinking: Low",
+            "Reasoning: Low",
             "Tokens: 330 in (314 audio) · 72 out · 540 thinking",
             "Cost: $0.0021",
             "Took 2.6 s · first word 1.2 s · model 2.2 s",
@@ -116,7 +116,7 @@ import Testing
         #expect(VersionDetails.lines(for: version) == [
             "Parakeet v3 + Clean-up by Flash Lite",
             "google/gemini-3.5-flash-lite",
-            "Thinking: Minimal",
+            "Reasoning: Minimal",
             "Model 0.8 s",
             "System prompt: yes",
             "Finished: length",
@@ -126,7 +126,7 @@ import Testing
         #expect(VersionDetails.lines(for: luna) == [
             "Parakeet v3 + Clean-up by GPT-6 Luna",
             "openai/gpt-6-luna via OpenAI",
-            "Thinking: None",
+            "Reasoning: None",
             "Took 1.1 s",
         ])
     }
@@ -150,7 +150,7 @@ import Testing
         #expect(VersionDetails.lines(for: version) == [
             "Gemini 3.1 Pro",
             "google/gemini-3.1-pro-preview via Google AI Studio",
-            "Thinking: High",
+            "Reasoning: High",
             "Tokens: 900 in · 200 out · 4k thinking",
             "Cost: $0.0094",
             "Took 6.8 s",

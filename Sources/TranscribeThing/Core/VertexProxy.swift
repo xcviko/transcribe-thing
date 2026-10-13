@@ -1,7 +1,7 @@
 import Foundation
 
 /// The service a cloud engine's requests go to: OpenRouter, or the user's own OpenAI-compatible endpoint for Gemini
-/// (`VertexProxyAccount.routesGemini`). Cloud Parakeet always goes through OpenRouter. (`vertexProxy` and the
+/// (`VertexProxyAccount.routesGemini`). (`vertexProxy` and the
 /// `VertexProxy…` names are what the endpoint was called when it could only be the user's Vertex proxy; the app calls
 /// it "OpenAI-compatible endpoint", "Custom endpoint" for short, and "your endpoint" in sentences.)
 enum CloudProvider: String, Sendable, Equatable, CaseIterable {

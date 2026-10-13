@@ -64,7 +64,7 @@ import Testing
 
     @Test func cloudEngineNeedsAWorkingKey() {
         let valid = KeyStatus.valid(KeyInfo(limitRemaining: 3))
-        for engine in EngineID.cloudEngines {
+        for engine in EngineID.geminiEngines {
             #expect(OnboardingGate.canContinue(.model, inputs(engine: engine, local: .notInstalled, key: valid, stored: true)))
             #expect(!OnboardingGate.canContinue(.model, inputs(engine: engine, key: .missing)))
             #expect(!OnboardingGate.canContinue(.model, inputs(engine: engine, key: .checking, stored: true)))
@@ -120,7 +120,7 @@ import Testing
         #expect(eval(local: .downloading(DownloadProgress(fraction: 0.62))) == .downloading(.parakeet, 0.62))
         #expect(eval(local: .failed("x")) == .notDownloaded(.parakeet))
         #expect(eval(engine: .geminiFlash, key: .missing) == .needsKey(.geminiFlash))
-        #expect(eval(engine: .parakeetCloud, key: .valid(KeyInfo()), stored: true) == .ready)
+        #expect(eval(engine: .geminiArgon, key: .valid(KeyInfo()), stored: true) == .ready)
         #expect(eval(local: .downloading(DownloadProgress(fraction: 0.1))).allowsPractice == false)
         #expect(eval(local: .installed).allowsPractice)
     }
@@ -222,40 +222,30 @@ import Testing
             ctx.account = .preview(status: .missing)
         }
         #expect(!model.canContinue)
-        model.select(.parakeetCloud)
-        #expect(model.ctx.settings.parakeetEngine == .parakeetCloud)
-        #expect(model.showsKeyField)
-        #expect(!model.canContinue)
+        model.select(.geminiArgon)
+        #expect(!model.canContinue, "Gemini isn't picked here")
     }
 
-    @Test func validKeyUnlocksCloudEngines() {
-        let model = makeModel(step: 2) { ctx in
-            ctx.models = .preview(states: [.parakeet: .notInstalled])
-            ctx.account = .preview(status: .valid(KeyInfo(limitRemaining: 4.2)))
-        }
-        model.select(.parakeetCloud)
-        #expect(model.canContinue)
-        #expect(!model.showsKeyField)
-        model.replaceKey()
-        #expect(model.showsKeyField)
-    }
-
-    @Test func cloudSpeechSharesTheOneKey() {
+    /// Onboarding replayed with a Gemini main model: its key is what the step needs.
+    @Test func aGeminiMainModelNeedsItsKey() {
         let missing = makeModel(step: 2) { ctx in
             ctx.models = .preview(states: [.parakeet: .notInstalled])
             ctx.account = .preview(status: .missing)
+            ctx.settings.lineup.main = .argon
         }
-        missing.select(.parakeetCloud)
-        #expect(missing.ctx.settings.parakeetEngine == .parakeetCloud)
+        #expect(missing.gateInputs.engine == .geminiArgon)
         #expect(missing.showsKeyField)
         #expect(!missing.canContinue)
 
         let connected = makeModel(step: 2) { ctx in
             ctx.models = .preview(states: [.parakeet: .notInstalled])
+            ctx.account = .preview(status: .valid(KeyInfo(limitRemaining: 4.2)))
+            ctx.settings.lineup.main = .argon
         }
-        connected.select(.parakeetCloud)
-        #expect(connected.canContinue, "the key Gemini uses works for cloud Parakeet too")
+        #expect(connected.canContinue)
         #expect(!connected.showsKeyField)
+        connected.replaceKey()
+        #expect(connected.showsKeyField)
     }
 
     @Test func keyFormatErrorShowsOnSubmit() {
@@ -677,7 +667,7 @@ import Testing
     @Test func theLessonNeedsAStepAndAWorkingKeyForIt() {
         let valid = KeyStatus.valid(KeyInfo(limitRemaining: 3))
         func usable(_ lineup: ModelLineup, _ key: KeyStatus, parakeet: EngineID = .parakeet) -> Bool {
-            OnboardingGate.switchModelUsable(lineup: lineup, parakeet: parakeet, keyStatus: key, hasStoredKey: true)
+            OnboardingGate.switchModelUsable(lineup: lineup, keyStatus: key, hasStoredKey: true)
         }
         #expect(usable(Self.lineup(on: [.gemini]), valid))
         #expect(!usable(Self.lineup(on: []), valid), "nothing to step to")
@@ -685,12 +675,12 @@ import Testing
         #expect(!usable(Self.lineup(on: [.gemini]), .invalid("401")))
         #expect(usable(Self.lineup(on: [.gemini]), .offline))
         #expect(usable(Self.lineup(main: .gemini, on: [.parakeet]), .missing), "Parakeet on this Mac needs no key")
-        #expect(!usable(Self.lineup(main: .gemini, on: [.parakeet]), .missing, parakeet: .parakeetCloud))
+        #expect(!usable(Self.lineup(main: .parakeet, on: [.argon]), .missing), "Argon needs the key as Flash does")
     }
 
     @Test func noteNamesTheActualSwitchModelBinding() {
         func note(_ binding: Shortcut?, _ lineup: ModelLineup) -> String {
-            OnboardingGate.lineupNote(binding: binding, lineup: lineup, parakeet: .parakeet)
+            OnboardingGate.lineupNote(binding: binding, lineup: lineup)
         }
         let fnTab = note(.fnTab, Self.lineup(on: [.gemini]))
         #expect(fnTab.contains(Shortcut.fnTab.compactDescription.replacingOccurrences(of: " ", with: "\u{00A0}")))
@@ -703,16 +693,15 @@ import Testing
     }
 
     @Test func theDefaultNoteNamesGemini() {
-        #expect(OnboardingGate.lineupNote(binding: .fnTab, lineup: .default, parakeet: .parakeet)
-            == "For a long talk where every word counts, press fn\u{00A0}⇥ while dictating to use Gemini. "
-                + "It uses the same OpenRouter key.")
+        #expect(OnboardingGate.lineupNote(binding: .fnTab, lineup: .default)
+            == "For a long talk where every word counts, press fn\u{00A0}⇥ while dictating to use Gemini 3.8 Flash. "
+                + "Add its OpenRouter key later in Models.")
     }
 
     @Test func theNoteNamesAMainModelOtherThanParakeet() {
-        #expect(OnboardingGate.lineupNote(binding: .fnTab, lineup: Self.lineup(main: .gemini, on: [.parakeet]),
-                                          parakeet: .parakeet)
+        #expect(OnboardingGate.lineupNote(binding: .fnTab, lineup: Self.lineup(main: .gemini, on: [.parakeet]))
             == "Your dictations start on Gemini 3.8 Flash, your main model. Change it anytime in Models.")
-        #expect(OnboardingGate.lineupNote(binding: nil, lineup: Self.lineup(main: .gemini, on: []), parakeet: .parakeetCloud)
+        #expect(OnboardingGate.lineupNote(binding: nil, lineup: Self.lineup(main: .gemini, on: []))
             == "Your dictations start on Gemini 3.8 Flash, your main model. Change it anytime in Models.")
     }
 }
@@ -728,14 +717,25 @@ import Testing
         return OnboardingModel(context: ctx)
     }
 
-    @Test func theModelStepPicksOnlyWhereParakeetRuns() {
+    @Test func theModelStepIsParakeetOnThisMac() {
         let model = makeModel()
-        model.select(.parakeetCloud)
-        for engine in EngineID.offered where !engine.isParakeet {
+        for engine in EngineID.allCases {
             model.select(engine)
-            #expect(model.selectedEngine == .parakeetCloud, "\(engine) isn’t a place Parakeet runs")
+            #expect(model.selectedEngine == .parakeet, "\(engine) isn’t picked here")
         }
         #expect(model.ctx.settings.lineup.main == .parakeet)
+    }
+
+    /// The line under the card names the model Switch model steps to.
+    @Test func theLineupNoteNamesTheNextModel() {
+        var lineup = ModelLineup.default
+        #expect(OnboardingGate.lineupNote(binding: .fnTab, lineup: lineup).contains("to use Gemini 3.8 Flash"))
+        lineup.move(.argon, to: 1)
+        lineup.setSwitchable(.argon, true)
+        #expect(OnboardingGate.lineupNote(binding: .fnTab, lineup: lineup).contains("to use Gemini 4 Argon"))
+        lineup.main = .argon
+        #expect(OnboardingGate.lineupNote(binding: .fnTab, lineup: lineup)
+            .hasPrefix("Your dictations start on Gemini 4 Argon, your main model."))
     }
 
     @Test func switchModelLessonShowsOnlyWhenAStepWouldAnswer() {
@@ -755,7 +755,7 @@ import Testing
         }
         #expect(gemini.gateInputs.engine == .geminiFlash)
         #expect(gemini.practiceReadiness != .ready)
-        let cloud = makeModel { ctx in ctx.settings.parakeetEngine = .parakeetCloud }
-        #expect(cloud.gateInputs.engine == .parakeetCloud)
+        let argon = makeModel { ctx in ctx.settings.lineup.main = .argon }
+        #expect(argon.gateInputs.engine == .geminiArgon)
     }
 }

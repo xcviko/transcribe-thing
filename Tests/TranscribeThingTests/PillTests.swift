@@ -1510,14 +1510,14 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
 
     @Test func theModelMenuChecksTheCurrentChoiceAndDisablesWhatCantRun() throws {
         var picked: [ModelChoice] = []
-        let menu = PillController.modelMenu(choices: [.gemini, .parakeet], current: .gemini,
-                                            parakeet: .parakeetCloud,
-                                            unavailableReason: { $0 == .parakeet ? "Needs key" : nil }) {
+        let menu = PillController.modelMenu(choices: [.gemini, .argon], current: .gemini,
+                                            unavailableReason: { $0 == .argon ? "Needs key" : nil }) {
             picked.append($0)
         }
         // The cycle as it is, the main model first: no separators.
         #expect(menu.items.allSatisfy { !$0.isSeparatorItem })
-        #expect(menu.items.map(\.title) == ["Gemini 3.8 Flash", "Parakeet v3 · Cloud  Needs key"])
+        #expect(menu.items.map(\.title) == ["Gemini 3.8 Flash", "Gemini 4 Argon  Needs key"])
+        #expect(menu.items.map { $0.image != nil } == [true, true], "each with its model's symbol")
         #expect(menu.items.map(\.state) == [.on, .off])
         #expect(menu.items.map(\.isEnabled) == [true, false])
         #expect(menu.items[0].attributedTitle == nil, "a suffix only for what can't run")
@@ -1529,7 +1529,9 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
     @Test func theHintNamesTheOneStepOrWhatTheyShare() {
         #expect(PillSwitchHint.label(for: [.gemini]) == "Gemini 3.8 Flash")
         #expect(PillSwitchHint.label(for: [.parakeet]) == "Parakeet v3")
-        #expect(PillSwitchHint.label(for: [.parakeet, .gemini]) == "Parakeet, Gemini")
+        #expect(PillSwitchHint.label(for: [.argon]) == "Gemini 4 Argon")
+        #expect(PillSwitchHint.label(for: [.parakeet, .gemini]) == "Parakeet, Flash")
+        #expect(PillSwitchHint.label(for: [.gemini, .argon]) == "Flash, Argon")
     }
 
     @Test func toastsClearTheChip() {

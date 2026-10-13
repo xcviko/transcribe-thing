@@ -57,7 +57,7 @@ private let historyFile = #"""
         #expect(VersionDetails.lines(for: version) == [
             "Gemini 3.1 Pro",
             "google/gemini-3.1-pro-preview via Google AI Studio",
-            "Thinking: High",
+            "Reasoning: High",
             "Tokens: 900 in (860 audio) · 200 out · 4k thinking",
             "Cost: $0.0094",
             "Took 6.8 s · model 6.1 s",
@@ -80,7 +80,7 @@ private let historyFile = #"""
         #expect(tidied.currentKind == .cleanup(of: .parakeetCloud, by: .geminiFlashLite) && tidied.text == "Tidied.")
         #expect(EngineGlyph(engine: tidied.engine, provider: tidied.provider, cleanupModel: tidied.currentKind?.cleanupModel).label
                 == "Parakeet v3 · Cloud + Clean-up by Flash Lite · via Google AI Studio")
-        #expect(tidied.currentVersion.map(VersionDetails.lines)?.contains("Thinking: Minimal") == true)
+        #expect(tidied.currentVersion.map(VersionDetails.lines)?.contains("Reasoning: Minimal") == true)
 
         let failed = entries[3]
         #expect(failed.status == .failed && failed.engine == .geminiPro && failed.versions.isEmpty)
@@ -138,8 +138,8 @@ private let historyFile = #"""
         try withDefaults { defaults in
             try storeOldSettings(defaults, switchEngines: ["geminiFlash", "geminiPro"])
             let settings = load(defaults)
-            // Gemini 3.1 Pro was the main model: Gemini 3.8 Flash is, and Parakeet runs on this Mac.
-            #expect(settings.parakeetEngine == .parakeet)
+            // Gemini 3.1 Pro was the main model: Gemini 3.8 Flash is, and the old key goes.
+            #expect(defaults.object(forKey: SettingsKey.selectedEngine.defaultsKey) == nil)
             #expect(settings.lineup.main == .gemini)
             #expect(settings.lineup.cycle == [.gemini, .parakeet])
             for key in [SettingsKey.reasoningEfforts, .cleanupModel, .cleanupReasoningEfforts, .cleanupReasoningEffort] {
@@ -155,7 +155,7 @@ private let historyFile = #"""
         }
     }
 
-    /// The old levels never reach a request: Gemini 3.8 Flash thinks at medium.
+    /// The old levels never reach a request: Gemini 3.8 Flash thinks at medium, its default.
     @Test func oldStoredLevelsNeverReachTheWire() async throws {
         let suite = NSTemporaryDirectory() + "transcribe-thing-tests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -198,11 +198,12 @@ private let historyFile = #"""
 
     @Test func nothingOffersARetiredModel() {
         #expect(!EngineID.offered.contains(.geminiPro))
-        #expect(!EngineID.parakeetRuntimes.contains(.geminiPro))
-        #expect(AppSettings.inMemory().lineup.cycle.map { $0.engine(parakeet: .parakeet) }
+        #expect(!EngineID.offered.contains(.parakeetCloud))
+        #expect(!EngineID.geminiEngines.contains(.geminiPro))
+        #expect(AppSettings.inMemory().lineup.cycle.map { $0.engine }
                 == [.parakeet, .geminiFlash])
         for engine in EngineID.allCases {
-            #expect(!DictationController.fallbackCandidates(for: engine, parakeet: .parakeet).contains(.geminiPro))
+            #expect(DictationController.fallbackCandidates(for: engine).allSatisfy { !$0.isRetired })
         }
         #expect(ModelChoice(engine: .geminiPro) == .gemini, "a job it made reads as Gemini")
     }

@@ -79,10 +79,10 @@ enum PillSnapshots {
                 ])
             },
             // Models (`--only pill-models`): the chip, the tint, the hint and the no-key notice.
-            SnapshotEntry("pill-models", width: 760, height: 44 + 9 * 92) { _ in PillModelSheet() },
+            SnapshotEntry("pill-models", width: 760, height: 44 + 13 * 92) { _ in PillModelSheet() },
             SnapshotEntry("pill-polish", width: 760, height: 44 + 8 * 92) { _ in PolishSheet() },
             // fn ⇥ while the chip is up: its names roll on, frame by frame of the spring.
-            SnapshotEntry("pill-chip-roll", width: 2040, height: 220) { _ in ChipRollSheet() },
+            SnapshotEntry("pill-chip-roll", width: 2040, height: 270) { _ in ChipRollSheet() },
             // fn P on Parakeet with nothing selected: it says Polish is Gemini's, and the dictation goes on.
             SnapshotEntry("pill-polish-gemini-only", width: 640, height: 150) { _ in
                 CanvasScene(model: polishGeminiOnlyModel(), notices: [])
@@ -318,9 +318,9 @@ enum PillSnapshotFixtures {
     static let keyRejected = AppError.openRouterInvalidKey("Invalid API key")
         .notice(recordingID: UUID(), fallbackEngine: .parakeet)
 
-    /// Cloud speech errors name the model and offer the same model on this Mac first.
+    /// A rate limit on Gemini 4 Argon offers Parakeet on this Mac.
     static let cloudSpeechRateLimited = AppError.openRouterRateLimited(retryAfter: nil)
-        .notice(recordingID: UUID(), fallbackEngine: .parakeet, engine: .parakeetCloud)
+        .notice(recordingID: UUID(), fallbackEngine: .parakeet, engine: .geminiArgon)
 
     /// OpenRouter out of reach (a VPN that stopped), and a VPN that went off where Gemini isn't served.
     static let noConnection = AppError.offline.notice(recordingID: UUID(), fallbackEngine: .parakeet)
@@ -770,6 +770,17 @@ private struct PillModelSheet: View {
                 Self.model(.processing, choice: .gemini, chip: false)
                     .previewCounter(PillTokenCount(phase: .writing, tokens: 17_700))
             },
+            Row(id: "argon", caption: "Push-to-talk · Gemini 4 Argon") { Self.model(.listening, choice: .argon) },
+            Row(id: "argon-later", caption: "Gemini 4 Argon · chip gone") {
+                Self.model(.listening, choice: .argon, chip: false)
+            },
+            Row(id: "locked-argon", caption: "Hands-free · Gemini 4 Argon") {
+                Self.model(.locked, choice: .argon, level: 0.5)
+            },
+            Row(id: "processing-thinking-argon", caption: "Thinking · Gemini 4 Argon") {
+                Self.model(.processing, choice: .argon, chip: false)
+                    .previewCounter(PillTokenCount(phase: .thinking, tokens: 9_800))
+            },
         ]
     }
 
@@ -943,7 +954,7 @@ private struct ModelColorSheet: View {
             var colors = ModelColors.default
             for c in ModelChoice.allCases { colors[c] = color }
             return AnyView(HStack(spacing: 12) {
-                ModelChoiceIcon(choice: .gemini, parakeet: .parakeet, color: color, size: 36)
+                ModelChoiceIcon(choice: .gemini, color: color, size: 36)
                 EngineGlyph(engine: .geminiFlash, colors: colors)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1100,7 +1111,7 @@ private struct PillStateSheet: View {
 /// The chip's roll between two models, every 40 ms of its spring (`PillChipRoll`), on the pill's dark ground.
 private struct ChipRollSheet: View {
     private let settings = AppSettings.inMemory()
-    private let rolls: [(ModelChoice, ModelChoice)] = [(.parakeet, .gemini), (.gemini, .parakeet)]
+    private let rolls: [(ModelChoice, ModelChoice)] = [(.parakeet, .gemini), (.gemini, .argon), (.argon, .parakeet)]
     private let times = Array(0...9).map { Double($0) * 0.04 }
 
     var body: some View {

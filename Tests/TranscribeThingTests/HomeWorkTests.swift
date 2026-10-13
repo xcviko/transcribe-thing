@@ -87,8 +87,8 @@ import Testing
         for failing in [true, false] {
             fails = failing
             h.controller.makeVersion(.transcription(.geminiFlash), of: try #require(h.history.entry(id: transcribed)))
-            h.controller.makeVersion(.polish, of: try #require(h.history.entry(id: polished)))
-            h.controller.makeVersion(.transcription(.parakeetCloud), of: try #require(h.history.entry(id: failed)))
+            h.controller.makeVersion(.polish(), of: try #require(h.history.entry(id: polished)))
+            h.controller.makeVersion(.transcription(.geminiArgon), of: try #require(h.history.entry(id: failed)))
             #expect(h.controller.homeWork.count == 3)
             #expect(h.controller.pendingJobCount == 0 && h.controller.machine.activeJobs == 0)
             #expect(!h.controller.machine.isBusy && !h.hotkeys.isBusy)
@@ -98,12 +98,12 @@ import Testing
             #expect(h.toasts.notices.isEmpty)
             if failing {
                 #expect(Set(h.controller.homeFailures.keys) == [transcribed, polished], "why, in each transcript's row")
-                #expect(h.history.entry(id: failed)?.errorMessage == "\(EngineID.parakeetCloud.shortName) took too long",
+                #expect(h.history.entry(id: failed)?.errorMessage == "\(EngineID.geminiArgon.shortName) took too long",
                         "and in the failed row itself")
             }
         }
         #expect(h.history.entry(id: transcribed)?.currentKind == .transcription(.geminiFlash))
-        #expect(h.history.entry(id: polished)?.currentKind == .polish)
+        #expect(h.history.entry(id: polished)?.currentKind == .polish())
         #expect(h.history.entry(id: failed)?.status == .success)
         #expect(h.controller.homeFailures.isEmpty, "each success cleared its row's failure")
         #expect(outside.sawNothing)
@@ -178,7 +178,7 @@ import Testing
             if recording.id == id { landed.append("polish") }
             return TranscriptResult(text: "dictated", engine: engine, processingTime: 1)
         }
-        h.controller.makeVersion(.polish, of: try #require(h.history.entry(id: id)))
+        h.controller.makeVersion(.polish(), of: try #require(h.history.entry(id: id)))
         h.controller.retry(try #require(h.history.entry(id: failed)), with: .parakeet)
         h.controller.enqueue(H.recording(), engine: .parakeet)
         #expect(h.controller.homeWork.count == 2)
@@ -200,13 +200,13 @@ import Testing
         defer { removeFiles(h) }
         let id = try await transcript(h)
         h.controller.transcribeOverride = { _, _ in throw AppError.openRouterServer("HTTP 500") }
-        h.controller.makeVersion(.polish, of: try #require(h.history.entry(id: id)))
+        h.controller.makeVersion(.polish(), of: try #require(h.history.entry(id: id)))
         try await waitUntil { h.controller.homeFailures[id] != nil }
-        #expect(h.controller.homeFailures[id] == HomeFailure(kind: .polish, reason: "OpenRouter ran into a problem."))
+        #expect(h.controller.homeFailures[id] == HomeFailure(kind: .polish(), reason: "OpenRouter ran into a problem."))
         h.controller.dismissHomeFailure(for: id)
         #expect(h.controller.homeFailures.isEmpty)
 
-        h.controller.makeVersion(.polish, of: try #require(h.history.entry(id: id)))
+        h.controller.makeVersion(.polish(), of: try #require(h.history.entry(id: id)))
         try await waitUntil { h.controller.homeFailures[id] != nil }
         var release = false
         h.controller.transcribeOverride = { _, engine in
@@ -228,7 +228,7 @@ import Testing
         defer { removeFiles(h) }
         let id = try await transcript(h)
         h.controller.transcribeOverride = { _, _ in throw AppError.openRouterMissingKey }
-        h.controller.makeVersion(.polish, of: try #require(h.history.entry(id: id)))
+        h.controller.makeVersion(.polish(), of: try #require(h.history.entry(id: id)))
         try await waitUntil { h.controller.homeFailures[id] != nil }
         #expect(h.controller.homeFailures[id]?.reason == "Add your OpenRouter key in Models.")
 
@@ -243,7 +243,7 @@ import Testing
     @Test func reasonsDontNameTheModelTwice() {
         let reason = DictationController.homeFailureReason(_:making:)
         let flash = TranscriptVersionKind.transcription(.geminiFlash)
-        let polish = TranscriptVersionKind.polish
+        let polish = TranscriptVersionKind.polish()
         #expect(flash.failureTitle == "Couldn’t transcribe with Gemini 3.8 Flash")
         #expect(polish.failureTitle == "Couldn’t polish with Gemini 3.8 Flash")
         #expect(reason(.timeout(.geminiFlash), flash) == "It took too long.")
@@ -253,8 +253,8 @@ import Testing
         #expect(reason(nil, polish) == "It returned no text.")
         #expect(reason(.openRouterBadRequest(""), flash) == "It couldn’t process this recording.")
         #expect(reason(.openRouterProviderUnavailable(""), flash) == "Google AI Studio is unavailable")
-        #expect(reason(.openRouterProviderUnavailable(""), .transcription(.parakeetCloud))
-                == "OpenRouter couldn’t reach its provider.")
+        #expect(reason(.openRouterProviderUnavailable(""), .transcription(.geminiArgon))
+                == "Google AI Studio is unavailable")
         #expect(reason(.noSpeech, flash) == "No speech detected")
         for error: AppError in [.openRouterMissingKey, .openRouterInvalidKey(""), .openRouterNoCredits(""), .offline,
                                 .openRouterRateLimited(retryAfter: nil), .openRouterServer("")] {
@@ -334,7 +334,7 @@ import Testing
         defer { removeFiles(h) }
         let transcribed = try await transcript(h), polished = try await transcript(h)
         h.controller.transcribeOverride = { _, _ in throw AppError.openRouterServer("HTTP 500") }
-        h.controller.makeVersion(.polish, of: try #require(h.history.entry(id: polished)))
+        h.controller.makeVersion(.polish(), of: try #require(h.history.entry(id: polished)))
         try await waitUntil { h.controller.homeFailures[polished] != nil }
         var started = false, stopped = 0
         h.controller.transcribeOverride = { _, engine in

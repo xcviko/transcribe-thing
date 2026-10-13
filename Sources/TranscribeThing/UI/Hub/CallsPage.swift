@@ -405,7 +405,7 @@ struct CallStatusLine: View {
             HStack(alignment: .center, spacing: 8) {
                 ShimmerBar(height: 3)
                     .frame(width: 40)
-                Text("Transcribing with \(EngineID.geminiFlash.shortName)…")
+                Text("Transcribing with \(hub.settings.callEngine.shortName)…")
                     .font(.system(size: 11.5))
                     .foregroundStyle(.inkSecondary)
             }

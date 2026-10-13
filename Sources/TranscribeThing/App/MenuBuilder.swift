@@ -117,11 +117,10 @@ final class MenuBuilder {
             item.image = Self.dot(.systemRed)
             return item
         }
-        let parakeet = env.settings.parakeetEngine
         let main = env.dictation.activity == .recording ? env.dictation.effectiveChoice : env.settings.lineup.main
-        let status = Self.status(of: main, parakeet: parakeet, models: env.models, account: env.account,
+        let status = Self.status(of: main, models: env.models, account: env.account,
                                  proxy: env.proxy)
-        let title = Self.statusTitle(env.dictation.activity, model: main.title(parakeet: parakeet), status: status.text)
+        let title = Self.statusTitle(env.dictation.activity, model: main.title, status: status.text)
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         item.isEnabled = false
         item.image = Self.dot(env.dictation.activity == .idle ? status.color : .systemRed)
@@ -146,9 +145,9 @@ final class MenuBuilder {
     }
 
     /// A model's status: its engine's.
-    static func status(of choice: ModelChoice, parakeet: EngineID, models: ModelStore,
+    static func status(of choice: ModelChoice, models: ModelStore,
                        account: OpenRouterAccount, proxy: VertexProxyAccount? = nil) -> EngineStatus {
-        engineStatus(choice.engine(parakeet: parakeet), models: models, account: account, proxy: proxy)
+        engineStatus(choice.engine, models: models, account: account, proxy: proxy)
     }
 
     /// `proxy`: Gemini's status is the custom endpoint's while it routes Gemini.

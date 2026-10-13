@@ -1,79 +1,45 @@
 import Foundation
 
 /// The transcription engines transcribe-thing knows. Raw values are persisted (settings, history), never rename
-/// them. Declaration order is display order: the local model, then cloud speech-to-text, then Gemini.
+/// them. Declaration order is display order: the local model, then Gemini.
 enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
-    /// `geminiPro` is retired (`isRetired`).
-    case parakeet, parakeetCloud, geminiFlash, geminiPro
+    /// `parakeetCloud` and `geminiPro` are retired (`isRetired`).
+    case parakeet, parakeetCloud, geminiFlash, geminiArgon, geminiPro
 
     var id: String { rawValue }
 
     static let `default`: EngineID = .parakeet
 
-    /// A model this build no longer offers or runs: Gemini 3.1 Pro. Its case stays so History keeps reading, naming
-    /// and drawing the transcripts it wrote.
-    var isRetired: Bool { self == .geminiPro }
+    /// A model this build no longer offers or runs: Parakeet v3 through OpenRouter's speech-to-text endpoint, and
+    /// Gemini 3.1 Pro. Their cases stay so History keeps reading, naming and drawing the transcripts they wrote; a
+    /// setting that named one reads as Parakeet v3 on this Mac (`AppSettings`).
+    var isRetired: Bool { self == .parakeetCloud || self == .geminiPro }
 
     /// Every engine this build offers and runs, in display order. Every list of models to pick, switch to, fall
     /// back to or transcribe with comes from here, never from `allCases`.
     static var offered: [EngineID] { allCases.filter { !$0.isRetired } }
 
     static var localEngines: [EngineID] { offered.filter(\.isLocal) }
-    static var cloudEngines: [EngineID] { offered.filter { !$0.isLocal } }
-    /// Parakeet served through OpenRouter's speech-to-text endpoint.
-    static var cloudTranscriptionEngines: [EngineID] { offered.filter { $0.cloudAPI == .transcriptions } }
-    /// Gemini through chat completions.
-    static var cloudChatEngines: [EngineID] { offered.filter { $0.cloudAPI == .chatCompletions } }
-    /// Where Parakeet v3 can run: on this Mac, then through OpenRouter (`AppSettings.parakeetEngine`).
-    static var parakeetRuntimes: [EngineID] { offered.filter(\.isParakeet) }
-
-    /// Which OpenRouter endpoint a cloud engine uses. Routing code switches on this, never on specific cases.
-    enum CloudAPI: Sendable, Equatable {
-        /// `POST /chat/completions` with the audio as an `input_audio` part (Gemini). One request per recording, as
-        /// AAC in an .m4a.
-        case chatCompletions
-        /// `POST /audio/transcriptions` (Parakeet). One request per segment of at most 5 minutes, as FLAC.
-        case transcriptions
-    }
+    /// The Gemini models this build runs: Gemini 3.8 Flash and Gemini 4 Argon. Calls take one of them
+    /// (`AppSettings.callEngine`).
+    static var geminiEngines: [EngineID] { offered.filter(\.isGemini) }
 
     var isLocal: Bool {
         switch self {
         case .parakeet: true
-        case .parakeetCloud, .geminiFlash, .geminiPro: false
+        case .parakeetCloud, .geminiFlash, .geminiArgon, .geminiPro: false
         }
     }
 
     var isCloud: Bool { !isLocal }
 
-    /// Parakeet v3, on this Mac or through OpenRouter: what `ModelChoice.parakeet` runs on.
-    var isParakeet: Bool {
+    /// Gemini, which hears the audio itself over chat completions (`POST /chat/completions` with the audio as an
+    /// `input_audio` part, one request per recording, as AAC in an .m4a), through OpenRouter or the user's endpoint.
+    /// Every cloud model this build runs is one.
+    var isGemini: Bool {
         switch self {
-        case .parakeet, .parakeetCloud: true
-        case .geminiFlash, .geminiPro: false
-        }
-    }
-
-    /// nil for local engines.
-    var cloudAPI: CloudAPI? {
-        switch self {
-        case .parakeet: nil
-        case .parakeetCloud: .transcriptions
-        case .geminiFlash, .geminiPro: .chatCompletions
-        }
-    }
-
-    /// The same model running on the other side: Parakeet v3 on this Mac and through OpenRouter.
-    var localCounterpart: EngineID? {
-        switch self {
-        case .parakeetCloud: .parakeet
-        case .parakeet, .geminiFlash, .geminiPro: nil
-        }
-    }
-
-    var cloudCounterpart: EngineID? {
-        switch self {
-        case .parakeet: .parakeetCloud
-        case .parakeetCloud, .geminiFlash, .geminiPro: nil
+        case .geminiFlash, .geminiArgon, .geminiPro: true
+        case .parakeet, .parakeetCloud: false
         }
     }
 
@@ -83,14 +49,15 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
         switch self {
         case .parakeet, .parakeetCloud: "Parakeet v3"
         case .geminiFlash: "Gemini 3.8 Flash"
+        case .geminiArgon: "Gemini 4 Argon"
         case .geminiPro: "Gemini 3.1 Pro"
         }
     }
 
-    /// Unique per engine: the cloud variant of the local model carries "· Cloud".
+    /// Unique per engine: the retired cloud Parakeet carries "· Cloud".
     var displayName: String {
         switch self {
-        case .parakeet, .geminiFlash, .geminiPro: modelName
+        case .parakeet, .geminiFlash, .geminiArgon, .geminiPro: modelName
         case .parakeetCloud: "Parakeet v3 · Cloud"
         }
     }
@@ -101,7 +68,7 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
         case .parakeet: "Parakeet v3"
         case .parakeetCloud: "Parakeet v3 · Cloud"
         // With the version: "Gemini Flash" alone doesn't say which model it is.
-        case .geminiFlash, .geminiPro: modelName
+        case .geminiFlash, .geminiArgon, .geminiPro: modelName
         }
     }
 
@@ -109,7 +76,7 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
         switch self {
         case .parakeet: "NVIDIA · on your Mac"
         case .parakeetCloud: "NVIDIA · via OpenRouter · Together"
-        case .geminiFlash, .geminiPro: "Google · via OpenRouter"
+        case .geminiFlash, .geminiArgon, .geminiPro: "Google · via OpenRouter"
         }
     }
 
@@ -118,18 +85,18 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
         case .parakeet: "Fastest · 25 European languages"
         case .parakeetCloud: "25 European languages · ≈ $0.09 per hour of audio"
         case .geminiFlash: "Fast and very accurate · pay per use"
+        case .geminiArgon: "Most accurate · slower · about 2.7× Flash’s cost"
         case .geminiPro: "Most accurate · slower · higher cost"
         }
     }
 
-    /// The OpenRouter provider that serves this model: "Together", "Google AI Studio"; nil for the local model.
-    /// Gemini requests pin it; transcription requests can't pin one, and Together is the only one serving
-    /// Parakeet today. History records who actually answered.
+    /// The OpenRouter provider that serves this model: "Google AI Studio"; nil for the local model. Gemini requests
+    /// pin it. History records who actually answered (the retired cloud Parakeet's were Together's).
     var provider: String? {
         switch self {
         case .parakeet: nil
         case .parakeetCloud: "Together"
-        case .geminiFlash, .geminiPro: "Google AI Studio"
+        case .geminiFlash, .geminiArgon, .geminiPro: "Google AI Studio"
         }
     }
 
@@ -139,7 +106,7 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
     var badges: [String] {
         switch self {
         case .parakeet: ["Recommended", "Private", "Offline"]
-        case .parakeetCloud, .geminiFlash, .geminiPro: ["Cloud"]
+        case .parakeetCloud, .geminiFlash, .geminiArgon, .geminiPro: ["Cloud"]
         }
     }
 
@@ -148,16 +115,18 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
         case .parakeet: "bolt.fill"
         case .parakeetCloud: "cloud.bolt.fill"
         case .geminiFlash: "sparkle"
+        case .geminiArgon: "atom"
         case .geminiPro: "sparkles"
         }
     }
 
-    /// Short mark used on history rows. The cloud variant shares the local letter; `EngineGlyph` adds a cloud
-    /// and the cloud tint to tell them apart.
+    /// Short mark used on history rows. The retired cloud Parakeet shares the local letter; `EngineGlyph` adds a
+    /// cloud to tell them apart.
     var glyph: String {
         switch self {
         case .parakeet, .parakeetCloud: "P"
         case .geminiFlash: "F"
+        case .geminiArgon: "A"
         case .geminiPro: "Pro"
         }
     }
@@ -165,15 +134,18 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
     var approxDownloadBytes: Int64? {
         switch self {
         case .parakeet: 632_321_326
-        case .parakeetCloud, .geminiFlash, .geminiPro: nil
+        case .parakeetCloud, .geminiFlash, .geminiArgon, .geminiPro: nil
         }
     }
 
+    /// The OpenRouter model slug; the user's endpoint takes the same one (it drops "google/"). nil for the local
+    /// model. The retired models keep theirs, so History's versions still match theirs (`TokenEstimate`).
     var openRouterModelID: String? {
         switch self {
         case .parakeet: nil
         case .parakeetCloud: "nvidia/parakeet-tdt-0.6b-v3"
         case .geminiFlash: "google/gemini-3.8-flash"
+        case .geminiArgon: "google/gemini-4-argon"
         case .geminiPro: "google/gemini-3.1-pro-preview"
         }
     }
@@ -181,13 +153,14 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
     /// How long a request may go without a byte (`URLRequest.timeoutInterval`, an idle timeout);
     /// `URLSession.openRouterCloud` caps a whole request at 3 hours. Gemini streams its answer, and OpenRouter sends
     /// comments while the model is busy, so 2 minutes of silence means a stalled connection, however long the
-    /// recording. Parakeet through OpenRouter answers all at once, within 3 minutes for each request of at most 5
-    /// minutes of audio (`CloudAudio.speechSegments`).
+    /// recording. Gemini 4 Argon, a larger and slower model, can think for longer before its first byte at high
+    /// effort, and the user's endpoint may send no comments meanwhile: it gets 4 minutes. 0 for the models that
+    /// never run here.
     var cloudTimeout: TimeInterval {
         switch self {
-        case .parakeet: 0
-        case .parakeetCloud: 180
+        case .parakeet, .parakeetCloud: 0
         case .geminiFlash, .geminiPro: 120
+        case .geminiArgon: 240
         }
     }
 

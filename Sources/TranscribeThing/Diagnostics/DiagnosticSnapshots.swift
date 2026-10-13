@@ -60,9 +60,13 @@ struct DiagnosticSettingsSummary: Equatable, Sendable {
         var fields = [
             DiagnosticField("main", settings.lineup.main.rawValue),
             DiagnosticField("steps", steps.isEmpty ? "none" : steps.map(\.rawValue).joined(separator: ",")),
-            DiagnosticField("parakeet", settings.parakeetEngine.isLocal ? "local" : "cloud"),
             DiagnosticField("handsFreeModel", settings.handsFreeChoice?.rawValue ?? "main"),
+            DiagnosticField("callModel", settings.callEngine.rawValue),
         ]
+        for engine in EngineID.geminiEngines {
+            fields.append(DiagnosticField("effort.\(engine.rawValue)",
+                                          settings.reasoningEffort(for: engine)?.rawValue ?? "none"))
+        }
         for action in ShortcutAction.allCases {
             fields.append(DiagnosticField("shortcut.\(action.rawValue)",
                                           settings.shortcuts[action]?.compactDescription ?? "none"))

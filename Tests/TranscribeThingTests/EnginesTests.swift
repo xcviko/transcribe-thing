@@ -985,16 +985,6 @@ final class ProgressLog: @unchecked Sendable {
         #expect(started.duration(to: .now) < .seconds(5))
     }
 
-    /// The speech endpoint answers all at once: the same check covers its wait.
-    @Test func aSpeechRequestThatCantReachOpenRouterEndsAsOffline() async throws {
-        let watch = ConnectionWatch(probeAfter: 0.2, probeAgainAfter: 5) { false }
-        let (client, _) = StubURLProtocol.client([.init(hangs: true)], connectionWatch: watch)
-        await #expect(throws: AppError.offline) {
-            try await client.transcribeSpeech(audio: Fixtures.wav, format: "wav", model: "nvidia/parakeet-tdt-0.6b-v3",
-                                              apiKey: "k", timeout: 60)
-        }
-    }
-
     /// OpenRouter's firewall said no before OpenRouter saw anything: nothing was billed, so it's asked once more.
     @Test func aFirewallBlockIsTriedOnceMore() async throws {
         let blocked = StubURLProtocol.Reply(status: 403, headers: ["Server": "cloudflare"],
@@ -1726,10 +1716,14 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
 
 @MainActor
 @Suite(.timeLimit(.minutes(1))) struct ModelStoreTests {
-    private func makeStore(installed: Bool = true, freeBytes: Int64 = 50_000_000_000, selected: EngineID = .parakeet)
+    /// `usedByLineup` false: Gemini is the main model and Parakeet is switched off, so nothing loads it.
+    private func makeStore(installed: Bool = true, freeBytes: Int64 = 50_000_000_000, usedByLineup: Bool = true)
         -> (ModelStore, FakeEngine, AppSettings) {
         let settings = AppSettings.inMemory()
-        settings.parakeetEngine = selected
+        if !usedByLineup {
+            settings.lineup.main = .gemini
+            settings.lineup.setSwitchable(.parakeet, false)
+        }
         let parakeet = FakeEngine(.parakeet, installed: installed)
         let store = ModelStore(paths: .temporary(), settings: settings, engines: [.parakeet: parakeet],
                                gate: InferenceGate(), freeDiskBytes: { freeBytes })
@@ -1768,8 +1762,8 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
         #expect(await parakeet.isLoaded)
     }
 
-    @Test func downloadOfAnUnselectedModelStopsAtInstalled() async throws {
-        let (store, _, _) = makeStore(installed: false, selected: .parakeetCloud)
+    @Test func downloadOfAModelNothingUsesStopsAtInstalled() async throws {
+        let (store, _, _) = makeStore(installed: false, usedByLineup: false)
         store.download(.parakeet)
         await waitUntil { store.state(of: .parakeet) == .installed }
     }
@@ -1815,7 +1809,7 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
     }
 
     @Test func downloadRestartedRightAfterCancelFinishes() async throws {
-        let (store, parakeet, _) = makeStore(installed: false, selected: .parakeetCloud)
+        let (store, parakeet, _) = makeStore(installed: false, usedByLineup: false)
         let gate = await parakeet.gateDownloads()
         store.download(.parakeet)
         await gate.arrival(1)
@@ -1899,12 +1893,11 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
         #expect(await parakeet.loadCount == 2)
     }
 
-    @Test func selectingACloudEngineKeepsTheLocalModelLoaded() async throws {
+    @Test func aGeminiMainModelKeepsTheLocalModelLoaded() async throws {
         let (store, parakeet, settings) = makeStore()
         store.start()
         await waitUntil { store.state(of: .parakeet) == .ready }
-        store.select(.parakeetCloud)
-        #expect(settings.parakeetEngine == .parakeetCloud)
+        settings.lineup.main = .argon
         #expect(store.state(of: .parakeet) == .ready)
         #expect(await parakeet.isLoaded)
     }
@@ -2033,21 +2026,18 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
         #expect(result.uploads.map(\.format) == [.m4a])
     }
 
-    /// `EngineCLI --upload` sends Gemini WAV or FLAC instead, and a result says what went.
+    /// `EngineCLI --upload` sends Gemini WAV instead, and a result says what went.
     @Test func geminiTakesAForcedFormat() async throws {
-        let (service, _, _, host) = makeServiceAccountAndHost(replies: [Fixtures.success, Fixtures.success])
+        let (service, _, _, host) = makeServiceAccountAndHost(replies: [Fixtures.success])
         let recording = speech(seconds: 1)
         let wav = try await service.transcribe(recording, engine: .geminiFlash, upload: .wav)
-        let flac = try await service.transcribe(recording, engine: .geminiFlash, upload: .flac)
         let bodies = try StubURLProtocol.registry.bodies(for: host).map {
             try #require(JSONSerialization.jsonObject(with: $0) as? [String: Any])
         }
-        #expect(bodies.map(Self.audioFormat) == ["wav", "flac"])
+        #expect(bodies.map(Self.audioFormat) == ["wav"])
         #expect(Self.audio(bodies[0]) == WAVEncoder.pcm16(recording.samples))
-        #expect(try Self.audio(bodies[1]) == CloudAudio.flac(recording.samples))
         #expect(wav.uploads == [AudioUpload(format: .wav, bytes: WAVEncoder.pcm16(recording.samples).count,
                                             generationID: "gen-1")])
-        #expect(flac.uploads.map(\.format) == [.flac])
     }
 
     /// However long, a recording goes to Gemini as AAC in one request, with a budget that grows with it; streamed,

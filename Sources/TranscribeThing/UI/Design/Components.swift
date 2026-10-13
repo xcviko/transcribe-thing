@@ -717,8 +717,8 @@ struct StageBackground: View {
     }
 }
 
-/// Where an engine runs: this Mac in ink, the cloud in gray. Onboarding's choice of where Parakeet runs; in the Hub a
-/// model wears its own color (`ModelChoiceIcon`).
+/// Where an engine runs: this Mac in ink, the cloud in gray. Onboarding's Parakeet card; in the Hub a model wears its
+/// own color (`ModelChoiceIcon`).
 struct EngineIcon: View {
     var engine: EngineID
     var size: CGFloat = 32
@@ -728,16 +728,14 @@ struct EngineIcon: View {
     }
 }
 
-/// A model's mark: its symbol (Parakeet's bolt where `parakeet` runs it, Gemini's sparkles) in the
-/// model's own color (`AppSettings.modelColors`), so a row in Models, the sidebar chip and the pill agree.
+/// A model's mark: its symbol (Parakeet's bolt, Flash's sparkles, Argon's atom) in the model's own color (`AppSettings.modelColors`), so a row in Models, the sidebar chip and the pill agree.
 struct ModelChoiceIcon: View {
     var choice: ModelChoice
-    var parakeet: EngineID
     var color: ModelColor
     var size: CGFloat = 32
 
     var body: some View {
-        ModelTile(symbol: choice.symbolName(parakeet: parakeet), tint: color.tint, size: size)
+        ModelTile(symbol: choice.symbolName, tint: color.tint, size: size)
     }
 }
 

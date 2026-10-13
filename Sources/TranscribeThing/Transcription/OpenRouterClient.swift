@@ -5,7 +5,7 @@ extension URLSession {
     /// Shared session for OpenRouter calls: no cookies or disk cache, fail fast when offline.
     /// The per-request timeout is an idle one, set per call (`EngineID.cloudTimeout`): a streamed answer keeps bytes
     /// coming (its text, and OpenRouter's comments while the model is busy), so there it only catches a stalled
-    /// connection, and a speech-to-text segment answers within it. The resource timeout, 3 hours, caps a whole
+    /// connection. The resource timeout, 3 hours, caps a whole
     /// request, upload included, however long its answer streams.
     static let openRouterCloud: URLSession = {
         let config = URLSessionConfiguration.ephemeral
@@ -110,10 +110,10 @@ final class ConnectionActivity: Sendable {
 
 struct CloudResult: Sendable, Equatable {
     var text: String
-    /// Who served the request, when the response says (a chat stream's chunks, an `X-Provider-Name` header).
+    /// Who served the request, when the response says (the stream's chunks, an `X-Provider-Name` header).
     var provider: String?
     var costUSD: Double?
-    /// Token counts from the chat stream's `usage`; nil from the speech endpoint, which reports seconds.
+    /// Token counts from the chat stream's `usage`.
     var usage: TokenUsage?
     /// The chunks' `id`, else `X-Generation-Id`: for `generationDetails(id:apiKey:)`.
     var generationID: String?
@@ -122,8 +122,6 @@ struct CloudResult: Sendable, Equatable {
     var finishReason: String?
     /// Seconds OpenRouter measured for the generation (`openrouter_metadata.generation_time`).
     var generationTime: TimeInterval?
-    /// Seconds of audio the speech endpoint billed.
-    var audioSeconds: Double?
     /// The chat response's `service_tier` ("flex", "standard"…), when it names one.
     var serviceTier: String?
     /// Characters of reasoning the stream showed (for Gemini, the summaries of its thoughts); nil when none came.
@@ -132,7 +130,7 @@ struct CloudResult: Sendable, Equatable {
     var timeToFirstToken: TimeInterval?
     /// The files the audio went as, one per request that answered (set by `TranscriptionService`).
     var uploads: [AudioUpload] = []
-    /// How Gemini's answer held its transcript (`TaggedTranscript`); nil for the other endpoints.
+    /// How Gemini's answer held its transcript (`TaggedTranscript`); nil for a text request.
     var answerTags: TaggedTranscript.Tags?
     /// The other request of a pair sent at once (`CloudHedge.race`), cancelled when this one answered: its
     /// generations, to add what it cost.
@@ -158,9 +156,8 @@ struct TokenUsage: Codable, Equatable, Sendable {
     }
 }
 
-/// Transcription through OpenRouter: Gemini over chat completions, Parakeet over the speech-to-text endpoint.
-/// Every failure surfaces as `AppError` (or `CancellationError` when the calling task is cancelled), but for a speech
-/// upload refused for its format (`AudioFormatRefused`).
+/// Transcription through OpenRouter: Gemini over chat completions. Every failure surfaces as `AppError` (or
+/// `CancellationError` when the calling task is cancelled).
 /// The same client talks to the user's OpenAI-compatible endpoint (`service` `.vertexProxy`, `vertexProxy(apiBase:)`),
 /// which takes the same chat completions: there it sends no OpenRouter routing or headers, asks for at most
 /// `VertexProxy.maxOutputTokens`, names the provider as the stream does or else by the endpoint's host, keeps no
@@ -228,10 +225,12 @@ final class OpenRouterClient: Sendable {
 
     /// `max_tokens` of a Gemini transcription. Its floor, 32,768, covers the first minute, so short dictations
     /// ask for what they always have (a 1:48 recording already thought for about 18k tokens at high, and less
-    /// would cut them short); every further minute started adds 600 tokens to write it out, up to 65,536.
-    static func transcriptionMaxTokens(audioSeconds: TimeInterval) -> Int {
+    /// would cut them short); every further minute started adds 600 tokens to write it out. At high, which thinks
+    /// the longest (Gemini 4 Argon most of all), it starts 16,384 higher. Never more than 65,536, Gemini's most.
+    static func transcriptionMaxTokens(audioSeconds: TimeInterval, effort: ReasoningEffort = .medium) -> Int {
         let minutes = Int((max(0, audioSeconds) / 60).rounded(.up))
-        return min(65_536, 32_768 + 600 * max(0, minutes - 1))
+        let thinking = effort == .high ? 16_384 : 0
+        return min(65_536, 32_768 + thinking + 600 * max(0, minutes - 1))
     }
 
     static func engine(forModel model: String) -> EngineID {
@@ -294,14 +293,14 @@ final class OpenRouterClient: Sendable {
         return result
     }
 
-    /// `text` over chat completions by the model, provider and effort of `route` (Polish Selection): text in, text
-    /// out, with `systemPrompt` as the instructions, streamed to `progress` like transcription. Same retry policy; a
-    /// failure is mapped as a Gemini one. Cancelling stops the generation and its bill. The returned text is the
+    /// `text` over chat completions by the model, provider and effort of `route` (Polish Selection, a call's
+    /// summary): text in, text out, with `systemPrompt` as the instructions, streamed to `progress` like
+    /// transcription. Same retry policy; a failure is mapped as the route's model's. Cancelling stops the generation and its bill. The returned text is the
     /// model's reply without any tags or quotes it put around it.
     func sendText(_ text: String, route: TextRoute, systemPrompt: String, apiKey: String,
                   timeout: TimeInterval, progress: (@Sendable (ChatStreamProgress) -> Void)? = nil,
                   generation: (@Sendable (String) -> Void)? = nil) async throws -> CloudResult {
-        let engine = EngineID.geminiFlash
+        let engine = Self.engine(forModel: route.model)
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw adapted(AppError.openRouterMissingKey) }
         let body: Data
@@ -314,71 +313,6 @@ final class OpenRouterClient: Sendable {
         var result = try await streamWithRetry(request, engine: engine, progress: progress, generation: generation)
         result.text = TextRoute.answerText(from: result.text)
         return result
-    }
-
-    /// Parakeet over `POST /audio/transcriptions`. `audio` is one file in `format` ("flac", "wav":
-    /// `CloudAudio.forSpeech`) in one request: a whole recording up to 5 minutes, or one segment of a longer one
-    /// (`CloudAudio.speechSegments`). The provider behind it transcribes many times faster than real time, and a size
-    /// OpenRouter refuses comes back as a 413 (`recordingTooLarge`). Not streamed (the endpoint can't), with the same
-    /// retry policy as `transcribe(audio:format:model:…)`. A refusal of the file's format
-    /// (`OpenRouterErrorMapper.refusesAudioFormat`: a 415, or a 400, 422, 500 or 502, or an error inside a 200, that
-    /// says so) throws `AudioFormatRefused` instead of an `AppError`, and isn't retried, so the caller can send the
-    /// audio again as WAV at once.
-    func transcribeSpeech(audio: Data, format: String, model: String, apiKey: String,
-                          timeout: TimeInterval) async throws -> CloudResult {
-        let engine = Self.engine(forModel: model)
-        let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty else { throw AppError.openRouterMissingKey }
-
-        let body: Data
-        do {
-            body = try OpenRouterSpeechRequest.audio(model: model, audioBase64: audio.base64EncodedString(),
-                                                     format: format).encoded()
-        } catch {
-            throw AppError.openRouterBadRequest("Couldn’t build the request.")
-        }
-        let request = makeRequest(path: "audio/transcriptions", body: body, apiKey: key, timeout: timeout)
-        return try await sendWithRetry(request, engine: engine) { data in
-            try OpenRouterErrorMapper.speechSuccess(data: data, engine: engine)
-        } refused: { error in
-            AudioFormatRefused(format: format, error: error)
-        }
-    }
-
-    /// The speech endpoint refused a file for its format: `error` is how the failure maps otherwise.
-    struct AudioFormatRefused: Error, Equatable {
-        let format: String
-        let error: AppError
-    }
-
-    /// Sends `request`, retrying once per the policy above. `interpret` reads a 200 body and throws `AppError`
-    /// for a failure reported inside it; a refusal of the upload's format throws what `refused` makes of its error.
-    private func sendWithRetry(_ request: URLRequest, engine: EngineID, interpret: (Data) throws -> CloudResult,
-                               refused: (AppError) -> any Error) async throws -> CloudResult {
-        try await withRetry {
-            let started = ContinuousClock.now
-            let (data, http) = try await watching { _ in try await self.send(request, engine: engine) }
-            guard http.statusCode == 200 else {
-                let failure = self.statusFailure(http, body: data, engine: engine)
-                if OpenRouterErrorMapper.refusesAudioFormat(status: http.statusCode, body: data) {
-                    throw refused(failure.error)
-                }
-                throw failure
-            }
-            var result: CloudResult
-            do {
-                result = try interpret(data)
-            } catch let error as AppError {
-                // An upstream failure reported after OpenRouter committed a 200. Retried like its HTTP twin (a 502),
-                // but only when it came back quickly: after a long wait the user already waited once.
-                if OpenRouterErrorMapper.refusesAudioFormat(status: 502, body: data) { throw refused(error) }
-                let quick = started.duration(to: .now) < Self.quickFailureWindow
-                throw AttemptFailure(error: error, retryable: quick && error.isTransientCloudFailure, retryAfter: nil)
-            }
-            if result.provider == nil { result.provider = Self.header("X-Provider-Name", in: http) }
-            if result.generationID == nil { result.generationID = Self.header("X-Generation-Id", in: http) }
-            return result
-        }
     }
 
     /// Sends a chat `request` and reads its answer as it streams in, retrying once per the policy above. Its

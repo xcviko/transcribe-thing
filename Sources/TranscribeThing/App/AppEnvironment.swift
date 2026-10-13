@@ -68,11 +68,13 @@ final class AppEnvironment {
         self.transcription = transcription
         self.history = history
         self.calls = calls
+        let callModel: @MainActor () -> CallModel = { [settings] in settings.callModel }
         callTranscriber = CallTranscriber(store: calls,
                                           send: CallTranscriber.openRouter(client: openRouterClient, account: account,
-                                                                           proxy: proxy),
+                                                                           proxy: proxy, model: callModel),
                                           sendText: CallTranscriber.openRouterText(client: openRouterClient,
-                                                                                   account: account, proxy: proxy))
+                                                                                   account: account, proxy: proxy,
+                                                                                   model: callModel))
         callMonitor = CallMonitor(settings: settings, store: calls, transcriber: callTranscriber,
                                   dependencies: .live(settings: settings))
         self.permissions = permissions
@@ -159,6 +161,7 @@ final class AppEnvironment {
         let account = makeAccount(keyStore, client)
         let transcription = TranscriptionService(models: models, account: account, client: client, proxy: proxy)
         transcription.vocabulary = { [settings] in settings.dictionary.words }
+        transcription.reasoningEffort = { [settings] in settings.reasoningEffort(for: $0) }
         let inserter = TextInserter()
         let sounds = SoundPlayer(settings: settings)
         let pillModel = PillModel(settings: settings, levelMeter: levelMeter)

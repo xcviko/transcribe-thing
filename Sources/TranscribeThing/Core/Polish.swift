@@ -67,18 +67,25 @@ enum PolishSelectionModel: String, CaseIterable, Codable, Sendable {
         }
     }
 
-    /// Text in, text out over chat completions: Gemini at the level it always thinks at, its thinking streamed (so
-    /// it counts as an answer under way, as for a dictation). nil for Luna, which is no longer asked.
-    var route: TextRoute? {
+    /// The engine whose level (Models → Reasoning) the request goes at; nil for Luna, which is no longer asked.
+    var engine: EngineID? {
         switch self {
-        case .geminiFlash:
-            var route = TextRoute(model: EngineID.geminiFlash.openRouterModelID ?? "google/gemini-3.8-flash",
-                                  effort: EngineID.geminiFlash.reasoningEffort ?? .medium, provider: .googleAIStudio)
-            route.streamsReasoning = true
-            return route
-        case .gpt6Luna:
-            return nil
+        case .geminiFlash: .geminiFlash
+        case .gpt6Luna: nil
         }
+    }
+
+    /// Text in, text out over chat completions: Gemini at its default level, its thinking streamed (so it counts as
+    /// an answer under way, as for a dictation). nil for Luna, which is no longer asked.
+    var route: TextRoute? { route(effort: nil) }
+
+    /// `route` at `effort`, the level picked for the model in Models (its default when nil).
+    func route(effort: ReasoningEffort?) -> TextRoute? {
+        guard let engine, let model = engine.openRouterModelID else { return nil }
+        var route = TextRoute(model: model, effort: effort ?? engine.defaultReasoningEffort ?? .medium,
+                              provider: .googleAIStudio)
+        route.streamsReasoning = true
+        return route
     }
 
     /// The model whose color the pill and History wear: Gemini's, Polish Selection being Gemini's now.

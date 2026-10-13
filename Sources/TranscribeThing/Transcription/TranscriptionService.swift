@@ -22,16 +22,13 @@ struct TranscriptResult: Sendable, Equatable {
     var finishReason: String? = nil
     /// Seconds OpenRouter measured for the generation.
     var generationTime: TimeInterval? = nil
-    /// Seconds of audio the speech endpoint billed.
-    var audioSeconds: Double? = nil
     /// The chat response's `service_tier`, when it names one (set by text requests only; not kept in history).
     var serviceTier: String? = nil
     /// Characters of reasoning the answer streamed (for Gemini, the summaries of its thoughts).
     var reasoningCharacters: Int? = nil
     /// Seconds from sending a streamed request until the first character of the answer.
     var timeToFirstToken: TimeInterval? = nil
-    /// The files the audio went to OpenRouter as, one per request that answered (each of Parakeet's segments); empty
-    /// for the local model. Not kept in history.
+    /// The file the audio went to the cloud as; empty for the local model. Not kept in history.
     var uploads: [AudioUpload] = []
     /// How Gemini's answer held its transcript (`TaggedTranscript`). Not kept in history.
     var answerTags: TaggedTranscript.Tags? = nil
@@ -45,7 +42,7 @@ struct TranscriptResult: Sendable, Equatable {
                            reasoningEffort: reasoningEffort, usage: usage, costUSD: costUSD,
                            processingTime: processingTime, timeToFirstToken: timeToFirstToken,
                            generationTime: generationTime, usedSystemPrompt: usedSystemPrompt,
-                           finishReason: finishReason, audioSeconds: audioSeconds,
+                           finishReason: finishReason,
                            reasoningCharacters: reasoningCharacters,
                            pendingGenerationIDs: otherGenerationIDs.isEmpty ? nil : otherGenerationIDs)
     }
@@ -57,7 +54,7 @@ struct TranscriptResult: Sendable, Equatable {
     }
 }
 
-/// Routes a recording to the local model, Gemini, or OpenRouter speech-to-text, and returns trimmed text. An engine
+/// Routes a recording to the local model or Gemini, and returns trimmed text. An engine
 /// that answers with no text heard no speech, so that comes back as an empty result, never as an error.
 /// Gemini (its transcripts, Polish, Translate, Polish Selection) goes to the user's OpenAI-compatible endpoint instead
 /// of OpenRouter while the endpoint routes it (`VertexProxyAccount.routesGemini`), with no fallback to OpenRouter.
@@ -74,9 +71,9 @@ final class TranscriptionService {
         let report = hedgeMeasured
         return { measurement in Task { @MainActor in report(measurement) } }
     }
-    /// The format Parakeet's segments go in: FLAC, the WAV's samples in a little over half its bytes, until OpenRouter
-    /// refuses it; WAV from then on, for as long as the app runs.
-    private(set) var speechFormat: UploadFormat = .flac
+    /// The level each Gemini model thinks at (`AppSettings.reasoningEfforts`), read as each request goes: every
+    /// request to the model, but one given its own `effort`. The CLI keeps each model's default.
+    var reasoningEffort: @MainActor (EngineID) -> ReasoningEffort? = { $0.defaultReasoningEffort }
     /// The user's dictionary (`UserDictionary`), at the moment each request goes: after Gemini's prompt and Polish
     /// Selection's, whichever prompt they get. The app reads it from its settings; the CLI sends none.
     var vocabulary: @MainActor () -> [String] = { [] }
@@ -127,16 +124,15 @@ final class TranscriptionService {
 
     /// Throws `AppError` only, or `CancellationError` when the calling task is cancelled. A retired model never runs.
     /// `processingTime` covers everything after the recording ended, including any wait for the model.
-    /// `effort` has Gemini think at another level than its own (`EngineCLI --effort`), and `prompt` replaces its
+    /// `effort` has Gemini think at another level than the one picked for it (`EngineCLI --effort`), and `prompt` replaces its
     /// fixed `EngineID.geminiSystemPrompt`: Polish's (`Polish.prompt`, for a polished dictation and Home's Polish), or
-    /// any (`--prompt`; empty sends only the audio). `upload` sends a cloud model the audio in that format instead of
-    /// its own, a refusal of it failing rather than going again as WAV (`--upload`). The app passes only `prompt`.
+    /// any (`--prompt`; empty sends only the audio). `upload` sends Gemini the audio in that format instead of
+    /// an .m4a (`--upload`). The app passes only `prompt`.
     /// `background`: Home's work, which lets dictations have the local model first.
     /// `progress` hears how much of a streamed answer has come (Gemini's reasoning and text); Parakeet has none.
-    /// `hedge`: the cloud request goes twice at once (`CloudHedge`): Gemini's, or each of cloud Parakeet's segments.
+    /// `hedge`: Gemini's request goes twice at once (`CloudHedge`).
     func transcribe(_ recording: Recording, engine: EngineID, effort: ReasoningEffort? = nil,
-                    prompt: String? = nil, upload: UploadFormat? = nil, speechModel: String? = nil,
-                    hedge: CloudHedge? = nil, provider: OpenRouterChatRequest.Provider? = nil, background: Bool = false,
+                    prompt: String? = nil, upload: UploadFormat? = nil, hedge: CloudHedge? = nil, provider: OpenRouterChatRequest.Provider? = nil, background: Bool = false,
                     progress: (@Sendable (ChatStreamProgress) -> Void)? = nil) async throws -> TranscriptResult {
         guard !engine.isRetired else {
             throw AppError.engineFailed(engine, "\(engine.displayName) is no longer offered.")
@@ -147,12 +143,11 @@ final class TranscriptionService {
             if engine.isLocal {
                 result.text = try await models.transcribeLocal(engine, samples: recording.samples, background: background)
             } else {
-                let effort = effort ?? engine.reasoningEffort
-                let prompt = engine.cloudAPI == .chatCompletions
-                    ? UserDictionary.prompt(prompt ?? EngineID.geminiSystemPrompt, with: vocabulary(), heard: true) : ""
+                let effort = effort ?? reasoningEffort(engine) ?? engine.defaultReasoningEffort ?? .medium
+                let prompt = UserDictionary.prompt(prompt ?? EngineID.geminiSystemPrompt, with: vocabulary(), heard: true)
                 let cloud = try await transcribeCloud(recording, engine: engine, effort: effort, prompt: prompt,
-                                                      upload: upload, speechModel: speechModel, hedge: hedge,
-                                                      provider: provider, progress: progress)
+                                                      upload: upload, hedge: hedge, provider: provider,
+                                                      progress: progress)
                 result.text = cloud.text
                 result.costUSD = cloud.costUSD
                 result.provider = cloud.provider
@@ -163,7 +158,6 @@ final class TranscriptionService {
                 result.usedSystemPrompt = !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 result.finishReason = cloud.finishReason
                 result.generationTime = cloud.generationTime
-                result.audioSeconds = cloud.audioSeconds
                 result.reasoningCharacters = cloud.reasoningCharacters
                 result.timeToFirstToken = cloud.timeToFirstToken
                 result.answerTags = cloud.answerTags
@@ -188,44 +182,23 @@ final class TranscriptionService {
         }
     }
 
-    /// `speechModel`: another model on the transcriptions endpoint in the engine's place (`EngineCLI --speech-model`,
-    /// to compare one with cloud Parakeet).
-    private func transcribeCloud(_ recording: Recording, engine: EngineID, effort: ReasoningEffort?, prompt: String,
-                                 upload: UploadFormat?, speechModel: String? = nil, hedge: CloudHedge? = nil,
+    private func transcribeCloud(_ recording: Recording, engine: EngineID, effort: ReasoningEffort, prompt: String,
+                                 upload: UploadFormat?, hedge: CloudHedge? = nil,
                                  provider: OpenRouterChatRequest.Provider? = nil,
                                  progress: (@Sendable (ChatStreamProgress) -> Void)?) async throws -> CloudResult {
-        guard let model = (engine.cloudAPI == .transcriptions ? speechModel : nil) ?? engine.openRouterModelID,
-              let api = engine.cloudAPI else {
+        guard engine.isGemini, let model = engine.openRouterModelID else {
             throw AppError.engineFailed(engine, "No cloud model for \(engine.displayName).")
         }
-        if api == .chatCompletions {
-            let access = try chatAccess()
-            do {
-                let result = try await transcribeWithChat(recording, engine: engine, model: model, access: access,
-                                                          effort: effort ?? .medium, prompt: prompt, upload: upload,
-                                                          hedge: hedge, provider: provider, progress: progress)
-                access.noteSuccess()
-                return result
-            } catch let error as AppError {
-                access.noteFailure(error)
-                throw error
-            }
-        }
-        guard let key = account.apiKey() else {
-            throw account.isKeyUnreadable ? AppError.openRouterKeyUnreadable : AppError.openRouterMissingKey
-        }
+        let access = try chatAccess()
         do {
-            let result = try await transcribeSpeech(recording.samples, engine: engine, model: model, key: key,
-                                                    upload: upload, hedge: hedge)
-            account.noteCloudSuccess()
+            let result = try await transcribeWithChat(recording, engine: engine, model: model, access: access,
+                                                      effort: effort, prompt: prompt, upload: upload,
+                                                      hedge: hedge, provider: provider, progress: progress)
+            access.noteSuccess()
             return result
         } catch let error as AppError {
-            account.noteCloudFailure(error)
+            access.noteFailure(error)
             throw error
-        } catch let refused as OpenRouterClient.AudioFormatRefused {
-            // A refusal with nothing left to fall back from: a WAV's, or a format `upload` forced.
-            account.noteCloudFailure(refused.error)
-            throw refused.error
         }
     }
 
@@ -242,7 +215,8 @@ final class TranscriptionService {
         }.value
         guard let audio else { throw AppError.engineFailed(engine, "Couldn’t compress the recording.") }
         try Task.checkCancellation()
-        let maxTokens = OpenRouterClient.transcriptionMaxTokens(audioSeconds: Double(samples.count) / Recording.sampleRate)
+        let maxTokens = OpenRouterClient.transcriptionMaxTokens(audioSeconds: Double(samples.count) / Recording.sampleRate,
+                                                                effort: effort)
         let client = access.client, key = access.key, timeout = engine.cloudTimeout
         let send: @Sendable (CloudHedge.Hooks) async throws -> CloudResult = { hooks in
             try await client.transcribe(audio: audio, format: format.rawValue, model: model, systemPrompt: prompt,
@@ -260,85 +234,17 @@ final class TranscriptionService {
         return result
     }
 
-    /// Parakeet over the speech-to-text endpoint: a request per segment of at most 5 minutes, cut in pauses
-    /// (`CloudAudio.speechSegments`; a shorter recording is one), one after another, each as FLAC (`speechFormat`,
-    /// or `upload`). A segment whose FLAC OpenRouter refuses goes again as WAV at once, and so does every later one,
-    /// in this and every dictation after it. The texts join with a space; the billed seconds and the costs add up, and
-    /// the first segment's generation stands for the whole. The Gemini system prompt doesn't apply, and no language is
-    /// sent: Parakeet v3 detects it.
-    private func transcribeSpeech(_ samples: [Float], engine: EngineID, model: String, key: String,
-                                  upload: UploadFormat?, hedge: CloudHedge? = nil) async throws -> CloudResult {
-        let ranges = await Task.detached(priority: .userInitiated) { CloudAudio.speechSegments(samples) }.value
-        var results: [CloudResult] = []
-        for range in ranges {
-            try Task.checkCancellation()
-            do {
-                results.append(try await transcribeSegment(samples, range, format: upload ?? speechFormat,
-                                                           engine: engine, model: model, key: key, hedge: hedge))
-            } catch let refused as OpenRouterClient.AudioFormatRefused
-                        where upload == nil && refused.format != UploadFormat.wav.rawValue {
-                Log.net.warning("OpenRouter refused \(refused.format, privacy: .public) for \(engine.rawValue, privacy: .public): sending WAV from now on")
-                DiagnosticLog.shared.event(.net, "openrouter.formatRefused",
-                                           ["engine": engine, "format": refused.format])
-                speechFormat = .wav
-                results.append(try await transcribeSegment(samples, range, format: .wav, engine: engine,
-                                                           model: model, key: key, hedge: hedge))
-            }
-        }
-        return Self.joined(results)
-    }
-
-    /// One of Parakeet's segments in `format` (`CloudAudio.forSpeech`: WAV when that encoder fails).
-    private func transcribeSegment(_ samples: [Float], _ range: Range<Int>, format: UploadFormat, engine: EngineID,
-                                   model: String, key: String, hedge: CloudHedge? = nil) async throws -> CloudResult {
-        let file = await Task.detached(priority: .userInitiated) {
-            CloudAudio.forSpeech(Array(samples[range]), format: format)
-        }.value
-        let client = client, timeout = engine.cloudTimeout
-        let send: @Sendable (CloudHedge.Hooks) async throws -> CloudResult = { _ in
-            try await client.transcribeSpeech(audio: file.data, format: file.format.rawValue, model: model,
-                                              apiKey: key, timeout: timeout)
-        }
-        var result = if let hedge {
-            try await CloudHedge.run(hedge, .transcription, engine: engine, modelName: engine.displayName,
-                                     progress: nil, measured: measuredReporter, send)
-        } else {
-            try await send(CloudHedge.Hooks(progress: nil) { _ in })
-        }
-        result.uploads = [AudioUpload(format: file.format, bytes: file.data.count, generationID: result.generationID)]
-        return result
-    }
-
-    /// Parakeet's segments as one result: the first's, with every text (trimmed, empty ones left out) joined by a
-    /// space, the billed seconds and costs summed (nil when none said), the first provider any of them named, and
-    /// every segment's file.
-    private nonisolated static func joined(_ results: [CloudResult]) -> CloudResult {
-        guard var combined = results.first else { return CloudResult(text: "") }
-        combined.text = results.map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }.joined(separator: " ")
-        combined.audioSeconds = Self.sum(results.map(\.audioSeconds))
-        combined.costUSD = Self.sum(results.map(\.costUSD))
-        combined.provider = results.lazy.compactMap(\.provider).first
-        combined.uploads = results.flatMap(\.uploads)
-        combined.otherGenerationIDs = results.flatMap(\.otherGenerationIDs)
-        return combined
-    }
-
-    private nonisolated static func sum(_ values: [Double?]) -> Double? {
-        let known = values.compactMap { $0 }
-        return known.isEmpty ? nil : known.reduce(0, +)
-    }
-
     // MARK: Text
 
-    /// Polish Selection: `text` to the model of `route`, with `prompt` (`Polish.textPrompt`) as its instructions. Gives
+    /// Polish Selection: `text` to the model of `route` (at the level it carries), with `prompt` (`Polish.textPrompt`)
+    /// as its instructions. Gives
     /// up with `AppError.timeout` when the answer hasn't started within `TextRoute.timeout(forCharacterCount:)`; once it
     /// streams, it may take as long as it keeps coming, and the same time without a byte ends it. Throws `AppError`
     /// only, or `CancellationError`. `progress` hears how much of the answer has streamed in. Errors are Gemini's.
     /// `timeout` replaces that deadline (tests).
     func polishText(_ text: String, route: TextRoute, prompt: String, timeout: TimeInterval? = nil,
                     progress: (@Sendable (ChatStreamProgress) -> Void)? = nil) async throws -> TranscriptResult {
-        let source = EngineID.geminiFlash
+        let source = OpenRouterClient.engine(forModel: route.model)
         let prompt = UserDictionary.prompt(prompt, with: vocabulary(), heard: false)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         // A request with no instruction would have the model reply to the text instead of working on it.
@@ -409,7 +315,7 @@ final class TranscriptionService {
 
     // MARK: Generation record
 
-    /// Who served a delivered cloud result, from OpenRouter's generation record ("Together"). A generation OpenRouter
+    /// Who served a delivered cloud result, from OpenRouter's generation record ("Google AI Studio"). A generation OpenRouter
     /// hasn't recorded yet is asked for once more after a short wait. nil when nothing could be learned; never
     /// throws.
     func servedProvider(generationID: String) async -> String? {

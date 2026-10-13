@@ -1,6 +1,7 @@
 import Foundation
 
-/// Transcribes a recorded call with Gemini 3.8 Flash, one request per chunk. The two tracks, the mic's and the other
+/// Transcribes a recorded call with the Gemini model picked for calls (Models → Calls: Gemini 3.8 Flash or Gemini 4
+/// Argon, at the level picked for it, `CallModel`), one request per chunk. The two tracks, the mic's and the other
 /// side's, are mixed into one mono track (`CallMix`), the mic silent while the person was muted; the tracks stay apart on
 /// disk, for the player. The prompt (`CallPrompts.call`) names the person ("Sam", or "Me"), says when they were muted,
 /// and asks for every voice: theirs, the other participants', anyone in the room with them ("Nearby 1"). The answer is a
@@ -26,6 +27,19 @@ import Foundation
 /// `answers/summary.txt` and added to what the call cost; so does a one-chunk answer that came without any of the
 /// blocks. A summary that fails leaves the call done with its transcript, and says why (`CallRecord.summaryError`):
 /// Summarize (`summarize`) tries again, and sums up a call transcribed before summaries, from its transcript alone.
+/// The Gemini model a call's requests go to (`AppSettings.callEngine`), and the level it thinks at
+/// (`AppSettings.reasoningEfforts`): both the transcript's audio requests and the summary's text one.
+struct CallModel: Equatable, Sendable {
+    var engine: EngineID
+    var effort: ReasoningEffort
+
+    /// Gemini 3.8 Flash at medium: what calls use until another is picked.
+    static let `default` = CallModel(engine: .geminiFlash, effort: .medium)
+
+    /// The model's OpenRouter slug ("google/gemini-4-argon"); the user's endpoint takes the same.
+    var modelID: String { engine.openRouterModelID ?? "google/gemini-3.8-flash" }
+}
+
 @MainActor
 final class CallTranscriber {
     /// One request: the chunk's audio as an .m4a, the system prompt, the chunk's length, and the sample of the
@@ -66,22 +80,20 @@ final class CallTranscriber {
         self.sendText = sendText
     }
 
-    /// The live request: Gemini 3.8 Flash at its own reasoning level, through the Vertex proxy while it routes Gemini
-    /// (`VertexProxyAccount.routesGemini`, decided for each request), else through OpenRouter with the account's key.
-    /// A proxy that's set up never hands a request to OpenRouter. The answer comes back as the model wrote it (no
-    /// `<transcript>` tags are asked for or taken off).
-    static func openRouter(client: OpenRouterClient, account: OpenRouterAccount,
-                           proxy: VertexProxyAccount? = nil) -> Send {
-        let engine = EngineID.geminiFlash
-        let model = engine.openRouterModelID ?? "google/gemini-3.8-flash"
-        let effort = engine.reasoningEffort ?? .medium
+    /// The live request: the model picked for calls (`model`, read as each request goes: `AppSettings.callModel`) at
+    /// its level, through the Vertex proxy while it routes Gemini (`VertexProxyAccount.routesGemini`, decided for each
+    /// request), else through OpenRouter with the account's key. A proxy that's set up never hands a request to
+    /// OpenRouter. The answer comes back as the model wrote it (no `<transcript>` tags are asked for or taken off).
+    static func openRouter(client: OpenRouterClient, account: OpenRouterAccount, proxy: VertexProxyAccount? = nil,
+                           model: @escaping @MainActor () -> CallModel = { .default }) -> Send {
         return { audio, prompt, seconds, voiceSample in
-            let (target, key) = try await route(client: client, account: account, proxy: proxy)
+            let (target, key, call) = try await route(client: client, account: account, proxy: proxy, model: model)
             do {
                 let result = try await target.transcribe(
-                    audio: audio, format: UploadFormat.m4a.rawValue, model: model, systemPrompt: prompt, effort: effort,
-                    maxTokens: OpenRouterClient.transcriptionMaxTokens(audioSeconds: seconds), apiKey: key,
-                    timeout: engine.cloudTimeout, extractsTags: false, voiceSample: voiceSample)
+                    audio: audio, format: UploadFormat.m4a.rawValue, model: call.modelID, systemPrompt: prompt,
+                    effort: call.effort,
+                    maxTokens: OpenRouterClient.transcriptionMaxTokens(audioSeconds: seconds, effort: call.effort),
+                    apiKey: key, timeout: call.engine.cloudTimeout, extractsTags: false, voiceSample: voiceSample)
                 if target.service == .vertexProxy, let proxy { await MainActor.run { proxy.noteCloudSuccess() } }
                 return result
             } catch let error as AppError {
@@ -91,16 +103,14 @@ final class CallTranscriber {
         }
     }
 
-    /// The summary's live request: the transcript as text to Gemini 3.8 Flash at its own reasoning level, the same
-    /// way a call's audio goes (`openRouter`). No audio, so it costs a fraction of the transcript.
-    static func openRouterText(client: OpenRouterClient, account: OpenRouterAccount,
-                               proxy: VertexProxyAccount? = nil) -> SendText {
-        let engine = EngineID.geminiFlash
-        let textRoute = TextRoute(model: engine.openRouterModelID ?? "google/gemini-3.8-flash",
-                                  effort: engine.reasoningEffort ?? .medium, provider: .googleAIStudio)
+    /// The summary's live request: the transcript as text to the model picked for calls at its level, the same way a
+    /// call's audio goes (`openRouter`). No audio, so it costs a fraction of the transcript.
+    static func openRouterText(client: OpenRouterClient, account: OpenRouterAccount, proxy: VertexProxyAccount? = nil,
+                               model: @escaping @MainActor () -> CallModel = { .default }) -> SendText {
         return { text, prompt in
-            let (target, key) = try await route(client: client, account: account, proxy: proxy)
-            let timeout = max(engine.cloudTimeout, TextRoute.timeout(forCharacterCount: text.count))
+            let (target, key, call) = try await route(client: client, account: account, proxy: proxy, model: model)
+            let textRoute = TextRoute(model: call.modelID, effort: call.effort, provider: .googleAIStudio)
+            let timeout = max(call.engine.cloudTimeout, TextRoute.timeout(forCharacterCount: text.count))
             do {
                 let result = try await target.sendText(text, route: textRoute, systemPrompt: prompt, apiKey: key,
                                                        timeout: timeout)
@@ -113,18 +123,22 @@ final class CallTranscriber {
         }
     }
 
-    /// Where a call's request goes, and with which key: the Vertex proxy while it routes Gemini, else OpenRouter.
-    private nonisolated static func route(client: OpenRouterClient, account: OpenRouterAccount,
-                                          proxy: VertexProxyAccount?) async throws -> (OpenRouterClient, String) {
-        let route = await MainActor.run { () -> Result<(OpenRouterClient, String), AppError> in
+    /// Where a call's request goes, with which key, and to which model at which level: the Vertex proxy while it
+    /// routes Gemini, else OpenRouter.
+    private nonisolated static func route(
+        client: OpenRouterClient, account: OpenRouterAccount, proxy: VertexProxyAccount?,
+        model: @escaping @MainActor () -> CallModel
+    ) async throws -> (OpenRouterClient, String, CallModel) {
+        let route = await MainActor.run { () -> Result<(OpenRouterClient, String, CallModel), AppError> in
+            let call = model()
             if let proxy, proxy.routesGemini {
                 guard let key = proxy.apiKey(), let proxyClient = proxy.client() else {
                     return .failure(.vertexProxy(.keyUnreadable))
                 }
-                return .success((proxyClient, key))
+                return .success((proxyClient, key, call))
             }
             guard let key = account.apiKey() else { return .failure(.openRouterMissingKey) }
-            return .success((client, key))
+            return .success((client, key, call))
         }
         return try route.get()
     }

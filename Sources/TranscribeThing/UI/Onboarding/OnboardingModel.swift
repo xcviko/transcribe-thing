@@ -114,27 +114,28 @@ enum OnboardingGate {
     }
 
     /// The Switch model lesson is offered once a step can actually answer: Switch model has a model to step to, and
-    /// the OpenRouter key works when a step goes through it (`parakeet`: where Parakeet runs).
-    static func switchModelUsable(lineup: ModelLineup, parakeet: EngineID, keyStatus: KeyStatus,
+    /// the key works when a step goes through it (a Gemini model).
+    static func switchModelUsable(lineup: ModelLineup, keyStatus: KeyStatus,
                                   hasStoredKey: Bool) -> Bool {
         guard !lineup.steps.isEmpty else { return false }
-        guard lineup.steps.contains(where: { $0.needsOpenRouter(parakeet: parakeet) }) else { return true }
+        guard lineup.steps.contains(where: { $0.isGemini }) else { return true }
         return engineIsUsable(.geminiFlash, localState: .notInstalled, keyStatus: keyStatus, hasStoredKey: hasStoredKey)
     }
 
     /// The model step's line under the tiles, with the user's own Switch model binding: what the shortcut steps to
     /// from Parakeet, or which main model dictations start on when it isn't Parakeet.
-    static func lineupNote(binding: Shortcut?, lineup: ModelLineup, parakeet: EngineID) -> String {
+    static func lineupNote(binding: Shortcut?, lineup: ModelLineup) -> String {
         guard lineup.main == .parakeet else {
-            return "Your dictations start on \(lineup.main.title(parakeet: parakeet)), your main model. "
+            return "Your dictations start on \(lineup.main.title), your main model. "
                 + "Change it anytime in Models."
         }
         switch SwitchModelLine.status(binding: binding, lineup: lineup) {
         case .ready(let binding):
             // "fn ⇥" stays on one line inside running copy.
             let key = binding.compactDescription.replacingOccurrences(of: " ", with: "\u{00A0}")
-            return "For a long talk where every word counts, press \(key) while dictating to use Gemini. "
-                + "It uses the same OpenRouter key."
+            let next = lineup.steps.first?.modelName ?? EngineID.geminiFlash.modelName
+            return "For a long talk where every word counts, press \(key) while dictating to use \(next). "
+                + "Add its OpenRouter key later in Models."
         case .alone, .unbound:
             return "Gemini is there for long talks where every word counts. Set it up later in Settings."
         }
@@ -420,8 +421,8 @@ final class OnboardingModel {
     var canSkipAccessibility: Bool { step == .permissions && OnboardingGate.canSkipAccessibility(gateInputs) }
     var practiceStarted: Bool { !completedLessons.isEmpty }
     var primaryTitle: String { OnboardingGate.primaryTitle(step, gateInputs, practiceStarted: practiceStarted) }
-    /// Where Parakeet runs: the model step's selected tile.
-    var selectedEngine: EngineID { ctx.settings.parakeetEngine }
+    /// The model step's card: Parakeet on this Mac, the only model onboarding sets up.
+    var selectedEngine: EngineID { .parakeet }
 
     var fnKeyUsage: FnKeyUsage { fnKeyUsageOverride ?? ctx.permissions.fnKeyUsage }
     var accessibilityLooksStale: Bool { accessibilityStaleOverride ?? ctx.permissions.accessibilityLikelyStale }
@@ -447,14 +448,13 @@ final class OnboardingModel {
 
     /// The model step's line about the other models: a key press away while dictating.
     var lineupNote: String {
-        OnboardingGate.lineupNote(binding: ctx.settings.shortcuts[.switchModel], lineup: ctx.settings.lineup,
-                                  parakeet: ctx.settings.parakeetEngine)
+        OnboardingGate.lineupNote(binding: ctx.settings.shortcuts[.switchModel], lineup: ctx.settings.lineup)
     }
 
     /// The optional "Switch model" row on the practice step: only when a model it steps to would answer.
     var showsSwitchModelLesson: Bool {
         let inputs = gateInputs
-        return OnboardingGate.switchModelUsable(lineup: ctx.settings.lineup, parakeet: ctx.settings.parakeetEngine,
+        return OnboardingGate.switchModelUsable(lineup: ctx.settings.lineup,
                                                 keyStatus: inputs.keyStatus, hasStoredKey: inputs.hasStoredKey)
     }
 
@@ -666,13 +666,14 @@ final class OnboardingModel {
 
     // MARK: Models
 
-    /// Where Parakeet runs. Gemini isn't a place Parakeet runs: it's one of the models in Settings → Models.
+    /// The model step's Parakeet card: a model already on disk starts loading, so the first dictation doesn't wait
+    /// for it. Gemini isn't picked here: it's one of the models in Settings → Models.
     func select(_ engine: EngineID) {
-        guard engine.isParakeet else { return }
-        ctx.models.select(engine)
-        // Preview stores keep their own settings; keep the shared selection authoritative either way.
-        if ctx.settings.parakeetEngine != engine { ctx.settings.parakeetEngine = engine }
-        if engine.isCloud, ctx.account.maskedKey == nil { isReplacingKey = true }
+        guard engine.isLocal else { return }
+        switch ctx.models.state(of: engine) {
+        case .installed, .failed: ctx.models.prepare(engine)
+        case .notInstalled, .downloading, .preparing, .ready: break
+        }
     }
 
     func requiredDiskBytes(for engine: EngineID) -> Int64? { OnboardingGate.requiredDiskBytes(for: engine) }

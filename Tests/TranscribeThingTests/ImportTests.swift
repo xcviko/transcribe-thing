@@ -252,8 +252,8 @@ import Testing
 
     @Test func aFileThatFailsSaysWhyAndKeepsItsName() async throws {
         let h = H.make(keyStatus: .valid(KeyInfo()))
-        h.controller.transcribeOverride = { _, _ in throw AppError.engineFailed(.parakeetCloud, "boom") }
-        h.controller.transcribe(Self.file(), as: .transcription(.parakeetCloud))
+        h.controller.transcribeOverride = { _, _ in throw AppError.engineFailed(.geminiArgon, "boom") }
+        h.controller.transcribe(Self.file(), as: .transcription(.geminiArgon))
         let id = try #require(h.history.entries.first?.id)
         try await waitUntil { h.history.entry(id: id)?.status == .failed }
         #expect(h.history.entry(id: id)?.importedFrom == "interview.mp3")
@@ -286,10 +286,10 @@ import Testing
         h.controller.transcribeOverride = { _, engine in
             TranscriptResult(text: "The message.", engine: engine, processingTime: 0.5)
         }
-        h.controller.transcribe(Self.file(), as: .polish)
+        h.controller.transcribe(Self.file(), as: .polish())
         let id = try #require(h.history.entries.first?.id)
         try await waitUntil { h.history.entry(id: id)?.status == .success }
-        #expect(h.history.entry(id: id)?.currentKind == .polish)
+        #expect(h.history.entry(id: id)?.currentKind == .polish())
     }
 
     /// Words, speed and time saved are the user's own talking: a file's transcript stays out of them.
@@ -317,7 +317,7 @@ import Testing
             engine.isLocal ? .needsDownload : .ready
         }
         #expect(choices.first?.kind == .transcription(.geminiFlash))
-        #expect(choices.suffix(2).map(\.kind) == [.polish, .translation(polished: false)])
+        #expect(choices.suffix(4).map(\.kind) == TranscriptVersionKind.rewrites)
         #expect(choices.filter { !$0.isEnabled }.allSatisfy { $0.kind.engine.isLocal })
         #expect(Set(choices.map(\.kind)).count == choices.count)
     }
@@ -417,11 +417,14 @@ import Testing
     /// A file past it isn't offered Gemini, Polish or Translate; Parakeet still is.
     @Test func aLongFileIsOfferedOnlyParakeet() {
         let choices = ImportChoices.make(main: .geminiFlash, seconds: 2 * 3_600) { _ in .ready }
-        let gemini = choices.filter { $0.kind.engine.cloudAPI == .chatCompletions }
-        #expect(gemini.map(\.kind) == [.transcription(.geminiFlash), .polish, .translation(polished: false)])
+        let gemini = choices.filter { $0.kind.engine.isGemini }
+        #expect(gemini.map(\.kind) == [.transcription(.geminiFlash), .transcription(.geminiArgon),
+                                       .polish(by: .geminiFlash), .polish(by: .geminiArgon),
+                                       .translation(polished: false, by: .geminiFlash),
+                                       .translation(polished: false, by: .geminiArgon)])
         #expect(gemini.allSatisfy { $0.blocker == .tooLongForGemini })
         #expect(gemini.first?.title == "Gemini 3.8 Flash · Too long, Parakeet takes any length")
-        #expect(choices.filter(\.isEnabled).map(\.kind) == [.transcription(.parakeet), .transcription(.parakeetCloud)])
+        #expect(choices.filter(\.isEnabled).map(\.kind) == [.transcription(.parakeet)])
         let hour = ImportChoices.make(main: .geminiFlash, seconds: 3_600) { _ in .ready }
         #expect(hour.allSatisfy { $0.isEnabled })
     }
@@ -431,8 +434,8 @@ import Testing
         let entry = TranscriptEntry(text: "a podcast", engine: .parakeet, audioDuration: 3 * 3_600,
                                     voicedSeconds: 10_000, audioFileName: "x.m4a", importedFrom: "episode.mp3")
         let menu = VersionsMenu.make(for: entry, running: nil) { _ in .ready }
-        #expect(menu.actions.first { $0.kind == .transcription(.parakeetCloud) }?.isEnabled == true)
-        for kind: TranscriptVersionKind in [.transcription(.geminiFlash), .polish, .translation(polished: false)] {
+        #expect(menu.actions.first { $0.kind == .transcription(.parakeet) } == nil, "it has Parakeet's already")
+        for kind in [.transcription(.geminiFlash), .transcription(.geminiArgon)] + TranscriptVersionKind.rewrites {
             #expect(menu.actions.first { $0.kind == kind }?.blocker == .tooLongForGemini)
         }
     }

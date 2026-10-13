@@ -71,7 +71,7 @@ import Testing
         #expect(rig.pasted == ["Polished."])
         let entry = try #require(rig.h.history.entries.first)
         #expect(entry.engine == .geminiFlash)
-        #expect(entry.versions.map(\.kind) == [.polish])
+        #expect(entry.versions.map(\.kind) == [.polish()])
     }
 
     /// Esc while a polished dictation is being transcribed, then Undo: it goes on polished.
@@ -132,11 +132,11 @@ import Testing
         try await waitUntil { rig.h.history.entries.first?.status == .failed && c.machine.activeJobs == 0 }
         let failed = try #require(rig.h.history.entries.first)
         rig.result = { _, _ in "thinking it over <message>Polished.</message>" }
-        c.makeVersion(.polish, of: failed)
+        c.makeVersion(.polish(), of: failed)
         try await waitUntil { rig.h.history.entries.first?.status == .success }
         let entry = try #require(rig.h.history.entries.first)
         #expect(entry.text == "Polished.")
-        #expect(entry.versions.map(\.kind) == [.polish])
+        #expect(entry.versions.map(\.kind) == [.polish()])
     }
 
     /// In hands-free, fn ↩'s fn press was for polishing: its release doesn't finish the dictation.
@@ -538,9 +538,9 @@ import Testing
     }
 
     @Test func thePolishedVersionRoundTrips() {
-        #expect(TranscriptVersionKind(rawValue: "polish") == .polish)
-        #expect(TranscriptVersionKind.polish.rawValue == "polish")
-        #expect(!TranscriptVersionKind.polish.isReadableByOlderBuilds)
-        #expect(TranscriptVersionKind.polish.displayName == "Polished by Gemini 3.8 Flash")
+        #expect(TranscriptVersionKind(rawValue: "polish") == .polish())
+        #expect(TranscriptVersionKind.polish().rawValue == "polish")
+        #expect(!TranscriptVersionKind.polish().isReadableByOlderBuilds)
+        #expect(TranscriptVersionKind.polish().displayName == "Polished by Gemini 3.8 Flash")
     }
 }

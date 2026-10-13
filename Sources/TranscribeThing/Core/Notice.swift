@@ -325,7 +325,7 @@ enum AppError: Error, Equatable, Sendable {
     }
 
     /// The key, the credit or the connection failed: every cloud model would fail the same way, so only the local
-    /// model can take over. Never the user's endpoint's: cloud Parakeet still goes through OpenRouter.
+    /// model can take over. Never the user's endpoint's: those are its own (`VertexProxyFailure`).
     var stopsEveryCloudModel: Bool {
         switch self {
         case .openRouterMissingKey, .openRouterKeyUnreadable, .openRouterInvalidKey, .openRouterNoCredits,
@@ -417,7 +417,7 @@ extension AppError {
     /// Canonical copy per the error catalog (wispr-ux.md §5.9, adapted).
     /// `recordingID` non-nil means the audio is retained, which enables Retry and Retry-with actions.
     /// `fallbackEngine` is a ready engine other than the failing one. `engine` is the engine the error came
-    /// from: OpenRouter errors name it ("Parakeet v3 · Cloud is rate-limited"), and say "Gemini" without it.
+    /// from (a timeout names it: "Gemini 4 Argon took too long"); OpenRouter errors say "Gemini".
     func notice(recordingID: UUID?, fallbackEngine: EngineID?, engine: EngineID? = nil) -> Notice {
         let copy = self.copy(for: engine)
         let hasAudio = recordingID != nil
@@ -527,25 +527,13 @@ extension AppError {
         return String(flat.prefix(limit - 1)).trimmingCharacters(in: .whitespaces) + "…"
     }
 
-    /// What OpenRouter copy calls the service: "Gemini" (also when the engine is unknown), or the cloud speech
-    /// model ("Parakeet v3 · Cloud").
+    /// What OpenRouter copy calls the service: "Gemini", every cloud model being one.
     private struct CloudName {
-        let service: String
-        let isSpeech: Bool
-
-        init(_ engine: EngineID?) {
-            if let engine, engine.cloudAPI == .transcriptions {
-                service = engine.shortName
-                isSpeech = true
-            } else {
-                service = "Gemini"
-                isSpeech = false
-            }
-        }
+        let service = "Gemini"
     }
 
     private func copy(for engine: EngineID?) -> Copy {
-        let cloud = CloudName(engine)
+        let cloud = CloudName()
         switch self {
         case .microphonePermissionDenied:
             return Copy(symbol: "mic.slash.fill",
@@ -660,16 +648,13 @@ extension AppError {
         case .openRouterNoRoute:
             return Copy(symbol: "lock.shield",
                         title: "\(cloud.service) isn’t available for your key",
-                        body: cloud.isSpeech
-                            ? "OpenRouter found no provider your settings allow. Check your privacy and provider settings."
-                            : "OpenRouter found no Google AI Studio route. Check your privacy and provider settings.",
+                        body: "OpenRouter found no Google AI Studio route. Check your privacy and provider settings.",
                         fixes: [Fix(title: "Open Settings", kind: .openURL(OpenRouterLinks.privacy))],
                         order: .fixFirst, offersSwitch: true)
         case .openRouterProviderUnavailable:
             return Copy(symbol: "icloud.slash",
-                        title: cloud.isSpeech ? "\(cloud.service) is unavailable" : "Google AI Studio is unavailable",
-                        body: cloud.isSpeech ? "OpenRouter couldn’t reach its provider right now."
-                            : "OpenRouter couldn’t reach Gemini right now.")
+                        title: "Google AI Studio is unavailable",
+                        body: "OpenRouter couldn’t reach Gemini right now.")
         case .openRouterRefused(let message):
             return Copy(symbol: "hand.raised.fill",
                         title: "\(cloud.service) refused this request",
@@ -691,11 +676,7 @@ extension AppError {
                         fixes: partialTranscript.map { [Fix(title: "Copy", kind: .copyText($0))] } ?? [],
                         sound: .alert)
         case .timeout(let e):
-            let body = switch e.cloudAPI {
-            case nil: "The model didn’t finish in time."
-            case .chatCompletions: "Gemini didn’t answer in time."
-            case .transcriptions: "OpenRouter didn’t answer in time."
-            }
+            let body = e.isGemini ? "Gemini didn’t answer in time." : "The model didn’t finish in time."
             return Copy(symbol: "hourglass", title: "\(e.shortName) took too long", body: body)
         case .offline:
             return Copy(symbol: "wifi.slash",

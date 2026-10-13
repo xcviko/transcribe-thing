@@ -419,13 +419,13 @@ private struct PastingRules: View {
     var body: some View {
         @Bindable var settings = settings
         let order = settings.lineup.order
-        Grid(alignment: .center, horizontalSpacing: 16, verticalSpacing: 12) {
+        Grid(alignment: .center, horizontalSpacing: 14, verticalSpacing: 12) {
             GridRow {
                 Color.clear
                     .gridCellUnsizedAxes([.horizontal, .vertical])
                 ForEach(order) { choice in
-                    columnHeader(choice.shortName, symbol: choice.symbolName(parakeet: settings.parakeetEngine))
-                        .help(choice.title(parakeet: settings.parakeetEngine))
+                    columnHeader(choice.shortName, symbol: choice.symbolName)
+                        .help(choice.title)
                 }
                 ForEach(Array(DictationMachine.Mode.allCases.enumerated()), id: \.element) { index, mode in
                     columnHeader(mode.chipTitle, symbol: mode.action.symbolName)
@@ -462,10 +462,13 @@ private struct PastingRules: View {
                     .foregroundStyle(.inkSecondary)
                     .frame(width: 28, height: 28)
                     .background(Color.inkSecondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                // Three models' columns leave a narrow window little room: the rule wraps rather than cut off.
                 Text(title)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.ink)
-                    .lineLimit(1)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(minWidth: 110, alignment: .leading)
                 Spacer(minLength: 0)
             }
             .gridColumnAlignment(.leading)

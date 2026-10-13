@@ -520,7 +520,7 @@ struct PillView: View {
         case .message(let text): text
         }
         guard let choice, visual.carriesModel, !visual.isPolishing else { return label }
-        return "\(label) with \(choice.title(parakeet: model.settings.parakeetEngine))"
+        return "\(label) with \(choice.title)"
     }
 }
 
@@ -1476,7 +1476,7 @@ private struct PillModelChip: View {
         }
         .onChange(of: choice) { _, new in roll(to: new) }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Model: \(choice.title(parakeet: settings.parakeetEngine))")
+        .accessibilityLabel("Model: \(choice.title)")
         .accessibilityAddTraits(isInteractive ? .isButton : [])
     }
 
@@ -1514,9 +1514,8 @@ struct PillChipRoll: View, Animatable {
         let next = min(index + 1, last)
         let p = next == index ? 0 : CGFloat(at - Double(index))
         let from = names[index], to = names[next]
-        let parakeet = settings.parakeetEngine
-        let fromWidth = Self.width(of: from, parakeet: parakeet)
-        let toWidth = Self.width(of: to, parakeet: parakeet)
+        let fromWidth = Self.width(of: from)
+        let toWidth = Self.width(of: to)
         let rolling = next != index && p > 0
         Group {
             if !rolling {
@@ -1544,13 +1543,13 @@ struct PillChipRoll: View, Animatable {
     }
 
     private func label(_ choice: ModelChoice) -> some View {
-        Self.label(choice, parakeet: settings.parakeetEngine,
+        Self.label(choice,
                    accent: PillPalette.accent(for: settings.modelColors[choice]))
     }
 
-    @MainActor static func label(_ choice: ModelChoice, parakeet: EngineID, accent: PillAccent?) -> some View {
+    @MainActor static func label(_ choice: ModelChoice, accent: PillAccent?) -> some View {
         HStack(spacing: 4) {
-            Image(systemName: choice.symbolName(parakeet: parakeet))
+            Image(systemName: choice.symbolName)
                 .font(.system(size: 9.5, weight: .semibold))
                 .foregroundStyle(accent?.mark ?? .white.opacity(0.75))
             Text(choice.chipName)
@@ -1566,10 +1565,10 @@ struct PillChipRoll: View, Animatable {
     /// A name's width, laid out once ahead of any roll (so the very first one already knows where it goes).
     @MainActor private static var widths: [String: CGFloat] = [:]
 
-    @MainActor static func width(of choice: ModelChoice, parakeet: EngineID) -> CGFloat {
-        let key = "\(choice.rawValue).\(choice.symbolName(parakeet: parakeet))"
+    @MainActor static func width(of choice: ModelChoice) -> CGFloat {
+        let key = "\(choice.rawValue).\(choice.symbolName)"
         if let width = widths[key] { return width }
-        let host = NSHostingView(rootView: label(choice, parakeet: parakeet, accent: nil))
+        let host = NSHostingView(rootView: label(choice, accent: nil))
         let width = ceil(host.fittingSize.width)
         widths[key] = width
         return width

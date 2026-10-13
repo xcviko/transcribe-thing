@@ -47,7 +47,7 @@ import Testing
 
     @Test func aFailedRequestLeavesTheOtherToAnswer() async throws {
         let calls = Calls()
-        let result = try await CloudHedge.run(.race, .transcription, engine: .parakeetCloud, modelName: "Parakeet",
+        let result = try await CloudHedge.run(.race, .transcription, engine: .geminiArgon, modelName: "Gemini 4 Argon",
                                               progress: nil,
                                               work(calls, delays: [0.01, 0.1], texts: ["x", "answer"],
                                                    failures: [0: .openRouterProviderUnavailable("")]))
@@ -57,7 +57,7 @@ import Testing
     @Test func whenBothFailTheFirstFailureIsThrown() async {
         let calls = Calls()
         await #expect(throws: AppError.timeout(.parakeet)) {
-            try await CloudHedge.run(.race, .transcription, engine: .parakeetCloud, modelName: "Parakeet", progress: nil,
+            try await CloudHedge.run(.race, .transcription, engine: .geminiArgon, modelName: "Gemini 4 Argon", progress: nil,
                                      work(calls, delays: [0.01, 0.05],
                                           failures: [0: .timeout(.parakeet), 1: .openRouterTruncated("")]))
         }

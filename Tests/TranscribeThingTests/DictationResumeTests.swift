@@ -114,7 +114,7 @@ import Testing
     /// nothing kept, whichever model and whatever the key.
     @Test func noTextFromAnyModelIsSilenceNotAFailure() async throws {
         for (engine, key) in [(EngineID.parakeet, KeyStatus.valid(KeyInfo())), (.parakeet, .missing),
-                              (.parakeetCloud, .valid(KeyInfo())), (.geminiFlash, .valid(KeyInfo()))] {
+                              (.geminiArgon, .valid(KeyInfo())), (.geminiFlash, .valid(KeyInfo()))] {
             let rig = Rig(keyStatus: key)
             rig.h.settings.pillMode = .never   // the notice itself is what's checked here
             let r = Self.roomNoise()
@@ -392,10 +392,10 @@ import Testing
         try await waitUntil { rig.h.history.entry(id: failing.id)?.status == .failed && rig.h.controller.machine.activeJobs == 0 }
         rig.h.toasts.dismissAll()
         let shakes = rig.h.pill.shakeCount
-        rig.h.controller.retry(try #require(rig.h.history.entry(id: failing.id)), with: .parakeetCloud)
+        rig.h.controller.retry(try #require(rig.h.history.entry(id: failing.id)), with: .geminiArgon)
         try await waitUntil { rig.transcribed.count == 2 && rig.h.controller.runningVersions.isEmpty }
         let entry = try #require(rig.h.history.entry(id: failing.id))
-        #expect(entry.status == .failed && entry.engine == .parakeetCloud)
+        #expect(entry.status == .failed && entry.engine == .geminiArgon)
         #expect(entry.errorMessage == "No speech detected")
         #expect(!rig.saidNoSpeech && rig.h.toasts.notices.isEmpty && rig.h.pill.shakeCount == shakes)
         #expect(rig.pasted.isEmpty)

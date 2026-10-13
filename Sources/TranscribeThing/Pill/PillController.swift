@@ -331,7 +331,7 @@ final class PillController {
         guard let host, model.isPresented, model.visiblePhase == .locked, let chip = regions.chip else { return }
         let settings = model.settings
         let current = model.sessionModel ?? settings.lineup.main
-        let menu = Self.modelMenu(choices: model.menuChoices, current: current, parakeet: settings.parakeetEngine,
+        let menu = Self.modelMenu(choices: model.menuChoices, current: current,
                                   unavailableReason: model.unavailableReason ?? { _ in nil }) { [weak model] choice in
             model?.onSelectModel?(choice)
         }
@@ -344,20 +344,20 @@ final class PillController {
 
     /// One item per choice, in cycle order (the main model first), titled with its symbol; `current` is checked. One
     /// that can't take the dictation now is disabled, its reason beside it.
-    static func modelMenu(choices: [ModelChoice], current: ModelChoice, parakeet: EngineID,
+    static func modelMenu(choices: [ModelChoice], current: ModelChoice,
                           unavailableReason: (ModelChoice) -> String?,
                           select: @escaping @MainActor (ModelChoice) -> Void) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
         for choice in choices {
-            let title = choice.title(parakeet: parakeet)
+            let title = choice.title
             let item = MenuActionItem(title: title) { select(choice) }
             item.state = choice == current ? .on : .off
             if let reason = unavailableReason(choice) {
                 item.isEnabled = false
                 item.attributedTitle = MenuBuilder.titleWithSuffix(title, suffix: reason)
             }
-            let image = NSImage(systemSymbolName: choice.symbolName(parakeet: parakeet), accessibilityDescription: nil)
+            let image = NSImage(systemSymbolName: choice.symbolName, accessibilityDescription: nil)
             image?.isTemplate = true
             item.image = image
             menu.addItem(item)

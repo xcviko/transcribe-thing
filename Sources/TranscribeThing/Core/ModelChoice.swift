@@ -1,106 +1,91 @@
 import Foundation
 
-/// What a dictation goes to. Models lists both in the user's order (`ModelLineup`): one is the main model every
-/// dictation starts on, and Switch model steps to the other when it's switched on. Raw values are persisted (the
-/// lineup): never rename them. Declaration order is the default order.
+/// What a dictation goes to. Models lists them in the user's order (`ModelLineup`): one is the main model every
+/// dictation starts on, and Switch model steps to the others switched on. Raw values are persisted (the lineup): never
+/// rename them. Declaration order is the default order.
 ///
-/// Clean-up ("cleanup", Parakeet's text tidied by GPT-6 Luna) was a third model until it was removed: a stored value
-/// that names it is read as Parakeet where it was the main or hands-free model, and dropped elsewhere
-/// (`retiredCleanup`).
+/// Clean-up ("cleanup", Parakeet's text tidied by GPT-6 Luna) was a model until it was removed: a stored value that
+/// names it is read as Parakeet where it was the main or hands-free model, and dropped elsewhere (`retiredCleanup`).
+/// Parakeet ran through OpenRouter too until that was removed (`EngineID.parakeetCloud`): Parakeet is on this Mac now.
 enum ModelChoice: String, Codable, CaseIterable, Identifiable, Sendable {
-    /// Parakeet v3, where `AppSettings.parakeetEngine` runs it.
+    /// Parakeet v3 on this Mac.
     case parakeet
-    /// Gemini 3.8 Flash (`EngineID.geminiFlash`), which hears the audio itself.
+    /// Gemini 3.8 Flash (`EngineID.geminiFlash`), which hears the audio itself. Named when it was the only Gemini.
     case gemini
+    /// Gemini 4 Argon (`EngineID.geminiArgon`): slower and dearer than Flash, for when every word counts.
+    case argon
 
     var id: String { rawValue }
 
     /// The raw value of the removed clean-up model, as older builds stored it.
     static let retiredCleanup = "cleanup"
 
-    /// The choice a job or a kept recording was made with (Undo, the processing pill): any chat-completions engine
-    /// (the retired Gemini 3.1 Pro too) is Gemini, and Parakeet anywhere is Parakeet.
+    /// The choice a job or a kept recording was made with (Undo, the processing pill, History's colors): Gemini 4
+    /// Argon is Argon, any other Gemini (the retired Gemini 3.1 Pro too) is Gemini, and Parakeet anywhere (the retired
+    /// cloud one too) is Parakeet.
     init(engine: EngineID) {
-        self = engine.cloudAPI == .chatCompletions ? .gemini : .parakeet
+        switch engine {
+        case .geminiArgon: self = .argon
+        case .geminiFlash, .geminiPro: self = .gemini
+        case .parakeet, .parakeetCloud: self = .parakeet
+        }
     }
 
-    /// The engine that hears the audio: Parakeet where `parakeet` runs it, or Gemini 3.8 Flash.
-    func engine(parakeet: EngineID) -> EngineID {
+    /// The engine that hears the audio.
+    var engine: EngineID {
         switch self {
-        case .parakeet: parakeet
+        case .parakeet: .parakeet
         case .gemini: .geminiFlash
+        case .argon: .geminiArgon
         }
     }
 
-    /// It goes through the OpenRouter key: Gemini always, Parakeet when it runs there.
-    func needsOpenRouter(parakeet: EngineID) -> Bool {
-        switch self {
-        case .parakeet: parakeet.isCloud
-        case .gemini: true
-        }
-    }
+    /// A Gemini model: it goes through the OpenRouter key (or the user's endpoint), and Polish and Translate work on
+    /// it while dictating.
+    var isGemini: Bool { engine.isGemini }
 
     /// It needs Parakeet on this Mac (downloaded, loaded).
-    func usesLocalParakeet(parakeet: EngineID) -> Bool {
-        switch self {
-        case .parakeet: parakeet.isLocal
-        case .gemini: false
-        }
-    }
+    var usesLocalParakeet: Bool { engine.isLocal }
 }
 
 extension ModelChoice {
-    /// The model's own name, wherever it runs: "Parakeet v3", "Gemini 3.8 Flash". The Models rows, which say where
-    /// Parakeet runs in a section of their own.
-    var modelName: String {
-        switch self {
-        case .parakeet: EngineID.parakeet.modelName
-        case .gemini: EngineID.geminiFlash.modelName
-        }
-    }
+    /// The model's own name: "Parakeet v3", "Gemini 3.8 Flash", "Gemini 4 Argon". Models' rows, menus, the pill's
+    /// menu and accessibility, onboarding's Done step.
+    var modelName: String { engine.modelName }
 
-    /// The full name, with Parakeet's "· Cloud" when it runs through OpenRouter: the menu bar, the pill's menu and
-    /// accessibility, onboarding's Done step.
-    func title(parakeet: EngineID) -> String {
-        switch self {
-        case .parakeet: parakeet.displayName
-        case .gemini: modelName
-        }
-    }
+    /// The full name. The same as `modelName` now that Parakeet runs only on this Mac.
+    var title: String { modelName }
 
-    /// One word for chains and sentences: "Parakeet → Gemini", "Parakeet and Gemini need…".
+    /// One word for chains, sentences and narrow columns: "Parakeet → Flash → Argon", "Flash and Argon need…".
     var shortName: String {
         switch self {
         case .parakeet: "Parakeet"
-        case .gemini: "Gemini"
+        case .gemini: "Flash"
+        case .argon: "Argon"
         }
     }
 
-    /// The sidebar chip's name: "Parakeet v3 · Cloud", "Gemini Flash".
-    func compactName(parakeet: EngineID) -> String {
-        switch self {
-        case .parakeet: parakeet.shortName
-        case .gemini: EngineID.geminiFlash.shortName
-        }
-    }
+    /// The sidebar chip's name: "Parakeet v3", "Gemini 3.8 Flash".
+    var compactName: String { engine.shortName }
 
-    /// The pill chip's name after its symbol: "Parakeet", "Gemini 3.8 Flash".
+    /// The pill chip's name after its symbol: "Parakeet", "Gemini 3.8 Flash", "Gemini 4 Argon".
     var chipName: String {
         switch self {
         case .parakeet: "Parakeet"
-        case .gemini: EngineID.geminiFlash.modelName
+        case .gemini, .argon: engine.modelName
         }
     }
 
-    /// Parakeet's bolt (a cloud bolt through OpenRouter), Gemini's sparkles.
-    func symbolName(parakeet: EngineID) -> String {
+    /// Parakeet's bolt, Flash's sparkles, Argon's atom.
+    var symbolName: String {
         switch self {
-        case .parakeet: parakeet.symbolName
+        case .parakeet: EngineID.parakeet.symbolName
         case .gemini: "sparkles"
+        case .argon: EngineID.geminiArgon.symbolName
         }
     }
 
-    /// Short names in a sentence, and whether it takes a plural verb: "Gemini", "Parakeet and Gemini".
+    /// Short names in a sentence, and whether it takes a plural verb: "Flash", "Parakeet and Flash".
     static func sentenceList(_ choices: [ModelChoice]) -> (names: String, isPlural: Bool) {
         let names = choices.map(\.shortName)
         guard let last = names.last else { return ("", false) }
@@ -133,8 +118,9 @@ struct ModelLineup: Equatable, Sendable {
     /// main, and is switched on when it stops being main (`main`).
     private(set) var switchable: Set<ModelChoice>
 
-    /// What every install starts with, and what builds before the lineup did: Parakeet, then Gemini.
-    static let `default` = ModelLineup(order: [.parakeet, .gemini], main: .parakeet, switchable: [.gemini])
+    /// What every install starts with: Parakeet, then Gemini 3.8 Flash in the cycle, and Gemini 4 Argon after them,
+    /// switched off (it costs about 2.7 times Flash's).
+    static let `default` = ModelLineup(order: [.parakeet, .gemini, .argon], main: .parakeet, switchable: [.gemini])
 
     /// `order` loses duplicates and gets every missing choice appended, in `allCases` order.
     init(order: [ModelChoice], main: ModelChoice, switchable: Set<ModelChoice>) {
@@ -226,11 +212,13 @@ enum ModelColor: String, Codable, CaseIterable, Identifiable, Sendable {
 }
 
 extension ModelChoice {
-    /// Its color until one is picked, as before colors could be: Parakeet the plain pill, Gemini violet.
+    /// Its color until one is picked, as before colors could be: Parakeet the plain pill, Gemini violet, and Argon
+    /// blue.
     var defaultColor: ModelColor {
         switch self {
         case .parakeet: .graphite
         case .gemini: .violet
+        case .argon: .blue
         }
     }
 }

@@ -279,9 +279,9 @@ struct HistoryRow: View, Equatable {
         .frame(minWidth: 88, minHeight: 26 - 4, alignment: .topTrailing)
     }
 
-    /// Gemini is pinned to one provider, so only cloud Parakeet says who answered.
+    /// Gemini is pinned to one provider, so only the retired cloud Parakeet's old rows say who answered.
     private var servedBy: String? {
-        guard entry.engine.cloudAPI == .transcriptions, let provider = entry.provider, !provider.isEmpty else { return nil }
+        guard entry.engine == .parakeetCloud, let provider = entry.provider, !provider.isEmpty else { return nil }
         return provider
     }
 

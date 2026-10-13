@@ -49,9 +49,6 @@ final class ModelStore {
     private(set) var lastErrors: [EngineID: AppError] = [:]
     /// Wall time of the last successful load per engine (Core ML specialization makes the first one long).
     private(set) var lastLoadDurations: [EngineID: TimeInterval] = [:]
-    /// Where Parakeet should run, picked before that model finished downloading. It becomes
-    /// `AppSettings.parakeetEngine` once it lands, even if the window that asked for it has closed meanwhile.
-    private(set) var pendingSelection: EngineID?
 
     @ObservationIgnored var onDownloadFinished: ((EngineID) -> Void)?
     /// A download or load failed (never called for a cancellation).
@@ -110,9 +107,8 @@ final class ModelStore {
         Task { [weak self] in
             guard let self else { return }
             await self.refreshFromDisk()
-            let selected = self.settings.parakeetEngine
-            if selected.isLocal, self.state(of: selected) == .installed, self.settings.usesLocalParakeet {
-                self.prepare(selected)
+            if self.state(of: .parakeet) == .installed, self.settings.usesLocalParakeet {
+                self.prepare(.parakeet)
             }
         }
     }
@@ -179,7 +175,6 @@ final class ModelStore {
     }
 
     func cancelDownload(_ id: EngineID) {
-        if pendingSelection == id { pendingSelection = nil }
         guard let task = downloadTasks[id] else { return }
         task.cancel()
         if state(of: id).isDownloading { states[id] = .notInstalled }
@@ -235,12 +230,8 @@ final class ModelStore {
             await refreshDiskUsage()
             Log.engine.info("Downloaded \(id.rawValue, privacy: .public)")
             DiagnosticLog.shared.event(.models, "download.finished", ["model": id, "bytes": Int(total)])
-            if pendingSelection == id {
-                pendingSelection = nil
-                settings.parakeetEngine = id
-            }
             onDownloadFinished?(id)
-            if settings.parakeetEngine == id, settings.usesLocalParakeet { prepare(id) }
+            if settings.usesLocalParakeet { prepare(id) }
         case .success:
             await refreshDiskUsage()
         case .failure(let error):
@@ -271,13 +262,11 @@ final class ModelStore {
     private func settleCancelledDownload(_ id: EngineID, engine: any LocalEngine, token: UUID) {
         // A newer download of the same model owns the state now.
         guard downloadTokens[id] == token else { return }
-        if pendingSelection == id { pendingSelection = nil }
         guard state(of: id).isDownloading || state(of: id) == .notInstalled else { return }
         states[id] = engine.isInstalled() ? .installed : .notInstalled
     }
 
     private func fail(_ id: EngineID, _ error: AppError, message: String) {
-        if pendingSelection == id { pendingSelection = nil }
         states[id] = .failed(message)
         lastErrors[id] = error
         onFailure?(id, error)
@@ -314,39 +303,6 @@ final class ModelStore {
     }
 
     // MARK: Select and prepare
-
-    /// Sets where Parakeet runs (`AppSettings.parakeetEngine`); on this Mac it starts loading. Anything but
-    /// Parakeet does nothing: Gemini is a model in the lineup, not a place Parakeet runs.
-    func select(_ id: EngineID) {
-        guard id.isParakeet else { return }
-        pendingSelection = nil
-        settings.parakeetEngine = id
-        guard id.isLocal else { return }
-        switch state(of: id) {
-        case .installed, .failed: prepare(id)
-        case .notInstalled, .downloading, .preparing, .ready: break
-        }
-    }
-
-    /// Selects `id` now if it can run, otherwise downloads it (when needed) and selects it once it is installed.
-    /// The current engine stays in use meanwhile.
-    func selectWhenInstalled(_ id: EngineID) {
-        guard id.isParakeet else { return }
-        guard id.isLocal else { return select(id) }
-        switch state(of: id) {
-        case .installed, .ready, .preparing:
-            select(id)
-        case .downloading:
-            pendingSelection = id
-        case .notInstalled, .failed:
-            pendingSelection = id
-            download(id)
-            // The download may have been refused synchronously (preview, or a load-only retry).
-            if !state(of: id).isDownloading, pendingSelection == id {
-                if state(of: id).isPreparing { select(id) } else if !isPreview { pendingSelection = nil }
-            }
-        }
-    }
 
     /// Loads the model in the background: `.preparing` → `.ready` (or `.failed`).
     func prepare(_ id: EngineID) {

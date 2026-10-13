@@ -1,10 +1,11 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The models in the user's order: the main model every dictation starts on (a radio), which other the Switch model
+/// The models in the user's order: the main model every dictation starts on (a radio), which others the Switch model
 /// shortcut steps to (a switch), the order it steps in (drag a row by its handle), and each one's color on the pill
-/// (its tile). Then where Parakeet runs (on this Mac: download, use, delete, storage; or through OpenRouter), the
-/// API keys: OpenRouter's, and the user's own OpenAI-compatible endpoint that can take Gemini's requests instead.
+/// (its tile). Then the model hands-free starts on, how hard each Gemini model thinks (Reasoning), the model calls go
+/// to, Parakeet on this Mac (download, delete, storage), and the API keys: OpenRouter's, and the user's own
+/// OpenAI-compatible endpoint that can take Gemini's requests instead.
 struct ModelsPage: View {
     @Environment(HubContext.self) private var hub
     @Environment(ModelStore.self) private var models
@@ -42,9 +43,25 @@ struct ModelsPage: View {
                     }
                 }
 
-                HubGroup("Where Parakeet runs") {
+                HubGroup("Reasoning", footer: ReasoningCopy.footer) {
                     SettingsGroup {
-                        ForEach(EngineID.parakeetRuntimes) { engine in row(engine, proxy: proxy) }
+                        ForEach(EngineID.geminiEngines) { engine in ReasoningRow(engine: engine) }
+                    }
+                }
+                HubGroup("Calls", footer: CallsModelCopy.footer) {
+                    SettingsGroup {
+                        SettingsRow(title: "Calls use", subtitle: CallsModelCopy.subtitle,
+                                    systemImage: "phone", iconTint: .inkSecondary) {
+                            HubMenuPicker(title: "Calls use", options: EngineID.geminiEngines,
+                                          selection: callEngine, label: \.modelName)
+                        }
+                    }
+                }
+                HubGroup("Parakeet on this Mac") {
+                    SettingsGroup {
+                        ForEach(EngineID.localEngines) { engine in
+                            ModelRow(engine: engine)
+                        }
                     }
                 }
                 APIKeysGroup(keyFocusRequest: keyFocusRequest, endpointFocusRequest: proxyFocusRequest)
@@ -62,25 +79,13 @@ struct ModelsPage: View {
         }
     }
 
-    private func row(_ engine: EngineID, proxy: ScrollViewProxy) -> some View {
-        ModelRow(
-            engine: engine,
-            isSelected: settings.parakeetEngine == engine,
-            isPendingSwitch: models.pendingSelection == engine,
-            choose: { choose(engine, proxy: proxy) },
-            use: { use(engine) },
-            focusKey: { focusKey(proxy) })
-    }
-
     // MARK: Main model
 
-    /// Makes `choice` the main model. One the OpenRouter key can't pay for leads to the key instead, even while it
-    /// also waits for Parakeet's download; one on Parakeet on this Mac starts its download, or its load, so the next
-    /// dictation doesn't wait for it.
+    /// Makes `choice` the main model. One the key can't pay for leads to the key instead; Parakeet on this Mac starts
+    /// its download, or its load, so the next dictation doesn't wait for it.
     private func chooseMain(_ choice: ModelChoice, proxy: ScrollViewProxy) {
         guard settings.lineup.main != choice else { return }
-        let parakeet = settings.parakeetEngine
-        if choice.needsOpenRouter(parakeet: parakeet) {
+        if choice.isGemini {
             switch hub.readiness(of: choice) {
             case .needsKey, .keyProblem:
                 focusKey(for: choice, proxy)
@@ -90,30 +95,17 @@ struct ModelsPage: View {
             }
         }
         withAnimation(Theme.Motion.snappy) { settings.lineup.main = choice }
-        guard choice.usesLocalParakeet(parakeet: parakeet) else { return }
-        switch models.state(of: parakeet) {
-        case .notInstalled: models.download(parakeet)
-        case .installed: models.prepare(parakeet)
+        guard choice.usesLocalParakeet else { return }
+        switch models.state(of: .parakeet) {
+        case .notInstalled: models.download(.parakeet)
+        case .installed: models.prepare(.parakeet)
         case .downloading, .preparing, .ready, .failed: break
         }
     }
 
-    // MARK: Where Parakeet runs
-
-    private func choose(_ engine: EngineID, proxy: ScrollViewProxy) {
-        guard settings.parakeetEngine != engine else { return }
-        switch hub.readiness(of: engine) {
-        case .ready, .warming, .needsDownload, .failed:
-            // Downloads keep the current engine until the new one lands (ModelStore finishes the switch
-            // even if this window closes).
-            withAnimation(Theme.Motion.snappy) { models.selectWhenInstalled(engine) }
-        case .needsKey, .keyProblem:
-            focusKey(proxy)
-        }
-    }
-
-    private func use(_ engine: EngineID) {
-        withAnimation(Theme.Motion.snappy) { models.select(engine) }
+    private var callEngine: Binding<EngineID> {
+        let settings = settings
+        return Binding(get: { settings.callEngine }, set: { settings.callEngine = $0 })
     }
 
     private func focusKey(_ proxy: ScrollViewProxy) {
@@ -124,7 +116,7 @@ struct ModelsPage: View {
     /// The key `choice` goes with: the endpoint's row of API keys while it takes Gemini's requests, else the
     /// OpenRouter key.
     private func focusKey(for choice: ModelChoice, _ proxy: ScrollViewProxy) {
-        guard hub.provider(for: choice.engine(parakeet: settings.parakeetEngine)) == .vertexProxy else {
+        guard hub.provider(for: choice.engine) == .vertexProxy else {
             focusKey(proxy)
             return
         }
@@ -158,9 +150,41 @@ struct ModelsPage: View {
     }
 
     private func handsFreeLabel(_ choice: ModelChoice?) -> String {
-        choice?.title(parakeet: settings.parakeetEngine) ?? "Main model"
+        choice?.title ?? "Main model"
     }
 
+}
+
+/// What Models says about Reasoning and Calls.
+enum ReasoningCopy {
+    static let footer = "Higher effort thinks longer before it writes: answers come slower and cost more."
+}
+
+enum CallsModelCopy {
+    static let subtitle = "Transcribes and sums up every call."
+    static let footer = "Calls need a Gemini model. It thinks at its level under Reasoning."
+}
+
+/// A Gemini model's level (`AppSettings.reasoningEfforts`): its tile, its name, and a menu of the levels it takes.
+private struct ReasoningRow: View {
+    var engine: EngineID
+
+    @Environment(AppSettings.self) private var settings
+
+    var body: some View {
+        let choice = ModelChoice(engine: engine)
+        SettingsRow(title: engine.modelName, systemImage: choice.symbolName,
+                    iconTint: settings.modelColors[choice].tint) {
+            HubMenuPicker(title: "Reasoning for \(engine.modelName)", options: engine.reasoningEfforts,
+                          selection: effort, label: \.title)
+        }
+    }
+
+    private var effort: Binding<ReasoningEffort> {
+        let settings = settings, engine = engine
+        return Binding(get: { settings.reasoningEffort(for: engine) ?? .medium },
+                       set: { settings.reasoningEfforts[engine] = $0 })
+    }
 }
 
 enum ModelsAnchor: Hashable {
@@ -205,7 +229,6 @@ private struct LineupRow: View {
     @State private var hovering = false
 
     private var isMain: Bool { settings.lineup.main == choice }
-    private var parakeet: EngineID { settings.parakeetEngine }
     private var index: Int { settings.lineup.order.firstIndex(of: choice) ?? 0 }
     private var isLast: Bool { index == settings.lineup.order.count - 1 }
 
@@ -215,7 +238,7 @@ private struct LineupRow: View {
                 handle
                 RadioDot(isOn: isMain)
             }
-            ModelColorButton(choice: choice, parakeet: parakeet)
+            ModelColorButton(choice: choice)
             VStack(alignment: .leading, spacing: 3) {
                 Text(choice.modelName)
                     .font(.system(size: 13, weight: .semibold))
@@ -290,9 +313,9 @@ private struct LineupRow: View {
     // MARK: Status and controls
 
     private var status: some View {
-        let summary = EngineSummary.make(choice: choice, parakeet: parakeet, localState: models.state(of: parakeet),
-                                         keyStatus: hub.keyStatus(for: choice.engine(parakeet: parakeet)),
-                                         localError: models.lastErrors[parakeet])
+        let summary = EngineSummary.make(choice: choice, localState: models.state(of: .parakeet),
+                                         keyStatus: hub.keyStatus(for: choice.engine),
+                                         localError: models.lastErrors[.parakeet])
         return HStack(spacing: 4) {
             StatusDot(color: summary.tone.color, size: 6, pulsing: summary.tone == .progress)
                 .frame(width: 12, height: 12)
@@ -321,7 +344,7 @@ private struct LineupRow: View {
             Button("Update Key", action: focusKey)
                 .buttonStyle(SecondaryButtonStyle(size: .small))
         case .failed:
-            // Only Parakeet on this Mac fails this way: the same Retry as under Where Parakeet runs.
+            // Only Parakeet on this Mac fails this way: the same Retry as under Parakeet on this Mac.
             Button("Retry") { models.download(.parakeet) }
                 .buttonStyle(SecondaryButtonStyle(size: .small))
         case .ready, .warming:
@@ -364,7 +387,6 @@ private struct LineupRow: View {
 /// model main.
 private struct ModelColorButton: View {
     var choice: ModelChoice
-    var parakeet: EngineID
 
     @Environment(AppSettings.self) private var settings
     @State private var picking = false
@@ -376,7 +398,7 @@ private struct ModelColorButton: View {
         let color = settings.modelColors[choice]
         let tile = RoundedRectangle(cornerRadius: Self.size * 0.28, style: .continuous)
         Button { picking = true } label: {
-            ModelChoiceIcon(choice: choice, parakeet: parakeet, color: color, size: Self.size)
+            ModelChoiceIcon(choice: choice, color: color, size: Self.size)
                 .overlay {
                     // Hovered or open: a ring 3 pt out says the tile is a control.
                     RoundedRectangle(cornerRadius: Self.size * 0.28 + 3, style: .continuous).ring(1.5)
@@ -393,7 +415,7 @@ private struct ModelColorButton: View {
         .accessibilityLabel("Pill color for \(choice.modelName)")
         .accessibilityValue(color.title)
         .popover(isPresented: $picking, arrowEdge: .bottom) {
-            ModelColorPopover(choice: choice, parakeet: parakeet, color: color) { picked in
+            ModelColorPopover(choice: choice, color: color) { picked in
                 settings.modelColors[choice] = picked
             }
         }
@@ -404,7 +426,6 @@ private struct ModelColorButton: View {
 /// chip, History's marks and a pill that is dictating fade to it), and the popover stays open to compare.
 struct ModelColorPopover: View {
     var choice: ModelChoice
-    var parakeet: EngineID
     var color: ModelColor
     var onPick: (ModelColor) -> Void
 
@@ -414,7 +435,7 @@ struct ModelColorPopover: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ModelColorPreview(choice: choice, parakeet: parakeet, color: color)
+            ModelColorPreview(choice: choice, color: color)
                 .frame(width: Self.contentWidth, height: 84)
             HStack(spacing: 0) {
                 Text("Pill color")
@@ -435,17 +456,14 @@ struct ModelColorPopover: View {
 /// A still listening pill with its chip, in `color`: the chip names the model the colors are for.
 private struct ModelColorPreview: View {
     var choice: ModelChoice
-    var parakeet: EngineID
     var color: ModelColor
 
     @State private var model: PillModel
 
-    init(choice: ModelChoice, parakeet: EngineID, color: ModelColor) {
+    init(choice: ModelChoice, color: ModelColor) {
         self.choice = choice
-        self.parakeet = parakeet
         self.color = color
         let model = PillModel.preview(phase: .listening, level: 0.7)
-        model.settings.parakeetEngine = parakeet
         model.sessionModel = choice
         // A preview's chip stays up.
         model.flashChip()
@@ -511,50 +529,42 @@ private struct StateCapsule: View {
     }
 }
 
-// MARK: - Where Parakeet runs
+// MARK: - Parakeet on this Mac
 
-/// Parakeet v3 on this Mac (download, use, delete) or through OpenRouter: where Parakeet runs
-/// (`AppSettings.parakeetEngine`).
+/// Parakeet v3 on this Mac: its download (or load) and how it's doing, and Delete. While a model Switch model reaches
+/// is Parakeet, it can't be deleted.
 private struct ModelRow: View {
     var engine: EngineID
-    var isSelected: Bool
-    var isPendingSwitch: Bool
-    var choose: () -> Void
-    var use: () -> Void
-    var focusKey: () -> Void
 
-    @Environment(HubContext.self) private var hub
     @Environment(ModelStore.self) private var models
-    @Environment(OpenRouterAccount.self) private var account
     @Environment(AppSettings.self) private var settings
     @Environment(\.inNativeForm) private var inNativeForm
-    @State private var hovering = false
     @State private var confirmingDelete = false
 
     private var state: LocalModelState { models.state(of: engine) }
-    private var readiness: EngineReadiness { hub.readiness(of: engine) }
-    /// A model Switch model reaches runs on Parakeet, so the selected runtime is in use.
-    private var lineupUsesParakeet: Bool { settings.lineup.cycle.contains { $0 != .gemini } }
-    /// The row's title: the place, as the section names the model.
-    private var runtimeName: String { engine.isLocal ? "On this Mac" : "Through OpenRouter" }
-    /// What the choice costs, the one thing worth saying here.
-    private var runtimeNote: String { engine.isLocal ? "Free · works offline" : "≈ $0.09 per hour of audio" }
+    /// A model Switch model reaches runs on Parakeet, so it's in use.
+    private var lineupUsesParakeet: Bool { settings.usesLocalParakeet }
+    /// Downloaded, loaded or loading: what "In use" needs.
+    private var isOnDisk: Bool {
+        switch state {
+        case .installed, .preparing, .ready: true
+        case .notInstalled, .downloading, .failed: false
+        }
+    }
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
-            RadioDot(isOn: isSelected)
-            // Parakeet either way, in Parakeet's color: the glyph and the title say where.
-            ModelChoiceIcon(choice: .parakeet, parakeet: engine, color: settings.modelColors[.parakeet], size: 36)
+            ModelChoiceIcon(choice: .parakeet, color: settings.modelColors[.parakeet], size: 36)
             VStack(alignment: .leading, spacing: 3) {
-                Text(runtimeName)
+                Text(engine.displayName)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.ink)
                     .lineLimit(1)
-                Text(runtimeNote)
+                Text("Free · works offline")
                     .typeface(.callout)
                     .foregroundStyle(.inkSecondary)
                     .lineLimit(1)
-                status
+                localStatus
             }
             Spacer(minLength: 8)
             actions
@@ -563,24 +573,10 @@ private struct ModelRow: View {
         .padding(.horizontal, inNativeForm ? 0 : Theme.Spacing.md)
         .padding(.vertical, inNativeForm ? 4 : 12)
         .frame(minHeight: inNativeForm ? 0 : 76)
-        .background { RowHighlight(isSelected: isSelected, isHovering: hovering) }
-        .contentShape(Rectangle())
-        .onTapGesture(perform: choose)
-        .onHover { hovering = $0 }
-        .animation(Theme.Motion.hover, value: hovering)
         .accessibilityElement(children: .contain)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     // MARK: Status
-
-    @ViewBuilder private var status: some View {
-        if engine.isLocal {
-            localStatus
-        } else {
-            ModelStatusText(keyStatus: account.status)
-        }
-    }
 
     @ViewBuilder private var localStatus: some View {
         switch state {
@@ -589,30 +585,24 @@ private struct ModelRow: View {
                 ProgressBar(fraction: progress.fraction, height: 4)
                     .frame(width: 120)
             } caption: {
-                HStack(spacing: 8) {
-                    Text(downloadLabel(progress))
-                        .typeface(.callout)
-                        .monospacedDigit()
-                        .foregroundStyle(.inkSecondary)
-                        .contentTransition(.numericText())
-                        .lineLimit(1)
-                    pendingNote
-                }
+                Text(downloadLabel(progress))
+                    .typeface(.callout)
+                    .monospacedDigit()
+                    .foregroundStyle(.inkSecondary)
+                    .contentTransition(.numericText())
+                    .lineLimit(1)
             }
         case .preparing(let since):
             BarThenCaption {
                 ShimmerBar(height: 4).frame(width: 100)
             } caption: {
-                HStack(spacing: 8) {
-                    TimelineView(.periodic(from: since, by: 1)) { context in
-                        let elapsed = context.date.timeIntervalSince(since)
-                        Text("Loading model into memory… up to a minute the first time" + (elapsed >= 20 ? " · \(Fmt.duration(elapsed))" : ""))
-                            .typeface(.callout)
-                            .monospacedDigit()
-                            .foregroundStyle(.inkSecondary)
-                            .lineLimit(1)
-                    }
-                    pendingNote
+                TimelineView(.periodic(from: since, by: 1)) { context in
+                    let elapsed = context.date.timeIntervalSince(since)
+                    Text("Loading model into memory… up to a minute the first time" + (elapsed >= 20 ? " · \(Fmt.duration(elapsed))" : ""))
+                        .typeface(.callout)
+                        .monospacedDigit()
+                        .foregroundStyle(.inkSecondary)
+                        .lineLimit(1)
                 }
             }
         case .failed(let message):
@@ -627,19 +617,7 @@ private struct ModelRow: View {
                     .help(message)
             }
         case .notInstalled, .installed, .ready:
-            HStack(spacing: 6) {
-                ModelStatusText(state: state, engine: engine)
-                pendingNote
-            }
-        }
-    }
-
-    @ViewBuilder private var pendingNote: some View {
-        if isPendingSwitch {
-            Text("· Switches when ready")
-                .typeface(.callout)
-                .foregroundStyle(.accent)
-                .lineLimit(1)
+            ModelStatusText(state: state, engine: engine)
         }
     }
 
@@ -655,65 +633,37 @@ private struct ModelRow: View {
 
     @ViewBuilder private var actions: some View {
         HStack(spacing: 6) {
-            if isSelected && readiness.isUsable && lineupUsesParakeet {
+            if lineupUsesParakeet, isOnDisk {
                 StateCapsule(title: "In use")
             }
-            if engine.isLocal {
-                localActions
-            } else {
-                cloudActions
-            }
-        }
-    }
-
-    @ViewBuilder private var localActions: some View {
-        switch state {
-        case .notInstalled:
-            Button {
-                models.download(engine)
-            } label: {
-                Label("Download", systemImage: "arrow.down")
-            }
-            .buttonStyle(SecondaryButtonStyle(size: .small))
-        case .failed:
-            Button("Retry") { models.download(engine) }
-                .buttonStyle(SecondaryButtonStyle(size: .small))
-            if case .modelLoadFailed? = models.lastErrors[engine] {
-                // The files downloaded but don't load: Retry loads the same files again, this replaces them.
-                Button("Download Again") {
-                    let models = models
-                    Task { await models.reinstall(engine) }
+            switch state {
+            case .notInstalled:
+                Button {
+                    models.download(engine)
+                } label: {
+                    Label("Download", systemImage: "arrow.down")
                 }
                 .buttonStyle(SecondaryButtonStyle(size: .small))
-                .help("Delete \(engine.displayName) and download it again")
-            } else {
-                // A partial download or a half-removed install can go even while selected: nothing is loaded.
-                deleteButton(isEnabled: true, freedBytes: nil)
-            }
-        case .downloading:
-            Button("Cancel") { models.cancelDownload(engine) }
-                .buttonStyle(SecondaryButtonStyle(size: .small))
-        case .installed, .ready, .preparing:
-            if !isSelected {
-                Button("Use", action: use)
+            case .failed:
+                Button("Retry") { models.download(engine) }
                     .buttonStyle(SecondaryButtonStyle(size: .small))
-            }
-            deleteButton(isEnabled: !(isSelected && lineupUsesParakeet), freedBytes: engine.approxDownloadBytes)
-        }
-    }
-
-    @ViewBuilder private var cloudActions: some View {
-        switch readiness {
-        case .needsKey:
-            Button("Add Key", action: focusKey)
-                .buttonStyle(SecondaryButtonStyle(size: .small))
-        case .keyProblem:
-            Button("Update Key", action: focusKey)
-                .buttonStyle(SecondaryButtonStyle(size: .small))
-        case .ready, .warming, .needsDownload, .failed:
-            if !isSelected {
-                Button("Use", action: use)
+                if case .modelLoadFailed? = models.lastErrors[engine] {
+                    // The files downloaded but don't load: Retry loads the same files again, this replaces them.
+                    Button("Download Again") {
+                        let models = models
+                        Task { await models.reinstall(engine) }
+                    }
                     .buttonStyle(SecondaryButtonStyle(size: .small))
+                    .help("Delete \(engine.displayName) and download it again")
+                } else {
+                    // A partial download or a half-removed install can go even while in use: nothing is loaded.
+                    deleteButton(isEnabled: true, freedBytes: nil)
+                }
+            case .downloading:
+                Button("Cancel") { models.cancelDownload(engine) }
+                    .buttonStyle(SecondaryButtonStyle(size: .small))
+            case .installed, .ready, .preparing:
+                deleteButton(isEnabled: !lineupUsesParakeet, freedBytes: engine.approxDownloadBytes)
             }
         }
     }
@@ -726,7 +676,8 @@ private struct ModelRow: View {
         }
         .buttonStyle(IconButtonStyle(size: 26))
         .disabled(!isEnabled)
-        .help(isEnabled ? "Delete \(engine.displayName)" : "Switch Parakeet to OpenRouter to delete it.")
+        .help(isEnabled ? "Delete \(engine.displayName)"
+              : "Make a Gemini model the main model and switch Parakeet off in Your models to delete it.")
         .accessibilityLabel("Delete \(engine.displayName)")
         .popover(isPresented: $confirmingDelete, arrowEdge: .bottom) {
             DeleteModelConfirmation(engine: engine, freedBytes: freedBytes) {

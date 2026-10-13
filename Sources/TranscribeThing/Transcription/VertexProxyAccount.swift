@@ -23,7 +23,7 @@ enum VertexProxyStatus: Equatable, Sendable {
 ///
 /// With a base URL and a key and "Use for Gemini" on (`routesGemini`), every Gemini request goes to the endpoint, and
 /// none to OpenRouter: a failure there is the endpoint's, never retried on OpenRouter (that would spend OpenRouter
-/// credit). Cloud Parakeet always goes through OpenRouter.
+/// credit).
 @MainActor @Observable
 final class VertexProxyAccount {
     @ObservationIgnored private let keyStore: KeyFileStore
@@ -320,8 +320,8 @@ extension KeyStatus {
 enum CloudRoute {
     /// nil for a local engine.
     static func provider(for engine: EngineID, proxy: VertexProxyAccount?) -> CloudProvider? {
-        guard let api = engine.cloudAPI else { return nil }
-        return api == .chatCompletions && proxy?.routesGemini == true ? .vertexProxy : .openRouter
+        guard engine.isCloud else { return nil }
+        return engine.isGemini && proxy?.routesGemini == true ? .vertexProxy : .openRouter
     }
 
     /// The status of the key `engine`'s requests go with (OpenRouter's for a local engine, which needs none).

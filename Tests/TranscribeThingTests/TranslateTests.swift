@@ -33,7 +33,9 @@ import Testing
 
     @Test func translationVersionsRoundTrip() throws {
         for kind: TranscriptVersionKind in [.translation(polished: false), .translation(polished: true),
-                                            .selectionTranslation(.geminiFlash)] {
+                                            .translation(polished: false, by: .geminiArgon),
+                                            .translation(polished: true, by: .geminiArgon),
+                                            .polish(by: .geminiArgon), .selectionTranslation(.geminiFlash)] {
             #expect(TranscriptVersionKind(rawValue: kind.rawValue) == kind)
             let data = try JSONEncoder().encode(kind)
             #expect(try JSONDecoder().decode(TranscriptVersionKind.self, from: data) == kind)
@@ -44,13 +46,30 @@ import Testing
         #expect(!TranscriptVersionKind.translation(polished: false).answersInMessageTags)
         #expect(TranscriptVersionKind.translation(polished: true).displayName
                 == "Polished and translated by Gemini 3.8 Flash")
+        // Flash's keep the raw values older builds wrote; Argon's carry the model.
+        #expect(TranscriptVersionKind.translation(polished: true).rawValue == "translation:polished")
+        #expect(TranscriptVersionKind.translation(polished: false, by: .geminiArgon).rawValue == "translation:geminiArgon")
+        #expect(TranscriptVersionKind.translation(polished: true, by: .geminiArgon).rawValue
+                == "translation:polished:geminiArgon")
+        #expect(TranscriptVersionKind.polish(by: .geminiArgon).rawValue == "polish:geminiArgon")
+        #expect(TranscriptVersionKind(rawValue: "polish:someFutureModel") == nil)
+        #expect(TranscriptVersionKind(rawValue: "translation:junk:geminiArgon") == nil)
+        #expect(TranscriptVersionKind.translation(polished: false, by: .geminiArgon).displayName
+                == "Translated by Gemini 4 Argon")
+        #expect(TranscriptVersionKind.polish(by: .geminiArgon).progressTitle == "Polishing with Gemini 4 Argon…")
+        #expect(TranscriptVersionKind.polish(by: .geminiArgon).engine == .geminiArgon)
+        #expect(TranscriptVersionKind.translation(polished: true, by: .geminiArgon).answersInMessageTags)
     }
 
     @Test func whatGeminiWritesFollowsBothKeys() {
         #expect(DictationController.rewriteKind(polishes: false, translates: false) == nil)
-        #expect(DictationController.rewriteKind(polishes: true, translates: false) == .polish)
+        #expect(DictationController.rewriteKind(polishes: true, translates: false) == .polish())
         #expect(DictationController.rewriteKind(polishes: false, translates: true) == .translation(polished: false))
         #expect(DictationController.rewriteKind(polishes: true, translates: true) == .translation(polished: true))
+        #expect(DictationController.rewriteKind(polishes: true, translates: false, by: .geminiArgon)
+                == .polish(by: .geminiArgon))
+        #expect(DictationController.rewriteKind(polishes: true, translates: true, by: .geminiArgon)
+                == .translation(polished: true, by: .geminiArgon))
     }
 
     @Test func fnTIsTheDefault() {

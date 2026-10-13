@@ -452,8 +452,9 @@ struct CountBadge: View {
     }
 }
 
-/// The engine mark on history rows: P, F, Pro, in the model's color (`ModelColor.markTint`, as the pill wears it).
-/// Cloud Parakeet shares the local letter and color, so it carries a small cloud; a clean-up, a wand after the letter.
+/// The engine mark on history rows: P, F, A, Pro, in the model's color (`ModelColor.markTint`, as the pill wears it).
+/// The retired cloud Parakeet shares the local letter and color, so it carries a small cloud; a clean-up, a wand after
+/// the letter.
 /// A selection's polish in History: the wand (Translate's glyph for its translation), in the color of the model that
 /// wrote it.
 struct SelectionGlyph: View {
@@ -493,7 +494,7 @@ struct EngineGlyph: View {
     /// The models' colors (`AppSettings.modelColors`).
     var colors: ModelColors = .default
 
-    /// The color of the model that made it: the retired Gemini 3.1 Pro wears Gemini's, cloud Parakeet and an old
+    /// The color of the model that made it: the retired Gemini 3.1 Pro wears Flash's, the retired cloud Parakeet and an old
     /// clean-up of Parakeet's text Parakeet's.
     var color: ModelColor {
         colors[ModelChoice(engine: engine)]
@@ -502,7 +503,7 @@ struct EngineGlyph: View {
     var body: some View {
         let tint = color.markTint
         HStack(spacing: 1.5) {
-            if engine.cloudAPI == .transcriptions {
+            if engine == .parakeetCloud {
                 Image(systemName: "cloud.fill")
                     .font(.system(size: 7, weight: .bold))
             }

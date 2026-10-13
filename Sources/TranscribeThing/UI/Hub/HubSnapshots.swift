@@ -18,8 +18,11 @@ enum HubSnapshots {
             hub("hub-models-compact", .models, width: 820, height: 560) { c in
                 c.models = .preview(states: [.parakeet: .downloading(Samples.downloading)])
             },
-            hub("hub-models-compact-cloud", .models, width: 820, height: 1100) { c in
-                c.settings.parakeetEngine = .parakeetCloud
+            // The narrowest window with Argon switched on and thinking at High: the rows and pickers keep their ends.
+            hub("hub-models-compact-argon", .models, width: 820, height: 1400) { c in
+                c.settings.lineup.setSwitchable(.argon, true)
+                c.settings.reasoningEfforts[.geminiArgon] = .high
+                c.settings.callEngine = .geminiArgon
             },
             hub("hub-home-search", .home) { c in
                 c.initialSearch = "zzz"
@@ -33,7 +36,7 @@ enum HubSnapshots {
             hub("hub-home-transcribing", .home, height: 900) { c in
                 let entries = c.history.entries
                 var running: [UUID: TranscriptVersionKind] = [:]
-                if let first = entries.first { running[first.id] = .polish }
+                if let first = entries.first { running[first.id] = .polish(by: .geminiArgon) }
                 if entries.count > 1 { running[entries[1].id] = .transcription(.geminiFlash) }
                 if let failed = entries.first(where: { $0.status == .failed }) { running[failed.id] = .transcription(.parakeet) }
                 c.previewRunning = running
@@ -55,8 +58,8 @@ enum HubSnapshots {
                 let entries = c.history.entries
                 guard entries.count > 2 else { return }
                 c.previewFailures = [
-                    entries[0].id: Samples.homeFailure(.polish, .openRouterProviderUnavailable("")),
-                    entries[2].id: Samples.homeFailure(.transcription(.parakeetCloud), .timeout(.parakeetCloud)),
+                    entries[0].id: Samples.homeFailure(.polish(), .openRouterProviderUnavailable("")),
+                    entries[2].id: Samples.homeFailure(.transcription(.geminiArgon), .timeout(.geminiArgon)),
                 ]
                 var running = [entries[1].id: TranscriptVersionKind.transcription(.geminiFlash)]
                 if let failed = entries.first(where: { $0.status == .failed }) { running[failed.id] = .transcription(.parakeet) }
@@ -165,11 +168,15 @@ enum HubSnapshots {
                 c.models = .preview(states: [.parakeet: .failed("Couldn’t load the model. Retry, or download it again.")],
                                     lastErrors: [.parakeet: .modelLoadFailed(.parakeet, "Corrupt weights")])
             },
-            hub("hub-models-cloud-stt", .models, height: 1100) { c in
-                c.settings.parakeetEngine = .parakeetCloud
+            // Gemini 4 Argon switched on, thinking at High, and taking calls; Flash at Low.
+            hub("hub-models-argon", .models, height: 1400) { c in
+                c.settings.lineup.setSwitchable(.argon, true)
+                c.settings.reasoningEfforts[.geminiArgon] = .high
+                c.settings.reasoningEfforts[.geminiFlash] = .low
+                c.settings.callEngine = .geminiArgon
             },
             hub("hub-models-key-limit", .models, height: 1100) { c in
-                c.settings.parakeetEngine = .parakeetCloud
+                c.settings.lineup.main = .gemini
                 c.account = .preview(status: .noCredit(KeyInfo(label: "transcribe-thing", limit: 5, limitRemaining: 0, usage: 5)))
             },
             hub("hub-models-key-invalid", .models, height: 1100) { c in
@@ -218,10 +225,9 @@ enum HubSnapshots {
             hub("hub-models-main-gemini", .models, height: 1100) { c in
                 c.settings.lineup.main = .gemini
             },
-            // Gemini as the main model, with Parakeet through OpenRouter.
-            hub("hub-models-main-gemini-cloud", .models, height: 1100) { c in
-                c.settings.parakeetEngine = .parakeetCloud
-                c.settings.lineup.main = .gemini
+            // Gemini 4 Argon as the main model: Parakeet and Flash get their switches.
+            hub("hub-models-main-argon", .models, height: 1100) { c in
+                c.settings.lineup.main = .argon
             },
             // Dragged into Gemini, Parakeet: the line follows the new order from the main model.
             hub("hub-models-reordered", .models, height: 1100) { c in
@@ -231,7 +237,7 @@ enum HubSnapshots {
             hub("hub-models-only-main", .models, height: 1100) { c in
                 c.settings.lineup.setSwitchable(.gemini, false)
             },
-            // Colors picked in Models: every tile wears its model's, the Where Parakeet runs tiles and the sidebar chip
+            // Colors picked in Models: every tile wears its model's, the Parakeet on this Mac tile and the sidebar chip
             // Parakeet's.
             hub("hub-models-colors", .models, height: 1100, configure: Samples.pickColors),
             // History's marks in the picked colors.
@@ -241,7 +247,7 @@ enum HubSnapshots {
             SnapshotEntry("hub-model-color-picker", width: 3 * ModelColorPopover.width + 4 * 24, height: 230) { _ in
                 HStack(alignment: .top, spacing: 24) {
                     ForEach(ModelChoice.allCases) { choice in
-                        ModelColorPopover(choice: choice, parakeet: .parakeet, color: choice.defaultColor) { _ in }
+                        ModelColorPopover(choice: choice, color: choice.defaultColor) { _ in }
                             .background(Color.bgElevated, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                             .overlay {
                                 RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -301,7 +307,7 @@ enum HubSnapshots {
             hub("hub-dictionary-empty", .dictionary, height: 560),
             // Pasting set per model: quick Parakeet searches go in bare, Gemini gets a space after.
             hub("hub-general", .general, height: 1080) { c in
-                c.settings.modelsAddingSpace = [.gemini]
+                c.settings.modelsAddingSpace = [.gemini, .argon]
                 c.settings.modelsRemovingFinalPeriod = [.parakeet]
                 c.settings.modesRemovingFinalPeriod = [.pushToTalk]
             },
@@ -314,7 +320,7 @@ enum HubSnapshots {
             },
             // The narrowest window: Pasting's chips still fit under each rule.
             hub("hub-general-pasting-compact", .general, width: 820, height: 1080) { c in
-                c.settings.modelsAddingSpace = [.gemini]
+                c.settings.modelsAddingSpace = [.gemini, .argon]
                 c.settings.modelsRemovingFinalPeriod = [.parakeet]
                 c.settings.modesRemovingFinalPeriod = [.pushToTalk]
             },
@@ -465,7 +471,7 @@ enum HubSnapshots {
                                                  keyMissing ? .openRouterMissingKey : .timeout(.geminiFlash))
             }
             if entries.count > 1 {
-                failures[entries[1].id] = homeFailure(.polish,
+                failures[entries[1].id] = homeFailure(.polish(),
                                                       keyMissing ? .openRouterMissingKey : .openRouterProviderUnavailable(""))
             }
             if entries.count > 2 { failures[entries[2].id] = .recordingGone(.transcription(.parakeetCloud)) }

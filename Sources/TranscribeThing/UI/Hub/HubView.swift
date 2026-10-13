@@ -125,12 +125,9 @@ final class HubContext: Observable {
                            localError: models.lastErrors[engine])
     }
 
-    /// A model's readiness, with Parakeet where Settings runs it (`AppSettings.parakeetEngine`).
+    /// A model's readiness: its engine's.
     func readiness(of choice: ModelChoice) -> EngineReadiness {
-        let parakeet = settings.parakeetEngine
-        return EngineReadiness.of(choice, parakeet: parakeet, localState: models.state(of: parakeet),
-                                  keyStatus: keyStatus(for: choice.engine(parakeet: parakeet)),
-                                  localError: models.lastErrors[parakeet])
+        readiness(of: choice.engine)
     }
 
     /// The status of the key `engine`'s requests go with: the custom endpoint's for Gemini while it routes Gemini,

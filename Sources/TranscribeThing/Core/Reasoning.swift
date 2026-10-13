@@ -2,7 +2,8 @@ import Foundation
 
 /// How long a model thinks before it answers: OpenRouter's `reasoning.effort`. Gemini gets it as `thinkingLevel`
 /// one to one (minimal → minimal … high → high). Raw values go on the wire and are persisted (a history version
-/// records the level it was asked for). Each model thinks at one fixed level (`EngineID.reasoningEffort`); `off`
+/// records the level it was asked for). Each Gemini model thinks at the level picked for it in Models
+/// (`ReasoningEfforts`, one of `EngineID.reasoningEfforts`); `off`
 /// ("none") is for a model that can skip thinking (GPT-6 Luna, whose clean-ups History still keeps). Declaration order
 /// is from least to most thinking.
 enum ReasoningEffort: String, Codable, CaseIterable, Sendable {
@@ -22,14 +23,62 @@ enum ReasoningEffort: String, Codable, CaseIterable, Sendable {
 }
 
 extension EngineID {
-    /// The level the model thinks at, fixed: Gemini 3.8 Flash at medium (it can't turn thinking off; at high it
-    /// thought for about 18k tokens, 76 s, on a 1:48 recording). nil for models that don't reason, and for a retired
-    /// one, which never runs.
-    var reasoningEffort: ReasoningEffort? {
+    /// The levels the model can be asked to think at (Models → Reasoning): Low, Medium and High for Gemini. Neither
+    /// Gemini model takes Minimal (the user's endpoint sends it as Low) nor None (they can't turn thinking off), so
+    /// neither is offered. Empty for models that don't reason, and for a retired one, which never runs.
+    var reasoningEfforts: [ReasoningEffort] {
         switch self {
-        case .geminiFlash: .medium
-        case .parakeet, .parakeetCloud, .geminiPro: nil
+        case .geminiFlash, .geminiArgon: [.low, .medium, .high]
+        case .parakeet, .parakeetCloud, .geminiPro: []
         }
+    }
+
+    /// The level the model thinks at until another is picked: medium for both Gemini models (Gemini 3.8 Flash at high
+    /// thought for about 18k tokens, 76 s, on a 1:48 recording). nil for models that don't reason.
+    var defaultReasoningEffort: ReasoningEffort? {
+        reasoningEfforts.isEmpty ? nil : .medium
+    }
+}
+
+/// The level each Gemini model thinks at, picked in Models (`AppSettings.reasoningEfforts`). Every request to the
+/// model goes at its level: dictation, Polish, Translate, file imports, History's versions, calls. One JSON object
+/// under `SettingsKey.geminiReasoningEfforts`, keyed by `EngineID` raw value: {"geminiArgon":"high","geminiFlash":"medium"}.
+struct ReasoningEfforts: Equatable, Sendable {
+    private var levels: [EngineID: ReasoningEffort] = [:]
+
+    /// Every model at its `defaultReasoningEffort`.
+    static let `default` = ReasoningEfforts()
+
+    /// `engine`'s level: the one picked, else its default. nil for a model that doesn't reason. Setting a level the
+    /// model doesn't offer (`EngineID.reasoningEfforts`) does nothing.
+    subscript(_ engine: EngineID) -> ReasoningEffort? {
+        get { levels[engine] ?? engine.defaultReasoningEffort }
+        set {
+            guard let newValue, engine.reasoningEfforts.contains(newValue) else { return }
+            levels[engine] = newValue
+        }
+    }
+}
+
+extension ReasoningEfforts: Codable {
+    /// Lenient, as a stored value outlives builds: a level the model doesn't offer (Minimal, a newer build's) or a
+    /// value of the wrong kind leaves that model's default; an unknown model is ignored.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let raw = (try? container.decode([String: String].self)) ?? [:]
+        self.init()
+        for engine in EngineID.offered {
+            self[engine] = raw[engine.rawValue].flatMap(ReasoningEffort.init(rawValue:))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        var raw: [String: String] = [:]
+        for engine in EngineID.offered {
+            if let level = self[engine] { raw[engine.rawValue] = level.rawValue }
+        }
+        try container.encode(raw)
     }
 }
 

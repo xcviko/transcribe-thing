@@ -73,9 +73,9 @@ import Testing
         context.history = .preview(entries: empty + entries)
         context.previewRunning = [entries[0].id: .transcription(.geminiFlash), empty[0].id: .transcription(.geminiFlash)]
         context.previewFailures = [
-            entries[1].id: HomeFailure(kind: .polish, reason: "It took too long."),
+            entries[1].id: HomeFailure(kind: .polish(), reason: "It took too long."),
             empty[1].id: HomeFailure(kind: .transcription(.geminiFlash), reason: "It took too long."),
-            entries[2].id: .recordingGone(.transcription(.parakeetCloud)),
+            entries[2].id: .recordingGone(.transcription(.geminiArgon)),
             failed.id: .recordingGone(.transcription(.parakeet)),
         ]
         env.windows.hubSection = .home

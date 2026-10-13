@@ -21,10 +21,14 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
 // MARK: - Levels
 
 @Suite struct ReasoningEffortTests {
-    @Test func eachModelThinksAtOneFixedLevel() {
-        #expect(EngineID.geminiFlash.reasoningEffort == .medium, "3.8 Flash can't turn thinking off")
-        #expect(EngineID.parakeet.reasoningEffort == nil && EngineID.parakeetCloud.reasoningEffort == nil)
-        #expect(EngineID.geminiPro.reasoningEffort == nil, "a retired model never runs")
+    @Test func eachGeminiOffersLowMediumAndHighAndStartsAtMedium() {
+        for engine in EngineID.geminiEngines {
+            #expect(engine.reasoningEfforts == [.low, .medium, .high], "no Minimal, no None")
+            #expect(engine.defaultReasoningEffort == .medium)
+        }
+        for engine in [EngineID.parakeet, .parakeetCloud, .geminiPro] {
+            #expect(engine.reasoningEfforts.isEmpty && engine.defaultReasoningEffort == nil, "\(engine)")
+        }
         #expect(ReasoningEffort.allCases.map(\.rawValue) == ["none", "minimal", "low", "medium", "high"])
         #expect(ReasoningEffort.off.title == "None" && ReasoningEffort.medium.title == "Medium")
     }
@@ -414,7 +418,7 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         }
         h.controller.insertOverride = { _ in .pasted }
         let r = H.recording()
-        h.controller.enqueue(r, engine: .parakeetCloud)
+        h.controller.enqueue(r, engine: .geminiArgon)
         try await waitUntil { h.history.entry(id: r.id)?.provider != nil }
         let meta = try #require(h.history.entry(id: r.id)?.currentVersion?.metadata)
         #expect(meta.provider == "Together" && meta.latency == 0.4 && meta.generationTime == 0.35)

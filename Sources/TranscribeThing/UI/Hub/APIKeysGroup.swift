@@ -3,7 +3,7 @@ import SwiftUI
 
 /// Models' "API keys": one group (a section of the page's form) with the OpenRouter key, the user's own
 /// OpenAI-compatible endpoint (base URL, API key, status) and "Use for Gemini", which sends Gemini through the
-/// endpoint. Cloud Parakeet always uses OpenRouter.
+/// endpoint.
 struct APIKeysGroup: View {
     /// Incremented by the page to scroll to the OpenRouter key and focus its field ("Add key", "Update key").
     var keyFocusRequest: Int
@@ -23,8 +23,8 @@ struct APIKeysGroup: View {
         }
     }
 
-    static let footer = "Gemini goes through your endpoint when it’s set up and Use for Gemini is on. "
-        + "\(EngineID.parakeetCloud.displayName) always uses OpenRouter."
+    static let footer = "Gemini goes through your endpoint when it’s set up and Use for Gemini is on, "
+        + "and through OpenRouter otherwise."
 }
 
 /// The OpenRouter key: masked key with Replace/Remove, or a field to add one, and its live status.
@@ -76,8 +76,8 @@ struct OpenRouterKeyRow: View {
                     .foregroundStyle(.ink)
                 // Who pays, and for what: worth saying every time.
                 Text(proxy.routesGemini
-                     ? "Cloud Parakeet runs on it; Gemini goes through your endpoint. You pay OpenRouter per use."
-                     : "Gemini and cloud Parakeet run on it. You pay OpenRouter per use.")
+                     ? "Not in use while Gemini goes through your endpoint."
+                     : "Gemini runs on it. You pay OpenRouter per use.")
                     .typeface(.callout)
                     .foregroundStyle(.inkSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -173,8 +173,8 @@ struct OpenRouterKeyRow: View {
         switch account.status {
         case .missing:
             status("key.slash", .inkTertiary, proxy.routesGemini
-                   ? "No key yet. \(EngineID.parakeetCloud.displayName) needs one."
-                   : "No key yet. The cloud models need one.")
+                   ? "No key yet. Your endpoint takes Gemini’s requests."
+                   : "No key yet. Gemini needs one.")
         case .checking:
             HStack(spacing: 7) {
                 ProgressView().controlSize(.mini)

@@ -865,9 +865,12 @@ final class FakeRecorder: DictationRecorder {
         #expect(TranscriptVersionKind.transcription(.parakeetCloud).dictationModel == .parakeet)
         #expect(TranscriptVersionKind.transcription(.geminiFlash).dictationModel == .gemini)
         #expect(TranscriptVersionKind.transcription(.geminiPro).dictationModel == .gemini)
+        #expect(TranscriptVersionKind.transcription(.geminiArgon).dictationModel == .argon)
+        #expect(TranscriptVersionKind.polish(by: .geminiArgon).dictationModel == .argon)
+        #expect(TranscriptVersionKind.translation(polished: true, by: .geminiArgon).dictationModel == .argon)
         #expect(TranscriptVersionKind.cleanup(of: .parakeet, by: .gpt6Luna).dictationModel == .parakeet)
         #expect(TranscriptVersionKind.cleanup(of: .parakeetCloud, by: .geminiFlashLite).dictationModel == .parakeet)
-        #expect(TranscriptVersionKind.polish.dictationModel == .gemini)
+        #expect(TranscriptVersionKind.polish().dictationModel == .gemini)
         for model in PolishSelectionModel.allCases {
             #expect(TranscriptVersionKind.selection(model).dictationModel == nil)
         }
@@ -1156,8 +1159,8 @@ final class FakeRecorder: DictationRecorder {
         #expect(h.controller.machine.capture == .idle)
         let notice = h.toasts.notices.first
         #expect(notice?.dedupeKey == "error.modelNotDownloaded.parakeet")
-        #expect(notice?.actions.map(\.kind) == [.download(.parakeet), .selectEngine(.parakeetCloud)],
-                "the same model through OpenRouter, the key works")
+        #expect(notice?.actions.map(\.kind) == [.download(.parakeet), .openHub(.models)],
+                "Gemini is never offered in Parakeet's place")
         #expect(h.pill.visiblePhase == .error)
 
         let keyless = Self.make(models: [.parakeet: .notInstalled])
@@ -1165,15 +1168,10 @@ final class FakeRecorder: DictationRecorder {
         #expect(keyless.toasts.notices.first?.actions.map(\.kind) == [.download(.parakeet), .openHub(.models)])
     }
 
-    @Test func fallbacksPairParakeetOnThisMacWithParakeetInTheCloud() {
-        for parakeet in EngineID.parakeetRuntimes {
-            #expect(DictationController.fallbackCandidates(for: .parakeet, parakeet: parakeet) == [.parakeetCloud])
-            #expect(DictationController.fallbackCandidates(for: .parakeetCloud, parakeet: parakeet) == [.parakeet])
-        }
-        #expect(DictationController.fallbackCandidates(for: .geminiFlash, parakeet: .parakeet) == [.parakeet, .parakeetCloud],
-                "Gemini falls back to Parakeet where it runs first")
-        #expect(DictationController.fallbackCandidates(for: .geminiFlash, parakeet: .parakeetCloud)
-                == [.parakeetCloud, .parakeet])
+    @Test func geminiFallsBackToParakeetOnThisMacAndParakeetToNothing() {
+        #expect(DictationController.fallbackCandidates(for: .parakeet) == [])
+        #expect(DictationController.fallbackCandidates(for: .geminiFlash) == [.parakeet])
+        #expect(DictationController.fallbackCandidates(for: .geminiArgon) == [.parakeet])
     }
 
     /// A failed dictation's Retry is the same model, whatever else could run: another one is the user's call, from
@@ -1203,7 +1201,7 @@ final class FakeRecorder: DictationRecorder {
         }
         h.controller.insertOverride = { _ in Issue.record("canceled, never pasted"); return .pasted }
         h.controller.enqueue(Self.recording(), engine: .geminiFlash)
-        h.controller.enqueue(Self.recording(), engine: .parakeetCloud)
+        h.controller.enqueue(Self.recording(), engine: .geminiArgon)
         try await Task.sleep(for: .milliseconds(300))
         #expect(h.toasts.notices.isEmpty)
         h.controller.handle(.cancel)
@@ -1211,9 +1209,9 @@ final class FakeRecorder: DictationRecorder {
         #expect(h.controller.machine.activeJobs == 0)
     }
 
-    /// A dictation waiting for Parakeet on this Mac to download says so, and "Use … Instead" runs it on the model
-    /// that can take it now.
-    @Test func aDictationWaitingForItsDownloadSaysSoAndOffersAnother() async throws {
+    /// A dictation waiting for Parakeet on this Mac to download says so. Nothing else runs Parakeet, and Gemini is
+    /// never offered in its place: no "Use … Instead".
+    @Test func aDictationWaitingForItsDownloadSaysSo() async throws {
         let h = Self.make(models: [.parakeet: .downloading(DownloadProgress(fraction: 0.42))],
                           keyStatus: .valid(KeyInfo()))
         h.controller.waitNoticeDelayOverride = 0.05
@@ -1230,14 +1228,9 @@ final class FakeRecorder: DictationRecorder {
         try await waitUntil { h.toasts.notices.contains { $0.dedupeKey == "slow.\(r.id)" } }
         let wait = try #require(h.toasts.notices.first { $0.dedupeKey == "slow.\(r.id)" })
         #expect(wait.title == "Still downloading Parakeet v3 · 42%")
-        let use = try #require(wait.actions.first)
-        #expect(use.title == "Use Parakeet v3 · Cloud Instead")
-        h.controller.perform(use, from: wait)
-        try await waitUntil { h.controller.machine.activeJobs == 0 && !pasted.isEmpty }
-        #expect(runs == [.parakeet, .parakeetCloud])
-        #expect(pasted == ["by parakeetCloud"])
-        #expect(h.history.entry(id: r.id)?.engine == .parakeetCloud)
-        #expect(!h.toasts.notices.contains { $0.dedupeKey == "slow.\(r.id)" })
+        #expect(!wait.actions.contains { $0.title.hasPrefix("Use ") })
+        #expect(runs == [.parakeet] && pasted.isEmpty)
+        h.controller.handle(.cancel)
     }
 
     @Test func refusalWhileArmingStaysSilentForFnCombos() {
@@ -1869,7 +1862,7 @@ final class FakeRecorder: DictationRecorder {
         let h = harness()
         let gate = Gate()
         hold(h, gate)
-        for engine in [EngineID.parakeet, .parakeetCloud] {
+        for engine in [EngineID.parakeet] {
             let r = H.recording()
             h.controller.enqueue(r, engine: engine)
             h.controller.streamed(ChatStreamProgress(reasoningCharacters: 800, outputCharacters: 80), for: r.id)
@@ -2041,16 +2034,17 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
         }
         env.settings.lineup.main = .gemini
         #expect(try status() == "Gemini 3.8 Flash · Ready")
-        env.settings.parakeetEngine = .parakeetCloud
-        env.settings.lineup.main = .parakeet
-        #expect(try status() == "Parakeet v3 · Cloud · Ready")
+        env.settings.lineup.main = .argon
+        #expect(try status() == "Gemini 4 Argon · Ready")
         let keyless = OpenRouterAccount.preview(status: .missing)
-        #expect(MenuBuilder.status(of: .gemini, parakeet: .parakeet, models: env.models, account: keyless).text
+        #expect(MenuBuilder.status(of: .gemini, models: env.models, account: keyless).text
             == "Needs key")
-        #expect(MenuBuilder.status(of: .parakeet, parakeet: .parakeetCloud, models: env.models, account: keyless).text
+        #expect(MenuBuilder.status(of: .argon, models: env.models, account: keyless).text
             == "Needs key")
+        #expect(MenuBuilder.status(of: .parakeet, models: env.models, account: keyless).text
+            == "Ready", "Parakeet needs no key")
         let bare = ModelStore.preview(states: [.parakeet: .notInstalled])
-        #expect(MenuBuilder.status(of: .parakeet, parakeet: .parakeet, models: bare, account: keyless).text
+        #expect(MenuBuilder.status(of: .parakeet, models: bare, account: keyless).text
             == "Not downloaded")
     }
 

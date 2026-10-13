@@ -6,9 +6,9 @@ import Foundation
 /// Headless engine checks, dispatched by TranscribeThingMain before the app starts:
 ///
 ///     transcribe-thing --transcribe <audio file>
-///            --engine parakeet|parakeetCloud|geminiFlash
+///            --engine parakeet|geminiFlash|geminiArgon
 ///            [--download] [--prompt <text>] [--repeat <n>] [--effort low|medium|high]
-///            [--upload wav|m4a|flac]
+///            [--upload wav|m4a]
 ///     transcribe-thing --model-status
 ///
 /// Hidden comparison (not in the usage text): `--provider <slug>` sends Gemini to another endpoint than Google AI
@@ -17,29 +17,22 @@ import Foundation
 /// Hidden comparison (not in the usage text): `--hedge race|measure` sends a cloud engine's request twice at once, as
 /// dictations do (`CloudHedge`); `measure` lets both run to their end and prints both times (`HEDGE:`).
 ///
-/// Hidden comparison (not in the usage text): `--speech-model <openrouter slug>` with `--engine parakeetCloud` sends the
-/// recording to another model on the transcriptions endpoint the same way ("openai/whisper-large-v3"). OpenRouter picks
-/// its provider: that endpoint takes no routing preferences.
-///
 /// Hidden diagnostic (not in the usage text): `--parakeet-compute ane|gpu` loads the local model on other Core ML
 /// compute units. Core ML specializes and caches the model per compute unit, so the first run with a new choice
 /// is a cold load, and it can evict the default Neural Engine build (the next default load is cold again).
 ///
 /// Uses the real model folder (~/Library/Application Support/transcribe-thing) and the real pipeline
 /// (ModelStore → InferenceGate → engine, or OpenRouterClient). Cloud engines read the key from
-/// OPENROUTER_API_KEY, else from the app's key file (`keyStore`), never the Keychain; cloud Parakeet also prints the
-/// provider that served the request.
-/// `--prompt` and `--effort` apply to Gemini only: `--effort` replaces Gemini 3.8 Flash's fixed medium and is sent as
-/// given. Without `--prompt` Gemini gets the app's fixed prompt (`EngineID.geminiSystemPrompt`); `--prompt ""` sends
+/// OPENROUTER_API_KEY, else from the app's key file (`keyStore`), never the Keychain.
+/// `--prompt` and `--effort` apply to Gemini only: `--effort` replaces the model's default level (medium; the CLI
+/// doesn't read the level picked in the app's Models) and is sent as given. Without `--prompt` Gemini gets the app's fixed prompt (`EngineID.geminiSystemPrompt`); `--prompt ""` sends
 /// only the audio.
 /// The audio file may be anything AVFoundation reads (.wav, .m4a…). A cloud model gets it as the app sends a
 /// recording: Gemini as AAC in an .m4a (an .m4a that is AAC at 32 kbps, 16 kHz mono, as History keeps a recording,
-/// goes as it is, like History's own file), cloud Parakeet as FLAC. `--upload` (cloud models only) sends that format
-/// instead, for comparing them: WAV (16-bit), .m4a (AAC at 32 kbps) or FLAC (the WAV's samples, losslessly), all
-/// 16 kHz mono; a refusal of it fails the run instead of going again as WAV. Each run prints, after its `RUN` line,
-/// what went up (`UPLOAD:` format and bytes, per segment for Parakeet) and what the app records of it (`USAGE:`
-/// tokens, billed seconds, cost, provider, generation id, time to first token, generation and total time), asking
-/// OpenRouter's generation record (every segment's, for Parakeet) for what the response left out.
+/// goes as it is, like History's own file). `--upload` (cloud models only) sends that format instead, for comparing
+/// them: WAV (16-bit) or .m4a (AAC at 32 kbps), both 16 kHz mono. Each run prints, after its `RUN` line, what went up
+/// (`UPLOAD:` format and bytes) and what the app records of it (`USAGE:` tokens, cost, provider, generation id, time
+/// to first token, generation and total time), asking OpenRouter's generation record for what the response left out.
 /// Settings are in-memory: the CLI never changes the app's. Gemini goes where the app sends it: through the user's
 /// OpenAI-compatible endpoint when the app has one set up and on (its base URL and switch read from the app's
 /// settings, its key from its key file, read only), else through OpenRouter. `--model-status` says which, never the
@@ -113,8 +106,8 @@ enum EngineCLI {
     struct Options: Equatable {
         static let usage = """
         usage: transcribe-thing --transcribe <audio file> \
-        --engine parakeet|parakeetCloud|geminiFlash \
-        [--download] [--prompt <text>] [--repeat <n>] [--effort low|medium|high] [--upload wav|m4a|flac]
+        --engine parakeet|geminiFlash|geminiArgon \
+        [--download] [--prompt <text>] [--repeat <n>] [--effort low|medium|high] [--upload wav|m4a]
                transcribe-thing --model-status
         """
 
@@ -127,8 +120,6 @@ enum EngineCLI {
         var effort: ReasoningEffort?
         /// The format a cloud model gets the audio in instead of its own.
         var upload: UploadFormat?
-        /// Another model on the transcriptions endpoint in cloud Parakeet's place.
-        var speechModel: String?
         /// The request twice at once (`--hedge`).
         var hedge: CloudHedge?
         /// Gemini's endpoint instead of Google AI Studio's (`--provider`).
@@ -160,14 +151,8 @@ enum EngineCLI {
                 }
                 upload = format
             }
-            if arguments.contains("--speech-model") {
-                guard engine.cloudAPI == .transcriptions, let slug = value("--speech-model"), slug.contains("/") else {
-                    return nil
-                }
-                speechModel = slug
-            }
             if arguments.contains("--provider") {
-                guard engine.cloudAPI == .chatCompletions, let slug = value("--provider"), !slug.isEmpty else {
+                guard engine.isGemini, let slug = value("--provider"), !slug.isEmpty else {
                     return nil
                 }
                 provider = slug
@@ -194,8 +179,8 @@ enum EngineCLI {
             if let id = EngineID.offered.first(where: { $0.rawValue == name }) { return id }
             switch name.lowercased().replacingOccurrences(of: "-", with: "").replacingOccurrences(of: "_", with: "") {
             case "parakeet": return .parakeet
-            case "parakeetcloud", "cloudparakeet": return .parakeetCloud
             case "geminiflash", "flash": return .geminiFlash
+            case "geminiargon", "argon", "gemini4argon": return .geminiArgon
             default: return nil
             }
         }
@@ -226,9 +211,8 @@ enum EngineCLI {
 
         let paths = AppPaths.live()
         let settings = AppSettings.inMemory()
-        if options.engine.isParakeet { settings.parakeetEngine = options.engine }
-        // Gemini's own level unless --effort replaces it; nothing for a model that doesn't reason.
-        let effort = options.engine.reasoningEffort.map { options.effort ?? $0 }
+        // The model's default level unless --effort replaces it; nothing for a model that doesn't reason.
+        let effort = options.engine.defaultReasoningEffort.map { options.effort ?? $0 }
         if let effort { print("EFFORT: \(effort.rawValue)") }
         var engines = ModelStore.makeEngines(paths: paths)
         if options.parakeetCompute == .gpu {
@@ -283,7 +267,7 @@ enum EngineCLI {
         for run in 1...options.repeatCount {
             var result = try await service.transcribe(recording, engine: options.engine, effort: effort,
                                                       prompt: options.prompt, upload: options.upload,
-                                                      speechModel: options.speechModel, hedge: options.hedge,
+                                                      hedge: options.hedge,
                                                       provider: options.provider.map {
                                                           .init(only: [$0], allowFallbacks: false)
                                                       })
@@ -306,14 +290,6 @@ enum EngineCLI {
             last = result
         }
         if let last {
-            if options.engine.cloudAPI == .transcriptions {
-                var provider = last.provider
-                if provider == nil, let generationID = last.generationID {
-                    provider = await service.servedProvider(generationID: generationID)
-                }
-                let expected = options.engine.provider.map { " · expected \($0)" } ?? ""
-                print("PROVIDER: \(provider ?? "unknown")\(expected)")
-            }
             print(last.text.isEmpty ? "NO SPEECH" : "TEXT: \(last.text)")
             if let tags = last.answerTags { print("TAGS: \(tags.rawValue)") }
             if let best = runTimes.min() { print("TRANSCRIBE: first \(format(runTimes[0], digits: 3)) s · best \(format(best, digits: 3)) s") }
@@ -456,64 +432,42 @@ enum EngineCLI {
     }
 
     /// Asks OpenRouter's generation record, as the app does (`DictationController`), for what the response left out:
-    /// the provider, the cost, the generation time (which a speech-to-text answer never carries, so Parakeet's is
-    /// always asked). A recording Parakeet heard in segments asks each segment's generation, and adds up their costs
-    /// and times only when every segment's record came with its own.
+    /// the provider, the cost, the generation time, the reasoning tokens.
     @MainActor
     static func fillFromGenerationRecord(_ result: inout TranscriptResult, service: TranscriptionService) async {
         guard result.provider == nil || result.costUSD == nil || result.generationTime == nil else { return }
-        let ids = result.uploads.count > 1 ? result.uploads.map(\.generationID) : [result.generationID]
-        var records: [GenerationDetails] = []
-        for id in ids {
-            guard let id, let details = await service.generationDetails(generationID: id) else { break }
-            records.append(details)
+        guard let id = result.generationID, let record = await service.generationDetails(generationID: id) else {
+            return
         }
-        guard let first = records.first else { return }
-        /// The sum of every segment's value, or nil when one of them is missing.
-        func total(_ values: [Double?]) -> Double? {
-            guard records.count == ids.count, !values.contains(nil) else { return nil }
-            return values.reduce(0) { $0 + ($1 ?? 0) }
-        }
-        result.provider = result.provider ?? records.lazy.compactMap(\.provider).first
-        result.costUSD = result.costUSD ?? total(records.map(\.costUSD))
-        result.generationTime = result.generationTime ?? total(records.map(\.generationTime))
-        if let reasoning = first.reasoningTokens, result.usage?.reasoningTokens == nil {
+        result.provider = result.provider ?? record.provider
+        result.costUSD = result.costUSD ?? record.costUSD
+        result.generationTime = result.generationTime ?? record.generationTime
+        if let reasoning = record.reasoningTokens, result.usage?.reasoningTokens == nil {
             var usage = result.usage ?? TokenUsage()
             usage.reasoningTokens = reasoning
             result.usage = usage
         }
     }
 
-    /// "UPLOAD: m4a · 123456 bytes", or per segment for Parakeet ("UPLOAD: 3 segments · flac 4801234 + … · 9876543
-    /// bytes in all"); nil when nothing went up. `input` is the audio file, when it went as it is.
+    /// "UPLOAD: m4a · 123456 bytes"; nil when nothing went up. `input` is the audio file, when it went as it is.
     static func uploadLine(_ uploads: [AudioUpload], input: URL?) -> String? {
         guard let first = uploads.first else { return nil }
-        guard uploads.count > 1 else {
-            let asIs = input.flatMap { RecordingFile.Stamp($0)?.size } == first.bytes && first.format == .m4a
-            return "UPLOAD: \(first.format.rawValue) · \(first.bytes) bytes" + (asIs ? " · the input file as is" : "")
-        }
-        let files = uploads.map { "\($0.format.rawValue) \($0.bytes)" }.joined(separator: " + ")
-        return "UPLOAD: \(uploads.count) segments · \(files) · \(uploads.reduce(0) { $0 + $1.bytes }) bytes in all"
+        let asIs = input.flatMap { RecordingFile.Stamp($0)?.size } == first.bytes && first.format == .m4a
+        return "UPLOAD: \(first.format.rawValue) · \(first.bytes) bytes" + (asIs ? " · the input file as is" : "")
     }
 
-    /// "USAGE: …": what History keeps of a cloud result. Tokens and the time to the first token for a chat answer,
-    /// billed seconds for speech-to-text; "?" for what OpenRouter didn't say.
+    /// "USAGE: …": what History keeps of a cloud result: tokens and the time to the first token among the rest; "?"
+    /// for what OpenRouter didn't say.
     static func usageLine(_ result: TranscriptResult) -> String {
         func known<T>(_ value: T?, _ describe: (T) -> String = { "\($0)" }) -> String { value.map(describe) ?? "?" }
         var parts: [String] = []
-        if result.engine.cloudAPI == .chatCompletions {
-            let usage = result.usage
-            parts.append("tokens audio \(known(usage?.audioTokens)) · prompt \(known(usage?.promptTokens)) · "
-                         + "completion \(known(usage?.completionTokens)) · reasoning \(known(usage?.reasoningTokens))")
-        } else {
-            parts.append("audio \(known(result.audioSeconds) { format($0) }) s billed")
-        }
+        let usage = result.usage
+        parts.append("tokens audio \(known(usage?.audioTokens)) · prompt \(known(usage?.promptTokens)) · "
+                     + "completion \(known(usage?.completionTokens)) · reasoning \(known(usage?.reasoningTokens))")
         parts.append("cost \(known(result.costUSD) { "$" + String(format: "%.6f", $0) })")
         parts.append("provider \(known(result.provider))")
         parts.append("generation \(known(result.generationID))")
-        if result.engine.cloudAPI == .chatCompletions {
-            parts.append("first token \(known(result.timeToFirstToken) { format($0, digits: 3) }) s")
-        }
+        parts.append("first token \(known(result.timeToFirstToken) { format($0, digits: 3) }) s")
         parts.append("generated in \(known(result.generationTime) { format($0, digits: 3) }) s")
         parts.append("total \(format(result.processingTime, digits: 3)) s")
         return "USAGE: " + parts.joined(separator: " · ")
@@ -683,8 +637,20 @@ enum EngineCLI {
         }
         let envKey = ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"].map { !$0.isEmpty } ?? false
         print("OpenRouter key: \(envKey ? "OPENROUTER_API_KEY is set" : "not in the environment (the app keeps it in \(paths.keyFile.path))")")
+        for line in cloudModelLines() { print(line) }
         print("Gemini goes through: \(geminiRouteLine(appVertexProxy(paths: paths)))")
-        print("\(EngineID.parakeetCloud.displayName) goes through: OpenRouter")
+    }
+
+    /// The cloud models `--transcribe --engine` takes, one line each: "geminiArgon  Gemini 4 Argon  google/gemini-4-argon
+    /// · effort low|medium|high (default medium)".
+    static func cloudModelLines() -> [String] {
+        EngineID.geminiEngines.map { id in
+            let efforts = id.reasoningEfforts.map(\.rawValue).joined(separator: "|")
+            let level = id.defaultReasoningEffort.map { " (default \($0.rawValue))" } ?? ""
+            return id.rawValue.padding(toLength: 12, withPad: " ", startingAt: 0)
+                + id.displayName.padding(toLength: 18, withPad: " ", startingAt: 0)
+                + (id.openRouterModelID ?? "") + " · effort \(efforts)\(level)"
+        }
     }
 
     /// Where Gemini's requests go, as `--model-status` says it: never the key, only whether one is saved.

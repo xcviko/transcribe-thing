@@ -36,11 +36,11 @@ struct OpenRouterChatRequest: Encodable, Equatable {
         case maxTokens = "max_tokens"
     }
 
-    /// Gemini via Google AI Studio only, streamed, thinking at `effort` (the model's fixed level,
-    /// `EngineID.reasoningEffort`) with its reasoning included: the summaries of its thoughts stream ahead of the
+    /// Gemini via Google AI Studio only, streamed, thinking at `effort` (the level picked for the model,
+    /// `AppSettings.reasoningEfforts`) with its reasoning included: the summaries of its thoughts stream ahead of the
     /// transcript, so the pill can count them (the bill is the same either way). No temperature (Google recommends the
     /// default for Gemini 3). The system message exists only for a non-empty prompt, and the user message carries ONLY
-    /// the audio, in `format` ("m4a"; "wav" or "flac" from `EngineCLI --upload`): no text part, ever. `maxTokens`
+    /// the audio, in `format` ("m4a"; "wav" from `EngineCLI --upload`): no text part, ever. `maxTokens`
     /// grows with the audio (`OpenRouterClient.transcriptionMaxTokens`).
     /// `provider`: another endpoint than Google AI Studio's ("google-ai-studio/priority", `EngineCLI --provider`).
     /// `voiceSampleBase64` (a call's only, `CallVoiceSample`): the user message carries two audio parts, the sample of
@@ -215,50 +215,7 @@ enum OpenRouterMessage: Encodable, Equatable {
     }
 }
 
-/// `POST /audio/transcriptions` body. No `provider` object: routing preferences (`order`, `only`, `ignore`) are
-/// not applied to transcription requests, so sending them would only suggest a pin that doesn't exist.
-struct OpenRouterSpeechRequest: Encodable, Equatable {
-    let model: String
-    let inputAudio: InputAudio
-
-    struct InputAudio: Encodable, Equatable {
-        /// Raw base64, not a data URI.
-        let data: String
-        let format: String
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case model
-        case inputAudio = "input_audio"
-    }
-
-    /// One file in `format`: "flac", "wav" once OpenRouter refused FLAC, or any `UploadFormat` `EngineCLI --upload`
-    /// forces. The endpoint documents wav, mp3, flac, m4a, ogg, webm and aac, each as far as the provider takes it;
-    /// Together takes FLAC. No `language`: Parakeet v3 detects it.
-    static func audio(model: String, audioBase64: String, format: String) -> OpenRouterSpeechRequest {
-        OpenRouterSpeechRequest(model: model, inputAudio: InputAudio(data: audioBase64, format: format))
-    }
-
-    func encoded() throws -> Data {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.withoutEscapingSlashes]
-        return try encoder.encode(self)
-    }
-}
-
 // MARK: Response
-
-/// `POST /audio/transcriptions` → `{ text, usage }`; the generation id comes in the `X-Generation-Id` header.
-struct OpenRouterSpeechResponse: Decodable {
-    let text: String?
-    let usage: Usage?
-    let error: OpenRouterAPIError?
-
-    struct Usage: Decodable {
-        let seconds: Double?
-        let cost: Double?
-    }
-}
 
 /// `GET /api/v1/generation?id=` → `data`. Only what transcribe-thing reads; every field is nullable.
 struct OpenRouterGeneration: Decodable {
@@ -749,12 +706,6 @@ struct OpenRouterDataEnvelope<T: Decodable>: Decodable { let data: T }
 enum OpenRouterErrorMapper {
     static let noRouteHint = "Google AI Studio isn’t reachable with your OpenRouter settings. Check openrouter.ai/settings/privacy: zero data retention (ZDR) for Google and your allowed providers must let Google AI Studio through."
 
-    static func noRouteHint(for engine: EngineID) -> String {
-        guard engine.cloudAPI == .transcriptions else { return noRouteHint }
-        let provider = engine.provider ?? "its provider"
-        return "No provider of \(engine.modelName) is reachable with your OpenRouter settings. Check openrouter.ai/settings/privacy: your data policy and allowed providers must let \(provider) through."
-    }
-
     /// How a 400 says the request is too large to take (lowercased).
     static let tooLargePhrases = ["payload size", "request entity too large", "request too large"]
 
@@ -795,44 +746,6 @@ enum OpenRouterErrorMapper {
         return String(text.prefix(300))
     }
 
-    /// What a refusal of an upload's format names (whole words, lowercased)…
-    static let audioFormatSubjects = ["format", "formats", "file type", "filetype", "media type", "mime", "mimetype",
-                                      "content type", "codec", "codecs", "decode", "decoding", "decoded"]
-    /// …and the words that refuse it.
-    static let refusalWords = plainRefusals + ["invalid", "unrecognized", "unrecognised", "unknown", "not allowed",
-                                               "cannot", "can't", "could not", "couldn't", "unable", "failed to"]
-    /// What names a format only beside a plain refusal (`plainRefusals`): "flac" and "extension" turn up in many an
-    /// error that isn't about the format ("… for audio.flac").
-    static let audioFormatNames = ["flac", "extension"]
-    static let plainRefusals = ["unsupported", "not supported", "isn't supported", "not accepted"]
-
-    /// Whether the speech-to-text endpoint refused an upload for its format: any 415, or a 400, 422, 500 or 502 whose
-    /// words (`words(of:)`) name a format, file type, codec or decoding (`audioFormatSubjects`) and refuse it
-    /// (`refusalWords`), or call FLAC unsupported, however OpenRouter or the provider words it. The provider's own
-    /// error, which OpenRouter passes on in the metadata, counts too; a 500 or 502 is how OpenRouter reports a
-    /// provider's error it can't classify or read.
-    static func refusesAudioFormat(status: Int, body: Data) -> Bool {
-        if status == 415 { return true }
-        guard [400, 422, 500, 502].contains(status) else { return false }
-        let words = words(of: body)
-        func says(_ phrases: [String]) -> Bool { phrases.contains { words.contains(" \($0) ") } }
-        return says(audioFormatSubjects) && says(refusalWords) || says(audioFormatNames) && says(plainRefusals)
-    }
-
-    /// The words of `body`, lowercased, each with a space either side (" could not decode "). A word is letters,
-    /// digits, `_` and apostrophes, so neither "information" nor "response_format" is "format"; JSON's escapes
-    /// (`\n`, `\"`) part words however deeply the provider's error is quoted.
-    static func words(of body: Data) -> String {
-        let text = String(decoding: body.prefix(64 * 1024), as: UTF8.self).lowercased()
-            .replacingOccurrences(of: "’", with: "'")
-            .replacingOccurrences(of: #"\\+u2019"#, with: "'", options: .regularExpression)
-            .replacingOccurrences(of: #"\\+(u[0-9a-f]{4}|.)"#, with: " ", options: .regularExpression)
-        let words = text.split { !($0.isLetter || $0.isNumber || $0 == "_" || $0 == "'") }
-            .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "'")) }
-            .filter { !$0.isEmpty }
-        return " " + words.joined(separator: " ") + " "
-    }
-
     /// Maps a non-200 response (body may be JSON, HTML or empty).
     static func httpError(status: Int, data: Data, retryAfter: Double?, engine: EngineID) -> AppError {
         // Wherever in the body it says so (the provider's error is JSON inside a string), in any status.
@@ -863,7 +776,7 @@ enum OpenRouterErrorMapper {
         // Routing dead ends are documented both as 404 and as 503; the message tells them apart.
         let noRoute = lowered.hasPrefix("no endpoints") || lowered.hasPrefix("no allowed providers")
             || lowered.contains("no endpoints found")
-        if noRoute { return .openRouterNoRoute(join(message, noRouteHint(for: engine))) }
+        if noRoute { return .openRouterNoRoute(join(message, noRouteHint)) }
 
         // A request too large to take, reported as a bad request. Only these phrases: a text request's errors come
         // through here too.
@@ -888,7 +801,7 @@ enum OpenRouterErrorMapper {
         case "provider_overloaded", "provider_unavailable": return .openRouterProviderUnavailable(message)
         case "authentication": return .openRouterInvalidKey(message)
         case "payment_required": return .openRouterNoCredits(message)
-        case "not_found": return .openRouterNoRoute(join(message, noRouteHint(for: engine)))
+        case "not_found": return .openRouterNoRoute(join(message, noRouteHint))
         case "permission_denied": return .openRouterRefused(message)
         case "context_length_exceeded", "max_tokens_exceeded", "token_limit_exceeded", "string_too_long",
              "invalid_request", "invalid_prompt", "unprocessable", "precondition_failed":
@@ -901,7 +814,7 @@ enum OpenRouterErrorMapper {
         case 401: return .openRouterInvalidKey(message)
         case 402: return .openRouterNoCredits(message)
         case 403: return .openRouterRefused(message)
-        case 404: return .openRouterNoRoute(join(message, noRouteHint(for: engine)))
+        case 404: return .openRouterNoRoute(join(message, noRouteHint))
         case 408, 504, 524: return .timeout(engine)
         case 413: return .recordingTooLarge
         case 429: return .openRouterRateLimited(retryAfter: retryAfter)
@@ -910,21 +823,6 @@ enum OpenRouterErrorMapper {
         case 400...499: return .openRouterBadRequest(message.isEmpty ? "HTTP \(status)" : message)
         default: return .openRouterServer(message.isEmpty ? "Unexpected HTTP \(status)" : "HTTP \(status): \(message)")
         }
-    }
-
-    /// Interprets a 200 from the transcription endpoint. An error object inside it is an upstream failure, mapped
-    /// like the chat endpoint's. Empty text is returned as is: silence legitimately transcribes to nothing.
-    static func speechSuccess(data: Data, engine: EngineID) throws -> CloudResult {
-        let decoded: OpenRouterSpeechResponse
-        do {
-            decoded = try JSONDecoder().decode(OpenRouterSpeechResponse.self, from: data)
-        } catch {
-            throw AppError.openRouterServer("OpenRouter sent a response \(Brand.name) couldn’t read.")
-        }
-        if let error = decoded.error { throw map(error, status: 502, retryAfter: nil, engine: engine) }
-        guard let text = decoded.text else { throw AppError.openRouterServer("OpenRouter sent no transcript.") }
-        return CloudResult(text: text.trimmingCharacters(in: .whitespacesAndNewlines), provider: nil,
-                           costUSD: decoded.usage?.cost, audioSeconds: decoded.usage?.seconds)
     }
 
     /// `Retry-After` is seconds or an HTTP date.

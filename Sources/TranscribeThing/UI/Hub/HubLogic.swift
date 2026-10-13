@@ -182,13 +182,6 @@ enum EngineReadiness: Equatable {
         case .noCredit: return .keyProblem(keyStatus.isKeyLimitReached ? "Key limit reached" : "No credit")
         }
     }
-
-    /// A model's readiness: its transcriber's (Parakeet where `parakeet` runs it, or Gemini). `localState` and
-    /// `localError` are `parakeet`'s.
-    static func of(_ choice: ModelChoice, parakeet: EngineID, localState: LocalModelState, keyStatus: KeyStatus,
-                   localError: AppError? = nil) -> EngineReadiness {
-        of(choice.engine(parakeet: parakeet), localState: localState, keyStatus: keyStatus, localError: localError)
-    }
 }
 
 // MARK: - Versions
@@ -222,7 +215,7 @@ struct VersionsMenu: Equatable {
 
         /// `.tooLongForGemini` for Gemini's kinds on `seconds` of audio it can't take in one request.
         static func length(_ seconds: TimeInterval, for kind: TranscriptVersionKind) -> Blocker? {
-            kind.engine.cloudAPI == .chatCompletions && !CloudAudio.fitsChat(seconds: seconds) ? .tooLongForGemini : nil
+            kind.engine.isGemini && !CloudAudio.fitsChat(seconds: seconds) ? .tooLongForGemini : nil
         }
     }
 
@@ -251,10 +244,10 @@ struct VersionsMenu: Equatable {
             case .transcription(let engine): engine.displayName
             // Never an action: nothing makes clean-ups any more.
             case .cleanup: kind.displayName
-            case .polish: "Polish with \(EngineID.geminiFlash.modelName)"
+            case .polish(let engine): "Polish with \(engine.modelName)"
             case .selection(let model): "Polish with \(model.modelName)"
-            case .translation(polished: false): "Translate with \(EngineID.geminiFlash.modelName)"
-            case .translation(polished: true): "Polish and Translate with \(EngineID.geminiFlash.modelName)"
+            case .translation(false, let engine): "Translate with \(engine.modelName)"
+            case .translation(true, let engine): "Polish and Translate with \(engine.modelName)"
             case .selectionTranslation(let model): "Translate with \(model.modelName)"
             }
         }
@@ -270,7 +263,7 @@ struct VersionsMenu: Equatable {
     var title: String
     /// Oldest first.
     var versions: [Version]
-    /// Engines in `EngineID.offered` order, then Polish.
+    /// Engines in `EngineID.offered` order, then Polish and Translate with each Gemini model.
     var actions: [Action]
     /// What is running for the recording right now: "Transcribing with Gemini Flash…", "Polishing with Gemini Flash…".
     var runningTitle: String?
@@ -301,15 +294,10 @@ struct VersionsMenu: Equatable {
         var actions = EngineID.offered.filter { isRetry || !entry.hasVersion(.transcription($0)) }.map { engine in
             action(.transcription(engine))
         }
-        // Polish: Gemini on the recording again, with Polish's prompt. A failed or canceled dictation can be polished
-        // too, as it can be transcribed.
-        if isRetry || !entry.hasVersion(.polish) {
-            actions.append(action(.polish))
-        }
-        // Translate: Gemini on the recording again, writing it in the other language (`Translate`).
-        let translation = TranscriptVersionKind.translation(polished: false)
-        if isRetry || !entry.hasVersion(translation) {
-            actions.append(action(translation))
+        // Polish: each Gemini model on the recording again, with Polish's prompt. A failed or canceled dictation can be
+        // polished too, as it can be transcribed. Translate: the same, writing it in the other language (`Translate`).
+        for kind in TranscriptVersionKind.rewrites where isRetry || !entry.hasVersion(kind) {
+            actions.append(action(kind))
         }
         let runningTitle = running.map(\.progressTitle)
         return VersionsMenu(isRetry: isRetry, title: title(for: entry), versions: versions, actions: actions,
@@ -323,13 +311,13 @@ struct VersionsMenu: Equatable {
 }
 
 /// What a file dropped on Home can be transcribed with (`ImportedAudio`): each offered engine, the main model's first,
-/// then Polish and Translate with Gemini. Each says why it can't run right now, as the Versions menu's actions do:
+/// then Polish and Translate with each Gemini model. Each says why it can't run right now, as the Versions menu's actions do:
 /// Gemini's when `seconds` (the longest file's) is more than one request holds, too.
 enum ImportChoices {
     static func make(main: EngineID, seconds: TimeInterval = 0,
                      readiness: (EngineID) -> EngineReadiness) -> [VersionsMenu.Action] {
         let engines = EngineID.offered.filter { $0 == main } + EngineID.offered.filter { $0 != main }
-        let kinds = engines.map(TranscriptVersionKind.transcription) + [.polish, .translation(polished: false)]
+        let kinds = engines.map(TranscriptVersionKind.transcription) + TranscriptVersionKind.rewrites
         return kinds.map { kind in
             VersionsMenu.Action(kind: kind, blocker: VersionsMenu.Blocker.length(seconds, for: kind)
                                     ?? readiness(kind.engine).unavailableReason.map(VersionsMenu.Blocker.engine))
@@ -341,7 +329,7 @@ enum ImportChoices {
 /// which model and provider made it, how hard it thought, its tokens, cost and timing. Lines with nothing known are
 /// left out, so a local transcript says little and an old one only what older builds recorded.
 enum VersionDetails {
-    /// "Gemini 3.8 Flash · Google AI Studio", "Thinking: Low", "Tokens: 330 in (314 audio) · 72 out · 540 thinking",
+    /// "Gemini 3.8 Flash · Google AI Studio", "Reasoning: Low", "Tokens: 330 in (314 audio) · 72 out · 540 thinking",
     /// "Cost: $0.0021", "Took 2.6 s · model 2.2 s", "System prompt: none".
     static func lines(for version: TranscriptVersion) -> [String] {
         let m = version.metadata
@@ -351,7 +339,7 @@ enum VersionDetails {
         if let model = m.modelID, !model.isEmpty { source.append(model) }
         if let provider = m.provider, !provider.isEmpty { source.append("via \(provider)") }
         if !source.isEmpty { lines.append(source.joined(separator: " ")) }
-        if let effort = m.reasoningEffort { lines.append("Thinking: \(effort.title)") }
+        if let effort = m.reasoningEffort { lines.append("Reasoning: \(effort.title)") }
         if let tokens = m.usage.flatMap(tokenLine) { lines.append("Tokens: \(tokens)") }
         if let cost = m.costUSD, cost > 0 { lines.append("Cost: \(Fmt.usd(cost))") }
         if let time = timeLine(m) { lines.append(time) }
@@ -399,13 +387,12 @@ struct EngineSummary: Equatable {
     var status: String
     var tone: StatusTone
 
-    /// `choice` by `ModelChoice.compactName`: its transcriber's status. `localState` and `localError` are
-    /// `parakeet`'s.
-    static func make(choice: ModelChoice, parakeet: EngineID, localState: LocalModelState, keyStatus: KeyStatus,
+    /// `choice` by `ModelChoice.compactName`: its engine's status. `localState` and `localError` are Parakeet's.
+    static func make(choice: ModelChoice, localState: LocalModelState, keyStatus: KeyStatus,
                      localError: AppError? = nil) -> EngineSummary {
-        var summary = make(engine: choice.engine(parakeet: parakeet), localState: localState, keyStatus: keyStatus,
+        var summary = make(engine: choice.engine, localState: localState, keyStatus: keyStatus,
                            localError: localError)
-        summary.name = choice.compactName(parakeet: parakeet)
+        summary.name = choice.compactName
         return summary
     }
 
@@ -594,8 +581,8 @@ enum HubAttention {
             }
         }
         if !input.engine.isLocal {
-            // Same naming as the OpenRouter notices: "Gemini" for either Gemini, the model for cloud speech.
-            let service = input.engine.cloudAPI == .transcriptions ? input.engine.shortName : "Gemini"
+            // Same naming as the OpenRouter notices: "Gemini" for either Gemini model.
+            let service = "Gemini"
             switch input.keyStatus {
             case .valid, .checking, .offline, .failed:
                 break

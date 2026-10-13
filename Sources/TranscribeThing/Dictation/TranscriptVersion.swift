@@ -8,23 +8,40 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
     case transcription(EngineID)
     /// `model` over the text of `.transcription(engine)`. History only: nothing makes clean-ups any more.
     case cleanup(of: EngineID, by: CleanupModel)
-    /// Polish (`Polish`): Gemini 3.8 Flash's message from the audio.
-    case polish
+    /// Polish (`Polish`): the Gemini model's message from the audio (the dictation's model: Gemini 3.8 Flash or
+    /// Gemini 4 Argon).
+    case polish(by: EngineID = .geminiFlash)
     /// Polish Selection: the model's message from text selected in another app. No recording: the entry is this one
     /// version.
     case selection(PolishSelectionModel)
-    /// Translate (`Translate`): Gemini 3.8 Flash's transcript in the other language; `polished`, its Polish message
+    /// Translate (`Translate`): the Gemini model's transcript in the other language; `polished`, its Polish message
     /// in the other language (fn P and fn T both on).
-    case translation(polished: Bool)
+    case translation(polished: Bool, by: EngineID = .geminiFlash)
     /// Translate on selected text: the model's translation of it. No recording, like Polish Selection's.
     case selectionTranslation(PolishSelectionModel)
 
     /// The engine that heard the audio (for a clean-up, the one whose text was tidied).
     var engine: EngineID {
         switch self {
-        case .transcription(let engine), .cleanup(let engine, _): engine
+        case .transcription(let engine), .cleanup(let engine, _), .polish(let engine), .translation(_, let engine):
+            engine
         // Nothing heard any audio: Gemini Flash stands in (the entry is never transcribed again).
-        case .polish, .selection, .translation, .selectionTranslation: .geminiFlash
+        case .selection, .selectionTranslation: .geminiFlash
+        }
+    }
+
+    /// What Home can make from a recording besides its transcripts, in menu order: Polish with each Gemini model,
+    /// then Translate with each.
+    static var rewrites: [TranscriptVersionKind] {
+        EngineID.geminiEngines.map { .polish(by: $0) }
+            + EngineID.geminiEngines.map { .translation(polished: false, by: $0) }
+    }
+
+    /// Polish's or Translate's: Gemini rewrote what it heard.
+    var isRewrite: Bool {
+        switch self {
+        case .polish, .translation: true
+        default: false
         }
     }
 
@@ -46,7 +63,10 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
 
     /// Gemini's answer from the audio comes in Polish's `<message>` tags rather than `<transcript>` ones.
     var answersInMessageTags: Bool {
-        self == .polish || self == .translation(polished: true)
+        switch self {
+        case .polish, .translation(polished: true, _): true
+        default: false
+        }
     }
 
     var isCleanup: Bool {
@@ -60,7 +80,7 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
         switch self {
         case .transcription(let engine): ModelChoice(engine: engine)
         case .cleanup(let engine, _): ModelChoice(engine: engine)
-        case .polish, .translation: .gemini
+        case .polish(let engine), .translation(_, let engine): ModelChoice(engine: engine)
         case .selection, .selectionTranslation: nil
         }
     }
@@ -84,10 +104,10 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
         switch self {
         case .transcription(let engine): engine.displayName
         case .cleanup(let engine, let model): "\(engine.displayName) + Clean-up by \(model.shortName)"
-        case .polish: "Polished by \(EngineID.geminiFlash.displayName)"
+        case .polish(let engine): "Polished by \(engine.displayName)"
         case .selection(let model): "Selection polished by \(model.modelName)"
-        case .translation(let polished):
-            "\(polished ? "Polished and translated" : "Translated") by \(EngineID.geminiFlash.displayName)"
+        case .translation(let polished, let engine):
+            "\(polished ? "Polished and translated" : "Translated") by \(engine.displayName)"
         case .selectionTranslation(let model): "Selection translated by \(model.modelName)"
         }
     }
@@ -109,9 +129,9 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
         switch self {
         case .transcription(let engine): "Transcribing with \(engine.shortName)…"
         case .cleanup(_, let model): "Cleaning up with \(model.shortName)…"
-        case .polish: "Polishing with \(EngineID.geminiFlash.shortName)…"
+        case .polish(let engine): "Polishing with \(engine.shortName)…"
         case .selection(let model): "Polishing with \(model.modelName)…"
-        case .translation: "Translating with \(EngineID.geminiFlash.shortName)…"
+        case .translation(_, let engine): "Translating with \(engine.shortName)…"
         case .selectionTranslation(let model): "Translating with \(model.modelName)…"
         }
     }
@@ -122,16 +142,18 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
         switch self {
         case .transcription(let engine): "Couldn’t transcribe with \(engine.shortName)"
         case .cleanup(_, let model): "Couldn’t clean up with \(model.shortName)"
-        case .polish: "Couldn’t polish with \(EngineID.geminiFlash.shortName)"
+        case .polish(let engine): "Couldn’t polish with \(engine.shortName)"
         case .selection(let model): "Couldn’t polish with \(model.modelName)"
-        case .translation: "Couldn’t translate with \(EngineID.geminiFlash.shortName)"
+        case .translation(_, let engine): "Couldn’t translate with \(engine.shortName)"
         case .selectionTranslation(let model): "Couldn’t translate with \(model.modelName)"
         }
     }
 
     /// Persisted: "parakeet", "cleanup:parakeet" (Flash Lite's: the form from before the choice of clean-up model,
-    /// which older builds read), "cleanup:parakeet:gpt6Luna", "polish", "selection:geminiFlash", "translation",
-    /// "translation:polished", "translated-selection:geminiFlash". Never rename. An older
+    /// which older builds read), "cleanup:parakeet:gpt6Luna", "polish" (Gemini 3.8 Flash's, as before there was a
+    /// choice), "polish:geminiArgon", "selection:geminiFlash", "translation", "translation:polished",
+    /// "translation:geminiArgon", "translation:polished:geminiArgon", "translated-selection:geminiFlash". Never rename.
+    /// An older
     /// build can't read a kind with a model and drops that version, not the entry (`TranscriptEntry.encode(to:)` keeps
     /// the text it tidied intact for them).
     var rawValue: String {
@@ -139,9 +161,10 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
         case .transcription(let engine): engine.rawValue
         case .cleanup(let engine, .geminiFlashLite): "cleanup:\(engine.rawValue)"
         case .cleanup(let engine, let model): "cleanup:\(engine.rawValue):\(model.rawValue)"
-        case .polish: "polish"
+        case .polish(let engine): engine == .geminiFlash ? "polish" : "polish:\(engine.rawValue)"
         case .selection(let model): "selection:\(model.rawValue)"
-        case .translation(let polished): polished ? "translation:polished" : "translation"
+        case .translation(let polished, let engine):
+            (polished ? "translation:polished" : "translation") + (engine == .geminiFlash ? "" : ":\(engine.rawValue)")
         case .selectionTranslation(let model): "translated-selection:\(model.rawValue)"
         }
     }
@@ -154,9 +177,22 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
             EngineID(rawValue: String(raw)) ?? TranscriptEntry.retiredEngines[String(raw)]
         }
         if rawValue == "polish" {
-            self = .polish
-        } else if rawValue == "translation" || rawValue == "translation:polished" {
-            self = .translation(polished: rawValue == "translation:polished")
+            self = .polish()
+        } else if rawValue.hasPrefix("polish:") {
+            guard let by = EngineID(rawValue: String(rawValue.dropFirst("polish:".count))) else { return nil }
+            self = .polish(by: by)
+        } else if rawValue == "translation" || rawValue.hasPrefix("translation:") {
+            var rest = rawValue.dropFirst("translation".count)
+            let polished = rest.hasPrefix(":polished")
+            if polished { rest = rest.dropFirst(":polished".count) }
+            var by = EngineID.geminiFlash
+            if rest.hasPrefix(":") {
+                guard let engine = EngineID(rawValue: String(rest.dropFirst())) else { return nil }
+                by = engine
+            } else if !rest.isEmpty {
+                return nil
+            }
+            self = .translation(polished: polished, by: by)
         } else if rawValue.hasPrefix("translated-selection:") {
             let raw = String(rawValue.dropFirst("translated-selection:".count))
             guard let model = PolishSelectionModel(rawValue: raw) else { return nil }

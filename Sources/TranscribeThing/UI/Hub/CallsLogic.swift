@@ -314,7 +314,7 @@ enum CallsCopy {
     static var settingsFooter: String {
         "\(whatIsACall) Mute is followed in \(muteFollowed). Music and recording apps like GarageBand, Logic Pro "
             + "and OBS never count. In a browser, the call’s tab is found through Accessibility (already on for "
-            + "pasting), and all of the browser’s sound is recorded."
+            + "pasting), and all of the browser’s sound is recorded. Models → Calls picks the model that transcribes them."
     }
 
     /// General → Calls → Never recorded, under its title.

@@ -536,15 +536,18 @@ enum ProxyFixture {
         #expect(StubURLProtocol.registry.requests(for: openRouterHost).isEmpty)
     }
 
-    @Test func cloudParakeetStillGoesThroughOpenRouter() async throws {
-        let (proxy, proxyHost) = ProxyFixture.proxy()
-        let (service, openRouterHost) = ProxyFixture.service(
-            openRouterReplies: [StubURLProtocol.Reply(body: #"{"text":"hi","usage":{"seconds":1,"cost":0.0001}}"#)],
-            proxy: proxy)
-        let result = try await service.transcribe(ProxyFixture.speech(), engine: .parakeetCloud)
-        #expect(result.text == "hi")
-        #expect(StubURLProtocol.registry.requests(for: openRouterHost).count == 1)
-        #expect(StubURLProtocol.registry.requests(for: proxyHost).isEmpty)
+    /// Gemini 4 Argon goes to the endpoint as Flash does, with its own model and the level picked for it.
+    @Test func argonGoesThroughTheProxyWithItsModelAndLevel() async throws {
+        let (proxy, proxyHost) = ProxyFixture.proxy([ProxyFixture.answer("Argon.")])
+        let (service, openRouterHost) = ProxyFixture.service(proxy: proxy)
+        service.reasoningEffort = { $0 == .geminiArgon ? .high : .low }
+        let result = try await service.transcribe(ProxyFixture.speech(), engine: .geminiArgon)
+        #expect(result.text == "Argon." && result.engine == .geminiArgon && result.reasoningEffort == .high)
+        let body = ProxyFixture.json(try #require(StubURLProtocol.registry.bodies(for: proxyHost).first))
+        #expect(body["model"] as? String == "google/gemini-4-argon")
+        #expect((body["reasoning"] as? [String: Any])?["effort"] as? String == "high")
+        #expect(body["provider"] == nil)
+        #expect(StubURLProtocol.registry.requests(for: openRouterHost).isEmpty)
     }
 
     @Test func withTheProxyOffGeminiGoesThroughOpenRouter() async throws {
@@ -561,14 +564,13 @@ enum ProxyFixture {
         #expect(body["provider"] != nil, "OpenRouter's requests keep their routing")
     }
 
-    @Test func withOnlyTheProxyGeminiWorksAndParakeetCloudNeedsAnOpenRouterKey() async throws {
-        let (proxy, _) = ProxyFixture.proxy([ProxyFixture.answer("Только прокси.")])
+    @Test func withOnlyTheProxyEveryGeminiWorks() async throws {
+        let (proxy, _) = ProxyFixture.proxy([ProxyFixture.answer("Только прокси."), ProxyFixture.answer("И Argon.")])
         let (service, openRouterHost) = ProxyFixture.service(openRouterKey: nil, proxy: proxy)
         let result = try await service.transcribe(ProxyFixture.speech(), engine: .geminiFlash)
         #expect(result.text == "Только прокси.")
-        await #expect(throws: AppError.openRouterMissingKey) {
-            try await service.transcribe(ProxyFixture.speech(), engine: .parakeetCloud)
-        }
+        let argon = try await service.transcribe(ProxyFixture.speech(), engine: .geminiArgon)
+        #expect(argon.text == "И Argon.")
         #expect(StubURLProtocol.registry.requests(for: openRouterHost).isEmpty)
     }
 
@@ -633,10 +635,10 @@ enum ProxyFixture {
         let (proxy, _) = ProxyFixture.proxy()
         let account = OpenRouterAccount.preview(status: .missing)
         #expect(CloudRoute.provider(for: .geminiFlash, proxy: proxy) == .vertexProxy)
-        #expect(CloudRoute.provider(for: .parakeetCloud, proxy: proxy) == .openRouter)
+        #expect(CloudRoute.provider(for: .geminiArgon, proxy: proxy) == .vertexProxy)
         #expect(CloudRoute.provider(for: .parakeet, proxy: proxy) == nil)
         #expect(CloudRoute.keyStatus(for: .geminiFlash, account: account, proxy: proxy) == .checking)
-        #expect(CloudRoute.keyStatus(for: .parakeetCloud, account: account, proxy: proxy) == .missing)
+        #expect(CloudRoute.keyStatus(for: .parakeet, account: account, proxy: proxy) == .missing)
         proxy.isEnabled = false
         #expect(CloudRoute.provider(for: .geminiFlash, proxy: proxy) == .openRouter)
         #expect(CloudRoute.keyStatus(for: .geminiFlash, account: account, proxy: proxy) == .missing)
@@ -682,13 +684,13 @@ enum ProxyFixture {
     }
 
     @Test func homeRowsSayWhatTheEndpointDid() {
-        #expect(DictationController.homeFailureReason(.vertexProxy(.spendLimit("x")), making: .polish)
+        #expect(DictationController.homeFailureReason(.vertexProxy(.spendLimit("x")), making: .polish())
                 == "Your endpoint hit a spend limit.")
         #expect(DictationController.homeFailureReason(.vertexProxy(.unreachable), making: .transcription(.geminiFlash))
                 == "Couldn’t reach your endpoint. Check its base URL in Models.")
-        #expect(DictationController.homeFailureReason(.vertexProxy(.keyRejected("x")), making: .polish)
+        #expect(DictationController.homeFailureReason(.vertexProxy(.keyRejected("x")), making: .polish())
                 == "Your endpoint rejected the API key.")
-        #expect(DictationController.homeFailureReason(.vertexProxy(.unavailable("x")), making: .polish)
+        #expect(DictationController.homeFailureReason(.vertexProxy(.unavailable("x")), making: .polish())
                 == "Your endpoint ran into a problem.")
     }
 
@@ -704,7 +706,7 @@ enum ProxyFixture {
             let notice = error.notice(recordingID: UUID(), fallbackEngine: .parakeet, engine: .geminiFlash)
             texts += [notice.title, notice.body ?? "", error.localizedDescription]
             texts += notice.actions.map(\.title)
-            texts.append(DictationController.homeFailureReason(error, making: .polish))
+            texts.append(DictationController.homeFailureReason(error, making: .polish()))
             texts.append("\(VertexProxyAccount.status(for: error))")
         }
         for status in [404, 500] {

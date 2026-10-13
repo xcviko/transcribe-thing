@@ -52,27 +52,30 @@ enum OnboardingSnapshots {
                 model.stage(step: .model)
                 model.stageDisk(free: 412_000_000)
             },
-            entry("onboarding-3-model-cloud-valid", context: { ctx in
+            // Onboarding replayed with Gemini as the main model: its key under the Parakeet card.
+            entry("onboarding-3-model-gemini-main", context: { ctx in
                 ctx.models = .preview(states: [.parakeet: .ready])
-                ctx.settings.parakeetEngine = .parakeetCloud
+                ctx.settings.lineup.main = .gemini
             }) { model in model.stage(step: .model) },
             // Switch model rebound to right ⌘: the Gemini line names it.
             entry("onboarding-3-model-custom-switch", context: { ctx in
                 ctx.models = .preview(states: [.parakeet: .ready])
                 ctx.settings.shortcuts[.switchModel] = .rightCommand
             }) { model in model.stage(step: .model) },
-            entry("onboarding-3-model-cloud-stt", context: { ctx in
+            // Gemini 4 Argon switched on after Parakeet: the line under the card names it.
+            entry("onboarding-3-model-argon-step", context: { ctx in
                 ctx.models = .preview(states: [.parakeet: .ready])
-                ctx.settings.parakeetEngine = .parakeetCloud
+                ctx.settings.lineup.move(.argon, to: 1)
+                ctx.settings.lineup.setSwitchable(.argon, true)
             }) { model in model.stage(step: .model) },
-            entry("onboarding-3-model-cloud-stt-missing", context: { ctx in
+            entry("onboarding-3-model-argon-main-missing", context: { ctx in
                 ctx.models = .preview(states: [.parakeet: .notInstalled])
-                ctx.settings.parakeetEngine = .parakeetCloud
+                ctx.settings.lineup.main = .argon
                 ctx.account = .preview(status: .missing)
             }) { model in model.stage(step: .model) },
-            entry("onboarding-3-model-cloud-invalid", context: { ctx in
+            entry("onboarding-3-model-gemini-invalid", context: { ctx in
                 ctx.models = .preview(states: [.parakeet: .notInstalled])
-                ctx.settings.parakeetEngine = .parakeetCloud
+                ctx.settings.lineup.main = .gemini
                 ctx.account = .preview(status: .invalid("401"))
             }) { model in
                 model.stage(step: .model)
@@ -137,8 +140,8 @@ enum OnboardingSnapshots {
             },
 
             entry("onboarding-5-done", still: 0.42) { model in model.stage(step: .done) },
-            entry("onboarding-5-done-cloud", still: 0.42, context: { ctx in
-                ctx.settings.parakeetEngine = .parakeetCloud
+            entry("onboarding-5-done-argon", still: 0.42, context: { ctx in
+                ctx.settings.lineup.main = .argon
             }) { model in model.stage(step: .done) },
         ]
     }

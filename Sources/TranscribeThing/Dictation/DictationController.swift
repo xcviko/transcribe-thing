@@ -314,27 +314,27 @@ final class DictationController {
         case .cycleEngine: send(.cycleEngine)
         case .cycleEngineRepeat: repeatCycle()
         case .polish:
-            // On Gemini the key is Polish's; off Gemini it's Polish Selection's, for what's selected right then (text
+            // On Gemini (Flash or Argon) the key is Polish's; off Gemini it's Polish Selection's, for what's selected right then (text
             // selected after fn went down counts too).
             guard machine.isRecording else { return }
-            if effectiveChoice != .gemini, canPolishSelection {
+            if !effectiveChoice.isGemini, canPolishSelection {
                 actOnceSelectionIsKnown(.polish, nil)
             } else {
                 _ = acted(on: .polish, selection: nil)
             }
         case .polishRepeat:
             // Held down: Polish on and off again on Gemini; elsewhere the first press has said what it could.
-            if machine.isRecording, effectiveChoice == .gemini { send(.polish) }
+            if machine.isRecording, effectiveChoice.isGemini { send(.polish) }
         case .translate:
             // As the polish key: Translate's on Gemini, the selection's translation off it.
             guard machine.isRecording else { return }
-            if effectiveChoice != .gemini, canTranslateSelection {
+            if !effectiveChoice.isGemini, canTranslateSelection {
                 actOnceSelectionIsKnown(.translate, nil)
             } else {
                 _ = acted(on: .translate, selection: nil)
             }
         case .translateRepeat:
-            if machine.isRecording, effectiveChoice == .gemini { send(.translate) }
+            if machine.isRecording, effectiveChoice.isGemini { send(.translate) }
         case .heldForSelection(let action, let key):
             actOnceSelectionIsKnown(action, key)
         case .cardPaste: pasteSelectionCard()
@@ -367,8 +367,8 @@ final class DictationController {
     /// The model the dictation being recorded goes to: the one picked for it, else the main model.
     var effectiveChoice: ModelChoice { modelOverride ?? settings.lineup.main }
 
-    /// The engine that hears it: `effectiveChoice`'s, with Parakeet where `AppSettings.parakeetEngine` runs it.
-    var effectiveEngine: EngineID { effectiveChoice.engine(parakeet: settings.parakeetEngine) }
+    /// The engine that hears it: `effectiveChoice`'s.
+    var effectiveEngine: EngineID { effectiveChoice.engine }
 
     /// The Switch model shortcut can do something: the cycle has another model that can take this dictation now
     /// (the main model always can).
@@ -646,8 +646,8 @@ final class DictationController {
         let job = Job(recording: nil, engine: effectiveEngine, id: resumedID)
         job.mode = mode
         // The main model may have changed under it (Models, a notice's "Use Parakeet v3"): only Gemini polishes.
-        job.polishes = isPolishing && effectiveChoice == .gemini
-        job.translates = isTranslating && effectiveChoice == .gemini
+        job.polishes = isPolishing && effectiveChoice.isGemini
+        job.translates = isTranslating && effectiveChoice.isGemini
         queue.append(job)
         _ = machine.handle(.jobStarted, now: clock())
         finishingJob = job
@@ -871,7 +871,9 @@ final class DictationController {
         /// when it polishes too).
         var translates = false
         /// What Gemini writes for it instead of its transcript, if anything.
-        var rewrite: TranscriptVersionKind? { DictationController.rewriteKind(polishes: polishes, translates: translates) }
+        var rewrite: TranscriptVersionKind? {
+            DictationController.rewriteKind(polishes: polishes, translates: translates, by: engine)
+        }
         /// Held or hands-free: its paste follows General → Pasting's rules for that.
         var mode: DictationMachine.Mode = .pushToTalk
         /// How many tokens its model is thinking or writing, as far as the stream shows (`streamed(_:for:)`): nil until
@@ -906,8 +908,8 @@ final class DictationController {
         guard !isInFlight(recording.id) else { return }
         let job = Job(recording: recording, engine: engine)
         job.mode = mode
-        job.polishes = polishes && engine == .geminiFlash
-        job.translates = translates && engine == .geminiFlash
+        job.polishes = polishes && engine.isGemini
+        job.translates = translates && engine.isGemini
         queue.append(job)
         _ = machine.handle(.jobStarted, now: clock())
         run(job)
@@ -926,7 +928,7 @@ final class DictationController {
         job.count = nil
         job.estimate = TokenEstimate.learned(from: history.entries, modelID: engine.openRouterModelID)
         // Only a streamed answer has tokens to count: Gemini's (Parakeet has none).
-        let progress = engine.cloudAPI == .chatCompletions ? streamProgress(for: job, generation: generation) : nil
+        let progress = engine.isGemini ? streamProgress(for: job, generation: generation) : nil
         let rewrite = job.rewrite
         let prompt = rewrite.flatMap(geminiPrompt(for:))
         job.task = Task { [weak self] in
@@ -970,7 +972,7 @@ final class DictationController {
     /// else (Home's work never counts).
     func streamed(_ progress: ChatStreamProgress, for id: UUID) {
         guard let job = queue.first(where: { $0.id == id }), job.outcome == nil,
-              job.engine.cloudAPI == .chatCompletions else { return }
+              job.engine.isGemini else { return }
         job.count = job.estimate.count(for: progress)
         refreshPill()
     }
@@ -1053,7 +1055,7 @@ final class DictationController {
             case .downloading:
                 try await Task.sleep(for: .milliseconds(300))
             case .installed:
-                if engine == settings.parakeetEngine { models.prepare(engine) }
+                models.prepare(engine)
                 return
             case .notInstalled:
                 throw AppError.modelNotDownloaded(engine)
@@ -1374,12 +1376,12 @@ final class DictationController {
         case .retryWith(let engine):
             retry(recordingID: notice.recordingID, engine: engine)
         case .selectEngine(let engine):
-            // "Use Parakeet v3": where Parakeet runs, and Parakeet in place of a Gemini main model.
-            models.select(engine)
-            if settings.lineup.main == .gemini { settings.lineup.main = .parakeet }
-            let main = settings.lineup.main, parakeet = settings.parakeetEngine
-            toasts.post(Notice(dedupeKey: "engine.selected", style: .success, symbol: main.symbolName(parakeet: parakeet),
-                               title: "Now using \(main.title(parakeet: parakeet))", lifetime: .seconds(3)))
+            // "Use Parakeet v3": Parakeet in place of a Gemini main model, loading if it's on disk.
+            if engine.isLocal, models.state(of: engine) == .installed { models.prepare(engine) }
+            if settings.lineup.main.isGemini { settings.lineup.main = ModelChoice(engine: engine) }
+            let main = settings.lineup.main
+            toasts.post(Notice(dedupeKey: "engine.selected", style: .success, symbol: main.symbolName,
+                               title: "Now using \(main.title)", lifetime: .seconds(3)))
         case .undoCancel:
             undo(recordingID: notice.recordingID ?? lastCancelledID)
         case .chooseMicrophone:
@@ -1508,19 +1510,20 @@ final class DictationController {
     func geminiPrompt(for kind: TranscriptVersionKind) -> String? {
         switch kind {
         case .polish: Polish.prompt
-        case .translation(polished: false): Translate.prompt(settings.translationPair)
-        case .translation(polished: true): Translate.polishedPrompt(settings.translationPair)
+        case .translation(polished: false, _): Translate.prompt(settings.translationPair)
+        case .translation(polished: true, _): Translate.polishedPrompt(settings.translationPair)
         case .transcription, .cleanup, .selection, .selectionTranslation: nil
         }
     }
 
-    /// What Gemini writes for a dictation with Polish and Translate on or off: its transcript (nil), Polish's message,
-    /// the translation, or the message translated.
-    nonisolated static func rewriteKind(polishes: Bool, translates: Bool) -> TranscriptVersionKind? {
+    /// What Gemini (`engine`, the dictation's: Flash or Argon) writes for a dictation with Polish and Translate on or
+    /// off: its transcript (nil), Polish's message, the translation, or the message translated.
+    nonisolated static func rewriteKind(polishes: Bool, translates: Bool,
+                                        by engine: EngineID = .geminiFlash) -> TranscriptVersionKind? {
         switch (polishes, translates) {
         case (false, false): nil
-        case (true, false): .polish
-        case (_, true): .translation(polished: polishes)
+        case (true, false): .polish(by: engine)
+        case (_, true): .translation(polished: polishes, by: engine)
         }
     }
 
@@ -1669,8 +1672,6 @@ final class DictationController {
         case (.modelNotDownloaded?, _): "It isn’t downloaded yet."
         case (.modelLoadFailed?, _): "It couldn’t be loaded."
         case (.openRouterNoRoute?, _): "It isn’t available for your key."
-        case (.openRouterProviderUnavailable?, .transcription(let engine)) where engine.cloudAPI == .transcriptions:
-            "OpenRouter couldn’t reach its provider."
         case (let error?, .transcription(let engine)):
             accountFailureReason(error) ?? error.notice(recordingID: nil, fallbackEngine: nil, engine: engine).title
         }
@@ -1715,7 +1716,7 @@ final class DictationController {
     private func retry(recordingID: UUID?, engine: EngineID?) {
         guard let id = recordingID else { return }
         if let waiting = queue.first(where: { $0.id == id }) {
-            // Still in the queue ("Use Parakeet v3 · Cloud Instead" while Parakeet loads): switch engines in place.
+            // Still in the queue ("Use … Instead" while its model loads): switch engines in place.
             if let engine, engine != waiting.engine, waiting.outcome == nil {
                 waiting.engine = engine
                 run(waiting)
@@ -1785,8 +1786,8 @@ final class DictationController {
     /// Downloads and loads run in the background (often after the window that started them closed), so
     /// their failures surface as notices. A failed dictation's notice for the same error shares the dedupe key.
     private func modelFailed(_ engine: EngineID, _ error: AppError) {
-        // A load nothing needs now (Parakeet on this Mac while the lineup runs it elsewhere) stays quiet.
-        if case .modelLoadFailed = error, !(engine == settings.parakeetEngine && settings.usesLocalParakeet) { return }
+        // A load nothing needs now (Parakeet on this Mac while Switch model never reaches it) stays quiet.
+        if case .modelLoadFailed = error, !(engine.isLocal && settings.usesLocalParakeet) { return }
         // A load Home work waits for: its row says why. A dictation that needs the model says it in its own notice.
         if case .modelLoadFailed = error, homeWork.values.contains(.transcription(engine)) { return }
         postFailure(error.notice(recordingID: nil, fallbackEngine: usableFallback(excluding: engine, after: error),
@@ -1927,27 +1928,19 @@ final class DictationController {
 
     // MARK: - Engines and recordings
 
-    /// Engines to fall back to from `engine`, in order: the same model on the other side (Parakeet · Cloud ↔
-    /// Parakeet on this Mac); from Gemini, Parakeet where `parakeet` runs it first, then on the other side. Only
-    /// Parakeet: Gemini is never offered in another model's place.
-    static func fallbackCandidates(for engine: EngineID, parakeet: EngineID) -> [EngineID] {
-        let ordered = [engine.localCounterpart, engine.cloudCounterpart].compactMap { $0 }
-            + [parakeet] + EngineID.parakeetRuntimes
-        var candidates: [EngineID] = []
-        for candidate in ordered where candidate != engine && !candidates.contains(candidate) {
-            candidates.append(candidate)
-        }
-        return candidates
+    /// Engines to fall back to from `engine`: from Gemini, Parakeet on this Mac; from Parakeet, none. Only Parakeet:
+    /// Gemini is never offered in another model's place.
+    static func fallbackCandidates(for engine: EngineID) -> [EngineID] {
+        EngineID.localEngines.filter { $0 != engine }
     }
 
     /// The engine offered in place of `engine`: "Retry with …" or "Use … Instead" for a saved recording, "Use …"
     /// when nothing was recorded. The first of `fallbackCandidates` that can run it: a local model once it's
-    /// downloaded (one that isn't loaded yet loads for the retry, so from Gemini Parakeet on this Mac, where it runs,
-    /// comes before Parakeet · Cloud even then), or only once it's loaded with `readyNow`; a cloud one while the key is
-    /// valid, unless `error` (the key's, the credit's, the connection's) would stop it too.
+    /// downloaded (one that isn't loaded yet loads for the retry), or only once it's loaded with `readyNow`; a cloud
+    /// one while the key is valid, unless `error` (the key's, the credit's, the connection's) would stop it too.
     private func usableFallback(excluding engine: EngineID, after error: AppError? = nil,
                                 readyNow: Bool = false) -> EngineID? {
-        Self.fallbackCandidates(for: engine, parakeet: settings.parakeetEngine).first { candidate in
+        Self.fallbackCandidates(for: engine).first { candidate in
             if candidate.isLocal {
                 switch models.state(of: candidate) {
                 case .ready: return true
@@ -1997,10 +1990,8 @@ final class DictationController {
     /// Why `choice` can't take the dictation being recorded now, or nil when it can: the OpenRouter key when it goes
     /// through it (`openRouterKeyProblem`), then Parakeet on this Mac when it uses it (`localRefusal`).
     private func switchRefusal(_ choice: ModelChoice) -> AppError? {
-        let parakeet = settings.parakeetEngine
-        if choice.needsOpenRouter(parakeet: parakeet),
-           let keyProblem = keyProblem(for: choice.engine(parakeet: parakeet)) { return keyProblem }
-        if choice.usesLocalParakeet(parakeet: parakeet) { return localRefusal(parakeet) }
+        if choice.isGemini, let keyProblem = keyProblem(for: choice.engine) { return keyProblem }
+        if choice.usesLocalParakeet { return localRefusal(choice.engine) }
         return nil
     }
 
@@ -2008,12 +1999,11 @@ final class DictationController {
     /// the main model, which always can, and for any other that can.
     private func unavailableReason(_ choice: ModelChoice) -> String? {
         guard choice != settings.lineup.main, switchRefusal(choice) != nil else { return nil }
-        let parakeet = settings.parakeetEngine
-        let engine = choice.engine(parakeet: parakeet)
-        return EngineReadiness.of(choice, parakeet: parakeet, localState: models.state(of: parakeet),
+        let engine = choice.engine
+        return EngineReadiness.of(engine, localState: models.state(of: .parakeet),
                                   keyStatus: CloudRoute.keyStatus(for: engine, account: account,
                                                                   proxy: transcription.proxy),
-                                  localError: models.lastErrors[parakeet])
+                                  localError: models.lastErrors[.parakeet])
             .unavailableReason ?? "Unavailable"
     }
 
@@ -2101,7 +2091,7 @@ final class DictationController {
     /// Only a dictation on Gemini polishes: on another model the key does Polish Selection or says why it can't
     /// (`acted(on:selection:)`), and this guard is for a model that changed in between.
     private func togglePolish() {
-        guard effectiveChoice == .gemini else { return }
+        guard effectiveChoice.isGemini else { return }
         isPolishing.toggle()
         playCue(isPolishing ? .polishOn : .polishOff)
     }
@@ -2109,7 +2099,7 @@ final class DictationController {
     /// The translate shortcut while dictating: Translate on for this dictation (its glyph in the pill), or off when
     /// pressed again. On Gemini only, as Polish; with Polish on too, the polished message comes out translated.
     private func toggleTranslate() {
-        guard effectiveChoice == .gemini else { return }
+        guard effectiveChoice.isGemini else { return }
         isTranslating.toggle()
         playCue(isTranslating ? .polishOn : .polishOff)
     }
@@ -2242,13 +2232,13 @@ final class DictationController {
     /// app. The polish and translate keys never do: where they can't work, they say so.
     private func acted(on action: ShortcutAction, selection: String?) -> Bool {
         switch action {
-        case .polish where effectiveChoice == .gemini:
+        case .polish where effectiveChoice.isGemini:
             send(.polish)
         case .polish where canPolishSelection && selection != nil:
             rewriteSelection(selection ?? "", translates: false)
         case .polish:
             explainPolish()
-        case .translate where effectiveChoice == .gemini:
+        case .translate where effectiveChoice.isGemini:
             send(.translate)
         case .translate where canTranslateSelection && selection != nil:
             rewriteSelection(selection ?? "", translates: true)
@@ -2376,6 +2366,12 @@ final class DictationController {
         }
         let override = selectionPolishOverride
         let transcription = transcription
+        let settings = settings
+        // Polish Selection stays on Gemini 3.8 Flash whatever the dictation's model: text only, it's quick there. It
+        // thinks at the level picked for Flash.
+        let effort: @MainActor (PolishSelectionModel) -> ReasoningEffort? = { model in
+            model.engine.flatMap(settings.reasoningEffort(for:))
+        }
         for model in PolishSelectionModel.asked {
             let progress: @Sendable (ChatStreamProgress) -> Void = { [weak self] streamed in
                 Task { @MainActor [weak self] in
@@ -2389,7 +2385,7 @@ final class DictationController {
                 do {
                     let result = if let override {
                         try await override(text, model)
-                    } else if let route = model.route {
+                    } else if let route = model.route(effort: effort(model)) {
                         try await transcription.polishText(text, route: route, prompt: prompt, progress: progress)
                     } else {
                         throw AppError.engineFailed(.geminiFlash, "\(model.modelName) no longer polishes.")
@@ -2599,8 +2595,8 @@ final class DictationController {
     private func switchModel(to choice: ModelChoice?, byUser: Bool = true) {
         modelOverride = choice
         if byUser { pickedModel = true }
-        if isPolishing, effectiveChoice != .gemini { isPolishing = false }
-        if isTranslating, effectiveChoice != .gemini { isTranslating = false }
+        if isPolishing, !effectiveChoice.isGemini { isPolishing = false }
+        if isTranslating, !effectiveChoice.isGemini { isTranslating = false }
         pillModel.engineChipPulse &+= 1
         if pillModel.showsTabHint { pillModel.showsTabHint = false }
         if byUser { playCue(.modelSwitch) }
@@ -2633,14 +2629,14 @@ final class DictationController {
             if case .invalid = account.status { account.refreshIfStale(maxAge: 30) }
             toasts.post(Self.switchWithoutKeyNotice(account.status, blocked: keyBlocked))
         } else if let first = blocked.first {
-            var notice = first.error.notice(recordingID: nil, fallbackEngine: nil, engine: settings.parakeetEngine)
+            var notice = first.error.notice(recordingID: nil, fallbackEngine: nil, engine: first.choice.engine)
             notice.dedupeKey = Self.switchModelNoticeKey
             toasts.post(notice)
         }
     }
 
-    /// What a switch to models the OpenRouter key can't pay for (`blocked`, in cycle order) says: "Gemini needs an
-    /// OpenRouter key", "Parakeet and Gemini need OpenRouter credit".
+    /// What a switch to models the OpenRouter key can't pay for (`blocked`, in cycle order) says: "Flash needs an
+    /// OpenRouter key", "Flash and Argon need OpenRouter credit".
     static func switchWithoutKeyNotice(_ status: KeyStatus, blocked: [ModelChoice]) -> Notice {
         let list = ModelChoice.sentenceList(blocked.isEmpty ? [.gemini] : blocked)
         let subject = "\(list.names) \(list.isPlural ? "need" : "needs")"
@@ -2787,10 +2783,10 @@ final class DictationController {
         if pillModel.sessionModel != session { pillModel.sessionModel = session }
         // A dictation in flight speaks for the processing pill before a selection's polish does.
         let selectionTranslates = selectionPolish?.translates == true
-        let polishes = phase.isRecording ? isPolishing && effectiveChoice == .gemini
+        let polishes = phase.isRecording ? isPolishing && effectiveChoice.isGemini
             : phase == .processing && (pillJob.map(\.polishes) ?? (selectionRuns && !selectionTranslates))
         if pillModel.polishes != polishes { pillModel.polishes = polishes }
-        let translates = phase.isRecording ? isTranslating && effectiveChoice == .gemini
+        let translates = phase.isRecording ? isTranslating && effectiveChoice.isGemini
             : phase == .processing && (pillJob.map(\.translates) ?? (selectionRuns && selectionTranslates))
         if pillModel.translates != translates { pillModel.translates = translates }
         // No job on the pill: the polish is the selection's, with no audio behind it.

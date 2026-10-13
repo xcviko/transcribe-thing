@@ -31,14 +31,6 @@ final class AppSettings {
     var onboardingCompleted: Bool = false { didSet { store.set(onboardingCompleted, .onboardingCompleted) } }
     /// Resume point for onboarding: an `OnboardingStep` raw value (five steps).
     var onboardingStep: Int = 0 { didSet { store.set(onboardingStep, .onboardingResumeStep) } }
-    /// Where Parakeet v3 runs, on this Mac or through OpenRouter (`ModelChoice.parakeet`). Anything but Parakeet
-    /// leaves the default. Stored under `SettingsKey.selectedEngine`.
-    var parakeetEngine: EngineID = .default {
-        didSet {
-            if !parakeetEngine.isParakeet { parakeetEngine = .default }
-            store.set(parakeetEngine.rawValue, .selectedEngine)
-        }
-    }
     /// The models as Models lists them: their order, the main model every dictation starts on, and which
     /// others the Switch model shortcut steps to.
     var lineup: ModelLineup = .default {
@@ -52,6 +44,19 @@ final class AppSettings {
     /// Each model's color (Models): the pill wears the dictation's model's, and its tile, the sidebar chip and
     /// History's marks show it.
     var modelColors: ModelColors = .default { didSet { store.setJSON(modelColors, .modelColors) } }
+    /// The level each Gemini model thinks at (Models → Reasoning), Medium until picked. Every request to the model
+    /// goes at it (`reasoningEffort(for:)`).
+    var reasoningEfforts: ReasoningEfforts = .default {
+        didSet { store.setJSON(reasoningEfforts, .geminiReasoningEfforts) }
+    }
+    /// The Gemini model that transcribes and sums up calls (Models → Calls): Gemini 3.8 Flash until another is picked.
+    /// Anything but a Gemini this build runs leaves Flash.
+    var callEngine: EngineID = .geminiFlash {
+        didSet {
+            if !EngineID.geminiEngines.contains(callEngine) { callEngine = .geminiFlash }
+            store.set(callEngine.rawValue, .callEngine)
+        }
+    }
     /// How many times the pill has shown the Switch model hint (it shows at most `switchHintLimit` times).
     var switchHintShownCount: Int = 0 { didSet { store.set(switchHintShownCount, .switchHintShownCount) } }
     var pillMode: PillMode = .whileDictating { didSet { store.set(pillMode.rawValue, .pillMode) } }
@@ -213,11 +218,21 @@ final class AppSettings {
     // MARK: Models
 
     /// The engine every dictation starts on: the main model's.
-    var mainEngine: EngineID { lineup.main.engine(parakeet: parakeetEngine) }
+    var mainEngine: EngineID { lineup.main.engine }
 
     /// Some model Switch model can reach needs Parakeet on this Mac, so it's worth loading.
     var usesLocalParakeet: Bool {
-        lineup.cycle.contains { $0.usesLocalParakeet(parakeet: parakeetEngine) }
+        lineup.cycle.contains(where: \.usesLocalParakeet)
+    }
+
+    /// The level `engine` thinks at: the one picked in Models for a Gemini model; nil for a model that doesn't reason.
+    func reasoningEffort(for engine: EngineID) -> ReasoningEffort? {
+        reasoningEfforts[engine]
+    }
+
+    /// The model calls go to, and the level it thinks at, as both a call's requests send them (`CallTranscriber`).
+    var callModel: CallModel {
+        CallModel(engine: callEngine, effort: reasoningEffort(for: callEngine) ?? .medium)
     }
 
     /// The lineup that stands for what an older build stored, or nil when it stored nothing the lineup replaces (the
@@ -226,7 +241,7 @@ final class AppSettings {
     /// (Gemini 3.1 Pro too) is the main model again.
     nonisolated static func migratedLineup(storedEngine: EngineID?, switchCleanup: Bool?,
                                            switchEngines: [String]?) -> ModelLineup? {
-        let geminiWasMain = storedEngine?.cloudAPI == .chatCompletions
+        let geminiWasMain = storedEngine?.isGemini == true
         guard geminiWasMain || switchCleanup != nil || switchEngines != nil else { return nil }
         var lineup = ModelLineup.default
         lineup.setSwitchable(.gemini, switchEngines.map { $0.contains(EngineID.geminiFlash.rawValue) } ?? true)
@@ -240,6 +255,13 @@ final class AppSettings {
     nonisolated static func handsFreeModel(stored raw: String?, lineup: ModelLineup) -> ModelChoice? {
         guard raw == ModelChoice.retiredCleanup else { return raw.flatMap(ModelChoice.init(rawValue:)) }
         return lineup.steps.contains(.parakeet) ? .parakeet : nil
+    }
+
+    /// A Pasting rule's models from before Gemini 4 Argon: Argon checked where Gemini 3.8 Flash is.
+    nonisolated static func withArgonLikeFlash(_ models: Set<ModelChoice>) -> Set<ModelChoice> {
+        var models = models
+        if models.contains(.gemini) { models.insert(.argon) } else { models.remove(.argon) }
+        return models
     }
 
     /// Onboarding had six steps (welcome, permissions, model, shortcuts, try it, done) until shortcuts and try it
@@ -264,9 +286,9 @@ final class AppSettings {
             store.set(onboardingStep, .onboardingResumeStep)
             store.remove(.onboardingStep)
         }
-        // An engine this build doesn't offer (one since removed) leaves the default.
+        // Where Parakeet ran (on this Mac, or through OpenRouter until that was removed), or the main model of a build
+        // before 0.2.0. Parakeet runs only on this Mac now, so a lineup that had it through OpenRouter has it here.
         let storedEngine = store.string(.selectedEngine).flatMap(EngineID.init(rawValue:))
-        if let storedEngine, storedEngine.isParakeet { parakeetEngine = storedEngine }
         if let v: ModelLineup = store.json(.lineup) {
             lineup = v
         } else if let migrated = Self.migratedLineup(storedEngine: storedEngine,
@@ -276,11 +298,14 @@ final class AppSettings {
             lineup = migrated
             store.setJSON(migrated, .lineup)
         }
-        // A Gemini selection from builds before 0.2.0 is the lineup's main model now; the key holds Parakeet's place.
-        if let storedEngine, !storedEngine.isParakeet { store.set(EngineID.default.rawValue, .selectedEngine) }
+        // A Gemini selection from builds before 0.2.0 is the lineup's main model now, and Parakeet runs on this Mac:
+        // the key has nothing left to say.
+        store.remove(.selectedEngine)
         store.remove(.switchCleanup)
         store.remove(.switchEngines)
         if let v: ModelColors = store.json(.modelColors) { modelColors = v }
+        if let v: ReasoningEfforts = store.json(.geminiReasoningEfforts) { reasoningEfforts = v }
+        if let v = store.string(.callEngine).flatMap(EngineID.init(rawValue:)) { callEngine = v }
         if let v = store.int(.switchHintShownCount) { switchHintShownCount = max(0, v) }
         if let v = store.string(.pillMode).flatMap(PillMode.init(rawValue:)) { pillMode = v }
         // Older builds could hide the pill for an hour; that deadline has no meaning now.
@@ -312,8 +337,8 @@ final class AppSettings {
         store.remove(.cleanupEnabled)
         // Polish Selection asks both its models at once now (to pick the better answer): the stored choice goes.
         store.remove(.polishSelectionModel)
-        // Every model thinks at its own fixed level now, and clean-up is gone: the stored levels and clean-up model
-        // choice have no meaning any more.
+        // Clean-up is gone, and the levels Gemini models think at are stored anew (`geminiReasoningEfforts`): the
+        // levels and clean-up model choice older builds stored have no meaning any more.
         for key in [SettingsKey.reasoningEfforts, .cleanupModel, .cleanupReasoningEfforts, .cleanupReasoningEffort] {
             store.remove(key)
         }
@@ -342,6 +367,13 @@ final class AppSettings {
         }
         store.remove(.addSpaceAfterText)
         store.remove(.removeFinalPeriod)
+        // Gemini 4 Argon arrived after Pasting's rules were picked per model: it starts with Gemini 3.8 Flash's, once.
+        // Changed after that, it keeps its own.
+        if store.bool(.argonPastingAdded) != true {
+            modelsAddingSpace = Self.withArgonLikeFlash(modelsAddingSpace)
+            modelsRemovingFinalPeriod = Self.withArgonLikeFlash(modelsRemovingFinalPeriod)
+            store.set(true, .argonPastingAdded)
+        }
         if let v: [String] = store.json(.modesAddingSpace) { modesAddingSpace = DictationMachine.Mode.read(v) }
         if let v: [String] = store.json(.modesRemovingFinalPeriod) {
             modesRemovingFinalPeriod = DictationMachine.Mode.read(v)
@@ -440,7 +472,8 @@ struct MicrophoneMigrationProbe: Sendable, Equatable {
 // MARK: - Storage
 
 enum SettingsKey: String, CaseIterable {
-    /// `selectedEngine` holds `parakeetEngine`; named when it was the main model.
+    /// `selectedEngine` held where Parakeet ran (on this Mac or through OpenRouter; named when it was the main
+    /// model): read once by the lineup's migration and removed at load, as Parakeet runs only on this Mac now.
     /// `onboardingStep` holds a six-step index from older builds, read once and moved to `onboardingResumeStep`.
     /// `soundVolume` is the removed volume slider's, read once (zero turns sounds off) and removed.
     /// `pillHiddenUntil` is the removed "Hide Pill for 1 Hour" deadline, removed at load.
@@ -462,7 +495,7 @@ enum SettingsKey: String, CaseIterable {
     case switchEngines, switchCleanup, switchHintShownCount, microphoneChoiceMigrated
     /// `cleanupEnabled` is the removed "Clean up Parakeet transcripts" switch (every dictation), removed at load:
     /// clean-up became a model in `lineup`, and is gone now.
-    /// `reasoningEfforts` (each Gemini model's Thinking level), `cleanupModel` (the clean-up model choice),
+    /// `reasoningEfforts` (an older build's Thinking level per Gemini model), `cleanupModel` (the clean-up model choice),
     /// `cleanupReasoningEfforts` (each clean-up model's level) and `cleanupReasoningEffort` (Flash Lite's level from
     /// before that choice) are removed at load: every model thinks at a fixed level, and clean-up is gone.
     case reasoningEfforts, cleanupEnabled, cleanupReasoningEffort
@@ -489,6 +522,10 @@ enum SettingsKey: String, CaseIterable {
     case callRecording, callExclusions, showsCallNotices
     /// The OpenAI-compatible endpoint's base URL and whether Gemini goes through it.
     case vertexProxyURL, vertexProxyEnabled
+    /// The level each Gemini model thinks at (`ReasoningEfforts`), and the model calls go to.
+    case geminiReasoningEfforts, callEngine
+    /// Set once Pasting's rules have given Gemini 4 Argon Gemini 3.8 Flash's checks (`load`).
+    case argonPastingAdded
 
     var defaultsKey: String { "tt.\(rawValue)" }
 }

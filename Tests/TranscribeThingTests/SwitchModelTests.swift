@@ -253,11 +253,11 @@ import Testing
         #expect(!cues.played.contains(.modelSwitch))
         let notice = try #require(rig.notice(DictationController.switchModelNoticeKey))
         if case .noCredit = key {
-            #expect(notice.title == "Gemini needs OpenRouter credit")
+            #expect(notice.title == "Flash needs OpenRouter credit")
             #expect(notice.body == "Add credit to switch models.")
             #expect(notice.primaryAction?.kind == .openURL(OpenRouterLinks.credits))
         } else {
-            #expect(notice.title == "Gemini needs an OpenRouter key")
+            #expect(notice.title == "Flash needs an OpenRouter key")
             #expect(notice.primaryAction?.title == "Add Key")
             try rig.click(.openHub(.models), in: DictationController.switchModelNoticeKey)
             #expect(opened == [.models])
@@ -275,7 +275,7 @@ import Testing
         broke.h.controller.cycleEngine()
         #expect(broke.h.controller.modelOverride == nil && broke.h.pill.shakeCount == shakes + 1)
         #expect(broke.notice(DictationController.switchModelNoticeKey)?.title
-            == "Gemini needs OpenRouter credit")
+            == "Flash needs OpenRouter credit")
         broke.h.controller.send(.pillCancel)
 
         // Gemini as the main model, Parakeet on this Mac not downloaded: Parakeet can't run.
@@ -739,13 +739,13 @@ import Testing
     /// The notice without a key names what it keeps out of reach, in cycle order.
     @Test func theKeyNoticeNamesWhatItBlocks() {
         #expect(DictationController.switchWithoutKeyNotice(.missing, blocked: [.gemini]).title
-            == "Gemini needs an OpenRouter key")
+            == "Flash needs an OpenRouter key")
         #expect(DictationController.switchWithoutKeyNotice(.missing, blocked: [.parakeet]).title
             == "Parakeet needs an OpenRouter key")
-        #expect(DictationController.switchWithoutKeyNotice(.noCredit(nil), blocked: [.parakeet, .gemini]).title
-            == "Parakeet and Gemini need OpenRouter credit")
+        #expect(DictationController.switchWithoutKeyNotice(.noCredit(nil), blocked: [.gemini, .argon]).title
+            == "Flash and Argon need OpenRouter credit")
         let all = DictationController.switchWithoutKeyNotice(.invalid("401"), blocked: [.parakeet, .gemini])
-        #expect(all.title == "Parakeet and Gemini need an OpenRouter key")
+        #expect(all.title == "Parakeet and Flash need an OpenRouter key")
         #expect(all.body == "OpenRouter rejected yours. Update it to switch models.")
         #expect(DictationController.switchWithoutKeyNotice(.missing, blocked: [.gemini]).body
             == "Add one to switch models while dictating.")
@@ -801,7 +801,7 @@ import Testing
         c.send(.handsFreeToggle)
         c.selectModelForCurrentDictation(.gemini)
         #expect(c.modelOverride == nil && !cues.played.contains(.modelSwitch))
-        #expect(rig.notice(DictationController.switchModelNoticeKey)?.title == "Gemini needs an OpenRouter key")
+        #expect(rig.notice(DictationController.switchModelNoticeKey)?.title == "Flash needs an OpenRouter key")
         c.send(.pillCancel)
     }
 
