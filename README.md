@@ -80,7 +80,7 @@ key stay saved.
 ## Dictionary
 
 Words, names and terms you use, and how they're spelled. Gemini 3.8 Flash gets them as a hint, so a dictation
-spells "Wispr Flow" the way you do; Parakeet takes no hints. Add one with fn D over selected text, or in the
+or a call's transcript spells "Wispr Flow" the way you do; Parakeet takes no hints. Add one with fn D over selected text, or in the
 app's Dictionary page, where you can also sort them into groups by dragging. Groups are only for you: the models get
 every word.
 

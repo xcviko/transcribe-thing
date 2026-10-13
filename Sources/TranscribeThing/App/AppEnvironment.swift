@@ -210,6 +210,7 @@ final class AppEnvironment {
     /// transcription, or its recording.
     private func wireCalls() {
         callTranscriber.userName = { [settings] in settings.displayName }
+        callTranscriber.vocabulary = { [settings] in settings.dictionary.words }
         calls.onRemove = { [weak self] ids in
             for id in ids { self?.callTranscriber.cancel(id) }
             self?.callMonitor.removed(ids)

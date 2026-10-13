@@ -49,6 +49,9 @@ final class CallTranscriber {
     private let sendText: SendText?
     /// The person's first name, which the mic's speaker gets; "Me" without one.
     var userName: @MainActor () -> String? = { nil }
+    /// The user's dictionary, as dictation's Gemini gets it (`UserDictionary.prompt`): a hint for the names and terms
+    /// said in the call. Read when a transcription or summary starts.
+    var vocabulary: @MainActor () -> [String] = { [] }
     /// Reads a stretch of a track's file; replaceable in tests.
     var read: @Sendable (_ url: URL, _ range: Range<Int>) throws -> [Float] = { try CallAudio.read($0, range: $1) }
     /// Where events go; a test's own log in tests.
@@ -152,7 +155,7 @@ final class CallTranscriber {
                         remoteSamples: Int(call.remoteSeconds * Recording.sampleRate),
                         micSamples: Int(call.micSeconds * Recording.sampleRate),
                         mutes: call.muteIntervals, userName: userName(), service: call.service?.name,
-                        answers: store.answersFolder(for: id), callID: id)
+                        answers: store.answersFolder(for: id), callID: id, vocabulary: vocabulary())
         let send = send, sendText = sendText, read = read, log = log
         tasks[id] = Task { [weak self] in
             let outcome: Result<Outcome, any Error>
@@ -179,12 +182,12 @@ final class CallTranscriber {
         store.summarizing.insert(id)
         store.update(id) { $0.summaryError = nil }
         let me = CallPrompts.speakerName(for: userName())
-        let service = call.service?.name, answers = store.answersFolder(for: id), log = log
+        let service = call.service?.name, answers = store.answersFolder(for: id), log = log, words = vocabulary()
         summaryTasks[id] = Task { [weak self] in
             let outcome: Result<SummaryOutcome, any Error>
             do {
                 outcome = .success(try await Self.summarize(transcript, me: me, service: service, answers: answers,
-                                                            sendText: sendText, log: log, callID: id))
+                                                            sendText: sendText, log: log, callID: id, vocabulary: words))
             } catch {
                 outcome = .failure(error)
             }
@@ -285,9 +288,12 @@ final class CallTranscriber {
         var answers: URL?
         /// For the log.
         var callID: UUID?
+        /// The user's dictionary, for the prompts.
+        var vocabulary: [String]
 
         init(remote: URL?, mic: URL?, remoteSamples: Int, micSamples: Int, mutes: [CallInterval], userName: String?,
-             service: String?, answers: URL? = nil, callID: UUID? = nil) {
+             service: String?, answers: URL? = nil, callID: UUID? = nil, vocabulary: [String] = []) {
+            self.vocabulary = vocabulary
             self.remote = remote
             self.mic = mic
             self.remoteSamples = remoteSamples
@@ -394,9 +400,10 @@ final class CallTranscriber {
                 guard mute.overlap(offset, offset + audio.seconds) > 0 else { return nil }
                 return CallInterval(start: max(0, mute.start - offset), end: min(audio.seconds, mute.end - offset))
             }
-            let prompt = CallPrompts.call(me: me, service: plan.service, roster: roster, local: sides.speakers,
-                                          mutes: mutes, seconds: audio.seconds, voiceSample: sample != nil,
-                                          summary: inlineSummary)
+            let prompt = UserDictionary.prompt(
+                CallPrompts.call(me: me, service: plan.service, roster: roster, local: sides.speakers, mutes: mutes,
+                                 seconds: audio.seconds, voiceSample: sample != nil, summary: inlineSummary),
+                with: plan.vocabulary, heard: true)
             let started = ContinuousClock.now
             var text: String
             var result: CloudResult?
@@ -454,7 +461,7 @@ final class CallTranscriber {
                 do {
                     let summed = try await Self.summarize(outcome.transcript, me: me, service: plan.service,
                                                           answers: plan.answers, sendText: summarize, log: log,
-                                                          callID: plan.callID)
+                                                          callID: plan.callID, vocabulary: plan.vocabulary)
                     outcome.summary = summed.summary
                     costs += [summed.costUSD].compactMap { $0 }
                 } catch is CancellationError {
@@ -478,14 +485,15 @@ final class CallTranscriber {
     /// read as far as it goes.
     nonisolated static func summarize(_ transcript: CallTranscript, me: String, service: String?, answers: URL?,
                                       sendText: SendText, log: DiagnosticLog,
-                                      callID: UUID?) async throws -> SummaryOutcome {
+                                      callID: UUID?, vocabulary: [String] = []) async throws -> SummaryOutcome {
         let call = callID.map(shortID)
         let text = CallSummaryPrompt.transcript(transcript)
         let started = ContinuousClock.now
         var answer: String
         var result: CloudResult?
         do {
-            let answered = try await sendText(text, CallSummaryPrompt.text(me: me, service: service))
+            let answered = try await sendText(text, UserDictionary.prompt(CallSummaryPrompt.text(me: me, service: service),
+                                                                          with: vocabulary, heard: false))
             result = answered
             answer = answered.text
         } catch AppError.openRouterTruncated(let partial) {

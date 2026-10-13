@@ -498,6 +498,19 @@ private func journalInfo(_ id: UUID = UUID(), consent: CallJournal.Consent = .ke
         #expect(gemini.samples.withLock { $0 } == [nil], "nothing of theirs to sample")
     }
 
+    /// The dictionary helps a call as it helps a dictation: its words follow the call's prompt as a hint.
+    @Test func theDictionaryGoesWithTheCall() async throws {
+        let gemini = FakeGemini(answer: { _ in "[00:01-00:03] Аня: Привет, Deskpoint" })
+        let samples = speechLike(seconds: 10)
+        let plan = CallTranscriber.Plan(remote: URL(fileURLWithPath: "/remote.m4a"), mic: URL(fileURLWithPath: "/mic.m4a"),
+                                        remoteSamples: samples.count, micSamples: samples.count, mutes: [],
+                                        userName: "Матвей", service: "Slack", vocabulary: ["Deskpoint", "Зуб.про"])
+        _ = try await CallTranscriber.run(plan, send: { try await gemini.send($0, $1, $2, $3) }) { _, range in Array(samples[range]) }
+        let prompt = try #require(gemini.prompts.withLock { $0.first })
+        #expect(prompt.hasSuffix("<dictionary>\nDeskpoint\nЗуб.про\n</dictionary>"))
+        #expect(prompt.contains("This audio is a recording of a call") || prompt.contains("The second audio is a recording"))
+    }
+
     @Test func aChunkGoesWholeAndOnlyASilentOneIsLeftOut() async throws {
         let gemini = FakeGemini(answer: { _ in "[00:04-00:06] Me: Hello" })
         // Speech in the first two seconds only, then 28 s of quiet: all 30 s go.
