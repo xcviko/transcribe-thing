@@ -132,6 +132,7 @@ final class CallTranscriber {
         let route = await MainActor.run { () -> Result<(OpenRouterClient, String, CallModel), AppError> in
             let call = model()
             if let proxy, proxy.routesGemini {
+                guard proxy.isConfigured else { return .failure(.vertexProxy(.notSetUp)) }
                 guard let key = proxy.apiKey(), let proxyClient = proxy.client() else {
                     return .failure(.vertexProxy(.keyUnreadable))
                 }

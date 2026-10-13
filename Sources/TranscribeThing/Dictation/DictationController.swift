@@ -598,7 +598,8 @@ final class DictationController {
                 proxy.refreshIfStale(maxAge: 30)
                 return .vertexProxy(.keyRejected(message))
             case .failed where proxy.isKeyUnreadable: return .vertexProxy(.keyUnreadable)
-            case .missing, .checking, .valid, .noCredit, .offline, .failed: return nil
+            case .missing: return .vertexProxy(.notSetUp)
+            case .checking, .valid, .noCredit, .offline, .failed: return nil
             }
         }
         switch account.status {
@@ -1024,7 +1025,8 @@ final class DictationController {
         case .invalid(let message): .vertexProxy(.keyRejected(message))
         case .noCredit: .vertexProxy(.spendLimit(""))
         case .failed where proxy.isKeyUnreadable: .vertexProxy(.keyUnreadable)
-        case .missing, .checking, .valid, .offline, .failed: nil
+        case .missing: .vertexProxy(.notSetUp)
+        case .checking, .valid, .offline, .failed: nil
         }
     }
 
@@ -1699,6 +1701,7 @@ final class DictationController {
     /// best.
     private nonisolated static func vertexProxyFailureReason(_ failure: VertexProxyFailure) -> String? {
         switch failure {
+        case .notSetUp: "Your endpoint isn’t set up. Add its base URL and API key in Models."
         case .keyUnreadable: "Your endpoint’s saved API key couldn’t be read. Paste it again in Models."
         case .keyRejected: "Your endpoint rejected the API key."
         case .spendLimit: "Your endpoint hit a spend limit."
@@ -2003,7 +2006,8 @@ final class DictationController {
         return EngineReadiness.of(engine, localState: models.state(of: .parakeet),
                                   keyStatus: CloudRoute.keyStatus(for: engine, account: account,
                                                                   proxy: transcription.proxy),
-                                  localError: models.lastErrors[.parakeet])
+                                  localError: models.lastErrors[.parakeet],
+                                  provider: transcription.provider(for: engine))
             .unavailableReason ?? "Unavailable"
     }
 

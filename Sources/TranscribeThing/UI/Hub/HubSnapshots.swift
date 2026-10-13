@@ -185,10 +185,15 @@ enum HubSnapshots {
             hub("hub-models-key-missing", .models, height: 1100) { c in
                 c.account = .preview(status: .missing)
             },
-            // API keys, at the bottom: the OpenAI-compatible endpoint not set up, working, its key rejected, switched
-            // off, saved as a bare host (read as …/api/v1), and the endpoint alone (no OpenRouter key: Gemini ready
-            // through it, cloud Parakeet needing a key).
+            // API keys, at the bottom: OpenRouter picked (its key alone), the custom endpoint picked and working, its
+            // key rejected, picked but not set up (Gemini "Needs endpoint"), OpenRouter picked with an endpoint saved,
+            // saved as a bare host (read as …/api/v1), and the endpoint alone (no OpenRouter key: Gemini ready
+            // through it).
             hub("hub-models-endpoint-unset", .models, height: 1500),
+            hub("hub-models-endpoint-not-set-up", .models, height: 1500) { c in
+                c.proxy = .preview(status: .notSet, settings: c.settings, enabled: true)
+                c.settings.lineup.main = .gemini
+            },
             hub("hub-models-endpoint-works", .models, height: 1500) { c in
                 c.proxy = .preview(status: .works, settings: c.settings)
             },

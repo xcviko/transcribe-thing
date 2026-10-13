@@ -1,9 +1,9 @@
 import AppKit
 import SwiftUI
 
-/// Models' "API keys": one group (a section of the page's form) with the OpenRouter key, the user's own
-/// OpenAI-compatible endpoint (base URL, API key, status) and "Use for Gemini", which sends Gemini through the
-/// endpoint.
+/// Models' "API keys": one group (a section of the page's form) with the provider every cloud request goes to, then
+/// that provider's fields only: the OpenRouter key, or the user's own OpenAI-compatible endpoint (base URL, API key,
+/// status). The other provider's stay saved.
 struct APIKeysGroup: View {
     /// Incremented by the page to scroll to the OpenRouter key and focus its field ("Add key", "Update key").
     var keyFocusRequest: Int
@@ -11,20 +11,35 @@ struct APIKeysGroup: View {
     /// Gemini goes through the endpoint).
     var endpointFocusRequest: Int
 
+    @Environment(AppSettings.self) private var settings
+
     var body: some View {
-        HubGroup("API keys", footer: Self.footer) {
+        HubGroup("API keys", footer: Self.footer(settings.cloudProvider)) {
             SettingsGroup {
-                OpenRouterKeyRow(focusRequest: keyFocusRequest)
-                    .id(ModelsAnchor.key)
-                EndpointRow(focusRequest: endpointFocusRequest)
-                    .id(ModelsAnchor.proxy)
-                UseEndpointForGeminiRow()
+                ProviderPickerRow()
+                switch settings.cloudProvider {
+                case .openRouter:
+                    OpenRouterKeyRow(focusRequest: keyFocusRequest)
+                        .id(ModelsAnchor.key)
+                case .vertexProxy:
+                    EndpointRow(focusRequest: endpointFocusRequest)
+                        .id(ModelsAnchor.proxy)
+                }
             }
         }
     }
 
-    static let footer = "Gemini goes through your endpoint when it’s set up and Use for Gemini is on, "
-        + "and through OpenRouter otherwise."
+    /// What the choice means, and that switching loses nothing.
+    static func footer(_ provider: CloudProvider) -> String {
+        switch provider {
+        case .openRouter:
+            "Every Gemini request goes to OpenRouter and never to your endpoint. Your endpoint’s URL and key stay "
+                + "saved, so you can switch back anytime."
+        case .vertexProxy:
+            "Every Gemini request goes to your endpoint and never to OpenRouter. Your OpenRouter key stays saved, so "
+                + "you can switch back anytime."
+        }
+    }
 }
 
 /// The OpenRouter key: masked key with Replace/Remove, or a field to add one, and its live status.
@@ -75,9 +90,7 @@ struct OpenRouterKeyRow: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.ink)
                 // Who pays, and for what: worth saying every time.
-                Text(proxy.routesGemini
-                     ? "Not in use while Gemini goes through your endpoint."
-                     : "Gemini runs on it. You pay OpenRouter per use.")
+                Text("Gemini runs on it. You pay OpenRouter per use.")
                     .typeface(.callout)
                     .foregroundStyle(.inkSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -172,9 +185,7 @@ struct OpenRouterKeyRow: View {
     @ViewBuilder private var statusLine: some View {
         switch account.status {
         case .missing:
-            status("key.slash", .inkTertiary, proxy.routesGemini
-                   ? "No key yet. Your endpoint takes Gemini’s requests."
-                   : "No key yet. Gemini needs one.")
+            status("key.slash", .inkTertiary, "No key yet. Gemini needs one.")
         case .checking:
             HStack(spacing: 7) {
                 ProgressView().controlSize(.mini)

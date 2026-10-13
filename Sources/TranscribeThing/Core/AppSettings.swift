@@ -174,9 +174,34 @@ final class AppSettings {
     /// Vertex proxy) still reads as `<host>/api/v1`. The name is from then, kept so a saved URL needs no migration.
     /// Its key is in its own key file (`AppPaths.vertexProxyKeyFile`), never here.
     var vertexProxyURL: String? = nil { didSet { store.set(vertexProxyURL, .vertexProxyURL) } }
-    /// "Use for Gemini": with an endpoint set up, every Gemini request goes to it instead of OpenRouter. Off keeps
-    /// the endpoint's URL and key, and Gemini goes through OpenRouter again.
-    var vertexProxyEnabled: Bool = true { didSet { store.set(vertexProxyEnabled, .vertexProxyEnabled) } }
+    /// Where every cloud request goes (Models → API keys → Provider): OpenRouter, or the user's own endpoint, never the
+    /// other. Every cloud request is Gemini's: dictations, Polish, Translate, selected text, files, calls and their
+    /// summaries. The other provider's key (and the endpoint's URL) stay saved. Stored under `cloudProvider`, and
+    /// mirrored into `vertexProxyEnabled` (the "Use for Gemini" switch it replaced) for an older build.
+    var cloudProvider: CloudProvider = .openRouter {
+        didSet {
+            store.set(cloudProvider.rawValue, .cloudProvider)
+            store.set(cloudProvider == .vertexProxy, .vertexProxyEnabled)
+            providerNeedsMigration = false
+        }
+    }
+    /// No provider stored yet: a build from before the choice. `resolveCloudProvider` picks it once the endpoint's
+    /// account knows whether it's set up.
+    @ObservationIgnored private(set) var providerNeedsMigration = false
+    /// What an older build stored for "Use for Gemini" (on by default), read by the provider's migration only.
+    @ObservationIgnored private var storedUseForGemini = true
+
+    /// The provider for a build from before the choice, once: the custom endpoint where one was set up (a base URL and
+    /// a key) with "Use for Gemini" on, OpenRouter for everyone else. Nothing once a provider is stored.
+    func resolveCloudProvider(endpointConfigured: Bool) {
+        guard providerNeedsMigration else { return }
+        cloudProvider = Self.migratedCloudProvider(endpointConfigured: endpointConfigured,
+                                                   useForGemini: storedUseForGemini)
+    }
+
+    nonisolated static func migratedCloudProvider(endpointConfigured: Bool, useForGemini: Bool) -> CloudProvider {
+        endpointConfigured && useForGemini ? .vertexProxy : .openRouter
+    }
 
     @ObservationIgnored private let store: SettingsStore
     /// Read once at most, by the migration of the removed built-in-over-Bluetooth switch.
@@ -391,7 +416,12 @@ final class AppSettings {
         if let v: [CallExclusion] = store.json(.callExclusions) { callExclusions = v }
         if let v = store.bool(.showsCallNotices) { showsCallNotices = v }
         if let v = store.string(.vertexProxyURL), !v.isEmpty { vertexProxyURL = v }
-        if let v = store.bool(.vertexProxyEnabled) { vertexProxyEnabled = v }
+        if let v = store.string(.cloudProvider).flatMap(CloudProvider.init(rawValue:)) {
+            cloudProvider = v
+        } else {
+            storedUseForGemini = store.bool(.vertexProxyEnabled) ?? true
+            providerNeedsMigration = true
+        }
         if let v: ShortcutBindings = store.json(.shortcuts) { shortcuts = v }
         // Polish moved from fn ↩ to fn P (when ↩ finished a hands-free dictation): a build that had it on fn ↩ by default
         // moves it, once, unless fn P is taken. Bound to fn ↩ again after that, it stays.
@@ -520,8 +550,10 @@ enum SettingsKey: String, CaseIterable {
     case polishSelectionModel, translationPair, userName
     /// How calls are recorded (`CallRecordingMode`), and the apps and sites never recorded.
     case callRecording, callExclusions, showsCallNotices
-    /// The OpenAI-compatible endpoint's base URL and whether Gemini goes through it.
-    case vertexProxyURL, vertexProxyEnabled
+    /// The OpenAI-compatible endpoint's base URL, and the provider every cloud request goes to (`cloudProvider`).
+    /// `vertexProxyEnabled` is the "Use for Gemini" switch it replaced: read once by the provider's migration, then kept
+    /// in step with the provider for an older build.
+    case vertexProxyURL, vertexProxyEnabled, cloudProvider
     /// The level each Gemini model thinks at (`ReasoningEfforts`), and the model calls go to.
     case geminiReasoningEfforts, callEngine
     /// Set once Pasting's rules have given Gemini 4 Argon Gemini 3.8 Flash's checks (`load`).

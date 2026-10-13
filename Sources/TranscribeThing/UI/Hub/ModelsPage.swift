@@ -87,7 +87,7 @@ struct ModelsPage: View {
         guard settings.lineup.main != choice else { return }
         if choice.isGemini {
             switch hub.readiness(of: choice) {
-            case .needsKey, .keyProblem:
+            case .needsKey, .needsEndpoint, .keyProblem:
                 focusKey(for: choice, proxy)
                 return
             case .ready, .warming, .needsDownload, .failed:
@@ -315,7 +315,8 @@ private struct LineupRow: View {
     private var status: some View {
         let summary = EngineSummary.make(choice: choice, localState: models.state(of: .parakeet),
                                          keyStatus: hub.keyStatus(for: choice.engine),
-                                         localError: models.lastErrors[.parakeet])
+                                         localError: models.lastErrors[.parakeet],
+                                         provider: hub.provider(for: choice.engine))
         return HStack(spacing: 4) {
             StatusDot(color: summary.tone.color, size: 6, pulsing: summary.tone == .progress)
                 .frame(width: 12, height: 12)
@@ -339,6 +340,9 @@ private struct LineupRow: View {
             .buttonStyle(SecondaryButtonStyle(size: .small))
         case .needsKey:
             Button("Add Key", action: focusKey)
+                .buttonStyle(SecondaryButtonStyle(size: .small))
+        case .needsEndpoint:
+            Button("Set Up", action: focusKey)
                 .buttonStyle(SecondaryButtonStyle(size: .small))
         case .keyProblem:
             Button("Update Key", action: focusKey)

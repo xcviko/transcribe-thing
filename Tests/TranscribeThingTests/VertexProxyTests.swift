@@ -27,7 +27,7 @@ enum ProxyFixture {
         let host = "proxy-\(UUID().uuidString.lowercased()).test"
         StubURLProtocol.registry.enqueue(replies, host: host)
         settings.vertexProxyURL = "https://\(host)\(path)"
-        settings.vertexProxyEnabled = enabled
+        settings.cloudProvider = enabled ? .vertexProxy : .openRouter
         let keyStore = KeyFileStore.inMemory(key)
         keyStore.simulateReadFailure(keyReadFails)
         let session = session
@@ -402,7 +402,7 @@ enum ProxyFixture {
         #expect(await proxy.setURL("") == nil)
         #expect(settings.vertexProxyURL == nil)
         #expect(proxy.status == .notSet)
-        #expect(!proxy.routesGemini)
+        #expect(proxy.routesGemini && !proxy.isConfigured, "still the provider, now not set up")
     }
 
     @Test func aKeyOfAnyShapeIsSavedAndChecked() async {
@@ -428,7 +428,7 @@ enum ProxyFixture {
         proxy.removeKey()
         #expect(proxy.apiKey() == nil)
         #expect(proxy.status == .notSet)
-        #expect(!proxy.routesGemini)
+        #expect(proxy.routesGemini && !proxy.isConfigured, "still the provider, now not set up")
     }
 
     @Test func theCheckSaysWhatWentWrong() async {
@@ -446,7 +446,7 @@ enum ProxyFixture {
         }
     }
 
-    @Test func useForGeminiSwitchesRoutingWithoutForgetting() {
+    @Test func theProviderSwitchesRoutingWithoutForgetting() {
         let (proxy, _) = ProxyFixture.proxy()
         #expect(proxy.routesGemini)
         proxy.isEnabled = false
@@ -650,7 +650,7 @@ enum ProxyFixture {
 
 @MainActor
 @Suite struct VertexProxyCopyTests {
-    static let failures: [VertexProxyFailure] = [.keyUnreadable, .keyRejected("x"), .spendLimit("x"), .unreachable,
+    static let failures: [VertexProxyFailure] = [.notSetUp, .keyUnreadable, .keyRejected("x"), .spendLimit("x"), .unreachable,
                                                  .rateLimited(retryAfter: nil), .forbidden(""), .unavailable("x"),
                                                  .badRequest(""), .tooLarge]
 
@@ -699,7 +699,8 @@ enum ProxyFixture {
     @Test func noUserFacingTextNamesVertexOrAProxy() {
         let (proxy, host) = ProxyFixture.proxy()
         var texts: [String] = [CloudProvider.vertexProxy.name, VertexProxy.label, VertexProxy.notAnAPIMessage,
-                               VertexProxyAccount.keyUnreadableMessage, EndpointRow.urlHelp, APIKeysGroup.footer]
+                               VertexProxyAccount.keyUnreadableMessage, EndpointRow.urlHelp,
+                               APIKeysGroup.footer(.openRouter), APIKeysGroup.footer(.vertexProxy)]
         texts += [VertexProxy.URLProblem.empty, .notHTTPS, .invalid].map(\.message)
         for failure in Self.failures {
             let error = AppError.vertexProxy(failure)
@@ -719,7 +720,7 @@ enum ProxyFixture {
         texts.append(EngineCLI.geminiRouteLine(nil))
         texts.append(EngineSummary.make(engine: .geminiFlash, localState: .notInstalled,
                                         keyStatus: .valid(KeyInfo(label: VertexProxy.label))).status)
-        for keyStatus in [KeyStatus.invalid("x"), .noCredit(KeyInfo(label: VertexProxy.label))] {
+        for keyStatus in [KeyStatus.invalid("x"), .noCredit(KeyInfo(label: VertexProxy.label)), .missing] {
             let input = HubAttention.Input(microphone: .granted, accessibility: .granted, accessibilityLikelyStale: false,
                                            fnKeyUsage: .doNothing, pushToTalkUsesFn: true, engine: .geminiFlash,
                                            localState: .notInstalled, keyStatus: keyStatus, provider: .vertexProxy)
@@ -782,19 +783,21 @@ enum ProxyFixture {
         let (proxy, host) = ProxyFixture.proxy(settings: settings)
         let line = DiagnosticSettingsSummary(settings: settings, keySaved: true,
                                              endpoint: DiagnosticSettingsSummary.endpointState(proxy)).line
-        #expect(line.contains("customEndpoint=gemini"))
+        #expect(line.contains("provider=vertexProxy customEndpoint=set"))
         #expect(!line.contains(ProxyFixture.key) && !line.contains(host))
         proxy.isEnabled = false
-        #expect(DiagnosticSettingsSummary.endpointState(proxy) == "off")
+        #expect(DiagnosticSettingsSummary(settings: settings, keySaved: true,
+                                          endpoint: DiagnosticSettingsSummary.endpointState(proxy)).line
+                    .contains("provider=openRouter customEndpoint=set"))
         #expect(DiagnosticSettingsSummary.endpointState(nil) == "notSet")
         let route = EngineCLI.geminiRouteLine(proxy)
-        #expect(route == "OpenRouter (custom endpoint at \(host)/api/v1 is switched off)")
+        #expect(route == "OpenRouter (custom endpoint at \(host)/api/v1 saved, not in use)")
         #expect(!route.contains(ProxyFixture.key))
         proxy.isEnabled = true
         #expect(EngineCLI.geminiRouteLine(proxy) == "Custom endpoint (\(host)/api/v1, key saved)")
-        #expect(EngineCLI.geminiRouteLine(nil) == "OpenRouter (no custom endpoint set up)")
+        #expect(EngineCLI.geminiRouteLine(nil) == "OpenRouter (no custom endpoint saved)")
         let (unkeyed, other) = ProxyFixture.proxy(key: nil, path: "/v1")
-        #expect(EngineCLI.geminiRouteLine(unkeyed) == "OpenRouter (custom endpoint at \(other)/v1 has no key)")
+        #expect(EngineCLI.geminiRouteLine(unkeyed) == "Custom endpoint (\(other)/v1, not set up: no key)")
     }
 
     @Test func noFailureCarriesTheKey() {

@@ -80,17 +80,21 @@ as much: a model that stops to think on one request doesn't hold you up.
 If you ran Parakeet v3 through OpenRouter, that option is gone: Parakeet runs only on your Mac now. If it isn't
 downloaded yet, download it in Models (about 600 MB). Transcripts it made stay in History as "Parakeet v3 · Cloud".
 
-Gemini can also go through another service you pay for, if it has an OpenAI-compatible API. In Models → API keys,
-under "OpenAI-compatible endpoint", enter its base URL (the one that ends in `/v1`, like `https://api.example.com/v1`)
-and its API key. A URL without a path is read as `<address>/api/v1`, so an endpoint saved by its address alone keeps
-working. The app checks the key without spending anything and says whether it works. The endpoint gets the same
-request OpenRouter would, audio included, with OpenRouter's model name (`google/gemini-3.8-flash` or
-`google/gemini-4-argon`), so it has to accept those names.
+Gemini can also go through another service you pay for, if it has an OpenAI-compatible API. Models → API keys →
+Provider picks one of the two, OpenRouter or Custom endpoint, for every Gemini request: dictations, Polish, Translate,
+selected text, files, calls and their summaries. Requests never go to the other one, even when the picked one fails or
+isn't set up yet. Only the picked one's fields show; the other's key (and the endpoint's URL) stay saved, so switching
+back is instant.
 
-While "Use for Gemini" is on, every Gemini request goes to your endpoint: dictations, Polish, Translate, selected text,
-files and calls. If it fails, nothing is sent to OpenRouter instead, and the error says it came from your endpoint.
-Costs in History are what your endpoint reports, and History names it by its address. Turn "Use for Gemini" off to go
-back to OpenRouter; the URL and the key stay saved.
+For Custom endpoint, enter its base URL (the one that ends in `/v1`, like `https://api.example.com/v1`) and its API
+key. A URL without a path is read as `<address>/api/v1`, so an endpoint saved by its address alone keeps working. The
+app checks the key without spending anything and says whether it works. Until both are saved, Gemini shows "Needs
+endpoint". The endpoint gets the same request OpenRouter would, audio included, with OpenRouter's model name
+(`google/gemini-3.8-flash` or `google/gemini-4-argon`), so it has to accept those names. If it fails, the error says it
+came from your endpoint. Costs in History are what your endpoint reports, and History names it by its address.
+
+If you had an endpoint set up with "Use for Gemini" on, Custom endpoint is picked for you. Everyone else starts on
+OpenRouter.
 
 ## Dictionary
 
@@ -166,7 +170,7 @@ there's nothing to take out, and your microphone stays as it was recorded. That 
 
 History, the recordings, your dictionary and your API keys (OpenRouter's and your own endpoint's) stay on your Mac, in
 `~/Library/Application Support/transcribe-thing`. Each key is in a file only you can read. Audio leaves your Mac only
-when a Gemini model transcribes it: through OpenRouter, or through your own endpoint when it's on. Text leaves it only
+when a Gemini model transcribes it: through OpenRouter, or through your own endpoint when it's the provider. Text leaves it only
 when Gemini 3.8 Flash polishes or translates text you selected, or when a long call's transcript goes back for its
 summary. Your dictionary's words go along with everything sent to Gemini.
 
@@ -216,8 +220,8 @@ The binary also works without the UI, for checking the models:
 ```
 
 Cloud runs use the app's saved key, or `OPENROUTER_API_KEY` when it's set. They think at Medium unless `--effort`
-says otherwise; the level picked in the app's Models isn't read. Gemini runs go through your own endpoint
-when the app has it on, and `--model-status` says which way Gemini goes. `Sources/TranscribeThing/App/EngineCLI.swift`
+says otherwise; the level picked in the app's Models isn't read. Gemini runs go to the provider picked in the app,
+and `--model-status` says which one it is. `Sources/TranscribeThing/App/EngineCLI.swift`
 lists every flag.
 
 ### Releasing

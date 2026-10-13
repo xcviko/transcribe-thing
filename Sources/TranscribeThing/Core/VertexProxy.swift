@@ -1,7 +1,7 @@
 import Foundation
 
-/// The service a cloud engine's requests go to: OpenRouter, or the user's own OpenAI-compatible endpoint for Gemini
-/// (`VertexProxyAccount.routesGemini`). (`vertexProxy` and the
+/// The service every cloud request goes to, picked in Models → API keys → Provider (`AppSettings.cloudProvider`):
+/// OpenRouter, or the user's own OpenAI-compatible endpoint (`VertexProxyAccount.routesGemini`). (`vertexProxy` and the
 /// `VertexProxy…` names are what the endpoint was called when it could only be the user's Vertex proxy; the app calls
 /// it "OpenAI-compatible endpoint", "Custom endpoint" for short, and "your endpoint" in sentences.)
 enum CloudProvider: String, Sendable, Equatable, CaseIterable {
@@ -123,6 +123,8 @@ enum VertexProxy {
 /// endpoint's key, a 402 or a 429 that says "spend limit" is its spend limit, and nothing can be fixed on
 /// openrouter.ai.
 enum VertexProxyFailure: Equatable, Sendable {
+    /// The endpoint is the provider, but it has no base URL or no key yet.
+    case notSetUp
     /// The key file is there but can't be read.
     case keyUnreadable
     /// 401: the endpoint doesn't know this key (revoked, mistyped).
@@ -144,6 +146,7 @@ enum VertexProxyFailure: Equatable, Sendable {
 
     var code: String {
         switch self {
+        case .notSetUp: "notSetUp"
         case .keyUnreadable: "keyUnreadable"
         case .keyRejected: "keyRejected"
         case .spendLimit: "spendLimit"
@@ -160,7 +163,7 @@ enum VertexProxyFailure: Equatable, Sendable {
         switch self {
         case .keyRejected(let s), .spendLimit(let s), .forbidden(let s), .unavailable(let s), .badRequest(let s):
             s.isEmpty ? nil : s
-        case .keyUnreadable, .unreachable, .rateLimited, .tooLarge:
+        case .notSetUp, .keyUnreadable, .unreachable, .rateLimited, .tooLarge:
             nil
         }
     }

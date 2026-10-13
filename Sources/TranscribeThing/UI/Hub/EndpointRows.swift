@@ -71,8 +71,8 @@ struct EndpointRow: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.ink)
                 // Who pays: worth saying every time, as OpenRouter's row does.
-                Text("Any service with an OpenAI-compatible API that serves Gemini. "
-                     + "Gemini can go there instead of OpenRouter, and you pay that service.")
+                Text("Any service with an OpenAI-compatible API that serves Gemini. Every Gemini request goes "
+                     + "there, and you pay that service.")
                     .typeface(.callout)
                     .foregroundStyle(.inkSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -236,9 +236,7 @@ struct EndpointRow: View {
                 Text("Checking your endpoint…").typeface(.callout).foregroundStyle(.inkSecondary)
             }
         case .works:
-            status("checkmark.circle.fill", .success, proxy.isEnabled
-                ? "Works · Gemini goes through it"
-                : "Works · Gemini goes through OpenRouter while Use for Gemini is off")
+            status("checkmark.circle.fill", .success, "Works · Gemini goes through it")
         case .keyRejected:
             HStack(spacing: 8) {
                 status("xmark.octagon.fill", .danger, "Your endpoint didn’t accept this key. Copy it again from where you got it.")
@@ -265,9 +263,9 @@ struct EndpointRow: View {
 
     private var notSetText: String {
         switch (proxy.baseURL != nil, proxy.maskedKey != nil) {
-        case (false, false): "Add its base URL and API key to send Gemini through it."
-        case (false, true): "Add its base URL to send Gemini through it."
-        default: "Add its API key to send Gemini through it."
+        case (false, false): "Add its base URL and API key. Until then, Gemini can’t run."
+        case (false, true): "Add its base URL. Until then, Gemini can’t run."
+        default: "Add its API key. Until then, Gemini can’t run."
         }
     }
 
@@ -329,25 +327,19 @@ struct EndpointRow: View {
     }
 }
 
-/// "Use for Gemini": sends Gemini through the endpoint once it has a base URL and a key. Off keeps both.
-struct UseEndpointForGeminiRow: View {
-    @Environment(VertexProxyAccount.self) private var proxy
+/// Which provider every cloud request goes to: OpenRouter or the custom endpoint, never both. The other's key and URL
+/// stay saved.
+struct ProviderPickerRow: View {
+    @Environment(AppSettings.self) private var settings
 
     var body: some View {
-        SettingsRow(title: "Use for Gemini",
-                    subtitle: proxy.isConfigured ? nil : "Add your endpoint’s base URL and API key first.") {
-            Toggle("", isOn: enabled)
-                .toggleStyle(.appSwitch)
-                .labelsHidden()
-                .disabled(!proxy.isConfigured)
-                .accessibilityLabel("Use your OpenAI-compatible endpoint for Gemini")
+        SettingsRow(title: "Provider", subtitle: "Where every Gemini request goes.", systemImage: "arrow.triangle.branch",
+                    iconTint: .inkSecondary) {
+            HubSegmentedPicker(title: "Provider", options: CloudProvider.allCases, selection: settings.cloudProvider,
+                               label: \.name) { picked in
+                withAnimation(Theme.Motion.snappy) { settings.cloudProvider = picked }
+            }
         }
-    }
-
-    private var enabled: Binding<Bool> {
-        let proxy = proxy
-        return Binding(get: { proxy.isConfigured && proxy.isEnabled },
-                       set: { on in withAnimation(Theme.Motion.snappy) { proxy.isEnabled = on } })
     }
 }
 

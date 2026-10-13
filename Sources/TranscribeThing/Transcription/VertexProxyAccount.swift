@@ -18,12 +18,12 @@ enum VertexProxyStatus: Equatable, Sendable {
 
 /// The user's own OpenAI-compatible endpoint (named for the Vertex proxy it started as): its base URL
 /// (`AppSettings.vertexProxyURL`), its key (in its own key file, like the OpenRouter key: `KeyFileStore`), whether
-/// Gemini goes through it (`AppSettings.vertexProxyEnabled`), and whether it works. The key is never logged or shown
-/// past its mask.
+/// it's the provider picked for cloud requests (`AppSettings.cloudProvider`), and whether it works. The key is never
+/// logged or shown past its mask.
 ///
-/// With a base URL and a key and "Use for Gemini" on (`routesGemini`), every Gemini request goes to the endpoint, and
-/// none to OpenRouter: a failure there is the endpoint's, never retried on OpenRouter (that would spend OpenRouter
-/// credit).
+/// While it's the provider (`routesGemini`), every Gemini request goes to the endpoint, and none to OpenRouter, set up
+/// or not: a failure there is the endpoint's (`VertexProxyFailure.notSetUp` without a URL or a key), never retried on
+/// OpenRouter (that would spend OpenRouter credit). OpenRouter picked, nothing goes to the endpoint.
 @MainActor @Observable
 final class VertexProxyAccount {
     @ObservationIgnored private let keyStore: KeyFileStore
@@ -56,6 +56,8 @@ final class VertexProxyAccount {
         self.makeClient = makeClient
         self.debounce = debounce
         readKey()
+        // A build from before the choice of provider: the endpoint where it was set up and on, once.
+        settings.resolveCloudProvider(endpointConfigured: isConfigured)
         // Set up: usable until the first check (at launch) says otherwise.
         if isKeyUnreadable {
             status = .failed(Self.keyUnreadableMessage)
@@ -64,14 +66,15 @@ final class VertexProxyAccount {
         }
     }
 
-    /// A fixed `status` that never checks itself, with a base URL and a key when it isn't `.notSet`.
+    /// A fixed `status` that never checks itself, with a base URL and a key when it isn't `.notSet`. `enabled`: the
+    /// endpoint is the provider; by default when it's set up.
     static func preview(status: VertexProxyStatus, settings: AppSettings? = nil,
                         url: String = "https://llm.example.com/v1",
-                        enabled: Bool = true) -> VertexProxyAccount {
+                        enabled: Bool? = nil) -> VertexProxyAccount {
         let settings = settings ?? .inMemory()
         let keyStore = KeyFileStore.inMemory(status == .notSet ? nil : "sk-preview00000000000000000003f9a")
         if status != .notSet { settings.vertexProxyURL = url }
-        settings.vertexProxyEnabled = enabled
+        settings.cloudProvider = enabled ?? (status != .notSet) ? .vertexProxy : .openRouter
         let account = VertexProxyAccount(keyStore: keyStore, settings: settings)
         account.isPreview = true
         account.status = status
@@ -165,17 +168,17 @@ final class VertexProxyAccount {
 
     // MARK: Routing
 
-    /// "Use for Gemini".
+    /// The endpoint is the provider picked for cloud requests (Models → API keys → Provider).
     var isEnabled: Bool {
-        get { settings.vertexProxyEnabled }
-        set { settings.vertexProxyEnabled = newValue }
+        get { settings.cloudProvider == .vertexProxy }
+        set { settings.cloudProvider = newValue ? .vertexProxy : .openRouter }
     }
 
     /// A base URL and a key (one that can't be read counts: Gemini then fails as the endpoint's).
     var isConfigured: Bool { baseURL != nil && (maskedKey != nil || isKeyUnreadable) }
 
-    /// Gemini's requests go to the endpoint, not OpenRouter.
-    var routesGemini: Bool { isEnabled && isConfigured }
+    /// Gemini's requests go to the endpoint, not OpenRouter: it's the provider, whether it's set up or not.
+    var routesGemini: Bool { isEnabled }
 
     /// The client for the base URL set now; nil without one.
     func client() -> OpenRouterClient? {

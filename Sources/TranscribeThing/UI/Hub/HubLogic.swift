@@ -141,6 +141,8 @@ enum EngineReadiness: Equatable {
     case warming
     case needsDownload
     case needsKey
+    /// The custom endpoint is the provider, and it has no base URL or no key yet.
+    case needsEndpoint
     case keyProblem(String)
     /// A short reason: "Download failed", "Couldn’t load".
     case failed(String)
@@ -149,7 +151,7 @@ enum EngineReadiness: Equatable {
     var isUsable: Bool {
         switch self {
         case .ready, .warming: true
-        case .needsDownload, .needsKey, .keyProblem, .failed: false
+        case .needsDownload, .needsKey, .needsEndpoint, .keyProblem, .failed: false
         }
     }
 
@@ -159,13 +161,15 @@ enum EngineReadiness: Equatable {
         case .ready, .warming: nil
         case .needsDownload: "Not downloaded"
         case .needsKey: "Needs key"
+        case .needsEndpoint: "Needs endpoint"
         case .keyProblem(let reason), .failed(let reason): reason
         }
     }
 
-    /// `localError` is the error ModelStore kept for a failed local model.
+    /// `localError` is the error ModelStore kept for a failed local model. `provider`: where `engine`'s requests go
+    /// (`CloudRoute.provider`); the custom endpoint with no key is one not set up.
     static func of(_ engine: EngineID, localState: LocalModelState, keyStatus: KeyStatus,
-                   localError: AppError? = nil) -> EngineReadiness {
+                   localError: AppError? = nil, provider: CloudProvider? = nil) -> EngineReadiness {
         if engine.isLocal {
             switch localState {
             case .ready, .installed: return .ready
@@ -176,7 +180,7 @@ enum EngineReadiness: Equatable {
         }
         switch keyStatus {
         case .valid, .checking, .offline, .failed: return .ready
-        case .missing: return .needsKey
+        case .missing: return provider == .vertexProxy ? .needsEndpoint : .needsKey
         case .invalid: return .keyProblem("Key rejected")
         case .noCredit where keyStatus.isProxySpendLimit: return .keyProblem("Spend limit reached")
         case .noCredit: return .keyProblem(keyStatus.isKeyLimitReached ? "Key limit reached" : "No credit")
@@ -389,15 +393,16 @@ struct EngineSummary: Equatable {
 
     /// `choice` by `ModelChoice.compactName`: its engine's status. `localState` and `localError` are Parakeet's.
     static func make(choice: ModelChoice, localState: LocalModelState, keyStatus: KeyStatus,
-                     localError: AppError? = nil) -> EngineSummary {
+                     localError: AppError? = nil, provider: CloudProvider? = nil) -> EngineSummary {
         var summary = make(engine: choice.engine, localState: localState, keyStatus: keyStatus,
-                           localError: localError)
+                           localError: localError, provider: provider)
         summary.name = choice.compactName
         return summary
     }
 
+    /// `provider`: where `engine`'s requests go; the custom endpoint with no key is one not set up ("Needs endpoint").
     static func make(engine: EngineID, localState: LocalModelState, keyStatus: KeyStatus,
-                     localError: AppError? = nil) -> EngineSummary {
+                     localError: AppError? = nil, provider: CloudProvider? = nil) -> EngineSummary {
         let name = engine.shortName
         if engine.isLocal {
             switch localState {
@@ -412,6 +417,8 @@ struct EngineSummary: Equatable {
         case .valid(let info) where info.label == VertexProxy.label:
             return EngineSummary(name: name, status: "Ready · \(VertexProxy.label)", tone: .positive)
         case .valid: return EngineSummary(name: name, status: "Ready", tone: .positive)
+        case .missing where provider == .vertexProxy:
+            return EngineSummary(name: name, status: "Needs endpoint", tone: .warning)
         case .checking, .missing, .invalid, .noCredit, .offline, .failed:
             // The key's own status, in the key's own words and color (`ModelStatusText`), shortened for offline.
             let (text, tone) = ModelStatusText.describe(keyStatus)
@@ -586,6 +593,12 @@ enum HubAttention {
             switch input.keyStatus {
             case .valid, .checking, .offline, .failed:
                 break
+            case .missing where input.provider == .vertexProxy:
+                items.append(AttentionItem(
+                    id: "key", tone: .error, symbol: "server.rack", title: "Set up your endpoint",
+                    body: "Your endpoint is the provider, but it has no base URL or API key yet. "
+                        + "\(input.engine.shortName) can’t transcribe until it does.",
+                    actionTitle: "Set Up", action: .openModels))
             case .missing:
                 items.append(AttentionItem(
                     id: "key", tone: .error, symbol: "key.fill", title: "Add your OpenRouter key",

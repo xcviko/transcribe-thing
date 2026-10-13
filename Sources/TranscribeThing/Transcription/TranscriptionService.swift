@@ -99,10 +99,11 @@ final class TranscriptionService {
         var noteSuccess: @MainActor () -> Void
     }
 
-    /// The custom endpoint while it routes Gemini, else OpenRouter. Throws the missing or unreadable key of whichever
-    /// it is: a proxy that's set up never hands its requests to OpenRouter.
+    /// The custom endpoint while it's the provider, else OpenRouter. Throws the missing or unreadable key (or the
+    /// endpoint not set up) of whichever it is: one provider never hands its requests to the other.
     private func chatAccess() throws -> ChatAccess {
         if let proxy, proxy.routesGemini {
+            guard proxy.isConfigured else { throw AppError.vertexProxy(.notSetUp) }
             guard let key = proxy.apiKey(), let client = proxy.client() else {
                 throw AppError.vertexProxy(.keyUnreadable)
             }

@@ -122,7 +122,7 @@ final class HubContext: Observable {
 
     func readiness(of engine: EngineID) -> EngineReadiness {
         EngineReadiness.of(engine, localState: models.state(of: engine), keyStatus: keyStatus(for: engine),
-                           localError: models.lastErrors[engine])
+                           localError: models.lastErrors[engine], provider: provider(for: engine))
     }
 
     /// A model's readiness: its engine's.

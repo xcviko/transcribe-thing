@@ -304,7 +304,7 @@ enum AppError: Error, Equatable, Sendable {
         case .vertexProxy(let failure):
             switch failure {
             case .unreachable, .rateLimited, .unavailable: true
-            case .keyUnreadable, .keyRejected, .spendLimit, .forbidden, .badRequest, .tooLarge: false
+            case .notSetUp, .keyUnreadable, .keyRejected, .spendLimit, .forbidden, .badRequest, .tooLarge: false
             }
         case .microphonePermissionDenied, .noMicrophone, .microphoneNotResponding, .microphoneSilent,
              .accessibilityMissing, .modelNotDownloaded, .downloadFailed, .notEnoughDisk,
@@ -717,6 +717,12 @@ extension AppError {
     private static func copy(for failure: VertexProxyFailure) -> Copy {
         let models = Fix(title: "Open Models", kind: .openHub(.models))
         switch failure {
+        case .notSetUp:
+            return Copy(symbol: "server.rack",
+                        title: "Your endpoint isn’t set up",
+                        body: "Add its base URL and API key in Models, or pick OpenRouter there.",
+                        fixes: [Fix(title: "Set Up", kind: .openHub(.models))],
+                        order: .fixFirst, offersSwitch: true)
         case .keyUnreadable:
             return Copy(symbol: "key.fill",
                         title: "\(Brand.name) can’t read your endpoint’s API key",

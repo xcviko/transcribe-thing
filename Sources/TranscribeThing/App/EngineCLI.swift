@@ -638,7 +638,7 @@ enum EngineCLI {
         let envKey = ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"].map { !$0.isEmpty } ?? false
         print("OpenRouter key: \(envKey ? "OPENROUTER_API_KEY is set" : "not in the environment (the app keeps it in \(paths.keyFile.path))")")
         for line in cloudModelLines() { print(line) }
-        print("Gemini goes through: \(geminiRouteLine(appVertexProxy(paths: paths)))")
+        print("Provider: \(geminiRouteLine(appVertexProxy(paths: paths)))")
     }
 
     /// The cloud models `--transcribe --engine` takes, one line each: "geminiArgon  Gemini 4 Argon  google/gemini-4-argon
@@ -653,29 +653,42 @@ enum EngineCLI {
         }
     }
 
-    /// Where Gemini's requests go, as `--model-status` says it: never the key, only whether one is saved.
+    /// The provider every cloud request goes to, as `--model-status` says it: never the key, only whether one is
+    /// saved. nil: OpenRouter with no endpoint saved.
     @MainActor
     static func geminiRouteLine(_ proxy: VertexProxyAccount?) -> String {
-        guard let proxy, let base = proxy.baseURL else { return "OpenRouter (no custom endpoint set up)" }
-        let host = VertexProxy.displayHost(base)
-        let key = proxy.isKeyUnreadable ? "key unreadable" : (proxy.maskedKey != nil ? "key saved" : "no key")
-        if proxy.routesGemini { return "Custom endpoint (\(host), \(key))" }
-        if !proxy.isConfigured { return "OpenRouter (custom endpoint at \(host) has no key)" }
-        return "OpenRouter (custom endpoint at \(host) is switched off)"
+        guard let proxy else { return "OpenRouter (no custom endpoint saved)" }
+        let host = proxy.baseURL.map(VertexProxy.displayHost)
+        guard proxy.routesGemini else {
+            return host.map { "OpenRouter (custom endpoint at \($0) saved, not in use)" }
+                ?? "OpenRouter (no custom endpoint saved)"
+        }
+        guard let host else { return "Custom endpoint (not set up: no base URL)" }
+        if proxy.isKeyUnreadable { return "Custom endpoint (\(host), key unreadable)" }
+        return proxy.maskedKey != nil ? "Custom endpoint (\(host), key saved)"
+            : "Custom endpoint (\(host), not set up: no key)"
     }
 
-    /// The app's OpenAI-compatible endpoint, read only: its base URL and switch from the app's settings
+    /// The app's OpenAI-compatible endpoint, read only: its base URL and the provider from the app's settings
     /// (`dev.transcribe-thing.app`), its key from its key file, copied into memory so nothing the run does changes
-    /// either. nil without a base URL.
+    /// either. A build from before the choice of provider is read as the app reads it (`AppSettings.cloudProvider`).
+    /// nil while OpenRouter is the provider and no base URL is saved.
     @MainActor
     static func appVertexProxy(paths: AppPaths) -> VertexProxyAccount? {
         // A suite named after this process's own bundle id comes back nil: the installed app's binary reads its own.
         let domain = "dev.transcribe-thing.app"
         let defaults = Bundle.main.bundleIdentifier == domain ? UserDefaults.standard : UserDefaults(suiteName: domain)
-        guard let url = defaults?.string(forKey: SettingsKey.vertexProxyURL.defaultsKey), !url.isEmpty else { return nil }
+        let url = defaults?.string(forKey: SettingsKey.vertexProxyURL.defaultsKey).flatMap { $0.isEmpty ? nil : $0 }
+        let stored = defaults?.string(forKey: SettingsKey.cloudProvider.defaultsKey).flatMap(CloudProvider.init(rawValue:))
+        let useForGemini = defaults?.object(forKey: SettingsKey.vertexProxyEnabled.defaultsKey) as? Bool ?? true
+        guard url != nil || stored == .vertexProxy else { return nil }
         let settings = AppSettings.inMemory()
         settings.vertexProxyURL = url
-        settings.vertexProxyEnabled = defaults?.object(forKey: SettingsKey.vertexProxyEnabled.defaultsKey) as? Bool ?? true
+        if let stored {
+            settings.cloudProvider = stored
+        } else if !useForGemini {
+            settings.cloudProvider = .openRouter
+        }
         let keyStore: KeyFileStore
         do {
             keyStore = .inMemory(try KeyFileStore(url: paths.vertexProxyKeyFile).lookup())

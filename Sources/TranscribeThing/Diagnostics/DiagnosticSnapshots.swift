@@ -46,12 +46,12 @@ struct DiagnosticSettingsSummary: Equatable, Sendable {
         self.fields = fields
     }
 
-    /// The user's OpenAI-compatible endpoint as the settings line says it: "gemini" while Gemini goes through it,
-    /// "off" when it's set up but switched off, "notSet" without a base URL and a key. Never its URL or key.
+    /// The user's OpenAI-compatible endpoint as the settings line says it: "set" with a base URL and a key,
+    /// "notSet" without. Never its URL or key. Whether requests go to it is `provider`'s.
     @MainActor
     static func endpointState(_ proxy: VertexProxyAccount?) -> String {
         guard let proxy, proxy.isConfigured else { return "notSet" }
-        return proxy.isEnabled ? "gemini" : "off"
+        return "set"
     }
 
     @MainActor
@@ -77,6 +77,7 @@ struct DiagnosticSettingsSummary: Equatable, Sendable {
             // How many, never which: the words are the user's own.
             DiagnosticField("dictionaryWords", "\(settings.dictionary.words.count)"),
             DiagnosticField("keySaved", keySaved ? "yes" : "no"),
+            DiagnosticField("provider", settings.cloudProvider.rawValue),
             DiagnosticField("customEndpoint", endpoint),
         ]
         self.fields = fields
