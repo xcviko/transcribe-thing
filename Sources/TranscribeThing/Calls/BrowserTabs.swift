@@ -158,10 +158,31 @@ enum BrowserTabs {
         }
     }
 
-    /// One tab in the strip: its accessible title, and whether it's the window's selected tab when the browser says.
+    /// Which tab of the strip one is, for as long as it's there: the same from read to read however the tab is
+    /// retitled and whichever tab is in front; another tab, or one closed and opened again, has another. Opaque:
+    /// `TabIDs` gives them out, tests make their own. Two calls in tabs titled alike ("Идёт звонок · Яндекс
+    /// Телемост" twice) are told apart by it.
+    struct TabID: Hashable, Sendable, CustomStringConvertible {
+        var raw: Int
+
+        init(_ raw: Int) { self.raw = raw }
+
+        var description: String { "#\(raw)" }
+    }
+
+    /// Whether a browser's tab strip elements keep their identity while the tab lives, so its tabs get a `TabID`.
+    /// Chromium's tab strip is made of views that live as long as their tab; Safari's and Firefox's haven't been
+    /// looked into, so their tabs are told apart by their titles alone.
+    static func tabsHaveIDs(bundleID: String) -> Bool {
+        !["com.apple.Safari", "com.apple.SafariTechnologyPreview", "org.mozilla.firefox"].contains(bundleID)
+    }
+
+    /// One tab in the strip: its accessible title, whether it's the window's selected tab when the browser says,
+    /// and which tab it is when that's known.
     struct Tab: Equatable, Sendable {
         var title: String
         var selected: Bool?
+        var id: TabID? = nil
     }
 
     struct Window: Equatable, Sendable {
@@ -185,16 +206,29 @@ enum BrowserTabs {
         /// Whether another tab records the mic too: then this one stopping while that one goes on is that tab's call,
         /// not this one retitled (`CallDetector`).
         var othersRecordMic = false
+        /// Which tab it is, when the browser's tabs have ids.
+        var id: TabID? = nil
+        /// The other tabs recording the mic that have ids: `CallDetector` notes when it first saw each, which is
+        /// where that tab's call begins if it takes over.
+        var otherMicTabs: [TabID] = []
 
         /// Which call it is (`BrowserTabs.key`).
         var key: String { BrowserTabs.key(service: service, page: page) }
     }
 
+    /// The tab a call was in, for the next read to find it again: that very tab when it has an id, else a tab with
+    /// the same `key`.
+    struct Following: Equatable, Sendable {
+        var key: String
+        var id: TabID? = nil
+    }
+
     /// The tab a call is in: one that records the mic, then one that records anything; among those the call
-    /// already `following` (by its `key`), then a known service, then the selected one. Without any recording
-    /// mark, a tab titled like a call service: the one followed, then the selected one, then any. Preferring the
-    /// call followed keeps it while you switch to another service's tab, or while Telegram, muted, records nothing.
-    static func callTab(in windows: [Window], following: String? = nil) -> CallTab? {
+    /// already `following` (the same tab, then one with its `key`), then a known service, then the selected one.
+    /// Without any recording mark, a tab titled like a call service: the one followed, then the selected one, then
+    /// any. Preferring the call followed keeps it while you switch to another service's tab, or while Telegram,
+    /// muted, records nothing.
+    static func callTab(in windows: [Window], following: Following? = nil) -> CallTab? {
         var candidates: [CallTab] = []
         for (windowIndex, window) in windows.enumerated() {
             for (tabIndex, tab) in window.tabs.enumerated() {
@@ -202,10 +236,14 @@ enum BrowserTabs {
                 let active = tab.selected ?? isWindowTitle(window.title, of: title.page, tab: tab.title)
                 candidates.append(CallTab(window: windowIndex, tab: tabIndex, windowTitle: window.title, page: title.page,
                                           recording: title.recording, service: CallService.of(pageTitle: title.page),
-                                          active: active))
+                                          active: active, id: tab.id))
             }
         }
-        func followed(_ tab: CallTab) -> Int { following != nil && tab.key == following ? 0 : 1 }
+        func followed(_ tab: CallTab) -> Int {
+            guard let following else { return 2 }
+            if let id = following.id, tab.id == id { return 0 }
+            return tab.key == following.key ? 1 : 2
+        }
         func first(_ tabs: [CallTab], by rank: (CallTab) -> [Int]) -> CallTab? {
             tabs.enumerated().min { lhs, rhs in
                 (rank(lhs.element) + [lhs.offset]).lexicographicallyPrecedes(rank(rhs.element) + [rhs.offset])
@@ -218,9 +256,11 @@ enum BrowserTabs {
                 [$0.recording?.hasMic == true ? 0 : 1, followed($0), $0.service == nil ? 1 : 0, $0.active ? 0 : 1]
             }
         if let tab = chosen {
-            chosen?.othersRecordMic = candidates.contains {
+            let others = candidates.filter {
                 ($0.window != tab.window || $0.tab != tab.tab) && $0.recording?.hasMic == true
             }
+            chosen?.othersRecordMic = !others.isEmpty
+            chosen?.otherMicTabs = others.compactMap(\.id)
         }
         return chosen
     }
@@ -232,5 +272,56 @@ enum BrowserTabs {
         let window = withoutUnreadMark(windowTitle)
         return window == tab || window == withoutUnreadMark(tab) || window == page || window.hasPrefix(page + " - ")
             || window.hasPrefix(page + " – ")
+    }
+}
+
+/// Gives each tab a `BrowserTabs.TabID` from its Accessibility element (`CallMuteReader`); generic, so tests can use
+/// anything. An element is a tab seen before when `same` says so (CFEqual, for AXUIElements) and it's in the same
+/// window.
+///
+/// Elements can be wrong about tabs in two ways. A tab whose element changes (dragged to another window, its strip
+/// rebuilt) gets a new id: its call is split in two, the lesser harm. A closed tab's element comparing equal to a new
+/// tab's (its address used again) would make two calls one: so a tab missing from a read that saw its window's whole
+/// strip, or whose window is gone from a read that saw them all, is forgotten for good, and ids are never given twice.
+struct TabIDs<Element> {
+    private struct Entry {
+        var window: Element
+        var tab: Element
+        var id: BrowserTabs.TabID
+    }
+
+    private let same: (Element, Element) -> Bool
+    private var entries: [Entry] = []
+    private var next = 1
+
+    init(same: @escaping (Element, Element) -> Bool) {
+        self.same = same
+    }
+
+    /// The tabs known now.
+    var count: Int { entries.count }
+
+    /// The id `tab` of `window` had, or a new one.
+    mutating func id(of tab: Element, in window: Element) -> BrowserTabs.TabID {
+        if let entry = entries.first(where: { same($0.tab, tab) && same($0.window, window) }) { return entry.id }
+        let id = BrowserTabs.TabID(next)
+        next += 1
+        entries.append(Entry(window: window, tab: tab, id: id))
+        return id
+    }
+
+    /// A read saw `window`'s whole strip: its tabs besides `seen` are gone.
+    mutating func sawWhole(_ window: Element, tabs seen: Set<BrowserTabs.TabID>) {
+        entries.removeAll { same($0.window, window) && !seen.contains($0.id) }
+    }
+
+    /// A read saw every window of the app: the tabs of any other are gone with it.
+    mutating func sawAll(windows: [Element]) {
+        entries.removeAll { entry in !windows.contains { same($0, entry.window) } }
+    }
+
+    /// Forgets every tab; the ids given so far are still never given again.
+    mutating func forget() {
+        entries = []
     }
 }

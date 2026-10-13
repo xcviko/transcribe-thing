@@ -463,6 +463,103 @@ import Testing
             == [["Huddles - Acme - Slack", "slack"]], "a page found to be a service is still its call")
     }
 
+    /// A read of Chrome finding the call in tab `id` titled `page`, the tabs `others` recording the mic beside it.
+    private static func read(_ service: CallService?, _ page: String, tab id: Int, recording: BrowserTabs.Recording? = .mic,
+                             others: [Int] = []) -> CallDetector.Window {
+        CallDetector.Window(tab: CallDetector.Tab(service: service, page: page, recording: recording,
+                                                  id: BrowserTabs.TabID(id), otherMicTabs: others.map(BrowserTabs.TabID.init)))
+    }
+
+    /// The case of 2026-10-13: a Telemost call in one Chrome tab ends at 300 s while another Telemost call has
+    /// begun in a background tab at 290 s. Both tabs are titled "Идёт звонок · Яндекс Телемост", and the second
+    /// took the mic before the first let it go, so the mic never went off. They were one call; they're two, the
+    /// first ending where its tab was last seen, the second beginning where its tab was first seen recording.
+    @Test func twoTelemostCallsInTwoTabsAreTwoCallsThoughTheMicNeverWentOff() throws {
+        let chrome = Process(bundleID: "com.google.Chrome.helper", mic: [0.3..<600.3], sound: [0.3..<600.3])
+        let telemost = "Идёт звонок · Яндекс Телемост"
+        var reads: [Double: CallDetector.Window] = [:]
+        // Read every 12 s here (every 1 to 3 s in the app), in tenths so the times equal the steps'.
+        for tenth in stride(from: 13, through: 2893, by: 120) {
+            reads[Double(tenth) / 10] = Self.read(.telemost, telemost, tab: 1, recording: .cameraAndMic)
+        }
+        reads[290.3] = Self.read(.telemost, telemost, tab: 1, recording: .cameraAndMic, others: [2])
+        reads[293.3] = Self.read(.telemost, telemost, tab: 1, recording: .cameraAndMic, others: [2])
+        reads[299.3] = Self.read(.telemost, telemost, tab: 1, recording: .cameraAndMic, others: [2])
+        for tenth in stride(from: 3023, through: 5993, by: 120) {
+            reads[Double(tenth) / 10] = Self.read(.telemost, telemost, tab: 2)
+        }
+        var detector = CallDetector()
+        let steps = run([chrome], reads: reads, from: 0.3, to: 700, detector: &detector)
+
+        let ended = calls(steps)
+        #expect(ended.map { $0.startedAt...$0.lastAudioAt } == [0.3...299.3, 290.3...600.3])
+        #expect(ended.map { $0.tab?.id } == [BrowserTabs.TabID(1), BrowserTabs.TabID(2)])
+        #expect(ended.map { $0.tab?.page } == [telemost, telemost])
+        let second = try #require(started(steps).last)
+        #expect(steps.filter { $0.time == 302.3 }.map(\.event) == [.ended(ended[0]), .suspected(Self.chrome, at: 290.3)])
+        #expect(steps.filter { $0.time == 310.3 }.map(\.event) == [.started(second)], "confirmed 20 s after it began")
+
+        // Without ids (Safari, or tabs read without their strip) the titles can't tell them apart: one call, as before.
+        var titles = reads
+        for (time, read) in reads {
+            titles[time] = Self.read(.telemost, telemost, recording: read.tab?.recording)
+        }
+        var old = CallDetector()
+        let oneCall = calls(run([chrome], reads: titles, from: 0.3, to: 700, detector: &old))
+        #expect(oneCall.map { $0.startedAt...$0.lastAudioAt } == [0.3...600.3])
+    }
+
+    /// Slack retitles its tab with every channel you open mid-huddle: the same tab is the same call, as by its
+    /// title. A Meet tab that joins another meeting is another call, and so is a Meet meeting in another tab.
+    @Test func theSameTabIsTheSameCallWhateverItsTitleUnlessItsAnotherMeeting() throws {
+        func spans(_ reads: [Double: CallDetector.Window]) -> [ClosedRange<Double>] {
+            var detector = CallDetector()
+            let steps = run([Process(bundleID: "com.google.Chrome.helper", mic: [10.1..<150.1], sound: [10.1..<150.1])],
+                            reads: reads, from: 10.1, to: 300, detector: &detector)
+            return calls(steps).map { $0.startedAt...$0.lastAudioAt }
+        }
+        #expect(spans([
+            11.1: Self.read(.slack, "general (Channel) - V-Soft - Slack", tab: 7),
+            40.1: Self.read(.slack, "Jira (DM) - V-Soft - Slack", tab: 7, others: [8]),
+            70.1: Self.read(nil, "Loading…", tab: 7),
+            100.1: Self.read(.slack, "Matvey Litvin (DM) - V-Soft - Slack", tab: 7),
+        ]) == [10.1...150.1], "another tab recording beside it changes nothing while the call's tab goes on")
+
+        let meet = Self.read(.meet, "Meet – abc-defg-hij", tab: 3)
+        #expect(spans([11.1: meet, 57.1: Self.read(.meet, "Meet – xyz-abcd-efg", tab: 3)]) == [10.1...57.1, 57.1...150.1])
+        #expect(spans([11.1: meet, 57.1: Self.read(.meet, "Meet – abc-defg-hij 🎧", tab: 3)]) == [10.1...150.1])
+        #expect(spans([11.1: meet, 57.1: Self.read(.meet, "Meet – xyz-abcd-efg", tab: 4)]) == [10.1...52.1, 57.1...150.1],
+                "another tab: the second call from now, never seen before; the first ended where its tab was last seen, but reads this far apart say they stalled: 5 s back at most")
+    }
+
+    /// Two tabs record the mic at once: the call followed stays its tab's; once that tab stops, the other's call
+    /// begins where it was first seen, whatever the mic did. Without ids, it begins when it takes over.
+    @Test func whenTheCallsTabStopsTheOtherRecordingTabIsANewCallFromWhenItWasSeen() throws {
+        let chrome = Process(bundleID: "com.google.Chrome.helper", mic: [10.1..<200.1], sound: [10.1..<200.1])
+        let reads: [Double: CallDetector.Window] = [
+            11.1: Self.read(nil, "Call A", tab: 1),
+            50.1: Self.read(nil, "Call A", tab: 1, others: [2]),
+            80.1: Self.read(nil, "Call A", tab: 1, others: [2]),
+            87.1: Self.read(nil, "Call A", tab: 1, others: [2]),
+            // Tab 1 still there, no longer recording: the reader picks the tab that records.
+            90.1: Self.read(nil, "Call B", tab: 2),
+        ]
+        var detector = CallDetector()
+        let steps = run([chrome], reads: reads, from: 10.1, to: 400, detector: &detector)
+        let ended = calls(steps)
+        #expect(ended.map { $0.startedAt...$0.lastAudioAt } == [10.1...87.1, 50.1...200.1])
+        #expect(ended.map { $0.tab?.page } == ["Call A", "Call B"])
+        #expect(steps.filter { $0.time == 90.1 }.map(\.event)
+            == [.ended(ended[0]), .suspected(Self.chrome, at: 50.1), .started(try #require(started(steps).last))],
+                "it has had mic and sound for 40 s: a call at once")
+
+        // A tab the call's never saw beside it: from when it takes over.
+        let unseen: [Double: CallDetector.Window] = [11.1: Self.read(nil, "Call A", tab: 1), 90.1: Self.read(nil, "Call B", tab: 2)]
+        var other = CallDetector()
+        #expect(calls(run([chrome], reads: unseen, from: 10.1, to: 400, detector: &other)).map { $0.startedAt...$0.lastAudioAt }
+            == [10.1...85.1, 90.1...200.1])
+    }
+
     /// A mute first seen half a minute or more into the call (its tab was in the background until then) counts from
     /// when it was seen, not from the start.
     @Test func aMuteFirstSeenLateCountsFromThen() throws {

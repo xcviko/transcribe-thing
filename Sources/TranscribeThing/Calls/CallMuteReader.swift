@@ -37,6 +37,8 @@ final class CallMuteReader: @unchecked Sendable {
     private var manual: [pid_t: Bool] = [:]
     /// A site no service is known for: what its Mute button has shown during the call.
     private var generic = GenericMute()
+    /// The ids of a Chromium browser's tabs, kept until `release`.
+    private var tabIDs = TabIDs<AXUIElement> { CFEqual($0, $1) }
 
     /// Why a browser call's mute is unknown when its tab isn't the one shown: a background tab's controls can't be read.
     nonisolated static let tabNotActive = "tab not active"
@@ -55,9 +57,9 @@ final class CallMuteReader: @unchecked Sendable {
         self.budget = budget
     }
 
-    /// One read of `app`, whose processes with windows are `pids`; for a browser, `following` is the key of the tab
-    /// the call was in (`BrowserTabs.callTab`). Call on the reader's queue.
-    func read(_ app: CallApp, pids: [pid_t], following: String? = nil) -> Report {
+    /// One read of `app`, whose processes with windows are `pids`; for a browser, `following` is the tab the call
+    /// was in (`BrowserTabs.callTab`). Call on the reader's queue.
+    func read(_ app: CallApp, pids: [pid_t], following: BrowserTabs.Following? = nil) -> Report {
         let deadline = Date() + budget
         switch CallAppKind.of(app.id) {
         case .telegramDesktop:
@@ -67,7 +69,8 @@ final class CallMuteReader: @unchecked Sendable {
         case .electron(let service):
             return readWindows(pids, rules: service.rules, manual: true, deadline: deadline)
         case .browser:
-            return readBrowser(pids, following: following, deadline: deadline)
+            return readBrowser(pids, following: following, ids: BrowserTabs.tabsHaveIDs(bundleID: app.id),
+                               deadline: deadline)
         case .other:
             return readWindows(pids, rules: nil, manual: false, deadline: deadline)
         }
@@ -80,6 +83,7 @@ final class CallMuteReader: @unchecked Sendable {
         }
         manual = [:]
         generic = GenericMute()
+        tabIDs.forget()
     }
 
     // MARK: Apps
@@ -125,20 +129,28 @@ final class CallMuteReader: @unchecked Sendable {
         return Report(read: read, windowCount: windowCount, dump: read.state.isKnown ? nil : CallControl.dump(controls))
     }
 
-    private func readBrowser(_ pids: [pid_t], following: String?, deadline: Date) -> Report {
+    private func readBrowser(_ pids: [pid_t], following: BrowserTabs.Following?, ids: Bool,
+                             deadline: Date) -> Report {
         var windows: [BrowserTabs.Window] = []
         var windowElements: [AXUIElement] = []
+        var allWindows = true
         for pid in pids {
             let app = application(pid)
             askForWebTree(app, pid: pid)
-            for window in elements(app, kAXWindowsAttribute) {
+            guard let appWindows = elementsIfRead(app, kAXWindowsAttribute) else {
+                allWindows = false
+                continue
+            }
+            for window in appWindows {
                 let title = node(window, children: false)?.title
-                var tabs = self.tabs(in: window, deadline: deadline)
+                var (tabs, whole) = self.tabs(in: window, ids: ids, deadline: deadline)
+                if ids, whole { tabIDs.sawWhole(window, tabs: Set(tabs.compactMap(\.id))) }
                 if tabs.isEmpty, let title { tabs = [BrowserTabs.Tab(title: title, selected: true)] }
                 windows.append(BrowserTabs.Window(title: title, tabs: tabs))
                 windowElements.append(window)
             }
         }
+        if ids, allWindows, !pids.isEmpty { tabIDs.sawAll(windows: windowElements) }
         var report = Report(read: MuteRead(state: .unknown("no tab records or is titled like a call"), inCall: nil, detail: ""),
                             isBrowser: true, windowCount: windows.count)
         let callTab = BrowserTabs.callTab(in: windows, following: following)
@@ -219,31 +231,43 @@ final class CallMuteReader: @unchecked Sendable {
     }
 
     /// The tabs of a browser window: radio buttons in a tab group (Chrome, Safari), or anything whose title says it
-    /// records (other tab strips). Web content is skipped.
-    private func tabs(in window: AXUIElement, deadline: Date) -> [BrowserTabs.Tab] {
+    /// records (other tab strips). Web content is skipped. With `ids`, each tab has its element's (`TabIDs`). `whole`:
+    /// the walk saw everything it meant to, so a tab it didn't find isn't there.
+    private func tabs(in window: AXUIElement, ids: Bool, deadline: Date) -> (tabs: [BrowserTabs.Tab], whole: Bool) {
         var tabs: [BrowserTabs.Tab] = []
-        walk(window, maxDepth: 15, maxNodes: 1500, deadline: deadline) { node, parentRole in
+        let whole = walk(window, maxDepth: 15, maxNodes: 1500, deadline: deadline) { node, parentRole in
             if node.role == "AXWebArea" { return false }
             let texts = [node.title, node.label].compactMap { $0 }
             let recording = texts.first { BrowserTabs.parse($0).recording != nil }
             let isTab = node.role == kAXRadioButtonRole && parentRole == kAXTabGroupRole
             guard recording != nil || isTab, let title = recording ?? texts.first(where: { !$0.isEmpty }) else { return true }
-            tabs.append(BrowserTabs.Tab(title: title, selected: node.value.map { $0 != 0 } ?? node.selected))
+            tabs.append(BrowserTabs.Tab(title: title, selected: node.value.map { $0 != 0 } ?? node.selected,
+                                        id: ids ? tabIDs.id(of: node.element, in: window) : nil))
             return false
         }
-        return tabs
+        return (tabs, whole)
     }
 
-    /// Depth-first, in order, while `visit` says to go into a node's children and the limits allow.
+    /// Depth-first, in order, while `visit` says to go into a node's children and the limits allow. Returns whether
+    /// it went everywhere `visit` asked (bar `maxDepth`, which is the same every time): no limit on nodes or time
+    /// cut it short, no element failed to answer.
+    @discardableResult
     private func walk(_ root: AXUIElement, maxDepth: Int, maxNodes: Int, deadline: Date,
-                      visit: (Node, _ parentRole: String?) -> Bool) {
+                      visit: (Node, _ parentRole: String?) -> Bool) -> Bool {
         var stack: [(element: AXUIElement, depth: Int, parentRole: String?)] = [(root, 0, nil)]
         var visited = 0
-        while let (element, depth, parentRole) = stack.popLast(), visited < maxNodes, Date() < deadline {
+        var whole = true
+        while let (element, depth, parentRole) = stack.popLast() {
+            guard visited < maxNodes, Date() < deadline else { return false }
             visited += 1
-            guard let node = node(element, children: depth < maxDepth), visit(node, parentRole) else { continue }
+            guard let node = node(element, children: depth < maxDepth) else {
+                whole = false
+                continue
+            }
+            guard visit(node, parentRole) else { continue }
             stack += node.children.reversed().map { ($0, depth + 1, node.role) }
         }
+        return whole
     }
 
     /// Asks a Chromium browser or Electron app for its web content's tree, once per process. One that already has
@@ -321,8 +345,13 @@ final class CallMuteReader: @unchecked Sendable {
     }
 
     private func elements(_ parent: AXUIElement, _ attribute: String) -> [AXUIElement] {
+        elementsIfRead(parent, attribute) ?? []
+    }
+
+    /// nil when the attribute couldn't be read, which says nothing about what's there.
+    private func elementsIfRead(_ parent: AXUIElement, _ attribute: String) -> [AXUIElement]? {
         var ref: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(parent, attribute as CFString, &ref) == .success else { return [] }
+        guard AXUIElementCopyAttributeValue(parent, attribute as CFString, &ref) == .success else { return nil }
         return ref as? [AXUIElement] ?? []
     }
 

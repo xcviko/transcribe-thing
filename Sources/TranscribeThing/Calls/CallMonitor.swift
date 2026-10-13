@@ -16,13 +16,15 @@ final class CallRecorder {
     private let journal: CallJournal
     private let sources: [CallJournal.Track: any CallTrackSource]
 
+    /// Starts recording from `origin`. With `carrying`, a recording of the same app still going: what it has from
+    /// `origin` on starts this one's tracks (`CallJournal.begin`), so the seconds both calls had aren't lost to this one.
     init(journal: CallJournal, info: CallJournal.Info, origin: TimeInterval,
-         sources: [CallJournal.Track: any CallTrackSource]) {
+         sources: [CallJournal.Track: any CallTrackSource], carrying: CallRecorder? = nil) {
         id = info.id
         self.origin = origin
         self.journal = journal
         self.sources = sources
-        journal.begin(info, origin: origin, sources: sources)
+        journal.begin(info, origin: origin, sources: sources, carrying: carrying?.id)
     }
 
     func update(_ change: @escaping @Sendable (inout CallJournal.Info) -> Void) {
@@ -148,9 +150,15 @@ final class CallMonitor {
     /// tab. Until the detector drops or ends it.
     @ObservationIgnored private var ignored: CallApp?
     @ObservationIgnored private var endings: [UUID: Task<Void, Never>] = [:]
+    /// While the detector's events are handled: recordings to throw away once they are, so a call that takes over
+    /// from one in the same browser can still copy its first seconds from it.
+    @ObservationIgnored private var discardsLater: [CallRecorder]?
 
     /// Kept after the call app's last mic or sound: the end of a word it cut off, or a hang-up a moment late.
     static let endPadding: TimeInterval = 1
+    /// The most a call taking over from another in the same browser copies from that one's recording: the seconds
+    /// its tab recorded beside the other's.
+    static let carryLimit: TimeInterval = 600
 
     private struct Live {
         var recorder: CallRecorder
@@ -373,15 +381,28 @@ final class CallMonitor {
 
     // MARK: Events
 
+    /// The detector's events, in order. When a browser's call ends because another of its tabs holds one now, that
+    /// call is suspected from when its tab began recording, which can be before now: its recording starts there,
+    /// copying the ended call's recording up to now (`CallRecorder.init(carrying:)`), so both keep the seconds
+    /// their tabs recorded side by side. The tap takes the whole browser, so nothing else has them.
     private func handle(_ events: [CallDetector.Event], at time: TimeInterval) {
+        // The recording of a call that just ended or dropped in this step, for the next one in its app.
+        var handedOver: (app: CallApp, recorder: CallRecorder)?
+        discardsLater = []
+        defer {
+            for recorder in discardsLater ?? [] { recorder.discard() }
+            discardsLater = nil
+        }
         for event in events {
             switch event {
-            case .suspected(let app, _):
+            case .suspected(let app, let at):
                 guard live == nil, mayRecord(app) else { continue }
-                begin(app, at: time)
+                let carrying = handedOver.flatMap { $0.app == app && at < time ? $0.recorder : nil }
+                begin(app, at: time, from: at, carrying: carrying)
             case .dropped(let app, _):
                 if ignored == app { ignored = nil }
                 guard let live, live.app == app else { continue }
+                handedOver = (app, live.recorder)
                 logEvent("call.dropped", live, ["reason": "notACall"])
                 if live.consent == .kept { end(live, status: .transcribing) } else { discardLive(ignore: false) }
             case .started(let call):
@@ -394,6 +415,7 @@ final class CallMonitor {
             case .ended(let call):
                 if ignored == call.app { ignored = nil }
                 guard var live, live.app == call.app else { continue }
+                handedOver = (call.app, live.recorder)
                 live.info.mutes = intervals(call.mutes, origin: live.origin)
                 // The call ended at its app's last mic or sound, a second kept after it: not after the minute of
                 // silence that told it was over.
@@ -423,18 +445,24 @@ final class CallMonitor {
 
     private static func isBrowser(_ app: CallApp) -> Bool { CallAppKind.of(app.id) == .browser }
 
-    /// Starts recording `app`'s call: its mic and a tap of all its processes.
-    private func begin(_ app: CallApp, at time: TimeInterval) {
+    /// Starts recording `app`'s call at `time`: its mic and a tap of all its processes. With `carrying`, the
+    /// recording of the call `app` just had, the call is recorded `from` when the detector says it began (at most
+    /// `carryLimit` back, not before that recording's start), its first seconds copied from that recording.
+    private func begin(_ app: CallApp, at time: TimeInterval, from start: TimeInterval? = nil,
+                       carrying: CallRecorder? = nil) {
         guard let journal = store.journal else { return }
+        let origin = carrying.map { max(start ?? time, $0.origin, time - Self.carryLimit) }.map { min($0, time) } ?? time
         let kind = CallAppKind.of(app.id)
         let info = CallInfo(id: UUID(), appName: deps.appName(app), bundleID: app.id, service: kind.service,
-                            startedAt: deps.now(), muteKnown: kind.service?.releasesMicOnMute == true)
+                            startedAt: deps.now().addingTimeInterval(origin - time),
+                            muteKnown: kind.service?.releasesMicOnMute == true)
         var journalInfo = CallJournal.Info(id: info.id, startedAt: info.startedAt, appName: info.appName,
                                            bundleID: app.id, service: info.service, consent: .suspected)
         journalInfo.muteKnown = info.muteKnown
         let processes = watch.processes[app] ?? []
-        let recorder = CallRecorder(journal: journal, info: journalInfo, origin: time,
-                                    sources: deps.makeSources(.processes(processes)))
+        let recorder = CallRecorder(journal: journal, info: journalInfo, origin: origin,
+                                    sources: deps.makeSources(.processes(processes)),
+                                    carrying: origin < time ? carrying : nil)
         // A browser waits for its call tab, unless its windows can't be read at all: then it's any app.
         let classified = !Self.isBrowser(app) || !deps.sensors.canReadWindows()
         let suspected = Live(recorder: recorder, info: info, app: app, consent: .suspected, classified: classified,
@@ -442,7 +470,8 @@ final class CallMonitor {
         live = suspected
         state = .suspected(info)
         Log.audio.info("Recording a possible call in \(info.appName, privacy: .public)")
-        logEvent("call.suspected", suspected, ["muteKnown": info.muteKnown])
+        logEvent("call.suspected", suspected, ["muteKnown": info.muteKnown,
+                                               "carried": origin < time ? (time - origin).rounded() : nil])
     }
 
     /// The call is confirmed and known: ask about it, or keep it.
@@ -611,7 +640,7 @@ final class CallMonitor {
     private func discardLive(ignore: Bool = true) {
         guard let live else { return }
         if ignore, let app = live.app { ignored = app }
-        live.recorder.discard()
+        if discardsLater != nil { discardsLater?.append(live.recorder) } else { live.recorder.discard() }
         self.live = nil
         state = .idle
         notices?.dropped()

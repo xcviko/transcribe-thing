@@ -21,8 +21,8 @@ final class CallWatch {
         /// Whether windows can be read at all (the Accessibility permission).
         var canReadWindows: () -> Bool
         /// Reads `app`'s window off the main thread and hands the report back on the main actor. `following` is the
-        /// key of the browser tab the call was in.
-        var readWindow: (_ app: CallApp, _ pids: [pid_t], _ following: String?,
+        /// browser tab the call was in.
+        var readWindow: (_ app: CallApp, _ pids: [pid_t], _ following: BrowserTabs.Following?,
                          _ done: @escaping @MainActor (CallMuteReader.Report) -> Void) -> Void
         /// The call is over: whatever the reader asked of the app (AXManualAccessibility) is turned back off.
         var releaseWindows: () -> Void
@@ -124,7 +124,7 @@ final class CallWatch {
     private func readWindow(at time: TimeInterval) {
         guard sensors.canReadWindows() else { return }
         let app = detector.followed.flatMap { readsWindow?($0.app) ?? true ? $0.app : nil }
-        let following = detector.followed?.tab?.key
+        let following = detector.followed?.tab?.following
         if app != reading.app {
             if reading.app != nil { sensors.releaseWindows() }
             reading = Reading(app: app)

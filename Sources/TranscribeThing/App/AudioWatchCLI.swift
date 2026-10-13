@@ -184,7 +184,8 @@ private final class AudioWatch {
         guard let tab = report.tab else {
             return "TAB \(browser): no tab records or is titled like a call (\(report.windowCount) windows)"
         }
-        let window = "window \(tab.window + 1) of \(report.windowCount)"
+        let window = "window \(tab.window + 1) of \(report.windowCount)" + (tab.id.map { ", tab \($0)" } ?? "")
+            + (tab.otherMicTabs.isEmpty ? "" : ", also recording: \(tab.otherMicTabs.map(\.description).joined(separator: " "))")
             + (tab.active ? "" : ", which shows \"\(CallLabels.safe(tab.windowTitle ?? "?", limit: 60))\"")
         let what = tab.recording.map { "is recording (\(tab.active ? "active" : "background"), \($0.name))" }
             ?? "looks like a call by its title, no recording mark (\(tab.active ? "active" : "background"))"

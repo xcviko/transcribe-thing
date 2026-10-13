@@ -327,7 +327,7 @@ import Testing
         let front = try #require(BrowserTabs.callTab(in: windows))
         #expect(front.service == .discord && front.active && front.page == "Discord | Друзья")
         let meetKey = BrowserTabs.key(service: .meet, page: "Meet – gkz-omip-mob")
-        let followed = try #require(BrowserTabs.callTab(in: windows, following: meetKey))
+        let followed = try #require(BrowserTabs.callTab(in: windows, following: .init(key: meetKey)))
         #expect(followed.service == .meet && !followed.active && followed.key == meetKey)
     }
 
@@ -350,7 +350,7 @@ import Testing
         ])]
         #expect(try #require(BrowserTabs.callTab(in: windows)).service == .zoom)
         let meet = BrowserTabs.key(service: .meet, page: "Meet – abc-defg-hij")
-        #expect(try #require(BrowserTabs.callTab(in: windows, following: meet)).service == .meet)
+        #expect(try #require(BrowserTabs.callTab(in: windows, following: .init(key: meet))).service == .meet)
     }
 
     @Test func russianTabTitles() {
@@ -481,5 +481,54 @@ import Testing
         let tab = try #require(BrowserTabs.callTab(in: windows))
         #expect(tab.service == .telegram && tab.recording == nil && tab.active)
         #expect(BrowserTabs.callTab(in: [BrowserTabs.Window(title: "Weather", tabs: [.init(title: "Weather", selected: true)])]) == nil)
+    }
+
+    /// Two Telemost calls in two tabs titled alike: the call followed stays in its own tab, whichever is in front,
+    /// and says the other records beside it. Once it stops recording, the other is the call tab.
+    @Test func twoTabsTitledAlikeAreToldApartByTheirIDs() throws {
+        let telemost = "Идёт звонок · Яндекс Телемост"
+        let first = BrowserTabs.TabID(1), second = BrowserTabs.TabID(2)
+        let both = [BrowserTabs.Window(title: telemost, tabs: [
+            .init(title: telemost + " - Camera and microphone recording", selected: false, id: first),
+            .init(title: telemost + " - Microphone recording", selected: true, id: second),
+        ])]
+        let key = BrowserTabs.key(service: .telemost, page: telemost)
+        let followed = try #require(BrowserTabs.callTab(in: both, following: .init(key: key, id: first)))
+        #expect(followed.id == first && !followed.active && followed.otherMicTabs == [second] && followed.othersRecordMic)
+        #expect(try #require(BrowserTabs.callTab(in: both, following: .init(key: key, id: second))).id == second)
+        #expect(try #require(BrowserTabs.callTab(in: both, following: .init(key: key))).id == second,
+                "by its key alone, either tab will do: the one in front")
+
+        let firstDone = [BrowserTabs.Window(title: telemost, tabs: [
+            .init(title: "Яндекс Телемост", selected: false, id: first),
+            .init(title: telemost + " - Microphone recording", selected: true, id: second),
+        ])]
+        let next = try #require(BrowserTabs.callTab(in: firstDone, following: .init(key: key, id: first)))
+        #expect(next.id == second && next.otherMicTabs.isEmpty)
+        // Without a recording mark anywhere, the tab followed is still found by its id.
+        let noMarks = [BrowserTabs.Window(title: telemost, tabs: [
+            .init(title: telemost, selected: false, id: first), .init(title: telemost, selected: true, id: second),
+        ])]
+        #expect(try #require(BrowserTabs.callTab(in: noMarks, following: .init(key: key, id: first))).id == first)
+        #expect(!BrowserTabs.tabsHaveIDs(bundleID: "com.apple.Safari") && BrowserTabs.tabsHaveIDs(bundleID: "com.google.Chrome"))
+    }
+
+    /// A tab keeps its id while it's there; a tab gone from a whole read of its window, or with its window, is
+    /// forgotten, and an element equal to it later is another tab. Ids are never given twice.
+    @Test func tabIDsLastWhileTheTabIs() {
+        var ids = TabIDs<Int> { $0 == $1 }
+        let a = ids.id(of: 10, in: 1), b = ids.id(of: 11, in: 1), c = ids.id(of: 20, in: 2)
+        #expect(Set([a, b, c]).count == 3)
+        #expect(ids.id(of: 10, in: 1) == a && ids.id(of: 20, in: 2) == c)
+        #expect(ids.id(of: 10, in: 2) != a, "the same element in another window is another tab")
+        ids.sawWhole(1, tabs: [b])
+        let again = ids.id(of: 10, in: 1)
+        #expect(again != a, "closed, then an element equal to it: another tab")
+        #expect(ids.id(of: 11, in: 1) == b)
+        ids.sawAll(windows: [1])
+        #expect(ids.id(of: 20, in: 2) != c, "its window closed")
+        ids.forget()
+        #expect(ids.count == 0)
+        #expect(![a, b, c, again].contains(ids.id(of: 10, in: 1)))
     }
 }

@@ -861,6 +861,8 @@ private func heldVoice(seconds: Double, gain: Double) -> [Float] {
     @MainActor final class Rig {
         var records: [CoreAudioHAL.ProcessRecord] = []
         var tabs: [String] = []
+        /// Each tab's id (`BrowserTabs.TabID`), in `tabs`' order; nil: the browser gives none.
+        var tabIDs: [Int]?
         /// Accessibility allowed.
         var canReadWindows = true
         /// The browser shows its windows to Accessibility.
@@ -894,7 +896,9 @@ private func heldVoice(seconds: Double, gain: Double) -> [Float] {
                 readWindow: { [unowned self] app, _, following, done in
                     reads.append(app.id)
                     let windows = windowsReadable
-                        ? [BrowserTabs.Window(title: tabs.first, tabs: tabs.map { BrowserTabs.Tab(title: $0, selected: nil) })]
+                        ? [BrowserTabs.Window(title: tabs.first, tabs: tabs.enumerated().map { index, title in
+                            BrowserTabs.Tab(title: title, selected: nil, id: tabIDs.map { BrowserTabs.TabID($0[index]) })
+                        })]
                         : []
                     let isBrowser = CallAppKind.of(app.id) == .browser
                     done(CallMuteReader.Report(
@@ -1321,6 +1325,56 @@ private func heldVoice(seconds: Double, gain: Double) -> [Float] {
         let url = try #require(rig.store.audioURL(of: call, track: .mic))
         let samples = try CallAudio.read(url, range: 0..<Int(59 * rate))
         #expect(samples.allSatisfy { abs($0) < 0.001 })
+    }
+
+    /// The case of 2026-10-13 through the monitor: a Telemost call in one Chrome tab, and a second one begun in
+    /// another tab before the first ended, both tabs titled alike, the mic never off. Two calls: the first kept to
+    /// where its tab was last seen; the second recorded from where its tab was first seen recording, its first
+    /// seconds copied from the first's recording (the tap takes the whole browser, so nothing else has them).
+    @Test func aCallInAnotherTabOfTheSameServiceIsACallOfItsOwnWithItsFirstSeconds() async throws {
+        let rig = Rig(mode: .automatic)
+        let telemost = "Идёт звонок · Яндекс Телемост"
+        rig.tabs = [telemost + " - Camera and microphone recording"]
+        rig.tabIDs = [1]
+        rig.app("com.google.Chrome", mic: true, sound: true)
+        rig.poll([0])
+        let voice = speechLike(seconds: 60)
+        try #require(rig.sources.first?[.mic]).push(voice, at: 0)
+        // Its window is read every 3 s (no Mute button known here), each read seen at the next look.
+        rig.poll(stride(from: 1.0, through: 29, by: 1))
+        guard case .recording(let first) = rig.monitor.state else { Issue.record("not kept"); return }
+        // The second call's tab starts recording, in the background: first seen at 31.
+        rig.tabs.append(telemost + " - Microphone recording")
+        rig.tabIDs = [1, 2]
+        rig.poll(stride(from: 30.0, through: 41, by: 1))
+        #expect(rig.monitor.current?.id == first.id && rig.sources.count == 1, "two tabs recording: still the first call")
+        // The first call is over, its tab still open: last seen recording at 40, seen gone at 43.
+        rig.tabs[0] = telemost
+        rig.poll(stride(from: 42.0, through: 43, by: 1))
+        guard case .suspected(let second) = rig.monitor.state else { Issue.record("no second call"); return }
+        #expect(second.id != first.id && rig.sources.count == 2)
+        #expect(second.service == .telemost && second.pageTitle == telemost)
+
+        // Its recording begins at 31 with what the first one's had from there.
+        let journal = try #require(rig.store.journal)
+        journal.pump(second.id)
+        await journal.settle()
+        let written = try #require(RecordingJournal.read(journal.audioURL(for: second.id, track: .mic)))
+        let expected = Array(voice[Int(31 * rate)...])
+        #expect(written.count == expected.count - CallJournal.micHoldBackSamples)
+        #expect(zip(written, expected).allSatisfy { abs($0 - $1) < 3 / 32_767 }, "the first call's audio from 31 s on")
+
+        rig.poll(stride(from: 44.0, through: 55, by: 1))
+        guard case .recording = rig.monitor.state else { Issue.record("second not kept"); return }
+        rig.monitor.stop(keep: true)
+        await rig.monitor.waitForEndings()
+        await rig.transcriber.waitUntilIdle()
+        #expect(rig.store.calls.count == 2)
+        let firstCall = try #require(rig.store.call(id: first.id))
+        let secondCall = try #require(rig.store.call(id: second.id))
+        #expect(abs(firstCall.duration - 41) < 0.1, "to 40 s, where its tab was last seen, and a second after")
+        #expect(abs(secondCall.micSeconds - 29) < 0.1, "from 31 s to the end of what the mic had")
+        #expect(firstCall.service == .telemost && secondCall.service == .telemost)
     }
 
     /// The minute of silence that tells a hang-up from a pause isn't the call: the room after it isn't kept.

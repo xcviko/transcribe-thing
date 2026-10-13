@@ -208,10 +208,12 @@ final class CallJournal: @unchecked Sendable {
     // MARK: Writing (any thread; the work is queued in order)
 
     /// Starts the journal of `info.id`: each source is started and its audio written from `origin`, the `AudioClock`
-    /// time of the call's sample 0.
-    func begin(_ info: Info, origin: TimeInterval, sources: [Track: any CallTrackSource]) {
+    /// time of the call's sample 0. With `carrying`, a journal still being written whose sources heard this call's
+    /// start: each track begins with what that one has from `origin` on, its sources drained first; then this one's
+    /// own sources go on from where that ends (`TrackAligner`).
+    func begin(_ info: Info, origin: TimeInterval, sources: [Track: any CallTrackSource], carrying: UUID? = nil) {
         for source in sources.values { source.start() }
-        queue.async { self.beginOnQueue(info, origin: origin, sources: sources) }
+        queue.async { self.beginOnQueue(info, origin: origin, sources: sources, carrying: carrying) }
     }
 
     /// Changes what the sidecar says (mutes, the answer, a track's problem); written at once.
@@ -284,7 +286,9 @@ final class CallJournal: @unchecked Sendable {
 
     // MARK: Private (queue)
 
-    private func beginOnQueue(_ info: Info, origin: TimeInterval, sources: [Track: any CallTrackSource]) {
+    private func beginOnQueue(_ info: Info, origin: TimeInterval, sources: [Track: any CallTrackSource],
+                              carrying: UUID?) {
+        let carried = carrying.map { carriedAudio(from: $0, since: origin) } ?? [:]
         close(info.id, sync: false)
         begun.insert(info.id)
         do {
@@ -305,8 +309,12 @@ final class CallJournal: @unchecked Sendable {
                 Log.audio.error("Couldn't keep the call's \(track.rawValue, privacy: .public) on disk: \(error.localizedDescription, privacy: .public)")
                 handle = nil
             }
-            writer.tracks[track] = TrackWriter(source: source, handle: handle, origin: origin,
-                                               holdBack: track == .mic ? Self.micHoldBackSamples : 0)
+            let trackWriter = TrackWriter(source: source, handle: handle, origin: origin,
+                                          holdBack: track == .mic ? Self.micHoldBackSamples : 0)
+            if let samples = carried[track], !samples.isEmpty {
+                trackWriter.held = trackWriter.aligner.place(TimedAudio(samples: samples, start: origin))
+            }
+            writer.tracks[track] = trackWriter
         }
         let timer = DispatchSource.makeTimerSource(queue: queue)
         let interval = RecordingJournal.flushInterval
@@ -316,6 +324,39 @@ final class CallJournal: @unchecked Sendable {
         timer.resume()
         writer.timer = timer
         writers[id] = writer
+    }
+
+    /// What `id`'s tracks have from `since` (`AudioClock` time) on, written or held back, its sources drained first;
+    /// nothing for a journal not being written.
+    private func carriedAudio(from id: UUID, since: TimeInterval) -> [Track: [Float]] {
+        guard let writer = writers[id] else { return [:] }
+        pumpOnQueue(id)
+        var carried: [Track: [Float]] = [:]
+        for (track, trackWriter) in writer.tracks {
+            let first = max(0, Int(((since - trackWriter.aligner.origin) * Recording.sampleRate).rounded()))
+            var samples: [Float] = []
+            if first < trackWriter.flushed {
+                samples = written(audioURL(for: id, track: track), from: first, to: trackWriter.flushed)
+                // What couldn't be read stays in its place as silence.
+                samples += [Float](repeating: 0, count: trackWriter.flushed - first - samples.count)
+            }
+            let heldFrom = max(0, first - trackWriter.flushed)
+            if heldFrom < trackWriter.held.count { samples += trackWriter.held[heldFrom...] }
+            carried[track] = samples
+        }
+        return carried
+    }
+
+    /// Samples `first..<end` of a track file being written.
+    private func written(_ url: URL, from first: Int, to end: Int) -> [Float] {
+        guard end > first, let handle = try? FileHandle(forReadingFrom: url) else { return [] }
+        defer { try? handle.close() }
+        guard (try? handle.seek(toOffset: UInt64(RecordingJournal.headerSize + first * 2))) != nil,
+              let data = try? handle.read(upToCount: (end - first) * 2) else { return [] }
+        let count = min(end - first, data.count / 2)
+        var ints = [Int16](repeating: 0, count: count)
+        _ = ints.withUnsafeMutableBytes { data.copyBytes(to: $0, count: count * 2) }
+        return ints.map { Float($0) / 32_768 }
     }
 
     /// Each source's new audio onto its track; `final` writes what's held back too (the call is over).

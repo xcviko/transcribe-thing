@@ -10,9 +10,13 @@ import Foundation
 /// pauses, reconnects and leave chimes don't end or restart it.
 ///
 /// A browser is one app to the HAL, whichever tab plays or records, so a browser's call is also its tab (`Tab`, from
-/// `Window`): when the tab holding it is another service's, another Meet meeting, or one that recorded beside it,
-/// or the mic was off before it, the call ends and that tab's is suspected. A tab that only changes its title while
-/// the mic stays on (Slack as you switch channels mid-huddle) is the same call (`continues`). Meet,
+/// `Window`). Where the browser's tabs have ids, the call is its tab's: another tab holding a call is another call,
+/// even of the same service and titled alike (two Telemost calls), however the mic went from one to the other; the
+/// call ends where its tab was last seen, and the new one begins where its tab was first seen recording. Without
+/// ids, tabs are told apart by their titles: when the tab holding the call is another service's, another Meet
+/// meeting, or one that recorded beside it, or the mic was off before it, the call ends and that tab's is suspected.
+/// Either way a tab that only changes its title while the mic stays on (Slack as you switch channels mid-huddle) is
+/// the same call (`continues`), unless it's become another service or Meet meeting. Meet,
 /// Discord, Zoom, Slack and Telemost keep the mic while muted, so for them a released mic is leaving, over at once
 /// when the window agrees (the tab stops recording or goes, the Leave button goes), and their mutes come from their
 /// Mute button. Telegram releases the mic to mute, so for it a released mic is the mute.
@@ -37,6 +41,10 @@ struct CallDetector: Equatable, Sendable {
         /// a first read says nothing about before it (the tab may have been in the background), and the mute counts
         /// from when it was seen.
         var mutedFromStartWithin: TimeInterval = 30
+        /// How long a browser's call tab can go unseen while its window is read (every 1 to 3 s). When another tab
+        /// takes the call, the call ends where its tab was last seen, but at most this long before: a sighting older
+        /// than that says the reads stalled, not that the call ended then.
+        var tabSeenWithin: TimeInterval = 5
     }
 
     /// What one app is doing at a moment: recording from a mic, playing sound.
@@ -57,18 +65,30 @@ struct CallDetector: Equatable, Sendable {
         var recording: BrowserTabs.Recording?
         /// Another tab records the mic too.
         var othersRecordMic: Bool
+        /// Which tab it is, when the browser's tabs have ids (`BrowserTabs.TabID`): then a tab is its call's
+        /// whatever its title, and another tab is another call whatever its title.
+        var id: BrowserTabs.TabID?
+        /// The other tabs recording the mic, those with ids.
+        var otherMicTabs: [BrowserTabs.TabID]
 
-        init(service: CallService?, page: String, recording: BrowserTabs.Recording? = nil, othersRecordMic: Bool = false) {
+        init(service: CallService?, page: String, recording: BrowserTabs.Recording? = nil, othersRecordMic: Bool = false,
+             id: BrowserTabs.TabID? = nil, otherMicTabs: [BrowserTabs.TabID] = []) {
             key = BrowserTabs.key(service: service, page: page)
             self.service = service
             self.page = page
             self.recording = recording
-            self.othersRecordMic = othersRecordMic
+            self.othersRecordMic = othersRecordMic || !otherMicTabs.isEmpty
+            self.id = id
+            self.otherMicTabs = otherMicTabs
         }
 
         init(_ tab: BrowserTabs.CallTab) {
-            self.init(service: tab.service, page: tab.page, recording: tab.recording, othersRecordMic: tab.othersRecordMic)
+            self.init(service: tab.service, page: tab.page, recording: tab.recording, othersRecordMic: tab.othersRecordMic,
+                      id: tab.id, otherMicTabs: tab.otherMicTabs)
         }
+
+        /// How the next read finds this tab again.
+        var following: BrowserTabs.Following { BrowserTabs.Following(key: key, id: id) }
     }
 
     /// One read of the followed app's own window, fed with the step it arrives in.
@@ -299,24 +319,35 @@ struct CallDetector: Equatable, Sendable {
                 if !micNow { shown.hungUp = true }
                 return []
             }
-            if let current = call.tab, current.key != tab.key {
-                if tab.recording == nil {
+            if let current = call.tab {
+                // Whether it's the call's tab, when both have ids; nil when only titles can tell.
+                let sameTab = current.id.flatMap { id in tab.id.map { $0 == id } }
+                if sameTab == false || (sameTab == nil && current.key != tab.key), tab.recording == nil {
                     // While the mic is on and no tab says it records, the one titled like a call needn't be the one
                     // with the mic, so it says nothing (and neither do its buttons).
                     guard !micNow else { return [] }
                     return switchTab(to: tab, at: time)
                 }
-                guard continues(call, in: tab) else { return switchTab(to: tab, at: time) }
-                // The same call, its tab retitled: a service once known stays known through a title that doesn't
-                // say it.
-                if tab.service == nil, let service = current.service {
-                    tab = Tab(service: service, page: tab.page, recording: tab.recording,
-                              othersRecordMic: tab.othersRecordMic)
+                if sameTab == false, let id = tab.id {
+                    // Another tab records: its own call, from when it was first seen recording beside this one,
+                    // however alike their titles and whether or not the mic went off between. This one ended where
+                    // its tab was last seen (`tabSeenWithin`).
+                    let lastSeen = shown.tabSeenAt.map { max($0, time - settings.tabSeenWithin) }
+                    return switchTab(to: tab, at: time, lastSeen: lastSeen, from: shown.othersSince[id])
+                }
+                if current.key != tab.key {
+                    guard continues(call, in: tab, sameTab: sameTab == true) else { return switchTab(to: tab, at: time) }
+                    // The same call, its tab retitled: a service once known stays known through a title that doesn't
+                    // say it.
+                    if tab.service == nil, let service = current.service {
+                        tab = Tab(service: service, page: tab.page, recording: tab.recording,
+                                  othersRecordMic: tab.othersRecordMic, id: tab.id, otherMicTabs: tab.otherMicTabs)
+                    }
                 }
             }
             call.tab = tab
             shown.tabSeenAt = time
-            shown.othersRecordedMic = tab.othersRecordMic
+            shown.saw(others: tab, at: time)
             // Meet and the like record all call long, muted or not: their tab not recording, the mic off, is gone.
             if !micNow, !call.micReleaseIsMute, tab.recording?.hasMic != true { shown.hungUp = true }
         }
@@ -342,44 +373,53 @@ struct CallDetector: Equatable, Sendable {
         return []
     }
 
-    /// Whether `tab`, which records and has another key than the call's tab, is still `call`: its tab retitled
-    /// (Slack and Discord as you move between channels, a page an extension renames). It is, while the mic has
-    /// stayed on since the call's tab was last seen (gaps under `flicker` don't count), unless
+    /// Whether `tab`, which has another key than the call's tab and is that very tab (`sameTab`, by its id) or may be
+    /// (no ids), is still `call`: its tab retitled (Slack and Discord as you move between channels, a page an
+    /// extension renames). It is, while the mic has stayed on since the call's tab was last seen (gaps under
+    /// `flicker` don't count), unless
     /// - both are known services and they differ, or are Meet with another meeting's code: another call;
-    /// - another tab recorded the mic too when the call's tab was last seen: that one has the mic now, and is its
-    ///   own call;
-    /// - the mic was off for longer than `flicker` since then: a new call began in the new tab.
-    private func continues(_ call: Call, in tab: Tab) -> Bool {
-        guard !shown.othersRecordedMic else { return false }
+    /// - without ids, another tab recorded the mic too when the call's tab was last seen: that one has the mic now,
+    ///   and is its own call;
+    /// - the mic was off for longer than `flicker` since then: a new call began in the tab.
+    private func continues(_ call: Call, in tab: Tab, sameTab: Bool) -> Bool {
+        guard sameTab || !shown.othersRecordedMic else { return false }
         if let old = call.tab?.service, let new = tab.service, old != new || old.pageNamesTheCall { return false }
         guard let mic = signals[call.app]?.mic, let on = mic.since, let seen = shown.tabSeenAt else { return false }
         return on <= seen
     }
 
-    /// The followed browser's call tab now holds another call: the call ends at its last audio (a suspicion is
-    /// dropped), and the new tab's is suspected from now if the browser has mic and sound.
-    private mutating func switchTab(to tab: Tab, at time: TimeInterval) -> [Event] {
+    /// The followed browser's call tab now holds another call: the call ends at its last audio, or where its tab was
+    /// `lastSeen` if that's earlier (a suspicion is dropped), and the new tab's is suspected if the browser has mic
+    /// and sound: from when that tab was first seen recording (`from`), else from now. Not from before the old call
+    /// began (nothing kept its audio), nor before the browser last had both.
+    private mutating func switchTab(to tab: Tab, at time: TimeInterval, lastSeen: TimeInterval? = nil,
+                                    from: TimeInterval? = nil) -> [Event] {
         var events: [Event] = []
         let app: CallApp
+        let earliest: TimeInterval
+        let ended = min(quietSince ?? time, lastSeen ?? time)
         switch phase {
         case .idle:
             return []
         case .suspected(let call):
             app = call.app
-            events.append(.dropped(app, at: time))
+            earliest = call.startedAt
+            events.append(.dropped(app, at: ended))
             forget()
         case .call(var call):
             app = call.app
-            events.append(.ended(end(&call, at: quietSince ?? time, how: .hungUp)))
+            earliest = call.startedAt
+            events.append(.ended(end(&call, at: ended, how: .hungUp)))
         }
         var signal = signals[app] ?? Signals()
-        signal.restart(at: time)
+        let start = min(time, max(from ?? time, earliest, signal.bothSince ?? time))
+        signal.restart(at: start)
         signals[app] = signal.isIdle ? nil : signal
         if signal.isBoth {
-            phase = .suspected(Call(app: app, tab: tab, startedAt: time, lastAudioAt: time))
+            phase = .suspected(Call(app: app, tab: tab, startedAt: start, lastAudioAt: time))
             shown.tabSeenAt = time
-            shown.othersRecordedMic = tab.othersRecordMic
-            events.append(.suspected(app, at: time))
+            shown.saw(others: tab, at: time)
+            events.append(.suspected(app, at: start))
         }
         return events
     }
@@ -468,6 +508,15 @@ extension CallDetector {
         /// For a browser: when a read last showed the call's tab, and whether another tab recorded the mic then.
         var tabSeenAt: TimeInterval?
         var othersRecordedMic = false
+        /// For a browser whose tabs have ids: the other tabs recording the mic as the call's tab was last seen, each
+        /// with when it was first seen doing so.
+        var othersSince: [BrowserTabs.TabID: TimeInterval] = [:]
+
+        /// A read showed the call's `tab`, and the other tabs recording beside it.
+        mutating func saw(others tab: Tab, at time: TimeInterval) {
+            othersRecordedMic = tab.othersRecordMic
+            othersSince = Dictionary(tab.otherMicTabs.map { ($0, othersSince[$0] ?? time) }) { first, _ in first }
+        }
     }
 
     /// One app's mic and sound, each with flickers shorter than `Settings.flicker` smoothed over.
