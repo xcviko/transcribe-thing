@@ -23,9 +23,9 @@ enum ReasoningEffort: String, Codable, CaseIterable, Sendable {
 }
 
 extension EngineID {
-    /// The levels the model can be asked to think at (Models → Reasoning): Low, Medium and High for Gemini. Neither
-    /// Gemini model takes Minimal (the user's endpoint sends it as Low) nor None (they can't turn thinking off), so
-    /// neither is offered. Empty for models that don't reason, and for a retired one, which never runs.
+    /// The levels the model can be asked to think at (the Reasoning menu on its row in Models): Low, Medium and High
+    /// for Gemini. Neither Gemini model takes Minimal (the user's endpoint sends it as Low) nor None (they can't turn
+    /// thinking off), so neither is offered. Empty for models that don't reason, and for a retired one, which never runs.
     var reasoningEfforts: [ReasoningEffort] {
         switch self {
         case .geminiFlash, .geminiArgon: [.low, .medium, .high]

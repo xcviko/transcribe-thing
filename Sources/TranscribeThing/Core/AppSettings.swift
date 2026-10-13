@@ -44,8 +44,8 @@ final class AppSettings {
     /// Each model's color (Models): the pill wears the dictation's model's, and its tile, the sidebar chip and
     /// History's marks show it.
     var modelColors: ModelColors = .default { didSet { store.setJSON(modelColors, .modelColors) } }
-    /// The level each Gemini model thinks at (Models → Reasoning), Medium until picked. Every request to the model
-    /// goes at it (`reasoningEffort(for:)`).
+    /// The level each Gemini model thinks at (the Reasoning menu on its row in Models), Medium until picked. Every
+    /// request to the model goes at it (`reasoningEffort(for:)`).
     var reasoningEfforts: ReasoningEfforts = .default {
         didSet { store.setJSON(reasoningEfforts, .geminiReasoningEfforts) }
     }

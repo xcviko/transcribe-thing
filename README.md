@@ -64,11 +64,11 @@ a card, and Paste Here puts it in place of the selection.
 In Models:
 
 - **Your models** picks the model every dictation starts on (the dot), which models fn ⇥ steps through while you talk
-  (the switches, in the order of the list, which you can drag), and each one's pill color.
+  (the switches, in the order of the list, which you can drag), and each one's pill color. Each Gemini's row also has
+  a Reasoning menu, under its name: how long that model thinks before it writes, Low, Medium (the default) or High.
+  Higher is slower and costs more. It applies to everything that model does: dictations, Polish, Translate, selected
+  text, files, History and calls.
 - **Hands-free** picks the model fn Space starts on.
-- **Reasoning** sets how long each Gemini model thinks before it writes: Low, Medium (the default) or High. Higher is
-  slower and costs more. It applies to everything that model does: dictations, Polish, Translate, files, History and
-  calls.
 - **Calls** picks the model that transcribes and sums up calls: Gemini 3.8 Flash (the default) or Gemini 4 Argon.
 - **Parakeet on this Mac** downloads it and shows how it's doing. Delete it there once it's neither the main
   model nor switched on.

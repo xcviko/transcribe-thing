@@ -3,8 +3,8 @@ import UniformTypeIdentifiers
 
 /// The models in the user's order: the main model every dictation starts on (a radio), which others the Switch model
 /// shortcut steps to (a switch), the order it steps in (drag a row by its handle), and each one's color on the pill
-/// (its tile). Then the model hands-free starts on, how hard each Gemini model thinks (Reasoning), the model calls go
-/// to, Parakeet on this Mac (download, delete, storage), and the API keys: OpenRouter's, and the user's own
+/// (its tile), and how hard each Gemini model thinks (its Reasoning menu). Then the model hands-free starts on, the
+/// model calls go to, Parakeet on this Mac (download, delete, storage), and the API keys: OpenRouter's, and the user's own
 /// OpenAI-compatible endpoint that can take Gemini's requests instead.
 struct ModelsPage: View {
     @Environment(HubContext.self) private var hub
@@ -43,11 +43,6 @@ struct ModelsPage: View {
                     }
                 }
 
-                HubGroup("Reasoning", footer: ReasoningCopy.footer) {
-                    SettingsGroup {
-                        ForEach(EngineID.geminiEngines) { engine in ReasoningRow(engine: engine) }
-                    }
-                }
                 HubGroup("Calls", footer: CallsModelCopy.footer) {
                     SettingsGroup {
                         SettingsRow(title: "Calls use", subtitle: CallsModelCopy.subtitle,
@@ -136,11 +131,11 @@ struct ModelsPage: View {
         return Binding(get: { settings.handsFreeChoice }, set: { settings.handsFreeModel = $0 })
     }
 
-    /// The one thing the list can't say by itself: what the dot and the switches mean.
+    /// What the list can't say by itself: what the dot and the switches mean, and what Reasoning costs.
     private var lineupFooter: String {
         let keys = settings.shortcuts[.switchModel].map { " (\($0.compactDescription))" } ?? ""
         return "The dot picks the main model: every dictation starts on it. Models switched on are the ones "
-            + "Switch model\(keys) steps through while you dictate."
+            + "Switch model\(keys) steps through while you dictate. " + ReasoningCopy.footer
     }
 
     /// Which key the setting is about.
@@ -157,27 +152,49 @@ struct ModelsPage: View {
 
 /// What Models says about Reasoning and Calls.
 enum ReasoningCopy {
-    static let footer = "Higher effort thinks longer before it writes: answers come slower and cost more."
+    static let footer = "Higher Reasoning thinks longer before it writes: answers come slower and cost more."
 }
 
 enum CallsModelCopy {
     static let subtitle = "Transcribes and sums up every call."
-    static let footer = "Calls need a Gemini model. It thinks at its level under Reasoning."
+    static let footer = "Calls need a Gemini model. It thinks at the Reasoning level picked for it under Your models."
 }
 
-/// A Gemini model's level (`AppSettings.reasoningEfforts`): its tile, its name, and a menu of the levels it takes.
-private struct ReasoningRow: View {
+/// A Gemini model's level (`AppSettings.reasoningEfforts`) on its lineup row, after its status: "Reasoning: Medium", a
+/// borderless menu of the levels it takes. Its click is its own: it never makes the model main.
+private struct ReasoningMenu: View {
     var engine: EngineID
 
     @Environment(AppSettings.self) private var settings
 
     var body: some View {
-        let choice = ModelChoice(engine: engine)
-        SettingsRow(title: engine.modelName, systemImage: choice.symbolName,
-                    iconTint: settings.modelColors[choice].tint) {
-            HubMenuPicker(title: "Reasoning for \(engine.modelName)", options: engine.reasoningEfforts,
-                          selection: effort, label: \.title)
+        let current = settings.reasoningEffort(for: engine) ?? .medium
+        Menu {
+            Picker("Reasoning", selection: effort) {
+                ForEach(engine.reasoningEfforts, id: \.self) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        } label: {
+            // Styled as the status beside it: a plain label with a small chevron, so it reads as a setting of the row
+            // rather than a second title.
+            HStack(spacing: 3) {
+                Text("Reasoning: \(current.title)")
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(.inkTertiary)
+            }
+            .typeface(.callout)
+            .foregroundStyle(.inkSecondary)
+            .contentShape(Rectangle())
         }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(ReasoningCopy.footer)
+        .accessibilityLabel("Reasoning for \(engine.modelName)")
+        .accessibilityValue(current.title)
     }
 
     private var effort: Binding<ReasoningEffort> {
@@ -326,6 +343,14 @@ private struct LineupRow: View {
                 .foregroundStyle(summary.tone == .negative ? Color.danger : Color.inkSecondary)
                 .contentTransition(.numericText())
                 .lineLimit(1)
+            // A Gemini model's Reasoning level, after its status; Parakeet doesn't reason.
+            if !choice.engine.reasoningEfforts.isEmpty {
+                Text("·")
+                    .typeface(.callout)
+                    .foregroundStyle(.inkTertiary)
+                    .accessibilityHidden(true)
+                ReasoningMenu(engine: choice.engine)
+            }
         }
     }
 
