@@ -78,7 +78,9 @@ final class AppEnvironment {
                                                                            proxy: proxy, model: callModel),
                                           sendText: CallTranscriber.openRouterText(client: openRouterClient,
                                                                                    account: account, proxy: proxy,
-                                                                                   model: callModel))
+                                                                                   model: callModel),
+                                          videoNames: CallTranscriber.endpointVideoNames(proxy: proxy,
+                                                                                         model: callModel))
         // A preview never listens, and its extension's files go to a temporary folder.
         browserBridge = BrowserBridge(socketPath: isPreview ? nil : BrowserBridge.socketPath(for: paths))
         browserExtension = isPreview

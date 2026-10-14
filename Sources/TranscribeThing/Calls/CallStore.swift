@@ -29,6 +29,9 @@ final class CallStore {
     /// Calls whose summary is being written on its own (`CallTranscriber.summarize`): never saved, a summary the app
     /// quit writing is simply not there.
     var summarizing: Set<UUID> = []
+    /// Calls whose speakers are being named from their video (`CallTranscriber.nameFromVideo`): never saved, a step
+    /// the app quit during simply didn't happen.
+    var namingSpeakers: Set<UUID> = []
 
     @ObservationIgnored private let paths: AppPaths
     @ObservationIgnored private let settings: AppSettings

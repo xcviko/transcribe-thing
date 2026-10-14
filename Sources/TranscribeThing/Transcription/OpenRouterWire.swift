@@ -87,6 +87,22 @@ struct OpenRouterChatRequest: Encodable, Equatable {
             temperature: route.temperature)
     }
 
+    /// A video already uploaded to the endpoint's Files API (`OpenRouterClient.uploadVideo`), then a question about
+    /// it, in one user message and no system message: how the speakers of a call made from a video are told apart by
+    /// their tiles (`CallVideoNames`). `processing` is how Vertex looks at it ("agentic": it looks where it needs to,
+    /// for a fraction of what reading every frame costs). Streamed, thinking at `effort` with its reasoning included,
+    /// as the app's other requests. Only the user's endpoint takes it: OpenRouter has no files to point at.
+    static func video(model: String, fileURI: String, processing: String, text: String, effort: ReasoningEffort,
+                      maxTokens: Int) -> OpenRouterChatRequest {
+        OpenRouterChatRequest(
+            model: model,
+            messages: [.userVideo(uri: fileURI, processing: processing, text: text)],
+            reasoning: Reasoning(effort: effort.rawValue, exclude: false),
+            provider: nil,
+            maxTokens: maxTokens,
+            stream: true)
+    }
+
     func encoded() throws -> Data {
         let encoder = JSONEncoder()
         // Base64 is full of "/"; the default encoder would send every one as "\/".
@@ -180,6 +196,8 @@ enum OpenRouterMessage: Encodable, Equatable {
     /// Several audio parts in one user message, in order, and no text: a call's voice sample, then the call
     /// (`OpenRouterChatRequest.transcription(voiceSampleBase64:)`).
     case userAudioParts([AudioClip])
+    /// A video by its uploaded file's `uri`, then `text` about it (`OpenRouterChatRequest.video`).
+    case userVideo(uri: String, processing: String, text: String)
 
     struct AudioClip: Equatable, Sendable {
         let base64: String
@@ -191,6 +209,18 @@ enum OpenRouterMessage: Encodable, Equatable {
         let inputAudio: Payload
         struct Payload: Encodable { let data: String; let format: String }
         enum CodingKeys: String, CodingKey { case type, inputAudio = "input_audio" }
+    }
+
+    private struct VideoPart: Encodable {
+        let type = "video_url"
+        let videoURL: Payload
+        struct Payload: Encodable { let url: String; let processing: String }
+        enum CodingKeys: String, CodingKey { case type, videoURL = "video_url" }
+    }
+
+    private struct TextPart: Encodable {
+        let type = "text"
+        let text: String
     }
 
     private enum CodingKeys: String, CodingKey { case role, content }
@@ -211,6 +241,11 @@ enum OpenRouterMessage: Encodable, Equatable {
             try container.encode("user", forKey: .role)
             try container.encode(clips.map { AudioPart(inputAudio: .init(data: $0.base64, format: $0.format)) },
                                  forKey: .content)
+        case .userVideo(let uri, let processing, let text):
+            try container.encode("user", forKey: .role)
+            var parts = container.nestedUnkeyedContainer(forKey: .content)
+            try parts.encode(VideoPart(videoURL: .init(url: uri, processing: processing)))
+            try parts.encode(TextPart(text: text))
         }
     }
 }
