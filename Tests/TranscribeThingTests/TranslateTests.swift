@@ -7,26 +7,30 @@ import Testing
 @Suite struct TranslatePromptTests {
     @Test func theRuleGoesBothWaysAndSendsAnythingElseToTheSecond() {
         #expect(Translate.rule(.default, audio: true)
-                == "если я говорю на русском - переводи на английский, если я говорю на английском - на русский, "
-                + "если я говорю на другом языке - на английский")
+                == "if I speak Russian, translate into English; if I speak English, translate into Russian; "
+                + "if I speak any other language, translate into English")
         let pair = TranslationPair(first: .german, second: .japanese)
         #expect(Translate.rule(pair, audio: false)
-                == "если текст на немецком - переводи на японский, если текст на японском - на немецкий, "
-                + "если текст на другом языке - на японский")
+                == "if the text is in German, translate it into Japanese; if the text is in Japanese, translate it "
+                + "into German; if the text is in any other language, translate it into Japanese")
     }
 
-    /// Gemini's translation comes in its usual tags; Polish translated keeps Polish's tags and drops its "don't
+    /// Gemini's translation comes in its usual tags; Polish translated keeps Polish's tags and drops its "never
     /// translate".
     @Test func eachPromptAsksForItsTagsAndTheRule() {
         let rule = Translate.rule(.default, audio: true)
         let plain = Translate.prompt(.default)
         #expect(plain.contains("<transcript>") && plain.contains("</transcript>") && plain.contains(rule))
-        #expect(!plain.contains("не переводи"))
+        #expect(!plain.contains("never translate"))
+        #expect(EngineID.geminiSystemPrompt.contains("never translate"))
         let polished = Translate.polishedPrompt(.default)
         #expect(Polish.prompt.contains(Translate.polishFirstParagraphEnd))
         #expect(Polish.prompt.contains(Translate.polishKeepsLanguage))
+        #expect(Polish.prompt.contains("never translate"))
         #expect(polished.contains(rule) && polished.contains(Polish.open) && polished.contains(Polish.close))
-        #expect(!polished.contains("не переводи"))
+        #expect(polished.contains(Translate.polishFirstParagraphEnd + " Write it translated: " + rule + "."))
+        #expect(polished.contains(Translate.polishKeepsLanguageTranslated))
+        #expect(!polished.contains("never translate"))
         let text = Translate.textPrompt(.default)
         #expect(text.contains(Translate.rule(.default, audio: false)) && text.contains(Polish.open))
     }
@@ -84,6 +88,47 @@ import Testing
         #expect(machine.handle(.translate, now: 1.1) == [.translate])
         _ = machine.handle(.pttUp, now: 1.2)
         #expect(machine.capture.isListeningOrLocked, "fn T's fn press doesn't finish hands-free")
+    }
+}
+
+/// Gemini 4 Argon ignores short audio and makes text up when the system prompt is Russian, so every dictation prompt
+/// is written in English: Russian may appear only inside quoted examples ("или или" -> "или").
+@Suite struct DictationPromptLanguageTests {
+    /// `prompt` without its quoted spans ("...", on one line).
+    static func instructions(_ prompt: String) -> String {
+        prompt.replacingOccurrences(of: #""[^"\n]*""#, with: "", options: .regularExpression)
+    }
+
+    static func hasCyrillic(_ text: String) -> Bool {
+        text.unicodeScalars.contains { (0x0400...0x04FF).contains($0.value) }
+    }
+
+    static var prompts: [(String, String)] {
+        var prompts = [("transcription", EngineID.geminiSystemPrompt), ("Polish", Polish.prompt),
+                       ("Polish Selection", Polish.textPrompt)]
+        for first in TranslationLanguage.allCases {
+            for second in TranslationLanguage.allCases where second != first {
+                let pair = TranslationPair(first: first, second: second)
+                prompts += [("Translate \(pair.title)", Translate.prompt(pair)),
+                            ("Polish translated \(pair.title)", Translate.polishedPrompt(pair)),
+                            ("Translate Selection \(pair.title)", Translate.textPrompt(pair))]
+            }
+        }
+        return prompts.flatMap { name, prompt in
+            [(name, prompt),
+             (name + " with the dictionary", UserDictionary.prompt(prompt, with: ["Wispr Flow"], heard: true)),
+             (name + " with the dictionary, read", UserDictionary.prompt(prompt, with: ["Wispr Flow"], heard: false))]
+        }
+    }
+
+    @Test func noDictationPromptHasRussianOutsideItsQuotedExamples() {
+        for (name, prompt) in Self.prompts {
+            #expect(!Self.hasCyrillic(Self.instructions(prompt)), "\(name) has Russian instructions")
+        }
+        // The check sees Russian when it's there, and leaves quoted examples alone.
+        #expect(Self.hasCyrillic(Self.instructions("Расшифруй это аудио.")))
+        #expect(!Self.hasCyrillic(Self.instructions(#"Keep doubts ("наверное", "я хз") as said."#)))
+        #expect(Self.hasCyrillic(EngineID.geminiSystemPrompt), "the Russian examples are still there")
     }
 }
 
@@ -156,7 +201,7 @@ import Testing
         let c = rig.h.controller
         rig.h.settings.translationPair = TranslationPair(first: .spanish, second: .english)
         let prompt = c.geminiPrompt(for: .translation(polished: false)) ?? ""
-        #expect(prompt.contains("если я говорю на испанском - переводи на английский"))
+        #expect(prompt.contains("if I speak Spanish, translate into English"))
         #expect(c.geminiPrompt(for: .transcription(.geminiFlash)) == nil)
     }
 

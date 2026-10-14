@@ -90,10 +90,20 @@ import Testing
         #expect(UserDictionary.prompt("", with: ["Wispr"], heard: true) == "", "the CLI's empty prompt sends only the audio")
         let gemini = UserDictionary.prompt(EngineID.geminiSystemPrompt, with: ["Wispr", "Flow"], heard: true)
         #expect(gemini.hasPrefix(EngineID.geminiSystemPrompt.trimmingCharacters(in: .whitespacesAndNewlines)))
-        #expect(gemini.contains("Подсказка") && gemini.contains("Если услышишь") && gemini.contains("Решай сам"))
+        #expect(gemini.contains("A hint:") && gemini.contains("If you hear one") && !gemini.contains("Подсказка"),
+                "the English prompt's Russian examples don't make the hint Russian")
         #expect(gemini.hasSuffix("<dictionary>\nWispr\nFlow\n</dictionary>"))
         let selection = UserDictionary.prompt(Polish.textPrompt, with: ["Wispr"], heard: false)
-        #expect(selection.contains("Если встретишь в тексте"))
+        #expect(selection.contains("If the text has one"))
+        for prompt in [Polish.prompt, Translate.prompt(.default), Translate.polishedPrompt(.default)] {
+            #expect(UserDictionary.prompt(prompt, with: ["Wispr"], heard: true).contains("If you hear one"))
+        }
+        #expect(UserDictionary.prompt(Translate.textPrompt(.default), with: ["Wispr"], heard: false)
+                .contains("If the text has one"))
+        let russian = UserDictionary.prompt("Расшифруй это аудио.", with: ["Wispr"], heard: true)
+        #expect(russian.contains("Подсказка") && russian.contains("Если услышишь") && russian.contains("Решай сам"))
+        #expect(UserDictionary.prompt("Исправь этот текст.", with: ["Wispr"], heard: false)
+                .contains("Если встретишь в тексте"))
     }
 
     @MainActor @Test func itPersistsInTheSettings() throws {
@@ -133,7 +143,7 @@ import Testing
         let samples = (0..<16_000).map { 0.1 * sin(Float($0) * 0.09) }
         _ = try await service.transcribe(Recording(samples: samples), engine: .geminiFlash)
         let prompt = try systemMessage(host)
-        #expect(prompt.hasPrefix("Я пришлю тебе аудио") && prompt.hasSuffix("<dictionary>\nWispr Flow\n</dictionary>"))
+        #expect(prompt.hasPrefix("I'll send you audio") && prompt.hasSuffix("<dictionary>\nWispr Flow\n</dictionary>"))
     }
 
     private var route: TextRoute { PolishSelectionModel.geminiFlash.route! }
@@ -142,7 +152,7 @@ import Testing
         let (service, host) = service([.stream(SSE.answer("<message>Wispr Flow.</message>"))], words: ["Wispr Flow"])
         _ = try await service.polishText("виспр флоу", route: route, prompt: Polish.textPrompt)
         let prompt = try systemMessage(host)
-        #expect(prompt.hasPrefix("Я пришлю тебе текст") && prompt.contains("<dictionary>\nWispr Flow\n</dictionary>"))
+        #expect(prompt.hasPrefix("I'll send you text") && prompt.contains("<dictionary>\nWispr Flow\n</dictionary>"))
     }
 
     @Test func anEmptyDictionaryLeavesThePromptAlone() async throws {
