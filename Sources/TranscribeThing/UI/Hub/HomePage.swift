@@ -63,7 +63,11 @@ struct HomePage: View {
                 .frame(width: 0, height: 0)
                 .accessibilityHidden(true)
         }
-        .overlay { if showsDropTarget { DropTarget() } }
+        .overlay {
+            if showsDropTarget {
+                FileDropTarget(title: "Drop audio or video to transcribe", subtitle: "You’ll pick the model next.")
+            }
+        }
         .overlay(alignment: .bottom) { undoBar }
         .overlay(alignment: .bottom) { readingBar }
         .dropDestination(for: URL.self) { urls, _ in
@@ -171,16 +175,7 @@ struct HomePage: View {
     /// Transcribe File…: audio or video, one or more.
     private func pickFiles() {
         guard !hub.isPreview else { return }
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = ImportedAudio.contentTypes
-        panel.allowsMultipleSelection = true
-        panel.canChooseDirectories = false
-        panel.message = "Choose audio or video to transcribe."
-        panel.prompt = "Transcribe"
-        panel.begin { [imports] response in
-            guard response == .OK else { return }
-            imports.add(panel.urls)
-        }
+        FileImport.choose(message: "Choose audio or video to transcribe.") { [imports] urls in imports.add(urls) }
     }
 
     /// Reading the files and asking about them live with the Hub (`FileImport`), so leaving Home loses nothing.
@@ -219,24 +214,7 @@ struct HomePage: View {
 
     @ViewBuilder private var readingBar: some View {
         if let name = imports.reading.first {
-            HStack(spacing: 10) {
-                ProgressView()
-                    .controlSize(.small)
-                    .tint(.white)
-                Text("Reading \(name)…")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-            .padding(.horizontal, 16)
-            .frame(height: 36)
-            .frame(maxWidth: 420)
-            .fixedSize()
-            .background(Capsule(style: .continuous).fill(Color.pillFill))
-            .shadow(color: .black.opacity(0.18), radius: 12, y: 6)
-            .padding(.bottom, 18)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
+            FileReadingBar(name: name)
         }
     }
 
@@ -287,29 +265,6 @@ struct HomePage: View {
     }
 }
 
-/// Over the page while files are dragged onto it.
-private struct DropTarget: View {
-    var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(Color.ink.opacity(0.35), style: StrokeStyle(lineWidth: 1.5, dash: [7, 5]))
-            VStack(spacing: 10) {
-                Image(systemName: "arrow.down.doc")
-                    .font(.system(size: 30, weight: .regular))
-                    .foregroundStyle(.ink)
-                Text("Drop audio or video to transcribe")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.ink)
-                Text("You’ll pick the model next.")
-                    .typeface(.callout)
-                    .foregroundStyle(.inkSecondary)
-            }
-        }
-        .padding(14)
-        .allowsHitTesting(false)
-        .transition(.opacity)
-    }
-}
 
 // MARK: - Attention card
 

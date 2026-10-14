@@ -1,3 +1,4 @@
+import AppKit
 import Observation
 import SwiftUI
 
@@ -125,5 +126,78 @@ final class FileImport {
             guard !Task.isCancelled else { return }
             prompt = !problems.isEmpty ? .problem : !pending.isEmpty ? .models : nil
         }
+    }
+}
+
+// MARK: - Shared by Home and Calls
+
+extension FileImport {
+    /// Transcribe a File…'s panel: audio or video, one or more; `done` gets what was chosen, nothing on Cancel.
+    static func choose(message: String, then done: @escaping @MainActor ([URL]) -> Void) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = ImportedAudio.contentTypes
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.message = message
+        panel.prompt = "Transcribe"
+        panel.begin { response in
+            guard response == .OK else { return }
+            done(panel.urls)
+        }
+    }
+}
+
+/// Over the page while files are dragged onto it: what dropping them does.
+struct FileDropTarget: View {
+    var title: String
+    var subtitle: String
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color.ink.opacity(0.35), style: StrokeStyle(lineWidth: 1.5, dash: [7, 5]))
+            VStack(spacing: 10) {
+                Image(systemName: "arrow.down.doc")
+                    .font(.system(size: 30, weight: .regular))
+                    .foregroundStyle(.ink)
+                Text(title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.ink)
+                Text(subtitle)
+                    .typeface(.callout)
+                    .foregroundStyle(.inkSecondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(.horizontal, 24)
+        }
+        .padding(14)
+        .allowsHitTesting(false)
+        .transition(.opacity)
+    }
+}
+
+/// "Reading Interview.mp4…", at the bottom of the page while dropped files are read.
+struct FileReadingBar: View {
+    var name: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+                .tint(.white)
+            Text("Reading \(name)…")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 36)
+        .frame(maxWidth: 420)
+        .fixedSize()
+        .background(Capsule(style: .continuous).fill(Color.pillFill))
+        .shadow(color: .black.opacity(0.18), radius: 12, y: 6)
+        .padding(.bottom, 18)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 }

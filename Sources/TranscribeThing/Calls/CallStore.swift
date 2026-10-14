@@ -188,18 +188,71 @@ final class CallStore {
         }
     }
 
-    /// Auto-delete, as History's: with `autoDeleteHistoryDays` set, calls older than that go with their audio.
+    /// Auto-delete, as History's: with `autoDeleteHistoryDays` set, calls older than that go with their audio. A call
+    /// made from a file counts from when it came in (`CallRecord.keptSince`).
     func deleteExpired(now: Date = Date()) {
         let days = settings.autoDeleteHistoryDays
         guard days > 0 else { return }
         let cutoff = now.addingTimeInterval(-Double(days) * 86_400)
-        let expired = calls.filter { $0.startedAt < cutoff && $0.status != .recording }.map(\.id)
+        let expired = calls.filter { $0.keptSince < cutoff && $0.status != .recording }.map(\.id)
         guard !expired.isEmpty else { return }
         let ids = Set(expired)
         calls.removeAll { ids.contains($0.id) }
         for id in expired { removeFolder(of: id) }
         save()
         onRemove?(expired)
+    }
+
+    // MARK: From a file
+
+    /// The one track of a call made from a file.
+    nonisolated static let importedAudioFile = "audio.m4a"
+
+    /// Audio or video read from a file (`ImportedAudio`) as a call of its own, with `status`: its sound encoded into
+    /// the call's folder off the main thread, as a recorded call's tracks are, so the player works the same. It's one
+    /// track, both sides mixed, kept as the other side's (`remoteFile`): nothing in it is known to be the person's
+    /// mic, so no sample of their voice is made from it. A video isn't copied, only its sound: its path is kept
+    /// (`CallFileSource`). The call starts at the file's creation date (`now` without one), and is saved before this
+    /// returns. nil, with nothing kept, when the sound couldn't be written.
+    func addImported(_ audio: ImportedAudio, status: CallStatus = .transcribing,
+                     now: Date = Date()) async -> CallRecord? {
+        let id = UUID()
+        let started = audio.url.flatMap(Self.creationDate(of:)) ?? now
+        var record = CallRecord(id: id, startedAt: started, appName: audio.fileName, status: status)
+        record.file = CallFileSource(name: audio.fileName, path: audio.url?.standardizedFileURL.path ?? "",
+                                     isVideo: audio.isVideo, importedAt: now)
+        record.remoteFile = Self.importedAudioFile
+        record.remoteSeconds = audio.duration
+        if persists {
+            let file = folder(for: id).appendingPathComponent(Self.importedAudioFile, isDirectory: false)
+            let samples = audio.samples
+            let encoded = await Task.detached(priority: .userInitiated) { () -> CallAudio.Encoded? in
+                do {
+                    return try CallAudio.write(samples, to: file)
+                } catch {
+                    Log.audio.error("Couldn't keep a file's sound as a call: \(error.localizedDescription, privacy: .public)")
+                    return nil
+                }
+            }.value
+            guard let encoded else {
+                removeFolder(of: id)
+                return nil
+            }
+            record.remoteSeconds = encoded.seconds
+        }
+        record.endedAt = started.addingTimeInterval(record.duration)
+        upsert(record)
+        await flush()
+        log.event(.calls, "call.imported", [
+            "call": CallTranscriber.shortID(id), "seconds": (record.duration * 10).rounded() / 10,
+            "video": audio.isVideo,
+        ])
+        return record
+    }
+
+    /// When the file was made: when a recording of it started, for a call recorded by another app.
+    nonisolated static func creationDate(of url: URL) -> Date? {
+        try? url.resourceValues(forKeys: [.creationDateKey]).creationDate
     }
 
     // MARK: From the journal

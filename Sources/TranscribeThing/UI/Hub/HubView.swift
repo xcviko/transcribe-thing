@@ -32,6 +32,8 @@ final class HubContext: Observable {
     let diagnostics: DiagnosticsCenter
     /// Files dropped on Home, read and asked about whichever page is showing.
     let imports = FileImport()
+    /// Files dropped on Calls, read and made calls whichever page is showing.
+    let callImports = CallImport()
     let isPreview: Bool
     /// Stand-in traffic lights so snapshots read like the real window.
     var drawsWindowControls = false
@@ -47,7 +49,7 @@ final class HubContext: Observable {
     var previewFailures: [UUID: HomeFailure]?
     /// A History row drawn as hovered, its actions showing (snapshots).
     var previewHoveredEntry: UUID?
-    /// Home drawn with files dragged over it (snapshots).
+    /// Home, or Calls, drawn with files dragged over it (snapshots).
     var previewDropTarget = false
     /// The live call as the Calls tab shows it, in place of the monitor's (snapshots).
     var previewCallState: CallMonitor.State?
@@ -83,6 +85,12 @@ final class HubContext: Observable {
             ImportChoices.make(main: self.settings.mainEngine, seconds: seconds, readiness: self.readiness(of:))
         }
         imports.start = { [dictation] file, kind in dictation.transcribe(file, as: kind) }
+        callImports.start = { [callTranscriber] file in await callTranscriber.importFile(file)?.id }
+        callImports.onImported = { [unowned self] ids in
+            // One file dropped on the list opens on its page, transcribing: it may have landed on a day far down.
+            guard ids.count == 1, let id = ids.first, self.windows.hubSection == .calls else { return }
+            self.showCall(id)
+        }
     }
 
     var now: Date { fixedNow ?? Date() }
