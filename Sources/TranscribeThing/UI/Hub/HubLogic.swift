@@ -329,6 +329,21 @@ enum ImportChoices {
     }
 }
 
+/// What a failed row says on hover.
+enum HistoryRowText {
+    static let modelAnswerTooltipLimit = 500
+
+    /// "Model’s answer: <message></message>": what a cloud model answered when it heard no speech in the recording
+    /// (`TranscriptEntry.modelAnswer`), as it came, cut short past `modelAnswerTooltipLimit` characters. nil without one.
+    static func modelAnswerTooltip(_ answer: String?) -> String? {
+        guard let answer else { return nil }
+        let text = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+        let shown = text.isEmpty ? "nothing at all"
+            : text.count > modelAnswerTooltipLimit ? String(text.prefix(modelAnswerTooltipLimit - 1)) + "…" : text
+        return "Model’s answer: \(shown)"
+    }
+}
+
 /// A History transcript's facts, for the tooltip on its engine badge and the version items of its Versions menu:
 /// which model and provider made it, how hard it thought, its tokens, cost and timing. Lines with nothing known are
 /// left out, so a local transcript says little and an old one only what older builds recorded.

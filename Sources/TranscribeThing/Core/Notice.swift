@@ -286,6 +286,9 @@ enum AppError: Error, Equatable, Sendable {
     /// Not a failure: the recording had no speech (too little voice for the recorder, or an engine that answered
     /// with no text). An info notice, never a history entry or a retry.
     case noSpeech
+    /// A cloud model answered with no text for a recording that had plenty of speech in it
+    /// (`DictationController.keepsUnheardSpeechVoicedSeconds`): kept in History, to retry or try another model on.
+    case heardNoSpeech(EngineID)
     case engineFailed(EngineID, String)
     case recordingTooLarge
     /// A Gemini request through the user's OpenAI-compatible endpoint failed in a way only the endpoint can
@@ -299,7 +302,7 @@ enum AppError: Error, Equatable, Sendable {
         case .microphoneDisconnected,
              .modelDownloading, .modelPreparing, .modelLoadFailed,
              .openRouterRateLimited, .openRouterProviderUnavailable, .openRouterServer, .openRouterTruncated,
-             .timeout, .offline, .regionBlocked, .connectionBlocked, .engineFailed:
+             .timeout, .offline, .regionBlocked, .connectionBlocked, .engineFailed, .heardNoSpeech:
             true
         case .vertexProxy(let failure):
             switch failure {
@@ -343,7 +346,7 @@ enum AppError: Error, Equatable, Sendable {
              .openRouterMissingKey, .openRouterKeyUnreadable, .openRouterInvalidKey, .openRouterNoCredits,
              .openRouterKeyLimit, .openRouterRateLimited, .openRouterNoRoute, .openRouterProviderUnavailable,
              .openRouterRefused, .openRouterBadRequest, .openRouterServer, .openRouterTruncated, .timeout, .offline,
-             .regionBlocked, .connectionBlocked, .engineFailed, .recordingTooLarge, .vertexProxy:
+             .regionBlocked, .connectionBlocked, .engineFailed, .recordingTooLarge, .vertexProxy, .heardNoSpeech:
             true
         case .microphonePermissionDenied, .noMicrophone, .microphoneNotResponding, .microphoneDisconnected,
              .microphoneSilent, .accessibilityMissing, .downloadFailed, .notEnoughDisk, .noSpeech:
@@ -383,6 +386,7 @@ enum AppError: Error, Equatable, Sendable {
         case .regionBlocked: "regionBlocked"
         case .connectionBlocked: "connectionBlocked"
         case .noSpeech: "noSpeech"
+        case .heardNoSpeech(let e): "heardNoSpeech.\(e.rawValue)"
         case .engineFailed(let e, _): "engineFailed.\(e.rawValue)"
         case .recordingTooLarge: "recordingTooLarge"
         case .vertexProxy(let failure): "vertexProxy.\(failure.code)"
@@ -491,7 +495,8 @@ extension AppError {
     private var failingEngine: EngineID? {
         switch self {
         case .modelNotDownloaded(let e), .modelDownloading(let e, _), .modelPreparing(let e),
-             .modelLoadFailed(let e, _), .downloadFailed(let e, _), .timeout(let e), .engineFailed(let e, _):
+             .modelLoadFailed(let e, _), .downloadFailed(let e, _), .timeout(let e), .engineFailed(let e, _),
+             .heardNoSpeech(let e):
             e
         case .openRouterMissingKey, .openRouterKeyUnreadable, .openRouterInvalidKey, .openRouterNoCredits,
              .openRouterKeyLimit, .openRouterRateLimited, .openRouterNoRoute, .openRouterProviderUnavailable,
@@ -697,6 +702,11 @@ extension AppError {
             return Copy(style: .info, symbol: "waveform",
                         title: "No speech detected",
                         sound: nil, seconds: 4)
+        case .heardNoSpeech(let e):
+            return Copy(style: .warning, symbol: "waveform.badge.exclamationmark",
+                        title: "\(e.shortName) heard no speech",
+                        body: "Your recording is saved in History, where another model can try it too.",
+                        sound: .alert, seconds: 10)
         case .engineFailed(let e, _):
             return Copy(title: "Couldn’t transcribe",
                         body: "\(e.displayName) ran into a problem.",

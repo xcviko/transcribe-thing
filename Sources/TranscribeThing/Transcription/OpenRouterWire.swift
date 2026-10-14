@@ -631,19 +631,50 @@ struct OpenRouterAPIError: Decodable, Equatable {
 
 /// Gemini puts the transcript between `<transcript>` tags (`EngineID.geminiSystemPrompt`). Once in a while it writes
 /// its thinking into the answer instead of its reasoning, drafts in tags included: the transcript is what the last
-/// pair holds. An answer without tags (a prompt that doesn't ask for them) is the transcript as it is.
+/// pair holds. An answer without tags (a prompt that doesn't ask for them) is the transcript as it is, out of the code
+/// fence it may come in.
+/// Two slips never lose what was said: an answer in the other tags the app asks for (`<message>` where `<transcript>`
+/// was asked, or the reverse) is read from those, and a lone pair left empty with the words written outside it
+/// (`rescueMinimumCharacters` of them, and not a remark that there was no speech) gives those words.
 enum TaggedTranscript {
     static let open = "<transcript>"
     static let close = "</transcript>"
+    /// Polish's tags (`Polish.open`, `Polish.close`).
+    static let messageOpen = "<message>"
+    static let messageClose = "</message>"
 
-    /// What the answer had: one pair, more than one (thinking in the answer), only an opening tag (cut short), or
-    /// none.
+    /// What the answer had: one pair, more than one (thinking in the answer), only an opening tag (cut short), none,
+    /// the other tags the app asks for (`other`), or an empty pair with the answer written outside it (`outside`).
+    /// Raw values go to the diagnostic log.
     enum Tags: String, Sendable, Equatable {
-        case pair, several, unclosed, none
+        case pair, several, unclosed, none, other, outside
     }
+
+    /// Text outside an empty pair shorter than this is taken for a remark, not for what was said.
+    static let rescueMinimumCharacters = 20
 
     /// The text of the last `open`…`close` pair (`Polish` reads its `<message>` tags the same way).
     static func extract(_ answer: String, open: String = open, close: String = close) -> (text: String, tags: Tags) {
+        if let found = extractPair(answer, open: open, close: close) {
+            if found.text.isEmpty, found.tags == .pair, let words = wordsOutside(answer) { return (words, .outside) }
+            return found
+        }
+        let asksForMessage = open.caseInsensitiveCompare(messageOpen) == .orderedSame
+        let (otherOpen, otherClose) = asksForMessage ? (Self.open, Self.close) : (messageOpen, messageClose)
+        if let other = extractPair(answer, open: otherOpen, close: otherClose) { return (other.text, .other) }
+        // A call's "no speech" (`CallTranscriber.noSpeech`) where a dictation's empty tags were asked for.
+        if isNoSpeechLiteral(answer) { return ("", .none) }
+        return (unfenced(answer), .none)
+    }
+
+    /// Only the words "NO SPEECH", in any case, with any punctuation around them.
+    static func isNoSpeechLiteral(_ answer: String) -> Bool {
+        answer.trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+            .caseInsensitiveCompare("NO SPEECH") == .orderedSame
+    }
+
+    /// The last pair's text; nil when the answer has neither tag.
+    private static func extractPair(_ answer: String, open: String, close: String) -> (text: String, tags: Tags)? {
         let opens = ranges(of: open, in: answer), closes = ranges(of: close, in: answer)
         let several = opens.count > 1 || closes.count > 1
         if let closing = closes.last {
@@ -651,7 +682,79 @@ enum TaggedTranscript {
             return (trimmed(answer[start..<closing.lowerBound]), several ? .several : .pair)
         }
         if let opening = opens.last { return (trimmed(answer[opening.upperBound...]), .unclosed) }
-        return (answer, .none)
+        return nil
+    }
+
+    /// What an answer holding one empty pair wrote outside it, when that reads as the transcript: long enough, and
+    /// not a remark about the audio. nil otherwise.
+    private static func wordsOutside(_ answer: String) -> String? {
+        let words = unfenced(stripped(answer))
+        guard words.count >= rescueMinimumCharacters, !isRemark(words) else { return nil }
+        return words
+    }
+
+    /// Words a model uses to say what it heard instead of speech, in English and Russian (lowercased).
+    static let remarkMarkers = ["speech", "audible", "intelligible", "silence", "silent", "noise", "background",
+                                "voices", "dictation", "audio", "empty tags",
+                                "речи", "речь", "слыш", "неразборчив", "тишин", "шум", "чужие голос", "чужой голос",
+                                "диктовк", "аудио", "пустые теги"]
+
+    /// A short remark about the audio ("Only background noise, no speech."), not something the user said.
+    static func isRemark(_ text: String) -> Bool {
+        let lowered = text.lowercased()
+        return text.count < 200 && remarkMarkers.contains(where: lowered.contains)
+    }
+
+    /// `answer` without any of the tags the app asks for, trimmed.
+    static func stripped(_ answer: String) -> String {
+        var text = answer
+        for tag in [open, close, messageOpen, messageClose] {
+            text = text.replacingOccurrences(of: tag, with: "", options: .caseInsensitive)
+        }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The text inside a Markdown code fence that wraps the whole answer ("```" or "```text" on the first line, "```"
+    /// at the end), trimmed; anything else as it is.
+    static func unfenced(_ answer: String) -> String {
+        let text = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.count >= 6, text.hasPrefix("```"), text.hasSuffix("```"),
+              let firstBreak = text.firstIndex(of: "\n") else { return answer }
+        let end = text.index(text.endIndex, offsetBy: -3)
+        guard firstBreak < end else { return answer }
+        return trimmed(text[text.index(after: firstBreak)..<end])
+    }
+
+    /// How a model's answer looked, for the diagnostic log: sizes and flags, never its words.
+    struct Shape: Equatable, Sendable {
+        /// Characters in the whole answer, tags and all.
+        var characters: Int
+        var hasTranscriptTags: Bool
+        var hasMessageTags: Bool
+        /// Tags and nothing in or around them (white space and a code fence aside): the model's "no speech".
+        var isOnlyTags: Bool
+        /// Only the words "NO SPEECH" (what a call's prompt asks for when there is none).
+        var isNoSpeechLiteral: Bool
+        /// Characters before the first tag and after the last; nil without tags.
+        var charactersOutsideTags: Int?
+    }
+
+    static func shape(of answer: String) -> Shape {
+        let lowered = answer.lowercased()
+        let hasTranscript = lowered.contains(open) || lowered.contains(close)
+        let hasMessage = lowered.contains(messageOpen) || lowered.contains(messageClose)
+        let tagged = hasTranscript || hasMessage
+        return Shape(characters: answer.count, hasTranscriptTags: hasTranscript, hasMessageTags: hasMessage,
+                     isOnlyTags: tagged && unfenced(stripped(answer)).isEmpty,
+                     isNoSpeechLiteral: isNoSpeechLiteral(answer),
+                     charactersOutsideTags: tagged ? outsideCount(answer) : nil)
+    }
+
+    /// Characters of `answer` before its first tag and after its last one (of either pair), trimmed.
+    private static func outsideCount(_ answer: String) -> Int {
+        let tags = [open, close, messageOpen, messageClose].flatMap { ranges(of: $0, in: answer) }
+        guard let first = tags.map(\.lowerBound).min(), let last = tags.map(\.upperBound).max() else { return 0 }
+        return trimmed(answer[..<first]).count + trimmed(answer[last...]).count
     }
 
     private static func ranges(of tag: String, in text: String) -> [Range<String.Index>] {

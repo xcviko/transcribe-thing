@@ -132,6 +132,9 @@ struct CloudResult: Sendable, Equatable {
     var uploads: [AudioUpload] = []
     /// How Gemini's answer held its transcript (`TaggedTranscript`); nil for a text request.
     var answerTags: TaggedTranscript.Tags?
+    /// The model's whole answer as it came, before the transcript was read out of its tags; nil for a text request.
+    /// Kept only where a model heard no speech in a recording that had some (`TranscriptEntry.modelAnswer`).
+    var rawAnswer: String?
     /// The other request of a pair sent at once (`CloudHedge.race`), cancelled when this one answered: its
     /// generations, to add what it cost.
     var otherGenerationIDs: [String] = []
@@ -283,6 +286,7 @@ final class OpenRouterClient: Sendable {
         } catch AppError.openRouterTruncated(let partial) {
             throw AppError.openRouterTruncated(TaggedTranscript.extract(partial, open: open, close: close).text)
         }
+        result.rawAnswer = result.text
         (result.text, result.answerTags) = TaggedTranscript.extract(result.text, open: open, close: close)
         if result.answerTags != .pair {
             Log.net.info("Gemini's answer had tags: \(result.answerTags?.rawValue ?? "?", privacy: .public)")

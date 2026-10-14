@@ -179,6 +179,7 @@ struct HistoryRow: View, Equatable {
                         .foregroundStyle(Color.inkSecondary)
                         .font(.system(size: 13))
                         .fixedSize(horizontal: false, vertical: true)
+                        .help(HistoryRowText.modelAnswerTooltip(entry.modelAnswer) ?? "")
                 }
                 inlineRetry(title: "Retry", symbol: "arrow.clockwise")
             }

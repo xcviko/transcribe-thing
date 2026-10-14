@@ -292,6 +292,8 @@ enum EngineCLI {
         if let last {
             print(last.text.isEmpty ? "NO SPEECH" : "TEXT: \(last.text)")
             if let tags = last.answerTags { print("TAGS: \(tags.rawValue)") }
+            // What the model wrote when that came out empty, tags and all: why it heard nothing.
+            if last.text.isEmpty, let answer = last.rawAnswer { print("ANSWER: \(answer.debugDescription)") }
             if let best = runTimes.min() { print("TRANSCRIBE: first \(format(runTimes[0], digits: 3)) s · best \(format(best, digits: 3)) s") }
         }
         return ExitCode.ok

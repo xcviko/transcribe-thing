@@ -20,6 +20,9 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
     /// The name of the audio file this entry was made from (dropped on Home, or picked with Transcribe File…); nil for
     /// a dictation. Its row shows it, and the stats (words, speed, time saved) leave it out: it isn't the user talking.
     var importedFrom: String?
+    /// A failed row's: what the cloud model answered when it heard no speech in a recording that had some, whole and
+    /// as it came (tags and all), for a closer look at why. Its row's tooltip shows it; nil everywhere else.
+    var modelAnswer: String?
     /// Every transcript of the recording, oldest first, at most one of each kind (one per model). Empty for failed
     /// and canceled entries. Change them through `addVersion`, `selectVersion` and `updateMetadata`.
     private(set) var versions: [TranscriptVersion]
@@ -146,6 +149,7 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id, createdAt, status, audioDuration, voicedSeconds, errorMessage, mode, audioFileName, importedFrom
+        case modelAnswer
         case versions
         case currentKind = "currentVersion"
         /// The current version, flat, as older builds read it; and what an entry from before versions holds.
@@ -170,6 +174,8 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
         mode = (try? c.decodeIfPresent(DictationMachine.Mode.self, forKey: .mode)).flatMap { $0 } ?? .pushToTalk
         audioFileName = try c.decodeIfPresent(String.self, forKey: .audioFileName)
         importedFrom = try c.decodeIfPresent(String.self, forKey: .importedFrom)
+        // Only ever a note for a closer look: whatever it holds never makes the entry unreadable.
+        modelAnswer = (try? c.decodeIfPresent(String.self, forKey: .modelAnswer)).flatMap { $0 }
         attemptedEngine = try Self.decodeEngine(from: c, forKey: .engine)
 
         var decoded = ((try? c.decodeIfPresent([LossyVersion].self, forKey: .versions)) ?? []).compactMap(\.value)
@@ -207,6 +213,7 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
         try c.encode(mode, forKey: .mode)
         try c.encodeIfPresent(audioFileName, forKey: .audioFileName)
         try c.encodeIfPresent(importedFrom, forKey: .importedFrom)
+        try c.encodeIfPresent(modelAnswer, forKey: .modelAnswer)
         // An older build that can't read the current kind takes the flat fields for the current version, as a
         // transcription by `engine`, in place of that transcription. For a clean-up it can't read, they hold the
         // transcription the clean-up tidied, so an older build keeps that text rather than the clean-up's under its

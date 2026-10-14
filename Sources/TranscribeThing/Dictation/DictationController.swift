@@ -940,6 +940,7 @@ final class DictationController {
                                                 progress: progress)
             guard !Task.isCancelled, job.generation == generation else { return }
             if rewrite?.answersInMessageTags == true, case .success(var result) = outcome {
+                result.rawAnswer = result.rawAnswer ?? result.text
                 result.text = Polish.message(from: result.text)
                 outcome = .success(result)
             }
@@ -1117,9 +1118,9 @@ final class DictationController {
             deliverFailure(job, error)
         case .success(let result):
             let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            // The engine answered and heard nothing: the user was silent. Not an error.
+            // The engine answered and heard nothing: the user was silent (or, with plenty of speech, its miss).
             guard !text.isEmpty else {
-                deliverSilence(job)
+                deliverSilence(job, result)
                 return
             }
             forget(job.id)
@@ -1203,13 +1204,39 @@ final class DictationController {
         return await transcription.generationDetails(generationID: generationID)
     }
 
+    /// Speech a recording must hold for a cloud model's empty answer to be kept rather than taken for silence. Room
+    /// noise has counted up to 0.6 s as voiced in real recordings, a cough or a breath near the mic about a second;
+    /// 1.5 s is a short sentence at least. Below it, an empty answer is silence as it always was.
+    nonisolated static let keepsUnheardSpeechVoicedSeconds: TimeInterval = 1.5
+
+    /// A cloud model's empty answer for a recording with `keepsUnheardSpeechVoicedSeconds` of speech or more is the
+    /// model's miss, not silence: the recording is kept as a failed row, with what the model answered, to retry or
+    /// try another model on (`keepUnheard`).
+    private func keepsUnheardSpeech(_ job: Job) -> Bool {
+        job.engine.isGemini && (job.recording?.speech.voicedSeconds ?? 0) >= Self.keepsUnheardSpeechVoicedSeconds
+    }
+
     /// A recording that turned out to be silence leaves nothing behind: no history entry, no kept audio, no
     /// Retry. One that already had a failed or canceled row (a retry, a resumed dictation) takes the row and its
     /// audio along; "No speech detected" still says why, so a row never vanishes without a word.
-    private func deliverSilence(_ job: Job) {
+    /// One a cloud model heard nothing in despite its speech is kept instead (`keepsUnheardSpeech`).
+    /// `result`: the empty answer, when there was one. The log says how it looked, never what it said.
+    private func deliverSilence(_ job: Job, _ result: TranscriptResult? = nil) {
+        let keeps = keepsUnheardSpeech(job)
+        let shape = result?.rawAnswer.map(TaggedTranscript.shape(of:))
         DiagnosticLog.shared.event(.dictation, "job.finished", [
             "engine": job.engine, "outcome": "noSpeech", "retry": history.entry(id: job.id)?.status == .failed,
-            "polished": job.polishes, "translated": job.translates ? true : nil])
+            "polished": job.polishes, "translated": job.translates ? true : nil,
+            "voiced": job.recording?.speech.voicedSeconds, "kept": keeps,
+            "answerChars": shape?.characters, "tags": result?.answerTags?.rawValue,
+            "transcriptTags": shape?.hasTranscriptTags, "messageTags": shape?.hasMessageTags,
+            "onlyTags": shape?.isOnlyTags, "noSpeechWords": shape?.isNoSpeechLiteral,
+            "outsideChars": shape?.charactersOutsideTags, "finish": result?.finishReason,
+            "reasoningTokens": result?.usage?.reasoningTokens, "outputTokens": result?.usage?.outputTokens])
+        if keeps, let recording = job.recording {
+            keepUnheard(job, recording, answer: result?.rawAnswer)
+            return
+        }
         forget(job.id)
         discardJournal(of: job.id)
         let hadRow = history.entry(id: job.id).map { $0.status != .success } ?? false
@@ -1218,26 +1245,44 @@ final class DictationController {
         reportNoSpeech(model: ModelChoice(engine: job.engine))
     }
 
+    /// "Gemini 4 Argon heard no speech": a failed row in History with the recording and `answer` (the model's, as it
+    /// came), its notice offering Retry, and the pill saying it was kept.
+    private func keepUnheard(_ job: Job, _ recording: Recording, answer: String?) {
+        let notice = keepFailed(job, recording, .heardNoSpeech(job.engine), modelAnswer: answer)
+        Log.engine.info("\(job.engine.rawValue, privacy: .public) heard no speech; kept in History")
+        postFailure(notice)
+        flashError(message: PillMetrics.keptNoSpeechText, model: ModelChoice(engine: job.engine))
+    }
+
     private func deliverFailure(_ job: Job, _ error: AppError) {
         guard let recording = job.recording else { return }
         DiagnosticLog.shared.event(.dictation, "job.finished", [
             "engine": job.engine, "outcome": "failure", "code": error,
             "retry": history.entry(id: job.id)?.status == .failed, "polished": job.polishes,
             "translated": job.translates ? true : nil])
+        let notice = keepFailed(job, recording, error)
+        Log.engine.error("Transcription failed: \(error.code, privacy: .public)")
+        postFailure(notice)
+        flashError()
+    }
+
+    /// Keeps a dictation that didn't come as a failed row: its audio saved and in memory for Retry, polished or
+    /// translated as it was, the row saying why. Returns its notice, which offers Retry.
+    private func keepFailed(_ job: Job, _ recording: Recording, _ error: AppError, modelAnswer: String? = nil) -> Notice {
         let file = history.saveAudio(recording)
         retain(recording)
         if job.polishes { polishIDs.insert(job.id) } else { polishIDs.remove(job.id) }
         if job.translates { translateIDs.insert(job.id) } else { translateIDs.remove(job.id) }
         // Its Retry is the same model: another one for this recording is the user's call, from History.
         let notice = error.notice(recordingID: job.id, fallbackEngine: nil, engine: job.engine)
-        history.upsert(TranscriptEntry(
+        var entry = TranscriptEntry(
             id: job.id, createdAt: recording.startedAt, text: "", engine: job.engine, status: .failed,
             audioDuration: recording.duration, voicedSeconds: recording.speech.voicedSeconds,
             errorMessage: notice.title, mode: job.mode,
-            audioFileName: file ?? history.entry(id: job.id)?.audioFileName))
-        Log.engine.error("Transcription failed: \(error.code, privacy: .public)")
-        postFailure(notice)
-        flashError()
+            audioFileName: file ?? history.entry(id: job.id)?.audioFileName)
+        entry.modelAnswer = modelAnswer
+        history.upsert(entry)
+        return notice
     }
 
     // MARK: - Insertion
@@ -1503,6 +1548,7 @@ final class DictationController {
         var outcome = await transcribe(recording, engine: engine, prompt: prompt, background: true)
         guard endHomeWork(for: recording.id) else { return }
         if made?.answersInMessageTags == true, case .success(var result) = outcome {
+            result.rawAnswer = result.rawAnswer ?? result.text
             result.text = Polish.message(from: result.text)
             outcome = .success(result)
         }
@@ -1605,11 +1651,14 @@ final class DictationController {
             cutOff = true
         }
         let failure: AppError
+        // What a cloud model answered when it heard no speech: a failed row keeps it for a closer look.
+        var modelAnswer: String?
         switch outcome {
         case .success(let result):
             let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else {
                 failure = .noSpeech
+                modelAnswer = result.rawAnswer
                 break
             }
             forget(id)
@@ -1652,11 +1701,13 @@ final class DictationController {
         // took too long"), or for an engine's own failure (titled only "Couldn't transcribe") the line naming it.
         let notice = failure.notice(recordingID: nil, fallbackEngine: nil, engine: engine)
         let reason = if case .engineFailed = failure, let body = notice.body { body } else { notice.title }
-        history.upsert(TranscriptEntry(
+        var failed = TranscriptEntry(
             id: id, createdAt: recording.startedAt, text: "", engine: engine, status: .failed,
             audioDuration: recording.duration, voicedSeconds: recording.speech.voicedSeconds,
             errorMessage: reason, mode: entry.mode, audioFileName: history.saveAudio(recording) ?? entry.audioFileName,
-            importedFrom: entry.importedFrom))
+            importedFrom: entry.importedFrom)
+        failed.modelAnswer = modelAnswer
+        history.upsert(failed)
     }
 
     /// Why a version asked for from Home didn't come, as its row says it after "Couldn't transcribe with Gemini

@@ -4,7 +4,7 @@ import SwiftUI
 enum PillSnapshots {
     @MainActor static var entries: [SnapshotEntry] {
         [
-            SnapshotEntry("pill-states", width: 760, height: 44 + 15 * 68) { _ in PillStateSheet() },
+            SnapshotEntry("pill-states", width: 760, height: 44 + 16 * 68) { _ in PillStateSheet() },
             SnapshotEntry("pill-tooltip", width: 640, height: 140) { _ in
                 SideBySide { _ in
                     PillView(model: .preview(phase: .rest, isHovering: true))
@@ -161,6 +161,12 @@ enum PillSnapshots {
             },
             SnapshotEntry("pill-toast-cloud-speech", width: 640, height: 270) { _ in
                 CanvasScene(model: .preview(phase: .error), notices: [PillSnapshotFixtures.cloudSpeechRateLimited])
+            },
+            SnapshotEntry("pill-toast-heard-no-speech", width: 640, height: 270) { _ in
+                let model = PillModel.preview(phase: .error)
+                model.errorMessage = PillMetrics.keptNoSpeechText
+                model.errorModel = .argon
+                return CanvasScene(model: model, notices: [PillSnapshotFixtures.heardNoSpeech])
             },
             SnapshotEntry("pill-toast-no-connection", width: 640, height: 270) { _ in
                 CanvasScene(model: .preview(phase: .error), notices: [PillSnapshotFixtures.noConnection])
@@ -324,6 +330,10 @@ enum PillSnapshotFixtures {
         dedupeKey: "secureInput", style: .warning, symbol: "lock.shield", title: "Secure typing is on in 1Password",
         body: "Holding fn still works. fn Space and Esc work again once it’s off.",
         actions: [NoticeAction(title: "Dismiss", kind: .dismiss)], lifetime: .seconds(10), sound: .alert)
+
+    /// Argon heard no speech in a long dictation: kept in History, with Retry.
+    static let heardNoSpeech = AppError.heardNoSpeech(.geminiArgon)
+        .notice(recordingID: UUID(), fallbackEngine: nil, engine: .geminiArgon)
 
     static let keyRejected = AppError.openRouterInvalidKey("Invalid API key")
         .notice(recordingID: UUID(), fallbackEngine: .parakeet)
@@ -1067,6 +1077,12 @@ private struct PillStateSheet: View {
                 let model = PillModel.preview(phase: .error)
                 model.errorMessage = PillMetrics.noSpeechText
                 model.errorModel = .gemini
+                return model
+            },
+            Row(id: "no-speech-kept", caption: "Heard no speech · kept (Argon)") {
+                let model = PillModel.preview(phase: .error)
+                model.errorMessage = PillMetrics.keptNoSpeechText
+                model.errorModel = .argon
                 return model
             },
         ]

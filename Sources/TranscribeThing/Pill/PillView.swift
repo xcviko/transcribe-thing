@@ -77,6 +77,9 @@ enum PillMetrics {
     static let captionPadding: CGFloat = 12
     /// A dictation with no words says so inside the capsule, in the caption face.
     static let noSpeechText = "No speech detected"
+    /// A cloud model heard no speech in a recording that had plenty: the pill wears its ring, and History has the
+    /// recording (`AppError.heardNoSpeech`).
+    static let keptNoSpeechText = "Heard no speech · Kept in History"
 
     /// A sentence inside the capsule: the push-to-talk height, just wide enough for `text` and its padding.
     static func captionSize(for text: String) -> CGSize {

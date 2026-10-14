@@ -874,7 +874,8 @@ import Testing
         SwitchModelControllerTests.hold(rig)
         rig.h.controller.handle(.cycleEngine)
         #expect(rig.h.controller.effectiveChoice == .gemini && rig.h.settings.lineup.main != .gemini)
-        rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
+        // Little enough speech (1.2 s voiced) for an empty answer to be silence, not a recording kept in History.
+        rig.h.recorder.next = DictationResumeTests.speech(seconds: 1.5)
         rig.now += 2
         rig.h.controller.handle(.pttUp)
         try await waitUntil { rig.h.pill.errorMessage == PillMetrics.noSpeechText }

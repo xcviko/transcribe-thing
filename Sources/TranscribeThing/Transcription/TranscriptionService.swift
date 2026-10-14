@@ -32,6 +32,9 @@ struct TranscriptResult: Sendable, Equatable {
     var uploads: [AudioUpload] = []
     /// How Gemini's answer held its transcript (`TaggedTranscript`). Not kept in history.
     var answerTags: TaggedTranscript.Tags? = nil
+    /// Gemini's whole answer, tags and all (`CloudResult.rawAnswer`); nil for the local model. Kept in history only
+    /// on the failed row of a recording it heard no speech in (`TranscriptEntry.modelAnswer`).
+    var rawAnswer: String? = nil
     /// The other request of the pair, cancelled when this one answered (`CloudHedge.race`): its generations, whose
     /// cost is added to this one's once OpenRouter has it (`TranscriptMetadata.pendingGenerationIDs`).
     var otherGenerationIDs: [String] = []
@@ -162,6 +165,7 @@ final class TranscriptionService {
                 result.reasoningCharacters = cloud.reasoningCharacters
                 result.timeToFirstToken = cloud.timeToFirstToken
                 result.answerTags = cloud.answerTags
+                result.rawAnswer = cloud.rawAnswer
                 result.otherGenerationIDs = cloud.otherGenerationIDs
                 result.uploads = cloud.uploads
             }
