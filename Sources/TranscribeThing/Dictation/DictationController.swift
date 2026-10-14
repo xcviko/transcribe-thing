@@ -2659,7 +2659,7 @@ final class DictationController {
                       actions: [NoticeAction(title: "Close", kind: .dismiss, isPrimary: true),
                                 NoticeAction(title: "Undo", kind: .undoDictionaryAdd(word, before: before,
                                                                                      after: after))],
-                      lifetime: .seconds(10), sound: .success)
+                      lifetime: .seconds(10), sound: .dictionaryAdded)
     }
 
     /// Another choice for this dictation: the pill's chip, and for the user's own

@@ -9,6 +9,8 @@ enum SoundEffect: String, CaseIterable, Sendable {
     case polishOn, polishOff
     /// Polish Selection's card coming up: a bubble surfacing.
     case polishReady
+    /// A word went into the dictionary (fn D): a soft "done?", one tongue pop gliding up.
+    case dictionaryAdded
 
     var fileName: String { rawValue }
     static let fileExtension = "wav"
