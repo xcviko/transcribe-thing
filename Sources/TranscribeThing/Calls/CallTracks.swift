@@ -136,8 +136,12 @@ final class ProcessTapSource: CallTrackSource, @unchecked Sendable {
     private var aggregateID = AudioObjectID(kAudioObjectUnknown)
     private var input: HALDeviceInput?
 
-    init(target: TapTarget) {
+    /// What the tap is for, in its name and the log: "call", or "dictation" for the echo canceller's reference.
+    private let label: String
+
+    init(target: TapTarget, label: String = "call") {
         self.target = target
+        self.label = label
     }
 
     var problem: String? { lock.withLock { lastProblem } }
@@ -184,7 +188,7 @@ final class ProcessTapSource: CallTrackSource, @unchecked Sendable {
             description = CATapDescription(monoGlobalTapButExcludeProcesses: own)
         }
         description.uuid = UUID()
-        description.name = "transcribe-thing call"
+        description.name = "transcribe-thing \(label)"
         description.isPrivate = true
         description.muteBehavior = .unmuted
         var tap = AudioObjectID(kAudioObjectUnknown)
@@ -193,8 +197,8 @@ final class ProcessTapSource: CallTrackSource, @unchecked Sendable {
             return failed("Couldn’t record the call app’s sound: no permission to record other apps’ audio (\(status))")
         }
         let aggregate: [String: Any] = [
-            kAudioAggregateDeviceNameKey: "transcribe-thing call",
-            kAudioAggregateDeviceUIDKey: "dev.transcribe-thing.call.\(UUID().uuidString)",
+            kAudioAggregateDeviceNameKey: "transcribe-thing \(label)",
+            kAudioAggregateDeviceUIDKey: "dev.transcribe-thing.\(label).\(UUID().uuidString)",
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceIsStackedKey: false,
             kAudioAggregateDeviceTapAutoStartKey: true,
@@ -232,7 +236,7 @@ final class ProcessTapSource: CallTrackSource, @unchecked Sendable {
         tapID = tap
         aggregateID = device
         self.input = input
-        Log.audio.info("Call tap started")
+        Log.audio.info("\(self.label, privacy: .public) tap started")
     }
 
     private func teardown() {

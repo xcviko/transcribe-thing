@@ -13,6 +13,9 @@ struct Recording: Sendable, Identifiable, Equatable {
     /// The .m4a in History these samples were read from (`HistoryStore.loadRecording`). Saved again, the recording
     /// keeps that file rather than being encoded a second time, and Gemini takes it as it is (`CloudAudio.forChat`).
     var aacFile: URL?
+    /// Whether what the Mac played was taken out of the mic while it recorded (`LiveEchoCanceller`), for the
+    /// diagnostics log; nil when it wasn't tried.
+    var echo: EchoCancellationReport?
 
     init(
         id: UUID = UUID(),

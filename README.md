@@ -38,6 +38,13 @@ When a new version is out, the app tells you, and Update Now in General → Soft
 Change any of them except esc in Shortcuts. A small pill at the bottom of the screen shows that you're recording;
 General → Show the pill chooses always, only while you dictate, or never.
 
+If music or a video plays on your Mac's speakers while you dictate, the app takes it out of what your microphone hears,
+so you don't have to talk over it and the song's words mostly stay out of the transcript. This needs System Audio
+Recording Only, the permission calls use to record the other side (System Settings → Privacy & Security → Screen &
+System Audio Recording). The app doesn't ask for it for dictation, so turn it on there if you want this. The first
+second after you start may still pick up the music. With headphones, or without the permission, your microphone is
+recorded as it is.
+
 Pasting leaves your clipboard as it was. To copy a transcript, use Copy Last Transcript in the menu bar or Copy in
 History.
 

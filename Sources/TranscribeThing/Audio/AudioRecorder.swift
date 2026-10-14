@@ -35,6 +35,9 @@ final class AudioRecorder {
     /// Whether `start` may open the mic. The TCC probe blocks the calling thread (the main one, at key-down) for
     /// about 25 ms; the app answers from `PermissionsCenter`'s cached state first.
     var isMicrophoneAllowed: () -> Bool = { AudioRecorder.isMicrophoneAuthorized }
+    /// Where a capture gets what the Mac plays, to take it out of the mic (`DictationEcho`); nil: the mic as it
+    /// comes. The app sets `.live`.
+    var echoSensors: DictationEcho.Sensors?
     /// The device choice of the current (or last) capture, including why it was picked.
     private(set) var lastChoice: InputDeviceChoice?
     var capturesFromBluetooth: Bool { lastChoice?.device.isBluetooth == true }
@@ -85,6 +88,7 @@ final class AudioRecorder {
         levelMeter.reset()
         let options = CaptureSession.Options(preferredUID: preferredDeviceUID)
         let session = CaptureSession(device: record, options: options, meter: levelMeter,
+                                     echo: echoSensors.map { DictationEcho(sensors: $0) },
                                      onEvent: Self.makeEventHandler(for: self, generation: generation))
         self.session = session
         lastChoice = choice
@@ -117,7 +121,7 @@ final class AudioRecorder {
         let prefix = prefix
         endJournal(samples)
         endSession()
-        return Self.joined(prefix, makeRecording(samples))
+        return Self.joined(prefix, makeRecording(samples, echo: session.echoReport))
     }
 
     /// Ends the capture after `tail` more seconds of audio (the pill can show processing at once), then
@@ -139,9 +143,13 @@ final class AudioRecorder {
             }
         }
         // Analysis and the join (an hour of audio, or more) stay off the main thread.
+        let echo = session.echoReport
         return await Task.detached(priority: .userInitiated) {
-            let own = Recording(id: id, samples: samples, startedAt: startedAt,
-                                speech: SpeechAnalyzer.stats(for: samples), deviceName: name)
+            var own = Recording(id: id, samples: samples, startedAt: startedAt,
+                                speech: SpeechAnalyzer.stats(for: samples, sampleRate: Recording.sampleRate,
+                                                             parts: echo?.parts ?? []),
+                                deviceName: name)
+            own.echo = echo
             return AudioRecorder.joined(prefix, own)
         }.value
     }
@@ -159,7 +167,7 @@ final class AudioRecorder {
         }
         endJournal(samples)
         endSession()
-        return Self.joined(prefix, makeRecording(samples))
+        return Self.joined(prefix, makeRecording(samples, echo: session.echoReport))
     }
 
     /// `recording` after the resumed `prefix`, if any.
@@ -211,9 +219,13 @@ final class AudioRecorder {
         isCapturing = false
     }
 
-    private func makeRecording(_ samples: [Float]) -> Recording {
-        Recording(id: recordingID, samples: samples, startedAt: startedAt, speech: SpeechAnalyzer.stats(for: samples),
-                  deviceName: lastDeviceName)
+    private func makeRecording(_ samples: [Float], echo: EchoCancellationReport?) -> Recording {
+        var recording = Recording(id: recordingID, samples: samples, startedAt: startedAt,
+                                  speech: SpeechAnalyzer.stats(for: samples, sampleRate: Recording.sampleRate,
+                                                               parts: echo?.parts ?? []),
+                                  deviceName: lastDeviceName)
+        recording.echo = echo
+        return recording
     }
 
     /// The journal names the model and mode the dictation ended with (Switch model, hands-free).
@@ -270,5 +282,12 @@ extension Recording {
                                       peakDBFS: max(speech.peakDBFS, next.speech.peakDBFS),
                                       isSilent: speech.isSilent && next.speech.isSilent),
                   deviceName: next.deviceName ?? deviceName)
+            .with(echo: next.echo ?? echo)
+    }
+
+    private func with(echo: EchoCancellationReport?) -> Recording {
+        var copy = self
+        copy.echo = echo
+        return copy
     }
 }

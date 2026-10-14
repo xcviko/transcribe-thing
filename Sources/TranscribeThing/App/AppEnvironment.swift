@@ -157,6 +157,8 @@ final class AppEnvironment {
         makeUpdates: (AppSettings, ToastCenter) -> UpdateCenter, isPreview: Bool
     ) -> AppEnvironment {
         let recorder = AudioRecorder(levelMeter: levelMeter, devices: devices, settings: settings)
+        // Music on the speakers is taken out of the mic while dictating.
+        if !isPreview { recorder.echoSensors = .live }
         let client = OpenRouterClient()
         let account = makeAccount(keyStore, client)
         let transcription = TranscriptionService(models: models, account: account, client: client, proxy: proxy)

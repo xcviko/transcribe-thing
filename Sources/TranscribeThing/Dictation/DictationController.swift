@@ -672,8 +672,12 @@ final class DictationController {
         }
         // A new recording may already be running (re-pressed during the tail): keep the cue out of it.
         if job.playsStopCue { playCue(.stop) }
-        DiagnosticLog.shared.event(.dictation, "dictation.stopped",
-                                   ["seconds": recording.duration, "voiced": recording.speech.voicedSeconds])
+        // Whether music on the speakers was taken out of the mic (`LiveEchoCanceller`), and by how much.
+        let echo = recording.echo
+        DiagnosticLog.shared.event(.dictation, "dictation.stopped", [
+            "seconds": recording.duration, "voiced": recording.speech.voicedSeconds,
+            "aec": echo?.status.rawValue, "aecSeconds": echo.flatMap { $0.seconds > 0 ? $0.seconds : nil },
+            "echoReductionDB": echo?.reductionDB])
         guard passesPreflight(recording, model: ModelChoice(engine: job.engine)) else {
             DiagnosticLog.shared.event(.dictation, "job.finished", [
                 "engine": job.engine, "outcome": recording.speech.isSilent ? "silent" : "noSpeech", "sent": false])

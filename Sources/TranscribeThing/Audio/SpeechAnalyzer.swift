@@ -32,7 +32,11 @@ enum SpeechAnalyzer {
         stats(for: samples, sampleRate: Recording.sampleRate)
     }
 
-    static func stats(for samples: [Float], sampleRate: Double, parameters: Parameters = Parameters()) -> SpeechStats {
+    /// `parts`: the samples where the mic changes character, each part measured against its own floor. A dictation
+    /// over music starts as recorded, with the music for its floor, and goes on with the music taken out
+    /// (`LiveEchoCanceller`): with one floor for both, the first moments' music would count as a voice.
+    static func stats(for samples: [Float], sampleRate: Double, parameters: Parameters = Parameters(),
+                      parts: [Int] = []) -> SpeechStats {
         guard !samples.isEmpty, sampleRate > 0 else { return .empty }
 
         var minValue: Float = 0
@@ -47,8 +51,14 @@ enum SpeechAnalyzer {
             return SpeechStats(voicedSeconds: 0, peakDBFS: peakDB, isSilent: true)
         }
 
-        let frameDB = frameLevels(samples, frameLength: max(1, Int(sampleRate * parameters.frameSeconds)))
-        let voicedFrames = countVoicedFrames(frameDB, parameters: parameters)
+        let frameLength = max(1, Int(sampleRate * parameters.frameSeconds))
+        let frameDB = frameLevels(samples, frameLength: frameLength)
+        var bounds = parts.map { $0 / frameLength }.filter { $0 > 0 && $0 < frameDB.count }
+        bounds = [0] + Array(Set(bounds)).sorted() + [frameDB.count]
+        var voicedFrames = 0
+        for index in 0..<bounds.count - 1 {
+            voicedFrames += countVoicedFrames(Array(frameDB[bounds[index]..<bounds[index + 1]]), parameters: parameters)
+        }
         return SpeechStats(voicedSeconds: Double(voicedFrames) * parameters.frameSeconds,
                            peakDBFS: peakDB, isSilent: false)
     }
