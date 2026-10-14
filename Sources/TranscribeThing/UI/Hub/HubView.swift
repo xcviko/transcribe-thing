@@ -34,6 +34,8 @@ final class HubContext: Observable {
     let diagnostics: DiagnosticsCenter
     /// Files dropped on Home, read and asked about whichever page is showing.
     let imports = FileImport()
+    /// Files dropped on Calls, read and made calls whichever page is showing.
+    let callImports = CallImport()
     let isPreview: Bool
     /// Stand-in traffic lights so snapshots read like the real window.
     var drawsWindowControls = false
@@ -49,7 +51,7 @@ final class HubContext: Observable {
     var previewFailures: [UUID: HomeFailure]?
     /// A History row drawn as hovered, its actions showing (snapshots).
     var previewHoveredEntry: UUID?
-    /// Home drawn with files dragged over it (snapshots).
+    /// Home, or Calls, drawn with files dragged over it (snapshots).
     var previewDropTarget = false
     /// The live call as the Calls tab shows it, in place of the monitor's (snapshots).
     var previewCallState: CallMonitor.State?
@@ -90,10 +92,18 @@ final class HubContext: Observable {
         diagnostics = env.diagnostics
         isPreview = env.isPreview
         firstName = HubGreeting.firstName(fullName: NSFullUserName(), accountName: NSUserName())
-        imports.choices = { [unowned self] seconds in
-            ImportChoices.make(main: self.settings.mainEngine, seconds: seconds, readiness: self.readiness(of:))
+        // Weak: reading a file outlives the Hub window, and with it this context.
+        imports.choices = { [weak self] seconds in
+            guard let self else { return [] }
+            return ImportChoices.make(main: self.settings.mainEngine, seconds: seconds, readiness: self.readiness(of:))
         }
         imports.start = { [dictation] file, kind in dictation.transcribe(file, as: kind) }
+        callImports.start = { [callTranscriber] file in await callTranscriber.importFile(file)?.id }
+        callImports.onImported = { [weak self] ids in
+            // The calls are made all the same when the window closed meanwhile; there's just no page to open.
+            guard let self else { return }
+            self.callsImported(ids)
+        }
     }
 
     var now: Date { fixedNow ?? Date() }
@@ -114,9 +124,22 @@ final class HubContext: Observable {
         previewCallState ?? callMonitor.state
     }
 
-    /// Opens the folder a call's audio is kept in, in Finder.
+    /// A batch of files made calls: their dates (the files') can put them far down the list, so the first one opens
+    /// on its page, transcribing, as long as Calls is still showing; the others are in the list, each on its
+    /// file’s day.
+    func callsImported(_ ids: [UUID]) {
+        guard let id = ids.first, windows.hubSection == .calls else { return }
+        showCall(id)
+    }
+
+    /// Shows a call in Finder: the file it was made from while that's still where it was, otherwise the folder its
+    /// audio is kept in.
     func revealCall(_ id: UUID) {
         guard !isPreview else { return }
+        if let file = calls.call(id: id)?.file, !file.path.isEmpty, FileManager.default.fileExists(atPath: file.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: file.path)])
+            return
+        }
         NSWorkspace.shared.activateFileViewerSelecting([calls.folder(for: id)])
     }
 

@@ -242,6 +242,58 @@ enum PreviewFixtures {
         return [telegram, meet, zoom, discord, slack, telemost]
     }
 
+    /// Calls made from files dropped on Calls, today: a screen recording of a design review, done, with three speakers
+    /// (one named from the talk, Sam, and one known only as "Speaker 2") and a summary; and a lecture's audio being
+    /// transcribed.
+    static func importedCalls(now: Date = Date(), calendar: Calendar = .current) -> [CallRecord] {
+        let today = calendar.startOfDay(for: now)
+        func at(_ hour: Int, _ minute: Int) -> Date {
+            calendar.date(bySettingHour: hour, minute: minute, second: 0, of: today) ?? today
+        }
+        func imported(_ id: Int, name: String, folder: String, isVideo: Bool, start: Date, seconds: TimeInterval,
+                      status: CallStatus) -> CallRecord {
+            var record = CallRecord(id: callID(id), startedAt: start, endedAt: start.addingTimeInterval(seconds),
+                                    appName: name, status: status)
+            record.file = CallFileSource(name: name, path: "\(NSHomeDirectory())/\(folder)/\(name)", isVideo: isVideo,
+                                         importedAt: now)
+            record.remoteFile = CallStore.importedAudioFile
+            record.remoteSeconds = seconds
+            return record
+        }
+
+        var review = imported(7, name: "Design review.mov", folder: "Movies", isVideo: true, start: at(11, 30),
+                              seconds: 2472, status: .done)
+        review.costUSD = 0.052
+        review.transcript = CallTranscript(segments: [
+            .init(start: 2, end: 8, side: .remote, speaker: "Олег",
+                  text: "Так, все видят экран? Начнём с нового онбординга."),
+            .init(start: 9, end: 15, side: .local, speaker: "Sam",
+                  text: "Yes. I moved the permissions to the second step, so the first one is just the hello."),
+            .init(start: 16, end: 24, side: .remote, speaker: "Speaker 2",
+                  text: "I like it. The microphone prompt still comes before people know why we need it, though."),
+            .init(start: 25, end: 31, side: .remote, speaker: "Олег",
+                  text: "Согласен. Давай сначала покажем, что получится, а потом попросим доступ."),
+            .init(start: 32, end: 37, side: .local, speaker: "Sam",
+                  text: "Okay, I’ll swap them and send a new build by Thursday."),
+        ])
+        review.summary = CallSummary(
+            summary: "The team went over the new onboarding. Permissions moved to the second step; the microphone "
+                + "prompt will come after a short demo of what the app does.",
+            keyPoints: [
+                "The first step is now just the hello.",
+                "The microphone prompt comes too early, before people know why it’s needed.",
+            ],
+            decided: ["Show the demo first, then ask for the microphone."],
+            tasks: [CallTask(id: callTaskID(7), owner: "Sam", text: "Swap the demo and the microphone prompt",
+                             due: "Thursday")],
+            open: ["Whether the demo needs sound."],
+            createdAt: review.startedAt)
+
+        let lecture = imported(8, name: "Lecture 4 - Signals.m4a", folder: "Downloads", isVideo: false,
+                               start: at(10, 15), seconds: 4360, status: .transcribing)
+        return [review, lecture]
+    }
+
     /// The fixture calls' ids, stable so snapshots can pick one.
     static func callID(_ n: Int) -> UUID {
         UUID(uuidString: String(format: "00000000-0000-4000-8000-%012d", n))!
