@@ -228,7 +228,7 @@ final class CallStore {
             let samples = audio.samples
             let encoded = await Task.detached(priority: .userInitiated) { () -> CallAudio.Encoded? in
                 do {
-                    return try CallAudio.write(samples, to: file)
+                    return try Self.writeStaged(samples, to: file)
                 } catch {
                     Log.audio.error("Couldn't keep a file's sound as a call: \(error.localizedDescription, privacy: .public)")
                     return nil
@@ -248,6 +248,23 @@ final class CallStore {
             "video": audio.isVideo,
         ])
         return record
+    }
+
+    /// A file's sound encoded in a temporary folder on the same disk, then moved into the call's folder: an app quit
+    /// halfway through leaves nothing in Calls/ that no record points to (macOS clears the temporary folder itself).
+    nonisolated static func writeStaged(_ samples: [Float], to m4a: URL) throws -> CallAudio.Encoded {
+        let files = FileManager.default
+        let folder = m4a.deletingLastPathComponent()
+        try files.createDirectory(at: folder.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let staging = try files.url(for: .itemReplacementDirectory, in: .userDomainMask,
+                                    appropriateFor: folder.deletingLastPathComponent(), create: true)
+        defer { try? files.removeItem(at: staging) }
+        let staged = staging.appendingPathComponent(m4a.lastPathComponent, isDirectory: false)
+        let encoded = try CallAudio.write(samples, to: staged)
+        try files.createDirectory(at: folder, withIntermediateDirectories: true)
+        try? files.removeItem(at: m4a)
+        try files.moveItem(at: staged, to: m4a)
+        return encoded
     }
 
     /// When the file was made: when a recording of it started, for a call recorded by another app.

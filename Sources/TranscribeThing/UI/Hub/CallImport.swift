@@ -23,7 +23,7 @@ final class CallImport {
     }
     /// Makes a file read into a call and starts transcribing it; its id, or nil when its sound couldn't be kept.
     @ObservationIgnored var start: (ImportedAudio) async -> UUID? = { _ in nil }
-    /// The calls one batch made, once it's read: the page opens a single one.
+    /// The calls one batch made, once it's read: the page opens the first one.
     @ObservationIgnored var onImported: ([UUID]) -> Void = { _ in }
     /// How long a new alert waits for the one before it to go.
     @ObservationIgnored var settle: Duration = .milliseconds(300)

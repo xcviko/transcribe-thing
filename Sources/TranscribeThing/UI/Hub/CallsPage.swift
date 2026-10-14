@@ -57,7 +57,7 @@ struct CallsPage: View {
                     Label("Transcribe a File…", systemImage: "arrow.down.doc")
                 }
                 .keyboardShortcut("o", modifiers: .command)
-                .help("Transcribe a File… (⌘O): each file becomes a call")
+                .help("Transcribe a File… (⌘O): each file becomes a call, sent to \(EngineID.geminiFlash.shortName) at once")
             }
             ToolbarItem(placement: .primaryAction) { recordButton(state) }
         }
@@ -71,7 +71,7 @@ struct CallsPage: View {
         .overlay {
             if showsDropTarget {
                 FileDropTarget(title: "Drop audio or video to transcribe",
-                               subtitle: "Each file becomes a call here, with who said what and a summary.")
+                               subtitle: "Each file becomes a call here and goes to \(EngineID.geminiFlash.shortName) at once, for who said what and a summary.")
             }
         }
         .overlay(alignment: .bottom) {
@@ -197,7 +197,7 @@ extension View {
     }
 }
 
-private struct CallDeleteAlert: ViewModifier {
+struct CallDeleteAlert: ViewModifier {
     @Binding var call: CallRecord?
     var onDeleted: () -> Void
     @Environment(HubContext.self) private var hub
@@ -212,9 +212,15 @@ private struct CallDeleteAlert: ViewModifier {
             }
             .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {}
-        } message: { _ in
-            Text("Its recording and transcript go too. This can’t be undone.")
+        } message: { call in
+            Text(Self.message(for: call))
         }
+    }
+
+    /// A call made from a file loses only what the app keeps: the file itself stays.
+    static func message(for call: CallRecord) -> String {
+        guard let file = call.file else { return "Its recording and transcript go too. This can’t be undone." }
+        return "Its transcript and the sound kept with it go too. “\(file.name)” stays where it is. This can’t be undone."
     }
 }
 

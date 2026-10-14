@@ -167,6 +167,7 @@ struct FileDropTarget: View {
                     .typeface(.callout)
                     .foregroundStyle(.inkSecondary)
                     .multilineTextAlignment(.center)
+                    .frame(maxWidth: 420)
             }
             .padding(.horizontal, 24)
         }

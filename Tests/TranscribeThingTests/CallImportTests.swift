@@ -164,15 +164,15 @@ private func fileOnDisk(_ name: String, created: Date) throws -> URL {
         #expect(!unnamed.contains("<summary>"))
     }
 
-    /// A live call's prompt is as it was: its own format, its blocks said of a call, "Participant 1".
+    /// A live call's prompts are word for word what they were before files could become calls (`LiveCallPromptText`).
     @Test func aCallsPromptIsUnchanged() {
-        #expect(CallPrompts.format(summary: false) == CallPrompts.format)
-        #expect(CallSummaryPrompt.blocks(me: "Sam", subject: "call", firstSpeaker: "Participant 1")
-                == CallSummaryPrompt.blocks(me: "Sam"))
-        let call = CallPrompts.call(me: "Sam", service: "Zoom", roster: [], mutes: [], summary: true)
-        #expect(call.contains("This audio is a recording of a call on Zoom"))
-        #expect(call.contains("Sum up the call in these five blocks") && call.contains("\"Participant 1\""))
-        #expect(!call.contains("Speaker 1") && !call.contains("recording from the file"))
+        #expect(CallPrompts.call(me: "Sam", service: "Zoom", roster: [], mutes: [], summary: true)
+                == LiveCallPromptText.callNamed)
+        #expect(CallPrompts.call(me: "Me", service: nil, roster: ["Олег", "Participant 1"], local: ["Sam"],
+                                 mutes: [CallInterval(start: 65, end: 72.5)], seconds: 600, voiceSample: true,
+                                 summary: false) == LiveCallPromptText.callUnnamed)
+        #expect(CallSummaryPrompt.text(me: "Sam", service: "Zoom") == LiveCallPromptText.summaryNamed)
+        #expect(CallSummaryPrompt.text(me: "Me", service: nil) == LiveCallPromptText.summaryUnnamed)
     }
 
     /// A long file's summary comes from its transcript, asked about as a recording, not as Sam's call.
@@ -277,3 +277,54 @@ private func fileOnDisk(_ name: String, created: Date) throws -> URL {
         #expect(CallsList.filter(calls + PreviewFixtures.calls(), query: "lecture").map(\.id) == [audio.id])
     }
 }
+
+#if DEBUG
+@MainActor @Suite(.serialized) struct CallImportHubTests {
+    /// The Hub window closed while a file was still read: the call is made all the same, and nothing is opened.
+    @Test func aFileReadAfterTheWindowClosedStillBecomesACall() async throws {
+        let env = AppEnvironment.preview()
+        var context: HubContext? = HubContext(env: env)
+        weak let gone = context
+        let imports = try #require(context?.callImports)
+        let made = OSAllocatedUnfairLock(initialState: [String]())
+        imports.read = { url async throws(ImportedAudio.ReadError) -> ImportedAudio in
+            try? await Task.sleep(for: .milliseconds(50))
+            return fileAudio(url.lastPathComponent, seconds: 1)
+        }
+        imports.start = { file in
+            made.withLock { $0.append(file.fileName) }
+            return UUID()
+        }
+        env.windows.hubSection = .calls
+        imports.add([URL(fileURLWithPath: "/tmp/Interview.mp4")])
+        context = nil
+        #expect(gone == nil)
+        await imports.waitUntilRead()
+        #expect(made.withLock { $0 } == ["Interview.mp4"])
+        #expect(env.windows.openCallID == nil && env.windows.hubSection == .calls)
+    }
+
+    /// Several files dropped at once: the first opens on its page, so the batch is seen wherever its dates put it.
+    @Test func aBatchOpensItsFirstCall() {
+        let env = AppEnvironment.preview()
+        let context = HubContext(env: env)
+        let first = UUID(), second = UUID()
+        env.windows.hubSection = .general
+        context.callsImported([first, second])
+        #expect(env.windows.openCallID == nil && env.windows.hubSection == .general)
+        env.windows.hubSection = .calls
+        context.callsImported([first, second])
+        #expect(env.windows.openCallID == first && env.windows.hubSection == .callDetail)
+    }
+
+    /// Deleting a call made from a file says the file itself stays; a recorded call's alert is as it was.
+    @Test func deletingAFilesCallSaysTheFileStays() throws {
+        let video = try #require(PreviewFixtures.importedCalls().first)
+        #expect(CallDeleteAlert.message(for: video)
+                == "Its transcript and the sound kept with it go too. “Design review.mov” stays where it is. "
+                + "This can’t be undone.")
+        let recorded = try #require(PreviewFixtures.calls().first { $0.file == nil })
+        #expect(CallDeleteAlert.message(for: recorded) == "Its recording and transcript go too. This can’t be undone.")
+    }
+}
+#endif
