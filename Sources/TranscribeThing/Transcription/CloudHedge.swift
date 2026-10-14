@@ -39,7 +39,9 @@ enum CloudHedge: Sendable, Equatable {
 
     /// `work` twice at once; the first answer comes back as soon as it's there, with the other request's generation in
     /// `otherGenerationIDs` when OpenRouter had named it. A request that fails leaves the other to answer; when both
-    /// fail, the first failure is thrown. `progress` hears the further of the two streams, so the pill's count never
+    /// fail, the first failure is thrown. An empty answer (no text at all) waits for the other one: a model can come
+    /// back with nothing for audio with speech in it, and the other request often has the words; when both are empty,
+    /// or the other fails, the empty one is the answer. `progress` hears the further of the two streams, so the pill's count never
     /// goes back. Cancelling the caller before an answer cancels both. `measured` hears both answers once the other is
     /// in too (`.measure` only).
     static func run(_ mode: CloudHedge, _ kind: Kind, engine: EngineID, modelName: String,
@@ -99,6 +101,8 @@ enum CloudHedge: Sendable, Equatable {
         typealias Other = (result: CloudResult?, seconds: TimeInterval)
 
         private var first: Answer?
+        /// An empty answer held while the other request may still bring words.
+        private var empty: Answer?
         private var failures: [any Error] = []
         private var finished = 0
         private var waiter: CheckedContinuation<Answer, any Error>?
@@ -111,6 +115,8 @@ enum CloudHedge: Sendable, Equatable {
         func finish(_ index: Int, _ outcome: Result<CloudResult, any Error>, seconds: TimeInterval) {
             finished += 1
             switch outcome {
+            case .success(let result) where first == nil && Self.isEmpty(result) && finished < 2:
+                empty = (index, result, seconds)
             case .success(let result) where first == nil:
                 let answer = (index, result, seconds)
                 first = answer
@@ -126,14 +132,26 @@ enum CloudHedge: Sendable, Equatable {
                 }
             }
             if first == nil, finished == 2 {
-                waiter?.resume(throwing: firstFailure)
+                if let empty {
+                    first = empty
+                    waiter?.resume(returning: empty)
+                } else {
+                    waiter?.resume(throwing: firstFailure)
+                }
                 waiter = nil
             }
         }
 
+        private static func isEmpty(_ result: CloudResult) -> Bool {
+            result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+
         func firstAnswer() async throws -> Answer {
             if let first { return first }
-            if finished == 2 { throw firstFailure }
+            if finished == 2 {
+                if let empty { return empty }
+                throw firstFailure
+            }
             return try await withCheckedThrowingContinuation { waiter = $0 }
         }
 
