@@ -321,7 +321,8 @@ final class OpenRouterClient: Sendable {
 
     /// A question about a video uploaded to the endpoint (`uploadVideo`), its file's `uri` and then `text` in one user
     /// message (`OpenRouterChatRequest.video`), looked at with Vertex's agentic processing. The endpoint's only: it
-    /// has the Files API the video went up through. Same stream, retry policy and failures as `sendText`; the answer
+    /// has the Files API the video went up through. Same stream, retry policy and failures as `sendText`, but for an
+    /// answer cut off by `maxTokens`: it comes back as it is (finish reason "length"), with what it cost. The answer
     /// comes back as the model wrote it.
     func askAboutVideo(fileURI: String, text: String, model: String, effort: ReasoningEffort, maxTokens: Int,
                        apiKey: String, timeout: TimeInterval) async throws -> CloudResult {
@@ -336,7 +337,7 @@ final class OpenRouterClient: Sendable {
             throw adapted(AppError.openRouterBadRequest("Couldn’t build the request."))
         }
         let request = makeTranscriptionRequest(body: body, apiKey: key, timeout: timeout)
-        return try await streamWithRetry(request, engine: engine, progress: nil)
+        return try await streamWithRetry(request, engine: engine, progress: nil, keepTruncated: true)
     }
 
     /// Sends a chat `request` and reads its answer as it streams in, retrying once per the policy above. Its
@@ -347,11 +348,12 @@ final class OpenRouterClient: Sendable {
     /// done can still be looked up for what it cost.
     private func streamWithRetry(_ request: URLRequest, engine: EngineID,
                                  progress: (@Sendable (ChatStreamProgress) -> Void)?,
-                                 generation: (@Sendable (String) -> Void)? = nil) async throws -> CloudResult {
+                                 generation: (@Sendable (String) -> Void)? = nil,
+                                 keepTruncated: Bool = false) async throws -> CloudResult {
         try await withRetry {
             try await watching { activity in
                 try await self.stream(request, engine: engine, progress: progress, generation: generation,
-                                      activity: activity)
+                                      keepTruncated: keepTruncated, activity: activity)
             }
         }
     }
@@ -359,7 +361,7 @@ final class OpenRouterClient: Sendable {
     /// One attempt of `streamWithRetry`. A failure before the 200 is retried like any request's; one inside the
     /// stream only when it came quickly and before any of the answer: the model's work is never thrown away.
     private func stream(_ request: URLRequest, engine: EngineID, progress: (@Sendable (ChatStreamProgress) -> Void)?,
-                        generation: (@Sendable (String) -> Void)? = nil,
+                        generation: (@Sendable (String) -> Void)? = nil, keepTruncated: Bool = false,
                         activity: ConnectionActivity) async throws -> CloudResult {
         let started = ContinuousClock.now
         let (bytes, http) = try await open(request, engine: engine)
@@ -441,7 +443,7 @@ final class OpenRouterClient: Sendable {
         var result: CloudResult
         do {
             do {
-                result = try stream.result(engine: engine)
+                result = try stream.result(engine: engine, keepTruncated: keepTruncated)
             } catch let error as AppError where isProxy {
                 // The endpoint reports a failure inside the stream with its HTTP status as the code.
                 if let body = stream.error {

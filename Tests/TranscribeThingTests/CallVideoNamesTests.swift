@@ -261,6 +261,39 @@ private func sure(_ name: String?) -> CallVideoNames.Guess { CallVideoNames.Gues
         #expect(!CallTranscriber.endpointVideoNames(proxy: proxy).isAvailable())
         #expect(StubURLProtocol.registry.requests(for: host).isEmpty)
     }
+
+    /// An answer cut off by its token limit comes back as it is, with what it cost: it was paid for.
+    @Test func aCutOffAnswerComesBackWithItsCost() async throws {
+        let settings = AppSettings.inMemory()
+        settings.callEngine = .geminiArgon
+        let (proxy, host) = ProxyFixture.proxy(settings: settings)
+        StubURLProtocol.registry.enqueue([
+            Self.started(host), Self.uploaded,
+            .stream(SSE.answer(#"{"Speaker 1": {"name": "Pab"#, finish: "length", id: "chatcmpl-v2",
+                               usage: #"{"prompt_tokens":9000,"completion_tokens":32768,"total_tokens":41768,"cost":0.41}"#)),
+        ], host: host)
+        let video = try Self.file(bytes: 100)
+        defer { try? FileManager.default.removeItem(at: video) }
+        let result = try await CallTranscriber.endpointVideoNames(proxy: proxy, model: { settings.callModel })
+            .send(video, "Who is who?")
+        #expect(result.finishReason == "length" && result.costUSD == 0.41)
+        #expect(result.text == #"{"Speaker 1": {"name": "Pab"#)
+    }
+
+    /// A failure says whether the upload or the question failed.
+    @Test func aFailureSaysWhereItHappened() async throws {
+        let (proxy, _) = ProxyFixture.proxy([ProxyFixture.error(401, "Invalid API key", code: "401")])
+        let video = try Self.file(bytes: 6)
+        defer { try? FileManager.default.removeItem(at: video) }
+        do {
+            _ = try await CallTranscriber.endpointVideoNames(proxy: proxy).send(video, "Who is who?")
+            Issue.record("the upload should fail")
+        } catch let failure as CallTranscriber.NamesStageFailure {
+            #expect(failure.stage == "upload")
+            #expect(failure.error == .vertexProxy(.keyRejected("Invalid API key")))
+            #expect(CallTranscriber.code(of: failure) == failure.error.code)
+        }
+    }
 }
 
 // MARK: - The video
@@ -415,6 +448,7 @@ private func sure(_ name: String?) -> CallVideoNames.Guess { CallVideoNames.Gues
         #expect(call.name(of: "Speaker 1") == "Ангелина Д." && call.name(of: "Олег") == "Олег")
         #expect(abs((call.costUSD ?? 0) - 0.06) < 1e-9)
         #expect(store.namingSpeakers.isEmpty)
+        #expect(call.videoNamedSpeakers == ["Speaker 1"] && store.namingResult[id] == nil)
         let prompt = try #require(sent.prompts.withLock { $0 }.first)
         #expect(prompt.contains("[00:00-00:01] Speaker 1: Всем привет."))
         #expect(sent.hadSound.withLock { $0 } == [false])
@@ -506,5 +540,109 @@ private func sure(_ name: String?) -> CallVideoNames.Guess { CallVideoNames.Gues
         await transcriber.waitUntilIdle()
         #expect(asked.withLock { $0 } == 2, "the new transcript gets a step of its own")
         #expect(store.call(id: id)?.speakerNames == ["Speaker 1": "Ann"])
+    }
+
+    /// The names the video gave are noted as its: the page says so, and a rename by the person makes a name theirs.
+    @Test func theVideosNamesAreNotedAsItsUntilTheyRename() async throws {
+        let source = try await CallVideoCopyTests.movie(seconds: 1, width: 64, height: 64)
+        defer { try? FileManager.default.removeItem(at: source.deletingLastPathComponent()) }
+        let (store, _, id) = try await Self.setUp(file: source) { _, _ in
+            CloudResult(text: #"{"Speaker 1": {"name": "Ann", "confidence": "high"}, "Speaker 2": {"name": "Bob", "confidence": "high"}}"#)
+        }
+        var call = try #require(store.call(id: id))
+        #expect(call.videoNamedSpeakers == ["Speaker 1", "Speaker 2"])
+        #expect(call.isNamedFromVideo("Speaker 1") && !call.isNamedFromVideo("Олег"))
+        #expect(store.namingResult[id] == nil)
+        store.rename(speaker: "Speaker 1", to: "Anna", in: id)
+        store.rename(speaker: "Speaker 2", to: "", in: id)
+        call = try #require(store.call(id: id))
+        #expect(call.speakerNames == ["Speaker 1": "Anna"] && call.videoNamedSpeakers.isEmpty)
+        // Saved and read back.
+        var named = call
+        named.videoNamedSpeakers = ["Speaker 1"]
+        let decoded = try JSONDecoder().decode(CallRecord.self, from: JSONEncoder().encode(named))
+        #expect(decoded.videoNamedSpeakers == ["Speaker 1"])
+    }
+
+    /// Transcribe Again drops the names the video gave (the new "Speaker 1" may be someone else) and keeps the
+    /// person's; the new transcript's step names its speakers again.
+    @Test func transcribingAgainDropsOnlyTheVideosNames() async throws {
+        let source = try await CallVideoCopyTests.movie(seconds: 1, width: 64, height: 64)
+        defer { try? FileManager.default.removeItem(at: source.deletingLastPathComponent()) }
+        let asked = OSAllocatedUnfairLock(initialState: 0)
+        let (store, transcriber, id) = try await Self.setUp(file: source) { _, _ in
+            let number = asked.withLock { $0 += 1; return $0 }
+            return CloudResult(text: number == 1 ? #"{"Speaker 1": {"name": "Ann", "confidence": "high"}}"#
+                                                 : #"{"Speaker 1": {"name": "Pablo", "confidence": "low"}}"#)
+        }
+        #expect(store.call(id: id)?.speakerNames == ["Speaker 1": "Ann"])
+        store.rename(speaker: "Speaker 2", to: "Bob", in: id)
+        transcriber.retranscribe(id)
+        await transcriber.waitUntilIdle()
+        let call = try #require(store.call(id: id))
+        #expect(asked.withLock { $0 } == 2)
+        #expect(call.speakerNames == ["Speaker 2": "Bob"] && call.videoNamedSpeakers.isEmpty)
+        #expect(store.namingResult[id]?.message == "Couldn’t tell who’s who from the video.")
+    }
+
+    /// A step that names no one says so on the page, until the next rename.
+    @Test func nothingSureIsSaid() async throws {
+        let source = try await CallVideoCopyTests.movie(seconds: 1, width: 64, height: 64)
+        defer { try? FileManager.default.removeItem(at: source.deletingLastPathComponent()) }
+        let (store, _, id) = try await Self.setUp(file: source) { _, _ in
+            CloudResult(text: #"{"Speaker 1": {"name": null, "confidence": "low"}}"#)
+        }
+        #expect(store.namingResult[id] == CallStore.NamingResult(message: "Couldn’t tell who’s who from the video."))
+        store.rename(speaker: "Speaker 1", to: "Ann", in: id)
+        #expect(store.namingResult[id] == nil)
+    }
+
+    /// A failed step says so on the page, why on hover.
+    @Test func aFailureIsSaid() async throws {
+        let source = try await CallVideoCopyTests.movie(seconds: 1, width: 64, height: 64)
+        defer { try? FileManager.default.removeItem(at: source.deletingLastPathComponent()) }
+        let (store, _, id) = try await Self.setUp(file: source) { _, _ in
+            throw CallTranscriber.NamesStageFailure(stage: "ask", error: .vertexProxy(.tooLarge))
+        }
+        let result = try #require(store.namingResult[id])
+        #expect(result.message == "Couldn’t look at the video.")
+        #expect(result.detail == AppError.vertexProxy(.tooLarge).localizedDescription)
+    }
+
+    /// An answer cut off by its token limit still costs what it cost, and its sure names still count.
+    @Test func aCutOffAnswerStillCounts() async throws {
+        let source = try await CallVideoCopyTests.movie(seconds: 1, width: 64, height: 64)
+        defer { try? FileManager.default.removeItem(at: source.deletingLastPathComponent()) }
+        let (store, _, id) = try await Self.setUp(file: source) { _, _ in
+            var result = CloudResult(text: #"{"Speaker 1": {"name": "Ann", "confidence": "high"}, "Speaker 2": {"#,
+                                     costUSD: 0.4)
+            result.finishReason = "length"
+            return result
+        }
+        let call = try #require(store.call(id: id))
+        #expect(abs((call.costUSD ?? 0) - 0.41) < 1e-9)
+    }
+
+    /// Where the step failed goes with its failure: the copy, or the stage the request names.
+    @Test func aFailureCarriesItsStage() async throws {
+        let missing = FileManager.default.temporaryDirectory.appendingPathComponent("gone-\(UUID().uuidString).mp4")
+        do {
+            _ = try await CallTranscriber.askNames(source: missing, prompt: "", send: { _, _ in CloudResult(text: "") },
+                                                   answers: nil, log: DiagnosticLog(), callID: nil)
+            Issue.record("the copy should fail")
+        } catch let failure as CallTranscriber.NamesFailure {
+            #expect(failure.stage == "copy" && failure.videoBytes == nil)
+        }
+        let source = try await CallVideoCopyTests.movie(seconds: 1, width: 64, height: 64)
+        defer { try? FileManager.default.removeItem(at: source.deletingLastPathComponent()) }
+        do {
+            _ = try await CallTranscriber.askNames(source: source, prompt: "", send: { _, _ in
+                throw CallTranscriber.NamesStageFailure(stage: "ask", error: .vertexProxy(.tooLarge))
+            }, answers: nil, log: DiagnosticLog(), callID: nil)
+            Issue.record("the question should fail")
+        } catch let failure as CallTranscriber.NamesFailure {
+            #expect(failure.stage == "ask" && (failure.videoBytes ?? 0) > 0 && failure.copySeconds != nil)
+            #expect(CallTranscriber.code(of: failure) == AppError.vertexProxy(.tooLarge).code)
+        }
     }
 }

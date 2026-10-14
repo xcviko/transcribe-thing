@@ -154,6 +154,27 @@ enum HubSnapshots {
                 c.windows.openCallID = PreviewFixtures.callID(7)
                 c.calls.namingSpeakers.insert(PreviewFixtures.callID(7))
             },
+            // The same once its "Speaker 2" was named from the video: the header says where the name came from.
+            hub("hub-call-detail-named", .callDetail, height: 1100) { c in
+                Samples.callsWithFiles(c)
+                c.windows.openCallID = PreviewFixtures.callID(7)
+                c.calls.update(PreviewFixtures.callID(7)) {
+                    $0.speakerNames["Speaker 2"] = "Pablo"
+                    $0.videoNamedSpeakers = ["Speaker 2"]
+                }
+            },
+            // The step found no one it was sure of, then the step failed: said where the hint was.
+            hub("hub-call-detail-naming-none", .callDetail, height: 1100) { c in
+                Samples.callsWithFiles(c)
+                c.windows.openCallID = PreviewFixtures.callID(7)
+                c.calls.namingResult[PreviewFixtures.callID(7)] = .init(message: "Couldn’t tell who’s who from the video.")
+            },
+            hub("hub-call-detail-naming-failed", .callDetail, height: 1100) { c in
+                Samples.callsWithFiles(c)
+                c.windows.openCallID = PreviewFixtures.callID(7)
+                c.calls.namingResult[PreviewFixtures.callID(7)] = .init(message: "Couldn’t look at the video.",
+                                                                        detail: "The video is too large.")
+            },
             // Telemost's summary failed: why, and Summarize.
             hub("hub-call-detail-summary-failed", .callDetail) { c in Samples.openCall(c, 6) },
             // Telemost's other side came out silent: the permission, with Open Settings.
@@ -200,6 +221,14 @@ enum HubSnapshots {
             // A speaker's name clicked: the field that renames them (a popover doesn't render in a page snapshot).
             SnapshotEntry("hub-call-rename", width: 300, height: 170) { _ in
                 SpeakerRenameForm(original: "Participant 1", current: "Matvey") { _ in }
+                    .background(Color.bgElevated, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .padding(12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .background(Color.bgCanvas)
+            },
+            // A name the video gave: the field says so.
+            SnapshotEntry("hub-call-rename-video", width: 300, height: 190) { _ in
+                SpeakerRenameForm(original: "Speaker 2", current: "Pablo", fromVideo: true) { _ in }
                     .background(Color.bgElevated, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .padding(12)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

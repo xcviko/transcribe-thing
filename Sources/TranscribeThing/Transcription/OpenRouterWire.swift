@@ -538,8 +538,9 @@ struct OpenRouterChatStream {
     /// The answer once the stream has ended, or the failure it carried. Failures can come inside a 200: an `error`
     /// (the only event, or after some text), or a finish reason of error / content_filter / length. A stream that
     /// just stops, with no finish reason and no `[DONE]`, lost its connection. Empty text on a normal finish is
-    /// returned as is: Gemini heard no speech.
-    func result(engine: EngineID) throws -> CloudResult {
+    /// returned as is: Gemini heard no speech. With `keepTruncated`, an answer cut off by its token limit is returned
+    /// as is too (finish reason "length"), with what it cost, for a caller that reads what it can of it.
+    func result(engine: EngineID, keepTruncated: Bool = false) throws -> CloudResult {
         if let error { throw OpenRouterErrorMapper.map(error, status: 502, retryAfter: nil, engine: engine) }
         guard finishReason != nil || isDone else {
             if sawForeignLine, !sawChoice {
@@ -558,7 +559,7 @@ struct OpenRouterChatStream {
         case "length":
             // Out of output tokens: a repetition loop, a cut-off ending, or reasoning that used every token before
             // any text (empty `text`). Never pasted as if whole, and never taken for silence.
-            throw AppError.openRouterTruncated(text)
+            if !keepTruncated { throw AppError.openRouterTruncated(text) }
         default:
             break
         }

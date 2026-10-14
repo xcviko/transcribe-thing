@@ -367,9 +367,10 @@ private struct CallTranscriptView: View {
                         .font(.system(size: 11))
                         .foregroundStyle(.inkTertiary)
                     } else {
-                        Text("Click a phrase to play from there, a name to rename them.")
+                        Text(hint)
                             .font(.system(size: 11))
                             .foregroundStyle(.inkTertiary)
+                            .help(hub.calls.namingResult[call.id]?.detail ?? "")
                     }
                     Button {
                         hub.copy(CallFormat.copyText(call))
@@ -383,6 +384,16 @@ private struct CallTranscriptView: View {
             .padding(.horizontal, 4)
             content
         }
+    }
+
+    /// What the header says: how a names step that renamed no one ended, that names came from the video, or how the
+    /// transcript works.
+    private var hint: String {
+        if let result = hub.calls.namingResult[call.id] { return result.message }
+        if call.speakerNames.keys.contains(where: call.isNamedFromVideo) {
+            return "Names from the video. Click a name to change it."
+        }
+        return "Click a phrase to play from there, a name to rename them."
     }
 
     @ViewBuilder private var content: some View {
@@ -530,7 +541,8 @@ private struct SpeakerName: View {
         .help("Rename \(call.name(of: speaker))")
         .popover(isPresented: Binding(get: { renaming || hub.previewRenaming == speaker }, set: { renaming = $0 }),
                  arrowEdge: .bottom) {
-            SpeakerRenameForm(original: speaker, current: call.name(of: speaker)) { name in
+            SpeakerRenameForm(original: speaker, current: call.name(of: speaker),
+                              fromVideo: call.isNamedFromVideo(speaker)) { name in
                 renaming = false
                 guard let name else { return }
                 hub.calls.rename(speaker: speaker, to: name, in: call.id)
@@ -543,6 +555,8 @@ private struct SpeakerName: View {
 struct SpeakerRenameForm: View {
     var original: String
     var current: String
+    /// `current` came from the call's video (`CallRecord.videoNamedSpeakers`), not the person.
+    var fromVideo = false
     /// The name typed, or nil for Cancel.
     var done: (String?) -> Void
     @State private var text = ""
@@ -558,6 +572,7 @@ struct SpeakerRenameForm: View {
                 .focused($focused)
                 .onSubmit { done(text) }
             Text(original == current ? "Renames them all through this call."
+                 : fromVideo ? "Named from the video. Renames them all through this call. Leave it empty for “\(original)”."
                  : "Renames them all through this call. Leave it empty for “\(original)”.")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)

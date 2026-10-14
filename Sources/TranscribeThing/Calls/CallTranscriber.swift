@@ -160,8 +160,11 @@ final class CallTranscriber {
                 return .success((client, key, model()))
             }
             let (client, key, call) = try route.get()
+            var stage = "upload"
             do {
                 let file = try await client.uploadVideo(video, displayName: video.lastPathComponent, apiKey: key)
+                stage = "ask"
+                // An answer cut off by its token limit comes back as it is (finish "length"), with what it cost.
                 let result = try await client.askAboutVideo(
                     fileURI: file.uri, text: prompt, model: call.modelID, effort: call.effort,
                     maxTokens: videoNamesMaxTokens, apiKey: key,
@@ -170,7 +173,7 @@ final class CallTranscriber {
                 return result
             } catch let error as AppError {
                 await MainActor.run { proxy.noteCloudFailure(error) }
-                throw error
+                throw NamesStageFailure(stage: stage, error: error)
             }
         }
     }
@@ -300,6 +303,7 @@ final class CallTranscriber {
     private func stopNames(_ id: UUID) {
         nameTasks.removeValue(forKey: id)?.cancel()
         store.namingSpeakers.remove(id)
+        store.namingResult[id] = nil
     }
 
     /// Returns once no transcription, summary or names step runs: tests.
@@ -338,6 +342,8 @@ final class CallTranscriber {
                 "cutOff": outcome.cutOffAt.map(CallPrompts.clock), "cost": outcome.costUSD,
                 "summary": outcome.summary != nil ? "ok" : (outcome.summaryError != nil ? "failed" : "none"),
             ])
+            // The video's names were for the old transcript's speakers: the new one's step names them again.
+            store.clearVideoNames(in: id)
             store.update(id) {
                 $0.status = .done
                 $0.transcript = outcome.transcript
@@ -369,10 +375,11 @@ final class CallTranscriber {
     /// `answers/names.txt`. It never fails the call: a failure is logged, and the speakers keep their names.
     func nameFromVideo(_ id: UUID) {
         guard let videoNames, nameTasks[id] == nil, let call = store.call(id: id), call.status == .done,
-              let file = call.file, file.isVideo, let transcript = call.transcript, !transcript.segments.isEmpty
+              let file = call.file, let transcript = call.transcript, !transcript.segments.isEmpty
         else { return }
         let short = Self.shortID(id)
         func skip(_ reason: String) { self.log.event(.calls, "names.skipped", ["call": short, "reason": reason]) }
+        guard file.isVideo else { return skip("audioOnly") }
         guard videoNames.isAvailable() else { return skip("notEndpoint") }
         let me = CallPrompts.speakerName(for: userName())
         guard !CallVideoNames.nameable(transcript, speakerNames: call.speakerNames, me: me).isEmpty else {
@@ -383,6 +390,8 @@ final class CallTranscriber {
             return skip("videoGone")
         }
         store.namingSpeakers.insert(id)
+        store.namingResult[id] = nil
+        log.event(.calls, "names.started", ["call": short, "videoSeconds": (call.duration * 10).rounded() / 10])
         let source = URL(fileURLWithPath: file.path), prompt = CallVideoNames.prompt(transcript)
         let answers = store.answersFolder(for: id), send = videoNames.send, events = log
         nameTasks[id] = Task { [weak self] in
@@ -405,6 +414,26 @@ final class CallTranscriber {
         var costUSD: Double?
     }
 
+    /// The step failed, and where: making the copy ("copy"), uploading it ("upload"), asking about it ("ask"), or the
+    /// request as one ("send"), with how far it got, for the log.
+    struct NamesFailure: Error, LocalizedError {
+        var stage: String
+        var error: any Error
+        var videoBytes: Int?
+        var copySeconds: Double?
+        var seconds: Double?
+
+        var errorDescription: String? { error.localizedDescription }
+    }
+
+    /// What `endpointVideoNames` throws: the endpoint's failure, and whether the upload or the question failed.
+    struct NamesStageFailure: Error, LocalizedError {
+        var stage: String
+        var error: AppError
+
+        var errorDescription: String? { error.localizedDescription }
+    }
+
     /// The copy made, sent with the prompt, its answer kept and read; the copy deleted whatever happens.
     nonisolated static func askNames(source: URL, prompt: String, send: SendVideo, answers: URL?, log: DiagnosticLog,
                                      callID: UUID?) async throws -> NamesOutcome {
@@ -413,7 +442,12 @@ final class CallTranscriber {
             .appendingPathComponent("call-video-\(UUID().uuidString.lowercased()).mp4", isDirectory: false)
         defer { try? FileManager.default.removeItem(at: copy) }
         let started = ContinuousClock.now
-        try await CallVideoCopy.make(from: source, to: copy)
+        do {
+            try await CallVideoCopy.make(from: source, to: copy)
+        } catch {
+            if error is CancellationError { throw error }
+            throw NamesFailure(stage: "copy", error: error, copySeconds: seconds(started.duration(to: .now)))
+        }
         let made = started.duration(to: .now)
         let bytes = (try? FileManager.default.attributesOfItem(atPath: copy.path)[.size] as? NSNumber)?.intValue
         try Task.checkCancellation()
@@ -426,6 +460,11 @@ final class CallTranscriber {
             answer = answered.text
         } catch AppError.openRouterTruncated(let partial) {
             answer = partial
+        } catch {
+            if error is CancellationError { throw error }
+            let staged = error as? NamesStageFailure
+            throw NamesFailure(stage: staged?.stage ?? "send", error: staged?.error ?? error, videoBytes: bytes,
+                               copySeconds: seconds(made), seconds: seconds(asked.duration(to: .now)))
         }
         let elapsed = asked.duration(to: .now)
         if let answers {
@@ -461,8 +500,12 @@ final class CallTranscriber {
             guard let call = store.call(id: id), let transcript = call.transcript else { return }
             let renames = CallVideoNames.renames(outcome.guesses ?? [:], transcript: transcript,
                                                  speakerNames: call.speakerNames, me: me)
-            for (speaker, name) in renames { store.rename(speaker: speaker, to: name, in: id) }
+            store.nameFromVideo(renames, in: id)
             if let cost = outcome.costUSD { store.update(id) { $0.costUSD = ($0.costUSD ?? 0) + cost } }
+            // Nothing renamed while someone is still "Speaker 2" (not because the person named them meanwhile): said.
+            let unnamed = !CallVideoNames.nameable(transcript, speakerNames: call.speakerNames, me: me).isEmpty
+            store.namingResult[id] = renames.isEmpty && unnamed
+                ? CallStore.NamingResult(message: "Couldn’t tell who’s who from the video.") : nil
             log.event(.calls, "names.finished", [
                 "call": Self.shortID(id), "speakers": transcript.speakers.count,
                 "generic": transcript.speakers.filter(CallVideoNames.isGeneric).count, "renamed": renames.count,
@@ -471,7 +514,13 @@ final class CallTranscriber {
         case .failure(let error):
             guard !(error is CancellationError) else { return }
             Log.engine.error("Naming a call's speakers from its video failed: \(String(describing: error), privacy: .public)")
-            log.event(.calls, "names.failed", ["call": Self.shortID(id), "error": Self.code(of: error)])
+            let staged = error as? NamesFailure
+            log.event(.calls, "names.failed", [
+                "call": Self.shortID(id), "error": Self.code(of: error), "stage": staged?.stage,
+                "videoBytes": staged?.videoBytes, "copySeconds": staged?.copySeconds, "seconds": staged?.seconds,
+            ])
+            store.namingResult[id] = CallStore.NamingResult(message: "Couldn’t look at the video.",
+                                                            detail: error.localizedDescription)
         }
     }
 
@@ -480,6 +529,8 @@ final class CallTranscriber {
         if let error = error as? AppError { return error.code }
         if let error = error as? Failure { return error.code }
         if let error = error as? CallVideoCopy.Failure { return "video.\(error.code)" }
+        if let error = error as? NamesFailure { return code(of: error.error) }
+        if let error = error as? NamesStageFailure { return error.error.code }
         return String(describing: type(of: error))
     }
 
