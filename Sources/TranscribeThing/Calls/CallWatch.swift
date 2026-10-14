@@ -8,6 +8,11 @@ import Foundation
 /// is read through Accessibility (`CallMuteReader`): its Mute button, its Leave button, a browser's call tab. Those
 /// reads arrive between looks and go to the detector with the next one.
 ///
+/// A browser whose profile has the extension says the same from inside its pages (`Sensors.pages`, `BrowserPages`),
+/// at every look and for free: what it says goes to the detector instead of the window's read, and the window isn't
+/// read at all while the page says the mute too. When the page can't tell the mute, the Mute button still can: the
+/// window is read as before, and its mute taken when its tab is the same service's.
+///
 /// Everything it asks of the system is in `Sensors`, so tests drive it with a made-up HAL and window reads.
 @MainActor
 final class CallWatch {
@@ -26,9 +31,12 @@ final class CallWatch {
                          _ done: @escaping @MainActor (CallMuteReader.Report) -> Void) -> Void
         /// The call is over: whatever the reader asked of the app (AXManualAccessibility) is turned back off.
         var releaseWindows: () -> Void
+        /// What the browser extension says about a browser's tabs now; nil when no profile of it has the extension.
+        var pages: (CallApp) -> BrowserPages? = { _ in nil }
 
-        /// The real HAL and the real Accessibility tree, one read at a time on a queue of their own.
-        static func live() -> Sensors {
+        /// The real HAL and the real Accessibility tree, one read at a time on a queue of their own; the browser
+        /// extension's word from `bridge`.
+        static func live(bridge: BrowserBridge? = nil) -> Sensors {
             let reader = CallMuteReader()
             let queue = DispatchQueue(label: "dev.transcribe-thing.calls.windows", qos: .utility)
             return Sensors(
@@ -44,14 +52,16 @@ final class CallWatch {
                         DispatchQueue.main.async { MainActor.assumeIsolated { done(report) } }
                     }
                 },
-                releaseWindows: { queue.async { reader.release() } })
+                releaseWindows: { queue.async { reader.release() } },
+                pages: { [weak bridge] app in MainActor.assumeIsolated { bridge?.pages(of: app.id) } })
         }
     }
 
     private(set) var detector: CallDetector
     /// Each app's processes known to the HAL, playing or not, by HAL object: what a process tap of the app takes in.
     private(set) var processes: [CallApp: [AudioObjectID]] = [:]
-    /// The last window read of the followed app, while it's still the one followed.
+    /// The last window read of the followed app, while it's still the one followed; for a browser whose page tells
+    /// (the extension), what the page told at the last look.
     private(set) var lastRead: CallMuteReader.Report?
     /// Whether the followed app's mute has been readable at least once since it was first followed.
     private(set) var muteEverKnown = false
@@ -70,6 +80,11 @@ final class CallWatch {
     /// Reads of the followed app's window that arrived since the last look, for the detector.
     private var windows: [CallApp: CallDetector.Window] = [:]
     private var reading = Reading()
+    /// What the followed browser's page told at the last look, if it told anything.
+    private var told: BrowserPages.Read?
+    /// The last read of the followed browser's window while its page tells: its Mute button, for when the page
+    /// can't say.
+    private var windowRead: CallMuteReader.Report?
 
     /// The app whose window is read, and when.
     private struct Reading {
@@ -102,10 +117,36 @@ final class CallWatch {
         }
         for pid in apps.keys where !seen.contains(pid) { apps[pid] = nil }
         processes = objects.mapValues { $0.sorted() }
+        listenToPage()
         let events = detector.feed(CallApp.activity(activity), windows: windows, at: time)
         windows = [:]
         readWindow(at: time)
         return events
+    }
+
+    /// The followed browser's pages, through the extension: what they tell goes to the detector in this look, in
+    /// place of any window read since the last one, and is what the monitor reads (`lastRead`). A mute the page
+    /// can't tell comes from the last window read, when its tab is the same service's.
+    private func listenToPage() {
+        let previous = told
+        told = nil
+        guard let call = detector.followed, call.isBrowser, readsWindow?(call.app) ?? true,
+              var read = sensors.pages(call.app)?.read(following: call.tab, toldByPage: call.toldByPage) else {
+            if previous != nil { lastRead = nil }
+            windowRead = nil
+            return
+        }
+        if read.window.muted == nil, read.window.tab != nil, let window = windowRead,
+           let service = read.window.tab?.service, window.tab?.service == service, window.read.state.isKnown {
+            read.window.muted = window.read.state == .muted
+            read.report.read = window.read
+            read.report.fromPage = false
+        }
+        told = read
+        windows[call.app] = read.window
+        if read.window.muted != nil { muteEverKnown = true }
+        lastRead = read.report
+        if previous != read { onRead?(read.report, call.app) }
     }
 
     /// Stops following now (`CallDetector.stop`) and lets go of the app's window.
@@ -114,6 +155,8 @@ final class CallWatch {
         if reading.app != nil { sensors.releaseWindows() }
         reading = Reading()
         lastRead = nil
+        told = nil
+        windowRead = nil
         return events
     }
 
@@ -130,7 +173,11 @@ final class CallWatch {
             reading = Reading(app: app)
             lastRead = nil
             muteEverKnown = false
+            told = nil
+            windowRead = nil
         }
+        // The page says it all: its window has nothing to add.
+        if let told, told.window.muted != nil, told.report.fromPage { return }
         guard let app, !reading.inFlight,
               time - (reading.lastRead ?? -.infinity) >= (reading.lastKnown ? 1 : 3) else { return }
         reading.inFlight = true
@@ -144,9 +191,14 @@ final class CallWatch {
         guard app == reading.app else { return }
         reading.inFlight = false
         reading.lastKnown = report.read.state.isKnown
+        onRead?(report, app)
+        // While the page tells, the window only lends its Mute button (`listenToPage`).
+        if told != nil {
+            windowRead = report
+            return
+        }
         if report.read.state.isKnown { muteEverKnown = true }
         lastRead = report
         if let window = report.window { windows[app] = window }
-        onRead?(report, app)
     }
 }

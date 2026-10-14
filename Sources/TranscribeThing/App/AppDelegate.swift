@@ -120,8 +120,10 @@ enum SingleInstance {
         // The bare binary from .build has no bundle id: it's a development run, allow it.
         guard let id = Bundle.main.bundleIdentifier, id == bundleIdentifier else { return false }
         let me = ProcessInfo.processInfo.processIdentifier
+        // A copy with no UI at all isn't the app: the browser extension's host (`NativeHostCLI`) runs this executable
+        // headless, and must never keep the app from starting.
         let others = NSRunningApplication.runningApplications(withBundleIdentifier: id)
-            .filter { $0.processIdentifier != me && !$0.isTerminated }
+            .filter { $0.processIdentifier != me && !$0.isTerminated && $0.activationPolicy != .prohibited }
         guard let other = others.first else { return false }
         DistributedNotificationCenter.default().postNotificationName(showRequest, object: nil, userInfo: nil,
                                                                      deliverImmediately: true)

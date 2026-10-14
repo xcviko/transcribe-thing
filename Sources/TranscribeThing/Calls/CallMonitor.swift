@@ -105,10 +105,11 @@ final class CallMonitor {
         /// The app's name as it shows.
         var appName: @MainActor (CallApp) -> String
 
-        /// The real HAL, Accessibility, mic and taps; the mic dictation would pick.
-        static func live(settings: AppSettings) -> Dependencies {
+        /// The real HAL, Accessibility, mic and taps; the mic dictation would pick; the browser extension's word
+        /// from `bridge`.
+        static func live(settings: AppSettings, bridge: BrowserBridge? = nil) -> Dependencies {
             Dependencies(
-                sensors: .live(), clock: { AudioClock.now() }, now: { Date() },
+                sensors: .live(bridge: bridge), clock: { AudioClock.now() }, now: { Date() },
                 makeSources: { [weak settings] target in
                     [.mic: MicTrackSource(preferredUID: settings?.microphoneUID), .remote: ProcessTapSource(target: target)]
                 },
@@ -657,15 +658,16 @@ final class CallMonitor {
         let kind = CallAppKind.of(app.id)
         let followed = watch.detector.followed.flatMap { $0.app == app ? $0 : nil }
         let service = live.info.service ?? followed?.service
-        if let service, service.releasesMicOnMute {
+        if let service, service.releasesMicOnMute, followed?.toldByPage != true {
             guard let followed else { return .init() }
             return .init(muted: followed.micReleasedAt != nil, source: .micRelease(service.name))
         }
         if kind == .other { return .init(unfollowable: true) }
         guard let read = watch.lastRead else { return .init() }
+        let source: CallNotices.MuteSource = read.fromPage ? .page : kind == .zoomDesktop ? .zoomMenu : .button
         switch read.read.state {
-        case .muted: return .init(muted: true, source: kind == .zoomDesktop ? .zoomMenu : .button)
-        case .live: return .init(muted: false, source: kind == .zoomDesktop ? .zoomMenu : .button)
+        case .muted: return .init(muted: true, source: source)
+        case .live: return .init(muted: false, source: source)
         case .unknown(let reason):
             if reason == CallMuteReader.tabNotActive { return .init(hiddenTab: CallNotices.tabName(service)) }
             // A site no service is known for: nobody knows its controls.

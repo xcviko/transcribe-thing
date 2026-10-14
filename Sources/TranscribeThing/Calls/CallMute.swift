@@ -302,6 +302,21 @@ enum CallService: String, CaseIterable, Codable, Equatable, Sendable {
         }?.service
     }
 
+    /// The service a web page is, from its host name, as the browser extension knows it: more certain than a title,
+    /// which any page can have. Zoom's web client is on any of its subdomains (us05web.zoom.us, app.zoom.us), Discord's
+    /// test builds on ptb. and canary., Telemost on yandex.ru, 360.yandex.ru and their other countries.
+    static func of(host: String) -> CallService? {
+        let host = host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "."))
+        func within(_ domain: String) -> Bool { host == domain || host.hasSuffix("." + domain) }
+        if host == "meet.google.com" { return .meet }
+        if within("slack.com") { return .slack }
+        if within("zoom.us") || within("zoom.com") { return .zoom }
+        if within("discord.com") { return .discord }
+        if host == "web.telegram.org" { return .telegram }
+        if host.hasPrefix("telemost."), host.contains(".yandex.") { return .telemost }
+        return nil
+    }
+
     /// The names `of(pageTitle:)` knows each service by, in the order they're tried: as a whole part, and as the
     /// start of the first. Meet's and Slack's bare names aren't a start ("Meet the team", "Slack outage - Gmail").
     private static let names: [(service: CallService, whole: Set<String>, leading: [String])] = [
@@ -365,7 +380,7 @@ enum CallAppKind: Equatable, Sendable {
         "com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.dev", "com.google.Chrome.canary",
         "company.thebrowser.Browser", "com.microsoft.edgemac", "com.microsoft.edgemac.Beta", "com.microsoft.edgemac.Dev",
         "com.brave.Browser", "ru.yandex.desktop.yandex-browser", "com.apple.Safari", "com.apple.SafariTechnologyPreview",
-        "com.vivaldi.Vivaldi", "com.operasoftware.Opera", "org.mozilla.firefox",
+        "com.vivaldi.Vivaldi", "com.operasoftware.Opera", "org.mozilla.firefox", "org.chromium.Chromium",
     ]
 
     static func of(_ bundleID: String) -> CallAppKind {
