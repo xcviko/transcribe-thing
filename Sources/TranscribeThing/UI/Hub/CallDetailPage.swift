@@ -230,18 +230,24 @@ private struct CallTopCard: View {
     }
 
     /// "Wednesday, October 14 at 8:05 AM · 32:14 · $0.04 · In Google Chrome", on one line when it fits; where it ran
-    /// goes under when it doesn't.
+    /// goes under when it doesn't. A call with a title of its own says there what its title said before:
+    /// "Google Meet in Google Chrome", the tab's whole title in the tooltip.
     private var meta: some View {
-        ViewThatFits(in: .horizontal) {
+        let origin = CallFormat.origin(call)
+        let place = origin ?? CallFormat.place(call)
+        let tooltip = origin == nil ? place : CallFormat.source(call)
+        return ViewThatFits(in: .horizontal) {
             HStack(spacing: 0) {
                 when
                 Text(" · ")
-                Text(CallFormat.place(call))
+                Text(place).help(tooltip)
             }
             .fixedSize()
             VStack(alignment: .leading, spacing: 2) {
                 when
-                Text(CallFormat.place(call))
+                Text(place)
+                    .truncationMode(.middle)
+                    .help(tooltip)
             }
         }
         .font(.system(size: 12))

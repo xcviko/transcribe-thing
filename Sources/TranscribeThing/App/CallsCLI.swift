@@ -58,6 +58,7 @@ enum CallsCLI {
                      + "\(call.manual ? " (manual)" : "")  \(clock(call.duration))  \(call.status.rawValue)"]
         lines.append("  id \(call.id.uuidString)")
         if let page = call.pageTitle { lines.append("  page \"\(CallLabels.safe(page, limit: 60))\"") }
+        if let title = call.summary?.title { lines.append("  title \"\(CallLabels.safe(title, limit: 60))\"") }
         for (name, file, seconds, problem) in [("mic", call.micFile, call.micSeconds, call.micProblem),
                                                ("remote", call.remoteFile, call.remoteSeconds, call.remoteProblem)] {
             let exists = file.map { FileManager.default.fileExists(atPath: folder.appendingPathComponent($0).path) }

@@ -238,10 +238,11 @@ struct CallRow: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.ink)
                     .lineLimit(1)
-                    .truncationMode(.middle)
-                if let speakers = CallFormat.speakers(call) {
+                    // A place's title ("Google Meet · Meet – abc-defg-hij") keeps both ends; a title of its own, its start.
+                    .truncationMode(CallFormat.generatedTitle(call) == nil ? .middle : .tail)
+                if let line = CallFormat.rowSubtitle(call) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(speakers)
+                        Text(line)
                             .font(.system(size: 12))
                             .foregroundStyle(.inkSecondary)
                             .lineLimit(1)

@@ -279,7 +279,7 @@ private extension JSONDecoder {
         // They may only have listened: the summary doesn't make them the one who ran it.
         #expect(request.prompt.contains("Sam may not have spoken at all, only listened: don't say they led the call or "
                                         + "said something unless the transcript shows it."))
-        #expect(request.prompt.contains("Answer with only the five blocks, nothing before or after them."))
+        #expect(request.prompt.contains("Answer with only the six blocks, nothing before or after them."))
         #expect(request.prompt.contains(CallSummaryPrompt.blocks(me: "Sam")))
         #expect(outcome.summary?.keyPoints.count == 3 && outcome.summaryError == nil)
         #expect(abs((outcome.costUSD ?? 0) - 0.032) < 1e-9, "three chunks and the summary")
@@ -595,5 +595,186 @@ extension CallSummaryTranscriberTests {
         // Ticks kept whether or not the task's mentions are marked.
         let old = CallSummary(tasks: [CallTask(text: "Написать Ане и Participant 1", done: true)])
         #expect(summary.keepingDone(from: old).tasks[0].done)
+    }
+}
+
+// A call's title, written by the model in the summary's first block (`CallSummary.title`): what the call is called
+// everywhere it's named, where it happened shown under it; a call without one keeps its place's name.
+@MainActor @Suite struct CallTitleTests {
+    private static func call(title: String? = nil) -> CallRecord {
+        var call = CallRecord(id: UUID(), startedAt: Date(), appName: "Google Chrome", bundleID: "com.google.Chrome",
+                              service: .meet, pageTitle: "Meet – abc-defg-hij", status: .done)
+        call.transcript = CallTranscript(segments: [
+            .init(start: 1, end: 2, side: .remote, speaker: "Participant 1", text: "Hi"),
+            .init(start: 3, end: 4, side: .remote, speaker: "Аня", text: "Привет"),
+        ])
+        call.speakerNames = ["Participant 1": "Matvey"]
+        if let title { call.summary = CallSummary(title: title, summary: "A short call.") }
+        return call
+    }
+
+    @Test func thePromptAsksForATitleFirst() throws {
+        let blocks = CallSummaryPrompt.blocks(me: "Sam")
+        #expect(blocks.hasPrefix("Sum up the call in these six blocks, in this order"))
+        let title = try #require(blocks.range(of: "<title>"))
+        let summary = try #require(blocks.range(of: "<summary>"))
+        #expect(title.lowerBound < summary.lowerBound)
+        #expect(blocks.contains("<title>\na short title for the call, on one line\n</title>\n<summary>"))
+        #expect(blocks.contains("name the call the way someone would name a calendar event for it afterwards: 3 to 7 "
+                                + "words saying what it was about"))
+        #expect(blocks.contains(#""Релиз в пятницу и длинные файлы", "Quarterly budget review with {{Anna}}""#))
+        #expect(blocks.contains("with no quotes around it, no period at the end, no date, and no app or service the "
+                                + "call was on unless the call was about it"))
+        // Speakers marked in it, so a rename reaches it; the quotes and hyphens hold there too.
+        #expect(blocks.contains("In <title>, <summary>, <key_points>, <decided>, <open> and the task part of <tasks>, "
+                                + "write every mention"))
+        #expect(blocks.contains(#"straight quotes "like this""#))
+        // Both ways a summary is asked for; with no speech, no blocks at all, so no title.
+        #expect(CallSummaryPrompt.text(me: "Sam", service: nil).contains("Answer with only the six blocks"))
+        #expect(CallPrompts.format(summary: true, me: "Sam").contains(blocks))
+        #expect(CallPrompts.format(summary: true, me: "Sam")
+                    .contains("With no speech at all, answer only NO SPEECH, with no blocks."))
+    }
+
+    @Test func theTitleIsRead() throws {
+        let answer = "[00:01-00:02] Аня: Привет\n<title>\nРелиз в пятницу и длинные файлы\n</title>\n<summary>Да.</summary>"
+        let summary = try #require(CallSummaryParser.parse(answer))
+        #expect(summary.title == "Релиз в пятницу и длинные файлы" && summary.summary == "Да.")
+        // The transcript stops where the title starts.
+        let parsed = CallTranscriptParser.parse(answer, side: .remote, duration: 60)
+        #expect(parsed.segments.map(\.text) == ["Привет"] && parsed.skipped == 0)
+        #expect(CallSummaryParser.blocksFound(in: answer) == 2)
+        // Missing, empty, or saying there's nothing: no title.
+        #expect(try #require(CallSummaryParser.parse("<summary>Да.</summary>")).title == nil)
+        #expect(try #require(CallSummaryParser.parse("<title></title>\n<summary>Да.</summary>")).title == nil)
+        #expect(try #require(CallSummaryParser.parse("<title>\n  \n</title><summary>Да.</summary>")).title == nil)
+        #expect(try #require(CallSummaryParser.parse("<title>None</title><summary>Да.</summary>")).title == nil)
+        // A title alone is a summary too.
+        #expect(CallSummaryParser.parse("<title>Budget</title>")?.title == "Budget")
+    }
+
+    @Test func theTitleIsTidied() {
+        #expect(CallSummaryParser.title("  Quarterly   budget\n review  ") == "Quarterly budget review")
+        #expect(CallSummaryParser.title("\"Quarterly budget review.\"") == "Quarterly budget review")
+        #expect(CallSummaryParser.title("«Релиз в пятницу»") == "Релиз в пятницу")
+        #expect(CallSummaryParser.title("“Release plan”.") == "Release plan")
+        #expect(CallSummaryParser.title("**Release plan**") == "Release plan")
+        #expect(CallSummaryParser.title("- Release plan") == "Release plan")
+        // Quoted words inside stay; so does an ellipsis.
+        #expect(CallSummaryParser.title(#""Import" and "Export" review"#) == #""Import" and "Export" review"#)
+        #expect(CallSummaryParser.title("Waiting for Friday...") == "Waiting for Friday...")
+        // Mentions stay marked, so a rename reaches the title.
+        #expect(CallSummaryParser.title("Бюджет с {{Аня|Аней}}.") == "Бюджет с {{Аня|Аней}}")
+        #expect(CallSummaryParser.title("\"\"") == nil && CallSummaryParser.title(".") == nil)
+    }
+
+    @Test func aCallIsNamedByItsTitleElseByWhereItHappened() {
+        let titled = Self.call(title: "Budget with {{Participant 1}} and {{Аня|Аней}}")
+        // Renamed as everywhere else; a speaker not renamed keeps the word written.
+        #expect(CallFormat.generatedTitle(titled) == "Budget with Matvey and Аней")
+        #expect(CallFormat.title(titled) == "Budget with Matvey and Аней")
+        #expect(CallFormat.windowTitle(titled) == "Budget with Matvey and Аней")
+        #expect(CallFormat.source(titled) == "Google Meet · Meet – abc-defg-hij")
+        #expect(CallFormat.origin(titled) == "Google Meet in Google Chrome")
+        #expect(CallFormat.rowSubtitle(titled) == "Google Meet · Matvey, Аня")
+
+        // No title: named by where it happened, as before.
+        var noTitle = Self.call(title: "x")
+        noTitle.summary?.title = nil
+        for untitled in [Self.call(), Self.call(title: ""), noTitle] {
+            #expect(CallFormat.generatedTitle(untitled) == nil)
+            #expect(CallFormat.title(untitled) == "Google Meet · Meet – abc-defg-hij")
+            #expect(CallFormat.windowTitle(untitled) == "Google Meet")
+            #expect(CallFormat.origin(untitled) == nil)
+            #expect(CallFormat.rowSubtitle(untitled) == "Matvey, Аня")
+        }
+        // Still recording: no transcript, no title, nothing under it.
+        var live = Self.call()
+        live.status = .recording
+        live.transcript = nil
+        #expect(CallFormat.title(live) == "Google Meet · Meet – abc-defg-hij" && CallFormat.rowSubtitle(live) == nil)
+
+        // Where it happened, for an app and the menu bar.
+        var telegram = CallRecord(id: UUID(), startedAt: Date(), appName: "Telegram", bundleID: "ru.keepcoder.Telegram",
+                                  service: .telegram, status: .done)
+        telegram.summary = CallSummary(title: "Moving day")
+        #expect(CallFormat.origin(telegram) == "Telegram")
+        var manual = CallRecord(id: UUID(), startedAt: Date(), appName: CallMonitor.manualName, manual: true,
+                                status: .done)
+        manual.summary = CallSummary(title: "Moving day")
+        #expect(CallFormat.origin(manual) == "Menu bar recording" && CallFormat.title(manual) == "Moving day")
+        // A site without a known service, by its page.
+        var site = CallRecord(id: UUID(), startedAt: Date(), appName: "Safari", bundleID: "com.apple.Safari",
+                              pageTitle: "ChatGPT", status: .done)
+        site.summary = CallSummary(title: "Moving day")
+        #expect(CallFormat.origin(site) == "ChatGPT in Safari")
+    }
+
+    @Test func searchFindsBothNames() {
+        let titled = Self.call(title: "Budget with {{Participant 1|Матвеем}}")
+        let other = CallRecord(id: UUID(), startedAt: Date(), appName: "Telegram", service: .telegram, status: .done)
+        let calls = [titled, other]
+        #expect(CallsList.filter(calls, query: "budget").map(\.id) == [titled.id])
+        // As shown (renamed) and as written.
+        #expect(CallsList.filter(calls, query: "with matvey").map(\.id) == [titled.id])
+        #expect(CallsList.filter(calls, query: "матвеем").map(\.id) == [titled.id])
+        // Where it happened still finds it.
+        #expect(CallsList.filter(calls, query: "google meet").map(\.id) == [titled.id])
+        #expect(CallsList.filter(calls, query: "abc-defg").map(\.id) == [titled.id])
+        // The marks themselves aren't searched.
+        #expect(CallsList.filter(calls, query: "{{").isEmpty)
+    }
+
+    @Test func theCopiedSummaryStartsWithTheTitle() {
+        let titled = Self.call(title: "Budget with {{Participant 1}}")
+        #expect(CallFormat.summaryText(titled) == "Budget with Matvey\n\nSummary\nA short call.")
+        var untitled = titled
+        untitled.summary?.title = nil
+        #expect(CallFormat.summaryText(untitled) == "Summary\nA short call.")
+    }
+
+    @Test func oldSummariesReadWithoutATitleAndNewOnesKeepIt() throws {
+        let old = #"{"summary":"Hi","keyPoints":["One"],"createdAt":"2026-10-01T10:00:00Z"}"#
+        let read = try JSONDecoder.iso8601.decode(CallSummary.self, from: Data(old.utf8))
+        #expect(read.title == nil && read.summary == "Hi" && read.keyPoints == ["One"])
+        // An odd title (empty, not text) is none.
+        #expect(try JSONDecoder().decode(CallSummary.self, from: Data(#"{"title":""}"#.utf8)).title == nil)
+        #expect(try JSONDecoder().decode(CallSummary.self, from: Data(#"{"title":3,"summary":"Hi"}"#.utf8)).summary == "Hi")
+        // Without a title nothing is written for it; with one, it comes back.
+        let encoder = JSONEncoder()
+        #expect(!String(decoding: try encoder.encode(CallSummary(summary: "Hi")), as: UTF8.self).contains("title"))
+        let titled = CallSummary(title: "Budget", summary: "Hi")
+        #expect(try JSONDecoder().decode(CallSummary.self, from: encoder.encode(titled)) == titled)
+    }
+
+    @Test func summarizeAgainWritesANewTitle() async throws {
+        let store = CallStore(paths: .temporary(), settings: .inMemory())
+        store.load()
+        var call = Self.call(title: "Old title")
+        call.micFile = "mic.m4a"
+        call.micSeconds = 10
+        store.upsert(call)
+        let answer = OSAllocatedUnfairLock(initialState: "<title>New title</title>\n<summary>Again.</summary>")
+        let text = FakeText { answer.withLock { $0 } }
+        let audio = speech(seconds: 10)
+        let transcriber = CallTranscriber(store: store, send: { _, _, _, _ in
+            CloudResult(text: "[00:01-00:02] Аня: Привет\n<title>From the audio</title>\n<summary>Hi.</summary>")
+        }, sendText: { try await text.send($0, $1) })
+        transcriber.read = { _, range in Array(audio[range]) }
+        // Transcribe Again: the title comes with the transcript's answer.
+        transcriber.transcribe(call.id)
+        await transcriber.waitUntilIdle()
+        #expect(store.call(id: call.id)?.summary?.title == "From the audio" && text.count == 0)
+        // Summarize Again: from the text request.
+        transcriber.summarize(call.id)
+        await transcriber.waitUntilIdle()
+        #expect(store.call(id: call.id)?.summary?.title == "New title")
+        #expect(CallFormat.title(try #require(store.call(id: call.id))) == "New title")
+        // A new summary without a title leaves the call named by where it happened.
+        answer.withLock { $0 = "<summary>Once more.</summary>" }
+        transcriber.summarize(call.id)
+        await transcriber.waitUntilIdle()
+        let done = try #require(store.call(id: call.id))
+        #expect(done.summary?.title == nil && CallFormat.title(done) == "Google Meet · Meet – abc-defg-hij")
     }
 }

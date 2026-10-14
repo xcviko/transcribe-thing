@@ -141,7 +141,7 @@ enum PreviewFixtures {
     // MARK: Calls
 
     /// The calls of the Calls tab, newest first: a Telegram call being transcribed, a Google Meet call in Chrome done
-    /// with three speakers besides Sam, two mutes (something said in one), another tab's sound and a summary (two of its
+    /// with three speakers besides Sam, two mutes (something said in one), another tab's sound and a summary with a title (two of its
     /// four tasks done), a Zoom call that failed, a Discord call never answered about, a Slack huddle the app quit
     /// during, and a Telemost call whose other side came out silent and whose summary failed.
     static func calls(now: Date = Date(), calendar: Calendar = .current) -> [CallRecord] {
@@ -192,6 +192,7 @@ enum PreviewFixtures {
                   text: "Great. I’ll send the notes after the call, with who does what."),
         ])
         meet.summary = CallSummary(
+            title: "Friday release and slow long files",
             // Its speakers marked as Gemini writes them (`CallMention`): Participant 1 shows as Matvey, renamed.
             summary: "The team went over the release plan. Long files load slowly because of the request limit, so "
                 + "{{Sam}} will split them into chunks, and the release moves to Friday.",

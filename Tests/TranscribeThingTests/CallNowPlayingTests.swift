@@ -111,6 +111,12 @@ private final class FakePlayer: NowPlayable {
                                 status: .done)
         #expect(NowPlayingItem.of(manual).title == "Menu bar recording")
         #expect(NowPlayingItem.of(manual).artist == "Your mic and all sound")
+        // Titled by its summary: the title, by where it happened.
+        var titled = meet
+        titled.summary = CallSummary(title: "Friday release and long files")
+        #expect(NowPlayingItem.of(titled) == NowPlayingItem(title: "Friday release and long files",
+                                                            artist: "Google Meet in Google Chrome",
+                                                            album: CallFormat.date(started)))
     }
 
     @Test func commandsMoveThePlayer() {

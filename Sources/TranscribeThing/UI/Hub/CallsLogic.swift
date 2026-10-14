@@ -62,15 +62,16 @@ enum CallsList {
         return days
     }
 
-    /// Case- and diacritic-insensitive match on the title, the app, the speakers (as the model named them and as
-    /// renamed) and what was said.
+    /// Case- and diacritic-insensitive match on the title (the summary's, as shown and as the model wrote it, and where
+    /// the call happened), the app, the speakers (as the model named them and as renamed) and what was said.
     static func filter(_ calls: [CallRecord], query: String) -> [CallRecord] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !needle.isEmpty else { return calls }
         let options: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
         func matches(_ text: String?) -> Bool { text?.range(of: needle, options: options) != nil }
         return calls.filter { call in
-            if matches(CallFormat.title(call)) || matches(call.appName) { return true }
+            if matches(CallFormat.generatedTitle(call)) || matches(call.summary?.title.map(CallMention.plain))
+                || matches(CallFormat.source(call)) || matches(call.appName) { return true }
             let speakers = call.transcript?.speakers ?? []
             if speakers.contains(where: { matches($0) || matches(call.name(of: $0)) }) { return true }
             return call.transcript?.segments.contains { matches($0.text) } ?? false
@@ -109,8 +110,23 @@ struct CallProblem: Equatable, Hashable {
 }
 
 enum CallFormat {
-    /// "Google Meet · Meet – abc-defg-hij", "Telegram", "Menu bar recording".
+    /// What the call is called wherever it's named: the title its summary gave it ("Friday release and long files"),
+    /// else where it happened (`source`): a call not summed up yet (recording, transcribing), or summed up before
+    /// titles.
     static func title(_ call: CallRecord) -> String {
+        generatedTitle(call) ?? source(call)
+    }
+
+    /// The title the call's summary gave it, the speakers it mentions renamed (`plain`); nil without one.
+    static func generatedTitle(_ call: CallRecord) -> String? {
+        guard let title = call.summary?.title else { return nil }
+        let shown = plain(call, title).trimmingCharacters(in: .whitespacesAndNewlines)
+        return shown.isEmpty ? nil : shown
+    }
+
+    /// Where the call happened: "Google Meet · Meet – abc-defg-hij", "Telegram", "Menu bar recording". The call's
+    /// title until it has one of its own, then the line under it.
+    static func source(_ call: CallRecord) -> String {
         if call.manual { return "Menu bar recording" }
         let name = call.title
         guard let page = call.pageTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !page.isEmpty,
@@ -123,11 +139,35 @@ enum CallFormat {
         call.manual ? "Menu bar recording" : call.title
     }
 
+    /// The window's title on the call's page: its own title, else the service's name (`shortTitle`).
+    static func windowTitle(_ call: CallRecord) -> String {
+        generatedTitle(call) ?? shortTitle(call)
+    }
+
+    /// Where a titled call happened, on its page under the title: "Google Meet in Google Chrome", "Telegram", "Menu
+    /// bar recording" (the tab's page title is in `source`, the line's tooltip). nil for a call without a title of its
+    /// own, whose title says it already.
+    static func origin(_ call: CallRecord) -> String? {
+        guard generatedTitle(call) != nil else { return nil }
+        let name = shortTitle(call)
+        guard !call.manual, let bundleID = call.bundleID, CallAppKind.of(bundleID) == .browser,
+              name.caseInsensitiveCompare(call.appName) != .orderedSame else { return name }
+        return "\(name) in \(call.appName)"
+    }
+
     /// "Matvey, Аня, Participant 2": everyone who spoke, by the names the person gave them, in the order they first
     /// spoke. nil before there's a transcript with anyone in it.
     static func speakers(_ call: CallRecord) -> String? {
         let names = (call.transcript?.speakers ?? []).map(call.name(of:))
         return names.isEmpty ? nil : names.joined(separator: ", ")
+    }
+
+    /// The line under a call's title in the list: who spoke, and where the call happened once the title no longer
+    /// says it ("Google Meet · Matvey, Аня, Participant 2"); nil for a call with neither.
+    static func rowSubtitle(_ call: CallRecord) -> String? {
+        let place = generatedTitle(call) == nil ? nil : shortTitle(call)
+        let parts = [place, speakers(call)].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     /// Where the call ran: "In Google Chrome", "In the Telegram app", "Your mic and all sound, from the menu bar".
@@ -281,11 +321,12 @@ enum CallFormat {
         return "[\(task.done ? "x" : " ")] \(owner)\(plain(call, task.text))\(due)"
     }
 
-    /// The summary as plain text to copy: each part that has something, under its heading, the speakers renamed.
-    /// Empty without a summary.
+    /// The summary as plain text to copy: the call's title on top when the summary gave it one, then each part that
+    /// has something, under its heading, the speakers renamed. Empty without a summary.
     static func summaryText(_ call: CallRecord) -> String {
         guard let summary = call.summary else { return "" }
         var sections: [String] = []
+        if let title = generatedTitle(call) { sections.append(title) }
         if !summary.summary.isEmpty { sections.append("Summary\n\(plain(call, summary.summary))") }
         func list(_ title: String, _ items: [String]) {
             guard !items.isEmpty else { return }

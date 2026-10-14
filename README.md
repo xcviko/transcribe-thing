@@ -154,6 +154,11 @@ sends its transcript once more, as text, which costs a little extra. Calls trans
 on their page: it works from the transcript and doesn't send the audio again. If a summary fails, the transcript is
 still there, and Summarize tries again.
 
+The summary also gives the call a short title, like "Friday release and slow long files": the Calls tab and the call's
+page show it, with where the call happened, like Google Meet, under it. Search finds a call by either. Calls summed up
+before this keep their old name; Summarize Again on a call's page gives one a title from its transcript, without sending
+the audio again.
+
 In Zoom, Discord, Slack, Google Meet, Telemost and Telegram, the app follows your mute: while you're muted, your
 microphone isn't recorded, so what you say then is neither kept nor transcribed. Your first words right after you unmute
 may be cut too. In other apps, and in a menu bar recording, what you say while muted is recorded and may end up in the

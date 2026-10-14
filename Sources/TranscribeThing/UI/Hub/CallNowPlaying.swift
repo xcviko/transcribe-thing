@@ -7,10 +7,11 @@ struct NowPlayingItem: Equatable, Sendable {
     var artist: String
     var album: String
 
-    /// "Google Meet · Meet – abc-defg-hij", by "Google Chrome", from "Thursday, October 9 at 2:10 PM".
+    /// "Google Meet · Meet – abc-defg-hij", by "Google Chrome", from "Thursday, October 9 at 2:10 PM"; a call its
+    /// summary titled is "Friday release and long files", by "Google Meet in Google Chrome".
     @MainActor static func of(_ call: CallRecord) -> NowPlayingItem {
         NowPlayingItem(title: CallFormat.title(call),
-                       artist: call.manual ? "Your mic and all sound" : call.appName,
+                       artist: CallFormat.origin(call) ?? (call.manual ? "Your mic and all sound" : call.appName),
                        album: CallFormat.date(call.startedAt))
     }
 }

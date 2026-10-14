@@ -243,7 +243,7 @@ private struct HubRoot: View {
     private var title: String {
         guard windows.hubSection == .callDetail, let id = windows.openCallID,
               let call = hub.calls.call(id: id) else { return windows.hubSection.title }
-        return CallFormat.shortTitle(call)
+        return CallFormat.windowTitle(call)
     }
 
     @ViewBuilder private func page(_ section: HubSection) -> some View {
