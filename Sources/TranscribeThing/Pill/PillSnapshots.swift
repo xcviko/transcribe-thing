@@ -117,7 +117,7 @@ enum PillSnapshots {
             },
             SnapshotEntry("pill-selection-argon-card", width: 640, height: 400) { _ in
                 CanvasScene(model: restModel(), notices: [
-                    DictationController.selectionCard("Tomorrow I'll go again and check how it does with intervals.",
+                    DictationController.selectionCard("Tomorrow I’ll go again and check how it does with intervals.",
                                                       by: .geminiArgon, translated: true),
                 ])
             },

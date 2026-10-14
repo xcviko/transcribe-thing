@@ -534,7 +534,7 @@ enum HubSnapshots {
                                        audioDuration: 0, voicedSeconds: 0, versions: [version])
             }
             return [
-                entry("Tomorrow I'll go again and check how it does with intervals.",
+                entry("Tomorrow I’ll go again and check how it does with intervals.",
                       .selectionTranslation(.geminiArgon), ago: 30),
                 entry("We ship the import on Friday, and Pasha checks the long files over the weekend.",
                       .selection(.geminiFlash), ago: 90),
