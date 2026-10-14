@@ -9,6 +9,11 @@ public enum TranscribeThingMain {
     /// isn't main-actor isolated). main.swift always runs on the main thread.
     public nonisolated static func run() {
         let arguments = Array(CommandLine.arguments.dropFirst())
+        // A browser starting the extension's native messaging host: a relay to the running app, before anything of
+        // the app's own (no settings, no hotkeys, no windows).
+        if NativeHostCLI.handles(arguments) {
+            NativeHostCLI.run(arguments)
+        }
         MainActor.assumeIsolated {
             if arguments.contains("--snapshots") {
                 exit(SnapshotRunner.run(arguments: arguments))

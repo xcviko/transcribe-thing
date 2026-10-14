@@ -52,6 +52,10 @@ plutil -lint -s "$CONTENTS/Info.plist"
 
 cp "$RES"/Sounds/*.wav "$CONTENTS/Resources/Sounds/"
 
+# The browser extension, which the app copies to its own folder for browsers to load (BrowserExtension.swift).
+mkdir -p "$CONTENTS/Resources/BrowserExtension"
+ditto "$ROOT/BrowserExtension/chromium" "$CONTENTS/Resources/BrowserExtension/chromium"
+
 shopt -s nullglob
 # SwiftPM resource bundles (FluidAudio_FluidAudio.bundle, ...): the generated Bundle.module accessor looks
 # in Bundle.main.resourceURL first, so an app must carry them in Contents/Resources.

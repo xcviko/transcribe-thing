@@ -23,6 +23,10 @@ final class AppEnvironment {
     let calls: CallStore
     let callTranscriber: CallTranscriber
     let callMonitor: CallMonitor
+    /// The browser extension: the socket its hosts reach (`BrowserBridge`), which tells `callMonitor` about calls in
+    /// web pages, and its setup in each browser (`BrowserExtension`).
+    let browserBridge: BrowserBridge
+    let browserExtension: BrowserExtension
     let permissions: PermissionsCenter
     let hotkeys: HotkeyMonitor
     let inserter: TextInserter
@@ -75,8 +79,13 @@ final class AppEnvironment {
                                           sendText: CallTranscriber.openRouterText(client: openRouterClient,
                                                                                    account: account, proxy: proxy,
                                                                                    model: callModel))
+        // A preview never listens, and its extension's files go to a temporary folder.
+        browserBridge = BrowserBridge(socketPath: isPreview ? nil : BrowserBridge.socketPath(for: paths))
+        browserExtension = isPreview
+            ? .preview(browsers: [])
+            : BrowserExtension(places: .live(paths: paths), bridge: browserBridge)
         callMonitor = CallMonitor(settings: settings, store: calls, transcriber: callTranscriber,
-                                  dependencies: .live(settings: settings))
+                                  dependencies: .live(settings: settings, bridge: browserBridge))
         self.permissions = permissions
         self.hotkeys = hotkeys
         self.inserter = inserter
@@ -248,6 +257,9 @@ final class AppEnvironment {
         diagnostics.start()
         history.load()
         calls.load()
+        // Browsers that have the extension reach this copy of the app, and load this version of it.
+        browserExtension.reprepare()
+        browserBridge.start()
         devices.start()
         permissions.refresh()
         models.start()
@@ -298,6 +310,7 @@ final class AppEnvironment {
 
     /// Called at quit: persist what's pending and release the event tap.
     func stop() {
+        browserBridge.stop()
         diagnostics.stop()
         history.flush()
         inserter.flushPendingRestore()
