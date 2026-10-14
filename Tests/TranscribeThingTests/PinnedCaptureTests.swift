@@ -145,6 +145,7 @@ private final class Events: @unchecked Sendable {
         hal.inputs[0].change(.format)
         try await waitUntil { hal.inputs.count == 2 }
         try await waitUntil { hal.inputs.last?.isRunning == true }
+        try #require(hal.inputs.count == 2, "a busy machine can outlast the wait: stop here, not on hal.inputs[1]")
         #expect(hal.opened == [Self.builtIn.audioID, Self.builtIn.audioID])
         #expect(!hal.inputs[0].isRunning, "the old input is stopped before the new one opens")
         #expect(!hal.opened.contains(Self.airPods.audioID))
