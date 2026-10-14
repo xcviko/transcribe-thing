@@ -21,6 +21,11 @@ import Foundation
 /// when the window agrees (the tab stops recording or goes, the Leave button goes), and their mutes come from their
 /// Mute button. Telegram releases the mic to mute, so for it a released mic is the mute.
 ///
+/// A browser with the extension tells about its calls from inside the page (`Window.fromPage`, `BrowserPages`): the
+/// tab is its call whatever its title and whichever tab is in front, the mute is the page's own, and the call is over
+/// the moment the page says so (its peer connections closed), mic or no mic. While the page tells, a released mic is
+/// neither leaving nor a mute: the page says which.
+///
 /// One call at a time: another app with both is only followed once the call has gone silent, and then takes over,
 /// ending it at its last audio, once it has had both for `confirmAfter`.
 struct CallDetector: Equatable, Sendable {
@@ -100,11 +105,16 @@ struct CallDetector: Equatable, Sendable {
         var muted: Bool?
         /// Whether it shows a Leave button; nil when its labels have none or it wasn't read.
         var inCall: Bool?
+        /// Told by the browser extension from inside the page, not read off the window: `tab`'s id is the page's,
+        /// `muted` the page's own, and `inCall` whether its peer connections are up. Once a page that was in the call
+        /// says it isn't, the call is over, whatever the mic does.
+        var fromPage: Bool
 
-        init(tab: Tab? = nil, muted: Bool? = nil, inCall: Bool? = nil) {
+        init(tab: Tab? = nil, muted: Bool? = nil, inCall: Bool? = nil, fromPage: Bool = false) {
             self.tab = tab
             self.muted = muted
             self.inCall = inCall
+            self.fromPage = fromPage
         }
     }
 
@@ -123,6 +133,9 @@ struct CallDetector: Equatable, Sendable {
         var micReleasedAt: TimeInterval?
         /// Set while the Mute button shows muted: the mute that hasn't ended yet.
         var mutedSince: TimeInterval?
+        /// For a browser: its last read came from inside the page (the extension), which says when the call is
+        /// muted and when it's over, so a released mic says neither.
+        var toldByPage = false
 
         var micReleased: Bool { micReleasedAt != nil }
         var duration: TimeInterval { lastAudioAt - startedAt }
@@ -130,8 +143,9 @@ struct CallDetector: Equatable, Sendable {
         /// The browser tab's service, or the desktop app's.
         var service: CallService? { tab?.service ?? CallAppKind.of(app.id).service }
         /// Whether a released mic is a mute: yes for Telegram; no for the services that keep the mic while muted;
-        /// maybe, for one nobody knows, so it's counted as before.
-        var micReleaseIsMute: Bool { service?.releasesMicOnMute ?? true }
+        /// maybe, for one nobody knows, so it's counted as before. Never while the page tells (`toldByPage`): its
+        /// own mute counts instead.
+        var micReleaseIsMute: Bool { !toldByPage && (service?.releasesMicOnMute ?? true) }
     }
 
     enum Phase: Equatable, Sendable {
@@ -212,6 +226,10 @@ struct CallDetector: Equatable, Sendable {
         switch phase {
         case .idle:
             break
+        case .suspected(let call) where shown.over:
+            // The page left the call before it was confirmed: not one, whatever the browser still plays.
+            events.append(.dropped(call.app, at: time))
+            forget()
         case .suspected(var call):
             if signals[call.app]?.isBoth == true {
                 if lasted(call.startedAt, time, settings.confirmAfter) {
@@ -225,7 +243,7 @@ struct CallDetector: Equatable, Sendable {
             }
         case .call(var call):
             events += follow(&call, at: time)
-            if shown.hungUp, signals[call.app]?.mic.isOn != true {
+            if shown.over || (shown.hungUp && signals[call.app]?.mic.isOn != true) {
                 events.append(.ended(end(&call, at: quietSince ?? time, how: .hungUp)))
                 signals[call.app] = nil
             } else if let quietSince, lasted(quietSince, time, settings.endAfter) {
@@ -281,7 +299,7 @@ struct CallDetector: Equatable, Sendable {
         var events: [Event] = []
         var audible = signal.mic.isOn || signal.sound.isOn
         var quiet = [signal.mic.offAt, signal.sound.offAt].compactMap { $0 }.max() ?? time
-        if !call.micReleaseIsMute, !signal.mic.isOn {
+        if !call.micReleaseIsMute, !call.toldByPage, !signal.mic.isOn {
             // Meet, Discord and Zoom hold the mic all call long, muted or not. Once it's given back, only the sound
             // that goes straight on (the leave chime, up to `leaveTail`) is still the call's: sound after a silence
             // is another tab's, or a notification.
@@ -314,29 +332,41 @@ struct CallDetector: Equatable, Sendable {
     private mutating func see(_ window: Window, micNow: Bool, at time: TimeInterval) -> [Event] {
         guard var call = followed else { return [] }
         if call.isBrowser {
+            if window.fromPage, window.inCall == false, shown.pageInCall,
+               window.tab == nil || window.tab?.id == call.tab?.id {
+                // The page that was in the call has left it.
+                shown.over = true
+                return []
+            }
             guard var tab = window.tab else {
-                // No tab records or is titled like a call: with the mic off too, it was hung up.
-                if !micNow { shown.hungUp = true }
+                // No tab records or is titled like a call: with the mic off too, it was hung up. The extension says
+                // nothing of the kind: it only says so of the call's own tab, above.
+                if !micNow, !window.fromPage { shown.hungUp = true }
                 return []
             }
             if let current = call.tab {
-                // Whether it's the call's tab, when both have ids; nil when only titles can tell.
-                let sameTab = current.id.flatMap { id in tab.id.map { $0 == id } }
+                // Whether it's the call's tab, when both have ids; nil when only titles can tell. The extension's
+                // ids and the tab strip's are never the same tab's, so going from one to the other, titles tell.
+                let sameTab = window.fromPage != call.toldByPage ? nil
+                    : current.id.flatMap { id in tab.id.map { $0 == id } }
                 if sameTab == false || (sameTab == nil && current.key != tab.key), tab.recording == nil {
                     // While the mic is on and no tab says it records, the one titled like a call needn't be the one
                     // with the mic, so it says nothing (and neither do its buttons).
                     guard !micNow else { return [] }
-                    return switchTab(to: tab, at: time)
+                    return switchTab(to: tab, at: time, fromPage: window.fromPage)
                 }
                 if sameTab == false, let id = tab.id {
                     // Another tab records: its own call, from when it was first seen recording beside this one,
                     // however alike their titles and whether or not the mic went off between. This one ended where
                     // its tab was last seen (`tabSeenWithin`).
                     let lastSeen = shown.tabSeenAt.map { max($0, time - settings.tabSeenWithin) }
-                    return switchTab(to: tab, at: time, lastSeen: lastSeen, from: shown.othersSince[id])
+                    return switchTab(to: tab, at: time, lastSeen: lastSeen, from: shown.othersSince[id],
+                                     fromPage: window.fromPage)
                 }
                 if current.key != tab.key {
-                    guard continues(call, in: tab, sameTab: sameTab == true) else { return switchTab(to: tab, at: time) }
+                    guard continues(call, in: tab, sameTab: sameTab == true) else {
+                        return switchTab(to: tab, at: time, fromPage: window.fromPage)
+                    }
                     // The same call, its tab retitled: a service once known stays known through a title that doesn't
                     // say it.
                     if tab.service == nil, let service = current.service {
@@ -346,10 +376,12 @@ struct CallDetector: Equatable, Sendable {
                 }
             }
             call.tab = tab
+            call.toldByPage = window.fromPage
             shown.tabSeenAt = time
             shown.saw(others: tab, at: time)
             // Meet and the like record all call long, muted or not: their tab not recording, the mic off, is gone.
-            if !micNow, !call.micReleaseIsMute, tab.recording?.hasMic != true { shown.hungUp = true }
+            // The page itself says when it's gone.
+            if !micNow, !call.micReleaseIsMute, !window.fromPage, tab.recording?.hasMic != true { shown.hungUp = true }
         }
         if let muted = window.muted {
             if muted, call.mutedSince == nil {
@@ -363,7 +395,13 @@ struct CallDetector: Equatable, Sendable {
             shown.muteRead = true
         }
         if let inCall = window.inCall {
-            if inCall { shown.leave = true } else if shown.leave, !micNow { shown.hungUp = true }
+            if window.fromPage {
+                if inCall { shown.pageInCall = true }
+            } else if inCall {
+                shown.leave = true
+            } else if shown.leave, !micNow {
+                shown.hungUp = true
+            }
         }
         switch phase {
         case .idle: break
@@ -393,7 +431,7 @@ struct CallDetector: Equatable, Sendable {
     /// and sound: from when that tab was first seen recording (`from`), else from now. Not from before the old call
     /// began (nothing kept its audio), nor before the browser last had both.
     private mutating func switchTab(to tab: Tab, at time: TimeInterval, lastSeen: TimeInterval? = nil,
-                                    from: TimeInterval? = nil) -> [Event] {
+                                    from: TimeInterval? = nil, fromPage: Bool = false) -> [Event] {
         var events: [Event] = []
         let app: CallApp
         let earliest: TimeInterval
@@ -416,7 +454,7 @@ struct CallDetector: Equatable, Sendable {
         signal.restart(at: start)
         signals[app] = signal.isIdle ? nil : signal
         if signal.isBoth {
-            phase = .suspected(Call(app: app, tab: tab, startedAt: start, lastAudioAt: time))
+            phase = .suspected(Call(app: app, tab: tab, startedAt: start, lastAudioAt: time, toldByPage: fromPage))
             shown.tabSeenAt = time
             shown.saw(others: tab, at: time)
             events.append(.suspected(app, at: start))
@@ -467,7 +505,10 @@ struct CallDetector: Equatable, Sendable {
     private mutating func end(_ call: inout Call, at end: TimeInterval, how: Ending) -> Call {
         call.lastAudioAt = max(call.startedAt, end)
         if let since = call.mutedSince {
-            let until = call.micReleaseIsMute ? call.lastAudioAt : min(call.micReleasedAt ?? call.lastAudioAt, call.lastAudioAt)
+            // A Mute button still on lasts until the mic was given back (leaving), unless the mic is the mute
+            // (Telegram), or the page says the mute itself.
+            let untilEnd = call.micReleaseIsMute || call.toldByPage
+            let until = untilEnd ? call.lastAudioAt : min(call.micReleasedAt ?? call.lastAudioAt, call.lastAudioAt)
             call.mutes.append(since...max(since, until))
             call.mutedSince = nil
         }
@@ -505,6 +546,10 @@ extension CallDetector {
         var hungUp = false
         /// A read has said whether the Mute button is on.
         var muteRead = false
+        /// The page (the extension) said it's in the call.
+        var pageInCall = false
+        /// The page that was in the call said it isn't any more: the call is over, mic or no mic.
+        var over = false
         /// For a browser: when a read last showed the call's tab, and whether another tab recorded the mic then.
         var tabSeenAt: TimeInterval?
         var othersRecordedMic = false

@@ -122,7 +122,12 @@ struct CallsStep: View {
                         .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(state == .comingLater ? Color.inkSecondary : Color.ink)
                         .lineLimit(1)
-                    if let detail = Self.rowDetail(state, installing: installing) {
+                    if let error = ext.installErrors[browser.id], state == .notInstalled {
+                        Text(error)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.danger)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else if let detail = Self.rowDetail(state, installing: installing) {
                         Text(detail)
                             .font(.system(size: 11))
                             .foregroundStyle(.inkTertiary)

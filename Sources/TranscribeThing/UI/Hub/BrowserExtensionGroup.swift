@@ -149,7 +149,7 @@ struct BrowserExtensionGroup: View {
                 }
                 ForEach(ext.browsers) { browser in
                     let state = BrowserExtensionCopy.state(of: browser, profiles: ext.connections(of: browser).count)
-                    BrowserExtensionRow(browser: browser, state: state,
+                    BrowserExtensionRow(browser: browser, state: state, error: ext.installErrors[browser.id],
                                         isInstalling: installing.contains(browser.id)
                                             || hub.previewInstallingBrowser == browser.id) {
                         installing.insert(browser.id)
@@ -167,12 +167,14 @@ struct BrowserExtensionGroup: View {
 private struct BrowserExtensionRow: View {
     var browser: BrowserExtension.Browser
     var state: BrowserExtensionCopy.State
+    /// Why Install didn't go through, said in place of the steps.
+    var error: String?
     /// Install was clicked and no profile has connected yet: the steps show under the name.
     var isInstalling: Bool
     var onInstall: () -> Void
     @Environment(\.inNativeForm) private var inNativeForm
 
-    private var showsSteps: Bool { isInstalling && state == .notInstalled }
+    private var showsSteps: Bool { isInstalling && state == .notInstalled && error == nil }
 
     var body: some View {
         HStack(alignment: showsSteps ? .top : .center, spacing: Theme.Spacing.sm) {
@@ -190,6 +192,11 @@ private struct BrowserExtensionRow: View {
                     }
                     .typeface(.callout)
                     .foregroundStyle(.success)
+                } else if let error, state == .notInstalled {
+                    Text(error)
+                        .typeface(.callout)
+                        .foregroundStyle(.danger)
+                        .fixedSize(horizontal: false, vertical: true)
                 } else {
                     Text(showsSteps ? "Waiting for it to connect…" : BrowserExtensionCopy.status(state))
                         .typeface(.callout)

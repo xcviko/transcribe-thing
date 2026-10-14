@@ -17,6 +17,9 @@ final class CallMuteReader: @unchecked Sendable {
         var otherTabPlaysAudio = false
         /// While mute is unknown: the controls that were read, to learn the app's labels from.
         var dump: [String]?
+        /// Told by the browser extension from inside the page (`BrowserPages`), not read off the window: its mute
+        /// is the page's own.
+        var fromPage = false
 
         /// What `CallDetector` takes from the read; nil for a browser none of whose windows could be read, which
         /// says nothing about its tabs.

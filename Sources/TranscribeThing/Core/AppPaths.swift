@@ -33,6 +33,11 @@ struct AppPaths: Sendable {
     var vertexProxyKeyFile: URL { root.appendingPathComponent("vertex-proxy-key", isDirectory: false) }
     /// root/Logs: the diagnostic log, a file per day (`DiagnosticLog`). Created by the log when it first writes.
     var logs: URL { root.appendingPathComponent("Logs", isDirectory: true) }
+    /// root/Browser Extension: the unpacked browser extension each browser loads (`BrowserExtension`), copied from
+    /// the app so its place never moves with the app.
+    var browserExtension: URL { root.appendingPathComponent("Browser Extension", isDirectory: true) }
+    /// root/browser.sock: where the browser extension's host reaches the running app (`BrowserBridge`).
+    var browserSocket: URL { root.appendingPathComponent("browser.sock", isDirectory: false) }
 
     func recordingURL(fileName: String) -> URL {
         recordings.appendingPathComponent(fileName, isDirectory: false)
