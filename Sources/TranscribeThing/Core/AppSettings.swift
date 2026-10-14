@@ -148,6 +148,10 @@ final class AppSettings {
     /// Brief, silent notices above the pill about the call being recorded: noticed, muted or unmuted, mute not
     /// followed, ended (`CallNotices`).
     var showsCallNotices: Bool = true { didSet { store.set(showsCallNotices, .showsCallNotices) } }
+    /// The Calls tab's note about the browser extension, after a call in a browser that has none, was closed.
+    var browserExtensionHintDismissed: Bool = false {
+        didSet { store.set(browserExtensionHintDismissed, .browserExtensionHintDismissed) }
+    }
     /// Days a transcript and its recording stay in History; 0 = Never deleted (`HistoryStore.deleteExpired`).
     var autoDeleteHistoryDays: Int = 0 { didSet { store.set(autoDeleteHistoryDays, .autoDeleteHistoryDays) } }
     var shortcuts: ShortcutBindings = .defaults { didSet { store.setJSON(shortcuts, .shortcuts) } }
@@ -421,6 +425,7 @@ final class AppSettings {
         if let v = store.string(.callRecording).flatMap(CallRecordingMode.init(rawValue:)) { callRecording = v }
         if let v: [CallExclusion] = store.json(.callExclusions) { callExclusions = v }
         if let v = store.bool(.showsCallNotices) { showsCallNotices = v }
+        if let v = store.bool(.browserExtensionHintDismissed) { browserExtensionHintDismissed = v }
         if let v = store.string(.vertexProxyURL), !v.isEmpty { vertexProxyURL = v }
         if let v = store.string(.cloudProvider).flatMap(CloudProvider.init(rawValue:)) {
             cloudProvider = v
@@ -564,6 +569,8 @@ enum SettingsKey: String, CaseIterable {
     case geminiReasoningEfforts, callEngine
     /// Set once Pasting's rules have given Gemini 4 Argon Gemini 3.8 Flash's checks (`load`).
     case argonPastingAdded
+    /// The Calls tab's browser extension note was closed.
+    case browserExtensionHintDismissed
 
     var defaultsKey: String { "tt.\(rawValue)" }
 }

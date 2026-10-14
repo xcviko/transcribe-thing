@@ -12,27 +12,29 @@ import Testing
                               keyStatus: key, hasStoredKey: stored)
     }
 
-    @Test(arguments: [(-3, OnboardingStep.welcome), (0, .welcome), (2, .model), (3, .tryIt), (4, .done), (99, .done)])
+    @Test(arguments: [(-3, OnboardingStep.welcome), (0, .welcome), (2, .model), (3, .tryIt), (4, .calls), (5, .done),
+                      (99, .done)])
     func resumeClampsTheStoredStep(_ stored: Int, _ expected: OnboardingStep) {
         #expect(OnboardingStep.resuming(from: stored) == expected)
     }
 
-    @Test func fiveSteps() {
-        #expect(OnboardingStep.allCases == [.welcome, .permissions, .model, .tryIt, .done])
+    @Test func sixSteps() {
+        #expect(OnboardingStep.allCases == [.welcome, .permissions, .model, .tryIt, .calls, .done])
         #expect(OnboardingStepIndex.tryIt == OnboardingStep.tryIt.rawValue, "the Hub's Practice button lands on the chat")
         #expect(OnboardingStepIndex.welcome == OnboardingStep.welcome.rawValue)
     }
 
-    /// Old layout: welcome, permissions, model, shortcuts, try it, done.
+    /// Old layout: welcome, permissions, model, shortcuts, try it, done. Done came back as the last step then; it's
+    /// Calls now, which that build never showed.
     @Test(arguments: [(-1, OnboardingStep.welcome), (0, .welcome), (1, .permissions), (2, .model),
-                      (3, .tryIt), (4, .tryIt), (5, .done), (9, .done)])
-    func sixStepProgressMapsOntoFiveSteps(_ old: Int, _ expected: OnboardingStep) {
+                      (3, .tryIt), (4, .tryIt), (5, .calls), (9, .done)])
+    func sixStepProgressMapsOntoTheMergedSteps(_ old: Int, _ expected: OnboardingStep) {
         #expect(OnboardingStep.resuming(from: AppSettings.onboardingStep(fromSixStepIndex: old)) == expected)
     }
 
     @Test func freeStepsNeverBlock() {
         let blocked = inputs(mic: .denied, ax: .denied, local: .notInstalled)
-        for step in [OnboardingStep.welcome, .tryIt, .done] {
+        for step in [OnboardingStep.welcome, .tryIt, .calls, .done] {
             #expect(OnboardingGate.canContinue(step, blocked))
         }
     }
@@ -86,6 +88,7 @@ import Testing
         #expect(OnboardingGate.primaryTitle(.model, inputs(), practiceStarted: false) == "Continue")
         #expect(OnboardingGate.primaryTitle(.tryIt, inputs(), practiceStarted: false) == "Skip Practice")
         #expect(OnboardingGate.primaryTitle(.tryIt, inputs(), practiceStarted: true) == "Continue")
+        #expect(OnboardingGate.primaryTitle(.calls, inputs(), practiceStarted: true) == "Continue")
         #expect(OnboardingGate.primaryTitle(.done, inputs(), practiceStarted: true) == "Start Dictating")
     }
 
@@ -165,8 +168,12 @@ import Testing
         #expect(model.ctx.settings.onboardingStep == 3)
         #expect(model.movingForward)
         model.goNext()
-        #expect(model.step == .done)
+        #expect(model.step == .calls)
         #expect(model.ctx.settings.onboardingStep == 4)
+        model.goNext()
+        #expect(model.step == .done)
+        #expect(model.ctx.settings.onboardingStep == 5)
+        model.goBack()
         model.goBack()
         model.goBack()
         #expect(model.step == .model)
@@ -175,7 +182,7 @@ import Testing
     }
 
     /// Someone who quit a six-step build on Shortcuts or Try it comes back to the merged step, once.
-    @Test(arguments: [(3, OnboardingStep.tryIt), (4, .tryIt), (5, .done), (2, .model)])
+    @Test(arguments: [(3, OnboardingStep.tryIt), (4, .tryIt), (5, .calls), (2, .model)])
     func resumesSixStepProgressSavedByAnOlderBuild(_ old: Int, _ expected: OnboardingStep) throws {
         let suite = NSTemporaryDirectory() + "transcribe-thing-tests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -565,7 +572,7 @@ import Testing
     }
 
     @Test func finishCompletesOnboardingAndAppliesPreferences() {
-        let model = makeModel(step: 4)
+        let model = makeModel(step: 5)
         #expect(model.step == .done)
         #expect(model.openAtLogin)
         model.finish()

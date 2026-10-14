@@ -23,6 +23,7 @@ final class AppEnvironment {
     let calls: CallStore
     let callTranscriber: CallTranscriber
     let callMonitor: CallMonitor
+    let browserExtension: BrowserExtension
     let permissions: PermissionsCenter
     let hotkeys: HotkeyMonitor
     let inserter: TextInserter
@@ -77,6 +78,7 @@ final class AppEnvironment {
                                                                                    model: callModel))
         callMonitor = CallMonitor(settings: settings, store: calls, transcriber: callTranscriber,
                                   dependencies: .live(settings: settings))
+        browserExtension = isPreview ? .preview(browsers: []) : BrowserExtension()
         self.permissions = permissions
         self.hotkeys = hotkeys
         self.inserter = inserter

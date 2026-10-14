@@ -139,8 +139,44 @@ enum OnboardingSnapshots {
                 model.stagePressed([.fn], heldPTT: true)
             },
 
-            entry("onboarding-5-done", still: 0.42) { model in model.stage(step: .done) },
-            entry("onboarding-5-done-argon", still: 0.42, context: { ctx in
+            // Calls (`--only onboarding-5`): Chrome and Arc to install, Safari not yet.
+            entry("onboarding-5-calls", still: 1.2, context: { ctx in
+                ctx.browserExtension = .preview(browsers: [PreviewFixtures.chrome, PreviewFixtures.arc,
+                                                           PreviewFixtures.safari])
+            }) { model in model.stage(step: .calls) },
+            entry("onboarding-5-calls-no-browsers", still: 1.2, context: { ctx in
+                ctx.browserExtension = .preview(browsers: [])
+                ctx.settings.callRecording = .automatic
+            }) { model in model.stage(step: .calls) },
+            // Install clicked for Chrome: its steps under the row, its extensions page on the stage (Developer mode
+            // called out, then the folder on its way in).
+            entry("onboarding-5-calls-installing", still: 0.6, context: { ctx in
+                ctx.browserExtension = .preview(browsers: [PreviewFixtures.chrome, PreviewFixtures.arc,
+                                                           PreviewFixtures.firefox, PreviewFixtures.safari])
+            }) { model in
+                model.stage(step: .calls)
+                model.stageInstalling([PreviewFixtures.chrome.id])
+            },
+            entry("onboarding-5-calls-installing-drag", still: 2.7, context: { ctx in
+                ctx.browserExtension = .preview(browsers: [PreviewFixtures.chrome, PreviewFixtures.arc,
+                                                           PreviewFixtures.firefox, PreviewFixtures.safari])
+            }) { model in
+                model.stage(step: .calls)
+                model.stageInstalling([PreviewFixtures.chrome.id])
+            },
+            // Chrome connected in two profiles, Arc in one: checks, and the extension's card on the stage.
+            entry("onboarding-5-calls-connected", still: 1.2, context: { ctx in
+                ctx.browserExtension = .preview(
+                    browsers: [PreviewFixtures.chrome, PreviewFixtures.arc, PreviewFixtures.firefox, PreviewFixtures.safari],
+                    connections: PreviewFixtures.connections(PreviewFixtures.chrome, profiles: 2)
+                        + PreviewFixtures.connections(PreviewFixtures.arc, profiles: 1))
+            }) { model in
+                model.stage(step: .calls)
+                model.stageInstalling([PreviewFixtures.arc.id, PreviewFixtures.chrome.id])
+            },
+
+            entry("onboarding-6-done", still: 0.42) { model in model.stage(step: .done) },
+            entry("onboarding-6-done-argon", still: 0.42, context: { ctx in
                 ctx.settings.lineup.main = .argon
             }) { model in model.stage(step: .done) },
         ]

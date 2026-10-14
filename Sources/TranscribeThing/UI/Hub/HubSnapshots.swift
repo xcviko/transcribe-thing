@@ -195,6 +195,34 @@ enum HubSnapshots {
                 ]
             },
 
+            // General → Browser Extension (`--only hub-general-browser`), below Calls: Chrome to install, Arc in two
+            // profiles, Firefox and Safari coming later. Then Chrome's Install clicked (its steps open), and no browser.
+            hub("hub-general-browser-extension", .general, height: 2150) { c in
+                c.browserExtension = .preview(
+                    browsers: [PreviewFixtures.chrome, PreviewFixtures.arc, PreviewFixtures.firefox, PreviewFixtures.safari],
+                    connections: PreviewFixtures.connections(PreviewFixtures.arc, profiles: 2))
+            },
+            hub("hub-general-browser-installing", .general, height: 2150) { c in
+                c.browserExtension = .preview(browsers: [PreviewFixtures.chrome, PreviewFixtures.safari])
+                c.previewInstallingBrowser = PreviewFixtures.chrome.id
+            },
+            hub("hub-general-browser-connected", .general, height: 2150) { c in
+                c.browserExtension = .preview(browsers: [PreviewFixtures.chrome],
+                                              connections: PreviewFixtures.connections(PreviewFixtures.chrome, profiles: 1))
+            },
+            hub("hub-general-browser-none", .general, height: 2150),
+            // A Meet call in Chrome, which has no extension: the note above the calls, and the empty tab's pointer.
+            hub("hub-calls-browser-hint", .calls) { c in
+                Samples.calls(c)
+                c.browserExtension = .preview(browsers: [PreviewFixtures.chrome, PreviewFixtures.safari])
+            },
+            hub("hub-calls-empty-browser", .calls) { c in
+                c.browserExtension = .preview(browsers: [PreviewFixtures.chrome, PreviewFixtures.safari])
+            },
+            hub("hub-calls-empty-browser-compact", .calls, width: 820, height: 560) { c in
+                c.browserExtension = .preview(browsers: [PreviewFixtures.chrome, PreviewFixtures.safari])
+            },
+
             hub("hub-models", .models),
             hub("hub-models-full", .models, height: 1080),
             // Hands-free switches to Gemini.

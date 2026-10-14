@@ -5,9 +5,10 @@ import SwiftUI
 // MARK: - Steps
 
 /// Raw values are what `settings.onboardingStep` stores. `tryIt` teaches the shortcuts and runs the practice chat;
-/// they used to be two steps (see `AppSettings.onboardingStep(fromSixStepIndex:)` for saved progress).
+/// they used to be two steps (see `AppSettings.onboardingStep(fromSixStepIndex:)` for saved progress). `calls` came
+/// later, before `done`: a stored 4 that meant Done shows it first.
 enum OnboardingStep: Int, CaseIterable, Comparable, Identifiable, Sendable {
-    case welcome, permissions, model, tryIt, done
+    case welcome, permissions, model, tryIt, calls, done
 
     var id: Int { rawValue }
 
@@ -19,6 +20,7 @@ enum OnboardingStep: Int, CaseIterable, Comparable, Identifiable, Sendable {
         case .permissions: "Permissions"
         case .model: "Model"
         case .tryIt: "Try it"
+        case .calls: "Calls"
         case .done: "Done"
         }
     }
@@ -49,7 +51,7 @@ enum OnboardingGate {
 
     static func canContinue(_ step: OnboardingStep, _ inputs: Inputs) -> Bool {
         switch step {
-        case .welcome, .tryIt, .done:
+        case .welcome, .tryIt, .calls, .done:
             true
         case .permissions:
             inputs.microphone == .granted && inputs.accessibility == .granted
@@ -93,7 +95,7 @@ enum OnboardingGate {
         case .done:
             return "Start Dictating"
         // While a model downloads, the note under the cards says the download keeps going.
-        case .permissions, .model:
+        case .permissions, .model, .calls:
             return "Continue"
         }
     }
@@ -288,6 +290,8 @@ struct OnboardingContext {
     var freeDiskBytes: () -> Int64
     var closeWindow: () -> Void
     var showHello: () -> Void
+    /// The calls step's browser rows.
+    var browserExtension: BrowserExtension
     /// Snapshots and tests: no polling, monitors, timers or system calls.
     var isPreview: Bool
 
@@ -311,6 +315,7 @@ struct OnboardingContext {
         closeWindow = { [weak windows] in windows?.closeOnboarding() }
         let pill = env.pill
         showHello = { [weak pill] in pill?.showHello() }
+        browserExtension = env.browserExtension
         isPreview = env.isPreview
     }
 }
@@ -365,6 +370,12 @@ final class OnboardingModel {
     private(set) var practiceHint: PracticeHint?
     private(set) var isSendingDictation = false
     private(set) var recordingInProgress = false
+
+    // Calls
+    /// Browsers whose Install was clicked: their steps show under the row until a profile connects.
+    private(set) var installingBrowsers: Set<String> = []
+    /// The browser Install was last clicked for: the stage sketches its extensions page.
+    private(set) var installTarget: String?
 
     // Done
     private(set) var openAtLogin: Bool
@@ -594,6 +605,8 @@ final class OnboardingModel {
             schedule("keyboardHint", after: 25) { model in
                 if !model.sawPushToTalkKey { model.showKeyboardHint = true }
             }
+        case .calls:
+            ctx.browserExtension.refresh()
         case .done:
             confettiBurst += 1
         case .welcome:
@@ -612,6 +625,22 @@ final class OnboardingModel {
     func externalStepChanged(_ stored: Int) {
         let target = OnboardingStep.resuming(from: stored)
         if target != step { go(to: target) }
+    }
+
+    // MARK: Calls
+
+    /// Opens the browser's extensions page and the folder to drag in; the row shows what to do there.
+    func installExtension(_ browser: BrowserExtension.Browser) {
+        installingBrowsers.insert(browser.id)
+        installTarget = browser.id
+        guard !ctx.isPreview else { return }
+        ctx.browserExtension.openInstall(browser)
+    }
+
+    /// The browser being set up, while it is: the stage sketches its extensions page.
+    var installingBrowser: BrowserExtension.Browser? {
+        guard let installTarget else { return nil }
+        return ctx.browserExtension.browsers.first { $0.id == installTarget }
     }
 
     // MARK: Permissions
@@ -1055,6 +1084,12 @@ final class OnboardingModel {
     /// Puts the model into a given sub-state without timers (snapshots only).
     func stage(step: OnboardingStep) {
         self.step = step
+    }
+
+    /// The calls step after Install was clicked for these browsers, the last one on the stage.
+    func stageInstalling(_ ids: [String]) {
+        installingBrowsers = Set(ids)
+        installTarget = ids.last
     }
 
     func stagePressed(_ keys: Set<IllustratedKey>, heldPTT: Bool = false, triedHandsFree: Bool = false,

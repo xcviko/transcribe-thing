@@ -17,6 +17,8 @@ final class HubContext: Observable {
     var calls: CallStore
     let callMonitor: CallMonitor
     let callTranscriber: CallTranscriber
+    /// The browser extension for calls in web pages: which browsers can take it, which profiles have it.
+    var browserExtension: BrowserExtension
     var permissions: PermissionsCenter
     var devices: AudioDeviceCatalog
     var launchAtLogin: LaunchAtLogin
@@ -61,6 +63,8 @@ final class HubContext: Observable {
     var previewWaveformFlat = false
     /// How far the open call's summary and transcript are scrolled under its card (snapshots).
     var previewCallScroll: CGFloat?
+    /// General → Browser Extension drawn after Install was clicked for this browser: its steps open (snapshots).
+    var previewInstallingBrowser: String?
 
     init(env: AppEnvironment) {
         settings = env.settings
@@ -71,6 +75,7 @@ final class HubContext: Observable {
         calls = env.calls
         callMonitor = env.callMonitor
         callTranscriber = env.callTranscriber
+        browserExtension = env.browserExtension
         permissions = env.permissions
         devices = env.devices
         launchAtLogin = env.launchAtLogin

@@ -25,6 +25,11 @@ struct CallsPage: View {
                             .buttonStyle(SecondaryButtonStyle(size: .small))
                     }
                 }
+                if !settings.browserExtensionHintDismissed,
+                   let browser = BrowserExtensionCopy.hintBrowser(calls: store.calls, browsers: hub.browserExtension.browsers,
+                                                                  connections: hub.browserExtension.connections) {
+                    BrowserExtensionHint(browser: browser)
+                }
                 if all.isEmpty {
                     CallsEmptyState()
                 } else {
@@ -547,8 +552,38 @@ enum CallAppIcons {
 
 // MARK: - Empty states
 
+/// After a call in a Chromium browser that has no extension in any profile: what it would do, Set Up (General),
+/// and × to never show it again.
+private struct BrowserExtensionHint: View {
+    var browser: BrowserExtension.Browser
+    @Environment(HubContext.self) private var hub
+    @Environment(AppSettings.self) private var settings
+
+    var body: some View {
+        Callout(.info, symbol: "puzzlepiece.extension", text: BrowserExtensionCopy.callsHint(browser: browser.name)) {
+            HStack(spacing: 6) {
+                Button("Set Up…") { hub.show(.general) }
+                    .buttonStyle(SecondaryButtonStyle(size: .small))
+                Button {
+                    settings.browserExtensionHintDismissed = true
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.inkTertiary)
+                .help("Don’t show again")
+                .accessibilityLabel("Don’t show again")
+            }
+        }
+    }
+}
+
 private struct CallsEmptyState: View {
     @Environment(AppSettings.self) private var settings
+    @Environment(HubContext.self) private var hub
 
     var body: some View {
         @Bindable var settings = settings
@@ -592,6 +627,13 @@ private struct CallsEmptyState: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: 440)
                 .padding(.top, 2)
+            if offersExtension {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 4) { extensionLine }
+                        .fixedSize()
+                    VStack(spacing: 2) { extensionLine }
+                }
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 36)
@@ -600,6 +642,21 @@ private struct CallsEmptyState: View {
             RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous)
                 .strokeBorder(Color.strokeStrong, style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
         }
+    }
+
+    @ViewBuilder private var extensionLine: some View {
+        Text("Calls in a browser are noticed more surely with the browser extension.")
+            .font(.system(size: 12))
+            .foregroundStyle(.inkTertiary)
+            .multilineTextAlignment(.center)
+        Button("Set Up…") { hub.show(.general) }
+            .buttonStyle(QuietButtonStyle(tint: .accent, size: .small))
+    }
+
+    /// A Chromium browser is here and no profile has the extension.
+    private var offersExtension: Bool {
+        let ext = hub.browserExtension
+        return ext.connections.isEmpty && ext.browsers.contains { $0.family == .chromium }
     }
 
     private var modeLine: String {

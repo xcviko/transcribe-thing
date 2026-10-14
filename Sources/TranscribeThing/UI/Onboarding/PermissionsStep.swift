@@ -489,7 +489,7 @@ private struct SettingsSketch: View {
     }
 }
 
-private struct SketchSwitch: View {
+struct SketchSwitch: View {
     var isOn: Bool
     var dimmed: Bool
 

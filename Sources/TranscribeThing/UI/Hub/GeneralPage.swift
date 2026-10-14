@@ -96,6 +96,7 @@ struct GeneralPage: View {
                 }
             }
             CallsSettingsGroup()
+            BrowserExtensionGroup()
             HubGroup("History") {
                 SettingsGroup {
                     SettingsRow(title: "Auto-delete history", systemImage: "clock.arrow.circlepath",
