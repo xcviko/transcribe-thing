@@ -67,7 +67,24 @@ struct CallTranscript: Codable, Equatable, Sendable {
     }
 }
 
+/// The audio or video file a call was made from, dropped on Calls or picked with Transcribe a File… rather than
+/// recorded (`CallStore.addImported`).
+struct CallFileSource: Codable, Equatable, Hashable, Sendable {
+    /// "Interview.mp4".
+    var name: String
+    /// Where the file was when it came in. Only its sound is kept with the call, never a copy of the file: the path is
+    /// how a later step can send a video's picture to a model, to tell who is who, while the file is still there.
+    var path: String
+    /// The file has a picture, not only sound.
+    var isVideo: Bool
+    /// When it came in: Auto-delete counts from here, not from the call's start (the file's creation date), so a file
+    /// recorded long ago isn't deleted as soon as it's added.
+    var importedAt: Date
+}
+
 /// One recorded call: its audio in `Calls/<id>/` (`CallStore.folder(for:)`), what's known about it, its transcript.
+/// One made from a file (`file`) has its sound as a single track, both sides mixed, kept as the other side's
+/// (`remoteFile`): nothing in it is known to be the mic's.
 struct CallRecord: Codable, Equatable, Identifiable, Sendable {
     var id: UUID
     var startedAt: Date
@@ -122,6 +139,8 @@ struct CallRecord: Codable, Equatable, Identifiable, Sendable {
     var summary: CallSummary?
     /// Why the last summary failed; Summarize tries again (`CallTranscriber.summarize`).
     var summaryError: String?
+    /// The file it was made from; nil for a call the app recorded.
+    var file: CallFileSource?
 
     init(id: UUID, startedAt: Date, endedAt: Date? = nil, appName: String, bundleID: String? = nil,
          service: CallService? = nil, pageTitle: String? = nil, manual: Bool = false, status: CallStatus) {
@@ -139,6 +158,12 @@ struct CallRecord: Codable, Equatable, Identifiable, Sendable {
     /// The longer track's length: the call's.
     var duration: TimeInterval { max(micSeconds, remoteSeconds) }
 
+    /// Made from a file, not recorded.
+    var isImported: Bool { file != nil }
+
+    /// When Auto-delete counts from: when a file came in, else when the call started.
+    var keptSince: Date { file?.importedAt ?? startedAt }
+
     /// "Google Meet", "Telegram", "ChatGPT" (a site no service is known for, by its page), "FaceTime", "All sound":
     /// what the call is named by.
     var title: String { service?.name ?? pageTitle.flatMap { $0.isEmpty ? nil : $0 } ?? appName }
@@ -150,7 +175,7 @@ struct CallRecord: Codable, Equatable, Identifiable, Sendable {
         case id, startedAt, endedAt, appName, bundleID, service, pageTitle, manual, muteIntervals, muteKnown
         case micSilencedWhenMuted, echoCancelled, echoReductionDB
         case otherBrowserAudio, micFile, remoteFile, micSeconds, remoteSeconds, micProblem, remoteProblem, status
-        case error, transcript, costUSD, cutOffAt, speakerNames, summary, summaryError
+        case error, transcript, costUSD, cutOffAt, speakerNames, summary, summaryError, file
     }
 
     /// Lenient: anything but the id, the start, the app and the status may be missing (written by another build).
@@ -185,6 +210,7 @@ struct CallRecord: Codable, Equatable, Identifiable, Sendable {
         speakerNames = try c.decodeIfPresent([String: String].self, forKey: .speakerNames) ?? [:]
         summary = try? c.decodeIfPresent(CallSummary.self, forKey: .summary)
         summaryError = try? c.decodeIfPresent(String.self, forKey: .summaryError)
+        file = try? c.decodeIfPresent(CallFileSource.self, forKey: .file)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -217,6 +243,7 @@ struct CallRecord: Codable, Equatable, Identifiable, Sendable {
         if !speakerNames.isEmpty { try c.encode(speakerNames, forKey: .speakerNames) }
         try c.encodeIfPresent(summary, forKey: .summary)
         try c.encodeIfPresent(summaryError, forKey: .summaryError)
+        try c.encodeIfPresent(file, forKey: .file)
     }
 }
 

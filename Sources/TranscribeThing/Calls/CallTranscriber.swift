@@ -1,5 +1,18 @@
 import Foundation
 
+/// The Gemini model a call's requests go to (`AppSettings.callEngine`), and the level it thinks at
+/// (`AppSettings.reasoningEfforts`): both the transcript's audio requests and the summary's text one.
+struct CallModel: Equatable, Sendable {
+    var engine: EngineID
+    var effort: ReasoningEffort
+
+    /// Gemini 3.8 Flash at medium: what calls use until another is picked.
+    static let `default` = CallModel(engine: .geminiFlash, effort: .medium)
+
+    /// The model's OpenRouter slug ("google/gemini-4-argon"); the user's endpoint takes the same.
+    var modelID: String { engine.openRouterModelID ?? "google/gemini-3.8-flash" }
+}
+
 /// Transcribes a recorded call with the Gemini model picked for calls (Models → Calls: Gemini 3.8 Flash or Gemini 4
 /// Argon, at the level picked for it, `CallModel`), one request per chunk. The two tracks, the mic's and the other
 /// side's, are mixed into one mono track (`CallMix`), the mic silent while the person was muted; the tracks stay apart on
@@ -27,19 +40,10 @@ import Foundation
 /// `answers/summary.txt` and added to what the call cost; so does a one-chunk answer that came without any of the
 /// blocks. A summary that fails leaves the call done with its transcript, and says why (`CallRecord.summaryError`):
 /// Summarize (`summarize`) tries again, and sums up a call transcribed before summaries, from its transcript alone.
-/// The Gemini model a call's requests go to (`AppSettings.callEngine`), and the level it thinks at
-/// (`AppSettings.reasoningEfforts`): both the transcript's audio requests and the summary's text one.
-struct CallModel: Equatable, Sendable {
-    var engine: EngineID
-    var effort: ReasoningEffort
-
-    /// Gemini 3.8 Flash at medium: what calls use until another is picked.
-    static let `default` = CallModel(engine: .geminiFlash, effort: .medium)
-
-    /// The model's OpenRouter slug ("google/gemini-4-argon"); the user's endpoint takes the same.
-    var modelID: String { engine.openRouterModelID ?? "google/gemini-3.8-flash" }
-}
-
+///
+/// A call made from a file dropped on Calls (`importFile`, `CallRecord.file`) goes the same way, in the same chunks,
+/// with two differences: it's one track with no mic of its own, so there's no sample of the person's voice; and the
+/// prompt asks about a recording of anything, which the person may not be in (`CallPrompts.file`).
 @MainActor
 final class CallTranscriber {
     /// One request: the chunk's audio as an .m4a, the system prompt, the chunk's length, and the sample of the
@@ -170,7 +174,8 @@ final class CallTranscriber {
                         remoteSamples: Int(call.remoteSeconds * Recording.sampleRate),
                         micSamples: Int(call.micSeconds * Recording.sampleRate),
                         mutes: call.muteIntervals, userName: userName(), service: call.service?.name,
-                        answers: store.answersFolder(for: id), callID: id, vocabulary: vocabulary())
+                        answers: store.answersFolder(for: id), callID: id, vocabulary: vocabulary(),
+                        file: call.file?.name)
         let send = send, sendText = sendText, read = read, log = log
         tasks[id] = Task { [weak self] in
             let outcome: Result<Outcome, any Error>
@@ -188,6 +193,16 @@ final class CallTranscriber {
         transcribe(id)
     }
 
+    /// A file dropped on Calls (or picked with Transcribe a File…) as a call of its own (`CallStore.addImported`),
+    /// transcribed at once whatever Record calls is set to: the person asked for this one, there's nothing to ask
+    /// first. nil when its sound couldn't be kept.
+    @discardableResult
+    func importFile(_ audio: ImportedAudio) async -> CallRecord? {
+        guard let record = await store.addImported(audio) else { return nil }
+        transcribe(record.id)
+        return store.call(id: record.id) ?? record
+    }
+
     /// Sums up a done call from its transcript alone, text only, no audio: a call transcribed before summaries, or
     /// one whose summary failed. The new summary keeps the ticks of the old one's tasks; what it cost is added to the
     /// call's. Nothing while the call is being transcribed or summed up already.
@@ -197,12 +212,14 @@ final class CallTranscriber {
         store.summarizing.insert(id)
         store.update(id) { $0.summaryError = nil }
         let me = CallPrompts.speakerName(for: userName())
-        let service = call.service?.name, answers = store.answersFolder(for: id), log = log, words = vocabulary()
+        let service = call.service?.name, file = call.file?.name, answers = store.answersFolder(for: id), log = log
+        let words = vocabulary()
         summaryTasks[id] = Task { [weak self] in
             let outcome: Result<SummaryOutcome, any Error>
             do {
-                outcome = .success(try await Self.summarize(transcript, me: me, service: service, answers: answers,
-                                                            sendText: sendText, log: log, callID: id, vocabulary: words))
+                outcome = .success(try await Self.summarize(transcript, me: me, service: service, file: file,
+                                                            answers: answers, sendText: sendText, log: log,
+                                                            callID: id, vocabulary: words))
             } catch {
                 outcome = .failure(error)
             }
@@ -305,10 +322,14 @@ final class CallTranscriber {
         var callID: UUID?
         /// The user's dictionary, for the prompts.
         var vocabulary: [String]
+        /// The name of the file the call was made from (`CallRecord.file`): it's asked about as a recording of
+        /// anything (`CallPrompts.file`), not as a call this app recorded. nil for a recorded call.
+        var file: String?
 
         init(remote: URL?, mic: URL?, remoteSamples: Int, micSamples: Int, mutes: [CallInterval], userName: String?,
-             service: String?, answers: URL? = nil, callID: UUID? = nil, vocabulary: [String] = []) {
+             service: String?, answers: URL? = nil, callID: UUID? = nil, vocabulary: [String] = [], file: String? = nil) {
             self.vocabulary = vocabulary
+            self.file = file
             self.remote = remote
             self.mic = mic
             self.remoteSamples = remoteSamples
@@ -318,6 +339,7 @@ final class CallTranscriber {
             self.service = service
             self.answers = answers
             self.callID = callID
+            self.file = file
         }
     }
 
@@ -377,7 +399,8 @@ final class CallTranscriber {
         let me = CallPrompts.speakerName(for: plan.userName)
         let ranges = chunks(totalSamples: total, maxSeconds: maxChunkSeconds)
         let call = plan.callID.map(shortID)
-        let sample = ranges.isEmpty ? nil : try await voiceSample(plan, read: read, log: log)
+        // A file has no mic of its own to take the person's voice from.
+        let sample = ranges.isEmpty || plan.file != nil ? nil : try await voiceSample(plan, read: read, log: log)
         log.event(.calls, "transcription.started", [
             "call": call, "chunks": ranges.count,
             "remote": plan.remote == nil ? nil : Double(plan.remoteSamples) / Recording.sampleRate,
@@ -416,8 +439,10 @@ final class CallTranscriber {
                 return CallInterval(start: max(0, mute.start - offset), end: min(audio.seconds, mute.end - offset))
             }
             let prompt = UserDictionary.prompt(
-                CallPrompts.call(me: me, service: plan.service, roster: roster, local: sides.speakers, mutes: mutes,
-                                 seconds: audio.seconds, voiceSample: sample != nil, summary: inlineSummary),
+                plan.file.map { CallPrompts.file(name: $0, me: me, roster: roster, summary: inlineSummary) }
+                    ?? CallPrompts.call(me: me, service: plan.service, roster: roster, local: sides.speakers,
+                                        mutes: mutes, seconds: audio.seconds, voiceSample: sample != nil,
+                                        summary: inlineSummary),
                 with: plan.vocabulary, heard: true)
             let started = ContinuousClock.now
             var text: String
@@ -440,6 +465,7 @@ final class CallTranscriber {
                 }
             }
             let parsed = CallTranscriptParser.parse(text, side: .remote, duration: audio.seconds,
+                                                    defaultSpeaker: plan.file == nil ? nil : CallPrompts.firstSpeaker,
                                                     speakers: [me] + roster)
             let truncated = result == nil
             costs += [result?.costUSD].compactMap { $0 }
@@ -475,8 +501,8 @@ final class CallTranscriber {
             } else if let summarize {
                 do {
                     let summed = try await Self.summarize(outcome.transcript, me: me, service: plan.service,
-                                                          answers: plan.answers, sendText: summarize, log: log,
-                                                          callID: plan.callID, vocabulary: plan.vocabulary)
+                                                          file: plan.file, answers: plan.answers, sendText: summarize,
+                                                          log: log, callID: plan.callID, vocabulary: plan.vocabulary)
                     outcome.summary = summed.summary
                     costs += [summed.costUSD].compactMap { $0 }
                 } catch is CancellationError {
@@ -497,18 +523,18 @@ final class CallTranscriber {
 
     /// The summary of `transcript` from one text-only request, its answer kept as `answers/summary.txt`. Throws the
     /// request's failure, or `Failure.noSummary` for an answer without any of the blocks whole; a cut-off answer is
-    /// read as far as it goes.
-    nonisolated static func summarize(_ transcript: CallTranscript, me: String, service: String?, answers: URL?,
-                                      sendText: SendText, log: DiagnosticLog,
+    /// read as far as it goes. `file`: the call was made from that file, and is summed up as a recording of anything.
+    nonisolated static func summarize(_ transcript: CallTranscript, me: String, service: String?, file: String? = nil,
+                                      answers: URL?, sendText: SendText, log: DiagnosticLog,
                                       callID: UUID?, vocabulary: [String] = []) async throws -> SummaryOutcome {
         let call = callID.map(shortID)
         let text = CallSummaryPrompt.transcript(transcript)
         let started = ContinuousClock.now
         var answer: String
         var result: CloudResult?
+        let prompt = file.map { CallSummaryPrompt.text(me: me, file: $0) } ?? CallSummaryPrompt.text(me: me, service: service)
         do {
-            let answered = try await sendText(text, UserDictionary.prompt(CallSummaryPrompt.text(me: me, service: service),
-                                                                          with: vocabulary, heard: false))
+            let answered = try await sendText(text, UserDictionary.prompt(prompt, with: vocabulary, heard: false))
             result = answered
             answer = answered.text
         } catch AppError.openRouterTruncated(let partial) {
@@ -658,13 +684,20 @@ enum CallPrompts {
     static let noSpeech = "NO SPEECH"
 
     /// How the answer is written: the transcript alone, or (`summary`) the transcript, then the summary's blocks after
-    /// it (`CallSummaryPrompt.blocks`).
-    static func format(summary: Bool, me: String = "Me") -> String {
-        guard summary else { return format }
-        return format.replacingOccurrences(of: transcriptOnly, with: transcriptFirst)
-            + "\n\nAfter the transcript, on a new line: " + CallSummaryPrompt.blocks(me: me)
+    /// it (`CallSummaryPrompt.blocks`). `subject` is what the audio is ("call", "recording"), and `firstSpeaker` how
+    /// the first unnamed speaker is called, in the example line and the tasks' owners.
+    static func format(summary: Bool, me: String = "Me", subject: String = "call",
+                       firstSpeaker: String = "Participant 1") -> String {
+        let lines = format.replacingOccurrences(of: "Participant 1:", with: "\(firstSpeaker):")
+        guard summary else { return lines }
+        return lines.replacingOccurrences(of: transcriptOnly, with: transcriptFirst)
+            + "\n\nAfter the transcript, on a new line: "
+            + CallSummaryPrompt.blocks(me: me, subject: subject, firstSpeaker: firstSpeaker)
             + " With no speech at all, answer only \(noSpeech), with no blocks."
     }
+
+    /// How a file's first speaker not known by name is called; then "Speaker 2" and so on.
+    static let firstSpeaker = "Speaker 1"
 
     private static let transcriptOnly = "Answer with only the transcript, nothing before or after it:"
     private static let transcriptFirst = "Answer with the transcript first, nothing before it:"
@@ -733,6 +766,37 @@ enum CallPrompts {
                          + "Use the same names for the same voices; number new ones after them.")
         }
         lines.append(format(summary: summary, me: me))
+        return lines.joined(separator: "\n\n")
+    }
+
+    /// One chunk of a recording from a file (`name`), dropped on Calls: not a call this app recorded, so nothing is
+    /// known of who is in it. It may be a call, an interview, a meeting or a lecture, with one voice or several, and
+    /// `me` (the person using the app) may or may not be one of them: a voice is theirs only when the conversation makes
+    /// it clear. No sample of their voice, no mutes. `roster`: the speakers of the chunks before. `summary`: the
+    /// answer sums it up after its transcript (a file of one chunk).
+    static func file(name: String, me: String, roster: [String], summary: Bool = false) -> String {
+        let named = me != "Me"
+        let them = named ? me : "\"Me\""
+        var lines = [
+            "This audio is a recording from the file \"\(name)\". It may be a call, an interview, a meeting, a lecture "
+                + "or anything else people say, with one speaker or several, recorded on one microphone or mixed from "
+                + "a call.",
+            (named ? "The person who asked for this transcript is \(me)." : "Call the person who asked for this "
+                + "transcript \"Me\".")
+                + " They may be one of the speakers, or not be in it at all. Name a voice \(them) only when the "
+                + "conversation makes it clear it's them"
+                + (named ? " (someone calls them \(me) and they answer, or they say who they are)" : "")
+                + "; when unsure, it's one of the other speakers.",
+            "Tell the speakers apart. Name one by their name when the recording makes it clear: they introduce "
+                + "themselves, or someone addresses them by name and they answer (\"Аня, ты как?\" then Аня speaks). "
+                + "Otherwise call them \"\(firstSpeaker)\", \"Speaker 2\" and so on, in the order they first speak. "
+                + "One person keeps one name all through.",
+        ]
+        if !roster.isEmpty {
+            lines.append("Earlier in this recording these speakers were heard: \(roster.joined(separator: ", ")). "
+                         + "Use the same names for the same voices; number new ones after them.")
+        }
+        lines.append(format(summary: summary, me: me, subject: "recording", firstSpeaker: firstSpeaker))
         return lines.joined(separator: "\n\n")
     }
 

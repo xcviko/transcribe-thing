@@ -124,9 +124,10 @@ enum CallFormat {
         return shown.isEmpty ? nil : shown
     }
 
-    /// Where the call happened: "Google Meet · Meet – abc-defg-hij", "Telegram", "Menu bar recording". The call's
+    /// Where the call happened: "Google Meet · Meet – abc-defg-hij", "Telegram", "Menu bar recording", "Interview.mp4" (a call made from a file). The call's
     /// title until it has one of its own, then the line under it.
     static func source(_ call: CallRecord) -> String {
+        if let file = call.file { return file.name }
         if call.manual { return "Menu bar recording" }
         let name = call.title
         guard let page = call.pageTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !page.isEmpty,
@@ -136,7 +137,8 @@ enum CallFormat {
 
     /// The service's name alone, as the question about it says: "Google Meet", "Telegram".
     static func shortTitle(_ call: CallRecord) -> String {
-        call.manual ? "Menu bar recording" : call.title
+        if let file = call.file { return file.name }
+        return call.manual ? "Menu bar recording" : call.title
     }
 
     /// The window's title on the call's page: its own title, else the service's name (`shortTitle`).
@@ -170,8 +172,15 @@ enum CallFormat {
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
-    /// Where the call ran: "In Google Chrome", "In the Telegram app", "Your mic and all sound, from the menu bar".
+    /// Where the call ran: "In Google Chrome", "In the Telegram app", "Your mic and all sound, from the menu bar"; for
+    /// one made from a file, where that was: "From a video in ~/Media".
     static func place(_ call: CallRecord) -> String {
+        if let file = call.file {
+            let kind = file.isVideo ? "From a video" : "From an audio file"
+            let folder = (file.path as NSString).deletingLastPathComponent
+            guard !folder.isEmpty else { return kind }
+            return "\(kind) in \((folder as NSString).abbreviatingWithTildeInPath)"
+        }
         if call.manual { return "Your mic and all sound, from the menu bar" }
         if let bundleID = call.bundleID, CallAppKind.of(bundleID) == .browser { return "In \(call.appName)" }
         return "In the \(call.appName) app"
@@ -206,7 +215,9 @@ enum CallFormat {
             notes.append(CallNote(label: label, text: call.micSilencedWhenMuted ? "\(muted); your mic wasn’t recorded then."
                                                                                  : "\(muted)."))
         }
-        if call.manual {
+        if call.isImported {
+            // Nothing about mutes or tabs is known of a file, and nothing needs saying.
+        } else if call.manual {
             notes.append(CallNote(label: "Mute not followed", text: "Mute isn’t followed in a menu bar recording: "
                                       + "what you said while muted is in the transcript."))
         } else if !call.muteKnown {

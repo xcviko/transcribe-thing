@@ -45,6 +45,7 @@ import Testing
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         let file = try await ImportedAudio.read(url)
         #expect(file.fileName == "interview.wav")
+        #expect(!file.isVideo && file.url == url)
         #expect(abs(file.duration - 3) < 0.05)
         #expect(file.speech.voicedSeconds > 1 && !file.speech.isSilent)
     }
@@ -192,6 +193,7 @@ import Testing
         let movie = try await Self.mux(video: video, audio: audio, name: "meeting.mp4", as: .mp4)
         let file = try await ImportedAudio.read(movie)
         #expect(file.fileName == "meeting.mp4")
+        #expect(file.isVideo && file.url == movie, "Calls keeps a video's path for its picture")
         #expect(abs(file.duration - 3) < 0.15)
         #expect(file.speech.voicedSeconds > 1)
     }

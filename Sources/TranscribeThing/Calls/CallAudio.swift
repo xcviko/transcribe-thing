@@ -54,6 +54,22 @@ enum CallAudio {
         return Encoded(samples: written, peak: peak)
     }
 
+    /// Samples already in memory (a file's sound, `ImportedAudio`) as AAC in `m4a`, handed to the encoder a block at a
+    /// time as a journal's are.
+    static func write(_ samples: [Float], to m4a: URL) throws -> Encoded {
+        var peak: Float = 0
+        try FileManager.default.createDirectory(at: m4a.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try CloudAudio.writeM4A(bitRate: RecordingFile.bitRate,
+                                reservingSeconds: Double(samples.count) / Recording.sampleRate, to: m4a) { append in
+            for start in stride(from: 0, to: samples.count, by: block) {
+                let piece = Array(samples[start..<min(samples.count, start + block)])
+                peak = piece.reduce(peak) { max($0, abs($1)) }
+                try append(piece)
+            }
+        }
+        return Encoded(samples: samples.count, peak: peak)
+    }
+
     /// What `cancelEcho` did: the mic as recorded, how long the cleaning took, where the echo canceller was used
     /// (`summary`), what `EchoMeter` measured.
     struct EchoCancelled: Sendable {

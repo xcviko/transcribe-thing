@@ -2,7 +2,8 @@ import AppKit
 import SwiftUI
 
 /// The recorded calls, by day, as Home lists dictations: each call's app, title, speakers, length and where it stands,
-/// with what it waits for (an answer, a Retry, a permission). A click opens the call (`CallDetailPage`).
+/// with what it waits for (an answer, a Retry, a permission). A click opens the call (`CallDetailPage`). Audio or video
+/// dropped on it (or picked with Transcribe a File…) becomes a call of its own, transcribed at once (`CallImport`).
 struct CallsPage: View {
     @Environment(HubContext.self) private var hub
     @Environment(CallStore.self) private var store
@@ -13,6 +14,8 @@ struct CallsPage: View {
     /// The call whose trash was clicked, waiting for Delete (Return) or Cancel (Escape).
     @State private var confirmingDelete: CallRecord?
     @State private var hoverGate = ScrollHoverGate()
+    /// Files are being dragged over the page.
+    @State private var dropTargeted = false
 
     var body: some View {
         let state = hub.callState
@@ -46,12 +49,21 @@ struct CallsPage: View {
             .padding(.bottom, HubLayout.pageBottom + 20)
             .frame(maxWidth: HubLayout.readableWidth, alignment: .leading)
             .frame(maxWidth: .infinity)
+            // Under files dragged over it the page steps back, so the drop target reads alone.
+            .opacity(showsDropTarget ? 0.06 : 1)
         }
         .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, _ in hoverGate.scrolled() }
         .environment(\.scrollHoverGate, hoverGate)
         .searchable(text: $query, placement: .toolbar, prompt: "Search calls")
         .searchFocused($searchFocused)
         .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button(action: pickFiles) {
+                    Label("Transcribe a File…", systemImage: "arrow.down.doc")
+                }
+                .keyboardShortcut("o", modifiers: .command)
+                .help("Transcribe a File… (⌘O): each file becomes a call, sent to \(EngineID.geminiFlash.shortName) at once")
+            }
             ToolbarItem(placement: .primaryAction) { recordButton(state) }
         }
         .background {
@@ -61,9 +73,46 @@ struct CallsPage: View {
                 .frame(width: 0, height: 0)
                 .accessibilityHidden(true)
         }
+        .overlay {
+            if showsDropTarget {
+                FileDropTarget(title: "Drop audio or video to transcribe",
+                               subtitle: "Each file becomes a call here and goes to \(EngineID.geminiFlash.shortName) at once, for who said what and a summary.")
+            }
+        }
+        .overlay(alignment: .bottom) {
+            if let name = imports.reading.first { FileReadingBar(name: name) }
+        }
+        .dropDestination(for: URL.self) { urls, _ in
+            let files = urls.filter(\.isFileURL)
+            guard !files.isEmpty, !hub.isPreview else { return false }
+            imports.add(files)
+            return true
+        } isTargeted: { targeted in
+            withAnimation(Theme.Motion.fade) { dropTargeted = targeted }
+        }
+        .alert(imports.problem?.title ?? "", isPresented: Binding(get: { imports.showsProblem && imports.problem != nil },
+                                                                 set: { if !$0 { imports.problemDismissed() } })) {
+            // OK only closes it: the binding then moves on to what's next.
+            Button("OK") {}
+        } message: {
+            Text(imports.problem?.message ?? "")
+        }
         .callDeleteAlert($confirmingDelete)
         .onAppear {
             if query.isEmpty { query = hub.initialSearch }
+        }
+    }
+
+    private var showsDropTarget: Bool { dropTargeted || hub.previewDropTarget }
+
+    /// Reading the files and making them calls live with the Hub (`CallImport`), so leaving Calls loses nothing.
+    private var imports: CallImport { hub.callImports }
+
+    /// Transcribe a File…: audio or video, one or more, each a call of its own.
+    private func pickFiles() {
+        guard !hub.isPreview else { return }
+        FileImport.choose(message: "Choose audio or video to transcribe as a call.") { [imports] urls in
+            imports.add(urls)
         }
     }
 
@@ -153,7 +202,7 @@ extension View {
     }
 }
 
-private struct CallDeleteAlert: ViewModifier {
+struct CallDeleteAlert: ViewModifier {
     @Binding var call: CallRecord?
     var onDeleted: () -> Void
     @Environment(HubContext.self) private var hub
@@ -168,9 +217,15 @@ private struct CallDeleteAlert: ViewModifier {
             }
             .keyboardShortcut(.defaultAction)
             Button("Cancel", role: .cancel) {}
-        } message: { _ in
-            Text("Its recording and transcript go too. This can’t be undone.")
+        } message: { call in
+            Text(Self.message(for: call))
         }
+    }
+
+    /// A call made from a file loses only what the app keeps: the file itself stays.
+    static func message(for call: CallRecord) -> String {
+        guard let file = call.file else { return "Its recording and transcript go too. This can’t be undone." }
+        return "Its transcript and the sound kept with it go too. “\(file.name)” stays where it is. This can’t be undone."
     }
 }
 
@@ -517,13 +572,16 @@ struct RecordingDot: View {
 // MARK: - Icons
 
 /// The call app's own icon (the browser's for a call in a tab); a phone, or a waveform for a menu bar recording, when
-/// the app isn't on this Mac.
+/// the app isn't on this Mac; a film or a document for a call made from a video or an audio file.
 struct CallAppIcon: View {
     var call: CallRecord
     var size: CGFloat = 30
 
     var body: some View {
-        if !call.manual, let image = CallAppIcons.image(for: call.bundleID) {
+        if let file = call.file {
+            IconTile(symbol: file.isVideo ? "film" : "doc", tint: .inkSecondary, size: size * 0.9)
+                .frame(width: size, height: size)
+        } else if !call.manual, let image = CallAppIcons.image(for: call.bundleID) {
             Image(nsImage: image)
                 .resizable()
                 .interpolation(.high)
@@ -620,7 +678,8 @@ private struct CallsEmptyState: View {
                               selection: $settings.callRecording, label: \.title)
             }
             .padding(.top, 4)
-            Text("Anything else: Start Call Recording in the menu bar records your mic and everything the Mac plays.")
+            Text("Anything else: Start Call Recording in the menu bar records your mic and everything the Mac plays. "
+                 + "A recording you already have: drop it here.")
                 .font(.system(size: 12))
                 .foregroundStyle(.inkTertiary)
                 .multilineTextAlignment(.center)

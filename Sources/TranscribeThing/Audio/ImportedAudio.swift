@@ -2,13 +2,19 @@ import AVFoundation
 import Foundation
 import UniformTypeIdentifiers
 
-/// An audio or video file read for Home to transcribe as if it had been dictated: its sound as 16 kHz mono samples,
-/// like a recording's (`Recording`), with its file's name for the row.
+/// An audio or video file read for Home to transcribe as if it had been dictated, or for Calls as if it had been a
+/// recorded call (`CallStore.addImported`): its sound as 16 kHz mono samples, like a recording's (`Recording`), with
+/// its file's name for the row.
 struct ImportedAudio: Sendable, Identifiable {
     let id = UUID()
     var fileName: String
     var samples: [Float]
     var speech: SpeechStats
+    /// Where it was read from; nil for one made up in a test.
+    var url: URL?
+    /// The file has a picture (a screen recording, a call's video), not only sound: Calls keeps its path so the
+    /// picture can be looked at later.
+    var isVideo = false
 
     var duration: TimeInterval { Double(samples.count) / Recording.sampleRate }
 
@@ -45,8 +51,11 @@ struct ImportedAudio: Sendable, Identifiable {
     /// (`maxDuration`; tests pass less) is `.tooLong`.
     nonisolated static func read(_ url: URL, limit: TimeInterval = maxDuration) async throws(ReadError) -> ImportedAudio {
         let samples: [Float]
+        var isVideo = false
         do {
-            samples = try await readAsset(url, limit: limit)
+            let read = try await readAsset(url, limit: limit)
+            samples = read.samples
+            isVideo = read.isVideo
         } catch .unreadable {
             guard let read = try? AudioFileLoader.load16kMono(url) else { throw .unreadable }
             guard Double(read.count) / Recording.sampleRate <= limit else { throw .tooLong }
@@ -55,10 +64,15 @@ struct ImportedAudio: Sendable, Identifiable {
         guard !samples.isEmpty else { throw .noAudio }
         let speech = SpeechAnalyzer.stats(for: samples)
         guard !speech.isSilent, speech.voicedSeconds > 0 else { throw .silent }
-        return ImportedAudio(fileName: url.lastPathComponent, samples: samples, speech: speech)
+        return ImportedAudio(fileName: url.lastPathComponent, samples: samples, speech: speech, url: url,
+                             isVideo: isVideo)
     }
 
-    private nonisolated static func readAsset(_ url: URL, limit: TimeInterval) async throws(ReadError) -> [Float] {
+    /// The samples, and whether the file has a picture too: a video track, in a file that isn't of an audio type (an
+    /// M4A's cover art can come as one).
+    private nonisolated static func readAsset(_ url: URL,
+                                              limit: TimeInterval) async throws(ReadError)
+        -> (samples: [Float], isVideo: Bool) {
         let asset = AVURLAsset(url: url)
         let tracks: [AVAssetTrack]
         let duration: CMTime
@@ -74,6 +88,8 @@ struct ImportedAudio: Sendable, Identifiable {
             throw (try? await asset.loadTracks(withMediaType: .video).isEmpty) == false ? .noAudio : .unreadable
         }
         if duration.isNumeric, duration.seconds > limit { throw .tooLong }
+        let hasPicture = (try? await asset.loadTracks(withMediaType: .video).isEmpty) == false
+        let isVideo = hasPicture && UTType(filenameExtension: url.pathExtension)?.conforms(to: .audio) != true
         guard let reader = try? AVAssetReader(asset: asset) else { throw .unreadable }
         let output = AVAssetReaderAudioMixOutput(audioTracks: tracks, audioSettings: [
             AVFormatIDKey: kAudioFormatLinearPCM,
@@ -102,6 +118,6 @@ struct ImportedAudio: Sendable, Identifiable {
             guard status == kCMBlockBufferNoErr else { throw .unreadable }
         }
         guard reader.status == .completed else { throw .unreadable }
-        return samples
+        return (samples, isVideo)
     }
 }

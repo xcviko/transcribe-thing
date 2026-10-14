@@ -107,6 +107,22 @@ enum HubSnapshots {
                 Samples.calls(c)
                 c.settings.callRecording = .off
             },
+            // Calls made from files: a screen recording done (its film, its cost), a lecture's audio transcribing.
+            hub("hub-calls-file", .calls, configure: Samples.callsWithFiles),
+            // Files dragged over Calls.
+            hub("hub-calls-drop", .calls) { c in
+                Samples.calls(c)
+                c.previewDropTarget = true
+            },
+            // The design review's page: where the file was, three speakers, its summary.
+            hub("hub-call-detail-file", .callDetail, height: 1100) { c in
+                Samples.callsWithFiles(c)
+                c.windows.openCallID = PreviewFixtures.callID(7)
+            },
+            hub("hub-call-detail-file-transcribing", .callDetail) { c in
+                Samples.callsWithFiles(c)
+                c.windows.openCallID = PreviewFixtures.callID(8)
+            },
             hub("hub-calls-empty", .calls),
             hub("hub-calls-empty-off", .calls) { c in c.settings.callRecording = .off },
             // The Meet call: three speakers besides Sam, Matvey renamed, a phrase said muted, another tab's sound.
@@ -487,6 +503,12 @@ enum HubSnapshots {
         /// The fixture calls (`PreviewFixtures.calls`).
         @MainActor static func calls(_ context: HubContext) {
             context.calls = .preview(calls: PreviewFixtures.calls(), settings: context.settings)
+        }
+
+        /// The fixture calls, with two made from files (`PreviewFixtures.importedCalls`).
+        @MainActor static func callsWithFiles(_ context: HubContext) {
+            context.calls = .preview(calls: PreviewFixtures.importedCalls() + PreviewFixtures.calls(),
+                                     settings: context.settings)
         }
 
         /// A Meet call recorded now, 12:34 in: kept (in the store, as the monitor puts it) or asked about.
