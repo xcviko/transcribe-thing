@@ -1849,6 +1849,266 @@ private func copyScreenshotAndFile(to pasteboard: NSPasteboard) {
     }
 }
 
+// MARK: - Holding a modifier-only Switch model
+
+/// `Keyboard` with the tap engine's repeat timer on a fake clock: a `.start` schedules ticks (after the delay, then
+/// every interval), `.stop` cancels them, and `advance(to:)` feeds the router the ticks that fall due. Times are in ms.
+private struct ClockedKeyboard {
+    var kb: Keyboard
+    private(set) var now = 0
+    private var nextTick: Int?
+    private var interval = 0
+    /// Every event, with the time it came.
+    private(set) var log: [Stamped] = []
+
+    struct Stamped: Equatable, CustomStringConvertible {
+        var at: Int
+        var event: HotkeyEvent
+        var description: String { "\(at): \(event)" }
+    }
+
+    init(bindings: ShortcutBindings, keyRepeat: KeyRepeat? = KeyRepeat(delay: 0.25, interval: 0.05)) {
+        kb = Keyboard(bindings: bindings)
+        kb.config.keyRepeat = keyRepeat
+    }
+
+    var isTicking: Bool { nextTick != nil }
+
+    @discardableResult mutating func press(_ m: Keyboard.Modifier) -> HotkeyRouter.Decision { apply(kb.press(m)) }
+    @discardableResult mutating func release(_ m: Keyboard.Modifier) -> HotkeyRouter.Decision { apply(kb.release(m)) }
+    @discardableResult mutating func down(_ key: Int, isRepeat: Bool = false) -> HotkeyRouter.Decision {
+        apply(kb.down(key, isRepeat: isRepeat))
+    }
+    @discardableResult mutating func up(_ key: Int) -> HotkeyRouter.Decision { apply(kb.up(key)) }
+    @discardableResult mutating func click() -> HotkeyRouter.Decision { apply(kb.click()) }
+
+    /// Moves the clock to `ms`, firing every tick due on the way.
+    mutating func advance(to ms: Int) {
+        while let tick = nextTick, tick <= ms {
+            now = tick
+            nextTick = tick + interval
+            apply(kb.send(HotkeyInput(kind: .repeatTick)))
+        }
+        now = ms
+    }
+
+    /// The events logged from `ms` on.
+    func events(from ms: Int) -> [Stamped] { log.filter { $0.at >= ms } }
+
+    @discardableResult
+    private mutating func apply(_ decision: HotkeyRouter.Decision) -> HotkeyRouter.Decision {
+        log += decision.events.map { Stamped(at: now, event: $0) }
+        switch decision.repeatTimer {
+        case .start(let keyRepeat):
+            nextTick = now + Int((keyRepeat.delay * 1000).rounded())
+            interval = Int((keyRepeat.interval * 1000).rounded())
+        case .stop: nextTick = nil
+        case nil: break
+        }
+        return decision
+    }
+}
+
+/// Modifiers don't autorepeat: a modifier-only Switch model held steps on at the keyboard's repeat pace, on the
+/// engine's timer, the way fn Tab held steps on at every autorepeat.
+@Suite struct HeldSwitchModelRouterTests {
+    /// The user's own bindings: push to talk is Right ⌃ alone, Switch model is Right ⌃ + ⌘, the rest are ⌃ + a key.
+    private static let usersBindings: ShortcutBindings = {
+        let json = """
+        {"addToDictionary":{"keyCode":2,"modifiers":[{"modifier":"control","side":"either"}]},\
+        "handsFree":{"keyCode":49,"modifiers":[{"modifier":"control","side":"either"}]},\
+        "pasteLast":{"keyCode":9,"modifiers":[{"modifier":"control","side":"either"}]},\
+        "polish":{"keyCode":35,"modifiers":[{"modifier":"control","side":"either"}]},\
+        "pushToTalk":{"modifiers":[{"modifier":"control","side":"right"}]},\
+        "switchModel":{"modifiers":[{"modifier":"control","side":"right"},{"modifier":"command","side":"either"}]},\
+        "translate":{"keyCode":17,"modifiers":[{"modifier":"control","side":"either"}]}}
+        """
+        return try! JSONDecoder().decode(ShortcutBindings.self, from: Data(json.utf8))
+    }()
+
+    private func steps(_ log: [ClockedKeyboard.Stamped]) -> [Int] {
+        log.filter { $0.event == .cycleEngineRepeat }.map(\.at)
+    }
+
+    @Test func theUsersBindingsAreWhatTheyLookLike() {
+        #expect(Self.usersBindings[.pushToTalk] == Shortcut(modifiers: [.init(.control, .right)]))
+        #expect(Self.usersBindings[.switchModel] == Shortcut(modifiers: [.init(.control, .right), .init(.command)]))
+        #expect(Self.usersBindings[.switchModel]?.isModifierOnly == true)
+    }
+
+    @Test func heldItStepsAtOnceThenAtTheKeyboardsRepeatPaceUntilReleased() {
+        var kb = ClockedKeyboard(bindings: Self.usersBindings)
+        #expect(kb.press(.rightControl).events == [.pttDown])
+        kb.advance(to: 1000)
+        let press = kb.press(.leftCommand)
+        #expect(press.events == [.cycleEngine], "the first step comes on the press, as before")
+        #expect(press.repeatTimer == .start(KeyRepeat(delay: 0.25, interval: 0.05)))
+        #expect(!press.swallow, "modifier events are never swallowed")
+        kb.advance(to: 1249)
+        #expect(kb.events(from: 1001).isEmpty, "nothing before the keyboard's delay until repeat")
+        kb.advance(to: 1400)
+        #expect(steps(kb.events(from: 1001)) == [1250, 1300, 1350, 1400])
+        #expect(kb.events(from: 1001).allSatisfy { $0.event == .cycleEngineRepeat })
+
+        let release = kb.release(.leftCommand)
+        #expect(release.events.isEmpty, "letting go of ⌘ doesn't end the dictation")
+        #expect(release.repeatTimer == .stop)
+        kb.advance(to: 3000)
+        #expect(steps(kb.events(from: 1401)).isEmpty)
+
+        // Right ⌃ is still push to talk: ⌘ again steps again, and releasing ⌃ ends the dictation.
+        #expect(kb.press(.leftCommand).events == [.cycleEngine])
+        kb.advance(to: 3250)
+        #expect(steps(kb.events(from: 3000)) == [3250])
+        kb.release(.leftCommand)
+        #expect(kb.release(.rightControl).events == [.pttUp])
+        #expect(!kb.isTicking)
+    }
+
+    @Test func releasingControlFirstEndsTheDictationAndTheSteps() {
+        var kb = ClockedKeyboard(bindings: Self.usersBindings)
+        kb.press(.rightControl)
+        kb.press(.rightCommand)
+        kb.advance(to: 300)
+        #expect(steps(kb.log) == [250, 300])
+        let release = kb.release(.rightControl)
+        #expect(release.events == [.pttUp], "releasing the push-to-talk key ends the dictation as before")
+        #expect(release.repeatTimer == .stop)
+        kb.advance(to: 2000)
+        #expect(steps(kb.log) == [250, 300])
+    }
+
+    @Test func pushToTalkAloneNeverTicks() {
+        var kb = ClockedKeyboard(bindings: Self.usersBindings)
+        let press = kb.press(.rightControl)
+        #expect(press.events == [.pttDown])
+        #expect(press.repeatTimer == nil)
+        kb.advance(to: 2000)
+        #expect(kb.release(.rightControl).events == [.pttUp])
+        #expect(kb.log.map(\.event) == [.pttDown, .pttUp])
+    }
+
+    @Test func anotherKeyOrAClickStopsIt() {
+        var kb = ClockedKeyboard(bindings: Self.usersBindings)
+        kb.press(.rightControl)
+        kb.press(.leftCommand)
+        kb.advance(to: 250)
+        #expect(kb.down(kVK_ANSI_A).repeatTimer == .stop, "another key is something else")
+        kb.up(kVK_ANSI_A)
+        kb.advance(to: 1000)
+        #expect(steps(kb.log) == [250])
+        kb.release(.leftCommand)
+        kb.release(.rightControl)
+
+        // A click (opening the pill's model menu, say) stops it; the dictation goes on.
+        kb.advance(to: 2000)
+        kb.press(.rightControl)
+        kb.press(.leftCommand)
+        let click = kb.click()
+        #expect(click.events.isEmpty)
+        #expect(click.repeatTimer == .stop)
+        kb.advance(to: 3000)
+        #expect(steps(kb.events(from: 2000)).isEmpty)
+        kb.release(.leftCommand)
+        #expect(kb.release(.rightControl).events == [.pttUp])
+    }
+
+    @Test func anExtraModifierStopsItAndLettingGoOfItDoesntRestartIt() {
+        var kb = ClockedKeyboard(bindings: Self.usersBindings)
+        kb.press(.rightControl)
+        kb.press(.leftCommand)
+        #expect(kb.press(.leftShift).repeatTimer == .stop)
+        #expect(kb.release(.leftShift).repeatTimer == nil)
+        kb.advance(to: 2000)
+        #expect(steps(kb.log).isEmpty)
+    }
+
+    @Test func noStepsOnceTheDictationEnds() {
+        // Hands-free (no push to talk held) with a Right ⌘ Switch model.
+        var kb = ClockedKeyboard(bindings: bindings([.switchModel: .rightCommand]))
+        kb.kb.config.isRecording = true
+        #expect(kb.press(.rightCommand).events == [.cycleEngine])
+        kb.advance(to: 300)
+        #expect(steps(kb.log) == [250, 300])
+        // The dictation stops while ⌘ is still down: the next tick steps no more and stops the timer.
+        kb.kb.config.isRecording = false
+        kb.advance(to: 2000)
+        #expect(steps(kb.log) == [250, 300])
+        #expect(!kb.isTicking)
+        kb.release(.rightCommand)
+
+        // Outside a dictation the chord is the app's: nothing fires, nothing ticks.
+        let outside = kb.press(.rightCommand)
+        #expect(outside.events.isEmpty)
+        #expect(outside.repeatTimer == nil)
+        kb.advance(to: 4000)
+        #expect(steps(kb.log) == [250, 300])
+    }
+
+    @Test func theRecorderCapturingStopsIt() {
+        var kb = ClockedKeyboard(bindings: Self.usersBindings)
+        kb.press(.rightControl)
+        kb.press(.leftCommand)
+        kb.kb.config.isSuspended = true
+        kb.advance(to: 1000)
+        #expect(steps(kb.log).isEmpty)
+        #expect(!kb.isTicking)
+    }
+
+    @Test func aStateResetStopsTheTimerOnItsNextTick() {
+        var kb = ClockedKeyboard(bindings: Self.usersBindings)
+        kb.press(.rightControl)
+        kb.press(.leftCommand)
+        _ = kb.kb.router.reset()
+        kb.advance(to: 1000)
+        #expect(steps(kb.log).isEmpty)
+        #expect(!kb.isTicking)
+    }
+
+    @Test func withKeyRepeatOffItStepsOncePerPress() {
+        var kb = ClockedKeyboard(bindings: Self.usersBindings, keyRepeat: nil)
+        kb.press(.rightControl)
+        let press = kb.press(.leftCommand)
+        #expect(press.events == [.cycleEngine])
+        #expect(press.repeatTimer == nil)
+        kb.advance(to: 2000)
+        #expect(steps(kb.log).isEmpty)
+    }
+
+    @Test func aCycleOfOneNeitherStepsNorTicks() {
+        var kb = ClockedKeyboard(bindings: Self.usersBindings)
+        kb.kb.config.switchesModels = false
+        kb.press(.rightControl)
+        let press = kb.press(.leftCommand)
+        #expect(press.repeatTimer == nil)
+        #expect(!press.events.contains(.cycleEngine))
+    }
+
+    /// fn Tab keeps the keyboard's own autorepeat: no timer.
+    @Test func keyedFnTabStillRidesTheKeyboardsAutorepeat() {
+        var kb = ClockedKeyboard(bindings: .defaults)
+        kb.press(.fn)
+        let tab = kb.down(kVK_Tab)
+        #expect(tab.events == [.cycleEngine])
+        #expect(tab.repeatTimer == nil)
+        kb.advance(to: 1000)
+        #expect(steps(kb.log).isEmpty, "no ticks of our own")
+        let repeated = kb.down(kVK_Tab, isRepeat: true)
+        #expect(repeated.events == [.cycleEngineRepeat])
+        #expect(repeated.repeatTimer == nil)
+        kb.up(kVK_Tab)
+        #expect(kb.release(.fn).events == [.pttUp])
+        #expect(!kb.isTicking)
+    }
+
+    @Test func theSystemsTimingIsClampedAndOffMeansNoRepeat() {
+        #expect(KeyRepeat(systemDelay: 0.225, interval: 0.03) == KeyRepeat(delay: 0.225, interval: 0.05))
+        #expect(KeyRepeat(systemDelay: 0.01, interval: 0.5) == KeyRepeat(delay: 0.1, interval: 0.5))
+        #expect(KeyRepeat(systemDelay: 0.5, interval: 4500) == nil)
+        #expect(KeyRepeat(systemDelay: .infinity, interval: 0.1) == nil)
+    }
+}
+
 // MARK: - Pasted text
 
 @Suite struct PastedTextTests {

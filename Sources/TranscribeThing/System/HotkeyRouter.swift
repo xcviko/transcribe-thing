@@ -3,7 +3,11 @@ import Foundation
 
 /// A keyboard or mouse event reduced to what `HotkeyRouter` needs, so the decision logic runs without CGEvents.
 struct HotkeyInput: Equatable, Sendable {
-    enum Kind: Equatable, Sendable { case flagsChanged, keyDown, keyUp, mouseDown }
+    enum Kind: Equatable, Sendable {
+        case flagsChanged, keyDown, keyUp, mouseDown
+        /// The engine's repeat timer (`HotkeyRouter.Decision.repeatTimer`): a held modifier-only Switch model steps on.
+        case repeatTick
+    }
 
     var kind: Kind
     var keyCode: UInt16
@@ -20,6 +24,31 @@ struct HotkeyInput: Equatable, Sendable {
         self.isRepeat = isRepeat
         self.isSynthetic = isSynthetic
     }
+}
+
+/// The keyboard's own autorepeat timing (Keyboard Settings' "Delay until repeat" and "Key repeat rate"), which a held
+/// modifier-only shortcut copies: modifiers don't autorepeat.
+struct KeyRepeat: Equatable, Sendable {
+    /// From the press to the first repeat.
+    var delay: TimeInterval
+    /// Between repeats.
+    var interval: TimeInterval
+
+    init(delay: TimeInterval, interval: TimeInterval) {
+        self.delay = delay
+        self.interval = interval
+    }
+
+    /// The system's timing within sane bounds, or nil with key repeat turned off (Keyboard Settings' "Off" is a huge
+    /// interval): a held Tab doesn't repeat then either.
+    init?(systemDelay delay: TimeInterval, interval: TimeInterval) {
+        guard delay.isFinite, interval.isFinite, delay <= 10, interval <= 10 else { return nil }
+        self.delay = max(delay, 0.1)
+        self.interval = max(interval, 0.05)
+    }
+
+    /// Until the monitor reads the system's (`HotkeyMonitor.currentConfig`): a common setting.
+    static let standard = KeyRepeat(delay: 0.5, interval: 0.1)
 }
 
 /// Pure, dictation-agnostic hotkey recognizer. It only recognizes key gestures and decides which events
@@ -41,10 +70,12 @@ struct HotkeyInput: Equatable, Sendable {
 /// - Switch model (like Esc) is live only during a dictation, and it never interrupts the PTT hold: it may be
 ///   pressed with the PTT or hands-free modifiers still held (fn+Tab while holding fn), and extra modifiers on
 ///   the way to it (⌘ of ⌘⇧M) don't end the hold. Outside a dictation its keys pass through. Held down, its
-///   autorepeats step on (`cycleEngineRepeat`). Polish's shortcut is live the same way, on any model (the controller
-///   decides what it does there), and its autorepeats are `polishRepeat` (on Gemini, Polish on and off again and
-///   again). Add to dictionary's is live too, on any model, always held as `.heldForSelection`: the controller reads
-///   what's selected right then.
+///   autorepeats step on (`cycleEngineRepeat`). Modifiers don't autorepeat, so a modifier-only one held starts the
+///   engine's repeat timer (`Decision.repeatTimer`) at the keyboard's repeat pace; its ticks step on until the chord
+///   is no longer held, another key is pressed, a click comes, the dictation ends or the recorder captures. Polish's
+///   shortcut is live the same way, on any model (the controller decides what it does there), and its autorepeats are
+///   `polishRepeat` (on Gemini, Polish on and off again and again). Add to dictionary's is live too, on any model,
+///   always held as `.heldForSelection`: the controller reads what's selected right then.
 /// - Swallowed keys also have their autorepeats and keyUp swallowed.
 struct HotkeyRouter: Equatable, Sendable {
     struct Config: Equatable, Sendable {
@@ -65,12 +96,22 @@ struct HotkeyRouter: Equatable, Sendable {
         var isSuspended = false
         /// Forward raw key transitions (onboarding keyboard illustration).
         var forwardsRawKeys = false
+        /// How a held modifier-only Switch model repeats; nil (key repeat off) it steps once per press.
+        var keyRepeat: KeyRepeat? = .standard
+    }
+
+    /// What the engine does with its repeat timer, which feeds `.repeatTick` inputs back.
+    enum RepeatTimer: Equatable, Sendable {
+        /// First tick after `delay`, then one every `interval`, replacing a timer already running.
+        case start(KeyRepeat)
+        case stop
     }
 
     struct Decision: Equatable, Sendable {
         var events: [HotkeyEvent] = []
         var swallow = false
         var rawKey: RawKeyEvent?
+        var repeatTimer: RepeatTimer?
     }
 
     enum Gesture: Equatable, Sendable {
@@ -86,6 +127,8 @@ struct HotkeyRouter: Equatable, Sendable {
     private(set) var swallowedKeys: Set<UInt16> = []
     /// Modifier-only bindings (other than PTT) that already fired during the current hold.
     private var firedModifierChords: Set<ShortcutAction> = []
+    /// A modifier-only Switch model is held and its repeat timer runs: every tick steps on, as Tab's autorepeats do.
+    private(set) var repeatsSwitchModel = false
 
     init() {}
 
@@ -95,12 +138,22 @@ struct HotkeyRouter: Equatable, Sendable {
 
     mutating func handle(_ input: HotkeyInput, config: Config) -> Decision {
         if input.isSynthetic { return Decision() }
+        var decision: Decision
         switch input.kind {
-        case .flagsChanged: return flagsChanged(input, config)
-        case .keyDown: return keyDown(input, config)
-        case .keyUp: return keyUp(input, config)
-        case .mouseDown: return mouseDown(config)
+        case .flagsChanged: decision = flagsChanged(input, config)
+        case .keyDown: decision = keyDown(input, config)
+        case .keyUp: decision = keyUp(input, config)
+        case .mouseDown: decision = mouseDown(config)
+        case .repeatTick: decision = Decision()
         }
+        if repeatsSwitchModel, !switchModelRepeatHolds(after: input, config) {
+            repeatsSwitchModel = false
+            decision.repeatTimer = .stop
+        } else if input.kind == .repeatTick {
+            // A tick from a timer that should have stopped (state reset, or a stop that crossed it) stops it.
+            if repeatsSwitchModel { decision.events.append(.cycleEngineRepeat) } else { decision.repeatTimer = .stop }
+        }
+        return decision
     }
 
     /// After the tap was re-enabled events may have been missed: rebuild modifier state from the session
@@ -110,6 +163,8 @@ struct HotkeyRouter: Equatable, Sendable {
         modifiers = ModifierSnapshot(rawFlags: flags, functionDown: functionDown)
         swallowedKeys = swallowedKeys.filter(isKeyDown)
         firedModifierChords.removeAll()
+        // Its press may have been missed: the next tick stops the timer.
+        repeatsSwitchModel = false
         var events: [HotkeyEvent] = []
         switch gesture {
         case .idle:
@@ -172,6 +227,11 @@ struct HotkeyRouter: Equatable, Sendable {
             // Leaves the PTT hold alone: releasing the PTT key still ends the dictation.
             firedModifierChords.insert(action)
             if let event = Self.event(for: action) { decision.events.append(event) }
+            // Modifiers don't autorepeat: held, it steps on at the keyboard's repeat pace, as fn Tab held does.
+            if action == .switchModel, let keyRepeat = config.keyRepeat {
+                repeatsSwitchModel = true
+                decision.repeatTimer = .start(keyRepeat)
+            }
             return decision
         }
 
@@ -373,6 +433,20 @@ struct HotkeyRouter: Equatable, Sendable {
         if flags & other != 0 { return false }
         // Only the family bit (some synthetic events): fall back to the count.
         return countWentUp
+    }
+
+    /// A held modifier-only Switch model keeps repeating after `input`: still live (a dictation, another model to step
+    /// to, the recorder not capturing), still held exactly, and nothing else pressed or clicked (a click is how the
+    /// pill's model menu opens).
+    private func switchModelRepeatHolds(after input: HotkeyInput, _ config: Config) -> Bool {
+        switch input.kind {
+        case .keyDown where !input.isRepeat, .mouseDown: return false
+        default: break
+        }
+        guard !config.isSuspended, let switchModel = liveSwitchModel(config), switchModel.isModifierOnly else {
+            return false
+        }
+        return matchesDuringDictation(switchModel, config.bindings)
     }
 
     private func isBusy(_ config: Config) -> Bool {

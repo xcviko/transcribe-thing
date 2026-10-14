@@ -2014,7 +2014,8 @@ final class DictationController {
     }
 
     /// The Switch model key held down: a step, with its tick, at every autorepeat of the keyboard, however fast
-    /// (the ticks ring over each other). Nothing to switch to, it stays quiet: the press already said why.
+    /// (the ticks ring over each other). A modifier-only shortcut held steps at the same pace (the tap's repeat timer).
+    /// Nothing to switch to, it stays quiet: the press already said why.
     private func repeatCycle() {
         guard machine.isRecording, canSwitchModels else { return }
         send(.cycleEngine)

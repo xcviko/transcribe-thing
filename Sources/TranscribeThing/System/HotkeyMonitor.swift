@@ -8,7 +8,8 @@ enum HotkeyEvent: Equatable, Sendable {
     case pttDown, pttUp, pttInterrupted, handsFreeToggle, cancel, pasteLast
     /// The switch model shortcut, during a dictation.
     case cycleEngine
-    /// Its key held down: an autorepeat, which steps on too.
+    /// Its key held down: an autorepeat, which steps on too. A modifier-only one doesn't autorepeat; held, the tap's
+    /// repeat timer sends these at the keyboard's repeat pace.
     case cycleEngineRepeat
     /// The polish shortcut, during a dictation: Polish on or off for it, or Polish Selection with text selected.
     case polish
@@ -145,12 +146,15 @@ final class HotkeyMonitor {
     // MARK: Config
 
     /// What the tap routes with right now: Switch model is intercepted only while the lineup's cycle has another
-    /// model to step to.
+    /// model to step to. The key repeat timing is read again each time (every dictation pushes a config), so a change
+    /// in Keyboard Settings applies from the next one.
     func currentConfig() -> HotkeyRouter.Config {
         HotkeyRouter.Config(bindings: settings.shortcuts, isBusy: isBusy, isRecording: isRecording,
                             switchesModels: settings.lineup.cycle.count > 1,
                             cardPaste: cardPaste, cardClose: cardClose,
-                            isSuspended: suspendCount > 0, forwardsRawKeys: onRawKey != nil)
+                            isSuspended: suspendCount > 0, forwardsRawKeys: onRawKey != nil,
+                            keyRepeat: KeyRepeat(systemDelay: NSEvent.keyRepeatDelay,
+                                                 interval: NSEvent.keyRepeatInterval))
     }
 
     private func pushConfig() {
@@ -260,6 +264,8 @@ final class HotkeyTapEngine: @unchecked Sendable {
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
     private var healthTimer: CFRunLoopTimer?
+    /// A held modifier-only Switch model's repeat (`HotkeyRouter.RepeatTimer`): it feeds `.repeatTick` to the router.
+    private var repeatTimer: CFRunLoopTimer?
     private var reportedAvailability: Bool?
 
     init(config: HotkeyRouter.Config, healthInterval: TimeInterval = 3,
@@ -375,6 +381,7 @@ final class HotkeyTapEngine: @unchecked Sendable {
         tap = nil
         source = nil
         tapActive.withLock { $0 = false }
+        applyRepeatTimer(.stop)
         let events = router.reset()
         if !events.isEmpty { sink(.decision(events, nil)) }
     }
@@ -450,12 +457,32 @@ final class HotkeyTapEngine: @unchecked Sendable {
             flags: event.flags.rawValue,
             isRepeat: isKeyboard && event.getIntegerValueField(.keyboardEventAutorepeat) != 0,
             isSynthetic: event.getIntegerValueField(.eventSourceUserData) == SyntheticEvent.tag)
+        let swallow = route(input)
+        return swallow ? nil : pass
+    }
+
+    /// Runs `input` through the router, delivers what it decided and applies its repeat timer. Returns whether the
+    /// event is swallowed.
+    private func route(_ input: HotkeyInput) -> Bool {
         let current = config.withLock { $0 }
         let decision = router.handle(input, config: current)
         if !decision.events.isEmpty || decision.rawKey != nil {
             sink(.decision(decision.events, decision.rawKey))
         }
-        return decision.swallow ? nil : pass
+        if let change = decision.repeatTimer { applyRepeatTimer(change) }
+        return decision.swallow
+    }
+
+    private func applyRepeatTimer(_ change: HotkeyRouter.RepeatTimer) {
+        if let timer = repeatTimer { CFRunLoopTimerInvalidate(timer) }
+        repeatTimer = nil
+        guard case .start(let keyRepeat) = change, let runLoop else { return }
+        let timer = CFRunLoopTimerCreateWithHandler(kCFAllocatorDefault, CFAbsoluteTimeGetCurrent() + keyRepeat.delay,
+                                                    keyRepeat.interval, 0, 0) { [weak self] _ in
+            _ = self?.route(HotkeyInput(kind: .repeatTick))
+        }
+        CFRunLoopAddTimer(runLoop, timer, .commonModes)
+        repeatTimer = timer
     }
 
     /// Up/down events may have been missed while the tap was off: rebuild from the session state table.
