@@ -148,6 +148,12 @@ enum HubSnapshots {
                 c.calls.update(PreviewFixtures.callID(2)) { $0.summary = nil }
                 c.calls.summarizing.insert(PreviewFixtures.callID(2))
             },
+            // The design review dropped as a video, its "Speaker 2" being named from the picture.
+            hub("hub-call-detail-naming", .callDetail, height: 1100) { c in
+                Samples.callsWithFiles(c)
+                c.windows.openCallID = PreviewFixtures.callID(7)
+                c.calls.namingSpeakers.insert(PreviewFixtures.callID(7))
+            },
             // Telemost's summary failed: why, and Summarize.
             hub("hub-call-detail-summary-failed", .callDetail) { c in Samples.openCall(c, 6) },
             // Telemost's other side came out silent: the permission, with Open Settings.

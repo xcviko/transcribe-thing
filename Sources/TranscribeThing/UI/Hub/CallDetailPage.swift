@@ -357,9 +357,20 @@ private struct CallTranscriptView: View {
                     .accessibilityAddTraits(.isHeader)
                 Spacer(minLength: 8)
                 if call.transcript.map({ !$0.segments.isEmpty }) == true {
-                    Text("Click a phrase to play from there, a name to rename them.")
+                    if hub.calls.namingSpeakers.contains(call.id) {
+                        // The names step (`CallTranscriber.nameFromVideo`): speakers may get their names in a moment.
+                        HStack(spacing: 8) {
+                            ShimmerBar(height: 3)
+                                .frame(width: 28)
+                            Text("Finding who’s who in the video…")
+                        }
                         .font(.system(size: 11))
                         .foregroundStyle(.inkTertiary)
+                    } else {
+                        Text("Click a phrase to play from there, a name to rename them.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.inkTertiary)
+                    }
                     Button {
                         hub.copy(CallFormat.copyText(call))
                     } label: {

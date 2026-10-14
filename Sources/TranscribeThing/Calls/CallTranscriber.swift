@@ -43,7 +43,9 @@ struct CallModel: Equatable, Sendable {
 ///
 /// A call made from a file dropped on Calls (`importFile`, `CallRecord.file`) goes the same way, in the same chunks,
 /// with two differences: it's one track with no mic of its own, so there's no sample of the person's voice; and the
-/// prompt asks about a recording of anything, which the person may not be in (`CallPrompts.file`).
+/// prompt asks about a recording of anything, which the person may not be in (`CallPrompts.file`). A video's call then
+/// takes one more step, after its summary: its speakers still called "Speaker 2" are named from the picture
+/// (`nameFromVideo`, `CallVideoNames`), only while the Calls requests go through the person's endpoint.
 @MainActor
 final class CallTranscriber {
     /// One request: the chunk's audio as an .m4a, the system prompt, the chunk's length, and the sample of the
@@ -54,6 +56,17 @@ final class CallTranscriber {
     /// One text-only request: the transcript to sum up, and the system prompt. Throws `AppError`; an answer cut off by
     /// its token limit as `AppError.openRouterTruncated` with what came of it.
     typealias SendText = @Sendable (_ text: String, _ prompt: String) async throws -> CloudResult
+    /// The names step's request: the silent copy of a call's video (`CallVideoCopy`, an .mp4), uploaded, then asked
+    /// about with the prompt (`CallVideoNames.prompt`). Throws `AppError`.
+    typealias SendVideo = @Sendable (_ video: URL, _ prompt: String) async throws -> CloudResult
+
+    /// How a video's call gets its speakers named from the picture (`nameFromVideo`).
+    struct VideoNames {
+        /// Whether the step runs now: only while the Calls requests go through the person's endpoint, which has the
+        /// Files API the video goes up through. On OpenRouter it's skipped: no Files API, and no known size limit.
+        var isAvailable: @MainActor () -> Bool
+        var send: SendVideo
+    }
 
     /// Longest chunk in one request: well under the ~1 h 47 min a request's budget takes at 16 kbps, so the answer's
     /// tokens (a line for every phrase, `OpenRouterClient.transcriptionMaxTokens`) are never the limit.
@@ -77,11 +90,16 @@ final class CallTranscriber {
     private var tasks: [UUID: Task<Void, Never>] = [:]
     /// Summaries being written on their own (`summarize`).
     private var summaryTasks: [UUID: Task<Void, Never>] = [:]
+    /// The names step; nil never runs it (tests that don't test it).
+    private let videoNames: VideoNames?
+    /// Names steps running (`nameFromVideo`).
+    private var nameTasks: [UUID: Task<Void, Never>] = [:]
 
-    init(store: CallStore, send: @escaping Send, sendText: SendText? = nil) {
+    init(store: CallStore, send: @escaping Send, sendText: SendText? = nil, videoNames: VideoNames? = nil) {
         self.store = store
         self.send = send
         self.sendText = sendText
+        self.videoNames = videoNames
     }
 
     /// The live request: the model picked for calls (`model`, read as each request goes: `AppSettings.callModel`) at
@@ -127,6 +145,42 @@ final class CallTranscriber {
         }
     }
 
+    /// The names step's live request, through the person's endpoint only (`VertexProxyAccount.routesGemini`, set up):
+    /// the video up through its Files API (`OpenRouterClient.uploadVideo`), then the question to the model picked for
+    /// calls at its level (`askAboutVideo`). Without the endpoint the step doesn't run (`VideoNames.isAvailable`), and
+    /// a request that finds it gone by the time it goes fails rather than going to OpenRouter.
+    static func endpointVideoNames(proxy: VertexProxyAccount,
+                                   model: @escaping @MainActor () -> CallModel = { .default }) -> VideoNames {
+        VideoNames(isAvailable: { proxy.routesGemini && proxy.isConfigured }) { video, prompt in
+            let route = await MainActor.run { () -> Result<(OpenRouterClient, String, CallModel), AppError> in
+                guard proxy.routesGemini, proxy.isConfigured else { return .failure(.vertexProxy(.notSetUp)) }
+                guard let key = proxy.apiKey(), let client = proxy.client() else {
+                    return .failure(.vertexProxy(.keyUnreadable))
+                }
+                return .success((client, key, model()))
+            }
+            let (client, key, call) = try route.get()
+            do {
+                let file = try await client.uploadVideo(video, displayName: video.lastPathComponent, apiKey: key)
+                let result = try await client.askAboutVideo(
+                    fileURI: file.uri, text: prompt, model: call.modelID, effort: call.effort,
+                    maxTokens: videoNamesMaxTokens, apiKey: key,
+                    timeout: max(call.engine.cloudTimeout, videoNamesTimeout))
+                await MainActor.run { proxy.noteCloudSuccess() }
+                return result
+            } catch let error as AppError {
+                await MainActor.run { proxy.noteCloudFailure(error) }
+                throw error
+            }
+        }
+    }
+
+    /// The names step's answer is a few lines of JSON; the rest is room to think, and to look through a long video.
+    nonisolated static let videoNamesMaxTokens = 32_768
+    /// How long the names step's answer may go without a byte: a model looking through a long video can be quiet for
+    /// minutes before it says anything.
+    nonisolated static let videoNamesTimeout: TimeInterval = 600
+
     /// Where a call's request goes, with which key, and to which model at which level: the Vertex proxy while it
     /// routes Gemini, else OpenRouter.
     private nonisolated static func route(
@@ -152,10 +206,14 @@ final class CallTranscriber {
 
     func isSummarizing(_ id: UUID) -> Bool { summaryTasks[id] != nil }
 
+    func isNamingSpeakers(_ id: UUID) -> Bool { nameTasks[id] != nil }
+
     /// Transcribes the call (again): `.transcribing`, then `.done` with the transcript and what it cost, or `.failed`
     /// with why. A transcription of it already running goes on.
     func transcribe(_ id: UUID) {
         guard tasks[id] == nil, let call = store.call(id: id) else { return }
+        // Names for the old transcript's speakers would land on the new one's.
+        stopNames(id)
         guard call.micFile != nil || call.remoteFile != nil else {
             log.event(.calls, "transcription.failed", ["call": Self.shortID(id), "error": "noAudio"])
             store.update(id) {
@@ -227,10 +285,11 @@ final class CallTranscriber {
         }
     }
 
-    /// Stops a transcription, and a summary being written (the call was deleted).
+    /// Stops a transcription, a summary being written and a names step (the call was deleted).
     func cancel(_ id: UUID) {
         tasks.removeValue(forKey: id)?.cancel()
         stopSummary(id)
+        stopNames(id)
     }
 
     private func stopSummary(_ id: UUID) {
@@ -238,9 +297,14 @@ final class CallTranscriber {
         store.summarizing.remove(id)
     }
 
-    /// Returns once no transcription or summary runs: tests.
+    private func stopNames(_ id: UUID) {
+        nameTasks.removeValue(forKey: id)?.cancel()
+        store.namingSpeakers.remove(id)
+    }
+
+    /// Returns once no transcription, summary or names step runs: tests.
     func waitUntilIdle() async {
-        while let task = tasks.values.first ?? summaryTasks.values.first { await task.value }
+        while let task = tasks.values.first ?? summaryTasks.values.first ?? nameTasks.values.first { await task.value }
     }
 
     private func finishSummary(_ id: UUID, _ outcome: Result<SummaryOutcome, any Error>) {
@@ -283,6 +347,7 @@ final class CallTranscriber {
                 $0.summary = outcome.summary?.keepingDone(from: $0.summary)
                 $0.summaryError = outcome.summaryError
             }
+            nameFromVideo(id)
         case .failure(let error):
             guard !(error is CancellationError) else { return }
             Log.engine.error("Call transcription failed: \(String(describing: error), privacy: .public)")
@@ -294,10 +359,127 @@ final class CallTranscriber {
         }
     }
 
+    // MARK: Names from the video
+
+    /// The names step for a done call made from a video (`CallVideoNames`): a silent small copy of the video
+    /// (`CallVideoCopy`) and the transcript go to the model, which says whose tile lights up for each speaker; the
+    /// sure answers rename the speakers still called "Speaker 2" (`CallVideoNames.renames`), as the person would by
+    /// hand. Only through the person's endpoint (`VideoNames.isAvailable`), and only when there's a speaker to name and
+    /// the video is still where it was. What it costs is added to the call's; its answer is kept as
+    /// `answers/names.txt`. It never fails the call: a failure is logged, and the speakers keep their names.
+    func nameFromVideo(_ id: UUID) {
+        guard let videoNames, nameTasks[id] == nil, let call = store.call(id: id), call.status == .done,
+              let file = call.file, file.isVideo, let transcript = call.transcript, !transcript.segments.isEmpty
+        else { return }
+        let short = Self.shortID(id)
+        func skip(_ reason: String) { self.log.event(.calls, "names.skipped", ["call": short, "reason": reason]) }
+        guard videoNames.isAvailable() else { return skip("notEndpoint") }
+        let me = CallPrompts.speakerName(for: userName())
+        guard !CallVideoNames.nameable(transcript, speakerNames: call.speakerNames, me: me).isEmpty else {
+            return skip("nothingToName")
+        }
+        guard !file.path.isEmpty, FileManager.default.isReadableFile(atPath: file.path) else {
+            Log.engine.info("A call's video is gone: its speakers aren't named from it")
+            return skip("videoGone")
+        }
+        store.namingSpeakers.insert(id)
+        let source = URL(fileURLWithPath: file.path), prompt = CallVideoNames.prompt(transcript)
+        let answers = store.answersFolder(for: id), send = videoNames.send, events = log
+        nameTasks[id] = Task { [weak self] in
+            let outcome: Result<NamesOutcome, any Error>
+            do {
+                outcome = .success(try await Self.askNames(source: source, prompt: prompt, send: send,
+                                                           answers: answers, log: events, callID: id))
+            } catch {
+                outcome = .failure(error)
+            }
+            // Stopped (Transcribe Again, deleted): `stopNames` has tidied up, and a newer step may be running.
+            guard !Task.isCancelled else { return }
+            self?.finishNames(id, outcome, me: me)
+        }
+    }
+
+    struct NamesOutcome: Sendable {
+        /// nil: the answer held no JSON object.
+        var guesses: [String: CallVideoNames.Guess]?
+        var costUSD: Double?
+    }
+
+    /// The copy made, sent with the prompt, its answer kept and read; the copy deleted whatever happens.
+    nonisolated static func askNames(source: URL, prompt: String, send: SendVideo, answers: URL?, log: DiagnosticLog,
+                                     callID: UUID?) async throws -> NamesOutcome {
+        let call = callID.map(shortID)
+        let copy = FileManager.default.temporaryDirectory
+            .appendingPathComponent("call-video-\(UUID().uuidString.lowercased()).mp4", isDirectory: false)
+        defer { try? FileManager.default.removeItem(at: copy) }
+        let started = ContinuousClock.now
+        try await CallVideoCopy.make(from: source, to: copy)
+        let made = started.duration(to: .now)
+        let bytes = (try? FileManager.default.attributesOfItem(atPath: copy.path)[.size] as? NSNumber)?.intValue
+        try Task.checkCancellation()
+        let asked = ContinuousClock.now
+        var answer: String
+        var result: CloudResult?
+        do {
+            let answered = try await send(copy, prompt)
+            result = answered
+            answer = answered.text
+        } catch AppError.openRouterTruncated(let partial) {
+            answer = partial
+        }
+        let elapsed = asked.duration(to: .now)
+        if let answers {
+            do {
+                try FileManager.default.createDirectory(at: answers, withIntermediateDirectories: true)
+                try Data(answer.utf8).write(to: answers.appendingPathComponent("names.txt", isDirectory: false),
+                                            options: .atomic)
+            } catch {
+                Log.engine.error("Couldn't keep a call's names answer: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        let guesses = CallVideoNames.parse(answer)
+        log.event(.calls, "names.request", [
+            "call": call, "videoBytes": bytes, "copySeconds": seconds(made), "seconds": seconds(elapsed),
+            "answerChars": answer.count, "entries": guesses?.count, "sure": guesses?.values.filter(\.isSure).count,
+            "finish": result == nil ? "length" : result?.finishReason, "cost": result?.costUSD,
+        ])
+        return NamesOutcome(guesses: guesses, costUSD: result?.costUSD)
+    }
+
+    private nonisolated static func seconds(_ duration: Duration) -> Double {
+        let value = Double(duration.components.seconds) + Double(duration.components.attoseconds) / 1e18
+        return (value * 10).rounded() / 10
+    }
+
+    /// The step's answer applied: the renames it makes against the call as it is now (a speaker the person renamed
+    /// meanwhile keeps their name), and what it cost added to the call's. Counts only in the log, never a name.
+    private func finishNames(_ id: UUID, _ outcome: Result<NamesOutcome, any Error>, me: String) {
+        nameTasks[id] = nil
+        store.namingSpeakers.remove(id)
+        switch outcome {
+        case .success(let outcome):
+            guard let call = store.call(id: id), let transcript = call.transcript else { return }
+            let renames = CallVideoNames.renames(outcome.guesses ?? [:], transcript: transcript,
+                                                 speakerNames: call.speakerNames, me: me)
+            for (speaker, name) in renames { store.rename(speaker: speaker, to: name, in: id) }
+            if let cost = outcome.costUSD { store.update(id) { $0.costUSD = ($0.costUSD ?? 0) + cost } }
+            log.event(.calls, "names.finished", [
+                "call": Self.shortID(id), "speakers": transcript.speakers.count,
+                "generic": transcript.speakers.filter(CallVideoNames.isGeneric).count, "renamed": renames.count,
+                "readable": outcome.guesses != nil, "cost": outcome.costUSD,
+            ])
+        case .failure(let error):
+            guard !(error is CancellationError) else { return }
+            Log.engine.error("Naming a call's speakers from its video failed: \(String(describing: error), privacy: .public)")
+            log.event(.calls, "names.failed", ["call": Self.shortID(id), "error": Self.code(of: error)])
+        }
+    }
+
     /// An error as the log names it: `AppError.code`, the transcriber's own, or its type.
     nonisolated static func code(of error: any Error) -> String {
         if let error = error as? AppError { return error.code }
         if let error = error as? Failure { return error.code }
+        if let error = error as? CallVideoCopy.Failure { return "video.\(error.code)" }
         return String(describing: type(of: error))
     }
 

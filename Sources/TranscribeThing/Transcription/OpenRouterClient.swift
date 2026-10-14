@@ -176,8 +176,8 @@ final class OpenRouterClient: Sendable {
     /// Longest server-requested wait worth sitting through during a dictation.
     static let maxRetryWait: TimeInterval = 8
 
-    private let session: URLSession
-    private let baseURL: URL
+    let session: URLSession
+    let baseURL: URL
     private let retryDelay: TimeInterval
     /// nil: requests wait out their stall timeouts (tests that don't test this).
     private let connectionWatch: ConnectionWatch?
@@ -317,6 +317,26 @@ final class OpenRouterClient: Sendable {
         var result = try await streamWithRetry(request, engine: engine, progress: progress, generation: generation)
         result.text = TextRoute.answerText(from: result.text)
         return result
+    }
+
+    /// A question about a video uploaded to the endpoint (`uploadVideo`), its file's `uri` and then `text` in one user
+    /// message (`OpenRouterChatRequest.video`), looked at with Vertex's agentic processing. The endpoint's only: it
+    /// has the Files API the video went up through. Same stream, retry policy and failures as `sendText`; the answer
+    /// comes back as the model wrote it.
+    func askAboutVideo(fileURI: String, text: String, model: String, effort: ReasoningEffort, maxTokens: Int,
+                       apiKey: String, timeout: TimeInterval) async throws -> CloudResult {
+        let engine = Self.engine(forModel: model)
+        let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { throw adapted(AppError.openRouterMissingKey) }
+        let body: Data
+        do {
+            body = try adjusted(OpenRouterChatRequest.video(model: model, fileURI: fileURI, processing: "agentic",
+                                                            text: text, effort: effort, maxTokens: maxTokens)).encoded()
+        } catch {
+            throw adapted(AppError.openRouterBadRequest("Couldn’t build the request."))
+        }
+        let request = makeTranscriptionRequest(body: body, apiKey: key, timeout: timeout)
+        return try await streamWithRetry(request, engine: engine, progress: nil)
     }
 
     /// Sends a chat `request` and reads its answer as it streams in, retrying once per the policy above. Its
