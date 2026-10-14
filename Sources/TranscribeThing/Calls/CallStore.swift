@@ -32,6 +32,16 @@ final class CallStore {
     /// Calls whose speakers are being named from their video (`CallTranscriber.nameFromVideo`): never saved, a step
     /// the app quit during simply didn't happen.
     var namingSpeakers: Set<UUID> = []
+    /// How a names step that renamed no one ended, for the call page: "Couldn’t tell who’s who from the video." Never
+    /// saved; dropped by the next rename, Transcribe Again or another step.
+    var namingResult: [UUID: NamingResult] = [:]
+
+    struct NamingResult: Equatable, Sendable {
+        /// One line for the transcript's header.
+        var message: String
+        /// More on hover: why it failed.
+        var detail: String?
+    }
 
     @ObservationIgnored private let paths: AppPaths
     @ObservationIgnored private let settings: AppSettings
@@ -175,11 +185,34 @@ final class CallStore {
         onRemove?([id])
     }
 
-    /// Shows `speaker` as `name` from now on; an empty name, or the model's own, undoes it.
+    /// Shows `speaker` as `name` from now on; an empty name, or the model's own, undoes it. The name is the
+    /// person's from then on, even over one the video gave.
     func rename(speaker: String, to name: String, in id: UUID) {
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        namingResult[id] = nil
         update(id) { call in
             call.speakerNames[speaker] = name.isEmpty || name == speaker ? nil : name
+            call.videoNamedSpeakers.remove(speaker)
+        }
+    }
+
+    /// The names step's renames (`CallTranscriber.nameFromVideo`), speaker → name, noted as the video's.
+    func nameFromVideo(_ names: [String: String], in id: UUID) {
+        guard !names.isEmpty else { return }
+        update(id) { call in
+            for (speaker, name) in names {
+                call.speakerNames[speaker] = name
+                call.videoNamedSpeakers.insert(speaker)
+            }
+        }
+    }
+
+    /// Drops the names the video gave (a new transcript's speakers may be other people); the person's stay.
+    func clearVideoNames(in id: UUID) {
+        guard let call = call(id: id), !call.videoNamedSpeakers.isEmpty else { return }
+        update(id) { call in
+            for speaker in call.videoNamedSpeakers { call.speakerNames[speaker] = nil }
+            call.videoNamedSpeakers = []
         }
     }
 
@@ -296,6 +329,7 @@ final class CallStore {
         var record = info.record(status: status)
         if let existing = call(id: info.id) {
             record.speakerNames = existing.speakerNames
+            record.videoNamedSpeakers = existing.videoNamedSpeakers
         }
         if let journal {
             let id = info.id

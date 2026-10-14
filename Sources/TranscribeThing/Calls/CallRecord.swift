@@ -134,6 +134,10 @@ struct CallRecord: Codable, Equatable, Identifiable, Sendable {
     var cutOffAt: TimeInterval?
     /// Speakers renamed by the person: the model's name → theirs.
     var speakerNames: [String: String] = [:]
+    /// The speakers in `speakerNames` the app named from the call's video (`CallTranscriber.nameFromVideo`), not the
+    /// person: the page says so, and a new transcript drops these names (its "Speaker 2" may be someone else). A
+    /// rename by the person takes the speaker out.
+    var videoNamedSpeakers: Set<String> = []
     /// What the call was about (`CallSummary`); nil before one was made: a call transcribed before summaries, or one
     /// whose summary failed.
     var summary: CallSummary?
@@ -171,11 +175,14 @@ struct CallRecord: Codable, Equatable, Identifiable, Sendable {
     /// `speaker` as the person renamed them.
     func name(of speaker: String) -> String { speakerNames[speaker] ?? speaker }
 
+    /// `speaker`'s name came from the video, and the person hasn't changed it.
+    func isNamedFromVideo(_ speaker: String) -> Bool { videoNamedSpeakers.contains(speaker) && speakerNames[speaker] != nil }
+
     private enum CodingKeys: String, CodingKey {
         case id, startedAt, endedAt, appName, bundleID, service, pageTitle, manual, muteIntervals, muteKnown
         case micSilencedWhenMuted, echoCancelled, echoReductionDB
         case otherBrowserAudio, micFile, remoteFile, micSeconds, remoteSeconds, micProblem, remoteProblem, status
-        case error, transcript, costUSD, cutOffAt, speakerNames, summary, summaryError, file
+        case error, transcript, costUSD, cutOffAt, speakerNames, videoNamedSpeakers, summary, summaryError, file
     }
 
     /// Lenient: anything but the id, the start, the app and the status may be missing (written by another build).
@@ -208,6 +215,7 @@ struct CallRecord: Codable, Equatable, Identifiable, Sendable {
         costUSD = try c.decodeIfPresent(Double.self, forKey: .costUSD)
         cutOffAt = try? c.decodeIfPresent(TimeInterval.self, forKey: .cutOffAt)
         speakerNames = try c.decodeIfPresent([String: String].self, forKey: .speakerNames) ?? [:]
+        videoNamedSpeakers = (try? c.decodeIfPresent(Set<String>.self, forKey: .videoNamedSpeakers)) ?? []
         summary = try? c.decodeIfPresent(CallSummary.self, forKey: .summary)
         summaryError = try? c.decodeIfPresent(String.self, forKey: .summaryError)
         file = try? c.decodeIfPresent(CallFileSource.self, forKey: .file)
@@ -241,6 +249,7 @@ struct CallRecord: Codable, Equatable, Identifiable, Sendable {
         try c.encodeIfPresent(costUSD, forKey: .costUSD)
         try c.encodeIfPresent(cutOffAt, forKey: .cutOffAt)
         if !speakerNames.isEmpty { try c.encode(speakerNames, forKey: .speakerNames) }
+        if !videoNamedSpeakers.isEmpty { try c.encode(videoNamedSpeakers.sorted(), forKey: .videoNamedSpeakers) }
         try c.encodeIfPresent(summary, forKey: .summary)
         try c.encodeIfPresent(summaryError, forKey: .summaryError)
         try c.encodeIfPresent(file, forKey: .file)
