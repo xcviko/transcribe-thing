@@ -62,6 +62,21 @@ import Testing
         #expect(result.text == "words")
     }
 
+    /// Stray tokens without the asked-for tags wait for the other request too.
+    @Test func anUntaggedAnswerWaitsForATaggedOne() async throws {
+        let result = try await CloudHedge.run(.race, .transcription, engine: .geminiArgon, modelName: "Gemini 4 Argon",
+                                              progress: nil) { _ in
+            let fast = await Self.order.next() == 0
+            if fast { var r = CloudResult(text: "!#"); r.answerTags = TaggedTranscript.Tags.none; return r }
+            try await Task.sleep(for: .milliseconds(120))
+            var r = CloudResult(text: "Раз, два, три."); r.answerTags = .pair; return r
+        }
+        #expect(result.text == "Раз, два, три.")
+    }
+
+    private actor Order { var n = 0; func next() -> Int { defer { n += 1 }; return n } }
+    private static let order = Order()
+
     @Test func twoEmptyAnswersAreEmpty() async throws {
         let calls = Calls()
         let result = try await CloudHedge.run(.race, .transcription, engine: .geminiArgon, modelName: "Gemini 4 Argon",

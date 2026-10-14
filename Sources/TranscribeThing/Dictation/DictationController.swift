@@ -1123,6 +1123,18 @@ final class DictationController {
                 deliverSilence(job, result)
                 return
             }
+            // Gemini 4 Argon sometimes answers with stray tokens or its own thoughts and none of the tags it was asked
+            // for ("!#", "1 1 2 4 8"): not pasted, the recording kept to retry. Flash always tags its answer.
+            if job.engine == .geminiArgon, result.answerTags == TaggedTranscript.Tags.none, let recording = job.recording {
+                let notice = keepFailed(job, recording, .engineFailed(job.engine, "Its answer wasn’t a transcript."),
+                                        modelAnswer: result.rawAnswer)
+                DiagnosticLog.shared.event(.dictation, "job.finished", [
+                    "engine": job.engine, "outcome": "untagged", "kept": true, "polished": job.polishes,
+                    "answerChars": result.rawAnswer?.count, "finish": result.finishReason])
+                Log.engine.info("Gemini 4 Argon's answer had no tags; kept in History")
+                postFailure(notice)
+                return
+            }
             forget(job.id)
             // An older notice's Retry or Undo would transcribe it yet again, or record on, now that its audio is kept.
             toasts.dismiss(recordingID: job.id)

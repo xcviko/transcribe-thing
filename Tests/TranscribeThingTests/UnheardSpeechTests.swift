@@ -29,6 +29,44 @@ import Testing
         return result
     }
 
+    /// Argon answered stray tokens with none of the tags it was asked for (2026-10-14: "!#", "1 1 2 4 8"): nothing
+    /// is pasted, the recording stays as a failed row with the answer.
+    @Test func argonsUntaggedAnswerIsKeptNotPasted() async throws {
+        let h = H.make(keyStatus: .valid(KeyInfo()), persistsHistory: true)
+        defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
+        var pasted: [String] = []
+        h.controller.transcribeOverride = { _, engine in
+            var result = TranscriptResult(text: "1 1 2 4 8", engine: engine, processingTime: 0.1)
+            result.rawAnswer = "1 1 2 4 8\n<eos>"
+            result.answerTags = TaggedTranscript.Tags.none
+            return result
+        }
+        h.controller.insertOverride = { text in pasted.append(text); return .pasted }
+        let r = Self.speech(voiced: 2.5)
+        h.controller.enqueue(r, engine: .geminiArgon)
+        try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id) != nil }
+        let entry = try #require(h.history.entry(id: r.id))
+        #expect(entry.status == .failed && entry.modelAnswer == "1 1 2 4 8\n<eos>")
+        #expect(entry.audioFileName != nil)
+        #expect(pasted.isEmpty)
+    }
+
+    /// Flash's answer without tags is pasted as before: it tags its answers, and one that doesn't is still words.
+    @Test func flashsUntaggedAnswerIsStillPasted() async throws {
+        let h = H.make(keyStatus: .valid(KeyInfo()), persistsHistory: true)
+        defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
+        var pasted: [String] = []
+        h.controller.transcribeOverride = { _, engine in
+            var result = TranscriptResult(text: "Созвонимся завтра.", engine: engine, processingTime: 0.1)
+            result.answerTags = TaggedTranscript.Tags.none
+            return result
+        }
+        h.controller.insertOverride = { text in pasted.append(text); return .pasted }
+        h.controller.enqueue(Self.speech(voiced: 2.5), engine: .geminiFlash)
+        try await waitUntil { !pasted.isEmpty }
+        #expect(pasted == ["Созвонимся завтра."])
+    }
+
     /// Argon polished 21.7 s of speech into an empty `<message>`: the recording stays as a failed row with the answer,
     /// the notice offers Retry and says it's kept, and Retry then pastes what the next answer has.
     @Test func longSpeechWithAnEmptyAnswerIsKeptWithTheAnswer() async throws {
