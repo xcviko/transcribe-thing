@@ -4,7 +4,9 @@ import Foundation
 // came up, what was decided, the tasks people took on (ticked off in the app), and the questions left open. All in the
 // call's language. A call that fits one request gets it in the same answer as its transcript (`CallPrompts.call` with
 // `summary`); a longer one, and an older call summed up later (Summarize), from one text-only request with the whole
-// transcript (`CallSummaryPrompt`). Either way the answer's blocks are tagged (`CallSummaryParser`).
+// transcript (`CallSummaryPrompt`). Either way the answer's blocks are tagged (`CallSummaryParser`). The text keeps the
+// model's marks around the call's speakers ("{{Аня|Ане}}", `CallMention`), so a speaker renamed on the call's page is
+// renamed in its summary too (`CallFormat.shown`). A summary made before that has no marks, and shows as it was written.
 
 /// Something someone took on in the call, or was given.
 struct CallTask: Codable, Equatable, Identifiable, Sendable {
@@ -38,8 +40,8 @@ struct CallTask: Codable, Equatable, Identifiable, Sendable {
         done = (try? c.decodeIfPresent(Bool.self, forKey: .done)) ?? false
     }
 
-    /// The text as it's matched against another summary's tasks: case, punctuation and spacing aside.
-    var normalizedText: String { Self.normalized(text) }
+    /// The text as it's matched against another summary's tasks: case, punctuation, spacing and speaker marks aside.
+    var normalizedText: String { Self.normalized(CallMention.plain(text)) }
 
     static func normalized(_ text: String) -> String {
         let folded = text.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
@@ -110,6 +112,82 @@ struct CallSummary: Codable, Equatable, Sendable {
     }
 }
 
+// MARK: - Mentions
+
+/// The call's speakers as a summary's text names them: "{{Аня|Ане}} нужно проверить", the speaker as the transcript
+/// names them, then the word as the sentence needs it (any case: "Ане", "Аней"); "{{Participant 2}}" when they're the
+/// same. Read leniently: a mark that isn't closed, holds a line break or is too long to be a name is left as text,
+/// and so is anything around a mark opened inside another ("{{a {{Аня}}" keeps "{{a ").
+enum CallMention {
+    enum Piece: Equatable, Sendable {
+        case text(String)
+        /// `speaker` as the transcript names them; `form`, the word in the sentence.
+        case mention(speaker: String, form: String)
+    }
+
+    /// Longer than this between the braces isn't a name: braces the model meant as text.
+    static let maxLength = 80
+
+    /// `text` cut into plain text and mentions, in order; a text without marks is one piece.
+    static func pieces(_ text: String) -> [Piece] {
+        var pieces: [Piece] = []
+        var plain = ""
+        var rest = text[...]
+        while let open = rest.range(of: "{{"),
+              let close = rest[open.upperBound...].range(of: "}}") {
+            // Opened again before it closes: the last opening is the mark's, the ones before it are text.
+            var start = open
+            while let inner = rest[start.upperBound..<close.lowerBound].range(of: "{{") { start = inner }
+            plain += rest[..<start.lowerBound]
+            switch piece(rest[start.upperBound..<close.lowerBound]) {
+            case .mention(let speaker, let form)?:
+                if !plain.isEmpty { pieces.append(.text(plain)) }
+                plain = ""
+                pieces.append(.mention(speaker: speaker, form: form))
+            case .text(let words)?:
+                plain += words
+            case nil:
+                plain += rest[start.lowerBound..<close.upperBound]
+            }
+            rest = rest[close.upperBound...]
+        }
+        plain += rest
+        if !plain.isEmpty { pieces.append(.text(plain)) }
+        return pieces
+    }
+
+    /// What's between a mark's braces: "Аня|Ане", "Аня". A form with no name is text; nil when it isn't a mark.
+    private static func piece(_ inside: Substring) -> Piece? {
+        guard inside.count <= maxLength, !inside.contains(where: \.isNewline) else { return nil }
+        let trim = CharacterSet.whitespaces.union(CharacterSet(charactersIn: "{}"))
+        let parts = inside.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
+        let name = parts[0].trimmingCharacters(in: trim)
+        let form = parts.count > 1 ? parts[1].trimmingCharacters(in: trim) : ""
+        if name.isEmpty { return .text(form) }
+        return .mention(speaker: name, form: form.isEmpty ? name : form)
+    }
+
+    /// `text` as the model wrote it, without the marks: each mention as its form.
+    static func plain(_ text: String) -> String {
+        pieces(text).map { piece in
+            switch piece {
+            case .text(let words): words
+            case .mention(_, let form): form
+            }
+        }.joined()
+    }
+
+    /// `text` with each mention as the speaker's name: an owner written as a mark ("{{Аня}}") is that speaker.
+    static func names(_ text: String) -> String {
+        pieces(text).map { piece in
+            switch piece {
+            case .text(let words): words
+            case .mention(let speaker, _): speaker
+            }
+        }.joined()
+    }
+}
+
 // MARK: - Prompt
 
 /// What the model is asked to write for a summary, after a transcript (one request) or alone (a text-only one).
@@ -137,8 +215,14 @@ enum CallSummaryPrompt {
         plain hyphen "-" where a dash goes (never — or –). In <tasks>, write one line per task someone took on or was \
         given: owner is who will do it, named exactly as in the transcript ("\(me)", "Participant 1"), left empty if \
         nobody took it; due is when it's due as said in the call ("Friday", "до пятницы"), left empty if nobody said. \
-        Keep both "|" even when a part is empty. Only write what was said in the call: when nothing fits a block, leave \
-        it empty, its two tags with nothing between them, rather than invent something to fill it.
+        Keep both "|" even when a part is empty. In <summary>, <key_points>, <decided>, <open> and the task part of \
+        <tasks>, write every mention of someone who speaks in the call as {{Name|word}}: Name exactly as the \
+        transcript names them, then the word as it fits the sentence, in whatever form the grammar needs; when the \
+        word is the name itself, {{Name}} is enough. For example: "{{Аня|Ане}} нужно проверить длинные файлы", \
+        "Договорились с {{Аня|Аней}} о пятнице", "{{\(me)}} will send the notes", "Ask {{Participant 2}} about the \
+        budget". The owner in <tasks> stays a plain name, and someone who doesn't speak in the call is written \
+        plainly. Only write what was said in the call: when nothing fits a block, leave it empty, its two tags with \
+        nothing between them, rather than invent something to fill it.
         """
     }
 
@@ -284,8 +368,9 @@ enum CallSummaryParser {
     static func task(_ line: String) -> CallTask? {
         var line = line
         if let box = line.range(of: #"^\[[ xX✓]?\]\s*"#, options: .regularExpression) { line.removeSubrange(box) }
-        let parts = line.split(separator: "|", omittingEmptySubsequences: false)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
+        // A mention's "|" ("{{Аня|Ане}}") isn't a part's.
+        let parts = maskingMentionBars(line).split(separator: "|", omittingEmptySubsequences: false)
+            .map { $0.replacingOccurrences(of: mentionBar, with: "|").trimmingCharacters(in: .whitespaces) }
         let owner: String?, text: String, due: String?
         switch parts.count {
         case 1: (owner, text, due) = (nil, parts[0], nil)
@@ -294,8 +379,23 @@ enum CallSummaryParser {
         }
         let task = text.trimmingCharacters(in: .whitespaces)
         guard !task.isEmpty, !saysNothing(task) else { return nil }
-        return CallTask(owner: blank(owner.map(unbold)), text: task, due: blank(due))
+        return CallTask(owner: blank(owner.map { CallMention.names(unbold($0)) }), text: task, due: blank(due))
     }
+
+    /// Stands in for a mention's "|" while a task line is split into its parts.
+    private static let mentionBar = "\u{E000}"
+
+    private static func maskingMentionBars(_ line: String) -> String {
+        guard line.contains("{{") else { return line }
+        let masked = NSMutableString(string: line)
+        for match in mentionMark.matches(in: line, range: NSRange(location: 0, length: masked.length)).reversed() {
+            let mark = masked.substring(with: match.range).replacingOccurrences(of: "|", with: mentionBar)
+            masked.replaceCharacters(in: match.range, with: mark)
+        }
+        return masked as String
+    }
+
+    private static let mentionMark = try! NSRegularExpression(pattern: #"\{\{[^{}\n]*\}\}"#)
 
     private static func unbold(_ text: String) -> String {
         text.trimmingCharacters(in: CharacterSet(charactersIn: "*_ "))

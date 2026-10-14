@@ -192,18 +192,21 @@ enum PreviewFixtures {
                   text: "Great. I’ll send the notes after the call, with who does what."),
         ])
         meet.summary = CallSummary(
-            summary: "The team went over the release plan. Long files load slowly because of the request limit, so Sam "
-                + "will split them into chunks, and the release moves to Friday.",
+            // Its speakers marked as Gemini writes them (`CallMention`): Participant 1 shows as Matvey, renamed.
+            summary: "The team went over the release plan. Long files load slowly because of the request limit, so "
+                + "{{Sam}} will split them into chunks, and the release moves to Friday.",
             keyPoints: [
                 "File import works, but long files take a long time to load.",
                 "The cause is the request limit; splitting files into chunks is about a day of work, with tests.",
-                "Аня can test long files over the weekend.",
+                "{{Participant 1}} asked {{Аня}} to test long files over the weekend.",
             ],
-            decided: ["Ship on Friday."],
+            decided: ["Ship on Friday, as {{Participant 2}} suggested."],
             tasks: [
                 CallTask(id: callTaskID(1), owner: "Sam", text: "Split long files into chunks before they’re sent",
                          done: true),
-                CallTask(id: callTaskID(2), owner: "Аня", text: "Проверить длинные файлы", due: "на выходных"),
+                CallTask(id: callTaskID(2), owner: "Аня",
+                         text: "Проверить длинные файлы и написать {{Participant 1|первому участнику}}",
+                         due: "на выходных"),
                 CallTask(id: callTaskID(3), owner: "Sam", text: "Send the notes with who does what",
                          due: "after the call", done: true),
                 CallTask(id: callTaskID(4), owner: "Participant 1", text: "Confirm the Friday release with support"),

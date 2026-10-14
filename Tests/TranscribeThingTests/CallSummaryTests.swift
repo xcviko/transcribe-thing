@@ -471,3 +471,129 @@ extension CallSummaryTranscriberTests {
         return (log, folder)
     }
 }
+
+// The call's speakers marked in a summary's text ("{{Аня|Ане}}", `CallMention`), so a rename on the call's page renames
+// them in the summary too.
+@Suite struct CallSummaryMentionTests {
+    private static func call(renames: [String: String] = ["Participant 1": "Matvey"]) -> CallRecord {
+        var call = CallRecord(id: UUID(), startedAt: Date(), appName: "Zoom", status: .done)
+        call.transcript = CallTranscript(segments: [
+            .init(start: 1, end: 2, side: .remote, speaker: "Participant 1", text: "Hi"),
+            .init(start: 3, end: 4, side: .remote, speaker: "Аня", text: "Привет"),
+            .init(start: 5, end: 6, side: .local, speaker: "Sam", text: "Hello"),
+        ])
+        call.speakerNames = renames
+        return call
+    }
+
+    @Test func thePromptAsksForMarkedMentionsWithAnExample() {
+        let blocks = CallSummaryPrompt.blocks(me: "Sam")
+        #expect(blocks.contains("write every mention of someone who speaks in the call as {{Name|word}}"))
+        #expect(blocks.contains("Name exactly as the transcript names them"))
+        #expect(blocks.contains("when the word is the name itself, {{Name}} is enough"))
+        #expect(blocks.contains(#""{{Аня|Ане}} нужно проверить длинные файлы""#))
+        #expect(blocks.contains(#""{{Sam}} will send the notes""#) && blocks.contains("{{Participant 2}}"))
+        #expect(blocks.contains("The owner in <tasks> stays a plain name"))
+        // Still only what was said, and the quotes and hyphens.
+        #expect(blocks.contains("Only write what was said in the call"))
+        #expect(blocks.contains(#"straight quotes "like this""#) && blocks.contains(#"plain hyphen "-""#))
+        // Both ways a summary is asked for.
+        #expect(CallPrompts.format(summary: true, me: "Sam").contains(blocks))
+        #expect(CallSummaryPrompt.text(me: "Sam", service: nil).contains(blocks))
+        #expect(CallSummaryPrompt.blocks(me: "Me").contains(#""{{Me}} will send the notes""#))
+    }
+
+    @Test func everyShapeOfMarkIsRead() {
+        typealias P = CallMention.Piece
+        #expect(CallMention.pieces("{{Аня|Ане}} нужно проверить") == [
+            P.mention(speaker: "Аня", form: "Ане"), .text(" нужно проверить"),
+        ])
+        #expect(CallMention.pieces("Ask {{Participant 2}}.") == [
+            .text("Ask "), .mention(speaker: "Participant 2", form: "Participant 2"), .text("."),
+        ])
+        // Spaces inside, an empty form, a form with no name.
+        #expect(CallMention.pieces("{{ Аня | Аней }}") == [.mention(speaker: "Аня", form: "Аней")])
+        #expect(CallMention.pieces("{{Аня|}}") == [.mention(speaker: "Аня", form: "Аня")])
+        #expect(CallMention.pieces("с {{|Аней}}") == [.text("с Аней")])
+        // Not marks: left as written.
+        #expect(CallMention.pieces("No marks here") == [.text("No marks here")])
+        #expect(CallMention.pieces("{Аня} and }} and {{") == [.text("{Аня} and }} and {{")])
+        #expect(CallMention.pieces("Unclosed {{Аня|Ане нужно") == [.text("Unclosed {{Аня|Ане нужно")])
+        // Empty: nothing to show.
+        #expect(CallMention.pieces("{{}}").isEmpty && CallMention.pieces("{{ | }}").isEmpty)
+        let long = String(repeating: "a", count: CallMention.maxLength + 1)
+        #expect(CallMention.pieces("x {{\(long)}}") == [.text("x {{\(long)}}")])
+        // Opened inside another: the inner one is the mark.
+        #expect(CallMention.pieces("{{a {{Аня|Ане}} b}}") == [
+            .text("{{a "), .mention(speaker: "Аня", form: "Ане"), .text(" b}}"),
+        ])
+        #expect(CallMention.plain("{{Аня|Ане}} и {{Sam}}") == "Ане и Sam")
+        #expect(CallMention.names("{{Аня|Ане}} и {{Sam}}") == "Аня и Sam")
+    }
+
+    @Test func aRenamedSpeakerShowsTheirNewNameAndTheOthersTheWordWritten() {
+        let call = Self.call()
+        let text = "{{Participant 1|Первому участнику}} и {{Аня|Ане}} нужно написать {{Sam}} и {{Петя|Пете}}"
+        #expect(CallFormat.plain(call, text) == "Matvey и Ане нужно написать Sam и Пете")
+        #expect(CallFormat.shown(call, text).compactMap(\.speaker) == ["Participant 1", "Аня", "Sam"])
+        // Matched case aside, like owners.
+        #expect(CallFormat.plain(call, "{{participant 1|него}}") == "Matvey")
+        // Nobody renamed: every word as the model wrote it.
+        let plain = Self.call(renames: [:])
+        #expect(CallFormat.plain(plain, text) == "Первому участнику и Ане нужно написать Sam и Пете")
+        // Renamed later: the summary follows.
+        var renamed = plain
+        renamed.speakerNames = ["Аня": "Anna"]
+        #expect(CallFormat.plain(renamed, text) == "Первому участнику и Anna нужно написать Sam и Пете")
+    }
+
+    @Test func aSummaryWithoutMarksShowsAsWritten() {
+        let call = Self.call()
+        let old = "Participant 1 asked Аня to {check} the files."
+        #expect(CallFormat.plain(call, old) == old)
+        #expect(CallFormat.shown(call, old) == [CallFormat.Shown(text: old)])
+    }
+
+    @Test func theCopiedSummaryHasTheNewNames() {
+        var call = Self.call()
+        call.summary = CallSummary(
+            summary: "{{Participant 1}} and {{Аня}} went over the release.",
+            keyPoints: ["{{Аня|Ане}} нужно проверить файлы"], decided: ["Ship on Friday, as {{Sam}} said."],
+            tasks: [CallTask(owner: "Аня", text: "Написать {{Participant 1|первому участнику}}", due: "до {{Sam|Сэма}}")],
+            open: ["Whether {{Participant 1}} pays"])
+        #expect(CallFormat.summaryText(call) == """
+            Summary
+            Matvey and Аня went over the release.
+
+            Key points
+            - Ане нужно проверить файлы
+
+            Decided
+            - Ship on Friday, as Sam said.
+
+            Tasks
+            [ ] Аня: Написать Matvey (до Сэма)
+
+            Open
+            - Whether Matvey pays
+            """)
+    }
+
+    @Test func tasksAreReadWithMarksInThem() throws {
+        let summary = try #require(CallSummaryParser.parse("""
+            <tasks>
+            - Sam | Написать {{Аня|Ане}} и {{Participant 1}} | пятница
+            - {{Аня}} | Проверить файлы |
+            - {{Аня|Ане}} позвонить
+            - | Спросить {{Participant 2|второго}} |
+            </tasks>
+            """))
+        #expect(summary.tasks.map(\.owner) == ["Sam", "Аня", nil, nil])
+        #expect(summary.tasks.map(\.text) == ["Написать {{Аня|Ане}} и {{Participant 1}}", "Проверить файлы",
+                                              "{{Аня|Ане}} позвонить", "Спросить {{Participant 2|второго}}"])
+        #expect(summary.tasks.map(\.due) == ["пятница", nil, nil, nil])
+        // Ticks kept whether or not the task's mentions are marked.
+        let old = CallSummary(tasks: [CallTask(text: "Написать Ане и Participant 1", done: true)])
+        #expect(summary.keepingDone(from: old).tasks[0].done)
+    }
+}

@@ -205,13 +205,47 @@ enum CallFormat {
 
     // MARK: Summary
 
-    /// The speaker a task's owner is, as the transcript names them (the model's name, matched case aside); nil for
-    /// an owner who isn't one of the call's speakers, or no owner.
-    static func ownerSpeaker(_ call: CallRecord, _ task: CallTask) -> String? {
-        guard let owner = task.owner?.trimmingCharacters(in: .whitespacesAndNewlines), !owner.isEmpty else { return nil }
+    /// The call's speaker `name` is, as the transcript names them (the model's name, matched case aside); nil for
+    /// someone who isn't one of the call's speakers.
+    static func speaker(_ call: CallRecord, named name: String) -> String? {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return nil }
         let speakers = call.transcript?.speakers ?? []
-        if speakers.contains(owner) { return owner }
-        return speakers.first { $0.caseInsensitiveCompare(owner) == .orderedSame }
+        if speakers.contains(name) { return name }
+        return speakers.first { $0.caseInsensitiveCompare(name) == .orderedSame }
+    }
+
+    /// The speaker a task's owner is, as the transcript names them; nil for an owner who isn't one of the call's
+    /// speakers, or no owner.
+    static func ownerSpeaker(_ call: CallRecord, _ task: CallTask) -> String? {
+        task.owner.flatMap { speaker(call, named: $0) }
+    }
+
+    /// A stretch of a summary's text as the page shows it: `speaker`, the call's speaker it names, if it's a mention
+    /// of one.
+    struct Shown: Equatable {
+        var text: String
+        var speaker: String?
+    }
+
+    /// A summary's text as the page shows it (`CallMention`): a mention of a speaker the person renamed is their new
+    /// name, as is (not declined); one of a speaker not renamed keeps the word the model wrote ("Ане"), and so does
+    /// one of a name that isn't the call's speaker. A text without mentions (summaries made before them) is as is.
+    static func shown(_ call: CallRecord, _ text: String) -> [Shown] {
+        CallMention.pieces(text).map { piece in
+            switch piece {
+            case .text(let words):
+                return Shown(text: words)
+            case .mention(let name, let form):
+                guard let speaker = speaker(call, named: name) else { return Shown(text: form) }
+                return Shown(text: call.speakerNames[speaker] ?? form, speaker: speaker)
+            }
+        }
+    }
+
+    /// A summary's text as plain text, the speakers renamed (`shown`).
+    static func plain(_ call: CallRecord, _ text: String) -> String {
+        shown(call, text).map(\.text).joined()
     }
 
     /// A task's owner as the page shows them: renamed when they're one of the call's speakers, else as written.
@@ -224,18 +258,19 @@ enum CallFormat {
     /// "[x] Matvey: Send the notes (Friday)", "[ ] Book the room".
     static func taskLine(_ call: CallRecord, _ task: CallTask) -> String {
         let owner = ownerName(call, task).map { "\($0): " } ?? ""
-        let due = task.due.map { " (\($0))" } ?? ""
-        return "[\(task.done ? "x" : " ")] \(owner)\(task.text)\(due)"
+        let due = task.due.map { " (\(plain(call, $0)))" } ?? ""
+        return "[\(task.done ? "x" : " ")] \(owner)\(plain(call, task.text))\(due)"
     }
 
-    /// The summary as plain text to copy: each part that has something, under its heading. Empty without a summary.
+    /// The summary as plain text to copy: each part that has something, under its heading, the speakers renamed.
+    /// Empty without a summary.
     static func summaryText(_ call: CallRecord) -> String {
         guard let summary = call.summary else { return "" }
         var sections: [String] = []
-        if !summary.summary.isEmpty { sections.append("Summary\n\(summary.summary)") }
+        if !summary.summary.isEmpty { sections.append("Summary\n\(plain(call, summary.summary))") }
         func list(_ title: String, _ items: [String]) {
             guard !items.isEmpty else { return }
-            sections.append(([title] + items.map { "- \($0)" }).joined(separator: "\n"))
+            sections.append(([title] + items.map { "- \(plain(call, $0))" }).joined(separator: "\n"))
         }
         list("Key points", summary.keyPoints)
         list("Decided", summary.decided)

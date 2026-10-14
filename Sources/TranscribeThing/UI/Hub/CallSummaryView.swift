@@ -3,7 +3,7 @@ import SwiftUI
 /// The call's summary on its page, over the transcript: what the call was about, the key points, what was decided, the
 /// tasks (ticked off here, saved at once), and what's still open, each part only when it has something. While the call
 /// is transcribed it says the summary comes with the transcript; a call without one (transcribed before summaries, or
-/// whose summary failed) has Summarize.
+/// whose summary failed) has Summarize. The call's speakers it mentions wear their colors, renamed as in the transcript.
 struct CallSummaryView: View {
     var call: CallRecord
     @Environment(HubContext.self) private var hub
@@ -108,25 +108,25 @@ struct CallSummaryView: View {
                     .foregroundStyle(.inkTertiary)
             }
             if !summary.summary.isEmpty {
-                Text(summary.summary)
+                CallSummaryText.text(call, summary.summary, slots: slots)
                     .font(.system(size: 13))
                     .lineSpacing(3)
                     .foregroundStyle(.ink)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
             }
-            if !summary.keyPoints.isEmpty { list("Key points", summary.keyPoints) }
-            if !summary.decided.isEmpty { list("Decided", summary.decided) }
+            if !summary.keyPoints.isEmpty { list("Key points", summary.keyPoints, slots: slots) }
+            if !summary.decided.isEmpty { list("Decided", summary.decided, slots: slots) }
             if !summary.tasks.isEmpty {
                 part("Tasks") {
                     VStack(alignment: .leading, spacing: 7) {
                         ForEach(summary.tasks) { task in
-                            CallTaskRow(call: call, task: task, slot: CallFormat.ownerSpeaker(call, task).flatMap { slots[$0] })
+                            CallTaskRow(call: call, task: task, slots: slots)
                         }
                     }
                 }
             }
-            if !summary.open.isEmpty { list("Open", summary.open) }
+            if !summary.open.isEmpty { list("Open", summary.open, slots: slots) }
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 16)
@@ -144,14 +144,14 @@ struct CallSummaryView: View {
         }
     }
 
-    private func list(_ title: String, _ items: [String]) -> some View {
+    private func list(_ title: String, _ items: [String], slots: [String: CallSpeakerSlot]) -> some View {
         part(title) {
             VStack(alignment: .leading, spacing: 5) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text("•")
                             .foregroundStyle(.inkTertiary)
-                        Text(item)
+                        CallSummaryText.text(call, item, slots: slots)
                             .foregroundStyle(.ink)
                             .lineSpacing(2)
                             .fixedSize(horizontal: false, vertical: true)
@@ -169,8 +169,10 @@ struct CallSummaryView: View {
 private struct CallTaskRow: View {
     var call: CallRecord
     var task: CallTask
-    var slot: CallSpeakerSlot?
+    var slots: [String: CallSpeakerSlot]
     @Environment(HubContext.self) private var hub
+
+    private var slot: CallSpeakerSlot? { CallFormat.ownerSpeaker(call, task).flatMap { slots[$0] } }
 
     var body: some View {
         Toggle(isOn: Binding(get: { task.done }, set: { hub.setTask(task, done: $0, in: call) })) {
@@ -188,8 +190,22 @@ private struct CallTaskRow: View {
         let owner = CallFormat.ownerName(call, task).map { name in
             Text("\(Text(name).fontWeight(.semibold).foregroundStyle(CallSpeakerColors.color(slot)))  ")
         } ?? Text(verbatim: "")
-        let due = task.due.map { Text("  ·  \($0)").foregroundStyle(Color.inkSecondary) } ?? Text(verbatim: "")
-        return Text("\(owner)\(Text(task.text).foregroundStyle(Color.ink))\(due)")
+        let due = task.due.map { Text("  ·  \(CallFormat.plain(call, $0))").foregroundStyle(Color.inkSecondary) }
+            ?? Text(verbatim: "")
+        let text = CallSummaryText.text(call, task.text, slots: slots).foregroundStyle(Color.ink)
+        return Text("\(owner)\(text)\(due)")
             .strikethrough(task.done, color: Color.inkSecondary)
+    }
+}
+
+/// A summary's text with the call's speakers it mentions in their colors, renamed as in the transcript
+/// (`CallFormat.shown`).
+enum CallSummaryText {
+    static func text(_ call: CallRecord, _ text: String, slots: [String: CallSpeakerSlot]) -> Text {
+        CallFormat.shown(call, text).reduce(Text(verbatim: "")) { result, piece in
+            let words = Text(verbatim: piece.text)
+            guard let speaker = piece.speaker else { return Text("\(result)\(words)") }
+            return Text("\(result)\(words.fontWeight(.medium).foregroundStyle(CallSpeakerColors.color(slots[speaker])))")
+        }
     }
 }
