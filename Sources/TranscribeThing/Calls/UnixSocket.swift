@@ -18,9 +18,14 @@ enum UnixSocket {
     static func fits(_ path: String) -> Bool { path.utf8.count < maxPathBytes }
 
     /// Listens at `path`, readable and writable by this user only (0600). A file left there by an earlier run is
-    /// replaced.
+    /// replaced, but not a socket another copy of the app still listens on (a development build run beside the
+    /// installed app): taking its path would leave its listener unreachable until it restarts.
     static func listen(at path: String) throws -> Int32 {
         guard fits(path) else { throw Failure(call: "path", code: ENAMETOOLONG) }
+        if let live = connect(to: path) {
+            close(live)
+            throw Failure(call: "listen", code: EADDRINUSE)
+        }
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw Failure(call: "socket", code: errno) }
         noSigPipe(fd)
@@ -41,6 +46,13 @@ enum UnixSocket {
             throw Failure(call: "listen", code: code)
         }
         return fd
+    }
+
+    /// The file at `path`'s identity (device and inode), to tell later whether it's still the socket this run made.
+    static func identity(of path: String) -> (dev_t, ino_t)? {
+        var info = stat()
+        guard stat(path, &info) == 0 else { return nil }
+        return (info.st_dev, info.st_ino)
     }
 
     /// A connection to the socket at `path`, or nil when nobody listens there.

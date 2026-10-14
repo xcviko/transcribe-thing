@@ -231,6 +231,25 @@ private final class Box: @unchecked Sendable {
         let moved = BrowserBridge.socketPath(for: long)
         #expect(UnixSocket.fits(moved) && moved.hasSuffix("transcribe-thing-browser.sock"))
     }
+
+    /// A development build run beside the installed app must not take its socket: the app's extension would no
+    /// longer reach it. A stale file from a crashed run is still replaced.
+    @Test func aLiveSocketIsntTakenOver() throws {
+        let path = "/tmp/tt-\(UUID().uuidString.prefix(8)).sock"
+        let first = BrowserBridgeServer(path: path)
+        try first.start()
+        let second = BrowserBridgeServer(path: path)
+        #expect(throws: UnixSocket.Failure.self) { try second.start() }
+        second.stop()
+        #expect(UnixSocket.connect(to: path).map { close($0); return true } == true, "the second copy left it alone")
+        first.stop()
+        #expect(!FileManager.default.fileExists(atPath: path))
+
+        FileManager.default.createFile(atPath: path, contents: Data())
+        let third = BrowserBridgeServer(path: path)
+        try third.start()
+        third.stop()
+    }
 }
 
 // MARK: - Files
