@@ -52,7 +52,9 @@ struct CallDetailPage: View {
                 CallHeader(call: call, isAsking: CallsList.askingID(hub.callState) == call.id) { confirmingDelete = $0 }
                 CallNotes(call: call)
                 if call.micFile != nil || call.remoteFile != nil {
-                    CallPlayerBar(player: player(for: call))
+                    CallPlayerBar(call: call, player: player(for: call),
+                                  tracks: [CallJournal.Track.mic, .remote].compactMap { store.audioURL(of: call, track: $0) },
+                                  folder: store.folder(for: call.id))
                 }
                 CallSummaryView(call: call)
                 CallTranscriptView(call: call, player: player(for: call))
@@ -82,7 +84,7 @@ struct CallDetailPage: View {
     private func makePlayer(_ call: CallRecord, nowPlaying: CallNowPlaying? = nil) -> CallPlayer {
         let urls = [CallJournal.Track.mic, .remote].compactMap { store.audioURL(of: call, track: $0) }
         return CallPlayer(id: call.id, urls: hub.isPreview ? [] : urls, duration: call.duration,
-                          item: .of(call), nowPlaying: nowPlaying)
+                          item: .of(call), nowPlaying: nowPlaying, position: hub.previewCallPosition ?? 0)
     }
 
     @ViewBuilder private func tools(_ call: CallRecord) -> some View {
@@ -201,58 +203,87 @@ private struct CallNotes: View {
 
 // MARK: - Player
 
-/// Play/Pause, a scrubber over the whole call, and where it is: both sides together.
+/// Play/Pause, the call as a waveform in its speakers' colors (`CallWaveformView`) and where it is, both sides
+/// together; under it, who's who.
 private struct CallPlayerBar: View {
+    var call: CallRecord
     var player: CallPlayer
-    /// Where the scrubber is held while it's dragged; the player moves on release.
+    /// The call's tracks and folder, where its loudness is read from and kept (`CallPeaks`).
+    var tracks: [URL]
+    var folder: URL
+    @Environment(HubContext.self) private var hub
+    /// Where the waveform is held while it's dragged; the player moves on release.
     @State private var scrubbing: Double?
+    @State private var peaks: CallPeaks?
+    /// Which call's tracks `peaks` are.
+    @State private var peaksKey: PeaksKey?
+
+    /// What the loudness depends on: a track rewritten (joined onto, cleaned again) has another length.
+    private struct PeaksKey: Equatable {
+        var id: UUID
+        var micFile, remoteFile: String?
+        var micSeconds, remoteSeconds: TimeInterval
+    }
+
+    private var key: PeaksKey {
+        PeaksKey(id: call.id, micFile: call.micFile, remoteFile: call.remoteFile, micSeconds: call.micSeconds,
+                 remoteSeconds: call.remoteSeconds)
+    }
 
     var body: some View {
-        HStack(spacing: 12) {
-            Button {
-                player.toggle()
-            } label: {
-                Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 13, weight: .semibold))
-                    .frame(width: 30, height: 30)
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.borderless)
-            .foregroundStyle(.ink)
-            .background(Color.ink.opacity(0.08), in: Circle())
-            .keyboardShortcut(.space, modifiers: [])
-            .help(player.isPlaying ? "Pause (Space)" : "Play (Space)")
-            .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
-            .disabled(!player.canPlay && !player.isPlaying)
-            Slider(value: Binding(get: { scrubbing ?? player.currentTime },
-                                  set: { scrubbing = $0 }),
-                   in: 0...max(player.duration, 1)) { editing in
-                if !editing, let target = scrubbing {
-                    player.seek(to: target, play: player.isPlaying)
-                    scrubbing = nil
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 12) {
+                Button {
+                    player.toggle()
+                } label: {
+                    Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .frame(width: 30, height: 30)
+                        .contentShape(Circle())
                 }
+                .buttonStyle(.borderless)
+                .foregroundStyle(.ink)
+                .background(Color.ink.opacity(0.08), in: Circle())
+                .keyboardShortcut(.space, modifiers: [])
+                .help(player.isPlaying ? "Pause (Space)" : "Play (Space)")
+                .accessibilityLabel(player.isPlaying ? "Pause" : "Play")
+                .disabled(!player.canPlay && !player.isPlaying)
+                CallWaveformView(call: call, player: player, peaks: shownPeaks, scrubbing: $scrubbing)
+                Text("\(Fmt.duration(scrubbing ?? player.currentTime)) / \(Fmt.duration(player.duration))")
+                    .font(.system(size: 11.5))
+                    .monospacedDigit()
+                    .foregroundStyle(.inkSecondary)
+                    .fixedSize()
             }
-            .controlSize(.small)
-            .accessibilityLabel("Position")
-            .accessibilityValue(Fmt.duration(player.currentTime))
-            Text("\(Fmt.duration(scrubbing ?? player.currentTime)) / \(Fmt.duration(player.duration))")
-                .font(.system(size: 11.5))
-                .monospacedDigit()
-                .foregroundStyle(.inkSecondary)
-                .fixedSize()
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(Color.sectionFill, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
-        .overlay(alignment: .bottomLeading) {
             if let problem = player.problem {
                 Text(problem)
                     .font(.system(size: 11))
                     .foregroundStyle(.danger)
-                    .padding(.leading, 56)
-                    .padding(.bottom, 2)
+                    .padding(.leading, 42)
             }
+            CallWaveformLegend(call: call)
+                .padding(.leading, 42)
         }
+        .padding(.horizontal, 14)
+        .padding(.top, 10)
+        .padding(.bottom, 12)
+        .background(Color.sectionFill, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+        .task(id: key) {
+            guard !hub.isPreview else { return }
+            // Another call: flat bars until its own loudness is read.
+            if peaksKey?.id != key.id { peaks = nil }
+            let key = key, tracks = tracks, folder = folder
+            let loaded = await Task.detached(priority: .utility) { CallPeaks.load(tracks: tracks, folder: folder) }.value
+            guard !Task.isCancelled else { return }
+            peaks = loaded
+            peaksKey = key
+        }
+    }
+
+    /// The loudness drawn: the call's, or a snapshot's made-up one.
+    private var shownPeaks: CallPeaks? {
+        guard hub.isPreview else { return peaksKey?.id == call.id ? peaks : nil }
+        return hub.previewWaveformFlat ? nil : PreviewFixtures.peaks(for: call)
     }
 }
 

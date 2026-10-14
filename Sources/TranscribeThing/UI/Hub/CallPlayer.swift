@@ -20,6 +20,8 @@ final class CallPlayer: NowPlayable {
     @ObservationIgnored private var timeObserver: Any?
     @ObservationIgnored private var endObserver: NSObjectProtocol?
     @ObservationIgnored private var loading: Task<AVPlayer?, Never>?
+    /// Seeks not done yet: the player's own clock still says where it was.
+    @ObservationIgnored private var seeking = 0
 
     /// The call it plays.
     @ObservationIgnored let id: UUID
@@ -30,8 +32,9 @@ final class CallPlayer: NowPlayable {
 
     init(id: UUID, urls: [URL], duration: TimeInterval,
          item: NowPlayingItem = NowPlayingItem(title: "Call", artist: "", album: ""),
-         nowPlaying: CallNowPlaying? = nil) {
+         nowPlaying: CallNowPlaying? = nil, position: TimeInterval = 0) {
         self.id = id
+        currentTime = position
         self.urls = urls
         self.duration = duration
         self.nowPlayingItem = item
@@ -39,6 +42,17 @@ final class CallPlayer: NowPlayable {
     }
 
     var canPlay: Bool { !urls.isEmpty && problem == nil }
+
+    /// Never played since the page opened: the waveform's first click plays.
+    var isIdle: Bool { player == nil && loading == nil }
+
+    /// Where it is this instant, from the player's own clock: what a playhead drawn every frame follows, between
+    /// `currentTime`'s ten updates a second.
+    var livePosition: TimeInterval {
+        guard isPlaying, seeking == 0, let player else { return currentTime }
+        let seconds = player.currentTime().seconds
+        return seconds.isFinite ? min(max(0, seconds), duration) : currentTime
+    }
 
     func toggle() {
         isPlaying ? pause() : play()
@@ -91,6 +105,8 @@ final class CallPlayer: NowPlayable {
 
     private func seek(_ player: AVPlayer, to seconds: TimeInterval) async {
         let time = CMTime(seconds: seconds, preferredTimescale: 600)
+        seeking += 1
+        defer { seeking -= 1 }
         await player.seek(to: time, toleranceBefore: .zero, toleranceAfter: .zero)
         currentTime = seconds
     }

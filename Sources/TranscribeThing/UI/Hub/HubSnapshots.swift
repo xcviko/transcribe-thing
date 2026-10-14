@@ -112,6 +112,14 @@ enum HubSnapshots {
             // The Meet call: three speakers besides Sam, Matvey renamed, a phrase said muted, another tab's sound.
             hub("hub-call-detail", .callDetail, height: 900) { c in Samples.openCall(c, 2) },
             hub("hub-call-detail-compact", .callDetail, width: 820, height: 560) { c in Samples.openCall(c, 2) },
+            // The Meet call's first 3:20, played to 2:48: the waveform in its speakers' colors (the muted phrase dimmed),
+            // and before its loudness is read, flat.
+            hub("hub-call-detail-waveform", .callDetail) { c in Samples.waveformCall(c) },
+            hub("hub-call-detail-waveform-flat", .callDetail) { c in
+                Samples.waveformCall(c)
+                c.previewWaveformFlat = true
+            },
+            hub("hub-call-detail-waveform-compact", .callDetail, width: 820, height: 560) { c in Samples.waveformCall(c) },
             // The Meet call's summary whole (two of its four tasks done), then the transcript.
             hub("hub-call-detail-summary", .callDetail, height: 1260) { c in Samples.openCall(c, 2) },
             // The same call transcribed before summaries: Summarize, and the same while it runs.
@@ -435,6 +443,16 @@ enum HubSnapshots {
         @MainActor static func openCall(_ context: HubContext, _ n: Int) {
             calls(context)
             context.windows.openCallID = PreviewFixtures.callID(n)
+        }
+
+        /// The Meet call cut to its first 3:20, where all its phrases are, 2:48 played.
+        @MainActor static func waveformCall(_ context: HubContext) {
+            openCall(context, 2)
+            context.calls.update(PreviewFixtures.callID(2)) {
+                $0.micSeconds = 200
+                $0.remoteSeconds = 200
+            }
+            context.previewCallPosition = 168
         }
 
         /// Colors other than the defaults, one each: Parakeet teal, Gemini blue.

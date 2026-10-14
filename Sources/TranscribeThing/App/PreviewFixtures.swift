@@ -243,6 +243,28 @@ enum PreviewFixtures {
         UUID(uuidString: String(format: "00000000-0000-4000-8000-%012d", n))!
     }
 
+    /// A made-up loudness for `call`'s waveform: words rising and falling where its transcript has someone speaking,
+    /// a low hum elsewhere (a call not transcribed speaks in bursts: two stretches of 7 seconds in three). The same
+    /// every time.
+    static func peaks(for call: CallRecord) -> CallPeaks {
+        let count = Int(call.duration / CallPeaks.bucketSeconds)
+        let segments = call.transcript?.segments ?? (0..<Int(call.duration / 7)).compactMap { index in
+            index % 3 == 2 ? nil : CallTranscript.Segment(start: Double(index) * 7, end: Double(index) * 7 + 7,
+                                                          side: .remote, speaker: "", text: "")
+        }
+        var seed: UInt64 = 0x9E37_79B9_7F4A_7C15
+        func random() -> Float {
+            seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            return Float(seed >> 40) / Float(1 << 24)
+        }
+        return CallPeaks(values: (0..<count).map { index in
+            let time = Double(index) * CallPeaks.bucketSeconds
+            guard segments.contains(where: { time >= $0.start && time < $0.end }) else { return 0.01 + 0.02 * random() }
+            let words = 0.5 + 0.5 * sin(time * 1.7) * sin(time * 0.43 + 1)
+            return Float(0.12 + 0.7 * words) * (0.6 + 0.4 * random())
+        })
+    }
+
     /// The fixture summaries' task ids.
     static func callTaskID(_ n: Int) -> UUID {
         UUID(uuidString: String(format: "00000000-0000-4000-9000-%012d", n))!

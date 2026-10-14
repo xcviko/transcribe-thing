@@ -55,6 +55,10 @@ final class HubContext: Observable {
     var previewHoveredCall: UUID?
     /// The call's transcript row whose speaker is being renamed, its field open (snapshots).
     var previewRenaming: String?
+    /// Where the open call's player stands (snapshots).
+    var previewCallPosition: TimeInterval?
+    /// The open call's waveform drawn before its loudness is read: flat bars (snapshots).
+    var previewWaveformFlat = false
 
     init(env: AppEnvironment) {
         settings = env.settings
