@@ -21,6 +21,8 @@ final class CallNotices {
         case zoomMenu
         /// The app let go of the mic (Telegram): its name.
         case micRelease(String)
+        /// The browser extension, from inside the call's page.
+        case page
     }
 
     /// What the monitor sees of the live call's mute at one look.
@@ -208,6 +210,7 @@ final class CallNotices {
         case .button: "button"
         case .zoomMenu: "zoomMenu"
         case .micRelease: "micRelease"
+        case .page: "page"
         }
     }
 
@@ -234,6 +237,7 @@ extension Notice {
             case .button: "From the Mute button"
             case .zoomMenu: "From Zoom’s Meeting menu"
             case .micRelease(let app): muted ? "\(app) let go of the mic" : "\(app) took the mic again"
+            case .page: "From the browser extension"
             }
         case .muteNotFollowed(let name):
             title = "Mute isn’t followed in \(name)"

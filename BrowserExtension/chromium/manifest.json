@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "transcribe-thing",
+  "description": "Tells the transcribe-thing app which tab holds a call and whether your mic is muted. Nothing leaves your Mac.",
+  "version": "1.0.0",
+  "minimum_chrome_version": "111",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0yNsSno5J+AI6Ixdc6Vzk0qAx1EGLmYkLttovwaevQJtr7sZQhOoFj55von5ADOD3Fld3DAMAq6bbkxdB8QFATCbCdc0REHhzG/2I6+PEKBg6ql76pphxpmBz42wVkeeNz5Yhu5CcK89tUYd5RyAe7f/BfM4EneKho2D03MitDodmJYQGrwSg+Oe5DF0wegkDFuaqrKomT7iof8hqwf22NHKrfFKIwoN3MyJPLSuQeBfEiL6LKKMkB45ZjdJYeUUJvOSNYltklIAvSQZ3Nwaqvwrk3bzNSAS+a+uQ5A52z3SYn0kj0V7+b/Xe+bEvuj3a2nElEIwCaKb7xa/q9yFrwIDAQAB",
+  "permissions": ["nativeMessaging", "tabs", "storage"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["page.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_about_blank": true,
+      "match_origin_as_fallback": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["relay.js"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_about_blank": true,
+      "match_origin_as_fallback": true
+    }
+  ]
+}
