@@ -265,8 +265,12 @@ final class BrowserBridgeServer: @unchecked Sendable {
         self.path = path
     }
 
+    /// The socket file this run made, so `stop` removes only its own and never another copy's.
+    private var made: (dev_t, ino_t)?
+
     func start() throws {
         let fd = try UnixSocket.listen(at: path)
+        made = UnixSocket.identity(of: path)
         UnixSocket.setNonBlocking(fd)
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
         source.setEventHandler { [weak self] in self?.accept(fd) }
@@ -280,7 +284,7 @@ final class BrowserBridgeServer: @unchecked Sendable {
             listener?.cancel()
             listener = nil
             for id in Array(peers.keys) { closePeer(id, notify: false) }
-            unlink(path)
+            if let made, let now = UnixSocket.identity(of: path), made == now { unlink(path) }
         }
     }
 
