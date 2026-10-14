@@ -139,6 +139,42 @@ enum HubSnapshots {
             hub("hub-call-detail-unconfirmed", .callDetail) { c in Samples.openCall(c, 4) },
             hub("hub-call-detail-failed", .callDetail) { c in Samples.openCall(c, 3) },
             hub("hub-call-detail-transcribing", .callDetail) { c in Samples.openCall(c, 1) },
+            // The Meet call scrolled to its transcript: the card stays at the top, a hairline under it.
+            hub("hub-call-detail-scrolled", .callDetail) { c in
+                Samples.waveformCall(c)
+                c.previewCallScroll = 640
+            },
+            hub("hub-call-detail-scrolled-compact", .callDetail, width: 820, height: 560) { c in
+                Samples.waveformCall(c)
+                c.previewCallScroll = 640
+            },
+            // The Meet call being recorded now, 12:34 in: Recording, with Stop, and no player yet.
+            hub("hub-call-detail-recording", .callDetail) { c in
+                Samples.live(c, kept: true)
+                c.windows.openCallID = PreviewFixtures.callID(99)
+            },
+            // Recorded from the menu bar: its mute isn't followed, and it ran nowhere in particular.
+            hub("hub-call-detail-menu-bar", .callDetail) { c in
+                Samples.waveformCall(c)
+                c.calls.update(PreviewFixtures.callID(2)) {
+                    $0.manual = true
+                    $0.muteIntervals = []
+                    $0.otherBrowserAudio = []
+                }
+            },
+            // Everything worth a note: muted, mute not known, another tab's sound, cut off. Then the same in the
+            // narrowest window, with a long page title and eight speakers.
+            hub("hub-call-detail-notes", .callDetail) { c in
+                Samples.waveformCall(c)
+                c.calls.update(PreviewFixtures.callID(2)) { Samples.noteEverything(&$0) }
+            },
+            hub("hub-call-detail-crowded-compact", .callDetail, width: 820, height: 560) { c in
+                Samples.waveformCall(c)
+                c.calls.update(PreviewFixtures.callID(2)) {
+                    Samples.noteEverything(&$0)
+                    Samples.crowd(&$0)
+                }
+            },
             // A speaker's name clicked: the field that renames them (a popover doesn't render in a page snapshot).
             SnapshotEntry("hub-call-rename", width: 300, height: 170) { _ in
                 SpeakerRenameForm(original: "Participant 1", current: "Matvey") { _ in }
@@ -453,6 +489,22 @@ enum HubSnapshots {
                 $0.remoteSeconds = 200
             }
             context.previewCallPosition = 168
+        }
+
+        /// Every note a call can have: two mutes, mute not known, another tab's sound, cut off at 3:10.
+        static func noteEverything(_ call: inout CallRecord) {
+            call.muteKnown = false
+            call.cutOffAt = 190
+        }
+
+        /// A long page title and eight speakers: five more on the other side.
+        static func crowd(_ call: inout CallRecord) {
+            call.pageTitle = "Weekly release sync with design, support and the whole platform team – abc-defg-hij"
+            let extra = (3...7).map { n in
+                CallTranscript.Segment(start: 190 + Double(n), end: 191 + Double(n), side: .remote,
+                                       speaker: "Participant \(n)", text: "Sounds good.")
+            }
+            call.transcript?.segments += extra
         }
 
         /// Colors other than the defaults, one each: Parakeet teal, Gemini blue.

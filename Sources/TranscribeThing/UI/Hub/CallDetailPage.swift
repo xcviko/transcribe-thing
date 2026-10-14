@@ -11,6 +11,9 @@ struct CallDetailPage: View {
 
     @State private var confirmingDelete: CallRecord?
     @State private var player: CallPlayer?
+    @State private var scroll = ScrollPosition()
+    /// The summary and transcript are scrolled: a hairline under the call's card.
+    @State private var scrolled = false
 
     private var call: CallRecord? {
         guard let id = windows.openCallID else { return nil }
@@ -46,25 +49,43 @@ struct CallDetailPage: View {
         .onDisappear { player?.stop() }
     }
 
+    /// The call's card stays at the top, under the toolbar; the summary and the transcript scroll below it, a hairline
+    /// between them once they've moved.
     private func page(_ call: CallRecord) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Theme.Spacing.section) {
-                CallHeader(call: call, isAsking: CallsList.askingID(hub.callState) == call.id) { confirmingDelete = $0 }
-                CallNotes(call: call)
-                if call.micFile != nil || call.remoteFile != nil {
-                    CallPlayerBar(call: call, player: player(for: call),
-                                  tracks: [CallJournal.Track.mic, .remote].compactMap { store.audioURL(of: call, track: $0) },
-                                  folder: store.folder(for: call.id))
+        VStack(spacing: 0) {
+            CallTopCard(call: call, player: player(for: call),
+                        tracks: [CallJournal.Track.mic, .remote].compactMap { store.audioURL(of: call, track: $0) },
+                        folder: store.folder(for: call.id),
+                        isAsking: CallsList.askingID(hub.callState) == call.id) { confirmingDelete = $0 }
+                .padding(.horizontal, HubLayout.pageHorizontal)
+                .padding(.top, 14)
+                .padding(.bottom, 10)
+                .frame(maxWidth: HubLayout.readableWidth, alignment: .leading)
+                .frame(maxWidth: .infinity)
+            Divider()
+                .opacity(scrolled ? 1 : 0)
+            ScrollView {
+                VStack(alignment: .leading, spacing: Theme.Spacing.section) {
+                    CallSummaryView(call: call)
+                    CallTranscriptView(call: call, player: player(for: call))
                 }
-                CallSummaryView(call: call)
-                CallTranscriptView(call: call, player: player(for: call))
+                .padding(.horizontal, HubLayout.pageHorizontal)
+                .padding(.top, 13)
+                .padding(.bottom, HubLayout.pageBottom + 20)
+                .frame(maxWidth: HubLayout.readableWidth, alignment: .leading)
+                .frame(maxWidth: .infinity)
             }
-            .padding(.horizontal, HubLayout.pageHorizontal)
-            .padding(.top, HubLayout.pageTop)
-            .padding(.bottom, HubLayout.pageBottom + 20)
-            .frame(maxWidth: HubLayout.readableWidth, alignment: .leading)
-            .frame(maxWidth: .infinity)
+            .scrollPosition($scroll)
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.contentOffset.y + geometry.contentInsets.top > 0.5
+            } action: { _, moved in
+                scrolled = moved
+            }
+            .onAppear { if let y = hub.previewCallScroll { scroll.scrollTo(y: y) } }
         }
+        // The card's wrapping lines (a failure, a permission) asked at no width are tall: without a floor of 0 that
+        // height became the window's least, and the page was pushed up out of it.
+        .frame(minHeight: 0, maxHeight: .infinity, alignment: .top)
         .task(id: call.id) {
             guard player == nil || player?.id != call.id else { return }
             player?.stop()
@@ -128,95 +149,30 @@ struct CallDetailPage: View {
     }
 }
 
-// MARK: - Header
+// MARK: - Top card
 
-private struct CallHeader: View {
-    var call: CallRecord
-    var isAsking: Bool
-    var onDelete: (CallRecord) -> Void
-    @Environment(HubContext.self) private var hub
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .center, spacing: 14) {
-                CallAppIcon(call: call, size: 44)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(CallFormat.title(call))
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.ink)
-                        .lineLimit(2)
-                        .textSelection(.enabled)
-                    HStack(spacing: 0) {
-                        Text(CallFormat.date(call.startedAt))
-                        Text(" · ")
-                        CallDurationText(call: call)
-                        if let cost = call.costUSD, cost > 0 {
-                            Text(" · \(Fmt.usd(cost))")
-                                .help("What transcribing it cost on OpenRouter")
-                        }
-                    }
-                    .font(.system(size: 12))
-                    .monospacedDigit()
-                    .foregroundStyle(.inkSecondary)
-                    Text(CallFormat.place(call))
-                        .font(.system(size: 12))
-                        .foregroundStyle(.inkTertiary)
-                }
-                Spacer(minLength: 0)
-            }
-            if call.status != .done || !CallFormat.problems(call).isEmpty {
-                CallStatusLine(call: call, isAsking: isAsking, onDelete: onDelete)
-                    .padding(.leading, 58)
-            }
-        }
-        .padding(16)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.sectionFill, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
-    }
-}
-
-/// How the transcript was made: mutes, mute not followed, another tab's sound.
-private struct CallNotes: View {
-    var call: CallRecord
-
-    var body: some View {
-        let notes = CallFormat.notes(call)
-        if !notes.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(notes, id: \.self) { note in
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Image(systemName: "info.circle")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(.inkTertiary)
-                        Text(note)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.inkSecondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            }
-            .padding(.horizontal, 4)
-            .padding(.top, -8)
-        }
-    }
-}
-
-// MARK: - Player
-
-/// Play/Pause, the call as a waveform in its speakers' colors (`CallWaveformView`) and where it is, both sides
-/// together; under it, who's who.
-private struct CallPlayerBar: View {
+/// The call in one card that stays at the top of its page: its app, title, when, how long, what it cost and where it
+/// ran; what it's waiting for or what went wrong; notes on how the transcript was made; then the player (Play/Pause,
+/// the waveform in the speakers' colors, where it is) and who's who.
+private struct CallTopCard: View {
     var call: CallRecord
     var player: CallPlayer
     /// The call's tracks and folder, where its loudness is read from and kept (`CallPeaks`).
     var tracks: [URL]
     var folder: URL
+    var isAsking: Bool
+    var onDelete: (CallRecord) -> Void
     @Environment(HubContext.self) private var hub
     /// Where the waveform is held while it's dragged; the player moves on release.
     @State private var scrubbing: Double?
     @State private var peaks: CallPeaks?
     /// Which call's tracks `peaks` are.
     @State private var peaksKey: PeaksKey?
+
+    /// The app's icon and the Play button: the same width, so the title and the waveform start together.
+    private static let lead: CGFloat = 28
+    private static let gap: CGFloat = 10
+    private static var indent: CGFloat { lead + gap }
 
     /// What the loudness depends on: a track rewritten (joined onto, cleaned again) has another length.
     private struct PeaksKey: Equatable {
@@ -230,15 +186,92 @@ private struct CallPlayerBar: View {
                  remoteSeconds: call.remoteSeconds)
     }
 
+    private var hasAudio: Bool { call.micFile != nil || call.remoteFile != nil }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: Self.gap) {
+                CallAppIcon(call: call, size: Self.lead)
+                VStack(alignment: .leading, spacing: 2) {
+                    let title = CallFormat.title(call)
+                    Text(title)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.ink)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .textSelection(.enabled)
+                        .help(title)
+                    meta
+                    if call.status != .done || !CallFormat.problems(call).isEmpty {
+                        CallStatusLine(call: call, isAsking: isAsking, onDelete: onDelete)
+                            .padding(.top, 6)
+                    }
+                    CallNotes(call: call)
+                        .padding(.top, 5)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if hasAudio { playerRows }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.sectionFill, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+        .task(id: key) {
+            guard !hub.isPreview, hasAudio else { return }
+            // Another call: flat bars until its own loudness is read.
+            if peaksKey?.id != key.id { peaks = nil }
+            let key = key, tracks = tracks, folder = folder
+            let loaded = await Task.detached(priority: .utility) { CallPeaks.load(tracks: tracks, folder: folder) }.value
+            guard !Task.isCancelled else { return }
+            peaks = loaded
+            peaksKey = key
+        }
+    }
+
+    /// "Wednesday, October 14 at 8:05 AM · 32:14 · $0.04 · In Google Chrome", on one line when it fits; where it ran
+    /// goes under when it doesn't.
+    private var meta: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 0) {
+                when
+                Text(" · ")
+                Text(CallFormat.place(call))
+            }
+            .fixedSize()
+            VStack(alignment: .leading, spacing: 2) {
+                when
+                Text(CallFormat.place(call))
+            }
+        }
+        .font(.system(size: 12))
+        .monospacedDigit()
+        .foregroundStyle(.inkSecondary)
+        .lineLimit(1)
+    }
+
+    private var when: some View {
+        HStack(spacing: 0) {
+            Text(CallFormat.date(call.startedAt))
+            Text(" · ")
+            CallDurationText(call: call)
+            if let cost = call.costUSD, cost > 0 {
+                Text(" · \(Fmt.usd(cost))")
+                    .help("What transcribing it cost on OpenRouter")
+            }
+        }
+    }
+
+    /// Play/Pause, the waveform and where it is, both sides together; under it, who's who.
+    private var playerRows: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: Self.gap) {
                 Button {
                     player.toggle()
                 } label: {
                     Image(systemName: player.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 13, weight: .semibold))
-                        .frame(width: 30, height: 30)
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(width: Self.lead, height: Self.lead)
                         .contentShape(Circle())
                 }
                 .buttonStyle(.borderless)
@@ -259,24 +292,10 @@ private struct CallPlayerBar: View {
                 Text(problem)
                     .font(.system(size: 11))
                     .foregroundStyle(.danger)
-                    .padding(.leading, 42)
+                    .padding(.leading, Self.indent)
             }
             CallWaveformLegend(call: call)
-                .padding(.leading, 42)
-        }
-        .padding(.horizontal, 14)
-        .padding(.top, 10)
-        .padding(.bottom, 12)
-        .background(Color.sectionFill, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
-        .task(id: key) {
-            guard !hub.isPreview else { return }
-            // Another call: flat bars until its own loudness is read.
-            if peaksKey?.id != key.id { peaks = nil }
-            let key = key, tracks = tracks, folder = folder
-            let loaded = await Task.detached(priority: .utility) { CallPeaks.load(tracks: tracks, folder: folder) }.value
-            guard !Task.isCancelled else { return }
-            peaks = loaded
-            peaksKey = key
+                .padding(.leading, Self.indent)
         }
     }
 
@@ -284,6 +303,35 @@ private struct CallPlayerBar: View {
     private var shownPeaks: CallPeaks? {
         guard hub.isPreview else { return peaksKey?.id == call.id ? peaks : nil }
         return hub.previewWaveformFlat ? nil : PreviewFixtures.peaks(for: call)
+    }
+}
+
+/// How the transcript was made: mutes, mute not followed, another tab's sound, cut off. A few words each, side by
+/// side (wrapping when they don't fit); the whole sentence is in its tooltip and what VoiceOver reads.
+private struct CallNotes: View {
+    var call: CallRecord
+
+    var body: some View {
+        let notes = CallFormat.shortNotes(call)
+        if !notes.isEmpty {
+            FlowLayout(spacing: 14, lineSpacing: 3) {
+                ForEach(notes, id: \.self) { note in
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Image(systemName: "info.circle")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.inkTertiary)
+                        Text(note.label)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.inkSecondary)
+                            .lineLimit(1)
+                    }
+                    .contentShape(Rectangle())
+                    .help(note.text)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(note.text)
+                }
+            }
+        }
     }
 }
 

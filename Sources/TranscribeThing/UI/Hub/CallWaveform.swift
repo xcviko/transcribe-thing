@@ -10,8 +10,8 @@ enum CallWaveform {
     static let step: CGFloat = 4
     static let barWidth: CGFloat = 2.4
     /// The bars' track; the playhead stands out of it by `overhang` above and below.
-    static let trackHeight: CGFloat = 64
-    static let overhang: CGFloat = 4
+    static let trackHeight: CGFloat = 32
+    static let overhang: CGFloat = 3
     static let minimumBars = 24
     /// Heights before the loudness is known: where someone speaks, where nobody does.
     static let flatSpeech: Float = 0.42
@@ -104,7 +104,8 @@ enum CallWaveform {
 // MARK: - View
 
 /// The call as bars in its speakers' colors, played part bright, the rest faint, a playhead between. A click or a drag
-/// moves it (the first click plays), and the arrows skip 5 seconds; to VoiceOver, it's a slider.
+/// moves it (the first click plays), and the arrows skip 5 seconds. With the keyboard, its playhead is bolder: no ring
+/// around it. To VoiceOver, it's a slider.
 struct CallWaveformView: View {
     var call: CallRecord
     var player: CallPlayer
@@ -129,18 +130,12 @@ struct CallWaveformView: View {
         TimelineView(.animation(paused: !player.isPlaying || scrubbing != nil)) { _ in
             CallWaveformCanvas(tones: tones, flat: CallWaveform.flat(tones), loud: heights,
                                played: fraction(scrubbing ?? player.livePosition),
-                               hoverX: player.canPlay ? hoverX : nil, grown: grown)
+                               hoverX: player.canPlay ? hoverX : nil, grown: grown, focused: focused)
         }
         .frame(height: CallWaveform.trackHeight + 2 * CallWaveform.overhang)
         .frame(maxWidth: .infinity)
         .onGeometryChange(for: CGFloat.self, of: \.size.width) { width = $0 }
         .overlay(alignment: .topLeading) { hoverLabel }
-        .background {
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .strokeBorder(Color.accentRing, lineWidth: 2)
-                .padding(-3)
-                .opacity(focused ? 1 : 0)
-        }
         .contentShape(Rectangle())
         .gesture(scrub, isEnabled: player.canPlay)
         .onContinuousHover { phase in
@@ -238,6 +233,8 @@ private struct CallWaveformCanvas: View, Animatable {
     var played: CGFloat
     var hoverX: CGFloat?
     var grown: Double
+    /// It has the keyboard: a bolder playhead.
+    var focused = false
 
     var animatableData: Double {
         get { grown }
@@ -275,8 +272,10 @@ private struct CallWaveformCanvas: View, Animatable {
                 context.fill(Path(CGRect(x: hoverX - 0.5, y: top, width: 1, height: track)),
                              with: .color(Color.ink.opacity(0.3)))
             }
-            let x = min(max(split, 1), size.width - 1)
-            context.fill(Path(roundedRect: CGRect(x: x - 1, y: 0, width: 2, height: size.height), cornerRadius: 1),
+            let half: CGFloat = focused ? 1.75 : 1
+            let x = min(max(split, half), size.width - half)
+            context.fill(Path(roundedRect: CGRect(x: x - half, y: 0, width: 2 * half, height: size.height),
+                              cornerRadius: half),
                          with: .color(.ink))
         }
     }

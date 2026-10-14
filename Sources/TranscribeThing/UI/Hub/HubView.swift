@@ -59,6 +59,8 @@ final class HubContext: Observable {
     var previewCallPosition: TimeInterval?
     /// The open call's waveform drawn before its loudness is read: flat bars (snapshots).
     var previewWaveformFlat = false
+    /// How far the open call's summary and transcript are scrolled under its card (snapshots).
+    var previewCallScroll: CGFloat?
 
     init(env: AppEnvironment) {
         settings = env.settings

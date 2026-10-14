@@ -96,6 +96,12 @@ enum CallsList {
 
 // MARK: - Words
 
+/// A note on how a call's transcript was made: a few words for the call's card, the sentence for its tooltip.
+struct CallNote: Equatable, Hashable {
+    var label: String
+    var text: String
+}
+
 /// Something that kept a side of the call from being recorded, and where it's fixed.
 struct CallProblem: Equatable, Hashable {
     var text: String
@@ -143,25 +149,38 @@ enum CallFormat {
 
     /// What's worth knowing about how the transcript was made: mutes, mute not followed, another tab's sound.
     static func notes(_ call: CallRecord) -> [String] {
-        var notes: [String] = []
+        shortNotes(call).map(\.text)
+    }
+
+    /// `notes`, each with a few words that stand for it on the call's card: "Muted 2 times (1:20)", "Mute not known",
+    /// "Another tab’s sound", "May be cut off at 03:10".
+    static func shortNotes(_ call: CallRecord) -> [CallNote] {
+        var notes: [CallNote] = []
         let mutes = call.muteIntervals
         if !mutes.isEmpty {
             let total = Fmt.duration(mutes.reduce(0) { $0 + $1.duration })
             let muted = mutes.count == 1 ? "You were muted once (\(total))"
                                          : "You were muted \(mutes.count) times (\(total) in all)"
+            let label = mutes.count == 1 ? "Muted once (\(total))" : "Muted \(mutes.count) times (\(total))"
             // A call recorded before the mic was silenced while muted still has what was said then.
-            notes.append(call.micSilencedWhenMuted ? "\(muted); your mic wasn’t recorded then." : "\(muted).")
+            notes.append(CallNote(label: label, text: call.micSilencedWhenMuted ? "\(muted); your mic wasn’t recorded then."
+                                                                                 : "\(muted)."))
         }
         if call.manual {
-            notes.append("Mute isn’t followed in a menu bar recording: what you said while muted is in the transcript.")
+            notes.append(CallNote(label: "Mute not followed", text: "Mute isn’t followed in a menu bar recording: "
+                                      + "what you said while muted is in the transcript."))
         } else if !call.muteKnown {
-            notes.append("Mute isn’t known for this app: what you said while muted may be in the transcript.")
+            notes.append(CallNote(label: "Mute not known", text: "Mute isn’t known for this app: what you said while "
+                                      + "muted may be in the transcript."))
         }
         if !call.otherBrowserAudio.isEmpty {
-            notes.append("Another tab played sound during the call, so it may be mixed into their side.")
+            notes.append(CallNote(label: "Another tab’s sound", text: "Another tab played sound during the call, so it "
+                                      + "may be mixed into their side."))
         }
         if let cut = call.cutOffAt {
-            notes.append("The transcript may be cut off at \(CallPrompts.clock(cut)): Gemini’s answer ran out of room there.")
+            notes.append(CallNote(label: "May be cut off at \(CallPrompts.clock(cut))",
+                                  text: "The transcript may be cut off at \(CallPrompts.clock(cut)): Gemini’s answer ran "
+                                      + "out of room there."))
         }
         return notes
     }

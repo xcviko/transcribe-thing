@@ -491,14 +491,20 @@ struct RecordingDot: View {
     var size: CGFloat = 7
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// Seconds from bright to faint and back.
+    private static let period: TimeInterval = 1.8
+
+    /// Its opacity follows the clock rather than an animation: an animation also carried the dot's first move into
+    /// place, and on a call's page it slid in from the window's edge.
     var body: some View {
-        Circle()
-            .fill(Color(nsColor: .systemRed))
-            .frame(width: size, height: size)
-            .phaseAnimator(reduceMotion ? [1.0] : [1.0, 0.35]) { dot, opacity in
-                dot.opacity(opacity)
-            } animation: { _ in .easeInOut(duration: 0.9) }
-            .accessibilityHidden(true)
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { context in
+            let phase = context.date.timeIntervalSinceReferenceDate / Self.period * 2 * .pi
+            Circle()
+                .fill(Color(nsColor: .systemRed))
+                .frame(width: size, height: size)
+                .opacity(reduceMotion ? 1 : 0.675 + 0.325 * cos(phase))
+        }
+        .accessibilityHidden(true)
     }
 }
 

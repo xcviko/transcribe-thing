@@ -152,6 +152,22 @@ private func info(_ id: UUID = UUID(), startedAt: Date = now) -> CallMonitor.Cal
         #expect(slots["Аня"]?.side == .remote && slots["Sam"]?.side == .local)
     }
 
+    /// The call's card names each note in a few words; the sentence is its tooltip.
+    @Test func shortNotes() {
+        var call = record(1)
+        call.muteKnown = false
+        call.muteIntervals = [CallInterval(start: 10, end: 40), CallInterval(start: 100, end: 130)]
+        call.otherBrowserAudio = [CallInterval(start: 5, end: 9)]
+        call.cutOffAt = 190
+        let notes = CallFormat.shortNotes(call)
+        #expect(notes.map(\.label) == ["Muted 2 times (1:00)", "Mute not known", "Another tab’s sound",
+                                       "May be cut off at 03:10"])
+        #expect(notes.map(\.text) == CallFormat.notes(call))
+        call.muteIntervals = [CallInterval(start: 10, end: 90)]
+        call.manual = true
+        #expect(CallFormat.shortNotes(call).prefix(2).map(\.label) == ["Muted once (1:20)", "Mute not followed"])
+    }
+
     @Test func notesAndProblems() {
         var call = record(1)
         call.muteKnown = true
