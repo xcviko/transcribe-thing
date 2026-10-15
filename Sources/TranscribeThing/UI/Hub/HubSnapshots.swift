@@ -401,6 +401,14 @@ enum HubSnapshots {
                     recording: ShortcutRecorderSnapshots.controlOptionSpace, for: .handsFree).map { [.handsFree: $0] } ?? [:]) { c in
                 c.settings.shortcuts[.handsFree] = ShortcutRecorderSnapshots.controlOptionSpace
             },
+            // Hands-free on Double ⌘, and ⌘ alone just tried for paste last: refused, it's hands-free's first tap.
+            hub("hub-shortcuts-double-tap", .shortcuts,
+                recorderMessages: ShortcutRecorderSnapshots.message(
+                    recording: ShortcutRecorderSnapshots.command, for: .pasteLast,
+                    bindings: { var b = ShortcutBindings.defaults; b[.handsFree] = ShortcutRecorderSnapshots.doubleCommand; return b }()
+                ).map { [.pasteLast: $0] } ?? [:]) { c in
+                c.settings.shortcuts[.handsFree] = ShortcutRecorderSnapshots.doubleCommand
+            },
             // Also a customized binding, so "Restore Defaults" shows in the header.
             hub("hub-shortcuts-secure", .shortcuts) { c in
                 c.secureInput = .preview(active: true, owningAppName: "1Password")
