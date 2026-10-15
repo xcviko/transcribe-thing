@@ -456,9 +456,7 @@ final class HotkeyTapEngine: @unchecked Sendable {
             keyCode: isKeyboard ? UInt16(truncatingIfNeeded: event.getIntegerValueField(.keyboardEventKeycode)) : 0,
             flags: event.flags.rawValue,
             isRepeat: isKeyboard && event.getIntegerValueField(.keyboardEventAutorepeat) != 0,
-            isSynthetic: event.getIntegerValueField(.eventSourceUserData) == SyntheticEvent.tag,
-            // Not `event.timestamp`, whose unit isn't the same on every Mac: the tap sees each event as it comes.
-            time: ProcessInfo.processInfo.systemUptime)
+            isSynthetic: event.getIntegerValueField(.eventSourceUserData) == SyntheticEvent.tag)
         let swallow = route(input)
         return swallow ? nil : pass
     }

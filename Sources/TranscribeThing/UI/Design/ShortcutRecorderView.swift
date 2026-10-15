@@ -532,8 +532,6 @@ final class ShortcutCaptureNSView: NSView {
     private var monitor: Any?
     private var capturing: (@MainActor (Bool) -> Void)?
     private var resignObserver: MainNotificationObserver?
-    /// A single tap waits this long for a second (`DoubleTap.maxGap`), then is saved.
-    private var tapWindow: Task<Void, Never>?
 
     override var acceptsFirstResponder: Bool { true }
     override var focusRingType: NSFocusRingType {
@@ -570,8 +568,6 @@ final class ShortcutCaptureNSView: NSView {
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
         resignObserver = nil
-        tapWindow?.cancel()
-        tapWindow = nil
         capturing?(false)
         capturing = nil
         engine.reset()
@@ -589,11 +585,8 @@ final class ShortcutCaptureNSView: NSView {
             if !inside { stopRecording(notify: true) }
             return false
         case .flagsChanged:
-            let pending = engine.pendingTap
-            result = engine.flagsChanged(keyCode: event.keyCode, rawFlags: UInt64(event.modifierFlags.rawValue),
-                                         at: event.timestamp)
+            result = engine.flagsChanged(keyCode: event.keyCode, rawFlags: UInt64(event.modifierFlags.rawValue))
             onHeldChanged?(engine.held)
-            if let tap = engine.pendingTap, tap != pending { startTapWindow() }
         case .keyDown:
             result = engine.keyDown(keyCode: event.keyCode, rawFlags: UInt64(event.modifierFlags.rawValue),
                                     isRepeat: event.isARepeat)
@@ -605,19 +598,6 @@ final class ShortcutCaptureNSView: NSView {
             onResult?(result)
         }
         return true
-    }
-
-    /// The tap just let go stays in the field while a second one may come; without it, it's saved as it is.
-    private func startTapWindow() {
-        tapWindow?.cancel()
-        tapWindow = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(DoubleTap.maxGap))
-            guard !Task.isCancelled, let self, self.isRecording else { return }
-            let result = self.engine.tapWindowEnded()
-            guard result != .none else { return }
-            self.stopRecording(notify: false)
-            self.onResult?(result)
-        }
     }
 
     override func resignFirstResponder() -> Bool {
@@ -637,7 +617,7 @@ final class ShortcutCaptureNSView: NSView {
 /// when `TRANSCRIBE_THING_SNAPSHOT_DIR` is set, and available for the catalog as `ShortcutRecorderSnapshots.entries`.
 enum ShortcutRecorderSnapshots {
     @MainActor static var entries: [SnapshotEntry] {
-        [SnapshotEntry("system-shortcut-recorder", width: 640, height: 1700) { _ in RecorderGallery() },
+        [SnapshotEntry("system-shortcut-recorder", width: 640, height: 1420) { _ in RecorderGallery() },
          SnapshotEntry("system-shortcut-recorder-leading", width: 520, height: 420) { _ in RecorderLeadingDemo() }]
     }
 
@@ -645,8 +625,6 @@ enum ShortcutRecorderSnapshots {
     static let system = SystemKeyboardState(hotKeys: SystemSymbolicHotKeys.active(in: nil), fnUsage: .doNothing,
                                             functionKeysAreStandard: false)
     static let controlOptionSpace = Shortcut(modifiers: [.init(.control), .init(.option)], keyCode: KeyCode.space)
-    static let command = Shortcut(modifiers: [.init(.command)])
-    static let doubleCommand = command.doubleTap
 
     /// What the recorder shows right after recording `shortcut`, with the real validator's copy.
     static func message(recording shortcut: Shortcut, for action: ShortcutAction,
@@ -701,15 +679,6 @@ private struct RecorderGallery: View {
                 row(.pasteLast) {
                     ShortcutRecorderView(shortcut: .constant(nil), action: .pasteLast)
                 }
-                // A double tap, saved.
-                row(.handsFree) {
-                    ShortcutRecorderView(shortcut: .constant(ShortcutRecorderSnapshots.doubleCommand), action: .handsFree)
-                }
-                // Not saved: its first tap would set off hands-free's ⌘, and the other way round.
-                recorded(ShortcutRecorderSnapshots.doubleCommand, for: .pasteLast, current: .commandFnV,
-                         bindings: bindings([.handsFree: ShortcutRecorderSnapshots.command]))
-                recorded(ShortcutRecorderSnapshots.command, for: .pasteLast, current: .commandFnV,
-                         bindings: bindings([.handsFree: ShortcutRecorderSnapshots.doubleCommand]))
             }
         }
         .padding(Theme.Spacing.page)

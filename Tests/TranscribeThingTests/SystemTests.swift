@@ -45,8 +45,6 @@ private struct Keyboard {
     var router = HotkeyRouter()
     var config = HotkeyRouter.Config()
     private(set) var held: Set<Modifier> = []
-    /// The clock every event is stamped with (seconds); only double taps read it.
-    private(set) var now: TimeInterval = 0
 
     init(bindings: ShortcutBindings = .defaults) {
         config.bindings = bindings
@@ -88,24 +86,7 @@ private struct Keyboard {
     }
 
     mutating func send(_ input: HotkeyInput) -> HotkeyRouter.Decision {
-        var input = input
-        input.time = now
-        return router.handle(input, config: config)
-    }
-
-    mutating func wait(_ seconds: TimeInterval) {
-        now += seconds
-    }
-
-    /// Pressed, held `hold` seconds, let go, and `gap` seconds pass: one tap. Returns every event it gave.
-    @discardableResult
-    mutating func tap(_ modifiers: Modifier..., hold: TimeInterval = 0.08, gap: TimeInterval = 0.12) -> [HotkeyEvent] {
-        var events: [HotkeyEvent] = []
-        for modifier in modifiers { events += press(modifier).events }
-        wait(hold)
-        for modifier in modifiers { events += release(modifier).events }
-        wait(gap)
-        return events
+        router.handle(input, config: config)
     }
 }
 
@@ -308,7 +289,7 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
         #expect(kb.up(kVK_ANSI_KeypadEnter).swallow, "no stray keyUp reaches the app")
 
         var capture = ShortcutCaptureEngine(action: .polish)
-        _ = capture.flagsChanged(keyCode: KeyCode.function, rawFlags: CGEventFlags.maskSecondaryFn.rawValue, at: 0)
+        _ = capture.flagsChanged(keyCode: KeyCode.function, rawFlags: CGEventFlags.maskSecondaryFn.rawValue)
         let recorded = capture.keyDown(keyCode: UInt16(kVK_ANSI_KeypadEnter),
                                        rawFlags: CGEventFlags.maskSecondaryFn.rawValue, isRepeat: false)
         #expect(recorded == .commit(.fnReturn))
@@ -656,223 +637,6 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
     }
 }
 
-// MARK: - Double taps in the router
-
-/// A double tap goes off on its second press: two quick presses of the same modifiers with nothing in between
-/// (`DoubleTap`). Modifier events still reach apps.
-@Suite struct DoubleTapRouterTests {
-    private static let command = Shortcut(modifiers: [.init(.command)])
-
-    @Test func doubleCommandFiresOnTheSecondPress() {
-        var kb = Keyboard(bindings: bindings([.handsFree: Self.command.doubleTap]))
-        #expect(kb.tap(.leftCommand).isEmpty, "the first tap is only a tap")
-        let second = kb.press(.leftCommand)
-        #expect(second.events == [.handsFreeToggle])
-        #expect(!second.swallow, "modifier events are never swallowed")
-        #expect(kb.release(.leftCommand).events.isEmpty)
-        // Pressed once on its own, ⌘ does nothing.
-        kb.wait(1)
-        #expect(kb.tap(.leftCommand).isEmpty)
-    }
-
-    @Test func slowTapsAreNotADoubleTap() {
-        var kb = Keyboard(bindings: bindings([.handsFree: Self.command.doubleTap]))
-        kb.tap(.leftCommand, gap: DoubleTap.maxGap + 0.05)
-        #expect(kb.press(.leftCommand).events.isEmpty, "too long after the first")
-        kb.wait(0.05)
-        kb.release(.leftCommand)
-        kb.wait(0.1)
-        // That late one was a first tap of its own.
-        #expect(kb.press(.leftCommand).events == [.handsFreeToggle])
-    }
-
-    @Test func aLongFirstPressIsAHoldNotATap() {
-        var kb = Keyboard(bindings: bindings([.handsFree: Self.command.doubleTap]))
-        kb.tap(.leftCommand, hold: DoubleTap.maxHold + 0.05, gap: 0.05)
-        #expect(kb.press(.leftCommand).events.isEmpty)
-    }
-
-    @Test func anythingInBetweenStartsOver() {
-        var kb = Keyboard(bindings: bindings([.handsFree: Self.command.doubleTap]))
-        // A key.
-        kb.tap(.leftCommand)
-        kb.down(kVK_ANSI_A)
-        kb.up(kVK_ANSI_A)
-        #expect(kb.press(.leftCommand).events.isEmpty)
-        kb.release(.leftCommand)
-        kb.wait(1)
-        // A click.
-        kb.tap(.leftCommand)
-        kb.click()
-        #expect(kb.press(.leftCommand).events.isEmpty)
-        kb.release(.leftCommand)
-        kb.wait(1)
-        // Another modifier, tapped or held with it.
-        kb.tap(.leftCommand)
-        kb.tap(.leftOption)
-        #expect(kb.press(.leftCommand).events.isEmpty)
-        kb.release(.leftCommand)
-        kb.wait(1)
-        kb.tap(.leftCommand)
-        kb.press(.leftShift)
-        #expect(kb.press(.leftCommand).events.isEmpty, "⌘ with ⇧ held is ⇧⌘")
-        kb.release(.leftCommand)
-        kb.release(.leftShift)
-        kb.wait(1)
-        // Caps Lock.
-        kb.tap(.leftCommand)
-        kb.send(HotkeyInput(kind: .flagsChanged, keyCode: KeyCode.capsLock, flags: CGEventFlags.maskAlphaShift.rawValue))
-        #expect(kb.press(.leftCommand).events.isEmpty)
-    }
-
-    /// ⌘C, ⌘V and ⇧⌘4 never count, however quick: the key in each press ends it.
-    @Test func commandShortcutsNeverCount() {
-        var kb = Keyboard(bindings: bindings([.handsFree: Self.command.doubleTap]))
-        var events: [HotkeyEvent] = []
-        for key in [kVK_ANSI_C, kVK_ANSI_V, kVK_ANSI_C] {
-            events += kb.press(.leftCommand).events
-            let down = kb.down(key)
-            #expect(!down.swallow)
-            events += down.events + kb.up(key).events
-            events += kb.release(.leftCommand).events
-            kb.wait(0.05)
-        }
-        // ⌘ held, C twice, ⌘ let go and pressed again.
-        events += kb.press(.leftCommand).events
-        kb.down(kVK_ANSI_C); kb.up(kVK_ANSI_C)
-        kb.down(kVK_ANSI_C); kb.up(kVK_ANSI_C)
-        events += kb.release(.leftCommand).events
-        events += kb.press(.leftCommand).events
-        events += kb.release(.leftCommand).events
-        kb.wait(0.05)
-        for _ in 0..<2 {
-            events += kb.press(.leftShift).events + kb.press(.leftCommand).events
-            kb.down(kVK_ANSI_4); kb.up(kVK_ANSI_4)
-            events += kb.release(.leftCommand).events + kb.release(.leftShift).events
-            kb.wait(0.05)
-        }
-        #expect(events.isEmpty, "\(events)")
-    }
-
-    @Test func aTripleTapFiresOnce() {
-        var kb = Keyboard(bindings: bindings([.pasteLast: Self.command.doubleTap]))
-        kb.tap(.leftCommand)
-        #expect(kb.tap(.leftCommand) == [.pasteLast])
-        #expect(kb.tap(.leftCommand).isEmpty, "a third starts a new double tap")
-        #expect(kb.press(.leftCommand).events == [.pasteLast])
-    }
-
-    /// Push to talk on a double tap: tap, then press and hold. The second press starts the dictation and its release
-    /// ends it; another key while holding interrupts as with any modifier-only push to talk.
-    @Test func pushToTalkIsTapThenHold() {
-        var kb = Keyboard(bindings: bindings([.pushToTalk: Self.command.doubleTap]))
-        #expect(kb.press(.leftCommand).events.isEmpty, "the first press starts nothing")
-        kb.wait(0.1)
-        #expect(kb.release(.leftCommand).events.isEmpty)
-        kb.wait(0.1)
-        #expect(kb.press(.leftCommand).events == [.pttDown])
-        kb.wait(2)
-        #expect(kb.release(.leftCommand).events == [.pttUp])
-
-        // Held alone, ⌘ isn't push to talk.
-        kb.wait(1)
-        #expect(kb.press(.leftCommand).events.isEmpty)
-        kb.wait(2)
-        #expect(kb.release(.leftCommand).events.isEmpty)
-
-        // ⌘C during the hold: interrupted, and C reaches the app.
-        kb.wait(1)
-        kb.tap(.leftCommand)
-        #expect(kb.press(.leftCommand).events == [.pttDown])
-        let copy = kb.down(kVK_ANSI_C)
-        #expect(copy.events == [.pttInterrupted])
-        #expect(!copy.swallow)
-        kb.up(kVK_ANSI_C)
-        #expect(kb.release(.leftCommand).events.isEmpty)
-
-        // Esc still cancels while it's held.
-        kb.wait(1)
-        kb.tap(.leftCommand)
-        kb.press(.leftCommand)
-        #expect(kb.down(kVK_Escape).events == [.cancel])
-    }
-
-    @Test func sidesCount() {
-        let rightCommand = Shortcut.rightCommand.doubleTap
-        var kb = Keyboard(bindings: bindings([.handsFree: rightCommand]))
-        kb.tap(.leftCommand)
-        #expect(kb.press(.leftCommand).events.isEmpty, "Double Right ⌘ ignores the left key")
-        kb.release(.leftCommand)
-        kb.wait(1)
-        kb.tap(.leftCommand)
-        #expect(kb.press(.rightCommand).events.isEmpty, "left, then right, is not one key tapped twice")
-        kb.release(.rightCommand)
-        kb.wait(1)
-        kb.tap(.rightCommand)
-        #expect(kb.press(.rightCommand).events == [.handsFreeToggle])
-        kb.release(.rightCommand)
-
-        // Double ⌘ takes either key, tapped twice.
-        var either = Keyboard(bindings: bindings([.handsFree: Self.command.doubleTap]))
-        either.tap(.rightCommand)
-        #expect(either.press(.rightCommand).events == [.handsFreeToggle])
-        either.release(.rightCommand)
-        either.wait(1)
-        either.tap(.leftCommand)
-        #expect(either.press(.rightCommand).events.isEmpty)
-    }
-
-    @Test func aChordTappedTwice() {
-        let chord = Shortcut(modifiers: [.init(.control), .init(.option)]).doubleTap
-        var kb = Keyboard(bindings: bindings([.handsFree: chord]))
-        #expect(kb.tap(.leftControl, .leftOption).isEmpty)
-        #expect(kb.press(.leftControl).events.isEmpty, "half of it")
-        #expect(kb.press(.leftOption).events == [.handsFreeToggle])
-    }
-
-    @Test func doubleFnWithAnotherPushToTalk() {
-        var kb = Keyboard(bindings: bindings([.pushToTalk: .rightOption, .handsFree: Shortcut.fn.doubleTap]))
-        kb.tap(.fn)
-        #expect(kb.press(.fn).events == [.handsFreeToggle])
-    }
-
-    /// Switch model on Double ⌘ steps while holding fn (push to talk), and the hold goes on.
-    @Test func duringADictationOverTheHeldPushToTalk() {
-        var kb = Keyboard(bindings: bindings([.switchModel: Self.command.doubleTap]))
-        #expect(kb.press(.fn).events == [.pttDown])
-        kb.wait(1)
-        #expect(kb.tap(.leftCommand).isEmpty, "⌘ is on the way to Double ⌘: no interruption")
-        #expect(kb.press(.leftCommand).events == [.cycleEngine])
-        #expect(kb.release(.leftCommand).events.isEmpty)
-        kb.wait(1)
-        #expect(kb.release(.fn).events == [.pttUp])
-
-        // Hands-free, nothing held.
-        kb.config.isRecording = true
-        kb.wait(1)
-        kb.tap(.leftCommand)
-        #expect(kb.press(.leftCommand).events == [.cycleEngine])
-        kb.release(.leftCommand)
-
-        // Outside a dictation it's nothing.
-        kb.config.isRecording = false
-        kb.wait(1)
-        kb.tap(.leftCommand)
-        #expect(kb.press(.leftCommand).events.isEmpty)
-    }
-
-    @Test func theRecorderCapturingStartsOver() {
-        var kb = Keyboard(bindings: bindings([.handsFree: Self.command.doubleTap]))
-        kb.config.isSuspended = true
-        kb.tap(.leftCommand)
-        #expect(kb.press(.leftCommand).events.isEmpty)
-        kb.release(.leftCommand)
-        kb.config.isSuspended = false
-        kb.wait(0.1)
-        #expect(kb.press(.leftCommand).events.isEmpty, "the tap made while capturing doesn't count")
-    }
-}
-
 // MARK: - Shortcut capture (recorder)
 
 @Suite struct ShortcutCaptureEngineTests {
@@ -880,121 +644,31 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
         modifiers.reduce(0) { $0 | $1.flags }
     }
 
-    /// Held past `DoubleTap.maxHold`: saved the moment everything is let go.
     @Test func modifierOnlyCommitsLargestSetOnFullRelease() {
         var engine = ShortcutCaptureEngine(action: .pushToTalk)
-        #expect(engine.flagsChanged(keyCode: KeyCode.control, rawFlags: flags([.leftControl]), at: 0) == .none)
-        #expect(engine.flagsChanged(keyCode: KeyCode.option, rawFlags: flags([.leftControl, .leftOption]), at: 0.1) == .none)
+        #expect(engine.flagsChanged(keyCode: KeyCode.control, rawFlags: flags([.leftControl])) == .none)
+        #expect(engine.flagsChanged(keyCode: KeyCode.option, rawFlags: flags([.leftControl, .leftOption])) == .none)
         #expect(engine.held == Shortcut(modifiers: [.init(.control), .init(.option)]))
-        #expect(engine.flagsChanged(keyCode: KeyCode.control, rawFlags: flags([.leftOption]), at: 0.4) == .none)
-        #expect(engine.flagsChanged(keyCode: KeyCode.option, rawFlags: 0, at: 0.5)
+        #expect(engine.flagsChanged(keyCode: KeyCode.control, rawFlags: flags([.leftOption])) == .none)
+        #expect(engine.flagsChanged(keyCode: KeyCode.option, rawFlags: 0)
             == .commit(Shortcut(modifiers: [.init(.control), .init(.option)])))
         #expect(engine.held == nil)
     }
 
     @Test func rightOptionKeepsItsSide() {
         var engine = ShortcutCaptureEngine(action: .pushToTalk)
-        _ = engine.flagsChanged(keyCode: KeyCode.rightOption, rawFlags: flags([.rightOption]), at: 0)
-        #expect(engine.flagsChanged(keyCode: KeyCode.rightOption, rawFlags: 0, at: 0.5) == .commit(.rightOption))
+        _ = engine.flagsChanged(keyCode: KeyCode.rightOption, rawFlags: flags([.rightOption]))
+        #expect(engine.flagsChanged(keyCode: KeyCode.rightOption, rawFlags: 0) == .commit(.rightOption))
     }
 
     @Test func fnAloneAndFnSpace() {
         var engine = ShortcutCaptureEngine(action: .pushToTalk)
-        _ = engine.flagsChanged(keyCode: KeyCode.function, rawFlags: flags([.fn]), at: 0)
-        #expect(engine.flagsChanged(keyCode: KeyCode.function, rawFlags: 0, at: 0.5) == .commit(.fn))
+        _ = engine.flagsChanged(keyCode: KeyCode.function, rawFlags: flags([.fn]))
+        #expect(engine.flagsChanged(keyCode: KeyCode.function, rawFlags: 0) == .commit(.fn))
 
         var handsFree = ShortcutCaptureEngine(action: .handsFree)
-        _ = handsFree.flagsChanged(keyCode: KeyCode.function, rawFlags: flags([.fn]), at: 0)
+        _ = handsFree.flagsChanged(keyCode: KeyCode.function, rawFlags: flags([.fn]))
         #expect(handsFree.keyDown(keyCode: KeyCode.space, rawFlags: flags([.fn]), isRepeat: false) == .commit(.fnSpace))
-    }
-
-    // MARK: Double taps
-
-    private let command = Shortcut(modifiers: [.init(.command)])
-
-    /// A quick tap waits for a second: it stays in the field, and only the end of the window saves it.
-    @Test func aSingleTapIsSavedOnceTheWindowEnds() {
-        var engine = ShortcutCaptureEngine(action: .handsFree)
-        #expect(engine.flagsChanged(keyCode: KeyCode.command, rawFlags: flags([.leftCommand]), at: 10) == .none)
-        #expect(engine.flagsChanged(keyCode: KeyCode.command, rawFlags: 0, at: 10.1) == .none, "not yet: a second may come")
-        #expect(engine.pendingTap?.shortcut == command)
-        #expect(engine.held == command, "the tap stays in the field meanwhile")
-        #expect(engine.tapWindowEnded() == .commit(command))
-        #expect(engine.pendingTap == nil && engine.held == nil)
-    }
-
-    /// The second press saves the double tap at once, without waiting for its release.
-    @Test func aDoubleTapIsSavedOnTheSecondPress() {
-        var engine = ShortcutCaptureEngine(action: .handsFree)
-        _ = engine.flagsChanged(keyCode: KeyCode.command, rawFlags: flags([.leftCommand]), at: 0)
-        _ = engine.flagsChanged(keyCode: KeyCode.command, rawFlags: 0, at: 0.1)
-        #expect(engine.flagsChanged(keyCode: KeyCode.command, rawFlags: flags([.leftCommand]), at: 0.3)
-            == .commit(command.doubleTap))
-        #expect(engine.tapWindowEnded() == .none, "the window that was running saves nothing more")
-
-        // Right ⌘ keeps its side; tap, then hold (push to talk's double tap) is the same double tap.
-        var ptt = ShortcutCaptureEngine(action: .pushToTalk)
-        _ = ptt.flagsChanged(keyCode: KeyCode.rightCommand, rawFlags: flags([.rightCommand]), at: 0)
-        _ = ptt.flagsChanged(keyCode: KeyCode.rightCommand, rawFlags: 0, at: 0.05)
-        #expect(ptt.flagsChanged(keyCode: KeyCode.rightCommand, rawFlags: flags([.rightCommand]), at: 0.2)
-            == .commit(Shortcut.rightCommand.doubleTap))
-    }
-
-    @Test func aChordTappedTwice() {
-        var engine = ShortcutCaptureEngine(action: .handsFree)
-        let chord = Shortcut(modifiers: [.init(.control), .init(.option)])
-        _ = engine.flagsChanged(keyCode: KeyCode.control, rawFlags: flags([.leftControl]), at: 0)
-        _ = engine.flagsChanged(keyCode: KeyCode.option, rawFlags: flags([.leftControl, .leftOption]), at: 0.02)
-        _ = engine.flagsChanged(keyCode: KeyCode.control, rawFlags: flags([.leftOption]), at: 0.1)
-        #expect(engine.flagsChanged(keyCode: KeyCode.option, rawFlags: 0, at: 0.12) == .none)
-        #expect(engine.flagsChanged(keyCode: KeyCode.control, rawFlags: flags([.leftControl]), at: 0.3) == .none)
-        #expect(engine.tapWindowEnded() == .none, "the second tap is on its way: it decides")
-        #expect(engine.flagsChanged(keyCode: KeyCode.option, rawFlags: flags([.leftControl, .leftOption]), at: 0.5)
-            == .commit(chord.doubleTap))
-    }
-
-    /// A hold is never the first of two: let go, it's saved at once, as before double taps.
-    @Test func aHoldDoesntWait() {
-        var engine = ShortcutCaptureEngine(action: .pushToTalk)
-        _ = engine.flagsChanged(keyCode: KeyCode.command, rawFlags: flags([.leftCommand]), at: 0)
-        #expect(engine.flagsChanged(keyCode: KeyCode.command, rawFlags: 0, at: DoubleTap.maxHold) == .commit(command))
-        #expect(engine.pendingTap == nil)
-    }
-
-    /// A second press after the window (its timer late) saves the first tap as a single press.
-    @Test func aLateSecondPressSavesTheSingleTap() {
-        var engine = ShortcutCaptureEngine(action: .handsFree)
-        _ = engine.flagsChanged(keyCode: KeyCode.command, rawFlags: flags([.leftCommand]), at: 0)
-        _ = engine.flagsChanged(keyCode: KeyCode.command, rawFlags: 0, at: 0.1)
-        #expect(engine.flagsChanged(keyCode: KeyCode.command, rawFlags: flags([.leftCommand]), at: 0.5)
-            == .commit(command))
-    }
-
-    /// Other keys inside the window start over: the latest gesture is what's recorded.
-    @Test func otherKeysInTheWindowStartOver() {
-        var engine = ShortcutCaptureEngine(action: .handsFree)
-        _ = engine.flagsChanged(keyCode: KeyCode.command, rawFlags: flags([.leftCommand]), at: 0)
-        _ = engine.flagsChanged(keyCode: KeyCode.command, rawFlags: 0, at: 0.1)
-        #expect(engine.flagsChanged(keyCode: KeyCode.rightOption, rawFlags: flags([.rightOption]), at: 0.2) == .none)
-        #expect(engine.pendingTap == nil)
-        #expect(engine.flagsChanged(keyCode: KeyCode.rightOption, rawFlags: 0, at: 0.8) == .commit(.rightOption))
-
-        // Left ⌘ then right ⌘ is two keys, not one tapped twice.
-        _ = engine.flagsChanged(keyCode: KeyCode.command, rawFlags: flags([.leftCommand]), at: 1)
-        _ = engine.flagsChanged(keyCode: KeyCode.command, rawFlags: 0, at: 1.1)
-        #expect(engine.flagsChanged(keyCode: KeyCode.rightCommand, rawFlags: flags([.rightCommand]), at: 1.2) == .none)
-        #expect(engine.flagsChanged(keyCode: KeyCode.rightCommand, rawFlags: 0, at: 1.25) == .none)
-        #expect(engine.tapWindowEnded() == .commit(.rightCommand))
-
-        // Esc in the window still cancels; any other key is recorded as itself.
-        _ = engine.flagsChanged(keyCode: KeyCode.command, rawFlags: flags([.leftCommand]), at: 2)
-        _ = engine.flagsChanged(keyCode: KeyCode.command, rawFlags: 0, at: 2.1)
-        #expect(engine.keyDown(keyCode: KeyCode.escape, rawFlags: 0, isRepeat: false) == .cancel)
-        #expect(engine.tapWindowEnded() == .none)
-        _ = engine.flagsChanged(keyCode: KeyCode.command, rawFlags: flags([.leftCommand]), at: 3)
-        _ = engine.flagsChanged(keyCode: KeyCode.command, rawFlags: 0, at: 3.1)
-        #expect(engine.keyDown(keyCode: KeyCode.f13, rawFlags: CGEventFlags.maskSecondaryFn.rawValue, isRepeat: false)
-            == .commit(.f13))
     }
 
     @Test func combinationsIgnoreSidesAndFnFlaggedKeys() {
@@ -1995,49 +1669,6 @@ private func copyScreenshotAndFile(to pasteboard: NSPasteboard) {
             Issue.record("fn ⌃ for hands-free next to an fn push to talk must be accepted")
             return
         }
-    }
-
-    /// The same double tap on two actions clashes like any duplicate; a double tap and the same keys pressed once
-    /// can't live side by side either way round, push to talk included: the double tap's first tap is a whole press.
-    @Test func doubleTapsClashWithTheSameKeysPressedOnce() {
-        let command = Shortcut(modifiers: [.init(.command)])
-        let doubleCommand = command.doubleTap
-
-        #expect(evaluate(doubleCommand, for: .pasteLast, bindings: bindings([.handsFree: doubleCommand]))
-            == .offerSwap(.handsFree))
-        #expect(evaluate(Shortcut.rightCommand.doubleTap, for: .pasteLast, bindings: bindings([.handsFree: doubleCommand]))
-            == .offerSwap(.handsFree), "Double Right ⌘ is one way to press Double ⌘")
-
-        #expect(evaluate(doubleCommand, for: .handsFree, bindings: bindings([.pasteLast: command]))
-            == .reject("This starts with paste last transcript (⌘), which would go off first."))
-        #expect(evaluate(command, for: .pasteLast, bindings: bindings([.handsFree: doubleCommand]))
-            == .reject("This is part of hands-free (Double ⌘) and would go off every time you press that."))
-        // Push to talk too, both ways.
-        guard case .reject = evaluate(Shortcut.fn.doubleTap, for: .handsFree) else {
-            Issue.record("Double fn next to an fn push to talk must be refused")
-            return
-        }
-        guard case .reject = evaluate(command, for: .handsFree, bindings: bindings([.pushToTalk: doubleCommand])) else {
-            Issue.record("⌘ next to a Double ⌘ push to talk must be refused")
-            return
-        }
-        // A key pressed once that's part of a double-tapped chord fires on its first tap.
-        guard case .reject = evaluate(Shortcut(modifiers: [.init(.control, .right)]), for: .handsFree,
-                                      bindings: bindings([.pasteLast: Shortcut(modifiers: [.init(.control), .init(.option)]).doubleTap]))
-        else {
-            Issue.record("Right ⌃ next to Double ⌃⌥ must be refused")
-            return
-        }
-
-        // Fine: other keys, sides that never meet, a larger chord pressed once, a double of another chord.
-        let commandShift = Shortcut(modifiers: [.init(.command), .init(.shift)])
-        #expect(evaluate(doubleCommand, for: .handsFree, bindings: bindings([.pasteLast: commandShift])) == .apply(warning: nil))
-        #expect(evaluate(doubleCommand, for: .handsFree, bindings: bindings([.pasteLast: commandShift.doubleTap]))
-            == .apply(warning: nil))
-        #expect(evaluate(Shortcut(modifiers: [.init(.command, .left)]).doubleTap, for: .handsFree,
-                         bindings: bindings([.pasteLast: .rightCommand])) == .apply(warning: nil))
-        #expect(evaluate(doubleCommand, for: .pushToTalk, bindings: bindings([.handsFree: commandShift]))
-            == .apply(warning: nil))
     }
 
     @Test func swappingExchangesBothBindings() {
