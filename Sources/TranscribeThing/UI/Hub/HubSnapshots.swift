@@ -202,8 +202,8 @@ enum HubSnapshots {
                     $0.otherBrowserAudio = []
                 }
             },
-            // Everything worth a note: muted, mute not known, another tab's sound, cut off. Then the same in the
-            // narrowest window, with a long page title and eight speakers.
+            // Everything worth a note: muted, mute not known, another tab's sound, speech missed, cut off. Then the
+            // same in the narrowest window, with a long page title and eight speakers.
             hub("hub-call-detail-notes", .callDetail) { c in
                 Samples.waveformCall(c)
                 c.calls.update(PreviewFixtures.callID(2)) { Samples.noteEverything(&$0) }
@@ -562,9 +562,11 @@ enum HubSnapshots {
             context.previewCallPosition = 168
         }
 
-        /// Every note a call can have: two mutes, mute not known, another tab's sound, cut off at 3:10.
+        /// Every note a call can have: two mutes, mute not known, another tab's sound, speech maybe missed between
+        /// 1:35 and 2:30, cut off at 3:10.
         static func noteEverything(_ call: inout CallRecord) {
             call.muteKnown = false
+            call.missedSpeech = [CallInterval(start: 95, end: 150)]
             call.cutOffAt = 190
         }
 

@@ -1710,12 +1710,15 @@ private func heldVoice(seconds: Double, gain: Double) -> [Float] {
         #expect(files(in: store.answersFolder(for: call.id)) == ["1-mix.txt"])
     }
 
+    /// A cut-off answer is read as far as it goes and asked for the rest; when that request fails, the call says where
+    /// the transcript may stop.
     @Test func aCutOffAnswerIsReadAsFarAsItGoes() async throws {
         let (store, call) = Self.store()
         let speech = speechLike(seconds: 30)
         let requests = OSAllocatedUnfairLock(initialState: 0)
         let transcriber = CallTranscriber(store: store) { _, _, _, _ in
-            requests.withLock { $0 += 1 }
+            let request = requests.withLock { $0 += 1; return $0 }
+            guard request == 1 else { throw AppError.openRouterMissingKey }
             throw AppError.openRouterTruncated("[00:01-00:03] Аня: Первая фраза\n[00:12-00:14] Sam: Вторая\n[00:15-00")
         }
         transcriber.userName = { "Sam" }
@@ -1728,11 +1731,12 @@ private func heldVoice(seconds: Double, gain: Double) -> [Float] {
         await transcriber.waitUntilIdle()
         let done = try #require(store.call(id: call.id))
         #expect(done.status == .done)
-        #expect(requests.withLock { $0 } == 1)
+        #expect(requests.withLock { $0 } == 2, "the answer, and one for its rest")
         #expect(done.transcript?.segments.map(\.text) == ["Первая фраза", "Вторая"])
         #expect(done.transcript?.segments.map(\.side) == [.remote, .local])
-        #expect(done.cutOffAt == 14)
+        #expect(done.cutOffAt == 14 && done.missedSpeech.isEmpty)
         #expect(CallFormat.notes(done).contains { $0.contains("may be cut off at 00:14") })
+        #expect(!CallFormat.notes(done).contains { $0.contains("may miss speech") }, "one note for one gap")
         // The partial answer is kept as it came.
         #expect(try String(contentsOf: store.answersFolder(for: call.id).appendingPathComponent("1-mix.txt"),
                            encoding: .utf8).hasSuffix("[00:15-00"))

@@ -130,8 +130,12 @@ struct CallRecord: Codable, Equatable, Identifiable, Sendable {
     var transcript: CallTranscript?
     /// What the transcription requests cost, summed; nil before any answered.
     var costUSD: Double?
-    /// Where the transcript may stop short, in seconds from the call's start: an answer ran out of room there.
+    /// Where the transcript may stop short, in seconds from the call's start: an answer ran out of room there, and
+    /// asking for the rest didn't work.
     var cutOffAt: TimeInterval?
+    /// Stretches of the call, in seconds from its start, that an answer left out and asking again for failed: the
+    /// transcript may miss speech there (`CallTranscriber.resume`). Transcribe Again tries again.
+    var missedSpeech: [CallInterval] = []
     /// Speakers renamed by the person: the model's name → theirs.
     var speakerNames: [String: String] = [:]
     /// The speakers in `speakerNames` the app named from the call's video (`CallTranscriber.nameFromVideo`), not the
@@ -182,7 +186,8 @@ struct CallRecord: Codable, Equatable, Identifiable, Sendable {
         case id, startedAt, endedAt, appName, bundleID, service, pageTitle, manual, muteIntervals, muteKnown
         case micSilencedWhenMuted, echoCancelled, echoReductionDB
         case otherBrowserAudio, micFile, remoteFile, micSeconds, remoteSeconds, micProblem, remoteProblem, status
-        case error, transcript, costUSD, cutOffAt, speakerNames, videoNamedSpeakers, summary, summaryError, file
+        case error, transcript, costUSD, cutOffAt, missedSpeech, speakerNames, videoNamedSpeakers, summary
+        case summaryError, file
     }
 
     /// Lenient: anything but the id, the start, the app and the status may be missing (written by another build).
@@ -214,6 +219,7 @@ struct CallRecord: Codable, Equatable, Identifiable, Sendable {
         transcript = try? c.decodeIfPresent(CallTranscript.self, forKey: .transcript)
         costUSD = try c.decodeIfPresent(Double.self, forKey: .costUSD)
         cutOffAt = try? c.decodeIfPresent(TimeInterval.self, forKey: .cutOffAt)
+        missedSpeech = (try? c.decodeIfPresent([CallInterval].self, forKey: .missedSpeech)) ?? []
         speakerNames = try c.decodeIfPresent([String: String].self, forKey: .speakerNames) ?? [:]
         videoNamedSpeakers = (try? c.decodeIfPresent(Set<String>.self, forKey: .videoNamedSpeakers)) ?? []
         summary = try? c.decodeIfPresent(CallSummary.self, forKey: .summary)
@@ -248,6 +254,7 @@ struct CallRecord: Codable, Equatable, Identifiable, Sendable {
         try c.encodeIfPresent(transcript, forKey: .transcript)
         try c.encodeIfPresent(costUSD, forKey: .costUSD)
         try c.encodeIfPresent(cutOffAt, forKey: .cutOffAt)
+        if !missedSpeech.isEmpty { try c.encode(missedSpeech, forKey: .missedSpeech) }
         if !speakerNames.isEmpty { try c.encode(speakerNames, forKey: .speakerNames) }
         if !videoNamedSpeakers.isEmpty { try c.encode(videoNamedSpeakers.sorted(), forKey: .videoNamedSpeakers) }
         try c.encodeIfPresent(summary, forKey: .summary)

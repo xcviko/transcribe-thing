@@ -6,11 +6,14 @@ enum LocalEngineError: Error, Equatable, Sendable, LocalizedError {
     case notLoaded
     case incompleteDownload([String])
     case listingFailed(String)
+    /// The engine gives no word times (`LocalEngine.transcribeWords`).
+    case noWordTimes
 
     var errorDescription: String? {
         switch self {
         case .notInstalled: "The model isn’t downloaded."
         case .notLoaded: "The model isn’t loaded."
+        case .noWordTimes: "The model doesn’t say when each word was said."
         case .incompleteDownload(let missing):
             "The download is incomplete (\(missing.count) file\(missing.count == 1 ? "" : "s") missing)."
         case .listingFailed(let detail): "Couldn’t list the model files: \(detail)"
@@ -37,6 +40,9 @@ protocol LocalEngine: Actor {
     func unload() async
     /// 16 kHz mono Float32 in [-1, 1]. Returns "" when the engine hears no speech.
     func transcribe(_ samples: [Float]) async throws -> String
+    /// The words of `samples` (as `transcribe` takes them), each with when it was said; [] when the engine hears no
+    /// speech. Throws `LocalEngineError.noWordTimes` for an engine that can't say.
+    func transcribeWords(_ samples: [Float]) async throws -> [TimedWord]
     /// Unloads, then removes every file in `storageURLs`.
     func deleteFiles() async throws
 }
@@ -45,6 +51,17 @@ extension LocalEngine {
     nonisolated func bytesOnDisk() -> Int64 {
         storageURLs.reduce(Int64(0)) { $0 + AppPaths.allocatedSize(of: $1) }
     }
+
+    func transcribeWords(_ samples: [Float]) async throws -> [TimedWord] {
+        throw LocalEngineError.noWordTimes
+    }
+}
+
+/// A word the local model heard, and when: seconds from the start of the samples it was given.
+struct TimedWord: Sendable, Equatable {
+    var text: String
+    var start: TimeInterval
+    var end: TimeInterval
 }
 
 /// Forwards download progress at most every `interval` seconds (libraries call back per network chunk,

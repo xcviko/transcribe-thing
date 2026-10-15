@@ -202,7 +202,7 @@ enum CallFormat {
     }
 
     /// `notes`, each with a few words that stand for it on the call's card: "Muted 2 times (1:20)", "Mute not known",
-    /// "Another tab’s sound", "May be cut off at 03:10".
+    /// "Another tab’s sound", "May be cut off at 03:10", "May miss speech after 41:20".
     static func shortNotes(_ call: CallRecord) -> [CallNote] {
         var notes: [CallNote] = []
         let mutes = call.muteIntervals
@@ -233,7 +233,26 @@ enum CallFormat {
                                   text: "The transcript may be cut off at \(CallPrompts.clock(cut)): Gemini’s answer ran "
                                       + "out of room there."))
         }
+        if !call.missedSpeech.isEmpty {
+            let places = call.missedSpeech.map { missedPlace($0, in: call) }
+            let label = places.count == 1 ? "May miss speech \(places[0])" : "May miss speech in \(places.count) places"
+            notes.append(CallNote(label: label, text: "The transcript may miss speech \(listed(places)): Gemini left "
+                                      + "it out, and asking again didn’t work. Transcribe Again can try again."))
+        }
         return notes
+    }
+
+    /// "after 41:20" for a stretch to the call's end, else "between 12:05 and 14:30".
+    private static func missedPlace(_ stretch: CallInterval, in call: CallRecord) -> String {
+        let start = CallPrompts.clock(stretch.start)
+        guard stretch.end < call.duration - 1 else { return "after \(start)" }
+        return "between \(start) and \(CallPrompts.clock(stretch.end))"
+    }
+
+    /// "a", "a, and b", "a, b, and c": a place may say "between" with an "and" of its own.
+    private static func listed(_ items: [String]) -> String {
+        guard items.count > 1 else { return items.first ?? "" }
+        return items.dropLast().joined(separator: ", ") + ", and " + items[items.count - 1]
     }
 
     /// Why a side wasn't recorded (or stopped), with the Privacy & Security pane that fixes it when there is one.
