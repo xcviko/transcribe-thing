@@ -1,5 +1,7 @@
 // The live-call prompts as main had them before calls could be made from files (5417d96), word for word:
-// `CallImportTests.aCallsPromptIsUnchanged` checks that the file prompts didn't change them.
+// `CallImportTests.aCallsPromptIsUnchanged` checks that the file prompts didn't change them. The ones without a mic
+// hint are what a call still gets when the local model can't hear the person's mic; `callMicHint` and `callMicSilent`,
+// what it gets when it can (`CallMicHintTests.thePromptsWithTheMicAreWordForWord`).
 
 enum LiveCallPromptText {
     /// `CallPrompts.call(me: "Sam", service: "Zoom", roster: [], mutes: [], summary: true)`
@@ -57,6 +59,52 @@ enum LiveCallPromptText {
         The person who recorded it was muted in the call during 01:05 to 01:12. Their microphone is silent then: any voice heard then is one of the other participants, never "Me".
 
         Earlier in this call these speakers were heard: Олег, Participant 1. Use the same names for the same voices; number new ones after them.
+
+        Answer with only the transcript, nothing before or after it: one line per phrase, in order, each line [start-end] Speaker: what they said
+        for example: [01:05-01:12] Participant 1: Да, слышу тебя хорошо.
+        Times are MM:SS from the start of this audio (H:MM:SS from an hour on). Keep each phrase on its own single line. Start a new line when the speaker changes, and split a long turn at a sentence end about every 30 seconds. Write what is said in the language it's said in, never translated, with punctuation; leave out stutters, false starts and filler sounds. Use straight quotes "like this", never «» or „“, and a plain hyphen "-" where a dash goes, never a long dash (— or –). Leave out anything that isn't speech. With no speech at all, answer NO SPEECH.
+        """#
+
+    /// A call heard on the person's own mic (`CallMicHint`): what it heard of them goes in place of "may not speak".
+    /// `CallPrompts.call(me: "Sam", service: "Zoom", roster: [], mutes: [], seconds: 600, micHint: [20.4-26.3
+    /// "Да так просто получилось.", 65.5-69.2 "Ну давай."], summary: false)`
+    static let callMicHint = #"""
+        This audio is a recording of a call on Zoom, both sides mixed into one track: the person who recorded it, on their own microphone, and the other participants, one or several, as the call app played them, maybe with its codec's sound. People in the same room as the person who recorded it may be heard too.
+
+        The person who recorded it is Sam: call them "Sam". Theirs is usually the nearest, clearest voice. Call anyone else in the room with them "Nearby 1", "Nearby 2" and so on.
+
+        Sam's own microphone, recorded apart from the call, picked up these phrases from them (times are MM:SS from the start of this audio). A weak speech recognizer wrote them down: the words are often wrong, the times are right. Use them only to know when Sam speaks: a voice talking at these times, saying roughly this, is Sam; a voice talking at other times is someone else. Write the transcript from what you hear in the audio, never copy these words. Their microphone may also have caught someone in the room with them.
+        <mic>
+        [00:20-00:27] Да так просто получилось.
+        [01:05-01:10] Ну давай.
+        </mic>
+
+        Tell the other participants apart. Name one by their name when the call makes it clear: they introduce themselves, or someone addresses them by name and they answer ("Аня, ты как?" then Аня speaks). Otherwise call them "Participant 1", "Participant 2" and so on, in the order they first speak. One person keeps one name all through.
+
+        If Sam used speakers rather than headphones, the other participants may be heard twice, a moment apart: write each phrase once.
+
+        Answer with only the transcript, nothing before or after it: one line per phrase, in order, each line [start-end] Speaker: what they said
+        for example: [01:05-01:12] Participant 1: Да, слышу тебя хорошо.
+        Times are MM:SS from the start of this audio (H:MM:SS from an hour on). Keep each phrase on its own single line. Start a new line when the speaker changes, and split a long turn at a sentence end about every 30 seconds. Write what is said in the language it's said in, never translated, with punctuation; leave out stutters, false starts and filler sounds. Use straight quotes "like this", never «» or „“, and a plain hyphen "-" where a dash goes, never a long dash (— or –). Leave out anything that isn't speech. With no speech at all, answer NO SPEECH.
+        """#
+
+    /// A part of a call the person's mic heard nothing of theirs in.
+    /// `CallPrompts.call(me: "Me", service: nil, roster: ["Participant 1"], mutes: [1:05-1:12.5], seconds: 600,
+    /// micHint: [], wholeCall: false)`
+    static let callMicSilent = #"""
+        This audio is a recording of a call, both sides mixed into one track: the person who recorded it, on their own microphone, and the other participants, one or several, as the call app played them, maybe with its codec's sound. People in the same room as the person who recorded it may be heard too.
+
+        Call the person who recorded it "Me". Theirs is usually the nearest, clearest voice. Call anyone else in the room with them "Nearby 1", "Nearby 2" and so on.
+
+        The microphone of the person who recorded it ("Me"), recorded apart from the call, heard no speech from them in this part of the call: they only listened or were muted. No voice in it is "Me".
+
+        Tell the other participants apart. Name one by their name when the call makes it clear: they introduce themselves, or someone addresses them by name and they answer ("Аня, ты как?" then Аня speaks). Otherwise call them "Participant 1", "Participant 2" and so on, in the order they first speak. One person keeps one name all through.
+
+        If the person who recorded it used speakers rather than headphones, the other participants may be heard twice, a moment apart: write each phrase once.
+
+        The person who recorded it was muted in the call during 01:05 to 01:12. Their microphone is silent then: any voice heard then is one of the other participants, never "Me".
+
+        Earlier in this call these speakers were heard: Participant 1. Use the same names for the same voices; number new ones after them.
 
         Answer with only the transcript, nothing before or after it: one line per phrase, in order, each line [start-end] Speaker: what they said
         for example: [01:05-01:12] Participant 1: Да, слышу тебя хорошо.

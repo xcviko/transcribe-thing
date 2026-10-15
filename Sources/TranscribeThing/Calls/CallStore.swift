@@ -576,6 +576,7 @@ final class CallStore {
         record.summaryError = nil
         record.costUSD = nil
         record.cutOffAt = nil
+        record.missedSpeech = []
         record.muteIntervals = earlier.muteIntervals + info.mutes.map {
             CallInterval(start: $0.start + offset, end: $0.end + offset)
         }

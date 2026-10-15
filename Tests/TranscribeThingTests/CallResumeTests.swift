@@ -211,29 +211,148 @@ private func answersFolder() -> URL {
         #expect(abs((kept.costUSD ?? 0) - 0.02) < 1e-9)
     }
 
-    /// No more requests when what's after the last phrase is quiet, too short, or has too little speech in it; when
-    /// the answer was cut off by its limit (the call says where instead); or when it had no phrase at all.
+    /// No more requests when what's after the last phrase is quiet, too short, or has too little speech in it; or
+    /// when the answer had no phrase at all.
     @Test func theRestIsOnlyAskedForWhenItHasSpeech() async throws {
-        let cases: [(name: String, audio: [Float], answer: String, cutOff: Bool)] = [
-            ("quiet after", speech(60) + quiet(140), "[00:01-00:05] Аня: Привет.\n[00:50-00:58] Sam: Пока.", false),
+        let cases: [(name: String, audio: [Float], answer: String)] = [
+            ("quiet after", speech(60) + quiet(140), "[00:01-00:05] Аня: Привет.\n[00:50-00:58] Sam: Пока."),
             ("under a minute left", speech(200),
-             "[00:01-00:05] Аня: Привет.\n[01:10-01:20] Аня: Ну что?\n[02:20-02:30] Sam: Пока.", false),
+             "[00:01-00:05] Аня: Привет.\n[01:10-01:20] Аня: Ну что?\n[02:20-02:30] Sam: Пока."),
             ("ten seconds of speech in the rest", speech(60) + quiet(60) + speech(10) + quiet(70),
-             "[00:01-00:05] Аня: Привет.\n[00:50-01:00] Sam: Пока.", false),
-            ("cut off", speech(200), "[00:01-00:05] Аня: Привет.\n[00:50-01:00] Sam: Ну и вот", true),
-            ("no phrase", speech(200), "NO SPEECH", false),
+             "[00:01-00:05] Аня: Привет.\n[00:50-01:00] Sam: Пока."),
+            ("no phrase", speech(200), "NO SPEECH"),
         ]
         for item in cases {
             let audio = item.audio
-            let gemini = Gemini { _ in
-                if item.cutOff { throw AppError.openRouterTruncated(item.answer) }
-                return item.answer
-            }
+            let gemini = Gemini { _ in item.answer }
             let outcome = try await CallTranscriber.run(plan(audio), send: { try await gemini.send($0, $1, $2, $3) },
                                                         read: { _, range in Array(audio[range]) })
             #expect(gemini.count == 1 && outcome.resumed == 0, "\(item.name)")
-            if item.cutOff { #expect(outcome.cutOffAt == 60) }
+            #expect(outcome.cutOffAt == nil && outcome.missedSpeech.isEmpty, "\(item.name)")
         }
+    }
+
+    /// An answer cut off by its token limit, even with under a minute left, is asked for the rest from the start of
+    /// its last phrase, which may stop mid-word: what comes back from there takes its place, and the call isn't said
+    /// to be cut off. Its rest is asked for with the summary left to its own request.
+    @Test func aCutOffAnswerIsAskedForItsRest() async throws {
+        let (log, folder) = Self.log()
+        defer {
+            log.stop()
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let audio = speech(200)
+        let gemini = Gemini { index in
+            if index == 1 {
+                throw AppError.openRouterTruncated("[00:01-00:05] Аня: Привет.\n[01:10-01:20] Аня: Ну что?\n"
+                                                   + "[02:20-02:30] Sam: Ну и во")
+            }
+            // From 2:15: the phrase cut off, whole, then the rest.
+            return "[00:00-00:04] Аня: что?\n[00:05-00:15] Sam: Ну и вот, всё по плану.\n[00:20-00:40] Аня: Отлично."
+        }
+        let summaries = Summaries()
+        let outcome = try await CallTranscriber.run(
+            plan(audio, callID: UUID()), send: { try await gemini.send($0, $1, $2, $3) },
+            summarize: { try await summaries.send($0, $1) }, read: { _, range in Array(audio[range]) }, log: log)
+        let requests = gemini.requests.withLock { $0 }
+        #expect(requests.count == 2 && outcome.resumed == 1)
+        #expect(abs(requests[1].seconds - 65) < 0.01, "from 5 s before the cut-off phrase to the end")
+        #expect(!requests[1].prompt.contains("<summary>"))
+        #expect(outcome.transcript.segments.map(\.text) == ["Привет.", "Ну что?", "Ну и вот, всё по плану.", "Отлично."])
+        #expect(outcome.transcript.segments.map(\.start) == [1, 70, 140, 155])
+        #expect(outcome.cutOffAt == nil && outcome.missedSpeech.isEmpty)
+        #expect(summaries.count == 1, "the cut-off answer's summary blocks never came")
+        log.flush()
+        #expect(log.retainedText().contains("kind=cutOff from=135 to=200"))
+    }
+
+    /// When the request for a cut-off answer's rest fails too, the call says where the transcript may stop, not that
+    /// it may miss speech; an answer for the rest that is cut off again goes on from its own last phrase.
+    @Test func aCutOffAnswerWhoseRestFailsSaysWhereItStops() async throws {
+        let audio = speech(200)
+        let failing = Gemini { index in
+            if index == 1 { throw AppError.openRouterTruncated("[00:01-00:05] Аня: Привет.\n[00:50-01:00] Sam: Ну и во") }
+            throw AppError.openRouterMissingKey
+        }
+        let failed = try await CallTranscriber.run(plan(audio), send: { try await failing.send($0, $1, $2, $3) },
+                                                   read: { _, range in Array(audio[range]) })
+        #expect(failing.count == 2)
+        #expect(failed.transcript.segments.map(\.text) == ["Привет.", "Ну и во"], "the cut-off phrase stands")
+        #expect(failed.cutOffAt == 60 && failed.missedSpeech.isEmpty)
+
+        let again = Gemini { index in
+            switch index {
+            case 1: throw AppError.openRouterTruncated("[00:01-00:05] Аня: Привет.\n[00:50-01:00] Sam: Ну и во")
+            // From 0:45: the cut-off phrase whole, and another cut off.
+            case 2: throw AppError.openRouterTruncated("[00:05-00:15] Sam: Ну и вот.\n[01:00-01:10] Аня: Дава")
+            // From 1:40.
+            default: return "[00:00-00:10] Аня: Давай дальше.\n[01:30-01:40] Sam: Хорошо."
+            }
+        }
+        let outcome = try await CallTranscriber.run(plan(audio), send: { try await again.send($0, $1, $2, $3) },
+                                                    read: { _, range in Array(audio[range]) })
+        let requests = again.requests.withLock { $0 }
+        #expect(requests.count == 3 && outcome.resumed == 2)
+        #expect(requests.dropFirst().map { ($0.seconds * 100).rounded() / 100 } == [155, 100])
+        #expect(outcome.transcript.segments.map(\.text) == ["Привет.", "Ну и вот.", "Давай дальше.", "Хорошо."])
+        #expect(outcome.transcript.segments.map(\.start) == [1, 50, 100, 190])
+        #expect(outcome.cutOffAt == nil)
+
+        // Cut off every time: as far as the rounds go, then the call says where it stops.
+        let always = Gemini { index in
+            let at = 10 * index
+            throw AppError.openRouterTruncated("[00:00-00:02] Аня: Ещё.\n[00:\(at)-00:\(at + 5)] Sam: Обры")
+        }
+        let cut = try await CallTranscriber.run(plan(audio), send: { try await always.send($0, $1, $2, $3) },
+                                                read: { _, range in Array(audio[range]) })
+        #expect(always.count == 1 + CallTranscriber.ResumeRules.default.rounds)
+        #expect(cut.cutOffAt != nil && cut.missedSpeech.isEmpty)
+    }
+
+    /// A request for what an answer left out that fails leaves the call saying where it may miss speech: that stretch
+    /// and any after it in the chunk; Transcribe Again can try again.
+    @MainActor
+    @Test func aFailedRequestForTheRestSaysWhatMayBeMissing() async throws {
+        let audio = speech(200)
+        let gemini = Gemini { index in
+            guard index == 1 else { throw AppError.openRouterMissingKey }
+            return "[00:01-00:05] Аня: Привет.\n[00:40-00:50] Sam: Давай обсудим."
+        }
+        let outcome = try await CallTranscriber.run(plan(audio), send: { try await gemini.send($0, $1, $2, $3) },
+                                                    read: { _, range in Array(audio[range]) })
+        #expect(outcome.missedSpeech == [CallInterval(start: 50, end: 200)] && outcome.cutOffAt == nil)
+
+        // A gap in the middle and one at the end of the first of two chunks: the gap's request fails, so both are
+        // noted.
+        let long = speech(400)
+        let gaps = Gemini { index in
+            switch index {
+            case 1: "[00:00-00:10] Аня: Начали.\n[02:15-02:20] Sam: Ага."
+            case 2: throw AppError.openRouterMissingKey
+            default: "[00:00-03:20] Аня: Второй кусок."
+            }
+        }
+        let both = try await CallTranscriber.run(plan(long), maxChunkSeconds: 200,
+                                                 send: { try await gaps.send($0, $1, $2, $3) },
+                                                 read: { _, range in Array(long[range]) })
+        #expect(gaps.count == 3)
+        #expect(both.missedSpeech == [CallInterval(start: 10, end: 135), CallInterval(start: 140, end: 200)])
+
+        // On the call's page.
+        var call = CallRecord(id: UUID(), startedAt: Date(), appName: "Discord", status: .done)
+        call.remoteSeconds = 200
+        call.missedSpeech = [CallInterval(start: 50, end: 200)]
+        #expect(CallFormat.shortNotes(call).last?.label == "May miss speech after 00:50")
+        #expect(CallFormat.notes(call).last == "The transcript may miss speech after 00:50: Gemini left it out, and "
+                + "asking again didn’t work. Transcribe Again can try again.")
+        call.remoteSeconds = 400
+        call.missedSpeech = [CallInterval(start: 10, end: 170), CallInterval(start: 250, end: 400)]
+        #expect(CallFormat.shortNotes(call).last?.label == "May miss speech in 2 places")
+        #expect(CallFormat.notes(call).last == "The transcript may miss speech between 00:10 and 02:50, and after 04:10: "
+                + "Gemini left it out, and asking again didn’t work. Transcribe Again can try again.")
+        // Kept with the call.
+        let data = try JSONEncoder().encode(call)
+        #expect(try JSONDecoder().decode(CallRecord.self, from: data).missedSpeech == call.missedSpeech)
     }
 
     /// Minutes in the middle with no phrase and speech in them: that stretch is asked for, a few seconds wider, with the

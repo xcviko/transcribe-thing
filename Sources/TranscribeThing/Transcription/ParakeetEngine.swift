@@ -142,6 +142,19 @@ actor ParakeetEngine: LocalEngine {
     // MARK: Transcribe
 
     func transcribe(_ samples: [Float]) async throws -> String {
+        try await recognize(samples).text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// The words, from FluidAudio's token times (`buildWordTimings`): a call's mic, to tell when the person spoke
+    /// (`CallMicHint`). Audio over 15 s goes in FluidAudio's overlapping windows, the times on the whole's clock.
+    func transcribeWords(_ samples: [Float]) async throws -> [TimedWord] {
+        let result = try await recognize(samples)
+        return buildWordTimings(from: result.tokenTimings ?? []).map {
+            TimedWord(text: $0.word, start: $0.startTime, end: $0.endTime)
+        }
+    }
+
+    private func recognize(_ samples: [Float]) async throws -> ASRResult {
         guard let manager else { throw LocalEngineError.notLoaded }
         var input = samples
         let minimum = ASRConstants.minimumRequiredSamples(forSampleRate: ASRConstants.sampleRate)
@@ -155,7 +168,7 @@ actor ParakeetEngine: LocalEngine {
         var state = TdtDecoderState.make(decoderLayers: Self.version.decoderLayers)
         let result = try await manager.transcribe(input, decoderState: &state, language: nil)
         try Task.checkCancellation()
-        return result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return result
     }
 
     // MARK: Delete
