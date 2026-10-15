@@ -73,6 +73,10 @@ enum CallsCLI {
         }
         if let error = call.error { lines.append("  last error: \(error)") }
         if let cut = call.cutOffAt { lines.append("  cut off at \(clock(cut))") }
+        if !call.missedSpeech.isEmpty {
+            lines.append("  may miss speech: "
+                         + call.missedSpeech.map { "\(clock($0.start))-\(clock($0.end))" }.joined(separator: ", "))
+        }
         if let cost = call.costUSD { lines.append(String(format: "  cost: $%.4f", cost)) }
         let answers = folder.appendingPathComponent("answers", isDirectory: true)
         let names = ((try? FileManager.default.contentsOfDirectory(atPath: answers.path)) ?? []).sorted {

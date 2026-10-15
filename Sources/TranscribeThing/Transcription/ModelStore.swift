@@ -356,6 +356,33 @@ final class ModelStore {
     /// when the calling task is cancelled. `background`: Home's work, which lets dictations have the model first
     /// (`InferenceGate`).
     func transcribeLocal(_ id: EngineID, samples: [Float], background: Bool = false) async throws -> String {
+        try await runLocal(id, background: background) { try await $0.transcribe(samples) }
+    }
+
+    /// `transcribeLocal`, as words with their times (`LocalEngine.transcribeWords`): a call's mic, heard to tell when
+    /// the person spoke (`CallMicHint`).
+    func transcribeLocalWords(_ id: EngineID, samples: [Float], background: Bool = false) async throws -> [TimedWord] {
+        try await runLocal(id, background: background) { try await $0.transcribeWords(samples) }
+    }
+
+    /// Unloads `id` when it's loaded and no model Switch model reaches uses it (`AppSettings.usesLocalParakeet`): a
+    /// call's mic loaded it for itself, and its memory goes back. Behind any dictation waiting for it.
+    func unloadIfUnused(_ id: EngineID) async {
+        guard !isPreview, id.isLocal, let engine = engines[id], state(of: id) == .ready,
+              !settings.usesLocalParakeet else { return }
+        do {
+            try await gate.run(background: true) { await engine.unload() }
+        } catch {
+            return
+        }
+        // A dictation that found it unloaded loads it again (`transcribeLocal`), whatever this says.
+        if state(of: id) == .ready, !settings.usesLocalParakeet { states[id] = .installed }
+        DiagnosticLog.shared.event(.models, "unloaded", ["model": id, "reason": "unused"])
+    }
+
+    private func runLocal<T: Sendable>(_ id: EngineID, background: Bool,
+                                       _ operation: @escaping @Sendable (any LocalEngine) async throws -> T)
+        async throws -> T {
         guard id.isLocal, let engine = engines[id] else {
             throw AppError.engineFailed(id, "\(id.displayName) doesn’t run on this Mac.")
         }
@@ -365,7 +392,7 @@ final class ModelStore {
             attempts += 1
             try await waitUntilReady(id, engine: engine)
             do {
-                return try await gate.run(background: background) { try await engine.transcribe(samples) }
+                return try await gate.run(background: background) { try await operation(engine) }
             } catch LocalEngineError.notLoaded where attempts < 3 {
                 // Unloaded after it reported ready (a delete queued ahead of this): look at its state again.
                 if state(of: id) == .ready { states[id] = .installed }
