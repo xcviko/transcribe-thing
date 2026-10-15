@@ -171,7 +171,7 @@ struct HotkeyRouter: Equatable, Sendable {
         /// Switch model has another model to step to (`ModelLineup.cycle`); without one its shortcut is never
         /// intercepted.
         var switchesModels = true
-        /// Polish Selection's cards: ↩ (with no modifier) is theirs unless a dictation records, and Esc closes them
+        /// Cards of text to paste (Polish Selection's, an earlier dictation's): ↩ (with no modifier) is theirs unless a dictation records, and Esc closes them
         /// unless one is busy.
         var cardPaste = false
         var cardClose = false

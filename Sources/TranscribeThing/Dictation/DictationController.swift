@@ -63,7 +63,8 @@ final class DictationController {
     @ObservationIgnored var secureInput: SecureInputMonitor?
     @ObservationIgnored var openHub: ((HubSection) -> Void)?
     @ObservationIgnored var onActivityChanged: ((DictationActivity) -> Void)?
-    /// A dictation's text was just pasted where the user is typing (not paste-last, not a toast's Paste Here).
+    /// A dictation's text was just pasted where the user is typing (not paste-last, not a toast's Paste Here, not an
+    /// earlier dictation's card).
     @ObservationIgnored var onDictationDelivered: (() -> Void)?
     /// A dictation ended with the error shake (a failure, silence, no speech).
     @ObservationIgnored var onDictationFailed: (() -> Void)?
@@ -140,6 +141,9 @@ final class DictationController {
     @ObservationIgnored private var heldKeysGeneration = 0
     /// Polish Selection under way: the pill shows it (the polish circle, then the count) until its card comes up.
     @ObservationIgnored private var selectionPolish: SelectionPolish?
+    /// Cards of text to paste whose Copy was clicked, while they're up: the user took the text elsewhere, so ↩ goes back
+    /// to the app (`syncCardKeys`).
+    @ObservationIgnored private var copiedCards: Set<UUID> = []
     /// This dictation is polished (`Polish`, fn P while it's on Gemini). It lasts while the dictation records, as
     /// `modelOverride` does: its job keeps it, the next dictation starts without.
     private(set) var isPolishing = false
@@ -339,11 +343,11 @@ final class DictationController {
             if machine.isRecording, effectiveChoice.isGemini { send(.translate) }
         case .heldForSelection(let action, let key):
             actOnceSelectionIsKnown(action, key)
-        case .cardPaste: pasteSelectionCard()
+        case .cardPaste: pasteOnlyCard()
         case .cardClose:
             // Esc stops a polish still under way too, with the cancel cue.
             if selectionPolish?.isRunning == true { playCue(.cancel) }
-            settleSelection()
+            closeCards()
         }
     }
 
@@ -395,6 +399,7 @@ final class DictationController {
         let wasIdle = machine.capture == .idle
         let wasHandsFree = machine.mode == .handsFree
         let wasRecording = machine.isRecording
+        let wasCommitted = machine.capture.isListeningOrLocked
         if let mode = machine.mode { recordingMode = mode }
         let effects = machine.handle(input, now: clock())
         let startsRecording = !wasRecording && machine.isRecording
@@ -469,6 +474,10 @@ final class DictationController {
                 "translate": isTranslating ? true : nil,
                 "undo": input.isResume ? true : nil, "mic": recorder.lastChoice?.device.transport])
         }
+        // A press that commits (held past the confirm delay, or hands-free) is a new recording: the dictations still on
+        // their way go on a card rather than into it. A quick fn tap never commits. A hold the main model refused while
+        // hands-free may still take it counts; one refused outright is idle again by now.
+        if !wasCommitted, machine.capture.isListeningOrLocked { holdBackEarlierDictations() }
         stateDidChange()
     }
 
@@ -883,6 +892,9 @@ final class DictationController {
         }
         /// Held or hands-free: its paste follows General → Pasting's rules for that.
         var mode: DictationMachine.Mode = .pushToTalk
+        /// A new recording started before its text came (`holdBackEarlierDictations`): the user may be typing somewhere
+        /// else by now, so its text goes on a card (`earlierDictationCard`) instead of being pasted.
+        var isEarlier = false
         /// How many tokens its model is thinking or writing, as far as the stream shows (`streamed(_:for:)`): nil until
         /// the first streamed character, and always for Parakeet. The processing pill shows the newest job's.
         var count: PillTokenCount?
@@ -1090,6 +1102,14 @@ final class DictationController {
 
     private var isDelivering: Bool { deliveringJob != nil }
 
+    /// A new recording started: every dictation still on its way (transcribing, or its text about to be pasted) goes on
+    /// a card when its text comes, rather than into whatever is focused for the new one.
+    private func holdBackEarlierDictations() {
+        for job in queue + (deliveringJob.map { [$0] } ?? []) where !job.isEarlier {
+            job.isEarlier = true
+        }
+    }
+
     /// Queued, being delivered, being recorded on again (Undo), or worked on from Home.
     func isInFlight(_ id: UUID) -> Bool {
         queue.contains { $0.id == id } || deliveringJob?.id == id || continuing?.id == id || homeWork[id] != nil
@@ -1132,10 +1152,13 @@ final class DictationController {
             toasts.dismiss(recordingID: job.id)
             // The transcript is the entry's one version (a polished or translated dictation's is that).
             let version = result.version(job.rewrite, text: text)
+            // A new recording started since it was dictated, or one is on right now (a press still arming, a notice's
+            // Retry clicked during one): pasted, it would land wherever the user is dictating now.
+            let onCard = job.isEarlier || machine.isRecording
             DiagnosticLog.shared.event(.dictation, "job.finished", [
                 "engine": result.engine, "outcome": "success", "seconds": result.processingTime,
                 "retry": history.entry(id: job.id)?.status == .failed, "polished": job.polishes,
-                "translated": job.translates ? true : nil])
+                "translated": job.translates ? true : nil, "delivered": onCard ? "card" : nil])
             // Kept as long as the entry, so History can transcribe it again with another model. Saved again even when
             // a failed or canceled row had it: an Undo-resumed dictation's file holds only the part before the cancel.
             history.upsert(TranscriptEntry(
@@ -1146,6 +1169,12 @@ final class DictationController {
             // Only what is pasted follows General → Pasting, by the model that wrote it and how it was dictated:
             // History, the cards and Copy keep the text as it came.
             let model = version.kind.dictationModel
+            if onCard {
+                // No sound into a recording: the card comes up quietly while one is on.
+                toasts.post(Self.earlierDictationCard(text, kind: version.kind, mode: job.mode, id: job.id,
+                                                      quiet: machine.isRecording))
+                return
+            }
             let insertion = await insert(pasted(text, by: model, in: job.mode))
             handleInsertion(insertion, text: text, by: model, in: job.mode, isDictation: true)
         }
@@ -1386,10 +1415,14 @@ final class DictationController {
         switch action.kind {
         case .copyText(let text):
             copy(text)
-            if let model = Self.selectionModel(ofCard: notice) {
-                playCue(.paste)
-                selectionPicked(model, pasted: false)
+            if notice.takesCardKeys {
+                // The paste tick says it's taken, though not into a recording.
+                if !machine.isRecording { playCue(.paste) }
+                // Taken to paste elsewhere: ↩ is the app's again (`syncCardKeys`).
+                copiedCards.insert(notice.id)
+                syncCardKeys()
             }
+            if let model = Self.selectionModel(ofCard: notice) { selectionPicked(model, pasted: false) }
             return
         case .pasteText(let text, let model, let mode):
             toasts.dismiss(notice.id)
@@ -2192,8 +2225,6 @@ final class DictationController {
         var tasks: [Task<Void, Never>] = []
         var entryID: UUID?
         var settled = false
-        /// An answer was copied: the user took it elsewhere, so ↩ goes back to the app.
-        var copied = false
 
         init(estimates: [PolishSelectionModel: TokenEstimate], translates: Bool = false) {
             self.translates = translates
@@ -2523,33 +2554,17 @@ final class DictationController {
                            lifetime: .seconds(8), sound: .alert))
     }
 
-    /// "Polished by Gemini 3.8 Flash" ("Translated by…"): the message, Paste Here (over the selection still selected)
-    /// and Copy. Up for 6 s and a second for every 20 words, longer while the pointer is over it. ↩ pastes it while
-    /// it's the only one, Esc closes every one.
+    /// "Polished by Gemini 3.8 Flash" ("Translated by…"): the message, to paste over the selection still selected
+    /// (as written: General → Pasting is for dictations) or copy (`pasteCard`).
     nonisolated static func selectionCard(_ text: String, by model: PolishSelectionModel,
                                           translated: Bool = false) -> Notice {
-        let words = text.split(whereSeparator: \.isWhitespace).count
-        let seconds = (6 + Double(words) / 20) * ToastCountdown.speed
-        return Notice(dedupeKey: selectionCardKey(model), style: .info,
-                      symbol: translated ? "translate" : "wand.and.sparkles",
-                      title: "\(translated ? "Translated" : "Polished") by \(model.modelName)", transcript: text,
-                      actions: [NoticeAction(title: "Paste Here", kind: .pasteText(text, by: nil, in: .pushToTalk),
-                                             isPrimary: true),
-                                NoticeAction(title: "Copy", kind: .copyText(text))],
-                      lifetime: .seconds(seconds), sound: .polishReady, takesCardKeys: true)
+        pasteCard(text, key: selectionCardKey(model), symbol: translated ? "translate" : "wand.and.sparkles",
+                  title: "\(translated ? "Translated" : "Polished") by \(model.modelName)",
+                  paste: .pasteText(text, by: nil, in: .pushToTalk))
     }
 
     private var selectionCards: [Notice] {
         toasts.notices.filter { Self.selectionModel(ofCard: $0) != nil }
-    }
-
-    /// ↩ with one card up: its Paste Here. With two it couldn't tell which, and the key does nothing: passed on, it
-    /// would land on the text still selected (a newline over it, or a chat sending the draft).
-    private func pasteSelectionCard() {
-        let cards = selectionCards
-        guard cards.count == 1, selectionPolish?.copied != true, let notice = cards.first,
-              let action = notice.primaryAction else { return }
-        toasts.perform(action, on: notice)
     }
 
     /// An answer was picked (its card's Paste Here or Copy): History shows it, and the log keeps which model won.
@@ -2560,15 +2575,10 @@ final class DictationController {
         if let work = selectionPolish, let id = work.entryID, history.entry(id: id)?.hasVersion(work.kind(model)) == true {
             history.selectVersion(work.kind(model), of: id)
         }
-        if pasted {
-            settleSelection()
-        } else {
-            selectionPolish?.copied = true
-            syncCardKeys()
-        }
+        if pasted { settleSelection() }
     }
 
-    /// Esc, a paste or a new polish: every card goes, and what's still writing is stopped and dropped.
+    /// Esc, a paste or a new polish: every card of the polish goes, and what's still writing is stopped and dropped.
     private func settleSelection() {
         if let work = selectionPolish, !work.settled {
             work.settled = true
@@ -2578,17 +2588,87 @@ final class DictationController {
         stateDidChange()
     }
 
-    /// ↩ belongs to the cards while any is up (it pastes the only one), until an answer is copied: then the user is
-    /// pasting it elsewhere, and ↩ is the app's again. Esc closes them, and stops a polish still under way. The cards'
-    /// footer says what the keys do now: neither works while a dictation records (or Esc, transcribes).
+    // MARK: - Cards of text to paste
+
+    /// A card of text to paste or copy, Polish Selection's answer or an earlier dictation's text: `title`, the text,
+    /// Paste Here (`paste`) and Copy. Up for 6 s and a second for every 20 words, longer while the pointer is over it.
+    /// ↩ pastes it while it's the only one, Esc closes every one (`syncCardKeys`).
+    /// `waitsForDictation`: its countdown waits while a dictation records (`Notice.waitsForDictation`).
+    nonisolated static func pasteCard(_ text: String, key: String, symbol: String, title: String,
+                                      paste: NoticeActionKind, sound: SoundEffect? = .polishReady,
+                                      waitsForDictation: Bool = false) -> Notice {
+        let words = text.split(whereSeparator: \.isWhitespace).count
+        let seconds = (6 + Double(words) / 20) * ToastCountdown.speed
+        return Notice(dedupeKey: key, style: .info, symbol: symbol, title: title, transcript: text,
+                      actions: [NoticeAction(title: "Paste Here", kind: paste, isPrimary: true),
+                                NoticeAction(title: "Copy", kind: .copyText(text))],
+                      lifetime: .seconds(seconds), sound: sound, takesCardKeys: true,
+                      waitsForDictation: waitsForDictation)
+    }
+
+    /// Earlier dictations' cards, one per dictation (by its recording's id), so two never replace each other.
+    nonisolated static let earlierCardPrefix = "dictation.earlier."
+
+    /// The text of a dictation that came after the next one had started (`Job.isEarlier`): "Earlier dictation, by
+    /// Gemini 3.8 Flash", Paste Here by General → Pasting's rules for that model and how it was dictated, and Copy.
+    /// Its countdown waits while the user dictates; `quiet` (a recording is on): it comes up without its sound.
+    nonisolated static func earlierDictationCard(_ text: String, kind: TranscriptVersionKind,
+                                                 mode: DictationMachine.Mode, id: UUID, quiet: Bool) -> Notice {
+        let symbol = switch kind {
+        case .polish: "wand.and.sparkles"
+        case .translation: "translate"
+        default: "text.bubble"
+        }
+        return pasteCard(text, key: earlierCardPrefix + id.uuidString, symbol: symbol,
+                         title: earlierDictationTitle(kind),
+                         paste: .pasteText(text, by: kind.dictationModel, in: mode),
+                         sound: quiet ? nil : .polishReady, waitsForDictation: true)
+    }
+
+    /// "Earlier dictation, by Parakeet v3", "Earlier dictation, polished by Gemini 3.8 Flash".
+    nonisolated static func earlierDictationTitle(_ kind: TranscriptVersionKind) -> String {
+        let how = switch kind {
+        case .polish: "polished "
+        case .translation(polished: true, _): "polished and translated "
+        case .translation: "translated "
+        default: ""
+        }
+        return "Earlier dictation, \(how)by \(kind.engine.modelName)"
+    }
+
+    /// Every card of text to paste up now, Polish Selection's and earlier dictations'.
+    private var pasteCards: [Notice] {
+        toasts.notices.filter(\.takesCardKeys)
+    }
+
+    /// ↩ with one card up: its Paste Here. With two it couldn't tell which, and the key does nothing: passed on, it
+    /// would land where the user is typing (a newline over a selection, or a chat sending the draft).
+    private func pasteOnlyCard() {
+        let cards = pasteCards
+        guard cards.count == 1, !machine.isRecording, let notice = cards.first, !copiedCards.contains(notice.id),
+              let action = notice.primaryAction else { return }
+        toasts.perform(action, on: notice)
+    }
+
+    /// Esc: every card goes, and a polish still under way is stopped.
+    private func closeCards() {
+        for card in pasteCards { toasts.dismiss(card.id) }
+        settleSelection()
+    }
+
+    /// ↩ belongs to the cards while any is up (it pastes the only one), until one is copied: then the user is pasting
+    /// it elsewhere, and ↩ is the app's again. Esc closes them, and stops a polish still under way. Neither works
+    /// while a dictation records (or Esc, transcribes).
     private func syncCardKeys() {
-        let count = selectionCards.count
-        let copied = selectionPolish?.copied == true
-        let takesReturn = count > 0 && !copied
-        let takesEsc = count > 0 || selectionPolish?.isRunning == true
+        let cards = pasteCards
+        copiedCards.formIntersection(cards.map(\.id))
+        let copied = !copiedCards.isEmpty
+        let takesReturn = !cards.isEmpty && !copied
+        let takesEsc = !cards.isEmpty || selectionPolish?.isRunning == true
         if hotkeys.cardPaste != takesReturn { hotkeys.cardPaste = takesReturn }
         if hotkeys.cardClose != takesEsc { hotkeys.cardClose = takesEsc }
-        let keys = CardKeys(returnPastes: count == 1 && !copied && !machine.isRecording, escCloses: !machine.isBusy)
+        let keys = CardKeys(returnPastes: cards.count == 1 && !copied && !machine.isRecording,
+                            escCloses: !machine.isBusy)
         if toasts.cardKeys != keys { toasts.cardKeys = keys }
     }
 
@@ -2884,6 +2964,8 @@ final class DictationController {
     private func stateDidChange() {
         if hotkeys.isBusy != machine.isBusy { hotkeys.isBusy = machine.isBusy }
         if hotkeys.isRecording != machine.isRecording { hotkeys.isRecording = machine.isRecording }
+        // An earlier dictation's card waits for this one.
+        if toasts.isDictating != machine.isRecording { toasts.isDictating = machine.isRecording }
         syncCardKeys()
         updateSwitchHint()
         let count = queue.count + (isDelivering ? 1 : 0)

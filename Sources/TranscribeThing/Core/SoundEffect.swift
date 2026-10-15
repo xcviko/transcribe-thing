@@ -7,7 +7,7 @@ enum SoundEffect: String, CaseIterable, Sendable {
     case modelSwitch
     /// Polish turned on and off for a dictation: a drop rising, and falling (set A only, `scripts/gen-sounds.py`).
     case polishOn, polishOff
-    /// Polish Selection's card coming up: a bubble surfacing.
+    /// A card of text to paste coming up (Polish Selection's answer, an earlier dictation's text): a bubble surfacing.
     case polishReady
     /// A word went into the dictionary (fn D): a soft "done?", one tongue pop gliding up.
     case dictionaryAdded

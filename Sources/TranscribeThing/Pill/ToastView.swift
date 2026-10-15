@@ -233,7 +233,8 @@ struct ToastStack: View {
                 let notice = entry.notice
                 let isNewest = notice.dedupeKey == newestKey
                 let leaving = entry.closing != nil
-                // Polish Selection's cards are answers to compare: neither recedes.
+                // Cards of text to paste (Polish Selection's answers, earlier dictations) are there to pick from:
+                // neither recedes.
                 let dimmed = !leaving && !isNewest && !center.isPaused && !notice.takesCardKeys
                 // Closing into the slot the pill has come back into: under the pill, so gone at once.
                 let covered = entry.closing.map { $0.origin.isSlot && !origin.isSlot } ?? false

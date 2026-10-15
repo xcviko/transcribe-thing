@@ -179,6 +179,16 @@ enum PillSnapshots {
             SnapshotEntry("pill-toast-not-pasted", width: 640, height: 360) { _ in
                 CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.notPasted])
             },
+            // A dictation's text that came once the next one had started (`--only pill-toast-earlier`): on its card over
+            // the recording, its countdown waiting whole for it to end; then two of them, one polished.
+            SnapshotEntry("pill-toast-earlier-dictation", width: 640, height: 340) { _ in
+                CanvasScene(model: .preview(phase: .listening, level: 0.6),
+                            notices: [PillSnapshotFixtures.earlierDictation], fractionRemaining: 1)
+            },
+            SnapshotEntry("pill-toast-earlier-dictations", width: 640, height: 520) { _ in
+                CanvasScene(model: PillModelSheet.model(.processing, choice: .gemini),
+                            notices: [PillSnapshotFixtures.earlierDictation, PillSnapshotFixtures.earlierPolished])
+            },
             SnapshotEntry("pill-toast-shortcut", width: 640, height: 270) { _ in
                 CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.shortcutUnavailable])
             },
@@ -368,6 +378,14 @@ enum PillSnapshotFixtures {
 
     static let shortcutUnavailable = Notice.shortcutUnavailable(accessibility: .denied, likelyStale: false, shortcut: "fn")
 
+    /// What DictationController posts for a dictation whose text came once the next one had started.
+    static let earlierDictation = DictationController.earlierDictationCard(
+        "Can you send me the deck before the call? I want another look at the pricing slide.",
+        kind: .transcription(.parakeet), mode: .pushToTalk, id: UUID(), quiet: true)
+    static let earlierPolished = DictationController.earlierDictationCard(
+        "Moving the design review to Thursday afternoon so Maya can join. I will send the updated deck tonight.",
+        kind: .polish(), mode: .handsFree, id: UUID(), quiet: false)
+
     static let micFallback = Notice(
         dedupeKey: "mic.fallback", style: .warning, symbol: "mic.fill",
         title: "Using MacBook Pro Microphone instead", body: "AirPods Pro isn’t available right now.",
@@ -544,13 +562,15 @@ private struct ToastGrowSheet: View {
 private struct CanvasScene: View {
     let model: PillModel
     let notices: [Notice]
+    /// Where the cards' countdowns stand: 1 for one still waiting to start.
+    var fractionRemaining = 0.64
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         ZStack(alignment: .bottom) {
             SnapshotDesktop(dark: scheme == .dark)
             // The panel's own size: what doesn't fit is cut off here as it is on screen.
-            PillCanvasView(model: model, toasts: .preview(notices))
+            PillCanvasView(model: model, toasts: .preview(notices, fractionRemaining: fractionRemaining))
                 .frame(width: PillCanvasMetrics.size.width)
                 .frame(maxHeight: PillCanvasMetrics.size.height, alignment: .bottom)
                 .clipped()
