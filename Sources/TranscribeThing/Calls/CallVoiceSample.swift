@@ -1,9 +1,10 @@
 import Foundation
 
 /// A short sample of the person's own voice, from their mic in the same call, sent ahead of the call's audio so Gemini
-/// can tell them from the other participants in the mix (`CallPrompts.call`). A wrong sample is worse than none: a
-/// call on laptop speakers puts the other side's voice in the mic, and a sample of that names a colleague after the
-/// person. So a stretch is taken only where it can't be the other side:
+/// can tell them from the other participants in the mix (`CallPrompts.call`), when the local model can't say when they
+/// spoke (`CallMicHint`): it isn't downloaded, or it failed. A wrong sample is worse than none: a call on laptop
+/// speakers puts the other side's voice in the mic, and a sample of that names a colleague after the person. So a
+/// stretch is taken only where it can't be the other side:
 /// - never where they were muted (their mic is zeroed there);
 /// - the other side's track quiet all through it and for `guardSeconds` before and after (their echo and the room's
 ///   tail after they stop); speech that runs on into that margin is left out whole, not cut to fit;
@@ -216,7 +217,8 @@ enum CallVoiceSample {
         return median(levels) >= baseline + echoMarginDB
     }
 
-    private static func median(_ values: [Float]) -> Float {
+    /// The middle value of `values` (the mean of the two middle ones for an even count); `values` not empty.
+    static func median(_ values: [Float]) -> Float {
         let sorted = values.sorted()
         let middle = sorted.count / 2
         return sorted.count % 2 == 1 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2

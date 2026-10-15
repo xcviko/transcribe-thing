@@ -1665,6 +1665,13 @@ actor FakeEngine: LocalEngine {
         return transcript
     }
 
+    /// One word over all of `samples`: a call's mic, heard for when the person spoke.
+    func transcribeWords(_ samples: [Float]) async throws -> [TimedWord] {
+        guard loaded else { throw LocalEngineError.notLoaded }
+        transcribeCount += 1
+        return [TimedWord(text: transcript, start: 0, end: Double(samples.count) / Recording.sampleRate)]
+    }
+
     func deleteFiles() async throws {
         loaded = false
         installed.set(false)

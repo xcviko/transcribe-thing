@@ -227,6 +227,8 @@ final class AppEnvironment {
     private func wireCalls() {
         callTranscriber.userName = { [settings] in settings.displayName }
         callTranscriber.vocabulary = { [settings] in settings.dictionary.words }
+        // The local model tells Gemini when the person spoke, from their own mic.
+        callTranscriber.micListener = CallTranscriber.localParakeet(models: models)
         calls.onRemove = { [weak self] ids in
             for id in ids { self?.callTranscriber.cancel(id) }
             self?.callMonitor.removed(ids)
