@@ -90,8 +90,9 @@ final class CallStore {
         paths.calls.appendingPathComponent(id.uuidString, isDirectory: true)
     }
 
-    /// Calls/<id>/answers: each transcription request's answer as it came (`CallTranscriber`), "1-mix.txt" (a call
-    /// transcribed before the tracks were mixed has "1-remote.txt" and "1-mic.txt").
+    /// Calls/<id>/answers: each transcription request's answer as it came (`CallTranscriber`), "1-mix.txt", then
+    /// "1-mix-rest-1.txt" and on for what the chunk's answer left out (a call transcribed before the tracks were mixed
+    /// has "1-remote.txt" and "1-mic.txt").
     func answersFolder(for id: UUID) -> URL {
         folder(for: id).appendingPathComponent("answers", isDirectory: true)
     }
