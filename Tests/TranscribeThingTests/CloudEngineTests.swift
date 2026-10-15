@@ -3,12 +3,12 @@ import Foundation
 import Testing
 @testable import TranscribeThing
 
-// The cloud models (Gemini 3.8 Flash and Gemini 4 Argon) and what stays of the retired cloud Parakeet: engine
-// metadata, provider lookup, History that still reads it, and notices.
+// The cloud model (Gemini 3.8 Flash) and what stays of the retired cloud Parakeet and Gemini 4 Argon: engine
+// metadata, provider lookup, History that still reads them, and notices.
 
 private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
     let name = provider.map { "\"\($0)\"" } ?? "null"
-    return StubURLProtocol.Reply(body: #"{"data":{"id":"gen-1","api_type":"chat","model":"google/gemini-4-argon","provider_name":\#(name),"total_cost":0.0001,"created_at":"2026-09-27T10:00:00Z"}}"#)
+    return StubURLProtocol.Reply(body: #"{"data":{"id":"gen-1","api_type":"chat","model":"google/gemini-3.8-flash","provider_name":\#(name),"total_cost":0.0001,"created_at":"2026-09-27T10:00:00Z"}}"#)
 }
 
 // MARK: - Engine metadata
@@ -17,10 +17,10 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
     @Test func rawValuesAreStableAndOrderIsLocalThenGemini() {
         #expect(EngineID.allCases.map(\.rawValue) == ["parakeet", "parakeetCloud", "geminiFlash", "geminiArgon",
                                                       "geminiPro"], "retired models stay readable")
-        #expect(EngineID.offered == [.parakeet, .geminiFlash, .geminiArgon])
-        #expect(EngineID.allCases.filter(\.isRetired) == [.parakeetCloud, .geminiPro])
+        #expect(EngineID.offered == [.parakeet, .geminiFlash])
+        #expect(EngineID.allCases.filter(\.isRetired) == [.parakeetCloud, .geminiArgon, .geminiPro])
         #expect(EngineID.localEngines == [.parakeet])
-        #expect(EngineID.geminiEngines == [.geminiFlash, .geminiArgon])
+        #expect(EngineID.geminiEngines == [.geminiFlash])
     }
 
     @Test func namesAreUniqueAndTheRetiredCloudParakeetKeepsItsOwn() {
@@ -32,13 +32,13 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         #expect(EngineID.geminiArgon.glyph == "A")
     }
 
-    @Test func argonFacts() {
+    /// The retired Gemini 4 Argon keeps what History shows of it: its slug, provider and name.
+    @Test func theRetiredArgonKeepsItsFacts() {
         #expect(EngineID.geminiArgon.openRouterModelID == "google/gemini-4-argon")
         #expect(EngineID.geminiArgon.provider == "Google AI Studio")
-        #expect(EngineID.geminiArgon.isGemini && EngineID.geminiArgon.isCloud && !EngineID.geminiArgon.isRetired)
-        #expect(EngineID.geminiArgon.badges == ["Cloud"])
-        #expect(EngineID.geminiArgon.approxDownloadBytes == nil)
-        #expect(OpenRouterClient.engine(forModel: "google/gemini-4-argon") == .geminiArgon)
+        #expect(EngineID.geminiArgon.isGemini && EngineID.geminiArgon.isCloud && EngineID.geminiArgon.isRetired)
+        #expect(EngineID.geminiArgon.reasoningEfforts.isEmpty, "it never runs")
+        #expect(OpenRouterClient.engine(forModel: "google/gemini-4-argon") == .geminiFlash, "only offered models answer")
         #expect(OpenRouterClient.engine(forModel: "google/gemini-3.8-flash") == .geminiFlash)
         #expect(!EngineID.parakeet.isGemini && !EngineID.parakeetCloud.isGemini)
     }
@@ -49,10 +49,9 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
     }
 
     /// Gemini's answer streams, so its timeout is a stall one, the same for any length of audio: two minutes without a
-    /// byte for Flash, four for Argon, which can think longer before its first byte.
+    /// byte.
     @Test func geminisTimeoutIsAStallTimeout() {
         #expect(EngineID.geminiFlash.cloudTimeout == 120)
-        #expect(EngineID.geminiArgon.cloudTimeout == 240)
         #expect(EngineID.parakeet.cloudTimeout == 0)
         #expect(EngineID.parakeetCloud.cloudTimeout == 0, "retired: it never runs")
     }
@@ -65,7 +64,7 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
 
     @Test func noRouteHintIsGoogles() {
         let error = OpenRouterErrorMapper.map(status: 404, message: "No endpoints found", errorType: nil,
-                                              retryAfter: nil, engine: .geminiArgon)
+                                              retryAfter: nil, engine: .geminiFlash)
         guard case .openRouterNoRoute(let message) = error else {
             Issue.record("\(error)")
             return
@@ -252,7 +251,7 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         }
         h.controller.insertOverride = { _ in .pasted }
         let recording = DictationControllerTests.recording()
-        h.controller.enqueue(recording, engine: .geminiArgon)
+        h.controller.enqueue(recording, engine: .geminiFlash)
         try await waitUntil { h.history.entry(id: recording.id)?.provider != nil }
         #expect(h.history.entry(id: recording.id)?.provider == "Together")
         #expect(asked == ["gen-1"])
@@ -270,14 +269,14 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         }
         h.controller.insertOverride = { _ in .pasted }
         let recording = DictationControllerTests.recording()
-        h.controller.enqueue(recording, engine: .geminiArgon)
+        h.controller.enqueue(recording, engine: .geminiFlash)
         try await waitUntil { h.history.entry(id: recording.id) != nil }
         #expect(h.history.entry(id: recording.id)?.provider == "Together")
     }
 
-    @Test func aMissingKeyRefusesArgonBeforeRecording() throws {
+    @Test func aMissingKeyRefusesGeminiBeforeRecording() throws {
         let h = DictationControllerTests.make(models: [.parakeet: .ready], keyStatus: .missing)
-        h.settings.lineup.main = .argon
+        h.settings.lineup.main = .gemini
         h.controller.send(.handsFreeToggle)
         #expect(h.recorder.starts == 0)
         #expect(h.controller.machine.capture == .idle)
@@ -293,7 +292,7 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
 @Suite struct CloudNoticeTests {
     /// Nothing is refused up front, so "too large" is always OpenRouter's word. The same model would refuse it again:
     /// no Retry, the body says what takes it.
-    @Test(arguments: [EngineID.geminiFlash, .geminiArgon])
+    @Test(arguments: EngineID.geminiEngines)
     func tooLargeIsWhatOpenRouterSaid(_ engine: EngineID) {
         let notice = AppError.recordingTooLarge.notice(recordingID: UUID(), fallbackEngine: .parakeet, engine: engine)
         #expect(notice.title == "Too large to send to OpenRouter")
@@ -313,13 +312,13 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         #expect(AppError.regionBlocked.notice(recordingID: nil, fallbackEngine: nil).title
             == "Gemini isn’t available in your region")
         #expect(AppError.openRouterProviderUnavailable("x").notice(recordingID: nil, fallbackEngine: nil,
-                                                                   engine: .geminiArgon).title
+                                                                   engine: .geminiFlash).title
             == "Google AI Studio is unavailable")
     }
 
     @Test func aTimeoutNamesTheModel() {
-        let notice = AppError.timeout(.geminiArgon).notice(recordingID: nil, fallbackEngine: nil)
-        #expect(notice.title == "Gemini 4 Argon took too long")
+        let notice = AppError.timeout(.geminiFlash).notice(recordingID: nil, fallbackEngine: nil)
+        #expect(notice.title == "Gemini 3.8 Flash took too long")
         #expect(notice.body == "Gemini didn’t answer in time.")
     }
 }

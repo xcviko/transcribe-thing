@@ -527,46 +527,28 @@ import Testing
         #expect(store.lastSuccessful?.text == "dictated")
     }
 
-    // MARK: The model the user dictates with
+    // MARK: Gemini 3.8 Flash, whatever the dictation is on
 
-    /// Hands-free dictations go to Argon, held ones to Parakeet: the selection held on Parakeet goes to Argon, at
-    /// Argon's Reasoning level, and its card, History and the pill all say Argon.
-    @Test func theHandsFreeArgonRewritesTheSelection() async throws {
-        let (rig, _, asked) = Self.make(answers: [.geminiArgon: "<message>Argon's.</message>"])
-        rig.h.settings.lineup.setSwitchable(.argon, true)
-        rig.h.settings.handsFreeModel = .argon
-        rig.h.settings.reasoningEfforts[.geminiArgon] = .high
+    /// Gemini as the main model, switched to Parakeet mid-dictation: the selection goes to Flash, at Flash's level, in
+    /// Gemini's color while it writes.
+    @Test func theMainGeminiRewritesTheSelection() async throws {
+        let (rig, _, asked) = Self.make()
+        rig.h.settings.lineup.main = .gemini
         rig.h.settings.reasoningEfforts[.geminiFlash] = .low
-        asked.hold(.geminiArgon)
-        try await Self.polish(rig)
-        try await waitUntil { !asked.calls.isEmpty }
-        #expect(rig.h.pill.sessionModel == .argon, "the pill wears Argon's color while it writes")
-        asked.release(.geminiArgon)
-        try await waitUntil { Self.card(rig, .geminiArgon) != nil }
-        #expect(asked.models == [.geminiArgon])
-        let route = try #require(asked.routes.first ?? nil)
-        #expect(route.model == "google/gemini-4-argon" && route.effort == "high")
-        #expect(Self.card(rig, .geminiArgon)?.title == "Polished by Gemini 4 Argon")
-        #expect(Self.card(rig, .geminiFlash) == nil)
-        let entry = try #require(rig.h.history.entries.first { $0.isSelection })
-        #expect(entry.versions.map(\.kind) == [.selection(.geminiArgon)])
-        #expect(entry.engine == .geminiArgon)
-        rig.h.controller.handle(.cardClose)
-    }
-
-    /// Argon as the main model: switched to Parakeet mid-dictation, the selection still goes to Argon, at its level.
-    @Test func theMainArgonRewritesTheSelection() async throws {
-        let (rig, _, asked) = Self.make(answers: [.geminiArgon: "<message>Argon's.</message>"])
-        rig.h.settings.lineup.main = .argon
-        rig.h.settings.reasoningEfforts[.geminiArgon] = .low
+        asked.hold(.geminiFlash)
         Switch.hold(rig)
         try await waitUntil { rig.h.controller.machine.isRecording }
         rig.h.controller.handle(.cycleEngine)
         #expect(!rig.h.controller.effectiveChoice.isGemini, "on Parakeet now: the key is Polish Selection's")
         rig.h.controller.handle(.polish)
-        try await waitUntil { Self.card(rig, .geminiArgon) != nil }
-        #expect(asked.models == [.geminiArgon])
-        #expect((asked.routes.first ?? nil)?.effort == "low")
+        try await waitUntil { !asked.calls.isEmpty }
+        #expect(rig.h.pill.sessionModel == .gemini, "the pill wears Gemini's color while it writes")
+        asked.release(.geminiFlash)
+        try await waitUntil { Self.card(rig, .geminiFlash) != nil }
+        #expect(asked.models == [.geminiFlash])
+        let route = try #require(asked.routes.first ?? nil)
+        #expect(route.model == "google/gemini-3.8-flash" && route.effort == "low")
+        rig.h.controller.handle(.cardClose)
     }
 
     /// Nothing but Parakeet: the selection goes to Gemini 3.8 Flash, at Flash's level.
@@ -579,61 +561,12 @@ import Testing
         let route = try #require(asked.routes.first ?? nil)
         #expect(route.model == "google/gemini-3.8-flash" && route.effort == "high")
     }
-
-    /// The key the chosen model's requests go with can't pay: no selection is read, and the key says Polish is
-    /// Gemini's, as for Flash.
-    @Test func withoutAKeyTheHandsFreeArgonDoesNotRewriteEither() async throws {
-        let (rig, _) = Switch.make(key: .missing)
-        rig.h.controller.start()
-        rig.h.settings.shortcuts[.addToDictionary] = nil
-        rig.h.settings.lineup.setSwitchable(.argon, true)
-        rig.h.settings.handsFreeModel = .argon
-        #expect(rig.h.settings.selectionModel == .geminiArgon)
-        var looked = false
-        rig.h.controller.selectionOverride = { looked = true; return "text" }
-        Switch.hold(rig)
-        try await Task.sleep(for: .milliseconds(60))
-        rig.h.controller.handle(.polish)
-        #expect(!looked)
-        #expect(rig.h.pill.keyHint == "Polish works on Gemini only")
-        rig.h.controller.send(.pillCancel)
-    }
 }
 
 @MainActor
 @Suite struct PolishSelectionModelTests {
-    /// The main model when it's a Gemini; else the hands-free model when it's a Gemini; else Flash.
-    @Test func theSelectionGoesToTheGeminiTheUserDictatesWith() {
-        func chosen(_ main: ModelChoice, _ handsFree: ModelChoice?) -> PolishSelectionModel {
-            PolishSelectionModel.chosen(main: main, handsFree: handsFree)
-        }
-        #expect(chosen(.gemini, nil) == .geminiFlash)
-        #expect(chosen(.argon, nil) == .geminiArgon)
-        #expect(chosen(.parakeet, nil) == .geminiFlash)
-        #expect(chosen(.parakeet, .argon) == .geminiArgon)
-        #expect(chosen(.parakeet, .gemini) == .geminiFlash)
-        #expect(chosen(.gemini, .argon) == .geminiFlash, "the main model wins")
-        #expect(chosen(.argon, .gemini) == .geminiArgon, "the main model wins")
-        #expect(chosen(.argon, .parakeet) == .geminiArgon)
-        #expect(chosen(.gemini, .parakeet) == .geminiFlash)
-    }
-
-    /// Settings read the hands-free model only while Switch model reaches it (`handsFreeChoice`).
-    @Test func settingsFollowTheLineup() {
-        let settings = AppSettings.inMemory()
-        #expect(settings.selectionModel == .geminiFlash)
-        settings.lineup.setSwitchable(.argon, true)
-        settings.handsFreeModel = .argon
-        #expect(settings.selectionModel == .geminiArgon)
-        settings.lineup.setSwitchable(.argon, false)
-        #expect(settings.selectionModel == .geminiFlash, "Argon switched off is no longer the hands-free model")
-        settings.lineup.main = .argon
-        #expect(settings.selectionModel == .geminiArgon)
-        settings.lineup.main = .gemini
-        #expect(settings.selectionModel == .geminiFlash)
-    }
-
-    /// New raw values for Argon; the old ones (Flash's, the retired Luna's, translated or not) read exactly as before.
+    /// Every raw value reads as before: Flash's, and the ones History keeps from the retired GPT-6 Luna and Gemini 4
+    /// Argon, translated or not.
     @Test func versionKindsRoundTrip() {
         let kinds: [(TranscriptVersionKind, String)] = [
             (.selection(.geminiFlash), "selection:geminiFlash"),
@@ -653,7 +586,7 @@ import Testing
         #expect(TranscriptVersionKind(rawValue: "selection:geminiPro") == nil)
     }
 
-    /// Stored in History as JSON and read back: an Argon translation and an old Flash polish.
+    /// Stored in History as JSON and read back: an old Argon translation and an old Flash polish.
     @Test func selectionEntriesSurviveHistory() throws {
         let old = #"["selection:geminiFlash","translated-selection:geminiFlash","selection:gpt6Luna"]"#
         let decoded = try JSONDecoder().decode([TranscriptVersionKind].self, from: Data(old.utf8))
@@ -666,25 +599,24 @@ import Testing
         #expect(back.first?.engine == .geminiArgon)
     }
 
-    /// Names, colors and cards follow the model that wrote it.
+    /// Names follow the model that wrote it, Argon's old ones too; every one wears Gemini's color, and only Flash is
+    /// asked.
     @Test func namesAndCardsSayWhichModel() {
         #expect(TranscriptVersionKind.selection(.geminiArgon).displayName == "Selection polished by Gemini 4 Argon")
         #expect(TranscriptVersionKind.selectionTranslation(.geminiArgon).displayName
                 == "Selection translated by Gemini 4 Argon")
-        #expect(TranscriptVersionKind.selection(.geminiArgon).progressTitle == "Polishing with Gemini 4 Argon…")
-        #expect(TranscriptVersionKind.selectionTranslation(.geminiArgon).failureTitle
-                == "Couldn’t translate with Gemini 4 Argon")
         #expect(TranscriptVersionKind.selection(.geminiFlash).displayName == "Selection polished by Gemini 3.8 Flash")
         #expect(TranscriptVersionKind.selection(.geminiArgon).engine == .geminiArgon)
         #expect(TranscriptVersionKind.selection(.gpt6Luna).engine == .geminiFlash)
-        #expect(PolishSelectionModel.geminiArgon.choice == .argon)
-        #expect(PolishSelectionModel.geminiFlash.choice == .gemini && PolishSelectionModel.gpt6Luna.choice == .gemini)
-        let polished = DictationController.selectionCard("Hi.", by: .geminiArgon)
-        #expect(polished.title == "Polished by Gemini 4 Argon")
-        #expect(DictationController.selectionModel(ofCard: polished) == .geminiArgon)
-        #expect(DictationController.selectionCard("Hi.", by: .geminiArgon, translated: true).title
-                == "Translated by Gemini 4 Argon")
-        #expect(DictationController.selectionCard("Hi.", by: .geminiFlash).title == "Polished by Gemini 3.8 Flash")
+        #expect(PolishSelectionModel.allCases.allSatisfy { $0.choice == .gemini })
+        #expect(PolishSelectionModel.geminiFlash.route != nil)
+        #expect(PolishSelectionModel.geminiArgon.route == nil && PolishSelectionModel.gpt6Luna.route == nil,
+                "no longer asked")
+        let polished = DictationController.selectionCard("Hi.", by: .geminiFlash)
+        #expect(polished.title == "Polished by Gemini 3.8 Flash")
+        #expect(DictationController.selectionModel(ofCard: polished) == .geminiFlash)
+        #expect(DictationController.selectionCard("Hi.", by: .geminiFlash, translated: true).title
+                == "Translated by Gemini 3.8 Flash")
     }
 }
 

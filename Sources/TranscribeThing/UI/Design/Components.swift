@@ -736,7 +736,7 @@ struct EngineIcon: View {
     }
 }
 
-/// A model's mark: its symbol (Parakeet's bolt, Flash's sparkles, Argon's atom) in the model's own color (`AppSettings.modelColors`), so a row in Models, the sidebar chip and the pill agree.
+/// A model's mark: its symbol (Parakeet's bolt, Flash's sparkles) in the model's own color (`AppSettings.modelColors`), so a row in Models, the sidebar chip and the pill agree.
 struct ModelChoiceIcon: View {
     var choice: ModelChoice
     var color: ModelColor

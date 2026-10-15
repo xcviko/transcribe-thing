@@ -865,9 +865,10 @@ final class FakeRecorder: DictationRecorder {
         #expect(TranscriptVersionKind.transcription(.parakeetCloud).dictationModel == .parakeet)
         #expect(TranscriptVersionKind.transcription(.geminiFlash).dictationModel == .gemini)
         #expect(TranscriptVersionKind.transcription(.geminiPro).dictationModel == .gemini)
-        #expect(TranscriptVersionKind.transcription(.geminiArgon).dictationModel == .argon)
-        #expect(TranscriptVersionKind.polish(by: .geminiArgon).dictationModel == .argon)
-        #expect(TranscriptVersionKind.translation(polished: true, by: .geminiArgon).dictationModel == .argon)
+        // The retired Gemini 4 Argon's old versions paste by Gemini's rules.
+        #expect(TranscriptVersionKind.transcription(.geminiArgon).dictationModel == .gemini)
+        #expect(TranscriptVersionKind.polish(by: .geminiArgon).dictationModel == .gemini)
+        #expect(TranscriptVersionKind.translation(polished: true, by: .geminiArgon).dictationModel == .gemini)
         #expect(TranscriptVersionKind.cleanup(of: .parakeet, by: .gpt6Luna).dictationModel == .parakeet)
         #expect(TranscriptVersionKind.cleanup(of: .parakeetCloud, by: .geminiFlashLite).dictationModel == .parakeet)
         #expect(TranscriptVersionKind.polish().dictationModel == .gemini)
@@ -1171,7 +1172,6 @@ final class FakeRecorder: DictationRecorder {
     @Test func geminiFallsBackToParakeetOnThisMacAndParakeetToNothing() {
         #expect(DictationController.fallbackCandidates(for: .parakeet) == [])
         #expect(DictationController.fallbackCandidates(for: .geminiFlash) == [.parakeet])
-        #expect(DictationController.fallbackCandidates(for: .geminiArgon) == [.parakeet])
     }
 
     /// A failed dictation's Retry is the same model, whatever else could run: another one is the user's call, from
@@ -1201,7 +1201,7 @@ final class FakeRecorder: DictationRecorder {
         }
         h.controller.insertOverride = { _ in Issue.record("canceled, never pasted"); return .pasted }
         h.controller.enqueue(Self.recording(), engine: .geminiFlash)
-        h.controller.enqueue(Self.recording(), engine: .geminiArgon)
+        h.controller.enqueue(Self.recording(), engine: .geminiFlash)
         try await Task.sleep(for: .milliseconds(300))
         #expect(h.toasts.notices.isEmpty)
         h.controller.handle(.cancel)
@@ -2034,12 +2034,8 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
         }
         env.settings.lineup.main = .gemini
         #expect(try status() == "Gemini 3.8 Flash · Ready")
-        env.settings.lineup.main = .argon
-        #expect(try status() == "Gemini 4 Argon · Ready")
         let keyless = OpenRouterAccount.preview(status: .missing)
         #expect(MenuBuilder.status(of: .gemini, models: env.models, account: keyless).text
-            == "Needs key")
-        #expect(MenuBuilder.status(of: .argon, models: env.models, account: keyless).text
             == "Needs key")
         #expect(MenuBuilder.status(of: .parakeet, models: env.models, account: keyless).text
             == "Ready", "Parakeet needs no key")

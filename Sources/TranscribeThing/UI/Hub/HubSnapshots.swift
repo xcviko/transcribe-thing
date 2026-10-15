@@ -18,11 +18,9 @@ enum HubSnapshots {
             hub("hub-models-compact", .models, width: 820, height: 560) { c in
                 c.models = .preview(states: [.parakeet: .downloading(Samples.downloading)])
             },
-            // The narrowest window with Argon switched on and thinking at High: the rows and pickers keep their ends.
-            hub("hub-models-compact-argon", .models, width: 820, height: 1400) { c in
-                c.settings.lineup.setSwitchable(.argon, true)
-                c.settings.reasoningEfforts[.geminiArgon] = .high
-                c.settings.callEngine = .geminiArgon
+            // The narrowest window with Gemini thinking at High: the rows and pickers keep their ends.
+            hub("hub-models-compact-high", .models, width: 820, height: 1400) { c in
+                c.settings.reasoningEfforts[.geminiFlash] = .high
             },
             hub("hub-home-search", .home) { c in
                 c.initialSearch = "zzz"
@@ -36,7 +34,7 @@ enum HubSnapshots {
             hub("hub-home-transcribing", .home, height: 900) { c in
                 let entries = c.history.entries
                 var running: [UUID: TranscriptVersionKind] = [:]
-                if let first = entries.first { running[first.id] = .polish(by: .geminiArgon) }
+                if let first = entries.first { running[first.id] = .polish() }
                 if entries.count > 1 { running[entries[1].id] = .transcription(.geminiFlash) }
                 if let failed = entries.first(where: { $0.status == .failed }) { running[failed.id] = .transcription(.parakeet) }
                 c.previewRunning = running
@@ -59,7 +57,7 @@ enum HubSnapshots {
                 guard entries.count > 2 else { return }
                 c.previewFailures = [
                     entries[0].id: Samples.homeFailure(.polish(), .openRouterProviderUnavailable("")),
-                    entries[2].id: Samples.homeFailure(.transcription(.geminiArgon), .timeout(.geminiArgon)),
+                    entries[2].id: Samples.homeFailure(.transcription(.geminiFlash), .timeout(.geminiFlash)),
                 ]
                 var running = [entries[1].id: TranscriptVersionKind.transcription(.geminiFlash)]
                 if let failed = entries.first(where: { $0.status == .failed }) { running[failed.id] = .transcription(.parakeet) }
@@ -74,8 +72,7 @@ enum HubSnapshots {
             hub("hub-home-drop", .home) { c in
                 c.previewDropTarget = true
             },
-            // Selected text polished by Gemini 3.8 Flash and translated by Gemini 4 Argon: each glyph in its model's
-            // color.
+            // Selected text polished and translated by Gemini 3.8 Flash: each glyph in its model's color.
             hub("hub-home-selections", .home, height: 900) { c in
                 c.history = .preview(entries: Samples.selectionEntries() + c.history.entries)
             },
@@ -296,13 +293,6 @@ enum HubSnapshots {
                 c.models = .preview(states: [.parakeet: .failed("Couldn’t load the model. Retry, or download it again.")],
                                     lastErrors: [.parakeet: .modelLoadFailed(.parakeet, "Corrupt weights")])
             },
-            // Gemini 4 Argon switched on, thinking at High, and taking calls; Flash at Low.
-            hub("hub-models-argon", .models, height: 1400) { c in
-                c.settings.lineup.setSwitchable(.argon, true)
-                c.settings.reasoningEfforts[.geminiArgon] = .high
-                c.settings.reasoningEfforts[.geminiFlash] = .low
-                c.settings.callEngine = .geminiArgon
-            },
             hub("hub-models-key-limit", .models, height: 1100) { c in
                 c.settings.lineup.main = .gemini
                 c.account = .preview(status: .noCredit(KeyInfo(label: "transcribe-thing", limit: 5, limitRemaining: 0, usage: 5)))
@@ -357,10 +347,6 @@ enum HubSnapshots {
             // Gemini as the main model: its row takes the radio and "Main", and Parakeet gets a switch.
             hub("hub-models-main-gemini", .models, height: 1100) { c in
                 c.settings.lineup.main = .gemini
-            },
-            // Gemini 4 Argon as the main model: Parakeet and Flash get their switches.
-            hub("hub-models-main-argon", .models, height: 1100) { c in
-                c.settings.lineup.main = .argon
             },
             // Dragged into Gemini, Parakeet: the line follows the new order from the main model.
             hub("hub-models-reordered", .models, height: 1100) { c in
@@ -448,7 +434,7 @@ enum HubSnapshots {
             hub("hub-dictionary-empty", .dictionary, height: 560),
             // Pasting set per model: quick Parakeet searches go in bare, Gemini gets a space after.
             hub("hub-general", .general, height: 1080) { c in
-                c.settings.modelsAddingSpace = [.gemini, .argon]
+                c.settings.modelsAddingSpace = [.gemini]
                 c.settings.modelsRemovingFinalPeriod = [.parakeet]
                 c.settings.modesRemovingFinalPeriod = [.pushToTalk]
             },
@@ -461,7 +447,7 @@ enum HubSnapshots {
             },
             // The narrowest window: Pasting's chips still fit under each rule.
             hub("hub-general-pasting-compact", .general, width: 820, height: 1080) { c in
-                c.settings.modelsAddingSpace = [.gemini, .argon]
+                c.settings.modelsAddingSpace = [.gemini]
                 c.settings.modelsRemovingFinalPeriod = [.parakeet]
                 c.settings.modesRemovingFinalPeriod = [.pushToTalk]
             },
@@ -617,7 +603,7 @@ enum HubSnapshots {
         static let downloading = DownloadProgress(fraction: 0.42, bytesReceived: 265_600_000, totalBytes: 632_321_326,
                                                   bytesPerSecond: 9_800_000, secondsRemaining: 38)
 
-        /// Selected text rewritten: translated by Argon, polished by Flash.
+        /// Selected text rewritten by Flash: translated, and polished.
         static func selectionEntries() -> [TranscriptEntry] {
             let now = Date()
             func entry(_ text: String, _ kind: TranscriptVersionKind, ago: TimeInterval) -> TranscriptEntry {
@@ -628,7 +614,7 @@ enum HubSnapshots {
             }
             return [
                 entry("Tomorrow I’ll go again and check how it does with intervals.",
-                      .selectionTranslation(.geminiArgon), ago: 30),
+                      .selectionTranslation(.geminiFlash), ago: 30),
                 entry("We ship the import on Friday, and Pasha checks the long files over the weekend.",
                       .selection(.geminiFlash), ago: 90),
             ]

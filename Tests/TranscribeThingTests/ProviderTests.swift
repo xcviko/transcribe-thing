@@ -85,7 +85,7 @@ import Testing
         let (service, openRouterHost) = ProxyFixture.service(
             openRouterReplies: [.stream(SSE.answer("<transcript>OpenRouter.</transcript>"))], proxy: proxy)
         #expect(proxy.isConfigured && !proxy.routesGemini)
-        let result = try await service.transcribe(ProxyFixture.speech(), engine: .geminiArgon)
+        let result = try await service.transcribe(ProxyFixture.speech(), engine: .geminiFlash)
         #expect(result.text == "OpenRouter.")
         #expect(StubURLProtocol.registry.requests(for: proxyHost).isEmpty)
         #expect(StubURLProtocol.registry.requests(for: openRouterHost).count == 1)
@@ -114,7 +114,7 @@ import Testing
         await #expect(throws: AppError.vertexProxy(.notSetUp)) { try await send(Data([1]), "x", 1, nil) }
         await #expect(throws: AppError.vertexProxy(.notSetUp)) { try await sendText("x", "y") }
         #expect(StubURLProtocol.registry.requests(for: openRouterHost).isEmpty)
-        #expect(CloudRoute.provider(for: .geminiArgon, proxy: proxy) == .vertexProxy)
+        #expect(CloudRoute.provider(for: .geminiFlash, proxy: proxy) == .vertexProxy)
         #expect(CloudRoute.provider(for: .parakeet, proxy: proxy) == nil)
     }
 
@@ -156,15 +156,15 @@ import Testing
     @Test func openRouterPickedFollowsItsKey() {
         let (proxy, _) = ProxyFixture.proxy(enabled: false)
         let missing = OpenRouterAccount.preview(status: .missing)
-        let key = CloudRoute.keyStatus(for: .geminiArgon, account: missing, proxy: proxy)
+        let key = CloudRoute.keyStatus(for: .geminiFlash, account: missing, proxy: proxy)
         #expect(key == .missing)
-        #expect(EngineReadiness.of(.geminiArgon, localState: .ready, keyStatus: key,
-                                   provider: CloudRoute.provider(for: .geminiArgon, proxy: proxy)) == .needsKey)
+        #expect(EngineReadiness.of(.geminiFlash, localState: .ready, keyStatus: key,
+                                   provider: CloudRoute.provider(for: .geminiFlash, proxy: proxy)) == .needsKey)
     }
 
     @Test func homeAsksToSetUpTheEndpoint() throws {
         let input = HubAttention.Input(microphone: .granted, accessibility: .granted, accessibilityLikelyStale: false,
-                                       fnKeyUsage: .doNothing, pushToTalkUsesFn: true, engine: .geminiArgon,
+                                       fnKeyUsage: .doNothing, pushToTalkUsesFn: true, engine: .geminiFlash,
                                        localState: .ready, keyStatus: .missing, provider: .vertexProxy)
         let item = try #require(HubAttention.items(input).first { $0.id == "key" })
         #expect(item.title == "Set up your endpoint" && item.actionTitle == "Set Up" && item.action == .openModels)
@@ -180,7 +180,7 @@ import Testing
         proxySettings.cloudProvider = .vertexProxy
         let proxy = VertexProxyAccount(keyStore: .inMemory(nil), settings: proxySettings)
         let h = DictationControllerTests.make(keyStatus: .valid(KeyInfo()), proxy: proxy)
-        h.settings.lineup.main = .argon
+        h.settings.lineup.main = .gemini
         h.controller.send(.handsFreeToggle)
         #expect(h.recorder.starts == 0)
         #expect(h.controller.machine.capture == .idle)

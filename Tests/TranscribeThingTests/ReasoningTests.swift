@@ -26,7 +26,7 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
             #expect(engine.reasoningEfforts == [.low, .medium, .high], "no Minimal, no None")
             #expect(engine.defaultReasoningEffort == .medium)
         }
-        for engine in [EngineID.parakeet, .parakeetCloud, .geminiPro] {
+        for engine in [EngineID.parakeet, .parakeetCloud, .geminiArgon, .geminiPro] {
             #expect(engine.reasoningEfforts.isEmpty && engine.defaultReasoningEffort == nil, "\(engine)")
         }
         #expect(ReasoningEffort.allCases.map(\.rawValue) == ["none", "minimal", "low", "medium", "high"])
@@ -67,6 +67,151 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         settings.lineup.setSwitchable(.gemini, false)
         let reloaded = AppSettings(defaults: store, microphoneProbe: { MicrophoneMigrationProbe() })
         #expect(!reloaded.lineup.isSwitchable(.gemini))
+    }
+
+    /// No level stored: Gemini thinks at Medium. A level it doesn't take (Minimal, a newer build's) leaves its Medium;
+    /// the old per-model key from an older build goes. A level picked sticks.
+    @Test func levelsDefaultToMediumAndReadLeniently() throws {
+        let fresh = AppSettings(defaults: defaults(), microphoneProbe: { MicrophoneMigrationProbe() })
+        #expect(fresh.reasoningEffort(for: .geminiFlash) == .medium)
+        #expect(fresh.reasoningEffort(for: .parakeet) == nil)
+
+        let store = defaults()
+        store.set(try JSONEncoder().encode(["geminiFlash": "minimal", "parakeet": "low", "geminiFuture": "high"]),
+                  forKey: SettingsKey.geminiReasoningEfforts.defaultsKey)
+        store.set(try JSONEncoder().encode(["geminiFlash": "low"]), forKey: SettingsKey.reasoningEfforts.defaultsKey)
+        let settings = AppSettings(defaults: store, microphoneProbe: { MicrophoneMigrationProbe() })
+        #expect(settings.reasoningEffort(for: .geminiFlash) == .medium)
+        #expect(settings.reasoningEffort(for: .parakeet) == nil)
+        #expect(store.object(forKey: SettingsKey.reasoningEfforts.defaultsKey) == nil)
+        settings.reasoningEfforts[.geminiFlash] = .minimal
+        settings.reasoningEfforts[.geminiFlash] = .off
+        #expect(settings.reasoningEffort(for: .geminiFlash) == .medium, "levels it doesn't take are refused")
+        settings.reasoningEfforts[.geminiFlash] = .high
+        #expect(AppSettings(defaults: store, microphoneProbe: { MicrophoneMigrationProbe() })
+                    .reasoningEffort(for: .geminiFlash) == .high)
+    }
+}
+
+// MARK: - The level on the wire
+
+@MainActor
+@Suite struct ReasoningLevelRequestTests {
+    private func service(_ replies: [StubURLProtocol.Reply]) -> (TranscriptionService, String) {
+        let (client, host) = StubURLProtocol.client(replies)
+        let account = OpenRouterAccount(keyStore: .inMemory("sk-or-v1-test"), client: client, debounce: .zero)
+        return (TranscriptionService(models: ModelStore.preview(states: [:]), account: account, client: client), host)
+    }
+
+    private let speech = Recording(samples: [Float](repeating: 0.1, count: 16_000))
+
+    private func json(_ body: Data) throws -> [String: Any] {
+        try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+    }
+
+    /// Gemini goes with its slug, at the level picked for it, pinned to Google AI Studio, with its stall timeout;
+    /// High thinks longer, so it gets more room.
+    @Test func geminiGoesWithItsSlugAndItsLevel() async throws {
+        let (service, host) = service([.stream(SSE.answer("<transcript>High.</transcript>")),
+                                       .stream(SSE.answer("<transcript>Low.</transcript>"))])
+        var level = ReasoningEffort.high
+        service.reasoningEffort = { $0 == .geminiFlash ? level : nil }
+        let high = try await service.transcribe(speech, engine: .geminiFlash)
+        level = .low
+        let low = try await service.transcribe(speech, engine: .geminiFlash)
+        #expect(high.text == "High." && high.reasoningEffort == .high && high.engine == .geminiFlash)
+        #expect(low.text == "Low." && low.reasoningEffort == .low)
+        let bodies = try StubURLProtocol.registry.bodies(for: host).map(json)
+        #expect(bodies.map { $0["model"] as? String } == ["google/gemini-3.8-flash", "google/gemini-3.8-flash"])
+        #expect(bodies.map { ($0["reasoning"] as? [String: Any])?["effort"] as? String } == ["high", "low"])
+        #expect(bodies.allSatisfy { ($0["provider"] as? [String: Any])?["only"] as? [String] == ["google-ai-studio"] })
+        #expect(bodies.map { $0["max_tokens"] as? Int } == [32_768 + 16_384, 32_768], "high thinks longer")
+        #expect(StubURLProtocol.registry.requests(for: host).map(\.timeoutInterval) == [120, 120])
+        #expect(high.metadata().modelID == "google/gemini-3.8-flash" && high.metadata().reasoningEffort == .high)
+    }
+
+    /// `--effort` (or any caller's own level) wins over the one picked.
+    @Test func anExplicitLevelWins() async throws {
+        let (service, host) = service([.stream(SSE.answer("<transcript>x</transcript>"))])
+        service.reasoningEffort = { _ in .high }
+        _ = try await service.transcribe(speech, engine: .geminiFlash, effort: .low)
+        let body = try json(try #require(StubURLProtocol.registry.bodies(for: host).first))
+        #expect((body["reasoning"] as? [String: Any])?["effort"] as? String == "low")
+    }
+
+    /// Without the app's settings (the CLI) Gemini thinks at its default, Medium.
+    @Test func theDefaultLevelIsMedium() {
+        let (service, _) = service([])
+        #expect(service.reasoningEffort(.geminiFlash) == .medium)
+        #expect(service.reasoningEffort(.parakeet) == nil)
+    }
+
+    /// A selection goes at the level it's asked for, Medium by default.
+    @Test func polishSelectionGoesAtTheModelsLevel() throws {
+        let route = try #require(PolishSelectionModel.geminiFlash.route(effort: .high))
+        #expect(route.model == "google/gemini-3.8-flash" && route.effort == "high" && route.streamsReasoning)
+        #expect(PolishSelectionModel.geminiFlash.route?.effort == "medium")
+        #expect(PolishSelectionModel.gpt6Luna.route(effort: .high) == nil)
+    }
+
+    @Test func aTranscriptionsBudgetGrowsAtHigh() {
+        #expect(OpenRouterClient.transcriptionMaxTokens(audioSeconds: 60, effort: .low) == 32_768)
+        #expect(OpenRouterClient.transcriptionMaxTokens(audioSeconds: 60, effort: .medium) == 32_768)
+        #expect(OpenRouterClient.transcriptionMaxTokens(audioSeconds: 60, effort: .high) == 49_152)
+        #expect(OpenRouterClient.transcriptionMaxTokens(audioSeconds: 3_600, effort: .high) == 65_536)
+    }
+}
+
+// MARK: - Calls
+
+@MainActor
+@Suite struct CallModelRequestTests {
+    private func json(_ body: Data) throws -> [String: Any] {
+        try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+    }
+
+    /// The audio request and the summary's text request go to Gemini 3.8 Flash at the level calls go at, read as each
+    /// request goes.
+    @Test func bothRequestsFollowTheCallModel() async throws {
+        let (client, host) = StubURLProtocol.client([.stream(SSE.answer("[00:00-00:02] Anna: Hi.")),
+                                                     .stream(SSE.answer("<summary>Hi.</summary>")),
+                                                     .stream(SSE.answer("[00:00-00:02] Anna: Hi."))])
+        let account = OpenRouterAccount(keyStore: .inMemory("sk-or-v1-test"), client: client, debounce: .zero)
+        let settings = AppSettings.inMemory()
+        settings.reasoningEfforts[.geminiFlash] = .high
+        let send = CallTranscriber.openRouter(client: client, account: account, model: { settings.callModel })
+        let sendText = CallTranscriber.openRouterText(client: client, account: account, model: { settings.callModel })
+        _ = try await send(Data([1, 2]), "Transcribe the call.", 2, nil)
+        _ = try await sendText("Anna: Hi.", "Sum it up.")
+        settings.reasoningEfforts[.geminiFlash] = .low
+        _ = try await send(Data([1, 2]), "Transcribe the call.", 2, nil)
+        let bodies = try StubURLProtocol.registry.bodies(for: host).map(json)
+        #expect(bodies.map { $0["model"] as? String } == Array(repeating: "google/gemini-3.8-flash", count: 3))
+        #expect(bodies.map { ($0["reasoning"] as? [String: Any])?["effort"] as? String } == ["high", "high", "low"])
+        #expect(StubURLProtocol.registry.requests(for: host).first?.timeoutInterval == 120)
+    }
+
+    /// Through the user's endpoint too: the same slug, which it takes without "google/".
+    @Test func theProxyGetsTheCallModel() async throws {
+        let (proxy, proxyHost) = ProxyFixture.proxy([.stream(SSE.answer("[00:00-00:02] Sam: Hi.")),
+                                                     .stream(SSE.answer("Summary."))])
+        let (client, openRouterHost) = StubURLProtocol.client([])
+        let account = OpenRouterAccount(keyStore: .inMemory(nil), client: client, debounce: .zero)
+        let model = CallModel(engine: .geminiFlash, effort: .low)
+        let send = CallTranscriber.openRouter(client: client, account: account, proxy: proxy, model: { model })
+        let sendText = CallTranscriber.openRouterText(client: client, account: account, proxy: proxy, model: { model })
+        _ = try await send(Data([1, 2]), "The call.", 2, nil)
+        _ = try await sendText("Sam: Hi.", "Sum it up.")
+        let bodies = try StubURLProtocol.registry.bodies(for: proxyHost).map(json)
+        #expect(bodies.map { $0["model"] as? String } == ["google/gemini-3.8-flash", "google/gemini-3.8-flash"])
+        #expect(bodies.map { ($0["reasoning"] as? [String: Any])?["effort"] as? String } == ["low", "low"])
+        #expect(StubURLProtocol.registry.requests(for: openRouterHost).isEmpty)
+    }
+
+    @Test func theDefaultCallModelIsFlashAtMedium() {
+        #expect(CallModel.default == CallModel(engine: .geminiFlash, effort: .medium))
+        #expect(AppSettings.inMemory().callModel == .default)
+        #expect(CallModel.default.modelID == "google/gemini-3.8-flash")
     }
 }
 
@@ -418,7 +563,7 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         }
         h.controller.insertOverride = { _ in .pasted }
         let r = H.recording()
-        h.controller.enqueue(r, engine: .geminiArgon)
+        h.controller.enqueue(r, engine: .geminiFlash)
         try await waitUntil { h.history.entry(id: r.id)?.provider != nil }
         let meta = try #require(h.history.entry(id: r.id)?.currentVersion?.metadata)
         #expect(meta.provider == "Together" && meta.latency == 0.4 && meta.generationTime == 0.35)

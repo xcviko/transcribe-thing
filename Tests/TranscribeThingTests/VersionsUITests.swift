@@ -29,8 +29,7 @@ import Testing
     /// Clean-up is gone: no transcript offers it, whatever Parakeet texts it has, and one GPT-6 Luna already tidied
     /// keeps that version to switch to.
     @Test func nothingOffersACleanUp() {
-        #expect(menu(transcript()).actions.map(\.kind) == [.transcription(.geminiFlash), .transcription(.geminiArgon)]
-                + TranscriptVersionKind.rewrites)
+        #expect(menu(transcript()).actions.map(\.kind) == [.transcription(.geminiFlash)] + TranscriptVersionKind.rewrites)
         var entry = transcript(.parakeet)
         entry.addVersion(TranscriptVersion(text: "cloud", engine: .parakeetCloud))
         entry.addVersion(TranscriptVersion(kind: .cleanup(of: .parakeet, by: .gpt6Luna), text: "Hello.",
@@ -50,17 +49,15 @@ import Testing
         let proMenu = menu(pro)
         #expect(proMenu.versions.map(\.kind) == [.transcription(.geminiPro)])
         #expect(proMenu.versions.map(\.title) == ["Gemini 3.1 Pro"])
-        #expect(proMenu.actions.map(\.kind) == [.transcription(.parakeet), .transcription(.geminiFlash),
-                                                .transcription(.geminiArgon)] + TranscriptVersionKind.rewrites,
-                "Pro's text isn't cleaned up either")
+        #expect(proMenu.actions.map(\.kind) == [.transcription(.parakeet), .transcription(.geminiFlash)]
+                + TranscriptVersionKind.rewrites, "Pro's text isn't cleaned up either")
 
         var tidied = transcript()
         tidied.addVersion(TranscriptVersion(kind: .cleanup(of: .parakeet, by: .geminiFlashLite), text: "Hello.",
                                             metadata: TranscriptMetadata()))
         let tidiedMenu = menu(tidied)
         #expect(tidiedMenu.versions.map(\.title) == ["Parakeet v3", "Parakeet v3 + Clean-up by Flash Lite"])
-        #expect(tidiedMenu.actions.map(\.kind) == [.transcription(.geminiFlash), .transcription(.geminiArgon)]
-                + TranscriptVersionKind.rewrites)
+        #expect(tidiedMenu.actions.map(\.kind) == [.transcription(.geminiFlash)] + TranscriptVersionKind.rewrites)
 
         var failed = TranscriptEntry(text: "", engine: .geminiPro, status: .failed, audioDuration: 20, voicedSeconds: 10,
                                      audioFileName: "a.wav")

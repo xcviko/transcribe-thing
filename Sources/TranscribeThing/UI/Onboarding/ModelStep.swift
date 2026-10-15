@@ -9,8 +9,9 @@ struct ModelStep: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             StepHeader(title: "Get \(EngineID.parakeet.modelName) on your Mac",
-                       subtitle: "It transcribes on your Mac, private and offline, with no key. Gemini models, "
-                           + "which hear the audio in the cloud with your own key, are in Settings → Models.",
+                       subtitle: "It transcribes on your Mac, private and offline, with no key. "
+                           + "\(EngineID.geminiFlash.modelName), which hears the audio in the cloud with your own key, "
+                           + "is in Settings → Models.",
                        titleSize: 28)
                 .padding(.bottom, 16)
 
@@ -52,17 +53,13 @@ private struct SwitchModelNote: View {
 }
 
 private extension EngineID {
-    /// The local card's spec strip: what running on this Mac gets you.
+    /// The local card's spec strip: what running on this Mac gets you. Only the local model has a card.
     var localFacts: [LocalFact] {
-        switch self {
-        case .parakeet:
-            [LocalFact(symbol: "bolt.fill", title: "Fastest", detail: "No upload, no waiting"),
-             LocalFact(symbol: "globe", title: "25 languages", detail: "European, auto-detected"),
-             LocalFact(symbol: "lock.fill", title: "Private", detail: "Audio stays on this Mac"),
-             LocalFact(symbol: "wifi.slash", title: "Offline", detail: "No internet, no key")]
-        case .parakeetCloud, .geminiFlash, .geminiArgon, .geminiPro:
-            []
-        }
+        guard self == .parakeet else { return [] }
+        return [LocalFact(symbol: "bolt.fill", title: "Fastest", detail: "No upload, no waiting"),
+                LocalFact(symbol: "globe", title: "25 languages", detail: "European, auto-detected"),
+                LocalFact(symbol: "lock.fill", title: "Private", detail: "Audio stays on this Mac"),
+                LocalFact(symbol: "wifi.slash", title: "Offline", detail: "No internet, no key")]
     }
 }
 

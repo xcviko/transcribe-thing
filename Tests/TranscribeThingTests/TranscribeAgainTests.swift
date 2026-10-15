@@ -396,12 +396,10 @@ import Testing
         let m = menu(transcript(.parakeet))
         #expect(m.title == "Versions" && !m.isRetry && m.runningTitle == nil)
         #expect(m.versions == [VersionsMenu.Version(kind: .transcription(.parakeet), summary: "0.4 s", isCurrent: true)])
-        #expect(m.actions.map(\.kind) == [.transcription(.geminiFlash), .transcription(.geminiArgon)]
-                + TranscriptVersionKind.rewrites)
+        #expect(m.actions.map(\.kind) == [.transcription(.geminiFlash)] + TranscriptVersionKind.rewrites)
         #expect(m.actions.allSatisfy { $0.isEnabled })
-        #expect(m.actions.map(\.title) == ["Gemini 3.8 Flash", "Gemini 4 Argon", "Polish with Gemini 3.8 Flash",
-                                           "Polish with Gemini 4 Argon", "Translate with Gemini 3.8 Flash",
-                                           "Translate with Gemini 4 Argon"])
+        #expect(m.actions.map(\.title) == ["Gemini 3.8 Flash", "Polish with Gemini 3.8 Flash",
+                                           "Translate with Gemini 3.8 Flash"])
     }
 
     @Test func aModelAlreadyUsedIsAVersionNotAnAction() {
@@ -413,8 +411,7 @@ import Testing
         #expect(m.versions.map(\.kind) == [.transcription(.parakeet), .transcription(.geminiFlash), flashLite])
         #expect(m.versions.map(\.isCurrent) == [false, true, false])
         #expect(m.versions[1].summary == "3.0 s · $0.002")
-        #expect(m.actions.map(\.kind) == [.transcription(.geminiArgon)] + TranscriptVersionKind.rewrites,
-                "no clean-up, ever")
+        #expect(m.actions.map(\.kind) == TranscriptVersionKind.rewrites, "no clean-up, ever")
     }
 
     /// Old clean-ups stay versions to switch to; nothing offers another.
@@ -453,11 +450,9 @@ import Testing
 
     @Test func withoutAKeyCloudActionsSaySo() {
         let m = menu(transcript(.parakeet), key: .missing)
-        #expect(m.actions.map(\.title) == ["Gemini 3.8 Flash · Needs key", "Gemini 4 Argon · Needs key",
+        #expect(m.actions.map(\.title) == ["Gemini 3.8 Flash · Needs key",
                                            "Polish with Gemini 3.8 Flash · Needs key",
-                                           "Polish with Gemini 4 Argon · Needs key",
-                                           "Translate with Gemini 3.8 Flash · Needs key",
-                                           "Translate with Gemini 4 Argon · Needs key"])
+                                           "Translate with Gemini 3.8 Flash · Needs key"])
         #expect(action(menu(transcript(.parakeetCloud), key: .invalid("401")), .transcription(.geminiFlash))?.title
                 == "Gemini 3.8 Flash · Key rejected")
         #expect(action(menu(transcript(.parakeetCloud), key: .missing), .transcription(.parakeet))?.isEnabled == true)
@@ -472,8 +467,9 @@ import Testing
         entry.addVersion(TranscriptVersion(text: "g", engine: .geminiFlash))
         let m = menu(entry)
         #expect(m.versions.count == 2)
-        #expect(action(m, .transcription(.geminiArgon))?.blocker == .recordingGone)
-        #expect(action(m, .transcription(.geminiArgon))?.title == "Gemini 4 Argon · Recording no longer kept")
+        #expect(action(m, .translation(polished: false))?.blocker == .recordingGone)
+        #expect(action(m, .translation(polished: false))?.title
+                == "Translate with Gemini 3.8 Flash · Recording no longer kept")
         #expect(action(m, .polish())?.blocker == .recordingGone)
     }
 
@@ -546,7 +542,7 @@ import Testing
         h.controller.retry(original, with: .geminiFlash)
         #expect(h.controller.runningVersions[id] == .transcription(.geminiFlash))
         // One at a time: a second request while it runs is ignored.
-        h.controller.retry(original, with: .geminiArgon)
+        h.controller.makeVersion(.polish(), of: original)
         #expect(h.controller.homeWork == [id: .transcription(.geminiFlash)])
         try await waitUntil { h.history.entry(id: id)?.engine == .geminiFlash }
         #expect(h.controller.runningVersions.isEmpty && h.controller.homeWork.isEmpty)
@@ -637,12 +633,12 @@ import Testing
         var pasted: [String] = []
         h.controller.transcribeOverride = { _, engine in
             runs.append(engine)
-            if engine == .geminiArgon { throw AppError.timeout(engine) }
+            if runs.count == 1 { throw AppError.timeout(engine) }
             return TranscriptResult(text: "text by \(engine.rawValue)", engine: engine, processingTime: 1)
         }
         h.controller.insertOverride = { text in pasted.append(text); return .pasted }
         let r = H.recording()
-        h.controller.enqueue(r, engine: .geminiArgon)
+        h.controller.enqueue(r, engine: .geminiFlash)
         try await waitUntil { h.controller.machine.activeJobs == 0 && h.toasts.notices.contains { $0.recordingID == r.id } }
         let failure = try #require(h.toasts.notices.first { $0.recordingID == r.id })
         let retry = try #require(failure.actions.first { $0.kind == .retry })
@@ -654,7 +650,7 @@ import Testing
         h.controller.perform(retry, from: failure)
         try await Task.sleep(for: .milliseconds(100))
         #expect(h.controller.machine.activeJobs == 0 && h.controller.runningVersions.isEmpty)
-        #expect(runs == [.geminiArgon, .geminiFlash])
+        #expect(runs == [.geminiFlash, .geminiFlash])
         #expect(pasted.isEmpty)
         let entry = try #require(h.history.entry(id: r.id))
         #expect(entry.versions.map(\.kind) == [.transcription(.geminiFlash)])
@@ -736,7 +732,7 @@ import Testing
             return TranscriptResult(text: "late", engine: engine, processingTime: 1)
         }
         for entryID in [id, failed.id] {
-            h.controller.retry(try #require(h.history.entry(id: entryID)), with: .geminiArgon)
+            h.controller.retry(try #require(h.history.entry(id: entryID)), with: .geminiFlash)
             h.history.delete(entryID)
         }
         try await waitUntil { h.controller.runningVersions.isEmpty }
