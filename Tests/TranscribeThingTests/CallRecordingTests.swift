@@ -1377,6 +1377,43 @@ private func heldVoice(seconds: Double, gain: Double) -> [Float] {
         #expect(firstCall.service == .telemost && secondCall.service == .telemost)
     }
 
+    /// The case of 2026-10-15: Start Call Recording on a Telemost call the app had noticed, then the person left its
+    /// tab and the detector took it for a call in another tab. Asked for from the menu bar, it records on, one call,
+    /// until Stop Call Recording.
+    @Test func aCallStartedFromTheMenuBarEndsOnlyWithStop() async throws {
+        let rig = Rig()
+        let telemost = "Идёт звонок · Яндекс Телемост"
+        rig.tabs = [telemost + " - Camera and microphone recording"]
+        rig.tabIDs = [1]
+        rig.app("com.google.Chrome", mic: true, sound: true)
+        rig.poll([0, 1, 2, 3])
+        guard case .suspected(let noticed) = rig.monitor.state else { Issue.record("not noticed"); return }
+        rig.monitor.startManual()
+        guard case .recording(let kept) = rig.monitor.state, kept.id == noticed.id else { Issue.record("not kept"); return }
+        try #require(rig.sources.first?[.mic]).push(speechLike(seconds: 80), at: 0)
+        rig.poll(stride(from: 4.0, through: 29, by: 1))
+        // Another tab records, and the first one no longer says it does.
+        rig.tabs = [telemost, telemost + " - Microphone recording"]
+        rig.tabIDs = [1, 2]
+        rig.poll(stride(from: 30.0, through: 50, by: 1))
+        #expect(rig.monitor.current?.id == kept.id && rig.sources.count == 1, "still the one recording")
+        // The detector hears nothing for its minute: still recording.
+        rig.app("com.google.Chrome", mic: false, sound: false)
+        rig.poll(stride(from: 51.0, through: 130, by: 1))
+        guard case .recording(let still) = rig.monitor.state, still.id == kept.id else {
+            Issue.record("ended without Stop")
+            return
+        }
+        #expect(rig.asked.isEmpty)
+        rig.monitor.stop(keep: true)
+        await rig.monitor.waitForEndings()
+        await rig.transcriber.waitUntilIdle()
+        #expect(rig.store.calls.count == 1)
+        let call = try #require(rig.store.call(id: kept.id))
+        #expect(call.duration > 79, "all 80 s the mic had: to Stop, not cut where the detector thought it ended (51 s)")
+        #expect(call.service == .telemost)
+    }
+
     /// The minute of silence that tells a hang-up from a pause isn't the call: the room after it isn't kept.
     @Test func aCallIsKeptToItsEndNotTheMinuteAfter() async throws {
         let rig = Rig(mode: .automatic)
