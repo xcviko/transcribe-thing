@@ -20,7 +20,12 @@ final class ToastCenter {
     private(set) var countdowns: [UUID: ToastCountdown] = [:]
     /// True while the pointer is over the toast stack.
     private(set) var isPaused = false
-    /// What ↩ and Esc do for Polish Selection's cards right now, which their footer says.
+    /// A dictation is recording: the countdowns of notices that wait for it (`Notice.waitsForDictation`) stand still,
+    /// and run on from where they were once it's over.
+    var isDictating = false {
+        didSet { if isDictating != oldValue { retime() } }
+    }
+    /// What ↩ and Esc do for the cards of text to paste right now.
     var cardKeys = CardKeys()
 
     @ObservationIgnored var onAction: ((Notice, NoticeAction) -> Void)?
@@ -65,7 +70,7 @@ final class ToastCenter {
             notices.append(notice)
             trimToCapacity()
         }
-        countdowns[notice.id] = ToastCountdown(lifetime: notice.lifetime, now: now, paused: isPaused)
+        countdowns[notice.id] = ToastCountdown(lifetime: notice.lifetime, now: now, paused: isHeld(notice))
         if let sound = notice.sound { onSound?(sound) }
         rescheduleExpiry()
     }
@@ -113,10 +118,23 @@ final class ToastCenter {
     /// Hovering the stack pauses every countdown; leaving resumes with a short grace.
     func setPaused(_ paused: Bool) {
         guard paused != isPaused else { return }
-        let now = clock()
         isPaused = paused
-        for (id, countdown) in countdowns {
-            countdowns[id] = paused ? countdown.paused(at: now) : countdown.resumed(at: now, grace: Self.resumeGrace)
+        retime()
+    }
+
+    /// The pointer over the stack holds every countdown; a dictation recording, those of the notices that wait for it.
+    private func isHeld(_ notice: Notice) -> Bool {
+        isPaused || isDictating && notice.waitsForDictation
+    }
+
+    /// Stops or restarts each countdown for what holds it now (`isHeld`). One that restarts keeps at least
+    /// `resumeGrace`, so it doesn't vanish the moment the pointer leaves or the dictation ends.
+    private func retime() {
+        let now = clock()
+        for notice in notices {
+            guard let countdown = countdowns[notice.id] else { continue }
+            countdowns[notice.id] = isHeld(notice) ? countdown.paused(at: now)
+                : countdown.resumed(at: now, grace: Self.resumeGrace)
         }
         rescheduleExpiry()
     }
@@ -143,17 +161,17 @@ final class ToastCenter {
     }
 
     private func extend(_ id: UUID, toAtLeast seconds: TimeInterval) {
-        guard let countdown = countdowns[id] else { return }
+        guard let countdown = countdowns[id], let notice = notices.first(where: { $0.id == id }) else { return }
         let now = clock()
         if countdown.remaining(at: now) < seconds {
             countdowns[id] = ToastCountdown(total: max(countdown.total, seconds), remaining: seconds,
-                                            resumedAt: isPaused ? nil : now)
+                                            resumedAt: isHeld(notice) ? nil : now)
             rescheduleExpiry()
         }
     }
 
-    /// Keeps two: drops the oldest timed notice first, so sticky ones (permissions, missing mic) survive, and
-    /// Polish Selection's answers (to compare) go last.
+    /// Keeps two: drops the oldest timed notice first, so sticky ones (permissions, missing mic) survive, and the
+    /// cards of text to paste (Polish Selection's answers, earlier dictations) go last.
     private func trimToCapacity() {
         while notices.count > Self.maxVisible {
             let candidates = notices.dropLast()
@@ -224,8 +242,9 @@ struct ToastCountdown: Equatable, Sendable {
     }
 }
 
-/// What the keys do for Polish Selection's cards: ↩ pastes the only card, until an answer is copied and while no
-/// dictation records; Esc closes them while no dictation is busy (then it cancels the dictation).
+/// What the keys do for the cards of text to paste (Polish Selection's, an earlier dictation's): ↩ pastes the only
+/// card, until one is copied and while no dictation records; Esc closes them while no dictation is busy (then it
+/// cancels the dictation).
 struct CardKeys: Equatable, Sendable {
     var returnPastes = true
     var escCloses = true

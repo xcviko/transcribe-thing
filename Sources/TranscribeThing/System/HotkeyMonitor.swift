@@ -59,7 +59,7 @@ final class HotkeyMonitor {
     var isRecording = false {
         didSet { if isRecording != oldValue { pushConfig() } }
     }
-    /// Polish Selection's cards are up: ↩ is theirs (it pastes the one card; with two it couldn't tell which, and does
+    /// Cards of text to paste are up (Polish Selection's, an earlier dictation's): ↩ is theirs (it pastes the one card; with two it couldn't tell which, and does
     /// nothing), Esc closes them.
     var cardPaste = false {
         didSet { if cardPaste != oldValue { pushConfig() } }

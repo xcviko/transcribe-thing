@@ -141,6 +141,41 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(center.notices.count == 1)
     }
 
+    /// A notice that waits for a dictation (an earlier dictation's card) runs its countdown only between recordings:
+    /// whole until the one going on is over, then standing still with what it has left through the next one. Others
+    /// run as always.
+    @Test func noticesThatWaitForADictationRunOnlyBetweenRecordings() {
+        let (center, clock) = makeCenter()
+        center.isDictating = true
+        var waiting = notice("card", lifetime: .seconds(4))
+        waiting.waitsForDictation = true
+        center.post(waiting)
+        center.post(notice("other", lifetime: .seconds(4)))
+        clock.advance(10)
+        center.expire(now: clock.now)
+        #expect(center.notices.map(\.dedupeKey) == ["card"], "the other one ran out meanwhile")
+        #expect(center.fractionRemaining(for: waiting.id, at: clock.now) == 1)
+
+        center.isDictating = false
+        clock.advance(1)
+        center.expire(now: clock.now)
+        #expect(center.notices.count == 1)
+        center.isDictating = true
+        clock.advance(30)
+        center.expire(now: clock.now)
+        #expect(center.notices.count == 1)
+        #expect(abs((center.fractionRemaining(for: waiting.id, at: clock.now) ?? 0) - 0.5) < 0.001)
+
+        // It runs on with at least the hover's grace.
+        center.isDictating = false
+        clock.advance(1.4)
+        center.expire(now: clock.now)
+        #expect(center.notices.count == 1)
+        clock.advance(0.2)
+        center.expire(now: clock.now)
+        #expect(center.notices.isEmpty)
+    }
+
     @Test func playsTheNoticeSound() {
         let (center, _) = makeCenter()
         var played: [SoundEffect] = []
