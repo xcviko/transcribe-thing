@@ -84,8 +84,8 @@ struct Notice: Identifiable, Equatable, Sendable {
     /// A card of text to paste whose keys are ↩ and Esc: Polish Selection's answer, an earlier dictation's text
     /// (`DictationController.pasteCard`).
     var takesCardKeys = false
-    /// Its countdown stands still while a dictation records (`ToastCenter.isDictating`) and runs once it's over: an
-    /// earlier dictation's card stays up while the user dictates the next one.
+    /// Its countdown stands still while a dictation records (`ToastCenter.isDictating`) and runs once it's over: a card
+    /// of text to paste stays up while the user dictates.
     var waitsForDictation = false
 
     init(
