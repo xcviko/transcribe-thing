@@ -40,10 +40,10 @@ enum CloudHedge: Sendable, Equatable {
     /// `work` twice at once; the first answer comes back as soon as it's there, with the other request's generation in
     /// `otherGenerationIDs` when OpenRouter had named it. A request that fails leaves the other to answer; when both
     /// fail, the first failure is thrown. A weak answer (no text at all, or text without the tags the prompt asked
-    /// for) waits for the other one: Gemini 4 Argon sometimes comes back with nothing or with stray tokens ("!#",
-    /// its own thoughts) for audio with speech in it, and the other request often has the words; when both are weak,
-    /// or the other fails, the weak one is the answer. `progress` hears the further of the two streams, so the pill's count never
-    /// goes back. Cancelling the caller before an answer cancels both. `measured` hears both answers once the other is
+    /// for) waits for the other one: a model can come back with nothing or with stray tokens ("!#", its own
+    /// thoughts) for audio with speech in it, and the other request often has the words; when both are weak, or the
+    /// other fails, the weak one is the answer. `progress` hears the further of the two streams, so the pill's count
+    /// never goes back. Cancelling the caller before an answer cancels both. `measured` hears both answers once the other is
     /// in too (`.measure` only).
     static func run(_ mode: CloudHedge, _ kind: Kind, engine: EngineID, modelName: String,
                     progress: (@Sendable (ChatStreamProgress) -> Void)?,

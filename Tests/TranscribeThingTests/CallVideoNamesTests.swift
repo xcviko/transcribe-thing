@@ -222,7 +222,7 @@ private func sure(_ name: String?) -> CallVideoNames.Guess { CallVideoNames.Gues
     /// uri (looked at agentically) and the prompt, to the Calls model at its level; the answer and its cost back.
     @Test func theStepUploadsThenAsks() async throws {
         let settings = AppSettings.inMemory()
-        settings.callEngine = .geminiArgon
+        settings.reasoningEfforts[.geminiFlash] = .high
         let (proxy, host) = ProxyFixture.proxy(settings: settings)
         let answer = #"{"Speaker 1": {"name": "Pablo", "confidence": "high"}}"#
         StubURLProtocol.registry.enqueue([
@@ -243,7 +243,8 @@ private func sure(_ name: String?) -> CallVideoNames.Guess { CallVideoNames.Gues
         #expect(requests[2].url?.absoluteString == "https://\(host)/api/v1/chat/completions")
         #expect(requests[2].value(forHTTPHeaderField: "Authorization") == "Bearer \(ProxyFixture.key)")
         let body = ProxyFixture.json(StubURLProtocol.registry.bodies(for: host)[2])
-        #expect(body["model"] as? String == "google/gemini-4-argon")
+        #expect(body["model"] as? String == "google/gemini-3.8-flash")
+        #expect((body["reasoning"] as? [String: Any])?["effort"] as? String == "high")
         #expect(body["provider"] == nil && body["stream"] as? Bool == true)
         let messages = try #require(body["messages"] as? [[String: Any]])
         #expect(messages.count == 1 && messages[0]["role"] as? String == "user")
@@ -265,7 +266,6 @@ private func sure(_ name: String?) -> CallVideoNames.Guess { CallVideoNames.Gues
     /// An answer cut off by its token limit comes back as it is, with what it cost: it was paid for.
     @Test func aCutOffAnswerComesBackWithItsCost() async throws {
         let settings = AppSettings.inMemory()
-        settings.callEngine = .geminiArgon
         let (proxy, host) = ProxyFixture.proxy(settings: settings)
         StubURLProtocol.registry.enqueue([
             Self.started(host), Self.uploaded,

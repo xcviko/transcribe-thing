@@ -1,20 +1,20 @@
 import Foundation
 
-/// The Gemini model a call's requests go to (`AppSettings.callEngine`), and the level it thinks at
+/// The Gemini model a call's requests go to (Gemini 3.8 Flash, `AppSettings.callModel`), and the level it thinks at
 /// (`AppSettings.reasoningEfforts`): both the transcript's audio requests and the summary's text one.
 struct CallModel: Equatable, Sendable {
     var engine: EngineID
     var effort: ReasoningEffort
 
-    /// Gemini 3.8 Flash at medium: what calls use until another is picked.
+    /// Gemini 3.8 Flash at medium: what calls use until another level is picked.
     static let `default` = CallModel(engine: .geminiFlash, effort: .medium)
 
-    /// The model's OpenRouter slug ("google/gemini-4-argon"); the user's endpoint takes the same.
+    /// The model's OpenRouter slug ("google/gemini-3.8-flash"); the user's endpoint takes the same.
     var modelID: String { engine.openRouterModelID ?? "google/gemini-3.8-flash" }
 }
 
-/// Transcribes a recorded call with the Gemini model picked for calls (Models → Calls: Gemini 3.8 Flash or Gemini 4
-/// Argon, at the level picked for it, `CallModel`), one request per chunk. The two tracks, the mic's and the other
+/// Transcribes a recorded call with Gemini 3.8 Flash, at the Reasoning level picked for it in Models (`CallModel`),
+/// one request per chunk. The two tracks, the mic's and the other
 /// side's, are mixed into one mono track (`CallMix`), the mic silent while the person was muted; the tracks stay apart on
 /// disk, for the player. The prompt (`CallPrompts.call`) names the person ("Sam", or "Me"), says when they were muted,
 /// and asks for every voice: theirs, the other participants', anyone in the room with them ("Nearby 1"). The answer is a
@@ -102,7 +102,7 @@ final class CallTranscriber {
         self.videoNames = videoNames
     }
 
-    /// The live request: the model picked for calls (`model`, read as each request goes: `AppSettings.callModel`) at
+    /// The live request: the model calls go to (`model`, read as each request goes: `AppSettings.callModel`) at
     /// its level, through the Vertex proxy while it routes Gemini (`VertexProxyAccount.routesGemini`, decided for each
     /// request), else through OpenRouter with the account's key. A proxy that's set up never hands a request to
     /// OpenRouter. The answer comes back as the model wrote it (no `<transcript>` tags are asked for or taken off).
@@ -125,7 +125,7 @@ final class CallTranscriber {
         }
     }
 
-    /// The summary's live request: the transcript as text to the model picked for calls at its level, the same way a
+    /// The summary's live request: the transcript as text to the model calls go to at its level, the same way a
     /// call's audio goes (`openRouter`). No audio, so it costs a fraction of the transcript.
     static func openRouterText(client: OpenRouterClient, account: OpenRouterAccount, proxy: VertexProxyAccount? = nil,
                                model: @escaping @MainActor () -> CallModel = { .default }) -> SendText {
@@ -146,8 +146,8 @@ final class CallTranscriber {
     }
 
     /// The names step's live request, through the person's endpoint only (`VertexProxyAccount.routesGemini`, set up):
-    /// the video up through its Files API (`OpenRouterClient.uploadVideo`), then the question to the model picked for
-    /// calls at its level (`askAboutVideo`). Without the endpoint the step doesn't run (`VideoNames.isAvailable`), and
+    /// the video up through its Files API (`OpenRouterClient.uploadVideo`), then the question to the model calls go to
+    /// at its level (`askAboutVideo`). Without the endpoint the step doesn't run (`VideoNames.isAvailable`), and
     /// a request that finds it gone by the time it goes fails rather than going to OpenRouter.
     static func endpointVideoNames(proxy: VertexProxyAccount,
                                    model: @escaping @MainActor () -> CallModel = { .default }) -> VideoNames {

@@ -44,18 +44,10 @@ final class AppSettings {
     /// Each model's color (Models): the pill wears the dictation's model's, and its tile, the sidebar chip and
     /// History's marks show it.
     var modelColors: ModelColors = .default { didSet { store.setJSON(modelColors, .modelColors) } }
-    /// The level each Gemini model thinks at (the Reasoning menu on its row in Models), Medium until picked. Every
-    /// request to the model goes at it (`reasoningEffort(for:)`).
+    /// The level Gemini thinks at (the Reasoning menu on its row in Models), Medium until picked. Every request to the
+    /// model goes at it (`reasoningEffort(for:)`), calls' too.
     var reasoningEfforts: ReasoningEfforts = .default {
         didSet { store.setJSON(reasoningEfforts, .geminiReasoningEfforts) }
-    }
-    /// The Gemini model that transcribes and sums up calls (Models → Calls): Gemini 3.8 Flash until another is picked.
-    /// Anything but a Gemini this build runs leaves Flash.
-    var callEngine: EngineID = .geminiFlash {
-        didSet {
-            if !EngineID.geminiEngines.contains(callEngine) { callEngine = .geminiFlash }
-            store.set(callEngine.rawValue, .callEngine)
-        }
     }
     /// How many times the pill has shown the Switch model hint (it shows at most `switchHintLimit` times).
     var switchHintShownCount: Int = 0 { didSet { store.set(switchHintShownCount, .switchHintShownCount) } }
@@ -259,15 +251,10 @@ final class AppSettings {
         reasoningEfforts[engine]
     }
 
-    /// The Gemini model that polishes and translates selected text: the one the user dictates with
-    /// (`PolishSelectionModel.chosen`).
-    var selectionModel: PolishSelectionModel {
-        PolishSelectionModel.chosen(main: lineup.main, handsFree: handsFreeChoice)
-    }
-
-    /// The model calls go to, and the level it thinks at, as both a call's requests send them (`CallTranscriber`).
+    /// The model calls go to, Gemini 3.8 Flash, and the level it thinks at (its Reasoning in Models), as both a call's
+    /// requests send them (`CallTranscriber`).
     var callModel: CallModel {
-        CallModel(engine: callEngine, effort: reasoningEffort(for: callEngine) ?? .medium)
+        CallModel(engine: .geminiFlash, effort: reasoningEffort(for: .geminiFlash) ?? .medium)
     }
 
     /// The lineup that stands for what an older build stored, or nil when it stored nothing the lineup replaces (the
@@ -286,17 +273,12 @@ final class AppSettings {
 
     /// The stored hands-free model, read leniently. The removed clean-up was Parakeet's text tidied, so it becomes
     /// Parakeet while Switch model reaches Parakeet (`ModelLineup` turns Parakeet on where clean-up was), and
-    /// otherwise no model of its own: the main model, which is then Parakeet or one Parakeet was switched off for.
+    /// otherwise no model of its own: the main model, which is then Parakeet or one Parakeet was switched off for. The
+    /// removed Gemini 4 Argon becomes Gemini 3.8 Flash (`ModelChoice.init(stored:)`), which `ModelLineup` turns on
+    /// where Argon was.
     nonisolated static func handsFreeModel(stored raw: String?, lineup: ModelLineup) -> ModelChoice? {
-        guard raw == ModelChoice.retiredCleanup else { return raw.flatMap(ModelChoice.init(rawValue:)) }
+        guard raw == ModelChoice.retiredCleanup else { return raw.flatMap(ModelChoice.init(stored:)) }
         return lineup.steps.contains(.parakeet) ? .parakeet : nil
-    }
-
-    /// A Pasting rule's models from before Gemini 4 Argon: Argon checked where Gemini 3.8 Flash is.
-    nonisolated static func withArgonLikeFlash(_ models: Set<ModelChoice>) -> Set<ModelChoice> {
-        var models = models
-        if models.contains(.gemini) { models.insert(.argon) } else { models.remove(.argon) }
-        return models
     }
 
     /// Onboarding had six steps (welcome, permissions, model, shortcuts, try it, done) until shortcuts and try it
@@ -339,8 +321,11 @@ final class AppSettings {
         store.remove(.switchCleanup)
         store.remove(.switchEngines)
         if let v: ModelColors = store.json(.modelColors) { modelColors = v }
+        // A level stored for a retired model (Gemini 4 Argon's) is dropped as it's read (`ReasoningEfforts`).
         if let v: ReasoningEfforts = store.json(.geminiReasoningEfforts) { reasoningEfforts = v }
-        if let v = store.string(.callEngine).flatMap(EngineID.init(rawValue:)) { callEngine = v }
+        // Calls go to Gemini 3.8 Flash, the only Gemini left: the model picked for them (Flash, or the removed Gemini 4
+        // Argon) has nothing left to say.
+        store.remove(.callEngine)
         if let v = store.int(.switchHintShownCount) { switchHintShownCount = max(0, v) }
         if let v = store.string(.pillMode).flatMap(PillMode.init(rawValue:)) { pillMode = v }
         // Older builds could hide the pill for an hour; that deadline has no meaning now.
@@ -402,13 +387,8 @@ final class AppSettings {
         }
         store.remove(.addSpaceAfterText)
         store.remove(.removeFinalPeriod)
-        // Gemini 4 Argon arrived after Pasting's rules were picked per model: it starts with Gemini 3.8 Flash's, once.
-        // Changed after that, it keeps its own.
-        if store.bool(.argonPastingAdded) != true {
-            modelsAddingSpace = Self.withArgonLikeFlash(modelsAddingSpace)
-            modelsRemovingFinalPeriod = Self.withArgonLikeFlash(modelsRemovingFinalPeriod)
-            store.set(true, .argonPastingAdded)
-        }
+        // Gemini 4 Argon, which was given Gemini 3.8 Flash's Pasting rules once, is gone: so is the mark of that.
+        store.remove(.argonPastingAdded)
         if let v: [String] = store.json(.modesAddingSpace) { modesAddingSpace = DictationMachine.Mode.read(v) }
         if let v: [String] = store.json(.modesRemovingFinalPeriod) {
             modesRemovingFinalPeriod = DictationMachine.Mode.read(v)
@@ -565,9 +545,10 @@ enum SettingsKey: String, CaseIterable {
     /// `vertexProxyEnabled` is the "Use for Gemini" switch it replaced: read once by the provider's migration, then kept
     /// in step with the provider for an older build.
     case vertexProxyURL, vertexProxyEnabled, cloudProvider
-    /// The level each Gemini model thinks at (`ReasoningEfforts`), and the model calls go to.
+    /// The level each Gemini model thinks at (`ReasoningEfforts`). `callEngine` (the model calls went to: Gemini 3.8
+    /// Flash, or the removed Gemini 4 Argon) is removed at load: calls go to Flash.
     case geminiReasoningEfforts, callEngine
-    /// Set once Pasting's rules have given Gemini 4 Argon Gemini 3.8 Flash's checks (`load`).
+    /// Set once Pasting's rules had given the removed Gemini 4 Argon Gemini 3.8 Flash's checks; removed at load.
     case argonPastingAdded
     /// The Calls tab's browser extension note was closed.
     case browserExtensionHintDismissed

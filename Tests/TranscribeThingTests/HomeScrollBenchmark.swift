@@ -75,7 +75,7 @@ import Testing
         context.previewFailures = [
             entries[1].id: HomeFailure(kind: .polish(), reason: "It took too long."),
             empty[1].id: HomeFailure(kind: .transcription(.geminiFlash), reason: "It took too long."),
-            entries[2].id: .recordingGone(.transcription(.geminiArgon)),
+            entries[2].id: .recordingGone(.transcription(.geminiFlash)),
             failed.id: .recordingGone(.transcription(.parakeet)),
         ]
         env.windows.hubSection = .home

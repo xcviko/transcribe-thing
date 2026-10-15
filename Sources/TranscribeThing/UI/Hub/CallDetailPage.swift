@@ -123,7 +123,7 @@ struct CallDetailPage: View {
         } label: {
             Label(call.transcript == nil ? "Transcribe" : "Transcribe Again", systemImage: "arrow.clockwise")
         }
-        .help(call.transcript == nil ? "Transcribe" : "Transcribe Again, with \(hub.settings.callEngine.shortName)")
+        .help(call.transcript == nil ? "Transcribe" : "Transcribe Again, with \(hub.settings.callModel.engine.shortName)")
         .disabled(!hasAudio || call.status == .recording || call.status == .transcribing)
         Button {
             hub.summarizeCall(call)
@@ -441,8 +441,8 @@ private struct CallTranscriptView: View {
     private var placeholderText: String {
         switch call.status {
         case .recording: "The transcript comes once the call ends."
-        case .transcribing: "\(hub.settings.callEngine.shortName) is writing the transcript…"
-        case .unconfirmed: "Not transcribed: Transcribe sends it to \(hub.settings.callEngine.shortName)."
+        case .transcribing: "\(hub.settings.callModel.engine.shortName) is writing the transcript…"
+        case .unconfirmed: "Not transcribed: Transcribe sends it to \(hub.settings.callModel.engine.shortName)."
         case .interrupted: "Not transcribed: the app quit during the call. Transcribe sends what was recorded."
         case .failed: "No transcript: Retry above, or Transcribe Again in the toolbar."
         case .done: "Nobody spoke in this call."

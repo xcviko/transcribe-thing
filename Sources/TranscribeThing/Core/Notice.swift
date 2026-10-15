@@ -421,7 +421,7 @@ extension AppError {
     /// Canonical copy per the error catalog (wispr-ux.md §5.9, adapted).
     /// `recordingID` non-nil means the audio is retained, which enables Retry and Retry-with actions.
     /// `fallbackEngine` is a ready engine other than the failing one. `engine` is the engine the error came
-    /// from (a timeout names it: "Gemini 4 Argon took too long"); OpenRouter errors say "Gemini".
+    /// from (a timeout names it: "Gemini 3.8 Flash took too long"); OpenRouter errors say "Gemini".
     func notice(recordingID: UUID?, fallbackEngine: EngineID?, engine: EngineID? = nil) -> Notice {
         let copy = self.copy(for: engine)
         let hasAudio = recordingID != nil

@@ -50,7 +50,8 @@ import Testing
         #expect(!TranscriptVersionKind.translation(polished: false).answersInMessageTags)
         #expect(TranscriptVersionKind.translation(polished: true).displayName
                 == "Polished and translated by Gemini 3.8 Flash")
-        // Flash's keep the raw values older builds wrote; Argon's carry the model.
+        // Flash's keep the raw values older builds wrote; another Gemini's carry the model, as the retired Gemini 4
+        // Argon's in History do.
         #expect(TranscriptVersionKind.translation(polished: true).rawValue == "translation:polished")
         #expect(TranscriptVersionKind.translation(polished: false, by: .geminiArgon).rawValue == "translation:geminiArgon")
         #expect(TranscriptVersionKind.translation(polished: true, by: .geminiArgon).rawValue
@@ -70,10 +71,6 @@ import Testing
         #expect(DictationController.rewriteKind(polishes: true, translates: false) == .polish())
         #expect(DictationController.rewriteKind(polishes: false, translates: true) == .translation(polished: false))
         #expect(DictationController.rewriteKind(polishes: true, translates: true) == .translation(polished: true))
-        #expect(DictationController.rewriteKind(polishes: true, translates: false, by: .geminiArgon)
-                == .polish(by: .geminiArgon))
-        #expect(DictationController.rewriteKind(polishes: true, translates: true, by: .geminiArgon)
-                == .translation(polished: true, by: .geminiArgon))
     }
 
     @Test func fnTIsTheDefault() {
@@ -91,7 +88,7 @@ import Testing
     }
 }
 
-/// Gemini 4 Argon ignores short audio and makes text up when the system prompt is Russian, so every dictation prompt
+/// A Gemini model ignored short audio and made text up when the system prompt was Russian, so every dictation prompt
 /// is written in English: Russian may appear only inside quoted examples ("или или" -> "или").
 @Suite struct DictationPromptLanguageTests {
     /// `prompt` without its quoted spans ("...", on one line).

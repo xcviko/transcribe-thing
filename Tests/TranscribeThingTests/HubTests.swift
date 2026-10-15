@@ -164,7 +164,7 @@ import Testing
         let info = KeyInfo(limitRemaining: 3)
         #expect(EngineReadiness.of(.geminiFlash, localState: .notInstalled, keyStatus: .valid(info)) == .ready)
         #expect(EngineReadiness.of(.geminiFlash, localState: .notInstalled, keyStatus: .missing) == .needsKey)
-        #expect(EngineReadiness.of(.geminiArgon, localState: .notInstalled, keyStatus: .invalid("401")).unavailableReason == "Key rejected")
+        #expect(EngineReadiness.of(.geminiFlash, localState: .notInstalled, keyStatus: .invalid("401")).unavailableReason == "Key rejected")
         #expect(EngineReadiness.of(.geminiFlash, localState: .notInstalled, keyStatus: .noCredit(nil)).isUsable == false)
         #expect(EngineReadiness.of(.geminiFlash, localState: .notInstalled, keyStatus: .offline).isUsable)
     }
@@ -248,21 +248,21 @@ import Testing
 
     @Test func keyProblemsForCloudEngines() {
         #expect(HubAttention.items(input(engine: .geminiFlash, key: .missing)).first?.actionTitle == "Add Key")
-        #expect(HubAttention.items(input(engine: .geminiArgon, key: .invalid("401"))).first?.actionTitle == "Update Key")
-        #expect(HubAttention.items(input(engine: .geminiArgon, key: .noCredit(nil))).first?.action == .openURL(OpenRouterLinks.credits))
-        #expect(HubAttention.items(input(engine: .geminiArgon, key: .offline)).isEmpty)
+        #expect(HubAttention.items(input(engine: .geminiFlash, key: .invalid("401"))).first?.actionTitle == "Update Key")
+        #expect(HubAttention.items(input(engine: .geminiFlash, key: .noCredit(nil))).first?.action == .openURL(OpenRouterLinks.credits))
+        #expect(HubAttention.items(input(engine: .geminiFlash, key: .offline)).isEmpty)
     }
 
     @Test func keyProblemsSayGeminiAndNameTheModelThatNeedsAKey() {
         let limit = KeyStatus.noCredit(KeyInfo(limit: 5, limitRemaining: 0, usage: 5))
-        #expect(HubAttention.items(input(engine: .geminiArgon, key: limit)).first?.body
+        #expect(HubAttention.items(input(engine: .geminiFlash, key: limit)).first?.body
             == "This key has a spending limit, and it’s used up. Raise it to keep using Gemini.")
         for engine in EngineID.geminiEngines {
             #expect(HubAttention.items(input(engine: engine, key: .noCredit(nil))).first?.body
                 == "Add credit to keep using Gemini.")
         }
-        #expect(HubAttention.items(input(engine: .geminiArgon, key: .missing)).first?.body
-            == "Gemini 4 Argon needs a key to transcribe.")
+        #expect(HubAttention.items(input(engine: .geminiFlash, key: .missing)).first?.body
+            == "Gemini 3.8 Flash needs a key to transcribe.")
     }
 
     @Test func fnHintOnlyWhenPushToTalkUsesFn() {
@@ -276,10 +276,10 @@ import Testing
             #expect(EngineReadiness.of(engine, localState: .notInstalled, keyStatus: .valid(KeyInfo())) == .ready)
             #expect(EngineReadiness.of(engine, localState: .ready, keyStatus: .missing).unavailableReason == "Needs key")
         }
-        #expect(EngineSummary.make(engine: .geminiArgon, localState: .ready, keyStatus: .valid(KeyInfo()))
-            == EngineSummary(name: "Gemini 4 Argon", status: "Ready", tone: .positive))
-        #expect(EngineSummary.make(choice: .argon, localState: .notInstalled, keyStatus: .missing).name
-            == "Gemini 4 Argon")
+        #expect(EngineSummary.make(engine: .geminiFlash, localState: .ready, keyStatus: .valid(KeyInfo()))
+            == EngineSummary(name: "Gemini 3.8 Flash", status: "Ready", tone: .positive))
+        #expect(EngineSummary.make(choice: .gemini, localState: .notInstalled, keyStatus: .missing).name
+            == "Gemini 3.8 Flash")
     }
 
     @Test func preparingCopyFitsParakeetsShortFirstLoad() throws {
@@ -351,12 +351,9 @@ import Testing
         #expect(SwitchModelLine.explanation(.ready(.fnTab), lineup: lineup)
             == "Press \(fnTab) while dictating to step from Flash to Parakeet.")
         lineup.move(.gemini, to: 0)
-        #expect(lineup.order == [.gemini, .parakeet, .argon])
+        #expect(lineup.order == [.gemini, .parakeet])
         #expect(SwitchModelLine.explanation(.ready(rightCommand), lineup: lineup)
             == "Press \(rightCommand.spokenDescription) while dictating to step from Flash to Parakeet.")
-        lineup.setSwitchable(.argon, true)
-        #expect(SwitchModelLine.explanation(.ready(.fnTab), lineup: lineup)
-            == "Press \(fnTab) while dictating to step from Flash to Parakeet, then Argon.")
     }
 
     /// Steps that can't run now (no key yet) stay in the line, which says so: Switch model skips them.
@@ -368,11 +365,6 @@ import Testing
         parakeetStep.main = .gemini
         #expect(SwitchModelLine.explanation(.ready(.fnTab), lineup: parakeetStep, blocked: [.parakeet])
             == "Press \(fnTab) while dictating to step from Flash to Parakeet. Parakeet isn’t ready yet.")
-        var withArgon = ModelLineup.default
-        withArgon.setSwitchable(.argon, true)
-        #expect(SwitchModelLine.explanation(.ready(.fnTab), lineup: withArgon, blocked: [.gemini, .argon])
-            == "Press \(fnTab) while dictating to step from Parakeet to Flash, then Argon. "
-            + "Flash and Argon aren’t ready yet.")
         var geminiMain = ModelLineup.default
         geminiMain.main = .gemini
         #expect(!SwitchModelLine.explanation(.ready(.fnTab), lineup: geminiMain, blocked: [.gemini]).contains("ready yet"),
@@ -404,11 +396,9 @@ import Testing
         #expect(EngineReadiness.of(ModelChoice.parakeet.engine, localState: .notInstalled, keyStatus: .missing)
             == .needsDownload)
         #expect(EngineReadiness.of(ModelChoice.parakeet.engine, localState: .ready, keyStatus: .missing) == .ready)
-        for choice in [ModelChoice.gemini, .argon] {
-            #expect(EngineReadiness.of(choice.engine, localState: .notInstalled, keyStatus: .valid(KeyInfo()))
-                == .ready)
-            #expect(EngineReadiness.of(choice.engine, localState: .ready, keyStatus: .missing) == .needsKey)
-        }
+        #expect(EngineReadiness.of(ModelChoice.gemini.engine, localState: .notInstalled, keyStatus: .valid(KeyInfo()))
+            == .ready)
+        #expect(EngineReadiness.of(ModelChoice.gemini.engine, localState: .ready, keyStatus: .missing) == .needsKey)
     }
 
     @Test func theSidebarChipNamesTheMainModel() {
@@ -419,8 +409,6 @@ import Testing
         #expect(EngineSummary.make(choice: .gemini, localState: .notInstalled,
                                    keyStatus: .valid(KeyInfo()))
             == EngineSummary(name: "Gemini 3.8 Flash", status: "Ready", tone: .positive))
-        #expect(EngineSummary.make(choice: .argon, localState: .notInstalled,
-                                   keyStatus: .valid(KeyInfo())).name == "Gemini 4 Argon")
     }
 
     /// One key state reads the same on a lineup row, the sidebar chip and Where Parakeet runs: a missing key or
@@ -453,7 +441,7 @@ import Testing
     }
 
     /// Each mark in the color of the model that made it: the retired cloud Parakeet Parakeet's, the retired Gemini 3.1
-    /// Pro Flash's, an old clean-up of Parakeet's text Parakeet's (with its wand), Argon its own.
+    /// Pro and Gemini 4 Argon Flash's, an old clean-up of Parakeet's text Parakeet's (with its wand).
     @Test func historyMarksWearTheirModelsColor() {
         var picked = ModelColors.default
         picked[.parakeet] = .teal
@@ -467,9 +455,9 @@ import Testing
         #expect(EngineGlyph(engine: .parakeetCloud, cleanupModel: .gpt6Luna).color == .graphite)
         #expect(EngineGlyph(engine: .parakeet, cleanupModel: .gpt6Luna).label == "Parakeet v3 + Clean-up by GPT-6 Luna")
         #expect(EngineGlyph(engine: .geminiFlash).color == .violet)
-        #expect(EngineGlyph(engine: .geminiArgon).color == .blue)
-        picked[.argon] = .pink
-        #expect(EngineGlyph(engine: .geminiArgon, colors: picked).color == .pink)
+        #expect(EngineGlyph(engine: .geminiArgon).color == .violet)
+        #expect(EngineGlyph(engine: .geminiArgon, colors: picked).color == .blue)
+        #expect(EngineGlyph(engine: .geminiArgon).label == "Gemini 4 Argon", "an old row keeps its name")
         #expect(EngineGlyph(engine: .parakeetCloud).label == "Parakeet v3 · Cloud", "an old row keeps its name")
     }
 
@@ -483,7 +471,7 @@ import Testing
         }
         #expect(items(.missing).isEmpty, "Parakeet alone needs no key")
         #expect(items(.invalid("401")).isEmpty)
-        let missing = try #require(items(.missing, engine: .geminiArgon).first)
+        let missing = try #require(items(.missing, engine: .geminiFlash).first)
         #expect(missing.title == "Add your OpenRouter key" && missing.action == .openModels)
     }
 }

@@ -3,8 +3,8 @@ import UniformTypeIdentifiers
 
 /// The models in the user's order: the main model every dictation starts on (a radio), which others the Switch model
 /// shortcut steps to (a switch), the order it steps in (drag a row by its handle), and each one's color on the pill
-/// (its tile), and how hard each Gemini model thinks (its Reasoning menu). Then the model hands-free starts on, the
-/// model calls go to, Parakeet on this Mac (download, delete, storage), and the API keys: OpenRouter's, and the user's own
+/// (its tile), and how hard Gemini thinks (its Reasoning menu, which calls follow too). Then the model hands-free
+/// starts on, Parakeet on this Mac (download, delete, storage), and the API keys: OpenRouter's, and the user's own
 /// OpenAI-compatible endpoint that can take Gemini's requests instead.
 struct ModelsPage: View {
     @Environment(HubContext.self) private var hub
@@ -39,16 +39,6 @@ struct ModelsPage: View {
                                     systemImage: "lock.fill", iconTint: .inkSecondary) {
                             HubMenuPicker(title: "Hands-free dictations use", options: handsFreeOptions,
                                           selection: handsFreeModel, label: handsFreeLabel)
-                        }
-                    }
-                }
-
-                HubGroup("Calls", footer: CallsModelCopy.footer) {
-                    SettingsGroup {
-                        SettingsRow(title: "Calls use", subtitle: CallsModelCopy.subtitle,
-                                    systemImage: "phone", iconTint: .inkSecondary) {
-                            HubMenuPicker(title: "Calls use", options: EngineID.geminiEngines,
-                                          selection: callEngine, label: \.modelName)
                         }
                     }
                 }
@@ -98,11 +88,6 @@ struct ModelsPage: View {
         }
     }
 
-    private var callEngine: Binding<EngineID> {
-        let settings = settings
-        return Binding(get: { settings.callEngine }, set: { settings.callEngine = $0 })
-    }
-
     private func focusKey(_ proxy: ScrollViewProxy) {
         withAnimation(Theme.Motion.expand) { proxy.scrollTo(ModelsAnchor.key, anchor: .top) }
         keyFocusRequest += 1
@@ -131,11 +116,12 @@ struct ModelsPage: View {
         return Binding(get: { settings.handsFreeChoice }, set: { settings.handsFreeModel = $0 })
     }
 
-    /// What the list can't say by itself: what the dot and the switches mean, and what Reasoning costs.
+    /// What the list can't say by itself: what the dot and the switches mean, what Reasoning costs, and that calls
+    /// go to Gemini at its Reasoning.
     private var lineupFooter: String {
         let keys = settings.shortcuts[.switchModel].map { " (\($0.compactDescription))" } ?? ""
         return "The dot picks the main model: every dictation starts on it. Models switched on are the ones "
-            + "Switch model\(keys) steps through while you dictate. " + ReasoningCopy.footer
+            + "Switch model\(keys) steps through while you dictate. " + ReasoningCopy.footer + " " + ReasoningCopy.calls
     }
 
     /// Which key the setting is about.
@@ -150,14 +136,10 @@ struct ModelsPage: View {
 
 }
 
-/// What Models says about Reasoning and Calls.
+/// What Models says about Reasoning, and the calls that follow it.
 enum ReasoningCopy {
     static let footer = "Higher Reasoning thinks longer before it writes: answers come slower and cost more."
-}
-
-enum CallsModelCopy {
-    static let subtitle = "Transcribes and sums up every call."
-    static let footer = "Calls need a Gemini model. It thinks at the Reasoning level picked for it under Your models."
+    static let calls = "Calls use \(EngineID.geminiFlash.modelName) at its Reasoning level too."
 }
 
 /// A Gemini model's level (`AppSettings.reasoningEfforts`) on its lineup row, after its status: "Reasoning: Medium", a

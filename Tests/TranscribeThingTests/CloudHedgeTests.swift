@@ -47,24 +47,24 @@ import Testing
 
     @Test func aFailedRequestLeavesTheOtherToAnswer() async throws {
         let calls = Calls()
-        let result = try await CloudHedge.run(.race, .transcription, engine: .geminiArgon, modelName: "Gemini 4 Argon",
+        let result = try await CloudHedge.run(.race, .transcription, engine: .geminiFlash, modelName: "Gemini 3.8 Flash",
                                               progress: nil,
                                               work(calls, delays: [0.01, 0.1], texts: ["x", "answer"],
                                                    failures: [0: .openRouterProviderUnavailable("")]))
         #expect(result.text == "answer")
     }
 
-    /// A model came back with nothing at all for speech (Argon, 2026-10-14): the other request's words win.
+    /// A model came back with nothing at all for speech (2026-10-14): the other request's words win.
     @Test func anEmptyAnswerWaitsForTheOtherOne() async throws {
         let calls = Calls()
-        let result = try await CloudHedge.run(.race, .transcription, engine: .geminiArgon, modelName: "Gemini 4 Argon",
+        let result = try await CloudHedge.run(.race, .transcription, engine: .geminiFlash, modelName: "Gemini 3.8 Flash",
                                               progress: nil, work(calls, delays: [0.01, 0.15], texts: ["", "words"]))
         #expect(result.text == "words")
     }
 
     /// Stray tokens without the asked-for tags wait for the other request too.
     @Test func anUntaggedAnswerWaitsForATaggedOne() async throws {
-        let result = try await CloudHedge.run(.race, .transcription, engine: .geminiArgon, modelName: "Gemini 4 Argon",
+        let result = try await CloudHedge.run(.race, .transcription, engine: .geminiFlash, modelName: "Gemini 3.8 Flash",
                                               progress: nil) { _ in
             let fast = await Self.order.next() == 0
             if fast { var r = CloudResult(text: "!#"); r.answerTags = TaggedTranscript.Tags.none; return r }
@@ -79,14 +79,14 @@ import Testing
 
     @Test func twoEmptyAnswersAreEmpty() async throws {
         let calls = Calls()
-        let result = try await CloudHedge.run(.race, .transcription, engine: .geminiArgon, modelName: "Gemini 4 Argon",
+        let result = try await CloudHedge.run(.race, .transcription, engine: .geminiFlash, modelName: "Gemini 3.8 Flash",
                                               progress: nil, work(calls, delays: [0.01, 0.05], texts: [" ", ""]))
         #expect(result.text.trimmingCharacters(in: .whitespaces).isEmpty)
     }
 
     @Test func anEmptyAnswerStandsWhenTheOtherFails() async throws {
         let calls = Calls()
-        let result = try await CloudHedge.run(.race, .transcription, engine: .geminiArgon, modelName: "Gemini 4 Argon",
+        let result = try await CloudHedge.run(.race, .transcription, engine: .geminiFlash, modelName: "Gemini 3.8 Flash",
                                               progress: nil,
                                               work(calls, delays: [0.01, 0.05], texts: ["", "x"],
                                                    failures: [1: .openRouterProviderUnavailable("")]))
@@ -96,7 +96,7 @@ import Testing
     @Test func whenBothFailTheFirstFailureIsThrown() async {
         let calls = Calls()
         await #expect(throws: AppError.timeout(.parakeet)) {
-            try await CloudHedge.run(.race, .transcription, engine: .geminiArgon, modelName: "Gemini 4 Argon", progress: nil,
+            try await CloudHedge.run(.race, .transcription, engine: .geminiFlash, modelName: "Gemini 3.8 Flash", progress: nil,
                                      work(calls, delays: [0.01, 0.05],
                                           failures: [0: .timeout(.parakeet), 1: .openRouterTruncated("")]))
         }

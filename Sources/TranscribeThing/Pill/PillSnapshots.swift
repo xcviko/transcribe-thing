@@ -111,14 +111,10 @@ enum PillSnapshots {
                         by: .geminiFlash),
                 ])
             },
-            // Dictating with Gemini 4 Argon: the selection goes to Argon, in Argon's color, and its card says so.
-            SnapshotEntry("pill-selection-argon-translating", width: 640, height: 150) { _ in
-                CanvasScene(model: selectionModel(.processing, choice: .argon, translates: true), notices: [])
-            },
-            SnapshotEntry("pill-selection-argon-card", width: 640, height: 400) { _ in
+            SnapshotEntry("pill-selection-translated-card", width: 640, height: 400) { _ in
                 CanvasScene(model: restModel(), notices: [
                     DictationController.selectionCard("Tomorrow I’ll go again and check how it does with intervals.",
-                                                      by: .geminiArgon, translated: true),
+                                                      by: .geminiFlash, translated: true),
                 ])
             },
             // The tallest it gets: an answer long enough to fill its box, under a pill still processing with its
@@ -165,7 +161,7 @@ enum PillSnapshots {
             SnapshotEntry("pill-toast-heard-no-speech", width: 640, height: 270) { _ in
                 let model = PillModel.preview(phase: .error)
                 model.errorMessage = PillMetrics.keptNoSpeechText
-                model.errorModel = .argon
+                model.errorModel = .gemini
                 return CanvasScene(model: model, notices: [PillSnapshotFixtures.heardNoSpeech])
             },
             SnapshotEntry("pill-toast-no-connection", width: 640, height: 270) { _ in
@@ -331,16 +327,16 @@ enum PillSnapshotFixtures {
         body: "Holding fn still works. fn Space and Esc work again once it’s off.",
         actions: [NoticeAction(title: "Dismiss", kind: .dismiss)], lifetime: .seconds(10), sound: .alert)
 
-    /// Argon heard no speech in a long dictation: kept in History, with Retry.
-    static let heardNoSpeech = AppError.heardNoSpeech(.geminiArgon)
-        .notice(recordingID: UUID(), fallbackEngine: nil, engine: .geminiArgon)
+    /// Gemini heard no speech in a long dictation: kept in History, with Retry.
+    static let heardNoSpeech = AppError.heardNoSpeech(.geminiFlash)
+        .notice(recordingID: UUID(), fallbackEngine: nil, engine: .geminiFlash)
 
     static let keyRejected = AppError.openRouterInvalidKey("Invalid API key")
         .notice(recordingID: UUID(), fallbackEngine: .parakeet)
 
-    /// A rate limit on Gemini 4 Argon offers Parakeet on this Mac.
+    /// A rate limit on Gemini 3.8 Flash offers Parakeet on this Mac.
     static let cloudSpeechRateLimited = AppError.openRouterRateLimited(retryAfter: nil)
-        .notice(recordingID: UUID(), fallbackEngine: .parakeet, engine: .geminiArgon)
+        .notice(recordingID: UUID(), fallbackEngine: .parakeet, engine: .geminiFlash)
 
     /// OpenRouter out of reach (a VPN that stopped), and a VPN that went off where Gemini isn't served.
     static let noConnection = AppError.offline.notice(recordingID: UUID(), fallbackEngine: .parakeet)
@@ -790,17 +786,6 @@ private struct PillModelSheet: View {
                 Self.model(.processing, choice: .gemini, chip: false)
                     .previewCounter(PillTokenCount(phase: .writing, tokens: 17_700))
             },
-            Row(id: "argon", caption: "Push-to-talk · Gemini 4 Argon") { Self.model(.listening, choice: .argon) },
-            Row(id: "argon-later", caption: "Gemini 4 Argon · chip gone") {
-                Self.model(.listening, choice: .argon, chip: false)
-            },
-            Row(id: "locked-argon", caption: "Hands-free · Gemini 4 Argon") {
-                Self.model(.locked, choice: .argon, level: 0.5)
-            },
-            Row(id: "processing-thinking-argon", caption: "Thinking · Gemini 4 Argon") {
-                Self.model(.processing, choice: .argon, chip: false)
-                    .previewCounter(PillTokenCount(phase: .thinking, tokens: 9_800))
-            },
         ]
     }
 
@@ -1079,10 +1064,10 @@ private struct PillStateSheet: View {
                 model.errorModel = .gemini
                 return model
             },
-            Row(id: "no-speech-kept", caption: "Heard no speech · kept (Argon)") {
+            Row(id: "no-speech-kept", caption: "Heard no speech · kept (Gemini)") {
                 let model = PillModel.preview(phase: .error)
                 model.errorMessage = PillMetrics.keptNoSpeechText
-                model.errorModel = .argon
+                model.errorModel = .gemini
                 return model
             },
         ]
@@ -1137,7 +1122,7 @@ private struct PillStateSheet: View {
 /// The chip's roll between two models, every 40 ms of its spring (`PillChipRoll`), on the pill's dark ground.
 private struct ChipRollSheet: View {
     private let settings = AppSettings.inMemory()
-    private let rolls: [(ModelChoice, ModelChoice)] = [(.parakeet, .gemini), (.gemini, .argon), (.argon, .parakeet)]
+    private let rolls: [(ModelChoice, ModelChoice)] = [(.parakeet, .gemini), (.gemini, .parakeet)]
     private let times = Array(0...9).map { Double($0) * 0.04 }
 
     var body: some View {
