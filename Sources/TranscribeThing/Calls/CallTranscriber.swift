@@ -34,11 +34,17 @@ struct CallModel: Equatable, Sendable {
 /// limit is read as far as it goes and the call says where (`CallRecord.cutOffAt`). Runs once a kept call ends, and
 /// again on Retry (`retranscribe`). What happens goes to the diagnostic log, never what was said.
 ///
+/// An answer can also end as if done long before its chunk's audio does, or skip minutes in the middle. Where the
+/// chunk still has speech after its last phrase, or in a long stretch with no phrase (`ResumeRules`), that stretch goes
+/// in a request of its own with the speakers named so far, and its phrases are merged in by time (`resume`); what
+/// those requests cost is added to the call's.
+///
 /// The call is summed up too (`CallSummary`). A call of one chunk gets its summary in the same answer, in tagged blocks
 /// after the transcript (`CallPrompts.call` with `summary`). A longer one asks only for the transcript in each chunk,
 /// then sends the whole transcript, text only, in one more request (`sendText`, `CallSummaryPrompt.text`), kept as
 /// `answers/summary.txt` and added to what the call cost; so does a one-chunk answer that came without any of the
-/// blocks. A summary that fails leaves the call done with its transcript, and says why (`CallRecord.summaryError`):
+/// blocks, or one whose transcript more requests added to (its blocks were of what it had). A summary that fails
+/// leaves the call done with its transcript, and says why (`CallRecord.summaryError`):
 /// Summarize (`summarize`) tries again, and sums up a call transcribed before summaries, from its transcript alone.
 ///
 /// A call made from a file dropped on Calls (`importFile`, `CallRecord.file`) goes the same way, in the same chunks,
@@ -339,6 +345,7 @@ final class CallTranscriber {
             log.event(.calls, "transcription.finished", [
                 "call": Self.shortID(id), "phrases": outcome.transcript.segments.count,
                 "requests": outcome.requests, "skippedSilent": outcome.skippedSilent, "sample": outcome.sampleSeconds,
+                "resumed": outcome.resumed,
                 "cutOff": outcome.cutOffAt.map(CallPrompts.clock), "cost": outcome.costUSD,
                 "summary": outcome.summary != nil ? "ok" : (outcome.summaryError != nil ? "failed" : "none"),
             ])
@@ -549,7 +556,7 @@ final class CallTranscriber {
         var mutes: [CallInterval]
         var userName: String?
         var service: String?
-        /// Where each answer is kept as it came (`<chunk>-mix.txt`); nil keeps none.
+        /// Where each answer is kept as it came (`<chunk>-mix.txt`, `<chunk>-mix-rest-<n>.txt`); nil keeps none.
         var answers: URL?
         /// For the log.
         var callID: UUID?
@@ -584,6 +591,8 @@ final class CallTranscriber {
         /// Requests sent (one per chunk), and chunks left out as silent.
         var requests = 0
         var skippedSilent = 0
+        /// More requests, for speech a chunk's answer left out (`resume`).
+        var resumed = 0
         /// The sample of the person's voice each request carried, pauses included; nil without one.
         var sampleSeconds: TimeInterval?
         /// What the call was about; nil with no speech, or when it failed (`summaryError` says why).
@@ -622,9 +631,11 @@ final class CallTranscriber {
         }
     }
 
-    /// Every chunk of at most `maxChunkSeconds`, both tracks mixed, one request at a time, then the summary: from the
-    /// answer of a call of one chunk, else (or when that answer had none of it) from `summarize`'s text-only request.
-    nonisolated static func run(_ plan: Plan, maxChunkSeconds: TimeInterval = maxChunkSeconds, send: Send,
+    /// Every chunk of at most `maxChunkSeconds`, both tracks mixed, one request at a time, with more requests for what
+    /// a chunk's answer left out (`resume`), then the summary: from the answer of a call of one chunk, else (or when
+    /// that answer had none of it, or more requests added to it) from `summarize`'s text-only request.
+    nonisolated static func run(_ plan: Plan, maxChunkSeconds: TimeInterval = maxChunkSeconds,
+                                resume rules: ResumeRules = .default, send: Send,
                                 summarize: SendText? = nil,
                                 read: @Sendable (URL, Range<Int>) throws -> [Float],
                                 log: DiagnosticLog = .shared) async throws -> Outcome {
@@ -667,16 +678,8 @@ final class CallTranscriber {
                 log.event(.calls, "transcription.skipped", ["call": call, "chunk": chunk])
                 continue
             }
-            let mutes = plan.mutes.compactMap { mute -> CallInterval? in
-                guard mute.overlap(offset, offset + audio.seconds) > 0 else { return nil }
-                return CallInterval(start: max(0, mute.start - offset), end: min(audio.seconds, mute.end - offset))
-            }
-            let prompt = UserDictionary.prompt(
-                plan.file.map { CallPrompts.file(name: $0, me: me, roster: roster, summary: inlineSummary) }
-                    ?? CallPrompts.call(me: me, service: plan.service, roster: roster, local: sides.speakers,
-                                        mutes: mutes, seconds: audio.seconds, voiceSample: sample != nil,
-                                        summary: inlineSummary),
-                with: plan.vocabulary, heard: true)
+            let prompt = Self.prompt(plan, me: me, roster: roster, local: sides.speakers, at: offset,
+                                     seconds: audio.seconds, voiceSample: sample != nil, summary: inlineSummary)
             let started = ContinuousClock.now
             var text: String
             var result: CloudResult?
@@ -719,12 +722,26 @@ final class CallTranscriber {
                 outcome.cutOffAt = min(outcome.cutOffAt ?? reached, reached)
                 Log.engine.error("A call's answer was cut off at \(CallPrompts.clock(reached), privacy: .public)")
             }
-            let said = parsed.segments.map { segment -> CallTranscript.Segment in
+            var said = parsed.segments.map { segment -> CallTranscript.Segment in
                 var segment = segment
                 segment.side = sides.side(of: segment.speaker)
                 return segment
             }
             roster = Self.roster(roster, adding: said)
+            // An answer that stopped early, or left a long stretch out, while the audio there has speech: asked again
+            // for that stretch. A cut-off answer already says where the transcript stops.
+            if !truncated, !said.isEmpty {
+                let chunkPart = Chunk(number: chunk, range: range, seconds: audio.seconds, voiced: audio.voiced,
+                                      budget: budget)
+                let resumed = try await resume(said, in: chunkPart, plan: plan, rules: rules, me: me,
+                                               roster: &roster, sides: &sides, sample: sample, send: send,
+                                               read: read, log: log)
+                said = resumed.segments
+                costs += resumed.costs
+                outcome.resumed += resumed.requests
+                // The summary in this answer is of what it had: the whole transcript is summed up on its own.
+                if resumed.added > 0, summarize != nil { summary = nil }
+            }
             segments += said.map { $0.shifted(by: offset) }
         }
         outcome.transcript = CallTranscriptMerge.merge(segments, mutes: plan.mutes)
@@ -794,18 +811,253 @@ final class CallTranscriber {
         return SummaryOutcome(summary: summary, costUSD: result?.costUSD)
     }
 
-    /// The chunk as one request's .m4a within `budget` (base64 bytes), or nil when it has no speech worth sending.
+    /// The chunk as one request's .m4a within `budget` (base64 bytes), or nil when it has no speech worth sending; with
+    /// where in it there's speech, to tell what its answer left out (`resume`).
     private nonisolated static func chunkAudio(
         _ plan: Plan, _ range: Range<Int>, budget: Int, read: @Sendable (URL, Range<Int>) throws -> [Float]
-    ) async throws -> (data: Data, seconds: TimeInterval)? {
+    ) async throws -> (data: Data, seconds: TimeInterval, voiced: VoicedFrames)? {
         guard !range.isEmpty else { return nil }
         let samples = try mixed(plan, range, read: read)
         let speech = SpeechAnalyzer.stats(for: samples)
         guard !speech.isSilent, speech.voicedSeconds >= minimumVoicedSeconds else { return nil }
+        let voiced = VoicedFrames(samples)
         let data = try await Task.detached(priority: .userInitiated) {
             try CloudAudio.forChat(samples, budget: budget)
         }.value
-        return (data, Double(samples.count) / Recording.sampleRate)
+        return (data, Double(samples.count) / Recording.sampleRate, voiced)
+    }
+
+    /// The system prompt of a request for `seconds` of the call from `start` (on the call's clock): a call's
+    /// (`CallPrompts.call`, the mutes in that stretch), or a file's (`CallPrompts.file`), with the dictionary.
+    private nonisolated static func prompt(_ plan: Plan, me: String, roster: [String], local: [String],
+                                           at start: TimeInterval, seconds: TimeInterval, voiceSample: Bool,
+                                           summary: Bool) -> String {
+        let mutes = plan.mutes.compactMap { mute -> CallInterval? in
+            guard mute.overlap(start, start + seconds) > 0 else { return nil }
+            return CallInterval(start: max(0, mute.start - start), end: min(seconds, mute.end - start))
+        }
+        return UserDictionary.prompt(
+            plan.file.map { CallPrompts.file(name: $0, me: me, roster: roster, summary: summary) }
+                ?? CallPrompts.call(me: me, service: plan.service, roster: roster, local: local, mutes: mutes,
+                                    seconds: seconds, voiceSample: voiceSample, summary: summary),
+            with: plan.vocabulary, heard: true)
+    }
+
+    // MARK: What an answer left out
+
+    /// When a chunk's answer is taken to have left speech out, and how it's asked for again (`resume`). Gemini 3.8
+    /// Flash sometimes ends its answer as if done (finish "stop", not cut off) long before its audio ends: a 40-minute
+    /// chunk written out to 21:13, a Slack call without its last minutes.
+    struct ResumeRules: Sendable {
+        /// An answer whose last phrase ends at least this long before its chunk does, with at least `tailVoiced` of
+        /// speech after it, stopped early. A call's last minute rarely holds 20 s of voice nobody wrote down; a minute
+        /// of hold music or room noise after the last words rarely does either, and it's a cheap request if it does.
+        var tailSeconds: TimeInterval = 60
+        var tailVoiced: TimeInterval = 20
+        /// A stretch at least this long with no phrase in it, from the chunk's start or between two phrases, with at
+        /// least `gapVoiced` of speech, was left out. Longer than the end's: a pause mid-call (a shared screen, a
+        /// video, someone reading) is more often real.
+        var gapSeconds: TimeInterval = 120
+        var gapVoiced: TimeInterval = 30
+        /// The request for a stretch starts this long before it (and, for a gap, ends this long after), so the
+        /// phrase cut at its edge is heard whole; what it writes of the phrases around it is left out.
+        var lead: TimeInterval = 5
+        /// Requests for one stretch, each one going on from where the one before stopped, as long as each brings a
+        /// phrase.
+        var rounds = 3
+        /// Requests for what one chunk's answer left out, all stretches together: a bound on what it costs.
+        var maxRequests = 6
+        /// A phrase a request writes again with words already in the transcript within this long of it, its times
+        /// apart (a long chunk's times can drift), is left out; only phrases of `echoCharacters` letters and digits
+        /// or more, so a second "Да." stays.
+        var echoSeconds: TimeInterval = 300
+        var echoCharacters = 12
+
+        static let `default` = ResumeRules()
+    }
+
+    /// A stretch of a chunk, on the chunk's clock, that its answer has no phrase in though it holds speech.
+    struct Stretch: Equatable, Sendable {
+        var start: TimeInterval
+        var end: TimeInterval
+        /// Up to the chunk's end: the answer stopped early. Else a gap before the first phrase or between two.
+        var isTail: Bool
+    }
+
+    /// A chunk being transcribed: its number, its samples on the call's, its length, where it has speech, and its
+    /// requests' audio budget.
+    struct Chunk: Sendable {
+        var number: Int
+        var range: Range<Int>
+        var seconds: TimeInterval
+        var voiced: VoicedFrames
+        var budget: Int
+    }
+
+    /// The first stretch from `cursor` on (chunk's clock) that `segments` leave out though it holds enough speech
+    /// (`ResumeRules`), the gaps before the end; nil when there's none.
+    nonisolated static func untranscribed(_ segments: [CallTranscript.Segment], seconds: TimeInterval,
+                                          voiced: VoicedFrames, rules: ResumeRules,
+                                          from cursor: TimeInterval = 0) -> Stretch? {
+        guard !segments.isEmpty else { return nil }
+        var reach: TimeInterval = 0
+        for segment in segments.sorted(by: { $0.start < $1.start }) {
+            if reach >= cursor,
+               let gap = worthAsking(Stretch(start: reach, end: segment.start, isTail: false), voiced, rules) {
+                return gap
+            }
+            reach = max(reach, segment.end)
+        }
+        guard reach >= cursor else { return nil }
+        return worthAsking(Stretch(start: reach, end: seconds, isTail: true), voiced, rules)
+    }
+
+    /// `stretch` when it's long enough and holds enough speech for its kind.
+    private nonisolated static func worthAsking(_ stretch: Stretch, _ voiced: VoicedFrames,
+                                                _ rules: ResumeRules) -> Stretch? {
+        let (length, speech) = stretch.isTail
+            ? (rules.tailSeconds, rules.tailVoiced) : (rules.gapSeconds, rules.gapVoiced)
+        guard stretch.end - stretch.start >= length,
+              voiced.seconds(from: stretch.start, to: stretch.end) >= speech else { return nil }
+        return stretch
+    }
+
+    /// What `resume` came back with: all the chunk's phrases (on its clock), what the requests cost, how many went,
+    /// and how many phrases they added.
+    struct Resumed: Sendable {
+        var segments: [CallTranscript.Segment]
+        var costs: [Double] = []
+        var requests = 0
+        var added = 0
+    }
+
+    /// The chunk's phrases (`said`, on its clock) with what its answer left out asked for again: each stretch with
+    /// speech and no phrase (`untranscribed`), in order, in a request of its own with the same prompt as the chunk's
+    /// (a call's or a file's, without the summary) and the speakers named so far, from a few seconds before it; then
+    /// again from where that answer stopped, while each brings a phrase (`ResumeRules.rounds`). A new phrase counts
+    /// only when its middle falls in the stretch: what it writes again of the phrases around it is already there.
+    /// Answers are kept as `<chunk>-mix-rest-<n>.txt`, and each request is logged (`transcription.resumed`), never
+    /// what was said. A request that fails leaves the chunk as far as it got: the transcript stands.
+    nonisolated static func resume(
+        _ said: [CallTranscript.Segment], in chunk: Chunk, plan: Plan, rules: ResumeRules, me: String,
+        roster: inout [String], sides: inout CallSides, sample: CallVoiceSample.Sample?, send: Send,
+        read: @Sendable (URL, Range<Int>) throws -> [Float], log: DiagnosticLog
+    ) async throws -> Resumed {
+        let call = plan.callID.map(shortID)
+        let offset = Double(chunk.range.lowerBound) / Recording.sampleRate
+        var resumed = Resumed(segments: said)
+        var cursor: TimeInterval = 0
+        scan: while resumed.requests < rules.maxRequests,
+                    var stretch = untranscribed(resumed.segments, seconds: chunk.seconds, voiced: chunk.voiced,
+                                                rules: rules, from: cursor) {
+            let end = stretch.end
+            for _ in 0..<max(1, rules.rounds) {
+                guard resumed.requests < rules.maxRequests else { break scan }
+                try Task.checkCancellation()
+                resumed.requests += 1
+                let from = max(0, stretch.start - rules.lead)
+                let to = stretch.isTail ? chunk.seconds : min(chunk.seconds, stretch.end + rules.lead)
+                let first = chunk.range.lowerBound
+                let lower = first + Int((from * Recording.sampleRate).rounded())
+                let upper = min(chunk.range.upperBound, first + Int((to * Recording.sampleRate).rounded()))
+                let voicedSeconds = chunk.voiced.seconds(from: stretch.start, to: stretch.end)
+                // On the call's clock: the audio asked about, and the speech in the stretch.
+                var fields: [(String, (any DiagnosticValue)?)] = [
+                    ("call", call), ("chunk", chunk.number), ("kind", stretch.isTail ? "end" : "gap"),
+                    ("from", offset + from), ("to", offset + to), ("voiced", voicedSeconds),
+                ]
+                func logged() {
+                    log.event(.calls, "transcription.resumed", fields: fields.compactMap { key, value in
+                        value.map { DiagnosticField(key, $0.diagnosticText) }
+                    })
+                }
+                let started = ContinuousClock.now
+                var text: String
+                var result: CloudResult?
+                let seconds: TimeInterval
+                do {
+                    let samples = try mixed(plan, lower..<max(lower, upper), read: read)
+                    seconds = Double(samples.count) / Recording.sampleRate
+                    let budget = chunk.budget
+                    let data = try await Task.detached(priority: .userInitiated) {
+                        try CloudAudio.forChat(samples, budget: budget)
+                    }.value
+                    let prompt = Self.prompt(plan, me: me, roster: roster, local: sides.speakers, at: offset + from,
+                                             seconds: seconds, voiceSample: sample != nil, summary: false)
+                    do {
+                        let answered = try await send(data, prompt, seconds, sample?.data)
+                        result = answered
+                        text = answered.text
+                    } catch AppError.openRouterTruncated(let partial) {
+                        text = partial
+                    }
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    Log.engine.error(
+                        "A call's request for what an answer left out failed: \(String(describing: error), privacy: .public)")
+                    fields.append(("error", code(of: error)))
+                    logged()
+                    break scan
+                }
+                if let answers = plan.answers {
+                    let file = answers.appendingPathComponent("\(chunk.number)-mix-rest-\(resumed.requests).txt",
+                                                              isDirectory: false)
+                    do {
+                        try Data(text.utf8).write(to: file, options: .atomic)
+                    } catch {
+                        Log.engine.error("Couldn't keep a call's answer: \(error.localizedDescription, privacy: .public)")
+                    }
+                }
+                resumed.costs += [result?.costUSD].compactMap { $0 }
+                let parsed = CallTranscriptParser.parse(
+                    text, side: .remote, duration: seconds,
+                    defaultSpeaker: plan.file == nil ? nil : CallPrompts.firstSpeaker, speakers: [me] + roster)
+                let upTo = stretch.isTail ? TimeInterval.infinity : stretch.end
+                let kept = parsed.segments.map { $0.shifted(by: from) }.filter { segment in
+                    let middle = (segment.start + segment.end) / 2
+                    return middle >= stretch.start && middle < upTo
+                        && !isEcho(segment, of: resumed.segments, rules: rules)
+                }.map { segment -> CallTranscript.Segment in
+                    var segment = segment
+                    segment.side = sides.side(of: segment.speaker)
+                    return segment
+                }
+                let elapsed = started.duration(to: .now)
+                fields += [
+                    ("audio", seconds), ("chars", text.count), ("format", parsed.format.rawValue),
+                    ("phrases", parsed.segments.count), ("kept", kept.count),
+                    ("finish", result == nil ? "length" : result?.finishReason), ("cost", result?.costUSD),
+                    ("seconds", Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18),
+                ]
+                logged()
+                resumed.segments += kept
+                resumed.added += kept.count
+                roster = Self.roster(roster, adding: kept)
+                // Nothing new: Gemini heard nothing more there. Something: the rest of the stretch, if it still has
+                // enough speech.
+                guard let reached = kept.map(\.end).max(), reached > stretch.start,
+                      let rest = worthAsking(Stretch(start: reached, end: stretch.end, isTail: stretch.isTail),
+                                             chunk.voiced, rules)
+                else { break }
+                stretch = rest
+            }
+            cursor = end
+        }
+        return resumed
+    }
+
+    /// `segment` says again, in the same words, a phrase of `segments` within `ResumeRules.echoSeconds` of it.
+    private nonisolated static func isEcho(_ segment: CallTranscript.Segment, of segments: [CallTranscript.Segment],
+                                           rules: ResumeRules) -> Bool {
+        let words = gist(segment.text)
+        guard words.count >= rules.echoCharacters else { return false }
+        return segments.contains { abs($0.start - segment.start) <= rules.echoSeconds && gist($0.text) == words }
+    }
+
+    /// A phrase's letters and digits, lowercased: the same words however they're punctuated.
+    private nonisolated static func gist(_ text: String) -> String {
+        String(String.UnicodeScalarView(text.lowercased().unicodeScalars.filter(CharacterSet.alphanumerics.contains)))
     }
 
     /// The sample of the person's voice every chunk's request carries (`CallVoiceSample`), the same for all of them;
@@ -1062,7 +1314,8 @@ enum CallPrompts {
 /// a time: a line that isn't one (a remark before or after, a code fence) is skipped and counted, never the whole
 /// answer lost for it. It forgives what models do: "H:MM:SS", a fraction, plain seconds in brackets, no end time, a
 /// dash of any kind, list markers and bold around the time or the name, a speaker named with a colon in it (known
-/// from the speakers so far). The JSON array earlier builds asked for is still read, and a malformed one (a quote not
+/// from the speakers so far), every phrase on one line (`phrases(in:)`). The JSON array earlier builds asked for is
+/// still read, and a malformed one (a quote not
 /// escaped, an answer cut off) gives up only the objects that are broken.
 enum CallTranscriptParser {
     /// How the answer was read.
@@ -1139,18 +1392,79 @@ enum CallTranscriptParser {
         var items: [Item] = []
         var skipped = 0
         for raw in answer.split(omittingEmptySubsequences: true, whereSeparator: \.isNewline) {
-            let line = raw.trimmingCharacters(in: .whitespaces)
-            if line.isEmpty || line.hasPrefix("```") || isNoSpeech(line) { continue }
-            guard var phrase = item(line, known: known) else {
-                skipped += 1
-                continue
+            for piece in phrases(in: String(raw), known: known) {
+                let line = piece.trimmingCharacters(in: .whitespaces)
+                if line.isEmpty || line.hasPrefix("```") || isNoSpeech(line) { continue }
+                guard var phrase = item(line, known: known) else {
+                    skipped += 1
+                    continue
+                }
+                // A line with a time and nothing said: nothing to keep, nothing wrong.
+                guard !phrase.text.isEmpty else { continue }
+                if phrase.speaker == nil { phrase.speaker = items.last?.speaker }
+                items.append(phrase)
             }
-            // A line with a time and nothing said: nothing to keep, nothing wrong.
-            guard !phrase.text.isEmpty else { continue }
-            if phrase.speaker == nil { phrase.speaker = items.last?.speaker }
-            items.append(phrase)
         }
         return (items, skipped)
+    }
+
+    /// A clock time, "MM:SS" or "H:MM:SS", maybe with a fraction.
+    private static let clockTime = #"\d{1,2}(?::\d{1,2}){1,2}(?:[.,]\d+)?"#
+    /// Two clock times in square brackets, "[00:04-00:07]": where a phrase may start inside a line.
+    private static let phraseStart = try! NSRegularExpression(pattern:
+        #"\[\s*(?:"# + clockTime + #")\s*(?:-|–|—|~|→|to|\.\.)\s*(?:"# + clockTime + #")\s*\]"#)
+    /// What may go before a line's own first phrase: a list marker, bold.
+    private static let lineLead = try! NSRegularExpression(
+        pattern: #"^\s*(?:[-*•>]\s+|\d{1,3}[.)]\s+)?(?:\*\*|__)?\s*$"#)
+
+    /// A line cut where each of its phrases starts. Gemini sometimes writes the whole transcript on one line:
+    /// "[00:00-00:03] Participant 1: Нормально. [00:04-00:07] Матвей: А у тебя?". A phrase starts inside a line only at
+    /// a start and end time in square brackets followed by a speaker and a colon, so brackets in what was said
+    /// ("[смеётся]", or times in brackets with no name after them) stay in the text. Bold just before the times, and a
+    /// list marker before that, go with the phrase they open.
+    static func phrases(in line: String, known: [String]) -> [String] {
+        let ns = line as NSString
+        let matches = phraseStart.matches(in: line, range: NSRange(location: 0, length: ns.length))
+        guard !matches.isEmpty else { return [line] }
+        var cuts: [Int] = []
+        for (index, match) in matches.enumerated() {
+            let after = NSMaxRange(match.range)
+            let next = index + 1 < matches.count ? matches[index + 1].range.location : ns.length
+            let rest = ns.substring(with: NSRange(location: after, length: max(0, next - after)))
+            guard speakerAndText(rest, known: known).0 != nil else { continue }
+            let cut = phraseOpening(at: match.range.location, in: ns)
+            // The line's own first phrase, a list marker or bold before it at most: no cut.
+            let before = ns.substring(to: cut)
+            let whole = NSRange(location: 0, length: (before as NSString).length)
+            guard lineLead.firstMatch(in: before, range: whole) == nil else { continue }
+            if cut > (cuts.last ?? 0) { cuts.append(cut) }
+        }
+        guard !cuts.isEmpty else { return [line] }
+        var pieces: [String] = []
+        var start = 0
+        for cut in cuts {
+            pieces.append(ns.substring(with: NSRange(location: start, length: cut - start)))
+            start = cut
+        }
+        pieces.append(ns.substring(from: start))
+        return pieces
+    }
+
+    /// Where the phrase whose times open at `bracket` starts: with the bold just before them ("**[00:04-00:07]
+    /// Аня:**"), and a list marker before that ("- [00:04-00:07]").
+    private static func phraseOpening(at bracket: Int, in line: NSString) -> Int {
+        func isSpace(_ index: Int) -> Bool {
+            Unicode.Scalar(line.character(at: index)).map(CharacterSet.whitespaces.contains) ?? false
+        }
+        var start = bracket
+        if start >= 2, ["**", "__"].contains(line.substring(with: NSRange(location: start - 2, length: 2))) {
+            start -= 2
+        }
+        var marker = start
+        while marker > 0, isSpace(marker - 1) { marker -= 1 }
+        guard marker > 0, marker < start, "-*•>".utf16.contains(line.character(at: marker - 1)),
+              marker == 1 || isSpace(marker - 2) else { return start }
+        return marker - 1
     }
 
     /// "[01:05-01:12] Аня: Да." as a phrase; nil for a line that isn't one.
@@ -1338,5 +1652,34 @@ extension CallTranscript.Segment {
         segment.start += seconds
         segment.end += seconds
         return segment
+    }
+}
+
+/// Where a chunk of a call has speech, as SpeechAnalyzer hears it (`SpeechAnalyzer.voicedFrames`, the chunk measured
+/// whole, as when it's checked for any): how much of it any stretch holds, without keeping the samples.
+struct VoicedFrames: Sendable {
+    let frameSeconds: TimeInterval
+    /// Voiced frames before each frame, all of them last.
+    private let before: [Int32]
+
+    init(_ samples: [Float], sampleRate: Double = Recording.sampleRate,
+         parameters: SpeechAnalyzer.Parameters = SpeechAnalyzer.Parameters()) {
+        frameSeconds = parameters.frameSeconds
+        let frameLength = max(1, Int(sampleRate * parameters.frameSeconds))
+        let levels = samples.isEmpty ? [] : SpeechAnalyzer.frameLevels(samples, frameLength: frameLength)
+        var before = [Int32](repeating: 0, count: levels.count + 1)
+        for (index, voiced) in SpeechAnalyzer.voicedFrames(levels, parameters: parameters).enumerated() {
+            before[index + 1] = before[index] + (voiced ? 1 : 0)
+        }
+        self.before = before
+    }
+
+    /// Seconds of speech from `start` to `end`, seconds from the chunk's start.
+    func seconds(from start: TimeInterval, to end: TimeInterval) -> TimeInterval {
+        let frames = before.count - 1
+        guard frames > 0, end > start else { return 0 }
+        let first = min(frames, max(0, Int((start / frameSeconds).rounded(.down))))
+        let last = min(frames, max(first, Int((end / frameSeconds).rounded(.up))))
+        return Double(before[last] - before[first]) * frameSeconds
     }
 }
