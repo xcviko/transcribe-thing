@@ -61,7 +61,6 @@ struct DiagnosticSettingsSummary: Equatable, Sendable {
             DiagnosticField("main", settings.lineup.main.rawValue),
             DiagnosticField("steps", steps.isEmpty ? "none" : steps.map(\.rawValue).joined(separator: ",")),
             DiagnosticField("handsFreeModel", settings.handsFreeChoice?.rawValue ?? "main"),
-            DiagnosticField("callModel", settings.callEngine.rawValue),
         ]
         for engine in EngineID.geminiEngines {
             fields.append(DiagnosticField("effort.\(engine.rawValue)",

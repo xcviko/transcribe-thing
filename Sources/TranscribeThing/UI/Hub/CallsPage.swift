@@ -466,7 +466,7 @@ struct CallStatusLine: View {
             HStack(alignment: .center, spacing: 8) {
                 ShimmerBar(height: 3)
                     .frame(width: 40)
-                Text("Transcribing with \(hub.settings.callEngine.shortName)…")
+                Text("Transcribing with \(hub.settings.callModel.engine.shortName)…")
                     .font(.system(size: 11.5))
                     .foregroundStyle(.inkSecondary)
             }

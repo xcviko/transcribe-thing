@@ -742,8 +742,8 @@ import Testing
             == "Flash needs an OpenRouter key")
         #expect(DictationController.switchWithoutKeyNotice(.missing, blocked: [.parakeet]).title
             == "Parakeet needs an OpenRouter key")
-        #expect(DictationController.switchWithoutKeyNotice(.noCredit(nil), blocked: [.gemini, .argon]).title
-            == "Flash and Argon need OpenRouter credit")
+        #expect(DictationController.switchWithoutKeyNotice(.noCredit(nil), blocked: [.gemini]).title
+            == "Flash needs OpenRouter credit")
         let all = DictationController.switchWithoutKeyNotice(.invalid("401"), blocked: [.parakeet, .gemini])
         #expect(all.title == "Parakeet and Flash need an OpenRouter key")
         #expect(all.body == "OpenRouter rejected yours. Update it to switch models.")

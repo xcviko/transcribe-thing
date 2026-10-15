@@ -123,7 +123,7 @@ import Testing
         #expect(eval(local: .downloading(DownloadProgress(fraction: 0.62))) == .downloading(.parakeet, 0.62))
         #expect(eval(local: .failed("x")) == .notDownloaded(.parakeet))
         #expect(eval(engine: .geminiFlash, key: .missing) == .needsKey(.geminiFlash))
-        #expect(eval(engine: .geminiArgon, key: .valid(KeyInfo()), stored: true) == .ready)
+        #expect(eval(engine: .geminiFlash, key: .valid(KeyInfo()), stored: true) == .ready)
         #expect(eval(local: .downloading(DownloadProgress(fraction: 0.1))).allowsPractice == false)
         #expect(eval(local: .installed).allowsPractice)
     }
@@ -229,7 +229,7 @@ import Testing
             ctx.account = .preview(status: .missing)
         }
         #expect(!model.canContinue)
-        model.select(.geminiArgon)
+        model.select(.geminiFlash)
         #expect(!model.canContinue, "Gemini isn't picked here")
     }
 
@@ -238,16 +238,16 @@ import Testing
         let missing = makeModel(step: 2) { ctx in
             ctx.models = .preview(states: [.parakeet: .notInstalled])
             ctx.account = .preview(status: .missing)
-            ctx.settings.lineup.main = .argon
+            ctx.settings.lineup.main = .gemini
         }
-        #expect(missing.gateInputs.engine == .geminiArgon)
+        #expect(missing.gateInputs.engine == .geminiFlash)
         #expect(missing.showsKeyField)
         #expect(!missing.canContinue)
 
         let connected = makeModel(step: 2) { ctx in
             ctx.models = .preview(states: [.parakeet: .notInstalled])
             ctx.account = .preview(status: .valid(KeyInfo(limitRemaining: 4.2)))
-            ctx.settings.lineup.main = .argon
+            ctx.settings.lineup.main = .gemini
         }
         #expect(connected.canContinue)
         #expect(!connected.showsKeyField)
@@ -682,7 +682,6 @@ import Testing
         #expect(!usable(Self.lineup(on: [.gemini]), .invalid("401")))
         #expect(usable(Self.lineup(on: [.gemini]), .offline))
         #expect(usable(Self.lineup(main: .gemini, on: [.parakeet]), .missing), "Parakeet on this Mac needs no key")
-        #expect(!usable(Self.lineup(main: .parakeet, on: [.argon]), .missing), "Argon needs the key as Flash does")
     }
 
     @Test func noteNamesTheActualSwitchModelBinding() {
@@ -737,12 +736,9 @@ import Testing
     @Test func theLineupNoteNamesTheNextModel() {
         var lineup = ModelLineup.default
         #expect(OnboardingGate.lineupNote(binding: .fnTab, lineup: lineup).contains("to use Gemini 3.8 Flash"))
-        lineup.move(.argon, to: 1)
-        lineup.setSwitchable(.argon, true)
-        #expect(OnboardingGate.lineupNote(binding: .fnTab, lineup: lineup).contains("to use Gemini 4 Argon"))
-        lineup.main = .argon
+        lineup.main = .gemini
         #expect(OnboardingGate.lineupNote(binding: .fnTab, lineup: lineup)
-            .hasPrefix("Your dictations start on Gemini 4 Argon, your main model."))
+            .hasPrefix("Your dictations start on Gemini 3.8 Flash, your main model."))
     }
 
     @Test func switchModelLessonShowsOnlyWhenAStepWouldAnswer() {
@@ -762,7 +758,5 @@ import Testing
         }
         #expect(gemini.gateInputs.engine == .geminiFlash)
         #expect(gemini.practiceReadiness != .ready)
-        let argon = makeModel { ctx in ctx.settings.lineup.main = .argon }
-        #expect(argon.gateInputs.engine == .geminiArgon)
     }
 }

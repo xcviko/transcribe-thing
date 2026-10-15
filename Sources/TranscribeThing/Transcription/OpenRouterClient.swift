@@ -229,7 +229,7 @@ final class OpenRouterClient: Sendable {
     /// `max_tokens` of a Gemini transcription. Its floor, 32,768, covers the first minute, so short dictations
     /// ask for what they always have (a 1:48 recording already thought for about 18k tokens at high, and less
     /// would cut them short); every further minute started adds 600 tokens to write it out. At high, which thinks
-    /// the longest (Gemini 4 Argon most of all), it starts 16,384 higher. Never more than 65,536, Gemini's most.
+    /// the longest, it starts 16,384 higher. Never more than 65,536, Gemini's most.
     static func transcriptionMaxTokens(audioSeconds: TimeInterval, effort: ReasoningEffort = .medium) -> Int {
         let minutes = Int((max(0, audioSeconds) / 60).rounded(.up))
         let thinking = effort == .high ? 16_384 : 0

@@ -110,7 +110,7 @@ extension OpenRouterClient {
         } catch let error as URLError {
             if error.code == .cancelled || Task.isCancelled { throw CancellationError() }
             switch error.code {
-            case .timedOut: throw AppError.timeout(.geminiArgon)
+            case .timedOut: throw AppError.timeout(.geminiFlash)
             case .notConnectedToInternet, .dataNotAllowed, .cannotFindHost, .dnsLookupFailed, .cannotConnectToHost,
                  .secureConnectionFailed:
                 throw AppError.vertexProxy(.unreachable)
@@ -123,7 +123,7 @@ extension OpenRouterClient {
         let error = VertexProxyErrorMapper.httpError(
             status: http.statusCode, data: body,
             retryAfter: OpenRouterErrorMapper.retryAfter(http.value(forHTTPHeaderField: "Retry-After")),
-            engine: .geminiArgon)
+            engine: .geminiFlash)
         DiagnosticLog.shared.event(.net, "endpoint.upload.http", ["status": http.statusCode, "code": error])
         return error
     }

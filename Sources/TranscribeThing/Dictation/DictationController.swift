@@ -316,7 +316,7 @@ final class DictationController {
         case .cycleEngine: send(.cycleEngine)
         case .cycleEngineRepeat: repeatCycle()
         case .polish:
-            // On Gemini (Flash or Argon) the key is Polish's; off Gemini it's Polish Selection's, for what's selected right then (text
+            // On Gemini the key is Polish's; off Gemini it's Polish Selection's, for what's selected right then (text
             // selected after fn went down counts too).
             guard machine.isRecording else { return }
             if !effectiveChoice.isGemini, canPolishSelection {
@@ -1127,18 +1127,6 @@ final class DictationController {
                 deliverSilence(job, result)
                 return
             }
-            // Gemini 4 Argon sometimes answers with stray tokens or its own thoughts and none of the tags it was asked
-            // for ("!#", "1 1 2 4 8"): not pasted, the recording kept to retry. Flash always tags its answer.
-            if job.engine == .geminiArgon, result.answerTags == TaggedTranscript.Tags.none, let recording = job.recording {
-                let notice = keepFailed(job, recording, .engineFailed(job.engine, "Its answer wasn’t a transcript."),
-                                        modelAnswer: result.rawAnswer)
-                DiagnosticLog.shared.event(.dictation, "job.finished", [
-                    "engine": job.engine, "outcome": "untagged", "kept": true, "polished": job.polishes,
-                    "answerChars": result.rawAnswer?.count, "finish": result.finishReason])
-                Log.engine.info("Gemini 4 Argon's answer had no tags; kept in History")
-                postFailure(notice)
-                return
-            }
             forget(job.id)
             // An older notice's Retry or Undo would transcribe it yet again, or record on, now that its audio is kept.
             toasts.dismiss(recordingID: job.id)
@@ -1261,7 +1249,7 @@ final class DictationController {
         reportNoSpeech(model: ModelChoice(engine: job.engine))
     }
 
-    /// "Gemini 4 Argon heard no speech": a failed row in History with the recording and `answer` (the model's, as it
+    /// "Gemini 3.8 Flash heard no speech": a failed row in History with the recording and `answer` (the model's, as it
     /// came), its notice offering Retry, and the pill saying it was kept.
     private func keepUnheard(_ job: Job, _ recording: Recording, answer: String?) {
         let notice = keepFailed(job, recording, .heardNoSpeech(job.engine), modelAnswer: answer)
@@ -1582,8 +1570,8 @@ final class DictationController {
         }
     }
 
-    /// What Gemini (`engine`, the dictation's: Flash or Argon) writes for a dictation with Polish and Translate on or
-    /// off: its transcript (nil), Polish's message, the translation, or the message translated.
+    /// What Gemini (`engine`, the dictation's) writes for a dictation with Polish and Translate on or off: its
+    /// transcript (nil), Polish's message, the translation, or the message translated.
     nonisolated static func rewriteKind(polishes: Bool, translates: Bool,
                                         by engine: EngineID = .geminiFlash) -> TranscriptVersionKind? {
         switch (polishes, translates) {
@@ -2193,8 +2181,8 @@ final class DictationController {
         return PolishSelectionModel(rawValue: String(notice.dedupeKey.dropFirst(selectionCardPrefix.count)))
     }
 
-    /// Polish Selection, or the selection translated (`translates`): the models asked (`AppSettings.selectionModel`),
-    /// how far each has streamed, and the History entry their answers land in. `settled` once an answer is pasted or
+    /// Polish Selection, or the selection translated (`translates`): the models asked (Gemini 3.8 Flash), how far each
+    /// has streamed, and the History entry their answers land in. `settled` once an answer is pasted or
     /// the cards are closed: what comes after is dropped.
     final class SelectionPolish {
         let translates: Bool
@@ -2219,19 +2207,15 @@ final class DictationController {
         func kind(_ model: PolishSelectionModel) -> TranscriptVersionKind {
             translates ? .selectionTranslation(model) : .selection(model)
         }
-        /// The model whose color the pill wears while it writes: the first asked (Gemini's when none is).
-        var choice: ModelChoice {
-            PolishSelectionModel.allCases.first { estimates[$0] != nil }?.choice ?? .gemini
-        }
         /// The count the pill shows: the first model's that still writes.
         var count: PillTokenCount? {
             PolishSelectionModel.allCases.first { pending.contains($0) && counts[$0] != nil }.flatMap { counts[$0] }
         }
     }
 
-    /// Polish Selection can happen: its key is bound, and the key of the provider the selection's model goes through
-    /// (`AppSettings.selectionModel`: OpenRouter's, or the user's endpoint) can pay for it. Without one, the key stays
-    /// the app's and no hint promises a polish that would only fail.
+    /// Polish Selection can happen: its key is bound, and the key of the provider Gemini 3.8 Flash goes through
+    /// (OpenRouter's, or the user's endpoint) can pay for it. Without one, the key stays the app's and no hint promises
+    /// a polish that would only fail.
     private var canPolishSelection: Bool {
         settings.shortcuts[.polish] != nil && selectionModelIsReady
     }
@@ -2241,10 +2225,9 @@ final class DictationController {
         settings.shortcuts[.translate] != nil && selectionModelIsReady
     }
 
-    /// The model a selection goes to has a working key with the provider its requests go through.
+    /// Gemini 3.8 Flash, which a selection goes to, has a working key with the provider its requests go through.
     private var selectionModelIsReady: Bool {
-        guard let engine = settings.selectionModel.engine else { return false }
-        return keyProblem(for: engine) == nil
+        keyProblem(for: .geminiFlash) == nil
     }
 
     /// fn D can add the selection to the dictionary: its key is bound (with a key: a modifier-only binding can't be
@@ -2426,13 +2409,13 @@ final class DictationController {
     }
 
     /// The polish key over selected text (or the translate key, `translates`): the dictation gives way without a
-    /// trace (the cancel cue, then Polish's sound), the pill turns into the polish, and the selection goes to the
-    /// Gemini model the user dictates with (`AppSettings.selectionModel`), at its Reasoning level. Its message (or
-    /// translation) comes up on a card, to paste over the selection or copy, and History keeps it.
+    /// trace (the cancel cue, then Polish's sound), the pill turns into the polish, and the selection goes to Gemini
+    /// 3.8 Flash, at its Reasoning level. Its message (or translation) comes up on a card, to paste over the selection
+    /// or copy, and History keeps it.
     private func rewriteSelection(_ text: String, translates: Bool) {
         settleSelection()
         let entries = history.entries
-        let models = [settings.selectionModel]
+        let models = [PolishSelectionModel.geminiFlash]
         // Each model at the level picked for it in Models.
         let routes = Dictionary(uniqueKeysWithValues: models.map { model in
             (model, model.route(effort: model.engine.flatMap(settings.reasoningEffort(for:))))
@@ -2724,7 +2707,7 @@ final class DictationController {
     }
 
     /// What a switch to models the OpenRouter key can't pay for (`blocked`, in cycle order) says: "Flash needs an
-    /// OpenRouter key", "Flash and Argon need OpenRouter credit".
+    /// OpenRouter key", "Flash needs OpenRouter credit".
     static func switchWithoutKeyNotice(_ status: KeyStatus, blocked: [ModelChoice]) -> Notice {
         let list = ModelChoice.sentenceList(blocked.isEmpty ? [.gemini] : blocked)
         let subject = "\(list.names) \(list.isPlural ? "need" : "needs")"
@@ -2863,8 +2846,9 @@ final class DictationController {
             effectiveChoice
         } else if phase == .processing, let job = pillJob {
             ModelChoice(engine: job.engine)
-        } else if phase == .processing, selectionRuns, let selectionPolish {
-            selectionPolish.choice
+        } else if phase == .processing, selectionRuns, selectionPolish != nil {
+            // Gemini 3.8 Flash writes it.
+            .gemini
         } else {
             nil
         }

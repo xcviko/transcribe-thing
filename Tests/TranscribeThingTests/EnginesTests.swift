@@ -1897,7 +1897,7 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
         let (store, parakeet, settings) = makeStore()
         store.start()
         await waitUntil { store.state(of: .parakeet) == .ready }
-        settings.lineup.main = .argon
+        settings.lineup.main = .gemini
         #expect(store.state(of: .parakeet) == .ready)
         #expect(await parakeet.isLoaded)
     }

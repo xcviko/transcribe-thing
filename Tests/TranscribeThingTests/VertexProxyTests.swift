@@ -536,15 +536,15 @@ enum ProxyFixture {
         #expect(StubURLProtocol.registry.requests(for: openRouterHost).isEmpty)
     }
 
-    /// Gemini 4 Argon goes to the endpoint as Flash does, with its own model and the level picked for it.
-    @Test func argonGoesThroughTheProxyWithItsModelAndLevel() async throws {
-        let (proxy, proxyHost) = ProxyFixture.proxy([ProxyFixture.answer("Argon.")])
+    /// Gemini goes to the endpoint with its model and the level picked for it.
+    @Test func geminiGoesThroughTheProxyWithItsModelAndLevel() async throws {
+        let (proxy, proxyHost) = ProxyFixture.proxy([ProxyFixture.answer("Flash.")])
         let (service, openRouterHost) = ProxyFixture.service(proxy: proxy)
-        service.reasoningEffort = { $0 == .geminiArgon ? .high : .low }
-        let result = try await service.transcribe(ProxyFixture.speech(), engine: .geminiArgon)
-        #expect(result.text == "Argon." && result.engine == .geminiArgon && result.reasoningEffort == .high)
+        service.reasoningEffort = { $0 == .geminiFlash ? .high : .low }
+        let result = try await service.transcribe(ProxyFixture.speech(), engine: .geminiFlash)
+        #expect(result.text == "Flash." && result.engine == .geminiFlash && result.reasoningEffort == .high)
         let body = ProxyFixture.json(try #require(StubURLProtocol.registry.bodies(for: proxyHost).first))
-        #expect(body["model"] as? String == "google/gemini-4-argon")
+        #expect(body["model"] as? String == "google/gemini-3.8-flash")
         #expect((body["reasoning"] as? [String: Any])?["effort"] as? String == "high")
         #expect(body["provider"] == nil)
         #expect(StubURLProtocol.registry.requests(for: openRouterHost).isEmpty)
@@ -564,13 +564,11 @@ enum ProxyFixture {
         #expect(body["provider"] != nil, "OpenRouter's requests keep their routing")
     }
 
-    @Test func withOnlyTheProxyEveryGeminiWorks() async throws {
-        let (proxy, _) = ProxyFixture.proxy([ProxyFixture.answer("Только прокси."), ProxyFixture.answer("И Argon.")])
+    @Test func withOnlyTheProxyGeminiWorks() async throws {
+        let (proxy, _) = ProxyFixture.proxy([ProxyFixture.answer("Только прокси.")])
         let (service, openRouterHost) = ProxyFixture.service(openRouterKey: nil, proxy: proxy)
         let result = try await service.transcribe(ProxyFixture.speech(), engine: .geminiFlash)
         #expect(result.text == "Только прокси.")
-        let argon = try await service.transcribe(ProxyFixture.speech(), engine: .geminiArgon)
-        #expect(argon.text == "И Argon.")
         #expect(StubURLProtocol.registry.requests(for: openRouterHost).isEmpty)
     }
 
@@ -635,7 +633,6 @@ enum ProxyFixture {
         let (proxy, _) = ProxyFixture.proxy()
         let account = OpenRouterAccount.preview(status: .missing)
         #expect(CloudRoute.provider(for: .geminiFlash, proxy: proxy) == .vertexProxy)
-        #expect(CloudRoute.provider(for: .geminiArgon, proxy: proxy) == .vertexProxy)
         #expect(CloudRoute.provider(for: .parakeet, proxy: proxy) == nil)
         #expect(CloudRoute.keyStatus(for: .geminiFlash, account: account, proxy: proxy) == .checking)
         #expect(CloudRoute.keyStatus(for: .parakeet, account: account, proxy: proxy) == .missing)

@@ -119,7 +119,7 @@ private func format(of data: Data, ext: String) throws -> (codec: AudioFormatID,
     @Test func uploadForcesAFormatOnACloudModel() throws {
         for format in UploadFormat.allCases {
             #expect(options("--engine", "geminiFlash", "--upload", format.rawValue)?.upload == format)
-            #expect(options("--upload", format.rawValue, "--engine", "geminiArgon")?.upload == format)
+            #expect(options("--upload", format.rawValue, "--engine", "flash")?.upload == format)
         }
         let plain = try #require(options("--engine", "geminiFlash"))
         #expect(plain.upload == nil, "the app's own format")
@@ -218,7 +218,7 @@ private func format(of data: Data, ext: String) throws -> (codec: AudioFormatID,
     }
 
     private func record(_ id: String, cost: Double, milliseconds: Double) -> StubURLProtocol.Reply {
-        StubURLProtocol.Reply(body: #"{"data":{"id":"\#(id)","api_type":"chat","model":"google/gemini-4-argon","provider_name":"Google AI Studio","total_cost":\#(cost),"generation_time":\#(milliseconds),"created_at":"2026-09-29T10:00:00Z"}}"#)
+        StubURLProtocol.Reply(body: #"{"data":{"id":"\#(id)","api_type":"chat","model":"google/gemini-3.8-flash","provider_name":"Google AI Studio","total_cost":\#(cost),"generation_time":\#(milliseconds),"created_at":"2026-09-29T10:00:00Z"}}"#)
     }
 
     private let notRecorded = StubURLProtocol.Reply(status: 404, body: #"{"error":{"code":404,"message":"Generation not found"}}"#)
@@ -235,7 +235,7 @@ private func format(of data: Data, ext: String) throws -> (codec: AudioFormatID,
     @MainActor
     @Test func theRecordFillsInWhatTheResponseLeftOut() async {
         let (service, host) = makeService([record("gen-1", cost: 0.0009, milliseconds: 412)])
-        var result = TranscriptResult(text: "Hi.", engine: .geminiArgon, processingTime: 1,
+        var result = TranscriptResult(text: "Hi.", engine: .geminiFlash, processingTime: 1,
                                       provider: "Google AI Studio", generationID: "gen-1")
         await EngineCLI.fillFromGenerationRecord(&result, service: service)
         #expect(lookups(host) == ["gen-1"])

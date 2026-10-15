@@ -88,7 +88,7 @@ import Testing
             fails = failing
             h.controller.makeVersion(.transcription(.geminiFlash), of: try #require(h.history.entry(id: transcribed)))
             h.controller.makeVersion(.polish(), of: try #require(h.history.entry(id: polished)))
-            h.controller.makeVersion(.transcription(.geminiArgon), of: try #require(h.history.entry(id: failed)))
+            h.controller.makeVersion(.transcription(.geminiFlash), of: try #require(h.history.entry(id: failed)))
             #expect(h.controller.homeWork.count == 3)
             #expect(h.controller.pendingJobCount == 0 && h.controller.machine.activeJobs == 0)
             #expect(!h.controller.machine.isBusy && !h.hotkeys.isBusy)
@@ -98,7 +98,7 @@ import Testing
             #expect(h.toasts.notices.isEmpty)
             if failing {
                 #expect(Set(h.controller.homeFailures.keys) == [transcribed, polished], "why, in each transcript's row")
-                #expect(h.history.entry(id: failed)?.errorMessage == "\(EngineID.geminiArgon.shortName) took too long",
+                #expect(h.history.entry(id: failed)?.errorMessage == "\(EngineID.geminiFlash.shortName) took too long",
                         "and in the failed row itself")
             }
         }
@@ -253,8 +253,6 @@ import Testing
         #expect(reason(nil, polish) == "It returned no text.")
         #expect(reason(.openRouterBadRequest(""), flash) == "It couldn’t process this recording.")
         #expect(reason(.openRouterProviderUnavailable(""), flash) == "Google AI Studio is unavailable")
-        #expect(reason(.openRouterProviderUnavailable(""), .transcription(.geminiArgon))
-                == "Google AI Studio is unavailable")
         #expect(reason(.noSpeech, flash) == "No speech detected")
         for error: AppError in [.openRouterMissingKey, .openRouterInvalidKey(""), .openRouterNoCredits(""), .offline,
                                 .openRouterRateLimited(retryAfter: nil), .openRouterServer("")] {

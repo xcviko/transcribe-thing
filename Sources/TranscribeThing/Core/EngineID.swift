@@ -3,25 +3,25 @@ import Foundation
 /// The transcription engines transcribe-thing knows. Raw values are persisted (settings, history), never rename
 /// them. Declaration order is display order: the local model, then Gemini.
 enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
-    /// `parakeetCloud` and `geminiPro` are retired (`isRetired`).
+    /// `parakeetCloud`, `geminiArgon` and `geminiPro` are retired (`isRetired`): History still holds what they wrote.
     case parakeet, parakeetCloud, geminiFlash, geminiArgon, geminiPro
 
     var id: String { rawValue }
 
     static let `default`: EngineID = .parakeet
 
-    /// A model this build no longer offers or runs: Parakeet v3 through OpenRouter's speech-to-text endpoint, and
-    /// Gemini 3.1 Pro. Their cases stay so History keeps reading, naming and drawing the transcripts they wrote; a
-    /// setting that named one reads as Parakeet v3 on this Mac (`AppSettings`).
-    var isRetired: Bool { self == .parakeetCloud || self == .geminiPro }
+    /// A model this build no longer offers or runs: Parakeet v3 through OpenRouter's speech-to-text endpoint, Gemini 4
+    /// Argon and Gemini 3.1 Pro. Their cases stay so History keeps reading, naming and drawing the transcripts they
+    /// wrote; a setting that named one reads as the model that took its place: Parakeet v3 on this Mac for the cloud
+    /// Parakeet, Gemini 3.8 Flash for the others (`AppSettings`).
+    var isRetired: Bool { self == .parakeetCloud || self == .geminiArgon || self == .geminiPro }
 
     /// Every engine this build offers and runs, in display order. Every list of models to pick, switch to, fall
     /// back to or transcribe with comes from here, never from `allCases`.
     static var offered: [EngineID] { allCases.filter { !$0.isRetired } }
 
     static var localEngines: [EngineID] { offered.filter(\.isLocal) }
-    /// The Gemini models this build runs: Gemini 3.8 Flash and Gemini 4 Argon. Calls take one of them
-    /// (`AppSettings.callEngine`).
+    /// The Gemini models this build runs: Gemini 3.8 Flash alone. It takes calls too (`AppSettings.callModel`).
     static var geminiEngines: [EngineID] { offered.filter(\.isGemini) }
 
     var isLocal: Bool {
@@ -85,8 +85,7 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
         case .parakeet: "Fastest · 25 European languages"
         case .parakeetCloud: "25 European languages · ≈ $0.09 per hour of audio"
         case .geminiFlash: "Fast and very accurate · pay per use"
-        case .geminiArgon: "Most accurate · slower · about 2.7× Flash’s cost"
-        case .geminiPro: "Most accurate · slower · higher cost"
+        case .geminiArgon, .geminiPro: "Most accurate · slower · higher cost"
         }
     }
 
@@ -115,8 +114,7 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
         case .parakeet: "bolt.fill"
         case .parakeetCloud: "cloud.bolt.fill"
         case .geminiFlash: "sparkle"
-        case .geminiArgon: "atom"
-        case .geminiPro: "sparkles"
+        case .geminiArgon, .geminiPro: "sparkles"
         }
     }
 
@@ -153,14 +151,11 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
     /// How long a request may go without a byte (`URLRequest.timeoutInterval`, an idle timeout);
     /// `URLSession.openRouterCloud` caps a whole request at 3 hours. Gemini streams its answer, and OpenRouter sends
     /// comments while the model is busy, so 2 minutes of silence means a stalled connection, however long the
-    /// recording. Gemini 4 Argon, a larger and slower model, can think for longer before its first byte at high
-    /// effort, and the user's endpoint may send no comments meanwhile: it gets 4 minutes. 0 for the models that
-    /// never run here.
+    /// recording. 0 for the models that never run in the cloud.
     var cloudTimeout: TimeInterval {
         switch self {
         case .parakeet, .parakeetCloud: 0
-        case .geminiFlash, .geminiPro: 120
-        case .geminiArgon: 240
+        case .geminiFlash, .geminiArgon, .geminiPro: 120
         }
     }
 
@@ -173,9 +168,9 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
     /// asked just to apply it, Gemini did so in some runs and kept every repeat in others, the same recording each
     /// time. The silent word-for-word pass first made it clean the same way in every run. It adds 3-6 s to a dictation
     /// of 1-2 minutes, nothing to a short one. The examples are neutral: words from a prompt can come back on noise.
-    /// The instructions are English, as are Polish's and Translate's, for Flash and Argon alike: with any Russian
-    /// prompt, even a one-line "transcribe this", Gemini 4 Argon ignored a 4.6 s clip and answered with made-up text;
-    /// the same prompts in English worked every time. The examples stay Russian, in quotes, where they show Russian
+    /// The instructions are English, as are Polish's and Translate's: with any Russian prompt, even a one-line
+    /// "transcribe this", a Gemini model ignored a 4.6 s clip and answered with made-up text; the same prompts in
+    /// English worked every time. The examples stay Russian, in quotes, where they show Russian
     /// speech; "Write in the language I speak" keeps an English prompt from turning Russian into English.
     static let geminiSystemPrompt = """
     I'll send you audio, and your job is to write it down as clean text: everything I said, but without the clutter of live speech. Return the text between <transcript> and </transcript> tags and nothing outside them.

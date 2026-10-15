@@ -254,8 +254,8 @@ import Testing
 
     @Test func aFileThatFailsSaysWhyAndKeepsItsName() async throws {
         let h = H.make(keyStatus: .valid(KeyInfo()))
-        h.controller.transcribeOverride = { _, _ in throw AppError.engineFailed(.geminiArgon, "boom") }
-        h.controller.transcribe(Self.file(), as: .transcription(.geminiArgon))
+        h.controller.transcribeOverride = { _, _ in throw AppError.engineFailed(.geminiFlash, "boom") }
+        h.controller.transcribe(Self.file(), as: .transcription(.geminiFlash))
         let id = try #require(h.history.entries.first?.id)
         try await waitUntil { h.history.entry(id: id)?.status == .failed }
         #expect(h.history.entry(id: id)?.importedFrom == "interview.mp3")
@@ -319,7 +319,7 @@ import Testing
             engine.isLocal ? .needsDownload : .ready
         }
         #expect(choices.first?.kind == .transcription(.geminiFlash))
-        #expect(choices.suffix(4).map(\.kind) == TranscriptVersionKind.rewrites)
+        #expect(choices.suffix(TranscriptVersionKind.rewrites.count).map(\.kind) == TranscriptVersionKind.rewrites)
         #expect(choices.filter { !$0.isEnabled }.allSatisfy { $0.kind.engine.isLocal })
         #expect(Set(choices.map(\.kind)).count == choices.count)
     }
@@ -420,10 +420,8 @@ import Testing
     @Test func aLongFileIsOfferedOnlyParakeet() {
         let choices = ImportChoices.make(main: .geminiFlash, seconds: 2 * 3_600) { _ in .ready }
         let gemini = choices.filter { $0.kind.engine.isGemini }
-        #expect(gemini.map(\.kind) == [.transcription(.geminiFlash), .transcription(.geminiArgon),
-                                       .polish(by: .geminiFlash), .polish(by: .geminiArgon),
-                                       .translation(polished: false, by: .geminiFlash),
-                                       .translation(polished: false, by: .geminiArgon)])
+        #expect(gemini.map(\.kind) == [.transcription(.geminiFlash), .polish(by: .geminiFlash),
+                                       .translation(polished: false, by: .geminiFlash)])
         #expect(gemini.allSatisfy { $0.blocker == .tooLongForGemini })
         #expect(gemini.first?.title == "Gemini 3.8 Flash · Too long, Parakeet takes any length")
         #expect(choices.filter(\.isEnabled).map(\.kind) == [.transcription(.parakeet)])
@@ -437,7 +435,7 @@ import Testing
                                     voicedSeconds: 10_000, audioFileName: "x.m4a", importedFrom: "episode.mp3")
         let menu = VersionsMenu.make(for: entry, running: nil) { _ in .ready }
         #expect(menu.actions.first { $0.kind == .transcription(.parakeet) } == nil, "it has Parakeet's already")
-        for kind in [.transcription(.geminiFlash), .transcription(.geminiArgon)] + TranscriptVersionKind.rewrites {
+        for kind in [.transcription(.geminiFlash)] + TranscriptVersionKind.rewrites {
             #expect(menu.actions.first { $0.kind == kind }?.blocker == .tooLongForGemini)
         }
     }

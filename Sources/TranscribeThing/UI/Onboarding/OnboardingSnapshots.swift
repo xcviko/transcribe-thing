@@ -62,15 +62,9 @@ enum OnboardingSnapshots {
                 ctx.models = .preview(states: [.parakeet: .ready])
                 ctx.settings.shortcuts[.switchModel] = .rightCommand
             }) { model in model.stage(step: .model) },
-            // Gemini 4 Argon switched on after Parakeet: the line under the card names it.
-            entry("onboarding-3-model-argon-step", context: { ctx in
-                ctx.models = .preview(states: [.parakeet: .ready])
-                ctx.settings.lineup.move(.argon, to: 1)
-                ctx.settings.lineup.setSwitchable(.argon, true)
-            }) { model in model.stage(step: .model) },
-            entry("onboarding-3-model-argon-main-missing", context: { ctx in
+            entry("onboarding-3-model-gemini-main-missing", context: { ctx in
                 ctx.models = .preview(states: [.parakeet: .notInstalled])
-                ctx.settings.lineup.main = .argon
+                ctx.settings.lineup.main = .gemini
                 ctx.account = .preview(status: .missing)
             }) { model in model.stage(step: .model) },
             entry("onboarding-3-model-gemini-invalid", context: { ctx in
@@ -176,8 +170,8 @@ enum OnboardingSnapshots {
             },
 
             entry("onboarding-6-done", still: 0.42) { model in model.stage(step: .done) },
-            entry("onboarding-6-done-argon", still: 0.42, context: { ctx in
-                ctx.settings.lineup.main = .argon
+            entry("onboarding-6-done-gemini", still: 0.42, context: { ctx in
+                ctx.settings.lineup.main = .gemini
             }) { model in model.stage(step: .done) },
         ]
     }
