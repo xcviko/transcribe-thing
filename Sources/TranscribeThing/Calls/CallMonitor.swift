@@ -180,6 +180,13 @@ final class CallMonitor {
         /// When the mute going on now began, in seconds from the call's start: the journal silences the mic from there.
         var mutedSince: TimeInterval?
         var tapProcesses: [AudioObjectID]
+        /// Start Call Recording, pressed on a call the detector noticed: the person said to record it, so only Stop
+        /// Call Recording ends it. The detector ending or dropping its call, or finding one in another tab of the
+        /// browser (Chrome's picture-in-picture as the person leaves the tab can look like that), doesn't.
+        var pinned = false
+        /// The mutes of the detector's calls this pinned recording outlived, from its start: the detector forgets
+        /// them once its call is over.
+        var earlierMutes: [CallInterval] = []
         var origin: TimeInterval { recorder.origin }
     }
 
@@ -333,7 +340,14 @@ final class CallMonitor {
 
     /// Start Call Recording: during a noticed call, keeps it; otherwise records the mic and everything the Mac plays.
     func startManual() {
-        if live != nil { return keep() }
+        if var live {
+            live.pinned = true
+            // Asked for by name: no "is it a call?" wait for a tab that says so.
+            live.classified = true
+            self.live = live
+            if live.consent == .kept { logEvent("call.kept", live, ["reason": "menu"]) }
+            return keepLive(how: "menu")
+        }
         guard let journal = store.journal else { return }
         let id = UUID()
         let info = CallInfo(id: id, appName: Self.manualName, startedAt: deps.now(), manual: true)
@@ -402,13 +416,19 @@ final class CallMonitor {
                 begin(app, at: time, from: at, carrying: carrying)
             case .dropped(let app, _):
                 if ignored == app { ignored = nil }
-                guard let live, live.app == app else { continue }
+                guard var live, live.app == app else { continue }
+                if live.pinned {
+                    live.earlierMutes = live.info.mutes
+                    self.live = live
+                    logEvent("call.pinned", live, ["detector": "dropped"])
+                    continue
+                }
                 handedOver = (app, live.recorder)
                 logEvent("call.dropped", live, ["reason": "notACall"])
                 if live.consent == .kept { end(live, status: .transcribing) } else { discardLive(ignore: false) }
             case .started(let call):
                 if live == nil, mayRecord(call.app) { begin(call.app, at: time) }
-                guard var live, live.app == call.app else { continue }
+                guard var live, live.app == call.app, !live.pinned else { continue }
                 live.confirmed = true
                 self.live = live
                 logEvent("call.started", live, ["classified": live.classified])
@@ -416,6 +436,17 @@ final class CallMonitor {
             case .ended(let call):
                 if ignored == call.app { ignored = nil }
                 guard var live, live.app == call.app else { continue }
+                if live.pinned {
+                    // Recorded on until Stop; what the detector knew of the mutes stays with it.
+                    live.info.mutes = live.earlierMutes + intervals(call.mutes, origin: live.origin)
+                    live.earlierMutes = live.info.mutes
+                    live.mutedSince = nil
+                    self.live = live
+                    let mutes = live.info.mutes
+                    live.recorder.update { $0.mutes = mutes }
+                    logEvent("call.pinned", live, ["detector": "ended"])
+                    continue
+                }
                 handedOver = (call.app, live.recorder)
                 live.info.mutes = intervals(call.mutes, origin: live.origin)
                 // The call ended at its app's last mic or sound, a second kept after it: not after the minute of
@@ -518,11 +549,11 @@ final class CallMonitor {
                 mutes.append(since...max(since, time))
                 open.append(since)
             }
-            live.info.mutes = intervals(mutes, origin: live.origin)
+            live.info.mutes = live.earlierMutes + intervals(mutes, origin: live.origin)
             // From when the detector says the mute began, not when it was seen: the journal still holds that audio.
             live.mutedSince = open.min().map { max(0, $0 - live.origin) }
             if let tab = followed.tab, Self.isBrowser(app) {
-                if settings.callExclusions.excludes(service: tab.service, page: tab.page) {
+                if !live.pinned, settings.callExclusions.excludes(service: tab.service, page: tab.page) {
                     Log.audio.info("Not recorded: the call's site is excluded")
                     logEvent("call.dropped", live, ["reason": "excluded"])
                     return discardLive()
