@@ -122,12 +122,47 @@ struct ModifierSnapshot: Equatable, Sendable {
         [leftControl, rightControl, leftOption, rightOption, leftShift, rightShift,
          leftCommand, rightCommand, function].filter { $0 }.count
     }
+
+    // Key by key, for double taps: the keys of a tap on top of those already held.
+    func union(_ other: ModifierSnapshot) -> ModifierSnapshot { combining(other) { $0 || $1 } }
+    func subtracting(_ other: ModifierSnapshot) -> ModifierSnapshot { combining(other) { $0 && !$1 } }
+    func isSubset(of other: ModifierSnapshot) -> Bool { subtracting(other).isEmpty }
+
+    private func combining(_ other: ModifierSnapshot, _ key: (Bool, Bool) -> Bool) -> ModifierSnapshot {
+        var result = ModifierSnapshot()
+        result.leftControl = key(leftControl, other.leftControl)
+        result.rightControl = key(rightControl, other.rightControl)
+        result.leftOption = key(leftOption, other.leftOption)
+        result.rightOption = key(rightOption, other.rightOption)
+        result.leftShift = key(leftShift, other.leftShift)
+        result.rightShift = key(rightShift, other.rightShift)
+        result.leftCommand = key(leftCommand, other.leftCommand)
+        result.rightCommand = key(rightCommand, other.rightCommand)
+        result.function = key(function, other.function)
+        return result
+    }
+}
+
+// MARK: - Double taps
+
+/// When two presses of a modifier-only shortcut's keys are a double tap (`Shortcut.taps` 2), for the hotkey router
+/// and the recorder alike. A tap is the keys pressed and let go with nothing else in between: no other key, click or
+/// modifier. The double tap goes off on the second press.
+enum DoubleTap {
+    /// A press held longer is a hold, not a tap: the first tap is let go within it. The same length as
+    /// `DictationMachine.Config.tapThreshold`, below which a push-to-talk press records nothing.
+    static let maxHold: TimeInterval = 0.3
+    /// From letting go of the first tap to pressing the second. Also how long the recorder waits after a single tap
+    /// before it saves it as a single press.
+    static let maxGap: TimeInterval = 0.35
 }
 
 // MARK: - Shortcut model
 
-/// A rebindable shortcut: modifier-only (fn, Right ⌥, ⌃⌥), modifier + key (fn Space, ⌃⌘V) or a single key (F13, Esc).
-/// JSON for fn+Space: `{"modifiers":[{"modifier":"function","side":"either"}],"keyCode":49}`.
+/// A rebindable shortcut: modifier-only (fn, Right ⌥, ⌃⌥), modifier + key (fn Space, ⌃⌘V), a single key (F13, Esc), or a
+/// modifier-only one tapped twice (Double ⌘).
+/// JSON for fn+Space: `{"modifiers":[{"modifier":"function","side":"either"}],"keyCode":49}`. A double tap adds
+/// `"taps":2`; without it a shortcut is pressed once, as everything saved before double taps.
 struct Shortcut: Codable, Hashable, Sendable {
     /// Declaration order is display order: fn first, then Apple's ⌃⌥⇧⌘.
     enum Modifier: String, Codable, CaseIterable, Sendable {
@@ -159,8 +194,10 @@ struct Shortcut: Codable, Hashable, Sendable {
     private(set) var modifiers: [ModifierKey]
     /// nil means a modifier-only shortcut.
     private(set) var keyCode: UInt16?
+    /// 2: a double tap (`DoubleTap`), which only a modifier-only shortcut can be. 1 for everything else.
+    private(set) var taps: Int
 
-    init(modifiers: [ModifierKey], keyCode: UInt16? = nil) {
+    init(modifiers: [ModifierKey], keyCode: UInt16? = nil, taps: Int = 1) {
         var byFamily: [Modifier: Side] = [:]
         for mk in modifiers {
             if let existing = byFamily[mk.modifier], existing != mk.side {
@@ -172,21 +209,36 @@ struct Shortcut: Codable, Hashable, Sendable {
         self.modifiers = Modifier.allCases.compactMap { m in byFamily[m].map { ModifierKey(m, $0) } }
         // fn ↩ recorded on a laptop keyboard (older builds saved it as fn ⌤) is fn ↩.
         self.keyCode = keyCode.map { KeyCode.canonical($0, functionDown: byFamily[.function] != nil) }
+        // A key that types can't be tapped twice without typing: only modifiers alone can.
+        self.taps = keyCode == nil && !byFamily.isEmpty ? min(max(taps, 1), 2) : 1
     }
 
-    private enum CodingKeys: String, CodingKey { case modifiers, keyCode }
+    private enum CodingKeys: String, CodingKey { case modifiers, keyCode, taps }
 
     // Decoding goes through the normalizing init so hand-edited or older JSON can't produce duplicates.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.init(modifiers: try c.decodeIfPresent([ModifierKey].self, forKey: .modifiers) ?? [],
-                  keyCode: try c.decodeIfPresent(UInt16.self, forKey: .keyCode))
+                  keyCode: try c.decodeIfPresent(UInt16.self, forKey: .keyCode),
+                  taps: try c.decodeIfPresent(Int.self, forKey: .taps) ?? 1)
+    }
+
+    /// `taps` only when it's a double tap, so a single press saves exactly as it did before double taps.
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(modifiers, forKey: .modifiers)
+        try c.encodeIfPresent(keyCode, forKey: .keyCode)
+        if taps > 1 { try c.encode(taps, forKey: .taps) }
     }
 
     var isModifierOnly: Bool { keyCode == nil && !modifiers.isEmpty }
     var isEmpty: Bool { modifiers.isEmpty && keyCode == nil }
+    var isDoubleTap: Bool { taps > 1 }
     func contains(_ modifier: Modifier) -> Bool { modifiers.contains { $0.modifier == modifier } }
     var usesFunctionKey: Bool { contains(.function) }
+
+    /// The same keys tapped twice (only a modifier-only shortcut can be).
+    var doubleTap: Shortcut { Shortcut(modifiers: modifiers, keyCode: keyCode, taps: 2) }
 
     // MARK: Well-known shortcuts
 
@@ -240,18 +292,22 @@ struct Shortcut: Codable, Hashable, Sendable {
     }
 
     /// Some key press triggers both: the same key, the same modifier families, and sides that can coincide
-    /// (`.either` meets anything; left and right never meet). ⌥ and Right ⌥ overlap; Left ⌥ and Right ⌥ don't.
+    /// (`.either` meets anything; left and right never meet), tapped as many times. ⌥ and Right ⌥ overlap; Left ⌥ and
+    /// Right ⌥ don't, and neither do ⌥ and Double ⌥ (`isHeldOnTheWay` covers those).
     func overlaps(_ other: Shortcut) -> Bool {
-        guard keyCode == other.keyCode, modifiers.count == other.modifiers.count else { return false }
+        guard keyCode == other.keyCode, taps == other.taps, modifiers.count == other.modifiers.count else { return false }
         return zip(modifiers, other.modifiers).allSatisfy { a, b in
             a.modifier == b.modifier && Self.sidesMeet(a.side, b.side)
         }
     }
 
-    /// Modifier-only, and held on the way to `other` (a larger modifier-only chord): a chord that fires on
-    /// press would fire here before `other` is complete.
+    /// Modifier-only, pressed once, and held on the way to `other` (modifier-only too): a chord that fires on press
+    /// would fire here before `other` is complete. That is a larger chord, or a double tap of the same keys or more,
+    /// whose first tap is a whole press of these. A double tap is never on the way to anything: its keys go down twice.
     func isHeldOnTheWay(to other: Shortcut) -> Bool {
-        guard isModifierOnly, other.isModifierOnly, modifiers.count < other.modifiers.count else { return false }
+        guard isModifierOnly, other.isModifierOnly, !isDoubleTap,
+              modifiers.count < other.modifiers.count || (other.isDoubleTap && modifiers.count == other.modifiers.count)
+        else { return false }
         return modifiers.allSatisfy { mine in
             other.modifiers.contains { $0.modifier == mine.modifier && Self.sidesMeet($0.side, mine.side) }
         }
@@ -374,13 +430,14 @@ struct ShortcutBindings: Codable, Equatable, Sendable {
 
     /// A modifier-only binding other than push to talk fires the moment its keys are held, so it must not be
     /// the start of another modifier-only binding: that one would fire it first. Push to talk as the start
-    /// of another chord is intended (fn, then fn ⌃ for hands-free). Returns the action that clashes, and
+    /// of another chord is intended (fn, then fn ⌃ for hands-free), but not as the first tap of a double tap (fn,
+    /// then Double fn): that tap is a whole press and release of push to talk. Returns the action that clashes, and
     /// whether `shortcut` is the shorter one.
     func prefixClash(for shortcut: Shortcut, as action: ShortcutAction) -> (other: ShortcutAction, isShorter: Bool)? {
         for other in ShortcutAction.allCases where other != action {
             guard let theirs = bindings[other] else { continue }
-            if action != .pushToTalk, shortcut.isHeldOnTheWay(to: theirs) { return (other, true) }
-            if other != .pushToTalk, theirs.isHeldOnTheWay(to: shortcut) { return (other, false) }
+            if action != .pushToTalk || theirs.isDoubleTap, shortcut.isHeldOnTheWay(to: theirs) { return (other, true) }
+            if other != .pushToTalk || shortcut.isDoubleTap, theirs.isHeldOnTheWay(to: shortcut) { return (other, false) }
         }
         return nil
     }
@@ -448,6 +505,11 @@ struct Keycap: Hashable, Sendable {
     var systemImage: String?
     var side: Shortcut.Side = .either
     var isWide = false
+    /// Not a key: the "×2" after a double tap's keys, drawn as a mark beside them where the renderer knows it (a cap
+    /// where it doesn't).
+    var isTapMark = false
+
+    static let doubleTapMark = Keycap(label: "×2", isTapMark: true)
 
     var sideCaption: String? {
         switch side {
@@ -497,15 +559,16 @@ enum ShortcutFormatter {
         return out
     }
 
-    /// Menu-style string: "⌃⌘V", "fn Space", "Right ⌥".
+    /// Menu-style string: "⌃⌘V", "fn Space", "Right ⌥", "Double ⌘". Reads in running copy too ("Hold Double ⌘").
     static func compact(_ s: Shortcut, style: FunctionKeyStyle = .fn) -> String {
         let t = tokens(s, style: style)
         let allSymbols = s.modifiers.allSatisfy { $0.side == .either && $0.modifier != .function }
         if allSymbols, s.keyCode != nil, !s.modifiers.isEmpty { return t.joined() }
-        return t.joined(separator: " ")
+        let keys = t.joined(separator: " ")
+        return s.isDoubleTap ? "Double \(keys)" : keys
     }
 
-    /// Words for VoiceOver and tooltips: "Right Option", "Fn + Space".
+    /// Words for VoiceOver and tooltips: "Right Option", "Fn + Space", "Double Command".
     static func spoken(_ s: Shortcut, style: FunctionKeyStyle = .fn) -> String {
         var parts = s.modifiers.map { mk -> String in
             switch mk.side {
@@ -515,10 +578,11 @@ enum ShortcutFormatter {
             }
         }
         if let k = s.keyCode { parts.append(KeyNames.spokenName(for: k)) }
-        return parts.joined(separator: " + ")
+        let keys = parts.joined(separator: " + ")
+        return s.isDoubleTap ? "Double \(keys)" : keys
     }
 
-    /// Structured caps for the chip renderer.
+    /// Structured caps for the chip renderer; a double tap ends with `Keycap.doubleTapMark`.
     static func keycaps(_ s: Shortcut) -> [Keycap] {
         var caps = s.modifiers.map { mk -> Keycap in
             if mk.modifier == .function {
@@ -529,6 +593,7 @@ enum ShortcutFormatter {
         if let k = s.keyCode {
             caps.append(Keycap(label: KeyNames.keycapLabel(for: k), isWide: k == KeyCode.space))
         }
+        if s.isDoubleTap { caps.append(.doubleTapMark) }
         return caps
     }
 }
@@ -813,7 +878,9 @@ enum ShortcutValidator {
                 out.append(ShortcutWarning(.mediaKey, "On Apple keyboards \(KeyNames.name(for: key)) is a media key.",
                                            detail: "Turn on “Use F1, F2, etc. keys as standard function keys” in Keyboard Settings."))
             }
-        } else if s.modifiers.count == 1, let only = s.modifiers.first {
+        } else if s.modifiers.count == 1, !s.isDoubleTap, let only = s.modifiers.first {
+            // Typing and other shortcuts never tap a modifier twice with nothing in between: a double tap is clear of
+            // what a lone one gets in the way of.
             switch (only.modifier, only.side) {
             case (.shift, _):
                 out.append(ShortcutWarning(.typing, "⇧ alone is pressed all the time while typing."))

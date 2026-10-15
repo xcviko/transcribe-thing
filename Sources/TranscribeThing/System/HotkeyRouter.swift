@@ -16,13 +16,91 @@ struct HotkeyInput: Equatable, Sendable {
     var isRepeat: Bool
     /// Posted by transcribe-thing itself (the synthetic ⌘V); ignored entirely.
     var isSynthetic: Bool
+    /// When it came, in monotonic seconds: double taps are timed (`DoubleTap`).
+    var time: TimeInterval
 
-    init(kind: Kind, keyCode: UInt16 = 0, flags: UInt64 = 0, isRepeat: Bool = false, isSynthetic: Bool = false) {
+    init(kind: Kind, keyCode: UInt16 = 0, flags: UInt64 = 0, isRepeat: Bool = false, isSynthetic: Bool = false,
+         time: TimeInterval = 0) {
         self.kind = kind
         self.keyCode = keyCode
         self.flags = flags
         self.isRepeat = isRepeat
         self.isSynthetic = isSynthetic
+        self.time = time
+    }
+}
+
+/// Double taps as the router sees them: the modifier keys pressed and let go on top of what was already held (the
+/// push-to-talk's fn, say), with nothing else in between, timed by `DoubleTap`. Another key, a click, a modifier that
+/// was already held coming up, or a press held too long, and there's no double tap.
+struct TapTracker: Equatable, Sendable {
+    /// Keys pressed and let go together on top of `baseline`.
+    struct Tap: Equatable, Sendable {
+        var baseline: ModifierSnapshot
+        var keys: ModifierSnapshot
+        /// When its keys came up (for a double tap: when the second press went down).
+        var at: TimeInterval
+    }
+
+    /// The press in progress: `keys` went down on top of `baseline` since `startedAt`, and nothing else happened.
+    private struct Press: Equatable, Sendable {
+        var baseline: ModifierSnapshot
+        var keys: ModifierSnapshot
+        var startedAt: TimeInterval
+        /// The tap this press may be the second of, while its keys are on the way to that tap's.
+        var first: Tap?
+        /// It was the second press of a double tap, which went off: it doesn't start another.
+        var isSecond = false
+    }
+
+    private var press: Press?
+    private var lastTap: Tap?
+
+    /// Follows a modifier change; returns the double tap it completes: a press that puts down, on the same keys
+    /// held before, exactly the keys of a tap let go within `DoubleTap.maxGap`.
+    mutating func modifiersChanged(from previous: ModifierSnapshot, to held: ModifierSnapshot, isPress: Bool,
+                                   at time: TimeInterval) -> Tap? {
+        guard isPress else {
+            released(to: held, at: time)
+            return nil
+        }
+        if var current = press, !current.isSecond, time - current.startedAt <= DoubleTap.maxHold,
+           current.baseline.isSubset(of: held) {
+            // Another key of the same chord.
+            current.keys = current.keys.union(held.subtracting(current.baseline))
+            press = current
+        } else {
+            let first = lastTap.flatMap { $0.baseline == previous && time - $0.at <= DoubleTap.maxGap ? $0 : nil }
+            press = Press(baseline: previous, keys: held.subtracting(previous), startedAt: time, first: first)
+            lastTap = nil
+        }
+        guard var current = press, let first = current.first else { return nil }
+        if current.keys == first.keys {
+            current.isSecond = true
+            current.first = nil
+            press = current
+            return Tap(baseline: current.baseline, keys: current.keys, at: time)
+        }
+        // Other keys than the first tap's: not its second.
+        if !current.keys.isSubset(of: first.keys) { press?.first = nil }
+        return nil
+    }
+
+    /// Another key, a click, the recorder capturing: no tap spans it.
+    mutating func interrupt() {
+        self = TapTracker()
+    }
+
+    private mutating func released(to held: ModifierSnapshot, at time: TimeInterval) {
+        guard let current = press else { return }
+        // A key it was pressed on top of came up: something else is going on.
+        guard current.baseline.isSubset(of: held) else { return interrupt() }
+        guard held == current.baseline else { return }
+        // All its keys are up: a tap if it was quick.
+        if !current.isSecond, !current.keys.isEmpty, time - current.startedAt < DoubleTap.maxHold {
+            lastTap = Tap(baseline: current.baseline, keys: current.keys, at: time)
+        }
+        press = nil
     }
 }
 
@@ -77,6 +155,11 @@ struct KeyRepeat: Equatable, Sendable {
 ///   `polishRepeat` (on Gemini, Polish on and off again and again). Add to dictionary's is live too, on any model,
 ///   always held as `.heldForSelection`: the controller reads what's selected right then.
 /// - Swallowed keys also have their autorepeats and keyUp swallowed.
+/// - A double tap (`Shortcut.taps` 2, modifiers only) goes off on its second press (`TapTracker`), never on the first:
+///   push to talk's starts the hold there (`pttDown`, and its release `pttUp`, with the interruptions above), the
+///   others fire there. Nothing else may be held for it, except the PTT's and hands-free's modifiers for a binding live
+///   during a dictation (Double ⌘ for Switch model while holding fn). ⌘C and the like never count: a key in between
+///   ends it.
 struct HotkeyRouter: Equatable, Sendable {
     struct Config: Equatable, Sendable {
         var bindings: ShortcutBindings = .defaults
@@ -129,6 +212,8 @@ struct HotkeyRouter: Equatable, Sendable {
     private var firedModifierChords: Set<ShortcutAction> = []
     /// A modifier-only Switch model is held and its repeat timer runs: every tick steps on, as Tab's autorepeats do.
     private(set) var repeatsSwitchModel = false
+    /// Modifier taps, for the bindings that are double taps.
+    private(set) var taps = TapTracker()
 
     init() {}
 
@@ -138,6 +223,11 @@ struct HotkeyRouter: Equatable, Sendable {
 
     mutating func handle(_ input: HotkeyInput, config: Config) -> Decision {
         if input.isSynthetic { return Decision() }
+        // Any key or click between two taps (or during one) means they aren't a double tap: ⌘C, ⌘ is no Double ⌘.
+        switch input.kind {
+        case .keyDown, .keyUp, .mouseDown: taps.interrupt()
+        case .flagsChanged, .repeatTick: break
+        }
         var decision: Decision
         switch input.kind {
         case .flagsChanged: decision = flagsChanged(input, config)
@@ -163,6 +253,7 @@ struct HotkeyRouter: Equatable, Sendable {
         modifiers = ModifierSnapshot(rawFlags: flags, functionDown: functionDown)
         swallowedKeys = swallowedKeys.filter(isKeyDown)
         firedModifierChords.removeAll()
+        taps.interrupt()
         // Its press may have been missed: the next tick stops the timer.
         repeatsSwitchModel = false
         var events: [HotkeyEvent] = []
@@ -211,18 +302,34 @@ struct HotkeyRouter: Equatable, Sendable {
             config.bindings[$0]?.modifiersMatchExactly(modifiers) == true
         }
         if config.isSuspended {
+            taps.interrupt()
             endGestureForSuspension(&decision)
             return decision
         }
+        // Caps Lock is a key like any other between two taps.
+        let doubleTap: TapTracker.Tap?
+        if input.keyCode == KeyCode.capsLock {
+            taps.interrupt()
+            doubleTap = nil
+        } else {
+            doubleTap = taps.modifiersChanged(from: previous, to: modifiers, isPress: isPress, at: input.time)
+        }
 
+        if let doubleTap, let action = doubleTapChordMatch(doubleTap, config) {
+            fireChord(action, into: &decision)
+            return decision
+        }
         if isPress, let action = modifierChordMatch(config), !firedModifierChords.contains(action) {
             firedModifierChords.insert(action)
             fireChord(action, into: &decision)
             return decision
         }
-        if isPress, let (action, _) = liveDuringDictation(config).first(where: { action, shortcut in
-            shortcut.isModifierOnly && !firedModifierChords.contains(action)
-                && matchesDuringDictation(shortcut, config.bindings)
+        if let (action, _) = liveDuringDictation(config).first(where: { action, shortcut in
+            guard shortcut.isModifierOnly else { return false }
+            if shortcut.isDoubleTap {
+                return doubleTap.map { tapMatchesDuringDictation(shortcut, $0, config.bindings) } ?? false
+            }
+            return isPress && !firedModifierChords.contains(action) && matchesDuringDictation(shortcut, config.bindings)
         }) {
             // Leaves the PTT hold alone: releasing the PTT key still ends the dictation.
             firedModifierChords.insert(action)
@@ -238,7 +345,11 @@ struct HotkeyRouter: Equatable, Sendable {
         guard let ptt = config.bindings[.pushToTalk], ptt.isModifierOnly else { return decision }
         switch gesture {
         case .idle:
-            if isPress, !blockedUntilModifiersReleased, ptt.modifiersMatchExactly(modifiers) {
+            // A double-tap push to talk starts on its second press: the first is only a tap.
+            let isItsPress = ptt.isDoubleTap
+                ? doubleTap.map { $0.baseline.isEmpty && ptt.modifiersMatchExactly($0.keys) } ?? false
+                : isPress
+            if isItsPress, !blockedUntilModifiersReleased, ptt.modifiersMatchExactly(modifiers) {
                 gesture = .holdingModifiers
                 decision.events.append(.pttDown)
             }
@@ -258,12 +369,22 @@ struct HotkeyRouter: Equatable, Sendable {
         return decision
     }
 
-    /// A non-PTT binding that is modifier-only and matches the held set exactly.
+    /// A non-PTT binding that is modifier-only, pressed once, and matches the held set exactly.
     private func modifierChordMatch(_ config: Config) -> ShortcutAction? {
         let candidates: [ShortcutAction] = [.handsFree, .pasteLast]
         return candidates.first { action in
-            guard let shortcut = config.bindings[action], shortcut.isModifierOnly else { return false }
+            guard let shortcut = config.bindings[action], shortcut.isModifierOnly, !shortcut.isDoubleTap else { return false }
             return shortcut.modifiersMatchExactly(modifiers)
+        }
+    }
+
+    /// A non-PTT binding that is the double tap `tap` just completed, with nothing else held.
+    private func doubleTapChordMatch(_ tap: TapTracker.Tap, _ config: Config) -> ShortcutAction? {
+        guard tap.baseline.isEmpty else { return nil }
+        let candidates: [ShortcutAction] = [.handsFree, .pasteLast]
+        return candidates.first { action in
+            guard let shortcut = config.bindings[action], shortcut.isDoubleTap else { return false }
+            return shortcut.modifiersMatchExactly(tap.keys)
         }
     }
 
@@ -525,6 +646,14 @@ struct HotkeyRouter: Equatable, Sendable {
         let ignorable = heldDictationModifiers(bindings).subtracting(shortcut.modifiers.map(\.modifier))
         guard !ignorable.isEmpty else { return false }
         return shortcut.modifiersMatchExactly(modifiers.clearing(ignorable))
+    }
+
+    /// A double tap `shortcut` live during the dictation, completed by `tap`: its keys exactly, tapped on top of nothing
+    /// but the PTT's and hands-free's modifiers that are still held (Double ⌘ while holding fn).
+    private func tapMatchesDuringDictation(_ shortcut: Shortcut, _ tap: TapTracker.Tap, _ bindings: ShortcutBindings) -> Bool {
+        guard shortcut.modifiersMatchExactly(tap.keys) else { return false }
+        let ignorable = heldDictationModifiers(bindings).subtracting(shortcut.modifiers.map(\.modifier))
+        return tap.baseline.clearing(ignorable).isEmpty
     }
 
     private func heldDictationModifiers(_ bindings: ShortcutBindings) -> Set<Shortcut.Modifier> {

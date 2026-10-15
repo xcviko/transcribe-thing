@@ -1730,7 +1730,16 @@ struct PillShortcutChips: View {
     var body: some View {
         HStack(spacing: 3) {
             if let shortcut, !shortcut.isEmpty {
-                ForEach(Array(shortcut.keycaps.enumerated()), id: \.offset) { _, cap in PillKeyChip(keycap: cap) }
+                ForEach(Array(shortcut.keycaps.enumerated()), id: \.offset) { _, cap in
+                    if cap.isTapMark {
+                        Text(cap.label)
+                            .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.7))
+                            .fixedSize()
+                    } else {
+                        PillKeyChip(keycap: cap)
+                    }
+                }
             } else {
                 PillKeyChip(keycap: Keycap(label: fallback))
             }

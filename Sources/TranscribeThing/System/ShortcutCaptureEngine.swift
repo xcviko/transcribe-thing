@@ -4,19 +4,35 @@ import Foundation
 /// Pure capture rules for the shortcut recorder, fed with key codes and raw modifier flags
 /// (`NSEvent.modifierFlags.rawValue` shares the NX_* bit layout with `CGEventFlags`, device bits included).
 ///
-/// - Modifier-only: the largest set held during the gesture is committed once everything is released.
+/// - Modifier-only: the largest set held during the gesture is committed once everything is released. Held longer
+///   than `DoubleTap.maxHold`, at once; a quicker tap waits `DoubleTap.maxGap` for a second (`pendingTap`), and the
+///   same keys pressed again in time commit the double tap on that press. Without one, `tapWindowEnded()` commits the
+///   single press. Other keys pressed in the window start over: the latest gesture wins.
 /// - Combination: committed on the first non-modifier keyDown, with the modifiers held at that moment.
 /// - Bare Esc cancels recording.
 /// - Bare ⌫ or ⌦ clears the binding for actions that may be left unbound.
 struct ShortcutCaptureEngine: Equatable, Sendable {
     enum Result: Equatable, Sendable { case none, commit(Shortcut), cancel, clear }
 
+    /// A quick tap of modifiers, let go, that may get a second.
+    struct PendingTap: Equatable, Sendable {
+        var keys: ModifierSnapshot
+        var releasedAt: TimeInterval
+
+        var shortcut: Shortcut { Shortcut(modifiers: ShortcutCaptureEngine.modifierOnlyKeys(keys)) }
+    }
+
     let action: ShortcutAction
-    /// What is physically held right now, as the modifier-only shortcut it would become.
+    /// What is physically held right now, as the modifier-only shortcut it would become; while a tap waits for its
+    /// second, that tap.
     private(set) var held: Shortcut?
+    /// Set when a quick tap was let go: the recorder calls `tapWindowEnded()` `DoubleTap.maxGap` later.
+    private(set) var pendingTap: PendingTap?
 
     private var functionDown = false
     private var largest = ModifierSnapshot()
+    /// When the modifier gesture in progress began (its first press); nil with nothing held.
+    private var gestureStartedAt: TimeInterval?
 
     init(action: ShortcutAction) {
         self.action = action
@@ -30,21 +46,44 @@ struct ShortcutCaptureEngine: Equatable, Sendable {
         }
     }
 
-    mutating func flagsChanged(keyCode: UInt16, rawFlags: UInt64) -> Result {
+    /// `time`: when the change came, in seconds (`NSEvent.timestamp`).
+    mutating func flagsChanged(keyCode: UInt16, rawFlags: UInt64, at time: TimeInterval) -> Result {
         if keyCode == KeyCode.function {
             functionDown = rawFlags & CGEventFlags.maskSecondaryFn.rawValue != 0
         }
         let snapshot = ModifierSnapshot(rawFlags: rawFlags, functionDown: functionDown)
+        if gestureStartedAt == nil, !snapshot.isEmpty {
+            gestureStartedAt = time
+            // Its window ended before its timer came: that tap was a single press, and this one comes after it.
+            if let tap = pendingTap, time - tap.releasedAt > DoubleTap.maxGap { return finish(.commit(tap.shortcut)) }
+        }
+        if let tap = pendingTap, !snapshot.isEmpty {
+            if snapshot == tap.keys { return finish(.commit(tap.shortcut.doubleTap)) }
+            // Keys the tap didn't have: something new. The same keys so far may still become its second tap.
+            if !snapshot.isSubset(of: tap.keys) { pendingTap = nil }
+        }
         // Same size but different keys (Left ⌥ swapped for Right ⌥): the latest press wins.
         if snapshot.count >= largest.count, snapshot.count > 0 { largest = snapshot }
-        held = snapshot.isEmpty ? nil : Shortcut(modifiers: Self.modifierOnlyKeys(snapshot))
+        held = snapshot.isEmpty ? pendingTap?.shortcut : Shortcut(modifiers: Self.modifierOnlyKeys(snapshot))
 
-        if snapshot.isEmpty, largest.count > 0 {
-            let shortcut = Shortcut(modifiers: Self.modifierOnlyKeys(largest))
-            reset()
-            return .commit(shortcut)
+        guard snapshot.isEmpty, largest.count > 0, let startedAt = gestureStartedAt else { return .none }
+        let keys = largest
+        largest = ModifierSnapshot()
+        gestureStartedAt = nil
+        guard time - startedAt < DoubleTap.maxHold else {
+            return finish(.commit(Shortcut(modifiers: Self.modifierOnlyKeys(keys))))
         }
+        // A quick tap: a second may follow.
+        pendingTap = PendingTap(keys: keys, releasedAt: time)
+        held = pendingTap?.shortcut
         return .none
+    }
+
+    /// `DoubleTap.maxGap` after `pendingTap` was let go without a second: it was a single press. While keys are down
+    /// again (a chord's second tap on its way), the gesture decides.
+    mutating func tapWindowEnded() -> Result {
+        guard let tap = pendingTap, gestureStartedAt == nil else { return .none }
+        return finish(.commit(tap.shortcut))
     }
 
     mutating func keyDown(keyCode: UInt16, rawFlags: UInt64, isRepeat: Bool) -> Result {
@@ -68,6 +107,13 @@ struct ShortcutCaptureEngine: Equatable, Sendable {
     mutating func reset() {
         largest = ModifierSnapshot()
         held = nil
+        pendingTap = nil
+        gestureStartedAt = nil
+    }
+
+    private mutating func finish(_ result: Result) -> Result {
+        reset()
+        return result
     }
 
     /// Modifier-only shortcuts keep a Right-side key (Right ⌥ is the classic PTT); a left key means "either",

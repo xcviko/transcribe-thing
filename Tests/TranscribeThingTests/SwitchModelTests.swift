@@ -122,9 +122,9 @@ import Testing
     @Test func theRecorderCapturesAndClearsIt() {
         var engine = ShortcutCaptureEngine(action: .switchModel)
         let fn = CGEventFlags.maskSecondaryFn.rawValue
-        _ = engine.flagsChanged(keyCode: KeyCode.function, rawFlags: fn)
+        _ = engine.flagsChanged(keyCode: KeyCode.function, rawFlags: fn, at: 0)
         #expect(engine.keyDown(keyCode: KeyCode.tab, rawFlags: fn, isRepeat: false) == .commit(.fnTab))
-        _ = engine.flagsChanged(keyCode: KeyCode.function, rawFlags: 0)
+        _ = engine.flagsChanged(keyCode: KeyCode.function, rawFlags: 0, at: 0.1)
         #expect(ShortcutCaptureEngine.canClear(.switchModel))
         #expect(engine.keyDown(keyCode: KeyCode.delete, rawFlags: 0, isRepeat: false) == .clear)
     }
