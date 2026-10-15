@@ -1530,6 +1530,36 @@ private func heldVoice(seconds: Double, gain: Double) -> [Float] {
         #expect(s.allSatisfy { $0.side == .remote })
     }
 
+    /// Gemini 3.8 Flash sometimes writes a whole call's transcript on one line: each "[start-end] Speaker:" in it is a
+    /// phrase of its own, while brackets in what was said stay in the text.
+    @Test func phrasesAllOnOneLineAreReadOneByOne() {
+        let answer = "[00:00-00:03] Participant 1: Нормально, вроде. [00:04-00:07] Матвей: А у тебя какой "
+            + "некастодиальный кошелёк? [00:08-00:10] Participant 1: Trust Wallet. [00:10-00:19] Матвей: А, вот я тоже "
+            + "им пользуюсь [смеётся], удобный. **[00:20-00:24] Participant 1:** Ну да, там и стейкинг есть. - "
+            + "[00:25-00:31] Матвей: Слушай, а созвон в [10:00-11:00] тебе норм? [29:50-29:58] Participant 1: Давай, "
+            + "до связи!"
+        let parsed = CallTranscriptParser.parse(answer, side: .remote, duration: 1800)
+        #expect(parsed.format == .lines && parsed.skipped == 0)
+        let s = parsed.segments
+        #expect(s.map(\.speaker) == ["Participant 1", "Матвей", "Participant 1", "Матвей", "Participant 1", "Матвей",
+                                     "Participant 1"])
+        #expect(s.map(\.text) == ["Нормально, вроде.", "А у тебя какой некастодиальный кошелёк?", "Trust Wallet.",
+                                  "А, вот я тоже им пользуюсь [смеётся], удобный.", "Ну да, там и стейкинг есть.",
+                                  "Слушай, а созвон в [10:00-11:00] тебе норм?", "Давай, до связи!"])
+        #expect(s.map(\.start) == [0, 4, 8, 10, 20, 25, 1790])
+        #expect(s.map(\.end) == [3, 7, 10, 19, 24, 31, 1798])
+
+        // A remark before the first phrase on the same line is skipped, the phrases after it read.
+        let remark = CallTranscriptParser.parse("Here is the transcript: [00:01-00:02] Аня: Да. [00:03-00:04] Sam: Ок.",
+                                                side: .remote, duration: 60, speakers: ["Sam"])
+        #expect(remark.segments.map(\.text) == ["Да.", "Ок."] && remark.skipped == 1)
+        // One phrase a line, as asked: as before, whatever comes before its times.
+        #expect(CallTranscriptParser.phrases(in: "- **[01:02:03 - 01:02:05] HR: Аня:** Ок", known: ["HR: Аня"])
+                == ["- **[01:02:03 - 01:02:05] HR: Аня:** Ок"])
+        #expect(CallTranscriptParser.phrases(in: "1. [00:02-00:03] Sam: Первое", known: [])
+                == ["1. [00:02-00:03] Sam: Первое"])
+    }
+
     @Test func aLineWithoutANameIsTheSpeakerBeforeAndListNumbersArentTimes() {
         let answer = """
             1. [00:02-00:03] Sam: Первое
