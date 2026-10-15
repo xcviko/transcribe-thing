@@ -103,6 +103,82 @@ import Testing
         #expect(rig.h.toasts.countdowns[card.id]?.isRunning == true)
     }
 
+    /// A hold that turns out to be a shortcut isn't a dictation: fn ← after holding fn a moment or a while, or fn let go
+    /// as a tap just past the confirm delay. The text on its way is pasted as before once it comes.
+    @Test func aHoldThatWasAShortcutLeavesTheTextToBePasted() async throws {
+        let (rig, _) = Self.make()
+        let c = rig.h.controller
+        let gate = Gate()
+        rig.result = { _, _ in
+            await gate.wait()
+            return "first words"
+        }
+        Self.dictate(rig)
+        try await waitUntil { rig.transcribed.count == 1 }
+        for seconds in [0.5, 2] {
+            rig.h.recorder.next = DictationResumeTests.speech(seconds: seconds)
+            Switch.hold(rig)
+            rig.now += seconds
+            c.handle(.pttInterrupted)
+            #expect(!c.machine.isRecording)
+        }
+        Switch.hold(rig)
+        rig.now += 0.2
+        c.handle(.pttUp)
+        #expect(!c.machine.isRecording && rig.transcribed.count == 1, "a tap: nothing to transcribe")
+        gate.isOpen = true
+        try await waitUntil { rig.pasted == ["first words"] && c.machine.activeJobs == 0 }
+        #expect(Self.cards(rig).isEmpty)
+    }
+
+    /// fn P over a selection takes the hold over for Polish Selection: no dictation, so the text on its way is pasted
+    /// as before, and the polish comes up on its own card.
+    @Test func polishSelectionLeavesTheTextToBePasted() async throws {
+        let (rig, _) = Self.make()
+        let c = rig.h.controller
+        c.selectionOverride = { "short draft" }
+        c.selectionPolishOverride = { _, _, _ in
+            TranscriptResult(text: "<message>Polished.</message>", engine: .geminiFlash, processingTime: 0.1)
+        }
+        let gate = Gate()
+        rig.result = { _, _ in
+            await gate.wait()
+            return "first words"
+        }
+        Self.dictate(rig)
+        try await waitUntil { rig.transcribed.count == 1 }
+        rig.h.recorder.next = DictationResumeTests.speech(seconds: 0.5)
+        Switch.hold(rig)
+        c.handle(.polish)
+        try await waitUntil { rig.notice(DictationController.selectionCardKey(.geminiFlash)) != nil }
+        #expect(!c.machine.isRecording)
+        gate.isOpen = true
+        try await waitUntil { rig.pasted == ["first words"] && c.machine.activeJobs == 0 }
+        #expect(Self.cards(rig).isEmpty)
+    }
+
+    /// fn D over a selection likewise: the word goes into the dictionary, and the text on its way is pasted.
+    @Test func addingToTheDictionaryLeavesTheTextToBePasted() async throws {
+        let (rig, _) = Self.make()
+        let c = rig.h.controller
+        c.selectionOverride = { "Wispr Flow" }
+        let gate = Gate()
+        rig.result = { _, _ in
+            await gate.wait()
+            return "first words"
+        }
+        Self.dictate(rig)
+        try await waitUntil { rig.transcribed.count == 1 }
+        rig.h.recorder.next = DictationResumeTests.speech(seconds: 0.5)
+        Switch.hold(rig)
+        c.handle(.heldForSelection(.addToDictionary, AddToDictionaryTests.d))
+        try await waitUntil { rig.h.settings.dictionary.words == ["Wispr Flow"] }
+        #expect(!c.machine.isRecording)
+        gate.isOpen = true
+        try await waitUntil { rig.pasted == ["first words"] && c.machine.activeJobs == 0 }
+        #expect(Self.cards(rig).isEmpty)
+    }
+
     /// No new recording: the text is pasted as it always was. A quick fn tap meanwhile isn't a recording: it never
     /// commits.
     @Test func withNoNewRecordingTheTextIsPastedAsBefore() async throws {
@@ -243,5 +319,9 @@ import Testing
         #expect(quiet.sound == nil)
         #expect(quiet.dedupeKey != card.dedupeKey)
         #expect(C.selectionModel(ofCard: card) == nil, "not Polish Selection’s")
+        // Polish Selection's card waits for a dictation the same way, and comes up quietly during one.
+        #expect(C.selectionCard("Hi.", by: .geminiFlash).waitsForDictation)
+        #expect(C.selectionCard("Hi.", by: .geminiFlash).sound == .polishReady)
+        #expect(C.selectionCard("Hi.", by: .geminiFlash, quiet: true).sound == nil)
     }
 }

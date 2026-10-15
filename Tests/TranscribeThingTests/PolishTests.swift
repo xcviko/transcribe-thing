@@ -283,6 +283,26 @@ import Testing
         #expect(cues.played.last == .paste)
     }
 
+    /// An answer that comes while the next dictation records comes up without its sound, and its countdown waits for
+    /// the recording to end.
+    @Test func anAnswerDuringADictationWaitsForIt() async throws {
+        let (rig, cues, asked) = Self.make()
+        asked.hold(.geminiFlash)
+        try await Self.polish(rig)
+        try await waitUntil { asked.calls.count == 1 }
+        rig.h.recorder.next = DictationResumeTests.speech(seconds: 0.5)
+        Switch.hold(rig)
+        asked.release(.geminiFlash)
+        try await waitUntil { Self.card(rig, .geminiFlash) != nil }
+        let card = try #require(Self.card(rig, .geminiFlash))
+        #expect(!cues.played.contains(.polishReady), "no sound into the recording")
+        #expect(rig.h.toasts.countdowns[card.id]?.isRunning == false)
+        rig.now += 0.5
+        rig.h.controller.handle(.cancel)
+        #expect(rig.h.toasts.countdowns[card.id]?.isRunning == true, "its countdown starts once it’s over")
+        #expect(Self.card(rig, .geminiFlash) != nil)
+    }
+
     /// A polish that fails says why on its own notice; nothing goes to History.
     @Test func aFailedPolishSaysWhy() async throws {
         let (rig, _, _) = Self.make(errors: [.geminiFlash: .timeout(.geminiFlash)])
