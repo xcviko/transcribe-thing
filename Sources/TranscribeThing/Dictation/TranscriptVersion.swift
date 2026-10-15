@@ -2,14 +2,14 @@ import Foundation
 
 /// What wrote a transcript of a recording: an engine hearing the audio, Polish, Polish Selection, or (in entries from
 /// before clean-up was removed) a clean-up model tidying the text an engine wrote. An entry has at most one version of
-/// each kind, so the same model never runs twice on a recording. Kinds by retired models (Gemini 3.1 Pro, every
-/// clean-up) are read, named, shown and switched to like any other; nothing makes new ones.
+/// each kind, so the same model never runs twice on a recording. Kinds by retired models (Gemini 4 Argon, Gemini 3.1
+/// Pro, every clean-up) are read, named, shown and switched to like any other; nothing makes new ones.
 enum TranscriptVersionKind: Hashable, Sendable, Codable {
     case transcription(EngineID)
     /// `model` over the text of `.transcription(engine)`. History only: nothing makes clean-ups any more.
     case cleanup(of: EngineID, by: CleanupModel)
-    /// Polish (`Polish`): the Gemini model's message from the audio (the dictation's model: Gemini 3.8 Flash or
-    /// Gemini 4 Argon).
+    /// Polish (`Polish`): the Gemini model's message from the audio (Gemini 3.8 Flash; History keeps the retired
+    /// Gemini 4 Argon's).
     case polish(by: EngineID = .geminiFlash)
     /// Polish Selection: the model's message from text selected in another app. No recording: the entry is this one
     /// version.
@@ -152,11 +152,11 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
 
     /// Persisted: "parakeet", "cleanup:parakeet" (Flash Lite's: the form from before the choice of clean-up model,
     /// which older builds read), "cleanup:parakeet:gpt6Luna", "polish" (Gemini 3.8 Flash's, as before there was a
-    /// choice), "polish:geminiArgon", "selection:geminiFlash", "selection:gpt6Luna", "selection:geminiArgon",
-    /// "translation", "translation:polished", "translation:geminiArgon", "translation:polished:geminiArgon",
-    /// "translated-selection:geminiFlash", "translated-selection:geminiArgon". Never rename. An older build can't read
-    /// a kind with a model and drops that version, not the entry (`TranscriptEntry.encode(to:)` keeps the text it
-    /// tidied intact for them).
+    /// choice), "selection:geminiFlash", "selection:gpt6Luna", "translation", "translation:polished",
+    /// "translated-selection:geminiFlash". Another Gemini's polish or translation names it: "polish:geminiArgon",
+    /// "translation:polished:geminiArgon", as the retired Gemini 4 Argon's in History are. Never rename. An older build
+    /// can't read a kind with a model and drops that version, not the entry (`TranscriptEntry.encode(to:)` keeps the
+    /// text it tidied intact for them).
     var rawValue: String {
         switch self {
         case .transcription(let engine): engine.rawValue

@@ -49,33 +49,18 @@ enum Polish {
     }
 }
 
-/// The models that polish or translate a selection: the Gemini model the user dictates with (`chosen`), Gemini 3.8
-/// Flash or Gemini 4 Argon. GPT-6 Luna was asked alongside Flash once to see which answer gets picked; Gemini's was,
-/// so Luna is no longer asked, and stays only so History reads the versions it wrote. Raw values are persisted
-/// (History, and the cards' dedupe keys): never rename them.
+/// The models that polish or translate a selection: Gemini 3.8 Flash. GPT-6 Luna was asked alongside Flash once to
+/// see which answer gets picked; Gemini's was, so Luna is no longer asked. Gemini 4 Argon was asked for whoever
+/// dictated with it, until it was removed. Both stay only so History reads the versions they wrote. Raw values are
+/// persisted (History, and the cards' dedupe keys): never rename them.
 enum PolishSelectionModel: String, CaseIterable, Codable, Sendable {
     case geminiFlash
+    /// No longer asked: History's old versions only.
     case gpt6Luna
+    /// No longer asked (`EngineID.geminiArgon` is retired): History's old versions only.
     case geminiArgon
 
-    /// The model a selection goes to: the main model when it's a Gemini, else the hands-free model when it's a Gemini
-    /// (`AppSettings.handsFreeChoice`), else Gemini 3.8 Flash. A user who dictates with Argon gets Argon here too.
-    static func chosen(main: ModelChoice, handsFree: ModelChoice?) -> PolishSelectionModel {
-        if let model = PolishSelectionModel(choice: main) { return model }
-        if let handsFree, let model = PolishSelectionModel(choice: handsFree) { return model }
-        return .geminiFlash
-    }
-
-    /// The Gemini model's: Flash for `.gemini`, Argon for `.argon`; nil for Parakeet.
-    init?(choice: ModelChoice) {
-        switch choice {
-        case .gemini: self = .geminiFlash
-        case .argon: self = .geminiArgon
-        case .parakeet: return nil
-        }
-    }
-
-    /// "Gemini 3.8 Flash", "Gemini 4 Argon", "GPT-6 Luna".
+    /// "Gemini 3.8 Flash", "GPT-6 Luna", and History's old "Gemini 4 Argon".
     var modelName: String {
         switch self {
         case .geminiFlash: EngineID.geminiFlash.modelName
@@ -84,8 +69,8 @@ enum PolishSelectionModel: String, CaseIterable, Codable, Sendable {
         }
     }
 
-    /// The engine the request goes to, at the Reasoning level picked for it in Models; nil for Luna, which is no
-    /// longer asked.
+    /// The engine the request goes to (Flash, at the Reasoning level picked for it in Models), or the one that wrote
+    /// an old answer (Argon's, which History names and marks by it); nil for Luna.
     var engine: EngineID? {
         switch self {
         case .geminiFlash: .geminiFlash
@@ -95,19 +80,19 @@ enum PolishSelectionModel: String, CaseIterable, Codable, Sendable {
     }
 
     /// Text in, text out over chat completions: Gemini at its default level, its thinking streamed (so it counts as
-    /// an answer under way, as for a dictation). nil for Luna, which is no longer asked.
+    /// an answer under way, as for a dictation). nil for Luna and Argon, which are no longer asked.
     var route: TextRoute? { route(effort: nil) }
 
     /// `route` at `effort`, the level picked for the model in Models (its default when nil).
     func route(effort: ReasoningEffort?) -> TextRoute? {
-        guard let engine, let model = engine.openRouterModelID else { return nil }
+        guard let engine, !engine.isRetired, let model = engine.openRouterModelID else { return nil }
         var route = TextRoute(model: model, effort: effort ?? engine.defaultReasoningEffort ?? .medium,
                               provider: .googleAIStudio)
         route.streamsReasoning = true
         return route
     }
 
-    /// The model whose color the pill and History wear: Argon's for Argon, Gemini's for Flash (and for Luna's old
-    /// answers, which have always worn it).
-    var choice: ModelChoice { self == .geminiArgon ? .argon : .gemini }
+    /// The model whose color the pill and History wear: Gemini's, for Flash's answers and the old ones by Luna and
+    /// Argon alike.
+    var choice: ModelChoice { .gemini }
 }

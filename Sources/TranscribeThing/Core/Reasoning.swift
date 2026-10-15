@@ -24,17 +24,17 @@ enum ReasoningEffort: String, Codable, CaseIterable, Sendable {
 
 extension EngineID {
     /// The levels the model can be asked to think at (the Reasoning menu on its row in Models): Low, Medium and High
-    /// for Gemini. Neither Gemini model takes Minimal (the user's endpoint sends it as Low) nor None (they can't turn
+    /// for Gemini. Gemini 3.8 Flash takes neither Minimal (the user's endpoint sends it as Low) nor None (it can't turn
     /// thinking off), so neither is offered. Empty for models that don't reason, and for a retired one, which never runs.
     var reasoningEfforts: [ReasoningEffort] {
         switch self {
-        case .geminiFlash, .geminiArgon: [.low, .medium, .high]
-        case .parakeet, .parakeetCloud, .geminiPro: []
+        case .geminiFlash: [.low, .medium, .high]
+        case .parakeet, .parakeetCloud, .geminiArgon, .geminiPro: []
         }
     }
 
-    /// The level the model thinks at until another is picked: medium for both Gemini models (Gemini 3.8 Flash at high
-    /// thought for about 18k tokens, 76 s, on a 1:48 recording). nil for models that don't reason.
+    /// The level the model thinks at until another is picked: medium for Gemini 3.8 Flash (at high it thought for
+    /// about 18k tokens, 76 s, on a 1:48 recording). nil for models that don't reason.
     var defaultReasoningEffort: ReasoningEffort? {
         reasoningEfforts.isEmpty ? nil : .medium
     }
@@ -42,7 +42,7 @@ extension EngineID {
 
 /// The level each Gemini model thinks at, picked in Models (`AppSettings.reasoningEfforts`). Every request to the
 /// model goes at its level: dictation, Polish, Translate, file imports, History's versions, calls. One JSON object
-/// under `SettingsKey.geminiReasoningEfforts`, keyed by `EngineID` raw value: {"geminiArgon":"high","geminiFlash":"medium"}.
+/// under `SettingsKey.geminiReasoningEfforts`, keyed by `EngineID` raw value: {"geminiFlash":"medium"}.
 struct ReasoningEfforts: Equatable, Sendable {
     private var levels: [EngineID: ReasoningEffort] = [:]
 
@@ -62,7 +62,7 @@ struct ReasoningEfforts: Equatable, Sendable {
 
 extension ReasoningEfforts: Codable {
     /// Lenient, as a stored value outlives builds: a level the model doesn't offer (Minimal, a newer build's) or a
-    /// value of the wrong kind leaves that model's default; an unknown model is ignored.
+    /// value of the wrong kind leaves that model's default; an unknown or retired model is ignored.
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         let raw = (try? container.decode([String: String].self)) ?? [:]

@@ -6,7 +6,7 @@ import Foundation
 /// Headless engine checks, dispatched by TranscribeThingMain before the app starts:
 ///
 ///     transcribe-thing --transcribe <audio file>
-///            --engine parakeet|geminiFlash|geminiArgon
+///            --engine parakeet|geminiFlash
 ///            [--download] [--prompt <text>] [--repeat <n>] [--effort low|medium|high]
 ///            [--upload wav|m4a]
 ///     transcribe-thing --model-status
@@ -106,7 +106,7 @@ enum EngineCLI {
     struct Options: Equatable {
         static let usage = """
         usage: transcribe-thing --transcribe <audio file> \
-        --engine parakeet|geminiFlash|geminiArgon \
+        --engine parakeet|geminiFlash \
         [--download] [--prompt <text>] [--repeat <n>] [--effort low|medium|high] [--upload wav|m4a]
                transcribe-thing --model-status
         """
@@ -180,7 +180,6 @@ enum EngineCLI {
             switch name.lowercased().replacingOccurrences(of: "-", with: "").replacingOccurrences(of: "_", with: "") {
             case "parakeet": return .parakeet
             case "geminiflash", "flash": return .geminiFlash
-            case "geminiargon", "argon", "gemini4argon": return .geminiArgon
             default: return nil
             }
         }
@@ -643,8 +642,8 @@ enum EngineCLI {
         print("Provider: \(geminiRouteLine(appVertexProxy(paths: paths)))")
     }
 
-    /// The cloud models `--transcribe --engine` takes, one line each: "geminiArgon  Gemini 4 Argon  google/gemini-4-argon
-    /// · effort low|medium|high (default medium)".
+    /// The cloud models `--transcribe --engine` takes, one line each: "geminiFlash  Gemini 3.8 Flash
+    /// google/gemini-3.8-flash · effort low|medium|high (default medium)".
     static func cloudModelLines() -> [String] {
         EngineID.geminiEngines.map { id in
             let efforts = id.reasoningEfforts.map(\.rawValue).joined(separator: "|")

@@ -36,17 +36,17 @@ import Testing
     @Test func aCleanupMainModelBecomesParakeet() throws {
         let decoded = try lineup(#"{"main":"cleanup","order":["parakeet","cleanup","gemini"],"switchable":["gemini"]}"#)
         #expect(decoded.main == .parakeet)
-        #expect(decoded.order == [.parakeet, .gemini, .argon])
+        #expect(decoded.order == [.parakeet, .gemini])
         #expect(decoded.cycle == [.parakeet, .gemini])
         let reordered = try lineup(#"{"main":"cleanup","order":["gemini","cleanup","parakeet"],"switchable":["gemini"]}"#)
-        #expect(reordered.main == .parakeet && reordered.order == [.gemini, .parakeet, .argon])
+        #expect(reordered.main == .parakeet && reordered.order == [.gemini, .parakeet])
         #expect(reordered.cycle == [.parakeet, .gemini])
     }
 
     /// Switch model reached clean-up: it reaches Parakeet now, even where Parakeet itself was switched off.
     @Test func aSwitchableCleanupSwitchesParakeetOn() throws {
         let decoded = try lineup(#"{"main":"gemini","order":["gemini","cleanup","parakeet"],"switchable":["cleanup"]}"#)
-        #expect(decoded.main == .gemini && decoded.order == [.gemini, .parakeet, .argon])
+        #expect(decoded.main == .gemini && decoded.order == [.gemini, .parakeet])
         #expect(decoded.cycle == [.gemini, .parakeet])
         let off = try lineup(#"{"main":"gemini","order":["parakeet","cleanup","gemini"],"switchable":[]}"#)
         #expect(off.cycle == [.gemini], "clean-up wasn't a step: Parakeet stays off")
@@ -60,7 +60,7 @@ import Testing
             let settings = load(defaults)
             #expect(settings.lineup.main == .parakeet && settings.lineup.cycle == [.parakeet, .gemini])
             #expect(settings.mainEngine == .parakeet)
-            #expect(stored(defaults, .lineup) == #"{"main":"parakeet","order":["parakeet","gemini","argon"],"switchable":["parakeet","gemini"]}"#)
+            #expect(stored(defaults, .lineup) == #"{"main":"parakeet","order":["parakeet","gemini"],"switchable":["parakeet","gemini"]}"#)
             #expect(load(defaults).lineup == settings.lineup, "a reload changes nothing")
         }
     }
@@ -101,9 +101,9 @@ import Testing
             defaults.set(try JSONEncoder().encode(["cleanup", "gemini"]), forKey: SettingsKey.modelsAddingSpace.defaultsKey)
             defaults.set(try JSONEncoder().encode(["cleanup"]), forKey: SettingsKey.modelsRemovingFinalPeriod.defaultsKey)
             let settings = load(defaults)
-            #expect(settings.modelsAddingSpace == [.gemini, .argon], "Argon starts with Flash's")
+            #expect(settings.modelsAddingSpace == [.gemini])
             #expect(settings.modelsRemovingFinalPeriod.isEmpty)
-            #expect(stored(defaults, .modelsAddingSpace) == #"["gemini","argon"]"#)
+            #expect(stored(defaults, .modelsAddingSpace) == #"["gemini"]"#)
             #expect(stored(defaults, .modelsRemovingFinalPeriod) == "[]")
         }
     }
@@ -115,12 +115,12 @@ import Testing
             defaults.set(Data(json.utf8), forKey: SettingsKey.modelColors.defaultsKey)
             let settings = load(defaults)
             #expect(settings.modelColors[.parakeet] == .teal && settings.modelColors[.gemini] == .blue)
-            #expect(stored(defaults, .modelColors) == #"{"argon":"blue","gemini":"blue","parakeet":"teal"}"#)
+            #expect(stored(defaults, .modelColors) == #"{"gemini":"blue","parakeet":"teal"}"#)
         }
     }
 
     @Test func onlyParakeetAndGeminiAreLeft() {
-        #expect(ModelChoice.allCases == [.parakeet, .gemini, .argon])
+        #expect(ModelChoice.allCases == [.parakeet, .gemini])
         #expect(ModelChoice(rawValue: ModelChoice.retiredCleanup) == nil)
         #expect(ModelChoice.read(["parakeet", "cleanup", "gemini"]) == [.parakeet, .gemini])
     }
@@ -189,8 +189,7 @@ private let historyFile = #"""
         let m = menu(try entries()[0])
         #expect(m.versions.map(\.title) == ["Parakeet v3", "Parakeet v3 + Clean-up by GPT-6 Luna"])
         #expect(m.versions.map(\.isCurrent) == [false, true])
-        #expect(m.actions.map(\.kind) == [.transcription(.geminiFlash), .transcription(.geminiArgon)]
-                + TranscriptVersionKind.rewrites)
+        #expect(m.actions.map(\.kind) == [.transcription(.geminiFlash)] + TranscriptVersionKind.rewrites)
         #expect(!m.actions.contains { $0.kind.isCleanup || $0.title.contains("Clean Up") })
     }
 

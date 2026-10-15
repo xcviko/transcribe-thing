@@ -58,36 +58,34 @@ manager may still keep the selected text.
   European languages by itself.
 - **Gemini 3.8 Flash** runs in the cloud and is very accurate. It thinks before it writes, so it's slower than
   Parakeet.
-- **Gemini 4 Argon** runs in the cloud and is the most accurate. It's slower than Flash and costs about 2.7 times as
-  much. It's switched off until you switch it on.
 
-On either Gemini, press fn P while you talk and it pastes the message you meant, without the false starts, detours and
+On Gemini, press fn P while you talk and it pastes the message you meant, without the false starts, detours and
 repeats. Press fn T and it pastes what you said in the other language. Russian becomes English and English becomes
 Russian; pick another pair in General → Translate. With both on, you get the message you meant, translated.
 
-On Parakeet, fn P polishes and fn T translates the text you've selected instead: Gemini writes the result on a card,
-and Paste Here puts it in place of the selection. It's the Gemini you dictate with: your main model if it's a Gemini,
-else your hands-free model if it's a Gemini, else Gemini 3.8 Flash. So if you dictate with Gemini 4 Argon, Argon
-writes it.
+On Parakeet, fn P polishes and fn T translates the text you've selected instead: Gemini 3.8 Flash writes the result
+on a card, and Paste Here puts it in place of the selection.
 
 In Models:
 
 - **Your models** picks the model every dictation starts on (the dot), which models fn ⇥ steps through while you talk
-  (the switches, in the order of the list, which you can drag), and each one's pill color. Each Gemini's row also has
-  a Reasoning menu, under its name: how long that model thinks before it writes, Low, Medium (the default) or High.
-  Higher is slower and costs more. It applies to everything that model does: dictations, Polish, Translate, selected
-  text, files, History and calls.
+  (the switches, in the order of the list, which you can drag), and each one's pill color. Gemini's row also has a
+  Reasoning menu, under its name: how long it thinks before it writes, Low, Medium (the default) or High. Higher is
+  slower and costs more. It applies to everything Gemini does: dictations, Polish, Translate, selected text, files,
+  History and calls.
 - **Hands-free** picks the model fn Space starts on.
-- **Calls** picks the model that transcribes and sums up calls: Gemini 3.8 Flash (the default) or Gemini 4 Argon.
 - **Parakeet on this Mac** downloads it and shows how it's doing. Delete it there once it's neither the main
   model nor switched on.
 
-The Gemini models run on your own [OpenRouter](https://openrouter.ai) key, and you pay OpenRouter per use. Each Gemini
+Gemini runs on your own [OpenRouter](https://openrouter.ai) key, and you pay OpenRouter per use. Each Gemini
 dictation sends its request twice at once and pastes the first answer, stopping the other, so it can cost up to twice
 as much: a model that stops to think on one request doesn't hold you up.
 
 If you ran Parakeet v3 through OpenRouter, that option is gone: Parakeet runs only on your Mac now. If it isn't
 downloaded yet, download it in Models (about 600 MB). Transcripts it made stay in History as "Parakeet v3 · Cloud".
+
+Gemini 4 Argon is gone too. Wherever you had picked it (your main model, fn ⇥, hands-free, calls), Gemini 3.8 Flash
+takes its place, so there's nothing to change. Transcripts it made stay in History as "Gemini 4 Argon".
 
 Gemini can also go through another service you pay for, if it has an OpenAI-compatible API. Models → API keys →
 Provider picks one of the two, OpenRouter or Custom endpoint, for every Gemini request: dictations, Polish, Translate,
@@ -99,7 +97,7 @@ For Custom endpoint, enter its base URL (the one that ends in `/v1`, like `https
 key. A URL without a path is read as `<address>/api/v1`, so an endpoint saved by its address alone keeps working. The
 app checks the key without spending anything and says whether it works. Until both are saved, Gemini shows "Needs
 endpoint". The endpoint gets the same request OpenRouter would, audio included, with OpenRouter's model name
-(`google/gemini-3.8-flash` or `google/gemini-4-argon`), so it has to accept those names. If it fails, the error says it
+(`google/gemini-3.8-flash`), so it has to accept that name. If it fails, the error says it
 came from your endpoint. Costs in History are what your endpoint reports, and History names it by its address.
 
 If you had an endpoint set up with "Use for Gemini" on, Custom endpoint is picked for you. Everyone else starts on
@@ -107,7 +105,7 @@ OpenRouter.
 
 ## Dictionary
 
-Words, names and terms you use, and how they're spelled. The Gemini models get them as a hint, so a dictation
+Words, names and terms you use, and how they're spelled. Gemini gets them as a hint, so a dictation
 or a call's transcript spells "Wispr Flow" the way you do; Parakeet takes no hints. Add one with fn D over selected text, or in the
 app's Dictionary page, where you can also sort them into groups by dragging. Groups are only for you: the models get
 every word.
@@ -147,8 +145,8 @@ When a call starts, recording starts too, and the app asks "Transcribe your call
 If you don't answer, the call waits in the Calls tab, and nothing is sent until you click Transcribe there. To transcribe
 every call without asking, or to stop noticing calls, change General → Calls → Record calls.
 
-The model picked in Models → Calls writes the transcript (Gemini 3.8 Flash unless you pick Gemini 4 Argon), on
-your OpenRouter key or through your own endpoint. Someone whose name comes
+Gemini 3.8 Flash writes the transcript, at the Reasoning level picked for it in Models, on your OpenRouter key or
+through your own endpoint. Someone whose name comes
 up in the call is named; the rest are "Participant 1", "Participant 2", and anyone in the room with you is "Nearby 1". On
 the call's page, click a name to rename them, or a time to play the call from there. Once you've played it, the
 play/pause key (F8 on Apple keyboards), your headphones' button and Control Center pause and resume it, until you leave
@@ -184,7 +182,7 @@ there's nothing to take out, and your microphone stays as it was recorded. That 
 
 History, the recordings, your dictionary and your API keys (OpenRouter's and your own endpoint's) stay on your Mac, in
 `~/Library/Application Support/transcribe-thing`. Each key is in a file only you can read. Audio leaves your Mac only
-when a Gemini model transcribes it: through OpenRouter, or through your own endpoint when it's the provider. Text leaves it only
+when Gemini transcribes it: through OpenRouter, or through your own endpoint when it's the provider. Text leaves it only
 when Gemini 3.8 Flash polishes or translates text you selected, or when a long call's transcript goes back for its
 summary. Your dictionary's words go along with everything sent to Gemini.
 
@@ -229,8 +227,7 @@ The binary also works without the UI, for checking the models:
 
 ```sh
 .build/debug/transcribe-thing --transcribe memo.m4a --engine parakeet --download
-.build/debug/transcribe-thing --transcribe memo.m4a --engine geminiFlash
-.build/debug/transcribe-thing --transcribe memo.m4a --engine geminiArgon --effort high
+.build/debug/transcribe-thing --transcribe memo.m4a --engine geminiFlash --effort high
 ```
 
 Cloud runs use the app's saved key, or `OPENROUTER_API_KEY` when it's set. They think at Medium unless `--effort`

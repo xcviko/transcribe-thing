@@ -29,29 +29,7 @@ import Testing
         return result
     }
 
-    /// Argon answered stray tokens with none of the tags it was asked for (2026-10-14: "!#", "1 1 2 4 8"): nothing
-    /// is pasted, the recording stays as a failed row with the answer.
-    @Test func argonsUntaggedAnswerIsKeptNotPasted() async throws {
-        let h = H.make(keyStatus: .valid(KeyInfo()), persistsHistory: true)
-        defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
-        var pasted: [String] = []
-        h.controller.transcribeOverride = { _, engine in
-            var result = TranscriptResult(text: "1 1 2 4 8", engine: engine, processingTime: 0.1)
-            result.rawAnswer = "1 1 2 4 8\n<eos>"
-            result.answerTags = TaggedTranscript.Tags.none
-            return result
-        }
-        h.controller.insertOverride = { text in pasted.append(text); return .pasted }
-        let r = Self.speech(voiced: 2.5)
-        h.controller.enqueue(r, engine: .geminiArgon)
-        try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id) != nil }
-        let entry = try #require(h.history.entry(id: r.id))
-        #expect(entry.status == .failed && entry.modelAnswer == "1 1 2 4 8\n<eos>")
-        #expect(entry.audioFileName != nil)
-        #expect(pasted.isEmpty)
-    }
-
-    /// Flash's answer without tags is pasted as before: it tags its answers, and one that doesn't is still words.
+    /// Flash's answer without tags is pasted: it tags its answers, and one that doesn't is still words.
     @Test func flashsUntaggedAnswerIsStillPasted() async throws {
         let h = H.make(keyStatus: .valid(KeyInfo()), persistsHistory: true)
         defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
@@ -67,7 +45,7 @@ import Testing
         #expect(pasted == ["Созвонимся завтра."])
     }
 
-    /// Argon polished 21.7 s of speech into an empty `<message>`: the recording stays as a failed row with the answer,
+    /// Gemini polished 21.7 s of speech into an empty `<message>`: the recording stays as a failed row with the answer,
     /// the notice offers Retry and says it's kept, and Retry then pastes what the next answer has.
     @Test func longSpeechWithAnEmptyAnswerIsKeptWithTheAnswer() async throws {
         let h = H.make(keyStatus: .valid(KeyInfo()), persistsHistory: true)
@@ -79,32 +57,32 @@ import Testing
         }
         h.controller.insertOverride = { text in pasted.append(text); return .pasted }
         let r = Self.longSpeech()
-        h.controller.enqueue(r, engine: .geminiArgon, polishes: true)
+        h.controller.enqueue(r, engine: .geminiFlash, polishes: true)
         try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id) != nil }
 
         let entry = try #require(h.history.entry(id: r.id))
-        #expect(entry.status == .failed && entry.engine == .geminiArgon)
-        #expect(entry.errorMessage == "Gemini 4 Argon heard no speech")
+        #expect(entry.status == .failed && entry.engine == .geminiFlash)
+        #expect(entry.errorMessage == "Gemini 3.8 Flash heard no speech")
         #expect(entry.modelAnswer == "<message>\n\n</message>", "the answer as it came, tags and all")
         #expect(entry.audioFileName != nil)
         #expect(h.controller.retainedRecordingIDs.contains(r.id))
         #expect(pasted.isEmpty)
 
         let notice = try #require(h.toasts.notices.first { $0.recordingID == r.id })
-        #expect(notice.dedupeKey == "error.heardNoSpeech.geminiArgon")
-        #expect(notice.title == "Gemini 4 Argon heard no speech")
+        #expect(notice.dedupeKey == "error.heardNoSpeech.geminiFlash")
+        #expect(notice.title == "Gemini 3.8 Flash heard no speech")
         #expect(notice.body == "Your recording is saved in History, where another model can try it too.")
         #expect(notice.style == .warning && notice.actions.map(\.kind) == [.retry])
         #expect(!h.toasts.notices.contains { $0.dedupeKey == "error.noSpeech" })
         #expect(h.pill.errorMessage == PillMetrics.keptNoSpeechText)
-        #expect(h.pill.errorModel == .argon)
+        #expect(h.pill.errorModel == .gemini)
 
         // Retry: the same model, polished again, and this time it hears it.
         h.controller.perform(try #require(notice.actions.first), from: notice)
         try await waitUntil { !pasted.isEmpty && h.controller.machine.activeJobs == 0 }
         #expect(pasted.first?.hasPrefix("Созвонимся завтра в десять") == true)
         let done = try #require(h.history.entry(id: r.id))
-        #expect(done.status == .success && done.currentVersion?.kind == .polish(by: .geminiArgon))
+        #expect(done.status == .success && done.currentVersion?.kind == .polish(by: .geminiFlash))
         #expect(done.modelAnswer == nil, "a transcript has nothing to explain")
     }
 
@@ -134,7 +112,7 @@ import Testing
     /// Parakeet's empty answer is silence whatever the speech: the threshold is for cloud models only.
     @Test func littleSpeechOrALocalModelIsStillSilence() async throws {
         let cases: [(EngineID, Recording)] = [
-            (.geminiArgon, Self.speech(voiced: DictationController.keepsUnheardSpeechVoicedSeconds - 0.1)),
+            (.geminiFlash, Self.speech(voiced: DictationController.keepsUnheardSpeechVoicedSeconds - 0.1)),
             (.geminiFlash, Self.speech(voiced: 0.6)),
             (.parakeet, Self.longSpeech()),
         ]
@@ -157,13 +135,14 @@ import Testing
         h.settings.pillMode = .never
         h.controller.transcribeOverride = { _, engine in Self.empty(engine) }
         let r = Self.speech(voiced: DictationController.keepsUnheardSpeechVoicedSeconds)
-        h.controller.enqueue(r, engine: .geminiArgon, translates: true)
+        h.controller.enqueue(r, engine: .geminiFlash, translates: true)
         try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id) != nil }
         #expect(h.history.entry(id: r.id)?.status == .failed)
-        #expect(h.toasts.notices.map(\.dedupeKey) == ["error.heardNoSpeech.geminiArgon"])
+        #expect(h.toasts.notices.map(\.dedupeKey) == ["error.heardNoSpeech.geminiFlash"])
     }
 
-    /// The answer rides along in history.json, and an entry without one, or with something odd there, still reads.
+    /// The answer rides along in history.json (here on an old row by the retired Gemini 4 Argon), and an entry without
+    /// one, or with something odd there, still reads.
     @Test func theAnswerIsStoredAndReadLeniently() throws {
         var entry = TranscriptEntry(text: "", engine: .geminiArgon, status: .failed, audioDuration: 32,
                                     voicedSeconds: 21.67, errorMessage: "Gemini 4 Argon heard no speech")
@@ -200,10 +179,10 @@ import Testing
         let r = Self.longSpeech()
         h.controller.enqueue(r, engine: .geminiFlash)
         try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id)?.status == .failed }
-        h.controller.retry(try #require(h.history.entry(id: r.id)), with: .geminiArgon)
+        h.controller.retry(try #require(h.history.entry(id: r.id)), with: .geminiFlash)
         try await waitUntil { calls == 2 && h.controller.runningVersions.isEmpty }
         let entry = try #require(h.history.entry(id: r.id))
-        #expect(entry.status == .failed && entry.engine == .geminiArgon)
+        #expect(entry.status == .failed && entry.engine == .geminiFlash)
         #expect(entry.modelAnswer == "<transcript>\n</transcript>")
     }
 }
@@ -225,10 +204,10 @@ extension DiagnosticDictationTests {
             UnheardSpeechTests.empty(engine, answer: "<transcript></transcript>\nOnly a confidential whisper.")
         }
         let r = UnheardSpeechTests.longSpeech()
-        h.controller.enqueue(r, engine: .geminiArgon)
+        h.controller.enqueue(r, engine: .geminiFlash)
         try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id) != nil }
         let text = DiagnosticLog.shared.retainedText()
-        let line = try #require(text.split(separator: "\n").first { $0.contains("job.finished engine=geminiArgon outcome=noSpeech") })
+        let line = try #require(text.split(separator: "\n").first { $0.contains("job.finished engine=geminiFlash outcome=noSpeech") })
         for field in ["voiced=21.67", "kept=yes", "answerChars=54", "tags=pair", "transcriptTags=yes", "messageTags=no",
                       "onlyTags=no", "noSpeechWords=no", "outsideChars=28", "finish=stop", "reasoningTokens=0",
                       "outputTokens=9"] {
@@ -319,7 +298,7 @@ extension DiagnosticDictationTests {
         let answer = "<transcript>\n\n</transcript>"
         let (client, _) = StubURLProtocol.client([.stream(SSE.answer(answer))])
         let result = try await client.transcribe(audio: Data("dictation".utf8), format: "m4a",
-                                                 model: "google/gemini-4-argon", systemPrompt: EngineID.geminiSystemPrompt,
+                                                 model: "google/gemini-3.8-flash", systemPrompt: EngineID.geminiSystemPrompt,
                                                  effort: .medium, maxTokens: 32_768, apiKey: "sk-or-v1-test", timeout: 30)
         #expect(result.text == "" && result.answerTags == .pair)
         #expect(result.rawAnswer == answer)
