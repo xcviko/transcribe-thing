@@ -247,7 +247,7 @@ struct KeyChip: View {
     }
 }
 
-/// A shortcut rendered as key caps: [🌐 fn] [space], [left ⌃] [⌘] [C], [⌘] ×2.
+/// A shortcut rendered as key caps: [🌐 fn] [space], [left ⌃] [⌘] [C].
 struct ShortcutChips: View {
     var shortcut: Shortcut?
     var size: KeyChip.Size = .regular
@@ -263,15 +263,7 @@ struct ShortcutChips: View {
         if let shortcut, !shortcut.isEmpty {
             HStack(spacing: size == .large ? 6 : 4) {
                 ForEach(Array(shortcut.keycaps.enumerated()), id: \.offset) { _, cap in
-                    if cap.isTapMark {
-                        // Beside the caps, not one of them: level with their faces, which sit on a base.
-                        Text(cap.label)
-                            .font(.system(size: size.fontSize, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.inkSecondary)
-                            .padding(.bottom, size == .large ? 2 : 1.5)
-                    } else {
-                        KeyChip(cap, size: size)
-                    }
+                    KeyChip(cap, size: size)
                 }
             }
             .accessibilityElement(children: .ignore)

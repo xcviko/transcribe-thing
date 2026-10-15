@@ -50,40 +50,6 @@ import Testing
         #expect(!Shortcut.fn.modifiersMatchExactly(fnOnly))
     }
 
-    /// A double tap saves `"taps":2`; anything saved before double taps (no `taps`) is a single press, and a single
-    /// press still saves exactly as it did.
-    @Test func doubleTapsSaveTheirTapsAndOlderShortcutsLoadAsSingle() throws {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        let double = Shortcut.rightCommand.doubleTap
-        let json = String(decoding: try encoder.encode(double), as: UTF8.self)
-        #expect(json == #"{"modifiers":[{"modifier":"command","side":"right"}],"taps":2}"#)
-        #expect(try JSONDecoder().decode(Shortcut.self, from: Data(json.utf8)) == double)
-
-        let old = #"{"modifiers":[{"modifier":"command","side":"right"}]}"#
-        let decoded = try JSONDecoder().decode(Shortcut.self, from: Data(old.utf8))
-        #expect(decoded == .rightCommand && decoded.taps == 1)
-        #expect(String(decoding: try encoder.encode(decoded), as: UTF8.self) == old)
-
-        let stored = #"{"handsFree":{"modifiers":[{"modifier":"command","side":"either"}],"taps":2},"pushToTalk":"#
-            + #"{"modifiers":[{"modifier":"option","side":"right"}]}}"#
-        let bindings = try JSONDecoder().decode(ShortcutBindings.self, from: Data(stored.utf8))
-        #expect(bindings[.handsFree] == Shortcut(modifiers: [.init(.command)], taps: 2))
-        #expect(bindings[.pushToTalk] == .rightOption)
-        #expect(try JSONDecoder().decode(ShortcutBindings.self, from: JSONEncoder().encode(bindings)) == bindings)
-    }
-
-    /// Only modifiers alone can be tapped twice; more taps than two are two.
-    @Test func onlyModifiersAloneAreDoubleTaps() throws {
-        #expect(Shortcut(modifiers: [.init(.command)], keyCode: KeyCode.ansiC, taps: 2).taps == 1)
-        #expect(Shortcut.f13.doubleTap.taps == 1)
-        #expect(Shortcut(modifiers: [], taps: 2).taps == 1)
-        #expect(Shortcut(modifiers: [.init(.command)], taps: 5).taps == 2)
-        let keyed = #"{"keyCode":8,"modifiers":[{"modifier":"command","side":"either"}],"taps":2}"#
-        #expect(try JSONDecoder().decode(Shortcut.self, from: Data(keyed.utf8)).taps == 1)
-        #expect(Shortcut.fn.doubleTap != .fn)
-    }
-
     @Test func deviceBitsResolveSides() {
         let raw = CGEventFlags.maskCommand.rawValue | DeviceModifierMask.rightCommand
         let snapshot = ModifierSnapshot(rawFlags: raw, functionDown: false)
@@ -132,21 +98,6 @@ import Testing
         #expect(ctrlCmdV.compactDescription == "⌃⌘V")
         #expect(Shortcut.rightOption.compactDescription == "Right ⌥")
         #expect(Shortcut.rightOption.spokenDescription == "Right Option")
-    }
-
-    @Test func doubleTapsSayDouble() {
-        let command = Shortcut(modifiers: [.init(.command)]).doubleTap
-        #expect(command.compactDescription == "Double ⌘")
-        #expect(command.spokenDescription == "Double Command")
-        #expect(command.keycaps == [Keycap(label: "⌘"), .doubleTapMark])
-        #expect(Keycap.doubleTapMark.label == "×2" && Keycap.doubleTapMark.isTapMark)
-        #expect(Shortcut.rightCommand.doubleTap.compactDescription == "Double Right ⌘")
-        #expect(Shortcut.fn.doubleTap.compactDescription == "Double fn")
-        let chord = Shortcut(modifiers: [.init(.control), .init(.option)]).doubleTap
-        #expect(chord.compactDescription == "Double ⌃ ⌥")
-        #expect(chord.spokenDescription == "Double Control + Option")
-        // No menu can show it.
-        #expect(MenuActionItem.keyEquivalent(for: command) == nil)
     }
 
     @Test func keycapsForChips() {
@@ -387,18 +338,6 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         Case(name: "⌃ alone", shortcut: chord(.init(.control)), action: .pushToTalk, expected: .warning(.loneModifier)),
         Case(name: "Right ⌥ alone", shortcut: .rightOption, action: .pushToTalk, expected: .clean),
         Case(name: "⌃⌥ chord", shortcut: chord(.init(.control), .init(.option)), action: .pushToTalk, expected: .clean),
-
-        // Double taps: typing and other shortcuts never tap a modifier twice alone. 🌐 twice may be Apple Dictation.
-        Case(name: "Double ⌘", shortcut: chord(.init(.command)).doubleTap, action: .handsFree, expected: .clean),
-        Case(name: "Double ⇧", shortcut: chord(.init(.shift)).doubleTap, action: .handsFree, expected: .clean),
-        Case(name: "Double ⌥ push to talk", shortcut: chord(.init(.option)).doubleTap, action: .pushToTalk,
-             expected: .clean),
-        Case(name: "Double fn, 🌐 starts Dictation", shortcut: Shortcut.fn.doubleTap, action: .handsFree,
-             system: SystemKeyboardState(hotKeys: [], fnUsage: .startDictation, functionKeysAreStandard: false),
-             bindings: { var b = ShortcutBindings.defaults; b[.pushToTalk] = .rightOption; return b }(),
-             expected: .warning(.globeKey)),
-        Case(name: "Double ⌘ for add to dictionary", shortcut: chord(.init(.command)).doubleTap,
-             action: .addToDictionary, expected: .error),
 
         // The 🌐 key on its own.
         Case(name: "fn, 🌐 switches input sources", shortcut: .fn, action: .pushToTalk,
