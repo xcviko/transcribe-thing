@@ -167,7 +167,7 @@ final class CallWatch {
     private func readWindow(at time: TimeInterval) {
         guard sensors.canReadWindows() else { return }
         let app = detector.followed.flatMap { readsWindow?($0.app) ?? true ? $0.app : nil }
-        let following = detector.followed?.tab?.following
+        let following = detector.following
         if app != reading.app {
             if reading.app != nil { sensors.releaseWindows() }
             reading = Reading(app: app)

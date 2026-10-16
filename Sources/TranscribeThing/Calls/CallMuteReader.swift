@@ -147,8 +147,10 @@ final class CallMuteReader: @unchecked Sendable {
             for window in appWindows {
                 let title = node(window, children: false)?.title
                 var (tabs, whole) = self.tabs(in: window, ids: ids, deadline: deadline)
-                if ids, whole { tabIDs.sawWhole(window, tabs: Set(tabs.compactMap(\.id))) }
-                if tabs.isEmpty, let title { tabs = [BrowserTabs.Tab(title: title, selected: true)] }
+                // A window showing no tab at all says nothing of which closed: a picture-in-picture window has no
+                // strip, and a window in full screen may not show its own. Its tabs keep their ids.
+                if ids, whole, !tabs.isEmpty { tabIDs.sawWhole(window, tabs: Set(tabs.compactMap(\.id))) }
+                if tabs.isEmpty, let title { tabs = [.stripless(title)] }
                 windows.append(BrowserTabs.Window(title: title, tabs: tabs))
                 windowElements.append(window)
             }

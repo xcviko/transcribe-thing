@@ -513,6 +513,38 @@ import Testing
         #expect(!BrowserTabs.tabsHaveIDs(bundleID: "com.apple.Safari") && BrowserTabs.tabsHaveIDs(bundleID: "com.google.Chrome"))
     }
 
+    /// A window without a tab strip (Chrome's picture-in-picture window of a call) is read as its only tab, titled as
+    /// the window, with no id. It never takes the call from a tab of it, nor counts as another tab recording beside
+    /// the call; alone, it's found like any tab. A tab that recorded beside the call is another call's, so the call
+    /// whose tab got a new id is found in that tab, not in the other one in front.
+    @Test func aWindowWithoutAStripIsTheCallsOwnAndATabBesideItAnotherCalls() throws {
+        let telemost = "Идёт звонок · Яндекс Телемост", mark = " - Camera and microphone recording"
+        let key = BrowserTabs.key(service: .telemost, page: telemost)
+        let first = BrowserTabs.TabID(1), moved = BrowserTabs.TabID(3)
+        func left(_ id: BrowserTabs.TabID) -> [BrowserTabs.Window] {
+            [BrowserTabs.Window(title: "Inbox - Gmail", tabs: [
+                .init(title: telemost + mark, selected: false, id: id),
+                .init(title: "Inbox - Gmail", selected: true, id: BrowserTabs.TabID(2)),
+            ]), BrowserTabs.Window(title: telemost, tabs: [.stripless(telemost + mark)])]
+        }
+        let tab = try #require(BrowserTabs.callTab(in: left(first), following: .init(key: key, id: first)))
+        #expect(tab.id == first && !tab.stripless && !tab.othersRecordMic)
+        #expect(try #require(BrowserTabs.callTab(in: left(moved), following: .init(key: key, id: first))).id == moved,
+                "its tab with a new id, not its window in front")
+        let pip = [BrowserTabs.Window(title: telemost, tabs: [.stripless(telemost)])]
+        let alone = try #require(BrowserTabs.callTab(in: pip, following: .init(key: key, id: first)))
+        #expect(alone.stripless && alone.id == nil && alone.service == .telemost && alone.active)
+
+        let two = [BrowserTabs.Window(title: telemost, tabs: [
+            .init(title: telemost + mark, selected: false, id: moved),
+            .init(title: telemost + mark, selected: true, id: BrowserTabs.TabID(4)),
+        ])]
+        let besideKnown = try #require(BrowserTabs.callTab(in: two, following: .init(key: key, id: first, others: [.init(4)])))
+        #expect(besideKnown.id == moved)
+        let besideUnknown = try #require(BrowserTabs.callTab(in: two, following: .init(key: key, id: first)))
+        #expect(besideUnknown.id == BrowserTabs.TabID(4), "not knowing it recorded beside, the one in front")
+    }
+
     /// A tab keeps its id while it's there; a tab gone from a whole read of its window, or with its window, is
     /// forgotten, and an element equal to it later is another tab. Ids are never given twice.
     @Test func tabIDsLastWhileTheTabIs() {
