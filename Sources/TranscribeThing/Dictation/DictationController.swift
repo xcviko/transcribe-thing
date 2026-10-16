@@ -195,6 +195,14 @@ final class DictationController {
     @ObservationIgnored private var continuing: Recording?
     /// The recording the next `.resumeCapture` effect continues.
     @ObservationIgnored private var resumeRequest: Recording?
+    /// How the dictation the next `.resumeCapture` continues was dictated, when its paste should follow that rather
+    /// than hands-free's (Home's Continue); and the same for the capture under way, while it runs.
+    @ObservationIgnored private var resumeMode: DictationMachine.Mode?
+    @ObservationIgnored private var continuingMode: DictationMachine.Mode?
+    /// History rows whose recording Home's Continue is reading back before it records on.
+    @ObservationIgnored private var startingContinuations: Set<UUID> = []
+    /// The History row whose dictation is being recorded on right now (Undo, Home's Continue): its row says so.
+    private(set) var recordingOnID: UUID?
     /// When each failure notice (by dedupe key) last played its sound.
     @ObservationIgnored private var failureCueTimes: [String: TimeInterval] = [:]
     /// The task making each `homeWork` version, by recording id.
@@ -589,6 +597,7 @@ final class DictationController {
             try captureDevice.start(preferredDeviceUID: settings.microphoneUID, continuing: prefix)
             sounds.captureStarting(bluetooth: captureDevice.capturesFromBluetooth)
             continuing = prefix
+            continuingMode = prefix == nil ? nil : resumeMode
             deviceNoticeDue = captureDevice === recorder
             // The recorder trusts the cached permission (TCC costs ~25 ms here); re-probe it off the main
             // thread, so access turned off since is refused at the next press.
@@ -666,11 +675,14 @@ final class DictationController {
     /// Queues the job right away (FIFO order is decided at release), then waits for the recorder's tail.
     private func finishCapture(tail: TimeInterval, mode: DictationMachine.Mode) {
         let resumedID = continuing?.id
+        let resumedMode = continuingMode
         continuing = nil
+        continuingMode = nil
         guard captureDevice.isCapturing else { return }
         // A resumed dictation keeps the canceled recording's id, already while its tail is captured.
         let job = Job(recording: nil, engine: effectiveEngine, id: resumedID)
-        job.mode = mode
+        // Home's Continue pastes by the rules of how the dictation was first dictated.
+        job.mode = resumedMode ?? mode
         // The main model may have changed under it (Models, a notice's "Use Parakeet v3"): only Gemini polishes.
         job.polishes = isPolishing && effectiveChoice.isGemini
         job.translates = isTranslating && effectiveChoice.isGemini
@@ -744,6 +756,7 @@ final class DictationController {
     private func cancelCapture(keepForUndo: Bool, notify: Bool, onlyWithSpeech: Bool = false) {
         let resumed = continuing
         continuing = nil
+        continuingMode = nil
         let recording = captureDevice.isCapturing ? captureDevice.cancel() : nil
         let keepForUndo = keepForUndo
             && !(onlyWithSpeech && (recording?.speech.voicedSeconds ?? 0) < Self.takenOverKeepsVoicedSeconds)
@@ -777,7 +790,14 @@ final class DictationController {
         if polishes { polishIDs.insert(recording.id) } else { polishIDs.remove(recording.id) }
         if translates { translateIDs.insert(recording.id) } else { translateIDs.remove(recording.id) }
         lastCancelledID = recording.id
-        if recording.duration >= Self.saveCancelledMinimumDuration {
+        if var row = history.entry(id: recording.id), row.status == .failed, row.interruption != nil {
+            // Home's Continue, canceled: the row stays one to continue, with all that's recorded so far and its own
+            // mode, and Undo records on as Continue would.
+            row.audioDuration = recording.duration
+            row.voicedSeconds = recording.speech.voicedSeconds
+            row.audioFileName = history.saveAudio(recording) ?? row.audioFileName
+            history.upsert(row)
+        } else if recording.duration >= Self.saveCancelledMinimumDuration {
             let file = history.saveAudio(recording)
             history.upsert(TranscriptEntry(
                 id: recording.id, createdAt: recording.startedAt, text: "", engine: engine,
@@ -1126,9 +1146,10 @@ final class DictationController {
         }
     }
 
-    /// Queued, being delivered, being recorded on again (Undo), or worked on from Home.
+    /// Queued, being delivered, being recorded on again (Undo, Home's Continue), or worked on from Home.
     func isInFlight(_ id: UUID) -> Bool {
         queue.contains { $0.id == id } || deliveringJob?.id == id || continuing?.id == id || homeWork[id] != nil
+            || startingContinuations.contains(id)
     }
 
     /// False when there was nothing left to cancel (the last result is already being delivered).
@@ -1860,18 +1881,81 @@ final class DictationController {
             postCanceled(recording, note: "Finish this dictation first, then Undo.")
             return
         }
-        let engine = cancelledEngines[id] ?? history.entry(id: id)?.engine ?? settings.mainEngine
+        let row = history.entry(id: id)
+        let engine = cancelledEngines[id] ?? row?.engine ?? settings.mainEngine
+        // A row Home's Continue would record on (its Continue canceled) pastes as Continue does.
+        let mode = row.flatMap { $0.status == .failed && $0.interruption != nil ? $0.mode : nil }
+        if !recordOn(recording, engine: engine, mode: mode) {
+            // The mic didn't start (its error is showing): the audio stays for another Undo.
+            postCanceled(recording, note: Self.undoResumesHint)
+        }
+    }
+
+    /// Records on after `recording`, hands-free, with the model it had (`engine`), Polish and Translate as they were:
+    /// the same dictation goes on, its audio first, and nothing is transcribed or pasted until the user stops (Esc
+    /// cancels it again, all of it). `mode`: how it was first dictated, for its paste; nil pastes as hands-free. False
+    /// when the mic didn't start (`send` shows why).
+    private func recordOn(_ recording: Recording, engine: EngineID, mode: DictationMachine.Mode? = nil) -> Bool {
+        let id = recording.id
         let choice = ModelChoice(engine: engine)
         resumeRequest = recording
-        // The same dictation goes on, with the model it had; `send` drops it if the mic won't start.
+        resumeMode = mode
         modelOverride = choice == settings.lineup.main ? nil : choice
         isPolishing = polishIDs.contains(id)
         isTranslating = translateIDs.contains(id)
         send(.resume(prefix: recording.duration))
         resumeRequest = nil
-        if continuing?.id != id {
-            // The mic didn't start (its error is showing): the audio stays for another Undo.
-            postCanceled(recording, note: Self.undoResumesHint)
+        resumeMode = nil
+        return continuing?.id == id
+    }
+
+    // MARK: - Continue from Home
+
+    /// Home's Continue on a dictation the app quit during (`TranscriptEntry.interruption`).
+    ///
+    /// Cut off while it was recorded: it records on right away, hands-free (the pill shows it, as for any dictation),
+    /// its saved audio first, as Undo does after a cancel. Once stopped, the whole of it is transcribed by the row's
+    /// model and pasted wherever the user is then, by the rules of how it was first dictated, and the row becomes its
+    /// transcript. Esc keeps it all in the row, still to continue (`keepCancelled`). Nothing happens while another
+    /// dictation is being recorded (Home's button says so) or something already runs for the row.
+    ///
+    /// Quit after, while it was transcribed: nothing was cut off, so it's transcribed from Home, as Retry does.
+    func continueDictation(_ entry: TranscriptEntry) {
+        let id = entry.id
+        guard let row = history.entry(id: id), row.status == .failed,
+              let interruption = row.interruption else { return }
+        DiagnosticLog.shared.event(.dictation, "home.continue", [
+            "interrupted": interruption.rawValue, "seconds": row.audioDuration, "busy": isInFlight(id) ? true : nil,
+            "recording": machine.isRecording ? true : nil])
+        guard interruption == .whileRecording else {
+            retry(row, with: row.engine)
+            return
+        }
+        guard !isInFlight(id), !machine.isRecording else { return }
+        if let kept = retained[id] {
+            _ = recordOn(kept, engine: row.engine, mode: row.mode)
+            return
+        }
+        guard row.audioFileName != nil else {
+            homeFailures[id] = .recordingGone(.transcription(row.engine))
+            return
+        }
+        // Read off the main actor: a dictation that ran on for an hour takes a moment to decode.
+        startingContinuations.insert(id)
+        Task { [weak self] in
+            guard let self else { return }
+            let recording = await self.history.loadRecordingInBackground(for: row)
+            self.startingContinuations.remove(id)
+            guard let recording else {
+                self.homeFailures[id] = .recordingGone(.transcription(row.engine))
+                return
+            }
+            // Deleted, transcribed or taken up meanwhile, or another dictation started: nothing to record on now.
+            guard let current = self.history.entry(id: id), current.status == .failed,
+                  current.interruption == .whileRecording, !self.isInFlight(id),
+                  !self.machine.isRecording else { return }
+            self.homeFailures[id] = nil
+            _ = self.recordOn(recording, engine: current.engine, mode: current.mode)
         }
     }
 
@@ -2991,6 +3075,7 @@ final class DictationController {
             running[job.id] = job.rewrite ?? .transcription(job.engine)
         }
         if runningVersions != running { runningVersions = running }
+        if recordingOnID != continuing?.id { recordingOnID = continuing?.id }
         refreshPill()
         replayDeferredErrorFlash()
         showSecureInputNoticeIfNeeded()

@@ -174,14 +174,20 @@ struct HistoryRow: View, Equatable {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .firstTextBaseline, spacing: 7) {
                     // Centered on the cap height of the 13 pt label (≈4.5 pt above its baseline), not sitting on it.
-                    Circle().fill(Color.danger).frame(width: 6, height: 6).alignmentGuide(.firstTextBaseline) { $0[.bottom] + 1.5 }
-                    Text("\(Text("Couldn’t transcribe").fontWeight(.medium).foregroundStyle(Color.ink)) · \(failureReason)")
+                    // Amber for a dictation the app quit during: nothing failed, it's waiting to be finished.
+                    Circle().fill(entry.interruption == nil ? Color.danger : Color.warning)
+                        .frame(width: 6, height: 6).alignmentGuide(.firstTextBaseline) { $0[.bottom] + 1.5 }
+                    Text("\(Text(failureTitle).fontWeight(.medium).foregroundStyle(Color.ink)) · \(failureReason)")
                         .foregroundStyle(Color.inkSecondary)
                         .font(.system(size: 13))
                         .fixedSize(horizontal: false, vertical: true)
                         .help(HistoryRowText.modelAnswerTooltip(entry.modelAnswer) ?? "")
                 }
-                inlineRetry(title: "Retry", symbol: "arrow.clockwise")
+                if let interruption = entry.interruption {
+                    inlineContinue(interruption)
+                } else {
+                    inlineRetry(title: "Retry", symbol: "arrow.clockwise")
+                }
             }
         case .cancelled:
             VStack(alignment: .leading, spacing: 6) {
@@ -197,6 +203,10 @@ struct HistoryRow: View, Equatable {
                 inlineRetry(title: "Transcribe", symbol: "waveform")
             }
         }
+    }
+
+    private var failureTitle: String {
+        entry.interruption == nil ? "Couldn’t transcribe" : "Interrupted"
     }
 
     private var failureReason: String {
@@ -224,14 +234,60 @@ struct HistoryRow: View, Equatable {
             runningLine(running)
                 .frame(minHeight: Theme.Metrics.smallButtonHeight)
         } else if hasAudio {
-            Menu {
-                VersionsMenuItems(entry: entry)
-            } label: {
-                Label(title, systemImage: symbol)
+            retryMenu(title: title, symbol: symbol)
+                .padding(.leading, -8)
+        } else {
+            Text("Recording no longer kept")
+                .font(.system(size: 11.5))
+                .foregroundStyle(.inkTertiary)
+        }
+    }
+
+    /// "Retry" or "Transcribe": the row's Retry With menu, every model to transcribe its recording with.
+    private func retryMenu(title: String, symbol: String) -> some View {
+        Menu {
+            VersionsMenuItems(entry: entry)
+        } label: {
+            Label(title, systemImage: symbol)
+        }
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
+        .buttonStyle(QuietButtonStyle(size: .small))
+        .fixedSize()
+    }
+
+    /// A dictation the app quit during: Continue, and for one cut off while it was recorded Transcribe beside it
+    /// (`DictationController.continueDictation`). Cut off, Continue records on, then transcribes all of it and pastes
+    /// it; quit while it was transcribed, Continue transcribes it into the row, as Retry would. Continue uses the row's
+    /// model; Transcribe, the hover button and the row's menu offer the others. While it's recorded on or transcribed,
+    /// the row says so instead.
+    @ViewBuilder private func inlineContinue(_ interruption: TranscriptEntry.Interruption) -> some View {
+        if hub.isRecordingOn(entry.id) {
+            RecordingOnLine()
+                .frame(minHeight: Theme.Metrics.smallButtonHeight)
+        } else if let running {
+            runningLine(running)
+                .frame(minHeight: Theme.Metrics.smallButtonHeight)
+        } else if hasAudio {
+            let entry = entry
+            let recordsOn = interruption == .whileRecording
+            let blocker = hub.continueBlocker(for: entry)
+            HStack(spacing: 6) {
+                // Drawn as the Retry and Transcribe menus beside it are: the push button a menu shows as.
+                Button {
+                    hub.dictation.continueDictation(entry)
+                } label: {
+                    Label("Continue", systemImage: recordsOn ? "mic" : "waveform")
+                }
+                .disabled(blocker != nil)
+                .help(blocker ?? (recordsOn ? "Record more, then transcribe all of it and paste it"
+                                            : "Transcribe the recording with \(entry.engine.shortName)"))
+                if recordsOn {
+                    // What was recorded, without recording more, with any model: as a canceled row's Transcribe.
+                    retryMenu(title: "Transcribe", symbol: "waveform")
+                        .help("Transcribe what was recorded, without recording more")
+                }
             }
-            .menuStyle(.button)
-            .menuIndicator(.hidden)
-            .buttonStyle(QuietButtonStyle(size: .small))
             .fixedSize()
             .padding(.leading, -8)
         } else {
@@ -328,7 +384,7 @@ struct HistoryRow: View, Equatable {
             if entry.status == .success && !isEmptySuccess {
                 CopyButton(text: entry.text) { hub.copy($0) }
             }
-            if entry.status != .success && hasAudio && running == nil {
+            if entry.status != .success && hasAudio && running == nil && !hub.isRecordingOn(entry.id) {
                 Menu {
                     VersionsMenuItems(entry: entry)
                 } label: {
@@ -403,6 +459,22 @@ private struct RunningLine: View {
                     .padding(.leading, -4)
             }
         }
+    }
+}
+
+/// "Recording…" under an interrupted row being recorded on (its Continue): stopped or canceled from the pill, as any
+/// dictation is.
+private struct RecordingOnLine: View {
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            ShimmerBar(height: 3)
+                .frame(width: 40)
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+            Text("Recording…")
+                .font(.system(size: 11.5))
+                .foregroundStyle(.inkSecondary)
+        }
+        .accessibilityElement(children: .combine)
     }
 }
 

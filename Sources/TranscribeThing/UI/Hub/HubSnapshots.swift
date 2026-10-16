@@ -72,6 +72,23 @@ enum HubSnapshots {
             hub("hub-home-drop", .home) { c in
                 c.previewDropTarget = true
             },
+            // Dictations the app quit during, brought back at launch: one cut off while it was recorded (Continue
+            // records on, Transcribe beside it), one quit while it was transcribed (Continue transcribes it).
+            hub("hub-home-interrupted", .home) { c in
+                c.history = .preview(entries: Samples.interruptedEntries() + c.history.entries)
+            },
+            // The cut-off one being recorded on after its Continue.
+            hub("hub-home-interrupted-recording", .home) { c in
+                let interrupted = Samples.interruptedEntries()
+                c.history = .preview(entries: interrupted + c.history.entries)
+                c.previewRecordingOn = interrupted[0].id
+                c.previewDictating = true
+            },
+            // Another dictation is being recorded: Continue waits for it, and says so on hover.
+            hub("hub-home-interrupted-dictating", .home) { c in
+                c.history = .preview(entries: Samples.interruptedEntries() + c.history.entries)
+                c.previewDictating = true
+            },
             // Selected text polished and translated by Gemini 3.8 Flash: each glyph in its model's color.
             hub("hub-home-selections", .home, height: 900) { c in
                 c.history = .preview(entries: Samples.selectionEntries() + c.history.entries)
@@ -611,6 +628,24 @@ enum HubSnapshots {
                       .selectionTranslation(.geminiFlash), ago: 30),
                 entry("We ship the import on Friday, and Pasha checks the long files over the weekend.",
                       .selection(.geminiFlash), ago: 90),
+            ]
+        }
+
+        /// Dictations the app quit during: one cut off while it was recorded, one quit while it was transcribed.
+        static func interruptedEntries() -> [TranscriptEntry] {
+            let now = Date()
+            func entry(_ interruption: TranscriptEntry.Interruption, engine: EngineID, seconds: TimeInterval,
+                       ago: TimeInterval) -> TranscriptEntry {
+                var entry = TranscriptEntry(createdAt: now.addingTimeInterval(-ago), text: "", engine: engine,
+                                            status: .failed, audioDuration: seconds, voicedSeconds: seconds * 0.8,
+                                            errorMessage: interruption.message, mode: .handsFree,
+                                            audioFileName: "interrupted-\(interruption.rawValue).m4a")
+                entry.interruption = interruption
+                return entry
+            }
+            return [
+                entry(.whileRecording, engine: .geminiFlash, seconds: 48, ago: 20),
+                entry(.whileTranscribing, engine: .parakeet, seconds: 12, ago: 50),
             ]
         }
 

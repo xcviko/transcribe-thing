@@ -51,6 +51,10 @@ final class HubContext: Observable {
     var previewFailures: [UUID: HomeFailure]?
     /// A History row drawn as hovered, its actions showing (snapshots).
     var previewHoveredEntry: UUID?
+    /// The History row drawn as being recorded on (Continue), in place of the dictation controller's (snapshots).
+    var previewRecordingOn: UUID?
+    /// Drawn as if a dictation were being recorded, in place of the dictation controller's state (snapshots).
+    var previewDictating: Bool?
     /// Home, or Calls, drawn with files dragged over it (snapshots).
     var previewDropTarget = false
     /// The live call as the Calls tab shows it, in place of the monitor's (snapshots).
@@ -192,6 +196,22 @@ final class HubContext: Observable {
 
     func versionsMenu(for entry: TranscriptEntry) -> VersionsMenu {
         VersionsMenu.make(for: entry, running: runningVersion(for: entry.id), readiness: readiness(of:))
+    }
+
+    /// The row's dictation is being recorded on right now (its Continue, or Undo).
+    func isRecordingOn(_ id: UUID) -> Bool {
+        (previewRecordingOn ?? dictation.recordingOnID) == id
+    }
+
+    /// Why an interrupted row's Continue can't run now, said on the button: another dictation is being recorded (when
+    /// it would record on), or what keeps the row's model from transcribing it. nil when it can.
+    func continueBlocker(for entry: TranscriptEntry) -> String? {
+        if entry.interruption == .whileRecording, previewDictating ?? (dictation.activity == .recording) {
+            return "Finish the dictation you’re recording first"
+        }
+        // The row's model, as its Retry With menu says: "Needs key", "Not downloaded".
+        let kind = TranscriptVersionKind.transcription(entry.engine)
+        return versionsMenu(for: entry).actions.first { $0.kind == kind }?.blocker?.label
     }
 
     /// "transcribe-thing 0.1.0 (build 42)", or without the build when running the bare binary.

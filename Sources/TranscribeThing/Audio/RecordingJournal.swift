@@ -3,9 +3,10 @@ import Foundation
 /// A dictation on disk from the moment it's recorded until History has it, so a crash, a kill (a reinstall
 /// mid-dictation) or a power cut doesn't lose it: `<id>.wav`, 16 kHz mono 16-bit PCM whose header leaves the sizes
 /// open (`WAVEncoder.decode` reads to the end of the file, whatever was written), and `<id>.json`, whose dictation
-/// it is (`Info`). `AudioRecorder` writes it. It goes once History has the recording (`HistoryStore.saveAudio`, after
-/// history.json names it) or once the recording is thrown away (`remove`, `discard`). One still there at launch is a
-/// dictation an earlier run never finished: `HistoryStore` brings it back as a failed entry.
+/// it is and whether its recording had ended (`Info`). `AudioRecorder` writes it. It goes once History has the
+/// recording (`HistoryStore.saveAudio`, after history.json names it) or once the recording is thrown away (`remove`,
+/// `discard`). One still there at launch is a dictation an earlier run never finished: `HistoryStore` brings it back
+/// as a failed entry, to continue (cut off while it recorded) or to transcribe (its recording had ended).
 ///
 /// All file work runs on one serial queue, never on the audio thread. Every `flushInterval` the audio captured since
 /// is copied out of the capture (`CaptureSession.samples(from:keepingBack:)`) and appended, but for the last
@@ -22,8 +23,12 @@ final class RecordingJournal: @unchecked Sendable {
         /// The `DictationMachine.Mode` raw value.
         var mode: String?
         var deviceName: String?
-        /// It continues a canceled recording (Undo): that audio comes first in the file.
+        /// It continues a canceled recording (Undo) or an interrupted one (Home's Continue): that audio comes first in
+        /// the file.
         var continues: Bool
+        /// The recording had ended when the app quit: it was being transcribed, so nothing was cut off (`end` writes
+        /// it). nil while it records, and in journals from builds before it was written, which come back as cut off.
+        var ended: Bool? = nil
     }
 
     /// A journal an earlier run left behind.
@@ -100,12 +105,18 @@ final class RecordingJournal: @unchecked Sendable {
         }
     }
 
-    /// The capture is over: `samples` is all of it (without the prefix). What isn't written yet is, the file goes to
-    /// the disk and is closed. The journal stays until History has the recording or it's thrown away.
+    /// The capture is over: `samples` is all of it (without the prefix). What isn't written yet is, the sidecar says
+    /// the recording ended (`Info.ended`), the file goes to the disk and is closed. The journal stays until History
+    /// has the recording or it's thrown away.
     func end(_ id: UUID, samples: [Float]) {
         queue.async {
             guard let writer = self.writers[id] else { return }
             if samples.count > writer.written { self.append(Array(samples[writer.written...]), to: writer, id: id) }
+            // A write that failed (a full disk) closed the journal short of the end: it doesn't say it ended.
+            if self.writers[id] != nil {
+                writer.info.ended = true
+                self.writeInfo(writer.info)
+            }
             self.close(id, sync: true)
         }
     }
