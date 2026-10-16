@@ -1414,6 +1414,43 @@ private func heldVoice(seconds: Double, gain: Double) -> [Float] {
         #expect(call.service == .telemost)
     }
 
+    /// The case of 2026-10-16: Transcribe This Call from the menu bar while the app asks about a call, then the person
+    /// rejoined in another tab. From the menu bar, it's theirs: it records on until Stop Call Recording.
+    @Test func transcribeThisCallFromTheMenuBarEndsOnlyWithStop() async throws {
+        let rig = Rig()
+        let telemost = "Идёт звонок · Яндекс Телемост"
+        rig.tabs = [telemost + " - Camera and microphone recording"]
+        rig.tabIDs = [1]
+        rig.app("com.google.Chrome", mic: true, sound: true)
+        rig.poll(stride(from: 0.0, through: 22, by: 1))
+        guard case .asking(let asked) = rig.monitor.state else { Issue.record("not asked"); return }
+        rig.monitor.startManual()
+        guard case .recording(let kept) = rig.monitor.state, kept.id == asked.id else { Issue.record("not kept"); return }
+        rig.tabs = [telemost, telemost + " - Microphone recording"]
+        rig.tabIDs = [1, 2]
+        rig.poll(stride(from: 23.0, through: 50, by: 1))
+        rig.app("com.google.Chrome", mic: false, sound: false)
+        rig.poll(stride(from: 51.0, through: 130, by: 1))
+        guard case .recording(let still) = rig.monitor.state, still.id == kept.id else {
+            Issue.record("ended without Stop")
+            return
+        }
+        #expect(rig.sources.count == 1)
+    }
+
+    /// Stop Call Recording says the call ended at once, before its recording is finished (echo removal on a long call
+    /// takes up to a minute).
+    @Test func stoppingSaysTheCallEndedAtOnce() async throws {
+        let rig = Rig()
+        let s = CallNoticesTests.Shown()
+        rig.monitor.notices = s.notices
+        rig.monitor.startManual()
+        rig.poll([0, 1, 2])
+        rig.monitor.stop(keep: true)
+        #expect(s.shown.last?.hasPrefix("Call ended") == true, "before the recording is finished")
+        await rig.monitor.waitForEndings()
+    }
+
     /// The minute of silence that tells a hang-up from a pause isn't the call: the room after it isn't kept.
     @Test func aCallIsKeptToItsEndNotTheMinuteAfter() async throws {
         let rig = Rig(mode: .automatic)
@@ -2069,8 +2106,10 @@ private func heldVoice(seconds: Double, gain: Double) -> [Float] {
         rig.poll(stride(from: 40.0, through: 101, by: 1))
         await rig.monitor.waitForEndings()
         await rig.transcriber.waitUntilIdle()
+        // Said the moment the call ends, its length by the clock (to its last sound and a second): not after the
+        // recording is finished, so not the 12 s the fake mic held.
         #expect(s.shown == ["Call detected · Telegram", "You’re unmuted · Telegram", "You’re muted · Telegram",
-                            "You’re unmuted · Telegram", "Call ended · 00:12 · transcribing"])
+                            "You’re unmuted · Telegram", "Call ended · 00:41 · transcribing"])
     }
 
     @Test func askingShowsTheQuestionNotCallDetected() {
