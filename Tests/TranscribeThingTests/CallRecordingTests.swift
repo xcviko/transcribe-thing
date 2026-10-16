@@ -863,6 +863,8 @@ private func heldVoice(seconds: Double, gain: Double) -> [Float] {
         var tabs: [String] = []
         /// Each tab's id (`BrowserTabs.TabID`), in `tabs`' order; nil: the browser gives none.
         var tabIDs: [Int]?
+        /// A window without a tab strip titled so, besides the one with `tabs`: Chrome's picture-in-picture window.
+        var pip: String?
         /// Accessibility allowed.
         var canReadWindows = true
         /// The browser shows its windows to Accessibility.
@@ -898,7 +900,7 @@ private func heldVoice(seconds: Double, gain: Double) -> [Float] {
                     let windows = windowsReadable
                         ? [BrowserTabs.Window(title: tabs.first, tabs: tabs.enumerated().map { index, title in
                             BrowserTabs.Tab(title: title, selected: nil, id: tabIDs.map { BrowserTabs.TabID($0[index]) })
-                        })]
+                        })] + (pip.map { [BrowserTabs.Window(title: $0, tabs: [.stripless($0)])] } ?? [])
                         : []
                     let isBrowser = CallAppKind.of(app.id) == .browser
                     done(CallMuteReader.Report(
@@ -1377,9 +1379,60 @@ private func heldVoice(seconds: Double, gain: Double) -> [Float] {
         #expect(firstCall.service == .telemost && secondCall.service == .telemost)
     }
 
-    /// The case of 2026-10-15: Start Call Recording on a Telemost call the app had noticed, then the person left its
-    /// tab and the detector took it for a call in another tab. Asked for from the menu bar, it records on, one call,
-    /// until Stop Call Recording.
+    /// The case of 2026-10-16 through the monitor: a Telemost call asked about and kept. As the person leaves its tab,
+    /// the tab strip shows it with new ids, then only its picture-in-picture window can be read, then its tab again
+    /// with yet another id; then its tab closes and the person rejoins in a new one, the mic let go for a moment. One
+    /// call, never ended along the way nor asked about again, kept to its end.
+    @Test func aKeptCallMovingFromTabToTabIsOneCall() async throws {
+        let rig = Rig()
+        let telemost = "Идёт звонок · Яндекс Телемост", mark = " - Camera and microphone recording"
+        rig.tabs = [telemost + mark]
+        rig.tabIDs = [1]
+        rig.app("com.google.Chrome", mic: true, sound: true)
+        rig.poll(stride(from: 0.0, through: 21, by: 1))
+        guard case .asking(let asked) = rig.monitor.state else { Issue.record("not asked"); return }
+        rig.monitor.keep()
+        try #require(rig.sources.first?[.mic]).push(speechLike(seconds: 100), at: 0)
+        // Its tab left: Chrome shows it with a new id, twice.
+        rig.tabs = [telemost + mark, "Inbox - Gmail"]
+        rig.tabIDs = [5, 6]
+        rig.poll(stride(from: 22.0, through: 32, by: 1))
+        rig.tabIDs = [7, 6]
+        rig.poll(stride(from: 33.0, through: 42, by: 1))
+        // Only its picture-in-picture window can be read; then its tab again, with another id.
+        rig.tabs = []
+        rig.tabIDs = []
+        rig.pip = telemost
+        rig.poll(stride(from: 43.0, through: 52, by: 1))
+        rig.tabs = ["Inbox - Gmail", telemost + mark]
+        rig.tabIDs = [6, 8]
+        rig.poll(stride(from: 53.0, through: 62, by: 1))
+        // Its tab closed; rejoined in a new one, the mic let go for a moment.
+        rig.pip = nil
+        rig.tabs = ["Inbox - Gmail"]
+        rig.tabIDs = [6]
+        rig.app("com.google.Chrome", mic: false, sound: true)
+        rig.poll([63, 64])
+        rig.tabs = ["Inbox - Gmail", telemost + mark]
+        rig.tabIDs = [6, 9]
+        rig.app("com.google.Chrome", mic: true, sound: true)
+        rig.poll(stride(from: 65.0, through: 100, by: 1))
+        guard case .recording(let still) = rig.monitor.state, still.id == asked.id else {
+            Issue.record("the call ended along the way")
+            return
+        }
+        #expect(rig.asked.map(\.id) == [asked.id] && rig.sources.count == 1, "asked about once, recorded once")
+        rig.monitor.stop(keep: true)
+        await rig.monitor.waitForEndings()
+        await rig.transcriber.waitUntilIdle()
+        #expect(rig.store.calls.count == 1)
+        let call = try #require(rig.store.call(id: asked.id))
+        #expect(call.duration > 99 && call.service == .telemost && call.pageTitle == telemost)
+    }
+
+    /// The case of 2026-10-15: Start Call Recording on a Telemost call the app had noticed, then the detector took it
+    /// for a call in another tab (since 2026-10-16, only a tab that recorded beside it is one). Asked for from the
+    /// menu bar, it records on, one call, until Stop Call Recording.
     @Test func aCallStartedFromTheMenuBarEndsOnlyWithStop() async throws {
         let rig = Rig()
         let telemost = "Идёт звонок · Яндекс Телемост"
@@ -1392,10 +1445,12 @@ private func heldVoice(seconds: Double, gain: Double) -> [Float] {
         guard case .recording(let kept) = rig.monitor.state, kept.id == noticed.id else { Issue.record("not kept"); return }
         try #require(rig.sources.first?[.mic]).push(speechLike(seconds: 80), at: 0)
         rig.poll(stride(from: 4.0, through: 29, by: 1))
-        // Another tab records, and the first one no longer says it does.
-        rig.tabs = [telemost, telemost + " - Microphone recording"]
+        // Another tab records beside it, then the first one no longer says it does.
+        rig.tabs = [telemost + " - Camera and microphone recording", telemost + " - Microphone recording"]
         rig.tabIDs = [1, 2]
-        rig.poll(stride(from: 30.0, through: 50, by: 1))
+        rig.poll(stride(from: 30.0, through: 35, by: 1))
+        rig.tabs = [telemost, telemost + " - Microphone recording"]
+        rig.poll(stride(from: 36.0, through: 50, by: 1))
         #expect(rig.monitor.current?.id == kept.id && rig.sources.count == 1, "still the one recording")
         // The detector hears nothing for its minute: still recording.
         rig.app("com.google.Chrome", mic: false, sound: false)

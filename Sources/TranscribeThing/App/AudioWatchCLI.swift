@@ -185,6 +185,7 @@ private final class AudioWatch {
             return "TAB \(browser): no tab records or is titled like a call (\(report.windowCount) windows)"
         }
         let window = "window \(tab.window + 1) of \(report.windowCount)" + (tab.id.map { ", tab \($0)" } ?? "")
+            + (tab.stripless ? ", a window without tabs (picture in picture?)" : "")
             + (tab.otherMicTabs.isEmpty ? "" : ", also recording: \(tab.otherMicTabs.map(\.description).joined(separator: " "))")
             + (tab.active ? "" : ", which shows \"\(CallLabels.safe(tab.windowTitle ?? "?", limit: 60))\"")
         let what = tab.recording.map { "is recording (\(tab.active ? "active" : "background"), \($0.name))" }
