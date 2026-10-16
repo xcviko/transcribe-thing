@@ -28,11 +28,14 @@ private func speech(seconds: Double) -> Recording {
         var transcribed: [(recording: Recording, engine: EngineID)] = []
         var pasted: [String] = []
         var result: @MainActor (Recording) async throws -> String = { _ in "all of it" }
+        /// transcribe-thing itself is the frontmost app (Home's window).
+        var appInFront = false
 
         init() {
             h = DictationControllerTests.make(persistsHistory: true)
             paths = h.paths!
             h.recorder.journal = h.history.journal
+            h.controller.isOwnAppFrontmost = { [weak self] in self?.appInFront ?? false }
             // Kept as WAV: what's read back is what was saved, to the sample.
             h.history.encodeOverride = { _, _ in throw EncodeRefused() }
             // Weak: a test that timed out leaves its controller at work after the rig is gone.
@@ -253,6 +256,131 @@ private func speech(seconds: Double) -> Recording {
         try await waitUntil { rig.h.controller.homeFailures[entry.id]?.isRecordingGone == true }
         #expect(rig.h.recorder.starts == 0)
         #expect(!rig.h.controller.isInFlight(entry.id))
+    }
+
+    // MARK: Stopped from Home
+
+    /// Stopped with the app itself in front (from Home, without switching away): the row shows the transcript, and
+    /// nothing is pasted into the app's own window. Another dictation in the same spot still pastes as ever.
+    @Test func aContinuedDictationStoppedFromHomeStaysInItsRow() async throws {
+        let rig = Rig()
+        rig.appInFront = true
+        let entry = try await rig.launch(with: journalSpeech(seconds: 2))
+        rig.h.recorder.next = speech(seconds: 1)
+        rig.h.controller.continueDictation(entry)
+        try await waitUntil { rig.h.recorder.starts == 1 }
+        rig.now += 1
+        rig.h.controller.send(.pillStop)
+        try await waitUntil {
+            rig.h.history.entry(id: entry.id)?.status == .success && rig.h.controller.machine.activeJobs == 0
+        }
+        #expect(rig.h.history.entry(id: entry.id)?.text == "all of it")
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(rig.pasted.isEmpty, "not pasted into the app's own window")
+        #expect(rig.h.toasts.notices.isEmpty, "no card either: the row has it")
+
+        rig.result = { _ in "a new one" }
+        rig.h.recorder.next = speech(seconds: 1)
+        rig.h.controller.send(.handsFreeToggle)
+        rig.now += 1
+        rig.h.controller.send(.pillStop)
+        try await waitUntil { rig.pasted == ["a new one"] && rig.h.controller.machine.activeJobs == 0 }
+    }
+
+    // MARK: When the transcription doesn't come
+
+    /// Transcribe on a cut-off row fails: the row stays one to continue, its message as it was, with why under it.
+    /// Transcribe again is the retry.
+    @Test func aFailedTranscribeKeepsTheRowToContinue() async throws {
+        let rig = Rig()
+        let saved = journalSpeech(seconds: 3)
+        let entry = try await rig.launch(with: saved)
+        rig.result = { _ in throw AppError.engineFailed(.parakeet, "Couldn’t transcribe") }
+        rig.h.controller.retry(entry, with: entry.engine)
+        try await waitUntil { rig.h.controller.homeFailures[entry.id] != nil && rig.h.controller.runningVersions.isEmpty }
+        let row = try #require(rig.h.history.entry(id: entry.id))
+        #expect(row.status == .failed && row.interruption == .whileRecording)
+        #expect(row.errorMessage == entry.errorMessage, "it still says the app quit while recording")
+        let failure = try #require(rig.h.controller.homeFailures[entry.id])
+        #expect(failure.kind == .transcription(.parakeet) && failure.reason == "It ran into a problem.")
+        #expect(!failure.isRecordingGone)
+
+        rig.result = { _ in "all of it" }
+        rig.h.controller.retry(row, with: row.engine)
+        try await waitUntil { rig.h.history.entry(id: entry.id)?.status == .success }
+        #expect(rig.h.controller.homeFailures[entry.id] == nil)
+        #expect(rig.pasted.isEmpty)
+    }
+
+    /// Continue recorded on, then its transcription failed: the row keeps all of it, still to continue, says why, and
+    /// the failure's notice offers Retry as for any dictation. Continue again picks up after all of it.
+    @Test func aFailedContinueKeepsEverythingToContinue() async throws {
+        let rig = Rig()
+        let saved = journalSpeech(seconds: 3)
+        let entry = try await rig.launch(with: saved)
+        let more = speech(seconds: 2)
+        rig.h.recorder.next = more
+        rig.result = { _ in throw AppError.engineFailed(.parakeet, "Couldn’t transcribe") }
+        rig.h.controller.continueDictation(entry)
+        try await waitUntil { rig.h.recorder.starts == 1 }
+        rig.now += 2
+        rig.h.controller.send(.pillStop)
+        try await waitUntil { rig.h.controller.homeFailures[entry.id] != nil && rig.h.controller.machine.activeJobs == 0 }
+        let row = try #require(rig.h.history.entry(id: entry.id))
+        #expect(row.status == .failed && row.interruption == .whileRecording && row.mode == .pushToTalk)
+        #expect(abs(row.audioDuration - 5) < 0.001, "what was recorded on is kept")
+        try await waitUntil { rig.savedSamples(of: entry.id) == saved.count + more.samples.count }
+        #expect(rig.h.controller.homeFailures[entry.id]?.reason == "It ran into a problem.")
+        #expect(rig.h.toasts.notices.contains { $0.recordingID == entry.id && $0.actions.contains { $0.kind == .retry } })
+        #expect(rig.pasted.isEmpty)
+
+        rig.result = { _ in "all of it" }
+        rig.h.recorder.next = speech(seconds: 1)
+        rig.h.controller.continueDictation(row)
+        try await waitUntil { rig.h.recorder.starts == 2 }
+        #expect(rig.h.recorder.lastPrefix?.samples.count == saved.count + more.samples.count)
+        #expect(rig.h.controller.homeFailures[entry.id] == nil, "recording on again: the old reason goes")
+        rig.now += 1
+        rig.h.controller.send(.pillStop)
+        try await waitUntil { rig.pasted == ["all of it"] && rig.h.controller.machine.activeJobs == 0 }
+        #expect(rig.h.history.entry(id: entry.id)?.status == .success)
+    }
+
+    /// Nothing heard in the whole continued dictation: the row the user brought back stays (not deleted, as a plain
+    /// dictation's silence would be), saying so, to continue or try another model.
+    @Test func aContinueThatHearsNoSpeechKeepsTheRow() async throws {
+        let rig = Rig()
+        let entry = try await rig.launch(with: journalSpeech(seconds: 2))
+        rig.result = { _ in "" }
+        rig.h.recorder.next = speech(seconds: 1)
+        rig.h.controller.continueDictation(entry)
+        try await waitUntil { rig.h.recorder.starts == 1 }
+        rig.now += 1
+        rig.h.controller.send(.pillStop)
+        try await waitUntil { rig.h.controller.homeFailures[entry.id] != nil && rig.h.controller.machine.activeJobs == 0 }
+        let row = try #require(rig.h.history.entry(id: entry.id))
+        #expect(row.status == .failed && row.interruption == .whileRecording)
+        #expect(rig.h.controller.homeFailures[entry.id]?.reason == "No speech detected")
+        #expect(rig.pasted.isEmpty)
+    }
+
+    /// Continue on a row quit while it was transcribed fails: the row stays, still with Continue, saying why.
+    @Test func aFailedContinueAfterTheRecordingEndedKeepsContinue() async throws {
+        let rig = Rig()
+        let entry = try await rig.launch(with: journalSpeech(seconds: 2), cutOff: false)
+        rig.result = { _ in throw AppError.engineFailed(.parakeet, "Couldn’t transcribe") }
+        rig.h.controller.continueDictation(entry)
+        try await waitUntil { rig.h.controller.homeFailures[entry.id] != nil && rig.h.controller.runningVersions.isEmpty }
+        let row = try #require(rig.h.history.entry(id: entry.id))
+        #expect(row.status == .failed && row.interruption == .whileTranscribing)
+        #expect(row.errorMessage == HistoryStore.interruptedMessage)
+        #expect(rig.h.controller.homeFailures[entry.id]?.reason == "It ran into a problem.")
+
+        rig.result = { _ in "all of it" }
+        rig.h.controller.continueDictation(row)
+        try await waitUntil { rig.h.history.entry(id: entry.id)?.status == .success }
+        #expect(rig.h.controller.homeFailures[entry.id] == nil)
+        #expect(rig.h.recorder.starts == 0 && rig.pasted.isEmpty)
     }
 
     /// The mic won't start: its error shows, and the row stays as it was, to continue later.

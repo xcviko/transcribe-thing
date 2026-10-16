@@ -84,6 +84,15 @@ enum HubSnapshots {
                 c.previewRecordingOn = interrupted[0].id
                 c.previewDictating = true
             },
+            // Their transcriptions didn't come: why, above the same Continue and Transcribe, which try again.
+            hub("hub-home-interrupted-failed", .home) { c in
+                let interrupted = Samples.interruptedEntries()
+                c.history = .preview(entries: interrupted + c.history.entries)
+                c.previewFailures = [
+                    interrupted[0].id: Samples.homeFailure(.transcription(.geminiFlash), .timeout(.geminiFlash)),
+                    interrupted[1].id: Samples.homeFailure(.transcription(.parakeet), .engineFailed(.parakeet, "")),
+                ]
+            },
             // Another dictation is being recorded: Continue waits for it, and says so on hover.
             hub("hub-home-interrupted-dictating", .home) { c in
                 c.history = .preview(entries: Samples.interruptedEntries() + c.history.entries)
