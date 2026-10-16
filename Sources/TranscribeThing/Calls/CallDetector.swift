@@ -10,9 +10,14 @@ import Foundation
 /// pauses, reconnects and leave chimes don't end or restart it.
 ///
 /// A browser is one app to the HAL, whichever tab plays or records, so a browser's call is also its tab (`Tab`, from
-/// `Window`). Where the browser's tabs have ids, the call is its tab's: another tab holding a call is another call,
-/// even of the same service and titled alike (two Telemost calls), however the mic went from one to the other; the
-/// call ends where its tab was last seen, and the new one begins where its tab was first seen recording. Without
+/// `Window`). Where the browser's tabs have ids, a tab that recorded beside the call's holds another call, even of
+/// the same service and titled alike (two Telemost calls, the second begun before the first ended), however the mic
+/// went from one to the other; so does a tab of another service or Meet meeting. When such a tab takes over, the call
+/// ends where its tab was last seen, and the new one begins where its tab was first seen recording. A tab of the
+/// same call (`key`) that never recorded beside it is the call moving, and it goes on there: Chrome gave the tab
+/// a new element (dragged to another window, in or out of full screen, its strip rebuilt), or the person rejoined
+/// in a new tab once the old one stopped. A window without a tab strip titled like the call's tab (Chrome's
+/// picture-in-picture window of the call, as the person leaves its tab) is the call's own, not another tab. Without
 /// ids, tabs are told apart by their titles: when the tab holding the call is another service's, another Meet
 /// meeting, or one that recorded beside it, or the mic was off before it, the call ends and that tab's is suspected.
 /// Either way a tab that only changes its title while the mic stays on (Slack as you switch channels mid-huddle) is
@@ -71,7 +76,7 @@ struct CallDetector: Equatable, Sendable {
         /// Another tab records the mic too.
         var othersRecordMic: Bool
         /// Which tab it is, when the browser's tabs have ids (`BrowserTabs.TabID`): then a tab is its call's
-        /// whatever its title, and another tab is another call whatever its title.
+        /// whatever its title, and another tab that recorded beside it is another call whatever its title.
         var id: BrowserTabs.TabID?
         /// The other tabs recording the mic, those with ids.
         var otherMicTabs: [BrowserTabs.TabID]
@@ -91,9 +96,6 @@ struct CallDetector: Equatable, Sendable {
             self.init(service: tab.service, page: tab.page, recording: tab.recording, othersRecordMic: tab.othersRecordMic,
                       id: tab.id, otherMicTabs: tab.otherMicTabs)
         }
-
-        /// How the next read finds this tab again.
-        var following: BrowserTabs.Following { BrowserTabs.Following(key: key, id: id) }
     }
 
     /// One read of the followed app's own window, fed with the step it arrives in.
@@ -202,6 +204,12 @@ struct CallDetector: Equatable, Sendable {
         case .idle: nil
         case .suspected(let call), .call(let call): call
         }
+    }
+
+    /// How the next read of the followed browser finds its call's tab: that very tab, else one of its call that never
+    /// recorded beside it (where the call has moved), not one that did (another call's).
+    var following: BrowserTabs.Following? {
+        followed?.tab.map { BrowserTabs.Following(key: $0.key, id: $0.id, others: shown.recordedBeside) }
     }
 
     /// One look at every app with audio at `time` (an app left out has neither), and the followed app's window if
@@ -347,22 +355,37 @@ struct CallDetector: Equatable, Sendable {
             if let current = call.tab {
                 // Whether it's the call's tab, when both have ids; nil when only titles can tell. The extension's
                 // ids and the tab strip's are never the same tab's, so going from one to the other, titles tell.
-                let sameTab = window.fromPage != call.toldByPage ? nil
+                var sameTab = window.fromPage != call.toldByPage ? nil
                     : current.id.flatMap { id in tab.id.map { $0 == id } }
+                if sameTab == nil, !window.fromPage, !call.toldByPage, let id = current.id, tab.id == nil,
+                   tab.key == current.key {
+                    // A window without a tab strip, titled like the call's tab (`BrowserTabs.Tab.stripless`): Chrome's
+                    // picture-in-picture window of the call, opened as the person leaves its tab, or the call's own
+                    // window read without its strip. It's the call's, not another tab's: the call keeps its tab,
+                    // which the next read looks for first.
+                    tab.id = id
+                    sameTab = true
+                }
                 if sameTab == false || (sameTab == nil && current.key != tab.key), tab.recording == nil {
                     // While the mic is on and no tab says it records, the one titled like a call needn't be the one
                     // with the mic, so it says nothing (and neither do its buttons).
                     guard !micNow else { return [] }
                     return switchTab(to: tab, at: time, fromPage: window.fromPage)
                 }
-                if sameTab == false, let id = tab.id {
-                    // Another tab records: its own call, from when it was first seen recording beside this one,
-                    // however alike their titles and whether or not the mic went off between. This one ended where
-                    // its tab was last seen (`tabSeenWithin`).
+                if sameTab == false, let id = tab.id, tab.key != current.key || shown.recordedBeside.contains(id) {
+                    // Another tab records, one that recorded beside this one or is another service's or Meet
+                    // meeting's: its own call, from when it was first seen recording beside this one, however alike
+                    // their titles and whether or not the mic went off between. This one ended where its tab was last
+                    // seen (`tabSeenWithin`).
                     let lastSeen = shown.tabSeenAt.map { max($0, time - settings.tabSeenWithin) }
                     return switchTab(to: tab, at: time, lastSeen: lastSeen, from: shown.othersSince[id],
                                      fromPage: window.fromPage)
                 }
+                // Another tab that gets this far (`sameTab == false`) records, is of the same call, and never recorded
+                // beside this one: the call has moved there, as when Chrome gives its tab a new element (dragged to
+                // another window, a window going in or out of full screen) or the person rejoins in a new tab once
+                // the old one stopped. The call goes on in it, whatever the mic did meanwhile, as it does in a tab
+                // titled alike without ids.
                 if current.key != tab.key {
                     guard continues(call, in: tab, sameTab: sameTab == true) else {
                         return switchTab(to: tab, at: time, fromPage: window.fromPage)
@@ -556,11 +579,16 @@ extension CallDetector {
         /// For a browser whose tabs have ids: the other tabs recording the mic as the call's tab was last seen, each
         /// with when it was first seen doing so.
         var othersSince: [BrowserTabs.TabID: TimeInterval] = [:]
+        /// For a browser whose tabs have ids: every tab seen recording the mic beside the call's during the call. Such
+        /// a tab holds another call, whatever its title (2026-10-13: two Telemost calls, the second begun before the
+        /// first ended), while one of the same call never seen beside it is where the call has moved.
+        var recordedBeside: Set<BrowserTabs.TabID> = []
 
         /// A read showed the call's `tab`, and the other tabs recording beside it.
         mutating func saw(others tab: Tab, at time: TimeInterval) {
             othersRecordedMic = tab.othersRecordMic
             othersSince = Dictionary(tab.otherMicTabs.map { ($0, othersSince[$0] ?? time) }) { first, _ in first }
+            recordedBeside.formUnion(tab.otherMicTabs)
         }
     }
 
