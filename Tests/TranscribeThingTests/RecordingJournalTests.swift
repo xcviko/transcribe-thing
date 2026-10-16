@@ -60,6 +60,19 @@ private func leaveJournal(in directory: URL, _ info: RecordingJournal.Info, samp
     await journal.settle()
 }
 
+/// A journal as an app quit while recording leaves it: `samples` written, the sidecar never told the recording
+/// ended. `sidecar`: its JSON as written, in place of `info`'s (an older build's).
+func leaveCutOffJournal(in directory: URL, _ info: RecordingJournal.Info, samples: [Float],
+                        sidecar: String? = nil) throws {
+    let journal = RecordingJournal(directory: directory)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    try RecordingJournal.openHeader(samples).write(to: journal.audioURL(for: info.id))
+    try (sidecar.map { Data($0.utf8) } ?? JSONEncoder().encode(info)).write(to: journal.infoURL(for: info.id))
+}
+
+/// `seconds` of speech a recording keeps, as `speechLike` (SpeechAnalyzer hears it).
+func journalSpeech(seconds: Double) -> [Float] { speechLike(seconds: seconds) }
+
 @Suite struct RecordingJournalTests {
     @Test func whatIsWrittenInChunksReadsBack() async throws {
         let folder = temporaryFolder()
@@ -86,7 +99,39 @@ private func leaveJournal(in directory: URL, _ info: RecordingJournal.Info, samp
         #expect(maxError(read, prefix + audio) <= 1.0 / 32_767)
         let leftovers = await RecordingJournal(directory: folder).leftovers()
         #expect(leftovers.map(\.id) == [id])
-        #expect(leftovers.first?.info == info(id), "whose dictation it is, read back")
+        var ended = info(id)
+        ended.ended = true
+        #expect(leftovers.first?.info == ended, "whose dictation it is, read back, and that its recording ended")
+    }
+
+    /// The sidecar says the recording ended only once it has: a journal cut off while recording never says so, so
+    /// the next launch can tell the two apart (Continue records on after one, transcribes the other).
+    @Test func aJournalSaysItsRecordingEndedOnlyOnceItHas() async throws {
+        let folder = temporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let journal = RecordingJournal(directory: folder)
+        let capture = FakeCapture()
+        let id = UUID()
+        journal.begin(info(id)) { capture.samples(from: $0) }
+        capture.record(speechLike(seconds: 1))
+        journal.pump(id)
+        await journal.settle()
+        func onDisk() throws -> RecordingJournal.Info {
+            try JSONDecoder().decode(RecordingJournal.Info.self, from: Data(contentsOf: journal.infoURL(for: id)))
+        }
+        #expect(try onDisk().ended == nil, "still recording")
+        #expect(!(try String(contentsOf: journal.infoURL(for: id), encoding: .utf8)).contains("ended"))
+
+        journal.label(id, engine: EngineID.parakeet.rawValue, mode: DictationMachine.Mode.pushToTalk.rawValue)
+        journal.end(id, samples: speechLike(seconds: 1.5))
+        await journal.settle()
+        #expect(try onDisk().ended == true)
+        #expect(try onDisk().engine == EngineID.parakeet.rawValue)
+
+        journal.label(id, engine: EngineID.geminiFlash.rawValue, mode: nil)
+        await journal.settle()
+        #expect(try onDisk().ended == true, "a later label keeps it")
+        #expect(try onDisk().engine == EngineID.geminiFlash.rawValue)
     }
 
     /// A kill or a power cut leaves the file wherever the last write ended, even mid-sample: what's there reads back.
@@ -202,6 +247,7 @@ private func leaveJournal(in directory: URL, _ info: RecordingJournal.Info, samp
         let entry = try #require(store.entry(id: id))
         #expect(entry.status == .failed)
         #expect(entry.errorMessage == HistoryStore.interruptedMessage)
+        #expect(entry.interruption == .whileTranscribing, "its recording had ended: Continue transcribes it")
         #expect(abs(entry.createdAt.timeIntervalSince(started)) < 0.001)
         #expect(entry.engine == .geminiFlash && entry.mode == .handsFree, "Retry uses the model and mode it had")
         #expect(abs(entry.audioDuration - 3) < 0.001)
@@ -246,6 +292,81 @@ private func leaveJournal(in directory: URL, _ info: RecordingJournal.Info, samp
         #expect(store.entries.map(\.id) == [saved.id])
         #expect(store.entry(id: saved.id)?.status == .success && store.entry(id: saved.id)?.text == "kept")
         try await waitUntil { files(in: paths.journals).isEmpty }
+    }
+
+    /// Cut off while it was recorded (the sidecar never said it ended): it comes back to be continued, saying so.
+    @Test func aDictationCutOffWhileRecordingComesBackToContinue() async throws {
+        let paths = AppPaths.temporary()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let id = UUID()
+        try leaveCutOffJournal(in: paths.journals, info(id, engine: .parakeet, mode: .pushToTalk),
+                               samples: speechLike(seconds: 4))
+
+        let store = try await loaded(paths)
+        let entry = try #require(store.entry(id: id))
+        #expect(entry.status == .failed)
+        #expect(entry.interruption == .whileRecording)
+        #expect(entry.errorMessage == "The app quit while you were recording")
+        #expect(entry.engine == .parakeet && entry.mode == .pushToTalk)
+        #expect(abs(entry.audioDuration - 4) < 0.001)
+        #expect(store.loadRecording(for: entry) != nil)
+        try await waitUntil { files(in: paths.journals).isEmpty }
+
+        // Kept that way across launches.
+        store.flush()
+        let again = try await loaded(paths)
+        #expect(again.entry(id: id)?.interruption == .whileRecording)
+    }
+
+    /// A journal from a build before the marker never says its recording ended, whether it had or not: it comes
+    /// back cut off, so the row offers to record on, and Transcribe beside it.
+    @Test func aJournalFromBeforeTheMarkerComesBackCutOff() async throws {
+        let paths = AppPaths.temporary()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let id = UUID()
+        let old = """
+            {"id":"\(id.uuidString)","startedAt":\(Int(Date().timeIntervalSinceReferenceDate)),\
+            "engine":"geminiFlash","mode":"handsFree",\
+            "deviceName":"MacBook Pro Microphone","continues":false}
+            """
+        try leaveCutOffJournal(in: paths.journals, info(id), samples: speechLike(seconds: 2), sidecar: old)
+
+        let store = try await loaded(paths)
+        let entry = try #require(store.entry(id: id))
+        #expect(entry.interruption == .whileRecording)
+        #expect(entry.errorMessage == "The app quit while you were recording")
+        #expect(entry.engine == .geminiFlash && entry.mode == .handsFree)
+    }
+
+    /// A continued dictation the app quit during again comes back with all of it, as it stood then: cut off again,
+    /// or recorded to the end. A failure whose journal comes back keeps its own reason, and its Retry.
+    @Test func whatTheRowSaysFollowsItsLatestJournal() async throws {
+        let paths = AppPaths.temporary()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let first = try await loaded(paths)
+        let cutOff = UUID(), ended = UUID(), failed = UUID()
+        for id in [cutOff, ended, failed] {
+            var entry = TranscriptEntry(id: id, createdAt: Date(), text: "", engine: .parakeet, status: .failed,
+                                        audioDuration: 2, voicedSeconds: 1.5,
+                                        errorMessage: id == failed ? "Parakeet v3 ran into a problem"
+                                            : TranscriptEntry.Interruption.whileRecording.message,
+                                        audioFileName: "\(id.uuidString).m4a")
+            entry.interruption = id == failed ? nil : .whileRecording
+            first.upsert(entry)
+        }
+        first.flush()
+        try leaveCutOffJournal(in: paths.journals, info(cutOff, engine: .parakeet), samples: speechLike(seconds: 5))
+        await leaveJournal(in: paths.journals, info(ended, engine: .parakeet), samples: speechLike(seconds: 5))
+        await leaveJournal(in: paths.journals, info(failed, engine: .parakeet), samples: speechLike(seconds: 2))
+
+        let store = try await loaded(paths)
+        let again = try #require(store.entry(id: cutOff))
+        #expect(again.interruption == .whileRecording && abs(again.audioDuration - 5) < 0.001)
+        let done = try #require(store.entry(id: ended))
+        #expect(done.interruption == .whileTranscribing && done.errorMessage == HistoryStore.interruptedMessage)
+        #expect(abs(done.audioDuration - 5) < 0.001)
+        let kept = try #require(store.entry(id: failed))
+        #expect(kept.interruption == nil && kept.errorMessage == "Parakeet v3 ran into a problem")
     }
 
     /// A transcript whose recording never made it to disk gets it back from its journal, and keeps its text.
