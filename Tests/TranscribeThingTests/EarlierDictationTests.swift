@@ -274,7 +274,7 @@ import Testing
         #expect(rig.pasted.isEmpty)
     }
 
-    /// Copy takes the text elsewhere: ↩ goes back to the app, and the card stays for a moment, saying so.
+    /// Copy takes the text elsewhere: the card goes and ↩ goes back to the app.
     @Test func copyingGivesReturnBack() async throws {
         let (rig, cues) = Self.make()
         let c = rig.h.controller
@@ -295,9 +295,10 @@ import Testing
         try rig.click(.copyText("first words"), in: try #require(Self.cards(rig).first).dedupeKey)
         #expect(copied == ["first words"])
         #expect(cues.played.last == .paste)
-        #expect(!rig.h.hotkeys.cardPaste && rig.h.hotkeys.cardClose)
+        // Copied, the card goes, and ↩ is the app's again.
+        #expect(Self.cards(rig).isEmpty)
+        #expect(!rig.h.hotkeys.cardPaste)
         #expect(!rig.h.toasts.cardKeys.returnPastes)
-        #expect(Self.cards(rig).count == 1)
     }
 
     /// The title says it's the earlier dictation and who wrote it, polished or translated; it stays as long as Polish

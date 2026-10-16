@@ -270,8 +270,8 @@ import Testing
         #expect(rig.h.history.entries.first?.versions.count == 1)
     }
 
-    /// Copy picks the answer too (History shows it) and leaves its card up.
-    @Test func copyPicksTheAnswerAndKeepsItsCard() async throws {
+    /// Copy picks the answer too (History shows it), and the card goes: taking the text is what it was for.
+    @Test func copyPicksTheAnswerAndClosesItsCard() async throws {
         let (rig, cues, _) = Self.make()
         try await Self.polish(rig)
         try await waitUntil { Self.card(rig, .geminiFlash) != nil }
@@ -279,7 +279,7 @@ import Testing
         let copy = try #require(gemini.actions.first { $0.title == "Copy" })
         rig.h.toasts.perform(copy, on: gemini)
         #expect(rig.h.history.entries.first?.currentKind == .selection(.geminiFlash))
-        #expect(Self.card(rig, .geminiFlash) != nil)
+        #expect(Self.card(rig, .geminiFlash) == nil)
         #expect(cues.played.last == .paste)
     }
 
