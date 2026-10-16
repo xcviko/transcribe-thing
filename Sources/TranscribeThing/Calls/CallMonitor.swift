@@ -338,7 +338,9 @@ final class CallMonitor {
         drop(callID: callID, answer: "never")
     }
 
-    /// Start Call Recording: during a noticed call, keeps it; otherwise records the mic and everything the Mac plays.
+    /// Start Call Recording, or Transcribe This Call, from the menu bar: during a noticed call (suspected or asked
+    /// about), keeps it as the person's own recording, which only Stop Call Recording ends (`Live.pinned`); otherwise
+    /// records the mic and everything the Mac plays.
     func startManual() {
         if var live {
             live.pinned = true
@@ -369,6 +371,7 @@ final class CallMonitor {
     /// Stop Call Recording: ends the live recording, kept and transcribed, or deleted. That call isn't recorded again.
     func stop(keep: Bool) {
         guard let live else { return }
+        logEvent("call.stopped", live, ["keep": keep])
         if let app = live.app ?? watch.detector.followed?.app { ignored = app }
         guard keep else {
             logEvent("call.answered", live, ["answer": "discard", "from": "menu"])
@@ -641,6 +644,8 @@ final class CallMonitor {
         let endsAt = live.endsAt
         let endedAt = endsAt.map { live.info.startedAt.addingTimeInterval($0) } ?? deps.now()
         if status != .unconfirmed { onAnswered?(id) }
+        // Said at once: finishing the recording (echo removal, encoding) takes a while on a long call, up to a minute.
+        notices?.ended(seconds: endsAt ?? max(0, now - live.origin), transcribing: status == .transcribing, at: now)
         endings[id] = Task { [weak self] in
             guard let self else { return }
             var info = await live.recorder.finish() ?? fallback
@@ -658,7 +663,6 @@ final class CallMonitor {
                 "mutes": info.mutes.count, "muteKnown": info.muteKnown, "tapProblem": tapProblem,
                 "micProblem": info.micProblem == nil ? nil : true,
             ])
-            self.notices?.ended(seconds: record.duration, transcribing: status == .transcribing, at: self.lastTime)
             // A continuation joined onto the call the app quit recording: that one is transcribed, whole.
             if status == .transcribing { self.transcriber.transcribe(record.id) }
             self.endings[id] = nil

@@ -74,7 +74,8 @@ final class MenuBuilder {
 
     /// While a kept call records: Stop Call Recording (it's transcribed). While one waits for "Transcribe your call?":
     /// Transcribe This Call. Otherwise Start Call Recording, which keeps a noticed call or records the mic and
-    /// everything the Mac plays. Throwing a call away is Delete in the Calls tab.
+    /// everything the Mac plays. Either one from the menu bar is the person's own recording: only Stop ends it
+    /// (`CallMonitor.startManual`). Throwing a call away is Delete in the Calls tab.
     private func callItems(_ env: AppEnvironment) -> [NSMenuItem] {
         switch env.callMonitor.state {
         case .recording:
@@ -83,7 +84,7 @@ final class MenuBuilder {
             ]
         case .asking:
             return [
-                MenuActionItem(title: "Transcribe This Call") { [weak env] in env?.callMonitor.keep() },
+                MenuActionItem(title: "Transcribe This Call") { [weak env] in env?.callMonitor.startManual() },
             ]
         case .idle, .suspected, .ending:
             return [MenuActionItem(title: "Start Call Recording") { [weak env] in env?.callMonitor.startManual() }]
