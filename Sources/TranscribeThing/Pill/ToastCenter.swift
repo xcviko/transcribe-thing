@@ -101,12 +101,14 @@ final class ToastCenter {
         rescheduleExpiry()
     }
 
-    /// A button in a toast was clicked. Copy keeps the card (its button turns into "Copied"); everything else
-    /// dismisses it after the action is handed to `onAction`.
+    /// A button in a toast was clicked. Copy keeps a card for a moment (its button turns into "Copied"), except a
+    /// card whose text is there to paste or copy (`takesCardKeys`: Polish Selection's, an earlier dictation's):
+    /// taking it is what the card was for, so it goes. Everything else dismisses it after the action is handed to
+    /// `onAction`.
     func perform(_ action: NoticeAction, on notice: Notice) {
         onAction?(notice, action)
         switch action.kind {
-        case .copyText:
+        case .copyText where !notice.takesCardKeys:
             extend(notice.id, toAtLeast: Self.afterCopyLifetime)
         default:
             dismiss(notice.id)
