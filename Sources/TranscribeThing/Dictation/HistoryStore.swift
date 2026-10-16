@@ -23,6 +23,10 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
     /// A failed row's: what the cloud model answered when it heard no speech in a recording that had some, whole and
     /// as it came (tags and all), for a closer look at why. Its row's tooltip shows it; nil everywhere else.
     var modelAnswer: String?
+    /// A failed row the app brought back from its journal after quitting during the dictation (`HistoryStore`'s
+    /// recovery): cut off while it was recorded, or quit after, while it was transcribed. Its row offers Continue
+    /// (`DictationController.continueDictation`) in place of Retry. nil for every other entry.
+    var interruption: Interruption?
     /// Every transcript of the recording, oldest first, at most one of each kind (one per model). Empty for failed
     /// and canceled entries. Change them through `addVersion`, `selectVersion` and `updateMetadata`.
     private(set) var versions: [TranscriptVersion]
@@ -145,11 +149,29 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
         return true
     }
 
+    // MARK: Interrupted
+
+    /// How the app quitting interrupted a dictation.
+    enum Interruption: String, Codable, Sendable {
+        /// The recording was cut off: Continue records on after it.
+        case whileRecording = "recording"
+        /// The recording had ended and was being transcribed: Continue transcribes it.
+        case whileTranscribing = "transcribing"
+
+        /// What its row says.
+        var message: String {
+            switch self {
+            case .whileRecording: "The app quit while you were recording"
+            case .whileTranscribing: "The app quit before it was transcribed"
+            }
+        }
+    }
+
     // MARK: Coding
 
     private enum CodingKeys: String, CodingKey {
         case id, createdAt, status, audioDuration, voicedSeconds, errorMessage, mode, audioFileName, importedFrom
-        case modelAnswer
+        case modelAnswer, interruption = "interrupted"
         case versions
         case currentKind = "currentVersion"
         /// The current version, flat, as older builds read it; and what an entry from before versions holds.
@@ -176,6 +198,14 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
         importedFrom = try c.decodeIfPresent(String.self, forKey: .importedFrom)
         // Only ever a note for a closer look: whatever it holds never makes the entry unreadable.
         modelAnswer = (try? c.decodeIfPresent(String.self, forKey: .modelAnswer)).flatMap { $0 }
+        if let raw = (try? c.decodeIfPresent(String.self, forKey: .interruption)).flatMap({ $0 }) {
+            // A kind a newer build added reads as a plain failure, with Retry.
+            interruption = status == .failed ? Interruption(rawValue: raw) : nil
+        } else if status == .failed, errorMessage == Interruption.whileTranscribing.message {
+            // Brought back by a build that didn't tell the two apart: taken for cut off, as a journal without its
+            // marker is. Its row keeps saying what it said, and offers Transcribe beside Continue.
+            interruption = .whileRecording
+        }
         attemptedEngine = try Self.decodeEngine(from: c, forKey: .engine)
 
         var decoded = ((try? c.decodeIfPresent([LossyVersion].self, forKey: .versions)) ?? []).compactMap(\.value)
@@ -214,6 +244,7 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
         try c.encodeIfPresent(audioFileName, forKey: .audioFileName)
         try c.encodeIfPresent(importedFrom, forKey: .importedFrom)
         try c.encodeIfPresent(modelAnswer, forKey: .modelAnswer)
+        try c.encodeIfPresent(interruption?.rawValue, forKey: .interruption)
         // An older build that can't read the current kind takes the flat fields for the current version, as a
         // transcription by `engine`, in place of that transcription. For a clean-up it can't read, they hold the
         // transcription the clean-up tidied, so an older build keeps that text rather than the clean-up's under its
@@ -317,8 +348,9 @@ struct HistoryStats: Equatable, Sendable {
 @MainActor @Observable
 final class HistoryStore {
     static let maxEntries = 2000
-    /// What a dictation brought back from its journal says in place of an engine's error.
-    static let interruptedMessage = "The app quit before it was transcribed"
+    /// What a dictation brought back from its journal says in place of an engine's error, when its recording had
+    /// ended (`TranscriptEntry.Interruption`).
+    nonisolated static let interruptedMessage = TranscriptEntry.Interruption.whileTranscribing.message
 
     @ObservationIgnored private let paths: AppPaths
     @ObservationIgnored private let settings: AppSettings
@@ -617,10 +649,12 @@ final class HistoryStore {
     }
 
     /// Brings back the dictations an earlier run was recording or transcribing when it ended (a crash, a kill, a power
-    /// cut): each journal it left becomes a failed entry with its recording, so Retry and Transcribe With work on it
-    /// from Home. Nothing is transcribed by itself: a cloud model costs money. A journal too short or without speech
-    /// to be worth it, one older than Auto-delete keeps, or one History already has goes; a success whose recording
-    /// went missing gets it back and keeps its text. One at a time, read off the main thread.
+    /// cut): each journal it left becomes a failed entry with its recording, marked with how it was interrupted
+    /// (`TranscriptEntry.Interruption`, from the journal's `Info.ended`), so Home's Continue records on after one cut
+    /// off or transcribes one that had ended, and Transcribe With works on it. Nothing is transcribed by itself: a
+    /// cloud model costs money. A journal too short or without speech to be worth it, one older than Auto-delete
+    /// keeps, or one History already has goes; a success whose recording went missing gets it back and keeps its
+    /// text. One at a time, read off the main thread.
     private func recoverJournals() async {
         guard let journal else { return }
         let days = settings.autoDeleteHistoryDays
@@ -659,15 +693,23 @@ final class HistoryStore {
                     ?? leftover.info?.engine.flatMap { EngineID(rawValue: $0) ?? TranscriptEntry.retiredEngines[$0] }
                     ?? settings.mainEngine
                 let mode = leftover.info?.mode.flatMap(DictationMachine.Mode.init(rawValue:)) ?? .pushToTalk
-                upsert(TranscriptEntry(
+                // A failure whose recording didn't make it to disk keeps saying why it failed, with Retry. Any other
+                // without the marker `end` writes never ended (or an older build left it): it was cut off.
+                let keepsFailure = existing.map { $0.status == .failed && $0.interruption == nil } ?? false
+                let interruption: TranscriptEntry.Interruption? = keepsFailure ? nil
+                    : leftover.info?.ended == true ? .whileTranscribing : .whileRecording
+                var entry = TranscriptEntry(
                     id: id, createdAt: existing?.createdAt ?? startedAt, text: "", engine: engine, status: .failed,
                     audioDuration: duration, voicedSeconds: speech.voicedSeconds,
-                    // A failure whose recording didn't make it to disk keeps saying why it failed.
-                    errorMessage: existing?.status == .failed ? existing?.errorMessage : Self.interruptedMessage,
-                    mode: existing?.mode ?? mode, audioFileName: file))
+                    errorMessage: interruption?.message ?? existing?.errorMessage,
+                    mode: existing?.mode ?? mode, audioFileName: file)
+                entry.interruption = interruption
+                upsert(entry)
             }
             Log.app.info("Brought back a dictation the app quit before transcribing (\(duration, format: .fixed(precision: 1), privacy: .public) s)")
-            DiagnosticLog.shared.event(.dictation, "dictation.recovered", ["seconds": duration, "had": existing?.status.rawValue])
+            DiagnosticLog.shared.event(.dictation, "dictation.recovered", [
+                "seconds": duration, "had": existing?.status.rawValue,
+                "ended": leftover.info.map { $0.ended == true }])
         }
     }
 
