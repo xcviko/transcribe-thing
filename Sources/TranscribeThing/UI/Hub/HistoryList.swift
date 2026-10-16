@@ -260,7 +260,7 @@ struct HistoryRow: View, Equatable {
     /// (`DictationController.continueDictation`). Cut off, Continue records on, then transcribes all of it and pastes
     /// it; quit while it was transcribed, Continue transcribes it into the row, as Retry would. Continue uses the row's
     /// model; Transcribe, the hover button and the row's menu offer the others. While it's recorded on or transcribed,
-    /// the row says so instead.
+    /// the row says so instead. A transcription of it that didn't come is said above the buttons, which try again.
     @ViewBuilder private func inlineContinue(_ interruption: TranscriptEntry.Interruption) -> some View {
         if hub.isRecordingOn(entry.id) {
             RecordingOnLine()
@@ -272,6 +272,12 @@ struct HistoryRow: View, Equatable {
             let entry = entry
             let recordsOn = interruption == .whileRecording
             let blocker = hub.continueBlocker(for: entry)
+            if let failure {
+                // Why its last transcription didn't come. Continue or Transcribe below tries again: no Retry of its own.
+                FailureLine(failure: failure, retry: nil, onRetry: {},
+                            onDismiss: { hub.dictation.dismissHomeFailure(for: entry.id) })
+                    .transition(.opacity)
+            }
             HStack(spacing: 6) {
                 // Drawn as the Retry and Transcribe menus beside it are: the push button a menu shows as.
                 Button {

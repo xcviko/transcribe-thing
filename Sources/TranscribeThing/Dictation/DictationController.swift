@@ -100,6 +100,9 @@ final class DictationController {
         (@MainActor (String, PolishSelectionModel, TextRoute?) async throws -> TranscriptResult)?
     /// Replaces how long a job waits for its local model before saying so (`modelWaitNoticeDelay`).
     @ObservationIgnored var waitNoticeDelayOverride: TimeInterval?
+    /// transcribe-thing itself is the frontmost app (Home's window, say): a continued dictation's transcript then stays
+    /// in its row rather than being pasted into the app's own window.
+    @ObservationIgnored var isOwnAppFrontmost: () -> Bool = { NSRunningApplication.current.isActive }
     /// TCC's answer right now (about 25 ms), asked only while the cached permission isn't granted.
     @ObservationIgnored var microphoneAuthorizedNow: () -> Bool = { AudioRecorder.isMicrophoneAuthorized }
     /// Replaces the sound player for the dictation cues.
@@ -790,13 +793,10 @@ final class DictationController {
         if polishes { polishIDs.insert(recording.id) } else { polishIDs.remove(recording.id) }
         if translates { translateIDs.insert(recording.id) } else { translateIDs.remove(recording.id) }
         lastCancelledID = recording.id
-        if var row = history.entry(id: recording.id), row.status == .failed, row.interruption != nil {
+        if let row = interruptedRow(recording.id) {
             // Home's Continue, canceled: the row stays one to continue, with all that's recorded so far and its own
             // mode, and Undo records on as Continue would.
-            row.audioDuration = recording.duration
-            row.voicedSeconds = recording.speech.voicedSeconds
-            row.audioFileName = history.saveAudio(recording) ?? row.audioFileName
-            history.upsert(row)
+            keepInterrupted(row, recording)
         } else if recording.duration >= Self.saveCancelledMinimumDuration {
             let file = history.saveAudio(recording)
             history.upsert(TranscriptEntry(
@@ -808,6 +808,30 @@ final class DictationController {
         }
         guard notify else { return }
         postCanceled(recording)
+    }
+
+    /// The History row of `id` when it's a dictation the app quit during (`TranscriptEntry.interruption`): whatever
+    /// becomes of its Continue or Transcribe short of a transcript leaves it one to continue (`keepInterrupted`).
+    private func interruptedRow(_ id: UUID) -> TranscriptEntry? {
+        history.entry(id: id).flatMap { $0.status == .failed && $0.interruption != nil ? $0 : nil }
+    }
+
+    /// An interrupted row stays one to continue, its message and mode as they were, with all of `recording` (what was
+    /// recorded on, too). `failure`: why a transcription of it didn't come, said under the row (`homeFailures`) above
+    /// its Continue and Transcribe; `modelAnswer`: the model's empty answer, for the row's tooltip.
+    private func keepInterrupted(_ row: TranscriptEntry, _ recording: Recording,
+                                 failure: (kind: TranscriptVersionKind, error: AppError?)? = nil,
+                                 modelAnswer: String? = nil) {
+        var row = row
+        row.audioDuration = recording.duration
+        row.voicedSeconds = recording.speech.voicedSeconds
+        row.audioFileName = history.saveAudio(recording) ?? row.audioFileName
+        row.modelAnswer = modelAnswer
+        history.upsert(row)
+        guard let failure else { return }
+        homeFailures[row.id] = HomeFailure(kind: failure.kind,
+                                           reason: Self.homeFailureReason(failure.error, making: failure.kind))
+        Log.engine.info("An interrupted dictation's transcription didn't come; its row stays to continue")
     }
 
     /// "Dictation canceled · Undo", nothing more (a long enough recording is in History too). After an Undo that
@@ -1192,10 +1216,14 @@ final class DictationController {
             // A new recording started since it was dictated, or one is on right now (a press still arming, a notice's
             // Retry clicked during one): pasted, it would land wherever the user is dictating now.
             let onCard = job.isEarlier || machine.isRecording
+            // A row Home's Continue recorded on, stopped with the app itself in front (Home, most likely): its row
+            // shows the text, and a paste would only land in the app's own window.
+            let staysInRow = !onCard && interruptedRow(job.id) != nil && isOwnAppFrontmost()
             DiagnosticLog.shared.event(.dictation, "job.finished", [
                 "engine": result.engine, "outcome": "success", "seconds": result.processingTime,
                 "retry": history.entry(id: job.id)?.status == .failed, "polished": job.polishes,
-                "translated": job.translates ? true : nil, "delivered": onCard ? "card" : nil])
+                "translated": job.translates ? true : nil,
+                "delivered": onCard ? "card" : staysInRow ? "row" : nil])
             // Kept as long as the entry, so History can transcribe it again with another model. Saved again even when
             // a failed or canceled row had it: an Undo-resumed dictation's file holds only the part before the cancel.
             history.upsert(TranscriptEntry(
@@ -1210,6 +1238,10 @@ final class DictationController {
                 // No sound into a recording: the card comes up quietly while one is on.
                 toasts.post(Self.earlierDictationCard(text, kind: version.kind, mode: job.mode, id: job.id,
                                                       quiet: machine.isRecording))
+                return
+            }
+            if staysInRow {
+                Log.app.info("A continued dictation stayed in its History row: \(Brand.name, privacy: .public) was in front")
                 return
             }
             let insertion = await insert(pasted(text, by: model, in: job.mode))
@@ -1307,6 +1339,14 @@ final class DictationController {
             keepUnheard(job, recording, answer: result?.rawAnswer)
             return
         }
+        if let row = interruptedRow(job.id), let recording = job.recording {
+            // Home's Continue: the row the user brought back stays, to continue or transcribe with another model.
+            retain(recording)
+            keepInterrupted(row, recording, failure: (job.rewrite ?? .transcription(job.engine), .noSpeech),
+                            modelAnswer: result?.rawAnswer)
+            reportNoSpeech(model: ModelChoice(engine: job.engine))
+            return
+        }
         forget(job.id)
         discardJournal(of: job.id)
         let hadRow = history.entry(id: job.id).map { $0.status != .success } ?? false
@@ -1339,12 +1379,18 @@ final class DictationController {
     /// Keeps a dictation that didn't come as a failed row: its audio saved and in memory for Retry, polished or
     /// translated as it was, the row saying why. Returns its notice, which offers Retry.
     private func keepFailed(_ job: Job, _ recording: Recording, _ error: AppError, modelAnswer: String? = nil) -> Notice {
-        let file = history.saveAudio(recording)
         retain(recording)
         if job.polishes { polishIDs.insert(job.id) } else { polishIDs.remove(job.id) }
         if job.translates { translateIDs.insert(job.id) } else { translateIDs.remove(job.id) }
         // Its Retry is the same model: another one for this recording is the user's call, from History.
         let notice = error.notice(recordingID: job.id, fallbackEngine: nil, engine: job.engine)
+        if let row = interruptedRow(job.id) {
+            // Home's Continue recorded on, then its transcription failed: the row stays one to continue.
+            keepInterrupted(row, recording, failure: (job.rewrite ?? .transcription(job.engine), error),
+                            modelAnswer: modelAnswer)
+            return notice
+        }
+        let file = history.saveAudio(recording)
         var entry = TranscriptEntry(
             id: job.id, createdAt: recording.startedAt, text: "", engine: job.engine, status: .failed,
             audioDuration: recording.duration, voicedSeconds: recording.speech.voicedSeconds,
@@ -1771,6 +1817,12 @@ final class DictationController {
             homeFailures[id] = HomeFailure(kind: kind, reason: Self.homeFailureReason(failure, making: kind))
             return
         }
+        if let row = interruptedRow(id) {
+            // Transcribe on a row cut off while it was recorded, or Continue on one quit while it was transcribed:
+            // the row stays one to continue, saying why under it.
+            keepInterrupted(row, recording, failure: (kind, failure), modelAnswer: modelAnswer)
+            return
+        }
         // Its row says why itself, naming the model as a failed dictation's does: the notice's title ("Gemini Flash
         // took too long"), or for an engine's own failure (titled only "Couldn't transcribe") the line naming it.
         let notice = failure.notice(recordingID: nil, fallbackEngine: nil, engine: engine)
@@ -1906,7 +1958,10 @@ final class DictationController {
         send(.resume(prefix: recording.duration))
         resumeRequest = nil
         resumeMode = nil
-        return continuing?.id == id
+        guard continuing?.id == id else { return false }
+        // Why its last transcription didn't come is old news once it's recorded on.
+        homeFailures[id] = nil
+        return true
     }
 
     // MARK: - Continue from Home
@@ -1916,10 +1971,14 @@ final class DictationController {
     /// Cut off while it was recorded: it records on right away, hands-free (the pill shows it, as for any dictation),
     /// its saved audio first, as Undo does after a cancel. Once stopped, the whole of it is transcribed by the row's
     /// model and pasted wherever the user is then, by the rules of how it was first dictated, and the row becomes its
-    /// transcript. Esc keeps it all in the row, still to continue (`keepCancelled`). Nothing happens while another
+    /// transcript. Stopped with the app itself in front (Home's window), the transcript stays in the row, not pasted
+    /// into it. Esc keeps it all in the row, still to continue (`keepCancelled`). Nothing happens while another
     /// dictation is being recorded (Home's button says so) or something already runs for the row.
     ///
     /// Quit after, while it was transcribed: nothing was cut off, so it's transcribed from Home, as Retry does.
+    ///
+    /// Either way, and for the row's Transcribe, a transcription that doesn't come leaves the row one to continue,
+    /// with all that's recorded, saying why under it (`keepInterrupted`).
     func continueDictation(_ entry: TranscriptEntry) {
         let id = entry.id
         guard let row = history.entry(id: id), row.status == .failed,
@@ -1954,7 +2013,6 @@ final class DictationController {
             guard let current = self.history.entry(id: id), current.status == .failed,
                   current.interruption == .whileRecording, !self.isInFlight(id),
                   !self.machine.isRecording else { return }
-            self.homeFailures[id] = nil
             _ = self.recordOn(recording, engine: current.engine, mode: current.mode)
         }
     }
