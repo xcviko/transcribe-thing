@@ -32,11 +32,28 @@ import Testing
     /// literals they are compared with.
     private func run(_ processes: [Process], reads: [Double: CallDetector.Window] = [:], from: Double = 0.3,
                      to: Double, detector: inout CallDetector) -> [Step] {
+        run(processes, from: from, to: to, detector: &detector) { time, _ in reads[time] }
+    }
+
+    /// The same, with Chrome's windows at each look in `strips` read the way the app reads them: the call tab picked
+    /// by `BrowserTabs.callTab`, following the detector's call.
+    private func run(_ processes: [Process], strips: [Double: [BrowserTabs.Window]], from: Double, to: Double,
+                     detector: inout CallDetector) -> [Step] {
+        run(processes, from: from, to: to, detector: &detector) { time, detector in
+            strips[time].map { windows in
+                CallDetector.Window(tab: BrowserTabs.callTab(in: windows, following: detector.following)
+                    .map(CallDetector.Tab.init))
+            }
+        }
+    }
+
+    private func run(_ processes: [Process], from: Double, to: Double, detector: inout CallDetector,
+                     read: (Double, CallDetector) -> CallDetector.Window?) -> [Step] {
         var steps: [Step] = []
         for tenth in stride(from: Int((from * 10).rounded()), through: Int((to * 10).rounded()), by: 5) {
             let time = Double(tenth) / 10
             let apps = CallApp.activity(processes.map { (CallApp(bundleID: $0.bundleID), $0.activity(at: time)) })
-            let windows = reads[time].map { [Self.chrome: $0] } ?? [:]
+            let windows = read(time, detector).map { [Self.chrome: $0] } ?? [:]
             steps += detector.feed(apps, windows: windows, at: time).map { Step(time: time, event: $0) }
         }
         return steps
@@ -465,9 +482,10 @@ import Testing
 
     /// A read of Chrome finding the call in tab `id` titled `page`, the tabs `others` recording the mic beside it.
     private static func read(_ service: CallService?, _ page: String, tab id: Int, recording: BrowserTabs.Recording? = .mic,
-                             others: [Int] = []) -> CallDetector.Window {
+                             others: [Int] = [], muted: Bool? = nil) -> CallDetector.Window {
         CallDetector.Window(tab: CallDetector.Tab(service: service, page: page, recording: recording,
-                                                  id: BrowserTabs.TabID(id), otherMicTabs: others.map(BrowserTabs.TabID.init)))
+                                                  id: BrowserTabs.TabID(id), otherMicTabs: others.map(BrowserTabs.TabID.init)),
+                            muted: muted)
     }
 
     /// The case of 2026-10-13: a Telemost call in one Chrome tab ends at 300 s while another Telemost call has
@@ -558,6 +576,157 @@ import Testing
         var other = CallDetector()
         #expect(calls(run([chrome], reads: unseen, from: 10.1, to: 400, detector: &other)).map { $0.startedAt...$0.lastAudioAt }
             == [10.1...85.1, 90.1...200.1])
+    }
+
+    /// The case of 2026-10-16: a Telemost call in Chrome, muted after a while. As the person left its tab, the tab
+    /// strip showed it as another tab three times in half a minute (Chrome gave it a new element, so a new id): the
+    /// call was ended each time and the "new" one asked about. It's one call that moved, each time to a tab that
+    /// never recorded beside it, its mute going on through the moves.
+    @Test func aTabThatTakesOverWithoutEverRecordingBesideIsTheCallMoving() throws {
+        let chrome = Process(bundleID: "com.google.Chrome.helper", mic: [10.1..<600.1], sound: [10.1..<600.1])
+        let telemost = "Идёт звонок · Яндекс Телемост"
+        var reads: [Double: CallDetector.Window] = [:]
+        // Read every 3 s, in tenths so the times equal the steps': its tab is #1, then #2 at 470.1, #3 at 497.1 and
+        // #4 from 503.1.
+        for tenth in stride(from: 111, through: 5991, by: 30) {
+            let time = Double(tenth) / 10
+            let tab = time < 470 ? 1 : time < 496 ? 2 : time < 502 ? 3 : 4
+            reads[time] = Self.read(.telemost, telemost, tab: tab, recording: .cameraAndMic, muted: time >= 410)
+        }
+        var detector = CallDetector()
+        let steps = run([chrome], reads: reads, from: 10.1, to: 700, detector: &detector)
+        let call = try #require(calls(steps).first)
+        #expect(steps.map(\.event) == [.suspected(Self.chrome, at: 10.1), .started(try #require(started(steps).first)),
+                                       .ended(call)])
+        #expect(call.startedAt == 10.1 && call.lastAudioAt == 600.1)
+        #expect(call.tab?.id == BrowserTabs.TabID(4), "followed to the tab it's in now")
+        #expect(call.mutes == [410.1...600.1])
+
+        // Had the second tab been seen recording beside the first, even once, it would be another call (2026-10-13).
+        var beside = reads
+        beside[467.1] = Self.read(.telemost, telemost, tab: 1, recording: .cameraAndMic, others: [2], muted: true)
+        var other = CallDetector()
+        let besideSteps = run([chrome], reads: beside, from: 10.1, to: 700, detector: &other)
+        #expect(calls(besideSteps).map { $0.startedAt...$0.lastAudioAt } == [10.1...467.1, 467.1...600.1])
+        #expect(calls(besideSteps).map { $0.tab?.id } == [BrowserTabs.TabID(1), BrowserTabs.TabID(4)],
+                "the second call moves on its own from tab 2")
+    }
+
+    /// The call's tab closed and the person rejoined in a new tab, the mic let go for a moment as they did: the same
+    /// call, in its new tab. Left for good (the mic off for longer than a flicker, no call tab in the window), it was
+    /// over at once, and the new tab's is a new call.
+    @Test func rejoiningInANewTabOnceTheOldOneClosedIsTheSameCall() throws {
+        let telemost = "Идёт звонок · Яндекс Телемост"
+        func spans(mic: [Range<Double>]) -> [ClosedRange<Double>] {
+            let reads: [Double: CallDetector.Window] = [
+                11.1: Self.read(.telemost, telemost, tab: 1),
+                50.1: Self.read(.telemost, telemost, tab: 1),
+                // The tab closed: no call tab.
+                51.6: Self.noCallTab,
+                53.1: Self.noCallTab,
+                56.1: Self.read(.telemost, telemost, tab: 2),
+                80.1: Self.read(.telemost, telemost, tab: 2),
+            ]
+            var detector = CallDetector()
+            let steps = run([Process(bundleID: "com.google.Chrome.helper", mic: mic, sound: [10.1..<150.1])],
+                            reads: reads, from: 10.1, to: 300, detector: &detector)
+            return calls(steps).map { $0.startedAt...$0.lastAudioAt }
+        }
+        #expect(spans(mic: [10.1..<51.1, 52.1..<150.1]) == [10.1...150.1])
+        #expect(spans(mic: [10.1..<51.1, 55.1..<150.1]) == [10.1...52.6, 55.1...150.1])
+    }
+
+    /// Chrome's picture-in-picture window of a call, opened as the person leaves its tab: a window without a tab strip
+    /// titled like the call's tab, here with its recording mark too. It's the call's own: it neither takes the call
+    /// from its tab nor counts as another tab recording; when the tab gets a new id meanwhile, the call moves to the
+    /// tab, not the window; read alone (the strip not shown), it keeps the call's tab for the next read to look for.
+    @Test func aPictureInPictureWindowIsTheCallsOwn() throws {
+        let chrome = Process(bundleID: "com.google.Chrome.helper", mic: [10.1..<150.1], sound: [10.1..<150.1])
+        let telemost = "Идёт звонок · Яндекс Телемост", mark = " - Camera and microphone recording"
+        func strip(_ call: Int, front: Bool) -> BrowserTabs.Window {
+            BrowserTabs.Window(title: front ? telemost : "Inbox - Gmail", tabs: [
+                BrowserTabs.Tab(title: telemost + mark, selected: front, id: BrowserTabs.TabID(call)),
+                BrowserTabs.Tab(title: "Inbox - Gmail", selected: !front, id: BrowserTabs.TabID(2)),
+            ])
+        }
+        let pip = BrowserTabs.Window(title: telemost, tabs: [.stripless(telemost + mark)])
+        let strips: [Double: [BrowserTabs.Window]] = [
+            11.1: [strip(1, front: true)],
+            // Its tab left: its picture in picture is the window in front.
+            40.1: [strip(1, front: false), pip],
+            // Its tab has a new id.
+            60.1: [strip(3, front: false), pip],
+            // The strip not shown: windows without one only.
+            70.1: [BrowserTabs.Window(title: "Inbox - Gmail", tabs: [.stripless("Inbox - Gmail")]), pip],
+            90.1: [strip(3, front: true)],
+        ]
+        let key = BrowserTabs.key(service: .telemost, page: telemost)
+        let leftStrip = try #require(strips[40.1])
+        let left = try #require(BrowserTabs.callTab(in: leftStrip, following: .init(key: key, id: .init(1))))
+        #expect(left.id == BrowserTabs.TabID(1) && !left.othersRecordMic, "the window isn't another tab recording")
+
+        var detector = CallDetector()
+        var steps = run([chrome], strips: strips, from: 10.1, to: 50.1, detector: &detector)
+        #expect(detector.followed?.tab?.id == BrowserTabs.TabID(1), "its tab, not its window in front")
+        steps += run([chrome], strips: strips, from: 50.6, to: 65.1, detector: &detector)
+        #expect(detector.followed?.tab?.id == BrowserTabs.TabID(3), "moved to its tab's new id, not to the window")
+        steps += run([chrome], strips: strips, from: 65.6, to: 75.1, detector: &detector)
+        #expect(detector.followed?.tab?.id == BrowserTabs.TabID(3) && detector.following?.id == BrowserTabs.TabID(3),
+                "the window alone: still its tab's call")
+        steps += run([chrome], strips: strips, from: 75.6, to: 300, detector: &detector)
+        let call = try #require(calls(steps).first)
+        #expect(calls(steps).count == 1 && call.startedAt == 10.1 && call.lastAudioAt == 150.1)
+        #expect(call.tab?.id == BrowserTabs.TabID(3))
+        #expect(steps.filter { if case .suspected = $0.event { true } else { false } }.count == 1)
+    }
+
+    /// Two Telemost calls side by side, as on 2026-10-13, and the first one's tab gets a new id meanwhile: the first
+    /// call moves to it, the tab that recorded beside it being the other call's, though it's the one in front. Once
+    /// the first stops, the other is its own call, from when it was first seen.
+    @Test func aTabThatRecordedBesideTheCallIsAnotherCallWhenTheCallsTabChangesItsID() throws {
+        let chrome = Process(bundleID: "com.google.Chrome.helper", mic: [10.1..<150.1], sound: [10.1..<150.1])
+        let telemost = "Идёт звонок · Яндекс Телемост"
+        func strip(_ tabs: [(id: Int, recording: Bool)]) -> [BrowserTabs.Window] {
+            [BrowserTabs.Window(title: telemost, tabs: tabs.enumerated().map { index, tab in
+                BrowserTabs.Tab(title: telemost + (tab.recording ? " - Microphone recording" : ""),
+                                selected: index == tabs.count - 1, id: BrowserTabs.TabID(tab.id))
+            })]
+        }
+        let strips: [Double: [BrowserTabs.Window]] = [
+            11.1: strip([(1, true)]),
+            40.1: strip([(1, true), (2, true)]),
+            60.1: strip([(3, true), (2, true)]),
+            70.1: strip([(3, true), (2, true)]),
+            79.1: strip([(3, true), (2, true)]),
+            80.1: strip([(3, false), (2, true)]),
+            100.1: strip([(3, false), (2, true)]),
+        ]
+        var detector = CallDetector()
+        let steps = run([chrome], strips: strips, from: 10.1, to: 300, detector: &detector)
+        let ended = calls(steps)
+        #expect(ended.map { $0.startedAt...$0.lastAudioAt } == [10.1...79.1, 40.1...150.1])
+        #expect(ended.map { $0.tab?.id } == [BrowserTabs.TabID(3), BrowserTabs.TabID(2)])
+    }
+
+    /// A tab taking over without ever recording beside the call is the call moving only if it's of the same call:
+    /// another service's, or another Meet meeting's, is another call; the same meeting's is the call moving.
+    @Test func aTabOfAnotherServiceOrMeetingIsAnotherCallEvenWithoutOverlap() throws {
+        func spans(_ reads: [Double: CallDetector.Window]) -> [ClosedRange<Double>] {
+            var detector = CallDetector()
+            let steps = run([Process(bundleID: "com.google.Chrome.helper", mic: [10.1..<150.1], sound: [10.1..<150.1])],
+                            reads: reads, from: 10.1, to: 300, detector: &detector)
+            return calls(steps).map { $0.startedAt...$0.lastAudioAt }
+        }
+        let telemost = Self.read(.telemost, "Идёт звонок · Яндекс Телемост", tab: 1)
+        #expect(spans([11.1: telemost, 55.1: telemost, 57.1: Self.read(.zoom, "Zoom Meeting", tab: 2)])
+            == [10.1...55.1, 57.1...150.1])
+        let meet = Self.read(.meet, "Meet – abc-defg-hij", tab: 3)
+        #expect(spans([11.1: meet, 55.1: meet, 57.1: Self.read(.meet, "Meet – xyz-abcd-efg", tab: 4)])
+            == [10.1...55.1, 57.1...150.1])
+        #expect(spans([11.1: meet, 55.1: meet, 57.1: Self.read(.meet, "Meet – abc-defg-hij", tab: 4)]) == [10.1...150.1],
+                "the same meeting in another tab: the call moved")
+        #expect(spans([11.1: Self.read(nil, "Call A", tab: 5), 57.1: Self.read(nil, "Call A", tab: 6)]) == [10.1...150.1],
+                "a page no service is known for, by its title")
     }
 
     /// A mute first seen half a minute or more into the call (its tab was in the background until then) counts from
