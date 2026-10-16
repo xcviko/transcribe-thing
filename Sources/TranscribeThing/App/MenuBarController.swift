@@ -1,8 +1,8 @@
 import AppKit
 import QuartzCore
 
-/// The menu bar extra: template icon, a red dot while recording (a dictation, or a call), a slow pulse while
-/// transcribing, and the shared transcribe-thing menu (rebuilt each time it opens).
+/// The menu bar extra: template icon, a red dot while a call is recorded (a dictation has the pill for that), a slow
+/// pulse while transcribing, and the shared transcribe-thing menu (rebuilt each time it opens).
 @MainActor
 final class MenuBarController: NSObject, NSMenuDelegate {
     weak var environment: AppEnvironment? {
@@ -48,7 +48,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         refresh()
     }
 
-    /// A call started or stopped being recorded: the red dot stays while it records, as it does for a dictation.
+    /// A call started or stopped being recorded: the red dot stays while it records.
     func showCall(recording: Bool) {
         isRecordingCall = recording
         refresh()
@@ -61,8 +61,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         button.setAccessibilityValue(Self.accessibilityValue(activity: activity, recordingCall: isRecordingCall))
     }
 
+    /// Only a call: it records for an hour with nothing else on screen, while a dictation already shows its pill.
     static func showsRecordingDot(activity: DictationActivity, recordingCall: Bool) -> Bool {
-        activity == .recording || recordingCall
+        recordingCall
     }
 
     static func accessibilityValue(activity: DictationActivity, recordingCall: Bool) -> String {

@@ -273,7 +273,8 @@ private func info(_ id: UUID = UUID(), startedAt: Date = now) -> CallMonitor.Cal
     /// The menu bar's red dot shows for a dictation recording and for a call recorded, asked about or kept.
     @Test func menuBarDot() {
         #expect(MenuBarController.showsRecordingDot(activity: .idle, recordingCall: true))
-        #expect(MenuBarController.showsRecordingDot(activity: .recording, recordingCall: false))
+        #expect(!MenuBarController.showsRecordingDot(activity: .recording, recordingCall: false), "a dictation has its pill")
+        #expect(MenuBarController.showsRecordingDot(activity: .recording, recordingCall: true))
         #expect(!MenuBarController.showsRecordingDot(activity: .processing, recordingCall: false))
         #expect(MenuBarController.accessibilityValue(activity: .idle, recordingCall: true) == "Recording call")
         #expect(MenuBarController.accessibilityValue(activity: .idle, recordingCall: false) == "Idle")
