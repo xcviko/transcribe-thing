@@ -178,6 +178,13 @@ import Testing
         return (rig, cues, asked)
     }
 
+    /// Gemini switched off in the lineup: Switch model can't reach it, so neither can the polish key.
+    static func geminiOff(_ rig: SwitchModelControllerTests.Rig) {
+        var lineup = rig.h.settings.lineup
+        lineup.setSwitchable(.gemini, false)
+        rig.h.settings.lineup = lineup
+    }
+
     final class Asked {
         var calls: [(String, PolishSelectionModel)] = []
         /// Each request's route: the model ID and Reasoning level it goes at.
@@ -316,9 +323,11 @@ import Testing
         #expect(!rig.h.history.entries.contains { $0.isSelection })
     }
 
-    /// Nothing selected, off Gemini: the key says what Polish works on; the dictation goes on.
+    /// Nothing selected, off Gemini, and Gemini switched off in the lineup: the key says what Polish works on; the
+    /// dictation goes on.
     @Test func withoutASelectionTheKeySaysPolishIsGeminis() async throws {
         let (rig, cues, asked) = Self.make(selection: nil)
+        Self.geminiOff(rig)
         Switch.hold(rig)
         rig.h.controller.handle(.polish)
         try await waitUntil { rig.h.pill.keyHint != nil }
@@ -424,9 +433,11 @@ import Testing
         #expect(asked.calls.allSatisfy { $0.0 == "copied draft" })
     }
 
-    /// Held down off Gemini, fn P's autorepeats do nothing more: one look at the selection, one word over the pill.
+    /// Held down off Gemini (and Gemini switched off), fn P's autorepeats do nothing more: one look at the selection,
+    /// one word over the pill.
     @Test func holdingThePolishKeyOffGeminiLooksOnce() async throws {
         let (rig, _, asked) = Self.make(selection: nil)
+        Self.geminiOff(rig)
         var looks = 0
         rig.h.controller.selectionOverride = { looks += 1; return nil }
         Switch.hold(rig)
@@ -438,9 +449,23 @@ import Testing
         rig.h.controller.send(.pillCancel)
     }
 
+    /// Nothing selected, on Parakeet, Gemini in the lineup: the polish key moves this dictation to Gemini and polishes
+    /// it, as Switch model then fn P would.
+    @Test func offGeminiThePolishKeyMovesTheDictationToGemini() async throws {
+        let (rig, _, asked) = Self.make(selection: nil)
+        Switch.hold(rig)
+        #expect(rig.h.controller.effectiveChoice == .parakeet)
+        rig.h.controller.handle(.polish)
+        try await waitUntil { rig.h.controller.isPolishing }
+        #expect(rig.h.controller.effectiveChoice == .gemini)
+        #expect(asked.calls.isEmpty && rig.h.pill.keyHint == nil)
+        rig.h.controller.send(.pillCancel)
+    }
+
     /// With no pill on screen (Never), the word about the key comes as a short notice.
     @Test func withNoPillTheKeySaysSoInANotice() async throws {
         let (rig, _, _) = Self.make(selection: nil)
+        Self.geminiOff(rig)
         rig.h.pill.isPresented = false
         Switch.hold(rig)
         rig.h.controller.handle(.polish)
@@ -461,9 +486,11 @@ import Testing
         #expect(rig.transcribed.isEmpty)
     }
 
-    /// Nothing selected after all: the key never goes to the app; it says Polish is Gemini's, and the dictation goes on.
+    /// Nothing selected after all, Gemini switched off: the key never goes to the app; it says Polish is Gemini's, and
+    /// the dictation goes on.
     @Test func aQuickPolishKeyOverNothingSaysSo() async throws {
         let (rig, _, asked) = Self.make(selection: nil)
+        Self.geminiOff(rig)
         let lookup = Lookup()
         rig.h.controller.selectionOverride = { await lookup.wait(); return nil }
         rig.h.controller.handle(.pttDown)

@@ -2351,12 +2351,16 @@ final class DictationController {
             send(.polish)
         case .polish where canPolishSelection && selection != nil:
             rewriteSelection(selection ?? "", translates: false)
+        case .polish where switchesToGemini():
+            send(.polish)
         case .polish:
             explainPolish()
         case .translate where effectiveChoice.isGemini:
             send(.translate)
         case .translate where canTranslateSelection && selection != nil:
             rewriteSelection(selection ?? "", translates: true)
+        case .translate where switchesToGemini():
+            send(.translate)
         case .translate:
             explainTranslate()
         case .addToDictionary where selection != nil:
@@ -2367,7 +2371,16 @@ final class DictationController {
         return true
     }
 
-    /// The polish key where it can't polish (off Gemini, nothing selected): it says so over the pill for a moment, and
+    /// The polish or translate key off Gemini with nothing selected: the dictation moves to Gemini, as Switch model
+    /// would take it there, when Gemini is in the lineup's cycle and can take it now (its key). True once it's on Gemini.
+    private func switchesToGemini() -> Bool {
+        guard machine.isRecording, let gemini = settings.lineup.cycle.first(where: \.isGemini),
+              switchRefusal(gemini) == nil else { return false }
+        selectModelForCurrentDictation(gemini)
+        return effectiveChoice.isGemini
+    }
+
+    /// The polish key where it can't polish (off Gemini, no Gemini to move to, nothing selected): it says so over the pill for a moment, and
     /// the dictation goes on. To the machine it's a key pressed during the hold, so the release isn't a tap.
     private func explainPolish() {
         send(.keyUsed)

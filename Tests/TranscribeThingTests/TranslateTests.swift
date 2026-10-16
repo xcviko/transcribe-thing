@@ -260,9 +260,23 @@ import Testing
         asked.release(.geminiFlash)
     }
 
-    /// Nothing selected, off Gemini: the key says where Translate works; the dictation goes on.
+    /// Nothing selected, on Parakeet, Gemini in the lineup: the translate key moves this dictation to Gemini and
+    /// translates it.
+    @Test func offGeminiTheTranslateKeyMovesTheDictationToGemini() async throws {
+        let (rig, _, asked) = PolishSelectionTests.make(selection: nil)
+        Switch.hold(rig)
+        rig.h.controller.handle(.translate)
+        try await waitUntil { rig.h.controller.isTranslating }
+        #expect(rig.h.controller.effectiveChoice == .gemini)
+        #expect(asked.calls.isEmpty && rig.h.pill.keyHint == nil)
+        rig.h.controller.send(.pillCancel)
+    }
+
+    /// Nothing selected, off Gemini, Gemini switched off in the lineup: the key says where Translate works; the
+    /// dictation goes on.
     @Test func withoutASelectionTheKeySaysWhereItWorks() async throws {
         let (rig, _, asked) = PolishSelectionTests.make(selection: nil)
+        PolishSelectionTests.geminiOff(rig)
         Switch.hold(rig)
         rig.h.controller.handle(.translate)
         try await waitUntil { rig.h.pill.keyHint != nil }
