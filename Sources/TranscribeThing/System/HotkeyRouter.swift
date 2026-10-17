@@ -65,6 +65,10 @@ struct KeyRepeat: Equatable, Sendable {
 ///   modifier is up. The interrupting key passes through, so ⌘C with a Right-⌘ PTT still copies. A mouse click
 ///   doesn't: clicking into another field while holding the key is part of dictating.
 /// - A key-based PTT (F13, ⌃⌥D) is not interrupted by other keys: it is unambiguous.
+/// - A shortcut with a held key (F5 Space) is pressed off a push to talk on that key, as fn Space is off fn: its key
+///   goes off only while the held key is down, which the router knows because the PTT took it (`swallowedKeys`). It
+///   then does exactly what the fn chord does with fn held: F5 Space turns the held dictation hands-free and F5's release
+///   doesn't end it, F5 P polishes and the hold goes on. Keys that are no chord's still type.
 /// - Esc cancels only while recording or transcribing, even with the PTT's or hands-free's modifiers still held; the
 ///   rest of the time it reaches apps.
 /// - Switch model (like Esc) is live only during a dictation, and it never interrupts the PTT hold: it may be
@@ -335,12 +339,14 @@ struct HotkeyRouter: Equatable, Sendable {
         let bindings = config.bindings
         // Exact matches first: Esc and switch model also match with the PTT's and hands-free's modifiers still
         // held, so a switch model bound to plain Space would otherwise take fn+Space from hands-free.
-        if let handsFree = bindings[.handsFree], handsFree.matches(keyCode: key, modifiers: modifiers) {
+        if let handsFree = bindings[.handsFree],
+           handsFree.matches(keyCode: key, modifiers: modifiers, heldKeys: swallowedKeys) {
             consume(physical, into: &decision)
             if !input.isRepeat { fireChord(.handsFree, into: &decision) }
             return decision
         }
-        if let pasteLast = bindings[.pasteLast], pasteLast.matches(keyCode: key, modifiers: modifiers) {
+        if let pasteLast = bindings[.pasteLast],
+           pasteLast.matches(keyCode: key, modifiers: modifiers, heldKeys: swallowedKeys) {
             consume(physical, into: &decision)
             if !input.isRepeat { fireChord(.pasteLast, into: &decision) }
             return decision
@@ -358,7 +364,7 @@ struct HotkeyRouter: Equatable, Sendable {
             if !input.isRepeat { fire(.cancel, into: &decision) }
             return decision
         }
-        if let (action, _) = liveDuringDictation(config).first(where: { _, shortcut in
+        if let (action, shortcut) = liveDuringDictation(config).first(where: { _, shortcut in
             shortcut.keyCode == key && matchesDuringDictation(shortcut, bindings)
         }) {
             // Not a PTT-ending combo: the hold (and hands-free's stop-on-release) goes on.
@@ -366,9 +372,12 @@ struct HotkeyRouter: Equatable, Sendable {
             if input.isRepeat {
                 return decision
             } else if action == .addToDictionary {
-                // Held only for the selection lookup: what it is gets decided once that answers.
+                // Held only for the selection lookup: what it is gets decided once that answers. Pressed off the held
+                // talk key (fn D, F5 D), a selection it can't read ends the hold as any other key would have.
+                let offTheHold = gesture == .holdingModifiers
+                    || shortcut.heldKeyCode.map { gesture == .holdingKey($0) } == true
                 decision.events.append(.heldForSelection(action, KeyStroke(keyCode: physical, flags: input.flags,
-                                                                           interruptsHold: gesture == .holdingModifiers)))
+                                                                           interruptsHold: offTheHold)))
             } else if let event = Self.event(for: action) {
                 decision.events.append(event)
             }
@@ -521,8 +530,10 @@ struct HotkeyRouter: Equatable, Sendable {
 
     /// The held modifiers match `shortcut` exactly, or do once the PTT's and the hands-free chord's modifiers that
     /// are still held (and that `shortcut` doesn't use itself) are set aside: Esc with fn still down is a cancel,
-    /// Tab with Right ⌥ (the PTT) and fn down is fn+Tab.
+    /// Tab with Right ⌥ (the PTT) and fn down is fn+Tab. A held key it names (F5 of F5 P) must be down.
     private func matchesDuringDictation(_ shortcut: Shortcut, _ bindings: ShortcutBindings) -> Bool {
+        if let held = shortcut.heldKeyCode, !swallowedKeys.contains(held) { return false }
+        let modifiers = shortcut.setsFunctionAside ? self.modifiers.clearing([.function]) : self.modifiers
         if shortcut.modifiersMatchExactly(modifiers) { return true }
         let ignorable = heldDictationModifiers(bindings).subtracting(shortcut.modifiers.map(\.modifier))
         guard !ignorable.isEmpty else { return false }
@@ -534,6 +545,10 @@ struct HotkeyRouter: Equatable, Sendable {
         for action in [ShortcutAction.pushToTalk, .handsFree] {
             guard let shortcut = bindings[action], shortcut.requiredModifiersHeld(modifiers) else { continue }
             held.formUnion(shortcut.modifiers.map(\.modifier))
+            // The fn Karabiner holds around an F-key push to talk is that key's while it's down (Esc with it cancels).
+            if let key = shortcut.keyCode, KeyNames.functionKeys.contains(key), swallowedKeys.contains(key) {
+                held.insert(.function)
+            }
         }
         return held
     }

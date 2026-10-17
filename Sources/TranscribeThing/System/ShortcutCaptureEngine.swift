@@ -6,17 +6,26 @@ import Foundation
 ///
 /// - Modifier-only: the largest set held during the gesture is committed once everything is released.
 /// - Combination: committed on the first non-modifier keyDown, with the modifiers held at that moment.
+/// - A key that can be held (`KeyNames.canBeHeld`: F5) waits instead, except for push to talk: another key pressed while
+///   it's down commits both (F5 Space), its release commits it alone (F5).
 /// - Bare Esc cancels recording.
 /// - Bare ⌫ or ⌦ clears the binding for actions that may be left unbound.
 struct ShortcutCaptureEngine: Equatable, Sendable {
     enum Result: Equatable, Sendable { case none, commit(Shortcut), cancel, clear }
 
+    /// A key that can be held, down and waiting for what comes next, with the modifiers held as it went down.
+    private struct HeldKey: Equatable, Sendable {
+        var keyCode: UInt16
+        var modifiers: ModifierSnapshot
+    }
+
     let action: ShortcutAction
-    /// What is physically held right now, as the modifier-only shortcut it would become.
+    /// What is physically held right now, as the shortcut it would become on release.
     private(set) var held: Shortcut?
 
     private var functionDown = false
     private var largest = ModifierSnapshot()
+    private var heldKey: HeldKey?
 
     init(action: ShortcutAction) {
         self.action = action
@@ -35,6 +44,9 @@ struct ShortcutCaptureEngine: Equatable, Sendable {
             functionDown = rawFlags & CGEventFlags.maskSecondaryFn.rawValue != 0
         }
         let snapshot = ModifierSnapshot(rawFlags: rawFlags, functionDown: functionDown)
+        // A held key waits for its own release or the next key; modifiers coming and going meanwhile (the fn Karabiner
+        // holds around F5) commit nothing.
+        if heldKey != nil { return .none }
         // Same size but different keys (Left ⌥ swapped for Right ⌥): the latest press wins.
         if snapshot.count >= largest.count, snapshot.count > 0 { largest = snapshot }
         held = snapshot.isEmpty ? nil : Shortcut(modifiers: Self.modifierOnlyKeys(snapshot))
@@ -51,13 +63,28 @@ struct ShortcutCaptureEngine: Equatable, Sendable {
         guard !isRepeat else { return .none }
         // Fn keeps its tracked value: arrows and F-keys report the Fn flag without Fn being held.
         let snapshot = ModifierSnapshot(rawFlags: rawFlags, functionDown: functionDown)
-        if snapshot.isEmpty && keyCode == KeyCode.escape {
+        // With an F-key held, its fn doesn't count: Esc still cancels.
+        var bare = snapshot
+        if heldKey != nil { bare.function = false }
+        if bare.isEmpty && keyCode == KeyCode.escape {
             reset()
             return .cancel
         }
-        if snapshot.isEmpty && (keyCode == KeyCode.delete || keyCode == KeyCode.forwardDelete) && Self.canClear(action) {
+        if bare.isEmpty && (keyCode == KeyCode.delete || keyCode == KeyCode.forwardDelete) && Self.canClear(action) {
             reset()
             return .clear
+        }
+        if let heldKey {
+            // F5 held, then Space: F5 Space, with the modifiers held for Space.
+            let shortcut = Shortcut(heldKeyCode: heldKey.keyCode, modifiers: Self.comboKeys(snapshot), keyCode: keyCode)
+            reset()
+            return .commit(shortcut)
+        }
+        // Push to talk is held on its own: nothing is pressed off itself.
+        if action != .pushToTalk, KeyNames.canBeHeld(keyCode) {
+            heldKey = HeldKey(keyCode: keyCode, modifiers: snapshot)
+            held = Shortcut(modifiers: Self.comboKeys(snapshot), keyCode: keyCode)
+            return .none
         }
         // fn ↩ on a laptop keyboard arrives as Keypad Enter; `Shortcut` records it as fn ↩.
         let shortcut = Shortcut(modifiers: Self.comboKeys(snapshot), keyCode: keyCode)
@@ -65,9 +92,19 @@ struct ShortcutCaptureEngine: Equatable, Sendable {
         return .commit(shortcut)
     }
 
+    /// A held key let go with nothing pressed after it is the shortcut on its own (F5), with the modifiers it went down
+    /// with.
+    mutating func keyUp(keyCode: UInt16) -> Result {
+        guard let heldKey, heldKey.keyCode == keyCode else { return .none }
+        let shortcut = Shortcut(modifiers: Self.comboKeys(heldKey.modifiers), keyCode: keyCode)
+        reset()
+        return .commit(shortcut)
+    }
+
     mutating func reset() {
         largest = ModifierSnapshot()
         held = nil
+        heldKey = nil
     }
 
     /// Modifier-only shortcuts keep a Right-side key (Right ⌥ is the classic PTT); a left key means "either",

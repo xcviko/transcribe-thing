@@ -297,10 +297,10 @@ final class MenuActionItem: NSMenuItem {
     }
 
     /// The hint only when the menu draws the shortcut faithfully: ⌘ ⌥ ⌃ ⇧ with a key. The menu drops fn
-    /// (⌘ fn V would read "⌘V", which is a normal paste) and can't tell left from right, and modifier-only
-    /// shortcuts have no menu form: those get no hint rather than a wrong one.
+    /// (⌘ fn V would read "⌘V", which is a normal paste) and a held key (F5 Space would read "Space"), can't tell left
+    /// from right, and modifier-only shortcuts have no menu form: those get no hint rather than a wrong one.
     static func keyEquivalent(for shortcut: Shortcut) -> (key: String, modifiers: NSEvent.ModifierFlags)? {
-        guard let code = shortcut.keyCode, !shortcut.usesFunctionKey,
+        guard let code = shortcut.keyCode, !shortcut.usesFunctionKey, shortcut.heldKeyCode == nil,
               shortcut.modifiers.allSatisfy({ $0.side == .either }) else { return nil }
         let key: String
         switch code {

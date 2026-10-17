@@ -204,7 +204,8 @@ enum IllustratedKey: Hashable, CaseIterable, Sendable {
 
     /// Keys a shortcut needs held down, when all of them are on the illustration.
     static func keys(for shortcut: Shortcut?) -> Set<IllustratedKey> {
-        guard let shortcut, !shortcut.isEmpty else { return [] }
+        // A held key (F5 of F5 Space) is an F-key, which isn't drawn.
+        guard let shortcut, !shortcut.isEmpty, shortcut.heldKeyCode == nil else { return [] }
         var keys = Set<IllustratedKey>()
         for mk in shortcut.modifiers {
             switch mk.modifier {
