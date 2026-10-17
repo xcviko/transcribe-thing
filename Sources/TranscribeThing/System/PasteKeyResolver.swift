@@ -42,6 +42,26 @@ enum PasteKeyResolver {
         return nil
     }
 
+    /// The current keyboard layout as this app sees it, by its short id ("RussianWin", "ABC"), for the log.
+    static func currentLayoutName() -> String? {
+        guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+              let id = TISGetInputSourceProperty(source, kTISPropertyInputSourceID) else { return nil }
+        return shortName(Unmanaged<CFString>.fromOpaque(id).takeUnretainedValue() as String)
+    }
+
+    /// The layout macOS last saved as current (com.apple.HIToolbox), which a switch made from another app updates
+    /// even when this app isn't told of it.
+    static func savedLayoutName() -> String? {
+        let key = "AppleCurrentKeyboardLayoutInputSourceID" as CFString
+        CFPreferencesAppSynchronize("com.apple.HIToolbox" as CFString)
+        guard let id = CFPreferencesCopyAppValue(key, "com.apple.HIToolbox" as CFString) as? String else { return nil }
+        return shortName(id)
+    }
+
+    private static func shortName(_ id: String) -> String {
+        id.replacingOccurrences(of: "com.apple.keylayout.", with: "")
+    }
+
     /// An installed keyboard layout by id ("com.apple.keylayout.Dvorak"), enabled or not.
     static func layout(id: String) -> TISInputSource? {
         let filter = [kTISPropertyInputSourceID as String: id] as CFDictionary
