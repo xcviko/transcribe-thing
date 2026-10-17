@@ -345,7 +345,7 @@ struct HotkeyRouter: Equatable, Sendable {
             if !input.isRepeat { fireChord(.pasteLast, into: &decision) }
             return decision
         }
-        if let ptt = bindings[.pushToTalk], ptt.keyCode == key, ptt.modifiersMatchExactly(modifiers) {
+        if let ptt = bindings[.pushToTalk], ptt.matches(keyCode: key, modifiers: modifiers) {
             consume(physical, into: &decision)
             if !input.isRepeat, gesture == .idle {
                 gesture = .holdingKey(physical)
