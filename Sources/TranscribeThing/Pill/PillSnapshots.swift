@@ -81,6 +81,10 @@ enum PillSnapshots {
             // Models (`--only pill-models`): the chip, the tint, the hint and the no-key notice.
             SnapshotEntry("pill-models", width: 760, height: 44 + 13 * 92) { _ in PillModelSheet() },
             SnapshotEntry("pill-polish", width: 760, height: 44 + 8 * 92) { _ in PolishSheet() },
+            // Send (`--only pill-send`): the plane right of the bars, the wave and the count, alone and with Polish.
+            SnapshotEntry("pill-send", width: 760, height: 44 + 10 * 92) { _ in
+                PolishSheet(title: "Send", rows: PolishSheet.sendRows)
+            },
             // fn ⇥ while the chip is up: its names roll on, frame by frame of the spring.
             SnapshotEntry("pill-chip-roll", width: 2040, height: 270) { _ in ChipRollSheet() },
             // fn P on Parakeet with nothing selected: it says Polish is Gemini's, and the dictation goes on.
@@ -850,23 +854,65 @@ private struct PillModelSheet: View {
     }
 }
 
-/// Polish in each state it shows in: the wand left of the bars while recording, beside the wave, then the count.
+/// Polish in each state it shows in: the wand left of the bars while recording, beside the wave, then the count. Send's
+/// plane the same way, right of them (`sendRows`).
 private struct PolishSheet: View {
-    private struct Row: Identifiable {
+    struct Row: Identifiable {
         let id: String
         let caption: String
         let make: @MainActor () -> PillModel
     }
 
+    var title = "Polish"
+    var rows: [Row] = Self.polishRows
+
     @MainActor static func model(_ phase: PillPhase, level: Float = 0.7, polishes: Bool = true,
-                                 translates: Bool = false) -> PillModel {
-        let model = PillModelSheet.model(phase, choice: .gemini, level: level, chip: false)
+                                 translates: Bool = false, sends: Bool = false, choice: ModelChoice = .gemini,
+                                 recordingFor elapsed: TimeInterval? = nil) -> PillModel {
+        let model = PillModelSheet.model(phase, choice: choice, level: level, chip: false, recordingFor: elapsed)
         model.polishes = polishes
         model.translates = translates
+        model.sends = sends
         return model
     }
 
-    private var rows: [Row] {
+    static var sendRows: [Row] {
+        [
+            Row(id: "send-listening", caption: "Push-to-talk · Send") {
+                Self.model(.listening, polishes: false, sends: true, choice: .parakeet)
+            },
+            Row(id: "send-locked", caption: "Hands-free · Send") {
+                Self.model(.locked, level: 0.5, polishes: false, sends: true, choice: .parakeet)
+            },
+            Row(id: "send-processing", caption: "Processing · Send") {
+                Self.model(.processing, polishes: false, sends: true, choice: .parakeet)
+            },
+            Row(id: "send-thinking", caption: "Thinking · Send") {
+                Self.model(.processing, polishes: false, sends: true)
+                    .previewCounter(PillTokenCount(phase: .thinking, tokens: 1_200))
+            },
+            Row(id: "send-polish", caption: "Push-to-talk · Polish, Send") {
+                Self.model(.listening, sends: true)
+            },
+            Row(id: "send-polish-locked", caption: "Hands-free · Polish, Send") {
+                Self.model(.locked, level: 0.5, sends: true)
+            },
+            Row(id: "send-polish-processing", caption: "Processing · Polish, Send") {
+                Self.model(.processing, sends: true)
+            },
+            Row(id: "send-polish-writing", caption: "Writing · Polish, Send") {
+                Self.model(.processing, sends: true).previewCounter(PillTokenCount(phase: .writing, tokens: 140))
+            },
+            Row(id: "send-both", caption: "Push-to-talk · Both, Send") {
+                Self.model(.listening, translates: true, sends: true)
+            },
+            Row(id: "send-locked-hours", caption: "Hands-free past an hour · Send") {
+                Self.model(.locked, level: 0.5, polishes: false, sends: true, choice: .parakeet, recordingFor: 3_723)
+            },
+        ]
+    }
+
+    static var polishRows: [Row] {
         [
             Row(id: "listening", caption: "Push-to-talk · Polish") { Self.model(.listening) },
             Row(id: "locked", caption: "Hands-free · Polish") { Self.model(.locked, level: 0.5) },
@@ -891,7 +937,7 @@ private struct PolishSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
-                Text("Polish").frame(width: 200, alignment: .leading)
+                Text(title).frame(width: 200, alignment: .leading)
                 Text("On a document").frame(maxWidth: .infinity)
                 Text("On a dark editor").frame(maxWidth: .infinity)
             }

@@ -107,6 +107,10 @@ final class DictationController {
     @ObservationIgnored var microphoneAuthorizedNow: () -> Bool = { AudioRecorder.isMicrophoneAuthorized }
     /// Replaces the sound player for the dictation cues.
     @ObservationIgnored var playCueOverride: (@MainActor (SoundEffect) -> Void)?
+    /// Tests: Send's Return (`TextInserter.pressReturn`), instead of a key posted to the frontmost app.
+    @ObservationIgnored var pressReturnOverride: (@MainActor () async -> TextInserter.ReturnOutcome)?
+    /// How long after a sent dictation's paste Return is pressed (`sendReturnDelay`).
+    @ObservationIgnored var returnDelay: Duration = DictationController.sendReturnDelay
     /// False in tests that fire the machine's timers by hand (`send(.timer(_:))`), so none fires on its own.
     @ObservationIgnored var runsTimers = true
 
@@ -155,6 +159,9 @@ final class DictationController {
     private(set) var isPolishing = false
     /// This dictation is translated (`Translate`, fn T while it's on Gemini), for as long as Polish would be.
     private(set) var isTranslating = false
+    /// This dictation is sent (`Send`, fn ↩ on any model): Return is pressed once its text is pasted. For as long as
+    /// Polish would be.
+    private(set) var isSending = false
     /// How long a push-to-talk hold lasts before the pill hints at Switch model.
     @ObservationIgnored var switchHintDelay: TimeInterval = 1.5
     /// How long the tap may stay down before the user is told (its own retries and brief drops stay quiet).
@@ -189,6 +196,9 @@ final class DictationController {
     @ObservationIgnored private var polishIDs: Set<UUID> = []
     /// Kept recordings of translated dictations: Undo and Retry translate them again.
     @ObservationIgnored private var translateIDs: Set<UUID> = []
+    /// Canceled recordings of sent dictations: Undo records on with Send on. A failed one's Retry never sends: its text
+    /// comes whenever it comes, and Return then could land anywhere.
+    @ObservationIgnored private var sendIDs: Set<UUID> = []
     /// How the recording under way is dictated, still set once it's over: a canceled one goes to History with it.
     @ObservationIgnored private var recordingMode: DictationMachine.Mode = .pushToTalk
     @ObservationIgnored private var switchHintTask: Task<Void, Never>?
@@ -355,6 +365,10 @@ final class DictationController {
             }
         case .translateRepeat:
             if machine.isRecording, effectiveChoice.isGemini { send(.translate) }
+        case .send:
+            // On any model: it's about where the text goes, not what's written.
+            guard machine.isRecording else { return }
+            send(.send)
         case .heldForSelection(let action, let key):
             actOnceSelectionIsKnown(action, key)
         case .cardPaste: pasteOnlyCard()
@@ -481,13 +495,14 @@ final class DictationController {
             pickedModel = false
             if isPolishing { isPolishing = false }
             if isTranslating { isTranslating = false }
+            if isSending { isSending = false }
         }
         // A hold the main model refused isn't a start (`deferredRefusal`); hands-free taking it over is.
         if (!wasRecording || wasArming) && deferredRefusal == nil || startsAfterRefusal,
            machine.capture.isListeningOrLocked {
             DiagnosticLog.shared.event(.dictation, "dictation.started", [
                 "mode": machine.mode, "model": effectiveChoice, "engine": effectiveEngine, "polish": isPolishing,
-                "translate": isTranslating ? true : nil,
+                "translate": isTranslating ? true : nil, "send": isSending ? true : nil,
                 "undo": input.isResume ? true : nil, "mic": recorder.lastChoice?.device.transport])
         }
         if wasRecording, !machine.isRecording {
@@ -583,6 +598,8 @@ final class DictationController {
                 togglePolish()
             case .translate:
                 toggleTranslate()
+            case .send:
+                toggleSend()
             }
         }
     }
@@ -689,6 +706,7 @@ final class DictationController {
         // The main model may have changed under it (Models, a notice's "Use Parakeet v3"): only Gemini polishes.
         job.polishes = isPolishing && effectiveChoice.isGemini
         job.translates = isTranslating && effectiveChoice.isGemini
+        job.sends = isSending
         queue.append(job)
         _ = machine.handle(.jobStarted, now: clock())
         finishingJob = job
@@ -705,7 +723,7 @@ final class DictationController {
         if job.isCancelled {
             // Esc during the tail: the job already left the queue and the cancel cue has played.
             keepCancelled(recording, engine: job.engine, mode: job.mode, polishes: job.polishes,
-                          translates: job.translates, notify: true)
+                          translates: job.translates, sends: job.sends, notify: true)
             return
         }
         // A new recording may already be running (re-pressed during the tail): keep the cue out of it.
@@ -770,11 +788,11 @@ final class DictationController {
                                        ["seconds": recording?.duration, "voiced": recording?.speech.voicedSeconds])
             guard let recording else { return }
             keepCancelled(recording, engine: effectiveEngine, mode: recordingMode, polishes: isPolishing,
-                          translates: isTranslating, notify: notify)
+                          translates: isTranslating, sends: isSending, notify: notify)
         } else if let resumed {
             // A resumed dictation whose mic failed: its audio (the kept part at least) stays for another Undo.
             keepCancelled(recording ?? resumed, engine: effectiveEngine, mode: recordingMode,
-                          polishes: isPolishing, translates: isTranslating, notify: true)
+                          polishes: isPolishing, translates: isTranslating, sends: isSending, notify: true)
         } else if let recording {
             discardJournal(of: recording.id)
         }
@@ -783,7 +801,7 @@ final class DictationController {
     /// Keeps a canceled recording for Undo (and in history when it's long). Only one History keeps is kept on disk:
     /// the rest is the user's to Undo while the app runs, not to find again after a crash.
     private func keepCancelled(_ recording: Recording, engine: EngineID, mode: DictationMachine.Mode,
-                               polishes: Bool = false, translates: Bool = false, notify: Bool) {
+                               polishes: Bool = false, translates: Bool = false, sends: Bool = false, notify: Bool) {
         guard recording.duration >= Self.undoMinimumDuration else {
             discardJournal(of: recording.id)
             return
@@ -792,6 +810,7 @@ final class DictationController {
         cancelledEngines[recording.id] = engine
         if polishes { polishIDs.insert(recording.id) } else { polishIDs.remove(recording.id) }
         if translates { translateIDs.insert(recording.id) } else { translateIDs.remove(recording.id) }
+        if sends { sendIDs.insert(recording.id) } else { sendIDs.remove(recording.id) }
         lastCancelledID = recording.id
         if let row = interruptedRow(recording.id) {
             // Home's Continue, canceled: the row stays one to continue, with all that's recorded so far and its own
@@ -944,6 +963,8 @@ final class DictationController {
         /// A translated dictation (`Translate`): its audio goes to Gemini with Translate's prompt (Polish's translated,
         /// when it polishes too).
         var translates = false
+        /// A sent dictation (`Send`): Return once its text is pasted where the user is typing.
+        var sends = false
         /// What Gemini writes for it instead of its transcript, if anything.
         var rewrite: TranscriptVersionKind? {
             DictationController.rewriteKind(polishes: polishes, translates: translates, by: engine)
@@ -1188,7 +1209,7 @@ final class DictationController {
         _ = machine.handle(.jobEnded, now: clock())
         if let recording = job.recording {
             keepCancelled(recording, engine: job.engine, mode: job.mode, polishes: job.polishes,
-                          translates: job.translates, notify: true)
+                          translates: job.translates, sends: job.sends, notify: true)
         }
         drain()
         return true
@@ -1222,7 +1243,7 @@ final class DictationController {
             DiagnosticLog.shared.event(.dictation, "job.finished", [
                 "engine": result.engine, "outcome": "success", "seconds": result.processingTime,
                 "retry": history.entry(id: job.id)?.status == .failed, "polished": job.polishes,
-                "translated": job.translates ? true : nil,
+                "translated": job.translates ? true : nil, "sends": job.sends ? true : nil,
                 "delivered": onCard ? "card" : staysInRow ? "row" : nil])
             // Kept as long as the entry, so History can transcribe it again with another model. Saved again even when
             // a failed or canceled row had it: an Undo-resumed dictation's file holds only the part before the cancel.
@@ -1246,7 +1267,22 @@ final class DictationController {
             }
             let insertion = await insert(pasted(text, by: model, in: job.mode))
             handleInsertion(insertion, text: text, by: model, in: job.mode, isDictation: true)
+            // Only once its own text is in: a card, a password field or a failed paste never sends anything.
+            if job.sends, insertion == .pasted { await pressReturn() }
         }
+    }
+
+    /// Send: how long after a dictation's ⌘V Return is pressed. ⌘V is only queued, and the app takes the text when its
+    /// main thread gets to it; Return goes after it either way (keys reach an app in order), and this leaves an app
+    /// that pastes asynchronously (a web page, an Electron app) time to put the text in before Return sends it.
+    nonisolated static let sendReturnDelay: Duration = .milliseconds(150)
+
+    /// Send's Return, `returnDelay` after the paste, in the app the text went to (`TextInserter.pressReturn`). The next
+    /// dictation's paste waits for it.
+    private func pressReturn() async {
+        try? await Task.sleep(for: returnDelay)
+        let outcome = if let pressReturnOverride { await pressReturnOverride() } else { await inserter.pressReturn() }
+        DiagnosticLog.shared.event(.dictation, "send.return", ["outcome": outcome.rawValue])
     }
 
     /// Asks OpenRouter about a delivered cloud version in the background when its response left something out: the
@@ -1382,6 +1418,7 @@ final class DictationController {
         retain(recording)
         if job.polishes { polishIDs.insert(job.id) } else { polishIDs.remove(job.id) }
         if job.translates { translateIDs.insert(job.id) } else { translateIDs.remove(job.id) }
+        sendIDs.remove(job.id)
         // Its Retry is the same model: another one for this recording is the user's call, from History.
         let notice = error.notice(recordingID: job.id, fallbackEngine: nil, engine: job.engine)
         if let row = interruptedRow(job.id) {
@@ -1943,8 +1980,8 @@ final class DictationController {
         }
     }
 
-    /// Records on after `recording`, hands-free, with the model it had (`engine`), Polish and Translate as they were:
-    /// the same dictation goes on, its audio first, and nothing is transcribed or pasted until the user stops (Esc
+    /// Records on after `recording`, hands-free, with the model it had (`engine`), Polish, Translate and Send as they
+    /// were: the same dictation goes on, its audio first, and nothing is transcribed or pasted until the user stops (Esc
     /// cancels it again, all of it). `mode`: how it was first dictated, for its paste; nil pastes as hands-free. False
     /// when the mic didn't start (`send` shows why).
     private func recordOn(_ recording: Recording, engine: EngineID, mode: DictationMachine.Mode? = nil) -> Bool {
@@ -1955,6 +1992,7 @@ final class DictationController {
         modelOverride = choice == settings.lineup.main ? nil : choice
         isPolishing = polishIDs.contains(id)
         isTranslating = translateIDs.contains(id)
+        isSending = sendIDs.contains(id)
         send(.resume(prefix: recording.duration))
         resumeRequest = nil
         resumeMode = nil
@@ -2214,6 +2252,7 @@ final class DictationController {
             cancelledEngines[evicted] = nil
             polishIDs.remove(evicted)
             translateIDs.remove(evicted)
+            sendIDs.remove(evicted)
         }
         // Past `retainedSecondsLimit` of audio, the oldest recordings whose audio History keeps on disk let go of
         // their samples (Undo and Retry read them back, and keep their model); the newest always stays.
@@ -2234,6 +2273,7 @@ final class DictationController {
         cancelledEngines[id] = nil
         polishIDs.remove(id)
         translateIDs.remove(id)
+        sendIDs.remove(id)
     }
 
     // MARK: - Switch model
@@ -2355,6 +2395,13 @@ final class DictationController {
         guard effectiveChoice.isGemini else { return }
         isTranslating.toggle()
         playCue(isTranslating ? .polishOn : .polishOff)
+    }
+
+    /// The send shortcut while dictating: Send on for this dictation (the paper plane in the pill), with a flick up, or
+    /// off when pressed again, with Polish's falling drop. On any model.
+    private func toggleSend() {
+        isSending.toggle()
+        playCue(isSending ? .sendOn : .polishOff)
     }
 
     // MARK: - Polish Selection
@@ -3112,6 +3159,9 @@ final class DictationController {
         let translates = phase.isRecording ? isTranslating && effectiveChoice.isGemini
             : phase == .processing && (pillJob.map(\.translates) ?? (selectionRuns && selectionTranslates))
         if pillModel.translates != translates { pillModel.translates = translates }
+        // A selection's polish is never sent.
+        let sends = phase.isRecording ? isSending : phase == .processing && pillJob?.sends == true
+        if pillModel.sends != sends { pillModel.sends = sends }
         // No job on the pill: the polish is the selection's, with no audio behind it.
         let selectionPolishing = (polishes || translates) && phase == .processing && pillJob == nil
         if pillModel.selectionPolishing != selectionPolishing { pillModel.selectionPolishing = selectionPolishing }

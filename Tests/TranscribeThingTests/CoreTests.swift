@@ -199,6 +199,8 @@ import Testing
         .polish: .fnP,
         .addToDictionary: .fnD,
         .translate: .fnT,
+        // Send follows their push to talk: ⌥↩ for Right ⌥.
+        .send: Shortcut(modifiers: [.init(.option)], keyCode: KeyCode.returnKey),
     ])
 
     @Test func conflictsAndSwap() {
@@ -826,12 +828,20 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         #expect(colors[.parakeet] == colors[.gemini], "two may share one")
     }
 
+    /// Bindings as a build before Send saved them: no "send" key at all.
+    static func savedBeforeSend(_ bindings: ShortcutBindings) throws -> Data {
+        let json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(bindings))
+        var object = try #require(json as? [String: Any])
+        object["send"] = nil
+        return try JSONSerialization.data(withJSONObject: object)
+    }
+
     /// Polish moved from fn ↩ to fn P: a build that had it on fn ↩ moves it once; bound to fn ↩ again, it stays.
     @Test func polishMovesFromFnReturnToFnPOnce() throws {
         try withSuite { defaults in
             var old = ShortcutBindings.defaults
             old[.polish] = .fnReturn
-            defaults.set(try JSONEncoder().encode(old), forKey: "tt.shortcuts")
+            defaults.set(try Self.savedBeforeSend(old), forKey: "tt.shortcuts")
             let settings = AppSettings(defaults: defaults)
             #expect(settings.shortcuts[.polish] == .fnP)
             settings.shortcuts[.polish] = .fnReturn
@@ -845,7 +855,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
             var old = ShortcutBindings.defaults
             old[.polish] = .fnReturn
             old[.pasteLast] = .fnP
-            defaults.set(try JSONEncoder().encode(old), forKey: "tt.shortcuts")
+            defaults.set(try Self.savedBeforeSend(old), forKey: "tt.shortcuts")
             #expect(AppSettings(defaults: defaults).shortcuts[.polish] == .fnReturn)
         }
     }

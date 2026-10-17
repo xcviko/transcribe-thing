@@ -75,15 +75,16 @@ struct KeyRepeat: Equatable, Sendable {
 ///   is no longer held, another key is pressed, a click comes, the dictation ends or the recorder captures. Polish's
 ///   shortcut is live the same way, on any model (the controller decides what it does there), and its autorepeats are
 ///   `polishRepeat` (on Gemini, Polish on and off again and again). Add to dictionary's is live too, on any model,
-///   always held as `.heldForSelection`: the controller reads what's selected right then.
+///   always held as `.heldForSelection`: the controller reads what's selected right then. Send's is live the same way,
+///   on any model; its autorepeats are swallowed and do nothing, so a held ↩ turns Send on once.
 /// - Swallowed keys also have their autorepeats and keyUp swallowed.
 struct HotkeyRouter: Equatable, Sendable {
     struct Config: Equatable, Sendable {
         var bindings: ShortcutBindings = .defaults
         /// Recording or transcribing: Esc cancels (and is swallowed) only then.
         var isBusy = false
-        /// A dictation is recording: the Switch model and Polish shortcuts are live (and swallowed) only then, and the
-        /// cards' ↩ isn't theirs.
+        /// A dictation is recording: the Switch model, Polish and Send shortcuts are live (and swallowed) only then,
+        /// and the cards' ↩ isn't theirs.
         var isRecording = false
         /// Switch model has another model to step to (`ModelLineup.cycle`); without one its shortcut is never
         /// intercepted.
@@ -466,7 +467,7 @@ struct HotkeyRouter: Equatable, Sendable {
         switch action {
         case .handsFree: event = .handsFreeToggle
         case .pasteLast: event = .pasteLast
-        case .pushToTalk, .switchModel, .polish, .addToDictionary, .translate: return
+        case .pushToTalk, .switchModel, .polish, .addToDictionary, .translate, .send: return
         }
         if gesture != .idle, action == .pasteLast {
             decision.events.append(.pttInterrupted)
@@ -496,7 +497,7 @@ struct HotkeyRouter: Equatable, Sendable {
     }
 
     /// The bindings live during a dictation only (a held PTT counts): Switch model with another model to switch to,
-    /// Polish, Add to dictionary, Translate.
+    /// Polish, Add to dictionary, Translate, Send.
     private func liveDuringDictation(_ config: Config) -> [(action: ShortcutAction, shortcut: Shortcut)] {
         guard config.isRecording || gesture != .idle else { return [] }
         return ShortcutAction.allCases.compactMap { action in
@@ -513,6 +514,7 @@ struct HotkeyRouter: Equatable, Sendable {
         case .switchModel: .cycleEngine
         case .polish: .polish
         case .translate: .translate
+        case .send: .send
         case .pushToTalk, .handsFree, .pasteLast, .addToDictionary: nil
         }
     }

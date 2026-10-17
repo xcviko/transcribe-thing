@@ -2194,3 +2194,93 @@ private struct ClockedKeyboard {
         c.send(.pillCancel)
     }
 }
+
+// MARK: - Send
+
+@Suite struct SendRouterTests {
+    /// Right ⌃ to talk, Send on ⌃↩ (what the user's saved bindings load as).
+    private static var rightControl: ShortcutBindings {
+        bindings([.pushToTalk: SendShortcutTests.rightControl, .send: SendShortcutTests.controlReturn])
+    }
+
+    /// fn ↩ while holding fn: Send, swallowed, the hold going on. A laptop's fn ↩ comes as Keypad Enter. Held down, it
+    /// doesn't turn Send on and off: its autorepeats are swallowed and say nothing.
+    @Test(arguments: [kVK_Return, kVK_ANSI_KeypadEnter])
+    func fnReturnWhileHoldingFn(_ key: Int) {
+        var kb = Keyboard()
+        #expect(kb.press(.fn).events == [.pttDown])
+        let send = kb.down(key, fnFlagged: true)
+        #expect(send.events == [.send] && send.swallow)
+        for _ in 0..<3 {
+            let repeated = kb.down(key, isRepeat: true, fnFlagged: true)
+            #expect(repeated.events.isEmpty && repeated.swallow)
+        }
+        #expect(kb.up(key, fnFlagged: true).swallow)
+        #expect(kb.release(.fn).events == [.pttUp], "still the dictation's hold")
+    }
+
+    /// The user's keys: Right ⌃ held, ↩ is Send; in hands-free, ⌃↩ with either ⌃. Outside a dictation ⌃↩ is the app's.
+    @Test func controlReturnWithRightControlToTalk() {
+        var kb = Keyboard(bindings: Self.rightControl)
+        let outside = kb.down(kVK_Return)
+        #expect(outside.events.isEmpty && !outside.swallow, "plain ↩ outside a dictation")
+        kb.up(kVK_Return)
+        kb.press(.leftControl)
+        let notRecording = kb.down(kVK_Return)
+        #expect(notRecording.events.isEmpty && !notRecording.swallow, "⌃↩ reaches the app outside a dictation")
+        kb.up(kVK_Return)
+        kb.release(.leftControl)
+
+        #expect(kb.press(.rightControl).events == [.pttDown])
+        let send = kb.down(kVK_Return)
+        #expect(send.events == [.send] && send.swallow)
+        #expect(kb.up(kVK_Return).swallow)
+        #expect(kb.release(.rightControl).events == [.pttUp])
+
+        kb.config.isRecording = true
+        kb.press(.leftControl)
+        let handsFree = kb.down(kVK_Return)
+        #expect(handsFree.events == [.send] && handsFree.swallow, "hands-free: left ⌃ ↩ too")
+        #expect(kb.down(kVK_Return, isRepeat: true).events.isEmpty)
+        kb.up(kVK_Return)
+        kb.release(.leftControl)
+        // Plain ↩ during hands-free stays the app's: only the binding is taken.
+        let plain = kb.down(kVK_Return)
+        #expect(plain.events.isEmpty && !plain.swallow)
+    }
+
+    /// Send's own Return (tagged as ours) passes straight through, even while a dictation records and a card is up.
+    @Test func ourReturnPassesThrough() {
+        var kb = Keyboard()
+        kb.config.isRecording = true
+        kb.config.cardPaste = true
+        kb.press(.fn)
+        let ours = kb.down(kVK_Return, synthetic: true)
+        #expect(ours.events.isEmpty && !ours.swallow)
+    }
+
+    /// Unbound, nothing is taken.
+    @Test func unboundItIsNeverTaken() {
+        var kb = Keyboard(bindings: bindings([.send: nil]))
+        #expect(kb.press(.fn).events == [.pttDown])
+        let enter = kb.down(kVK_ANSI_KeypadEnter, fnFlagged: true)
+        #expect(!enter.events.contains(.send))
+    }
+
+    /// The machine hands the key on from every recording state, and fn ↩'s fn press doesn't finish hands-free.
+    @Test func theMachineHandsItOn() {
+        var machine = DictationMachine()
+        _ = machine.handle(.pttDown, now: 0)
+        #expect(machine.handle(.send, now: 0.05) == [.send], "arming")
+        _ = machine.handle(.timer(.arming), now: 0.12)
+        #expect(machine.handle(.send, now: 0.5) == [.send], "push-to-talk")
+        _ = machine.handle(.handsFreeToggle, now: 0.6)
+        #expect(machine.handle(.send, now: 1) == [.send], "hands-free")
+        _ = machine.handle(.pttDown, now: 1.1)
+        #expect(machine.handle(.send, now: 1.2) == [.send])
+        _ = machine.handle(.pttUp, now: 1.3)
+        #expect(machine.capture.isListeningOrLocked)
+        var idle = DictationMachine()
+        #expect(idle.handle(.send, now: 0).isEmpty)
+    }
+}

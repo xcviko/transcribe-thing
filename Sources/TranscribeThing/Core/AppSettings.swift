@@ -419,6 +419,11 @@ final class AppSettings {
         if store.bool(.polishMovedToFnP) != true {
             if shortcuts[.polish] == .fnReturn, shortcuts.conflict(for: .fnP, excluding: .polish) == nil {
                 shortcuts[.polish] = .fnP
+                // Saved before Send existed, which found fn ↩ taken by Polish and started unbound: fn ↩ is free now.
+                let send = ShortcutBindings.sendShortcut(after: shortcuts[.pushToTalk])
+                if shortcuts[.send] == nil, shortcuts.conflict(for: send, excluding: .send) == nil {
+                    shortcuts[.send] = send
+                }
             }
             store.set(true, .polishMovedToFnP)
         }
