@@ -19,9 +19,10 @@ enum HotkeyEvent: Equatable, Sendable {
     case translate
     /// Its key held down: Translate on and off again on Gemini (and nothing elsewhere).
     case translateRepeat
-    /// The send shortcut, during a dictation: Send on or off for it (Return once its text is pasted). Held down, it
-    /// doesn't repeat.
+    /// The send shortcut, during a dictation: Send on or off for it (Return once its text is pasted).
     case send
+    /// Its key held down: Send on and off again, on any model.
+    case sendRepeat
     /// A key the tap held for the selection (Add to dictionary's: it reads what's selected now). What the key does with
     /// the selection if there is one; with none, the pill says to select a word first.
     case heldForSelection(ShortcutAction, KeyStroke)

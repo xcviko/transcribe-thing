@@ -784,16 +784,19 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
     }
 
     /// F5 P, F5 T, F5 ↩ and F5 Tab during the hold: Polish, Translate, Send and Switch model, swallowed, and the hold
-    /// goes on, as fn P and the rest do with fn. F5 D is held for the selection, as fn D is.
+    /// goes on, as fn P and the rest do with fn; held down, each repeats. F5 D is held for the selection, as fn D is.
     @Test func duringDictationKeysOffF5() {
-        let cases: [(key: Int, event: HotkeyEvent)] = [
-            (kVK_ANSI_P, .polish), (kVK_ANSI_T, .translate), (kVK_Return, .send), (kVK_Tab, .cycleEngine),
+        let cases: [(key: Int, event: HotkeyEvent, repeats: HotkeyEvent)] = [
+            (kVK_ANSI_P, .polish, .polishRepeat), (kVK_ANSI_T, .translate, .translateRepeat),
+            (kVK_Return, .send, .sendRepeat), (kVK_Tab, .cycleEngine, .cycleEngineRepeat),
         ]
-        for (key, event) in cases {
+        for (key, event, repeats) in cases {
             var kb = Keyboard(bindings: Self.bindingsOnF5)
             kb.down(kVK_F5, fnFlagged: true)
             let pressed = kb.down(key)
             #expect(pressed.events == [event] && pressed.swallow, "F5 + key \(key)")
+            let repeated = kb.down(key, isRepeat: true)
+            #expect(repeated.events == [repeats] && repeated.swallow, "F5 + key \(key) held down")
             #expect(kb.up(key).swallow)
             #expect(kb.up(kVK_F5, fnFlagged: true).events == [.pttUp], "the hold went on after key \(key)")
 
@@ -2471,7 +2474,7 @@ private struct ClockedKeyboard {
     }
 
     /// fn ↩ while holding fn: Send, swallowed, the hold going on. A laptop's fn ↩ comes as Keypad Enter. Held down, it
-    /// doesn't turn Send on and off: its autorepeats are swallowed and say nothing.
+    /// turns Send on and off again at every autorepeat, as a held fn Tab steps through the models.
     @Test(arguments: [kVK_Return, kVK_ANSI_KeypadEnter])
     func fnReturnWhileHoldingFn(_ key: Int) {
         var kb = Keyboard()
@@ -2480,7 +2483,7 @@ private struct ClockedKeyboard {
         #expect(send.events == [.send] && send.swallow)
         for _ in 0..<3 {
             let repeated = kb.down(key, isRepeat: true, fnFlagged: true)
-            #expect(repeated.events.isEmpty && repeated.swallow)
+            #expect(repeated.events == [.sendRepeat] && repeated.swallow)
         }
         #expect(kb.up(key, fnFlagged: true).swallow)
         #expect(kb.release(.fn).events == [.pttUp], "still the dictation's hold")
@@ -2508,7 +2511,7 @@ private struct ClockedKeyboard {
         kb.press(.leftControl)
         let handsFree = kb.down(kVK_Return)
         #expect(handsFree.events == [.send] && handsFree.swallow, "hands-free: left ⌃ ↩ too")
-        #expect(kb.down(kVK_Return, isRepeat: true).events.isEmpty)
+        #expect(kb.down(kVK_Return, isRepeat: true).events == [.sendRepeat], "held down, it flips again")
         kb.up(kVK_Return)
         kb.release(.leftControl)
         // Plain ↩ during hands-free stays the app's: only the binding is taken.

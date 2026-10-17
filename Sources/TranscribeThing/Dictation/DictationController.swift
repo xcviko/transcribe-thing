@@ -369,6 +369,9 @@ final class DictationController {
             // On any model: it's about where the text goes, not what's written.
             guard machine.isRecording else { return }
             send(.send)
+        case .sendRepeat:
+            // Held down: Send on and off again, with its flick and drop each time.
+            if machine.isRecording { send(.send) }
         case .heldForSelection(let action, let key):
             actOnceSelectionIsKnown(action, key)
         case .cardPaste: pasteOnlyCard()
