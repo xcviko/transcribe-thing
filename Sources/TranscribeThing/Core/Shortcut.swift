@@ -169,6 +169,9 @@ struct Shortcut: Codable, Hashable, Sendable {
                 byFamily[mk.modifier] = mk.side
             }
         }
+        // An F-key is itself, fn or not: on an Apple keyboard fn is what makes it an F-key rather than a media key (or
+        // Karabiner holds fn to send it), never a second key of the shortcut. So F5 pressed is F5, not fn F5.
+        if let keyCode, KeyNames.functionKeys.contains(keyCode) { byFamily[.function] = nil }
         self.modifiers = Modifier.allCases.compactMap { m in byFamily[m].map { ModifierKey(m, $0) } }
         // fn ↩ recorded on a laptop keyboard (older builds saved it as fn ⌤) is fn ↩.
         self.keyCode = keyCode.map { KeyCode.canonical($0, functionDown: byFamily[.function] != nil) }
@@ -234,9 +237,13 @@ struct Shortcut: Codable, Hashable, Sendable {
         }
     }
 
-    /// Key event matches this key-based shortcut exactly (key code + exact modifiers).
+    /// Key event matches this key-based shortcut exactly (key code + exact modifiers). An F-key's fn doesn't count
+    /// (`init`): F5 comes with fn on an Apple keyboard whose F-keys are media keys, and without it elsewhere.
     func matches(keyCode code: UInt16, modifiers snapshot: ModifierSnapshot) -> Bool {
-        keyCode == code && modifiersMatchExactly(snapshot)
+        guard keyCode == code else { return false }
+        var snapshot = snapshot
+        if KeyNames.functionKeys.contains(code) { snapshot.function = false }
+        return modifiersMatchExactly(snapshot)
     }
 
     /// Some key press triggers both: the same key, the same modifier families, and sides that can coincide
@@ -831,9 +838,9 @@ enum ShortcutValidator {
             } else if typesText && !KeyNames.functionKeys.contains(key) && !action.isDuringDictation {
                 out.append(ShortcutWarning(.typing, "This will fire while you type.", detail: appsLoseIt))
             }
-            if KeyNames.mediaFunctionKeys.contains(key), !mods.contains(.function), !system.functionKeysAreStandard {
-                out.append(ShortcutWarning(.mediaKey, "On Apple keyboards \(KeyNames.name(for: key)) is a media key.",
-                                           detail: "Turn on “Use F1, F2, etc. keys as standard function keys” in Keyboard Settings."))
+            if KeyNames.mediaFunctionKeys.contains(key), !system.functionKeysAreStandard {
+                out.append(ShortcutWarning(.mediaKey, "On Apple keyboards \(KeyNames.name(for: key)) is a media key: hold fn with it.",
+                                           detail: "Or turn on “Use F1, F2, etc. keys as standard function keys” in Keyboard Settings."))
             }
         } else if s.modifiers.count == 1, let only = s.modifiers.first {
             switch (only.modifier, only.side) {

@@ -330,7 +330,8 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         Case(name: "F5, standard F-keys",
              shortcut: combo(kVK_F5), action: .pushToTalk,
              system: SystemKeyboardState(hotKeys: [], fnUsage: .doNothing, functionKeysAreStandard: true), expected: .clean),
-        Case(name: "fn F5", shortcut: combo(kVK_F5, .function), action: .pushToTalk, expected: .clean),
+        // fn F5 is F5 (an F-key's fn isn't part of the shortcut), so the same hint.
+        Case(name: "fn F5", shortcut: combo(kVK_F5, .function), action: .pushToTalk, expected: .warning(.mediaKey)),
         Case(name: "F13", shortcut: .f13, action: .pushToTalk, expected: .clean),
 
         // Lone modifiers.

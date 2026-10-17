@@ -509,6 +509,25 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
         #expect(up.swallow)
     }
 
+    /// F5 as push to talk, sent the way Karabiner sends a real F5 on an Apple keyboard (fn held around it, so the
+    /// Mac doesn't take it for its Dictation key), and the way a keyboard with standard F-keys sends it (no fn):
+    /// both are F5.
+    @Test func anFKeyIsItselfWithOrWithoutFn() {
+        let f5 = Shortcut(modifiers: [.init(.function)], keyCode: UInt16(kVK_F5))
+        #expect(f5 == Shortcut(modifiers: [], keyCode: UInt16(kVK_F5)), "recorded as F5, not fn F5")
+        var viaKarabiner = Keyboard(bindings: bindings([.pushToTalk: f5]))
+        viaKarabiner.press(.fn)
+        let down = viaKarabiner.down(kVK_F5, fnFlagged: true)
+        #expect(down.events == [.pttDown] && down.swallow)
+        let up = viaKarabiner.up(kVK_F5, fnFlagged: true)
+        #expect(up.events == [.pttUp])
+        viaKarabiner.release(.fn)
+
+        var standard = Keyboard(bindings: bindings([.pushToTalk: f5]))
+        #expect(standard.down(kVK_F5, fnFlagged: true).events == [.pttDown])
+        #expect(standard.up(kVK_F5, fnFlagged: true).events == [.pttUp])
+    }
+
     /// Clicking into another field while holding the key is part of dictating: the hold goes on.
     @Test func mouseClickWhileHoldingModifierPushToTalkGoesOn() {
         var kb = Keyboard(bindings: bindings([.pushToTalk: .rightCommand]))
