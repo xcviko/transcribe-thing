@@ -71,6 +71,8 @@ final class TextInserter {
     /// When nothing reads the text (the ⌘V went where nothing takes a paste), the clipboard comes back after this.
     /// Up to then the user's own ⌘V pastes the transcript, and that read brings the clipboard back `readGrace` later.
     var unreadTimeout: Duration = .seconds(8)
+    /// Where whether each paste was taken is written (`paste.read`).
+    var log: DiagnosticLog = .shared
     var modifierReleaseTimeout: Duration = .milliseconds(600)
     /// How long ⌘C has to put the selection on the clipboard: an Electron app takes tens of milliseconds, a busy one
     /// longer. Past this, nothing was selected.
@@ -299,12 +301,15 @@ final class TextInserter {
         let keyCode = system.pasteKeyCode()
         let post = system.postPaste
         let target = system.frontmostApp()
+        let conditions = PasteConditions(toUs: target == ProcessInfo.processInfo.processIdentifier,
+                                         secureInput: IsSecureEventInputEnabled())
         let posted = await Task.detached(priority: .userInitiated) { post(keyCode) }.value
         guard posted else {
             if pasteboard.changeCount == ourChangeCount { original?.restore(to: pasteboard) }
             return .failed("\(Brand.name) couldn’t send the paste keystroke.")
         }
-        scheduleRestore(original, source: source, pastedAt: .now, ourChangeCount: ourChangeCount)
+        scheduleRestore(original, source: source, pastedAt: .now, ourChangeCount: ourChangeCount,
+                        conditions: conditions)
         lastPasteTarget = target
         return .pasted
     }
@@ -330,11 +335,12 @@ final class TextInserter {
     }
 
     private func scheduleRestore(_ original: PasteboardSnapshot?, source: PastedTextSource?,
-                                 pastedAt: ContinuousClock.Instant, ourChangeCount: Int) {
-        let earliest = pastedAt + restoreDelay, readGrace = readGrace, latest = pastedAt + unreadTimeout
+                                 pastedAt: ContinuousClock.Instant, ourChangeCount: Int, conditions: PasteConditions) {
+        let earliest = pastedAt + restoreDelay, readGrace = readGrace, latest = pastedAt + unreadTimeout, log = log
         let task = Task { @MainActor [weak self] in
-            guard await Self.waitForTheTarget(source, earliest: earliest, readGrace: readGrace, latest: latest),
-                  !Task.isCancelled, let self else { return }
+            let waited = await Self.waitForTheTarget(source, earliest: earliest, readGrace: readGrace, latest: latest)
+            Self.logDelivery(source, to: log, pastedAt: pastedAt, conditions: conditions, superseded: !waited)
+            guard waited, !Task.isCancelled, let self else { return }
             self.pendingRestore = nil
             // Someone copied something since our paste: theirs wins.
             guard self.pasteboard.changeCount == ourChangeCount else { return }
@@ -361,6 +367,27 @@ final class TextInserter {
         } catch {
             return false
         }
+    }
+
+    /// What was true as ⌘V went out: it went to transcribe-thing itself (one of its windows was in front), or Secure
+    /// Keyboard Entry was on somewhere. Never which app it went to.
+    struct PasteConditions: Sendable {
+        var toUs: Bool
+        var secureInput: Bool
+    }
+
+    /// Whether the paste was taken: an app reads the text when ⌘V reaches it, so `read=no` once the wait is over means
+    /// the keystroke went where nothing pastes. `unknown`: the text was written outright (the clipboard was empty), so
+    /// its reads can't be seen. `superseded`: a newer paste came first, and `read` says only what happened until then.
+    private static func logDelivery(_ source: PastedTextSource?, to log: DiagnosticLog,
+                                    pastedAt: ContinuousClock.Instant, conditions: PasteConditions, superseded: Bool) {
+        let readAt = source?.firstRead
+        let read = source == nil ? "unknown" : readAt == nil ? "no" : "yes"
+        let ms = readAt.map { Int((($0 - pastedAt) / .milliseconds(1)).rounded()) }
+        log.event(.dictation, "paste.read", [
+            "read": read, "ms": ms, "superseded": superseded ? true : nil,
+            "toUs": conditions.toUs ? true : nil, "secureInput": conditions.secureInput ? true : nil,
+        ])
     }
 
     /// The app is quitting: what a paste replaced comes back now instead of never.
