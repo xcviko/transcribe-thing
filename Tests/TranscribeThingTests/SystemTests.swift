@@ -1252,6 +1252,34 @@ private func copyScreenshotAndFile(to pasteboard: NSPasteboard) {
         #expect(!types(rig).contains(PasteboardMarkers.transientType))
     }
 
+    /// Whether the paste was taken goes in the log: read, and how soon, when the app in front reads the text, and
+    /// `read=no` when nothing has by the end of the wait (the ⌘V went where nothing pastes). Never the text.
+    @Test func whetherThePasteWasTakenIsLogged() async throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tt-paste-read-\(UUID().uuidString)", isDirectory: true)
+        let log = DiagnosticLog()
+        log.start(directory: folder)
+        defer {
+            log.stop()
+            try? FileManager.default.removeItem(at: folder)
+        }
+        for reads in [true, false] {
+            let rig = rig(targetReadsAfter: reads ? 0.01 : nil)
+            defer { rig.pasteboard.releaseGlobally() }
+            rig.inserter.log = log
+            rig.inserter.unreadTimeout = .milliseconds(300)
+            copyString("the user's own copy", to: rig)
+            #expect(await rig.inserter.insert("meet me at the private place") == .pasted)
+            try await waitUntil(timeout: .seconds(10)) { log.retainedText().contains(reads ? "read=yes" : "read=no") }
+        }
+        let text = log.retainedText()
+        let lines = text.split(separator: "\n").filter { $0.contains("[dictation] paste.read") }
+        #expect(lines.count == 2)
+        #expect(lines.first?.contains("read=yes ms=") == true, "taken, and how soon")
+        #expect(lines.last?.contains("read=no") == true, "never taken")
+        #expect(!text.contains("private place"), "never the text")
+    }
+
     @Test func pasteHerePutsTheClipboardBack() async throws {
         let rig = rig()
         defer { rig.pasteboard.releaseGlobally() }
