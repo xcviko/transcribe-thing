@@ -207,8 +207,11 @@ extension DiagnosticDictationTests {
         h.controller.enqueue(r, engine: .geminiFlash)
         try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id) != nil }
         let text = DiagnosticLog.shared.retainedText()
-        let line = try #require(text.split(separator: "\n").first { $0.contains("job.finished engine=geminiFlash outcome=noSpeech") })
-        for field in ["voiced=21.67", "kept=yes", "answerChars=54", "tags=pair", "transcriptTags=yes", "messageTags=no",
+        // Its own line: tests running alongside log their dictations to the same log.
+        let line = try #require(text.split(separator: "\n").first {
+            $0.contains("job.finished engine=geminiFlash outcome=noSpeech") && $0.contains("voiced=21.67")
+        })
+        for field in ["kept=yes", "answerChars=54", "tags=pair", "transcriptTags=yes", "messageTags=no",
                       "onlyTags=no", "noSpeechWords=no", "outsideChars=28", "finish=stop", "reasoningTokens=0",
                       "outputTokens=9"] {
             #expect(line.contains(field), "\(field) in \(line)")
