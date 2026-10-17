@@ -506,18 +506,6 @@ import Testing
         #expect(stats.averageWPM == nil)
     }
 
-    @Test func timeSavedComparesWithTypingAt80WPM() {
-        // 400 words take 5 min to type; speaking took 150 s -> 150 s saved.
-        let entries = [Self.entry(daysAgo: 1, words: 400, audio: 150, voiced: 130)]
-        let stats = HistoryStats.compute(entries, now: Self.now, calendar: Self.calendar)
-        #expect(stats.timeSavedSeconds == 150)
-    }
-
-    @Test func timeSavedNeverGoesNegative() {
-        let entries = [Self.entry(daysAgo: 1, words: 4, audio: 60, voiced: 5)]
-        #expect(HistoryStats.compute(entries, now: Self.now, calendar: Self.calendar).timeSavedSeconds == 0)
-    }
-
     @Test func wordCountIgnoresPunctuationOnlyTokens() {
         #expect(TranscriptEntry.countWords("Hello — world …  and\nmore") == 4)
         #expect(TranscriptEntry.countWords("Привет, как дела?") == 3)

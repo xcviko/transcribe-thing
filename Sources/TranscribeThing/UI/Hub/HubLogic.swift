@@ -89,19 +89,6 @@ struct StatPart: Equatable {
 }
 
 enum StatFormat {
-    /// "45 s", "12 m", "1 h 12 m", "3 h".
-    static func timeSaved(_ seconds: TimeInterval) -> [StatPart] {
-        let total = Int(max(0, seconds.isFinite ? seconds : 0).rounded())
-        if total == 0 { return [StatPart(value: "0", unit: "m")] }
-        if total < 60 { return [StatPart(value: "\(total)", unit: "s")] }
-        let minutes = total / 60
-        if minutes < 60 { return [StatPart(value: "\(minutes)", unit: "m")] }
-        let hours = minutes / 60, rest = minutes % 60
-        var parts = [StatPart(value: Fmt.number(hours), unit: "h")]
-        if rest > 0 { parts.append(StatPart(value: "\(rest)", unit: "m")) }
-        return parts
-    }
-
     /// Bar heights 0...1 for the 7-day sparkline, relative to the busiest day.
     static func sparkline(_ daily: [Int]) -> [Double] {
         let peak = daily.max() ?? 0

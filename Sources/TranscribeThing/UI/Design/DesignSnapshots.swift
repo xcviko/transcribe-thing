@@ -85,8 +85,8 @@ private struct DesignGallery: View {
                         Text("Words per minute").typeface(.caption).foregroundStyle(.inkTertiary)
                     }
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("1:24:05").typeface(.numeric).foregroundStyle(.ink)
-                        Text("Time saved").typeface(.caption).foregroundStyle(.inkTertiary)
+                        Text(Fmt.number(1_923)).typeface(.numeric).foregroundStyle(.ink)
+                        Text("Dictations").typeface(.caption).foregroundStyle(.inkTertiary)
                     }
                 }
                 Text("sk-or-v1-••••3f9a").typeface(.mono).foregroundStyle(.inkSecondary)

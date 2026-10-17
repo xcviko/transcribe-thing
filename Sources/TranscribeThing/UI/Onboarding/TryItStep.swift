@@ -252,7 +252,8 @@ private struct SpeedFlash: View {
     /// All three lessons done: the card carries the wrap-up line too.
     var complete = false
 
-    private static let typingWPM = Int(HistoryStats.typingWPM)
+    /// What the user's speed is set against: a practiced typist's.
+    private static let typingWPM = 80
 
     var body: some View {
         let wpm = stat.wordsPerMinute

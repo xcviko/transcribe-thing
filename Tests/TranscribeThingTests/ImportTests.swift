@@ -294,7 +294,7 @@ import Testing
         #expect(h.history.entry(id: id)?.currentKind == .polish())
     }
 
-    /// Words, speed and time saved are the user's own talking: a file's transcript stays out of them.
+    /// Words, speed and dictations are the user's own talking: a file's transcript stays out of them.
     @Test func filesStayOutOfTheStats() {
         let now = Date()
         let spoken = TranscriptEntry(createdAt: now, text: "one two three", engine: .parakeet, audioDuration: 3,

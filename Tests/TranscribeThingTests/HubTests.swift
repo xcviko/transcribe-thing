@@ -116,15 +116,6 @@ import Testing
 }
 
 @Suite struct StatFormatTests {
-    @Test func timeSaved() {
-        #expect(StatFormat.timeSaved(0) == [StatPart(value: "0", unit: "m")])
-        #expect(StatFormat.timeSaved(45) == [StatPart(value: "45", unit: "s")])
-        #expect(StatFormat.timeSaved(12 * 60 + 20) == [StatPart(value: "12", unit: "m")])
-        #expect(StatFormat.timeSaved(72 * 60) == [StatPart(value: "1", unit: "h"), StatPart(value: "12", unit: "m")])
-        #expect(StatFormat.timeSaved(3 * 3600) == [StatPart(value: "3", unit: "h")])
-        #expect(StatFormat.timeSaved(-5) == [StatPart(value: "0", unit: "m")])
-    }
-
     @Test func sparklineIsRelativeToTheBusiestDay() {
         #expect(StatFormat.sparkline([0, 50, 100, 25, 0, 0, 10]) == [0, 0.5, 1, 0.25, 0, 0, 0.1])
         #expect(StatFormat.sparkline(Array(repeating: 0, count: 7)) == Array(repeating: 0, count: 7))

@@ -117,7 +117,7 @@ The transcript shows up in History under the file's name instead of being pasted
 dictation: transcribe it again with another model, polish it or translate it.
 
 It takes MP3, M4A, WAV, Telegram voice notes (.ogg) and the sound of a video, up to three hours. Files don't count
-toward your words, speed or time saved.
+toward the numbers on Home: words, speed and dictations are only what you said.
 
 ## Calls
 
