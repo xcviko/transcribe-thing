@@ -18,7 +18,7 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
     /// the oldest entries past `HistoryStore.maxEntries`). nil only where an older build pruned it or none was saved.
     var audioFileName: String?
     /// The name of the audio file this entry was made from (dropped on Home, or picked with Transcribe File…); nil for
-    /// a dictation. Its row shows it, and the stats (words, speed, time saved) leave it out: it isn't the user talking.
+    /// a dictation. Its row shows it, and the stats (words, speed, dictations) leave it out: it isn't the user talking.
     var importedFrom: String?
     /// A failed row's: what the cloud model answered when it heard no speech in a recording that had some, whole and
     /// as it came (tags and all), for a closer look at why. Its row's tooltip shows it; nil everywhere else.
@@ -302,29 +302,22 @@ struct HistoryStats: Equatable, Sendable {
     /// Last 7 days, oldest first.
     var dailyWords: [Int]
     var averageWPM: Int?
-    /// words / 40 wpm − speaking time, never negative.
-    var timeSavedSeconds: TimeInterval
     var totalDictations: Int
 
     static let empty = HistoryStats(wordsThisWeek: 0, dailyWords: Array(repeating: 0, count: 7),
-                                    averageWPM: nil, timeSavedSeconds: 0, totalDictations: 0)
-
-    /// Typing speed the "time saved" tile compares against: a practiced typist's.
-    static let typingWPM: Double = 80
+                                    averageWPM: nil, totalDictations: 0)
 
     /// Pure stats math over any set of entries (only successful ones count).
     static func compute(_ entries: [TranscriptEntry], now: Date, calendar: Calendar) -> HistoryStats {
         let today = calendar.startOfDay(for: now)
         var daily = Array(repeating: 0, count: 7)
         var words = 0
-        var speaking: TimeInterval = 0
         var voiced: TimeInterval = 0
         var count = 0
         for entry in entries where entry.status == .success && !entry.isSelection && entry.importedFrom == nil {
             let n = entry.wordCount
             count += 1
             words += n
-            speaking += max(0, entry.audioDuration)
             voiced += max(0, entry.voicedSeconds)
             let day = calendar.startOfDay(for: entry.createdAt)
             if let ago = calendar.dateComponents([.day], from: day, to: today).day, (0..<7).contains(ago) {
@@ -333,9 +326,8 @@ struct HistoryStats: Equatable, Sendable {
         }
         // Speed is words per minute of actual speech; below a few seconds of speech the number is noise.
         let wpm: Int? = voiced >= 3 && words > 0 ? Int((Double(words) / (voiced / 60)).rounded()) : nil
-        let saved = max(0, Double(words) / typingWPM * 60 - speaking)
         return HistoryStats(wordsThisWeek: daily.reduce(0, +), dailyWords: daily, averageWPM: wpm,
-                            timeSavedSeconds: saved, totalDictations: count)
+                            totalDictations: count)
     }
 }
 

@@ -342,8 +342,6 @@ private struct StatsRow: View {
             }
             StatTile(label: "Average speed",
                      parts: [StatPart(value: stats.averageWPM.map { Fmt.number($0) } ?? StatPart.noValue, unit: "wpm")])
-            StatTile(label: "Time saved", parts: StatFormat.timeSaved(stats.timeSavedSeconds),
-                     help: "Compared with typing at \(Int(HistoryStats.typingWPM)) wpm.")
             StatTile(label: "Dictations", parts: [StatPart(value: Fmt.number(stats.totalDictations), unit: "total")])
         }
     }
