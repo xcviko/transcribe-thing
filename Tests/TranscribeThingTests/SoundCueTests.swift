@@ -337,6 +337,7 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
         gate.signal()
         try await waitUntil { output.played == [.start, .modelSwitch] }
         let times = output.state.withLock { $0.playTimes }
+        try #require(times.count >= 2, "a busy machine can outlast the wait: stop here, not on times[1]")
         let gap = Double(times[1] - times[0]) / 1e6
         #expect(gap >= 120, "\(gap) ms apart")
     }
