@@ -158,7 +158,8 @@ struct ShortcutRecorderView: View {
 
     @ViewBuilder private var contextMenu: some View {
         Button("Change Shortcut") { startRecording() }
-        if let fallback = ShortcutBindings.defaults[action], fallback != currentShortcut {
+        // Send's follows the push to talk that's set (⌃↩ for Right ⌃).
+        if let fallback = allBindings.defaultShortcut(for: action), fallback != currentShortcut {
             Button("Reset to \(fallback.compactDescription)") { apply(fallback) }
         }
         if ShortcutCaptureEngine.canClear(action), currentShortcut != nil {

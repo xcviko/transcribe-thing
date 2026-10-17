@@ -29,6 +29,7 @@ struct ShortcutsPage: View {
                     row(.switchModel)
                     row(.polish)
                     row(.translate)
+                    row(.send)
                     row(.addToDictionary)
                 }
             }

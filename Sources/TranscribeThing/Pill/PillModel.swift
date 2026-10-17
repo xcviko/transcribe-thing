@@ -59,6 +59,9 @@ final class PillModel {
     var translates = false
     /// What stands left of the bars or the wave, if anything: the wand, Translate's glyph, or both in one.
     var rewrite: PillRewrite? { PillRewrite(polishes: polishes, translates: translates) }
+    /// The dictation on screen is sent (`Send`): the paper plane sits right of its bars, then of its wave, as the wand
+    /// sits left of them (both, with Polish or Translate on too).
+    var sends = false
     /// The polish on screen is a selection's (Polish Selection): nothing was heard, so the pill says "Polishing" where
     /// a dictation's shows the wave.
     var selectionPolishing = false

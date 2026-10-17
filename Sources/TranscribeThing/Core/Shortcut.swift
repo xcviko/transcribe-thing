@@ -280,15 +280,18 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
     /// While dictating with text selected: the selection goes into the user's dictionary (`UserDictionary`).
     case addToDictionary
     /// Translate this dictation (`Translate`) while it's on Gemini; off Gemini, with text selected, that text
-    /// translated. Declared last: bindings are stored in declaration order.
+    /// translated.
     case translate
+    /// Send this dictation: Return is pressed once its text is pasted (a chat message goes out). On any model. Declared
+    /// last: bindings are stored in declaration order.
+    case send
 
     var id: String { rawValue }
 
     /// Live only while a dictation records: outside one its keys reach apps.
     var isDuringDictation: Bool {
         switch self {
-        case .switchModel, .polish, .addToDictionary, .translate: true
+        case .switchModel, .polish, .addToDictionary, .translate, .send: true
         case .pushToTalk, .handsFree, .pasteLast: false
         }
     }
@@ -302,6 +305,7 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
         case .polish: "Polish"
         case .addToDictionary: "Add to dictionary"
         case .translate: "Translate"
+        case .send: "Send"
         }
     }
 
@@ -312,6 +316,7 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
         case .polish: "On Gemini, the message you meant. With text selected, that text polished."
         case .addToDictionary: "With a word selected, while you dictate."
         case .translate: "On Gemini, your dictation translated. With text selected, that text translated."
+        case .send: "Presses Return once your text is pasted. While you dictate."
         case .pushToTalk, .handsFree, .pasteLast: nil
         }
     }
@@ -325,6 +330,7 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
         case .polish: "wand.and.sparkles"
         case .addToDictionary: "character.book.closed"
         case .translate: "translate"
+        case .send: "paperplane"
         }
     }
 
@@ -349,11 +355,25 @@ struct ShortcutBindings: Codable, Equatable, Sendable {
         .handsFree: .fnSpace,
         .pasteLast: .commandFnV,
         .switchModel: .fnTab,
-        // P for Polish, D for Dictionary, T for Translate.
+        // P for Polish, D for Dictionary, T for Translate, ↩ for Send.
         .polish: .fnP,
         .addToDictionary: .fnD,
         .translate: .fnT,
+        // fn's, as `sendShortcut(after:)` makes it.
+        .send: .fnReturn,
     ])
+
+    /// Send's default: ↩ with the push-to-talk key's modifiers, on either side, so it's pressed with the key already
+    /// held (fn ↩ for fn, ⌃↩ for Right ⌃), as fn P is for Polish. A push-to-talk with no modifier (F13) gets fn ↩.
+    static func sendShortcut(after pushToTalk: Shortcut?) -> Shortcut {
+        guard let pushToTalk, !pushToTalk.modifiers.isEmpty else { return .fnReturn }
+        return Shortcut(modifiers: pushToTalk.modifiers.map { .init($0.modifier) }, keyCode: KeyCode.returnKey)
+    }
+
+    /// What `action` goes back to (the recorder's Reset): its default, Send's following this push to talk.
+    func defaultShortcut(for action: ShortcutAction) -> Shortcut? {
+        action == .send ? Self.sendShortcut(after: bindings[.pushToTalk]) : Self.defaults[action]
+    }
 
     subscript(_ action: ShortcutAction) -> Shortcut? {
         get { bindings[action] }
@@ -428,6 +448,8 @@ struct ShortcutBindings: Codable, Equatable, Sendable {
             }
         }
         bindings = result
+        // Send, newer than the saved bindings, follows the push to talk they have (⌃↩ for Right ⌃).
+        if defaulted.contains(.send) { bindings[.send] = Self.sendShortcut(after: bindings[.pushToTalk]) }
         // An action newer than the saved bindings starts unbound when its default is already the user's for
         // something else (Polish's fn P next to a hands-free set to fn P): the user's binding keeps working.
         for action in defaulted {

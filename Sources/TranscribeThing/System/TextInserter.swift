@@ -32,6 +32,19 @@ final class TextInserter {
         var copyKeyCode: @MainActor () -> CGKeyCode = { PasteKeyResolver.resolveCurrentCopy() }
         /// Posts ⌘C, as `postPaste` does ⌘V (`copySelection`).
         var postCopy: @Sendable (CGKeyCode) -> Bool = { _ in false }
+        /// The app in front, which a paste goes to: Send's Return goes only to the one its paste went to.
+        var frontmostApp: @MainActor () -> pid_t? = { nil }
+        /// Posts Return, as `postPaste` does ⌘V (`pressReturn`).
+        var postReturn: @Sendable () -> Bool = { false }
+    }
+
+    /// What Send's Return came to (`pressReturn()`).
+    enum ReturnOutcome: String, Equatable, Sendable {
+        case pressed
+        /// The app the text was pasted into isn't in front any more: Return would land somewhere else.
+        case appChanged
+        /// No paste to follow, no permission to post keys, or the key couldn't be posted.
+        case failed
     }
 
     /// What copying the selection found (`copySelection()`).
@@ -69,6 +82,8 @@ final class TextInserter {
     private let pasteboard: NSPasteboard
     private var system: System
     private var pendingRestore: PendingRestore?
+    /// The app the last paste's ⌘V went to (`System.frontmostApp`), for Send's Return.
+    private var lastPasteTarget: pid_t?
     /// The clipboard as `prepareToPaste()` read it, for the next paste while nothing has changed it since.
     private var prepared: (changeCount: Int, snapshot: PasteboardSnapshot?)?
     private var queueTail: Task<Void, Never>?
@@ -90,7 +105,9 @@ final class TextInserter {
             inspectFocus: { await FocusInspector.inspect() },
             pasteKeyCode: { PasteKeyResolver.resolveCurrent() },
             postPaste: { TextInserter.postCommand(keyCode: $0) },
-            postCopy: { TextInserter.postCommand(keyCode: $0) })
+            postCopy: { TextInserter.postCommand(keyCode: $0) },
+            frontmostApp: { NSWorkspace.shared.frontmostApplication?.processIdentifier },
+            postReturn: { TextInserter.postReturn() })
     }
 
     /// Tests: a private pasteboard and fake system hooks.
@@ -112,6 +129,8 @@ final class TextInserter {
     }
 
     private func performInsert(_ text: String) async -> InsertionOutcome {
+        // Whatever this comes to, Send's Return follows it, never an earlier paste.
+        lastPasteTarget = nil
         guard !text.isEmpty else { return .failed("There was no text to paste.") }
         guard await mayPostEvents() else { return .accessibilityMissing }
 
@@ -131,7 +150,24 @@ final class TextInserter {
         return await paste(final)
     }
 
+    /// Send: Return in the app the last paste went to, after any paste still queued, once the keys held for the
+    /// dictation are up (Return with ⌃ held is another key in most apps). Never into another app: one that came to the
+    /// front since the paste gets nothing.
+    func pressReturn() async -> ReturnOutcome {
+        await serialized { await self.performPressReturn() }
+    }
+
+    private func performPressReturn() async -> ReturnOutcome {
+        guard let target = lastPasteTarget, await mayPostEvents() else { return .failed }
+        await waitForModifierRelease()
+        guard system.frontmostApp() == target else { return .appChanged }
+        let post = system.postReturn
+        let posted = await Task.detached(priority: .userInitiated) { post() }.value
+        return posted ? .pressed : .failed
+    }
+
     private func performPasteNow(_ text: String) async -> InsertionOutcome {
+        lastPasteTarget = nil
         guard !text.isEmpty else { return .failed("There was no text to paste.") }
         guard await mayPostEvents() else { return .accessibilityMissing }
         await waitForModifierRelease()
@@ -262,12 +298,14 @@ final class TextInserter {
 
         let keyCode = system.pasteKeyCode()
         let post = system.postPaste
+        let target = system.frontmostApp()
         let posted = await Task.detached(priority: .userInitiated) { post(keyCode) }.value
         guard posted else {
             if pasteboard.changeCount == ourChangeCount { original?.restore(to: pasteboard) }
             return .failed("\(Brand.name) couldn’t send the paste keystroke.")
         }
         scheduleRestore(original, source: source, pastedAt: .now, ourChangeCount: ourChangeCount)
+        lastPasteTarget = target
         return .pasted
     }
 
@@ -365,6 +403,25 @@ final class TextInserter {
     nonisolated static func physicalModifiersHeld() -> Bool {
         let relevant: CGEventFlags = [.maskCommand, .maskControl, .maskAlternate, .maskShift, .maskSecondaryFn]
         return !CGEventSource.flagsState(.combinedSessionState).intersection(relevant).isEmpty
+    }
+
+    /// Return down and up, with no modifiers, from the combined session state and tagged as ours (our tap lets it
+    /// through: it's never Send's own ↩), posted at the session tap as ⌘V is.
+    nonisolated static func postReturn() -> Bool {
+        guard let source = CGEventSource(stateID: .combinedSessionState) else { return false }
+        source.userData = SyntheticEvent.tag
+        source.setLocalEventsFilterDuringSuppressionState(
+            [.permitLocalMouseEvents, .permitLocalKeyboardEvents, .permitSystemDefinedEvents],
+            state: .eventSuppressionStateSuppressionInterval)
+        guard let down = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Return), keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Return), keyDown: false)
+        else { return false }
+        down.flags = []
+        up.flags = []
+        down.post(tap: .cgSessionEventTap)
+        usleep(5_000)
+        up.post(tap: .cgSessionEventTap)
+        return true
     }
 
     /// ⌘ down, V (or C) down and up, ⌘ up from the combined session state, posted at the session tap (posting at

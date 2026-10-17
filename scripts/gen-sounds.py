@@ -30,6 +30,8 @@ A "tongue click": pitch-dropping mouth pops (tongue voice), bodies 120-260 Hz, 1
   polishReady   a bubble surfacing: one round pop falling 720 -> 380 Hz in a touch of room, 120 ms, -16 dBFS
   dictionaryAdded  a soft "done?": one tongue pop gliding up 185 -> 300 Hz over 45 ms, 210 ms, -11 dBFS
                (chatgpt-thing's n08 "pop-vopros", same voices and mastering)
+  sendOn   an airy flick up: a breath of noise swelling up 380 -> 1200 Hz for 95 ms, flicked off by a tongue pop
+               gliding up 210 -> 360 Hz at its crest (58 ms), 155 ms, -15 dBFS, as loud as polishOn (off is polishOff)
                (only this set has them: Polish came after the others were picked)
 
 B "low wood block": modal knocks, fundamentals 155-290 Hz, tau 11-19 ms, low-passed at 1.5-2 kHz, a faint sub thump.
@@ -59,6 +61,7 @@ Voices:
   pop     a mouth "tsk-pop": a sine burst whose pitch drops fast, plus a soft 2 ms band-limited transient.
   tongue  a tongue click: a pitch-dropping sine body with a faster-dying 2nd harmonic (so a 150 Hz body still
           reads on laptop speakers), an oral-cavity resonance that falls with it, and a soft release tick.
+  whoosh  a breath: noise through a band-pass whose center rises as it swells in and closes (sendOn's air).
   finish  4th-order Butterworth low-pass (nothing bright), 2nd-order high-pass (40 Hz: no DC; set C uses
           90-130 Hz to drop the mallet's sub bump), a 1.5 ms fade-in, a raised-cosine fade-out to exact zero
           after the natural decay, and peak normalization.
@@ -326,6 +329,29 @@ def tongue(f_start, f_end, glide_s, tau, seconds, attack_s=0.0008, h2_db=-16.0, 
     return out
 
 
+def whoosh(f_start, f_end, seconds, seed, q=1.6, crest=0.7):
+    """A breath: noise through a band-pass whose center rises from f_start to f_end Hz (exponentially), swelling in
+    over `crest` of its length and closing over the rest, so the air sweeps up and stops."""
+    n = int(round(seconds * SR))
+    rng = random.Random(seed)
+    low = band = 0.0
+    damp = 1 / q
+    out = []
+    for i in range(n):
+        u = i / (n - 1)
+        f = f_start * (f_end / f_start) ** u
+        k = 2 * math.sin(math.pi * f / SR)  # Chamberlin state-variable filter, retuned every sample
+        high = rng.uniform(-1, 1) - low - damp * band
+        band += k * high
+        low += k * band
+        if u < crest:
+            env = math.sin(0.5 * math.pi * u / crest) ** 2
+        else:
+            env = math.cos(0.5 * math.pi * (u - crest) / (1 - crest)) ** 2
+        out.append(band * env)
+    return out
+
+
 def sag(semis, time_s):
     """Pitch multiplier that sags by `semis` semitones (exponential approach, ~95 % after `time_s`)."""
     return lambda t: 2 ** (semis / 12 * (1 - math.exp(-t / (time_s / 3))))
@@ -493,6 +519,14 @@ def a_dictionary_added():
     c.add(0.0, tongue(185.0, 300.0, glide_s=0.045, tau=0.034, seconds=0.200, h2_db=-14.0, cavity=(2.4, -10.0, 0.003),
                       click_db=-24.0, seed=435))
     return finish(c.buf, -11, lowpass_hz=1600, room=0.0, fade_out_ms=30)
+
+
+def a_send_on():
+    c = Canvas(0.155)
+    c.add(0.000, scaled(whoosh(380.0, 1200.0, seconds=0.095, seed=441, crest=0.65), 1.0), gain=0.5)
+    c.add(0.058, tongue(210.0, 360.0, glide_s=0.025, tau=0.012, seconds=0.095, h2_db=-14.0, cavity=(2.4, -10.0, 0.003),
+                        click_db=-24.0, seed=443))
+    return finish(c.buf, -15, lowpass_hz=2200, fade_out_ms=16)
 
 
 def a_alert():
@@ -690,7 +724,7 @@ SETS = {
     "A": {"start": a_start, "stop": a_stop, "lock": a_lock, "paste": a_paste,
           "cancel": a_cancel, "alert": a_alert, "error": a_error, "success": a_success,
           "modelSwitch": a_model_switch, "polishOn": a_polish_on, "polishOff": a_polish_off,
-          "polishReady": a_polish_ready, "dictionaryAdded": a_dictionary_added},
+          "polishReady": a_polish_ready, "dictionaryAdded": a_dictionary_added, "sendOn": a_send_on},
     "B": {"start": b_start, "stop": b_stop, "lock": b_lock, "paste": b_paste,
           "cancel": b_cancel, "alert": b_alert, "error": b_error, "success": b_success,
           "modelSwitch": b_model_switch},

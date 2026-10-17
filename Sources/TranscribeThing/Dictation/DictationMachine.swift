@@ -32,6 +32,8 @@ struct DictationMachine: Equatable {
         case polish
         /// The translate shortcut: Translate on or off for the dictation being recorded.
         case translate
+        /// The send shortcut: Send on or off for the dictation being recorded (Return once its text is pasted).
+        case send
         /// Undo of a canceled dictation: record on, hands-free, after `prefix` seconds of kept audio.
         case resume(prefix: TimeInterval)
         /// A key took the press over (Polish Selection, fn D in push-to-talk): the recording goes without a sound,
@@ -72,6 +74,8 @@ struct DictationMachine: Equatable {
         case polish
         /// Turn Translate on or off for this dictation, as Polish.
         case translate
+        /// Turn Send on or off for this dictation (the controller owns it and its sound).
+        case send
     }
 
     enum NoticeKind: Equatable {
@@ -186,8 +190,8 @@ struct DictationMachine: Equatable {
             return cancelRecording()
         case .cycleEngine:
             return [.cycleEngine]
-        case .polish, .translate:
-            return [input == .polish ? .polish : .translate]
+        case .polish, .translate, .send:
+            return Self.keyEffect(input)
         case .deviceLost:
             capture = .idle
             return [.cancelTimer(.arming), .cancelCapture(keepForUndo: false, notify: false), .showPill(.rest)]
@@ -219,8 +223,8 @@ struct DictationMachine: Equatable {
             return cancelRecording()
         case .cycleEngine:
             return [.cycleEngine]
-        case .polish, .translate:
-            return [input == .polish ? .polish : .translate]
+        case .polish, .translate, .send:
+            return Self.keyEffect(input)
         case .deviceLost:
             capture = .idle
             return [.stopCaptureAndTranscribe(mode: .pushToTalk), .notice(.deviceLostTranscribing)]
@@ -262,10 +266,10 @@ struct DictationMachine: Equatable {
             // fn+Tab: the fn press was for switching, so its release must not stop hands-free.
             capture = .locked(startedAt: startedAt)
             return [.cycleEngine]
-        case .polish, .translate:
-            // fn P and fn T likewise.
+        case .polish, .translate, .send:
+            // fn P, fn T and fn ↩ likewise.
             capture = .locked(startedAt: startedAt)
-            return [input == .polish ? .polish : .translate]
+            return Self.keyEffect(input)
         default:
             return handleHandsFreeCommon(input)
         }
@@ -277,8 +281,8 @@ struct DictationMachine: Equatable {
             return cancelRecording()
         case .cycleEngine:
             return [.cycleEngine]
-        case .polish, .translate:
-            return [input == .polish ? .polish : .translate]
+        case .polish, .translate, .send:
+            return Self.keyEffect(input)
         case .deviceLost:
             capture = .idle
             return [.stopCaptureAndTranscribe(mode: .handsFree), .notice(.deviceLostTranscribing)]
@@ -333,4 +337,14 @@ struct DictationMachine: Equatable {
     }
 
     private var cancelAllTimers: [Effect] { TimerID.allCases.map { .cancelTimer($0) } }
+
+    /// What the Polish, Translate and Send keys hand on: the controller turns them on or off for the recording.
+    private static func keyEffect(_ input: Input) -> [Effect] {
+        switch input {
+        case .polish: [.polish]
+        case .translate: [.translate]
+        case .send: [.send]
+        default: []
+        }
+    }
 }

@@ -111,13 +111,14 @@ enum PillMetrics {
     static let polishCounterSize = CGSize(
         width: (2 * counterPadding + counterWandSize + counterWandGap + widestCount).rounded(.up),
         height: listeningSize.height)
-    /// The count's capsule just around `label`: the padding, the wand for a polish, and the text.
-    static func counterSize(for label: PillCountLabel, polishes: Bool) -> CGSize {
+    /// The count's capsule just around `label`: the padding, the wand for a polish, the text, and Send's plane.
+    static func counterSize(for label: PillCountLabel, polishes: Bool, sends: Bool = false) -> CGSize {
         let wand = polishes ? counterWandSize + 2 + counterWandGap : 0
+        let plane = sends ? sendCounterRoom : 0
         let text = textWidth(label.number, size: counterNumberFontSize, weight: .semibold, rounded: true,
                              monospacedDigits: true)
             + counterWordGap + textWidth(label.word, size: captionFontSize, weight: .medium, rounded: true)
-        return CGSize(width: (2 * counterPadding + wand + text).rounded(.up), height: listeningSize.height)
+        return CGSize(width: (2 * counterPadding + wand + text + plane).rounded(.up), height: listeningSize.height)
     }
     /// A polished dictation carries the wand left of its bars (and of its dots once processing): the capsule widens
     /// by this much for it, the wand and its gap.
@@ -128,6 +129,13 @@ enum PillMetrics {
     static let polishDotsShift = polishWandRoom / 2
     /// The wand's center, from the bars' center: left of them by its own half, its gap and theirs.
     static let polishWandOffset = -(counterWandSize / 2 + counterWandGap + barFieldWidth / 2)
+    /// A sent dictation carries Send's paper plane right of its bars (and of its dots), as the wand is left of them:
+    /// the capsule widens by as much, and the bars sit left of where they'd be by half of it.
+    static let sendRoom = polishWandRoom
+    /// The plane's center, from the bars' center: the wand's place, mirrored.
+    static let sendPlaneOffset = -polishWandOffset
+    /// A sent dictation's count ends with the plane: its gap and its frame, as the wand's before a polish's count.
+    static let sendCounterRoom = counterWandGap + counterWandSize + 2
     /// What a selection's polish says until the model's count comes.
     static let polishingText = "Polishing"
     /// A selection's polish before its count: the wand and "Polishing", with the counter's padding and nothing more.
@@ -256,21 +264,23 @@ struct PillCountLabel: Hashable, Sendable {
 enum PillVisual: Equatable, Sendable {
     case hidden, rest, peek
     /// Push-to-talk. `polishes`: Polish is on for the dictation (`PillModel.polishes`), so the wand sits left of the
-    /// bars in a capsule wider by it.
-    case listening(polishes: Bool = false)
+    /// bars in a capsule wider by it. `sends`: Send is on (`PillModel.sends`), its paper plane right of the bars.
+    case listening(polishes: Bool = false, sends: Bool = false)
     /// One-time post-onboarding bloom: listening size, bars ripple once, then rest as dots.
     case hello
     /// `hours`: the recording has run past an hour, and the capsule is wide enough for "1:02:03". `polishes`: the
-    /// wand left of the bars, as in push-to-talk.
-    case locked(hours: Bool = false, polishes: Bool = false)
+    /// wand left of the bars, and `sends` the plane right of them, as in push-to-talk.
+    case locked(hours: Bool = false, polishes: Bool = false, sends: Bool = false)
     /// The push-to-talk size: stopping hands-free shrinks the pill. `afterHandsFree` only starts the dots
     /// where the hands-free bars stood, so they glide to the center as the pill narrows instead of hopping.
     /// `counting`: the model's token count in place of the dots, in a capsule wide enough for it. The number itself is
     /// never part of the visual, so a tick never springs the capsule. `polish`: a polish is being written, with the
     /// wand before what the pill shows: a dictation's keeps the wave (its audio is being transcribed), a selection's
     /// says "Polishing" (nothing was heard); then both show the count. `label`: what the count's capsule fits, just
-    /// around it (none: as wide as the widest count).
-    case processing(afterHandsFree: Bool, counting: Bool = false, polish: PillPolish? = nil, label: PillCountLabel? = nil)
+    /// around it (none: as wide as the widest count). `sends`: the dictation is sent, the plane right of the wave or
+    /// the count.
+    case processing(afterHandsFree: Bool, counting: Bool = false, polish: PillPolish? = nil,
+                    label: PillCountLabel? = nil, sends: Bool = false)
     case error
     /// The error flash as a sentence instead of the glyph ("No speech detected"): no red, no shake.
     case message(String)
@@ -286,22 +296,32 @@ enum PillVisual: Equatable, Sendable {
         switch self {
         case .hidden, .rest: PillMetrics.restSize
         case .peek: PillMetrics.peekSize
-        case .processing(_, counting: true, let polish, label: let label?):
-            PillMetrics.counterSize(for: label, polishes: polish != nil)
-        case .processing(_, counting: true, polish: .some, _): PillMetrics.polishCounterSize
-        case .processing(_, counting: true, polish: nil, _): PillMetrics.counterSize
-        case .processing(_, counting: false, polish: .selection, _): PillMetrics.polishingSize
-        case .processing(_, counting: false, polish: .translatedSelection, _): PillMetrics.translatingSize
-        case .processing(_, counting: false, polish: .dictation, _), .listening(polishes: true):
-            PillMetrics.polishWaveSize
-        case .listening, .hello, .processing: PillMetrics.listeningSize
-        case .locked(let hours, let polishes):
+        case .processing(_, counting: true, let polish, label: let label?, let sends):
+            PillMetrics.counterSize(for: label, polishes: polish != nil, sends: sends)
+        case .processing(_, counting: true, let polish, label: nil, let sends):
+            Self.wider(polish == nil ? PillMetrics.counterSize : PillMetrics.polishCounterSize,
+                       by: sends ? PillMetrics.sendCounterRoom : 0)
+        case .processing(_, counting: false, polish: .selection, _, _): PillMetrics.polishingSize
+        case .processing(_, counting: false, polish: .translatedSelection, _, _): PillMetrics.translatingSize
+        case .processing(_, counting: false, polish: .dictation, _, let sends):
+            Self.wider(PillMetrics.polishWaveSize, by: sends ? PillMetrics.sendRoom : 0)
+        case .processing(_, counting: false, polish: nil, _, let sends):
+            Self.wider(PillMetrics.listeningSize, by: sends ? PillMetrics.sendRoom : 0)
+        case .listening(let polishes, let sends):
+            Self.wider(PillMetrics.listeningSize, by: (polishes ? PillMetrics.polishWandRoom : 0)
+                                                      + (sends ? PillMetrics.sendRoom : 0))
+        case .hello: PillMetrics.listeningSize
+        case .locked(let hours, let polishes, let sends):
             CGSize(width: (hours ? PillMetrics.lockedHoursSize : PillMetrics.lockedSize).width
-                       + (polishes ? PillMetrics.polishWandRoom : 0),
+                       + (polishes ? PillMetrics.polishWandRoom : 0) + (sends ? PillMetrics.sendRoom : 0),
                    height: PillMetrics.maxHeight)
         case .error: PillMetrics.errorSize
         case .message(let text): PillMetrics.captionSize(for: text)
         }
+    }
+
+    private static func wider(_ size: CGSize, by extra: CGFloat) -> CGSize {
+        CGSize(width: size.width + extra, height: size.height)
     }
 
     var content: Content {
@@ -332,38 +352,62 @@ enum PillVisual: Equatable, Sendable {
     var isLocked: Bool { if case .locked = self { true } else { false } }
 
     /// Hands-free past an hour: the wider timer.
-    var showsHours: Bool { if case .locked(hours: true, _) = self { true } else { false } }
+    var showsHours: Bool { if case .locked(hours: true, _, _) = self { true } else { false } }
 
     /// Recording a polished dictation: the wand left of the bars.
     var recordsPolished: Bool {
         switch self {
-        case .listening(polishes: true), .locked(_, polishes: true): true
+        case .listening(polishes: true, _), .locked(_, polishes: true, _): true
+        default: false
+        }
+    }
+
+    /// A sent dictation, recording or processing: Send's plane right of the bars, the wave or the count.
+    var sends: Bool {
+        switch self {
+        case .listening(_, let sends), .locked(_, _, let sends), .processing(_, _, _, _, let sends): sends
         default: false
         }
     }
 
     /// Processing with the token count in place of the dots.
-    var isCounting: Bool { if case .processing(_, counting: true, _, _) = self { true } else { false } }
+    var isCounting: Bool { if case .processing(_, counting: true, _, _, _) = self { true } else { false } }
 
     /// Processing a polish: the wand inside the capsule.
     var isPolishing: Bool { polish != nil }
 
     /// What the polish on screen is written from; nil for anything but a polish.
-    var polish: PillPolish? { if case .processing(_, _, let polish, _) = self { polish } else { nil } }
+    var polish: PillPolish? { if case .processing(_, _, let polish, _, _) = self { polish } else { nil } }
 
     /// Horizontal offset of the bars from the pill's center. Hands-free centers them between X and the timer;
     /// processing after it starts its dots where the usual hands-free bars stand, so they don't hop sideways when
     /// Stop is pressed. A dictation's polish starts them where they settle, right of the wand: gliding from the bars,
-    /// they would pass under it. Recording a polished dictation, they sit right of where they'd be, by the wand's half.
+    /// they would pass under it. Recording a polished dictation, they sit right of where they'd be, by the wand's half;
+    /// a sent one, left of it by the plane's half (both: where they'd be). The plane is right of where they settle, so
+    /// they glide from hands-free's bars to it.
     var barsOffset: CGFloat {
         switch self {
-        case .listening(polishes: true): PillMetrics.polishDotsShift
-        case .locked(let hours, let polishes):
-            PillMetrics.lockedBarsOffset(hours: hours) + (polishes ? PillMetrics.polishDotsShift : 0)
-        case .processing(_, _, polish: .dictation, _): PillMetrics.polishDotsShift
-        case .processing(afterHandsFree: true, _, polish: nil, _): PillMetrics.lockedBarsOffset(hours: false)
+        case .listening(let polishes, let sends): Self.badgeShift(polishes: polishes, sends: sends)
+        case .locked(let hours, let polishes, let sends):
+            PillMetrics.lockedBarsOffset(hours: hours) + Self.badgeShift(polishes: polishes, sends: sends)
+        case .processing(_, _, polish: .dictation, _, let sends): Self.badgeShift(polishes: true, sends: sends)
+        case .processing(afterHandsFree: true, _, polish: nil, _, let sends):
+            PillMetrics.lockedBarsOffset(hours: false) + Self.badgeShift(polishes: false, sends: sends)
+        case .processing(afterHandsFree: false, _, polish: nil, _, sends: true):
+            Self.badgeShift(polishes: false, sends: true)
         default: 0
         }
+    }
+
+    /// Where the processing dots settle, from the capsule's center: right of the wand, left of the plane.
+    var dotsShift: CGFloat {
+        guard case .processing(_, _, let polish, _, let sends) = self, polish?.isSelection != true else { return 0 }
+        return Self.badgeShift(polishes: polish == .dictation, sends: sends)
+    }
+
+    /// The bars (or dots) beside the wand and the plane: right by the wand's half, left by the plane's.
+    private static func badgeShift(polishes: Bool, sends: Bool) -> CGFloat {
+        (polishes ? PillMetrics.polishDotsShift : 0) - (sends ? PillMetrics.sendRoom / 2 : 0)
     }
 
     /// The bars' center as a point of the capsule: processing content scales in around it, so dots that start
@@ -423,14 +467,15 @@ struct PillView: View {
         case .hidden, .rest:
             return model.isHovering ? .peek : .rest
         case .listening:
-            return .listening(polishes: model.rewrite != nil)
+            return .listening(polishes: model.rewrite != nil, sends: model.sends)
         case .locked:
-            return .locked(hours: model.showsHours, polishes: model.rewrite != nil)
+            return .locked(hours: model.showsHours, polishes: model.rewrite != nil, sends: model.sends)
         case .processing:
             let selection: PillPolish = model.translates ? .translatedSelection : .selection
             return .processing(afterHandsFree: model.processingOrigin == .locked, counting: model.showsCounter,
                                polish: model.rewrite == nil ? nil : model.selectionPolishing ? selection : .dictation,
-                               label: model.showsCounter ? model.tokenCount.map(PillCountLabel.init) : nil)
+                               label: model.showsCounter ? model.tokenCount.map(PillCountLabel.init) : nil,
+                               sends: model.sends && !model.selectionPolishing)
         case .error:
             if let text = model.errorMessage { return .message(text) }
             return .error
@@ -517,7 +562,8 @@ struct PillView: View {
         case .listening: "transcribe-thing is listening"
         case .locked: "transcribe-thing is listening, hands-free"
         // A polish or translation (a dictation's or a selection's, all by Gemini) names no model.
-        case .processing(_, _, polish: .some, _): "transcribe-thing is \(model.translates ? "translating" : "polishing")"
+        case .processing(_, _, polish: .some, _, _):
+            "transcribe-thing is \(model.translates ? "translating" : "polishing")"
         case .processing: "transcribe-thing is transcribing"
         case .error: "Dictation failed"
         case .message(let text): text
@@ -939,13 +985,14 @@ struct PillFace: View {
                 .modifier(fit)
         case .recording:
             RecordingContent(model: model, locked: visual.isLocked, hours: visual.showsHours,
-                             polishes: visual.recordsPolished, barsOffset: visual.barsOffset, regions: regions,
-                             isLive: !leaving)
+                             polishes: visual.recordsPolished, sends: visual.sends, barsOffset: visual.barsOffset,
+                             regions: regions, isLive: !leaving)
                 .frame(width: frame.width, height: frame.height)
                 .modifier(fit)
         case .processing:
-            ProcessingContent(startOffset: visual.barsOffset, tint: .white,
-                              count: model.tokenCount, isCounting: visual.isCounting, polish: visual.polish)
+            ProcessingContent(startOffset: visual.barsOffset, dotsShift: visual.dotsShift, tint: .white,
+                              count: model.tokenCount, isCounting: visual.isCounting, polish: visual.polish,
+                              sends: visual.sends)
                 .frame(width: frame.width, height: frame.height)
                 .modifier(fit)
         case .error:
@@ -1133,14 +1180,18 @@ private struct PillCaptionText: View {
 /// capsule widens and the count fades in while the shimmer keeps sweeping. Same content either way, so starting to
 /// count never restarts the wave or the shimmer. A polish puts the wand first, under a shimmer in the ring's color: a
 /// dictation's beside the wave, a selection's beside "Polishing" (no audio, so no wave). Everything inside the capsule
-/// is white: the model's color is its ring's alone.
+/// is white: the model's color is its ring's alone. A sent dictation has Send's plane right of the wave, then of the
+/// count.
 private struct ProcessingContent: View {
     var startOffset: CGFloat
+    /// Where the dots settle (`PillVisual.dotsShift`): beside the wand and the plane.
+    var dotsShift: CGFloat = 0
     var tint: Color
     /// The model's count right now; nil once the controller has let it go (the pill leaving with its number).
     var count: PillTokenCount?
     var isCounting: Bool
     var polish: PillPolish?
+    var sends = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.pillStaticRendering) private var staticRendering
@@ -1150,8 +1201,7 @@ private struct ProcessingContent: View {
     var body: some View {
         ZStack {
             ProcessingWaveView(startOffset: startOffset, tint: tint, showsDots: !isCounting && polish?.isSelection != true,
-                               glow: polish == nil ? nil : tint,
-                               dotsShift: polish == .dictation ? PillMetrics.polishDotsShift : 0)
+                               glow: polish == nil ? nil : tint, dotsShift: dotsShift)
             // Live while it fades, where it stood: through a removal it would freeze against the capsule's left end
             // as the capsule widens into the count, beside the count's own wand.
             PillLingering(value: isCounting ? nil : polish, insertion: counterTransition,
@@ -1162,14 +1212,22 @@ private struct ProcessingContent: View {
                 case .dictation:
                     // Left of the dots: the wand, its gap and the dots centered together in the capsule.
                     PillWand(tint: tint, pulses: reduceMotion && !staticRendering)
-                        .offset(x: -(PillMetrics.counterWandGap + PillMetrics.barFieldWidth) / 2)
+                        .offset(x: dotsShift + PillMetrics.polishWandOffset)
                 case .selection, .translatedSelection:
                     PillPolishingLabel(text: polish == .selection ? PillMetrics.polishingText : PillMetrics.translatingText,
                                        pulses: reduceMotion && !staticRendering)
                 }
             }
+            // Right of the dots, as the wand is left of them; the count takes it along.
+            PillLingering(value: isCounting || !sends ? nil : true, insertion: counterTransition,
+                          fadeOut: reduceMotion ? .easeInOut(duration: 0.15)
+                              : .easeOut(duration: PillMotion.contentLeaving),
+                          fadeIn: reduceMotion ? .easeInOut(duration: 0.15) : .easeOut(duration: 0.18)) { _, _ in
+                PillSendPlane(tint: tint)
+                    .offset(x: dotsShift + PillMetrics.sendPlaneOffset)
+            }
             if isCounting, let shown = count ?? lastCount {
-                PillTokenCounter(count: shown, polishes: polish != nil)
+                PillTokenCounter(count: shown, polishes: polish != nil, sends: sends)
                     .transition(counterTransition)
             }
         }
@@ -1241,12 +1299,26 @@ private struct PillWand: View {
     }
 }
 
+/// Send's paper plane inside the capsule: right of the bars, the wave or the count, as the wand is left of them.
+private struct PillSendPlane: View {
+    var tint: Color
+
+    var body: some View {
+        Image(systemName: "paperplane.fill")
+            .font(.system(size: PillMetrics.counterWandSize - 1.5, weight: .semibold))
+            .foregroundStyle(tint)
+            .frame(width: PillMetrics.counterWandSize + 2)
+            .accessibilityHidden(true)
+    }
+}
+
 /// "~1.2k thinking", centered in the capsule: the count and what the model is doing; a polish puts the wand before
-/// it. Within a phase the digits roll, and from thinking to writing (which starts again from its first tokens) number
-/// and word crossfade instead, so the restart never reads as a countdown.
+/// it, Send the plane after it. Within a phase the digits roll, and from thinking to writing (which starts again from
+/// its first tokens) number and word crossfade instead, so the restart never reads as a countdown.
 struct PillTokenCounter: View {
     let count: PillTokenCount
     var polishes = false
+    var sends = false
     @Environment(\.pillRewrite) private var rewrite
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -1257,6 +1329,7 @@ struct PillTokenCounter: View {
             label
                 .id(count.phase)
                 .transition(.opacity.animation(.easeInOut(duration: reduceMotion ? 0.15 : 0.2)))
+            if sends { PillSendPlane(tint: .white) }
         }
         .animation(.easeInOut(duration: reduceMotion ? 0.15 : 0.2), value: count.phase)
         .padding(.horizontal, PillMetrics.counterPadding)
@@ -1297,7 +1370,7 @@ private struct ErrorGlyph: View {
 
 /// Bars while recording; in hands-free, X and the check ride the capsule's ends as it widens and the timer sits left
 /// of the check, all four evenly spaced (`PillMetrics.lockedGap`). A polished dictation has Polish's wand just left of
-/// the bars, in a capsule wider by it.
+/// the bars, in a capsule wider by it; a sent one, Send's plane just right of them.
 private struct RecordingContent: View {
     let model: PillModel
     /// Hands-free: X, the timer and Stop.
@@ -1306,6 +1379,8 @@ private struct RecordingContent: View {
     var hours = false
     /// Polish is on: the wand left of the bars.
     var polishes = false
+    /// Send is on: the plane right of the bars.
+    var sends = false
     let barsOffset: CGFloat
     let regions: PillHitRegions?
     /// Still the pill's content: once it's leaving, X and the check take no clicks, report no regions and show no
@@ -1327,6 +1402,12 @@ private struct RecordingContent: View {
                 PillWand(tint: tint)
             }
             .offset(x: barsOffset + PillMetrics.polishWandOffset)
+            PillLingering(value: sends ? true : nil, insertion: wandTransition,
+                          fadeOut: .easeOut(duration: reduceMotion ? 0.15 : 0.12),
+                          fadeIn: .easeOut(duration: 0.14)) { _, _ in
+                PillSendPlane(tint: tint)
+            }
+            .offset(x: barsOffset + PillMetrics.sendPlaneOffset)
             // Each piece is inserted on its own so its transition runs (a transition only applies to the
             // outermost view being inserted).
             HStack(spacing: 0) {
