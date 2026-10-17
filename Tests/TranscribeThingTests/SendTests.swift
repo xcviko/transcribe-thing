@@ -187,7 +187,7 @@ import Testing
         rig.h.controller.handle(.pttUp)
     }
 
-    /// The key turns Send on with its flick and off with Polish's falling drop; the pill shows it; the recording goes
+    /// The key turns Send on and off, with its flick both ways; the pill shows it; the recording goes
     /// on; on Parakeet too (it's no Gemini rewrite).
     @Test func theSendKeyTurnsItOnAndOff() {
         let (rig, cues, _) = Self.make()
@@ -200,7 +200,8 @@ import Testing
         c.handle(.send)
         #expect(!c.isSending && !rig.h.pill.sends)
         c.handle(.send)
-        #expect(cues.played.suffix(3) == [.sendOn, .polishOff, .sendOn])
+        #expect(cues.played.suffix(3) == [.sendOn, .sendOn, .sendOn])
+        #expect(!cues.played.contains(.polishOff), "no Polish drop for Send")
         #expect(c.machine.capture.isListeningOrLocked, "it never stops the recording")
         c.send(.pillCancel)
         #expect(!c.isSending && !rig.h.pill.sends)
@@ -215,7 +216,7 @@ import Testing
         c.handle(.send)
         for _ in 0..<4 { c.handle(.sendRepeat) }
         #expect(c.isSending && rig.h.pill.sends)
-        #expect(cues.played.suffix(5) == [.sendOn, .polishOff, .sendOn, .polishOff, .sendOn])
+        #expect(cues.played.suffix(5) == Array(repeating: .sendOn, count: 5))
         #expect(c.machine.capture.isListeningOrLocked, "it never stops the recording")
         c.send(.pillCancel)
         let played = cues.played.count

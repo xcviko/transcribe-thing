@@ -370,7 +370,7 @@ final class DictationController {
             guard machine.isRecording else { return }
             send(.send)
         case .sendRepeat:
-            // Held down: Send on and off again, with its flick and drop each time.
+            // Held down: Send on and off again, with its flick each time.
             if machine.isRecording { send(.send) }
         case .heldForSelection(let action, let key):
             actOnceSelectionIsKnown(action, key)
@@ -2401,10 +2401,10 @@ final class DictationController {
     }
 
     /// The send shortcut while dictating: Send on for this dictation (the paper plane in the pill), with a flick up, or
-    /// off when pressed again, with Polish's falling drop. On any model.
+    /// off when pressed again, with the same flick: Send has the one sound. On any model.
     private func toggleSend() {
         isSending.toggle()
-        playCue(isSending ? .sendOn : .polishOff)
+        playCue(.sendOn)
     }
 
     // MARK: - Polish Selection
