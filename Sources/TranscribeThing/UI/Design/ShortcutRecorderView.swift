@@ -134,7 +134,7 @@ struct ShortcutRecorderView: View {
                     .transition(.opacity.combined(with: .move(edge: .top)))
             } else if let message = shownMessage {
                 RecorderMessageView(message: message, alignment: alignment, onSwap: swap, onUse: apply,
-                                    onDismiss: { self.message = nil })
+                                    onMoveBack: moveBack, onDismiss: { self.message = nil })
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
@@ -218,9 +218,26 @@ struct ShortcutRecorderView: View {
     }
 
     private func apply(_ shortcut: Shortcut) {
-        let outcome = ShortcutEdit.evaluate(shortcut, for: action, bindings: allBindings, swapAllowed: settings != nil)
-        if case .apply = outcome { write(shortcut) }
-        message = RecorderMessage(outcome, recording: shortcut)
+        let recorded = RecorderMessage.recording(shortcut, for: action, in: allBindings, settingsWritable: settings != nil)
+        if recorded.saved {
+            // The others first (what went along with push to talk), then this action's.
+            for other in ShortcutAction.allCases where other != action && recorded.bindings[other] != allBindings[other] {
+                settings?.shortcuts[other] = recorded.bindings[other]
+            }
+            write(shortcut)
+        }
+        message = recorded.message
+    }
+
+    /// "Move Back": the shortcuts that went along with push to talk go back to the old talk key.
+    private func moveBack() {
+        guard case .moved(_, let talkKey, let previous, _)? = message, let settings else { return }
+        var bindings = settings.shortcuts
+        bindings.restore(previous, movedOnto: talkKey)
+        for action in previous.keys where settings.shortcuts[action] != bindings[action] {
+            settings.shortcuts[action] = bindings[action]
+        }
+        message = nil
     }
 
     private func swap() {
@@ -249,6 +266,40 @@ enum RecorderMessage: Equatable {
     case warning(ShortcutWarning, suggestion: Shortcut?)
     case conflict(ShortcutAction, attempted: Shortcut)
     case swapped(ShortcutAction, warning: ShortcutWarning?)
+    /// Push to talk went from `from` to `to`, and the shortcuts pressed off the old key went along (fn P → F5 P):
+    /// `previous` is what each had, for Move Back. `warning`: the new push to talk's own.
+    case moved(from: Shortcut, to: Shortcut, previous: [ShortcutAction: Shortcut], warning: ShortcutWarning?)
+
+    /// What recording `shortcut` for `action` does: whether it's saved, every binding after it, and what the recorder
+    /// says. A new push to talk takes the shortcuts pressed off the old one along (fn P → F5 P,
+    /// `ShortcutBindings.moveOntoTalkKey`) when the other bindings can be written (`settingsWritable`), and says so.
+    static func recording(_ shortcut: Shortcut, for action: ShortcutAction, in bindings: ShortcutBindings,
+                          settingsWritable: Bool, system: SystemKeyboardState = .current)
+        -> (saved: Bool, bindings: ShortcutBindings, message: RecorderMessage?) {
+        let outcome = ShortcutEdit.evaluate(shortcut, for: action, bindings: bindings, swapAllowed: settingsWritable,
+                                            system: system)
+        guard case .apply(let warning) = outcome else {
+            return (false, bindings, RecorderMessage(outcome, recording: shortcut))
+        }
+        var after = bindings
+        after[action] = shortcut
+        if action == .pushToTalk, settingsWritable, let old = bindings[.pushToTalk] {
+            let moved = after.moveOntoTalkKey(from: old, system: system)
+            if !moved.isEmpty {
+                return (true, after, .moved(from: old, to: shortcut, previous: moved, warning: warning))
+            }
+        }
+        return (true, after, RecorderMessage(outcome, recording: shortcut))
+    }
+
+    /// "Also on F5 now: hands-free, polish and send.", in the Shortcuts page's order.
+    static func movedLine(to talkKey: Shortcut, actions: some Collection<ShortcutAction>) -> String {
+        let pageOrder: [ShortcutAction] = [.handsFree, .switchModel, .polish, .translate, .send, .addToDictionary]
+        let names = pageOrder.filter(actions.contains).map { $0.title.lowercased() }
+        let list = names.count > 1 ? names.dropLast().joined(separator: ", ") + " and " + (names.last ?? "")
+                                   : names.joined()
+        return "Also on \(talkKey.compactDescription) now: \(list)."
+    }
 
     /// What the recorder says after recording `shortcut`; nil when there is nothing to say.
     init?(_ outcome: ShortcutEdit.Outcome, recording shortcut: Shortcut) {
@@ -270,6 +321,7 @@ private struct RecorderMessageView: View {
     let alignment: HorizontalAlignment
     var onSwap: () -> Void
     var onUse: (Shortcut) -> Void
+    var onMoveBack: () -> Void
     var onDismiss: () -> Void
 
     var body: some View {
@@ -322,6 +374,17 @@ private struct RecorderMessageView: View {
                 MessageBubble(symbol: "checkmark.circle.fill", tint: .success) {
                     Text("Swapped with \(other.title.lowercased()).").foregroundStyle(.inkSecondary)
                 }
+            }
+        case .moved(let old, let talkKey, let previous, let warning):
+            MessageBubble(symbol: warning == nil ? "checkmark.circle.fill" : "exclamationmark.triangle.fill",
+                          tint: warning == nil ? .success : .warning) {
+                if let warning { WarningLines(warning: warning) }
+                Text(RecorderMessage.movedLine(to: talkKey, actions: previous.keys))
+                    .foregroundStyle(warning == nil ? .ink : .inkSecondary)
+                    .fontWeight(warning == nil ? .medium : .regular)
+                Button("Move Back to \(old.compactDescription)", action: onMoveBack)
+                    .buttonStyle(SecondaryButtonStyle(size: .small))
+                    .padding(.top, 2)
             }
         }
     }
@@ -591,6 +654,10 @@ final class ShortcutCaptureNSView: NSView {
         case .keyDown:
             result = engine.keyDown(keyCode: event.keyCode, rawFlags: UInt64(event.modifierFlags.rawValue),
                                     isRepeat: event.isARepeat)
+            // An F-key held, waiting for the next key (F5 of F5 Space), shows while it's down.
+            onHeldChanged?(engine.held)
+        case .keyUp:
+            result = engine.keyUp(keyCode: event.keyCode)
         default:
             return true
         }
@@ -625,6 +692,14 @@ enum ShortcutRecorderSnapshots {
     /// macOS's default shortcuts all on and 🌐 set to Do Nothing, so snapshots don't depend on this Mac.
     static let system = SystemKeyboardState(hotKeys: SystemSymbolicHotKeys.active(in: nil), fnUsage: .doNothing)
     static let controlOptionSpace = Shortcut(modifiers: [.init(.control), .init(.option)], keyCode: KeyCode.space)
+    static let f5 = Shortcut(modifiers: [], keyCode: KeyCode.f5)
+
+    /// Push to talk recorded as F5 over the defaults: hands-free and the keys used while dictating go along (F5 Space,
+    /// F5 P…), and the line under push to talk says so.
+    static var movedToF5: (bindings: ShortcutBindings, message: RecorderMessage?) {
+        let recorded = RecorderMessage.recording(f5, for: .pushToTalk, in: .defaults, settingsWritable: true, system: system)
+        return (recorded.bindings, recorded.message)
+    }
 
     /// What the recorder shows right after recording `shortcut`, with the real validator's copy.
     static func message(recording shortcut: Shortcut, for action: ShortcutAction,

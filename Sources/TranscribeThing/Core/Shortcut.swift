@@ -37,6 +37,7 @@ enum KeyCode {
     static let ansiP = UInt16(kVK_ANSI_P)               // 35
     static let ansiT = UInt16(kVK_ANSI_T)               // 17
     static let ansiC = UInt16(kVK_ANSI_C)               // 8
+    static let f5 = UInt16(kVK_F5)                      // 96
     static let f13 = UInt16(kVK_F13)                    // 105
 
     /// Key codes that arrive as flagsChanged (never keyDown/keyUp).
@@ -126,8 +127,10 @@ struct ModifierSnapshot: Equatable, Sendable {
 
 // MARK: - Shortcut model
 
-/// A rebindable shortcut: modifier-only (fn, Right ⌥, ⌃⌥), modifier + key (fn Space, ⌃⌘V) or a single key (F13, Esc).
-/// JSON for fn+Space: `{"modifiers":[{"modifier":"function","side":"either"}],"keyCode":49}`.
+/// A rebindable shortcut: modifier-only (fn, Right ⌥, ⌃⌥), modifier + key (fn Space, ⌃⌘V), a single key (F13, Esc),
+/// or a key pressed while another is held (F5 Space: hold F5, press Space).
+/// JSON for fn+Space: `{"modifiers":[{"modifier":"function","side":"either"}],"keyCode":49}`; for F5 Space:
+/// `{"modifiers":[],"chord":[96,49]}`, the held key first.
 struct Shortcut: Codable, Hashable, Sendable {
     /// Declaration order is display order: fn first, then Apple's ⌃⌥⇧⌘.
     enum Modifier: String, Codable, CaseIterable, Sendable {
@@ -159,8 +162,11 @@ struct Shortcut: Codable, Hashable, Sendable {
     private(set) var modifiers: [ModifierKey]
     /// nil means a modifier-only shortcut.
     private(set) var keyCode: UInt16?
+    /// A key already held when `keyCode` is pressed: F5 of F5 Space. Never without a key. Only push to talk's own key
+    /// works here (`ShortcutValidator`), so these are pressed off the talk key the way fn Space is off fn.
+    private(set) var heldKeyCode: UInt16?
 
-    init(modifiers: [ModifierKey], keyCode: UInt16? = nil) {
+    init(heldKeyCode: UInt16? = nil, modifiers: [ModifierKey], keyCode: UInt16? = nil) {
         var byFamily: [Modifier: Side] = [:]
         for mk in modifiers {
             if let existing = byFamily[mk.modifier], existing != mk.side {
@@ -169,27 +175,64 @@ struct Shortcut: Codable, Hashable, Sendable {
                 byFamily[mk.modifier] = mk.side
             }
         }
+        // A held key with nothing pressed after it is just that key; held twice, it is still one key.
+        var keyCode = keyCode, heldKeyCode = heldKeyCode
+        if keyCode == nil { swap(&keyCode, &heldKeyCode) }
+        if heldKeyCode == keyCode { heldKeyCode = nil }
+        let functionDown = byFamily[.function] != nil
         // An F-key is itself, fn or not: on an Apple keyboard fn is what makes it an F-key rather than a media key (or
-        // Karabiner holds fn to send it), never a second key of the shortcut. So F5 pressed is F5, not fn F5.
-        if let keyCode, KeyNames.functionKeys.contains(keyCode) { byFamily[.function] = nil }
+        // Karabiner holds fn to send it), never a second key of the shortcut. So F5 pressed is F5, not fn F5, and
+        // Space pressed with F5 held is F5 Space.
+        if [keyCode, heldKeyCode].contains(where: { $0.map(KeyNames.functionKeys.contains) == true }) {
+            byFamily[.function] = nil
+        }
         self.modifiers = Modifier.allCases.compactMap { m in byFamily[m].map { ModifierKey(m, $0) } }
         // fn ↩ recorded on a laptop keyboard (older builds saved it as fn ⌤) is fn ↩.
-        self.keyCode = keyCode.map { KeyCode.canonical($0, functionDown: byFamily[.function] != nil) }
+        self.keyCode = keyCode.map { KeyCode.canonical($0, functionDown: functionDown) }
+        self.heldKeyCode = heldKeyCode
     }
 
-    private enum CodingKeys: String, CodingKey { case modifiers, keyCode }
+    /// `chord` holds the held key and the key, for F5 Space; `keyCode` the key of every other shortcut. A build from
+    /// before held keys reads a chord as no key at all (nothing fires), never as a bare Space it would take from apps.
+    private enum CodingKeys: String, CodingKey { case modifiers, keyCode, chord }
 
     // Decoding goes through the normalizing init so hand-edited or older JSON can't produce duplicates.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.init(modifiers: try c.decodeIfPresent([ModifierKey].self, forKey: .modifiers) ?? [],
-                  keyCode: try c.decodeIfPresent(UInt16.self, forKey: .keyCode))
+        let modifiers = try c.decodeIfPresent([ModifierKey].self, forKey: .modifiers) ?? []
+        if let chord = try c.decodeIfPresent([UInt16].self, forKey: .chord), let key = chord.last {
+            self.init(heldKeyCode: chord.count > 1 ? chord.first : nil, modifiers: modifiers, keyCode: key)
+        } else {
+            self.init(modifiers: modifiers, keyCode: try c.decodeIfPresent(UInt16.self, forKey: .keyCode))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(modifiers, forKey: .modifiers)
+        if let heldKeyCode, let keyCode {
+            try c.encode([heldKeyCode, keyCode], forKey: .chord)
+        } else {
+            try c.encodeIfPresent(keyCode, forKey: .keyCode)
+        }
     }
 
     var isModifierOnly: Bool { keyCode == nil && !modifiers.isEmpty }
     var isEmpty: Bool { modifiers.isEmpty && keyCode == nil }
     func contains(_ modifier: Modifier) -> Bool { modifiers.contains { $0.modifier == modifier } }
     var usesFunctionKey: Bool { contains(.function) }
+
+    /// The key a shortcut can be pressed off while this one is held, as fn Space is off fn: F5 for push to talk on F5.
+    /// Only a key on its own that types nothing (`KeyNames.canBeHeld`); nil for fn, ⌃⌥D or Keypad Enter.
+    var holdableKey: UInt16? {
+        guard modifiers.isEmpty, heldKeyCode == nil, let keyCode, KeyNames.canBeHeld(keyCode) else { return nil }
+        return keyCode
+    }
+
+    /// The fn held around an F-key isn't part of the shortcut (`init`), so matching sets it aside.
+    var setsFunctionAside: Bool {
+        [keyCode, heldKeyCode].contains { $0.map(KeyNames.functionKeys.contains) == true }
+    }
 
     // MARK: Well-known shortcuts
 
@@ -205,6 +248,26 @@ struct Shortcut: Codable, Hashable, Sendable {
     static let rightOption = Shortcut(modifiers: [.init(.option, .right)])
     static let rightCommand = Shortcut(modifiers: [.init(.command, .right)])
     static let f13 = Shortcut(modifiers: [], keyCode: KeyCode.f13)
+
+    /// `key` pressed while `talkKey` (push to talk) is held, as the defaults pair fn with Space or P: fn P for fn, ⌃P
+    /// for Right ⌃ (either side, so it's pressed with the key already down), F5 P for F5. Nil for a talk key nothing
+    /// can be pressed off: a combination with a key (⌃⌥D), or a key that types (Keypad Enter).
+    static func onTalkKey(_ key: UInt16, talkKey: Shortcut) -> Shortcut? {
+        if talkKey.isModifierOnly {
+            let shortcut = Shortcut(modifiers: talkKey.modifiers.map { .init($0.modifier) }, keyCode: key)
+            // fn F5 is F5 (`init`): not pressed off fn.
+            return shortcut.modifiers.count == talkKey.modifiers.count ? shortcut : nil
+        }
+        guard let held = talkKey.holdableKey, held != key else { return nil }
+        return Shortcut(heldKeyCode: held, modifiers: [], keyCode: key)
+    }
+
+    /// The key this shortcut adds to `talkKey`, when it is exactly `onTalkKey` of it: P of fn P for fn, of ⌃P for
+    /// Right ⌃, of F5 P for F5. Nil for anything else (⌘ fn V, F5 ⌥Space, fn P with Right ⌃).
+    func keyOnTalkKey(_ talkKey: Shortcut) -> UInt16? {
+        guard let keyCode, Self.onTalkKey(keyCode, talkKey: talkKey) == self else { return nil }
+        return keyCode
+    }
 
     // MARK: Matching
 
@@ -237,19 +300,23 @@ struct Shortcut: Codable, Hashable, Sendable {
         }
     }
 
-    /// Key event matches this key-based shortcut exactly (key code + exact modifiers). An F-key's fn doesn't count
-    /// (`init`): F5 comes with fn on an Apple keyboard whose F-keys are media keys, and without it elsewhere.
-    func matches(keyCode code: UInt16, modifiers snapshot: ModifierSnapshot) -> Bool {
+    /// Key event matches this key-based shortcut exactly (key code + exact modifiers), with its held key among
+    /// `heldKeys` (F5 of F5 Space). An F-key's fn doesn't count (`init`): F5 comes with fn on an Apple keyboard whose
+    /// F-keys are media keys, and without it elsewhere.
+    func matches(keyCode code: UInt16, modifiers snapshot: ModifierSnapshot, heldKeys: Set<UInt16> = []) -> Bool {
         guard keyCode == code else { return false }
+        if let heldKeyCode, !heldKeys.contains(heldKeyCode) { return false }
         var snapshot = snapshot
-        if KeyNames.functionKeys.contains(code) { snapshot.function = false }
+        if setsFunctionAside { snapshot.function = false }
         return modifiersMatchExactly(snapshot)
     }
 
     /// Some key press triggers both: the same key, the same modifier families, and sides that can coincide
-    /// (`.either` meets anything; left and right never meet). ⌥ and Right ⌥ overlap; Left ⌥ and Right ⌥ don't.
+    /// (`.either` meets anything; left and right never meet). ⌥ and Right ⌥ overlap; Left ⌥ and Right ⌥ don't. A
+    /// key without a held key goes off with one held too, so Space overlaps F5 Space; F5 Space and F6 Space don't.
     func overlaps(_ other: Shortcut) -> Bool {
         guard keyCode == other.keyCode, modifiers.count == other.modifiers.count else { return false }
+        if let mine = heldKeyCode, let theirs = other.heldKeyCode, mine != theirs { return false }
         return zip(modifiers, other.modifiers).allSatisfy { a, b in
             a.modifier == b.modifier && Self.sidesMeet(a.side, b.side)
         }
@@ -370,6 +437,12 @@ struct ShortcutBindings: Codable, Equatable, Sendable {
         .send: .fnReturn,
     ])
 
+    /// The key each default presses off the talk key: fn Space, fn Tab, fn P, fn D, fn T, fn ↩.
+    static let keysOnTalkKey: [ShortcutAction: UInt16] = [
+        .handsFree: KeyCode.space, .switchModel: KeyCode.tab, .polish: KeyCode.ansiP,
+        .addToDictionary: KeyCode.ansiD, .translate: KeyCode.ansiT, .send: KeyCode.returnKey,
+    ]
+
     /// Send's default: ↩ with the push-to-talk key's modifiers, on either side, so it's pressed with the key already
     /// held (fn ↩ for fn, ⌃↩ for Right ⌃), as fn P is for Polish. A push-to-talk with no modifier (F13) gets fn ↩.
     static func sendShortcut(after pushToTalk: Shortcut?) -> Shortcut {
@@ -377,9 +450,50 @@ struct ShortcutBindings: Codable, Equatable, Sendable {
         return Shortcut(modifiers: pushToTalk.modifiers.map { .init($0.modifier) }, keyCode: KeyCode.returnKey)
     }
 
-    /// What `action` goes back to (the recorder's Reset): its default, Send's following this push to talk.
+    /// `action`'s default next to this push to talk. A talk key that is a key on its own and types nothing (F5, F13)
+    /// carries them all, as fn does: F5 Space, F5 Tab, F5 P, F5 D, F5 T, F5 ↩. Otherwise `defaults`, with Send's ↩
+    /// on the talk key's modifiers (`sendShortcut(after:)`).
+    static func defaultShortcut(for action: ShortcutAction, pushToTalk: Shortcut?) -> Shortcut? {
+        if let key = keysOnTalkKey[action], let pushToTalk, pushToTalk.holdableKey != nil {
+            return Shortcut.onTalkKey(key, talkKey: pushToTalk)
+        }
+        return action == .send ? sendShortcut(after: pushToTalk) : defaults[action]
+    }
+
+    /// What `action` goes back to (the recorder's Reset): its default next to this push to talk.
     func defaultShortcut(for action: ShortcutAction) -> Shortcut? {
-        action == .send ? Self.sendShortcut(after: bindings[.pushToTalk]) : Self.defaults[action]
+        Self.defaultShortcut(for: action, pushToTalk: bindings[.pushToTalk])
+    }
+
+    /// Push to talk just went from `old` to the binding it has now: the shortcuts pressed off the old talk key move onto
+    /// the new one (fn P → F5 P, fn Space → F5 Space; F5 P → ⌃P for Right ⌃), so they're still pressed with the key you
+    /// hold. Only hands-free and the keys used while dictating, and only exactly on the old key
+    /// (`Shortcut.keyOnTalkKey`): paste last pressed off the talk key would start a dictation first. One that would
+    /// clash with another binding or get in the way where it lands (⌃Space is macOS's) stays. Returns what each moved
+    /// action had.
+    mutating func moveOntoTalkKey(from old: Shortcut?, system: SystemKeyboardState = .current) -> [ShortcutAction: Shortcut] {
+        guard let old, let talkKey = bindings[.pushToTalk], talkKey != old else { return [:] }
+        var moved: [ShortcutAction: Shortcut] = [:]
+        for action in ShortcutAction.allCases where Self.keysOnTalkKey[action] != nil {
+            guard let current = bindings[action], let key = current.keyOnTalkKey(old),
+                  let target = Shortcut.onTalkKey(key, talkKey: talkKey), target != current else { continue }
+            var candidate = self
+            candidate[action] = nil
+            let validation = ShortcutValidator.validate(target, for: action, bindings: candidate, system: system)
+            guard validation.errors.isEmpty, validation.warnings.isEmpty else { continue }
+            bindings[action] = target
+            moved[action] = current
+        }
+        return moved
+    }
+
+    /// Undoes `moveOntoTalkKey`: each action in `previous` still on `talkKey` gets back what it had. One changed since
+    /// keeps the change.
+    mutating func restore(_ previous: [ShortcutAction: Shortcut], movedOnto talkKey: Shortcut) {
+        for (action, shortcut) in previous {
+            guard let key = bindings[action]?.keyOnTalkKey(talkKey), key == shortcut.keyCode else { continue }
+            bindings[action] = shortcut
+        }
     }
 
     subscript(_ action: ShortcutAction) -> Shortcut? {
@@ -455,8 +569,8 @@ struct ShortcutBindings: Codable, Equatable, Sendable {
             }
         }
         bindings = result
-        // Send, newer than the saved bindings, follows the push to talk they have (⌃↩ for Right ⌃).
-        if defaulted.contains(.send) { bindings[.send] = Self.sendShortcut(after: bindings[.pushToTalk]) }
+        // An action newer than the saved bindings follows the push to talk they have (⌃↩ for Right ⌃, F5 P for F5).
+        for action in defaulted { bindings[action] = Self.defaultShortcut(for: action, pushToTalk: bindings[.pushToTalk]) }
         // An action newer than the saved bindings starts unbound when its default is already the user's for
         // something else (Polish's fn P next to a hands-free set to fn P): the user's binding keeps working.
         for action in defaulted {
@@ -513,9 +627,10 @@ enum ShortcutFormatter {
         }
     }
 
-    /// Keycap tokens: ["fn", "Space"], ["Right ⌥"], ["⌃", "⌘", "V"].
+    /// Keycap tokens: ["fn", "Space"], ["Right ⌥"], ["⌃", "⌘", "V"], ["F5", "Space"]. A held key comes first.
     static func tokens(_ s: Shortcut, style: FunctionKeyStyle = .fn) -> [String] {
-        var out = s.modifiers.map { mk -> String in
+        var out = s.heldKeyCode.map { [KeyNames.name(for: $0)] } ?? []
+        out += s.modifiers.map { mk -> String in
             switch mk.side {
             case .either: symbol(mk.modifier, style: style)
             case .left: "Left \(symbol(mk.modifier, style: style))"
@@ -526,17 +641,21 @@ enum ShortcutFormatter {
         return out
     }
 
-    /// Menu-style string: "⌃⌘V", "fn Space", "Right ⌥".
+    /// Menu-style string: "⌃⌘V", "fn Space", "Right ⌥", "F5 Space", "F5 ⌥Space".
     static func compact(_ s: Shortcut, style: FunctionKeyStyle = .fn) -> String {
+        if let held = s.heldKeyCode {
+            return "\(KeyNames.name(for: held)) \(compact(Shortcut(modifiers: s.modifiers, keyCode: s.keyCode), style: style))"
+        }
         let t = tokens(s, style: style)
         let allSymbols = s.modifiers.allSatisfy { $0.side == .either && $0.modifier != .function }
         if allSymbols, s.keyCode != nil, !s.modifiers.isEmpty { return t.joined() }
         return t.joined(separator: " ")
     }
 
-    /// Words for VoiceOver and tooltips: "Right Option", "Fn + Space".
+    /// Words for VoiceOver and tooltips: "Right Option", "Fn + Space", "F5 + Space".
     static func spoken(_ s: Shortcut, style: FunctionKeyStyle = .fn) -> String {
-        var parts = s.modifiers.map { mk -> String in
+        var parts = s.heldKeyCode.map { [KeyNames.spokenName(for: $0)] } ?? []
+        parts += s.modifiers.map { mk -> String in
             switch mk.side {
             case .either: word(mk.modifier, style: style)
             case .left: "Left \(word(mk.modifier, style: style))"
@@ -549,7 +668,8 @@ enum ShortcutFormatter {
 
     /// Structured caps for the chip renderer.
     static func keycaps(_ s: Shortcut) -> [Keycap] {
-        var caps = s.modifiers.map { mk -> Keycap in
+        var caps = s.heldKeyCode.map { [Keycap(label: KeyNames.keycapLabel(for: $0))] } ?? []
+        caps += s.modifiers.map { mk -> Keycap in
             if mk.modifier == .function {
                 return Keycap(label: "fn", systemImage: "globe")
             }
@@ -626,6 +746,10 @@ enum KeyNames {
 
     /// Letters, digits and punctuation: keys that type a character.
     static func isCharacterKey(_ keyCode: UInt16) -> Bool { ansiFallback[keyCode] != nil }
+
+    /// Keys a shortcut can hold before its key (F5 of F5 Space): the F-keys, which type nothing, so holding one down
+    /// for a moment before deciding what's next costs nothing. Letters, Space, Return and arrows are typing.
+    static func canBeHeld(_ keyCode: UInt16) -> Bool { functionKeys.contains(keyCode) }
 
     static func name(for keyCode: UInt16) -> String {
         if let s = special[keyCode] { return s.symbol }
@@ -708,7 +832,8 @@ struct ShortcutWarning: Equatable, Sendable {
 }
 
 struct ShortcutValidation: Equatable, Sendable {
-    /// Why it can't work at all: nothing was pressed, or another action uses it (or starts with it).
+    /// Why it can't work at all: nothing was pressed, another action uses it (or starts with it), or the key it holds
+    /// first isn't push to talk.
     var errors: [String] = []
     /// Why it may get in the way, most specific first. Never blocks saving.
     var warnings: [ShortcutWarning] = []
@@ -732,8 +857,9 @@ struct SystemKeyboardState: Equatable, Sendable {
     }
 }
 
-/// Anything can be bound. Only an empty shortcut and a clash with another transcribe-thing action are errors
-/// (the recorder offers Swap for a duplicate); everything else that may get in the way is a warning.
+/// Anything can be bound. Only an empty shortcut, a clash with another transcribe-thing action (the recorder offers
+/// Swap for a duplicate) and a held key that isn't push to talk's are errors; everything else that may get in the way
+/// is a warning.
 enum ShortcutValidator {
     /// Who else reacts to a combination Keyboard Settings can't turn off.
     enum Owner: Sendable { case macOS, apps }
@@ -776,6 +902,18 @@ enum ShortcutValidator {
             v.errors.append("Press a key or a key combination.")
             return v
         }
+        if let held = s.heldKeyCode {
+            // A held key is the talk key's, as fn is fn Space's: the router knows it's down because push to talk took it.
+            if action == .pushToTalk {
+                v.errors.append("Push to talk is one key or combination, not one key held and then another.")
+                return v
+            }
+            if bindings[.pushToTalk]?.holdableKey != held {
+                let talkKey = bindings[.pushToTalk].map { " (\($0.compactDescription))" } ?? ""
+                v.errors.append("Only push to talk\(talkKey) can be the key you hold first.")
+                return v
+            }
+        }
         if action == .addToDictionary, s.isModifierOnly {
             // The key is held while the selection is read, and modifiers can't be held back from the app.
             v.errors.append("Add to dictionary needs a key, like fn D.")
@@ -799,6 +937,9 @@ enum ShortcutValidator {
     /// Everything that may get in the way, most specific first. The router swallows a bound key everywhere
     /// (switch model's only during a dictation), so "apps won't get it" is literal.
     static func warnings(for s: Shortcut, action: ShortcutAction, system: SystemKeyboardState) -> [ShortcutWarning] {
+        // Pressed off a held talk key (F5 Space), it goes off only while that key is down: the rest of the time Space
+        // types, and macOS still gets its ⌃Space.
+        if s.heldKeyCode != nil { return [] }
         var out: [ShortcutWarning] = []
         let mods = Set(s.modifiers.map(\.modifier))
         let combo = s.compactDescription

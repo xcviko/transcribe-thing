@@ -413,6 +413,15 @@ enum HubSnapshots {
                     recording: ShortcutRecorderSnapshots.controlOptionSpace, for: .handsFree).map { [.handsFree: $0] } ?? [:]) { c in
                 c.settings.shortcuts[.handsFree] = ShortcutRecorderSnapshots.controlOptionSpace
             },
+            // Push to talk on F5: hands-free and the keys used while dictating are pressed off it (F5 Space, F5 P…).
+            hub("hub-shortcuts-talk-key", .shortcuts, height: 860) { c in
+                c.settings.shortcuts = ShortcutRecorderSnapshots.movedToF5.bindings
+            },
+            // Push to talk just changed from fn to F5: the others went along, and the line under it says so.
+            hub("hub-shortcuts-talk-key-moved", .shortcuts, height: 860,
+                recorderMessages: ShortcutRecorderSnapshots.movedToF5.message.map { [.pushToTalk: $0] } ?? [:]) { c in
+                c.settings.shortcuts = ShortcutRecorderSnapshots.movedToF5.bindings
+            },
             // Also a customized binding, so "Restore Defaults" shows in the header.
             hub("hub-shortcuts-secure", .shortcuts) { c in
                 c.secureInput = .preview(active: true, owningAppName: "1Password")

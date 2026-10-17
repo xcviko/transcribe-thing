@@ -656,6 +656,195 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
     }
 }
 
+// MARK: - Held-key shortcuts (F5 Space)
+
+/// Push to talk on F5, and the rest pressed off it the way fn's are pressed off fn: F5 Space, F5 P, F5 ↩…
+@Suite struct HeldKeyChordRouterTests {
+    static let f5 = Shortcut(modifiers: [], keyCode: KeyCode.f5)
+    static func onF5(_ key: Int) -> Shortcut { Shortcut(heldKeyCode: KeyCode.f5, modifiers: [], keyCode: UInt16(key)) }
+
+    /// What the Shortcuts page makes of the defaults once push to talk is F5.
+    static var bindingsOnF5: ShortcutBindings {
+        var bindings = ShortcutBindings.defaults
+        bindings[.pushToTalk] = f5
+        _ = bindings.moveOntoTalkKey(from: .fn, system: SystemKeyboardState(hotKeys: [], fnUsage: .doNothing))
+        return bindings
+    }
+
+    /// The router's events played into the machine, as the controller does.
+    static func machineInput(_ event: HotkeyEvent) -> DictationMachine.Input? {
+        switch event {
+        case .pttDown: .pttDown
+        case .pttUp: .pttUp
+        case .pttInterrupted: .pttInterrupted
+        case .handsFreeToggle: .handsFreeToggle
+        case .cancel: .cancel
+        case .polish: .polish
+        case .translate: .translate
+        case .send: .send
+        case .cycleEngine: .cycleEngine
+        default: nil
+        }
+    }
+
+    @Test func theBindingsAreOnF5() {
+        let bindings = Self.bindingsOnF5
+        #expect(bindings[.handsFree] == Self.onF5(kVK_Space))
+        #expect(bindings[.polish] == Self.onF5(kVK_ANSI_P))
+        #expect(bindings[.send] == Self.onF5(kVK_Return))
+    }
+
+    /// F5 down starts push to talk; Space while it's held turns that dictation hands-free and is swallowed (with its
+    /// autorepeats and release); F5's release then ends nothing. Exactly fn Space with fn.
+    @Test func f5SpaceTurnsTheHeldDictationHandsFree() {
+        var kb = Keyboard(bindings: Self.bindingsOnF5)
+        var machine = DictationMachine()
+        func play(_ decision: HotkeyRouter.Decision, at t: TimeInterval) {
+            for event in decision.events { if let input = Self.machineInput(event) { _ = machine.handle(input, now: t) } }
+        }
+        let down = kb.down(kVK_F5, fnFlagged: true)
+        #expect(down.events == [.pttDown] && down.swallow)
+        play(down, at: 0)
+        let space = kb.down(kVK_Space)
+        #expect(space.events == [.handsFreeToggle] && space.swallow)
+        play(space, at: 0.4)
+        let repeated = kb.down(kVK_Space, isRepeat: true)
+        #expect(repeated.events.isEmpty && repeated.swallow)
+        #expect(kb.up(kVK_Space).swallow)
+        let up = kb.up(kVK_F5, fnFlagged: true)
+        #expect(up.events.isEmpty && up.swallow, "F5's release doesn't end hands-free")
+        play(up, at: 1)
+        #expect(machine.mode == .handsFree && machine.isRecording)
+    }
+
+    /// The same with fn held around F5 (Karabiner sends a real F5 that way): fn Space is still F5 Space.
+    @Test func f5SpaceWithFnHeldAroundF5() {
+        var kb = Keyboard(bindings: Self.bindingsOnF5)
+        kb.press(.fn)
+        #expect(kb.down(kVK_F5, fnFlagged: true).events == [.pttDown])
+        let space = kb.down(kVK_Space, fnFlagged: true)
+        #expect(space.events == [.handsFreeToggle] && space.swallow)
+        kb.up(kVK_Space, fnFlagged: true)
+        // Hands-free now records (the monitor says so), with F5 and its fn still held.
+        kb.config.isRecording = true
+        kb.config.isBusy = true
+        let polish = kb.down(kVK_ANSI_P, fnFlagged: true)
+        #expect(polish.events == [.polish] && polish.swallow)
+        kb.up(kVK_ANSI_P, fnFlagged: true)
+        // Esc with that fn still cancels.
+        let esc = kb.down(kVK_Escape, fnFlagged: true)
+        #expect(esc.events == [.cancel] && esc.swallow)
+    }
+
+    /// Other keys while F5 is held type, as they did, and don't end the hold.
+    @Test func otherKeysStillType() {
+        var kb = Keyboard(bindings: Self.bindingsOnF5)
+        #expect(kb.down(kVK_F5, fnFlagged: true).events == [.pttDown])
+        for key in [kVK_ANSI_A, kVK_ANSI_X, kVK_ANSI_1] {
+            let typed = kb.down(key)
+            #expect(typed.events.isEmpty && !typed.swallow, "key \(key) types")
+            #expect(!kb.up(key).swallow)
+        }
+        #expect(kb.up(kVK_F5, fnFlagged: true).events == [.pttUp], "the hold went on")
+    }
+
+    /// Without F5 held, Space, P and ↩ are the app's, during a dictation too.
+    @Test func withoutF5TheKeysAreTheApps() {
+        var kb = Keyboard(bindings: Self.bindingsOnF5)
+        for key in [kVK_Space, kVK_ANSI_P, kVK_Return] {
+            let typed = kb.down(key)
+            #expect(typed.events.isEmpty && !typed.swallow, "key \(key) outside a dictation")
+            kb.up(key)
+        }
+        kb.config.isRecording = true
+        kb.config.isBusy = true
+        for key in [kVK_Space, kVK_ANSI_P, kVK_ANSI_T, kVK_Return, kVK_Tab] {
+            let typed = kb.down(key)
+            #expect(typed.events.isEmpty && !typed.swallow, "key \(key) during hands-free without F5")
+            kb.up(key)
+        }
+    }
+
+    /// From idle, F5 Space is what fn Space is with fn: push to talk starts, then goes hands-free.
+    @Test func f5SpaceFromIdle() {
+        var kb = Keyboard(bindings: Self.bindingsOnF5)
+        var events: [HotkeyEvent] = []
+        events += kb.down(kVK_F5).events
+        events += kb.down(kVK_Space).events
+        events += kb.up(kVK_Space).events
+        events += kb.up(kVK_F5).events
+        var fn = Keyboard()
+        var fnEvents: [HotkeyEvent] = []
+        fnEvents += fn.press(.fn).events
+        fnEvents += fn.down(kVK_Space, fnFlagged: true).events
+        fnEvents += fn.up(kVK_Space, fnFlagged: true).events
+        fnEvents += fn.release(.fn).events
+        #expect(events == [.pttDown, .handsFreeToggle])
+        #expect(events == fnEvents)
+    }
+
+    /// F5 P, F5 T, F5 ↩ and F5 Tab during the hold: Polish, Translate, Send and Switch model, swallowed, and the hold
+    /// goes on, as fn P and the rest do with fn. F5 D is held for the selection, as fn D is.
+    @Test func duringDictationKeysOffF5() {
+        let cases: [(key: Int, event: HotkeyEvent)] = [
+            (kVK_ANSI_P, .polish), (kVK_ANSI_T, .translate), (kVK_Return, .send), (kVK_Tab, .cycleEngine),
+        ]
+        for (key, event) in cases {
+            var kb = Keyboard(bindings: Self.bindingsOnF5)
+            kb.down(kVK_F5, fnFlagged: true)
+            let pressed = kb.down(key)
+            #expect(pressed.events == [event] && pressed.swallow, "F5 + key \(key)")
+            #expect(kb.up(key).swallow)
+            #expect(kb.up(kVK_F5, fnFlagged: true).events == [.pttUp], "the hold went on after key \(key)")
+
+            var fn = Keyboard()
+            fn.press(.fn)
+            #expect(fn.down(key, fnFlagged: true).events == [event], "fn + key \(key) does the same")
+        }
+        var kb = Keyboard(bindings: Self.bindingsOnF5)
+        kb.down(kVK_F5, fnFlagged: true)
+        let d = kb.down(kVK_ANSI_D)
+        #expect(d.swallow)
+        guard case .heldForSelection(.addToDictionary, let stroke) = d.events.first else {
+            Issue.record("expected heldForSelection, got \(d.events)")
+            return
+        }
+        #expect(stroke.interruptsHold, "as fn D with fn: a selection it can't read ends the hold")
+        // Polish held down turns Polish on and off at every autorepeat, as fn P held does.
+        kb.up(kVK_ANSI_D)
+        kb.down(kVK_ANSI_P)
+        #expect(kb.down(kVK_ANSI_P, isRepeat: true).events == [.polishRepeat])
+    }
+
+    /// In hands-free, F5 down is a push-to-talk press (its release would finish), F5 P polishes, and F5 Space keeps
+    /// recording: the same inputs fn gives the machine.
+    @Test func inHandsFreeF5IsWhatFnIs() {
+        var kb = Keyboard(bindings: Self.bindingsOnF5)
+        kb.config.isRecording = true
+        kb.config.isBusy = true
+        #expect(kb.down(kVK_F5, fnFlagged: true).events == [.pttDown])
+        #expect(kb.down(kVK_ANSI_P).events == [.polish])
+        kb.up(kVK_ANSI_P)
+        #expect(kb.down(kVK_Space).events == [.handsFreeToggle])
+        kb.up(kVK_Space)
+        #expect(kb.up(kVK_F5, fnFlagged: true).events.isEmpty)
+
+        var machine = DictationMachine()
+        _ = machine.handle(.handsFreeToggle, now: 0)
+        _ = machine.handle(.pttDown, now: 1)
+        _ = machine.handle(.handsFreeToggle, now: 1.1)
+        #expect(machine.mode == .handsFree, "F5 Space in hands-free keeps recording")
+    }
+
+    /// A chord's key with another F-key held is nobody's: F6 Space isn't F5 Space.
+    @Test func aChordNeedsItsOwnKeyHeld() {
+        var kb = Keyboard(bindings: Self.bindingsOnF5)
+        kb.down(kVK_F6, fnFlagged: true)
+        let space = kb.down(kVK_Space)
+        #expect(space.events.isEmpty && !space.swallow, "F6 isn't F5")
+    }
+}
+
 // MARK: - Shortcut capture (recorder)
 
 @Suite struct ShortcutCaptureEngineTests {
@@ -695,9 +884,69 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
         let rightCommand = flags([.rightCommand])
         #expect(engine.keyDown(keyCode: KeyCode.ansiV, rawFlags: rightCommand, isRepeat: false)
             == .commit(Shortcut(modifiers: [.init(.command)], keyCode: KeyCode.ansiV)))
-        // F13 reports the Fn flag without Fn being held.
+        // F13 reports the Fn flag without Fn being held. It may be the start of F13 Space: its release commits it.
         #expect(engine.keyDown(keyCode: KeyCode.f13, rawFlags: CGEventFlags.maskSecondaryFn.rawValue, isRepeat: false)
+            == .none)
+        #expect(engine.held == .f13)
+        #expect(engine.keyUp(keyCode: KeyCode.f13) == .commit(.f13))
+        // Push to talk is one key on its own: F13 commits on the press.
+        var ptt = ShortcutCaptureEngine(action: .pushToTalk)
+        #expect(ptt.keyDown(keyCode: KeyCode.f13, rawFlags: CGEventFlags.maskSecondaryFn.rawValue, isRepeat: false)
             == .commit(.f13))
+    }
+
+    /// F5 held, then Space: F5 Space. F5 alone, let go: F5. With fn held around F5 (Karabiner), the same.
+    @Test func aHeldFKeyThenAKeyIsAChord() {
+        let fnFlag = CGEventFlags.maskSecondaryFn.rawValue
+        let f5Space = Shortcut(heldKeyCode: KeyCode.f5, modifiers: [], keyCode: KeyCode.space)
+        var engine = ShortcutCaptureEngine(action: .handsFree)
+        #expect(engine.keyDown(keyCode: KeyCode.f5, rawFlags: fnFlag, isRepeat: false) == .none)
+        #expect(engine.held == Shortcut(modifiers: [], keyCode: KeyCode.f5), "F5 shows while it's held")
+        #expect(engine.keyDown(keyCode: KeyCode.f5, rawFlags: fnFlag, isRepeat: true) == .none)
+        #expect(engine.keyDown(keyCode: KeyCode.space, rawFlags: 0, isRepeat: false) == .commit(f5Space))
+        #expect(engine.held == nil)
+
+        var alone = ShortcutCaptureEngine(action: .handsFree)
+        _ = alone.keyDown(keyCode: KeyCode.f5, rawFlags: fnFlag, isRepeat: false)
+        #expect(alone.keyUp(keyCode: KeyCode.space) == .none, "another key's release changes nothing")
+        #expect(alone.keyUp(keyCode: KeyCode.f5) == .commit(Shortcut(modifiers: [], keyCode: KeyCode.f5)))
+
+        var karabiner = ShortcutCaptureEngine(action: .handsFree)
+        #expect(karabiner.flagsChanged(keyCode: KeyCode.function, rawFlags: fnFlag) == .none)
+        _ = karabiner.keyDown(keyCode: KeyCode.f5, rawFlags: fnFlag, isRepeat: false)
+        #expect(karabiner.keyDown(keyCode: KeyCode.space, rawFlags: fnFlag, isRepeat: false) == .commit(f5Space))
+        // fn let go before F5: nothing is committed as fn alone, and F5's release is F5.
+        var fnFirst = ShortcutCaptureEngine(action: .polish)
+        _ = fnFirst.flagsChanged(keyCode: KeyCode.function, rawFlags: fnFlag)
+        _ = fnFirst.keyDown(keyCode: KeyCode.f5, rawFlags: fnFlag, isRepeat: false)
+        #expect(fnFirst.flagsChanged(keyCode: KeyCode.function, rawFlags: 0) == .none)
+        #expect(fnFirst.keyUp(keyCode: KeyCode.f5) == .commit(Shortcut(modifiers: [], keyCode: KeyCode.f5)))
+
+        // A modifier with the second key: F5 ⌥Space.
+        var option = ShortcutCaptureEngine(action: .handsFree)
+        _ = option.keyDown(keyCode: KeyCode.f5, rawFlags: 0, isRepeat: false)
+        #expect(option.flagsChanged(keyCode: KeyCode.option, rawFlags: flags([.leftOption])) == .none)
+        #expect(option.keyDown(keyCode: KeyCode.space, rawFlags: flags([.leftOption]), isRepeat: false)
+            == .commit(Shortcut(heldKeyCode: KeyCode.f5, modifiers: [.init(.option)], keyCode: KeyCode.space)))
+    }
+
+    /// With F5 held, Esc still stops recording and ⌫ still clears: they don't become F5 Esc or F5 ⌫.
+    @Test func escAndDeleteKeepTheirMeaningWithAKeyHeld() {
+        let fnFlag = CGEventFlags.maskSecondaryFn.rawValue
+        var esc = ShortcutCaptureEngine(action: .handsFree)
+        _ = esc.flagsChanged(keyCode: KeyCode.function, rawFlags: fnFlag)
+        _ = esc.keyDown(keyCode: KeyCode.f5, rawFlags: fnFlag, isRepeat: false)
+        #expect(esc.keyDown(keyCode: KeyCode.escape, rawFlags: fnFlag, isRepeat: false) == .cancel)
+        var delete = ShortcutCaptureEngine(action: .handsFree)
+        _ = delete.keyDown(keyCode: KeyCode.f5, rawFlags: 0, isRepeat: false)
+        #expect(delete.keyDown(keyCode: KeyCode.delete, rawFlags: 0, isRepeat: false) == .clear)
+    }
+
+    /// Only F-keys wait: a key that types commits on the press, as before.
+    @Test func keysThatTypeCommitOnThePress() {
+        var engine = ShortcutCaptureEngine(action: .handsFree)
+        #expect(engine.keyDown(keyCode: KeyCode.space, rawFlags: 0, isRepeat: false)
+            == .commit(Shortcut(modifiers: [], keyCode: KeyCode.space)))
     }
 
     @Test(arguments: ShortcutAction.allCases)
