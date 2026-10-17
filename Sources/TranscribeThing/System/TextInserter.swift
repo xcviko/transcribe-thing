@@ -302,7 +302,9 @@ final class TextInserter {
         let post = system.postPaste
         let target = system.frontmostApp()
         let conditions = PasteConditions(toUs: target == ProcessInfo.processInfo.processIdentifier,
-                                         secureInput: IsSecureEventInputEnabled())
+                                         secureInput: IsSecureEventInputEnabled(),
+                                         layout: PasteKeyResolver.currentLayoutName(),
+                                         systemLayout: PasteKeyResolver.savedLayoutName())
         let posted = await Task.detached(priority: .userInitiated) { post(keyCode) }.value
         guard posted else {
             if pasteboard.changeCount == ourChangeCount { original?.restore(to: pasteboard) }
@@ -369,11 +371,14 @@ final class TextInserter {
         }
     }
 
-    /// What was true as ⌘V went out: it went to transcribe-thing itself (one of its windows was in front), or Secure
-    /// Keyboard Entry was on somewhere. Never which app it went to.
+    /// What was true as ⌘V went out: it went to transcribe-thing itself (one of its windows was in front), Secure
+    /// Keyboard Entry was on somewhere, and the keyboard layout ("RussianWin"), as this app sees it and as macOS last
+    /// saved it (they differ when this app wasn't told of a switch). Never which app it went to.
     struct PasteConditions: Sendable {
         var toUs: Bool
         var secureInput: Bool
+        var layout: String?
+        var systemLayout: String?
     }
 
     /// Whether the paste was taken: an app reads the text when ⌘V reaches it, so `read=no` once the wait is over means
@@ -387,6 +392,8 @@ final class TextInserter {
         log.event(.dictation, "paste.read", [
             "read": read, "ms": ms, "superseded": superseded ? true : nil,
             "toUs": conditions.toUs ? true : nil, "secureInput": conditions.secureInput ? true : nil,
+            "layout": conditions.layout,
+            "systemLayout": conditions.systemLayout == conditions.layout ? nil : conditions.systemLayout,
         ])
     }
 
