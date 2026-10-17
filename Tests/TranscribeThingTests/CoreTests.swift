@@ -262,11 +262,11 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
     }
 
     /// Every macOS shortcut off, 🌐 does nothing, F-keys are media keys.
-    static let quiet = SystemKeyboardState(hotKeys: [], fnUsage: .doNothing, functionKeysAreStandard: false)
+    static let quiet = SystemKeyboardState(hotKeys: [], fnUsage: .doNothing)
 
     /// A Mac nobody has customized: every default macOS shortcut on.
     static func stock(fnUsage: FnKeyAdvisor.Usage? = nil) -> SystemKeyboardState {
-        SystemKeyboardState(hotKeys: SystemSymbolicHotKeys.active(in: nil), fnUsage: fnUsage, functionKeysAreStandard: false)
+        SystemKeyboardState(hotKeys: SystemSymbolicHotKeys.active(in: nil), fnUsage: fnUsage)
     }
 
     static let controlOptionPTT = {
@@ -326,12 +326,10 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         Case(name: "Esc for push to talk", shortcut: .escape, action: .pushToTalk, expected: .warning(.escape)),
 
         // F-keys.
-        Case(name: "F5, media keys", shortcut: combo(kVK_F5), action: .pushToTalk, expected: .warning(.mediaKey)),
-        Case(name: "F5, standard F-keys",
-             shortcut: combo(kVK_F5), action: .pushToTalk,
-             system: SystemKeyboardState(hotKeys: [], fnUsage: .doNothing, functionKeysAreStandard: true), expected: .clean),
-        // fn F5 is F5 (an F-key's fn isn't part of the shortcut), so the same hint.
-        Case(name: "fn F5", shortcut: combo(kVK_F5, .function), action: .pushToTalk, expected: .warning(.mediaKey)),
+        // An F-key is just a key: no word about media keys (Karabiner or the Keyboard setting may make it F5 anyway),
+        // and fn F5 is F5.
+        Case(name: "F5", shortcut: combo(kVK_F5), action: .pushToTalk, expected: .clean),
+        Case(name: "fn F5", shortcut: combo(kVK_F5, .function), action: .pushToTalk, expected: .clean),
         Case(name: "F13", shortcut: .f13, action: .pushToTalk, expected: .clean),
 
         // Lone modifiers.
@@ -344,14 +342,14 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
 
         // The 🌐 key on its own.
         Case(name: "fn, 🌐 switches input sources", shortcut: .fn, action: .pushToTalk,
-             system: SystemKeyboardState(hotKeys: [], fnUsage: .changeInputSource, functionKeysAreStandard: false),
+             system: SystemKeyboardState(hotKeys: [], fnUsage: .changeInputSource),
              expected: .warning(.globeKey)),
         Case(name: "fn, 🌐 never set", shortcut: .fn, action: .pushToTalk,
-             system: SystemKeyboardState(hotKeys: [], fnUsage: nil, functionKeysAreStandard: false),
+             system: SystemKeyboardState(hotKeys: [], fnUsage: nil),
              expected: .warning(.globeKey)),
         Case(name: "fn, 🌐 does nothing", shortcut: .fn, action: .pushToTalk, expected: .clean),
         Case(name: "fn Space, 🌐 switches input sources", shortcut: .fnSpace, action: .handsFree,
-             system: SystemKeyboardState(hotKeys: [], fnUsage: .changeInputSource, functionKeysAreStandard: false),
+             system: SystemKeyboardState(hotKeys: [], fnUsage: .changeInputSource),
              expected: .clean),
     ]
 
@@ -437,8 +435,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         #expect(hit(combo(kVK_Space, .command), in: Self.probed) == nil)
         #expect(hit(combo(kVK_Space, .option, .command), in: Self.probed) == nil)
         #expect(hit(combo(kVK_ANSI_5, .shift, .command), in: Self.probed) == nil)
-        let system = SystemKeyboardState(hotKeys: SystemSymbolicHotKeys.active(in: Self.probed), fnUsage: .doNothing,
-                                         functionKeysAreStandard: false)
+        let system = SystemKeyboardState(hotKeys: SystemSymbolicHotKeys.active(in: Self.probed), fnUsage: .doNothing)
         #expect(ShortcutValidator.validate(combo(kVK_Space, .control), for: .handsFree, system: system).warnings.isEmpty)
         #expect(ShortcutValidator.validate(combo(kVK_Space, .command), for: .pushToTalk, system: system).warnings.isEmpty)
     }

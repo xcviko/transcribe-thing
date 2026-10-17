@@ -618,11 +618,6 @@ enum KeyNames {
         kVK_F11, kVK_F12, kVK_F13, kVK_F14, kVK_F15, kVK_F16, kVK_F17, kVK_F18, kVK_F19, kVK_F20,
     ].map { UInt16($0) })
 
-    /// F1–F12 are media keys on Apple keyboards unless com.apple.keyboard.fnState is on.
-    static let mediaFunctionKeys: Set<UInt16> = Set([
-        kVK_F1, kVK_F2, kVK_F3, kVK_F4, kVK_F5, kVK_F6, kVK_F7, kVK_F8, kVK_F9, kVK_F10, kVK_F11, kVK_F12,
-    ].map { UInt16($0) })
-
     /// Keys whose keyDown carries `.maskSecondaryFn` even without Fn physically held.
     static let fnFlaggedKeys: Set<UInt16> = functionKeys.union([
         kVK_LeftArrow, kVK_RightArrow, kVK_UpArrow, kVK_DownArrow, kVK_Home, kVK_End,
@@ -695,7 +690,6 @@ struct ShortcutWarning: Equatable, Sendable {
         /// Esc bound to an action: apps stop getting it.
         case escape
         /// F1–F12 control brightness and volume on Apple keyboards.
-        case mediaKey
         /// A lone ⌘, ⌥ or ⌃ is part of other shortcuts; the right-hand key rarely is.
         case loneModifier
         /// "Press 🌐 key to" also does something when fn is pressed on its own.
@@ -730,14 +724,11 @@ struct SystemKeyboardState: Equatable, Sendable {
     var hotKeys: [SystemSymbolicHotKeys.HotKey]
     /// "Press 🌐 key to"; nil when never changed (behaves like Emoji & Symbols).
     var fnUsage: FnKeyAdvisor.Usage?
-    /// "Use F1, F2, etc. keys as standard function keys".
-    var functionKeysAreStandard: Bool
 
     /// This Mac's settings, read on every call: they can change while the app runs.
     static var current: SystemKeyboardState {
         SystemKeyboardState(hotKeys: SystemSymbolicHotKeys.active(in: SystemSymbolicHotKeys.readPreferences()),
-                            fnUsage: FnKeyAdvisor.usage,
-                            functionKeysAreStandard: FnKeyAdvisor.functionKeysAreStandard)
+                            fnUsage: FnKeyAdvisor.usage)
     }
 }
 
@@ -837,10 +828,6 @@ enum ShortcutValidator {
                 }
             } else if typesText && !KeyNames.functionKeys.contains(key) && !action.isDuringDictation {
                 out.append(ShortcutWarning(.typing, "This will fire while you type.", detail: appsLoseIt))
-            }
-            if KeyNames.mediaFunctionKeys.contains(key), !system.functionKeysAreStandard {
-                out.append(ShortcutWarning(.mediaKey, "On Apple keyboards \(KeyNames.name(for: key)) is a media key: hold fn with it.",
-                                           detail: "Or turn on “Use F1, F2, etc. keys as standard function keys” in Keyboard Settings."))
             }
         } else if s.modifiers.count == 1, let only = s.modifiers.first {
             switch (only.modifier, only.side) {
@@ -1029,12 +1016,6 @@ enum FnKeyAdvisor {
         return Usage(rawValue: v)
     }
 
-    /// "Use F1, F2, etc. keys as standard function keys" (global com.apple.keyboard.fnState, off by default).
-    static var functionKeysAreStandard: Bool {
-        CFPreferencesAppSynchronize(kCFPreferencesAnyApplication)
-        return CFPreferencesCopyAppValue("com.apple.keyboard.fnState" as CFString, kCFPreferencesAnyApplication)
-            as? Bool ?? false
-    }
 
     /// For a binding that is fn on its own (or fn with other modifiers): what else pressing fn does.
     static func warnings(for usage: Usage?) -> [ShortcutWarning] {

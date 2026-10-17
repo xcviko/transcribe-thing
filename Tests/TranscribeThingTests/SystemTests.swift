@@ -1554,10 +1554,9 @@ private func copyScreenshotAndFile(to pasteboard: NSPasteboard) {
 @Suite struct ShortcutEditTests {
     private let defaults = ShortcutBindings.defaults
     /// Every macOS shortcut off, 🌐 does nothing.
-    private let quiet = SystemKeyboardState(hotKeys: [], fnUsage: .doNothing, functionKeysAreStandard: false)
+    private let quiet = SystemKeyboardState(hotKeys: [], fnUsage: .doNothing)
     /// Every default macOS shortcut on.
-    private let stock = SystemKeyboardState(hotKeys: SystemSymbolicHotKeys.active(in: nil), fnUsage: .doNothing,
-                                            functionKeysAreStandard: false)
+    private let stock = SystemKeyboardState(hotKeys: SystemSymbolicHotKeys.active(in: nil), fnUsage: .doNothing)
 
     private func evaluate(_ shortcut: Shortcut, for action: ShortcutAction, bindings: ShortcutBindings? = nil,
                           swapAllowed: Bool = true, system: SystemKeyboardState? = nil) -> ShortcutEdit.Outcome {

@@ -623,8 +623,7 @@ enum ShortcutRecorderSnapshots {
     }
 
     /// macOS's default shortcuts all on and 🌐 set to Do Nothing, so snapshots don't depend on this Mac.
-    static let system = SystemKeyboardState(hotKeys: SystemSymbolicHotKeys.active(in: nil), fnUsage: .doNothing,
-                                            functionKeysAreStandard: false)
+    static let system = SystemKeyboardState(hotKeys: SystemSymbolicHotKeys.active(in: nil), fnUsage: .doNothing)
     static let controlOptionSpace = Shortcut(modifiers: [.init(.control), .init(.option)], keyCode: KeyCode.space)
 
     /// What the recorder shows right after recording `shortcut`, with the real validator's copy.
