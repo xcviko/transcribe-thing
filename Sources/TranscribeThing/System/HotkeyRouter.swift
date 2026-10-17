@@ -80,7 +80,7 @@ struct KeyRepeat: Equatable, Sendable {
 ///   shortcut is live the same way, on any model (the controller decides what it does there), and its autorepeats are
 ///   `polishRepeat` (on Gemini, Polish on and off again and again). Add to dictionary's is live too, on any model,
 ///   always held as `.heldForSelection`: the controller reads what's selected right then. Send's is live the same way,
-///   on any model; its autorepeats are swallowed and do nothing, so a held ↩ turns Send on once.
+///   on any model, and its autorepeats are `sendRepeat` (Send on and off again and again).
 /// - Swallowed keys also have their autorepeats and keyUp swallowed.
 struct HotkeyRouter: Equatable, Sendable {
     struct Config: Equatable, Sendable {
@@ -301,8 +301,8 @@ struct HotkeyRouter: Equatable, Sendable {
         }
         if swallowedKeys.contains(physical) {
             decision.swallow = true
-            // The switch model key held down keeps stepping, and the polish key keeps turning Polish on and off on
-            // Gemini, at every autorepeat.
+            // The switch model key held down keeps stepping, the polish key keeps turning Polish on and off on
+            // Gemini, and the send key Send on any model, at every autorepeat.
             if input.isRepeat, let switchModel = liveSwitchModel(config), switchModel.keyCode == key,
                matchesDuringDictation(switchModel, config.bindings) {
                 decision.events.append(.cycleEngineRepeat)
@@ -314,6 +314,10 @@ struct HotkeyRouter: Equatable, Sendable {
                       let translate = liveDuringDictation(config).first(where: { $0.action == .translate }),
                       translate.shortcut.keyCode == key, matchesDuringDictation(translate.shortcut, config.bindings) {
                 decision.events.append(.translateRepeat)
+            } else if input.isRepeat,
+                      let send = liveDuringDictation(config).first(where: { $0.action == .send }),
+                      send.shortcut.keyCode == key, matchesDuringDictation(send.shortcut, config.bindings) {
+                decision.events.append(.sendRepeat)
             }
             return decision
         }

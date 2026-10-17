@@ -206,6 +206,23 @@ import Testing
         #expect(!c.isSending && !rig.h.pill.sends)
     }
 
+    /// Held down, its autorepeats turn Send on and off again, each with its sound, on any model, as a held fn Tab steps
+    /// through the models. Once the dictation is over they do nothing.
+    @Test func heldDownItFlipsAtEveryRepeat() {
+        let (rig, cues, _) = Self.make()
+        let c = rig.h.controller
+        Switch.hold(rig)
+        c.handle(.send)
+        for _ in 0..<4 { c.handle(.sendRepeat) }
+        #expect(c.isSending && rig.h.pill.sends)
+        #expect(cues.played.suffix(5) == [.sendOn, .polishOff, .sendOn, .polishOff, .sendOn])
+        #expect(c.machine.capture.isListeningOrLocked, "it never stops the recording")
+        c.send(.pillCancel)
+        let played = cues.played.count
+        c.handle(.sendRepeat)
+        #expect(!c.isSending && !rig.h.pill.sends && cues.played.count == played, "nothing once it's over")
+    }
+
     /// Outside a dictation the key does nothing (the router lets it through to the app anyway).
     @Test func itDoesNothingWhenNotRecording() {
         let (rig, cues, _) = Self.make()
