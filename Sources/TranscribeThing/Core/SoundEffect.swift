@@ -11,7 +11,7 @@ enum SoundEffect: String, CaseIterable, Sendable {
     case polishReady
     /// A word went into the dictionary (fn D): a soft "done?", one tongue pop gliding up.
     case dictionaryAdded
-    /// Send turned on for a dictation (fn ↩): an airy flick up, a breath rising into a tongue pop. Off is `polishOff`.
+    /// Send turned on or off for a dictation (fn ↩): an airy flick up, a breath rising into a tongue pop.
     case sendOn
 
     var fileName: String { rawValue }
