@@ -145,7 +145,7 @@ import Testing
     @Test func pttDownWhileLockedWaitsForRelease() {
         var m = Self.locked()
         let effects = m.handle(.pttDown, now: 30)
-        #expect(m.capture == .lockedStopPending(startedAt: Self.t0))
+        #expect(m.capture == .lockedStopPending(startedAt: Self.t0, downAt: 30))
         #expect(effects.isEmpty)
         #expect(m.isRecording)
     }
@@ -162,6 +162,18 @@ import Testing
         let effects = m.handle(.pttUp, now: 30.125)
         #expect(m.capture == .idle)
         #expect(effects == [.stopCaptureAndTranscribe(mode: .handsFree), .playSound(.stop)])
+    }
+
+    /// Held past half a second, then let go: a press thought better of, and hands-free records on. The next click
+    /// still stops it.
+    @Test func aHeldPTTPressDoesNotStopHandsFree() {
+        var m = Self.stopPending()
+        #expect(m.handle(.pttUp, now: 30.6).isEmpty)
+        #expect(m.capture == .locked(startedAt: Self.t0) && m.isRecording)
+        _ = m.handle(.pttDown, now: 40)
+        #expect(m.handle(.pttUp, now: 40.5) == [.stopCaptureAndTranscribe(mode: .handsFree), .playSound(.stop)],
+                "half a second is still a click")
+        #expect(m.capture == .idle)
     }
 
     @Test func comboWhileLockedKeepsRecording() {

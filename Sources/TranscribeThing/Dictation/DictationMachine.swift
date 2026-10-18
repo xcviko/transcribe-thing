@@ -15,16 +15,17 @@ struct DictationMachine: Equatable {
         case listening(downAt: TimeInterval)
         /// Hands-free.
         case locked(startedAt: TimeInterval)
-        /// Hands-free + PTT key went down: stop on clean release, resume if it was a combo (fn+←, fn+Space).
-        case lockedStopPending(startedAt: TimeInterval)
+        /// Hands-free + PTT key went down at `downAt`: a click stops it on release; held past `handsFreeStopClick`, or
+        /// a combo (fn+←, fn+Space), the recording goes on.
+        case lockedStopPending(startedAt: TimeInterval, downAt: TimeInterval)
     }
 
     enum Input: Equatable {
         /// `pttInterrupted`: another key, extra modifier or mouse click while the PTT key is held.
         case pttDown, pttUp, pttInterrupted
         /// `handsFreeToggle`: the hands-free shortcut. It only starts hands-free. Pressed during hands-free, the
-        /// recording goes on, and a PTT key pressed for it (fn of fn+Space) no longer finishes on release. A lone PTT
-        /// press finishes, Esc cancels.
+        /// recording goes on, and a PTT key pressed for it (fn of fn+Space) no longer finishes on release. A click of
+        /// the PTT key finishes (held longer, it was a slip: the recording goes on), Esc cancels.
         case handsFreeToggle, cancel, pillClick, pillStop, pillCancel
         /// The switch model shortcut: another engine for the dictation being recorded.
         case cycleEngine
@@ -86,6 +87,9 @@ struct DictationMachine: Equatable {
         var armingDelay = 0.12
         var tapThreshold = 0.30
         var quietInterruptWindow = 1.5
+        /// In hands-free, the PTT key let go within this of going down is a click, and finishes; held longer, it was
+        /// pressed by mistake and let go, and the recording goes on.
+        var handsFreeStopClick = 0.5
     }
 
     private(set) var capture: Capture = .idle
@@ -118,7 +122,7 @@ struct DictationMachine: Equatable {
     /// When the current recording started (monotonic seconds), nil when not recording.
     var recordingStartedAt: TimeInterval? {
         switch capture {
-        case .arming(let t), .listening(let t), .locked(let t), .lockedStopPending(let t): t
+        case .arming(let t), .listening(let t), .locked(let t), .lockedStopPending(let t, _): t
         case .idle: nil
         }
     }
@@ -152,8 +156,8 @@ struct DictationMachine: Equatable {
             return handleListening(input, downAt: downAt, now: now)
         case .locked(let startedAt):
             return handleLocked(input, startedAt: startedAt, now: now)
-        case .lockedStopPending(let startedAt):
-            return handleLockedStopPending(input, startedAt: startedAt, now: now)
+        case .lockedStopPending(let startedAt, let downAt):
+            return handleLockedStopPending(input, startedAt: startedAt, downAt: downAt, now: now)
         }
     }
 
@@ -238,7 +242,7 @@ struct DictationMachine: Equatable {
     private mutating func handleLocked(_ input: Input, startedAt: TimeInterval, now: TimeInterval) -> [Effect] {
         switch input {
         case .pttDown:
-            capture = .lockedStopPending(startedAt: startedAt)
+            capture = .lockedStopPending(startedAt: startedAt, downAt: now)
             return []
         case .pttUp, .pttInterrupted:
             // Release of the key that locked it (fn+Space), or that press became a combo (fn+←): the recording
@@ -254,8 +258,13 @@ struct DictationMachine: Equatable {
         }
     }
 
-    private mutating func handleLockedStopPending(_ input: Input, startedAt: TimeInterval, now: TimeInterval) -> [Effect] {
+    private mutating func handleLockedStopPending(_ input: Input, startedAt: TimeInterval, downAt: TimeInterval,
+                                                  now: TimeInterval) -> [Effect] {
         switch input {
+        case .pttUp where now - downAt > config.handsFreeStopClick:
+            // Held, then let go: a press the user thought better of. The recording goes on.
+            capture = .locked(startedAt: startedAt)
+            return []
         case .pttUp, .pillStop:
             return finishHandsFree()
         case .pttInterrupted, .handsFreeToggle, .keyUsed:
