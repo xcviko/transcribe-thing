@@ -148,9 +148,9 @@ every call without asking, or to stop noticing calls, change General â†’ Calls â
 Gemini 3.8 Flash writes the transcript, at the Reasoning level picked for it in Models, on your OpenRouter key or
 through your own endpoint. Someone whose name comes
 up in the call is named; the rest are "Participant 1", "Participant 2", and anyone in the room with you is "Nearby 1". On
-the call's page, click a name to rename them, or a time to play the call from there. Once you've played it, the
-play/pause key (F8 on Apple keyboards), your headphones' button and Control Center pause and resume it, until you leave
-the page. Space works too.
+the call's page, click a name to rename them, or a phrase to move the player to it; right-click a phrase to play from
+there. Once you've played it, the play/pause key (F8 on Apple keyboards), your headphones' button and Control Center
+pause and resume it, until you leave the page. Space works too.
 
 Above the transcript, each call gets a summary in the call's language: what it was about, the key points, what was
 decided, the tasks people took on, and the questions left open. Tick a task off when it's done; the Calls tab shows how

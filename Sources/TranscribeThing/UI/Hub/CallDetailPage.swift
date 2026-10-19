@@ -500,16 +500,17 @@ private struct CallSegmentRow: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
-        // The whole phrase plays from its start: the one playing is lit, the one under the pointer shaded.
+        // A click on the phrase moves the player to its start, playing on only if it was playing: the one at the
+        // player is lit, the one under the pointer shaded. Play from… in its menu starts it.
         .background {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(isCurrent ? Color.accentColor.opacity(0.14) : (hovering && player.canPlay ? Color.hover : .clear))
         }
         .padding(.horizontal, 6)
         .contentShape(Rectangle())
-        .onTapGesture { if player.canPlay { player.seek(to: segment.start, play: true) } }
+        .onTapGesture { if player.canPlay { player.seek(to: segment.start, play: player.isPlaying) } }
         .onHover { hovering = $0 }
-        .help(player.canPlay ? "Play from \(CallPrompts.clock(segment.start))" : "")
+        .help(player.canPlay ? "Go to \(CallPrompts.clock(segment.start))" : "")
         .contextMenu {
             Button("Play from \(CallPrompts.clock(segment.start))") { player.seek(to: segment.start, play: true) }
                 .disabled(!player.canPlay)
@@ -517,7 +518,7 @@ private struct CallSegmentRow: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
-        .accessibilityAction { if player.canPlay { player.seek(to: segment.start, play: true) } }
+        .accessibilityAction { if player.canPlay { player.seek(to: segment.start, play: player.isPlaying) } }
     }
 }
 
