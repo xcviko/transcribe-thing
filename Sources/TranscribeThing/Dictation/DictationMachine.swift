@@ -51,6 +51,14 @@ struct DictationMachine: Equatable {
         var isResume: Bool {
             if case .resume = self { true } else { false }
         }
+
+        /// What starts a dictation from rest: the talk key, the hands-free shortcut, a click on the pill, an Undo.
+        var startsDictation: Bool {
+            switch self {
+            case .pttDown, .handsFreeToggle, .pillClick, .resume: true
+            default: false
+            }
+        }
     }
 
     enum TimerID: Equatable, Hashable, CaseIterable { case arming }
@@ -110,6 +118,9 @@ struct DictationMachine: Equatable {
     /// HotkeyMonitor swallows Esc only while busy.
     var isBusy: Bool { isRecording || activeJobs > 0 }
 
+    /// A dictation is being processed: transcribed, or its text being pasted. No new one starts meanwhile.
+    var isProcessing: Bool { !isRecording && activeJobs > 0 }
+
     /// Hands-free or push-to-talk, for the states that record.
     var mode: Mode? {
         switch capture {
@@ -162,6 +173,9 @@ struct DictationMachine: Equatable {
     }
 
     private mutating func handleIdle(_ input: Input, now: TimeInterval) -> [Effect] {
+        // A dictation being processed holds every new one off: no sound, no pill, nothing. Its text then never lands
+        // in a recording that started after it.
+        if activeJobs > 0, input.startsDictation { return [] }
         switch input {
         case .pttDown:
             return arm(now: now)

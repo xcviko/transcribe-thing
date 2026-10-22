@@ -28,6 +28,12 @@ enum HotkeyEvent: Equatable, Sendable {
     case heldForSelection(ShortcutAction, KeyStroke)
     /// ↩ and Esc while Polish Selection's card is up: Paste Here, and close it.
     case cardPaste, cardClose
+    /// While a dictation is processed (`HotkeyRouter.Config.isProcessing`): a key the tap took came up, or a
+    /// modifier-only shortcut was let go. A held Polish or Translate key's choice is made.
+    case shortcutKeyUp
+    /// Another key went down, and on to the app, while a talk key that is a key (F5, F13) was held: only while
+    /// `HotkeyRouter.Config.reportsKeysDuringHold`. A press of the talk key with another key in it is no Undo.
+    case keyDuringHold
 }
 
 /// Marker written into `kCGEventSourceUserData` of every event transcribe-thing synthesizes (the ⌘V paste),
@@ -63,7 +69,19 @@ final class HotkeyMonitor {
     var isRecording = false {
         didSet { if isRecording != oldValue { pushConfig() } }
     }
-    /// Cards of text to paste are up (Polish Selection's, an earlier dictation's): ↩ is theirs (it pastes the one card; with two it couldn't tell which, and does
+    /// A dictation is being processed; `processingTakesKeys`: on Gemini, where Polish, Translate and Send still change
+    /// it (`HotkeyRouter.Config`).
+    var isProcessing = false {
+        didSet { if isProcessing != oldValue { pushConfig() } }
+    }
+    var processingTakesKeys = false {
+        didSet { if processingTakesKeys != oldValue { pushConfig() } }
+    }
+    /// The talk key is Undo now ("Dictation canceled · Undo" is up): a key pressed during its hold is reported.
+    var reportsKeysDuringHold = false {
+        didSet { if reportsKeysDuringHold != oldValue { pushConfig() } }
+    }
+    /// Polish Selection's cards are up: ↩ is theirs (it pastes the one card; with two it couldn't tell which, and does
     /// nothing), Esc closes them.
     var cardPaste = false {
         didSet { if cardPaste != oldValue { pushConfig() } }
@@ -154,6 +172,8 @@ final class HotkeyMonitor {
     /// in Keyboard Settings applies from the next one.
     func currentConfig() -> HotkeyRouter.Config {
         HotkeyRouter.Config(bindings: settings.shortcuts, isBusy: isBusy, isRecording: isRecording,
+                            isProcessing: isProcessing, processingTakesKeys: processingTakesKeys,
+                            reportsKeysDuringHold: reportsKeysDuringHold,
                             switchesModels: settings.lineup.cycle.count > 1,
                             cardPaste: cardPaste, cardClose: cardClose,
                             isSuspended: suspendCount > 0, forwardsRawKeys: onRawKey != nil,

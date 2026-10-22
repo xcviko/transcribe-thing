@@ -79,6 +79,7 @@ struct DiagnosticSettingsSummary: Equatable, Sendable {
             DiagnosticField("provider", settings.cloudProvider.rawValue),
             DiagnosticField("customEndpoint", endpoint),
             DiagnosticField("raceRequests", settings.raceRequests.title.lowercased()),
+            DiagnosticField("parakeetWhileGemini", settings.showsParakeetWhileGemini ? "on" : "off"),
         ]
         self.fields = fields
     }
