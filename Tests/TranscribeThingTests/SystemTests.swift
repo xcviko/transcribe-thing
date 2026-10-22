@@ -2582,3 +2582,161 @@ private struct ClockedKeyboard {
         #expect(idle.handle(.send, now: 0).isEmpty)
     }
 }
+
+// MARK: - Keys while a dictation is processed
+
+/// While a dictation is processed the talk key's press reaches the controller (which starts nothing), and Polish,
+/// Translate and Send stay live on Gemini, off the held talk key or not; Switch model and Add to dictionary aren't.
+@Suite struct ProcessingRouterTests {
+    /// Right ⌃ to talk, Polish on ⌃P (either side, so it's pressed with the key already down).
+    static var rightControl: ShortcutBindings {
+        bindings([.pushToTalk: SendShortcutTests.rightControl,
+                  .polish: Shortcut(modifiers: [.init(.control)], keyCode: KeyCode.ansiP)])
+    }
+
+    fileprivate static func processing(_ kb: inout Keyboard, gemini: Bool = true) {
+        kb.config.isBusy = true
+        kb.config.isProcessing = true
+        kb.config.processingTakesKeys = gemini
+    }
+
+    /// F5 P: F5 still swallowed (it never reaches the app) and reported, P is Polish, its autorepeat flips again, and
+    /// its release is reported. Switch model and Add to dictionary pass on to the app.
+    @Test func f5PIsPolish() {
+        var kb = Keyboard(bindings: HeldKeyChordRouterTests.bindingsOnF5)
+        Self.processing(&kb)
+        let down = kb.down(kVK_F5, fnFlagged: true)
+        #expect(down.events == [.pttDown] && down.swallow)
+        let p = kb.down(kVK_ANSI_P)
+        #expect(p.events == [.polish] && p.swallow)
+        #expect(kb.down(kVK_ANSI_P, isRepeat: true).events == [.polishRepeat])
+        let pUp = kb.up(kVK_ANSI_P)
+        #expect(pUp.events == [.shortcutKeyUp] && pUp.swallow)
+        #expect(kb.down(kVK_ANSI_T).events == [.translate])
+        kb.up(kVK_ANSI_T)
+        #expect(kb.down(kVK_Return).events == [.send])
+        kb.up(kVK_Return)
+        for key in [kVK_Tab, kVK_ANSI_D] {
+            let typed = kb.down(key)
+            #expect(typed.events.isEmpty && !typed.swallow, "key \(key) isn't live while processing")
+            kb.up(key)
+        }
+        #expect(kb.up(kVK_F5, fnFlagged: true).events == [.pttUp])
+    }
+
+    /// fn P with fn to talk: fn's press is reported, P is Polish, and both releases are reported.
+    @Test func fnPIsPolish() {
+        var kb = Keyboard()
+        Self.processing(&kb)
+        #expect(kb.press(.fn).events == [.pttDown])
+        let p = kb.down(kVK_ANSI_P, fnFlagged: true)
+        #expect(p.events == [.polish] && p.swallow)
+        #expect(kb.up(kVK_ANSI_P, fnFlagged: true).events == [.shortcutKeyUp])
+        #expect(kb.release(.fn).events == [.pttUp])
+        // fn Tab: Switch model isn't live; the hold ends as for any other key.
+        #expect(kb.press(.fn).events == [.pttDown])
+        let tab = kb.down(kVK_Tab, fnFlagged: true)
+        #expect(!tab.events.contains(.cycleEngine) && !tab.swallow)
+    }
+
+    /// ⌃P with Right ⌃ to talk.
+    @Test func controlPIsPolish() {
+        var kb = Keyboard(bindings: Self.rightControl)
+        Self.processing(&kb)
+        #expect(kb.press(.rightControl).events == [.pttDown])
+        let p = kb.down(kVK_ANSI_P)
+        #expect(p.events == [.polish] && p.swallow)
+        #expect(kb.up(kVK_ANSI_P).events == [.shortcutKeyUp])
+        #expect(kb.release(.rightControl).events == [.pttUp])
+    }
+
+    /// A binding off no talk key (⌥P) is live too while processing, and is the app's otherwise. A modifier-only one
+    /// reports its release.
+    @Test func bindingsOffNoTalkKeyAreLiveToo() {
+        var kb = Keyboard(bindings: bindings([.polish: Shortcut(modifiers: [.init(.option)], keyCode: KeyCode.ansiP),
+                                              .send: Shortcut(modifiers: [.init(.command, .right)])]))
+        kb.press(.leftOption)
+        let outside = kb.down(kVK_ANSI_P)
+        #expect(outside.events.isEmpty && !outside.swallow, "the app's outside a dictation")
+        kb.up(kVK_ANSI_P)
+        Self.processing(&kb)
+        let p = kb.down(kVK_ANSI_P)
+        #expect(p.events == [.polish] && p.swallow)
+        kb.up(kVK_ANSI_P)
+        kb.release(.leftOption)
+        #expect(kb.press(.rightCommand).events == [.send])
+        #expect(kb.release(.rightCommand).events == [.shortcutKeyUp])
+    }
+
+    /// On Parakeet nothing is live: the keys are the app's, F5 P types its P.
+    @Test func onParakeetNothingIsLive() {
+        var kb = Keyboard(bindings: HeldKeyChordRouterTests.bindingsOnF5)
+        Self.processing(&kb, gemini: false)
+        #expect(kb.down(kVK_F5, fnFlagged: true).events == [.pttDown])
+        let p = kb.down(kVK_ANSI_P)
+        #expect(p.events.isEmpty && !p.swallow)
+        kb.up(kVK_ANSI_P)
+        #expect(kb.up(kVK_F5, fnFlagged: true).events == [.pttUp])
+    }
+
+    /// While the talk key would Undo, another key in an F5 press is reported (it still types); otherwise it isn't.
+    @Test func aKeyDuringAnF5HoldIsReportedForUndo() {
+        var kb = Keyboard(bindings: HeldKeyChordRouterTests.bindingsOnF5)
+        kb.config.reportsKeysDuringHold = true
+        #expect(kb.down(kVK_F5, fnFlagged: true).events == [.pttDown])
+        let a = kb.down(kVK_ANSI_A)
+        #expect(a.events == [.keyDuringHold] && !a.swallow)
+        #expect(kb.down(kVK_ANSI_A, isRepeat: true).events.isEmpty)
+        kb.up(kVK_ANSI_A)
+        #expect(kb.up(kVK_F5, fnFlagged: true).events == [.pttUp])
+    }
+}
+
+/// The router's keys played into a controller dictating on Gemini: F5 P, fn P and ⌃P while it's processed each have it
+/// sent again with Polish's prompt, once, when the keys are let go.
+@MainActor
+@Suite(.serialized) struct ProcessingKeysEndToEndTests {
+    enum Talk: CaseIterable { case f5, fn, rightControl }
+
+    @Test(arguments: Talk.allCases)
+    func polishOffTheTalkKeySendsItAgain(_ talk: Talk) async throws {
+        let first = RequestGate()
+        let (rig, _, requests) = ProcessingRig.make { _, prompt, number in
+            if number == 1 { try await first.wait() }
+            return ProcessingRig.gemini(prompt)
+        }
+        let c = rig.h.controller
+        ProcessingRig.dictate(rig)
+        try await waitUntil { requests.gemini.count == 1 }
+        var kb = Keyboard(bindings: talk == .f5 ? HeldKeyChordRouterTests.bindingsOnF5
+                                    : talk == .fn ? .defaults : ProcessingRouterTests.rightControl)
+        kb.config.isBusy = rig.h.hotkeys.isBusy
+        kb.config.isProcessing = rig.h.hotkeys.isProcessing
+        kb.config.processingTakesKeys = rig.h.hotkeys.processingTakesKeys
+        #expect(kb.config.isProcessing && kb.config.processingTakesKeys)
+        func play(_ decision: HotkeyRouter.Decision) { decision.events.forEach(c.handle) }
+        switch talk {
+        case .f5:
+            play(kb.down(kVK_F5, fnFlagged: true))
+            play(kb.down(kVK_ANSI_P))
+            play(kb.up(kVK_ANSI_P))
+            play(kb.up(kVK_F5, fnFlagged: true))
+        case .fn:
+            play(kb.press(.fn))
+            play(kb.down(kVK_ANSI_P, fnFlagged: true))
+            play(kb.up(kVK_ANSI_P, fnFlagged: true))
+            play(kb.release(.fn))
+        case .rightControl:
+            play(kb.press(.rightControl))
+            play(kb.down(kVK_ANSI_P))
+            play(kb.up(kVK_ANSI_P))
+            play(kb.release(.rightControl))
+        }
+        #expect(!c.machine.isRecording, "the talk key's press started nothing")
+        try await waitUntil { requests.gemini.count == 2 }
+        #expect(requests.gemini[1] == Polish.prompt)
+        try await waitUntil { rig.pasted.count == 1 && c.machine.activeJobs == 0 }
+        #expect(requests.gemini.count == 2)
+        #expect(rig.h.history.entries.first?.currentKind == .polish(by: .geminiFlash))
+    }
+}

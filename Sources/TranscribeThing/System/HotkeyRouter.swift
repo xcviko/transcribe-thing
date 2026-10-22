@@ -81,6 +81,9 @@ struct KeyRepeat: Equatable, Sendable {
 ///   `polishRepeat` (on Gemini, Polish on and off again and again). Add to dictionary's is live too, on any model,
 ///   always held as `.heldForSelection`: the controller reads what's selected right then. Send's is live the same way,
 ///   on any model, and its autorepeats are `sendRepeat` (Send on and off again and again).
+/// - While a dictation is processed (`Config.isProcessing`) the talk key's press still reaches the machine, which
+///   starts nothing; Polish, Translate and Send stay live on Gemini, with the talk key held (F5 P) or not, and the
+///   release of their keys is reported (`shortcutKeyUp`). Switch model and Add to dictionary aren't live then.
 /// - Swallowed keys also have their autorepeats and keyUp swallowed.
 struct HotkeyRouter: Equatable, Sendable {
     struct Config: Equatable, Sendable {
@@ -90,10 +93,18 @@ struct HotkeyRouter: Equatable, Sendable {
         /// A dictation is recording: the Switch model, Polish and Send shortcuts are live (and swallowed) only then,
         /// and the cards' ↩ isn't theirs.
         var isRecording = false
+        /// A dictation is being processed (transcribed, its text about to be pasted): a held talk key starts nothing
+        /// then, so of the keys used while dictating only Polish, Translate and Send are live, and only while
+        /// `processingTakesKeys` (on Gemini, where they still change it). A key of theirs that comes up is reported
+        /// (`shortcutKeyUp`).
+        var isProcessing = false
+        var processingTakesKeys = false
+        /// Another key during a hold of a talk key that is a key is reported (`keyDuringHold`): the press is an Undo.
+        var reportsKeysDuringHold = false
         /// Switch model has another model to step to (`ModelLineup.cycle`); without one its shortcut is never
         /// intercepted.
         var switchesModels = true
-        /// Cards of text to paste (Polish Selection's, an earlier dictation's): ↩ (with no modifier) is theirs unless a dictation records, and Esc closes them
+        /// Polish Selection's cards: ↩ (with no modifier) is theirs unless a dictation records, and Esc closes them
         /// unless one is busy.
         var cardPaste = false
         var cardClose = false
@@ -212,6 +223,7 @@ struct HotkeyRouter: Equatable, Sendable {
             decision.rawKey = Self.rawModifierEvent(keyCode: input.keyCode, modifiers: modifiers)
         }
         if modifiers.isEmpty { blockedUntilModifiersReleased = false }
+        let firedBefore = firedModifierChords.count
         firedModifierChords = firedModifierChords.filter {
             config.bindings[$0]?.modifiersMatchExactly(modifiers) == true
         }
@@ -219,6 +231,8 @@ struct HotkeyRouter: Equatable, Sendable {
             endGestureForSuspension(&decision)
             return decision
         }
+        // A modifier-only Polish, Translate or Send let go while a dictation is processed: its choice is made.
+        if config.isProcessing, firedModifierChords.count < firedBefore { decision.events.append(.shortcutKeyUp) }
 
         if isPress, let action = modifierChordMatch(config), !firedModifierChords.contains(action) {
             firedModifierChords.insert(action)
@@ -392,6 +406,10 @@ struct HotkeyRouter: Equatable, Sendable {
             gesture = .idle
             blockedUntilModifiersReleased = true
             decision.events.append(.pttInterrupted)
+        } else if case .holdingKey = gesture, config.reportsKeysDuringHold, !input.isRepeat {
+            // A talk key that is a key isn't interrupted (the other key goes on to the app), but its press is no clean
+            // one any more.
+            decision.events.append(.keyDuringHold)
         }
         return decision
     }
@@ -407,6 +425,9 @@ struct HotkeyRouter: Equatable, Sendable {
         if gesture == .holdingKey(physical) {
             gesture = .idle
             decision.events.append(.pttUp)
+        } else if config.isProcessing {
+            // A held Polish or Translate key let go while a dictation is processed: its choice is made.
+            decision.events.append(.shortcutKeyUp)
         }
         return decision
     }
@@ -510,11 +531,14 @@ struct HotkeyRouter: Equatable, Sendable {
     }
 
     /// The bindings live during a dictation only (a held PTT counts): Switch model with another model to switch to,
-    /// Polish, Add to dictionary, Translate, Send.
+    /// Polish, Add to dictionary, Translate, Send. While a dictation is processed a held talk key starts nothing: only
+    /// Polish, Translate and Send are live then, on Gemini, talk key held or not (`Config.isProcessing`).
     private func liveDuringDictation(_ config: Config) -> [(action: ShortcutAction, shortcut: Shortcut)] {
-        guard config.isRecording || gesture != .idle else { return [] }
+        let processing = config.isProcessing && !config.isRecording
+        guard processing ? config.processingTakesKeys : config.isRecording || gesture != .idle else { return [] }
         return ShortcutAction.allCases.compactMap { action in
             guard action.isDuringDictation, let shortcut = config.bindings[action] else { return nil }
+            if processing, !action.isLiveWhileProcessing { return nil }
             if action == .switchModel, !config.switchesModels { return nil }
             // Held, then given back if nothing is selected: only a key can be (a modifier-only binding isn't).
             if action == .addToDictionary, shortcut.isModifierOnly { return nil }

@@ -203,11 +203,14 @@ final class HubContext: Observable {
         (previewRecordingOn ?? dictation.recordingOnID) == id
     }
 
-    /// Why an interrupted row's Continue can't run now, said on the button: another dictation is being recorded (when
-    /// it would record on), or what keeps the row's model from transcribing it. nil when it can.
+    /// Why an interrupted row's Continue can't run now, said on the button: another dictation is being recorded or
+    /// processed (when it would record on), or what keeps the row's model from transcribing it. nil when it can.
     func continueBlocker(for entry: TranscriptEntry) -> String? {
         if entry.interruption == .whileRecording, previewDictating ?? (dictation.activity == .recording) {
             return "Finish the dictation you’re recording first"
+        }
+        if entry.interruption == .whileRecording, previewDictating == nil, dictation.machine.isProcessing {
+            return "Wait for the dictation on its way to be pasted"
         }
         // The row's model, as its Retry With menu says: "Needs key", "Not downloaded".
         let kind = TranscriptVersionKind.transcription(entry.engine)

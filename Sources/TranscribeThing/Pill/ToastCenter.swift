@@ -102,7 +102,7 @@ final class ToastCenter {
     }
 
     /// A button in a toast was clicked. Copy keeps a card for a moment (its button turns into "Copied"), except a
-    /// card whose text is there to paste or copy (`takesCardKeys`: Polish Selection's, an earlier dictation's):
+    /// card whose text is there to paste or copy (`takesCardKeys`: Polish Selection's):
     /// taking it is what the card was for, so it goes. Everything else dismisses it after the action is handed to
     /// `onAction`.
     func perform(_ action: NoticeAction, on notice: Notice) {
@@ -173,7 +173,7 @@ final class ToastCenter {
     }
 
     /// Keeps two: drops the oldest timed notice first, so sticky ones (permissions, missing mic) survive, and the
-    /// cards of text to paste (Polish Selection's answers, earlier dictations) go last.
+    /// cards of text to paste (Polish Selection's answers) go last.
     private func trimToCapacity() {
         while notices.count > Self.maxVisible {
             let candidates = notices.dropLast()
@@ -244,7 +244,7 @@ struct ToastCountdown: Equatable, Sendable {
     }
 }
 
-/// What the keys do for the cards of text to paste (Polish Selection's, an earlier dictation's): ↩ pastes the only
+/// What the keys do for the cards of text to paste (Polish Selection's): ↩ pastes the only
 /// card, until one is copied and while no dictation records; Esc closes them while no dictation is busy (then it
 /// cancels the dictation).
 struct CardKeys: Equatable, Sendable {

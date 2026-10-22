@@ -137,6 +137,11 @@ struct GeneralPage: View {
                     LogsRow()
                 }
             }
+            HubGroup("Experimental") {
+                SettingsGroup {
+                    ParakeetWhileGeminiRow()
+                }
+            }
         }
         // Approval in Login Items (or removal there) happens outside transcribe-thing.
         .onAppear { launchAtLogin.refresh() }
@@ -595,5 +600,44 @@ private struct CallExclusionRow: View {
         } else {
             IconTile(symbol: exclusion.kind == .app ? "app.dashed" : "globe", tint: .inkSecondary)
         }
+    }
+}
+
+/// General → Experimental: Parakeet's text on a card while Gemini still works (`AppSettings.showsParakeetWhileGemini`).
+/// It says it needs Parakeet while Parakeet isn't downloaded.
+private struct ParakeetWhileGeminiRow: View {
+    @Environment(AppSettings.self) private var settings
+    @Environment(ModelStore.self) private var models
+
+    static let help = "When you dictate on Gemini without Polish or Translate, Parakeet v3 on your Mac transcribes "
+        + "it too. If Parakeet’s text is ready before Gemini’s, it shows on a card. Paste Here pastes it and Copy "
+        + "copies it; either one stops Gemini, and Gemini’s text never comes. If Gemini’s text comes first, the card "
+        + "goes by itself. Needs Parakeet v3 downloaded in Models."
+
+    var body: some View {
+        SettingsRow(title: "Show Parakeet’s text while Gemini works", subtitle: subtitle,
+                    systemImage: EngineID.parakeet.symbolName, iconTint: .inkSecondary) {
+            HStack(spacing: 10) {
+                InfoHint(text: Self.help)
+                Toggle("", isOn: isOn)
+                    .toggleStyle(.appSwitch)
+                    .labelsHidden()
+            }
+        }
+    }
+
+    private var subtitle: String {
+        switch models.state(of: .parakeet) {
+        case .notInstalled, .downloading: "Needs Parakeet v3, downloaded in Models."
+        case .installed, .preparing, .ready, .failed: "A card to paste from, until Gemini’s text comes."
+        }
+    }
+
+    /// On, Parakeet loads now if it's downloaded, so the next dictation already has it.
+    private var isOn: Binding<Bool> {
+        Binding(get: { settings.showsParakeetWhileGemini }, set: { on in
+            settings.showsParakeetWhileGemini = on
+            if on, models.state(of: .parakeet) == .installed { models.prepare(.parakeet) }
+        })
     }
 }

@@ -99,7 +99,8 @@ final class ModelStore {
 
     // MARK: Start
 
-    /// Scans the disk, then prepares Parakeet on this Mac if it's installed and a model Switch model reaches uses it.
+    /// Scans the disk, then prepares Parakeet on this Mac if it's installed and something keeps it loaded
+    /// (`AppSettings.keepsParakeetLoaded`).
     func start() {
         guard !isPreview, !hasStarted else { return }
         hasStarted = true
@@ -107,7 +108,7 @@ final class ModelStore {
         Task { [weak self] in
             guard let self else { return }
             await self.refreshFromDisk()
-            if self.state(of: .parakeet) == .installed, self.settings.usesLocalParakeet {
+            if self.state(of: .parakeet) == .installed, self.settings.keepsParakeetLoaded {
                 self.prepare(.parakeet)
             }
         }
@@ -231,7 +232,7 @@ final class ModelStore {
             Log.engine.info("Downloaded \(id.rawValue, privacy: .public)")
             DiagnosticLog.shared.event(.models, "download.finished", ["model": id, "bytes": Int(total)])
             onDownloadFinished?(id)
-            if settings.usesLocalParakeet { prepare(id) }
+            if settings.keepsParakeetLoaded { prepare(id) }
         case .success:
             await refreshDiskUsage()
         case .failure(let error):
@@ -365,18 +366,18 @@ final class ModelStore {
         try await runLocal(id, background: background) { try await $0.transcribeWords(samples) }
     }
 
-    /// Unloads `id` when it's loaded and no model Switch model reaches uses it (`AppSettings.usesLocalParakeet`): a
+    /// Unloads `id` when it's loaded and nothing keeps it (`AppSettings.keepsParakeetLoaded`): a
     /// call's mic loaded it for itself, and its memory goes back. Behind any dictation waiting for it.
     func unloadIfUnused(_ id: EngineID) async {
         guard !isPreview, id.isLocal, let engine = engines[id], state(of: id) == .ready,
-              !settings.usesLocalParakeet else { return }
+              !settings.keepsParakeetLoaded else { return }
         do {
             try await gate.run(background: true) { await engine.unload() }
         } catch {
             return
         }
         // A dictation that found it unloaded loads it again (`transcribeLocal`), whatever this says.
-        if state(of: id) == .ready, !settings.usesLocalParakeet { states[id] = .installed }
+        if state(of: id) == .ready, !settings.keepsParakeetLoaded { states[id] = .installed }
         DiagnosticLog.shared.event(.models, "unloaded", ["model": id, "reason": "unused"])
     }
 
