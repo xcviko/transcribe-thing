@@ -14,8 +14,9 @@ import Foundation
 /// Hidden comparison (not in the usage text): `--provider <slug>` sends Gemini to another endpoint than Google AI
 /// Studio's ("google-ai-studio/priority"), pinned without fallbacks.
 ///
-/// Hidden comparison (not in the usage text): `--hedge race|measure` sends a cloud engine's request twice at once, as
-/// dictations do (`CloudHedge`); `measure` lets both run to their end and prints both times (`HEDGE:`).
+/// Hidden comparison (not in the usage text): `--hedge race|race3|measure` sends a cloud engine's request twice (three
+/// times for `race3`) at once, as dictations do with Race requests on (`CloudHedge`); `measure` sends it twice, lets
+/// both run to their end and prints both times (`HEDGE:`).
 ///
 /// Hidden diagnostic (not in the usage text): `--parakeet-compute ane|gpu` loads the local model on other Core ML
 /// compute units. Core ML specializes and caches the model per compute unit, so the first run with a new choice
@@ -120,7 +121,7 @@ enum EngineCLI {
         var effort: ReasoningEffort?
         /// The format a cloud model gets the audio in instead of its own.
         var upload: UploadFormat?
-        /// The request twice at once (`--hedge`).
+        /// The request twice or three times at once (`--hedge`).
         var hedge: CloudHedge?
         /// Gemini's endpoint instead of Google AI Studio's (`--provider`).
         var provider: String?
@@ -159,7 +160,8 @@ enum EngineCLI {
             }
             if arguments.contains("--hedge") {
                 switch value("--hedge") {
-                case "race" where engine.isCloud: hedge = .race
+                case "race" where engine.isCloud: hedge = .race(copies: 2)
+                case "race3" where engine.isCloud: hedge = .race(copies: 3)
                 case "measure" where engine.isCloud: hedge = .measure
                 default: return nil
                 }

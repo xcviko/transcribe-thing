@@ -467,6 +467,10 @@ enum HubSnapshots {
             },
             // The whole page, down to Troubleshooting's Export Logs….
             hub("hub-general-full", .general, height: 1360),
+            // The whole page down to Experimental at the bottom: Race requests on 2.
+            hub("hub-general-experimental", .general, height: 2200) { c in
+                c.settings.raceRequests = .two
+            },
             // The narrowest window: the segmented control leaves the least room for the pill caption; sounds off.
             hub("hub-general-compact", .general, width: 820, height: 560) { c in
                 c.settings.pillMode = .always

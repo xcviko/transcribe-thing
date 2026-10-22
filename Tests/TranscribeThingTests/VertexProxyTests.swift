@@ -502,7 +502,7 @@ enum ProxyFixture {
     @Test func aDictationsTwoRequestsAtOnceBothGoToTheProxy() async throws {
         let (proxy, proxyHost) = ProxyFixture.proxy([ProxyFixture.answer("one"), ProxyFixture.answer("one")])
         let (service, openRouterHost) = ProxyFixture.service(proxy: proxy)
-        let result = try await service.transcribe(ProxyFixture.speech(), engine: .geminiFlash, hedge: .race)
+        let result = try await service.transcribe(ProxyFixture.speech(), engine: .geminiFlash, hedge: .race(copies: 2))
         #expect(result.text == "one")
         #expect(result.otherGenerationIDs.isEmpty, "nothing to look up on OpenRouter")
         try await waitUntil { StubURLProtocol.registry.requests(for: proxyHost).count == 2 }

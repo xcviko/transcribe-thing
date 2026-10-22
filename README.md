@@ -77,9 +77,11 @@ In Models:
 - **Parakeet on this Mac** downloads it and shows how it's doing. Delete it there once it's neither the main
   model nor switched on.
 
-Gemini runs on your own [OpenRouter](https://openrouter.ai) key, and you pay OpenRouter per use. Each Gemini
-dictation sends its request twice at once and pastes the first answer, stopping the other, so it can cost up to twice
-as much: a model that stops to think on one request doesn't hold you up.
+Gemini runs on your own [OpenRouter](https://openrouter.ai) key, and you pay OpenRouter per use. Each dictation goes
+to Gemini once. If Gemini sometimes thinks for a long time before it writes, try General → Experimental → Race
+requests (off by default): at 2 or 3, each Gemini dictation is sent that many times at once, the first answer is
+pasted and the rest are stopped. A dictation can then cost up to 2 or 3 times as much. Selected text, files, History
+and calls aren't affected.
 
 If you ran Parakeet v3 through OpenRouter, that option is gone: Parakeet runs only on your Mac now. If it isn't
 downloaded yet, download it in Models (about 600 MB). Transcripts it made stay in History as "Parakeet v3 · Cloud".
