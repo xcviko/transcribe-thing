@@ -370,6 +370,15 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
         }
     }
 
+    /// Live too while a dictation on Gemini is processed: Polish and Translate have it sent again, Send has Return
+    /// pressed after its paste.
+    var isLiveWhileProcessing: Bool {
+        switch self {
+        case .polish, .translate, .send: true
+        case .pushToTalk, .handsFree, .pasteLast, .switchModel, .addToDictionary: false
+        }
+    }
+
     var title: String {
         switch self {
         case .pushToTalk: "Push to talk"

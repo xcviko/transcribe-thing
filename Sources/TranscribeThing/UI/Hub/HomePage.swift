@@ -417,41 +417,6 @@ extension StatTile where Accessory == EmptyView {
     }
 }
 
-/// The ⓘ beside a stat: what it means, in a popover as the pointer rests on it (or on a click). A tooltip on the whole
-/// tile came only after the system's long delay, and nothing said it was there.
-private struct InfoHint: View {
-    var text: String
-    @State private var hovering = false
-    @State private var shown = false
-
-    var body: some View {
-        Image(systemName: "info.circle")
-            .font(.system(size: 9.5, weight: .medium))
-            .foregroundStyle(hovering || shown ? Color.inkSecondary : Color.inkTertiary)
-            .padding(5)
-            .contentShape(Rectangle())
-            .padding(-5)
-            .onHover { inside in
-                hovering = inside
-                if !inside { shown = false }
-            }
-            .task(id: hovering) {
-                guard hovering else { return }
-                try? await Task.sleep(for: .milliseconds(250))
-                if !Task.isCancelled, hovering { shown = true }
-            }
-            .onTapGesture { shown.toggle() }
-            .popover(isPresented: $shown, arrowEdge: .bottom) {
-                Text(text)
-                    .font(.callout)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: 240, alignment: .leading)
-                    .padding(12)
-            }
-            .accessibilityLabel(text)
-    }
-}
-
 /// Seven 3 pt bars, oldest first; today in apricot.
 private struct Sparkline: View {
     var values: [Int]

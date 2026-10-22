@@ -141,7 +141,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(center.notices.count == 1)
     }
 
-    /// A notice that waits for a dictation (an earlier dictation's card) runs its countdown only between recordings:
+    /// A notice that waits for a dictation (Polish Selection's card) runs its countdown only between recordings:
     /// whole until the one going on is over, then standing still with what it has left through the next one. Others
     /// run as always.
     @Test func noticesThatWaitForADictationRunOnlyBetweenRecordings() {

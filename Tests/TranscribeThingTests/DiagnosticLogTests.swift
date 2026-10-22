@@ -372,8 +372,9 @@ private enum Fixture {
         #expect(!text.contains("private place"), "never the transcript")
     }
 
-    /// A dictation whose text came once the next one had started went on a card: the log says so, without the text.
-    @Test func anEarlierDictationsCardIsLoggedWithoutItsText() async throws {
+    /// A dictation started while another is processed is held off: the log says so, and the text that came is
+    /// pasted as always, never written down.
+    @Test func aDictationHeldOffWhileOneIsProcessedIsLogged() async throws {
         let logs = Fixture.temporaryDirectory()
         DiagnosticLog.shared.start(directory: logs)
         defer {
@@ -387,20 +388,22 @@ private enum Fixture {
             while !isOpen { try await Task.sleep(for: .milliseconds(5)) }
             return TranscriptResult(text: "meet me at the private place", engine: engine, processingTime: 0.4)
         }
-        h.controller.insertOverride = { _ in
-            Issue.record("an earlier dictation is never pasted")
+        var pasted: [String] = []
+        h.controller.insertOverride = { text in
+            pasted.append(text)
             return .pasted
         }
 
         h.controller.send(.handsFreeToggle)
         h.controller.send(.pillStop)
         h.controller.send(.handsFreeToggle)
+        #expect(!h.controller.machine.isRecording)
         isOpen = true
-        try await waitUntil(timeout: .seconds(10)) { h.toasts.notices.contains { $0.takesCardKeys } }
-        h.controller.send(.pillCancel)
+        try await waitUntil(timeout: .seconds(10)) { h.controller.machine.activeJobs == 0 && !pasted.isEmpty }
         let text = DiagnosticLog.shared.retainedText()
+        #expect(text.contains("[dictation] dictation.blocked why=processing"))
         #expect(text.contains("[dictation] job.finished engine=parakeet outcome=success seconds=0.4 retry=no"
-                                + " polished=no delivered=card"))
+                                + " polished=no"))
         #expect(!text.contains("private place"), "never the transcript")
     }
 }

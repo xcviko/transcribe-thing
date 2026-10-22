@@ -135,9 +135,12 @@ final class TranscriptionService {
     /// `background`: Home's work, which lets dictations have the local model first.
     /// `progress` hears how much of a streamed answer has come (Gemini's reasoning and text); Parakeet has none.
     /// `hedge`: Gemini's request goes twice at once (`CloudHedge`).
+    /// `generations` hears each Gemini request's generation as OpenRouter names it, so one cancelled before it answers
+    /// can still have its cost looked up (a dictation sent again with Polish).
     func transcribe(_ recording: Recording, engine: EngineID, effort: ReasoningEffort? = nil,
                     prompt: String? = nil, upload: UploadFormat? = nil, hedge: CloudHedge? = nil, provider: OpenRouterChatRequest.Provider? = nil, background: Bool = false,
-                    progress: (@Sendable (ChatStreamProgress) -> Void)? = nil) async throws -> TranscriptResult {
+                    progress: (@Sendable (ChatStreamProgress) -> Void)? = nil,
+                    generations: (@Sendable (String) -> Void)? = nil) async throws -> TranscriptResult {
         guard !engine.isRetired else {
             throw AppError.engineFailed(engine, "\(engine.displayName) is no longer offered.")
         }
@@ -151,7 +154,7 @@ final class TranscriptionService {
                 let prompt = UserDictionary.prompt(prompt ?? EngineID.geminiSystemPrompt, with: vocabulary(), heard: true)
                 let cloud = try await transcribeCloud(recording, engine: engine, effort: effort, prompt: prompt,
                                                       upload: upload, hedge: hedge, provider: provider,
-                                                      progress: progress)
+                                                      progress: progress, generations: generations)
                 result.text = cloud.text
                 result.costUSD = cloud.costUSD
                 result.provider = cloud.provider
@@ -190,7 +193,8 @@ final class TranscriptionService {
     private func transcribeCloud(_ recording: Recording, engine: EngineID, effort: ReasoningEffort, prompt: String,
                                  upload: UploadFormat?, hedge: CloudHedge? = nil,
                                  provider: OpenRouterChatRequest.Provider? = nil,
-                                 progress: (@Sendable (ChatStreamProgress) -> Void)?) async throws -> CloudResult {
+                                 progress: (@Sendable (ChatStreamProgress) -> Void)?,
+                                 generations: (@Sendable (String) -> Void)? = nil) async throws -> CloudResult {
         guard engine.isGemini, let model = engine.openRouterModelID else {
             throw AppError.engineFailed(engine, "No cloud model for \(engine.displayName).")
         }
@@ -198,7 +202,8 @@ final class TranscriptionService {
         do {
             let result = try await transcribeWithChat(recording, engine: engine, model: model, access: access,
                                                       effort: effort, prompt: prompt, upload: upload,
-                                                      hedge: hedge, provider: provider, progress: progress)
+                                                      hedge: hedge, provider: provider, progress: progress,
+                                                      generations: generations)
             access.noteSuccess()
             return result
         } catch let error as AppError {
@@ -213,7 +218,8 @@ final class TranscriptionService {
     private func transcribeWithChat(_ recording: Recording, engine: EngineID, model: String, access: ChatAccess,
                                     effort: ReasoningEffort, prompt: String, upload: UploadFormat?,
                                     hedge: CloudHedge? = nil, provider: OpenRouterChatRequest.Provider? = nil,
-                                    progress: (@Sendable (ChatStreamProgress) -> Void)?) async throws -> CloudResult {
+                                    progress: (@Sendable (ChatStreamProgress) -> Void)?,
+                                    generations: (@Sendable (String) -> Void)? = nil) async throws -> CloudResult {
         let samples = recording.samples, stored = recording.aacFile, format = upload ?? .m4a
         let audio = await Task.detached(priority: .userInitiated) {
             try? CloudAudio.forChat(samples, stored: stored, format: format)
@@ -226,7 +232,11 @@ final class TranscriptionService {
         let send: @Sendable (CloudHedge.Hooks) async throws -> CloudResult = { hooks in
             try await client.transcribe(audio: audio, format: format.rawValue, model: model, systemPrompt: prompt,
                                         effort: effort, maxTokens: maxTokens, apiKey: key, timeout: timeout,
-                                        progress: hooks.progress, generation: hooks.generation,
+                                        progress: hooks.progress,
+                                        generation: { id in
+                                            hooks.generation(id)
+                                            generations?(id)
+                                        },
                                         provider: provider ?? .googleAIStudio)
         }
         var result = if let hedge {
