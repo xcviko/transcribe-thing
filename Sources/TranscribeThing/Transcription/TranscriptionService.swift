@@ -35,8 +35,8 @@ struct TranscriptResult: Sendable, Equatable {
     /// Gemini's whole answer, tags and all (`CloudResult.rawAnswer`); nil for the local model. Kept in history only
     /// on the failed row of a recording it heard no speech in (`TranscriptEntry.modelAnswer`).
     var rawAnswer: String? = nil
-    /// The other request of the pair, cancelled when this one answered (`CloudHedge.race`): its generations, whose
-    /// cost is added to this one's once OpenRouter has it (`TranscriptMetadata.pendingGenerationIDs`).
+    /// The other requests sent at once with this one, cancelled when it answered (`CloudHedge.race`): their
+    /// generations, whose cost is added to this one's once OpenRouter has it (`TranscriptMetadata.pendingGenerationIDs`).
     var otherGenerationIDs: [String] = []
 
     /// Everything known about how this result came about, for its history version.
@@ -134,7 +134,7 @@ final class TranscriptionService {
     /// an .m4a (`--upload`). The app passes only `prompt`.
     /// `background`: Home's work, which lets dictations have the local model first.
     /// `progress` hears how much of a streamed answer has come (Gemini's reasoning and text); Parakeet has none.
-    /// `hedge`: Gemini's request goes twice at once (`CloudHedge`).
+    /// `hedge`: Gemini's request goes two or three times at once (`CloudHedge`).
     func transcribe(_ recording: Recording, engine: EngineID, effort: ReasoningEffort? = nil,
                     prompt: String? = nil, upload: UploadFormat? = nil, hedge: CloudHedge? = nil, provider: OpenRouterChatRequest.Provider? = nil, background: Bool = false,
                     progress: (@Sendable (ChatStreamProgress) -> Void)? = nil) async throws -> TranscriptResult {

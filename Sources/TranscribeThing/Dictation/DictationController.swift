@@ -83,7 +83,7 @@ final class DictationController {
     @ObservationIgnored var pasteLastOverride: (@MainActor (String) async -> InsertionOutcome)?
     /// Replaces the OpenRouter generation lookup that fills in a delivered cloud transcript's provider.
     @ObservationIgnored var providerLookupOverride: (@MainActor (String) async -> String?)?
-    /// How long after a dictation the cost of the other request of its pair is asked for (`CloudHedge.race`).
+    /// How long after a dictation the cost of its other raced requests is asked for (`CloudHedge.race`).
     @ObservationIgnored var cancelledGenerationDelay: Duration = .seconds(3)
     /// Replaces the whole generation lookup (provider, timing); wins over `providerLookupOverride`.
     @ObservationIgnored var generationLookupOverride: (@MainActor (String) async -> GenerationDetails?)?
@@ -1032,9 +1032,11 @@ final class DictationController {
         let progress = engine.isGemini ? streamProgress(for: job, generation: generation) : nil
         let rewrite = job.rewrite
         let prompt = rewrite.flatMap(geminiPrompt(for:))
+        // Race requests as it is when this attempt starts: a re-send reads it again.
+        let hedge = settings.raceRequests.hedge
         job.task = Task { [weak self] in
             guard let self else { return }
-            var outcome = await self.transcribe(recording, engine: engine, prompt: prompt, hedge: .race,
+            var outcome = await self.transcribe(recording, engine: engine, prompt: prompt, hedge: hedge,
                                                 progress: progress)
             guard !Task.isCancelled, job.generation == generation else { return }
             if rewrite?.answersInMessageTags == true, case .success(var result) = outcome {
@@ -1082,7 +1084,8 @@ final class DictationController {
     /// `background`: Home's work, which lets dictations have the local model first. `progress`: a dictation's, for
     /// the pill (Home never passes one).
     /// `prompt`: another prompt for Gemini (Polish's, Translate's: `geminiPrompt(for:)`).
-    /// `hedge`: a dictation's cloud request goes twice at once (`CloudHedge.race`); Home's never does.
+    /// `hedge`: a dictation's cloud request goes 2 or 3 times at once when Race requests says so (`CloudHedge.race`);
+    /// Home's never does.
     private func transcribe(_ recording: Recording, engine: EngineID, prompt: String? = nil, background: Bool = false,
                             hedge: CloudHedge? = nil,
                             progress: (@Sendable (ChatStreamProgress) -> Void)? = nil) async -> Outcome {
@@ -1320,8 +1323,8 @@ final class DictationController {
                 self.history.upsert(entry)
             }
             guard !pending.isEmpty else { return }
-            // The other request of the pair: OpenRouter records what a cancelled generation cost a moment after it
-            // stopped. It's added to this version's cost, the two being one dictation.
+            // The other raced requests: OpenRouter records what a cancelled generation cost a moment after it
+            // stopped. Each one's is added to this version's cost, all of them being one dictation.
             try? await Task.sleep(for: self.cancelledGenerationDelay)
             for id in pending {
                 let cost = await self.generationDetails(id)?.costUSD

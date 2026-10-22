@@ -135,8 +135,8 @@ struct CloudResult: Sendable, Equatable {
     /// The model's whole answer as it came, before the transcript was read out of its tags; nil for a text request.
     /// Kept only where a model heard no speech in a recording that had some (`TranscriptEntry.modelAnswer`).
     var rawAnswer: String?
-    /// The other request of a pair sent at once (`CloudHedge.race`), cancelled when this one answered: its
-    /// generations, to add what it cost.
+    /// The other requests sent at once with this one (`CloudHedge.race`), cancelled when this one answered: their
+    /// generations, to add what they cost.
     var otherGenerationIDs: [String] = []
 
     var reasoningTokens: Int? { usage?.reasoningTokens }

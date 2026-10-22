@@ -78,6 +78,7 @@ struct DiagnosticSettingsSummary: Equatable, Sendable {
             DiagnosticField("keySaved", keySaved ? "yes" : "no"),
             DiagnosticField("provider", settings.cloudProvider.rawValue),
             DiagnosticField("customEndpoint", endpoint),
+            DiagnosticField("raceRequests", settings.raceRequests.title.lowercased()),
         ]
         self.fields = fields
     }

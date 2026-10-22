@@ -1924,7 +1924,7 @@ final class FakeRecorder: DictationRecorder {
         try await waitUntil { h.pill.tokenCount != nil }
         #expect(h.pill.tokenCount == PillTokenCount(phase: .thinking, tokens: 110), "440 characters, 4 a token")
         try await waitUntil { h.pill.showsCounter }
-        #expect(StubURLProtocol.registry.requests(for: host).count == 2, "a dictation asks twice at once")
+        #expect(StubURLProtocol.registry.requests(for: host).count == 1, "once: Race requests is off by default")
         h.controller.handle(.cancel)
         #expect(h.controller.machine.activeJobs == 0 && h.pill.tokenCount == nil)
     }

@@ -137,6 +137,11 @@ struct GeneralPage: View {
                     LogsRow()
                 }
             }
+            HubGroup("Experimental") {
+                SettingsGroup {
+                    RaceRequestsRow()
+                }
+            }
         }
         // Approval in Login Items (or removal there) happens outside transcribe-thing.
         .onAppear { launchAtLogin.refresh() }
@@ -594,6 +599,26 @@ private struct CallExclusionRow: View {
                 .aspectRatio(contentMode: .fit)
         } else {
             IconTile(symbol: exclusion.kind == .app ? "app.dashed" : "globe", tint: .inkSecondary)
+        }
+    }
+}
+
+/// General → Experimental → Race requests: each Gemini dictation sent once (Off), or 2 or 3 times at once with the
+/// first answer pasted (`RaceRequests`).
+private struct RaceRequestsRow: View {
+    @Environment(AppSettings.self) private var settings
+
+    static let help = "Sends each Gemini dictation 2 or 3 times at once and pastes whichever answer comes first, "
+        + "stopping the rest. Helps when Gemini stalls thinking on one of them. A dictation can cost up to 2 or 3 "
+        + "times as much. Only dictations on Gemini."
+
+    var body: some View {
+        SettingsRow(title: "Race requests", systemImage: "arrow.triangle.branch", iconTint: .inkSecondary) {
+            HStack(spacing: 10) {
+                InfoHint(text: Self.help)
+                HubSegmentedPicker(title: "Race requests", options: RaceRequests.allCases,
+                                   selection: settings.raceRequests, label: \.title) { settings.raceRequests = $0 }
+            }
         }
     }
 }

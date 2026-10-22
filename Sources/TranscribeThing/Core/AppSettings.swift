@@ -56,6 +56,9 @@ final class AppSettings {
     /// What floats above the pill to say what's going on: the model's name after a switch, the Switch model hint, a
     /// word about a key that did nothing. Off, the pill's color tells the model, and the keys work all the same.
     var showsPillHints: Bool = true { didSet { store.set(showsPillHints, .showsPillHints) } }
+    /// General → Experimental → Race requests: how many times each Gemini dictation's request goes at once, the first
+    /// answer pasted and the rest stopped (`CloudHedge.race`). Off by default: once.
+    var raceRequests: RaceRequests = .off { didSet { store.set(raceRequests.rawValue, .raceRequests) } }
     /// The only mic dictation opens while it is connected. nil = Automatic: the system default input (Bluetooth
     /// included) at the moment a dictation starts. A picked mic that goes away falls back to Automatic
     /// (`InputDevicePolicy.keepsPick`), and is picked again when it's back (`microphoneUIDBeforeFallback`).
@@ -335,9 +338,12 @@ final class AppSettings {
         store.remove(.pillColor)
         if let v = store.bool(.soundsEnabled) { soundsEnabled = v }
         if let v = store.bool(.showsPillHints) { showsPillHints = v }
-        // Asking twice was a switch for a day (General → Experimental); every dictation does it now.
+        // Asking twice was a switch for a day (General → Experimental), then every dictation did it. Race requests
+        // has its own key (`raceRequests`), off until picked: the old switches say nothing about it.
         store.remove(.sendsTwice)
         store.remove(.measuresSendingTwice)
+        // A number this build doesn't offer (from a newer one) leaves it off.
+        if let v = store.int(.raceRequests).flatMap(RaceRequests.init(rawValue:)) { raceRequests = v }
         // Older builds had a volume slider; sounds now play at their files' own level. A slider left at zero
         // meant no sounds, so it turns "Play sounds" off once, and the old key goes.
         if let volume = store.double(.soundVolume) {
@@ -541,8 +547,10 @@ enum SettingsKey: String, CaseIterable {
     case returnFinishesHandsFree = "returnSendsHandsFree"
     /// Polish's default left fn ↩ for fn P: set once its old default has been moved (`load`).
     case polishMovedToFnP, showsPillHints
-    /// The day-old switches of asking twice (`CloudHedge`), removed at load: every dictation asks twice now.
+    /// The day-old switches of asking twice (`CloudHedge`), removed at load. Race requests is `raceRequests`.
     case sendsTwice, measuresSendingTwice
+    /// How many times a Gemini dictation's request goes at once (`RaceRequests`: 1, 2 or 3).
+    case raceRequests
     case polishSelectionModel, translationPair, userName
     /// How calls are recorded (`CallRecordingMode`), and the apps and sites never recorded.
     case callRecording, callExclusions, showsCallNotices

@@ -268,7 +268,7 @@ struct TranscriptMetadata: Codable, Equatable, Sendable {
     /// reasoning it's billed for (`usage.reasoningTokens`). Their ratio calibrates the pill's live count
     /// (`TokenEstimate`).
     var reasoningCharacters: Int?
-    /// The other request of the pair sent at once, cancelled when this one answered (`CloudHedge.race`): its
+    /// The other requests sent at once with this one, cancelled when it answered (`CloudHedge.race`): their
     /// generations, until what each cost is added to `costUSD`.
     var pendingGenerationIDs: [String]?
 
