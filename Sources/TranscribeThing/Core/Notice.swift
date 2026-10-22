@@ -50,12 +50,15 @@ struct NoticeAction: Identifiable, Equatable, Sendable {
     var title: String
     var kind: NoticeActionKind
     var isPrimary: Bool
+    /// The key that does it too, said small beside the title: "F5" on Undo, which the talk key does.
+    var keyHint: String?
 
-    init(id: UUID = UUID(), title: String, kind: NoticeActionKind, isPrimary: Bool = false) {
+    init(id: UUID = UUID(), title: String, kind: NoticeActionKind, isPrimary: Bool = false, keyHint: String? = nil) {
         self.id = id
         self.title = title
         self.kind = kind
         self.isPrimary = isPrimary
+        self.keyHint = keyHint
     }
 }
 
@@ -81,11 +84,10 @@ struct Notice: Identifiable, Equatable, Sendable {
     var sound: SoundEffect?
     /// Recording the retry/undo actions refer to.
     var recordingID: UUID?
-    /// A card of text to paste whose keys are ↩ and Esc: Polish Selection's answer, an earlier dictation's text
-    /// (`DictationController.pasteCard`).
+    /// A card of text to paste whose keys are ↩ and Esc: Polish Selection's answer (`DictationController.pasteCard`).
     var takesCardKeys = false
-    /// Its countdown stands still while a dictation records (`ToastCenter.isDictating`) and runs once it's over: a card
-    /// of text to paste stays up while the user dictates.
+    /// Its countdown stands still while a dictation records (`ToastCenter.isDictating`) and runs once it's over: Polish
+    /// Selection's card stays up while the user dictates.
     var waitsForDictation = false
 
     init(

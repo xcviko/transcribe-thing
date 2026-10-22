@@ -498,7 +498,8 @@ struct ToastCard: View {
         }
         var width = ToastMetrics.compactLeading + title
         if let action = notice.actions.first {
-            let label = ceil((action.title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: .semibold)]).width)
+            var label = ceil((action.title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: .semibold)]).width)
+            if let hint = action.keyHint { label += 4 + ToastKeyHint.width(hint) }
             width += 14 + label + 2 * ToastActionBody.padding + ToastMetrics.compactButtonInset
         } else {
             width += ToastMetrics.compactLeading
@@ -648,6 +649,9 @@ struct ToastCard: View {
                 }
                 Text(copied ? "Copied" : action.title)
                     .contentTransition(.opacity)
+                if let hint = action.keyHint, !copied {
+                    ToastKeyHint(text: hint, onFilled: isFilled)
+                }
             }
         }
         .buttonStyle(ToastActionStyle(isFilled: isFilled))
@@ -662,6 +666,36 @@ struct ToastCard: View {
             try? await Task.sleep(for: .seconds(1.2))
             if copiedAt == stamp { copiedAt = nil }
         }
+    }
+}
+
+/// The key that does a button's action too (`NoticeAction.keyHint`): its name, small and dim in a keycap's outline,
+/// after the title ("Undo  F5").
+struct ToastKeyHint: View {
+    let text: String
+    /// On the white button of a card's primary action: dark rather than light.
+    var onFilled = false
+
+    static let font = NSFont.systemFont(ofSize: 10, weight: .medium)
+    static let padding: CGFloat = 4
+
+    /// What it takes beside the title, for a one-row toast's width (`ToastCard.preferredWidth`).
+    static func width(_ text: String) -> CGFloat {
+        ceil((text as NSString).size(withAttributes: [.font: font]).width) + 2 * padding
+    }
+
+    var body: some View {
+        let ink = onFilled ? Color.black : Color.white
+        Text(text)
+            .font(Font(Self.font))
+            .foregroundStyle(ink.opacity(0.55))
+            .padding(.horizontal, Self.padding)
+            .frame(height: 15)
+            .overlay {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .strokeBorder(ink.opacity(0.22), lineWidth: 1)
+            }
+            .accessibilityHidden(true)
     }
 }
 

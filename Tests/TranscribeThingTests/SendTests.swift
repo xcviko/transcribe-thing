@@ -293,28 +293,6 @@ import Testing
         #expect(keys.returns == 0)
     }
 
-    /// The text came while the next dictation records: it goes on a card, and nothing is sent.
-    @Test func anEarlierDictationsCardIsntSent() async throws {
-        let (rig, _, keys) = Self.make()
-        rig.h.controller.start()
-        let gate = Gate()
-        var calls = 0
-        rig.result = { _, _ in
-            calls += 1
-            if calls == 1 { await gate.wait() }
-            return "See you at ten."
-        }
-        Self.dictateSent(rig)
-        try await waitUntil { calls == 1 }
-        Switch.hold(rig)
-        gate.isOpen = true
-        try await waitUntil { EarlierDictationTests.cards(rig).count == 1 }
-        rig.h.controller.send(.pillCancel)
-        try await waitUntil { rig.h.controller.machine.activeJobs == 0 }
-        try await Task.sleep(for: .milliseconds(60))
-        #expect(rig.pasted.isEmpty && keys.returns == 0)
-    }
-
     /// A transcription that failed or heard nothing sends nothing; a failed one's Retry pastes but doesn't send either.
     @Test func failuresAndSilenceSendNothing() async throws {
         let (rig, _, keys) = Self.make()

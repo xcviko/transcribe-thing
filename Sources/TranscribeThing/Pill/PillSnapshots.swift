@@ -85,6 +85,11 @@ enum PillSnapshots {
             SnapshotEntry("pill-send", width: 760, height: 44 + 10 * 92) { _ in
                 PolishSheet(title: "Send", rows: PolishSheet.sendRows)
             },
+            // The keys pressed while a dictation on Gemini is processed (`--only pill-processing-keys`): the wand, the
+            // translate glyph and the plane come on the processing pill; sent again, Gemini counts from the start.
+            SnapshotEntry("pill-processing-keys", width: 760, height: 44 + 7 * 92) { _ in
+                PolishSheet(title: "Keys while processing", rows: PolishSheet.processingRows)
+            },
             // fn ⇥ while the chip is up: its names roll on, frame by frame of the spring.
             SnapshotEntry("pill-chip-roll", width: 2040, height: 270) { _ in ChipRollSheet() },
             // fn P on Parakeet with nothing selected: it says Polish is Gemini's, and the dictation goes on.
@@ -183,15 +188,23 @@ enum PillSnapshots {
             SnapshotEntry("pill-toast-not-pasted", width: 640, height: 360) { _ in
                 CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.notPasted])
             },
-            // A dictation's text that came once the next one had started (`--only pill-toast-earlier`): on its card over
-            // the recording, its countdown waiting whole for it to end; then two of them, one polished.
-            SnapshotEntry("pill-toast-earlier-dictation", width: 640, height: 340) { _ in
-                CanvasScene(model: .preview(phase: .listening, level: 0.6),
-                            notices: [PillSnapshotFixtures.earlierDictation], fractionRemaining: 1)
-            },
-            SnapshotEntry("pill-toast-earlier-dictations", width: 640, height: 520) { _ in
+            // Parakeet's text while Gemini works (`--only pill-toast-parakeet`, Experimental): its card over the
+            // processing pill, no countdown; then with Gemini's count running, and a long text.
+            SnapshotEntry("pill-toast-parakeet", width: 640, height: 340) { _ in
                 CanvasScene(model: PillModelSheet.model(.processing, choice: .gemini),
-                            notices: [PillSnapshotFixtures.earlierDictation, PillSnapshotFixtures.earlierPolished])
+                            notices: [PillSnapshotFixtures.parakeetBeside])
+            },
+            SnapshotEntry("pill-toast-parakeet-counting", width: 640, height: 520) { _ in
+                CanvasScene(model: PillModelSheet.model(.processing, choice: .gemini)
+                                .previewCounter(PillTokenCount(phase: .thinking, tokens: 640)),
+                            notices: [PillSnapshotFixtures.parakeetBesideLong])
+            },
+            // Undo's key (`--only pill-toast-undo`): "Dictation canceled" with the talk key on its button, fn and F5.
+            SnapshotEntry("pill-toast-undo-key", width: 640, height: 250) { _ in
+                CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.canceledWithKey("fn")])
+            },
+            SnapshotEntry("pill-toast-undo-key-f5", width: 640, height: 250) { _ in
+                CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.canceledWithKey("F5")])
             },
             SnapshotEntry("pill-toast-shortcut", width: 640, height: 270) { _ in
                 CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.shortcutUnavailable])
@@ -382,13 +395,22 @@ enum PillSnapshotFixtures {
 
     static let shortcutUnavailable = Notice.shortcutUnavailable(accessibility: .denied, likelyStale: false, shortcut: "fn")
 
-    /// What DictationController posts for a dictation whose text came once the next one had started.
-    static let earlierDictation = DictationController.earlierDictationCard(
+    /// What DictationController posts when Parakeet's text is there before Gemini's (General → Experimental).
+    static let parakeetBeside = DictationController.parakeetCard(
         "Can you send me the deck before the call? I want another look at the pricing slide.",
-        kind: .transcription(.parakeet), mode: .pushToTalk, id: UUID(), quiet: true)
-    static let earlierPolished = DictationController.earlierDictationCard(
-        "Moving the design review to Thursday afternoon so Maya can join. I will send the updated deck tonight.",
-        kind: .polish(), mode: .handsFree, id: UUID(), quiet: false)
+        id: UUID(), mode: .pushToTalk)
+    static let parakeetBesideLong = DictationController.parakeetCard(
+        "So the plan for Thursday is to move the design review to the afternoon so Maya can join, and I will send the "
+            + "updated deck tonight. Also, can someone check whether the staging build picked up the new onboarding "
+            + "copy? If it didn’t, let’s hold the release until Friday morning.",
+        id: UUID(), mode: .handsFree)
+
+    /// "Dictation canceled · Undo" as DictationController posts it, the talk key `key` beside Undo.
+    static func canceledWithKey(_ key: String) -> Notice {
+        Notice(dedupeKey: "dictation.canceled", style: .info, symbol: "xmark.circle", title: "Dictation canceled",
+               actions: [NoticeAction(title: "Undo", kind: .undoCancel, isPrimary: true, keyHint: key)],
+               lifetime: .seconds(6), sound: .cancel)
+    }
 
     static let micFallback = Notice(
         dedupeKey: "mic.fallback", style: .warning, symbol: "mic.fill",
@@ -908,6 +930,29 @@ private struct PolishSheet: View {
             },
             Row(id: "send-locked-hours", caption: "Hands-free past an hour · Send") {
                 Self.model(.locked, level: 0.5, polishes: false, sends: true, choice: .parakeet, recordingFor: 3_723)
+            },
+        ]
+    }
+
+    static var processingRows: [Row] {
+        [
+            Row(id: "processing-plain", caption: "Processing · nothing pressed") {
+                Self.model(.processing, polishes: false).previewCounter(PillTokenCount(phase: .thinking, tokens: 480))
+            },
+            Row(id: "processing-polish", caption: "fn P · Polish, sent again") { Self.model(.processing) },
+            Row(id: "processing-translate", caption: "fn T · Translate, sent again") {
+                Self.model(.processing, polishes: false, translates: true)
+            },
+            Row(id: "processing-both", caption: "fn P, fn T · both") { Self.model(.processing, translates: true) },
+            Row(id: "processing-send", caption: "fn ↩ · Send, same request") {
+                Self.model(.processing, polishes: false, sends: true)
+                    .previewCounter(PillTokenCount(phase: .thinking, tokens: 480))
+            },
+            Row(id: "processing-polish-send", caption: "fn P, fn ↩ · Polish, Send") {
+                Self.model(.processing, sends: true)
+            },
+            Row(id: "processing-polish-counting", caption: "Polish, Gemini counting again") {
+                Self.model(.processing).previewCounter(PillTokenCount(phase: .thinking, tokens: 120))
             },
         ]
     }

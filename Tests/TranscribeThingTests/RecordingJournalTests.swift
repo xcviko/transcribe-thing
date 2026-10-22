@@ -476,6 +476,8 @@ func journalSpeech(seconds: Double) -> [Float] { speechLike(seconds: seconds) }
         #expect(rig.h.controller.retainedRecordingIDs.count == 1, "kept for Undo")
         #expect(rig.journalFiles.isEmpty, "not History's: nothing to bring back after a crash")
 
+        // Closed, "Dictation canceled" leaves the talk key to start the next one (up, the key is its Undo).
+        rig.h.toasts.dismiss(dedupeKey: "dictation.canceled")
         rig.hold(speechLike(seconds: 25), esc: true)
         try await waitUntil { rig.h.history.entries.first?.status == .cancelled }
         try await rig.settled()
