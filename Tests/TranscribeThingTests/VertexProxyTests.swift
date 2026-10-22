@@ -812,10 +812,10 @@ enum ProxyFixture {
     }
 }
 
-/// The client's log lines, as the app writes them, for proxy requests: never the key.
-@MainActor
-@Suite(.serialized) struct VertexProxyLogTests {
-    @Test func theKeyNeverReachesTheDiagnosticLog() async throws {
+/// The client's log lines, as the app writes them, for proxy requests: never the key. In the suite of the other tests
+/// that point the shared log at a folder of their own, so none of them stops it under another.
+extension DiagnosticDictationTests {
+    @Test func theProxyKeyNeverReachesTheDiagnosticLog() async throws {
         let logs = FileManager.default.temporaryDirectory.appendingPathComponent("tt-proxy-\(UUID().uuidString)")
         DiagnosticLog.shared.start(directory: logs)
         defer {
@@ -837,8 +837,7 @@ enum ProxyFixture {
         let text = DiagnosticLog.shared.retainedText()
         #expect(!text.contains(ProxyFixture.key))
         #expect(!text.contains("TestKey0123"))
-        // Another suite may stop the shared log meanwhile; when it kept running, the endpoint's lines are there.
-        if !text.isEmpty { #expect(text.contains("endpoint.")) }
+        #expect(text.contains("endpoint."))
     }
 }
 
