@@ -36,6 +36,17 @@ final class CallRecorder {
         sources[.remote]?.retarget(processes)
     }
 
+    /// The call app let go of the mic: so does the recording, its mic track silent until `retakeMic`. The other side's
+    /// track records on.
+    func releaseMic() {
+        sources[.mic]?.release()
+    }
+
+    /// The call app took the mic again: so does the recording, at once. `report` hears how it went, on any thread.
+    func retakeMic(_ report: @escaping @Sendable (MicRetake) -> Void) {
+        sources[.mic]?.retake(report)
+    }
+
     /// Stops recording; returns the journal's last word on the call, once its files are closed.
     func finish() async -> CallJournal.Info? {
         await journal.end(id)
@@ -59,6 +70,9 @@ final class CallRecorder {
 ///
 /// The menu bar's Start Call Recording records the mic and everything the Mac plays, whatever the setting, mute not
 /// followed; during a noticed call it just keeps that call. Dictation is never touched: it has its own capture.
+///
+/// While a noticed call's app has let go of the mic (Telegram muted), so has the recording (`holdMic`): macOS's mic
+/// light isn't kept on by this app, and the mic's track is silence until the app takes the mic again.
 @MainActor @Observable
 final class CallMonitor {
     /// What's known about the live call.
@@ -187,6 +201,8 @@ final class CallMonitor {
         /// The mutes of the detector's calls this pinned recording outlived, from its start: the detector forgets
         /// them once its call is over.
         var earlierMutes: [CallInterval] = []
+        /// The recording has let go of the mic, as the call app did (`holdMic`).
+        var micReleased = false
         var origin: TimeInterval { recorder.origin }
     }
 
@@ -249,6 +265,7 @@ final class CallMonitor {
         lastTime = time
         handle(watch.poll(at: time), at: time)
         follow(at: time)
+        holdMic()
         notices?.tick(at: time)
     }
 
@@ -348,7 +365,9 @@ final class CallMonitor {
             live.classified = true
             self.live = live
             if live.consent == .kept { logEvent("call.kept", live, ["reason": "menu"]) }
-            return keepLive(how: "menu")
+            keepLive(how: "menu")
+            // Recorded as asked, mic and all: a mic let go with the app is taken again now.
+            return holdMic()
         }
         guard let journal = store.journal else { return }
         let id = UUID()
@@ -621,6 +640,40 @@ final class CallMonitor {
         if live.confirmed, live.classified, !before.classified { confirm() }
     }
 
+    /// While the call's app has let go of the mic (`CallDetector.callLetGoOfMic`: Telegram muted, another app leaving
+    /// or gone silent), the recording lets go of it too, so the mic light macOS shows isn't on because of this app; its
+    /// mic track is silence meanwhile, the other side recorded on. The moment the app takes the mic again, so does the
+    /// recording. A manual recording, and a call the person started recording from the menu bar (`pinned`, which
+    /// records everything until Stop), keep the mic. When the call ends, the recording just stops (`end`), let go or
+    /// not.
+    private func holdMic() {
+        guard var live, let app = live.app else { return }
+        let letGo = !live.pinned && watch.detector.call?.app == app && watch.detector.callLetGoOfMic
+        guard letGo != live.micReleased else { return }
+        live.micReleased = letGo
+        self.live = live
+        if letGo {
+            // A mute (Telegram's), or the app leaving or gone silent.
+            let mute = watch.detector.call.map { $0.micReleaseIsMute && $0.micReleased } ?? false
+            logEvent("call.micReleased", live, ["mute": mute])
+            return live.recorder.releaseMic()
+        }
+        let info = live.info
+        live.recorder.retakeMic { [weak self] outcome in
+            Task { @MainActor in self?.logRetake(outcome, of: info) }
+        }
+    }
+
+    /// How taking the mic again went: how long until its audio came, or a start that failed.
+    private func logRetake(_ outcome: MicRetake, of info: CallInfo) {
+        switch outcome {
+        case .delivered(let seconds, let failures):
+            logEvent("call.micRetaken", info, ["ms": Int((seconds * 1000).rounded()), "failures": failures > 0 ? failures : nil])
+        case .failed(let attempt):
+            logEvent("call.micRetakeFailed", info, ["attempt": attempt])
+        }
+    }
+
     // MARK: Ending
 
     /// The recording stops; its call goes to the store as `status` (`.transcribing` is transcribed then).
@@ -712,9 +765,13 @@ final class CallMonitor {
 
     /// An event about the live call: its id, app and service (never a page's title), then `fields`.
     private func logEvent(_ name: String, _ live: Live, _ fields: KeyValuePairs<String, (any DiagnosticValue)?> = [:]) {
-        var all = [DiagnosticField("call", CallTranscriber.shortID(live.info.id)),
-                   DiagnosticField("app", live.info.manual ? "manual" : (live.info.bundleID ?? "unknown"))]
-        if let service = live.info.service { all.append(DiagnosticField("service", service.rawValue)) }
+        logEvent(name, live.info, fields)
+    }
+
+    private func logEvent(_ name: String, _ info: CallInfo, _ fields: KeyValuePairs<String, (any DiagnosticValue)?> = [:]) {
+        var all = [DiagnosticField("call", CallTranscriber.shortID(info.id)),
+                   DiagnosticField("app", info.manual ? "manual" : (info.bundleID ?? "unknown"))]
+        if let service = info.service { all.append(DiagnosticField("service", service.rawValue)) }
         all += fields.compactMap { key, value in value.map { DiagnosticField(key, $0.diagnosticText) } }
         log.event(.calls, name, fields: all)
     }

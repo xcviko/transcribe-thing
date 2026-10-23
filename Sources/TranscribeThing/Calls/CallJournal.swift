@@ -21,10 +21,26 @@ protocol CallTrackSource: AnyObject, Sendable {
     var problem: String? { get }
     /// The call app's processes changed: a tap of them takes in the new set. Only `ProcessTapSource` cares.
     func retarget(_ processes: [AudioObjectID])
+    /// The call app let go of the mic: stop capturing, so this app doesn't keep the mic open either, and give digital
+    /// silence on the call's clock until `retake`, so the track keeps its length. Only `MicTrackSource` cares.
+    func release()
+    /// The call app took the mic again: capture again at once, on the mic a fresh start would pick. `report` hears each
+    /// start that failed (tried again shortly, for as long as the call lasts) and then the first audio; on any thread.
+    func retake(_ report: @escaping @Sendable (MicRetake) -> Void)
 }
 
 extension CallTrackSource {
     func retarget(_ processes: [AudioObjectID]) {}
+    func release() {}
+    func retake(_ report: @escaping @Sendable (MicRetake) -> Void) {}
+}
+
+/// How taking the mic again went (`CallTrackSource.retake`).
+enum MicRetake: Equatable, Sendable {
+    /// Start number `attempt` failed; it's tried again shortly.
+    case failed(attempt: Int)
+    /// Audio again, `seconds` after the retake was asked for, after `failures` failed starts.
+    case delivered(seconds: TimeInterval, failures: Int)
 }
 
 /// Puts one track's stretches on the call's clock, where sample `n` is `origin + n / 16 kHz`: a stretch that starts
@@ -77,7 +93,8 @@ struct TrackAligner: Equatable, Sendable {
 /// began, which the hold-back still covers. An unmute is noted when it's seen: up to about a second of the
 /// first words after it may be silenced with the mute. A mute noted later than the hold-back (a window read that hung) leaves
 /// what was already written; the store zeroes it again when it encodes the call (`CallStore.adopt`). A crash
-/// loses the mic's held-back seconds.
+/// loses the mic's held-back seconds. While the call app has let go of the mic (Telegram muted), the mic isn't even
+/// captured (`MicTrackSource.release`): its source gives digital silence, held back and written like the rest.
 final class CallJournal: @unchecked Sendable {
     enum Track: String, CaseIterable, Codable, Sendable {
         /// This Mac's mic: the person recording, and whoever is in the room.
