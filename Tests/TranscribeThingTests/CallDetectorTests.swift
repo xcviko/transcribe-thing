@@ -116,6 +116,42 @@ import Testing
         #expect(detector.phase == .idle)
     }
 
+    /// Whether the call's app has let go of the mic, for the recording to let go of it too: while Telegram is muted,
+    /// once off for 1.5 s; again once it hangs up, until the call is over. Not while it has the mic, nor after.
+    @Test func theCallAppLettingGoOfTheMicIsKnown() {
+        let telegram = Process(bundleID: "ru.keepcoder.Telegram", mic: [177.3..<208.8, 230.3..<235.3],
+                               sound: [167.3..<235.3])
+        var detector = CallDetector()
+        func letGo(from: Double, to: Double) -> Bool {
+            _ = run([telegram], from: from, to: to, detector: &detector)
+            return detector.callLetGoOfMic
+        }
+        #expect(!letGo(from: 150.3, to: 197.3) && detector.call != nil)
+        #expect(!letGo(from: 197.8, to: 209.8), "off for 1 s: may be a device switching")
+        #expect(letGo(from: 210.3, to: 210.3))
+        #expect(letGo(from: 210.8, to: 229.8))
+        #expect(!letGo(from: 230.3, to: 230.3), "taken again at the first look that sees it")
+        #expect(!letGo(from: 230.8, to: 236.3))
+        #expect(letGo(from: 236.8, to: 236.8), "hung up: mic and sound off, the call not over yet")
+        #expect(letGo(from: 237.3, to: 290.3))
+        #expect(!letGo(from: 290.8, to: 300) && detector.call == nil)
+
+        // Meet keeps the mic while muted by its button: never let go.
+        var meet = CallDetector()
+        let chrome = Process(bundleID: "com.google.Chrome.helper", mic: [10.3..<100.3], sound: [10.3..<100.3])
+        let reads = Dictionary(uniqueKeysWithValues: stride(from: 403, through: 903, by: 10).map {
+            (Double($0) / 10, Self.read(.meet, "Meet – abc-defg-hij", recording: .cameraAndMic, muted: true))
+        })
+        var always = true
+        for tenth in stride(from: 3, through: 995, by: 5) {
+            let time = Double(tenth) / 10
+            _ = run([chrome], reads: reads, from: time, to: time, detector: &meet)
+            if meet.call != nil, meet.callLetGoOfMic { always = false }
+        }
+        #expect(always)
+        #expect(meet.call?.mutedSince != nil, "muted by its button all along")
+    }
+
     /// Meet in Chrome keeps the mic while muted, so no mute shows; its leave chime plays after the mic closes and
     /// is neither a mute nor a second call. Chrome played a video earlier with no mic.
     @Test func aMeetCallInChrome() throws {

@@ -31,7 +31,8 @@ private func speechLike(seconds: Double, pitch: Double = 140) -> [Float] {
 /// A track source that hands over what a test pushes.
 final class FakeSource: CallTrackSource, Sendable {
     private let state = OSAllocatedUnfairLock(initialState: (pending: [TimedAudio](), started: false, stopped: false,
-                                                             retargets: [[AudioObjectID]]()))
+                                                             retargets: [[AudioObjectID]](), holds: [String](),
+                                                             report: (@Sendable (MicRetake) -> Void)?.none))
     let fixedProblem: String?
 
     init(problem: String? = nil) {
@@ -52,10 +53,21 @@ final class FakeSource: CallTrackSource, Sendable {
     }
     var problem: String? { fixedProblem }
     func retarget(_ processes: [AudioObjectID]) { state.withLock { $0.retargets.append(processes) } }
+    func release() { state.withLock { $0.holds.append("release") } }
+    func retake(_ report: @escaping @Sendable (MicRetake) -> Void) {
+        state.withLock {
+            $0.holds.append("retake")
+            $0.report = report
+        }
+    }
 
     var started: Bool { state.withLock { $0.started } }
     var stopped: Bool { state.withLock { $0.stopped } }
     var retargets: [[AudioObjectID]] { state.withLock { $0.retargets } }
+    /// Each `release` and `retake`, in order.
+    var holds: [String] { state.withLock { $0.holds } }
+    /// Tells the last retake how it went, as a real mic would.
+    func retook(_ outcome: MicRetake) { state.withLock { $0.report }?(outcome) }
 }
 
 private func files(in folder: URL) -> Set<String> {
@@ -1278,6 +1290,132 @@ private func heldVoice(seconds: Double, gain: Double) -> [Float] {
         #expect(try level(20.1, 24.7) > 0.01)
         #expect(try level(30.2, 34.7) > 0.01)
         #expect(CallFormat.notes(call).first?.hasSuffix("; your mic wasn’t recorded then.") == true)
+    }
+
+    /// Telegram mutes by letting go of the mic: the recording lets go of it too (so macOS's mic light isn't on because
+    /// of this app), once the detector counts it off, and takes it again at the first look that sees Telegram take it.
+    /// The other side's track never stops. Hanging up lets go of it too, until the call is over. Each step is logged.
+    @Test func theMicIsLetGoWhileTheCallAppHasLetGoOfIt() async throws {
+        let (log, logs) = (DiagnosticLog(), FileManager.default.temporaryDirectory
+            .appendingPathComponent("calls-log-\(UUID().uuidString)", isDirectory: true))
+        log.start(directory: logs)
+        defer {
+            log.stop()
+            log.flush()
+            try? FileManager.default.removeItem(at: logs)
+        }
+        let rig = Rig(mode: .automatic)
+        rig.monitor.log = log
+        // This app records the mic too, in a process the HAL lists like any other.
+        func ownMic(_ on: Bool) {
+            rig.app("dev.transcribe-thing.app", pid: getpid(), object: 99, mic: on, sound: false)
+        }
+        ownMic(true)
+        rig.app("ru.keepcoder.Telegram", mic: true, sound: true)
+        rig.poll([0, 21])
+        guard case .recording(let info) = rig.monitor.state else { Issue.record("not kept"); return }
+        let mic = try #require(rig.sources.first?[.mic])
+        let remote = try #require(rig.sources.first?[.remote])
+        // This app's own mic going off isn't Telegram letting go of it.
+        ownMic(false)
+        rig.poll([22, 23, 24])
+        #expect(mic.holds.isEmpty && rig.monitor.current?.mutes.isEmpty == true)
+        ownMic(true)
+
+        // Nor does it hide Telegram letting go.
+        rig.app("ru.keepcoder.Telegram", mic: false, sound: true)
+        rig.poll([25, 26])
+        #expect(mic.holds.isEmpty, "off for under 1.5 s: a device switching, not let go")
+        rig.poll([26.5])
+        #expect(mic.holds == ["release"], "let go when the detector counts Telegram's mic off")
+        ownMic(false)
+        rig.poll([27, 28, 29])
+        #expect(mic.holds == ["release"], "once")
+        rig.app("ru.keepcoder.Telegram", mic: true, sound: true)
+        rig.poll([30])
+        #expect(mic.holds == ["release", "retake"], "taken again at the first look that sees Telegram take it")
+        ownMic(true)
+        mic.retook(.failed(attempt: 1))
+        mic.retook(.delivered(seconds: 0.084, failures: 1))
+        rig.poll([31, 32])
+        #expect(mic.holds == ["release", "retake"])
+
+        // Hung up: the mic is let go while the detector waits out its minute, then the recording just stops.
+        rig.app("ru.keepcoder.Telegram", mic: false, sound: false)
+        rig.poll(stride(from: 40.0, through: 101, by: 1))
+        #expect(mic.holds == ["release", "retake", "release"])
+        #expect(remote.holds.isEmpty, "the other side is recorded throughout")
+        await rig.monitor.waitForEndings()
+        await rig.transcriber.waitUntilIdle()
+        #expect(mic.stopped && remote.stopped)
+        let call = try #require(rig.store.call(id: info.id))
+        #expect(call.muteIntervals.count == 1 && abs(call.muteIntervals[0].start - 25) < 0.01, "hanging up isn't a mute")
+        #expect(CallFormat.notes(call).first?.hasSuffix("; your mic wasn’t recorded then.") == true)
+
+        for _ in 0..<100 where !log.retainedText().contains("call.micRetaken") { try await Task.sleep(for: .milliseconds(10)) }
+        let text = log.retainedText()
+        let id = CallTranscriber.shortID(info.id)
+        #expect(text.contains("call.micReleased call=\(id) app=ru.keepcoder.Telegram service=telegram mute=yes"))
+        #expect(text.contains("call.micReleased call=\(id) app=ru.keepcoder.Telegram service=telegram mute=no"),
+                "hanging up isn't a mute")
+        #expect(text.contains("call.micRetakeFailed call=\(id) app=ru.keepcoder.Telegram service=telegram attempt=1"))
+        #expect(text.contains("call.micRetaken call=\(id) app=ru.keepcoder.Telegram service=telegram ms=84 failures=1"))
+        #expect(text.components(separatedBy: "call.micReleased").count == 3)
+    }
+
+    /// Discord, Meet and the like keep the mic while muted by their button: so does the recording, as before, the mic
+    /// silenced in the mute.
+    @Test func aMicTheCallAppKeepsWhileMutedIsKept() async throws {
+        let discord = Rig(mode: .automatic)
+        discord.app("com.hnc.Discord", mic: true, sound: true)
+        discord.poll(stride(from: 0.0, through: 21, by: 1))
+        guard case .recording = discord.monitor.state else { Issue.record("not kept"); return }
+        discord.mute = .muted
+        discord.poll(stride(from: 22.0, through: 40, by: 1))
+        discord.mute = .live
+        discord.poll(stride(from: 41.0, through: 50, by: 1))
+        let mic = try #require(discord.sources.first?[.mic])
+        #expect(discord.monitor.current?.mutes.count == 1)
+        #expect(mic.holds.isEmpty)
+        discord.monitor.stop(keep: false)
+
+        let meet = Rig(mode: .automatic)
+        meet.tabs = [Self.meet]
+        meet.mute = .muted
+        meet.app("com.google.Chrome", mic: true, sound: true)
+        meet.poll(stride(from: 0.0, through: 40, by: 1))
+        guard case .recording(let muted) = meet.monitor.state else { Issue.record("not kept"); return }
+        #expect(muted.mutes.first?.start == 0, "muted from the start")
+        #expect(try #require(meet.sources.first?[.mic]).holds.isEmpty)
+        meet.monitor.stop(keep: false)
+    }
+
+    /// A menu bar recording has no call app to follow: it keeps the mic whatever an app does. So does a noticed call
+    /// the person started recording from the menu bar, which records everything until Stop: a mic let go with the
+    /// call app is taken again at once.
+    @Test func aRecordingFromTheMenuBarKeepsTheMic() async throws {
+        let manual = Rig()
+        manual.monitor.startManual()
+        manual.app("ru.keepcoder.Telegram", mic: true, sound: true)
+        manual.poll([0, 21])
+        manual.app("ru.keepcoder.Telegram", mic: false, sound: true)
+        manual.poll(stride(from: 22.0, through: 40, by: 1))
+        guard case .recording(let info) = manual.monitor.state, info.manual else { Issue.record("not manual"); return }
+        #expect(try #require(manual.sources.first?[.mic]).holds.isEmpty)
+        manual.monitor.stop(keep: false)
+
+        let pinned = Rig(mode: .automatic)
+        pinned.app("ru.keepcoder.Telegram", mic: true, sound: true)
+        pinned.poll([0, 21])
+        pinned.app("ru.keepcoder.Telegram", mic: false, sound: true)
+        pinned.poll([22, 23, 24])
+        let mic = try #require(pinned.sources.first?[.mic])
+        #expect(mic.holds == ["release"])
+        pinned.monitor.startManual()
+        #expect(mic.holds == ["release", "retake"], "taken again as the person starts recording it")
+        pinned.poll(stride(from: 25.0, through: 40, by: 1))
+        #expect(mic.holds == ["release", "retake"])
+        pinned.monitor.stop(keep: false)
     }
 
     /// The log of 2026-10-12: a Slack huddle in Chrome, its tab retitled by an extension ("... - Slack [Main] 🏠")

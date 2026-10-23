@@ -198,6 +198,15 @@ struct CallDetector: Equatable, Sendable {
         if case .call(let call) = phase { call } else { nil }
     }
 
+    /// Whether the confirmed call's app has let go of the mic while the call goes on: its processes have run no input
+    /// for `flicker` (a device switching doesn't count). Telegram muted; another app leaving, its leave chime still
+    /// playing; or the app gone silent before the call is over. Only the app's own processes count, never this one's
+    /// (`CallWatch`), so a recording of the mic neither hides the app letting go nor looks like it.
+    var callLetGoOfMic: Bool {
+        guard let call else { return false }
+        return signals[call.app]?.mic.isOn != true
+    }
+
     /// The call followed, suspected or confirmed: the app whose window is worth reading.
     var followed: Call? {
         switch phase {
