@@ -444,8 +444,9 @@ struct ToastCard: View {
             .overlay { ToastSurfaceEdge(reveal: reveal) }
             .background { ToastSurfaceShadow(reveal: reveal) }
             .opacity(reveal.surfaceOpacity)
-            .overlay(alignment: .topLeading) { closeButton }
             .contentShape(RoundedRectangle(cornerRadius: ToastMetrics.radius, style: .continuous))
+            // After the card's shape: the button's middle is past the card's rounded corner, which would take its clicks.
+            .overlay(alignment: .topLeading) { closeButton }
             .accessibilityElement(children: .contain)
             .accessibilityLabel([notice.title, notice.body, notice.detail].compactMap { $0 }.joined(separator: ". "))
     }
