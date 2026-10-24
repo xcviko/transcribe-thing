@@ -84,7 +84,12 @@ struct Notice: Identifiable, Equatable, Sendable {
     var sound: SoundEffect?
     /// Recording the retry/undo actions refer to.
     var recordingID: UUID?
-    /// A card of text to paste whose keys are ↩ and Esc: Polish Selection's answer (`DictationController.pasteCard`).
+    /// A card of text to paste or copy (`DictationController.pasteCard`): Polish Selection's answer, or a dictation's
+    /// text a click away kept from being pasted. Copy takes the text and the card goes; it's the last to go when the
+    /// stack is full, and never recedes behind a newer one.
+    var isPasteCard = false
+    /// One of those whose keys are ↩ and Esc: Polish Selection's. A dictation's held by a click away leaves both to the
+    /// app the user clicked into.
     var takesCardKeys = false
     /// Its countdown stands still while a dictation records (`ToastCenter.isDictating`) and runs once it's over: Polish
     /// Selection's card stays up while the user dictates.
@@ -104,6 +109,7 @@ struct Notice: Identifiable, Equatable, Sendable {
         lifetime: NoticeLifetime = .seconds(5),
         sound: SoundEffect? = nil,
         recordingID: UUID? = nil,
+        isPasteCard: Bool = false,
         takesCardKeys: Bool = false,
         waitsForDictation: Bool = false
     ) {
@@ -120,6 +126,7 @@ struct Notice: Identifiable, Equatable, Sendable {
         self.lifetime = lifetime
         self.sound = sound
         self.recordingID = recordingID
+        self.isPasteCard = isPasteCard || takesCardKeys
         self.takesCardKeys = takesCardKeys
         self.waitsForDictation = waitsForDictation
     }

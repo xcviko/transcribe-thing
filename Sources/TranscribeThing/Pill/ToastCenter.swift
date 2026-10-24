@@ -102,13 +102,13 @@ final class ToastCenter {
     }
 
     /// A button in a toast was clicked. Copy keeps a card for a moment (its button turns into "Copied"), except a
-    /// card whose text is there to paste or copy (`takesCardKeys`: Polish Selection's):
-    /// taking it is what the card was for, so it goes. Everything else dismisses it after the action is handed to
-    /// `onAction`.
+    /// card whose text is there to paste or copy (`isPasteCard`: Polish Selection's, a dictation's held by a click
+    /// away): taking it is what the card was for, so it goes. Everything else dismisses it after the action is handed
+    /// to `onAction`.
     func perform(_ action: NoticeAction, on notice: Notice) {
         onAction?(notice, action)
         switch action.kind {
-        case .copyText where !notice.takesCardKeys:
+        case .copyText where !notice.isPasteCard:
             extend(notice.id, toAtLeast: Self.afterCopyLifetime)
         default:
             dismiss(notice.id)
@@ -173,11 +173,11 @@ final class ToastCenter {
     }
 
     /// Keeps two: drops the oldest timed notice first, so sticky ones (permissions, missing mic) survive, and the
-    /// cards of text to paste (Polish Selection's answers) go last.
+    /// cards of text to paste (Polish Selection's answers, a dictation's held by a click away) go last.
     private func trimToCapacity() {
         while notices.count > Self.maxVisible {
             let candidates = notices.dropLast()
-            let index = candidates.firstIndex { $0.lifetime != .sticky && !$0.takesCardKeys }
+            let index = candidates.firstIndex { $0.lifetime != .sticky && !$0.isPasteCard }
                 ?? candidates.firstIndex { $0.lifetime != .sticky } ?? notices.startIndex
             countdowns[notices[index].id] = nil
             notices.remove(at: index)

@@ -90,6 +90,22 @@ enum PillSnapshots {
             SnapshotEntry("pill-processing-keys", width: 760, height: 44 + 7 * 92) { _ in
                 PolishSheet(title: "Keys while processing", rows: PolishSheet.processingRows)
             },
+            // A click away while a dictation is processed (`--only pill-held`): the outline in dashes (solid before the
+            // click), with the wand, the translate glyph or the count; Send's plane gone. Then over the processing
+            // pill in the panel, and the card its text comes up on.
+            SnapshotEntry("pill-held-paste", width: 760, height: 44 + 11 * 92) { _ in
+                PolishSheet(title: "Clicked away", rows: PolishSheet.heldRows)
+            },
+            SnapshotEntry("pill-held-processing", width: 640, height: 150) { _ in
+                CanvasScene(model: heldModel(PillModelSheet.model(.processing, choice: .gemini, chip: false)
+                    .previewCounter(PillTokenCount(phase: .thinking, tokens: 480))), notices: [])
+            },
+            SnapshotEntry("pill-held-card", width: 640, height: 340) { _ in
+                CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.clickedAway])
+            },
+            SnapshotEntry("pill-held-card-polished", width: 640, height: 400) { _ in
+                CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.clickedAwayPolished])
+            },
             // fn ⇥ while the chip is up: its names roll on, frame by frame of the spring.
             SnapshotEntry("pill-chip-roll", width: 2040, height: 270) { _ in ChipRollSheet() },
             // fn P on Parakeet with nothing selected: it says Polish is Gemini's, and the dictation goes on.
@@ -297,6 +313,12 @@ enum PillSnapshots {
         return model
     }
 
+    /// `model`, its dictation held by a click away (`PillModel.holdsPaste`).
+    @MainActor static func heldModel(_ model: PillModel) -> PillModel {
+        model.holdsPaste = true
+        return model
+    }
+
     /// "Never" mode: no pill, the toast sits where the pill would be.
     @MainActor private static func neverModel() -> PillModel {
         let model = PillModel.preview(phase: .rest)
@@ -383,6 +405,15 @@ enum PillSnapshotFixtures {
     }()
 
     static let shortcutUnavailable = Notice.shortcutUnavailable(accessibility: .denied, likelyStale: false, shortcut: "fn")
+
+    /// What DictationController posts for a dictation a click away held: its text, to paste or copy.
+    static let clickedAway = DictationController.clickedAwayCard(
+        "Can you send me the deck before the call? I want another look at the pricing slide.",
+        by: .gemini, in: .pushToTalk, id: UUID())
+    static let clickedAwayPolished = DictationController.clickedAwayCard(
+        "Could you send me the deck before the call? I’d like another look at the pricing slide, and at the "
+            + "timeline Maya asked about. If it isn’t ready, Friday morning works too.",
+        by: .gemini, in: .handsFree, id: UUID())
 
     /// "Dictation canceled · Undo" as DictationController posts it, the talk key `key` beside Undo.
     static func canceledWithKey(_ key: String) -> Notice {
@@ -909,6 +940,43 @@ private struct PolishSheet: View {
             },
             Row(id: "send-locked-hours", caption: "Hands-free past an hour · Send") {
                 Self.model(.locked, level: 0.5, polishes: false, sends: true, choice: .parakeet, recordingFor: 3_723)
+            },
+        ]
+    }
+
+    /// A click away while it's processed: dashes where the outline was, whatever the pill shows inside it.
+    static var heldRows: [Row] {
+        let held = PillSnapshots.heldModel
+        return [
+            Row(id: "held-before", caption: "Processing · before the click") { Self.model(.processing, polishes: false) },
+            Row(id: "held", caption: "Clicked away") { held(Self.model(.processing, polishes: false)) },
+            Row(id: "held-thinking", caption: "Clicked away · thinking") {
+                held(Self.model(.processing, polishes: false))
+                    .previewCounter(PillTokenCount(phase: .thinking, tokens: 480))
+            },
+            Row(id: "held-parakeet", caption: "Clicked away · Parakeet") {
+                held(Self.model(.processing, polishes: false, choice: .parakeet))
+            },
+            Row(id: "held-untinted", caption: "Clicked away · no tint") {
+                held(PillModelSheet.model(.processing, choice: nil, chip: false))
+            },
+            Row(id: "held-hands-free", caption: "Clicked away · after hands-free") {
+                let model = PillStateSheet.processingAfterLocked()
+                model.sessionModel = .gemini
+                return held(model)
+            },
+            Row(id: "held-polish", caption: "Clicked away · Polish") { held(Self.model(.processing)) },
+            Row(id: "held-translate", caption: "Clicked away · Translate") {
+                held(Self.model(.processing, polishes: false, translates: true))
+            },
+            Row(id: "held-polish-writing", caption: "Clicked away · Polish, writing") {
+                held(Self.model(.processing)).previewCounter(PillTokenCount(phase: .writing, tokens: 140))
+            },
+            Row(id: "held-send-before", caption: "Send on, before the click") {
+                Self.model(.processing, polishes: false, sends: true)
+            },
+            Row(id: "held-send-after", caption: "Clicked away · Send off") {
+                held(Self.model(.processing, polishes: false))
             },
         ]
     }

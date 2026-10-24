@@ -568,8 +568,10 @@ struct PillView: View {
         case .error: "Dictation failed"
         case .message(let text): text
         }
-        guard let choice, visual.carriesModel, !visual.isPolishing else { return label }
-        return "\(label) with \(choice.title)"
+        // What the dashed outline says (`PillModel.holdsPaste`).
+        let held = visual.content == .processing && model.holdsPaste ? ". The text will wait on a card" : ""
+        guard let choice, visual.carriesModel, !visual.isPolishing else { return label + held }
+        return "\(label) with \(choice.title)\(held)"
     }
 }
 
@@ -917,7 +919,11 @@ struct PillFace: View {
                     // Inside the capsule, whatever happens: nothing of the content is ever drawn past its ends.
                     .mask { PillContentMask().frame(width: size.width, height: size.height) }
             }
-            .overlay { PillCapsuleEdge(accent: capsule.content == .empty ? nil : accent) }
+            .overlay {
+                // A click away holds the dictation's text (`PillModel.holdsPaste`): its edge is dashed.
+                PillCapsuleEdge(accent: capsule.content == .empty ? nil : accent,
+                                dashed: capsule.content == .processing && model.holdsPaste)
+            }
             // Above the pill and part of it: it springs in on a switch, shrinks into the resting capsule with the
             // content and leaves with the pill in one piece. When it goes by itself (its hold over, the content no
             // longer a dictation's), it stays live while it fades, riding the capsule's top.
@@ -1059,12 +1065,85 @@ struct PillCapsule: View {
 /// of its top-left corner instead of being there at once.
 struct PillCapsuleEdge: View {
     var accent: PillAccent?
+    /// The same ring in dashes: the dictation on the pill won't be pasted (`PillModel.holdsPaste`).
+    var dashed = false
 
     var body: some View {
-        Capsule(style: .continuous).ring(1)
-            .fill(.foreground, style: FillStyle(eoFill: true))
+        PillEdgeShape(dashed: dashed)
+            .fill(.foreground, style: FillStyle(eoFill: !dashed))
             .animation(.easeOut(duration: 0.2)) { $0.foregroundStyle(accent?.ring ?? PillPalette.hairline) }
             .allowsHitTesting(false)
+    }
+}
+
+/// The capsule's 1 pt edge: the ring inside its outline (`RingShape`), or that ring as dashes. The dashes are a stroke
+/// along the ring's middle turned into a shape to fill, as the ring is (a stroked capsule drew stray lines at its flat
+/// ends in snapshots), stretched a little so a whole number of them goes around and no short one is left at the seam.
+struct PillEdgeShape: Shape {
+    var dashed = false
+
+    /// About how long a dash is, and the gap after it.
+    static let dash: CGFloat = 4
+    static let gap: CGFloat = 3
+
+    func path(in rect: CGRect) -> Path {
+        let ring = Capsule(style: .continuous).ring(1).path(in: rect)
+        guard dashed else { return ring }
+        let middle = Capsule(style: .continuous).inset(by: 0.5).path(in: rect)
+        let period = Self.dash + Self.gap
+        let length = middle.length
+        guard length > period else { return ring }
+        let scale = length / ((length / period).rounded() * period)
+        return middle.strokedPath(StrokeStyle(lineWidth: 1, lineCap: .butt,
+                                              dash: [Self.dash * scale, Self.gap * scale]))
+    }
+}
+
+private extension Path {
+    /// How long the path is, its curves measured as many short lines.
+    var length: CGFloat {
+        var total: CGFloat = 0
+        var start = CGPoint.zero, current = CGPoint.zero
+        func distance(_ a: CGPoint, _ b: CGPoint) -> CGFloat { hypot(b.x - a.x, b.y - a.y) }
+        func addCurve(_ point: (CGFloat) -> CGPoint) {
+            var last = current
+            for step in 1...24 {
+                let next = point(CGFloat(step) / 24)
+                total += distance(last, next)
+                last = next
+            }
+        }
+        forEach { element in
+            switch element {
+            case .move(let to):
+                start = to
+                current = to
+            case .line(let to):
+                total += distance(current, to)
+                current = to
+            case .quadCurve(let to, let control):
+                let from = current
+                addCurve { t in
+                    let u = 1 - t
+                    return CGPoint(x: u * u * from.x + 2 * u * t * control.x + t * t * to.x,
+                                   y: u * u * from.y + 2 * u * t * control.y + t * t * to.y)
+                }
+                current = to
+            case .curve(let to, let control1, let control2):
+                let from = current
+                addCurve { t in
+                    let u = 1 - t
+                    let a = u * u * u, b = 3 * u * u * t, c = 3 * u * t * t, d = t * t * t
+                    return CGPoint(x: a * from.x + b * control1.x + c * control2.x + d * to.x,
+                                   y: a * from.y + b * control1.y + c * control2.y + d * to.y)
+                }
+                current = to
+            case .closeSubpath:
+                total += distance(current, start)
+                current = start
+            }
+        }
+        return total
     }
 }
 

@@ -33,11 +33,13 @@ enum ProcessingRig {
 
     /// A rig dictating on Gemini, wired as the app is, whose requests are recorded and answered by `answer` (the
     /// request's engine, prompt and number, from 1). Each Gemini request names its generation "gen-<number>".
-    static func make(models: [EngineID: LocalModelState] = [.parakeet: .ready],
+    /// `clickAway`: the clicks away the controller hears, wired as the app wires them.
+    static func make(models: [EngineID: LocalModelState] = [.parakeet: .ready], clickAway: ClickAwayMonitor? = nil,
                      answer: @escaping @MainActor (EngineID, String?, Int) async throws -> String)
         -> (Rig, Switch.Cues, Requests) {
         let (rig, cues) = Switch.make(models: models)
         let requests = Requests()
+        rig.h.controller.clickAway = clickAway
         rig.h.settings.lineup.main = .gemini
         rig.h.controller.processingKeySettleDelay = .milliseconds(30)
         rig.h.controller.start()

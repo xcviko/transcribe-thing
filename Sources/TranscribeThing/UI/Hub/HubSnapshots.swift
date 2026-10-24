@@ -467,6 +467,11 @@ enum HubSnapshots {
             },
             // The whole page, down to Troubleshooting's Export Logs….
             hub("hub-general-full", .general, height: 1360),
+            // Pasting's "Hold the paste after a click" (`--only hub-general-hold-paste`): on (the default), and off.
+            hub("hub-general-hold-paste", .general, height: 900),
+            hub("hub-general-hold-paste-off", .general, height: 900) { c in
+                c.settings.holdsPasteAfterClick = false
+            },
             // The whole page down to Experimental at the bottom: Race requests on 2.
             hub("hub-general-experimental", .general, height: 2250) { c in
                 c.settings.raceRequests = .two
