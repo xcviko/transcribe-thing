@@ -471,14 +471,6 @@ enum HubSnapshots {
             hub("hub-general-experimental", .general, height: 2250) { c in
                 c.settings.raceRequests = .two
             },
-            // General → Experimental at the bottom (`--only hub-general-parakeet`): Parakeet's text while Gemini works,
-            // on; and with Parakeet not downloaded, which the row says.
-            hub("hub-general-parakeet-beside", .general, height: 2250) { c in
-                c.settings.showsParakeetWhileGemini = true
-            },
-            hub("hub-general-parakeet-beside-missing", .general, height: 2250) { c in
-                c.models = .preview(states: [.parakeet: .notInstalled])
-            },
             // The narrowest window: the segmented control leaves the least room for the pill caption; sounds off.
             hub("hub-general-compact", .general, width: 820, height: 560) { c in
                 c.settings.pillMode = .always

@@ -1017,17 +1017,9 @@ final class DictationController {
         /// When a key last turned Polish or Translate on or off for it (`clock`).
         var lastFlipAt: TimeInterval = 0
         /// Generations Gemini named for the request under way, and those of requests stopped before (sent again with
-        /// Polish, or given up for Parakeet's text): what these cost is added to the version that lands.
+        /// Polish): what these cost is added to the version that lands.
         var attemptGenerations: [String] = []
         var stoppedGenerations: [String] = []
-        /// Parakeet's text beside Gemini (`AppSettings.showsParakeetWhileGemini`): the run, and its text once it's on
-        /// its card.
-        var previewTask: Task<Void, Never>?
-        var preview: TranscriptResult?
-        /// No Parakeet card for it any more: Polish or Translate was pressed, or the card was picked.
-        var previewEnded = false
-        /// Parakeet's card's Copy took it: History keeps the text, and nothing is pasted.
-        var copiesOnly = false
         /// How many tokens its model is thinking or writing, as far as the stream shows (`streamed(_:for:)`): nil until
         /// the first streamed character, and always for Parakeet. The processing pill shows the newest job's.
         var count: PillTokenCount?
@@ -1050,12 +1042,10 @@ final class DictationController {
             hintTask?.cancel()
         }
 
-        /// What it's left the queue with (pasted, failed, canceled): nothing goes on beside it.
+        /// What it's left the queue with (pasted, failed, canceled): its keys' wait is over.
         func leave() {
             settleTask?.cancel()
             settleTask = nil
-            previewTask?.cancel()
-            previewTask = nil
         }
 
         /// Polish and Translate, for a dictation's request.
@@ -1104,7 +1094,6 @@ final class DictationController {
         }
         let rewrite = job.rewrite
         let prompt = rewrite.flatMap(geminiPrompt(for:))
-        startPreview(of: job, recording)
         // Race requests as it is when this attempt starts: a re-send reads it again.
         let hedge = settings.raceRequests.hedge
         job.task = Task { [weak self] in
@@ -1279,11 +1268,9 @@ final class DictationController {
 
     private var isDelivering: Bool { deliveringJob != nil }
 
-    /// A dictation left the queue (to be pasted, or canceled): its keys' wait and Parakeet's run beside it stop, and
-    /// Parakeet's card goes.
+    /// A dictation left the queue (to be pasted, or canceled): its keys' wait stops.
     private func leave(_ job: Job) {
         job.leave()
-        toasts.dismiss(dedupeKey: Self.parakeetCardKey(job.id))
     }
 
     /// Queued, being delivered, being recorded on again (Undo, Home's Continue), or worked on from Home.
@@ -1328,20 +1315,20 @@ final class DictationController {
             forget(job.id)
             // An older notice's Retry or Undo would transcribe it yet again, or record on, now that its audio is kept.
             toasts.dismiss(recordingID: job.id)
-            // Requests stopped on its way (sent again with Polish, or given up for Parakeet's text) cost something too:
-            // looked up later, as the other one of a pair is.
+            // Requests stopped on its way (sent again with Polish) cost something too: looked up later, as the other one
+            // of a pair is.
             let known = Set(result.otherGenerationIDs + [result.generationID].compactMap { $0 })
             result.otherGenerationIDs += job.stoppedGenerations.filter { !known.contains($0) }
             // The transcript is the entry's one version (a polished or translated dictation's is that).
             let version = result.version(job.rewrite, text: text)
             // A row Home's Continue recorded on, stopped with the app itself in front (Home, most likely): its row
             // shows the text, and a paste would only land in the app's own window.
-            let staysInRow = !job.copiesOnly && interruptedRow(job.id) != nil && isOwnAppFrontmost()
+            let staysInRow = interruptedRow(job.id) != nil && isOwnAppFrontmost()
             DiagnosticLog.shared.event(.dictation, "job.finished", [
                 "engine": result.engine, "outcome": "success", "seconds": result.processingTime,
                 "retry": history.entry(id: job.id)?.status == .failed, "polished": job.polishes,
                 "translated": job.translates ? true : nil, "sends": job.sends ? true : nil,
-                "delivered": job.copiesOnly ? "copied" : staysInRow ? "row" : nil,
+                "delivered": staysInRow ? "row" : nil,
                 "stoppedRequests": job.stoppedGenerations.isEmpty ? nil : job.stoppedGenerations.count])
             // Kept as long as the entry, so History can transcribe it again with another model. Saved again even when
             // a failed or canceled row had it: an Undo-resumed dictation's file holds only the part before the cancel.
@@ -1353,8 +1340,6 @@ final class DictationController {
             // Only what is pasted follows General → Pasting, by the model that wrote it and how it was dictated:
             // History, the cards and Copy keep the text as it came.
             let model = version.kind.dictationModel
-            // Parakeet's card's Copy: the text went to the clipboard, and History has it.
-            if job.copiesOnly { return }
             if staysInRow {
                 Log.app.info("A continued dictation stayed in its History row: \(Brand.name, privacy: .public) was in front")
                 return
@@ -1626,20 +1611,6 @@ final class DictationController {
     // MARK: - Notice actions
 
     func perform(_ action: NoticeAction, from notice: Notice) {
-        if let id = Self.parakeetCardJobID(notice) {
-            // Parakeet's card beside Gemini: either button is the answer, and Gemini stops.
-            toasts.dismiss(notice.id)
-            switch action.kind {
-            case .pasteText:
-                pickPreview(of: id, pastes: true)
-            case .copyText(let text):
-                copy(text)
-                pickPreview(of: id, pastes: false)
-            default:
-                break
-            }
-            return
-        }
         switch action.kind {
         case .copyText(let text):
             copy(text)
@@ -2961,8 +2932,6 @@ final class DictationController {
         }
         DiagnosticLog.shared.event(.dictation, "processing.key", [
             "key": key == .polish ? "polish" : "translate", "polish": job.polishes, "translate": job.translates])
-        // Not a plain transcript any more: Parakeet's text is no answer to it.
-        endPreview(of: job)
         if pressed { flipKeyHeld = true }
         job.lastFlipAt = clock()
         scheduleSettle(of: job, after: processingKeySettleDelay)
@@ -3007,99 +2976,6 @@ final class DictationController {
                 "polish": job.polishes, "translate": job.translates, "answered": job.outcome != nil])
             run(job)
         }
-        drain()
-    }
-
-    // MARK: - Parakeet beside Gemini (Experimental)
-
-    /// Parakeet's card, one per dictation (by its recording's id).
-    nonisolated static let parakeetCardPrefix = "dictation.parakeet."
-
-    nonisolated static func parakeetCardKey(_ id: UUID) -> String { parakeetCardPrefix + id.uuidString }
-
-    /// The dictation whose Parakeet card `notice` is; nil for any other notice.
-    nonisolated static func parakeetCardJobID(_ notice: Notice) -> UUID? {
-        guard notice.dedupeKey.hasPrefix(parakeetCardPrefix) else { return nil }
-        return UUID(uuidString: String(notice.dedupeKey.dropFirst(parakeetCardPrefix.count)))
-    }
-
-    /// "Parakeet v3, while Gemini works": Parakeet's text, Paste Here (by General → Pasting's rules for Parakeet) and
-    /// Copy, either of which stops Gemini. Up, silently, until Gemini's text is pasted or the dictation ends otherwise.
-    /// Neither ↩ nor Esc is its: it comes with every such dictation, and ↩ is the user's app's (Esc cancels the
-    /// dictation, and the card goes with it).
-    nonisolated static func parakeetCard(_ text: String, id: UUID, mode: DictationMachine.Mode) -> Notice {
-        Notice(dedupeKey: parakeetCardKey(id), style: .info, symbol: EngineID.parakeet.symbolName,
-               title: "\(EngineID.parakeet.modelName), while Gemini works", transcript: text,
-               actions: [NoticeAction(title: "Paste Here", kind: .pasteText(text, by: .parakeet, in: mode),
-                                      isPrimary: true),
-                         NoticeAction(title: "Copy", kind: .copyText(text))],
-               lifetime: .sticky)
-    }
-
-    /// With General → Experimental's switch on, a plain dictation on Gemini (no Polish, no Translate) goes to Parakeet
-    /// on this Mac too, when it's downloaded (loading it if need be); without it, nothing happens. Its own run makes
-    /// no History row.
-    private func startPreview(of job: Job, _ recording: Recording) {
-        guard settings.showsParakeetWhileGemini, job.engine.isGemini, job.rewrite == nil, !job.previewEnded,
-              job.previewTask == nil, job.preview == nil else { return }
-        switch models.state(of: .parakeet) {
-        case .ready, .installed, .preparing: break
-        case .notInstalled, .downloading, .failed: return
-        }
-        job.previewTask = Task { [weak self] in
-            guard let self else { return }
-            let outcome = await self.transcribe(recording, engine: .parakeet)
-            guard !Task.isCancelled else { return }
-            self.previewFinished(outcome, of: job)
-        }
-    }
-
-    /// Parakeet's text came: on its card, while Gemini hasn't answered and the dictation is still plain.
-    private func previewFinished(_ outcome: Outcome, of job: Job) {
-        job.previewTask = nil
-        let text: String = if case .success(let result) = outcome {
-            result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        } else {
-            ""
-        }
-        let shows = !text.isEmpty && !job.previewEnded && job.outcome == nil && job.rewrite == nil
-            && queue.contains { $0 === job }
-        DiagnosticLog.shared.event(.dictation, "parakeet.beside", [
-            "outcome": text.isEmpty ? "noText" : shows ? "card" : "late"])
-        guard shows, case .success(var result) = outcome else { return }
-        result.text = text
-        job.preview = result
-        toasts.post(Self.parakeetCard(text, id: job.id, mode: job.mode))
-    }
-
-    /// The dictation is no longer plain (Polish or Translate pressed): Parakeet's run stops and its card goes, for good.
-    private func endPreview(of job: Job) {
-        job.previewEnded = true
-        job.previewTask?.cancel()
-        job.previewTask = nil
-        job.preview = nil
-        toasts.dismiss(dedupeKey: Self.parakeetCardKey(job.id))
-    }
-
-    /// Parakeet's card's Paste Here (`pastes`) or Copy: Gemini's request stops (what it cost so far is looked up as any
-    /// stopped request's), and the dictation is Parakeet's text, in History as its transcript, pasted by Parakeet's
-    /// rules with Send's Return if it's on, or only copied.
-    private func pickPreview(of id: UUID, pastes: Bool) {
-        guard let job = queue.first(where: { $0.id == id }), let preview = job.preview else { return }
-        DiagnosticLog.shared.event(.dictation, "parakeet.picked", ["how": pastes ? "pasted" : "copied"])
-        job.stop()
-        job.stoppedGenerations += job.attemptGenerations
-        job.attemptGenerations = []
-        // Gemini's answer, should it still come, is dropped.
-        job.generation += 1
-        job.settleTask?.cancel()
-        job.settleTask = nil
-        job.engine = .parakeet
-        job.outcome = .success(preview)
-        job.copiesOnly = !pastes
-        job.preview = nil
-        job.previewEnded = true
-        dismissWaitNotice(for: job.id)
         drain()
     }
 
@@ -3149,7 +3025,7 @@ final class DictationController {
                       lifetime: .seconds(seconds), sound: sound, takesCardKeys: true, waitsForDictation: true)
     }
 
-    /// Every card of text to paste up now: Polish Selection's (Parakeet's beside Gemini takes no keys).
+    /// Every card of text to paste up now whose keys are ↩ and Esc: Polish Selection's.
     private var pasteCards: [Notice] {
         toasts.notices.filter(\.takesCardKeys)
     }

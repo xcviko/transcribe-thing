@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import TranscribeThing
 
-// MARK: - A dictation being processed: no new one, its keys, Parakeet beside Gemini, and the talk key as Undo
+// MARK: - A dictation being processed: no new one, its keys, and the talk key as Undo
 
 /// Holds a request until opened. A cancelled request stops waiting, as Gemini's does.
 @MainActor final class RequestGate {
@@ -33,13 +33,12 @@ enum ProcessingRig {
 
     /// A rig dictating on Gemini, wired as the app is, whose requests are recorded and answered by `answer` (the
     /// request's engine, prompt and number, from 1). Each Gemini request names its generation "gen-<number>".
-    static func make(parakeetBeside: Bool = false, models: [EngineID: LocalModelState] = [.parakeet: .ready],
+    static func make(models: [EngineID: LocalModelState] = [.parakeet: .ready],
                      answer: @escaping @MainActor (EngineID, String?, Int) async throws -> String)
         -> (Rig, Switch.Cues, Requests) {
         let (rig, cues) = Switch.make(models: models)
         let requests = Requests()
         rig.h.settings.lineup.main = .gemini
-        rig.h.settings.showsParakeetWhileGemini = parakeetBeside
         rig.h.controller.processingKeySettleDelay = .milliseconds(30)
         rig.h.controller.start()
         rig.h.controller.requestOverride = { _, engine, prompt, named in
@@ -385,180 +384,43 @@ enum ProcessingRig {
     }
 }
 
-// MARK: Parakeet's text while Gemini works (Experimental)
+// MARK: The removed "Show Parakeet's text while Gemini works"
 
 @MainActor
-@Suite(.serialized) struct ParakeetBesideGeminiTests {
-    typealias R = ProcessingRig
+@Suite(.serialized) struct ParakeetBesideGeminiRemovalTests {
+    private func withDefaults(_ body: (UserDefaults) throws -> Void) throws {
+        let suite = NSTemporaryDirectory() + "transcribe-thing-tests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(atPath: suite + ".plist")
+        }
+        try body(defaults)
+    }
 
-    /// Gemini waits on `gemini`, Parakeet on `parakeet` (both open by default unless closed by the test).
-    static func make(on: Bool = true, gemini: RequestGate, parakeet: RequestGate,
-                     models: [EngineID: LocalModelState] = [.parakeet: .ready])
-        -> (R.Rig, SwitchModelControllerTests.Cues, Requests) {
-        R.make(parakeetBeside: on, models: models) { engine, prompt, _ in
-            if engine.isGemini {
-                try await gemini.wait()
-                return R.gemini(prompt, plain: "gemini words")
-            }
-            try await parakeet.wait()
-            return "parakeet words"
+    /// The switch an older build stored goes at load, Parakeet isn't kept loaded for it, and the log no longer says it.
+    @Test func theStoredSwitchGoesAtLoad() throws {
+        try withDefaults { defaults in
+            defaults.set(true, forKey: "tt.showsParakeetWhileGemini")
+            let settings = AppSettings(defaults: defaults, microphoneProbe: { MicrophoneMigrationProbe() })
+            #expect(defaults.object(forKey: "tt.showsParakeetWhileGemini") == nil)
+            settings.lineup.main = .gemini
+            settings.lineup.setSwitchable(.parakeet, false)
+            #expect(!settings.usesLocalParakeet)
+            #expect(!DiagnosticSettingsSummary(settings: settings, keySaved: false).line.contains("parakeetWhileGemini"))
         }
     }
 
-    static func card(_ rig: R.Rig) -> Notice? {
-        rig.h.toasts.notices.first { $0.dedupeKey.hasPrefix(DictationController.parakeetCardPrefix) }
-    }
-
-    /// Parakeet first: its text on a card, silently, that takes neither ↩ nor Esc; Parakeet's run makes no History
-    /// row. Gemini's text pasted, the card goes by itself.
-    @Test func parakeetsTextComesOnACardUntilGeminisIsPasted() async throws {
-        let gemini = RequestGate(), parakeet = RequestGate()
-        parakeet.isOpen = true
-        let (rig, cues, requests) = Self.make(gemini: gemini, parakeet: parakeet)
+    /// A plain dictation on Gemini goes to Gemini alone, with Parakeet downloaded and loaded: no request to Parakeet,
+    /// no card, Gemini's text pasted.
+    @Test func aGeminiDictationGoesToGeminiAlone() async throws {
+        let (rig, _, requests) = ProcessingRig.make { _, prompt, _ in ProcessingRig.gemini(prompt) }
         let c = rig.h.controller
-        R.dictate(rig)
-        try await waitUntil { Self.card(rig) != nil }
-        let card = try #require(Self.card(rig))
-        #expect(card.title == "Parakeet v3, while Gemini works")
-        #expect(card.transcript == "parakeet words")
-        #expect(card.actions.map(\.title) == ["Paste Here", "Copy"])
-        #expect(card.sound == nil && !cues.played.contains(.polishReady), "silently")
-        #expect(!card.takesCardKeys && card.lifetime == .sticky)
-        #expect(!rig.h.hotkeys.cardPaste && !rig.h.hotkeys.cardClose, "↩ and Esc aren't the card's")
-        #expect(requests.parakeet == 1 && requests.gemini == [nil])
-        #expect(rig.h.history.entries.isEmpty, "Parakeet's run makes no row")
-
-        gemini.isOpen = true
+        ProcessingRig.dictate(rig)
         try await waitUntil { rig.pasted.count == 1 && c.machine.activeJobs == 0 }
-        #expect(rig.pasted.first?.contains("gemini words") == true)
-        #expect(Self.card(rig) == nil)
-        #expect(rig.h.history.entries.count == 1 && rig.h.history.entries.first?.engine == .geminiFlash)
-    }
-
-    /// Gemini first: no card, even once Parakeet's text comes.
-    @Test func geminiFirstMeansNoCard() async throws {
-        let gemini = RequestGate(), parakeet = RequestGate()
-        gemini.isOpen = true
-        let (rig, _, requests) = Self.make(gemini: gemini, parakeet: parakeet)
-        let c = rig.h.controller
-        R.dictate(rig)
-        try await waitUntil { rig.pasted.count == 1 && c.machine.activeJobs == 0 }
-        parakeet.isOpen = true
-        try await Task.sleep(for: .milliseconds(80))
-        #expect(Self.card(rig) == nil)
-        #expect(requests.parakeet <= 1)
-    }
-
-    /// Paste Here: Parakeet's text is pasted by Parakeet's Pasting rules, Gemini stops, History keeps Parakeet's
-    /// text, and Send's Return follows when it's on.
-    @Test func pasteHereTakesParakeetsText() async throws {
-        let gemini = RequestGate(), parakeet = RequestGate()
-        parakeet.isOpen = true
-        let (rig, _, _) = Self.make(gemini: gemini, parakeet: parakeet)
-        let c = rig.h.controller
-        rig.h.settings.modelsAddingSpace = [.parakeet]
-        rig.h.settings.modesAddingSpace = [.pushToTalk]
-        var returns = 0
-        c.returnDelay = .milliseconds(5)
-        c.pressReturnOverride = { returns += 1; return .pressed }
-        rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
-        SwitchModelControllerTests.hold(rig)
-        c.handle(.send)
-        rig.now += 2
-        c.handle(.pttUp)
-        try await waitUntil { Self.card(rig) != nil }
-        let card = try #require(Self.card(rig))
-        try rig.click(.pasteText("parakeet words", by: .parakeet, in: .pushToTalk), in: card.dedupeKey)
-        try await waitUntil { returns == 1 && c.machine.activeJobs == 0 }
-        #expect(rig.pasted == ["parakeet words "])
-        #expect(gemini.wasCancelled)
-        let entry = try #require(rig.h.history.entries.first)
-        #expect(entry.text == "parakeet words" && entry.engine == .parakeet && entry.status == .success)
-        #expect(Self.card(rig) == nil)
-        gemini.isOpen = true
-        try await Task.sleep(for: .milliseconds(60))
-        #expect(rig.pasted.count == 1, "Gemini's text never comes")
-    }
-
-    /// Copy: Parakeet's text on the clipboard, the card gone, Gemini stopped, nothing pasted; History keeps the text.
-    @Test func copyTakesParakeetsTextWithoutPasting() async throws {
-        let gemini = RequestGate(), parakeet = RequestGate()
-        parakeet.isOpen = true
-        let (rig, _, _) = Self.make(gemini: gemini, parakeet: parakeet)
-        let c = rig.h.controller
-        var copied: [String] = []
-        c.copyOverride = { copied.append($0) }
-        R.dictate(rig)
-        try await waitUntil { Self.card(rig) != nil }
-        try rig.click(.copyText("parakeet words"), in: try #require(Self.card(rig)).dedupeKey)
-        #expect(copied == ["parakeet words"])
-        #expect(Self.card(rig) == nil)
-        try await waitUntil { c.machine.activeJobs == 0 }
-        #expect(gemini.wasCancelled && rig.pasted.isEmpty)
-        #expect(rig.h.history.entries.first?.text == "parakeet words")
-    }
-
-    /// Esc cancels the dictation as always, and the card goes with it.
-    @Test func escTakesTheCardAlong() async throws {
-        let gemini = RequestGate(), parakeet = RequestGate()
-        parakeet.isOpen = true
-        let (rig, _, _) = Self.make(gemini: gemini, parakeet: parakeet)
-        let c = rig.h.controller
-        R.dictate(rig)
-        try await waitUntil { Self.card(rig) != nil }
-        c.handle(.cancel)
-        #expect(Self.card(rig) == nil && c.machine.activeJobs == 0)
-        #expect(rig.notice("dictation.canceled") != nil)
-    }
-
-    /// Polish pressed while it's processed: the dictation is no longer plain, and the card goes.
-    @Test func polishClosesTheCard() async throws {
-        let gemini = RequestGate(), parakeet = RequestGate()
-        parakeet.isOpen = true
-        let (rig, _, requests) = Self.make(gemini: gemini, parakeet: parakeet)
-        let c = rig.h.controller
-        R.dictate(rig)
-        try await waitUntil { Self.card(rig) != nil }
-        c.handle(.polish)
-        #expect(Self.card(rig) == nil)
-        c.handle(.shortcutKeyUp)
-        gemini.isOpen = true
-        try await waitUntil { c.machine.activeJobs == 0 }
-        #expect(requests.parakeet == 1)
-        #expect(rig.h.history.entries.first?.currentKind == .polish(by: .geminiFlash))
-    }
-
-    /// Never for Polish or Translate, never with the switch off, never without Parakeet downloaded.
-    @Test func onlyForAPlainGeminiDictationWithParakeetThere() async throws {
-        for setup in ["polish", "off", "notDownloaded"] {
-            let gemini = RequestGate(), parakeet = RequestGate()
-            gemini.isOpen = true
-            parakeet.isOpen = true
-            let (rig, _, requests) = Self.make(on: setup != "off", gemini: gemini, parakeet: parakeet,
-                                                models: [.parakeet: setup == "notDownloaded" ? .notInstalled : .ready])
-            let c = rig.h.controller
-            rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
-            SwitchModelControllerTests.hold(rig)
-            if setup == "polish" { c.handle(.polish) }
-            rig.now += 2
-            c.handle(.pttUp)
-            try await waitUntil { rig.pasted.count == 1 && c.machine.activeJobs == 0 }
-            #expect(requests.parakeet == 0, "\(setup)")
-            #expect(Self.card(rig) == nil)
-        }
-    }
-
-    /// The setting is off unless turned on, keeps Parakeet loaded while on, and is said in the diagnostics' settings
-    /// line.
-    @Test func theSettingIsOffByDefaultAndInTheLog() {
-        let settings = AppSettings.inMemory()
-        #expect(!settings.showsParakeetWhileGemini)
-        #expect(SettingsKey.showsParakeetWhileGemini.defaultsKey == "tt.showsParakeetWhileGemini")
-        #expect(DiagnosticSettingsSummary(settings: settings, keySaved: false).line.contains("parakeetWhileGemini=off"))
-        settings.lineup.main = .gemini
-        settings.showsParakeetWhileGemini = true
-        #expect(DiagnosticSettingsSummary(settings: settings, keySaved: false).line.contains("parakeetWhileGemini=on"))
-        #expect(settings.keepsParakeetLoaded)
+        #expect(requests.parakeet == 0 && requests.gemini == [nil])
+        #expect(rig.pasted.first?.contains("plain words") == true)
+        #expect(!rig.h.toasts.notices.contains { $0.dedupeKey.hasPrefix("dictation.parakeet.") })
     }
 }
 
