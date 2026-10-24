@@ -132,6 +132,35 @@ import Testing
         #expect(returns == 0 && rig.pasted.isEmpty)
     }
 
+    /// A click on the dashed pill takes the click away back: the outline is solid again, Send is on again with its
+    /// sound, and the text is pasted after all, Return following it. A click elsewhere would hold it again.
+    @Test func aClickOnTheDashedPillTakesItBack() async throws {
+        let first = RequestGate()
+        let (rig, cues, requests, monitor) = Self.make(first: first)
+        let c = rig.h.controller
+        var returns = 0
+        c.returnDelay = .milliseconds(5)
+        c.pressReturnOverride = { returns += 1; return .pressed }
+        rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
+        SwitchModelControllerTests.hold(rig)
+        c.handle(.send)
+        rig.now += 2
+        c.handle(.pttUp)
+        try await waitUntil { requests.gemini.count == 1 }
+        monitor.mouseDown(at: Self.away)
+        #expect(rig.h.pill.holdsPaste && !rig.h.pill.sends)
+        let before = cues.played.count
+        rig.h.pill.onClick?()
+        #expect(!rig.h.pill.holdsPaste && rig.h.pill.sends && rig.h.pill.phase == .processing)
+        #expect(Array(cues.played.dropFirst(before)) == [.sendOn], "Send's sound, as its key turning it on")
+        #expect(monitor.isWatching, "a click elsewhere would hold it again")
+
+        first.isOpen = true
+        try await waitUntil { c.machine.activeJobs == 0 && rig.pasted == ["plain words"] }
+        #expect(Self.card(rig) == nil)
+        try await waitUntil { returns == 1 }
+    }
+
     /// While recording, a click is part of dictating (into another field, say): nothing changes, and the text is
     /// pasted as always. No click is listened for until the recording stops.
     @Test func aClickWhileRecordingChangesNothing() async throws {

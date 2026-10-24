@@ -182,8 +182,11 @@ struct PillCanvasView: View {
             .padding(PillMetrics.hoverMargin)
             .contentShape(Rectangle())
             .onTapGesture {
-                // Clicking the resting pill (or its hover margin) starts hands-free, like Wispr.
-                if model.isPresented, model.visiblePhase.isIdle { model.onClick?() }
+                // Clicking the resting pill (or its hover margin) starts hands-free, like Wispr; clicking the dashed one
+                // (a click away held its paste) takes that click back, while its text is still on the way.
+                if model.isPresented, model.visiblePhase.isIdle || model.holdsPaste && model.phase == .processing {
+                    model.onClick?()
+                }
             }
             // Under a toast, the toast takes the clicks and the pointer.
             .allowsHitTesting(!pillCovered)

@@ -559,7 +559,11 @@ final class DictationController {
             if toasts.notices.isEmpty { openHub?(.home) }
             return
         }
-        guard pillModel.phase != .processing else { return }
+        guard pillModel.phase != .processing else {
+            // The dashed pill: a click away held its paste, and this click on the pill takes that back.
+            takeBackClickAway()
+            return
+        }
         send(.pillClick)
     }
 
@@ -1005,8 +1009,10 @@ final class DictationController {
         /// A sent dictation (`Send`): Return once its text is pasted where the user is typing.
         var sends = false
         /// The user clicked away from the app while it was processed (`clickedAway`): its text comes up on a card, never
-        /// pasted.
+        /// pasted, unless a click on the dashed pill takes that back (`takeBackClickAway`).
         var isHeldByClick = false
+        /// That click turned Send off: taking the click back turns it on again.
+        var sendOffByClick = false
         /// What Gemini writes for it instead of its transcript, if anything.
         var rewrite: TranscriptVersionKind? {
             DictationController.rewriteKind(polishes: polishes, translates: translates, by: engine)
@@ -3012,12 +3018,33 @@ final class DictationController {
             job.isHeldByClick = true
             if job.sends {
                 job.sends = false
+                job.sendOffByClick = true
                 sendOff = true
             }
         }
         // Send's one sound, as when its key turns it off.
         if sendOff { playCue(.sendOn) }
         DiagnosticLog.shared.event(.dictation, "processing.clickedAway", ["sendOff": sendOff ? true : nil])
+        stateDidChange()
+    }
+
+    /// A click on the dashed pill takes the click away back: the outline is solid again, the dictation on its way is
+    /// pasted after all (where the user is now), and Send is on again if that click turned it off, with its sound and the
+    /// plane. A click elsewhere holds it again.
+    private func takeBackClickAway() {
+        let held = queue.filter(\.isHeldByClick)
+        guard !held.isEmpty else { return }
+        var sendOn = false
+        for job in held {
+            job.isHeldByClick = false
+            if job.sendOffByClick {
+                job.sendOffByClick = false
+                job.sends = true
+                sendOn = true
+            }
+        }
+        if sendOn { playCue(.sendOn) }
+        DiagnosticLog.shared.event(.dictation, "processing.clickTakenBack", ["sendOn": sendOn ? true : nil])
         stateDidChange()
     }
 
