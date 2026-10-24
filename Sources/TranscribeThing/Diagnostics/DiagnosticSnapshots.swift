@@ -79,6 +79,7 @@ struct DiagnosticSettingsSummary: Equatable, Sendable {
             DiagnosticField("provider", settings.cloudProvider.rawValue),
             DiagnosticField("customEndpoint", endpoint),
             DiagnosticField("raceRequests", settings.raceRequests.title.lowercased()),
+            DiagnosticField("holdPasteAfterClick", settings.holdsPasteAfterClick ? "on" : "off"),
         ]
         self.fields = fields
     }

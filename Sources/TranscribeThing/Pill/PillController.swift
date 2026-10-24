@@ -300,14 +300,29 @@ final class PillController {
         return panel.convertToScreen(host.convert(rect, to: nil))
     }
 
-    private func updatePointer() {
-        guard let panel, panel.isVisible else { return }
-        let point = NSEvent.mouseLocation
-
+    /// What of the panel is at `point` (screen coordinates): the pill (with its hover margin), the hands-free chip, a card.
+    private func contentHit(at point: CGPoint) -> (pill: Bool, chip: Bool, toast: Bool) {
         let overPill = model.isPresented && (regions.pill.flatMap(screenRect)?.contains(point) ?? false)
         let overChip = model.isPresented && model.visiblePhase == .locked
             && (regions.chip.flatMap(screenRect)?.contains(point) ?? false)
         let overToast = regions.toasts.values.contains { screenRect($0)?.contains(point) ?? false }
+        return (overPill, overChip, overToast)
+    }
+
+    /// The pill, its chip or a card is at `point` (screen coordinates), where the panel takes clicks: a click there is
+    /// the app's own, even one that went through to the app below because the panel hadn't caught up with the pointer
+    /// yet (`ClickAwayMonitor`).
+    func takesClick(at point: CGPoint) -> Bool {
+        guard let panel, panel.isVisible else { return false }
+        let hit = contentHit(at: point)
+        return hit.pill || hit.chip || hit.toast
+    }
+
+    private func updatePointer() {
+        guard let panel, panel.isVisible else { return }
+        let point = NSEvent.mouseLocation
+
+        let (overPill, overChip, overToast) = contentHit(at: point)
         let interactive = overPill || overChip || overToast
         if panel.ignoresMouseEvents == interactive { panel.ignoresMouseEvents = !interactive }
 

@@ -100,6 +100,10 @@ final class AppSettings {
     var modesRemovingFinalPeriod: Set<DictationMachine.Mode> = Set(DictationMachine.Mode.allCases) {
         didSet { store.setJSON(DictationMachine.Mode.stored(modesRemovingFinalPeriod), .modesRemovingFinalPeriod) }
     }
+    /// General → Pasting → "Hold the paste after a click": a click outside the app's own windows while a dictation is
+    /// processed keeps its text from being pasted; it comes up on a card instead (`DictationController.clickedAway`).
+    /// On by default.
+    var holdsPasteAfterClick: Bool = true { didSet { store.set(holdsPasteAfterClick, .holdsPasteAfterClick) } }
 
     /// General → Pasting's space, for text `model` wrote in a dictation of `mode`: both have to be picked.
     func addsSpace(by model: ModelChoice, in mode: DictationMachine.Mode) -> Bool {
@@ -399,6 +403,7 @@ final class AppSettings {
         if let v: [String] = store.json(.modesRemovingFinalPeriod) {
             modesRemovingFinalPeriod = DictationMachine.Mode.read(v)
         }
+        if let v = store.bool(.holdsPasteAfterClick) { holdsPasteAfterClick = v }
         // A language this build doesn't know (from a newer one) leaves the default pair.
         if let v: TranslationPair = store.json(.translationPair), v.first != v.second { translationPair = v }
         if let v = store.string(.userName) { userName = v }
@@ -542,6 +547,8 @@ enum SettingsKey: String, CaseIterable {
     case addSpaceAfterText, removeFinalPeriod, autoDeleteHistoryDays, lineup, modelColors, keychainKeyMigrated
     case handsFreeModel, modelsAddingSpace, modelsRemovingFinalPeriod, dictionary
     case modesAddingSpace, modesRemovingFinalPeriod
+    /// General → Pasting's "Hold the paste after a click".
+    case holdsPasteAfterClick
     /// The Dictionary page's groups, apart from the words (`UserDictionary.Grouping`).
     case dictionaryGroups
     /// The removed "Return finishes a hands-free dictation", removed at load. Stored under its first name, from when

@@ -77,6 +77,7 @@ struct GeneralPage: View {
                 }
             }
             HubGroup("Pasting", footer: "A rule applies when both the model and the way you dictated are checked.") {
+                HoldPasteRow()
                 PastingRules()
             }
             HubGroup("Translate", footer: "On Gemini, Translate writes your dictation in the other language; with text "
@@ -412,6 +413,31 @@ private struct AboutCard: View {
                     Label("Replay Onboarding", systemImage: "arrow.counterclockwise")
                 }
                 .buttonStyle(SecondaryButtonStyle(size: .small))
+            }
+        }
+    }
+}
+
+/// General → Pasting → "Hold the paste after a click" (`AppSettings.holdsPasteAfterClick`): a click away while a
+/// dictation is processed puts its text on a card instead of pasting it.
+private struct HoldPasteRow: View {
+    @Environment(AppSettings.self) private var settings
+
+    static let help = "After you stop dictating and before the text is pasted, a click anywhere outside "
+        + "\(Brand.name), left or right button, means you’ve moved on. The pill’s outline turns dashed, and the text "
+        + "comes up on a card to paste or copy instead. Send turns off for that dictation. Clicks while you’re still "
+        + "recording, and clicks on the pill, its cards or the app’s windows, don’t count."
+
+    var body: some View {
+        @Bindable var settings = settings
+        SettingsRow(title: "Hold the paste after a click",
+                    subtitle: "Click elsewhere before it’s pasted, and the text waits on a card.",
+                    systemImage: "cursorarrow.click", iconTint: .inkSecondary) {
+            HStack(spacing: 10) {
+                InfoHint(text: Self.help)
+                Toggle("", isOn: $settings.holdsPasteAfterClick)
+                    .toggleStyle(.appSwitch)
+                    .labelsHidden()
             }
         }
     }

@@ -36,6 +36,8 @@ final class AppEnvironment {
     let pillModel: PillModel
     let toasts: ToastCenter
     let pill: PillController
+    /// Clicks away from the app while a dictation is processed (General → Pasting's "Hold the paste after a click").
+    let clickAway: ClickAwayMonitor
     let dictation: DictationController
     let updates: UpdateCenter
     let windows: WindowCoordinator
@@ -97,6 +99,8 @@ final class AppEnvironment {
         self.pillModel = pillModel
         self.toasts = toasts
         self.pill = pill
+        // A preview never listens to the mouse.
+        clickAway = ClickAwayMonitor(listens: !isPreview)
         self.dictation = dictation
         self.updates = updates
         self.windows = windows
@@ -199,6 +203,9 @@ final class AppEnvironment {
     private func wire() {
         dictation.devices = devices
         dictation.secureInput = secureInput
+        dictation.clickAway = clickAway
+        // A click on the pill or a card that went through to the app below is still the app's own.
+        clickAway.isOwnContent = { [weak pill] point in pill?.takesClick(at: point) ?? false }
         dictation.openHub = { [weak self] section in self?.windows.showHub(section) }
         dictation.onActivityChanged = { [weak self] activity in self?.menuBar.show(activity) }
         dictation.onDictationDelivered = { [weak self] in self?.updates.dictationDelivered() }

@@ -61,6 +61,8 @@ final class DictationController {
     // Wiring the composition root adds after init.
     @ObservationIgnored var devices: AudioDeviceCatalog?
     @ObservationIgnored var secureInput: SecureInputMonitor?
+    /// Clicks away from the app while a dictation is processed (`clickedAway`); it listens only while one is.
+    @ObservationIgnored var clickAway: ClickAwayMonitor?
     @ObservationIgnored var openHub: ((HubSection) -> Void)?
     @ObservationIgnored var onActivityChanged: ((DictationActivity) -> Void)?
     /// A dictation's text was just pasted where the user is typing (not paste-last, not a toast's Paste Here).
@@ -305,6 +307,7 @@ final class DictationController {
             self?.modelFailed(engine, error)
         }
         history.onRemove = { [weak self] ids in self?.entriesRemoved(ids) }
+        clickAway?.onClickAway = { [weak self] in self?.clickedAway() }
         observeMicrophonePermission()
         stateDidChange()
     }
@@ -1001,6 +1004,9 @@ final class DictationController {
         var translates = false
         /// A sent dictation (`Send`): Return once its text is pasted where the user is typing.
         var sends = false
+        /// The user clicked away from the app while it was processed (`clickedAway`): its text comes up on a card, never
+        /// pasted.
+        var isHeldByClick = false
         /// What Gemini writes for it instead of its transcript, if anything.
         var rewrite: TranscriptVersionKind? {
             DictationController.rewriteKind(polishes: polishes, translates: translates, by: engine)
@@ -1328,7 +1334,7 @@ final class DictationController {
                 "engine": result.engine, "outcome": "success", "seconds": result.processingTime,
                 "retry": history.entry(id: job.id)?.status == .failed, "polished": job.polishes,
                 "translated": job.translates ? true : nil, "sends": job.sends ? true : nil,
-                "delivered": staysInRow ? "row" : nil,
+                "delivered": staysInRow ? "row" : job.isHeldByClick ? "card" : nil,
                 "stoppedRequests": job.stoppedGenerations.isEmpty ? nil : job.stoppedGenerations.count])
             // Kept as long as the entry, so History can transcribe it again with another model. Saved again even when
             // a failed or canceled row had it: an Undo-resumed dictation's file holds only the part before the cancel.
@@ -1342,6 +1348,11 @@ final class DictationController {
             let model = version.kind.dictationModel
             if staysInRow {
                 Log.app.info("A continued dictation stayed in its History row: \(Brand.name, privacy: .public) was in front")
+                return
+            }
+            if job.isHeldByClick {
+                // The user clicked somewhere else meanwhile: the text waits on its card, to paste there or copy.
+                toasts.post(Self.clickedAwayCard(text, by: model, in: job.mode, id: job.id, quiet: machine.isRecording))
                 return
             }
             let insertion = await insert(pasted(text, by: model, in: job.mode))
@@ -1614,9 +1625,11 @@ final class DictationController {
         switch action.kind {
         case .copyText(let text):
             copy(text)
-            if notice.takesCardKeys {
+            if notice.isPasteCard {
                 // The paste tick says it's taken, though not into a recording.
                 if !machine.isRecording { playCue(.paste) }
+            }
+            if notice.takesCardKeys {
                 // Taken to paste elsewhere: ↩ is the app's again (`syncCardKeys`).
                 copiedCards.insert(notice.id)
                 syncCardKeys()
@@ -2924,6 +2937,8 @@ final class DictationController {
             job.translates.toggle()
             playCue(job.translates ? .polishOn : .polishOff)
         default:
+            // A click away holds its text on a card: there's no paste for Return to follow, so Send stays off.
+            guard !job.isHeldByClick else { return }
             job.sends.toggle()
             playCue(.sendOn)
             DiagnosticLog.shared.event(.dictation, "processing.key", ["key": "send", "on": job.sends])
@@ -2979,6 +2994,51 @@ final class DictationController {
         drain()
     }
 
+    // MARK: - A click away holds the paste
+
+    /// A click (left or right button) outside the app's own windows (`ClickAwayMonitor`). With General → Pasting's "Hold
+    /// the paste after a click" on, a dictation being processed (from its stop until its text is pasted, it fails or
+    /// it's canceled) isn't pasted: the user may be typing somewhere else by now. The pill's outline turns dashed, and
+    /// its text comes up on a card instead (`clickedAwayCard`). Send goes off for it, with its sound, and the plane
+    /// leaves the pill. One click is enough; another changes nothing. Clicks while a dictation records are part of
+    /// dictating (into another field, say), and change nothing either.
+    func clickedAway() {
+        guard settings.holdsPasteAfterClick, !machine.isRecording else { return }
+        // Not the one being pasted right now: its text is on its way in.
+        let jobs = queue.filter { !$0.isHeldByClick }
+        guard !jobs.isEmpty else { return }
+        var sendOff = false
+        for job in jobs {
+            job.isHeldByClick = true
+            if job.sends {
+                job.sends = false
+                sendOff = true
+            }
+        }
+        // Send's one sound, as when its key turns it off.
+        if sendOff { playCue(.sendOn) }
+        DiagnosticLog.shared.event(.dictation, "processing.clickedAway", ["sendOff": sendOff ? true : nil])
+        stateDidChange()
+    }
+
+    /// Listens for clicks only while one would hold a dictation's paste.
+    private var watchesClicks: Bool {
+        settings.holdsPasteAfterClick && !machine.isRecording && queue.contains { !$0.isHeldByClick }
+    }
+
+    nonisolated static let clickedAwayCardPrefix = "dictation.clickedAway."
+
+    /// "Not pasted: you clicked away": the dictation's text, Paste Here (by General → Pasting's rules for `model`, the
+    /// one that wrote it, in a dictation of `mode`) and Copy, as Polish Selection's card has them. Neither ↩ nor Esc is
+    /// its: the user clicked into something else, and is likely typing there. One per dictation (`id`). `quiet`: it
+    /// comes up without its sound.
+    nonisolated static func clickedAwayCard(_ text: String, by model: ModelChoice?, in mode: DictationMachine.Mode,
+                                            id: UUID, quiet: Bool = false) -> Notice {
+        pasteCard(text, key: clickedAwayCardPrefix + id.uuidString, symbol: "cursorarrow.click",
+                  title: "Not pasted: you clicked away", paste: .pasteText(text, by: model, in: mode),
+                  sound: quiet ? nil : .polishReady, takesKeys: false)
+    }
+
     // MARK: - The talk key as Undo
 
     /// "Dictation canceled · Undo" from a cancel of the user's (Esc, the pill's X, while recording or processing) is up,
@@ -3011,18 +3071,19 @@ final class DictationController {
 
     // MARK: - Cards of text to paste
 
-    /// A card of text to paste or copy, Polish Selection's answer: `title`, the text, Paste Here (`paste`) and Copy. Up
-    /// for 6 s and a second for every 20 words, longer while the pointer is over it; its countdown waits while a
-    /// dictation records (`Notice.waitsForDictation`). ↩ pastes it while it's the only one, Esc closes every one
-    /// (`syncCardKeys`). `sound`: nil for one that comes up while a dictation records.
+    /// A card of text to paste or copy, Polish Selection's answer or a dictation's a click away held: `title`, the text,
+    /// Paste Here (`paste`) and Copy. Up for 6 s and a second for every 20 words, longer while the pointer is over it;
+    /// its countdown waits while a dictation records (`Notice.waitsForDictation`). `takesKeys`: ↩ pastes it while it's
+    /// the only one, Esc closes every one (`syncCardKeys`). `sound`: nil for one that comes up while a dictation records.
     nonisolated static func pasteCard(_ text: String, key: String, symbol: String, title: String,
-                                      paste: NoticeActionKind, sound: SoundEffect?) -> Notice {
+                                      paste: NoticeActionKind, sound: SoundEffect?, takesKeys: Bool = true) -> Notice {
         let words = text.split(whereSeparator: \.isWhitespace).count
         let seconds = (6 + Double(words) / 20) * ToastCountdown.speed
         return Notice(dedupeKey: key, style: .info, symbol: symbol, title: title, transcript: text,
                       actions: [NoticeAction(title: "Paste Here", kind: paste, isPrimary: true),
                                 NoticeAction(title: "Copy", kind: .copyText(text))],
-                      lifetime: .seconds(seconds), sound: sound, takesCardKeys: true, waitsForDictation: true)
+                      lifetime: .seconds(seconds), sound: sound, isPasteCard: true, takesCardKeys: takesKeys,
+                      waitsForDictation: true)
     }
 
     /// Every card of text to paste up now whose keys are ↩ and Esc: Polish Selection's.
@@ -3332,6 +3393,11 @@ final class DictationController {
         // A selection's polish is never sent.
         let sends = phase.isRecording ? isSending : phase == .processing && pillJob?.sends == true
         if pillModel.sends != sends { pillModel.sends = sends }
+        // Dashed while the dictation on the pill is held by a click away, and still as the pill leaves with it: only
+        // the next dictation (or a processing pill that isn't one held) is solid again.
+        let holdsPaste = phase == .processing ? pillJob?.isHeldByClick == true
+            : phase.isRecording ? false : pillModel.holdsPaste
+        if pillModel.holdsPaste != holdsPaste { pillModel.holdsPaste = holdsPaste }
         // No job on the pill: the polish is the selection's, with no audio behind it.
         let selectionPolishing = (polishes || translates) && phase == .processing && pillJob == nil
         if pillModel.selectionPolishing != selectionPolishing { pillModel.selectionPolishing = selectionPolishing }
@@ -3357,6 +3423,8 @@ final class DictationController {
         if hotkeys.isRecording != machine.isRecording { hotkeys.isRecording = machine.isRecording }
         if hotkeys.isProcessing != machine.isProcessing { hotkeys.isProcessing = machine.isProcessing }
         let takesKeys = keyedJob != nil
+        let watches = watchesClicks
+        if let clickAway, clickAway.isWatching != watches { clickAway.isWatching = watches }
         if hotkeys.processingTakesKeys != takesKeys { hotkeys.processingTakesKeys = takesKeys }
         if queue.isEmpty {
             // Nothing left for the keys to settle: a release missed meanwhile isn't waited for next time.

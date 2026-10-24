@@ -65,6 +65,10 @@ final class PillModel {
     /// The polish on screen is a selection's (Polish Selection): nothing was heard, so the pill says "Polishing" where
     /// a dictation's shows the wave.
     var selectionPolishing = false
+    /// The dictation on screen won't be pasted: the user clicked away while it was processed (General → Pasting's
+    /// "Hold the paste after a click"), and its text will come up on a card. The processing pill's outline is dashed,
+    /// and stays so as the pill leaves with it.
+    var holdsPaste = false
     /// Bumped on every switch of the dictation's model, back to the main model too, so the chip names the new one
     /// for a moment.
     var engineChipPulse = 0 {
