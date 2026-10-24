@@ -168,11 +168,6 @@ final class AppSettings {
     /// The OpenRouter key older builds kept in the login keychain is settled: moved to its key file, never there, or
     /// a key was saved or removed since (`KeychainMigration`). From then on the Keychain is never asked again.
     var keychainKeyMigrated: Bool = false { didSet { store.set(keychainKeyMigrated, .keychainKeyMigrated) } }
-    /// General → Experimental: a plain dictation on Gemini goes to Parakeet on this Mac too, and Parakeet's text comes
-    /// up on a card while Gemini still works (`DictationController`). Off by default.
-    var showsParakeetWhileGemini: Bool = false {
-        didSet { store.set(showsParakeetWhileGemini, .showsParakeetWhileGemini) }
-    }
     /// The user's OpenAI-compatible endpoint (Models → API keys): its base URL as `VertexProxy.normalizedBaseURL`
     /// gives it, nil when none is set. A host-only value (what builds before the endpoint was generic saved for the
     /// Vertex proxy) still reads as `<host>/api/v1`. The name is from then, kept so a saved URL needs no migration.
@@ -252,12 +247,6 @@ final class AppSettings {
     /// Some model Switch model can reach needs Parakeet on this Mac, so it's worth loading.
     var usesLocalParakeet: Bool {
         lineup.cycle.contains(where: \.usesLocalParakeet)
-    }
-
-    /// Parakeet on this Mac is worth keeping loaded: a model Switch model reaches uses it, or it writes beside Gemini
-    /// (`showsParakeetWhileGemini`).
-    var keepsParakeetLoaded: Bool {
-        usesLocalParakeet || showsParakeetWhileGemini
     }
 
     /// The level `engine` thinks at: the one picked in Models for a Gemini model; nil for a model that doesn't reason.
@@ -450,7 +439,8 @@ final class AppSettings {
         lastLaunchedVersion = store.string(.lastLaunchedVersion)
         updatedVersionToAnnounce = store.string(.updatedVersionToAnnounce)
         if let v = store.bool(.keychainKeyMigrated) { keychainKeyMigrated = v }
-        if let v = store.bool(.showsParakeetWhileGemini) { showsParakeetWhileGemini = v }
+        // General → Experimental's "Show Parakeet's text while Gemini works" is gone: Gemini's text is the one pasted.
+        store.remove(.showsParakeetWhileGemini)
     }
 }
 
@@ -577,7 +567,7 @@ enum SettingsKey: String, CaseIterable {
     case argonPastingAdded
     /// The Calls tab's browser extension note was closed.
     case browserExtensionHintDismissed
-    /// General → Experimental's Parakeet text while Gemini works.
+    /// The removed "Show Parakeet's text while Gemini works" (General → Experimental), removed at load.
     case showsParakeetWhileGemini
 
     var defaultsKey: String { "tt.\(rawValue)" }

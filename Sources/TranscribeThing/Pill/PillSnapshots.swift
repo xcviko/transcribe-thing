@@ -188,17 +188,6 @@ enum PillSnapshots {
             SnapshotEntry("pill-toast-not-pasted", width: 640, height: 360) { _ in
                 CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.notPasted])
             },
-            // Parakeet's text while Gemini works (`--only pill-toast-parakeet`, Experimental): its card over the
-            // processing pill, no countdown; then with Gemini's count running, and a long text.
-            SnapshotEntry("pill-toast-parakeet", width: 640, height: 340) { _ in
-                CanvasScene(model: PillModelSheet.model(.processing, choice: .gemini),
-                            notices: [PillSnapshotFixtures.parakeetBeside])
-            },
-            SnapshotEntry("pill-toast-parakeet-counting", width: 640, height: 520) { _ in
-                CanvasScene(model: PillModelSheet.model(.processing, choice: .gemini)
-                                .previewCounter(PillTokenCount(phase: .thinking, tokens: 640)),
-                            notices: [PillSnapshotFixtures.parakeetBesideLong])
-            },
             // Undo's key (`--only pill-toast-undo`): "Dictation canceled" with the talk key on its button, fn and F5.
             SnapshotEntry("pill-toast-undo-key", width: 640, height: 250) { _ in
                 CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.canceledWithKey("fn")])
@@ -394,16 +383,6 @@ enum PillSnapshotFixtures {
     }()
 
     static let shortcutUnavailable = Notice.shortcutUnavailable(accessibility: .denied, likelyStale: false, shortcut: "fn")
-
-    /// What DictationController posts when Parakeet's text is there before Gemini's (General → Experimental).
-    static let parakeetBeside = DictationController.parakeetCard(
-        "Can you send me the deck before the call? I want another look at the pricing slide.",
-        id: UUID(), mode: .pushToTalk)
-    static let parakeetBesideLong = DictationController.parakeetCard(
-        "So the plan for Thursday is to move the design review to the afternoon so Maya can join, and I will send the "
-            + "updated deck tonight. Also, can someone check whether the staging build picked up the new onboarding "
-            + "copy? If it didn’t, let’s hold the release until Friday morning.",
-        id: UUID(), mode: .handsFree)
 
     /// "Dictation canceled · Undo" as DictationController posts it, the talk key `key` beside Undo.
     static func canceledWithKey(_ key: String) -> Notice {
