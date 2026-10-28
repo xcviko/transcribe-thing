@@ -19,9 +19,10 @@ enum NativeHostCLI {
 
     static func run(_ arguments: [String]) -> Never {
         signal(SIGPIPE, SIG_IGN)
+        let found = NativeHost.lookUpBrowser(parentOf: getpid())
         let host = NativeHost(input: STDIN_FILENO, output: STDOUT_FILENO,
                               socketPath: BrowserBridge.socketPath(for: AppPaths.live()),
-                              browserID: NativeHost.browserID(parentOf: getpid()))
+                              browserID: found.id, why: found.why)
         host.run()
         exit(0)
     }
@@ -35,6 +36,8 @@ final class NativeHost: @unchecked Sendable {
     private let output: Int32
     private let socketPath: String
     private let browserID: String?
+    /// Why `browserID` is nil, for the app's log.
+    private let why: String?
     private let retry: TimeInterval
     private let lock = NSLock()
     private let outputLock = NSLock()
@@ -46,11 +49,13 @@ final class NativeHost: @unchecked Sendable {
     private var hello: Data?
     private var done = false
 
-    init(input: Int32, output: Int32, socketPath: String, browserID: String?, retry: TimeInterval = 2) {
+    init(input: Int32, output: Int32, socketPath: String, browserID: String?, why: String? = nil,
+         retry: TimeInterval = 2) {
         self.input = input
         self.output = output
         self.socketPath = socketPath
         self.browserID = browserID
+        self.why = why
         self.retry = retry
     }
 
@@ -96,7 +101,8 @@ final class NativeHost: @unchecked Sendable {
                     return .some(hello)
                 }
                 guard case .some(let hello) = greeting else { return false }
-                let host = BrowserProtocol.encode("host", browserID.map { ["browserID": $0] } ?? [:])
+                let host = BrowserProtocol.encode("host", browserID.map { ["browserID": $0] }
+                                                  ?? why.map { ["why": $0] } ?? [:])
                 UnixSocket.writeAll(fd, NativeFrame.encode(host))
                 if let hello { UnixSocket.writeAll(fd, NativeFrame.encode(hello)) }
                 return true
@@ -127,19 +133,25 @@ final class NativeHost: @unchecked Sendable {
     /// helper of Chrome's too). Read from the parent's executable path and its bundle's Info.plist, never through
     /// AppKit or LaunchServices: a host that checked in with LaunchServices would count as a running transcribe-thing.
     static func browserID(parentOf pid: pid_t) -> String? {
+        lookUpBrowser(parentOf: pid).id
+    }
+
+    /// `browserID(parentOf:)`, and when it finds none, why: "pidinfo" (a process couldn't be read), "launchd" (no app
+    /// up the parents: started by launchd) or "noApp" (four parents up, none in an app).
+    static func lookUpBrowser(parentOf pid: pid_t) -> (id: String?, why: String?) {
         var current = pid
         for _ in 0..<4 {
             var info = proc_bsdinfo()
             let size = Int32(MemoryLayout<proc_bsdinfo>.size)
-            guard proc_pidinfo(current, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+            guard proc_pidinfo(current, PROC_PIDTBSDINFO, 0, &info, size) == size else { return (nil, "pidinfo") }
             let parent = pid_t(info.pbi_ppid)
-            guard parent > 1 else { return nil }
+            guard parent > 1 else { return (nil, "launchd") }
             if let path = executablePath(parent), let id = bundleID(ofExecutable: path) {
-                return CallApp.mainBundleID(of: id)
+                return (CallApp.mainBundleID(of: id), nil)
             }
             current = parent
         }
-        return nil
+        return (nil, "noApp")
     }
 
     private static func executablePath(_ pid: pid_t) -> String? {

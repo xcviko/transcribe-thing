@@ -39,6 +39,7 @@ private func shortFolder() throws -> URL {
             == .hello(installID: "abc", version: "1.0.0"))
         #expect(BrowserProtocol.decode(json(["v": 1, "type": "hello"])) == nil, "a hello without its id says nothing")
         #expect(BrowserProtocol.decode(json(["type": "host", "browserID": chromeID])) == .host(browserID: chromeID))
+        #expect(BrowserProtocol.decode(json(["type": "host", "why": "launchd"])) == .host(browserID: nil, why: "launchd"))
         #expect(BrowserProtocol.decode(json(["type": "gone", "id": 4])) == .gone(tabID: 4))
         #expect(BrowserProtocol.decode(json(["type": "audible", "tabs": [1, 2]])) == .audible([1, 2]))
         let meet = BrowserProtocol.Tab(id: 3, windowID: 1, host: "meet.google.com", room: "abc-defg-hij",
@@ -104,6 +105,51 @@ private final class Box: @unchecked Sendable {
 @Suite(.serialized) struct BrowserBridgeTests {
     final class Clock {
         var now = Date(timeIntervalSince1970: 1_790_000_000)
+    }
+
+    /// The host often can't tell its browser (Chrome starts it, yet it says nothing): the browser the app found from the
+    /// host's process stands, so the profile counts for Chrome, and the log says why the host didn't know.
+    @Test func theAppsOwnFindingOfTheBrowserStandsWhenTheHostCantTell() throws {
+        let clock = Clock()
+        let bridge = BrowserBridge(socketPath: nil, now: { clock.now })
+        let logs = FileManager.default.temporaryDirectory.appendingPathComponent("tt-bridge-\(UUID().uuidString)")
+        let log = DiagnosticLog()
+        log.start(directory: logs)
+        defer {
+            log.stop()
+            try? FileManager.default.removeItem(at: logs)
+        }
+        bridge.log = log
+        let browser = BrowserExtension(browsers: [], places: .temporary(), bridge: bridge)
+        bridge.opened(1, browserID: chromeID)
+        bridge.received(json(["type": "host", "why": "launchd"]), from: 1)
+        bridge.received(json(["v": 1, "type": "hello", "installID": profileID, "version": "1.0.0"]), from: 1)
+        #expect(browser.connections.first?.browserID == chromeID)
+        let text = log.retainedText()
+        #expect(text.contains("browser.hostUnsure why=launchd found=\(chromeID)"))
+        #expect(text.contains("browser.connected browser=\(chromeID)"))
+    }
+
+    /// The host's own word on its browser wins over what the app found.
+    @Test func theHostsWordOnItsBrowserWins() {
+        let bridge = BrowserBridge(socketPath: nil)
+        bridge.log = DiagnosticLog()
+        let browser = BrowserExtension(browsers: [], places: .temporary(), bridge: bridge)
+        bridge.opened(1, browserID: "com.example.other")
+        bridge.received(json(["type": "host", "browserID": chromeID]), from: 1)
+        bridge.received(json(["v": 1, "type": "hello", "installID": profileID, "version": "1.0.0"]), from: 1)
+        #expect(browser.connections.first?.browserID == chromeID)
+    }
+
+    /// The process at the other end of a connection, which the app finds the browser from.
+    @Test func thePeersProcessIsRead() throws {
+        var fds: [Int32] = [0, 0]
+        try #require(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0)
+        defer {
+            close(fds[0])
+            close(fds[1])
+        }
+        #expect(BrowserBridgeServer.peerPID(fds[0]) == getpid())
     }
 
     @Test func aProfileConnectsAndTellsItsTabs() throws {
