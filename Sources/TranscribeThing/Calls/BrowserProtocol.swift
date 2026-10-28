@@ -75,8 +75,9 @@ enum BrowserProtocol {
     enum Message: Equatable, Sendable {
         /// The extension, first on every connection: its profile's id (made once per profile) and its version.
         case hello(installID: String, version: String)
-        /// The host, before anything it passes on: the browser that started it, by bundle id.
-        case host(browserID: String?)
+        /// The host, before anything it passes on: the browser that started it, by bundle id; when it couldn't tell,
+        /// why (a code: "launchd", "pidinfo", "noApp").
+        case host(browserID: String?, why: String? = nil)
         case tab(Tab)
         case gone(tabID: Int)
         /// The tabs playing sound.
@@ -89,7 +90,7 @@ enum BrowserProtocol {
 
     private struct Kind: Decodable { var type: String }
     private struct Hello: Decodable { var installID: String; var version: String? }
-    private struct Host: Decodable { var browserID: String? }
+    private struct Host: Decodable { var browserID: String?; var why: String? }
     private struct OneTab: Decodable { var tab: Tab }
     private struct Gone: Decodable { var id: Int }
     private struct Audible: Decodable { var tabs: [Int] }
@@ -104,7 +105,7 @@ enum BrowserProtocol {
             guard let hello = try? decoder.decode(Hello.self, from: data), !hello.installID.isEmpty else { return nil }
             return .hello(installID: hello.installID, version: hello.version ?? "")
         case "host":
-            return (try? decoder.decode(Host.self, from: data)).map { .host(browserID: $0.browserID) }
+            return (try? decoder.decode(Host.self, from: data)).map { .host(browserID: $0.browserID, why: $0.why) }
         case "tab":
             return (try? decoder.decode(OneTab.self, from: data)).map { .tab($0.tab) }
         case "gone":

@@ -64,9 +64,12 @@ final class BrowserBridge {
     func start() {
         guard server == nil, let socketPath else { return }
         let server = BrowserBridgeServer(path: socketPath)
-        // In order, on the main queue: a connection's messages never overtake its opening or its end.
-        server.onOpen = { [weak self] peer in
-            DispatchQueue.main.async { MainActor.assumeIsolated { self?.opened(peer) } }
+        // In order, on the main queue: a connection's messages never overtake its opening or its end. The browser
+        // is found here from the host's own process, up its parents (`NativeHost.browserID(parentOf:)`): the host's
+        // word on it is often missing (it logs why).
+        server.onOpen = { [weak self] peer, pid in
+            let browserID = pid.flatMap { NativeHost.browserID(parentOf: $0) }
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.opened(peer, browserID: browserID) } }
         }
         server.onMessage = { [weak self] peer, data in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.received(data, from: peer) } }
@@ -102,8 +105,9 @@ final class BrowserBridge {
 
     // MARK: What the hosts say
 
-    func opened(_ peer: Int) {
-        profiles[peer] = Profile(lastSeen: now())
+    /// `browserID`: the browser of the process that connected, as the app found it; the host's own word wins.
+    func opened(_ peer: Int, browserID: String? = nil) {
+        profiles[peer] = Profile(browserID: browserID, lastSeen: now())
     }
 
     func closed(_ peer: Int) {
@@ -115,8 +119,13 @@ final class BrowserBridge {
         profile.lastSeen = now()
         let before = profile
         switch BrowserProtocol.decode(data) {
-        case .host(let browserID):
-            profile.browserID = browserID
+        case .host(let browserID, let why):
+            if let browserID {
+                profile.browserID = browserID
+            } else {
+                log.event(.calls, "browser.hostUnsure", ["why": why ?? "unknown",
+                                                         "found": profile.browserID ?? "unknown"])
+            }
         case .hello(let installID, let version):
             profile.installID = installID
             profile.version = version
@@ -245,7 +254,8 @@ final class BrowserBridge {
 final class BrowserBridgeServer: @unchecked Sendable {
     // @unchecked: everything mutable is touched on `queue` only; the callbacks are set before `start`.
 
-    var onOpen: @Sendable (Int) -> Void = { _ in }
+    /// A connection, and the process at its other end when the system says (`LOCAL_PEERPID`).
+    var onOpen: @Sendable (Int, pid_t?) -> Void = { _, _ in }
     var onMessage: @Sendable (Int, Data) -> Void = { _, _ in }
     var onClose: @Sendable (Int) -> Void = { _ in }
 
@@ -311,9 +321,17 @@ final class BrowserBridgeServer: @unchecked Sendable {
             source.setEventHandler { [weak self] in self?.read(id) }
             source.setCancelHandler { Darwin.close(fd) }
             peers[id] = Peer(fd: fd, source: source)
-            onOpen(id)
+            onOpen(id, Self.peerPID(fd))
             source.resume()
         }
+    }
+
+    /// The process at the other end of a Unix socket connection.
+    static func peerPID(_ fd: Int32) -> pid_t? {
+        var pid: pid_t = 0
+        var size = socklen_t(MemoryLayout<pid_t>.size)
+        guard getsockopt(fd, SOL_LOCAL, LOCAL_PEERPID, &pid, &size) == 0, pid > 0 else { return nil }
+        return pid
     }
 
     private func read(_ id: Int) {
