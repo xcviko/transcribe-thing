@@ -86,6 +86,7 @@ final class HotkeyMonitor {
     var cardPaste = false {
         didSet { if cardPaste != oldValue { pushConfig() } }
     }
+    /// Esc closes those cards, or "Dictation canceled · Undo", while no dictation is busy.
     var cardClose = false {
         didSet { if cardClose != oldValue { pushConfig() } }
     }

@@ -325,6 +325,32 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
         #expect(kb.down(kVK_Escape).events == [.cardClose])
     }
 
+    /// "Dictation canceled · Undo" up with nothing busy (the controller sets `cardClose` alone): bare Esc closes it,
+    /// swallowed, and ↩ stays the app's. With no such notice Esc goes to the app, so does ⇧Esc with it, and while a
+    /// dictation is busy Esc cancels that one.
+    @Test func escClosesTheUndoNoticeOnlyWhileIdle() {
+        var kb = Keyboard()
+        let passed = kb.down(kVK_Escape)
+        #expect(passed.events.isEmpty && !passed.swallow, "no notice: Esc is the app's")
+        kb.up(kVK_Escape)
+
+        kb.config.cardClose = true
+        let close = kb.down(kVK_Escape)
+        #expect(close.events == [.cardClose] && close.swallow)
+        #expect(kb.up(kVK_Escape).swallow)
+        #expect(!kb.down(kVK_Return).swallow, "↩ isn't the notice's")
+        kb.up(kVK_Return)
+        kb.press(.leftShift)
+        let shifted = kb.down(kVK_Escape)
+        #expect(shifted.events.isEmpty && !shifted.swallow, "only bare Esc")
+        kb.up(kVK_Escape)
+        kb.release(.leftShift)
+
+        kb.config.isBusy = true
+        kb.config.isRecording = true
+        #expect(kb.down(kVK_Escape).events == [.cancel], "a dictation recording: Esc cancels it")
+    }
+
     /// A key the user bound themselves stays theirs while a card is up: bare Keypad Enter for Paste Last.
     @Test func theCardsKeysYieldToTheUsersBindings() {
         let keypadEnter = Shortcut(modifiers: [], keyCode: UInt16(kVK_ANSI_KeypadEnter))

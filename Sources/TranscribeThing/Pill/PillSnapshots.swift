@@ -211,6 +211,15 @@ enum PillSnapshots {
             SnapshotEntry("pill-toast-undo-key-f5", width: 640, height: 250) { _ in
                 CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.canceledWithKey("F5")])
             },
+            // Canceled on its way to Gemini: no key on Undo (the talk key starts a new dictation), alone and over the
+            // new dictation the talk key started.
+            SnapshotEntry("pill-toast-undo-processing", width: 640, height: 250) { _ in
+                CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.canceledWhileProcessing])
+            },
+            SnapshotEntry("pill-toast-undo-processing-recording", width: 640, height: 250) { _ in
+                CanvasScene(model: .preview(phase: .listening, recordingFor: 2),
+                            notices: [PillSnapshotFixtures.canceledWhileProcessing])
+            },
             SnapshotEntry("pill-toast-shortcut", width: 640, height: 270) { _ in
                 CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.shortcutUnavailable])
             },
@@ -415,12 +424,14 @@ enum PillSnapshotFixtures {
             + "timeline Maya asked about. If it isn’t ready, Friday morning works too.",
         by: .gemini, in: .handsFree, id: UUID())
 
-    /// "Dictation canceled · Undo" as DictationController posts it, the talk key `key` beside Undo.
+    /// "Dictation canceled · Undo" as DictationController posts it after a cancel while recording, the talk key `key`
+    /// beside Undo.
     static func canceledWithKey(_ key: String) -> Notice {
-        Notice(dedupeKey: "dictation.canceled", style: .info, symbol: "xmark.circle", title: "Dictation canceled",
-               actions: [NoticeAction(title: "Undo", kind: .undoCancel, isPrimary: true, keyHint: key)],
-               lifetime: .seconds(6), sound: .cancel)
+        DictationController.canceledNotice(recordingID: UUID(), talkKey: key)
     }
+
+    /// The same after a cancel while the dictation was on its way: no key on Undo.
+    static let canceledWhileProcessing = DictationController.canceledNotice(recordingID: UUID(), talkKey: nil)
 
     static let micFallback = Notice(
         dedupeKey: "mic.fallback", style: .warning, symbol: "mic.fill",

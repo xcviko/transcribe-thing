@@ -105,7 +105,7 @@ struct HotkeyRouter: Equatable, Sendable {
         /// intercepted.
         var switchesModels = true
         /// Polish Selection's cards: ↩ (with no modifier) is theirs unless a dictation records, and Esc closes them
-        /// unless one is busy.
+        /// unless one is busy. Esc also closes "Dictation canceled · Undo" (`cardClose` alone).
         var cardPaste = false
         var cardClose = false
         /// While the shortcut recorder captures keys: nothing fires and nothing is swallowed.

@@ -425,6 +425,7 @@ final class DictationController {
         case .cardClose:
             // Esc stops a polish still under way too, with the cancel cue.
             if selectionPolish?.isRunning == true { playCue(.cancel) }
+            closeUndoNotice()
             closeCards()
         }
     }
@@ -758,9 +759,10 @@ final class DictationController {
 
     private func captured(_ recording: Recording, for job: Job) {
         if job.isCancelled {
-            // Esc during the tail: the job already left the queue and the cancel cue has played.
+            // Esc during the tail: the job already left the queue and the cancel cue has played. The user had stopped
+            // recording, so the talk key that follows starts a new dictation (`keepCancelled`'s `talkKeyUndoes`).
             keepCancelled(recording, engine: job.engine, mode: job.mode, polishes: job.polishes,
-                          translates: job.translates, sends: job.sends, notify: true)
+                          translates: job.translates, sends: job.sends, notify: true, talkKeyUndoes: false)
             return
         }
         // Only now that the tail is captured: the cue stays out of the recording.
@@ -840,7 +842,7 @@ final class DictationController {
 
     /// Keeps a canceled recording for Undo (and in history when it's long). Only one History keeps is kept on disk:
     /// the rest is the user's to Undo while the app runs, not to find again after a crash. `talkKeyUndoes`: its notice's
-    /// Undo is the talk key's too (`postCanceled`).
+    /// Undo is the talk key's too (`postCanceled`), for a cancel while it recorded.
     private func keepCancelled(_ recording: Recording, engine: EngineID, mode: DictationMachine.Mode,
                                polishes: Bool = false, translates: Bool = false, sends: Bool = false, notify: Bool,
                                talkKeyUndoes: Bool = true) {
@@ -896,13 +898,21 @@ final class DictationController {
     }
 
     /// "Dictation canceled · Undo", nothing more (a long enough recording is in History too). After an Undo that
-    /// couldn't pick the recording up, `note` says why. `talkKeyUndoes`: the user canceled it (Esc, the pill's X), and
-    /// while it's up the talk key is its Undo (`undoNotice`), named on the button.
+    /// couldn't pick the recording up, `note` says why. `talkKeyUndoes`: the user canceled it while it recorded (Esc,
+    /// the pill's X), and while it's up the talk key is its Undo (`undoNotice`), named on the button. One canceled on
+    /// its way to the engine leaves the talk key to start a new dictation: only its button brings it back.
     private func postCanceled(_ recording: Recording, note: String? = nil, talkKeyUndoes: Bool = true) {
-        toasts.post(Notice(dedupeKey: "dictation.canceled", style: .info, symbol: "xmark.circle",
-                           title: "Dictation canceled", body: note,
-                           actions: [undoAction(byTalkKey: talkKeyUndoes)],
-                           lifetime: .seconds(note == nil ? 6 : 10), recordingID: recording.id))
+        let key = talkKeyUndoes ? settings.shortcuts[.pushToTalk]?.compactDescription : nil
+        toasts.post(Self.canceledNotice(recordingID: recording.id, note: note, talkKey: key))
+    }
+
+    nonisolated static let canceledNoticeKey = "dictation.canceled"
+
+    /// "Dictation canceled · Undo" (`postCanceled`); `talkKey`, the talk key named on Undo, which does it too.
+    nonisolated static func canceledNotice(recordingID: UUID?, note: String? = nil, talkKey: String?) -> Notice {
+        Notice(dedupeKey: canceledNoticeKey, style: .info, symbol: "xmark.circle", title: "Dictation canceled",
+               body: note, actions: [NoticeAction(title: "Undo", kind: .undoCancel, isPrimary: true, keyHint: talkKey)],
+               lifetime: .seconds(note == nil ? 6 : 10), recordingID: recordingID)
     }
 
     /// A dictation's recording that ends here without History keeping it (thrown away, or kept in memory for Undo
@@ -1303,8 +1313,10 @@ final class DictationController {
         dismissWaitNotice(for: job.id)
         _ = machine.handle(.jobEnded, now: clock())
         if let recording = job.recording {
+            // It had stopped recording (on its way to the engine): the talk key that follows starts a new dictation,
+            // and only the notice's Undo button brings this one back.
             keepCancelled(recording, engine: job.engine, mode: job.mode, polishes: job.polishes,
-                          translates: job.translates, sends: job.sends, notify: true)
+                          translates: job.translates, sends: job.sends, notify: true, talkKeyUndoes: false)
         }
         drain()
         return true
@@ -1687,7 +1699,7 @@ final class DictationController {
             toasts.post(Notice(dedupeKey: "engine.selected", style: .success, symbol: main.symbolName,
                                title: "Now using \(main.title)", lifetime: .seconds(3)))
         case .undoCancel:
-            undo(recordingID: notice.recordingID ?? lastCancelledID)
+            undo(recordingID: notice.recordingID ?? lastCancelledID, byTalkKey: action.keyHint != nil)
         case .chooseMicrophone:
             openHub?(.microphone)
         case .useBuiltInMicrophone:
@@ -2063,8 +2075,9 @@ final class DictationController {
     }
 
     /// Undo of a cancel: the dictation picks up again hands-free, its kept audio first, and nothing is transcribed
-    /// or pasted until the user stops (Esc cancels it again, all of it).
-    private func undo(recordingID: UUID?) {
+    /// or pasted until the user stops (Esc cancels it again, all of it). `byTalkKey`: the notice's Undo was the talk
+    /// key's too, and the notice that says why it can't be done now keeps it so.
+    private func undo(recordingID: UUID?, byTalkKey: Bool = true) {
         guard let id = recordingID, let recording = recording(for: id) else {
             postRecordingGone()
             return
@@ -2073,13 +2086,16 @@ final class DictationController {
         guard history.entry(id: id)?.status != .success else { return }
         // Already being transcribed (from Home) or recorded on.
         guard !isInFlight(id) else { return }
+        // A dictation started meanwhile (the talk key after a cancel of one on its way, hands-free, the pill) is
+        // the user's now: it goes on, and the canceled one waits for it.
         guard !machine.isRecording else {
-            postCanceled(recording, note: "Finish this dictation first, then Undo.")
+            postCanceled(recording, note: "Finish this dictation first, then Undo.", talkKeyUndoes: byTalkKey)
             return
         }
         // No new recording while a dictation is processed (`DictationMachine`): its text is pasted first.
         guard !machine.isProcessing else {
-            postCanceled(recording, note: "Wait for the text on its way to be pasted, then Undo.")
+            postCanceled(recording, note: "Wait for the text on its way to be pasted, then Undo.",
+                         talkKeyUndoes: byTalkKey)
             return
         }
         let row = history.entry(id: id)
@@ -2088,7 +2104,7 @@ final class DictationController {
         let mode = row.flatMap { $0.status == .failed && $0.interruption != nil ? $0.mode : nil }
         if !recordOn(recording, engine: engine, mode: mode) {
             // The mic didn't start (its error is showing): the audio stays for another Undo.
-            postCanceled(recording, note: Self.undoResumesHint)
+            postCanceled(recording, note: Self.undoResumesHint, talkKeyUndoes: byTalkKey)
         }
     }
 
@@ -2219,7 +2235,7 @@ final class DictationController {
         switch kind {
         case .stoppedByOtherKey:
             guard let id = lastCancelledID, retained[id] != nil else { return }
-            toasts.post(Notice(dedupeKey: "dictation.canceled", style: .info, symbol: "keyboard",
+            toasts.post(Notice(dedupeKey: Self.canceledNoticeKey, style: .info, symbol: "keyboard",
                                title: "Dictation stopped",
                                body: "You pressed another key while holding \(pttHint). \(Self.undoResumesHint)",
                                actions: [undoAction(byTalkKey: false)],
@@ -3068,12 +3084,14 @@ final class DictationController {
 
     // MARK: - The talk key as Undo
 
-    /// "Dictation canceled · Undo" from a cancel of the user's (Esc, the pill's X, while recording or processing) is up,
-    /// and nothing records or is processed: a press of the talk key is its Undo, not a new dictation. Closed, or gone by
-    /// itself, the talk key starts dictations again.
+    /// "Dictation canceled · Undo" from a cancel of the user's while it recorded (Esc, the pill's X) is up, and nothing
+    /// records or is processed: a press of the talk key is its Undo, not a new dictation. Closed (its X, or Esc:
+    /// `escClosesUndoNotice`), or gone by itself, the talk key starts dictations again. After a cancel of a dictation
+    /// on its way to the engine the talk key starts a new one at once: the user had stopped recording, and pressing
+    /// it again means to say something new.
     private var undoNoticeOwnsTalkKey: Bool { undoNotice != nil }
 
-    /// The notice whose Undo names the talk key (`undoAction(byTalkKey:)`).
+    /// The notice whose Undo names the talk key (`postCanceled`'s `talkKeyUndoes`).
     private var undoNotice: Notice? {
         guard machine.capture == .idle, machine.activeJobs == 0 else { return nil }
         return toasts.notices.last { notice in
@@ -3088,6 +3106,20 @@ final class DictationController {
         }
         DiagnosticLog.shared.event(.dictation, "undo.talkKey")
         toasts.perform(action, on: notice)
+    }
+
+    /// A cancel's notice ("Dictation canceled · Undo", "Dictation stopped · Undo") is up and nothing records or is
+    /// processed: bare Esc closes it, as its X does, and the app keeps the key (`syncCardKeys`). While a dictation is
+    /// busy Esc cancels that one instead, and the notice stays.
+    private var escClosesUndoNotice: Bool {
+        !machine.isBusy && toasts.notices.contains { $0.dedupeKey == Self.canceledNoticeKey }
+    }
+
+    /// Esc with a cancel's notice up (`escClosesUndoNotice`): it goes, and the talk key starts dictations again.
+    private func closeUndoNotice() {
+        guard escClosesUndoNotice else { return }
+        DiagnosticLog.shared.event(.dictation, "undo.closedByEsc")
+        toasts.dismiss(dedupeKey: Self.canceledNoticeKey)
     }
 
     /// The Undo button of a cancel's notice; `byTalkKey`, with the talk key, which does it too, named beside it.
@@ -3134,14 +3166,14 @@ final class DictationController {
     }
 
     /// ↩ belongs to the cards while any is up (it pastes the only one), until one is copied: then the user is pasting
-    /// it elsewhere, and ↩ is the app's again. Esc closes them, and stops a polish still under way. Neither works
-    /// while a dictation records (or Esc, transcribes).
+    /// it elsewhere, and ↩ is the app's again. Esc closes them, and stops a polish still under way; it closes a
+    /// cancel's notice too (`escClosesUndoNotice`). Neither works while a dictation records (or Esc, transcribes).
     private func syncCardKeys() {
         let cards = pasteCards
         copiedCards.formIntersection(cards.map(\.id))
         let copied = !copiedCards.isEmpty
         let takesReturn = !cards.isEmpty && !copied
-        let takesEsc = !cards.isEmpty || selectionPolish?.isRunning == true
+        let takesEsc = !cards.isEmpty || selectionPolish?.isRunning == true || escClosesUndoNotice
         if hotkeys.cardPaste != takesReturn { hotkeys.cardPaste = takesReturn }
         if hotkeys.cardClose != takesEsc { hotkeys.cardClose = takesEsc }
         // The talk key is Undo while a cancel's notice is up: a key in its press calls that off.

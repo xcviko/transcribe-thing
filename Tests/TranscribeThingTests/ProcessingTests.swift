@@ -468,29 +468,121 @@ enum ProcessingRig {
         c.handle(.cancel)
     }
 
-    /// The same after Esc while the dictation was being transcribed.
-    @Test func aTapIsUndoAfterACancelWhileProcessing() async throws {
-        let rig = Self.make()
-        let c = rig.h.controller
-        let gate = RequestGate()
+    /// Two seconds dictated and let go, then Esc while it's on its way to the engine: "Dictation canceled · Undo",
+    /// with no key on Undo. `gate` holds every request.
+    static func cancelWhileProcessing(_ rig: Rig, gate: RequestGate) async throws -> UUID {
         rig.result = { _, _ in
             try await gate.wait()
-            return "words"
+            return "new words"
         }
         let kept = DictationResumeTests.speech(seconds: 2)
         rig.h.recorder.next = kept
         Switch.hold(rig)
         rig.now += 2
-        c.handle(.pttUp)
+        rig.h.controller.handle(.pttUp)
         try await waitUntil { rig.transcribed.count == 1 }
-        c.handle(.cancel)
-        try await waitUntil { c.machine.activeJobs == 0 && rig.notice("dictation.canceled") != nil }
+        rig.h.controller.handle(.cancel)
+        try await waitUntil { rig.h.controller.machine.activeJobs == 0 && rig.notice("dictation.canceled") != nil }
+        let notice = try #require(rig.notice("dictation.canceled"))
+        #expect(notice.actions.map(\.kind) == [.undoCancel])
+        #expect(notice.actions.first?.keyHint == nil, "no talk key on Undo")
+        #expect(!rig.h.hotkeys.reportsKeysDuringHold)
+        return kept.id
+    }
+
+    /// After Esc while the dictation was being transcribed, the talk key starts a new dictation at once (the user
+    /// had stopped recording, and pressing it again means to say something new): no Undo, and the notice stays.
+    /// Undo clicked during the new recording is refused ("finish first", still no key on it); once the new one is
+    /// pasted, the click brings the canceled one back.
+    @Test func afterACancelWhileProcessingTheTalkKeyStartsANewDictation() async throws {
+        let rig = Self.make()
+        let c = rig.h.controller
+        let gate = RequestGate()
+        let kept = try await Self.cancelWhileProcessing(rig, gate: gate)
+        let starts = rig.h.recorder.starts
+
+        rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
         c.handle(.pttDown)
-        #expect(!c.machine.isRecording)
+        #expect(c.machine.capture.isArming && rig.h.recorder.starts == starts + 1, "the press starts a dictation")
+        c.send(.timer(.arming))
+        #expect(rig.h.recorder.lastPrefix == nil, "a new dictation, not the canceled one")
+        #expect(rig.notice("dictation.canceled") != nil, "the notice stays")
+
+        try rig.click(.undoCancel, in: "dictation.canceled")
+        let refused = try #require(rig.notice("dictation.canceled"))
+        #expect(refused.body == "Finish this dictation first, then Undo.")
+        #expect(refused.actions.first?.keyHint == nil)
+        #expect(c.machine.capture.isListeningOrLocked && c.machine.mode == .pushToTalk, "the new one goes on")
+        #expect(rig.h.recorder.lastPrefix == nil)
+
+        rig.now += 2
         c.handle(.pttUp)
+        gate.isOpen = true
+        try await waitUntil { rig.pasted == ["new words"] && c.machine.activeJobs == 0 }
+        #expect(rig.transcribed.count == 2 && rig.transcribed.last?.id != kept)
+        #expect(!rig.h.hotkeys.reportsKeysDuringHold, "the talk key still isn't Undo")
+
+        try rig.click(.undoCancel, in: "dictation.canceled")
         #expect(c.machine.isRecording && c.machine.mode == .handsFree)
-        #expect(rig.h.recorder.lastPrefix?.id == kept.id)
+        #expect(rig.h.recorder.lastPrefix?.id == kept)
         c.handle(.cancel)
+    }
+
+    /// The notice's Undo button still brings a dictation canceled on its way back, recording on hands-free.
+    @Test func undoClickedAfterACancelWhileProcessingRestoresIt() async throws {
+        let rig = Self.make()
+        let c = rig.h.controller
+        let kept = try await Self.cancelWhileProcessing(rig, gate: RequestGate())
+        try rig.click(.undoCancel, in: "dictation.canceled")
+        #expect(c.machine.isRecording && c.machine.mode == .handsFree)
+        #expect(rig.h.recorder.lastPrefix?.id == kept)
+        #expect(rig.notice("dictation.canceled") == nil)
+        c.handle(.cancel)
+    }
+
+    // MARK: Esc closes the notice
+
+    /// With the notice up and nothing busy, Esc is the notice's (swallowed by the router: `cardClose`) and closes it,
+    /// as its X does: then the talk key starts a dictation again, and Esc is the app's. The same for both cancels.
+    @Test(arguments: ["recording", "processing"])
+    func escClosesTheNotice(_ canceled: String) async throws {
+        let rig = Self.make()
+        let c = rig.h.controller
+        #expect(!rig.h.hotkeys.cardClose, "no notice: Esc is the app's")
+        if canceled == "recording" {
+            _ = try Self.cancelWhileRecording(rig)
+        } else {
+            _ = try await Self.cancelWhileProcessing(rig, gate: RequestGate())
+        }
+        #expect(rig.h.hotkeys.cardClose)
+
+        c.handle(.cardClose)
+        #expect(rig.notice("dictation.canceled") == nil)
+        #expect(!rig.h.hotkeys.cardClose && !rig.h.hotkeys.reportsKeysDuringHold)
+        c.handle(.pttDown)
+        #expect(c.machine.capture.isArming, "the talk key records again")
+        #expect(!rig.h.hotkeys.cardClose, "recording: Esc cancels it")
+        c.handle(.cancel)
+    }
+
+    /// Esc during a dictation started while the notice is up cancels that dictation: the router gives it to the
+    /// dictation (`cardClose` is off while busy), and an Esc that reached the notice's path anyway leaves it.
+    @Test func escWhileRecordingCancelsItAndLeavesTheNotice() async throws {
+        let rig = Self.make()
+        let c = rig.h.controller
+        let canceled = try await Self.cancelWhileProcessing(rig, gate: RequestGate())
+        // Too short to keep for Undo: its cancel posts nothing over the notice.
+        rig.h.recorder.next = DictationResumeTests.speech(seconds: 0.5)
+        Switch.hold(rig)
+        #expect(c.machine.isRecording && rig.h.hotkeys.isBusy && !rig.h.hotkeys.cardClose)
+        c.handle(.cardClose)
+        #expect(c.machine.isRecording && rig.notice("dictation.canceled") != nil)
+        rig.now += 0.5
+        c.handle(.cancel)
+        #expect(!c.machine.isRecording)
+        let notice = try #require(rig.notice("dictation.canceled"), "the notice stays")
+        #expect(notice.recordingID == canceled)
+        #expect(rig.h.hotkeys.cardClose, "idle again: the next Esc closes it")
     }
 
     /// A chord off the talk key does what it does, and no Undo: Paste last (F5 V), hands-free (a new dictation), or
