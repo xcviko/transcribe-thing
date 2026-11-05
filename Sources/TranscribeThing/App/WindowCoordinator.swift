@@ -15,8 +15,6 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         // The toolbar names the page, as System Settings' does.
         didSet { hubWindow?.title = hubSection.title }
     }
-    /// The call the Calls tab's detail page shows (`HubSection.callDetail`).
-    var openCallID: UUID?
 
     @ObservationIgnored weak var environment: AppEnvironment?
     @ObservationIgnored private let settings: AppSettings
@@ -145,8 +143,6 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         // Drop the window and its SwiftUI tree so the agent stays light in the background.
         if closing === hubWindow {
             hubWindow = nil
-            // A call played on its page no longer holds the play/pause key once the window is gone.
-            CallNowPlaying.shared.release()
         }
         if closing === onboardingWindow { onboardingWindow = nil }
         // The closing window still counts as visible during willClose.

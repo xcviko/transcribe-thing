@@ -25,8 +25,7 @@ struct GeneralPage: View {
                 AboutCard()
                 SoftwareUpdateRow()
             }
-            HubGroup("You", footer: "Home greets you by it, and call transcripts name you with it. Empty: "
-                     + "your Mac account’s name.") {
+            HubGroup("You", footer: "Home greets you by it. Empty: your Mac account’s name.") {
                 SettingsGroup {
                     SettingsRow(title: "Your name", systemImage: "person.crop.circle", iconTint: .inkSecondary) {
                         TextField("Your name", text: $settings.userName, prompt: Text(AppSettings.macFirstName ?? "Name"))
@@ -96,8 +95,6 @@ struct GeneralPage: View {
                     }
                 }
             }
-            CallsSettingsGroup()
-            BrowserExtensionGroup()
             HubGroup("History") {
                 SettingsGroup {
                     SettingsRow(title: "Auto-delete history", systemImage: "clock.arrow.circlepath",
@@ -131,6 +128,7 @@ struct GeneralPage: View {
                             permissions.requestAccessibility()
                         }
                     }
+                    SystemAudioRow()
                 }
             }
             HubGroup("Troubleshooting") {
@@ -345,6 +343,8 @@ private struct PermissionRow: View {
     var subtitle: String?
     var symbol: String
     var state: PermissionState
+    /// Nothing breaks without it: not set up reads as a quiet choice, not as a warning.
+    var isOptional = false
     var action: () -> Void
 
     /// Icon and status share one tone. Off is red, like Home's attention card for the same problem.
@@ -352,7 +352,7 @@ private struct PermissionRow: View {
         switch state {
         case .granted: .success
         case .denied: .danger
-        case .notDetermined: .warning
+        case .notDetermined: isOptional ? .inkSecondary : .warning
         }
     }
 
@@ -523,108 +523,53 @@ private struct PastingRules: View {
     }
 }
 
-/// General → Calls: whether calls are noticed (and asked about), where, and the permission their other side needs.
-struct CallsSettingsGroup: View {
+/// General → Permissions → System Audio Recording: what lets a dictation take out the music the Mac plays
+/// (`DictationEcho`). Optional: without it a dictation is the mic as recorded. The app never asks on its own (a prompt
+/// mid-dictation would be worse than the music), so Allow makes a tap for a moment, which brings up macOS's question;
+/// once answered, it's changed in Privacy & Security.
+private struct SystemAudioRow: View {
     @Environment(HubContext.self) private var hub
-    @Environment(AppSettings.self) private var settings
+    @Environment(PermissionsCenter.self) private var permissions
+    @State private var status = SystemAudioPermission.Status.unknown
 
     var body: some View {
-        @Bindable var settings = settings
-        HubGroup("Calls", footer: CallsCopy.settingsFooter) {
-            SettingsGroup {
-                SettingsRow(title: "Record calls", subtitle: modeSubtitle, systemImage: "phone",
-                            iconTint: .inkSecondary) {
-                    HubMenuPicker(title: "Record calls", options: CallRecordingMode.pickerOrder,
-                                  selection: $settings.callRecording, label: \.title)
+        PermissionRow(title: "System Audio Recording", subtitle: Self.subtitle(status), symbol: "speaker.wave.2.fill",
+                      state: Self.state(status), isOptional: true) {
+            if status == .unknown, !hub.isPreview {
+                SystemAudioPermission.ask()
+                Task {
+                    try? await Task.sleep(for: .seconds(3))
+                    refresh()
                 }
-                SettingsRow(title: "Show call notices",
-                            subtitle: "A brief note above the pill when a call is noticed, when you mute or unmute, "
-                                + "and when it ends.",
-                            systemImage: "text.bubble", iconTint: .inkSecondary) {
-                    Toggle("", isOn: $settings.showsCallNotices)
-                        .toggleStyle(.appSwitch)
-                        .labelsHidden()
-                }
-                SettingsRow(title: "System Audio Recording",
-                            subtitle: systemAudioSubtitle,
-                            systemImage: "speaker.wave.2", iconTint: .inkSecondary) {
-                    Button("Open Settings") { hub.openSettings(.systemAudio) }
-                        .buttonStyle(SecondaryButtonStyle(size: .small))
-                }
-                SettingsRow(title: "Never recorded", subtitle: CallsCopy.exclusionsSubtitle(empty: settings.callExclusions.isEmpty),
-                            systemImage: "nosign", iconTint: .inkSecondary)
-                ForEach(settings.callExclusions) { exclusion in
-                    CallExclusionRow(exclusion: exclusion) { settings.removeCallExclusion(exclusion) }
-                }
+            } else {
+                permissions.open(.systemAudio)
             }
         }
-    }
-
-    /// What macOS says about recording other apps' sound, read as the page draws.
-    private var systemAudioSubtitle: String {
-        switch SystemAudioPermission.current() {
-        case .authorized: "Allowed: the app records the other side of a call."
-        case .denied: "Not allowed: the other side of a call comes out silent. Turn it on in Privacy & Security."
-        case .unknown: "Lets the app record the other side of a call. macOS asks the first time a call is recorded."
+        .onAppear { refresh() }
+        // Turned on or off in System Settings, or answered in macOS's prompt.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            refresh()
         }
     }
 
-    private var modeSubtitle: String {
-        switch settings.callRecording {
-        case .off: "Only Start Call Recording in the menu bar records."
-        case .ask: "A call is recorded, and you’re asked whether to transcribe it."
-        case .automatic: "Every call is recorded and transcribed."
-        }
-    }
-}
-
-/// One app or site under Never recorded: its icon, its name, what it is, and − to notice its calls again.
-private struct CallExclusionRow: View {
-    var exclusion: CallExclusion
-    var onRemove: () -> Void
-    @Environment(\.inNativeForm) private var inNativeForm
-
-    var body: some View {
-        HStack(spacing: Theme.Spacing.sm) {
-            icon
-                .frame(width: 28, height: 28)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(exclusion.name)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.ink)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Text(exclusion.kindTitle)
-                    .typeface(.callout)
-                    .foregroundStyle(.inkSecondary)
-            }
-            Spacer(minLength: Theme.Spacing.md)
-            Button(action: onRemove) {
-                Image(systemName: "minus")
-                    .font(.system(size: 11, weight: .bold))
-                    .frame(width: 22, height: 22)
-                    .background(Color.inkSecondary.opacity(0.12), in: Circle())
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.inkSecondary)
-            .help("Notice calls in \(exclusion.name) again")
-            .accessibilityLabel("Remove \(exclusion.name)")
-        }
-        .padding(.horizontal, inNativeForm ? 0 : Theme.Spacing.md)
-        .padding(.vertical, inNativeForm ? 2 : Theme.Spacing.sm)
-        .frame(minHeight: inNativeForm ? 0 : 48)
+    /// Snapshots draw it not set up, whatever this Mac says.
+    private func refresh() {
+        status = hub.isPreview ? .unknown : SystemAudioPermission.current()
     }
 
-    @ViewBuilder
-    private var icon: some View {
-        if exclusion.kind == .app, let image = CallAppIcons.image(for: exclusion.key) {
-            Image(nsImage: image)
-                .resizable()
-                .interpolation(.high)
-                .aspectRatio(contentMode: .fit)
-        } else {
-            IconTile(symbol: exclusion.kind == .app ? "app.dashed" : "globe", tint: .inkSecondary)
+    static func state(_ status: SystemAudioPermission.Status) -> PermissionState {
+        switch status {
+        case .authorized: .granted
+        case .denied: .denied
+        case .unknown: .notDetermined
+        }
+    }
+
+    static func subtitle(_ status: SystemAudioPermission.Status) -> String {
+        switch status {
+        case .authorized: "Music and videos playing on your Mac are taken out of your dictation."
+        case .denied: "Music playing on your Mac stays in your dictation."
+        case .unknown: "Optional. Takes music and videos playing on your Mac out of your dictation."
         }
     }
 }

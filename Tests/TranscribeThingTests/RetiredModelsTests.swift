@@ -484,7 +484,6 @@ private let argonHistoryFile = #"""
             store(defaults, #"{"main":"parakeet","order":["parakeet","gemini","argon"],"switchable":["parakeet","argon"]}"#,
                   .lineup)
             defaults.set("argon", forKey: SettingsKey.handsFreeModel.defaultsKey)
-            defaults.set("geminiArgon", forKey: SettingsKey.callEngine.defaultsKey)
             store(defaults, #"{"geminiArgon":"high","geminiFlash":"low"}"#, .geminiReasoningEfforts)
             store(defaults, #"{"argon":"pink","gemini":"orange","parakeet":"graphite"}"#, .modelColors)
             store(defaults, #"["gemini","argon"]"#, .modelsAddingSpace)
@@ -495,7 +494,6 @@ private let argonHistoryFile = #"""
             #expect(settings.lineup.main == .parakeet && settings.lineup.order == [.parakeet, .gemini])
             #expect(settings.lineup.steps == [.gemini], "fn ⇥ steps to Flash where it stepped to Argon")
             #expect(settings.handsFreeModel == .gemini && settings.handsFreeChoice == .gemini)
-            #expect(settings.callModel == CallModel(engine: .geminiFlash, effort: .low), "calls go at Flash's level")
             #expect(settings.reasoningEffort(for: .geminiFlash) == .low && settings.reasoningEffort(for: .geminiArgon) == nil)
             #expect(settings.modelColors[.gemini] == .orange && settings.modelColors[.parakeet] == .graphite)
             #expect(settings.modelsAddingSpace == [.gemini])
@@ -509,12 +507,11 @@ private let argonHistoryFile = #"""
             #expect(stored(defaults, .modelColors) == #"{"gemini":"orange","parakeet":"graphite"}"#)
             #expect(stored(defaults, .modelsAddingSpace) == #"["gemini"]"#)
             #expect(stored(defaults, .modelsRemovingFinalPeriod) == #"["parakeet"]"#)
-            #expect(defaults.object(forKey: SettingsKey.callEngine.defaultsKey) == nil)
             #expect(defaults.object(forKey: SettingsKey.argonPastingAdded.defaultsKey) == nil)
 
             let again = load(defaults)
             #expect(again.lineup == settings.lineup && again.handsFreeModel == .gemini, "a reload changes nothing")
-            #expect(again.callModel == settings.callModel && again.modelColors == settings.modelColors)
+            #expect(again.reasoningEfforts == settings.reasoningEfforts && again.modelColors == settings.modelColors)
         }
     }
 
@@ -542,19 +539,6 @@ private let argonHistoryFile = #"""
         #expect(off.steps.isEmpty, "Argon switched off switches nothing on")
     }
 
-    /// The model calls went to is gone from the settings, whatever it was: calls go to Flash, at its level.
-    @Test(arguments: ["geminiArgon", "geminiFlash", "parakeet", "junk"])
-    func callsGoToFlashWhateverWasPicked(_ raw: String) throws {
-        try withDefaults { defaults in
-            defaults.set(raw, forKey: SettingsKey.callEngine.defaultsKey)
-            let settings = load(defaults)
-            #expect(settings.callModel == .default)
-            #expect(defaults.object(forKey: SettingsKey.callEngine.defaultsKey) == nil)
-            settings.reasoningEfforts[.geminiFlash] = .high
-            #expect(settings.callModel == CallModel(engine: .geminiFlash, effort: .high))
-        }
-    }
-
     /// A level picked for Argon alone leaves Flash at Medium, and Argon takes no level any more.
     @Test func anArgonLevelIsIgnored() throws {
         try withDefaults { defaults in
@@ -577,55 +561,5 @@ private let argonHistoryFile = #"""
         #expect(AppSettings.handsFreeModel(stored: "argon", lineup: .default) == .gemini)
         let colors = try JSONDecoder().decode(ModelColors.self, from: Data(#"{"argon":"pink"}"#.utf8))
         #expect(colors == .default)
-    }
-}
-
-/// A call transcribed while Argon took calls: calls.json never named the model, so it reads as any other call, and
-/// Transcribe Again goes to Gemini 3.8 Flash, whatever the settings still said.
-@MainActor
-@Suite struct RetiredArgonCallTests {
-    @Test func aCallArgonTranscribedStillReads() throws {
-        let json = """
-            {"version":1,"calls":[{"id":"\(UUID().uuidString)","startedAt":"2026-10-14T10:00:00Z",
-            "endedAt":"2026-10-14T10:05:00Z","appName":"Google Chrome","service":"meet","pageTitle":"Meet - abc-defg-hij",
-            "status":"done","muteKnown":true,"micSilencedWhenMuted":true,"micFile":"mic.m4a","remoteFile":"remote.m4a",
-            "micSeconds":300,"remoteSeconds":300,"costUSD":0.31,"speakerNames":{"Participant 1":"Pablo"},
-            "transcript":{"segments":[{"start":1,"end":3,"side":"remote","speaker":"Participant 1","text":"Hola.","duringMute":false},
-            {"start":4,"end":6,"side":"local","speaker":"Sam","text":"Hi.","duringMute":false}]},
-            "summary":{"title":"Release plan","summary":"We planned the release.","keyPoints":["Friday"],"decided":["Ship"],
-            "tasks":[{"id":"\(UUID().uuidString)","owner":"Sam","text":"Write notes","done":false}],"open":[],
-            "createdAt":"2026-10-14T10:06:00Z"}}]}
-            """
-        let call = try #require(CallStore.readRecords(from: Data(json.utf8)).first)
-        #expect(call.status == .done && call.costUSD == 0.31)
-        #expect(call.transcript?.segments.map(\.text) == ["Hola.", "Hi."])
-        #expect(call.name(of: "Participant 1") == "Pablo")
-        #expect(call.summary?.title == "Release plan" && call.summary?.tasks.map(\.text) == ["Write notes"])
-    }
-
-    @Test func transcribeAgainGoesToFlash() async throws {
-        let suite = NSTemporaryDirectory() + "transcribe-thing-tests-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer {
-            defaults.removePersistentDomain(forName: suite)
-            try? FileManager.default.removeItem(atPath: suite + ".plist")
-        }
-        defaults.set("geminiArgon", forKey: SettingsKey.callEngine.defaultsKey)
-        defaults.set(Data(#"{"geminiArgon":"high","geminiFlash":"low"}"#.utf8),
-                     forKey: SettingsKey.geminiReasoningEfforts.defaultsKey)
-        let settings = AppSettings(defaults: defaults, microphoneProbe: { MicrophoneMigrationProbe() })
-        let (client, host) = StubURLProtocol.client([.stream(SSE.answer("[00:00-00:02] Anna: Hi.")),
-                                                     .stream(SSE.answer("<summary>Hi.</summary>"))])
-        let account = OpenRouterAccount(keyStore: .inMemory("sk-or-v1-test"), client: client, debounce: .zero)
-        let send = CallTranscriber.openRouter(client: client, account: account, model: { settings.callModel })
-        let sendText = CallTranscriber.openRouterText(client: client, account: account, model: { settings.callModel })
-        _ = try await send(Data([1, 2]), "Transcribe the call.", 2, nil)
-        _ = try await sendText("Anna: Hi.", "Sum it up.")
-        let bodies = try StubURLProtocol.registry.bodies(for: host).map {
-            try #require(JSONSerialization.jsonObject(with: $0) as? [String: Any])
-        }
-        #expect(bodies.map { $0["model"] as? String } == ["google/gemini-3.8-flash", "google/gemini-3.8-flash"])
-        #expect(bodies.map { ($0["reasoning"] as? [String: Any])?["effort"] as? String } == ["low", "low"])
-        #expect(StubURLProtocol.registry.requests(for: host).first?.timeoutInterval == 120)
     }
 }

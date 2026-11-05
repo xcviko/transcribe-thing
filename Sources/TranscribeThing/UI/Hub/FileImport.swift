@@ -129,7 +129,7 @@ final class FileImport {
     }
 }
 
-// MARK: - Shared by Home and Calls
+// MARK: - Choosing files
 
 extension FileImport {
     /// Transcribe a File…'s panel: audio or video, one or more; `done` gets what was chosen, nothing on Cancel.

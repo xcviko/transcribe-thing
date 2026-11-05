@@ -162,59 +162,6 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
     }
 }
 
-// MARK: - Calls
-
-@MainActor
-@Suite struct CallModelRequestTests {
-    private func json(_ body: Data) throws -> [String: Any] {
-        try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
-    }
-
-    /// The audio request and the summary's text request go to Gemini 3.8 Flash at the level calls go at, read as each
-    /// request goes.
-    @Test func bothRequestsFollowTheCallModel() async throws {
-        let (client, host) = StubURLProtocol.client([.stream(SSE.answer("[00:00-00:02] Anna: Hi.")),
-                                                     .stream(SSE.answer("<summary>Hi.</summary>")),
-                                                     .stream(SSE.answer("[00:00-00:02] Anna: Hi."))])
-        let account = OpenRouterAccount(keyStore: .inMemory("sk-or-v1-test"), client: client, debounce: .zero)
-        let settings = AppSettings.inMemory()
-        settings.reasoningEfforts[.geminiFlash] = .high
-        let send = CallTranscriber.openRouter(client: client, account: account, model: { settings.callModel })
-        let sendText = CallTranscriber.openRouterText(client: client, account: account, model: { settings.callModel })
-        _ = try await send(Data([1, 2]), "Transcribe the call.", 2, nil)
-        _ = try await sendText("Anna: Hi.", "Sum it up.")
-        settings.reasoningEfforts[.geminiFlash] = .low
-        _ = try await send(Data([1, 2]), "Transcribe the call.", 2, nil)
-        let bodies = try StubURLProtocol.registry.bodies(for: host).map(json)
-        #expect(bodies.map { $0["model"] as? String } == Array(repeating: "google/gemini-3.8-flash", count: 3))
-        #expect(bodies.map { ($0["reasoning"] as? [String: Any])?["effort"] as? String } == ["high", "high", "low"])
-        #expect(StubURLProtocol.registry.requests(for: host).first?.timeoutInterval == 120)
-    }
-
-    /// Through the user's endpoint too: the same slug, which it takes without "google/".
-    @Test func theProxyGetsTheCallModel() async throws {
-        let (proxy, proxyHost) = ProxyFixture.proxy([.stream(SSE.answer("[00:00-00:02] Sam: Hi.")),
-                                                     .stream(SSE.answer("Summary."))])
-        let (client, openRouterHost) = StubURLProtocol.client([])
-        let account = OpenRouterAccount(keyStore: .inMemory(nil), client: client, debounce: .zero)
-        let model = CallModel(engine: .geminiFlash, effort: .low)
-        let send = CallTranscriber.openRouter(client: client, account: account, proxy: proxy, model: { model })
-        let sendText = CallTranscriber.openRouterText(client: client, account: account, proxy: proxy, model: { model })
-        _ = try await send(Data([1, 2]), "The call.", 2, nil)
-        _ = try await sendText("Sam: Hi.", "Sum it up.")
-        let bodies = try StubURLProtocol.registry.bodies(for: proxyHost).map(json)
-        #expect(bodies.map { $0["model"] as? String } == ["google/gemini-3.8-flash", "google/gemini-3.8-flash"])
-        #expect(bodies.map { ($0["reasoning"] as? [String: Any])?["effort"] as? String } == ["low", "low"])
-        #expect(StubURLProtocol.registry.requests(for: openRouterHost).isEmpty)
-    }
-
-    @Test func theDefaultCallModelIsFlashAtMedium() {
-        #expect(CallModel.default == CallModel(engine: .geminiFlash, effort: .medium))
-        #expect(AppSettings.inMemory().callModel == .default)
-        #expect(CallModel.default.modelID == "google/gemini-3.8-flash")
-    }
-}
-
 // MARK: - Requests
 
 @Suite struct ReasoningRequestTests {

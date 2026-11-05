@@ -102,7 +102,6 @@ private struct OnboardingRoot: View {
         case .permissions: PermissionsStep(model: model)
         case .model: ModelStep(model: model)
         case .tryIt: TryItStep(model: model)
-        case .calls: CallsStep(model: model)
         case .done: DoneStep(model: model)
         }
     }
@@ -113,7 +112,6 @@ private struct OnboardingRoot: View {
         case .permissions: PermissionsStage(model: model)
         case .model: EmptyView()
         case .tryIt: PracticeChat(model: model)
-        case .calls: CallsStage(model: model)
         case .done: DoneStage(model: model)
         }
     }

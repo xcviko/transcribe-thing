@@ -43,22 +43,14 @@ struct OpenRouterChatRequest: Encodable, Equatable {
     /// the audio, in `format` ("m4a"; "wav" from `EngineCLI --upload`): no text part, ever. `maxTokens`
     /// grows with the audio (`OpenRouterClient.transcriptionMaxTokens`).
     /// `provider`: another endpoint than Google AI Studio's ("google-ai-studio/priority", `EngineCLI --provider`).
-    /// `voiceSampleBase64` (a call's only, `CallVoiceSample`): the user message carries two audio parts, the sample of
-    /// the person's voice first, then the audio, both in `format`, still no text part; the system prompt says which is
-    /// which. OpenRouter hands Gemini the parts in this order. Nil: the one part, as every other request.
     static func transcription(model: String, audioBase64: String, format: String, systemPrompt: String?,
-                              effort: ReasoningEffort, maxTokens: Int, provider: Provider = .googleAIStudio,
-                              voiceSampleBase64: String? = nil) -> OpenRouterChatRequest {
+                              effort: ReasoningEffort, maxTokens: Int,
+                              provider: Provider = .googleAIStudio) -> OpenRouterChatRequest {
         var messages: [OpenRouterMessage] = []
         if let prompt = systemPrompt?.trimmingCharacters(in: .whitespacesAndNewlines), !prompt.isEmpty {
             messages.append(.system(prompt))
         }
-        if let voiceSampleBase64 {
-            messages.append(.userAudioParts([.init(base64: voiceSampleBase64, format: format),
-                                             .init(base64: audioBase64, format: format)]))
-        } else {
-            messages.append(.userAudio(base64: audioBase64, format: format))
-        }
+        messages.append(.userAudio(base64: audioBase64, format: format))
         return OpenRouterChatRequest(
             model: model,
             messages: messages,
@@ -85,22 +77,6 @@ struct OpenRouterChatRequest: Encodable, Equatable {
             maxTokens: TextRoute.maxTokens(forCharacterCount: text.count, effort: route.budget),
             stream: true,
             temperature: route.temperature)
-    }
-
-    /// A video already uploaded to the endpoint's Files API (`OpenRouterClient.uploadVideo`), then a question about
-    /// it, in one user message and no system message: how the speakers of a call made from a video are told apart by
-    /// their tiles (`CallVideoNames`). `processing` is how Vertex looks at it ("agentic": it looks where it needs to,
-    /// for a fraction of what reading every frame costs). Streamed, thinking at `effort` with its reasoning included,
-    /// as the app's other requests. Only the user's endpoint takes it: OpenRouter has no files to point at.
-    static func video(model: String, fileURI: String, processing: String, text: String, effort: ReasoningEffort,
-                      maxTokens: Int) -> OpenRouterChatRequest {
-        OpenRouterChatRequest(
-            model: model,
-            messages: [.userVideo(uri: fileURI, processing: processing, text: text)],
-            reasoning: Reasoning(effort: effort.rawValue, exclude: false),
-            provider: nil,
-            maxTokens: maxTokens,
-            stream: true)
     }
 
     func encoded() throws -> Data {
@@ -193,34 +169,12 @@ enum OpenRouterMessage: Encodable, Equatable {
     /// Plain text from the user (the text Polish Selection works on).
     case user(String)
     case userAudio(base64: String, format: String)
-    /// Several audio parts in one user message, in order, and no text: a call's voice sample, then the call
-    /// (`OpenRouterChatRequest.transcription(voiceSampleBase64:)`).
-    case userAudioParts([AudioClip])
-    /// A video by its uploaded file's `uri`, then `text` about it (`OpenRouterChatRequest.video`).
-    case userVideo(uri: String, processing: String, text: String)
-
-    struct AudioClip: Equatable, Sendable {
-        let base64: String
-        let format: String
-    }
 
     private struct AudioPart: Encodable {
         let type = "input_audio"
         let inputAudio: Payload
         struct Payload: Encodable { let data: String; let format: String }
         enum CodingKeys: String, CodingKey { case type, inputAudio = "input_audio" }
-    }
-
-    private struct VideoPart: Encodable {
-        let type = "video_url"
-        let videoURL: Payload
-        struct Payload: Encodable { let url: String; let processing: String }
-        enum CodingKeys: String, CodingKey { case type, videoURL = "video_url" }
-    }
-
-    private struct TextPart: Encodable {
-        let type = "text"
-        let text: String
     }
 
     private enum CodingKeys: String, CodingKey { case role, content }
@@ -237,15 +191,6 @@ enum OpenRouterMessage: Encodable, Equatable {
         case .userAudio(let data, let format):
             try container.encode("user", forKey: .role)
             try container.encode([AudioPart(inputAudio: .init(data: data, format: format))], forKey: .content)
-        case .userAudioParts(let clips):
-            try container.encode("user", forKey: .role)
-            try container.encode(clips.map { AudioPart(inputAudio: .init(data: $0.base64, format: $0.format)) },
-                                 forKey: .content)
-        case .userVideo(let uri, let processing, let text):
-            try container.encode("user", forKey: .role)
-            var parts = container.nestedUnkeyedContainer(forKey: .content)
-            try parts.encode(VideoPart(videoURL: .init(url: uri, processing: processing)))
-            try parts.encode(TextPart(text: text))
         }
     }
 }
@@ -538,9 +483,8 @@ struct OpenRouterChatStream {
     /// The answer once the stream has ended, or the failure it carried. Failures can come inside a 200: an `error`
     /// (the only event, or after some text), or a finish reason of error / content_filter / length. A stream that
     /// just stops, with no finish reason and no `[DONE]`, lost its connection. Empty text on a normal finish is
-    /// returned as is: Gemini heard no speech. With `keepTruncated`, an answer cut off by its token limit is returned
-    /// as is too (finish reason "length"), with what it cost, for a caller that reads what it can of it.
-    func result(engine: EngineID, keepTruncated: Bool = false) throws -> CloudResult {
+    /// returned as is: Gemini heard no speech.
+    func result(engine: EngineID) throws -> CloudResult {
         if let error { throw OpenRouterErrorMapper.map(error, status: 502, retryAfter: nil, engine: engine) }
         guard finishReason != nil || isDone else {
             if sawForeignLine, !sawChoice {
@@ -559,7 +503,7 @@ struct OpenRouterChatStream {
         case "length":
             // Out of output tokens: a repetition loop, a cut-off ending, or reasoning that used every token before
             // any text (empty `text`). Never pasted as if whole, and never taken for silence.
-            if !keepTruncated { throw AppError.openRouterTruncated(text) }
+            throw AppError.openRouterTruncated(text)
         default:
             break
         }
@@ -698,7 +642,7 @@ enum TaggedTranscript {
         let asksForMessage = open.caseInsensitiveCompare(messageOpen) == .orderedSame
         let (otherOpen, otherClose) = asksForMessage ? (Self.open, Self.close) : (messageOpen, messageClose)
         if let other = extractPair(answer, open: otherOpen, close: otherClose) { return (other.text, .other) }
-        // A call's "no speech" (`CallTranscriber.noSpeech`) where a dictation's empty tags were asked for.
+        // The words "no speech" where empty tags were asked for.
         if isNoSpeechLiteral(answer) { return ("", .none) }
         return (unfenced(answer), .none)
     }
@@ -769,7 +713,7 @@ enum TaggedTranscript {
         var hasMessageTags: Bool
         /// Tags and nothing in or around them (white space and a code fence aside): the model's "no speech".
         var isOnlyTags: Bool
-        /// Only the words "NO SPEECH" (what a call's prompt asks for when there is none).
+        /// Only the words "NO SPEECH".
         var isNoSpeechLiteral: Bool
         /// Characters before the first tag and after the last; nil without tags.
         var charactersOutsideTags: Int?

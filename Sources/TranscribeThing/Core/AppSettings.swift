@@ -45,7 +45,7 @@ final class AppSettings {
     /// History's marks show it.
     var modelColors: ModelColors = .default { didSet { store.setJSON(modelColors, .modelColors) } }
     /// The level Gemini thinks at (the Reasoning menu on its row in Models), Medium until picked. Every request to the
-    /// model goes at it (`reasoningEffort(for:)`), calls' too.
+    /// model goes at it (`reasoningEffort(for:)`).
     var reasoningEfforts: ReasoningEfforts = .default {
         didSet { store.setJSON(reasoningEfforts, .geminiReasoningEfforts) }
     }
@@ -116,7 +116,7 @@ final class AppSettings {
     }
     /// The two languages Translate (fn T) goes between (General → Translate). Two different languages: picking one the
     /// other already has swaps them.
-    /// What the app calls the person (General → Your name): Home's greeting and their name in call transcripts.
+    /// What the app calls the person (General → Your name): Home's greeting.
     /// Empty: the first name of this Mac's account (`macFirstName`).
     var userName: String = "" { didSet { store.set(userName, .userName) } }
 
@@ -138,18 +138,6 @@ final class AppSettings {
             store.setJSON(dictionary, .dictionary)
             if dictionary.grouping != oldValue.grouping { store.setJSON(dictionary.grouping, .dictionaryGroups) }
         }
-    }
-    /// Whether calls (any app, or browser tab, using the mic and playing sound together) are noticed and recorded,
-    /// asking first (the default) or not (`CallMonitor`). The menu bar's Start Call Recording works whatever this says.
-    var callRecording: CallRecordingMode = .ask { didSet { store.set(callRecording.rawValue, .callRecording) } }
-    /// Apps and sites whose calls are never noticed ("Never for …" on the question, General → Calls), oldest first.
-    var callExclusions: [CallExclusion] = [] { didSet { store.setJSON(callExclusions, .callExclusions) } }
-    /// Brief, silent notices above the pill about the call being recorded: noticed, muted or unmuted, mute not
-    /// followed, ended (`CallNotices`).
-    var showsCallNotices: Bool = true { didSet { store.set(showsCallNotices, .showsCallNotices) } }
-    /// The Calls tab's note about the browser extension, after a call in a browser that has none, was closed.
-    var browserExtensionHintDismissed: Bool = false {
-        didSet { store.set(browserExtensionHintDismissed, .browserExtensionHintDismissed) }
     }
     /// Days a transcript and its recording stay in History; 0 = Never deleted (`HistoryStore.deleteExpired`).
     var autoDeleteHistoryDays: Int = 0 { didSet { store.set(autoDeleteHistoryDays, .autoDeleteHistoryDays) } }
@@ -178,8 +166,7 @@ final class AppSettings {
     /// Its key is in its own key file (`AppPaths.vertexProxyKeyFile`), never here.
     var vertexProxyURL: String? = nil { didSet { store.set(vertexProxyURL, .vertexProxyURL) } }
     /// Where every cloud request goes (Models → API keys → Provider): OpenRouter, or the user's own endpoint, never the
-    /// other. Every cloud request is Gemini's: dictations, Polish, Translate, selected text, files, calls and their
-    /// summaries. The other provider's key (and the endpoint's URL) stay saved. Stored under `cloudProvider`, and
+    /// other. Every cloud request is Gemini's: dictations, Polish, Translate, selected text and files. The other provider's key (and the endpoint's URL) stay saved. Stored under `cloudProvider`, and
     /// mirrored into `vertexProxyEnabled` (the "Use for Gemini" switch it replaced) for an older build.
     var cloudProvider: CloudProvider = .openRouter {
         didSet {
@@ -230,19 +217,6 @@ final class AppSettings {
         AppSettings(store: SettingsStore(defaults: nil))
     }
 
-    // MARK: Calls
-
-    /// Adds `exclusion` (once): that app's or site's calls are never noticed again.
-    func excludeFromCalls(_ exclusion: CallExclusion) {
-        guard !callExclusions.contains(where: { $0.id == exclusion.id }) else { return }
-        callExclusions.append(exclusion)
-    }
-
-    /// Takes `exclusion` off the list: its calls are noticed again.
-    func removeCallExclusion(_ exclusion: CallExclusion) {
-        callExclusions.removeAll { $0.id == exclusion.id }
-    }
-
     // MARK: Models
 
     /// The engine every dictation starts on: the main model's.
@@ -256,12 +230,6 @@ final class AppSettings {
     /// The level `engine` thinks at: the one picked in Models for a Gemini model; nil for a model that doesn't reason.
     func reasoningEffort(for engine: EngineID) -> ReasoningEffort? {
         reasoningEfforts[engine]
-    }
-
-    /// The model calls go to, Gemini 3.8 Flash, and the level it thinks at (its Reasoning in Models), as both a call's
-    /// requests send them (`CallTranscriber`).
-    var callModel: CallModel {
-        CallModel(engine: .geminiFlash, effort: reasoningEffort(for: .geminiFlash) ?? .medium)
     }
 
     /// The lineup that stands for what an older build stored, or nil when it stored nothing the lineup replaces (the
@@ -330,9 +298,6 @@ final class AppSettings {
         if let v: ModelColors = store.json(.modelColors) { modelColors = v }
         // A level stored for a retired model (Gemini 4 Argon's) is dropped as it's read (`ReasoningEfforts`).
         if let v: ReasoningEfforts = store.json(.geminiReasoningEfforts) { reasoningEfforts = v }
-        // Calls go to Gemini 3.8 Flash, the only Gemini left: the model picked for them (Flash, or the removed Gemini 4
-        // Argon) has nothing left to say.
-        store.remove(.callEngine)
         if let v = store.int(.switchHintShownCount) { switchHintShownCount = max(0, v) }
         if let v = store.string(.pillMode).flatMap(PillMode.init(rawValue:)) { pillMode = v }
         // Older builds could hide the pill for an hour; that deadline has no meaning now.
@@ -413,10 +378,6 @@ final class AppSettings {
             dictionary = loaded
         }
         if let v = store.int(.autoDeleteHistoryDays), v >= 0 { autoDeleteHistoryDays = v }
-        if let v = store.string(.callRecording).flatMap(CallRecordingMode.init(rawValue:)) { callRecording = v }
-        if let v: [CallExclusion] = store.json(.callExclusions) { callExclusions = v }
-        if let v = store.bool(.showsCallNotices) { showsCallNotices = v }
-        if let v = store.bool(.browserExtensionHintDismissed) { browserExtensionHintDismissed = v }
         if let v = store.string(.vertexProxyURL), !v.isEmpty { vertexProxyURL = v }
         if let v = store.string(.cloudProvider).flatMap(CloudProvider.init(rawValue:)) {
             cloudProvider = v
@@ -561,19 +522,14 @@ enum SettingsKey: String, CaseIterable {
     /// How many times a Gemini dictation's request goes at once (`RaceRequests`: 1, 2 or 3).
     case raceRequests
     case polishSelectionModel, translationPair, userName
-    /// How calls are recorded (`CallRecordingMode`), and the apps and sites never recorded.
-    case callRecording, callExclusions, showsCallNotices
     /// The OpenAI-compatible endpoint's base URL, and the provider every cloud request goes to (`cloudProvider`).
     /// `vertexProxyEnabled` is the "Use for Gemini" switch it replaced: read once by the provider's migration, then kept
     /// in step with the provider for an older build.
     case vertexProxyURL, vertexProxyEnabled, cloudProvider
-    /// The level each Gemini model thinks at (`ReasoningEfforts`). `callEngine` (the model calls went to: Gemini 3.8
-    /// Flash, or the removed Gemini 4 Argon) is removed at load: calls go to Flash.
-    case geminiReasoningEfforts, callEngine
+    /// The level each Gemini model thinks at (`ReasoningEfforts`).
+    case geminiReasoningEfforts
     /// Set once Pasting's rules had given the removed Gemini 4 Argon Gemini 3.8 Flash's checks; removed at load.
     case argonPastingAdded
-    /// The Calls tab's browser extension note was closed.
-    case browserExtensionHintDismissed
     /// The removed "Show Parakeet's text while Gemini works" (General → Experimental), removed at load.
     case showsParakeetWhileGemini
 

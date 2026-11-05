@@ -1010,7 +1010,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
 
         let settings = AppSettings(defaults: defaults)
         #expect(settings.lineup == .default)
-        #expect(settings.reasoningEfforts == .default && settings.callModel == .default)
+        #expect(settings.reasoningEfforts == .default)
         #expect(settings.pillMode == .whileDictating)
         #expect(settings.modelColors == .default)
         #expect(settings.shortcuts == .defaults)
@@ -1035,7 +1035,6 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
 
         let reloaded = AppSettings(defaults: defaults)
         #expect(reloaded.reasoningEffort(for: .geminiFlash) == .low)
-        #expect(reloaded.callModel == CallModel(engine: .geminiFlash, effort: .low), "calls follow Flash's level")
         #expect(reloaded.handsFreeModel == .parakeet)
         #expect(reloaded.lineup == settings.lineup)
         #expect(reloaded.lineup.order == [.gemini, .parakeet] && reloaded.lineup.main == .gemini)

@@ -24,23 +24,22 @@ protocol AudioTapSource: AnyObject, Sendable {
 
 /// What a process tap takes in.
 enum TapTarget: Equatable, Sendable {
-    /// The sound of these HAL process objects, mixed: every process of the call app (a browser's helpers included).
+    /// The sound of these HAL process objects, mixed: every process of one app (a browser's helpers included).
     case processes([AudioObjectID])
-    /// Everything the Mac plays but this app's own sounds: a manual recording.
+    /// Everything the Mac plays but this app's own sounds: what a dictation takes out of the mic (`DictationEcho`).
     case everythingButThisApp
 }
 
-/// A call's other side: a CoreAudio process tap of the call app's processes (or of everything, for a manual
-/// recording), mixed to mono, in a private aggregate device of its own that `HALDeviceInput` reads like any input,
-/// resampled to 16 kHz. Each stretch is stamped with the host time its IO cycle carries, so the track lines up with
-/// the mic's.
+/// Other apps' sound: a CoreAudio process tap of everything the Mac plays but this app (or of one app's processes),
+/// mixed to mono, in a private aggregate device of its own that `HALDeviceInput` reads like any input, resampled to
+/// 16 kHz. Each stretch is stamped with the host time its IO cycle carries, so it lines up with the mic's.
 ///
 /// It needs the "System Audio Recording Only" permission (`NSAudioCaptureUsageDescription`); macOS asks the first time
-/// a tap is made. A tap that can't be made leaves `problem` and no audio: the call goes on with its mic alone. When
-/// the app's processes change (Chrome starts a new helper), the tap is made again for the new set; the moment
-/// between is silence on the call's clock.
+/// a tap is made. A tap that can't be made leaves `problem` and no audio: the mic goes on alone. When the tapped
+/// processes change (`retarget`: Chrome starts a new helper), the tap is made again for the new set; the moment
+/// between is silence.
 final class ProcessTapSource: AudioTapSource, @unchecked Sendable {
-    private let control = DispatchQueue(label: "dev.transcribe-thing.calls.tap", qos: .userInitiated)
+    private let control = DispatchQueue(label: "dev.transcribe-thing.audio.tap", qos: .userInitiated)
     private let lock = NSLock()
     // Lock state.
     private var pending: [TimedAudio] = []
@@ -57,10 +56,10 @@ final class ProcessTapSource: AudioTapSource, @unchecked Sendable {
     private var aggregateID = AudioObjectID(kAudioObjectUnknown)
     private var input: HALDeviceInput?
 
-    /// What the tap is for, in its name and the log: "call", or "dictation" for the echo canceller's reference.
+    /// What the tap is for, in its name and the log: "dictation" for the echo canceller's reference.
     private let label: String
 
-    init(target: TapTarget, label: String = "call") {
+    init(target: TapTarget, label: String) {
         self.target = target
         self.label = label
     }
@@ -74,7 +73,7 @@ final class ProcessTapSource: AudioTapSource, @unchecked Sendable {
     func retarget(_ processes: [AudioObjectID]) {
         control.async {
             guard case .processes(let current) = self.target, current != processes, !processes.isEmpty else { return }
-            Log.audio.info("Call tap follows \(processes.count) processes now (was \(current.count))")
+            Log.audio.info("Tap follows \(processes.count) processes now (was \(current.count))")
             self.target = .processes(processes)
             self.teardown()
             self.build()
@@ -115,7 +114,7 @@ final class ProcessTapSource: AudioTapSource, @unchecked Sendable {
         var tap = AudioObjectID(kAudioObjectUnknown)
         var status = AudioHardwareCreateProcessTap(description, &tap)
         guard status == noErr, tap != kAudioObjectUnknown else {
-            return failed("Couldn’t record the call app’s sound: no permission to record other apps’ audio (\(status))")
+            return failed("Couldn’t record other apps’ sound: no permission to record other apps’ audio (\(status))")
         }
         let aggregate: [String: Any] = [
             kAudioAggregateDeviceNameKey: "transcribe-thing \(label)",
@@ -130,7 +129,7 @@ final class ProcessTapSource: AudioTapSource, @unchecked Sendable {
         status = AudioHardwareCreateAggregateDevice(aggregate as CFDictionary, &device)
         guard status == noErr, device != kAudioObjectUnknown else {
             AudioHardwareDestroyProcessTap(tap)
-            return failed("Couldn’t record the call app’s sound: no device for its tap (\(status))")
+            return failed("Couldn’t record other apps’ sound: no device for its tap (\(status))")
         }
         let generation = lock.withLock { () -> Int in
             self.generation += 1
@@ -152,7 +151,7 @@ final class ProcessTapSource: AudioTapSource, @unchecked Sendable {
         } catch {
             AudioHardwareDestroyAggregateDevice(device)
             AudioHardwareDestroyProcessTap(tap)
-            return failed("Couldn’t record the call app’s sound: its tap didn’t start (\(error))")
+            return failed("Couldn’t record other apps’ sound: its tap didn’t start (\(error))")
         }
         tapID = tap
         aggregateID = device
@@ -197,7 +196,7 @@ final class ProcessTapSource: AudioTapSource, @unchecked Sendable {
             do {
                 try resampler.process(buffer, into: &pending[pending.count - 1].samples)
             } catch {
-                Log.audio.error("Dropped a chunk of the call app's sound the converter rejected")
+                Log.audio.error("Dropped a chunk of other apps' sound the converter rejected")
             }
         }
     }

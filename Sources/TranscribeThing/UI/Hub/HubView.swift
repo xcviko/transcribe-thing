@@ -13,12 +13,6 @@ final class HubContext: Observable {
     /// The custom endpoint, which takes Gemini's requests while it's set up and on.
     var proxy: VertexProxyAccount
     var history: HistoryStore
-    /// Recorded calls (the Calls tab), and what records and transcribes them.
-    var calls: CallStore
-    let callMonitor: CallMonitor
-    let callTranscriber: CallTranscriber
-    /// The browser extension for calls in web pages: which browsers can take it, which profiles have it.
-    var browserExtension: BrowserExtension
     var permissions: PermissionsCenter
     var devices: AudioDeviceCatalog
     var launchAtLogin: LaunchAtLogin
@@ -34,8 +28,6 @@ final class HubContext: Observable {
     let diagnostics: DiagnosticsCenter
     /// Files dropped on Home, read and asked about whichever page is showing.
     let imports = FileImport()
-    /// Files dropped on Calls, read and made calls whichever page is showing.
-    let callImports = CallImport()
     let isPreview: Bool
     /// Stand-in traffic lights so snapshots read like the real window.
     var drawsWindowControls = false
@@ -55,22 +47,8 @@ final class HubContext: Observable {
     var previewRecordingOn: UUID?
     /// Drawn as if a dictation were being recorded, in place of the dictation controller's state (snapshots).
     var previewDictating: Bool?
-    /// Home, or Calls, drawn with files dragged over it (snapshots).
+    /// Home drawn with files dragged over it (snapshots).
     var previewDropTarget = false
-    /// The live call as the Calls tab shows it, in place of the monitor's (snapshots).
-    var previewCallState: CallMonitor.State?
-    /// A Calls row drawn as hovered, its actions showing (snapshots).
-    var previewHoveredCall: UUID?
-    /// The call's transcript row whose speaker is being renamed, its field open (snapshots).
-    var previewRenaming: String?
-    /// Where the open call's player stands (snapshots).
-    var previewCallPosition: TimeInterval?
-    /// The open call's waveform drawn before its loudness is read: flat bars (snapshots).
-    var previewWaveformFlat = false
-    /// How far the open call's summary and transcript are scrolled under its card (snapshots).
-    var previewCallScroll: CGFloat?
-    /// General → Browser Extension drawn after Install was clicked for this browser: its steps open (snapshots).
-    var previewInstallingBrowser: String?
 
     init(env: AppEnvironment) {
         settings = env.settings
@@ -78,10 +56,6 @@ final class HubContext: Observable {
         account = env.account
         proxy = env.proxy
         history = env.history
-        calls = env.calls
-        callMonitor = env.callMonitor
-        callTranscriber = env.callTranscriber
-        browserExtension = env.browserExtension
         permissions = env.permissions
         devices = env.devices
         launchAtLogin = env.launchAtLogin
@@ -102,12 +76,6 @@ final class HubContext: Observable {
             return ImportChoices.make(main: self.settings.mainEngine, seconds: seconds, readiness: self.readiness(of:))
         }
         imports.start = { [dictation] file, kind in dictation.transcribe(file, as: kind) }
-        callImports.start = { [callTranscriber] file in await callTranscriber.importFile(file)?.id }
-        callImports.onImported = { [weak self] ids in
-            // The calls are made all the same when the window closed meanwhile; there's just no page to open.
-            guard let self else { return }
-            self.callsImported(ids)
-        }
     }
 
     var now: Date { fixedNow ?? Date() }
@@ -115,36 +83,6 @@ final class HubContext: Observable {
     /// Picks a page: it's there at once, as a pane in System Settings is.
     func show(_ section: HubSection) {
         windows.hubSection = section
-    }
-
-    /// Opens a call's page, over the Calls tab.
-    func showCall(_ id: UUID) {
-        windows.openCallID = id
-        windows.hubSection = .callDetail
-    }
-
-    /// The live call: the monitor's, or the snapshot's.
-    var callState: CallMonitor.State {
-        previewCallState ?? callMonitor.state
-    }
-
-    /// A batch of files made calls: their dates (the files') can put them far down the list, so the first one opens
-    /// on its page, transcribing, as long as Calls is still showing; the others are in the list, each on its
-    /// file’s day.
-    func callsImported(_ ids: [UUID]) {
-        guard let id = ids.first, windows.hubSection == .calls else { return }
-        showCall(id)
-    }
-
-    /// Shows a call in Finder: the file it was made from while that's still where it was, otherwise the folder its
-    /// audio is kept in.
-    func revealCall(_ id: UUID) {
-        guard !isPreview else { return }
-        if let file = calls.call(id: id)?.file, !file.path.isEmpty, FileManager.default.fileExists(atPath: file.path) {
-            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: file.path)])
-            return
-        }
-        NSWorkspace.shared.activateFileViewerSelecting([calls.folder(for: id)])
     }
 
     func copy(_ text: String) {
@@ -249,8 +187,6 @@ struct HubView: View {
             .environment(context.account)
             .environment(context.proxy)
             .environment(context.history)
-            .environment(context.calls)
-            .environment(context.callMonitor)
             .environment(context.permissions)
             .environment(context.devices)
             .environment(context.launchAtLogin)
@@ -274,7 +210,7 @@ private struct HubRoot: View {
         } detail: {
             page(windows.hubSection)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .navigationTitle(title)
+                .navigationTitle(windows.hubSection.title)
                 // Every page keeps a toolbar, tools or none: a page without one lost the window's toolbar, and the
                 // sidebar then started under a separate title bar instead of reaching up around the window buttons.
                 .toolbar { ToolbarSpacer(.flexible) }
@@ -290,18 +226,9 @@ private struct HubRoot: View {
         }
     }
 
-    /// The page's name; a call's page is named by the call.
-    private var title: String {
-        guard windows.hubSection == .callDetail, let id = windows.openCallID,
-              let call = hub.calls.call(id: id) else { return windows.hubSection.title }
-        return CallFormat.windowTitle(call)
-    }
-
     @ViewBuilder private func page(_ section: HubSection) -> some View {
         switch section {
         case .home: HomePage()
-        case .calls: CallsPage()
-        case .callDetail: CallDetailPage()
         case .models: ModelsPage()
         case .shortcuts: ShortcutsPage()
         case .dictionary: DictionaryPage()
@@ -314,14 +241,12 @@ private struct HubRoot: View {
 
 // MARK: - Sidebar
 
-/// The pages, as a source list: Home and Calls, then Settings. Software Update keeps General selected, and an update
-/// waiting (with reminders on) puts a count on General, as System Settings does; calls waiting for an answer or a
-/// Retry put theirs on Calls. ⌘1…⌘N follow `HubSection.sidebar`.
+/// The pages, as a source list: Home, then Settings. Software Update keeps General selected, and an update waiting
+/// (with reminders on) puts a count on General, as System Settings does. ⌘1…⌘N follow `HubSection.sidebar`.
 private struct HubSidebar: View {
     @Environment(HubContext.self) private var hub
     @Environment(WindowCoordinator.self) private var windows
     @Environment(UpdateCenter.self) private var updates
-    @Environment(CallStore.self) private var calls
 
     var body: some View {
         List(selection: selection) {
@@ -371,7 +296,6 @@ private struct HubSidebar: View {
     private func badge(_ section: HubSection) -> Int {
         switch section {
         case .general: updates.showsBadge ? 1 : 0
-        case .calls: CallsList.badgeCount(calls.calls, live: hub.callState)
         default: 0
         }
     }
@@ -379,8 +303,7 @@ private struct HubSidebar: View {
     private func accessibilityLabel(_ section: HubSection) -> String {
         let count = badge(section)
         guard count > 0 else { return section.title }
-        return section == .general ? "\(section.title), update available"
-            : "\(section.title), \(count) waiting"
+        return "\(section.title), update available"
     }
 
     /// ⌘1…⌘N: a page each, as the sidebar lists them.

@@ -87,8 +87,8 @@ enum CloudAudio {
         }
     }
 
-    /// Writes an .m4a as `writeM4A(_:bitRate:to:)` does, from audio `body` hands to `append` a piece at a time (a
-    /// call's hour, read off its journal), so it never has to be in memory at once. `reservingSeconds` is how long it
+    /// Writes an .m4a as `writeM4A(_:bitRate:to:)` does, from audio `body` hands to `append` a piece at a time (an
+    /// hour, read off a journal), so it never has to be in memory at once. `reservingSeconds` is how long it
     /// will be, for the header's room.
     static func writeM4A(bitRate: Int, reservingSeconds: TimeInterval, to url: URL,
                          _ body: (_ append: ([Float]) throws -> Void) throws -> Void) throws {

@@ -11,7 +11,7 @@ import Foundation
 /// times like the mic. Each 10 ms mic frame is paired with the reference of the same moment (the speakers' delay and
 /// the room, up to `filterLength`, are the filter's to learn) and goes through three stages:
 ///
-/// 1. SpeexDSP's echo canceller (MDF), as calls use it (`EchoCanceller`): takes out the echo it has learned, about
+/// 1. SpeexDSP's echo canceller (MDF): takes out the echo it has learned, about
 ///    15-20 dB of a song.
 /// 2. SpeexDSP's preprocessor: steady noise and some of what's left of the echo.
 /// 3. `EchoGate`: what the canceller misses most is a sound it hasn't heard yet (a new chord, a drum), which then rings
@@ -22,7 +22,7 @@ import Foundation
 ///
 /// Until the first reference arrives (no tap yet, or never), the mic goes through untouched and at once. After, the
 /// output is two frames behind (the preprocessor's and the gate's), but always the same length and on the same clock
-/// as the mic. Like calls, the cancelled version is used only where there's echo: while the reference plays, the last
+/// as the mic. The cancelled version is used only where there's echo: while the reference plays, the last
 /// second must have lost `engageERLE` dB to the linear canceller; it's left when the last five seconds lost less than
 /// `releaseERLE`. On headphones, or with the speakers muted, there's nothing to cancel and the mic is exactly as
 /// recorded. Between the two the mic crossfades over 100 ms.

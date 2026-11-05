@@ -41,7 +41,7 @@ extension EngineID {
 }
 
 /// The level each Gemini model thinks at, picked in Models (`AppSettings.reasoningEfforts`). Every request to the
-/// model goes at its level: dictation, Polish, Translate, file imports, History's versions, calls. One JSON object
+/// model goes at its level: dictation, Polish, Translate, file imports, History's versions. One JSON object
 /// under `SettingsKey.geminiReasoningEfforts`, keyed by `EngineID` raw value: {"geminiFlash":"medium"}.
 struct ReasoningEfforts: Equatable, Sendable {
     private var levels: [EngineID: ReasoningEffort] = [:]

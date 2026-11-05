@@ -116,9 +116,8 @@ import Testing
     }
 }
 
-/// A call's request carries a sample of the person's voice as a first audio part; nothing else changes, and no other
-/// request (a dictation, Polish, Translate: one audio part; Polish Selection: text) gets anything new.
-@Suite struct CallVoiceSampleRequestTests {
+/// What each request sends: a dictation, Polish and Translate one audio part; Polish Selection text.
+@Suite struct RequestShapeTests {
     private func object(_ data: Data) throws -> NSDictionary {
         try #require(JSONSerialization.jsonObject(with: data) as? NSDictionary)
     }
@@ -136,18 +135,6 @@ import Testing
         ] as NSDictionary
     }
 
-    @Test func aCallSendsTheSampleThenTheCallAsTwoAudioPartsAndNoText() throws {
-        let body = OpenRouterChatRequest.transcription(
-            model: "google/gemini-3.8-flash", audioBase64: "Q0FMTA==", format: "m4a", systemPrompt: "The call.",
-            effort: .medium, maxTokens: 32_768, voiceSampleBase64: "U0FNUExF")
-        #expect(body.messages == [.system("The call."), .userAudioParts([.init(base64: "U0FNUExF", format: "m4a"),
-                                                                         .init(base64: "Q0FMTA==", format: "m4a")])])
-        #expect(try object(body.encoded()) == transcription([
-            ["role": "system", "content": "The call."],
-            ["role": "user", "content": [audioPart("U0FNUExF", "m4a"), audioPart("Q0FMTA==", "m4a")]],
-        ]))
-    }
-
     /// Exactly the JSON these requests always had.
     @Test func dictationPolishAndTranslateStillSendOneAudioPart() throws {
         let body = OpenRouterChatRequest.transcription(
@@ -158,10 +145,6 @@ import Testing
             ["role": "system", "content": "Transcribe."],
             ["role": "user", "content": [audioPart("QUFB", "m4a")]],
         ]))
-        let none = OpenRouterChatRequest.transcription(
-            model: "google/gemini-3.8-flash", audioBase64: "QUFB", format: "m4a", systemPrompt: "Transcribe.",
-            effort: .medium, maxTokens: 32_768, voiceSampleBase64: nil)
-        #expect(none == body)
     }
 
     @Test func polishSelectionStillSendsText() throws {
@@ -176,29 +159,6 @@ import Testing
             "max_tokens": TextRoute.maxTokens(forCharacterCount: 2, effort: route.budget), "stream": true,
         ]
         #expect(try object(body.encoded()) == expected)
-    }
-
-    /// Through the client: the sample goes only when given, before the audio.
-    @Test func theClientSendsTheSampleOnlyWhenGiven() async throws {
-        let (client, host) = StubURLProtocol.client([.stream(SSE.answer("<transcript>Hi.</transcript>")),
-                                                     .stream(SSE.answer("[00:00-00:01] Sam: Hi."))])
-        _ = try await client.transcribe(audio: Data("dictation".utf8), format: "m4a", model: "google/gemini-3.8-flash",
-                                        systemPrompt: "Transcribe.", effort: .medium, maxTokens: 32_768,
-                                        apiKey: "sk-or-v1-test", timeout: 30)
-        _ = try await client.transcribe(audio: Data("call".utf8), format: "m4a", model: "google/gemini-3.8-flash",
-                                        systemPrompt: "The call.", effort: .medium, maxTokens: 32_768,
-                                        apiKey: "sk-or-v1-test", timeout: 30, extractsTags: false,
-                                        voiceSample: Data("sample".utf8))
-        let bodies = try StubURLProtocol.registry.bodies(for: host).map(object)
-        #expect(bodies.count == 2)
-        func parts(_ body: NSDictionary) -> [[String: Any]] {
-            ((body["messages"] as? [[String: Any]])?.last?["content"] as? [[String: Any]]) ?? []
-        }
-        func data(_ part: [String: Any]) -> String? { (part["input_audio"] as? [String: Any])?["data"] as? String }
-        #expect(parts(bodies[0]).map(data) == [Data("dictation".utf8).base64EncodedString()])
-        #expect(parts(bodies[1]).map(data) == [Data("sample".utf8).base64EncodedString(),
-                                              Data("call".utf8).base64EncodedString()])
-        #expect(parts(bodies[1]).allSatisfy { $0["type"] as? String == "input_audio" && $0["text"] == nil })
     }
 }
 
@@ -1663,13 +1623,6 @@ actor FakeEngine: LocalEngine {
         if let transcribeGate { try await transcribeGate.pass() }
         transcribeCount += 1
         return transcript
-    }
-
-    /// One word over all of `samples`: a call's mic, heard for when the person spoke.
-    func transcribeWords(_ samples: [Float]) async throws -> [TimedWord] {
-        guard loaded else { throw LocalEngineError.notLoaded }
-        transcribeCount += 1
-        return [TimedWord(text: transcript, start: 0, end: Double(samples.count) / Recording.sampleRate)]
     }
 
     func deleteFiles() async throws {

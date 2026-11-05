@@ -1,8 +1,8 @@
 import AppKit
 import QuartzCore
 
-/// The menu bar extra: template icon, a red dot while a call is recorded (a dictation has the pill for that), a slow
-/// pulse while transcribing, and the shared transcribe-thing menu (rebuilt each time it opens).
+/// The menu bar extra: template icon, a slow pulse while transcribing, and the shared transcribe-thing menu (rebuilt
+/// each time it opens).
 @MainActor
 final class MenuBarController: NSObject, NSMenuDelegate {
     weak var environment: AppEnvironment? {
@@ -11,10 +11,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     let builder = MenuBuilder()
     private var statusItem: NSStatusItem?
-    private var recordingDot: NSView?
     private(set) var activity: DictationActivity = .idle
-    /// A call is being recorded (asked about or kept).
-    private(set) var isRecordingCall = false
 
     override init() {
         super.init()
@@ -48,55 +45,20 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         refresh()
     }
 
-    /// A call started or stopped being recorded: the red dot stays while it records.
-    func showCall(recording: Bool) {
-        isRecordingCall = recording
-        refresh()
-    }
-
     private func refresh() {
         guard let button = statusItem?.button else { return }
-        setRecordingDot(Self.showsRecordingDot(activity: activity, recordingCall: isRecordingCall), on: button)
         setPulsing(activity != .idle && activity != .recording, on: button)
-        button.setAccessibilityValue(Self.accessibilityValue(activity: activity, recordingCall: isRecordingCall))
+        button.setAccessibilityValue(Self.accessibilityValue(activity: activity))
     }
 
-    /// Only a call: it records for an hour with nothing else on screen, while a dictation already shows its pill.
-    static func showsRecordingDot(activity: DictationActivity, recordingCall: Bool) -> Bool {
-        recordingCall
-    }
-
-    static func accessibilityValue(activity: DictationActivity, recordingCall: Bool) -> String {
+    static func accessibilityValue(activity: DictationActivity) -> String {
         switch activity {
-        case .idle: recordingCall ? "Recording call" : "Idle"
+        case .idle: "Idle"
         case .recording: "Recording"
         case .processing: "Transcribing"
         case .polishing: "Polishing"
         case .translating: "Translating"
         }
-    }
-
-    private func setRecordingDot(_ visible: Bool, on button: NSStatusBarButton) {
-        guard visible != (recordingDot != nil) else { return }
-        button.image = MenuBarIcon.template(badgeHole: visible)
-        guard visible else {
-            recordingDot?.removeFromSuperview()
-            recordingDot = nil
-            return
-        }
-        let size = MenuBarIcon.badgeDiameter
-        let bounds = button.bounds
-        // The image is centered in the button; map the badge from image to button coordinates.
-        let dx = MenuBarIcon.badgeCenter.x - MenuBarIcon.size.width / 2
-        let dy = MenuBarIcon.badgeCenter.y - MenuBarIcon.size.height / 2
-        let center = CGPoint(x: bounds.midX + dx, y: button.isFlipped ? bounds.midY - dy : bounds.midY + dy)
-        let dot = NSView(frame: NSRect(x: center.x - size / 2, y: center.y - size / 2, width: size, height: size))
-        dot.wantsLayer = true
-        dot.layer?.backgroundColor = NSColor.systemRed.cgColor
-        dot.layer?.cornerRadius = size / 2
-        dot.setAccessibilityElement(false)
-        button.addSubview(dot)
-        recordingDot = dot
     }
 
     private func setPulsing(_ pulsing: Bool, on button: NSStatusBarButton) {
@@ -122,15 +84,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 }
 
-/// transcribe-thing's menu bar glyph, drawn in code: a capsule (the pill) holding a five-bar waveform. While recording,
-/// a hole is cut behind the badge so the red dot never collides with the outline.
+/// transcribe-thing's menu bar glyph, drawn in code: a capsule (the pill) holding a five-bar waveform.
 enum MenuBarIcon {
     static let size = NSSize(width: 20, height: 16)
-    /// Badge center in image coordinates (origin bottom-left).
-    static let badgeCenter = CGPoint(x: 18.5, y: 13.25)
-    static let badgeDiameter: CGFloat = 6
 
-    static func template(badgeHole: Bool = false) -> NSImage {
+    static func template() -> NSImage {
         let image = NSImage(size: size, flipped: false) { rect in
             NSColor.black.set()
             let stroke: CGFloat = 1.4
@@ -149,13 +107,6 @@ enum MenuBarIcon {
                 let bar = NSRect(x: x, y: rect.midY - height / 2, width: barWidth, height: height)
                 NSBezierPath(roundedRect: bar, xRadius: barWidth / 2, yRadius: barWidth / 2).fill()
                 x += barWidth + gap
-            }
-
-            if badgeHole, let context = NSGraphicsContext.current {
-                context.compositingOperation = .clear
-                let r = badgeDiameter / 2 + 1.25
-                NSBezierPath(ovalIn: NSRect(x: badgeCenter.x - r, y: badgeCenter.y - r, width: r * 2, height: r * 2)).fill()
-                context.compositingOperation = .sourceOver
             }
             return true
         }

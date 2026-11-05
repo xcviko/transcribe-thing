@@ -233,46 +233,6 @@ enum PillSnapshots {
             SnapshotEntry("pill-toast-update", width: 640, height: 270) { _ in
                 CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.updateAvailable])
             },
-            // "Transcribe your call in Google Meet?": sticky, Transcribe first. Over the resting pill, during a
-            // dictation, and with the pill hidden.
-            SnapshotEntry("pill-toast-call", width: 640, height: 270) { _ in
-                CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.callQuestion])
-            },
-            SnapshotEntry("pill-toast-call-dictating", width: 640, height: 290) { _ in
-                CanvasScene(model: .preview(phase: .listening, level: 0.6), notices: [PillSnapshotFixtures.callQuestion])
-            },
-            SnapshotEntry("pill-toast-call-never", width: 640, height: 230) { _ in
-                CanvasScene(model: neverModel(), notices: [PillSnapshotFixtures.callQuestion])
-            },
-            // Never for … for a site no service is known for, and for an app nobody knows.
-            SnapshotEntry("pill-toast-call-site", width: 640, height: 270) { _ in
-                CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.callQuestionSite])
-            },
-            SnapshotEntry("pill-toast-call-app", width: 640, height: 270) { _ in
-                CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.callQuestionApp])
-            },
-            // The call's brief notices (`CallNotices`): noticed, mute and how it was known, mute not followed, ended.
-            SnapshotEntry("pill-toast-call-notices", width: 640, height: 230) { _ in
-                CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.callDetected,
-                                                          PillSnapshotFixtures.callMuted])
-            },
-            SnapshotEntry("pill-toast-call-notice-telegram", width: 640, height: 190) { _ in
-                CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.callUnmutedTelegram])
-            },
-            SnapshotEntry("pill-toast-call-notice-zoom", width: 640, height: 190) { _ in
-                CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.callMutedZoom])
-            },
-            SnapshotEntry("pill-toast-call-notice-not-followed", width: 640, height: 230) { _ in
-                CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.callNotFollowed,
-                                                          PillSnapshotFixtures.callEnded])
-            },
-            // The mute slot: a background tab, then its "followed again", which takes its place.
-            SnapshotEntry("pill-toast-call-notice-background", width: 640, height: 190) { _ in
-                CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.callHidden])
-            },
-            SnapshotEntry("pill-toast-call-notice-again", width: 640, height: 190) { _ in
-                CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.callFollowedAgain])
-            },
             SnapshotEntry("pill-toast-updated", width: 640, height: 220) { _ in
                 CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.updated])
             },
@@ -346,24 +306,6 @@ enum PillSnapshots {
 // MARK: - Fixtures
 
 enum PillSnapshotFixtures {
-    /// What a call in Google Meet asks once it's confirmed (`CallMonitor.onAsk`).
-    static let callDetected = Notice.callStatus(.detected(title: "Google Meet"))
-    static let callMuted = Notice.callStatus(.mute(true, title: "Google Meet", source: .button))
-    static let callUnmutedTelegram = Notice.callStatus(.mute(false, title: "Telegram", source: .micRelease("Telegram")))
-    static let callMutedZoom = Notice.callStatus(.mute(true, title: "Zoom", source: .zoomMenu))
-    static let callNotFollowed = Notice.callStatus(.muteNotFollowed(title: "FaceTime"))
-    static let callHidden = Notice.callStatus(.muteHidden(tab: "Meet"))
-    static let callFollowedAgain = Notice.callStatus(.muteBack)
-    static let callEnded = Notice.callStatus(.ended(seconds: 24 * 60 + 37, transcribing: true))
-    static let callQuestion = Notice.transcribeCall(PreviewFixtures.callID(99), service: "Google Meet",
-                                                    never: "Never for Google Meet")
-    /// A call in a site no service is known for.
-    static let callQuestionSite = Notice.transcribeCall(PreviewFixtures.callID(98), service: "ChatGPT",
-                                                        never: "Never for This Site")
-    /// A call in an app nobody knows.
-    static let callQuestionApp = Notice.transcribeCall(PreviewFixtures.callID(97), service: "FaceTime",
-                                                       never: "Never for FaceTime")
-
     static let canceled = Notice(
         dedupeKey: "dictation.canceled", style: .info, symbol: "xmark.circle", title: "Dictation canceled",
         actions: [NoticeAction(title: "Undo", kind: .undoCancel, isPrimary: true)], lifetime: .seconds(6), sound: .cancel)

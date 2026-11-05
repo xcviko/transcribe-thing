@@ -1,7 +1,7 @@
 # CSpeexDSP
 
 The echo canceller and preprocessor of [SpeexDSP](https://github.com/xiph/speexdsp), vendored. The app uses them to take
-the other side's voices, played through the speakers, out of a call's mic track (`Audio/EchoCanceller.swift`).
+the music and other sound the Mac plays out of a dictation's mic as it is captured (`Audio/LiveEchoCanceller.swift`).
 
 - Version: SpeexDSP 1.2.1 plus later upstream fixes, commit `7a158783df74efe7c2d1c6ee8363c1e695c71226`
   (2025-07-05, "testresample2: define M_PI if needed").

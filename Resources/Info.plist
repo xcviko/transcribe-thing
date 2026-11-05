@@ -31,7 +31,7 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAudioCaptureUsageDescription</key>
-	<string>transcribe-thing records the other side of your calls, only the call app's sound, so it can transcribe the call when you say so.</string>
+	<string>While you dictate, transcribe-thing listens to the sound other apps play, such as music, to take it out of your dictation. It never saves that sound.</string>
 	<key>NSDesktopFolderUsageDescription</key>
 	<string>transcribe-thing saves the logs you export to your Desktop, so you can send them.</string>
 	<key>NSHighResolutionCapable</key>

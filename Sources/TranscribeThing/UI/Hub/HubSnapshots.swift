@@ -103,200 +103,6 @@ enum HubSnapshots {
                 c.history = .preview(entries: Samples.selectionEntries() + c.history.entries)
             },
 
-            // Calls (`--only hub-call`): every state a call can be in, by day, with the badge on the sidebar.
-            hub("hub-calls", .calls, configure: Samples.calls),
-            hub("hub-calls-full", .calls, height: 1120, configure: Samples.calls),
-            hub("hub-calls-compact", .calls, width: 820, height: 560, configure: Samples.calls),
-            // The Meet call hovered: Copy Transcript and Delete.
-            hub("hub-calls-hover", .calls) { c in
-                Samples.calls(c)
-                c.previewHoveredCall = PreviewFixtures.callID(2)
-            },
-            // A Meet call being recorded and asked about, 12:34 in: the question in its row, and in the badge.
-            hub("hub-calls-asking", .calls) { c in
-                Samples.calls(c)
-                Samples.live(c, kept: false)
-            },
-            // The same call kept, still recording.
-            hub("hub-calls-recording", .calls) { c in
-                Samples.calls(c)
-                Samples.live(c, kept: true)
-            },
-            hub("hub-calls-search", .calls) { c in
-                Samples.calls(c)
-                c.initialSearch = "аня"
-            },
-            hub("hub-calls-off", .calls) { c in
-                Samples.calls(c)
-                c.settings.callRecording = .off
-            },
-            // Calls made from files: a screen recording done (its film, its cost), a lecture's audio transcribing.
-            hub("hub-calls-file", .calls, configure: Samples.callsWithFiles),
-            // Files dragged over Calls.
-            hub("hub-calls-drop", .calls) { c in
-                Samples.calls(c)
-                c.previewDropTarget = true
-            },
-            // The design review's page: where the file was, three speakers, its summary.
-            hub("hub-call-detail-file", .callDetail, height: 1100) { c in
-                Samples.callsWithFiles(c)
-                c.windows.openCallID = PreviewFixtures.callID(7)
-            },
-            hub("hub-call-detail-file-transcribing", .callDetail) { c in
-                Samples.callsWithFiles(c)
-                c.windows.openCallID = PreviewFixtures.callID(8)
-            },
-            hub("hub-calls-empty", .calls),
-            hub("hub-calls-empty-off", .calls) { c in c.settings.callRecording = .off },
-            // The Meet call: three speakers besides Sam, Matvey renamed, a phrase said muted, another tab's sound.
-            hub("hub-call-detail", .callDetail, height: 900) { c in Samples.openCall(c, 2) },
-            hub("hub-call-detail-compact", .callDetail, width: 820, height: 560) { c in Samples.openCall(c, 2) },
-            // The Meet call's first 3:20, played to 2:48: the waveform in its speakers' colors (the muted phrase dimmed),
-            // and before its loudness is read, flat.
-            hub("hub-call-detail-waveform", .callDetail) { c in Samples.waveformCall(c) },
-            hub("hub-call-detail-waveform-flat", .callDetail) { c in
-                Samples.waveformCall(c)
-                c.previewWaveformFlat = true
-            },
-            hub("hub-call-detail-waveform-compact", .callDetail, width: 820, height: 560) { c in Samples.waveformCall(c) },
-            // The Meet call's summary whole (two of its four tasks done), then the transcript.
-            hub("hub-call-detail-summary", .callDetail, height: 1260) { c in Samples.openCall(c, 2) },
-            // The same call transcribed before summaries: Summarize, and the same while it runs.
-            hub("hub-call-detail-no-summary", .callDetail) { c in
-                Samples.openCall(c, 2)
-                c.calls.update(PreviewFixtures.callID(2)) { $0.summary = nil }
-            },
-            hub("hub-call-detail-summarizing", .callDetail) { c in
-                Samples.openCall(c, 2)
-                c.calls.update(PreviewFixtures.callID(2)) { $0.summary = nil }
-                c.calls.summarizing.insert(PreviewFixtures.callID(2))
-            },
-            // The design review dropped as a video, its "Speaker 2" being named from the picture.
-            hub("hub-call-detail-naming", .callDetail, height: 1100) { c in
-                Samples.callsWithFiles(c)
-                c.windows.openCallID = PreviewFixtures.callID(7)
-                c.calls.namingSpeakers.insert(PreviewFixtures.callID(7))
-            },
-            // The same once its "Speaker 2" was named from the video: the header says where the name came from.
-            hub("hub-call-detail-named", .callDetail, height: 1100) { c in
-                Samples.callsWithFiles(c)
-                c.windows.openCallID = PreviewFixtures.callID(7)
-                c.calls.update(PreviewFixtures.callID(7)) {
-                    $0.speakerNames["Speaker 2"] = "Pablo"
-                    $0.videoNamedSpeakers = ["Speaker 2"]
-                }
-            },
-            // The step found no one it was sure of, then the step failed: said where the hint was.
-            hub("hub-call-detail-naming-none", .callDetail, height: 1100) { c in
-                Samples.callsWithFiles(c)
-                c.windows.openCallID = PreviewFixtures.callID(7)
-                c.calls.namingResult[PreviewFixtures.callID(7)] = .init(message: "Couldn’t tell who’s who from the video.")
-            },
-            hub("hub-call-detail-naming-failed", .callDetail, height: 1100) { c in
-                Samples.callsWithFiles(c)
-                c.windows.openCallID = PreviewFixtures.callID(7)
-                c.calls.namingResult[PreviewFixtures.callID(7)] = .init(message: "Couldn’t look at the video.",
-                                                                        detail: "The video is too large.")
-            },
-            // Telemost's summary failed: why, and Summarize.
-            hub("hub-call-detail-summary-failed", .callDetail) { c in Samples.openCall(c, 6) },
-            // Telemost's other side came out silent: the permission, with Open Settings.
-            hub("hub-call-detail-silent", .callDetail) { c in Samples.openCall(c, 6) },
-            hub("hub-call-detail-unconfirmed", .callDetail) { c in Samples.openCall(c, 4) },
-            hub("hub-call-detail-failed", .callDetail) { c in Samples.openCall(c, 3) },
-            hub("hub-call-detail-transcribing", .callDetail) { c in Samples.openCall(c, 1) },
-            // The Meet call scrolled to its transcript: the card stays at the top, a hairline under it.
-            hub("hub-call-detail-scrolled", .callDetail) { c in
-                Samples.waveformCall(c)
-                c.previewCallScroll = 640
-            },
-            hub("hub-call-detail-scrolled-compact", .callDetail, width: 820, height: 560) { c in
-                Samples.waveformCall(c)
-                c.previewCallScroll = 640
-            },
-            // The Meet call being recorded now, 12:34 in: Recording, with Stop, and no player yet.
-            hub("hub-call-detail-recording", .callDetail) { c in
-                Samples.live(c, kept: true)
-                c.windows.openCallID = PreviewFixtures.callID(99)
-            },
-            // Recorded from the menu bar: its mute isn't followed, and it ran nowhere in particular.
-            hub("hub-call-detail-menu-bar", .callDetail) { c in
-                Samples.waveformCall(c)
-                c.calls.update(PreviewFixtures.callID(2)) {
-                    $0.manual = true
-                    $0.muteIntervals = []
-                    $0.otherBrowserAudio = []
-                }
-            },
-            // Everything worth a note: muted, mute not known, another tab's sound, speech missed, cut off. Then the
-            // same in the narrowest window, with a long page title and eight speakers.
-            hub("hub-call-detail-notes", .callDetail) { c in
-                Samples.waveformCall(c)
-                c.calls.update(PreviewFixtures.callID(2)) { Samples.noteEverything(&$0) }
-            },
-            hub("hub-call-detail-crowded-compact", .callDetail, width: 820, height: 560) { c in
-                Samples.waveformCall(c)
-                c.calls.update(PreviewFixtures.callID(2)) {
-                    Samples.noteEverything(&$0)
-                    Samples.crowd(&$0)
-                }
-            },
-            // A speaker's name clicked: the field that renames them (a popover doesn't render in a page snapshot).
-            SnapshotEntry("hub-call-rename", width: 300, height: 170) { _ in
-                SpeakerRenameForm(original: "Participant 1", current: "Matvey") { _ in }
-                    .background(Color.bgElevated, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .padding(12)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .background(Color.bgCanvas)
-            },
-            // A name the video gave: the field says so.
-            SnapshotEntry("hub-call-rename-video", width: 300, height: 190) { _ in
-                SpeakerRenameForm(original: "Speaker 2", current: "Pablo", fromVideo: true) { _ in }
-                    .background(Color.bgElevated, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .padding(12)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .background(Color.bgCanvas)
-            },
-            // General → Calls, on its own (the page is taller than a window).
-            hub("hub-general-calls", .general, height: 1700),
-            // The same, with apps and sites never recorded: an app with its icon, an unknown one, two sites.
-            hub("hub-general-calls-exclusions", .general, height: 1900) { c in
-                c.settings.callExclusions = [
-                    .app(bundleID: "com.apple.FaceTime", name: "FaceTime"),
-                    .app(bundleID: "net.whatsapp.WhatsApp", name: "WhatsApp"),
-                    CallExclusion.site(service: .meet, page: "Meet – abc-defg-hij")!,
-                    CallExclusion.site(service: nil, page: "ChatGPT")!,
-                ]
-            },
-
-            // General → Browser Extension (`--only hub-general-browser`), below Calls: Chrome to install, Arc in two
-            // profiles, Firefox and Safari coming later. Then Chrome's Install clicked (its steps open), and no browser.
-            hub("hub-general-browser-extension", .general, height: 2150) { c in
-                c.browserExtension = .preview(
-                    browsers: [PreviewFixtures.chrome, PreviewFixtures.arc, PreviewFixtures.firefox, PreviewFixtures.safari],
-                    connections: PreviewFixtures.connections(PreviewFixtures.arc, profiles: 2))
-            },
-            hub("hub-general-browser-installing", .general, height: 2150) { c in
-                c.browserExtension = .preview(browsers: [PreviewFixtures.chrome, PreviewFixtures.safari])
-                c.previewInstallingBrowser = PreviewFixtures.chrome.id
-            },
-            hub("hub-general-browser-connected", .general, height: 2150) { c in
-                c.browserExtension = .preview(browsers: [PreviewFixtures.chrome],
-                                              connections: PreviewFixtures.connections(PreviewFixtures.chrome, profiles: 1))
-            },
-            hub("hub-general-browser-none", .general, height: 2150),
-            // A Meet call in Chrome, which has no extension: the note above the calls, and the empty tab's pointer.
-            hub("hub-calls-browser-hint", .calls) { c in
-                Samples.calls(c)
-                c.browserExtension = .preview(browsers: [PreviewFixtures.chrome, PreviewFixtures.safari])
-            },
-            hub("hub-calls-empty-browser", .calls) { c in
-                c.browserExtension = .preview(browsers: [PreviewFixtures.chrome, PreviewFixtures.safari])
-            },
-            hub("hub-calls-empty-browser-compact", .calls, width: 820, height: 560) { c in
-                c.browserExtension = .preview(browsers: [PreviewFixtures.chrome, PreviewFixtures.safari])
-            },
-
             hub("hub-models", .models),
             hub("hub-models-full", .models, height: 1080),
             // Hands-free switches to Gemini.
@@ -466,14 +272,14 @@ enum HubSnapshots {
                 c.settings.modesRemovingFinalPeriod = [.pushToTalk]
             },
             // The whole page, down to Troubleshooting's Export Logs….
-            hub("hub-general-full", .general, height: 1360),
+            hub("hub-general-full", .general, height: 1600),
             // Pasting's "Hold the paste after a click" (`--only hub-general-hold-paste`): on (the default), and off.
             hub("hub-general-hold-paste", .general, height: 900),
             hub("hub-general-hold-paste-off", .general, height: 900) { c in
                 c.settings.holdsPasteAfterClick = false
             },
             // The whole page down to Experimental at the bottom: Race requests on 2.
-            hub("hub-general-experimental", .general, height: 2250) { c in
+            hub("hub-general-experimental", .general, height: 1700) { c in
                 c.settings.raceRequests = .two
             },
             // The narrowest window: the segmented control leaves the least room for the pill caption; sounds off.
@@ -487,7 +293,7 @@ enum HubSnapshots {
                 c.settings.modelsRemovingFinalPeriod = [.parakeet]
                 c.settings.modesRemovingFinalPeriod = [.pushToTalk]
             },
-            hub("hub-general-permissions", .general, height: 1080) { c in
+            hub("hub-general-permissions", .general, height: 1600) { c in
                 c.permissions = .preview(mic: .granted, ax: .denied)
                 c.launchAtLogin = .preview()
             },
@@ -564,65 +370,6 @@ enum HubSnapshots {
             Calendar.current.date(bySettingHour: 14, minute: 5, second: 0, of: Date()) ?? Date()
         }
         static let newVersion = AppVersion(major: 0, minor: 3, patch: 0)
-
-        /// The fixture calls (`PreviewFixtures.calls`).
-        @MainActor static func calls(_ context: HubContext) {
-            context.calls = .preview(calls: PreviewFixtures.calls(), settings: context.settings)
-        }
-
-        /// The fixture calls, with two made from files (`PreviewFixtures.importedCalls`).
-        @MainActor static func callsWithFiles(_ context: HubContext) {
-            context.calls = .preview(calls: PreviewFixtures.importedCalls() + PreviewFixtures.calls(),
-                                     settings: context.settings)
-        }
-
-        /// A Meet call recorded now, 12:34 in: kept (in the store, as the monitor puts it) or asked about.
-        @MainActor static func live(_ context: HubContext, kept: Bool) {
-            let now = Date()
-            let info = PreviewFixtures.liveCall(startedAt: now.addingTimeInterval(-754))
-            context.fixedNow = now
-            context.previewCallState = kept ? .recording(info) : .asking(info)
-            guard kept else { return }
-            var record = CallRecord(id: info.id, startedAt: info.startedAt, appName: info.appName,
-                                    bundleID: info.bundleID, service: info.service, pageTitle: info.pageTitle,
-                                    status: .recording)
-            record.muteKnown = true
-            context.calls = .preview(calls: [record] + PreviewFixtures.calls(), settings: context.settings)
-        }
-
-        /// The Calls tab's call `n` (`PreviewFixtures.callID`) open on its page.
-        @MainActor static func openCall(_ context: HubContext, _ n: Int) {
-            calls(context)
-            context.windows.openCallID = PreviewFixtures.callID(n)
-        }
-
-        /// The Meet call cut to its first 3:20, where all its phrases are, 2:48 played.
-        @MainActor static func waveformCall(_ context: HubContext) {
-            openCall(context, 2)
-            context.calls.update(PreviewFixtures.callID(2)) {
-                $0.micSeconds = 200
-                $0.remoteSeconds = 200
-            }
-            context.previewCallPosition = 168
-        }
-
-        /// Every note a call can have: two mutes, mute not known, another tab's sound, speech maybe missed between
-        /// 1:35 and 2:30, cut off at 3:10.
-        static func noteEverything(_ call: inout CallRecord) {
-            call.muteKnown = false
-            call.missedSpeech = [CallInterval(start: 95, end: 150)]
-            call.cutOffAt = 190
-        }
-
-        /// A long page title and eight speakers: five more on the other side.
-        static func crowd(_ call: inout CallRecord) {
-            call.pageTitle = "Weekly release sync with design, support and the whole platform team – abc-defg-hij"
-            let extra = (3...7).map { n in
-                CallTranscript.Segment(start: 190 + Double(n), end: 191 + Double(n), side: .remote,
-                                       speaker: "Participant \(n)", text: "Sounds good.")
-            }
-            call.transcript?.segments += extra
-        }
 
         /// Colors other than the defaults, one each: Parakeet teal, Gemini blue.
         @MainActor static func pickColors(_ context: HubContext) {

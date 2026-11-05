@@ -8,12 +8,10 @@ public enum TranscribeThingMain {
     /// `nonisolated` + `assumeIsolated` so a Swift 5 mode main.swift can call it (top-level code there
     /// isn't main-actor isolated). main.swift always runs on the main thread.
     public nonisolated static func run() {
+        // An old copy of the calls browser extension still starting this app as its host: nothing to do, before
+        // anything of the app's own (no settings, no hotkeys, no windows). Calls are in calls-thing now.
+        if LegacyBrowserHost.isBrowserLaunch(CommandLine.arguments.dropFirst()) { exit(0) }
         let arguments = Array(CommandLine.arguments.dropFirst())
-        // A browser starting the extension's native messaging host: a relay to the running app, before anything of
-        // the app's own (no settings, no hotkeys, no windows).
-        if NativeHostCLI.handles(arguments) {
-            NativeHostCLI.run(arguments)
-        }
         MainActor.assumeIsolated {
             if arguments.contains("--snapshots") {
                 exit(SnapshotRunner.run(arguments: arguments))
@@ -23,15 +21,6 @@ public enum TranscribeThingMain {
             }
             if EngineCLI.handles(arguments) {
                 EngineCLI.run(arguments)
-            }
-            if AudioWatchCLI.handles(arguments) {
-                AudioWatchCLI.run(arguments)
-            }
-            if CallsEchoCLI.handles(arguments) {
-                CallsEchoCLI.run(arguments)
-            }
-            if CallsCLI.handles(arguments) {
-                CallsCLI.run(arguments)
             }
             if UpdateCLI.handles(arguments) {
                 UpdateCLI.run(arguments)

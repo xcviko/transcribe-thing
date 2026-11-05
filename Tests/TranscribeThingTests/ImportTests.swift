@@ -193,7 +193,7 @@ import Testing
         let movie = try await Self.mux(video: video, audio: audio, name: "meeting.mp4", as: .mp4)
         let file = try await ImportedAudio.read(movie)
         #expect(file.fileName == "meeting.mp4")
-        #expect(file.isVideo && file.url == movie, "Calls keeps a video's path for its picture")
+        #expect(file.isVideo && file.url == movie)
         #expect(abs(file.duration - 3) < 0.15)
         #expect(file.speech.voicedSeconds > 1)
     }

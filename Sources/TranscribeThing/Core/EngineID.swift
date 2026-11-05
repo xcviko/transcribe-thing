@@ -21,7 +21,7 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
     static var offered: [EngineID] { allCases.filter { !$0.isRetired } }
 
     static var localEngines: [EngineID] { offered.filter(\.isLocal) }
-    /// The Gemini models this build runs: Gemini 3.8 Flash alone. It takes calls too (`AppSettings.callModel`).
+    /// The Gemini models this build runs: Gemini 3.8 Flash alone.
     static var geminiEngines: [EngineID] { offered.filter(\.isGemini) }
 
     var isLocal: Bool {

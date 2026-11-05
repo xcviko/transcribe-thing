@@ -2026,9 +2026,8 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
         #expect(Self.titles(menu) == [
             "Parakeet v3 · Ready", "—",
             "Copy Last Transcript", "—",
-            "Start Call Recording", "—",
             "Microphone", "—",
-            "Home", "Calls", "Settings…", "—", "Quit",
+            "Home", "Settings…", "—", "Quit",
         ])
         #expect(menu.items.first?.isEnabled == false)
     }

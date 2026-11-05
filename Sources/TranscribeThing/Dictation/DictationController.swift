@@ -71,8 +71,6 @@ final class DictationController {
     @ObservationIgnored var onDictationFailed: (() -> Void)?
     /// The update toast's "Update".
     @ObservationIgnored var installUpdate: (() -> Void)?
-    /// "Transcribe your call?" answered in its toast: the call's id, and the answer (`CallMonitor`).
-    @ObservationIgnored var answerCall: ((UUID, CallAnswer) -> Void)?
 
     // Seams for tests: time, capture, transcription and insertion can be replaced.
     @ObservationIgnored var clock: () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
@@ -1706,12 +1704,6 @@ final class DictationController {
             useBuiltInMicrophone()
         case .installUpdate:
             installUpdate?()
-        case .keepCall(let id):
-            answerCall?(id, .keep)
-        case .discardCall(let id):
-            answerCall?(id, .discard)
-        case .neverForCall(let id):
-            answerCall?(id, .never)
         case .undoDictionaryAdd(let word, let before, let after):
             settings.dictionary.undoAdding(word, before: before, after: after)
         case .dismiss, .copyText, .pasteText:

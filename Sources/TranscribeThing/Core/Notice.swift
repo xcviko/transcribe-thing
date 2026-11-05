@@ -37,11 +37,6 @@ enum NoticeActionKind: Sendable, Equatable {
     case useBuiltInMicrophone
     /// Open Software Update and install the newest release there, where its progress shows.
     case installUpdate
-    /// "Transcribe your call?": Yes keeps the call (`CallMonitor.keep(callID:)`), No deletes its recording, Never for …
-    /// deletes it too and never notices that app's or site's calls again (`CallMonitor.never(callID:)`).
-    case keepCall(UUID)
-    case discardCall(UUID)
-    case neverForCall(UUID)
     case dismiss
 }
 
@@ -71,14 +66,14 @@ struct Notice: Identifiable, Equatable, Sendable {
     var symbol: String
     var title: String
     var body: String?
-    /// A small second line under the title of a one-row toast (a call notice's "From the Mute button"); unlike
+    /// A small second line under the title of a one-row toast; unlike
     /// `body`, it keeps the toast a single compact pill.
     var detail: String?
     /// Non-nil renders the notice as a transcript card with selectable text.
     var transcript: String?
     /// At most two.
     var actions: [NoticeAction]
-    /// A rarer answer, as a small link beside the buttons (under them when it doesn't fit): Never for ….
+    /// A rarer answer, as a small link beside the buttons (under them when it doesn't fit).
     var link: NoticeAction?
     var lifetime: NoticeLifetime
     var sound: SoundEffect?
@@ -163,32 +158,11 @@ extension Notice {
     }
 }
 
-extension Notice {
-    static func callQuestionKey(_ id: UUID) -> String { "call.ask.\(id.uuidString)" }
-
-    /// A call is being recorded: transcribe it? Sticky until answered, or until the call is gone without an answer
-    /// mattering (dropped, deleted). An unanswered call that ends waits in the Calls tab, with a badge, and so does
-    /// this. Closed without an answer, the call waits there too. `never` is the third answer's title
-    /// (`CallExclusion.actionTitle`: "Never for FaceTime", "Never for This Site"), when the call can be excluded.
-    static func transcribeCall(_ id: UUID, service: String, never: String? = nil) -> Notice {
-        Notice(dedupeKey: callQuestionKey(id), style: .info, symbol: "phone.badge.waveform",
-               title: "Transcribe your call in \(service)?",
-               body: callQuestionBody,
-               actions: [NoticeAction(title: "Transcribe", kind: .keepCall(id), isPrimary: true),
-                         NoticeAction(title: "Don’t Keep", kind: .discardCall(id))],
-               link: never.map { NoticeAction(title: $0, kind: .neverForCall(id)) },
-               lifetime: .sticky)
-    }
-
-    static let callQuestionBody = "It’s being recorded. Don’t Keep deletes the recording; without an answer, it "
-        + "waits in Calls."
-}
-
 // MARK: - Destinations
 
 enum SettingsPane: String, Sendable {
     case microphone, accessibility, inputMonitoring, keyboard, sound, storage
-    /// Screen & System Audio Recording, whose System Audio Recording Only lets a call's other side be recorded.
+    /// Screen & System Audio Recording, whose System Audio Recording Only lets a dictation take music out.
     case systemAudio
 
     /// System Settings deep link (verified anchors, macos-input.md §3.4).
@@ -207,32 +181,27 @@ enum SettingsPane: String, Sendable {
 }
 
 enum HubSection: String, CaseIterable, Sendable, Identifiable {
-    case home, calls, models, shortcuts, dictionary, microphone, general
+    case home, models, shortcuts, dictionary, microphone, general
     /// A sub-page of General (no sidebar item of its own), like a pane inside System Settings.
     case softwareUpdate
-    /// One call, the one `WindowCoordinator.openCallID` names: a sub-page of Calls.
-    case callDetail
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .home: "Home"
-        case .calls: "Calls"
         case .models: "Models"
         case .shortcuts: "Shortcuts"
         case .dictionary: "Dictionary"
         case .microphone: "Microphone"
         case .general: "General"
         case .softwareUpdate: "Software Update"
-        case .callDetail: "Call"
         }
     }
 
     var symbolName: String {
         switch self {
         case .home: "house"
-        case .calls, .callDetail: "phone"
         case .models: "square.stack.3d.up"
         case .shortcuts: "keyboard"
         case .dictionary: "character.book.closed"
@@ -243,7 +212,7 @@ enum HubSection: String, CaseIterable, Sendable, Identifiable {
     }
 
     /// Pages reached from another one, with a Back button, and no sidebar item of their own.
-    var isSubPage: Bool { self == .softwareUpdate || self == .callDetail }
+    var isSubPage: Bool { self == .softwareUpdate }
 }
 
 enum OpenRouterLinks {

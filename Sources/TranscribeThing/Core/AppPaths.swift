@@ -18,12 +18,6 @@ struct AppPaths: Sendable {
     var journals: URL { root.appendingPathComponent("Recordings in Progress", isDirectory: true) }
     /// root/history.json
     var historyFile: URL { root.appendingPathComponent("history.json", isDirectory: false) }
-    /// root/Calls: a folder per recorded call (`CallStore`), its tracks as .m4a. Created with the first call.
-    var calls: URL { root.appendingPathComponent("Calls", isDirectory: true) }
-    /// root/Calls in Progress: the call being recorded, on disk until the Calls store has it (`CallJournal`).
-    var callJournals: URL { root.appendingPathComponent("Calls in Progress", isDirectory: true) }
-    /// root/calls.json: the recorded calls (`CallStore`).
-    var callsFile: URL { root.appendingPathComponent("calls.json", isDirectory: false) }
     /// root/updates.json: the last release feed GitHub sent, its ETag and when it was checked.
     var updateFeedFile: URL { root.appendingPathComponent("updates.json", isDirectory: false) }
     /// root/openrouter-key: the OpenRouter key (`KeyFileStore`), readable by the user only.
@@ -33,11 +27,6 @@ struct AppPaths: Sendable {
     var vertexProxyKeyFile: URL { root.appendingPathComponent("vertex-proxy-key", isDirectory: false) }
     /// root/Logs: the diagnostic log, a file per day (`DiagnosticLog`). Created by the log when it first writes.
     var logs: URL { root.appendingPathComponent("Logs", isDirectory: true) }
-    /// root/Browser Extension: the unpacked browser extension each browser loads (`BrowserExtension`), copied from
-    /// the app so its place never moves with the app.
-    var browserExtension: URL { root.appendingPathComponent("Browser Extension", isDirectory: true) }
-    /// root/browser.sock: where the browser extension's host reaches the running app (`BrowserBridge`).
-    var browserSocket: URL { root.appendingPathComponent("browser.sock", isDirectory: false) }
 
     func recordingURL(fileName: String) -> URL {
         recordings.appendingPathComponent(fileName, isDirectory: false)

@@ -2,12 +2,12 @@ import CoreAudio
 import Foundation
 
 /// The reference a dictation's echo canceller (`LiveEchoCanceller`) needs: what the Mac plays, as a process tap of
-/// every app but this one hears it (`ProcessTapSource`, `.everythingButThisApp`, the tap a manual call recording uses).
+/// every app but this one hears it (`ProcessTapSource`, `.everythingButThisApp`).
 ///
 /// Nothing of it runs at key-down: `start` returns at once and the checks run on a queue of their own while the mic
 /// opens. The tap is made only when macOS already lets the app record other apps' sound (it never asks: a tap made
 /// without the permission would bring up the system's prompt mid-dictation) and another app is playing sound right
-/// now (the HAL's process list, as `CallWatch` reads it). When nothing plays, that's looked at again every
+/// now (the HAL's process list, `othersRunningOutput`). When nothing plays, that's looked at again every
 /// `recheck` seconds, so music started mid-dictation is caught too. Until the tap delivers, the mic goes through as
 /// recorded.
 ///
@@ -16,8 +16,8 @@ import Foundation
 /// (`AudioRecorder.duckRecording`). Kept in the reference, a ducked cue would only teach the filter an echo that isn't
 /// there.
 ///
-/// A call recording that taps everything at the same time has a tap of its own: two taps of the same sound are two
-/// HAL objects that don't know of each other.
+/// Another app tapping the same sound at the same time (calls-thing recording a call) has a tap of its own: two taps
+/// of the same sound are two HAL objects that don't know of each other.
 final class DictationEcho: @unchecked Sendable {
     /// Everything it asks of the system, replaceable in tests.
     struct Sensors: Sendable {

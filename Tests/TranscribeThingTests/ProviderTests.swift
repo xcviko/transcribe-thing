@@ -107,12 +107,6 @@ import Testing
         await #expect(throws: AppError.vertexProxy(.notSetUp)) {
             try await service.polishText("text", route: route, prompt: "Polish.", timeout: 5)
         }
-        let (client, _) = StubURLProtocol.client([])
-        let account = OpenRouterAccount(keyStore: .inMemory(ProxyFixture.openRouterKey), client: client, debounce: .zero)
-        let send = CallTranscriber.openRouter(client: client, account: account, proxy: proxy)
-        let sendText = CallTranscriber.openRouterText(client: client, account: account, proxy: proxy)
-        await #expect(throws: AppError.vertexProxy(.notSetUp)) { try await send(Data([1]), "x", 1, nil) }
-        await #expect(throws: AppError.vertexProxy(.notSetUp)) { try await sendText("x", "y") }
         #expect(StubURLProtocol.registry.requests(for: openRouterHost).isEmpty)
         #expect(CloudRoute.provider(for: .geminiFlash, proxy: proxy) == .vertexProxy)
         #expect(CloudRoute.provider(for: .parakeet, proxy: proxy) == nil)
