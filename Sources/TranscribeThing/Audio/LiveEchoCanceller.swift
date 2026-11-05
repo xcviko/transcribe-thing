@@ -106,7 +106,7 @@ final class LiveEchoCanceller {
     private var echo: OpaquePointer?
     private var cleaning: OpaquePointer?
     private var echoGate: EchoGate?
-    private var notch = EchoCanceller.DCNotch()
+    private var notch = DCNotch()
     private var micFrame: [Int16], farFrame: [Int16], linear: [Int16]
     private var notched: [Double]
 
@@ -145,6 +145,10 @@ final class LiveEchoCanceller {
     /// The version the output is on, or crossfading to: the cancelled one when true.
     private var heading = false
     private var reducedMic = 0.0, reducedOut = 0.0
+
+    /// How far a reference stretch may start from where the last one ended and still just follow on: the tap's
+    /// jitter and the resampler's latency, never a real gap.
+    static let referenceTolerance: TimeInterval = 0.05
 
     /// The Mac counts as playing in a frame at or above -50 dBFS.
     private static let farVoiced: Double = Foundation.pow(32_768 * Foundation.pow(10.0, -50.0 / 20), 2)
@@ -203,14 +207,14 @@ final class LiveEchoCanceller {
     }
 
     /// Puts what arrived in place: a stretch that starts later than the reference reached is preceded by silence,
-    /// one that starts earlier loses what overlaps; within `TrackAligner.tolerance` it just follows on, so the
+    /// one that starts earlier loses what overlaps; within `referenceTolerance` it just follows on, so the
     /// tap's jitter doesn't move the echo the filter learned.
     private func takeReference() {
         for stretch in pull() {
             var samples = stretch.samples[...]
             if let start = stretch.start {
                 let target = index(of: start)
-                let slack = Int(TrackAligner.tolerance * Recording.sampleRate)
+                let slack = Int(Self.referenceTolerance * Recording.sampleRate)
                 if !hasReference {
                     hasReference = true
                     report.hadReference = true

@@ -24,7 +24,7 @@ final class DictationEcho: @unchecked Sendable {
         var permission: @Sendable () -> SystemAudioPermission.Status
         /// Whether an app other than this one is playing sound.
         var othersPlaying: @Sendable () -> Bool
-        var makeTap: @Sendable () -> any CallTrackSource
+        var makeTap: @Sendable () -> any AudioTapSource
         /// Seconds between looks while nothing plays.
         var recheck: TimeInterval = 1
 
@@ -47,7 +47,7 @@ final class DictationEcho: @unchecked Sendable {
     private let queue = DispatchQueue(label: "dev.transcribe-thing.audio.echo", qos: .userInitiated)
     private let lock = NSLock()
     // Lock state.
-    private var tap: (any CallTrackSource)?
+    private var tap: (any AudioTapSource)?
     private var currentStatus = Status.checking
     private var stopped = false
     private var started = false
@@ -78,7 +78,7 @@ final class DictationEcho: @unchecked Sendable {
 
     /// Lets the tap go, off the caller's thread. Safe to call more than once.
     func stop() {
-        let tap = lock.withLock { () -> (any CallTrackSource)? in
+        let tap = lock.withLock { () -> (any AudioTapSource)? in
             stopped = true
             defer { self.tap = nil }
             return self.tap

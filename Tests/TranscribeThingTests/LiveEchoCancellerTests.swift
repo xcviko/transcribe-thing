@@ -348,7 +348,7 @@ private func gateOpenShare(_ samples: [Float], from: Double, to: Double) -> Doub
 }
 
 /// A tap that hands over what the test gives it.
-private final class FakeTap: CallTrackSource, @unchecked Sendable {
+private final class FakeTap: AudioTapSource, @unchecked Sendable {
     private let lock = NSLock()
     private var queued: [TimedAudio] = []
     private var running = false

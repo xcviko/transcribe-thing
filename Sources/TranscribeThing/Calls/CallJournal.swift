@@ -1,24 +1,9 @@
 import CoreAudio
 import Foundation
 
-/// A stretch of one track's audio: 16 kHz mono samples and the `AudioClock` time its first one was captured; nil
-/// when it goes straight on from the stretch before.
-struct TimedAudio: Equatable, Sendable {
-    var samples: [Float]
-    var start: TimeInterval?
-}
-
 /// Where one track of a call gets its audio: the mic (`MicTrackSource`), or the call app's sound (`ProcessTapSource`).
 /// Safe from any thread.
-protocol CallTrackSource: AnyObject, Sendable {
-    /// Starts capturing. A source that can't capture says why in `problem` and gives no audio.
-    func start()
-    /// Audio captured since the last drain, oldest first.
-    func drain() -> [TimedAudio]
-    /// Stops capturing: a drain afterwards hands over the rest.
-    func stop()
-    /// Why the track has no audio or lost it, once known.
-    var problem: String? { get }
+protocol CallTrackSource: AudioTapSource {
     /// The call app's processes changed: a tap of them takes in the new set. Only `ProcessTapSource` cares.
     func retarget(_ processes: [AudioObjectID])
     /// The call app let go of the mic: stop capturing, so this app doesn't keep the mic open either, and give digital
@@ -34,6 +19,9 @@ extension CallTrackSource {
     func release() {}
     func retake(_ report: @escaping @Sendable (MicRetake) -> Void) {}
 }
+
+/// A call's other side: the tap already follows the call app's processes (`ProcessTapSource.retarget`).
+extension ProcessTapSource: CallTrackSource {}
 
 /// How taking the mic again went (`CallTrackSource.retake`).
 enum MicRetake: Equatable, Sendable {

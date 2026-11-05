@@ -331,38 +331,6 @@ final class EchoCanceller {
         return out
     }
 
-    /// The DC notch SpeexDSP's canceller puts the mic through first (`filter_dc_notch16` in mdf.c, at 16 kHz).
-    struct DCNotch {
-        private var memory: (Double, Double) = (0, 0)
-        private let radius = 0.982
-
-        /// The energy of `samples` through the notch, which goes on from the last call.
-        mutating func energy(_ samples: [Int16]) -> Double {
-            let den2 = radius * radius + 0.7 * (1 - radius) * (1 - radius)
-            var sum = 0.0
-            for sample in samples {
-                let input = Double(sample)
-                let output = memory.0 + input
-                memory.0 = memory.1 + 2 * (-input + radius * output)
-                memory.1 = input - den2 * output
-                sum += (radius * output) * (radius * output)
-            }
-            return sum
-        }
-
-        /// `samples` through the notch, into `out` (as long), which goes on from the last call.
-        mutating func filter(_ samples: [Int16], into out: inout [Double]) {
-            let den2 = radius * radius + 0.7 * (1 - radius) * (1 - radius)
-            for (index, sample) in samples.enumerated() {
-                let input = Double(sample)
-                let output = memory.0 + input
-                memory.0 = memory.1 + 2 * (-input + radius * output)
-                memory.1 = input - den2 * output
-                out[index] = radius * output
-            }
-        }
-    }
-
     private static func energy(_ samples: [Int16]) -> Double {
         samples.reduce(0.0) { $0 + Double($1) * Double($1) }
     }
