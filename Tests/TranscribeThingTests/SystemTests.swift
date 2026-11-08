@@ -2704,18 +2704,6 @@ private struct ClockedKeyboard {
         kb.up(kVK_ANSI_P)
         #expect(kb.up(kVK_F5, fnFlagged: true).events == [.pttUp])
     }
-
-    /// While the talk key would Undo, another key in an F5 press is reported (it still types); otherwise it isn't.
-    @Test func aKeyDuringAnF5HoldIsReportedForUndo() {
-        var kb = Keyboard(bindings: HeldKeyChordRouterTests.bindingsOnF5)
-        kb.config.reportsKeysDuringHold = true
-        #expect(kb.down(kVK_F5, fnFlagged: true).events == [.pttDown])
-        let a = kb.down(kVK_ANSI_A)
-        #expect(a.events == [.keyDuringHold] && !a.swallow)
-        #expect(kb.down(kVK_ANSI_A, isRepeat: true).events.isEmpty)
-        kb.up(kVK_ANSI_A)
-        #expect(kb.up(kVK_F5, fnFlagged: true).events == [.pttUp])
-    }
 }
 
 /// The router's keys played into a controller dictating on Gemini: F5 P, fn P and ⌃P while it's processed each have it

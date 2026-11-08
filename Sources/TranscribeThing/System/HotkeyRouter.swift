@@ -99,8 +99,6 @@ struct HotkeyRouter: Equatable, Sendable {
         /// (`shortcutKeyUp`).
         var isProcessing = false
         var processingTakesKeys = false
-        /// Another key during a hold of a talk key that is a key is reported (`keyDuringHold`): the press is an Undo.
-        var reportsKeysDuringHold = false
         /// Switch model has another model to step to (`ModelLineup.cycle`); without one its shortcut is never
         /// intercepted.
         var switchesModels = true
@@ -406,10 +404,6 @@ struct HotkeyRouter: Equatable, Sendable {
             gesture = .idle
             blockedUntilModifiersReleased = true
             decision.events.append(.pttInterrupted)
-        } else if case .holdingKey = gesture, config.reportsKeysDuringHold, !input.isRepeat {
-            // A talk key that is a key isn't interrupted (the other key goes on to the app), but its press is no clean
-            // one any more.
-            decision.events.append(.keyDuringHold)
         }
         return decision
     }

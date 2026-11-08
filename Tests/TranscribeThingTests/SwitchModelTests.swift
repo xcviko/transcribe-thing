@@ -820,8 +820,6 @@ import Testing
             shown.append(rig.h.pill.showsTabHint)
             c.handle(.cancel)
             #expect(!rig.h.pill.showsTabHint, "it goes with the hold")
-            // Closed, "Dictation canceled" leaves the talk key to start the next hold (up, the key is its Undo).
-            rig.h.toasts.dismiss(dedupeKey: "dictation.canceled")
         }
         #expect(shown == [true, true, true, false])
         #expect(rig.h.settings.switchHintShownCount == 3)

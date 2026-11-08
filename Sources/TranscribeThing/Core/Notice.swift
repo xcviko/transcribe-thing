@@ -45,15 +45,12 @@ struct NoticeAction: Identifiable, Equatable, Sendable {
     var title: String
     var kind: NoticeActionKind
     var isPrimary: Bool
-    /// The key that does it too, said small beside the title: "F5" on Undo, which the talk key does.
-    var keyHint: String?
 
-    init(id: UUID = UUID(), title: String, kind: NoticeActionKind, isPrimary: Bool = false, keyHint: String? = nil) {
+    init(id: UUID = UUID(), title: String, kind: NoticeActionKind, isPrimary: Bool = false) {
         self.id = id
         self.title = title
         self.kind = kind
         self.isPrimary = isPrimary
-        self.keyHint = keyHint
     }
 }
 
