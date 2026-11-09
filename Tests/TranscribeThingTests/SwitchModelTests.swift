@@ -518,7 +518,7 @@ import Testing
         rig.h.settings.lineup.main = .gemini
         rig.h.settings.handsFreeModel = .parakeet
         Self.hold(rig)
-        c.handle(.polish)
+        c.toggle(.polish, on: .recording)
         c.handle(.handsFreeToggle)
         #expect(c.effectiveChoice == .gemini && c.isPolishing)
         #expect(!cues.played.contains(.polishOff))
@@ -571,7 +571,7 @@ import Testing
         rig.h.settings.handsFreeModel = .parakeet
         c.handle(.pttDown)
         c.send(.timer(.arming))
-        c.handle(.polish)
+        c.toggle(.polish, on: .recording)
         #expect(c.isPolishing)
         c.handle(.handsFreeToggle)
         #expect(!c.machine.capture.isListeningOrLocked)

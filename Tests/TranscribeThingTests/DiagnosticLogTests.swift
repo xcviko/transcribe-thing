@@ -323,12 +323,12 @@ private enum Fixture {
         center.start()
         settings.pillMode = .always
         settings.soundsEnabled = false
-        settings.shortcuts[.polish] = nil
+        settings.shortcuts[.switchModel] = nil
         try await waitUntil(timeout: .seconds(5)) { log.retainedText().contains("settings.changed") }
         try await Task.sleep(for: .milliseconds(300))
         let changes = log.retainedText().split(separator: "\n").filter { $0.contains("[settings] settings.changed") }
         #expect(changes.count == 1)
-        #expect(changes.first?.contains("shortcut.polish=none") == true)
+        #expect(changes.first?.contains("shortcut.switchModel=none") == true)
         #expect(changes.first?.contains("pill=always sounds=off") == true)
     }
 }
@@ -372,9 +372,9 @@ private enum Fixture {
         #expect(!text.contains("private place"), "never the transcript")
     }
 
-    /// A dictation started while another is processed is held off: the log says so, and the text that came is
-    /// pasted as always, never written down.
-    @Test func aDictationHeldOffWhileOneIsProcessedIsLogged() async throws {
+    /// A dictation started while another is processed starts beside it: the log says how many were on their way, and
+    /// each text is pasted as always, never written down.
+    @Test func aDictationStartedAlongsideIsLogged() async throws {
         let logs = Fixture.temporaryDirectory()
         DiagnosticLog.shared.start(directory: logs)
         defer {
@@ -397,11 +397,12 @@ private enum Fixture {
         h.controller.send(.handsFreeToggle)
         h.controller.send(.pillStop)
         h.controller.send(.handsFreeToggle)
-        #expect(!h.controller.machine.isRecording)
+        #expect(h.controller.machine.isRecording)
+        h.controller.send(.pillStop)
         isOpen = true
-        try await waitUntil(timeout: .seconds(10)) { h.controller.machine.activeJobs == 0 && !pasted.isEmpty }
+        try await waitUntil(timeout: .seconds(10)) { h.controller.machine.activeJobs == 0 && pasted.count == 2 }
         let text = DiagnosticLog.shared.retainedText()
-        #expect(text.contains("[dictation] dictation.blocked why=processing"))
+        #expect(text.contains("alongside=1"))
         #expect(text.contains("[dictation] job.finished engine=parakeet outcome=success seconds=0.4 retry=no"
                                 + " polished=no"))
         #expect(!text.contains("private place"), "never the transcript")

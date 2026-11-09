@@ -38,7 +38,7 @@ struct TranslationPair: Codable, Equatable, Sendable {
     var title: String { "\(first.name) ↔ \(second.name)" }
 }
 
-/// Translate (fn T): on Gemini, the dictation comes out in the other language of the pair (`TranslationPair`),
+/// Translate (the pill's button): on Gemini, the dictation comes out in the other language of the pair (`TranslationPair`),
 /// polished too when Polish is on; with text selected off Gemini, that text translated, on a card like Polish
 /// Selection's. Gemini 3.8 Flash does both.
 enum Translate {

@@ -21,7 +21,7 @@ struct SnapshotEntry {
 
 enum SnapshotCatalog {
     @MainActor static var all: [SnapshotEntry] {
-        PillSnapshots.entries + OnboardingSnapshots.entries + HubSnapshots.entries + DesignSnapshots.entries
+        PillSnapshots.entries + PillTraySnapshots.entries + OnboardingSnapshots.entries + HubSnapshots.entries + DesignSnapshots.entries
             + ShortcutRecorderSnapshots.entries + ShellSnapshots.entries
     }
 }

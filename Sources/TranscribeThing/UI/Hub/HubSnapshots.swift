@@ -219,7 +219,7 @@ enum HubSnapshots {
                     recording: ShortcutRecorderSnapshots.controlOptionSpace, for: .handsFree).map { [.handsFree: $0] } ?? [:]) { c in
                 c.settings.shortcuts[.handsFree] = ShortcutRecorderSnapshots.controlOptionSpace
             },
-            // Push to talk on F5: hands-free and the keys used while dictating are pressed off it (F5 Space, F5 P…).
+            // Push to talk on F5: hands-free and the keys used while dictating are pressed off it (F5 Space, F5 D…).
             hub("hub-shortcuts-talk-key", .shortcuts, height: 860) { c in
                 c.settings.shortcuts = ShortcutRecorderSnapshots.movedToF5.bindings
             },

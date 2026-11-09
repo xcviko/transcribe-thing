@@ -11,26 +11,11 @@ enum HotkeyEvent: Equatable, Sendable {
     /// Its key held down: an autorepeat, which steps on too. A modifier-only one doesn't autorepeat; held, the tap's
     /// repeat timer sends these at the keyboard's repeat pace.
     case cycleEngineRepeat
-    /// The polish shortcut, during a dictation: Polish on or off for it, or Polish Selection with text selected.
-    case polish
-    /// Its key held down: an autorepeat, which turns Polish on and off again on Gemini (and does nothing elsewhere).
-    case polishRepeat
-    /// The translate shortcut, during a dictation: Translate on or off for it, or the selection translated.
-    case translate
-    /// Its key held down: Translate on and off again on Gemini (and nothing elsewhere).
-    case translateRepeat
-    /// The send shortcut, during a dictation: Send on or off for it (Return once its text is pasted).
-    case send
-    /// Its key held down: Send on and off again, on any model.
-    case sendRepeat
     /// A key the tap held for the selection (Add to dictionary's: it reads what's selected now). What the key does with
     /// the selection if there is one; with none, the pill says to select a word first.
     case heldForSelection(ShortcutAction, KeyStroke)
     /// ↩ and Esc while Polish Selection's card is up: Paste Here, and close it.
     case cardPaste, cardClose
-    /// While a dictation is processed (`HotkeyRouter.Config.isProcessing`): a key the tap took came up, or a
-    /// modifier-only shortcut was let go. A held Polish or Translate key's choice is made.
-    case shortcutKeyUp
 }
 
 /// Marker written into `kCGEventSourceUserData` of every event transcribe-thing synthesizes (the ⌘V paste),
@@ -62,17 +47,9 @@ final class HotkeyMonitor {
     var isBusy = false {
         didSet { if isBusy != oldValue { pushConfig() } }
     }
-    /// Swallow the Switch model and Polish shortcuts only while a dictation records.
+    /// Swallow the Switch model and Add to dictionary shortcuts only while a dictation records.
     var isRecording = false {
         didSet { if isRecording != oldValue { pushConfig() } }
-    }
-    /// A dictation is being processed; `processingTakesKeys`: on Gemini, where Polish, Translate and Send still change
-    /// it (`HotkeyRouter.Config`).
-    var isProcessing = false {
-        didSet { if isProcessing != oldValue { pushConfig() } }
-    }
-    var processingTakesKeys = false {
-        didSet { if processingTakesKeys != oldValue { pushConfig() } }
     }
     /// Polish Selection's cards are up: ↩ is theirs (it pastes the one card; with two it couldn't tell which, and does
     /// nothing), Esc closes them.
@@ -166,7 +143,6 @@ final class HotkeyMonitor {
     /// in Keyboard Settings applies from the next one.
     func currentConfig() -> HotkeyRouter.Config {
         HotkeyRouter.Config(bindings: settings.shortcuts, isBusy: isBusy, isRecording: isRecording,
-                            isProcessing: isProcessing, processingTakesKeys: processingTakesKeys,
                             switchesModels: settings.lineup.cycle.count > 1,
                             cardPaste: cardPaste, cardClose: cardClose,
                             isSuspended: suspendCount > 0, forwardsRawKeys: onRawKey != nil,

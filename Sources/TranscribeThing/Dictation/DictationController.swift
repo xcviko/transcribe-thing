@@ -3,7 +3,7 @@ import Observation
 
 /// What the menu bar icon reflects.
 /// `polishing`: Polish Selection under way, with no dictation recording or transcribing.
-/// `polishing` and `translating`: Polish Selection, or the translate key over a selection, under way.
+/// `polishing` and `translating`: Polish Selection, or the pill's Translate over a selection, under way.
 enum DictationActivity: Equatable, Sendable { case idle, recording, processing, polishing, translating }
 
 /// Why a version asked for from Home didn't come: its row says so until it's dismissed or something else is made
@@ -80,12 +80,6 @@ final class DictationController {
     /// stream does; wins over `transcribeOverride`.
     @ObservationIgnored var requestOverride:
         (@MainActor (Recording, EngineID, String?, @escaping @Sendable (String) -> Void) async throws -> TranscriptResult)?
-    /// How long the Polish and Translate keys pressed while a dictation is processed wait for another press before it
-    /// goes again with what they chose (a released key doesn't wait).
-    @ObservationIgnored var processingKeySettleDelay: Duration = .milliseconds(400)
-    /// Longest a key still held keeps the dictation waiting after its last press (`clock` seconds), should its release
-    /// never be heard.
-    @ObservationIgnored var heldKeyWaitLimit: TimeInterval = 3
     @ObservationIgnored var insertOverride: (@MainActor (String) async -> InsertionOutcome)?
     @ObservationIgnored var copyOverride: (@MainActor (String) -> Void)?
     @ObservationIgnored var pasteNowOverride: (@MainActor (String) async -> InsertionOutcome)?
@@ -150,7 +144,7 @@ final class DictationController {
     @ObservationIgnored private var pressTakenByKey = false
     /// Keys the tap held for the selection, waiting for a lookup, in the order they came: the press's own release
     /// waits with them (`heldRelease`), so what the press was is decided by its keys, not by when fn came up.
-    @ObservationIgnored private var heldKeys: [(action: ShortcutAction, key: KeyStroke?)] = []
+    @ObservationIgnored private var heldKeys: [(action: SelectionAction, key: KeyStroke?)] = []
     @ObservationIgnored private var heldRelease: DictationMachine.Input?
     /// The recording `heldKeys` were pressed in. A newer one's release (Esc, then fn again before the lookup
     /// answered) doesn't wait for them: they're dropped with the recording they belonged to.
@@ -160,17 +154,13 @@ final class DictationController {
     /// Cards of text to paste whose Copy was clicked, while they're up: the user took the text elsewhere, so ↩ goes back
     /// to the app (`syncCardKeys`).
     @ObservationIgnored private var copiedCards: Set<UUID> = []
-    /// While a dictation is processed: a Polish or Translate key pressed for it is still down, or the talk key (whose
-    /// press started nothing). Its choice is sent once they're let go (`settle`).
-    @ObservationIgnored private var flipKeyHeld = false
-    @ObservationIgnored private var talkKeyHeldWhileProcessing = false
-    /// This dictation is polished (`Polish`, fn P while it's on Gemini). It lasts while the dictation records, as
-    /// `modelOverride` does: its job keeps it, the next dictation starts without.
+    /// This dictation is polished (`Polish`, the pill's wand while it's on Gemini). It lasts while the dictation records,
+    /// as `modelOverride` does: its job keeps it, the next dictation starts without.
     private(set) var isPolishing = false
-    /// This dictation is translated (`Translate`, fn T while it's on Gemini), for as long as Polish would be.
+    /// This dictation is translated (`Translate`, the pill's button while it's on Gemini), for as long as Polish would be.
     private(set) var isTranslating = false
-    /// This dictation is sent (`Send`, fn ↩ on any model): Return is pressed once its text is pasted. For as long as
-    /// Polish would be.
+    /// This dictation is sent (`Send`, the pill's paper plane, on any model): Return is pressed once its text is pasted.
+    /// For as long as Polish would be.
     private(set) var isSending = false
     /// How long a push-to-talk hold lasts before the pill hints at Switch model.
     @ObservationIgnored var switchHintDelay: TimeInterval = 1.5
@@ -284,6 +274,8 @@ final class DictationController {
         hotkeys.onEvent = { [weak self] event in self?.handle(event) }
         recorder.onEvent = { [weak self] event in self?.handleRecorderEvent(event) }
         pillModel.onClick = { [weak self] in self?.pillClicked() }
+        pillModel.onStackClick = { [weak self] key in self?.stackedPillClicked(key) }
+        pillModel.onToggle = { [weak self] toggle, dictation in self?.toggle(toggle, on: dictation) }
         pillModel.onStop = { [weak self] in self?.send(.pillStop) }
         pillModel.onCancel = { [weak self] in self?.send(.pillCancel) }
         pillModel.onSelectModel = { [weak self] choice in self?.selectModelForCurrentDictation(choice) }
@@ -332,25 +324,11 @@ final class DictationController {
 
     func handle(_ event: HotkeyEvent) {
         switch event {
-        case .cancel:
-            // Esc ends the hold, and the dictation with it: nothing to send again.
-            talkKeyHeldWhileProcessing = false
-        case .pttUp, .pttInterrupted, .handsFreeToggle, .pasteLast:
-            // The talk key's hold is over (a chord off it ends the hold too).
-            if talkKeyHeldWhileProcessing {
-                talkKeyHeldWhileProcessing = false
-                processingKeysReleased()
-            }
-        default:
-            break
-        }
-        switch event {
         case .pttDown:
             pressTakenByKey = false
-            if machine.isProcessing { talkKeyHeldWhileProcessing = true }
             send(.pttDown)
         case .pttUp where holdsRelease:
-            // The press's polish key is still being decided: its release follows the decision.
+            // The press's key for the selection is still being decided: its release follows the decision.
             heldRelease = .pttUp
         case .pttInterrupted where holdsRelease:
             heldRelease = .pttInterrupted
@@ -365,42 +343,10 @@ final class DictationController {
         case .pasteLast: pasteLast()
         case .cycleEngine: send(.cycleEngine)
         case .cycleEngineRepeat: repeatCycle()
-        case .polish, .translate, .send:
-            if let job = keyedJob {
-                // The dictation on its way to Gemini: it goes again with the new choice (Send only says what follows).
-                flip(event, of: job, pressed: true)
-                return
-            }
-            guard machine.isRecording else { return }
-            if event == .send {
-                // On any model: it's about where the text goes, not what's written.
-                send(.send)
-                return
-            }
-            // On Gemini the key is Polish's; off Gemini it's Polish Selection's, for what's selected right then (text
-            // selected after fn went down counts too). The translate key likewise.
-            let action: ShortcutAction = event == .polish ? .polish : .translate
-            if !effectiveChoice.isGemini, event == .polish ? canPolishSelection : canTranslateSelection {
-                actOnceSelectionIsKnown(action, nil)
-            } else {
-                _ = acted(on: action, selection: nil)
-            }
-        case .polishRepeat, .translateRepeat, .sendRepeat:
-            // Held down: on and off again, Send on any model; Polish and Translate on Gemini (elsewhere the first press
-            // has said what it could).
-            let key: HotkeyEvent = event == .polishRepeat ? .polish : event == .translateRepeat ? .translate : .send
-            if let job = keyedJob {
-                flip(key, of: job, pressed: false)
-            } else if machine.isRecording, key == .send || effectiveChoice.isGemini {
-                send(key == .polish ? .polish : key == .translate ? .translate : .send)
-            }
-        case .shortcutKeyUp:
-            if flipKeyHeld {
-                flipKeyHeld = false
-                processingKeysReleased()
-            }
         case .heldForSelection(let action, let key):
-            actOnceSelectionIsKnown(action, key)
+            // Only Add to dictionary's key is held for the selection.
+            guard action == .addToDictionary else { return }
+            actOnceSelectionIsKnown(.addToDictionary, key)
         case .cardPaste: pasteOnlyCard()
         case .cardClose:
             // Esc stops a polish still under way too, with the cancel cue.
@@ -453,17 +399,47 @@ final class DictationController {
         send(.pillCancel)
     }
 
+    /// A button of a pill's tray (`PillTray`): Polish, Translate or Send for the dictation that pill shows, as their
+    /// keys did.
+    ///
+    /// While it records: on Gemini Polish and Translate go on or off for it, with their sounds and glyphs. Off Gemini they
+    /// work on the text selected right then (Polish Selection, Translate Selection), or move the dictation to Gemini
+    /// when the lineup has it, or say where they work. Send goes on or off on any model.
+    ///
+    /// While it's processed on Gemini, Polish and Translate send it again with the new prompt at once (the request
+    /// under way is stopped, and its cost still counts): one click, one request. Send says whether Return follows its
+    /// paste. On Parakeet Polish and Translate do nothing (the pill shows them off and dimmed).
+    func toggle(_ toggle: PillToggle, on dictation: PillDictation) {
+        switch dictation {
+        case .recording:
+            guard machine.isRecording else { return }
+            switch toggle {
+            case .send:
+                // On any model: it's about where the text goes, not what's written.
+                send(.send)
+            case .polish, .translate:
+                // On Gemini the button is Polish's; off Gemini it's Polish Selection's, for what's selected right then
+                // (the pill's panel never takes focus, so the selection is still there). Translate's likewise.
+                let action: SelectionAction = toggle == .polish ? .polish : .translate
+                if !effectiveChoice.isGemini, toggle == .polish ? canPolishSelection : canTranslateSelection {
+                    actOnceSelectionIsKnown(action, nil)
+                } else {
+                    _ = acted(on: action, selection: nil)
+                }
+            }
+        case .processing(let key):
+            guard let job = queue.first(where: { $0.key == key }) else { return }
+            self.toggle(toggle, of: job)
+        }
+        stateDidChange()
+    }
+
     func send(_ input: DictationMachine.Input) {
         let wasArming = machine.capture.isArming
-        let wasIdle = machine.capture == .idle
         let wasHandsFree = machine.mode == .handsFree
         let wasRecording = machine.isRecording
         if let mode = machine.mode { recordingMode = mode }
         let effects = machine.handle(input, now: clock())
-        if wasIdle, input.startsDictation, machine.isProcessing {
-            // Held off: the dictation on its way is pasted first.
-            DiagnosticLog.shared.event(.dictation, "dictation.blocked", ["why": "processing"])
-        }
         let startsRecording = !wasRecording && machine.isRecording
         if startsRecording {
             recordingGeneration &+= 1
@@ -530,7 +506,9 @@ final class DictationController {
             DiagnosticLog.shared.event(.dictation, "dictation.started", [
                 "mode": machine.mode, "model": effectiveChoice, "engine": effectiveEngine, "polish": isPolishing,
                 "translate": isTranslating ? true : nil, "send": isSending ? true : nil,
-                "undo": input.isResume ? true : nil, "mic": recorder.lastChoice?.device.transport])
+                "undo": input.isResume ? true : nil, "mic": recorder.lastChoice?.device.transport,
+                // Dictations still on their way when this one started: their pills stand above its own.
+                "alongside": queue.isEmpty && deliveringJob == nil ? nil : queue.count + (isDelivering ? 1 : 0)])
         }
         stateDidChange()
     }
@@ -541,11 +519,19 @@ final class DictationController {
             return
         }
         guard pillModel.phase != .processing else {
-            // The dashed pill: a click away held its paste, and this click on the pill takes that back.
-            takeBackClickAway()
+            // The dashed pill: a click away held its paste, and this click on the pill takes that back. A processing
+            // pill takes no other click: the pointer is on it for its tray.
+            if let job = pillJob, job.isHeldByClick { takeBackClickAway(of: job) }
             return
         }
+        // The resting pill: hands-free, also while earlier dictations are still on their way.
         send(.pillClick)
+    }
+
+    /// A click on a dashed pill stacked above (`PillModel.onStackClick`): its click away is taken back.
+    private func stackedPillClicked(_ key: UUID) {
+        guard let job = queue.first(where: { $0.key == key }), job.isHeldByClick else { return }
+        takeBackClickAway(of: job)
     }
 
     private func handleRecorderEvent(_ event: AudioRecorderEvent) {
@@ -757,7 +743,6 @@ final class DictationController {
                 "engine": job.engine, "outcome": recording.speech.isSilent ? "silent" : "noSpeech", "sent": false])
             discardJournal(of: recording.id)
             queue.removeAll { $0 === job }
-            leave(job)
             _ = machine.handle(.jobEnded, now: clock())
             drain()
             return
@@ -991,6 +976,8 @@ final class DictationController {
         var translates = false
         /// A sent dictation (`Send`): Return once its text is pasted where the user is typing.
         var sends = false
+        /// Who it is to its pill, from the stop to the paste: `id` changes once the recorder hands over the audio.
+        let key = UUID()
         /// The user clicked away from the app while it was processed (`clickedAway`): its text comes up on a card, never
         /// pasted, unless a click on the dashed pill takes that back (`takeBackClickAway`).
         var isHeldByClick = false
@@ -1003,14 +990,9 @@ final class DictationController {
         /// Held or hands-free: its paste follows General → Pasting's rules for that.
         var mode: DictationMachine.Mode = .pushToTalk
         /// Polish and Translate as its request under way (or its answer waiting) asked for them; nil before one went.
-        /// The keys pressed while it's processed change `polishes` and `translates`, and it goes again once they
-        /// settle on something else (`settle`).
+        /// The pill's buttons change `polishes` and `translates` while it's processed, and it goes again at once.
         var sent: Choice?
         var choice: Choice { Choice(polishes: polishes, translates: translates) }
-        /// Waits for the keys pressed while it's processed to settle: its text isn't pasted meanwhile.
-        var settleTask: Task<Void, Never>?
-        /// When a key last turned Polish or Translate on or off for it (`clock`).
-        var lastFlipAt: TimeInterval = 0
         /// Generations Gemini named for the request under way, and those of requests stopped before (sent again with
         /// Polish): what these cost is added to the version that lands.
         var attemptGenerations: [String] = []
@@ -1035,12 +1017,6 @@ final class DictationController {
         func stop() {
             task?.cancel()
             hintTask?.cancel()
-        }
-
-        /// What it's left the queue with (pasted, failed, canceled): its keys' wait is over.
-        func leave() {
-            settleTask?.cancel()
-            settleTask = nil
         }
 
         /// Polish and Translate, for a dictation's request.
@@ -1244,14 +1220,13 @@ final class DictationController {
         }
     }
 
-    /// Pastes the oldest dictation once its text is there, then the next. One whose keys are still being pressed
-    /// (`Job.settleTask`) waits for them: its text may be asked for again.
+    /// Pastes the oldest dictation once its text is there, then the next: in the order they were recorded, also while
+    /// a newer one records (into the field in front, as each would have been).
     private func drain() {
         defer { stateDidChange() }
-        guard !isDelivering, let head = queue.first, let outcome = head.outcome, head.settleTask == nil else { return }
+        guard !isDelivering, let head = queue.first, let outcome = head.outcome else { return }
         deliveringJob = head
         queue.removeFirst()
-        leave(head)
         Task { [weak self] in
             guard let self else { return }
             await self.deliver(head, outcome)
@@ -1262,11 +1237,6 @@ final class DictationController {
     }
 
     private var isDelivering: Bool { deliveringJob != nil }
-
-    /// A dictation left the queue (to be pasted, or canceled): its keys' wait stops.
-    private func leave(_ job: Job) {
-        job.leave()
-    }
 
     /// Queued, being delivered, being recorded on again (Undo, Home's Continue), or worked on from Home.
     func isInFlight(_ id: UUID) -> Bool {
@@ -1281,7 +1251,6 @@ final class DictationController {
         DiagnosticLog.shared.event(.dictation, "job.canceled", ["engine": job.engine])
         queue.removeLast()
         job.stop()
-        leave(job)
         job.isCancelled = true
         dismissWaitNotice(for: job.id)
         _ = machine.handle(.jobEnded, now: clock())
@@ -2055,11 +2024,6 @@ final class DictationController {
             postCanceled(recording, note: "Finish this dictation first, then Undo.")
             return
         }
-        // No new recording while a dictation is processed (`DictationMachine`): its text is pasted first.
-        guard !machine.isProcessing else {
-            postCanceled(recording, note: "Wait for the text on its way to be pasted, then Undo.")
-            return
-        }
         let row = history.entry(id: id)
         let engine = cancelledEngines[id] ?? row?.engine ?? settings.mainEngine
         // A row Home's Continue would record on (its Continue canceled) pastes as Continue does.
@@ -2101,7 +2065,8 @@ final class DictationController {
     /// model and pasted wherever the user is then, by the rules of how it was first dictated, and the row becomes its
     /// transcript. Stopped with the app itself in front (Home's window), the transcript stays in the row, not pasted
     /// into it. Esc keeps it all in the row, still to continue (`keepCancelled`). Nothing happens while another
-    /// dictation is being recorded or processed (Home's button says so) or something already runs for the row.
+    /// dictation is being recorded (Home's button says so) or something already runs for the row; dictations still on
+    /// their way are pasted first, as for any new dictation.
     ///
     /// Quit after, while it was transcribed: nothing was cut off, so it's transcribed from Home, as Retry does.
     ///
@@ -2118,7 +2083,7 @@ final class DictationController {
             retry(row, with: row.engine)
             return
         }
-        guard !isInFlight(id), !machine.isRecording, !machine.isProcessing else { return }
+        guard !isInFlight(id), !machine.isRecording else { return }
         if let kept = retained[id] {
             _ = recordOn(kept, engine: row.engine, mode: row.mode)
             return
@@ -2140,7 +2105,7 @@ final class DictationController {
             // Deleted, transcribed or taken up meanwhile, or another dictation started: nothing to record on now.
             guard let current = self.history.entry(id: id), current.status == .failed,
                   current.interruption == .whileRecording, !self.isInFlight(id),
-                  !self.machine.isRecording, !self.machine.isProcessing else { return }
+                  !self.machine.isRecording else { return }
             _ = self.recordOn(recording, engine: current.engine, mode: current.mode)
         }
     }
@@ -2469,7 +2434,7 @@ final class DictationController {
         switchModel(to: choice, byUser: false)
     }
 
-    /// The polish shortcut while dictating: Polish on for this dictation (the wand in the pill), or off when pressed
+    /// The pill's Polish while dictating: Polish on for this dictation (the wand in the pill), or off when clicked
     /// again.
     /// Only a dictation on Gemini polishes: on another model the key does Polish Selection or says why it can't
     /// (`acted(on:selection:)`), and this guard is for a model that changed in between.
@@ -2479,8 +2444,8 @@ final class DictationController {
         playCue(isPolishing ? .polishOn : .polishOff)
     }
 
-    /// The translate shortcut while dictating: Translate on for this dictation (its glyph in the pill), or off when
-    /// pressed again. On Gemini only, as Polish; with Polish on too, the polished message comes out translated.
+    /// The pill's Translate while dictating: Translate on for this dictation (its glyph in the pill), or off when
+    /// clicked again. On Gemini only, as Polish; with Polish on too, the polished message comes out translated.
     private func toggleTranslate() {
         guard effectiveChoice.isGemini else { return }
         isTranslating.toggle()
@@ -2539,16 +2504,15 @@ final class DictationController {
         }
     }
 
-    /// Polish Selection can happen: its key is bound, and the key of the provider Gemini 3.8 Flash goes through
-    /// (OpenRouter's, or the user's endpoint) can pay for it. Without one, the key stays the app's and no hint promises
-    /// a polish that would only fail.
+    /// Polish Selection can happen: the key of the provider Gemini 3.8 Flash goes through (OpenRouter's, or the user's
+    /// endpoint) can pay for it. Without one, no hint promises a polish that would only fail.
     private var canPolishSelection: Bool {
-        settings.shortcuts[.polish] != nil && selectionModelIsReady
+        selectionModelIsReady
     }
 
-    /// The selection can be translated: the translate key is bound, and the selection's model can be paid for.
+    /// The selection can be translated: the selection's model can be paid for.
     private var canTranslateSelection: Bool {
-        settings.shortcuts[.translate] != nil && selectionModelIsReady
+        selectionModelIsReady
     }
 
     /// Gemini 3.8 Flash, which a selection goes to, has a working key with the provider its requests go through.
@@ -2562,14 +2526,21 @@ final class DictationController {
         settings.shortcuts[.addToDictionary].map { !$0.isModifierOnly } ?? false
     }
 
-    /// A key for the selection, decided by what's selected right when it's pressed (in a long hands-free dictation,
-    /// not what was selected as it started; text selected after fn went down counts too). With text selected the key
-    /// does its work on it (on Gemini, fn P is Polish's). With nothing selected fn D says to select a word first, and
-    /// the dictation goes on; where the app couldn't say (a password field, an app that didn't answer even to ⌘C) a card
-    /// says why nothing happened, and a held press ends. The key never reaches the app.
+    /// What works on the selected text while a dictation records: the pill's Polish and Translate off Gemini, and the
+    /// Add to dictionary key.
+    enum SelectionAction: Equatable {
+        case polish, translate, addToDictionary
+    }
+
+    /// A key or a pill button for the selection, decided by what's selected right when it's pressed (in a long
+    /// hands-free dictation, not what was selected as it started; text selected after fn went down counts too). With
+    /// text selected it does its work on it (on Gemini, the pill's Polish is the dictation's). With nothing selected
+    /// fn D says to select a word first, and the dictation goes on; where the app couldn't say (a password field, an
+    /// app that didn't answer even to ⌘C) a card says why nothing happened, and a held press ends. The key never
+    /// reaches the app.
     /// Keys pressed while the first waits are decided the same way, in order, once the dictation is still on. A
     /// recording canceled meanwhile (Esc) drops them all, even with a new one started since.
-    private func actOnceSelectionIsKnown(_ action: ShortcutAction, _ key: KeyStroke?) {
+    private func actOnceSelectionIsKnown(_ action: SelectionAction, _ key: KeyStroke?) {
         heldKeys.append((action, key))
         guard heldKeys.count == 1 else { return }
         let override = selectionOverride, missing = selectionMissingOverride ?? .nothingSelected
@@ -2623,8 +2594,8 @@ final class DictationController {
     }
 
     /// What a key for the selection does once the selection is known; false when it does nothing, and goes to the
-    /// app. The polish and translate keys never do: where they can't work, they say so.
-    private func acted(on action: ShortcutAction, selection: String?) -> Bool {
+    /// app. The pill's Polish and Translate always do something: where they can't work, they say so.
+    private func acted(on action: SelectionAction, selection: String?) -> Bool {
         switch action {
         case .polish where effectiveChoice.isGemini:
             send(.polish)
@@ -2650,7 +2621,7 @@ final class DictationController {
         return true
     }
 
-    /// The polish or translate key off Gemini with nothing selected: the dictation moves to Gemini, as Switch model
+    /// The pill's Polish or Translate off Gemini with nothing selected: the dictation moves to Gemini, as Switch model
     /// would take it there, when Gemini is in the lineup's cycle and can take it now (its key). True once it's on Gemini.
     private func switchesToGemini() -> Bool {
         guard machine.isRecording, let gemini = settings.lineup.cycle.first(where: \.isGemini),
@@ -2659,14 +2630,15 @@ final class DictationController {
         return effectiveChoice.isGemini
     }
 
-    /// The polish key where it can't polish (off Gemini, no Gemini to move to, nothing selected): it says so over the pill for a moment, and
-    /// the dictation goes on. To the machine it's a key pressed during the hold, so the release isn't a tap.
+    /// The pill's Polish where it can't polish (off Gemini, no Gemini to move to, nothing selected): it says so over
+    /// the pill for a moment, and the dictation goes on. To the machine it's a key pressed during the hold, so the
+    /// release isn't a tap.
     private func explainPolish() {
         send(.keyUsed)
         showKeyHint(canPolishSelection ? "Polish works on Gemini, or on selected text" : "Polish works on Gemini only")
     }
 
-    /// The translate key where it can't translate, as the polish key's `explainPolish`.
+    /// The pill's Translate where it can't translate, as Polish's `explainPolish`.
     private func explainTranslate() {
         send(.keyUsed)
         showKeyHint(canTranslateSelection ? "Translate works on Gemini, or on selected text"
@@ -2747,7 +2719,7 @@ final class DictationController {
         return lookup
     }
 
-    /// The polish key over selected text (or the translate key, `translates`): the dictation gives way without a
+    /// The pill's Polish over selected text (or its Translate, `translates`): the dictation gives way without a
     /// trace (the cancel cue, then Polish's sound), the pill turns into the polish, and the selection goes to Gemini
     /// 3.8 Flash, at its Reasoning level. Its message (or translation) comes up on a card, to paste over the selection
     /// or copy, and History keeps it.
@@ -2898,84 +2870,38 @@ final class DictationController {
         stateDidChange()
     }
 
-    // MARK: - Keys while a dictation is processed
+    // MARK: - The pill's buttons while a dictation is processed
 
-    /// The dictation the Polish, Translate and Send keys change while it's processed: the newest one still on its way
-    /// to Gemini, or answered and waiting its turn (not one being pasted), and none while a dictation records. On
-    /// Parakeet the keys do nothing: its text is there at once.
-    private var keyedJob: Job? {
-        guard !machine.isRecording, let job = queue.last, job.engine.isGemini else { return nil }
-        return job
-    }
-
-
-    /// Polish, Translate or Send pressed (`pressed`) or held (its autorepeat) while the dictation is processed, as it
-    /// would be while it records: the wand, the translate glyph or the plane on the pill, and their sounds. Polish and
-    /// Translate have it sent again once the keys settle (`settle`); Send only has Return pressed after its paste.
-    private func flip(_ key: HotkeyEvent, of job: Job, pressed: Bool) {
-        switch key {
-        case .polish:
-            job.polishes.toggle()
-            playCue(job.polishes ? .polishOn : .polishOff)
-        case .translate:
-            job.translates.toggle()
-            playCue(job.translates ? .polishOn : .polishOff)
-        default:
+    /// Polish, Translate or Send clicked on the pill of a dictation being processed, as it would be while it records:
+    /// the wand, the translate glyph or the plane on its pill, and their sounds. Polish and Translate have it sent to
+    /// Gemini again at once, with the new prompt (still capturing its tail, its request goes with what's chosen then:
+    /// `captured`); Send only has Return pressed after its paste. On Parakeet Polish and Translate do nothing: there's
+    /// no prompt to change.
+    private func toggle(_ toggle: PillToggle, of job: Job) {
+        switch toggle {
+        case .polish, .translate:
+            guard job.engine.isGemini else { return }
+            if toggle == .polish {
+                job.polishes.toggle()
+                playCue(job.polishes ? .polishOn : .polishOff)
+            } else {
+                job.translates.toggle()
+                playCue(job.translates ? .polishOn : .polishOff)
+            }
+            DiagnosticLog.shared.event(.dictation, "processing.toggle", [
+                "button": toggle.rawValue, "polish": job.polishes, "translate": job.translates])
+            if job.recording != nil, job.sent != job.choice {
+                DiagnosticLog.shared.event(.dictation, "processing.resent", [
+                    "polish": job.polishes, "translate": job.translates, "answered": job.outcome != nil])
+                run(job)
+            }
+        case .send:
             // A click away holds its text on a card: there's no paste for Return to follow, so Send stays off.
             guard !job.isHeldByClick else { return }
             job.sends.toggle()
             playCue(.sendOn)
-            DiagnosticLog.shared.event(.dictation, "processing.key", ["key": "send", "on": job.sends])
-            stateDidChange()
-            return
+            DiagnosticLog.shared.event(.dictation, "processing.toggle", ["button": "send", "on": job.sends])
         }
-        DiagnosticLog.shared.event(.dictation, "processing.key", [
-            "key": key == .polish ? "polish" : "translate", "polish": job.polishes, "translate": job.translates])
-        if pressed { flipKeyHeld = true }
-        job.lastFlipAt = clock()
-        scheduleSettle(of: job, after: processingKeySettleDelay)
-        stateDidChange()
-    }
-
-    private func scheduleSettle(of job: Job, after delay: Duration) {
-        job.settleTask?.cancel()
-        job.settleTask = Task { [weak self] in
-            try? await Task.sleep(for: delay)
-            guard !Task.isCancelled else { return }
-            self?.settleIfNoKeyIsHeld(job)
-        }
-    }
-
-    /// The wait after a flip is over: the choice is made, unless a key that made it is still down (its autorepeat may
-    /// flip it again), whose release settles it instead (`processingKeysReleased`), or after `heldKeyWaitLimit`.
-    private func settleIfNoKeyIsHeld(_ job: Job) {
-        if flipKeyHeld || talkKeyHeldWhileProcessing, clock() - job.lastFlipAt < heldKeyWaitLimit {
-            scheduleSettle(of: job, after: processingKeySettleDelay)
-            return
-        }
-        settle(job)
-    }
-
-    /// The keys pressed for the processed dictation are all let go: what they chose is made now.
-    private func processingKeysReleased() {
-        guard !flipKeyHeld, !talkKeyHeldWhileProcessing,
-              let job = queue.last(where: { $0.settleTask != nil }) else { return }
-        settle(job)
-    }
-
-    /// The keys settled: the dictation goes to Gemini again when they changed what it asks for (the request under way
-    /// is stopped, and its cost still counts), or its request goes on, and its text is pasted once it's there.
-    private func settle(_ job: Job) {
-        job.settleTask?.cancel()
-        job.settleTask = nil
-        guard queue.contains(where: { $0 === job }) else { return }
-        // Still capturing its tail: its request goes with what's chosen now (`captured`).
-        if job.recording != nil, job.sent != job.choice {
-            DiagnosticLog.shared.event(.dictation, "processing.resent", [
-                "polish": job.polishes, "translate": job.translates, "answered": job.outcome != nil])
-            run(job)
-        }
-        drain()
     }
 
     // MARK: - A click away holds the paste
@@ -2984,10 +2910,11 @@ final class DictationController {
     /// the paste after a click" on, a dictation being processed (from its stop until its text is pasted, it fails or
     /// it's canceled) isn't pasted: the user may be typing somewhere else by now. The pill's outline turns dashed, and
     /// its text comes up on a card instead (`clickedAwayCard`). Send goes off for it, with its sound, and the plane
-    /// leaves the pill. One click is enough; another changes nothing. Clicks while a dictation records are part of
-    /// dictating (into another field, say), and change nothing either.
+    /// leaves the pill. One click is enough; another changes nothing. It holds every dictation on its way at the
+    /// click, each on its own pill; a dictation still recording isn't one of them: clicking into another field is part
+    /// of dictating it.
     func clickedAway() {
-        guard settings.holdsPasteAfterClick, !machine.isRecording else { return }
+        guard settings.holdsPasteAfterClick else { return }
         // Not the one being pasted right now: its text is on its way in.
         let jobs = queue.filter { !$0.isHeldByClick }
         guard !jobs.isEmpty else { return }
@@ -3006,20 +2933,17 @@ final class DictationController {
         stateDidChange()
     }
 
-    /// A click on the dashed pill takes the click away back: the outline is solid again, the dictation on its way is
-    /// pasted after all (where the user is now), and Send is on again if that click turned it off, with its sound and the
-    /// plane. A click elsewhere holds it again.
-    private func takeBackClickAway() {
-        let held = queue.filter(\.isHeldByClick)
-        guard !held.isEmpty else { return }
+    /// A click on a dashed pill takes the click away back for its dictation: the outline is solid again, the dictation
+    /// is pasted after all (where the user is now), and Send is on again if that click turned it off, with its sound and
+    /// the plane. Other dashed pills stay held. A click elsewhere holds it again.
+    private func takeBackClickAway(of job: Job) {
+        guard job.isHeldByClick, queue.contains(where: { $0 === job }) else { return }
+        job.isHeldByClick = false
         var sendOn = false
-        for job in held {
-            job.isHeldByClick = false
-            if job.sendOffByClick {
-                job.sendOffByClick = false
-                job.sends = true
-                sendOn = true
-            }
+        if job.sendOffByClick {
+            job.sendOffByClick = false
+            job.sends = true
+            sendOn = true
         }
         if sendOn { playCue(.sendOn) }
         DiagnosticLog.shared.event(.dictation, "processing.clickTakenBack", ["sendOn": sendOn ? true : nil])
@@ -3028,7 +2952,7 @@ final class DictationController {
 
     /// Listens for clicks only while one would hold a dictation's paste.
     private var watchesClicks: Bool {
-        settings.holdsPasteAfterClick && !machine.isRecording && queue.contains { !$0.isHeldByClick }
+        settings.holdsPasteAfterClick && queue.contains { !$0.isHeldByClick }
     }
 
     nonisolated static let clickedAwayCardPrefix = "dictation.clickedAway."
@@ -3351,8 +3275,7 @@ final class DictationController {
         let phase: PillPhase
         switch machine.capture {
         case .arming, .listening:
-            // From key-down on: an empty equalizer until the first buffer, then the voice. (No press starts while a
-            // dictation is processed.)
+            // From key-down on: an empty equalizer until the first buffer, then the voice.
             phase = .listening
         case .locked, .lockedStopPending:
             phase = .locked
@@ -3404,24 +3327,42 @@ final class DictationController {
         } else if pillModel.recordingStartedAt != nil {
             pillModel.recordingStartedAt = nil
         }
+
+        // The tray beside the pill acts on the dictation it shows: the one recording, or the newest on its way.
+        let tray: PillTrayState? = if phase.isRecording {
+            PillTrayState(dictation: .recording, polishes: polishes, translates: translates, sends: sends)
+        } else if phase == .processing, let job = pillJob {
+            trayState(of: job)
+        } else {
+            nil
+        }
+        if pillModel.tray != tray { pillModel.tray = tray }
+        // Every other dictation on its way stands above it, on a pill of its own, the newest nearest.
+        let bottom = phase.isRecording ? nil : pillJob
+        let stacked = ((deliveringJob.map { [$0] } ?? []) + queue).filter { $0 !== bottom }.reversed()
+        pillModel.setStack(stacked.map { job in
+            PillStackItem(key: job.key, choice: ModelChoice(engine: job.engine), tray: trayState(of: job),
+                          holdsPaste: job.isHeldByClick, count: job.count)
+        })
     }
 
     /// The job the processing pill speaks for: the newest dictation still being transcribed, or the one being pasted.
     private var pillJob: Job? { queue.last ?? deliveringJob }
 
+    /// The tray of a dictation on its way: Polish and Translate on Gemini only, Send unless a click away holds its
+    /// text. Nothing changes one being pasted right now.
+    private func trayState(of job: Job) -> PillTrayState {
+        let queued = queue.contains { $0 === job }
+        return PillTrayState(dictation: .processing(job.key), polishes: job.polishes, translates: job.translates,
+                             sends: job.sends, rewrites: queued && job.engine.isGemini,
+                             canSend: queued && !job.isHeldByClick)
+    }
+
     private func stateDidChange() {
         if hotkeys.isBusy != machine.isBusy { hotkeys.isBusy = machine.isBusy }
         if hotkeys.isRecording != machine.isRecording { hotkeys.isRecording = machine.isRecording }
-        if hotkeys.isProcessing != machine.isProcessing { hotkeys.isProcessing = machine.isProcessing }
-        let takesKeys = keyedJob != nil
         let watches = watchesClicks
         if let clickAway, clickAway.isWatching != watches { clickAway.isWatching = watches }
-        if hotkeys.processingTakesKeys != takesKeys { hotkeys.processingTakesKeys = takesKeys }
-        if queue.isEmpty {
-            // Nothing left for the keys to settle: a release missed meanwhile isn't waited for next time.
-            flipKeyHeld = false
-            talkKeyHeldWhileProcessing = false
-        }
         // Polish Selection's card waits for this one.
         if toasts.isDictating != machine.isRecording { toasts.isDictating = machine.isRecording }
         syncCardKeys()

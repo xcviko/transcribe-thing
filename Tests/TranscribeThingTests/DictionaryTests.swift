@@ -448,7 +448,7 @@ import Testing
         rig.h.pill.isPresented = false
         rig.h.controller.handle(.pttDown)
         Self.pressD(rig)
-        rig.h.controller.handle(.polish)
+        rig.h.controller.toggle(.polish, on: .recording)
         try await Task.sleep(for: .milliseconds(60))
         #expect(rig.h.pill.keyHint == nil && rig.notice("key.hint") == nil && rig.h.controller.machine.isRecording)
         rig.h.controller.send(.pillCancel)
@@ -461,7 +461,7 @@ import Testing
         let lookup = PolishSelectionTests.Lookup()
         rig.h.controller.selectionOverride = { await lookup.wait(); return nil }
         rig.h.controller.handle(.pttDown)
-        rig.h.controller.handle(.polish)
+        rig.h.controller.toggle(.polish, on: .recording)
         Self.pressD(rig)
         lookup.isOpen = true
         try await waitUntil { rig.h.pill.keyHint == "Select a word to add it to your dictionary" }

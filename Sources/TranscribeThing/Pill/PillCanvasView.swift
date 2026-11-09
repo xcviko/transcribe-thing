@@ -23,6 +23,11 @@ final class PillHitRegions {
     /// The model chip above the pill, while it opens the model menu (hands-free).
     private(set) var chip: CGRect?
     private(set) var toasts: [String: CGRect] = [:]
+    /// The trays beside the pills while they're out, and their buttons.
+    private(set) var trays: [PillTrayOwner: CGRect] = [:]
+    private(set) var trayButtons: [PillTrayButton: CGRect] = [:]
+    /// The pills stacked above the bottom one, by their dictations' keys, with their hover margins.
+    private(set) var stackPills: [UUID: CGRect] = [:]
     var onChange: (() -> Void)?
 
     func setPill(_ rect: CGRect?) {
@@ -46,6 +51,24 @@ final class PillHitRegions {
     func setToast(_ key: String, rect: CGRect?) {
         guard toasts[key] != rect else { return }
         toasts[key] = rect
+        onChange?()
+    }
+
+    func setTray(_ owner: PillTrayOwner, rect: CGRect?) {
+        guard trays[owner] != rect else { return }
+        trays[owner] = rect
+        onChange?()
+    }
+
+    func setTrayButton(_ button: PillTrayButton, rect: CGRect?) {
+        guard trayButtons[button] != rect else { return }
+        trayButtons[button] = rect
+        onChange?()
+    }
+
+    func setStackPill(_ key: UUID, rect: CGRect?) {
+        guard stackPills[key] != rect else { return }
+        stackPills[key] = rect
         onChange?()
     }
 }
@@ -113,17 +136,31 @@ struct PillCanvasView: View {
     /// overlap and never leave the slot empty.
     static let slotHandover: TimeInterval = toastClosing + 0.05
 
-    /// Toasts stand above a pill that holds its place, and in its slot, bottoms aligned, when it doesn't.
-    static func toastBottomPadding(pillOnScreen: Bool, showsChip: Bool) -> CGFloat {
+    /// Toasts stand above a pill that holds its place (and above the pills stacked over it: `stackHeight`), and in its
+    /// slot, bottoms aligned, when it doesn't.
+    static func toastBottomPadding(pillOnScreen: Bool, showsChip: Bool, stackHeight: CGFloat = 0) -> CGFloat {
         guard pillOnScreen else { return PillCanvasMetrics.pillBottomInset }
-        return PillCanvasMetrics.toastLift + (showsChip ? PillCanvasMetrics.chipLift : 0)
+        return PillCanvasMetrics.toastLift + (showsChip ? PillCanvasMetrics.chipLift : 0) + stackHeight
+    }
+
+    /// How tall the pills stacked above the bottom one stand, their gaps included: what toasts make room for.
+    private var stackHeight: CGFloat {
+        guard model.isPresented, pillHoldsSlot else { return 0 }
+        return PillStackMetrics.height(for: model.stack.count)
+    }
+
+    /// The stack stands above the chip (or a hint in its place) while one floats over the pill.
+    private var stackLift: CGFloat {
+        PillCanvasMetrics.pillBottomInset + PillMetrics.maxHeight + PillStackMetrics.gap
+            + (showsChip || showsSwitchHint ? PillCanvasMetrics.chipLift : 0)
     }
 
     /// Where the newest toast grows out of: the pill's slot, or the dictation's pill under the toasts.
     private var toastOrigin: ToastOrigin {
         guard pillHoldsSlot else { return ToastOrigin(pillComesBack: model.isPresented) }
         let pill = PillView(model: model, context: .panel(nil)).visual.size
-        let lift = Self.toastBottomPadding(pillOnScreen: true, showsChip: showsChip) - PillCanvasMetrics.pillBottomInset
+        let lift = Self.toastBottomPadding(pillOnScreen: true, showsChip: showsChip, stackHeight: stackHeight)
+            - PillCanvasMetrics.pillBottomInset
         return ToastOrigin(size: pill, drop: lift)
     }
 
@@ -139,12 +176,20 @@ struct PillCanvasView: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             ToastStack(center: toasts, regions: regions, origin: toastOrigin)
-                .padding(.bottom, Self.toastBottomPadding(pillOnScreen: pillHoldsSlot, showsChip: showsChip))
+                .padding(.bottom, Self.toastBottomPadding(pillOnScreen: pillHoldsSlot, showsChip: showsChip,
+                                                          stackHeight: stackHeight))
                 .animation(slotAnimation, value: pillHoldsSlot)
                 .animation(reduceMotion ? .easeInOut(duration: 0.15) : .spring(duration: 0.32, bounce: 0.15),
                            value: showsChip)
+                .animation(PillStackMetrics.animation(reduceMotion: reduceMotion), value: stackHeight)
             pillArea
                 .padding(.bottom, PillCanvasMetrics.pillBottomInset - PillMetrics.hoverMargin)
+            // Older dictations still on their way, each on its own pill above this one. Over the pill's hover margin,
+            // which reaches up to the nearest of them: a click there is the stacked pill's.
+            PillStack(model: model, regions: regions, isShown: model.isPresented && pillHoldsSlot)
+                .padding(.bottom, stackLift)
+                .animation(reduceMotion ? .easeInOut(duration: 0.15) : .spring(duration: 0.32, bounce: 0.15),
+                           value: stackLift)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .coordinateSpace(.named(PillCanvasMetrics.space))
@@ -169,6 +214,15 @@ struct PillCanvasView: View {
 
     private var pillArea: some View {
         PillView(model: model, context: .panel(regions), covered: pillCovered)
+            // Polish, Translate and Send for the dictation on the pill, beside it while the pointer is on it.
+            .overlay(alignment: .trailing) {
+                // Kept while it folds away as the dictation leaves the pill (pasted, canceled).
+                PillLingering(value: model.tray, fadeOut: .easeIn(duration: 0.2)) { tray, leaving in
+                    PillTray(model: model, owner: .bottom, state: tray,
+                             isOpen: !leaving && model.showsTray(.bottom), regions: regions)
+                }
+                .alignmentGuide(.trailing) { $0[.leading] - PillTrayMetrics.gap }
+            }
             .overlay(alignment: .top) {
                 // Live while it fades (`PillLingering`): a hint going as the pill changes size (the Switch model hint
                 // as fn Space widens the pill into hands-free) stays over the pill's middle, where the pill's corner

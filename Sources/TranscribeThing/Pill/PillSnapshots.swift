@@ -85,10 +85,10 @@ enum PillSnapshots {
             SnapshotEntry("pill-send", width: 760, height: 44 + 10 * 92) { _ in
                 PolishSheet(title: "Send", rows: PolishSheet.sendRows)
             },
-            // The keys pressed while a dictation on Gemini is processed (`--only pill-processing-keys`): the wand, the
+            // The tray clicked while a dictation on Gemini is processed (`--only pill-processing-keys`): the wand, the
             // translate glyph and the plane come on the processing pill; sent again, Gemini counts from the start.
             SnapshotEntry("pill-processing-keys", width: 760, height: 44 + 7 * 92) { _ in
-                PolishSheet(title: "Keys while processing", rows: PolishSheet.processingRows)
+                PolishSheet(title: "Tray while processing", rows: PolishSheet.processingRows)
             },
             // A click away while a dictation is processed (`--only pill-held`): the outline in dashes (solid before the
             // click), with the wand, the translate glyph or the count; Send's plane gone. Then over the processing
@@ -108,7 +108,7 @@ enum PillSnapshots {
             },
             // fn ⇥ while the chip is up: its names roll on, frame by frame of the spring.
             SnapshotEntry("pill-chip-roll", width: 2040, height: 270) { _ in ChipRollSheet() },
-            // fn P on Parakeet with nothing selected: it says Polish is Gemini's, and the dictation goes on.
+            // Polish clicked on Parakeet with nothing selected: it says Polish is Gemini's, and the dictation goes on.
             SnapshotEntry("pill-polish-gemini-only", width: 640, height: 150) { _ in
                 CanvasScene(model: polishGeminiOnlyModel(), notices: [])
             },
@@ -920,16 +920,16 @@ private struct PolishSheet: View {
             Row(id: "processing-plain", caption: "Processing · nothing pressed") {
                 Self.model(.processing, polishes: false).previewCounter(PillTokenCount(phase: .thinking, tokens: 480))
             },
-            Row(id: "processing-polish", caption: "fn P · Polish, sent again") { Self.model(.processing) },
-            Row(id: "processing-translate", caption: "fn T · Translate, sent again") {
+            Row(id: "processing-polish", caption: "Polish clicked · sent again") { Self.model(.processing) },
+            Row(id: "processing-translate", caption: "Translate clicked · sent again") {
                 Self.model(.processing, polishes: false, translates: true)
             },
-            Row(id: "processing-both", caption: "fn P, fn T · both") { Self.model(.processing, translates: true) },
-            Row(id: "processing-send", caption: "fn ↩ · Send, same request") {
+            Row(id: "processing-both", caption: "Polish and Translate · both") { Self.model(.processing, translates: true) },
+            Row(id: "processing-send", caption: "Send clicked · same request") {
                 Self.model(.processing, polishes: false, sends: true)
                     .previewCounter(PillTokenCount(phase: .thinking, tokens: 480))
             },
-            Row(id: "processing-polish-send", caption: "fn P, fn ↩ · Polish, Send") {
+            Row(id: "processing-polish-send", caption: "Polish and Send clicked") {
                 Self.model(.processing, sends: true)
             },
             Row(id: "processing-polish-counting", caption: "Polish, Gemini counting again") {

@@ -255,7 +255,7 @@ private enum FilmScript {
             s.film("chip goes", when: { !s.model.isChipFlashing })
         },
         FilmScenario(name: "polish-toggle", mode: .always,
-                     note: "fn P on and off on Gemini: the capsule widens and the wand comes in left of the bars") { s in
+                     note: "Polish on and off on Gemini: the capsule widens and the wand comes in left of the bars") { s in
             s.record(.listening, on: .gemini)
             s.wait(0.6)
             s.film("polish on (push-to-talk)") { s.model.polishes = true }
@@ -264,6 +264,40 @@ private enum FilmScript {
             s.record(.locked, on: .gemini, startedAgo: 14)
             s.wait(0.6)
             s.film("polish on (hands-free)") { s.model.polishes = true }
+        },
+        FilmScenario(name: "tray-open", mode: .always, area: CGSize(width: 340, height: 110),
+                     note: "The pointer on a Gemini dictation: the tray fans out, Polish goes on, the pointer leaves") { s in
+            s.record(.listening, on: .gemini)
+            s.model.tray = PillTrayState(dictation: .recording)
+            s.wait(0.6)
+            s.film("pointer on the pill: the tray opens", for: 0.7) { s.model.setPointerOverTray(.bottom) }
+            s.film("Polish clicked") {
+                s.model.polishes = true
+                s.model.tray = PillTrayState(dictation: .recording, polishes: true)
+            }
+            s.film("pointer gone: the tray folds", for: 0.9) { s.model.setPointerOverTray(nil) }
+        },
+        FilmScenario(name: "stack-rise", mode: .always, area: CGSize(width: 300, height: 170),
+                     note: "A new dictation while one is on its way: it rises above, then is pasted and the stack closes") { s in
+            let first = UUID(), second = UUID()
+            func item(_ key: UUID) -> PillStackItem {
+                PillStackItem(key: key, choice: .gemini, tray: PillTrayState(dictation: .processing(key)))
+            }
+            s.record(.listening, on: .gemini)
+            s.wait(0.5)
+            s.process(on: .gemini)
+            s.wait(0.6)
+            s.film("talk key again: the first rises, the new one records", for: 0.7) {
+                s.record(.listening, on: .gemini)
+                s.model.setStack([item(first)])
+            }
+            s.wait(0.4)
+            s.film("stopped, and a third starts", for: 0.7) {
+                s.record(.listening, on: .gemini)
+                s.model.setStack([item(second), item(first)])
+            }
+            s.wait(0.4)
+            s.film("the first is pasted: the stack closes", for: 0.7) { s.model.setStack([item(second)]) }
         },
         FilmScenario(name: "error-glyph-to-listening", mode: .always,
                      note: "An error flash from rest, then fn within its hold") { s in

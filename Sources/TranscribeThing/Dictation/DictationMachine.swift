@@ -29,18 +29,18 @@ struct DictationMachine: Equatable {
         case handsFreeToggle, cancel, pillClick, pillStop, pillCancel
         /// The switch model shortcut: another engine for the dictation being recorded.
         case cycleEngine
-        /// The polish shortcut: Polish on or off for the dictation being recorded.
+        /// The pill's Polish: Polish on or off for the dictation being recorded.
         case polish
-        /// The translate shortcut: Translate on or off for the dictation being recorded.
+        /// The pill's Translate: Translate on or off for the dictation being recorded.
         case translate
-        /// The send shortcut: Send on or off for the dictation being recorded (Return once its text is pasted).
+        /// The pill's Send: Send on or off for the dictation being recorded (Return once its text is pasted).
         case send
         /// Undo of a canceled dictation: record on, hands-free, after `prefix` seconds of kept audio.
         case resume(prefix: TimeInterval)
         /// A key took the press over (Polish Selection, fn D in push-to-talk): the recording goes without a sound,
         /// kept for Undo only if something was said in it (`discardCapture`).
         case discard
-        /// A key the press was for that changes nothing here (fn D, the polish key off Gemini saying why it can't):
+        /// A key the press was for that changes nothing here (fn D, the pill's Polish off Gemini saying why it can't):
         /// in hands-free, the push-to-talk key's release then doesn't finish it.
         case keyUsed
         case timer(TimerID)
@@ -118,7 +118,8 @@ struct DictationMachine: Equatable {
     /// HotkeyMonitor swallows Esc only while busy.
     var isBusy: Bool { isRecording || activeJobs > 0 }
 
-    /// A dictation is being processed: transcribed, or its text being pasted. No new one starts meanwhile.
+    /// Dictations being processed (transcribed, or their text being pasted), and none recording. A new one may start
+    /// meanwhile: their text is pasted as it comes, oldest first.
     var isProcessing: Bool { !isRecording && activeJobs > 0 }
 
     /// Hands-free or push-to-talk, for the states that record.
@@ -173,9 +174,7 @@ struct DictationMachine: Equatable {
     }
 
     private mutating func handleIdle(_ input: Input, now: TimeInterval) -> [Effect] {
-        // A dictation being processed holds every new one off: no sound, no pill, nothing. Its text then never lands
-        // in a recording that started after it.
-        if activeJobs > 0, input.startsDictation { return [] }
+        // Dictations still being processed hold nothing off: a new one starts beside them.
         switch input {
         case .pttDown:
             return arm(now: now)
@@ -290,7 +289,7 @@ struct DictationMachine: Equatable {
             capture = .locked(startedAt: startedAt)
             return [.cycleEngine]
         case .polish, .translate, .send:
-            // fn P, fn T and fn ↩ likewise.
+            // The pill's buttons, clicked with the talk key down, likewise.
             capture = .locked(startedAt: startedAt)
             return Self.keyEffect(input)
         default:
@@ -361,7 +360,7 @@ struct DictationMachine: Equatable {
 
     private var cancelAllTimers: [Effect] { TimerID.allCases.map { .cancelTimer($0) } }
 
-    /// What the Polish, Translate and Send keys hand on: the controller turns them on or off for the recording.
+    /// What the pill's Polish, Translate and Send hand on: the controller turns them on or off for the recording.
     private static func keyEffect(_ input: Input) -> [Effect] {
         switch input {
         case .polish: [.polish]

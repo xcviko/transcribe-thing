@@ -219,15 +219,12 @@ import Testing
         #expect(effects == [.resumeCapture, .showPill(.locked), .playSound(.lock)])
     }
 
-    /// Undo while a dictation is processed records nothing: its text comes first, then Undo works again.
-    @Test func resumeWhileAJobRunsIsHeldOff() {
+    /// Undo while a dictation is processed records on at once, beside it.
+    @Test func resumeWhileAJobRunsRecordsOn() {
         var m = M()
         _ = m.handle(.jobStarted, now: 1)
-        #expect(m.handle(.resume(prefix: 1), now: 2).isEmpty)
-        #expect(!m.isRecording && m.isProcessing && m.activeJobs == 1)
-        _ = m.handle(.jobEnded, now: 3)
-        #expect(m.handle(.resume(prefix: 1), now: 4).contains(.resumeCapture))
-        #expect(m.isRecording && !m.isProcessing)
+        #expect(m.handle(.resume(prefix: 1), now: 2).contains(.resumeCapture))
+        #expect(m.isRecording && !m.isProcessing && m.activeJobs == 1)
     }
 
     @Test(arguments: ["arming", "listening", "locked", "lockedStopPending"])
@@ -441,22 +438,18 @@ import Testing
         #expect(!m.isBusy)
     }
 
-    /// While a dictation is processed nothing starts another: the talk key, hands-free, a click on the pill do nothing
-    /// (no pill, no sound). Esc still cancels it; once it's done, the talk key records again.
-    @Test func noNewRecordingWhileAJobRuns() {
+    /// While a dictation is processed the talk key starts another, as from rest. Esc then cancels the recording; with
+    /// none, the newest dictation on its way.
+    @Test func aNewRecordingWhileAJobRuns() {
         var m = Self.listening()
         _ = m.handle(.pttUp, now: 12)
         _ = m.handle(.jobStarted, now: 12)
-        for input: M.Input in [.pttDown, .timer(.arming), .pttUp, .handsFreeToggle, .pillClick, .pttDown,
-                               .pttInterrupted] {
-            #expect(m.handle(input, now: 13).isEmpty, "\(input)")
-        }
-        #expect(m.activeJobs == 1 && !m.isRecording && m.isProcessing && m.isBusy)
-        #expect(m.handle(.cancel, now: 14) == [.cancelNewestJob, .playSound(.cancel)], "Esc still cancels it")
-        _ = m.handle(.jobEnded, now: 14)
-        #expect(!m.isProcessing)
-        #expect(m.handle(.pttDown, now: 15) == [.showPill(.listening), .startCapture, .playSound(.start),
+        #expect(m.handle(.pttDown, now: 13) == [.showPill(.listening), .startCapture, .playSound(.start),
                                                 .schedule(.arming, after: 0.12)])
+        #expect(m.isRecording && m.activeJobs == 1 && !m.isProcessing && m.isBusy)
+        #expect(m.handle(.cancel, now: 14).contains(.cancelCapture(keepForUndo: true, notify: true)))
+        #expect(m.activeJobs == 1 && m.isProcessing)
+        #expect(m.handle(.cancel, now: 15) == [.cancelNewestJob, .playSound(.cancel)], "then the one on its way")
     }
 
     @Test func deviceLostMidHandsFreeKeepsAudio() {
@@ -1388,9 +1381,9 @@ final class FakeRecorder: DictationRecorder {
         #expect(h.pill.shakeCount == 0)
     }
 
-    /// An fn tap, an fn combo or a whole hold while a job is in flight doesn't touch the processing pill: not its
-    /// width, not its count. No press starts a dictation then.
-    @Test func pressesWhileProcessingLeaveTheProcessingPillAlone() async throws {
+    /// A press of the talk key while a dictation is processed starts a new one: the processing dictation moves up onto
+    /// a pill of its own, keeping its count, and a tap folds the bottom pill back to it.
+    @Test func aPressWhileProcessingStartsADictationBesideIt() async throws {
         let h = Self.make(keyStatus: .valid(KeyInfo()))
         h.settings.lineup.main = .gemini
         h.controller.runsTimers = false
@@ -1415,35 +1408,28 @@ final class FakeRecorder: DictationRecorder {
         try await waitUntil { h.pill.showsCounter }
         let count = h.pill.tokenCount
 
-        var phases: [PillPhase] = []
-        h.pill.onVisiblePhaseChange = { phases.append(h.pill.visiblePhase) }
         now = 105
         h.controller.handle(.pttDown)
+        #expect(h.controller.machine.capture.isArming && h.pill.visiblePhase == .listening)
+        #expect(h.pill.stack.count == 1 && h.pill.stack.first?.count == count, "it moved up with its count")
         h.controller.handle(.pttUp)
-        #expect(h.controller.machine.capture == .idle)
-        now = 106
-        h.controller.handle(.pttDown)
-        h.controller.handle(.pttInterrupted)
-        #expect(phases.isEmpty, "the processing pill never moved")
-        #expect(h.pill.processingOrigin == .locked)
-        #expect(h.pill.showsCounter && h.pill.tokenCount == count)
+        #expect(h.controller.machine.capture == .idle, "a tap is no dictation")
+        #expect(h.pill.visiblePhase == .processing && h.pill.stack.isEmpty && h.pill.tokenCount == count)
 
         now = 107
         h.controller.handle(.pttDown)
         h.controller.send(.timer(.arming))
-        #expect(h.controller.machine.capture == .idle, "a hold records nothing either")
-        #expect(h.pill.visiblePhase == .processing && h.pill.showsCounter && h.pill.tokenCount == count)
-        now = 109
-        h.controller.handle(.pttUp)
-        #expect(phases.isEmpty, "the processing pill never moved")
+        #expect(h.controller.machine.capture.isListeningOrLocked, "a hold records")
+        #expect(h.pill.stack.count == 1 && h.pill.visiblePhase == .listening)
+        h.controller.handle(.cancel)
         release = true
         try await waitUntil { h.controller.machine.activeJobs == 0 }
     }
 
-    /// A press held while the job under it ends (pasted, or nowhere to paste) is still no dictation: let go, it ends
-    /// nothing; the next press records.
+    /// A press held while the job under it ends (pasted, or nowhere to paste) is a dictation of its own: the job's
+    /// text comes meanwhile, and the press records on.
     @Test(arguments: [false, true])
-    func aPressHeldAcrossTheJobsEndStartsNothing(pastes: Bool) async throws {
+    func aPressHeldAcrossTheJobsEndRecordsOn(pastes: Bool) async throws {
         let h = Self.make()
         h.controller.runsTimers = false
         var release = false
@@ -1455,15 +1441,11 @@ final class FakeRecorder: DictationRecorder {
         h.controller.enqueue(Self.recording(), engine: .parakeet)
         #expect(h.pill.visiblePhase == .processing)
         h.controller.handle(.pttDown)
-        #expect(h.controller.machine.capture == .idle && h.pill.visiblePhase == .processing)
+        h.controller.send(.timer(.arming))
+        #expect(h.controller.machine.capture.isListeningOrLocked && h.pill.visiblePhase == .listening)
         release = true
         try await waitUntil { h.controller.machine.activeJobs == 0 }
-        #expect(h.controller.machine.capture == .idle)
-        h.controller.handle(.pttUp)
-        #expect(h.controller.machine.capture == .idle)
-        h.controller.handle(.pttDown)
-        #expect(h.controller.machine.capture.isArming)
-        #expect(h.pill.visiblePhase == .listening)
+        #expect(h.controller.machine.capture.isListeningOrLocked && h.pill.stack.isEmpty)
         h.controller.handle(.cancel)
     }
 

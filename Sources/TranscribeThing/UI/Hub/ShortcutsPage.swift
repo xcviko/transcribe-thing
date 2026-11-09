@@ -27,9 +27,6 @@ struct ShortcutsPage: View {
                     row(.pushToTalk)
                     row(.handsFree)
                     row(.switchModel)
-                    row(.polish)
-                    row(.translate)
-                    row(.send)
                     row(.addToDictionary)
                 }
             }

@@ -239,18 +239,15 @@ struct Shortcut: Codable, Hashable, Sendable {
     static let fn = Shortcut(modifiers: [.init(.function)])
     static let fnSpace = Shortcut(modifiers: [.init(.function)], keyCode: KeyCode.space)
     static let fnTab = Shortcut(modifiers: [.init(.function)], keyCode: KeyCode.tab)
-    static let fnReturn = Shortcut(modifiers: [.init(.function)], keyCode: KeyCode.returnKey)
     static let fnD = Shortcut(modifiers: [.init(.function)], keyCode: KeyCode.ansiD)
-    static let fnP = Shortcut(modifiers: [.init(.function)], keyCode: KeyCode.ansiP)
-    static let fnT = Shortcut(modifiers: [.init(.function)], keyCode: KeyCode.ansiT)
     static let escape = Shortcut(modifiers: [], keyCode: KeyCode.escape)
     static let commandFnV = Shortcut(modifiers: [.init(.command), .init(.function)], keyCode: KeyCode.ansiV)
     static let rightOption = Shortcut(modifiers: [.init(.option, .right)])
     static let rightCommand = Shortcut(modifiers: [.init(.command, .right)])
     static let f13 = Shortcut(modifiers: [], keyCode: KeyCode.f13)
 
-    /// `key` pressed while `talkKey` (push to talk) is held, as the defaults pair fn with Space or P: fn P for fn, ⌃P
-    /// for Right ⌃ (either side, so it's pressed with the key already down), F5 P for F5. Nil for a talk key nothing
+    /// `key` pressed while `talkKey` (push to talk) is held, as the defaults pair fn with Space or D: fn D for fn, ⌃D
+    /// for Right ⌃ (either side, so it's pressed with the key already down), F5 D for F5. Nil for a talk key nothing
     /// can be pressed off: a combination with a key (⌃⌥D), or a key that types (Keypad Enter).
     static func onTalkKey(_ key: UInt16, talkKey: Shortcut) -> Shortcut? {
         if talkKey.isModifierOnly {
@@ -262,8 +259,8 @@ struct Shortcut: Codable, Hashable, Sendable {
         return Shortcut(heldKeyCode: held, modifiers: [], keyCode: key)
     }
 
-    /// The key this shortcut adds to `talkKey`, when it is exactly `onTalkKey` of it: P of fn P for fn, of ⌃P for
-    /// Right ⌃, of F5 P for F5. Nil for anything else (⌘ fn V, F5 ⌥Space, fn P with Right ⌃).
+    /// The key this shortcut adds to `talkKey`, when it is exactly `onTalkKey` of it: D of fn D for fn, of ⌃D for
+    /// Right ⌃, of F5 D for F5. Nil for anything else (⌘ fn V, F5 ⌥Space, fn D with Right ⌃).
     func keyOnTalkKey(_ talkKey: Shortcut) -> UInt16? {
         guard let keyCode, Self.onTalkKey(keyCode, talkKey: talkKey) == self else { return nil }
         return keyCode
@@ -346,36 +343,21 @@ struct Shortcut: Codable, Hashable, Sendable {
 // MARK: - Actions and bindings
 
 /// What can be bound. Cancel isn't: it is always Esc (`Shortcut.escape`), live only while a dictation records or
-/// transcribes.
+/// transcribes. Polish, Translate and Send aren't either: they are buttons on the pill (`PillToggle`), so P, T and ↩
+/// always reach apps. Bindings older builds saved for them are ignored at load (`ShortcutBindings.init(from:)`).
 enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, CodingKeyRepresentable {
     case pushToTalk, handsFree, pasteLast, switchModel
-    /// Polish this dictation (`Polish`) while it's on Gemini; off Gemini, with text selected, Polish Selection.
-    case polish
-    /// While dictating with text selected: the selection goes into the user's dictionary (`UserDictionary`).
-    case addToDictionary
-    /// Translate this dictation (`Translate`) while it's on Gemini; off Gemini, with text selected, that text
-    /// translated.
-    case translate
-    /// Send this dictation: Return is pressed once its text is pasted (a chat message goes out). On any model. Declared
+    /// While dictating with text selected: the selection goes into the user's dictionary (`UserDictionary`). Declared
     /// last: bindings are stored in declaration order.
-    case send
+    case addToDictionary
 
     var id: String { rawValue }
 
     /// Live only while a dictation records: outside one its keys reach apps.
     var isDuringDictation: Bool {
         switch self {
-        case .switchModel, .polish, .addToDictionary, .translate, .send: true
+        case .switchModel, .addToDictionary: true
         case .pushToTalk, .handsFree, .pasteLast: false
-        }
-    }
-
-    /// Live too while a dictation on Gemini is processed: Polish and Translate have it sent again, Send has Return
-    /// pressed after its paste.
-    var isLiveWhileProcessing: Bool {
-        switch self {
-        case .polish, .translate, .send: true
-        case .pushToTalk, .handsFree, .pasteLast, .switchModel, .addToDictionary: false
         }
     }
 
@@ -385,10 +367,7 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
         case .handsFree: "Hands-free"
         case .pasteLast: "Paste last transcript"
         case .switchModel: "Switch model"
-        case .polish: "Polish"
         case .addToDictionary: "Add to dictionary"
-        case .translate: "Translate"
-        case .send: "Send"
         }
     }
 
@@ -396,10 +375,7 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
     var hint: String? {
         switch self {
         case .switchModel: "While you dictate."
-        case .polish: "On Gemini, the message you meant. With text selected, that text polished."
         case .addToDictionary: "With a word selected, while you dictate."
-        case .translate: "On Gemini, your dictation translated. With text selected, that text translated."
-        case .send: "Presses Return once your text is pasted. While you dictate."
         case .pushToTalk, .handsFree, .pasteLast: nil
         }
     }
@@ -410,10 +386,7 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
         case .handsFree: "lock.fill"
         case .pasteLast: "doc.on.clipboard"
         case .switchModel: "sparkles"
-        case .polish: "wand.and.sparkles"
         case .addToDictionary: "character.book.closed"
-        case .translate: "translate"
-        case .send: "paperplane"
         }
     }
 
@@ -423,8 +396,8 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
 /// Action → shortcut map. Encodes as a flat JSON object keyed by action in declaration order,
 /// with `null` for a deliberately unbound action. A missing key decodes to the default, so new
 /// actions added later get their default binding instead of silently being unbound. A key for an action
-/// that no longer exists (copyLast, retired for paste last; cancel, which is always Esc now) is ignored, and the
-/// other bindings survive.
+/// that no longer exists (copyLast, retired for paste last; cancel, which is always Esc now; polish, translate and
+/// send, the pill's buttons now) is ignored, and the other bindings survive.
 struct ShortcutBindings: Codable, Equatable, Sendable {
     var bindings: [ShortcutAction: Shortcut]
 
@@ -438,35 +411,22 @@ struct ShortcutBindings: Codable, Equatable, Sendable {
         .handsFree: .fnSpace,
         .pasteLast: .commandFnV,
         .switchModel: .fnTab,
-        // P for Polish, D for Dictionary, T for Translate, ↩ for Send.
-        .polish: .fnP,
+        // D for Dictionary.
         .addToDictionary: .fnD,
-        .translate: .fnT,
-        // fn's, as `sendShortcut(after:)` makes it.
-        .send: .fnReturn,
     ])
 
-    /// The key each default presses off the talk key: fn Space, fn Tab, fn P, fn D, fn T, fn ↩.
+    /// The key each default presses off the talk key: fn Space, fn Tab, fn D.
     static let keysOnTalkKey: [ShortcutAction: UInt16] = [
-        .handsFree: KeyCode.space, .switchModel: KeyCode.tab, .polish: KeyCode.ansiP,
-        .addToDictionary: KeyCode.ansiD, .translate: KeyCode.ansiT, .send: KeyCode.returnKey,
+        .handsFree: KeyCode.space, .switchModel: KeyCode.tab, .addToDictionary: KeyCode.ansiD,
     ]
 
-    /// Send's default: ↩ with the push-to-talk key's modifiers, on either side, so it's pressed with the key already
-    /// held (fn ↩ for fn, ⌃↩ for Right ⌃), as fn P is for Polish. A push-to-talk with no modifier (F13) gets fn ↩.
-    static func sendShortcut(after pushToTalk: Shortcut?) -> Shortcut {
-        guard let pushToTalk, !pushToTalk.modifiers.isEmpty else { return .fnReturn }
-        return Shortcut(modifiers: pushToTalk.modifiers.map { .init($0.modifier) }, keyCode: KeyCode.returnKey)
-    }
-
     /// `action`'s default next to this push to talk. A talk key that is a key on its own and types nothing (F5, F13)
-    /// carries them all, as fn does: F5 Space, F5 Tab, F5 P, F5 D, F5 T, F5 ↩. Otherwise `defaults`, with Send's ↩
-    /// on the talk key's modifiers (`sendShortcut(after:)`).
+    /// carries them all, as fn does: F5 Space, F5 Tab, F5 D. Otherwise `defaults`.
     static func defaultShortcut(for action: ShortcutAction, pushToTalk: Shortcut?) -> Shortcut? {
         if let key = keysOnTalkKey[action], let pushToTalk, pushToTalk.holdableKey != nil {
             return Shortcut.onTalkKey(key, talkKey: pushToTalk)
         }
-        return action == .send ? sendShortcut(after: pushToTalk) : defaults[action]
+        return defaults[action]
     }
 
     /// What `action` goes back to (the recorder's Reset): its default next to this push to talk.
@@ -475,7 +435,7 @@ struct ShortcutBindings: Codable, Equatable, Sendable {
     }
 
     /// Push to talk just went from `old` to the binding it has now: the shortcuts pressed off the old talk key move onto
-    /// the new one (fn P → F5 P, fn Space → F5 Space; F5 P → ⌃P for Right ⌃), so they're still pressed with the key you
+    /// the new one (fn D → F5 D, fn Space → F5 Space; F5 D → ⌃D for Right ⌃), so they're still pressed with the key you
     /// hold. Only hands-free and the keys used while dictating, and only exactly on the old key
     /// (`Shortcut.keyOnTalkKey`): paste last pressed off the talk key would start a dictation first. One that would
     /// clash with another binding or get in the way where it lands (⌃Space is macOS's) stays. Returns what each moved
@@ -578,10 +538,10 @@ struct ShortcutBindings: Codable, Equatable, Sendable {
             }
         }
         bindings = result
-        // An action newer than the saved bindings follows the push to talk they have (⌃↩ for Right ⌃, F5 P for F5).
+        // An action newer than the saved bindings follows the push to talk they have (⌃D for Right ⌃, F5 D for F5).
         for action in defaulted { bindings[action] = Self.defaultShortcut(for: action, pushToTalk: bindings[.pushToTalk]) }
         // An action newer than the saved bindings starts unbound when its default is already the user's for
-        // something else (Polish's fn P next to a hands-free set to fn P): the user's binding keeps working.
+        // something else (Add to dictionary's fn D next to a hands-free set to fn D): the user's binding keeps working.
         for action in defaulted {
             guard let shortcut = bindings[action],
                   let other = conflict(for: shortcut, excluding: action), !defaulted.contains(other) else { continue }

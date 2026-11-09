@@ -15,7 +15,7 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
     /// version.
     case selection(PolishSelectionModel)
     /// Translate (`Translate`): the Gemini model's transcript in the other language; `polished`, its Polish message
-    /// in the other language (fn P and fn T both on).
+    /// in the other language (Polish and Translate both on).
     case translation(polished: Bool, by: EngineID = .geminiFlash)
     /// Translate on selected text: the model's translation of it. No recording, like Polish Selection's.
     case selectionTranslation(PolishSelectionModel)

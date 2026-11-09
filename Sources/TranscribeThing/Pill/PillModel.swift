@@ -98,6 +98,20 @@ final class PillModel {
     /// Drives the keyframe shake (explicit shakes plus every entry into `.error`).
     private(set) var shakeCount = 0
 
+    /// The tray beside the pill (`PillTray`): its dictation, and its buttons' state. nil when the pill shows no dictation
+    /// (at rest, a selection's polish, the error flash), so no tray opens. Set by the controller.
+    var tray: PillTrayState?
+    /// Older dictations still on their way, each on a pill of its own stacked above this one, the nearest first
+    /// (`PillStack`). Set by the controller with `setStack`.
+    private(set) var stack: [PillStackItem] = []
+    /// The stacked pills' own models, by dictation key: each draws its pill as this one draws the bottom pill.
+    @ObservationIgnored private(set) var stackModels: [UUID: PillModel] = [:]
+    /// The pill whose tray is open: the pointer is over it or its tray, or left them a moment ago.
+    private(set) var openTray: PillTrayOwner?
+    /// The tray button under the pointer (hover styling), and the one whose tooltip shows (after 500 ms).
+    private(set) var hoveredTrayButton: PillTrayButton?
+    private(set) var trayTooltip: PillTrayButton?
+
     /// Resolved by `PillController` from the pill mode. Standalone previews keep `true`.
     var isPresented = true
     /// False in Never mode. Toasts follow `isPresented`: with no pill on screen they sit in its slot.
@@ -108,6 +122,10 @@ final class PillModel {
     @ObservationIgnored var onClick: (() -> Void)?
     @ObservationIgnored var onStop: (() -> Void)?
     @ObservationIgnored var onCancel: (() -> Void)?
+    /// A tray button was clicked: Polish, Translate or Send for that pill's dictation.
+    @ObservationIgnored var onToggle: ((PillToggle, PillDictation) -> Void)?
+    /// A stacked pill was clicked (a dashed one takes its click away back), by its dictation's key.
+    @ObservationIgnored var onStackClick: ((UUID) -> Void)?
     @ObservationIgnored var contextMenuProvider: (() -> NSMenu)?
     /// The hands-free model chip was clicked: the controller opens the model menu under it.
     @ObservationIgnored var onEngineChipClick: (() -> Void)?
@@ -135,6 +153,9 @@ final class PillModel {
     @ObservationIgnored private var helloTask: Task<Void, Never>?
     @ObservationIgnored private var chipTask: Task<Void, Never>?
     @ObservationIgnored private var keyHintTask: Task<Void, Never>?
+    @ObservationIgnored private var trayTask: Task<Void, Never>?
+    @ObservationIgnored private var trayTooltipTask: Task<Void, Never>?
+    @ObservationIgnored private var trayPointer: PillTrayOwner?
     @ObservationIgnored private var pointerInside = false
 
     init(settings: AppSettings, levelMeter: LevelMeter) {
@@ -338,6 +359,111 @@ final class PillModel {
         if showsTooltip { showsTooltip = false }
         setHoveredControl(nil)
         setPointerOverChip(false)
+        trayPointer = nil
+        trayTask?.cancel()
+        if openTray != nil { openTray = nil }
+        setHoveredTrayButton(nil)
+    }
+
+    // MARK: Tray
+
+    /// The pointer is over a pill that shows a dictation, or over its tray (`owner`), or over neither (nil), as the
+    /// controller tracks it. A tray opens after the hover's short dwell, at once when another one is open already (the
+    /// pointer went from one pill to the next), and goes `timing.trayLinger` after the pointer has left it: long enough
+    /// to cross the gap between pill and tray, or to come back.
+    func setPointerOverTray(_ owner: PillTrayOwner?) {
+        guard owner != trayPointer else { return }
+        trayPointer = owner
+        trayTask?.cancel()
+        if let owner {
+            if openTray != nil {
+                openTray = owner
+            } else {
+                trayTask = delayed(timing.hoverIn) { $0.openTray = owner }
+            }
+        } else {
+            trayTask = delayed(timing.trayLinger) { model in
+                model.openTray = nil
+                model.setHoveredTrayButton(nil)
+            }
+        }
+    }
+
+    /// Which tray button the pointer is on (hover styling, and its tooltip after `timing.controlTooltipDelay`).
+    func setHoveredTrayButton(_ button: PillTrayButton?) {
+        guard button != hoveredTrayButton else { return }
+        hoveredTrayButton = button
+        trayTooltipTask?.cancel()
+        if trayTooltip != nil { trayTooltip = nil }
+        if let button {
+            trayTooltipTask = delayed(timing.controlTooltipDelay) { model in
+                if model.hoveredTrayButton == button { model.trayTooltip = button }
+            }
+        }
+    }
+
+    /// Opens `owner`'s tray at once, with `button` hovered and its tooltip up (snapshots, films).
+    func showTray(_ owner: PillTrayOwner?, tooltip button: PillTrayButton? = nil) {
+        trayTask?.cancel()
+        openTray = owner
+        hoveredTrayButton = button
+        trayTooltip = button
+    }
+
+    /// Whether `owner`'s tray is out now: open, and its pill shows a dictation that has one.
+    func showsTray(_ owner: PillTrayOwner) -> Bool {
+        guard openTray == owner, isPresented else { return false }
+        switch owner {
+        case .bottom: return tray != nil && (visiblePhase.isRecording || visiblePhase == .processing)
+        case .stacked(let key): return stack.contains { $0.key == key }
+        }
+    }
+
+    /// The tray `owner` shows: the bottom pill's, or a stacked pill's.
+    func trayState(_ owner: PillTrayOwner) -> PillTrayState? {
+        switch owner {
+        case .bottom: tray
+        case .stacked(let key): stack.first { $0.key == key }?.tray
+        }
+    }
+
+    // MARK: Stack
+
+    /// The older dictations still on their way, the nearest the pill first. Each gets a pill model of its own that
+    /// draws it processing (its count after the usual wait, its glyphs, its dashed edge); one that leaves the stack
+    /// drops its model, and its tray closes.
+    func setStack(_ items: [PillStackItem]) {
+        for item in items {
+            let child = stackModels[item.key] ?? makeStackModel()
+            stackModels[item.key] = child
+            child.apply(item)
+        }
+        let keys = Set(items.map(\.key))
+        for key in stackModels.keys where !keys.contains(key) { stackModels[key] = nil }
+        if stack != items { stack = items }
+        if case .stacked(let key)? = openTray, !keys.contains(key) {
+            openTray = nil
+            setHoveredTrayButton(nil)
+        }
+    }
+
+    private func makeStackModel() -> PillModel {
+        let child = PillModel(settings: settings, levelMeter: .preview(level: 0))
+        child.timing = timing
+        child.autoSettles = autoSettles
+        child.phase = .processing
+        return child
+    }
+
+    /// A stacked pill's dictation, as this pill model draws it.
+    private func apply(_ item: PillStackItem) {
+        if sessionModel != item.choice { sessionModel = item.choice }
+        if polishes != item.tray.polishes { polishes = item.tray.polishes }
+        if translates != item.tray.translates { translates = item.tray.translates }
+        if sends != item.tray.sends { sends = item.tray.sends }
+        if holdsPaste != item.holdsPaste { holdsPaste = item.holdsPaste }
+        if tokenCount != item.count { tokenCount = item.count }
+        if tray != item.tray { tray = item.tray }
     }
 
     // MARK: Model chip
@@ -429,6 +555,83 @@ struct PillTiming: Equatable, Sendable {
     var chipHold: TimeInterval = 1.2
     /// How long a word about a key that did nothing stays over the pill (`PillModel.keyHint`).
     var keyHintHold: TimeInterval = 1.8
+    /// How long a pill's tray stays out once the pointer has left it and its pill (`PillModel.openTray`).
+    var trayLinger: TimeInterval = 0.45
+}
+
+// MARK: - Tray and stack
+
+/// The buttons of a pill's tray (`PillTray`), in their order: what each turns on or off for the pill's dictation.
+enum PillToggle: String, CaseIterable, Sendable {
+    case polish, translate, send
+
+    var title: String {
+        switch self {
+        case .polish: "Polish"
+        case .translate: "Translate"
+        case .send: "Send"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .polish: "wand.and.sparkles"
+        case .translate: "translate"
+        case .send: "paperplane.fill"
+        }
+    }
+}
+
+/// The dictation a pill shows, for its tray: the one being recorded, or one being processed, by its job's key.
+enum PillDictation: Hashable, Sendable {
+    case recording
+    case processing(UUID)
+}
+
+/// Which pill a tray belongs to: the one at the bottom (recording, or the newest dictation on its way), or one stacked
+/// above it, by its dictation's key.
+enum PillTrayOwner: Hashable, Sendable {
+    case bottom
+    case stacked(UUID)
+}
+
+/// One tray button: its pill and which button.
+struct PillTrayButton: Hashable, Sendable {
+    var owner: PillTrayOwner
+    var toggle: PillToggle
+}
+
+/// A tray's buttons for one dictation: which are on, and which can be clicked.
+struct PillTrayState: Equatable, Sendable {
+    var dictation: PillDictation
+    var polishes = false
+    var translates = false
+    var sends = false
+    /// Polish and Translate can change this dictation (everywhere while it records; while it's processed, on Gemini).
+    var rewrites = true
+    /// Send can (not once a click away holds its text, nor while it's being pasted).
+    var canSend = true
+
+    func isOn(_ toggle: PillToggle) -> Bool {
+        switch toggle {
+        case .polish: polishes
+        case .translate: translates
+        case .send: sends
+        }
+    }
+
+    func isEnabled(_ toggle: PillToggle) -> Bool {
+        toggle == .send ? canSend : rewrites
+    }
+}
+
+/// A dictation still on its way, on a pill stacked above the bottom one (`PillModel.stack`).
+struct PillStackItem: Equatable, Sendable {
+    var key: UUID
+    var choice: ModelChoice
+    var tray: PillTrayState
+    var holdsPaste = false
+    var count: PillTokenCount?
 }
 
 extension PillPhase {

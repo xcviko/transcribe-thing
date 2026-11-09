@@ -101,8 +101,8 @@ import Testing
         #expect(Self.card(rig) == nil && rig.pasted.isEmpty)
     }
 
-    /// Send on for it: the click turns it off with Send's sound and the plane leaves the pill. Its key can't turn it
-    /// back on, and no Return is ever pressed. Another click changes nothing more.
+    /// Send on for it: the click turns it off with Send's sound and the plane leaves the pill. Its tray button can't turn
+    /// it back on (it's dimmed), and no Return is ever pressed. Another click changes nothing more.
     @Test func aClickTurnsSendOff() async throws {
         let first = RequestGate()
         let (rig, cues, requests, monitor) = Self.make(first: first)
@@ -112,7 +112,7 @@ import Testing
         c.pressReturnOverride = { returns += 1; return .pressed }
         rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
         SwitchModelControllerTests.hold(rig)
-        c.handle(.send)
+        c.toggle(.send, on: .recording)
         rig.now += 2
         c.handle(.pttUp)
         try await waitUntil { requests.gemini.count == 1 }
@@ -122,8 +122,8 @@ import Testing
         #expect(!rig.h.pill.sends && rig.h.pill.holdsPaste)
         #expect(Array(cues.played.dropFirst(before)) == [.sendOn], "Send's sound, as its key turning it off")
         c.clickedAway()
-        c.handle(.send)
-        c.handle(.shortcutKeyUp)
+        #expect(rig.h.pill.tray?.canSend == false)
+        rig.h.pill.clickTray(.send)
         #expect(!rig.h.pill.sends && cues.played.count == before + 1, "nothing more")
 
         first.isOpen = true
@@ -143,7 +143,7 @@ import Testing
         c.pressReturnOverride = { returns += 1; return .pressed }
         rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
         SwitchModelControllerTests.hold(rig)
-        c.handle(.send)
+        c.toggle(.send, on: .recording)
         rig.now += 2
         c.handle(.pttUp)
         try await waitUntil { requests.gemini.count == 1 }
@@ -173,7 +173,7 @@ import Testing
         c.pressReturnOverride = { returns += 1; return .pressed }
         rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
         SwitchModelControllerTests.hold(rig)
-        c.handle(.send)
+        c.toggle(.send, on: .recording)
         #expect(!monitor.isWatching)
         c.clickedAway()
         monitor.mouseDown(at: Self.away)
@@ -240,9 +240,8 @@ import Testing
         R.dictate(rig)
         try await waitUntil { requests.gemini.count == 1 }
         c.clickedAway()
-        c.handle(.polish)
+        rig.h.pill.clickTray(.polish)
         #expect(rig.h.pill.polishes && rig.h.pill.holdsPaste)
-        c.handle(.shortcutKeyUp)
         try await waitUntil { requests.gemini.count == 2 }
         #expect(requests.gemini[1] == Polish.prompt)
         try await waitUntil { Self.card(rig) != nil && c.machine.activeJobs == 0 }

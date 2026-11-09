@@ -4,141 +4,19 @@ import os
 import Testing
 @testable import TranscribeThing
 
-// MARK: - The shortcut
+// MARK: - No shortcut: the pill's button
 
-@Suite struct SendShortcutTests {
-    static let controlReturn = Shortcut(modifiers: [.init(.control)], keyCode: KeyCode.returnKey)
-    static let rightControl = Shortcut(modifiers: [.init(.control, .right)])
-
-    /// fn ↩ out of the box, live only during a dictation, and its row says what it does.
-    @Test func fnReturnIsTheDefault() {
-        #expect(ShortcutBindings.defaults[.send] == .fnReturn)
-        #expect(ShortcutAction.send.defaultShortcut == .fnReturn)
-        #expect(ShortcutAction.send.isDuringDictation)
-        #expect(ShortcutAction.send.title == "Send" && ShortcutAction.send.symbolName == "paperplane")
-        #expect(ShortcutAction.send.hint == "Presses Return once your text is pasted. While you dictate.")
-        #expect(ShortcutCaptureEngine.canClear(.send))
-        #expect(ShortcutAction.allCases.last == .send, "stored last, after the actions older bindings have")
-    }
-
-    /// ↩ with the push-to-talk key's modifiers, on either side: pressed with the key already held.
-    @Test func itFollowsThePushToTalkKey() {
-        #expect(ShortcutBindings.sendShortcut(after: .fn) == .fnReturn)
-        #expect(ShortcutBindings.sendShortcut(after: Self.rightControl) == Self.controlReturn)
-        #expect(Self.controlReturn.compactDescription == "⌃↩")
-        #expect(ShortcutBindings.sendShortcut(after: .rightOption)
-                == Shortcut(modifiers: [.init(.option)], keyCode: KeyCode.returnKey))
-        let controlOptionD = Shortcut(modifiers: [.init(.control), .init(.option)], keyCode: KeyCode.ansiD)
-        #expect(ShortcutBindings.sendShortcut(after: controlOptionD)
-                == Shortcut(modifiers: [.init(.control), .init(.option)], keyCode: KeyCode.returnKey))
-        // A key on its own, or none: fn ↩.
-        #expect(ShortcutBindings.sendShortcut(after: .f13) == .fnReturn)
-        #expect(ShortcutBindings.sendShortcut(after: nil) == .fnReturn)
-    }
-
-    /// What the user's own Mac saved before Send existed: Right ⌃ to talk, ⌃ with a letter for the rest. Send comes
-    /// as ⌃↩, and nothing else moves.
-    static let savedWithRightControl = #"{"addToDictionary":{"keyCode":2,"modifiers":[{"modifier":"control","side":"either"}]},"#
-        + #""handsFree":{"keyCode":49,"modifiers":[{"modifier":"control","side":"either"}]},"#
-        + #""pasteLast":{"keyCode":9,"modifiers":[{"modifier":"control","side":"either"}]},"#
-        + #""polish":{"keyCode":35,"modifiers":[{"modifier":"control","side":"either"}]},"#
-        + #""pushToTalk":{"modifiers":[{"modifier":"control","side":"right"}]},"#
-        + #""switchModel":{"modifiers":[{"modifier":"control","side":"right"},{"modifier":"command","side":"either"}]},"#
-        + #""translate":{"keyCode":17,"modifiers":[{"modifier":"control","side":"either"}]}}"#
-
-    @Test func savedBindingsGetSendAfterTheirPushToTalk() throws {
-        let decoded = try JSONDecoder().decode(ShortcutBindings.self, from: Data(Self.savedWithRightControl.utf8))
-        #expect(decoded[.send] == Self.controlReturn)
-        let control = { (key: UInt16) in Shortcut(modifiers: [.init(.control)], keyCode: key) }
-        #expect(decoded[.pushToTalk] == Self.rightControl)
-        #expect(decoded[.polish] == control(KeyCode.ansiP) && decoded[.translate] == control(KeyCode.ansiT))
-        #expect(decoded[.addToDictionary] == control(KeyCode.ansiD) && decoded[.pasteLast] == control(KeyCode.ansiV))
-        #expect(decoded[.handsFree] == control(KeyCode.space))
-        #expect(decoded[.switchModel] == Shortcut(modifiers: [.init(.control, .right), .init(.command)]))
-        // Saved again, it's there, and it loads the same.
-        let again = try JSONDecoder().decode(ShortcutBindings.self, from: JSONEncoder().encode(decoded))
-        #expect(again == decoded)
-
-        // fn to talk, saved before Send: fn ↩.
-        let fn = try JSONDecoder().decode(ShortcutBindings.self, from: Data(#"{"pushToTalk":{"modifiers":[{"modifier":"function"}]},"polish":null}"#.utf8))
-        #expect(fn[.send] == .fnReturn && fn[.polish] == nil)
-    }
-
-    /// Its default already the user's for something else: Send starts unbound, and theirs keeps working.
-    @Test func aDefaultTheUserHasForSomethingElseLeavesItUnbound() throws {
-        let handsFreeOnControlReturn = #"{"pushToTalk":{"modifiers":[{"modifier":"control","side":"right"}]},"#
-            + #""handsFree":{"keyCode":36,"modifiers":[{"modifier":"control","side":"either"}]}}"#
-        let taken = try JSONDecoder().decode(ShortcutBindings.self, from: Data(handsFreeOnControlReturn.utf8))
-        #expect(taken[.send] == nil)
-        #expect(taken[.handsFree] == Self.controlReturn)
-
-        // Polish bound to fn ↩ again after it moved to fn P.
-        let polishOnFnReturn = #"{"polish":{"keyCode":36,"modifiers":[{"modifier":"function"}]}}"#
-        let polish = try JSONDecoder().decode(ShortcutBindings.self, from: Data(polishOnFnReturn.utf8))
-        #expect(polish[.send] == nil && polish[.polish] == .fnReturn)
-
-        // Unbound on purpose stays unbound.
-        let unbound = try JSONDecoder().decode(ShortcutBindings.self, from: Data(#"{"send":null}"#.utf8))
-        #expect(unbound[.send] == nil)
-        // A default left alone conflicts with nothing.
-        #expect(ShortcutBindings.defaults.conflict(for: .fnReturn, excluding: .send) == nil)
-    }
-
-    /// The recorder's Reset follows the push to talk that's set; the other actions reset to their own defaults.
-    @Test func resetFollowsThePushToTalk() throws {
-        let decoded = try JSONDecoder().decode(ShortcutBindings.self, from: Data(Self.savedWithRightControl.utf8))
-        #expect(decoded.defaultShortcut(for: .send) == Self.controlReturn)
-        #expect(decoded.defaultShortcut(for: .polish) == .fnP)
-        #expect(ShortcutBindings.defaults.defaultShortcut(for: .send) == .fnReturn)
-    }
-
-    /// ⌃↩ next to the user's ⌃ bindings: nothing to warn about, nothing it clashes with.
-    @Test func controlReturnValidatesNextToTheUsersBindings() throws {
-        let decoded = try JSONDecoder().decode(ShortcutBindings.self, from: Data(Self.savedWithRightControl.utf8))
-        let validation = ShortcutValidator.validate(Self.controlReturn, for: .send, bindings: decoded,
-                                                    system: ShortcutPolicyTests.stock(fnUsage: .doNothing))
-        #expect(validation.errors.isEmpty && validation.warnings.isEmpty)
-        // Taken by hands-free: refused, with Swap offered.
-        var clash = decoded
-        clash[.handsFree] = Self.controlReturn
-        #expect(ShortcutValidator.validate(Self.controlReturn, for: .send, bindings: clash,
-                                           system: ShortcutPolicyTests.stock(fnUsage: .doNothing)).conflict == .handsFree)
-    }
-}
-
-/// The saved settings, through `AppSettings` (a test suite of its own, never the app's).
-@MainActor
-@Suite struct SendSettingsTests {
-    private func withSuite(_ body: (UserDefaults) throws -> Void) throws {
-        let suite = NSTemporaryDirectory() + "transcribe-thing-tests-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer {
-            defaults.removePersistentDomain(forName: suite)
-            try? FileManager.default.removeItem(atPath: suite + ".plist")
-        }
-        try body(defaults)
-    }
-
-    @Test func theUsersBindingsLoadWithSend() throws {
-        try withSuite { defaults in
-            defaults.set(Data(SendShortcutTests.savedWithRightControl.utf8), forKey: "tt.shortcuts")
-            let settings = AppSettings(defaults: defaults)
-            #expect(settings.shortcuts[.send] == SendShortcutTests.controlReturn)
-            #expect(settings.shortcuts[.polish] == Shortcut(modifiers: [.init(.control)], keyCode: KeyCode.ansiP))
-        }
-    }
-
-    /// Saved before Polish moved to fn P (it was on fn ↩ then): Send found fn ↩ taken and started unbound. Polish moving
-    /// frees fn ↩ for it.
-    @Test func polishMovingOffFnReturnLeavesItToSend() throws {
-        try withSuite { defaults in
-            var old = ShortcutBindings.defaults
-            old[.polish] = .fnReturn
-            defaults.set(try CoreModelTests.savedBeforeSend(old), forKey: "tt.shortcuts")
-            let settings = AppSettings(defaults: defaults)
-            #expect(settings.shortcuts[.polish] == .fnP)
-            #expect(settings.shortcuts[.send] == .fnReturn)
-        }
+@Suite struct SendIsNoShortcutTests {
+    /// Send is a button on the pill, not a binding: none in the defaults, none to record, and a key saved for it by an
+    /// older build is ignored, with every other binding kept.
+    @Test func sendIsThePillsButton() throws {
+        #expect(!ShortcutAction.allCases.map(\.rawValue).contains("send"))
+        #expect(PillToggle.send.title == "Send" && PillToggle.send.symbolName == "paperplane.fill")
+        let saved = #"{"send":{"keyCode":36,"modifiers":[{"modifier":"control","side":"either"}]},"#
+            + #""handsFree":{"keyCode":49,"modifiers":[{"modifier":"control","side":"either"}]}}"#
+        let decoded = try JSONDecoder().decode(ShortcutBindings.self, from: Data(saved.utf8))
+        #expect(decoded[.handsFree] == Shortcut(modifiers: [.init(.control)], keyCode: KeyCode.space))
+        #expect(!String(decoding: try JSONEncoder().encode(decoded), as: UTF8.self).contains("send"))
     }
 }
 
@@ -178,28 +56,29 @@ import Testing
         return (rig, cues, keys)
     }
 
-    /// Push-to-talk with Send pressed, then let go after two seconds of speech.
+    /// Push-to-talk with Send clicked on the pill, then let go after two seconds of speech.
     static func dictateSent(_ rig: Rig) {
         Switch.hold(rig)
-        rig.h.controller.handle(.send)
+        rig.h.controller.toggle(.send, on: .recording)
         rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
         rig.now += 2
         rig.h.controller.handle(.pttUp)
     }
 
-    /// The key turns Send on and off, with its flick both ways; the pill shows it; the recording goes
+    /// The pill's Send turns it on and off, with its flick both ways; the pill and its tray show it; the recording goes
     /// on; on Parakeet too (it's no Gemini rewrite).
-    @Test func theSendKeyTurnsItOnAndOff() {
+    @Test func theSendButtonTurnsItOnAndOff() {
         let (rig, cues, _) = Self.make()
         let c = rig.h.controller
         #expect(!c.effectiveChoice.isGemini)
         Switch.hold(rig)
-        c.handle(.send)
-        #expect(c.isSending && rig.h.pill.sends)
+        #expect(rig.h.pill.tray == PillTrayState(dictation: .recording))
+        c.toggle(.send, on: .recording)
+        #expect(c.isSending && rig.h.pill.sends && rig.h.pill.tray?.sends == true)
         #expect(PillView(model: rig.h.pill).visual == .listening(sends: true))
-        c.handle(.send)
+        c.toggle(.send, on: .recording)
         #expect(!c.isSending && !rig.h.pill.sends)
-        c.handle(.send)
+        c.toggle(.send, on: .recording)
         #expect(cues.played.suffix(3) == [.sendOn, .sendOn, .sendOn])
         #expect(!cues.played.contains(.polishOff), "no Polish drop for Send")
         #expect(c.machine.capture.isListeningOrLocked, "it never stops the recording")
@@ -207,42 +86,25 @@ import Testing
         #expect(!c.isSending && !rig.h.pill.sends)
     }
 
-    /// Held down, its autorepeats turn Send on and off again, each with its sound, on any model, as a held fn Tab steps
-    /// through the models. Once the dictation is over they do nothing.
-    @Test func heldDownItFlipsAtEveryRepeat() {
-        let (rig, cues, _) = Self.make()
-        let c = rig.h.controller
-        Switch.hold(rig)
-        c.handle(.send)
-        for _ in 0..<4 { c.handle(.sendRepeat) }
-        #expect(c.isSending && rig.h.pill.sends)
-        #expect(cues.played.suffix(5) == Array(repeating: .sendOn, count: 5))
-        #expect(c.machine.capture.isListeningOrLocked, "it never stops the recording")
-        c.send(.pillCancel)
-        let played = cues.played.count
-        c.handle(.sendRepeat)
-        #expect(!c.isSending && !rig.h.pill.sends && cues.played.count == played, "nothing once it's over")
-    }
-
-    /// Outside a dictation the key does nothing (the router lets it through to the app anyway).
+    /// Outside a dictation the button does nothing (there's no tray to click then anyway).
     @Test func itDoesNothingWhenNotRecording() {
         let (rig, cues, _) = Self.make()
-        rig.h.controller.handle(.send)
+        rig.h.controller.toggle(.send, on: .recording)
         #expect(!rig.h.controller.isSending && !rig.h.pill.sends)
         #expect(!cues.played.contains(.sendOn))
     }
 
-    /// Hands-free: fn ↩'s fn press doesn't finish it, and Send sits with Polish in the pill.
+    /// Hands-free: a click on Send with the talk key down doesn't finish it, and Send sits with Polish in the pill.
     @Test func inHandsFreeItSitsWithPolish() {
         let (rig, _, _) = Self.make()
         let c = rig.h.controller
         rig.h.settings.lineup.main = .gemini
         c.send(.handsFreeToggle)
         c.handle(.pttDown)
-        c.handle(.send)
+        c.toggle(.send, on: .recording)
         c.handle(.pttUp)
-        #expect(c.machine.capture.isListeningOrLocked, "fn ↩'s fn press doesn't finish hands-free")
-        c.handle(.polish)
+        #expect(c.machine.capture.isListeningOrLocked, "the talk key's press with the click doesn't finish hands-free")
+        c.toggle(.polish, on: .recording)
         #expect(c.isSending && c.isPolishing)
         #expect(PillView(model: rig.h.pill).visual == .locked(hours: false, polishes: true, sends: true))
         c.send(.pillCancel)
@@ -272,7 +134,7 @@ import Testing
         #expect(DictationController.sendReturnDelay == .milliseconds(150))
     }
 
-    /// Send is this dictation's: the next one, without the key, pastes and that's all.
+    /// Send is this dictation's: the next one, without the button, pastes and that's all.
     @Test func itDoesntCarryOverToTheNextDictation() async throws {
         let (rig, _, keys) = Self.make()
         Self.dictateSent(rig)
@@ -321,7 +183,7 @@ import Testing
         let c = rig.h.controller
         rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
         Switch.hold(rig)
-        c.handle(.send)
+        c.toggle(.send, on: .recording)
         rig.now += 2
         c.handle(.cancel)
         #expect(!c.isSending)

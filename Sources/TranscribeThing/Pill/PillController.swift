@@ -300,30 +300,37 @@ final class PillController {
         return panel.convertToScreen(host.convert(rect, to: nil))
     }
 
-    /// What of the panel is at `point` (screen coordinates): the pill (with its hover margin), the hands-free chip, a card.
-    private func contentHit(at point: CGPoint) -> (pill: Bool, chip: Bool, toast: Bool) {
-        let overPill = model.isPresented && (regions.pill.flatMap(screenRect)?.contains(point) ?? false)
-        let overChip = model.isPresented && model.visiblePhase == .locked
-            && (regions.chip.flatMap(screenRect)?.contains(point) ?? false)
-        let overToast = regions.toasts.values.contains { screenRect($0)?.contains(point) ?? false }
-        return (overPill, overChip, overToast)
+    /// What of the panel is at `point` (screen coordinates): the pill (with its hover margin), the hands-free chip, a card,
+    /// and the pill whose tray the pointer is on or near: the bottom one, or one stacked above it, over itself or over
+    /// its tray.
+    private func contentHit(at point: CGPoint) -> (pill: Bool, chip: Bool, toast: Bool, tray: PillTrayOwner?) {
+        let contains: (CGRect?) -> Bool = { rect in rect.flatMap(self.screenRect)?.contains(point) ?? false }
+        let overPill = model.isPresented && contains(regions.pill)
+        let overChip = model.isPresented && model.visiblePhase == .locked && contains(regions.chip)
+        let overToast = regions.toasts.values.contains { contains($0) }
+        // A stacked pill or an open tray first: the bottom pill's hover margin reaches up to the nearest stacked pill.
+        let overTray = regions.trays.first { contains($0.value) }?.key
+        let overStacked = model.isPresented
+            ? regions.stackPills.first { contains($0.value) }.map { PillTrayOwner.stacked($0.key) } : nil
+        let owner = overTray ?? overStacked ?? (overPill ? .bottom : nil)
+        return (overPill && overStacked == nil, overChip, overToast, owner)
     }
 
-    /// The pill, its chip or a card is at `point` (screen coordinates), where the panel takes clicks: a click there is
-    /// the app's own, even one that went through to the app below because the panel hadn't caught up with the pointer
-    /// yet (`ClickAwayMonitor`).
+    /// The pill, its chip, a stacked pill, a tray or a card is at `point` (screen coordinates), where the panel takes
+    /// clicks: a click there is the app's own, even one that went through to the app below because the panel hadn't
+    /// caught up with the pointer yet (`ClickAwayMonitor`).
     func takesClick(at point: CGPoint) -> Bool {
         guard let panel, panel.isVisible else { return false }
         let hit = contentHit(at: point)
-        return hit.pill || hit.chip || hit.toast
+        return hit.pill || hit.chip || hit.toast || hit.tray != nil
     }
 
     private func updatePointer() {
         guard let panel, panel.isVisible else { return }
         let point = NSEvent.mouseLocation
 
-        let (overPill, overChip, overToast) = contentHit(at: point)
-        let interactive = overPill || overChip || overToast
+        let (overPill, overChip, overToast, overTray) = contentHit(at: point)
+        let interactive = overPill || overChip || overToast || overTray != nil
         if panel.ignoresMouseEvents == interactive { panel.ignoresMouseEvents = !interactive }
 
         model.setPointerInside(overPill)
@@ -331,6 +338,11 @@ final class PillController {
         model.setPointerOverChip(overChip)
         let control = overPill ? regions.controls.first { screenRect($0.value)?.contains(point) ?? false }?.key : nil
         model.setHoveredControl(model.visiblePhase == .locked ? control : nil)
+        // The tray of the pill under the pointer comes out, and stays a moment after it leaves.
+        let trayOwner = overTray.flatMap { owner in model.trayState(owner) == nil ? nil : owner }
+        model.setPointerOverTray(trayOwner)
+        let trayButton = regions.trayButtons.first { screenRect($0.value)?.contains(point) ?? false }?.key
+        model.setHoveredTrayButton(trayButton.flatMap { model.showsTray($0.owner) ? $0 : nil })
         // Only a pointer brought onto the cards (or scrolling or clicking them) holds them: one resting where they come
         // up (on the text just selected, say) would keep them, and Polish Selection's hold on ↩ and Esc, forever.
         let moved = point != lastPointerLocation

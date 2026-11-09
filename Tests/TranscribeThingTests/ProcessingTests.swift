@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import TranscribeThing
 
-// MARK: - A dictation being processed: no new one, its keys, and Undo of a cancel
+// MARK: - Dictations being processed: new ones beside them, the pill's buttons, and Undo of a cancel
 
 /// Holds a request until opened. A cancelled request stops waiting, as Gemini's does.
 @MainActor final class RequestGate {
@@ -41,7 +41,6 @@ enum ProcessingRig {
         let requests = Requests()
         rig.h.controller.clickAway = clickAway
         rig.h.settings.lineup.main = .gemini
-        rig.h.controller.processingKeySettleDelay = .milliseconds(30)
         rig.h.controller.start()
         rig.h.controller.requestOverride = { _, engine, prompt, named in
             requests.made.append((engine, prompt))
@@ -68,54 +67,124 @@ enum ProcessingRig {
     }
 }
 
-// MARK: No new dictation while one is processed
+// MARK: A new dictation while others are processed
 
 @MainActor
-@Suite(.serialized) struct ProcessingBlocksDictationTests {
+@Suite(.serialized) struct DictationsAlongsideTests {
     typealias R = ProcessingRig
     typealias Switch = SwitchModelControllerTests
 
-    /// From the stop until the text is pasted, the talk key, hands-free and a click on the pill do nothing: no sound,
-    /// no pill change, no recording. Once it's pasted, the talk key records again.
-    @Test func nothingStartsWhileADictationIsProcessed() async throws {
-        let gate = RequestGate()
-        let (rig, cues, requests) = R.make { _, prompt, _ in
-            try await gate.wait()
-            return R.gemini(prompt)
+    /// Requests answered in their own time: request `n` waits on `gates[n]` (from 1) when there is one.
+    static func make(_ gates: [Int: RequestGate]) -> (R.Rig, Switch.Cues, Requests) {
+        R.make { _, prompt, number in
+            if let gate = gates[number] { try await gate.wait() }
+            return prompt == nil ? "words \(number)" : "<message>Polished \(number).</message>"
         }
+    }
+
+    /// While a dictation is processed the talk key starts a new one, with its sound and pill: the earlier one moves up
+    /// onto a pill of its own, the new recording takes the bottom pill and its tray. Hands-free and a click on the
+    /// resting pill would too (the machine takes them from rest with jobs in flight).
+    @Test func theTalkKeyStartsANewDictationWhileOneIsProcessed() async throws {
+        let first = RequestGate()
+        let (rig, cues, requests) = Self.make([1: first])
         let c = rig.h.controller
         R.dictate(rig)
         try await waitUntil { requests.gemini.count == 1 }
-        let played = cues.played
+        #expect(c.machine.isProcessing && rig.h.pill.stack.isEmpty)
+        guard case .processing(let firstKey)? = rig.h.pill.tray?.dictation else {
+            Issue.record("the processing pill's tray acts on its dictation")
+            return
+        }
         let starts = rig.h.recorder.starts
-        #expect(c.machine.isProcessing && rig.h.pill.phase == .processing)
-        #expect(rig.h.hotkeys.isProcessing && rig.h.hotkeys.processingTakesKeys)
-
-        c.handle(.pttDown)
-        c.send(.timer(.arming))
-        rig.now += 1
-        c.handle(.pttUp)
-        c.handle(.handsFreeToggle)
-        rig.h.pill.onClick?()
-        #expect(!c.machine.isRecording && rig.h.recorder.starts == starts)
-        #expect(cues.played == played, "no sound")
-        #expect(rig.h.pill.phase == .processing)
-
-        gate.isOpen = true
-        try await waitUntil { rig.pasted.count == 1 && c.machine.activeJobs == 0 }
-        #expect(!rig.h.hotkeys.isProcessing && !rig.h.hotkeys.processingTakesKeys)
         Switch.hold(rig)
-        #expect(c.machine.isRecording, "pasted: the talk key records again")
+        #expect(c.machine.isRecording && rig.h.recorder.starts == starts + 1 && cues.played.last == .start)
+        #expect(rig.h.pill.phase == .listening && rig.h.pill.tray?.dictation == .recording)
+        #expect(rig.h.pill.stack.map(\.key) == [firstKey], "the earlier one moved up")
+        #expect(rig.h.pill.stack.first?.choice == .gemini)
         c.handle(.cancel)
+        #expect(!c.machine.isRecording && c.machine.activeJobs == 1, "Esc cancels the recording, not the one on its way")
+        first.isOpen = true
+        try await waitUntil { rig.pasted == ["words 1"] && c.machine.activeJobs == 0 }
+
+        // Hands-free and the pill's click start from rest with a dictation on its way too.
+        #expect(DictationMachine.Input.handsFreeToggle.startsDictation && DictationMachine.Input.pillClick.startsDictation)
+        var machine = DictationMachine()
+        _ = machine.handle(.jobStarted, now: 0)
+        #expect(machine.handle(.handsFreeToggle, now: 0).contains(.startCapture) && machine.isRecording)
+        var clicked = DictationMachine()
+        _ = clicked.handle(.jobStarted, now: 0)
+        #expect(clicked.handle(.pillClick, now: 0).contains(.startCapture))
+    }
+
+    /// Each text is pasted when it's there, in the order the dictations were recorded: a later one that's answered first
+    /// waits for the earlier one.
+    @Test func textsArePastedInRecordingOrder() async throws {
+        let first = RequestGate()
+        let (rig, _, requests) = Self.make([1: first])
+        let c = rig.h.controller
+        R.dictate(rig)
+        try await waitUntil { requests.gemini.count == 1 }
+        R.dictate(rig)
+        try await waitUntil { requests.gemini.count == 2 }
+        try await Task.sleep(for: .milliseconds(60))
+        #expect(rig.pasted.isEmpty, "the second waits for the first")
+        #expect(rig.h.pill.stack.count == 1, "the first stands above the second's pill")
+        first.isOpen = true
+        try await waitUntil { rig.pasted == ["words 1", "words 2"] && c.machine.activeJobs == 0 }
+        #expect(rig.h.pill.stack.isEmpty)
+        #expect(rig.h.history.entries.count == 2)
+    }
+
+    /// An earlier dictation's text that comes while a new one records is pasted right away, into the field in front;
+    /// the recording goes on.
+    @Test func anEarlierTextIsPastedWhileTheNextRecords() async throws {
+        let first = RequestGate()
+        let (rig, _, requests) = Self.make([1: first])
+        let c = rig.h.controller
+        R.dictate(rig)
+        try await waitUntil { requests.gemini.count == 1 }
+        Switch.hold(rig)
+        first.isOpen = true
+        try await waitUntil { rig.pasted == ["words 1"] && c.machine.activeJobs == 0 }
+        #expect(c.machine.capture.isListeningOrLocked, "the new recording goes on")
+        #expect(rig.h.pill.stack.isEmpty && rig.h.pill.phase == .listening)
+        #expect(rig.h.toasts.notices.isEmpty, "no card for it")
+        rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
+        rig.now += 2
+        c.handle(.pttUp)
+        try await waitUntil { rig.pasted == ["words 1", "words 2"] && c.machine.activeJobs == 0 }
+    }
+
+    /// Esc cancels the dictation being recorded if there is one; with none, the newest one on its way. Each cancel has
+    /// its own Undo notice, and the older ones are pasted as always.
+    @Test func escCancelsTheRecordingThenTheNewestOnItsWay() async throws {
+        let first = RequestGate(), second = RequestGate()
+        let (rig, cues, requests) = Self.make([1: first, 2: second])
+        let c = rig.h.controller
+        R.dictate(rig)
+        try await waitUntil { requests.gemini.count == 1 }
+        R.dictate(rig)
+        try await waitUntil { requests.gemini.count == 2 }
+        rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
+        Switch.hold(rig)
+        rig.now += 2
+        c.handle(.cancel)
+        #expect(!c.machine.isRecording && c.machine.activeJobs == 2 && cues.played.last == .cancel)
+        #expect(rig.h.pill.stack.count == 1 && rig.h.pill.phase == .processing)
+        c.handle(.cancel)
+        #expect(c.machine.activeJobs == 1)
+        try await waitUntil { second.wasCancelled }
+        #expect(rig.h.pill.stack.isEmpty, "the first is on the bottom pill now")
+        #expect(rig.notice("dictation.canceled") != nil)
+        first.isOpen = true
+        try await waitUntil { rig.pasted == ["words 1"] && c.machine.activeJobs == 0 }
     }
 
     /// Paste last isn't held off: it pastes the last transcript while the next one is processed.
     @Test func pasteLastStillWorks() async throws {
         let gate = RequestGate()
-        let (rig, _, requests) = R.make { _, _, number in
-            if number == 2 { try await gate.wait() }
-            return number == 1 ? "first words" : "second words"
-        }
+        let (rig, _, requests) = Self.make([2: gate])
         let c = rig.h.controller
         var pastedLast: [String] = []
         c.pasteLastOverride = { pastedLast.append($0); return .pasted }
@@ -125,33 +194,33 @@ enum ProcessingRig {
         try await waitUntil { requests.gemini.count == 2 }
         c.handle(.pasteLast)
         try await waitUntil { pastedLast.count == 1 }
-        #expect(pastedLast.first?.contains("first words") == true)
+        #expect(pastedLast.first?.contains("words 1") == true)
         gate.isOpen = true
         try await waitUntil { rig.pasted.count == 2 && c.machine.activeJobs == 0 }
     }
 
-    /// Undo of an older cancel while a dictation is processed records nothing: the notice comes back saying to wait.
-    @Test func undoWaitsForTheTextOnItsWay() async throws {
+    /// Undo of an older cancel while a dictation is processed records on at once, hands-free; the one on its way is
+    /// pasted meanwhile.
+    @Test func undoRecordsOnWhileOneIsOnItsWay() async throws {
         let gate = RequestGate()
-        let (rig, _, requests) = R.make { _, prompt, _ in
-            try await gate.wait()
-            return R.gemini(prompt)
-        }
+        let (rig, _, requests) = Self.make([1: gate])
         let c = rig.h.controller
-        rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
+        let canceled = DictationResumeTests.speech(seconds: 2)
+        rig.h.recorder.next = canceled
         rig.holdThenEsc(2)
         #expect(rig.notice("dictation.canceled") != nil)
-        // A new dictation, hands-free, stopped: it's processed.
         rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
         c.send(.handsFreeToggle)
         rig.now += 2
         c.send(.pillStop)
         try await waitUntil { requests.gemini.count == 1 }
         try rig.click(.undoCancel, in: "dictation.canceled")
-        #expect(!c.machine.isRecording)
-        #expect(rig.notice("dictation.canceled")?.body == "Wait for the text on its way to be pasted, then Undo.")
+        #expect(c.machine.isRecording && c.machine.mode == .handsFree)
+        #expect(rig.h.recorder.lastPrefix?.id == canceled.id)
         gate.isOpen = true
-        try await waitUntil { rig.pasted.count == 1 && c.machine.activeJobs == 0 }
+        try await waitUntil { rig.pasted.count == 1 }
+        #expect(c.machine.isRecording)
+        c.handle(.cancel)
     }
 
     /// A failed dictation's Retry while another records would bring text with nowhere to go: the notice stays,
@@ -174,12 +243,77 @@ enum ProcessingRig {
         #expect(again.body == "Finish this dictation first, then Retry." && again.sound == nil)
         c.handle(.cancel)
     }
+
+    /// Each pill keeps its own dictation's state: Polish on the older one shows on its stacked pill, Send on the newer
+    /// one on the bottom pill, each on its own tray; the dictation log says how many were on their way.
+    @Test func eachPillKeepsItsOwnState() async throws {
+        let first = RequestGate(), second = RequestGate()
+        let (rig, _, requests) = Self.make([1: first, 2: second, 3: first])
+        let c = rig.h.controller
+        R.dictate(rig)
+        try await waitUntil { requests.gemini.count == 1 }
+        rig.h.pill.clickTray(.polish)
+        try await waitUntil { requests.gemini.count == 2 }
+        rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
+        Switch.hold(rig)
+        c.toggle(.send, on: .recording)
+        rig.now += 2
+        c.handle(.pttUp)
+        try await waitUntil { requests.gemini.count == 3 }
+        let stacked = try #require(rig.h.pill.stack.first)
+        #expect(rig.h.pill.stack.count == 1)
+        #expect(stacked.tray.polishes && !stacked.tray.sends)
+        #expect(rig.h.pill.stackModels[stacked.key]?.polishes == true)
+        #expect(rig.h.pill.sends && !rig.h.pill.polishes && rig.h.pill.tray?.sends == true)
+        first.isOpen = true
+        second.isOpen = true
+        try await waitUntil { rig.pasted.count == 2 && c.machine.activeJobs == 0 }
+        #expect(rig.pasted.first?.contains("Polished") == true, "the older one first, polished")
+    }
+
+    /// A click away holds every dictation on its way, each on its own dashed pill; a click on one dashed pill takes back
+    /// only that one, which is pasted, and the other's text comes up on its card.
+    @Test func aClickAwayIsTakenBackPerDictation() async throws {
+        let first = RequestGate(), second = RequestGate()
+        let (rig, _, requests) = Self.make([1: first, 2: second])
+        let c = rig.h.controller
+        R.dictate(rig)
+        try await waitUntil { requests.gemini.count == 1 }
+        R.dictate(rig)
+        try await waitUntil { requests.gemini.count == 2 }
+        c.clickedAway()
+        #expect(rig.h.pill.holdsPaste && rig.h.pill.stack.first?.holdsPaste == true)
+        let older = try #require(rig.h.pill.stack.first?.key)
+        rig.h.pill.onStackClick?(older)
+        #expect(rig.h.pill.stack.first?.holdsPaste == false && rig.h.pill.holdsPaste, "only the clicked one")
+        first.isOpen = true
+        second.isOpen = true
+        try await waitUntil { c.machine.activeJobs == 0 && rig.pasted == ["words 1"] }
+        try await waitUntil { rig.h.toasts.notices.contains { $0.transcript == "words 2" } }
+    }
+
+    /// Past three, the stack shows the newest three and folds the rest into "+N"; every one is still on its way.
+    @Test func manyDictationsStack() async throws {
+        let gates = Dictionary(uniqueKeysWithValues: (1...5).map { ($0, RequestGate()) })
+        let (rig, _, requests) = Self.make(gates)
+        let c = rig.h.controller
+        for n in 1...5 {
+            R.dictate(rig)
+            try await waitUntil { requests.gemini.count == n }
+        }
+        #expect(rig.h.pill.stack.count == 4 && c.machine.activeJobs == 5)
+        #expect(PillStackMetrics.height(for: 4) == 3 * (PillStackMetrics.pillHeight + PillStackMetrics.gap)
+                + PillStackMetrics.moreHeight + PillStackMetrics.gap)
+        for gate in gates.values { gate.isOpen = true }
+        try await waitUntil { rig.pasted.count == 5 && c.machine.activeJobs == 0 }
+        #expect(rig.pasted == (1...5).map { "words \($0)" })
+    }
 }
 
-// MARK: Polish, Translate and Send while a dictation is processed
+// MARK: Polish, Translate and Send on the pill while a dictation is processed
 
 @MainActor
-@Suite(.serialized) struct ProcessingKeysTests {
+@Suite(.serialized) struct ProcessingTrayTests {
     typealias R = ProcessingRig
 
     /// A Gemini dictation whose first request waits on `first`; later requests answer at once.
@@ -190,21 +324,17 @@ enum ProcessingRig {
         }
     }
 
-    /// fn P (fn's press starts nothing now): the wand and Polish's sound, as while recording; once the keys are let
-    /// go the request in flight stops and the recording goes again with Polish's prompt. Polish's message is pasted.
-    @Test func polishSendsItAgainPolished() async throws {
+    /// Polish clicked on the processing pill: the wand and Polish's sound, and the recording goes again with Polish's
+    /// prompt at once, the request in flight stopped. Polish's message is pasted.
+    @Test func polishSendsItAgainPolishedAtOnce() async throws {
         let first = RequestGate()
         let (rig, cues, requests) = Self.make(first: first)
         let c = rig.h.controller
         R.dictate(rig)
         try await waitUntil { requests.gemini.count == 1 }
-        c.handle(.pttDown)
-        c.handle(.polish)
-        #expect(rig.h.pill.polishes && cues.played.last == .polishOn)
-        c.handle(.shortcutKeyUp)
-        try await Task.sleep(for: .milliseconds(120))
-        #expect(requests.gemini.count == 1, "fn still held: nothing goes yet")
-        c.handle(.pttUp)
+        #expect(rig.h.pill.tray?.rewrites == true && rig.h.pill.tray?.canSend == true)
+        rig.h.pill.clickTray(.polish)
+        #expect(rig.h.pill.polishes && cues.played.last == .polishOn && rig.h.pill.tray?.polishes == true)
         try await waitUntil { requests.gemini.count == 2 }
         #expect(requests.gemini[1] == Polish.prompt)
         try await waitUntil { rig.pasted.count == 1 && c.machine.activeJobs == 0 }
@@ -214,81 +344,22 @@ enum ProcessingRig {
         #expect(!c.machine.isRecording)
     }
 
-    /// Held down, the key flips Polish at every autorepeat with its sound each time, and nothing goes until it's let
-    /// go: then once, with where it landed.
-    @Test func aHeldKeyGoesOnceWhenLetGo() async throws {
+    /// Every click is one request: on, then off again, is two more, and the last asks for the plain transcript.
+    @Test func everyClickIsOneRequest() async throws {
         let first = RequestGate()
         let (rig, cues, requests) = Self.make(first: first)
         let c = rig.h.controller
         R.dictate(rig)
         try await waitUntil { requests.gemini.count == 1 }
         let before = cues.played.count
-        c.handle(.polish)
-        for _ in 0..<4 { c.handle(.polishRepeat) }
-        #expect(Array(cues.played.dropFirst(before)) == [.polishOn, .polishOff, .polishOn, .polishOff, .polishOn])
-        try await Task.sleep(for: .milliseconds(150))
-        #expect(requests.gemini.count == 1, "still held")
-        c.handle(.shortcutKeyUp)
-        try await waitUntil { requests.gemini.count == 2 }
-        #expect(requests.gemini[1] == Polish.prompt)
-        try await waitUntil { c.machine.activeJobs == 0 }
-        #expect(requests.gemini.count == 2, "one request for the whole hold")
-    }
-
-    /// Flipped back to what's already asked for, the request in flight goes on, and its answer is pasted.
-    @Test func settlingBackKeepsTheRequest() async throws {
-        let first = RequestGate()
-        let (rig, _, requests) = Self.make(first: first)
-        let c = rig.h.controller
-        R.dictate(rig)
-        try await waitUntil { requests.gemini.count == 1 }
-        c.handle(.polish)
-        c.handle(.polishRepeat)
-        c.handle(.shortcutKeyUp)
-        try await Task.sleep(for: .milliseconds(120))
-        #expect(requests.gemini.count == 1 && !first.wasCancelled)
-        first.isOpen = true
+        rig.h.pill.clickTray(.polish)
+        rig.h.pill.clickTray(.polish)
+        #expect(Array(cues.played.dropFirst(before)) == [.polishOn, .polishOff])
+        try await waitUntil { requests.gemini.count == 3 }
+        #expect(requests.gemini[1] == Polish.prompt && requests.gemini[2] == nil)
         try await waitUntil { rig.pasted.count == 1 && c.machine.activeJobs == 0 }
         #expect(rig.pasted.first?.contains("plain words") == true)
-        #expect(rig.h.history.entries.first?.currentKind == .transcription(.geminiFlash))
-    }
-
-    /// Gemini's answer that comes while the keys are still being pressed isn't pasted until they settle: back where
-    /// it was, it's pasted then.
-    @Test func anAnswerWaitsForTheKeys() async throws {
-        let first = RequestGate()
-        let (rig, _, requests) = Self.make(first: first)
-        let c = rig.h.controller
-        R.dictate(rig)
-        try await waitUntil { requests.gemini.count == 1 }
-        c.handle(.pttDown)
-        c.handle(.polish)
-        first.isOpen = true
-        try await Task.sleep(for: .milliseconds(150))
-        #expect(rig.pasted.isEmpty, "not while the keys are down")
-        c.handle(.polishRepeat)
-        c.handle(.shortcutKeyUp)
-        c.handle(.pttUp)
-        try await waitUntil { rig.pasted.count == 1 && c.machine.activeJobs == 0 }
-        #expect(requests.gemini.count == 1)
-        #expect(rig.pasted.first?.contains("plain words") == true)
-    }
-
-    /// A release that never comes doesn't hold the dictation forever: past the wait limit it goes.
-    @Test func aLostReleaseStillGoes() async throws {
-        let first = RequestGate()
-        let (rig, _, requests) = Self.make(first: first)
-        let c = rig.h.controller
-        c.heldKeyWaitLimit = 2
-        R.dictate(rig)
-        try await waitUntil { requests.gemini.count == 1 }
-        c.handle(.polish)
-        try await Task.sleep(for: .milliseconds(120))
-        #expect(requests.gemini.count == 1)
-        rig.now += 3
-        try await waitUntil { requests.gemini.count == 2 }
-        #expect(requests.gemini[1] == Polish.prompt)
-        try await waitUntil { c.machine.activeJobs == 0 }
+        #expect(requests.gemini.count == 3)
     }
 
     /// Polish and Translate combine as while recording: the polished message, translated.
@@ -298,22 +369,56 @@ enum ProcessingRig {
         let c = rig.h.controller
         R.dictate(rig)
         try await waitUntil { requests.gemini.count == 1 }
-        c.handle(.pttDown)
-        c.handle(.polish)
-        c.handle(.shortcutKeyUp)
-        c.handle(.translate)
+        rig.h.pill.clickTray(.polish)
+        rig.h.pill.clickTray(.translate)
         #expect(rig.h.pill.polishes && rig.h.pill.translates && cues.played.last == .polishOn)
-        c.handle(.shortcutKeyUp)
-        c.handle(.pttUp)
-        try await waitUntil { requests.gemini.count == 2 }
-        #expect(requests.gemini[1] == Translate.polishedPrompt(rig.h.settings.translationPair))
+        try await waitUntil { requests.gemini.count == 3 }
+        #expect(requests.gemini[2] == Translate.polishedPrompt(rig.h.settings.translationPair))
         try await waitUntil { c.machine.activeJobs == 0 }
-        #expect(requests.gemini.count == 2)
         #expect(rig.h.history.entries.first?.currentKind == .translation(polished: true, by: .geminiFlash))
     }
 
-    /// Send while processed: the plane and its flick, no request again, and Return once the text is pasted. Held down,
-    /// it flips again.
+    /// An answer waiting behind an older dictation is asked for again too.
+    @Test func anAnswerWaitingItsTurnIsAskedAgain() async throws {
+        let first = RequestGate()
+        let (rig, _, requests) = Self.make(first: first)
+        let c = rig.h.controller
+        R.dictate(rig)
+        try await waitUntil { requests.gemini.count == 1 }
+        R.dictate(rig)
+        try await waitUntil { requests.gemini.count == 2 }
+        try await Task.sleep(for: .milliseconds(40))
+        rig.h.pill.clickTray(.polish)
+        try await waitUntil { requests.gemini.count == 3 }
+        #expect(requests.gemini[2] == Polish.prompt)
+        first.isOpen = true
+        try await waitUntil { rig.pasted.count == 2 && c.machine.activeJobs == 0 }
+        #expect(rig.pasted[0].contains("plain words") && rig.pasted[1].contains("Polished words"))
+    }
+
+    /// A stacked pill's tray acts on its own dictation: Polish there sends that one again, and the bottom pill's stays.
+    @Test func aStackedPillsTrayActsOnItsDictation() async throws {
+        let first = RequestGate()
+        let (rig, _, requests) = R.make { _, prompt, number in
+            if number <= 3 { try await first.wait() }
+            return R.gemini(prompt)
+        }
+        let c = rig.h.controller
+        R.dictate(rig)
+        try await waitUntil { requests.gemini.count == 1 }
+        R.dictate(rig)
+        try await waitUntil { requests.gemini.count == 2 }
+        let stacked = try #require(rig.h.pill.stack.first)
+        rig.h.pill.onToggle?(.polish, stacked.tray.dictation)
+        try await waitUntil { requests.gemini.count == 3 }
+        #expect(rig.h.pill.stack.first?.tray.polishes == true, "\(rig.h.pill.stack)")
+        #expect(!rig.h.pill.polishes)
+        first.isOpen = true
+        try await waitUntil { rig.pasted.count == 2 && c.machine.activeJobs == 0 }
+        #expect(rig.pasted[0].contains("Polished words") && rig.pasted[1].contains("plain words"))
+    }
+
+    /// Send while processed: the plane and its flick, no request again, and Return once the text is pasted.
     @Test func sendPressesReturnAfterThePaste() async throws {
         let first = RequestGate()
         let (rig, cues, requests) = Self.make(first: first)
@@ -323,14 +428,11 @@ enum ProcessingRig {
         c.pressReturnOverride = { returns += 1; return .pressed }
         R.dictate(rig)
         try await waitUntil { requests.gemini.count == 1 }
-        c.handle(.pttDown)
-        c.handle(.send)
+        rig.h.pill.clickTray(.send)
         #expect(rig.h.pill.sends && cues.played.last == .sendOn)
-        c.handle(.sendRepeat)
+        rig.h.pill.clickTray(.send)
         #expect(!rig.h.pill.sends && cues.played.last == .sendOn)
-        c.handle(.sendRepeat)
-        c.handle(.shortcutKeyUp)
-        c.handle(.pttUp)
+        rig.h.pill.clickTray(.send)
         try await Task.sleep(for: .milliseconds(80))
         #expect(requests.gemini.count == 1 && !first.wasCancelled, "Send asks Gemini for nothing new")
         first.isOpen = true
@@ -338,8 +440,8 @@ enum ProcessingRig {
         #expect(rig.pasted.count == 1)
     }
 
-    /// On Parakeet the text is there at once: the keys do nothing while it's processed.
-    @Test func onParakeetTheKeysDoNothing() async throws {
+    /// On Parakeet the text is there at once: Polish and Translate are dimmed and do nothing; Send still works.
+    @Test func onParakeetOnlySendWorks() async throws {
         let gate = RequestGate()
         let (rig, cues, requests) = R.make { _, _, _ in
             try await gate.wait()
@@ -347,16 +449,20 @@ enum ProcessingRig {
         }
         rig.h.settings.lineup.main = .parakeet
         let c = rig.h.controller
+        var returns = 0
+        c.returnDelay = .milliseconds(5)
+        c.pressReturnOverride = { returns += 1; return .pressed }
         R.dictate(rig)
         try await waitUntil { requests.parakeet == 1 }
-        #expect(rig.h.hotkeys.isProcessing && !rig.h.hotkeys.processingTakesKeys)
+        #expect(rig.h.pill.tray?.rewrites == false && rig.h.pill.tray?.canSend == true)
         let played = cues.played
-        c.handle(.polish)
-        c.handle(.send)
-        c.handle(.translate)
-        #expect(cues.played == played && !rig.h.pill.polishes && !rig.h.pill.sends)
+        rig.h.pill.clickTray(.polish)
+        rig.h.pill.clickTray(.translate)
+        #expect(cues.played == played && !rig.h.pill.polishes && !rig.h.pill.translates)
+        rig.h.pill.clickTray(.send)
+        #expect(rig.h.pill.sends)
         gate.isOpen = true
-        try await waitUntil { rig.pasted.count == 1 && c.machine.activeJobs == 0 }
+        try await waitUntil { rig.pasted.count == 1 && returns == 1 && c.machine.activeJobs == 0 }
         #expect(requests.made.count == 1)
     }
 
@@ -373,8 +479,7 @@ enum ProcessingRig {
         R.dictate(rig)
         try await waitUntil { requests.gemini.count == 1 }
         try await Task.sleep(for: .milliseconds(30))
-        c.handle(.polish)
-        c.handle(.shortcutKeyUp)
+        rig.h.pill.clickTray(.polish)
         try await waitUntil { requests.gemini.count == 2 }
         let kind = TranscriptVersionKind.polish(by: .geminiFlash)
         try await waitUntil {
@@ -383,6 +488,14 @@ enum ProcessingRig {
         }
         let cost = try #require(rig.h.history.entries.first?.version(kind)?.metadata.costUSD)
         #expect(abs(cost - 0.00007) < 1e-12, "the stopped request and the one that answered")
+    }
+}
+
+extension PillModel {
+    /// A click on a button of the bottom pill's tray, as the tray makes it.
+    @MainActor func clickTray(_ toggle: PillToggle) {
+        guard let tray else { return }
+        onToggle?(toggle, tray.dictation)
     }
 }
 

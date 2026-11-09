@@ -13,11 +13,11 @@ import Testing
         let c = rig.h.controller
         rig.h.settings.lineup.main = .gemini
         Switch.hold(rig)
-        c.handle(.polish)
+        c.toggle(.polish, on: .recording)
         #expect(c.isPolishing && rig.h.pill.polishes)
-        c.handle(.polish)
+        c.toggle(.polish, on: .recording)
         #expect(!c.isPolishing && !rig.h.pill.polishes)
-        c.handle(.polish)
+        c.toggle(.polish, on: .recording)
         #expect(cues.played.suffix(3) == [.polishOn, .polishOff, .polishOn])
         #expect(c.machine.capture.isListeningOrLocked, "it never stops the recording")
         c.send(.pillCancel)
@@ -31,7 +31,7 @@ import Testing
         let c = rig.h.controller
         rig.h.settings.lineup.main = .gemini
         Switch.hold(rig)
-        for _ in 0..<5 { c.handle(.polish) }
+        for _ in 0..<5 { c.toggle(.polish, on: .recording) }
         #expect(c.isPolishing)
         #expect(cues.played.suffix(5) == [.polishOn, .polishOff, .polishOn, .polishOff, .polishOn])
         c.send(.pillCancel)
@@ -42,11 +42,11 @@ import Testing
         let (rig, cues) = Switch.make()
         let c = rig.h.controller
         Switch.hold(rig)
-        c.handle(.polish)
+        c.toggle(.polish, on: .recording)
         #expect(!c.isPolishing && !rig.h.pill.polishes)
         #expect(!cues.played.contains(.polishOn))
         c.selectModelForCurrentDictation(.gemini)
-        c.handle(.polish)
+        c.toggle(.polish, on: .recording)
         #expect(c.isPolishing)
         c.selectModelForCurrentDictation(.parakeet)
         #expect(!c.isPolishing, "off once it's not Gemini")
@@ -65,7 +65,7 @@ import Testing
             return "- thinking it over\n<message>Polished.</message>"
         }
         Switch.hold(rig)
-        c.handle(.polish)
+        c.toggle(.polish, on: .recording)
         try await Switch.release(rig)
         #expect(engines == [.geminiFlash])
         #expect(rig.pasted == ["Polished."])
@@ -84,7 +84,7 @@ import Testing
             return "late"
         }
         Switch.hold(rig)
-        c.handle(.polish)
+        c.toggle(.polish, on: .recording)
         rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
         rig.now += 2
         c.handle(.pttUp)
@@ -111,7 +111,7 @@ import Testing
             return "words"
         }
         Switch.hold(rig)
-        c.handle(.polish)
+        c.toggle(.polish, on: .recording)
         rig.h.settings.lineup.main = .parakeet
         try await Switch.release(rig)
         #expect(engines == [.parakeet])
@@ -146,7 +146,7 @@ import Testing
         rig.h.settings.lineup.main = .gemini
         c.send(.handsFreeToggle)
         c.handle(.pttDown)
-        c.handle(.polish)
+        c.toggle(.polish, on: .recording)
         c.handle(.pttUp)
         #expect(c.machine.capture.isListeningOrLocked)
         #expect(c.isPolishing)
@@ -213,7 +213,7 @@ import Testing
     static func polish(_ rig: SwitchModelControllerTests.Rig) async throws {
         Switch.hold(rig)
         try await waitUntil { rig.h.controller.machine.isRecording }
-        rig.h.controller.handle(.polish)
+        rig.h.controller.toggle(.polish, on: .recording)
         try await waitUntil { !rig.h.controller.machine.isRecording }
     }
 
@@ -223,7 +223,7 @@ import Testing
         rig.h.settings.lineup.main = .gemini
         Switch.hold(rig)
         try await waitUntil { rig.h.controller.machine.isRecording }
-        rig.h.controller.handle(.polish)
+        rig.h.controller.toggle(.polish, on: .recording)
         #expect(rig.h.controller.isPolishing && asked.calls.isEmpty)
         rig.h.controller.send(.pillCancel)
     }
@@ -329,7 +329,7 @@ import Testing
         let (rig, cues, asked) = Self.make(selection: nil)
         Self.geminiOff(rig)
         Switch.hold(rig)
-        rig.h.controller.handle(.polish)
+        rig.h.controller.toggle(.polish, on: .recording)
         try await waitUntil { rig.h.pill.keyHint != nil }
         #expect(asked.calls.isEmpty && !cues.played.contains(.polishOn))
         #expect(rig.h.pill.keyHint == "Polish works on Gemini, or on selected text")
@@ -379,7 +379,7 @@ import Testing
         let lookup = Lookup()
         rig.h.controller.selectionOverride = { await lookup.wait(); return "short draft" }
         rig.h.controller.handle(.pttDown)
-        rig.h.controller.handle(.polish)
+        rig.h.controller.toggle(.polish, on: .recording)
         try await Task.sleep(for: .milliseconds(40))
         #expect(asked.calls.isEmpty)
         lookup.isOpen = true
@@ -394,8 +394,8 @@ import Testing
         let lookup = Lookup()
         rig.h.controller.selectionOverride = { await lookup.wait(); return "short draft" }
         rig.h.controller.handle(.pttDown)
-        rig.h.controller.handle(.polish)
-        rig.h.controller.handle(.polish)
+        rig.h.controller.toggle(.polish, on: .recording)
+        rig.h.controller.toggle(.polish, on: .recording)
         rig.now += 0.1
         rig.h.controller.handle(.pttUp)
         #expect(rig.h.controller.machine.isRecording, "the release waits for the key")
@@ -417,7 +417,7 @@ import Testing
         Switch.hold(rig)
         try await Task.sleep(for: .milliseconds(40))
         current = "selected later"
-        rig.h.controller.handle(.polish)
+        rig.h.controller.toggle(.polish, on: .recording)
         try await waitUntil { asked.calls.count == 1 }
         #expect(asked.calls.allSatisfy { $0.0 == "selected later" })
     }
@@ -428,22 +428,21 @@ import Testing
         rig.h.controller.selectionMissingOverride = .noFocusedElement
         rig.h.controller.selectionCopyOverride = { .text("copied draft") }
         Switch.hold(rig)
-        rig.h.controller.handle(.polish)
+        rig.h.controller.toggle(.polish, on: .recording)
         try await waitUntil { asked.calls.count == 1 }
         #expect(asked.calls.allSatisfy { $0.0 == "copied draft" })
     }
 
-    /// Held down off Gemini (and Gemini switched off), fn P's autorepeats do nothing more: one look at the selection,
-    /// one word over the pill.
-    @Test func holdingThePolishKeyOffGeminiLooksOnce() async throws {
+    /// Off Gemini (and Gemini switched off), Polish clicked once looks at the selection once and says one word over
+    /// the pill.
+    @Test func polishOffGeminiLooksOnce() async throws {
         let (rig, _, asked) = Self.make(selection: nil)
         Self.geminiOff(rig)
         var looks = 0
         rig.h.controller.selectionOverride = { looks += 1; return nil }
         Switch.hold(rig)
-        rig.h.controller.handle(.polish)
+        rig.h.controller.toggle(.polish, on: .recording)
         try await waitUntil { rig.h.pill.keyHint != nil }
-        for _ in 0..<5 { rig.h.controller.handle(.polishRepeat) }
         try await Task.sleep(for: .milliseconds(40))
         #expect(looks == 1 && asked.calls.isEmpty && rig.h.controller.machine.isRecording)
         rig.h.controller.send(.pillCancel)
@@ -455,7 +454,7 @@ import Testing
         let (rig, _, asked) = Self.make(selection: nil)
         Switch.hold(rig)
         #expect(rig.h.controller.effectiveChoice == .parakeet)
-        rig.h.controller.handle(.polish)
+        rig.h.controller.toggle(.polish, on: .recording)
         try await waitUntil { rig.h.controller.isPolishing }
         #expect(rig.h.controller.effectiveChoice == .gemini)
         #expect(asked.calls.isEmpty && rig.h.pill.keyHint == nil)
@@ -468,7 +467,7 @@ import Testing
         Self.geminiOff(rig)
         rig.h.pill.isPresented = false
         Switch.hold(rig)
-        rig.h.controller.handle(.polish)
+        rig.h.controller.toggle(.polish, on: .recording)
         try await waitUntil { rig.notice("key.hint") != nil }
         #expect(rig.notice("key.hint")?.title == "Polish works on Gemini, or on selected text")
         rig.h.controller.send(.pillCancel)
@@ -480,7 +479,7 @@ import Testing
         rig.h.recorder.next = DictationResumeTests.speech(seconds: 25)
         rig.h.controller.send(.handsFreeToggle)
         rig.now += 25
-        rig.h.controller.handle(.polish)
+        rig.h.controller.toggle(.polish, on: .recording)
         try await waitUntil { asked.calls.count == 1 }
         #expect(rig.h.history.entries.contains { $0.status == .cancelled })
         #expect(rig.transcribed.isEmpty)
@@ -494,15 +493,15 @@ import Testing
         let lookup = Lookup()
         rig.h.controller.selectionOverride = { await lookup.wait(); return nil }
         rig.h.controller.handle(.pttDown)
-        rig.h.controller.handle(.polish)
+        rig.h.controller.toggle(.polish, on: .recording)
         lookup.isOpen = true
         try await waitUntil { rig.h.pill.keyHint != nil }
         #expect(asked.calls.isEmpty && rig.h.controller.machine.isRecording)
         rig.h.controller.send(.pillCancel)
     }
 
-    /// Without an OpenRouter key Polish Selection can't happen: the key says Polish is Gemini's, and nothing is looked
-    /// up.
+    /// Without an OpenRouter key Polish Selection can't happen: the button says Polish is Gemini's, and nothing is
+    /// looked up.
     @Test func withoutAKeyThereIsNoPolishSelection() async throws {
         let (rig, _) = Switch.make(key: .missing)
         rig.h.controller.start()
@@ -512,7 +511,7 @@ import Testing
         Switch.hold(rig)
         try await Task.sleep(for: .milliseconds(60))
         #expect(!looked)
-        rig.h.controller.handle(.polish)
+        rig.h.controller.toggle(.polish, on: .recording)
         #expect(rig.h.pill.keyHint == "Polish works on Gemini only")
         rig.h.controller.send(.pillCancel)
     }
@@ -587,7 +586,7 @@ import Testing
         try await waitUntil { rig.h.controller.machine.isRecording }
         rig.h.controller.handle(.cycleEngine)
         #expect(!rig.h.controller.effectiveChoice.isGemini, "on Parakeet now: the key is Polish Selection's")
-        rig.h.controller.handle(.polish)
+        rig.h.controller.toggle(.polish, on: .recording)
         try await waitUntil { !asked.calls.isEmpty }
         #expect(rig.h.pill.sessionModel == .gemini, "the pill wears Gemini's color while it writes")
         asked.release(.geminiFlash)
