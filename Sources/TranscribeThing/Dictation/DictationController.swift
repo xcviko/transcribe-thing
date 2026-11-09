@@ -410,6 +410,8 @@ final class DictationController {
     /// under way is stopped, and its cost still counts): one click, one request. Send says whether Return follows its
     /// paste. On Parakeet Polish and Translate do nothing (the pill shows them off and dimmed).
     func toggle(_ toggle: PillToggle, on dictation: PillDictation) {
+        DiagnosticLog.shared.event(.dictation, "pill.button", [
+            "button": toggle.rawValue, "on": { if case .recording = dictation { "recording" } else { "processing" } }()])
         switch dictation {
         case .recording:
             guard machine.isRecording else { return }

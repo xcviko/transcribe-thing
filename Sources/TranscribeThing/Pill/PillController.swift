@@ -57,6 +57,7 @@ final class PillController {
             self?.updatePointer()
         }
         host.onRightMouseDown = { [weak self] event in self?.showContextMenu(for: event) ?? false }
+        host.onLeftMouseDown = { [weak self] _ in self?.clickTrayButton(at: NSEvent.mouseLocation) ?? false }
         model.onEngineChipClick = { [weak self] in self?.showEngineMenu() }
         regions.onChange = { [weak self] in self?.updatePointer() }
         // Key-down orders the panel front at once: waiting for the observation's next turn would put the mic
@@ -291,6 +292,15 @@ final class PillController {
             NSEvent.removeMonitor(monitor)
             globalMonitor = nil
         }
+    }
+
+    /// A click on a tray button, by the same regions the hover uses: the toggle goes straight to the model, whatever
+    /// SwiftUI's gestures around the tray would have made of it. False when the click isn't on an open tray's button.
+    func clickTrayButton(at point: CGPoint) -> Bool {
+        guard let button = regions.trayButtons.first(where: { screenRect($0.value)?.contains(point) ?? false })?.key,
+              model.showsTray(button.owner), let state = model.trayState(button.owner) else { return false }
+        if state.isEnabled(button.toggle) { model.onToggle?(button.toggle, state.dictation) }
+        return true
     }
 
     private func screenRect(_ canvasRect: CGRect) -> CGRect? {

@@ -44,6 +44,8 @@ final class PillHostingView: NSHostingView<PillCanvasView> {
     var onPointerInteraction: (() -> Void)?
     /// Returns true when it handled the click (showed the menu).
     var onRightMouseDown: ((NSEvent) -> Bool)?
+    /// Returns true when it handled the click itself (a tray button), so SwiftUI doesn't see it.
+    var onLeftMouseDown: ((NSEvent) -> Bool)?
 
     required init(rootView: PillCanvasView) {
         super.init(rootView: rootView)
@@ -82,6 +84,7 @@ final class PillHostingView: NSHostingView<PillCanvasView> {
 
     override func mouseDown(with event: NSEvent) {
         onPointerInteraction?()
+        if onLeftMouseDown?(event) == true { return }
         super.mouseDown(with: event)
     }
 
