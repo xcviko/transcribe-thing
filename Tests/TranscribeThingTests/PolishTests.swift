@@ -89,7 +89,7 @@ import Testing
         rig.now += 2
         c.handle(.pttUp)
         try await waitUntil { rig.transcribed.count == 1 }
-        #expect(PillView(model: rig.h.pill).visual.polish == .dictation, "its audio is in: the wave, with the wand")
+        #expect(PillView(model: rig.h.pill).visual.polish == nil, "the wand is on the tray, not in the pill")
         c.handle(.cancel)
         #expect(!c.isPolishing)
         rig.now += 1

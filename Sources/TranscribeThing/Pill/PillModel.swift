@@ -410,13 +410,13 @@ final class PillModel {
         trayTooltip = button
     }
 
-    /// Whether `owner`'s tray is out now: open, and its pill shows a dictation that has one.
+    /// Whether `owner`'s tray is out now: its pill shows a dictation that has one, and the pointer opened it or one of
+    /// its buttons is on (the pill shows no glyph of its own for them, so the tray stays to show it).
     func showsTray(_ owner: PillTrayOwner) -> Bool {
-        guard openTray == owner, isPresented else { return false }
-        switch owner {
-        case .bottom: return tray != nil && (visiblePhase.isRecording || visiblePhase == .processing)
-        case .stacked(let key): return stack.contains { $0.key == key }
-        }
+        guard isPresented, let state = trayState(owner) else { return false }
+        if case .bottom = owner, !(visiblePhase.isRecording || visiblePhase == .processing) { return false }
+        if case .stacked(let key) = owner, !stack.contains(where: { $0.key == key }) { return false }
+        return openTray == owner || PillToggle.allCases.contains { state.isOn($0) }
     }
 
     /// The tray `owner` shows: the bottom pill's, or a stacked pill's.

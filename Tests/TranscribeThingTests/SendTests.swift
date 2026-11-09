@@ -75,7 +75,7 @@ import Testing
         #expect(rig.h.pill.tray == PillTrayState(dictation: .recording))
         c.toggle(.send, on: .recording)
         #expect(c.isSending && rig.h.pill.sends && rig.h.pill.tray?.sends == true)
-        #expect(PillView(model: rig.h.pill).visual == .listening(sends: true))
+        #expect(PillView(model: rig.h.pill).visual == .listening() && rig.h.pill.tray?.sends == true)
         c.toggle(.send, on: .recording)
         #expect(!c.isSending && !rig.h.pill.sends)
         c.toggle(.send, on: .recording)
@@ -106,7 +106,8 @@ import Testing
         #expect(c.machine.capture.isListeningOrLocked, "the talk key's press with the click doesn't finish hands-free")
         c.toggle(.polish, on: .recording)
         #expect(c.isSending && c.isPolishing)
-        #expect(PillView(model: rig.h.pill).visual == .locked(hours: false, polishes: true, sends: true))
+        #expect(PillView(model: rig.h.pill).visual == .locked(hours: false))
+        #expect(rig.h.pill.tray?.sends == true && rig.h.pill.tray?.polishes == true)
         c.send(.pillCancel)
     }
 
@@ -124,7 +125,7 @@ import Testing
         try await waitUntil { rig.transcribed.count == 1 }
         #expect(!c.isSending, "the next dictation starts without")
         #expect(rig.h.pill.phase == .processing && rig.h.pill.sends, "the plane stays while it's transcribed")
-        #expect(PillView(model: rig.h.pill).visual.sends)
+        #expect(rig.h.pill.tray?.sends == true)
         gate.isOpen = true
         try await waitUntil { keys.returns == 1 && c.machine.activeJobs == 0 }
         #expect(keys.log == ["See you at ten.", "↩"])
@@ -335,10 +336,10 @@ import Testing
     @Test @MainActor func theModelsFlagReachesTheVisual() {
         let listening = PillModel.preview(phase: .listening)
         listening.sends = true
-        #expect(PillView(model: listening).visual == .listening(sends: true))
+        #expect(PillView(model: listening).visual == .listening())
         let processing = PillModel.preview(phase: .processing)
         processing.sends = true
-        #expect(PillView(model: processing).visual.sends)
+        #expect(!PillView(model: processing).visual.sends)
         processing.polishes = true
         processing.selectionPolishing = true
         #expect(!PillView(model: processing).visual.sends)

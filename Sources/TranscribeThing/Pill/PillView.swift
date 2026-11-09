@@ -466,16 +466,17 @@ struct PillView: View {
         switch phase {
         case .hidden, .rest:
             return model.isHovering ? .peek : .rest
+        // Polish, Translate and Send show on the tray beside the pill, which stays out while one is on: the pill
+        // itself carries no glyph for them. Polish Selection keeps its own look: it has no tray.
         case .listening:
-            return .listening(polishes: model.rewrite != nil, sends: model.sends)
+            return .listening()
         case .locked:
-            return .locked(hours: model.showsHours, polishes: model.rewrite != nil, sends: model.sends)
+            return .locked(hours: model.showsHours)
         case .processing:
             let selection: PillPolish = model.translates ? .translatedSelection : .selection
             return .processing(afterHandsFree: model.processingOrigin == .locked, counting: model.showsCounter,
-                               polish: model.rewrite == nil ? nil : model.selectionPolishing ? selection : .dictation,
-                               label: model.showsCounter ? model.tokenCount.map(PillCountLabel.init) : nil,
-                               sends: model.sends && !model.selectionPolishing)
+                               polish: model.rewrite != nil && model.selectionPolishing ? selection : nil,
+                               label: model.showsCounter ? model.tokenCount.map(PillCountLabel.init) : nil)
         case .error:
             if let text = model.errorMessage { return .message(text) }
             return .error

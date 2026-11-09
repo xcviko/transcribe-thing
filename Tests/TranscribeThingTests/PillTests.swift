@@ -639,33 +639,20 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(PillView(model: pushToTalk).visual.size.width == PillMetrics.listeningSize.width)
     }
 
-    /// Polish on while recording puts the wand inside the pill, left of the bars, in a capsule wider by it: nothing
-    /// beside the pill. Processing keeps the wand where it stood, the bars turned into the wave.
-    @Test func aPolishedDictationCarriesTheWandInsideThePill() {
-        let room = PillMetrics.counterWandSize + PillMetrics.counterWandGap
+    /// Polish, Translate and Send on show on the tray beside the pill, not in it: the pill stays plain, and the tray
+    /// stays out while one of them is on, with the pointer gone.
+    @Test func togglesShowOnTheTrayNotInThePill() {
         let model = PillModel.preview(phase: .listening, level: 0.7)
         model.sessionModel = .gemini
         model.polishes = true
-        let listening = PillView(model: model).visual
-        #expect(listening == .listening(polishes: true) && listening.recordsPolished)
-        #expect(listening.size == CGSize(width: PillVisual.listening().size.width + room, height: 26))
-        #expect(listening.barsOffset == room / 2, "the bars make way for the wand")
-        // The wand stands where the processing wave puts it: the bars turn into dots around it, nothing moves.
-        let processing = PillVisual.processing(afterHandsFree: false, polish: .dictation)
-        #expect(processing.size == listening.size && processing.barsOffset == listening.barsOffset)
-        let wandFromCenter = listening.barsOffset + PillMetrics.polishWandOffset
-        #expect(abs(wandFromCenter - -(PillMetrics.counterWandGap + PillMetrics.barFieldWidth) / 2) < 0.001)
-        // Hands-free: X, the wand, the bars, the timer and the check, in a capsule wider by the wand.
+        model.sends = true
+        model.tray = PillTrayState(dictation: .recording, polishes: true, sends: true)
+        #expect(PillView(model: model).visual == .listening())
         model.phase = .locked
-        let locked = PillView(model: model).visual
-        #expect(locked == .locked(hours: false, polishes: true) && locked.recordsPolished && locked.isLocked)
-        #expect(locked.size.width == PillVisual.locked().size.width + room)
-        #expect(locked.barsOffset == PillMetrics.lockedBarsOffset(hours: false) + room / 2)
-        #expect(PillVisual.locked(hours: true, polishes: true).showsHours)
-        #expect(PillVisual.locked(hours: true, polishes: true).size.width == PillVisual.locked(hours: true).size.width + room)
-        // Off, it's the plain pill again.
-        model.polishes = false
-        #expect(PillView(model: model).visual == .locked() && !PillView(model: model).visual.recordsPolished)
+        #expect(PillView(model: model).visual == .locked(hours: false))
+        #expect(model.showsTray(.bottom), "out while a button is on")
+        model.tray = PillTrayState(dictation: .recording)
+        #expect(!model.showsTray(.bottom), "all off: only the pointer brings it out")
     }
 
     /// The count takes the dots' place in a capsule just around its text. A tick keeps the capsule as it is: only a
