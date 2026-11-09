@@ -22,21 +22,28 @@ When a new version is out, the app tells you, and Update Now in General → Soft
 
 ## Dictate
 
-| To | Press |
+| To | Do |
 |---|---|
 | Dictate | hold **fn**, speak, let go |
 | Dictate without holding a key | **fn Space** to start, **fn** to finish |
 | Cancel | **esc** (Undo brings it back) |
 | Switch model while you talk | **fn ⇥** |
-| Get the message you meant, not every word (Gemini) | **fn P** while you talk |
-| Polish text you've selected (on Parakeet) | select it, hold **fn**, press **P** |
-| Get what you say in the other language (Gemini) | **fn T** while you talk |
-| Translate text you've selected (on Parakeet) | select it, hold **fn**, press **T** |
+| Get the message you meant, not every word (Gemini) | click the **wand** on the pill |
+| Polish text you've selected (on Parakeet) | select it, click the **wand** on the pill |
+| Get what you say in the other language (Gemini) | click **Translate** on the pill |
+| Translate text you've selected (on Parakeet) | select it, click **Translate** on the pill |
+| Press Return once the text is pasted (sends a chat message) | click the **paper plane** on the pill |
 | Teach the cloud models a word or a name | select it, hold **fn**, press **D** |
 | Paste the last transcript again | **⌘ fn V** |
 
-Change any of them except esc in Shortcuts. A small pill at the bottom of the screen shows that you're recording;
-General → Show the pill chooses always, only while you dictate, or never.
+A small pill at the bottom of the screen shows that you're recording; General → Show the pill chooses always, only
+while you dictate, or never. Point at the pill while you dictate, or while its text is on the way, and the wand,
+Translate and the paper plane come out beside it. Each click turns one on or off for that dictation. Change the keys
+(all but esc) in Shortcuts.
+
+You don't have to wait for the text. Start the next dictation while the last one is still being written: the earlier
+one moves up onto a pill of its own, and each text is pasted as soon as it's ready, in the order you dictated. Esc
+cancels the dictation you're recording, or, when you're not recording, the newest one still on its way.
 
 If music or a video plays on your Mac's speakers while you dictate, the app takes it out of what your microphone hears,
 so you don't have to talk over it and the song's words mostly stay out of the transcript. This needs the System Audio
@@ -48,7 +55,7 @@ recorded as it is.
 Pasting leaves your clipboard as it was. To copy a transcript, use Copy Last Transcript in the menu bar or Copy in
 History.
 
-fn P, fn T and fn D read the selected text through Accessibility. In apps that don't share it that way (Chrome, and
+The wand, Translate and fn D read the selected text through Accessibility. In apps that don't share it that way (Chrome, and
 Electron apps such as VS Code or Claude), they copy it with ⌘C and put your clipboard back right after. A clipboard
 manager may still keep the selected text.
 
@@ -59,11 +66,11 @@ manager may still keep the selected text.
 - **Gemini 3.8 Flash** runs in the cloud and is very accurate. It thinks before it writes, so it's slower than
   Parakeet.
 
-On Gemini, press fn P while you talk and it pastes the message you meant, without the false starts, detours and
-repeats. Press fn T and it pastes what you said in the other language. Russian becomes English and English becomes
+On Gemini, click the wand on the pill and it pastes the message you meant, without the false starts, detours and
+repeats. Click Translate and it pastes what you said in the other language. Russian becomes English and English becomes
 Russian; pick another pair in General → Translate. With both on, you get the message you meant, translated.
 
-On Parakeet, fn P polishes and fn T translates the text you've selected instead: Gemini 3.8 Flash writes the result
+On Parakeet, the wand polishes and Translate translates the text you've selected instead: Gemini 3.8 Flash writes the result
 on a card, and Paste Here puts it in place of the selection.
 
 In Models:
