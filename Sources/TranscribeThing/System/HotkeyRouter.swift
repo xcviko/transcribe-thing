@@ -78,9 +78,11 @@ struct KeyRepeat: Equatable, Sendable {
 ///   engine's repeat timer (`Decision.repeatTimer`) at the keyboard's repeat pace; its ticks step on until the chord
 ///   is no longer held, another key is pressed, a click comes, the dictation ends or the recorder captures. Add to
 ///   dictionary's is live the same way, on any model, always held as `.heldForSelection`: the controller reads what's
-///   selected right then.
-/// - While dictations are only processed, no key of a dictation is live: P, T, ↩ and the rest reach apps. Polish,
-///   Translate and Send are the pill's buttons, never keys.
+///   selected right then. Polish, Translate and Send are live the same way (`.polish`, `.translate`, `.send`); held
+///   down, their autorepeats are swallowed and say nothing: one press, one switch.
+/// - While dictations are only on their way (`Config.isProcessing`), Polish, Translate and Send stay live, with their
+///   modifiers exactly (fn T, never a bare T): the controller gives them to the newest one. Nothing else of a dictation
+///   is live then. The pill's buttons do the same with a click.
 /// - Swallowed keys also have their autorepeats and keyUp swallowed.
 struct HotkeyRouter: Equatable, Sendable {
     struct Config: Equatable, Sendable {
@@ -90,6 +92,8 @@ struct HotkeyRouter: Equatable, Sendable {
         /// A dictation is recording: the Switch model and Add to dictionary shortcuts are live (and swallowed) only
         /// then, and the cards' ↩ isn't theirs.
         var isRecording = false
+        /// Dictations are on their way and none records: Polish, Translate and Send are live (`isLiveWhileProcessing`).
+        var isProcessing = false
         /// Switch model has another model to step to (`ModelLineup.cycle`); without one its shortcut is never
         /// intercepted.
         var switchesModels = true
@@ -466,7 +470,7 @@ struct HotkeyRouter: Equatable, Sendable {
         switch action {
         case .handsFree: event = .handsFreeToggle
         case .pasteLast: event = .pasteLast
-        case .pushToTalk, .switchModel, .addToDictionary: return
+        case .pushToTalk, .switchModel, .polish, .addToDictionary, .translate, .send: return
         }
         if gesture != .idle, action == .pasteLast {
             decision.events.append(.pttInterrupted)
@@ -498,9 +502,11 @@ struct HotkeyRouter: Equatable, Sendable {
     /// The bindings live during a recording only (a held PTT counts): Switch model with another model to switch to, and
     /// Add to dictionary. Dictations only being processed take no keys.
     private func liveDuringDictation(_ config: Config) -> [(action: ShortcutAction, shortcut: Shortcut)] {
-        guard config.isRecording || gesture != .idle else { return [] }
+        let recording = config.isRecording || gesture != .idle
+        guard recording || config.isProcessing else { return [] }
         return ShortcutAction.allCases.compactMap { action in
             guard action.isDuringDictation, let shortcut = config.bindings[action] else { return nil }
+            if !recording, !action.isLiveWhileProcessing { return nil }
             if action == .switchModel, !config.switchesModels { return nil }
             // Held, then given back if nothing is selected: only a key can be (a modifier-only binding isn't).
             if action == .addToDictionary, shortcut.isModifierOnly { return nil }
@@ -511,6 +517,9 @@ struct HotkeyRouter: Equatable, Sendable {
     private static func event(for action: ShortcutAction) -> HotkeyEvent? {
         switch action {
         case .switchModel: .cycleEngine
+        case .polish: .polish
+        case .translate: .translate
+        case .send: .send
         case .pushToTalk, .handsFree, .pasteLast, .addToDictionary: nil
         }
     }

@@ -142,6 +142,11 @@ final class DictationController {
     /// A key took this press's recording over (fn D in push-to-talk, Polish Selection) and fn is still down: another
     /// fn D in the same press still adds what's selected.
     @ObservationIgnored private var pressTakenByKey = false
+    /// When the talk key's press went down while dictations were on their way (`clock`): a Polish, Translate or Send
+    /// key pressed right after is for the newest of them (`shortcutPressed`). nil for any other press.
+    @ObservationIgnored private var pressOverDictationsOnTheirWay: TimeInterval?
+    /// How soon after such a press its Polish, Translate or Send key is still for the dictation on its way.
+    static let keyTakeoverWindow: TimeInterval = 1
     /// Keys the tap held for the selection, waiting for a lookup, in the order they came: the press's own release
     /// waits with them (`heldRelease`), so what the press was is decided by its keys, not by when fn came up.
     @ObservationIgnored private var heldKeys: [(action: SelectionAction, key: KeyStroke?)] = []
@@ -326,6 +331,7 @@ final class DictationController {
         switch event {
         case .pttDown:
             pressTakenByKey = false
+            pressOverDictationsOnTheirWay = machine.isRecording || queue.isEmpty ? nil : clock()
             send(.pttDown)
         case .pttUp where holdsRelease:
             // The press's key for the selection is still being decided: its release follows the decision.
@@ -343,6 +349,9 @@ final class DictationController {
         case .pasteLast: pasteLast()
         case .cycleEngine: send(.cycleEngine)
         case .cycleEngineRepeat: repeatCycle()
+        case .polish: shortcutPressed(.polish)
+        case .translate: shortcutPressed(.translate)
+        case .send: shortcutPressed(.send)
         case .heldForSelection(let action, let key):
             // Only Add to dictionary's key is held for the selection.
             guard action == .addToDictionary else { return }
@@ -409,8 +418,8 @@ final class DictationController {
     /// While it's processed on Gemini, Polish and Translate send it again with the new prompt at once (the request
     /// under way is stopped, and its cost still counts): one click, one request. Send says whether Return follows its
     /// paste. On Parakeet Polish and Translate do nothing (the pill shows them off and dimmed).
-    func toggle(_ toggle: PillToggle, on dictation: PillDictation) {
-        DiagnosticLog.shared.event(.dictation, "pill.button", [
+    func toggle(_ toggle: PillToggle, on dictation: PillDictation, byKey: Bool = false) {
+        DiagnosticLog.shared.event(.dictation, byKey ? "key.toggle" : "pill.button", [
             "button": toggle.rawValue, "on": { if case .recording = dictation { "recording" } else { "processing" } }()])
         switch dictation {
         case .recording:
@@ -434,6 +443,27 @@ final class DictationController {
             self.toggle(toggle, of: job)
         }
         stateDidChange()
+    }
+
+    /// The Polish, Translate or Send shortcut (fn P, fn T, fn ↩): what the pill's button does, for the dictation being
+    /// recorded, or with none recording, the newest one on its way. Pressed just as the talk key went down over
+    /// dictations on their way (fn T with fn as the talk key), it's for the newest of them: that press only led to the
+    /// key, and gives way without a sound, as Polish Selection's does.
+    private func shortcutPressed(_ toggle: PillToggle) {
+        if machine.isRecording {
+            if machine.mode == .pushToTalk, let job = queue.last, let pressed = pressOverDictationsOnTheirWay,
+               clock() - pressed < Self.keyTakeoverWindow {
+                pressOverDictationsOnTheirWay = nil
+                pressTakenByKey = true
+                pillModel.endChipFlash()
+                send(.discard)
+                self.toggle(toggle, on: .processing(job.key), byKey: true)
+                return
+            }
+            self.toggle(toggle, on: .recording, byKey: true)
+        } else if let job = queue.last {
+            self.toggle(toggle, on: .processing(job.key), byKey: true)
+        }
     }
 
     func send(_ input: DictationMachine.Input) {
@@ -3363,6 +3393,8 @@ final class DictationController {
     private func stateDidChange() {
         if hotkeys.isBusy != machine.isBusy { hotkeys.isBusy = machine.isBusy }
         if hotkeys.isRecording != machine.isRecording { hotkeys.isRecording = machine.isRecording }
+        let onTheirWay = !machine.isRecording && !queue.isEmpty
+        if hotkeys.isProcessing != onTheirWay { hotkeys.isProcessing = onTheirWay }
         let watches = watchesClicks
         if let clickAway, clickAway.isWatching != watches { clickAway.isWatching = watches }
         // Polish Selection's card waits for this one.

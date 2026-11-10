@@ -266,12 +266,12 @@ enum RecorderMessage: Equatable {
     case warning(ShortcutWarning, suggestion: Shortcut?)
     case conflict(ShortcutAction, attempted: Shortcut)
     case swapped(ShortcutAction, warning: ShortcutWarning?)
-    /// Push to talk went from `from` to `to`, and the shortcuts pressed off the old key went along (fn D → F5 D):
+    /// Push to talk went from `from` to `to`, and the shortcuts pressed off the old key went along (fn P → F5 P):
     /// `previous` is what each had, for Move Back. `warning`: the new push to talk's own.
     case moved(from: Shortcut, to: Shortcut, previous: [ShortcutAction: Shortcut], warning: ShortcutWarning?)
 
     /// What recording `shortcut` for `action` does: whether it's saved, every binding after it, and what the recorder
-    /// says. A new push to talk takes the shortcuts pressed off the old one along (fn D → F5 D,
+    /// says. A new push to talk takes the shortcuts pressed off the old one along (fn P → F5 P,
     /// `ShortcutBindings.moveOntoTalkKey`) when the other bindings can be written (`settingsWritable`), and says so.
     static func recording(_ shortcut: Shortcut, for action: ShortcutAction, in bindings: ShortcutBindings,
                           settingsWritable: Bool, system: SystemKeyboardState = .current)
@@ -292,9 +292,9 @@ enum RecorderMessage: Equatable {
         return (true, after, RecorderMessage(outcome, recording: shortcut))
     }
 
-    /// "Also on F5 now: hands-free, switch model and add to dictionary.", in the Shortcuts page's order.
+    /// "Also on F5 now: hands-free, polish and send.", in the Shortcuts page's order.
     static func movedLine(to talkKey: Shortcut, actions: some Collection<ShortcutAction>) -> String {
-        let pageOrder: [ShortcutAction] = [.handsFree, .switchModel, .addToDictionary]
+        let pageOrder: [ShortcutAction] = [.handsFree, .switchModel, .polish, .translate, .send, .addToDictionary]
         let names = pageOrder.filter(actions.contains).map { $0.title.lowercased() }
         let list = names.count > 1 ? names.dropLast().joined(separator: ", ") + " and " + (names.last ?? "")
                                    : names.joined()
@@ -695,7 +695,7 @@ enum ShortcutRecorderSnapshots {
     static let f5 = Shortcut(modifiers: [], keyCode: KeyCode.f5)
 
     /// Push to talk recorded as F5 over the defaults: hands-free and the keys used while dictating go along (F5 Space,
-    /// F5 D…), and the line under push to talk says so.
+    /// F5 P…), and the line under push to talk says so.
     static var movedToF5: (bindings: ShortcutBindings, message: RecorderMessage?) {
         let recorded = RecorderMessage.recording(f5, for: .pushToTalk, in: .defaults, settingsWritable: true, system: system)
         return (recorded.bindings, recorded.message)

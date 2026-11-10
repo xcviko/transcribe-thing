@@ -4,19 +4,19 @@ import os
 import Testing
 @testable import TranscribeThing
 
-// MARK: - No shortcut: the pill's button
+// MARK: - Its shortcut and the pill's button
 
-@Suite struct SendIsNoShortcutTests {
-    /// Send is a button on the pill, not a binding: none in the defaults, none to record, and a key saved for it by an
-    /// older build is ignored, with every other binding kept.
-    @Test func sendIsThePillsButton() throws {
-        #expect(!ShortcutAction.allCases.map(\.rawValue).contains("send"))
+@Suite struct SendShortcutBackTests {
+    /// Send is a key again (fn ↩ by default, ⌃↩ next to Right ⌃) and the pill's paper plane. A key saved for it is
+    /// kept, every other binding too.
+    @Test func sendIsAKeyAndThePillsButton() throws {
+        #expect(ShortcutAction.allCases.contains(.send) && ShortcutBindings.defaults[.send] == .fnReturn)
         #expect(PillToggle.send.title == "Send" && PillToggle.send.symbolName == "paperplane.fill")
         let saved = #"{"send":{"keyCode":36,"modifiers":[{"modifier":"control","side":"either"}]},"#
             + #""handsFree":{"keyCode":49,"modifiers":[{"modifier":"control","side":"either"}]}}"#
         let decoded = try JSONDecoder().decode(ShortcutBindings.self, from: Data(saved.utf8))
         #expect(decoded[.handsFree] == Shortcut(modifiers: [.init(.control)], keyCode: KeyCode.space))
-        #expect(!String(decoding: try JSONEncoder().encode(decoded), as: UTF8.self).contains("send"))
+        #expect(decoded[.send] == Shortcut(modifiers: [.init(.control)], keyCode: KeyCode.returnKey))
     }
 }
 

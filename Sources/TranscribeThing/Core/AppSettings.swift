@@ -114,7 +114,7 @@ final class AppSettings {
     func removesFinalPeriod(by model: ModelChoice, in mode: DictationMachine.Mode) -> Bool {
         modelsRemovingFinalPeriod.contains(model) && modesRemovingFinalPeriod.contains(mode)
     }
-    /// The two languages Translate goes between (General → Translate). Two different languages: picking one the
+    /// The two languages Translate (fn T) goes between (General → Translate). Two different languages: picking one the
     /// other already has swaps them.
     /// What the app calls the person (General → Your name): Home's greeting.
     /// Empty: the first name of this Mac's account (`macFirstName`).
@@ -385,10 +385,20 @@ final class AppSettings {
             storedUseForGemini = store.bool(.vertexProxyEnabled) ?? true
             providerNeedsMigration = true
         }
-        // Saved again as read: what older builds bound Polish, Translate and Send to (the pill's buttons now) goes.
         if let v: ShortcutBindings = store.json(.shortcuts) { shortcuts = v }
-        // The mark of Polish's move from fn ↩ to fn P, which has no key to move any more.
-        store.remove(.polishMovedToFnP)
+        // Polish moved from fn ↩ to fn P (when ↩ finished a hands-free dictation): a build that had it on fn ↩ by default
+        // moves it, once, unless fn P is taken. Bound to fn ↩ again after that, it stays.
+        if store.bool(.polishMovedToFnP) != true {
+            if shortcuts[.polish] == .fnReturn, shortcuts.conflict(for: .fnP, excluding: .polish) == nil {
+                shortcuts[.polish] = .fnP
+                // Saved before Send existed, which found fn ↩ taken by Polish and started unbound: fn ↩ is free now.
+                let send = ShortcutBindings.sendShortcut(after: shortcuts[.pushToTalk])
+                if shortcuts[.send] == nil, shortcuts.conflict(for: send, excluding: .send) == nil {
+                    shortcuts[.send] = send
+                }
+            }
+            store.set(true, .polishMovedToFnP)
+        }
         if let v = store.bool(.hasShownWelcomeHello) { hasShownWelcomeHello = v }
         if let v = store.bool(.checkForUpdatesAutomatically) { checkForUpdatesAutomatically = v }
         announcedUpdateVersion = store.string(.announcedUpdateVersion)
@@ -505,8 +515,7 @@ enum SettingsKey: String, CaseIterable {
     /// The removed "Return finishes a hands-free dictation", removed at load. Stored under its first name, from when
     /// Return also sent what it finished.
     case returnFinishesHandsFree = "returnSendsHandsFree"
-    /// Polish's default left fn ↩ for fn P: set once its old default had been moved. Polish has no key now, and
-    /// the mark is removed at load.
+    /// Polish's default left fn ↩ for fn P: set once its old default has been moved (`load`).
     case polishMovedToFnP, showsPillHints
     /// The day-old switches of asking twice (`CloudHedge`), removed at load. Race requests is `raceRequests`.
     case sendsTwice, measuresSendingTwice

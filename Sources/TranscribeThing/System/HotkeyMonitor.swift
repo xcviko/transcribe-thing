@@ -11,6 +11,9 @@ enum HotkeyEvent: Equatable, Sendable {
     /// Its key held down: an autorepeat, which steps on too. A modifier-only one doesn't autorepeat; held, the tap's
     /// repeat timer sends these at the keyboard's repeat pace.
     case cycleEngineRepeat
+    /// The Polish, Translate and Send shortcuts: on or off for the dictation being recorded, or, with none recording,
+    /// the newest one on its way (the controller decides). The pill's buttons do the same.
+    case polish, translate, send
     /// A key the tap held for the selection (Add to dictionary's: it reads what's selected now). What the key does with
     /// the selection if there is one; with none, the pill says to select a word first.
     case heldForSelection(ShortcutAction, KeyStroke)
@@ -50,6 +53,10 @@ final class HotkeyMonitor {
     /// Swallow the Switch model and Add to dictionary shortcuts only while a dictation records.
     var isRecording = false {
         didSet { if isRecording != oldValue { pushConfig() } }
+    }
+    /// Dictations are on their way and none records: Polish, Translate and Send stay live (`HotkeyRouter.Config`).
+    var isProcessing = false {
+        didSet { if isProcessing != oldValue { pushConfig() } }
     }
     /// Polish Selection's cards are up: ↩ is theirs (it pastes the one card; with two it couldn't tell which, and does
     /// nothing), Esc closes them.
@@ -143,6 +150,7 @@ final class HotkeyMonitor {
     /// in Keyboard Settings applies from the next one.
     func currentConfig() -> HotkeyRouter.Config {
         HotkeyRouter.Config(bindings: settings.shortcuts, isBusy: isBusy, isRecording: isRecording,
+                            isProcessing: isProcessing,
                             switchesModels: settings.lineup.cycle.count > 1,
                             cardPaste: cardPaste, cardClose: cardClose,
                             isSuspended: suspendCount > 0, forwardsRawKeys: onRawKey != nil,

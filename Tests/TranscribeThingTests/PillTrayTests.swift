@@ -107,11 +107,13 @@ import Testing
     }
 }
 
-/// Polish, Translate and Send aren't on the Shortcuts page any more.
+/// Polish, Translate and Send are on the Shortcuts page and the pill both: fn P, fn T and fn ↩ by default.
 @Suite struct ShortcutsPageRowsTests {
-    @Test func theThreeRowsAreGone() {
+    @Test func theThreeRowsAreBack() {
         let actions = ShortcutAction.allCases.map(\.rawValue)
-        #expect(actions == ["pushToTalk", "handsFree", "pasteLast", "switchModel", "addToDictionary"])
-        #expect(ShortcutBindings.defaults.bindings.count == 5)
+        #expect(actions == ["pushToTalk", "handsFree", "pasteLast", "switchModel", "polish", "addToDictionary",
+                            "translate", "send"])
+        #expect(ShortcutBindings.defaults[.polish] == .fnP && ShortcutBindings.defaults[.translate] == .fnT)
+        #expect(ShortcutBindings.defaults[.send] == .fnReturn)
     }
 }

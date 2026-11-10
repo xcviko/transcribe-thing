@@ -145,15 +145,14 @@ import Testing
     }
 
     /// Older builds saved fn ↩ recorded on a laptop as fn ⌤ (Keypad Enter, which is what the keyboard sends): it loads
-    /// as fn ↩. The keypad's Enter without fn stays itself. Add to dictionary, newer than these bindings, gets its
-    /// default (fn D).
+    /// as fn ↩. The keypad's Enter without fn stays itself. Polish, newer than these bindings, gets its default (fn P).
     @Test func fnKeypadEnterLoadsAsFnReturnAndKeepsItsAction() throws {
         let stored = #"{"handsFree":{"keyCode":76,"modifiers":[{"modifier":"function","side":"either"}]},"#
             + #""pasteLast":{"keyCode":76,"modifiers":[]}}"#
         let decoded = try JSONDecoder().decode(ShortcutBindings.self, from: Data(stored.utf8))
-        #expect(decoded[.handsFree] == Shortcut(modifiers: [.init(.function)], keyCode: KeyCode.returnKey))
+        #expect(decoded[.handsFree] == .fnReturn)
         #expect(decoded[.pasteLast] == Shortcut(modifiers: [], keyCode: KeyCode.keypadEnter))
-        #expect(decoded[.addToDictionary] == .fnD)
+        #expect(decoded[.polish] == .fnP)
         #expect(decoded[.switchModel] == .fnTab, "a default nobody else has still comes")
 
         let untouched = try JSONDecoder().decode(ShortcutBindings.self, from: Data("{}".utf8))
@@ -197,7 +196,11 @@ import Testing
         .handsFree: Shortcut(modifiers: [.init(.control), .init(.option)], keyCode: KeyCode.space),
         // Added after it was saved: their defaults.
         .switchModel: .fnTab,
+        .polish: .fnP,
         .addToDictionary: .fnD,
+        .translate: .fnT,
+        // Send follows their push to talk: ⌥↩ for Right ⌥.
+        .send: Shortcut(modifiers: [.init(.option)], keyCode: KeyCode.returnKey),
     ])
 
     @Test func conflictsAndSwap() {
@@ -249,13 +252,6 @@ import Testing
         + #""switchModel":{"modifiers":[{"modifier":"control","side":"right"},{"modifier":"command","side":"either"}]},"#
         + #""translate":{"keyCode":17,"modifiers":[{"modifier":"control","side":"either"}]}}"#
 
-    /// `usersBindings` as this build saves them: Polish, Translate and Send are the pill's buttons now.
-    static let usersBindingsSaved = #"{"addToDictionary":{"keyCode":2,"modifiers":[{"modifier":"control","side":"either"}]},"#
-        + #""handsFree":{"keyCode":49,"modifiers":[{"modifier":"option","side":"either"}]},"#
-        + #""pasteLast":{"keyCode":9,"modifiers":[{"modifier":"control","side":"either"}]},"#
-        + #""pushToTalk":{"keyCode":96,"modifiers":[]},"#
-        + #""switchModel":{"modifiers":[{"modifier":"control","side":"right"},{"modifier":"command","side":"either"}]}}"#
-
     private static func sortedJSON<T: Encodable>(_ value: T) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -274,16 +270,16 @@ import Testing
         #expect(older.keyCode == nil && older.modifiers.isEmpty)
     }
 
-    /// Everything saved before loads as it did and saves the same, less Polish, Translate and Send.
+    /// Everything saved before loads as it did and saves byte for byte the same.
     @Test func oldBindingsLoadAndSaveAsBefore() throws {
         #expect(try Self.sortedJSON(Shortcut.fnSpace) == #"{"keyCode":49,"modifiers":[{"modifier":"function","side":"either"}]}"#)
         #expect(try Self.sortedJSON(Shortcut.fn) == #"{"modifiers":[{"modifier":"function","side":"either"}]}"#)
         let decoded = try JSONDecoder().decode(ShortcutBindings.self, from: Data(Self.usersBindings.utf8))
         #expect(decoded[.pushToTalk] == Self.f5)
         #expect(decoded[.handsFree] == Shortcut(modifiers: [.init(.option)], keyCode: KeyCode.space))
-        #expect(decoded[.addToDictionary] == Self.control(KeyCode.ansiD))
+        #expect(decoded[.polish] == Self.control(KeyCode.ansiP))
         #expect(decoded.bindings.values.allSatisfy { $0.heldKeyCode == nil })
-        #expect(try Self.sortedJSON(decoded) == Self.usersBindingsSaved)
+        #expect(try Self.sortedJSON(decoded) == Self.usersBindings)
     }
 
     @Test func normalizing() {
@@ -341,7 +337,8 @@ import Testing
     /// With a plain key to talk (F5, F13), every default is pressed off it as it is off fn. Otherwise as before.
     @Test func defaultsFollowThePushToTalkKey() throws {
         let expected: [ShortcutAction: UInt16] = [
-            .handsFree: KeyCode.space, .switchModel: KeyCode.tab, .addToDictionary: KeyCode.ansiD,
+            .handsFree: KeyCode.space, .switchModel: KeyCode.tab, .polish: KeyCode.ansiP,
+            .addToDictionary: KeyCode.ansiD, .translate: KeyCode.ansiT, .send: KeyCode.returnKey,
         ]
         for (action, key) in expected {
             #expect(ShortcutBindings.defaultShortcut(for: action, pushToTalk: Self.f5) == Self.onF5(key), "\(action)")
@@ -351,11 +348,13 @@ import Testing
         }
         #expect(ShortcutBindings.defaultShortcut(for: .pasteLast, pushToTalk: Self.f5) == .commandFnV)
         #expect(ShortcutBindings.defaultShortcut(for: .pushToTalk, pushToTalk: Self.f5) == .fn)
-        // A modifier to talk: the defaults stay fn's.
-        #expect(ShortcutBindings.defaultShortcut(for: .addToDictionary, pushToTalk: Self.rightControl) == .fnD)
+        // A modifier to talk: Send's ↩ goes with it, the others stay fn's.
+        #expect(ShortcutBindings.defaultShortcut(for: .send, pushToTalk: Self.rightControl) == Self.control(KeyCode.returnKey))
+        #expect(ShortcutBindings.defaultShortcut(for: .polish, pushToTalk: Self.rightControl) == .fnP)
         // A key that types can't be held for these: as before.
         let keypadEnter = Shortcut(modifiers: [], keyCode: KeyCode.keypadEnter)
         #expect(ShortcutBindings.defaultShortcut(for: .handsFree, pushToTalk: keypadEnter) == .fnSpace)
+        #expect(ShortcutBindings.defaultShortcut(for: .send, pushToTalk: keypadEnter) == .fnReturn)
 
         var bindings = ShortcutBindings.defaults
         bindings[.pushToTalk] = Self.f5
@@ -371,11 +370,11 @@ import Testing
 
     /// Saved with F5 to talk before an action existed: the action comes on F5 too.
     @Test func newActionsComeOnTheSavedTalkKey() throws {
-        let saved = #"{"pushToTalk":{"keyCode":96,"modifiers":[]},"switchModel":null}"#
+        let saved = #"{"pushToTalk":{"keyCode":96,"modifiers":[]},"polish":null}"#
         let decoded = try JSONDecoder().decode(ShortcutBindings.self, from: Data(saved.utf8))
         #expect(decoded[.handsFree] == Self.f5Space)
-        #expect(decoded[.addToDictionary] == Self.onF5(KeyCode.ansiD))
-        #expect(decoded[.switchModel] == nil, "unbound on purpose stays unbound")
+        #expect(decoded[.send] == Self.onF5(KeyCode.returnKey))
+        #expect(decoded[.polish] == nil, "unbound on purpose stays unbound")
     }
 
     private func validate(_ shortcut: Shortcut, for action: ShortcutAction, pushToTalk: Shortcut = HeldKeyShortcutTests.f5,
@@ -392,25 +391,50 @@ import Testing
         #expect(validate(Self.f5Space, for: .handsFree, pushToTalk: .fn).errors
                 == ["Only push to talk (fn) can be the key you hold first."])
         let f6Space = Shortcut(heldKeyCode: UInt16(kVK_F6), modifiers: [], keyCode: KeyCode.space)
-        #expect(validate(f6Space, for: .addToDictionary).errors == ["Only push to talk (F5) can be the key you hold first."])
+        #expect(validate(f6Space, for: .polish).errors == ["Only push to talk (F5) can be the key you hold first."])
         #expect(validate(Self.f5Space, for: .pushToTalk).errors
                 == ["Push to talk is one key or combination, not one key held and then another."])
     }
 
+    /// Polish, Translate and Send are live while a dictation is on its way, when you type again: a key that types on
+    /// its own (T, ⇧T, ⌥T) is refused for them, and one saved by an older build goes back to its default at load. fn T,
+    /// ⌃T, ⌘T and T off a held talk key are fine.
+    @Test func theThreeNeedMoreThanATypingKey() throws {
+        let t = Shortcut(modifiers: [], keyCode: KeyCode.ansiT)
+        #expect(t.typesText && Shortcut(modifiers: [.init(.shift)], keyCode: KeyCode.ansiT).typesText)
+        #expect(!Shortcut.fnT.typesText && !Self.onF5(KeyCode.ansiT).typesText && !Self.f5.typesText)
+        let refused = validate(t, for: .translate, pushToTalk: .fn)
+        #expect(refused.errors == ["Translate needs fn, ⌃ or ⌘ with it, or the talk key held first: on its own, "
+                                   + "T would stop typing while a dictation is on its way."])
+        #expect(validate(.fnT, for: .translate, pushToTalk: .fn).errors.isEmpty)
+        #expect(validate(Shortcut(modifiers: [.init(.control)], keyCode: KeyCode.ansiT), for: .translate,
+                         pushToTalk: .fn).errors.isEmpty)
+        // Switch model is live only while you record: a bare Tab stays allowed.
+        #expect(validate(Shortcut(modifiers: [], keyCode: KeyCode.tab), for: .switchModel, pushToTalk: .fn).errors.isEmpty)
+
+        let saved = #"{"pushToTalk":{"modifiers":[{"modifier":"function","side":"either"}]},"#
+            + #""translate":{"keyCode":17,"modifiers":[]},"polish":{"keyCode":35,"modifiers":[]},"#
+            + #""send":{"keyCode":36,"modifiers":[{"modifier":"control","side":"either"}]}}"#
+        let decoded = try JSONDecoder().decode(ShortcutBindings.self, from: Data(saved.utf8))
+        #expect(decoded[.translate] == .fnT && decoded[.polish] == .fnP, "bare T and P go back to fn T and fn P")
+        #expect(decoded[.send] == Shortcut(modifiers: [.init(.control)], keyCode: KeyCode.returnKey), "⌃↩ stays")
+    }
+
     @Test func chordsClash() {
-        let twice = validate(Self.f5Space, for: .addToDictionary, [.handsFree: Self.f5Space])
+        let twice = validate(Self.f5Space, for: .polish, [.handsFree: Self.f5Space])
         #expect(twice.conflict == .handsFree && twice.errors == ["Already used for hands-free."])
-        let bareSpace = validate(Shortcut(modifiers: [], keyCode: KeyCode.space), for: .switchModel,
-                                 [.handsFree: Self.f5Space])
-        #expect(bareSpace.conflict == .handsFree, "Space would go off with F5 held too")
-        #expect(validate(Self.onF5(KeyCode.ansiD), for: .addToDictionary, [.handsFree: Self.f5Space]).errors.isEmpty)
+        let bareSpace = validate(Shortcut(modifiers: [], keyCode: KeyCode.space), for: .send, [.handsFree: Self.f5Space])
+        #expect(bareSpace.conflict == nil && bareSpace.errors.count == 1, "a key that types is refused first")
+        let bareSpaceForSwitch = validate(Shortcut(modifiers: [], keyCode: KeyCode.space), for: .switchModel,
+                                          [.handsFree: Self.f5Space])
+        #expect(bareSpaceForSwitch.conflict == .handsFree, "Space would go off with F5 held too")
+        #expect(validate(Self.onF5(KeyCode.ansiP), for: .polish, [.handsFree: Self.f5Space]).errors.isEmpty)
         // Swap is offered for a duplicate, as for any other shortcut.
         var bindings = ShortcutBindings.defaults
         bindings[.pushToTalk] = Self.f5
         bindings[.handsFree] = Self.f5Space
-        bindings[.addToDictionary] = Self.onF5(KeyCode.ansiD)
-        #expect(ShortcutEdit.evaluate(Self.f5Space, for: .addToDictionary, bindings: bindings, swapAllowed: true,
-                                      system: Self.quiet)
+        bindings[.polish] = Self.onF5(KeyCode.ansiP)
+        #expect(ShortcutEdit.evaluate(Self.f5Space, for: .polish, bindings: bindings, swapAllowed: true, system: Self.quiet)
                 == .offerSwap(.handsFree))
     }
 
@@ -422,7 +446,7 @@ import Testing
         RecorderMessage.recording(shortcut, for: action, in: bindings, settingsWritable: writable, system: Self.quiet)
     }
 
-    /// fn to F5: hands-free and the keys used while dictating go along (fn D → F5 D), paste last stays, and the line
+    /// fn to F5: hands-free and the keys used while dictating go along (fn P → F5 P), paste last stays, and the line
     /// under push to talk says so.
     @Test func fnToF5TakesTheOthersAlong() {
         let recorded = record(Self.f5)
@@ -431,16 +455,17 @@ import Testing
         #expect(after[.pushToTalk] == Self.f5)
         #expect(after[.handsFree] == Self.f5Space)
         #expect(after[.switchModel] == Self.onF5(KeyCode.tab))
-        #expect(after[.addToDictionary] == Self.onF5(KeyCode.ansiD))
+        #expect(after[.polish] == Self.onF5(KeyCode.ansiP) && after[.translate] == Self.onF5(KeyCode.ansiT))
+        #expect(after[.send] == Self.onF5(KeyCode.returnKey) && after[.addToDictionary] == Self.onF5(KeyCode.ansiD))
         #expect(after[.pasteLast] == .commandFnV, "paste last off F5 would start a dictation first")
         guard case .moved(let old, let talkKey, let previous, let warning)? = recorded.message else {
             Issue.record("expected the moved line, got \(String(describing: recorded.message))")
             return
         }
         #expect(old == .fn && talkKey == Self.f5 && warning == nil)
-        #expect(previous[.handsFree] == .fnSpace && previous[.addToDictionary] == .fnD && previous.count == 3)
+        #expect(previous[.handsFree] == .fnSpace && previous[.polish] == .fnP && previous.count == 6)
         #expect(RecorderMessage.movedLine(to: talkKey, actions: previous.keys)
-                == "Also on F5 now: hands-free, switch model and add to dictionary.")
+                == "Also on F5 now: hands-free, switch model, polish, translate, send and add to dictionary.")
 
         // Move Back puts them on fn again; push to talk stays F5.
         var back = after
@@ -453,20 +478,21 @@ import Testing
         #expect(record(.fn, in: after).bindings == .defaults)
     }
 
-    /// The user's own case: push to talk was Right ⌃, with ⌃D pressed off it. Set to F5, it goes to F5 D. Hands-free
-    /// (⌥Space), Switch model (Right ⌃ ⌘, no key) and paste last (⌃V) stay.
+    /// The user's own case: push to talk was Right ⌃, with ⌃P, ⌃T, ⌃↩ and ⌃D pressed off it. Set to F5, those go to
+    /// F5 P, F5 T, F5 ↩ and F5 D. Hands-free (⌥Space), Switch model (Right ⌃ ⌘, no key) and paste last (⌃V) stay.
     @Test func rightControlToF5MovesTheUsersControlKeys() throws {
         var before = try JSONDecoder().decode(ShortcutBindings.self, from: Data(Self.usersBindings.utf8))
         before[.pushToTalk] = Self.rightControl
         let recorded = record(Self.f5, in: before)
         let after = recorded.bindings
-        #expect(after[.addToDictionary] == Self.onF5(KeyCode.ansiD))
+        #expect(after[.polish] == Self.onF5(KeyCode.ansiP) && after[.translate] == Self.onF5(KeyCode.ansiT))
+        #expect(after[.send] == Self.onF5(KeyCode.returnKey) && after[.addToDictionary] == Self.onF5(KeyCode.ansiD))
         #expect(after[.handsFree] == before[.handsFree])
         #expect(after[.switchModel] == before[.switchModel])
         #expect(after[.pasteLast] == Self.control(KeyCode.ansiV))
         if case .moved(_, _, let previous, _)? = recorded.message {
             #expect(RecorderMessage.movedLine(to: Self.f5, actions: previous.keys)
-                    == "Also on F5 now: add to dictionary.")
+                    == "Also on F5 now: polish, translate, send and add to dictionary.")
         } else {
             Issue.record("expected the moved line")
         }
@@ -475,14 +501,17 @@ import Testing
     /// One that would clash where it lands, or get in the way there, stays where it was.
     @Test func aMoveThatWouldClashOrGetInTheWayStays() {
         var taken = ShortcutBindings.defaults
-        taken[.pasteLast] = Self.onF5(KeyCode.ansiD)
+        taken[.pasteLast] = Self.onF5(KeyCode.ansiP)
         let clash = record(Self.f5, in: taken).bindings
-        #expect(clash[.addToDictionary] == .fnD, "F5 D is paste last's")
-        #expect(clash[.switchModel] == Self.onF5(KeyCode.tab))
+        #expect(clash[.polish] == .fnP, "F5 P is paste last's")
+        #expect(clash[.translate] == Self.onF5(KeyCode.ansiT))
 
-        // Right ⌥ to talk: ⌥Space would fire while you type, so hands-free stays fn Space; ⌥D during a dictation is fine.
+        // Right ⌥ to talk: ⌥Space would fire while you type, so hands-free stays fn Space; ⌥P types π, and Polish is
+        // live while a dictation is on its way, when you type again: it stays fn P. Add to dictionary's ⌥D only goes off
+        // while you record, and moves.
         let option = record(.rightOption).bindings
         #expect(option[.handsFree] == .fnSpace)
+        #expect(option[.polish] == .fnP)
         #expect(option[.addToDictionary] == Shortcut(modifiers: [.init(.option)], keyCode: KeyCode.ansiD))
     }
 
@@ -493,10 +522,10 @@ import Testing
         var free = ShortcutBindings.defaults
         free[.addToDictionary] = nil
         let combo = record(controlOptionD, in: free)
-        #expect(combo.saved && combo.message == nil && combo.bindings[.switchModel] == .fnTab)
+        #expect(combo.saved && combo.message == nil && combo.bindings[.polish] == .fnP)
 
-        let other = record(Shortcut(modifiers: [.init(.control)], keyCode: KeyCode.ansiP), for: .switchModel)
-        #expect(other.bindings[.handsFree] == .fnSpace && other.message == nil)
+        let polish = record(Shortcut(modifiers: [.init(.control)], keyCode: KeyCode.ansiP), for: .polish)
+        #expect(polish.bindings[.handsFree] == .fnSpace && polish.message == nil)
 
         let unwritable = record(Self.f5, writable: false)
         #expect(unwritable.saved && unwritable.bindings[.handsFree] == .fnSpace && unwritable.message == nil)
@@ -1098,18 +1127,35 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         #expect(colors[.parakeet] == colors[.gemini], "two may share one")
     }
 
-    /// What older builds saved for Polish, Translate and Send (keys of the pill's buttons now) goes at load, the user's
-    /// other bindings stay, nothing crashes, and the settings are saved again without them.
-    @Test func polishTranslateAndSendBindingsGoAtLoad() throws {
+    /// Bindings as a build before Send saved them: no "send" key at all.
+    static func savedBeforeSend(_ bindings: ShortcutBindings) throws -> Data {
+        let json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(bindings))
+        var object = try #require(json as? [String: Any])
+        object["send"] = nil
+        return try JSONSerialization.data(withJSONObject: object)
+    }
+
+    /// Polish moved from fn ↩ to fn P: a build that had it on fn ↩ moves it once; bound to fn ↩ again, it stays.
+    @Test func polishMovesFromFnReturnToFnPOnce() throws {
         try withSuite { defaults in
-            defaults.set(Data(HeldKeyShortcutTests.usersBindings.utf8), forKey: "tt.shortcuts")
-            defaults.set(true, forKey: "tt.polishMovedToFnP")
+            var old = ShortcutBindings.defaults
+            old[.polish] = .fnReturn
+            defaults.set(try Self.savedBeforeSend(old), forKey: "tt.shortcuts")
             let settings = AppSettings(defaults: defaults)
-            #expect(settings.shortcuts[.pushToTalk] == HeldKeyShortcutTests.f5)
-            #expect(settings.shortcuts[.addToDictionary] == HeldKeyShortcutTests.control(KeyCode.ansiD))
-            let saved = String(decoding: try #require(defaults.data(forKey: "tt.shortcuts")), as: UTF8.self)
-            #expect(!saved.contains("polish") && !saved.contains("translate") && !saved.contains("\"send\""))
-            #expect(defaults.object(forKey: "tt.polishMovedToFnP") == nil)
+            #expect(settings.shortcuts[.polish] == .fnP)
+            settings.shortcuts[.polish] = .fnReturn
+            #expect(AppSettings(defaults: defaults).shortcuts[.polish] == .fnReturn, "chosen again, it stays")
+        }
+    }
+
+    /// fn P taken by something else: Polish stays where it was.
+    @Test func polishStaysOnFnReturnWhenFnPIsTaken() throws {
+        try withSuite { defaults in
+            var old = ShortcutBindings.defaults
+            old[.polish] = .fnReturn
+            old[.pasteLast] = .fnP
+            defaults.set(try Self.savedBeforeSend(old), forKey: "tt.shortcuts")
+            #expect(AppSettings(defaults: defaults).shortcuts[.polish] == .fnReturn)
         }
     }
 

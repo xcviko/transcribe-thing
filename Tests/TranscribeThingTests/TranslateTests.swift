@@ -73,11 +73,9 @@ import Testing
         #expect(DictationController.rewriteKind(polishes: true, translates: true) == .translation(polished: true))
     }
 
-    /// Translate is the pill's button, not a binding.
-    @Test func translateIsThePillsButton() {
-        #expect(!ShortcutAction.allCases.map(\.rawValue).contains("translate"))
-        #expect(PillToggle.allCases == [.polish, .translate, .send])
-        #expect(PillToggle.translate.symbolName == "translate")
+    @Test func fnTIsTheDefault() {
+        #expect(ShortcutBindings.defaults[.translate] == .fnT)
+        #expect(ShortcutAction.translate.isDuringDictation)
     }
 
     @Test func theMachineHandsTheKeyOnWithoutStoppingTheRecording() {
@@ -86,7 +84,7 @@ import Testing
         _ = machine.handle(.pttDown, now: 1)
         #expect(machine.handle(.translate, now: 1.1) == [.translate])
         _ = machine.handle(.pttUp, now: 1.2)
-        #expect(machine.capture.isListeningOrLocked, "a click on Translate with the talk key down doesn't finish it")
+        #expect(machine.capture.isListeningOrLocked, "fn T's fn press doesn't finish hands-free")
     }
 }
 
@@ -142,11 +140,11 @@ import Testing
         let c = rig.h.controller
         rig.h.settings.lineup.main = .gemini
         Switch.hold(rig)
-        c.toggle(.translate, on: .recording)
+        c.handle(.translate)
         #expect(c.isTranslating && rig.h.pill.translates && rig.h.pill.rewrite == .translate)
-        c.toggle(.polish, on: .recording)
+        c.handle(.polish)
         #expect(rig.h.pill.rewrite == .both)
-        c.toggle(.translate, on: .recording)
+        c.handle(.translate)
         #expect(!c.isTranslating && rig.h.pill.rewrite == .polish)
         #expect(cues.played.suffix(3) == [.polishOn, .polishOn, .polishOff])
         #expect(c.machine.capture.isListeningOrLocked)
@@ -159,7 +157,7 @@ import Testing
         let c = rig.h.controller
         Switch.hold(rig)
         c.selectModelForCurrentDictation(.gemini)
-        c.toggle(.translate, on: .recording)
+        c.handle(.translate)
         #expect(c.isTranslating)
         c.selectModelForCurrentDictation(.parakeet)
         #expect(!c.isTranslating)
@@ -173,7 +171,7 @@ import Testing
         rig.h.settings.lineup.main = .gemini
         rig.result = { _, _ in "Let's meet at ten." }
         Switch.hold(rig)
-        c.toggle(.translate, on: .recording)
+        c.handle(.translate)
         try await Switch.release(rig)
         #expect(rig.pasted == ["Let's meet at ten."])
         let entry = try #require(rig.h.history.entries.first)
@@ -187,8 +185,8 @@ import Testing
         rig.h.settings.lineup.main = .gemini
         rig.result = { _, _ in "drafting <message>See you at ten.</message>" }
         Switch.hold(rig)
-        c.toggle(.polish, on: .recording)
-        c.toggle(.translate, on: .recording)
+        c.handle(.polish)
+        c.handle(.translate)
         try await Switch.release(rig)
         #expect(rig.pasted == ["See you at ten."])
         #expect(rig.h.history.entries.first?.versions.map(\.kind) == [.translation(polished: true)])
@@ -237,7 +235,7 @@ import Testing
             selection: "привет, как дела", answers: [.geminiFlash: "<message>Hi, how are you?</message>"])
         Switch.hold(rig)
         try await waitUntil { rig.h.controller.machine.isRecording }
-        rig.h.controller.toggle(.translate, on: .recording)
+        rig.h.controller.handle(.translate)
         try await waitUntil { PolishSelectionTests.card(rig, .geminiFlash) != nil }
         let card = try #require(PolishSelectionTests.card(rig, .geminiFlash))
         #expect(card.title == "Translated by Gemini 3.8 Flash" && card.transcript == "Hi, how are you?")
@@ -254,7 +252,7 @@ import Testing
         asked.hold(.geminiFlash)
         Switch.hold(rig)
         try await waitUntil { rig.h.controller.machine.isRecording }
-        rig.h.controller.toggle(.translate, on: .recording)
+        rig.h.controller.handle(.translate)
         try await waitUntil { asked.calls.count == 1 }
         #expect(rig.h.controller.activity == .translating)
         rig.h.controller.handle(.cardClose)
@@ -267,7 +265,7 @@ import Testing
     @Test func offGeminiTheTranslateKeyMovesTheDictationToGemini() async throws {
         let (rig, _, asked) = PolishSelectionTests.make(selection: nil)
         Switch.hold(rig)
-        rig.h.controller.toggle(.translate, on: .recording)
+        rig.h.controller.handle(.translate)
         try await waitUntil { rig.h.controller.isTranslating }
         #expect(rig.h.controller.effectiveChoice == .gemini)
         #expect(asked.calls.isEmpty && rig.h.pill.keyHint == nil)
@@ -280,7 +278,7 @@ import Testing
         let (rig, _, asked) = PolishSelectionTests.make(selection: nil)
         PolishSelectionTests.geminiOff(rig)
         Switch.hold(rig)
-        rig.h.controller.toggle(.translate, on: .recording)
+        rig.h.controller.handle(.translate)
         try await waitUntil { rig.h.pill.keyHint != nil }
         #expect(rig.h.pill.keyHint == "Translate works on Gemini, or on selected text")
         #expect(asked.calls.isEmpty && rig.h.controller.machine.isRecording)
@@ -293,7 +291,7 @@ import Testing
         rig.h.settings.lineup.main = .gemini
         Switch.hold(rig)
         try await waitUntil { rig.h.controller.machine.isRecording }
-        rig.h.controller.toggle(.translate, on: .recording)
+        rig.h.controller.handle(.translate)
         #expect(rig.h.controller.isTranslating && asked.calls.isEmpty)
         rig.h.controller.send(.pillCancel)
     }
