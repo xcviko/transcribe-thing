@@ -282,7 +282,8 @@ final class OpenRouterClient: Sendable {
         if result.answerTags != .pair {
             Log.net.info("Gemini's answer had tags: \(result.answerTags?.rawValue ?? "?", privacy: .public)")
         }
-        if !isProxy, let provider = result.provider, provider != "Google AI Studio" {
+        // Google AI Studio, or "Google" for Vertex (a raced copy's, `OpenRouterChatRequest.Provider.race`).
+        if !isProxy, let provider = result.provider, !["Google AI Studio", "Google"].contains(provider) {
             Log.net.warning("Unexpected OpenRouter provider: \(provider, privacy: .public)")
         }
         return result

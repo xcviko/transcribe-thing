@@ -29,6 +29,18 @@ struct OpenRouterChatRequest: Encodable, Equatable {
 
         /// Google AI Studio and nothing else, no fallbacks: every Gemini request.
         static let googleAIStudio = Provider(only: ["google-ai-studio"], allowFallbacks: false)
+
+        /// Where each copy of a raced dictation goes (Race requests, `CloudHedge.Hooks.copy`), so no two land on the
+        /// same service: Google AI Studio, then Vertex's global endpoint, then Vertex in the US (10% dearer). Gemini 3.8
+        /// Flash has no endpoint on OpenRouter in Europe or Asia. A copy past the list goes to the last.
+        static let race: [Provider] = [
+            .googleAIStudio,
+            Provider(only: ["google-vertex/global"], allowFallbacks: false),
+            Provider(only: ["google-vertex/us"], allowFallbacks: false),
+        ]
+
+        /// The copy's place in `race`.
+        static func race(copy: Int) -> Provider { race[min(max(0, copy), race.count - 1)] }
     }
 
     enum CodingKeys: String, CodingKey {
