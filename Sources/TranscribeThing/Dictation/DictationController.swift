@@ -1122,8 +1122,11 @@ final class DictationController {
                                                 progress: progress, generations: generations)
             guard !Task.isCancelled, job.generation == generation else { return }
             if rewrite?.answersInMessageTags == true, case .success(var result) = outcome {
-                result.rawAnswer = result.rawAnswer ?? result.text
-                result.text = Polish.message(from: result.text)
+                // Once, from the whole answer: the client already took the message out of its tags, and read again a
+                // message of "No speech." would come out empty.
+                let answer = result.rawAnswer ?? result.text
+                result.rawAnswer = answer
+                result.text = Polish.message(from: answer)
                 outcome = .success(result)
             }
             job.outcome = outcome
@@ -1807,8 +1810,10 @@ final class DictationController {
         var outcome = await transcribe(recording, engine: engine, prompt: prompt, background: true)
         guard endHomeWork(for: recording.id) else { return }
         if made?.answersInMessageTags == true, case .success(var result) = outcome {
-            result.rawAnswer = result.rawAnswer ?? result.text
-            result.text = Polish.message(from: result.text)
+            // Once, from the whole answer (see `run`).
+            let answer = result.rawAnswer ?? result.text
+            result.rawAnswer = answer
+            result.text = Polish.message(from: answer)
             outcome = .success(result)
         }
         land(outcome, of: recording, engine: engine, as: made)

@@ -489,6 +489,13 @@ import Testing
 
         // And back to fn: they come along again.
         #expect(record(.fn, in: after).bindings == .defaults)
+
+        // fn P given to paste last meanwhile: Move Back leaves Polish on F5 P instead of a second fn P.
+        var taken = after
+        taken[.pasteLast] = .fnP
+        taken.restore(previous, movedOnto: talkKey)
+        #expect(taken[.polish] == Self.onF5(KeyCode.ansiP) && taken[.pasteLast] == .fnP)
+        #expect(taken[.handsFree] == .fnSpace)
     }
 
     /// The user's own case: push to talk was Right ⌃, with ⌃P, ⌃T, ⌃↩ and ⌃D pressed off it. Set to F5, those go to

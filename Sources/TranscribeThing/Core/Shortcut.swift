@@ -554,7 +554,9 @@ struct ShortcutBindings: Codable, Equatable, Sendable {
     mutating func restore(_ previous: [ShortcutAction: Shortcut], movedOnto talkKey: Shortcut) {
         for (action, shortcut) in previous {
             guard let key = bindings[action]?.keyOnTalkKey(talkKey), key == shortcut.keyCode,
-                  !isUnusable(shortcut, for: action) else { continue }
+                  !isUnusable(shortcut, for: action),
+                  // Given to another action since (fn P to paste last): it stays where it moved.
+                  conflict(for: shortcut, excluding: action) == nil else { continue }
             bindings[action] = shortcut
         }
     }

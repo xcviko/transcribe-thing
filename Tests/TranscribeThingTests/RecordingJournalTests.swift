@@ -294,6 +294,22 @@ func journalSpeech(seconds: Double) -> [Float] { speechLike(seconds: seconds) }
         try await waitUntil { files(in: paths.journals).isEmpty }
     }
 
+    /// A row deleted while its recovery copy is still there (its save failed) doesn't come back at the next launch.
+    @Test func aDeletedRowsJournalGoesWithIt() async throws {
+        let paths = AppPaths.temporary()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let id = UUID()
+        await leaveJournal(in: paths.journals, info(id, startedAt: Date()), samples: speechLike(seconds: 3))
+        let store = try await loaded(paths)
+        #expect(store.entry(id: id) != nil)
+        await leaveJournal(in: paths.journals, info(id, startedAt: Date()), samples: speechLike(seconds: 3))
+        store.delete(id)
+        store.flush()
+        try await waitUntil { files(in: paths.journals).isEmpty }
+        let again = try await loaded(paths)
+        #expect(again.entry(id: id) == nil)
+    }
+
     /// The row says it's longer than its file (Continue added to it, and saving the longer recording failed): the
     /// journal isn't taken for kept. The longer recording comes back into the row's file.
     @Test func aRowLongerThanItsFileGetsTheJournalsRecording() async throws {

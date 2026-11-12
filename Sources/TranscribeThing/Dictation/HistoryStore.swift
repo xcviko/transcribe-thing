@@ -545,6 +545,9 @@ final class HistoryStore {
         guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
         if let file = entries[i].audioFileName { removeAudioFileLater(file) }
         entries.remove(at: i)
+        // A recovery copy kept for it (its save failed) would bring it back at the next launch.
+        savedJournals[id] = nil
+        journal?.remove(id)
         changed()
         onRemove?([id])
     }
@@ -554,6 +557,9 @@ final class HistoryStore {
         pendingFileRemovals.removeAll()
         let removed = entries.map(\.id)
         entries.removeAll()
+        // Their recovery copies too, or the next launch would bring them back.
+        savedJournals = [:]
+        for id in removed { journal?.remove(id) }
         if persists {
             let dir = paths.recordings
             io.perform {
