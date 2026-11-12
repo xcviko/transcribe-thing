@@ -380,6 +380,8 @@ final class HistoryStore {
     private(set) var entries: [TranscriptEntry] = []
     /// True once the on-disk history has been read (or there was none).
     private(set) var isLoaded = false
+    /// The file was there but couldn't be read (a copy was set aside): its recordings aren't swept as orphans.
+    private var readFailed = false
     /// Recordings `compressLegacyRecordings` has converted so far (General's size line follows it).
     private(set) var compressedRecordings = 0
 
@@ -477,6 +479,8 @@ final class HistoryStore {
             changed(save: !pending.isEmpty)
         case .unreadable(let message):
             Log.app.error("History file unreadable, kept a copy aside: \(message, privacy: .public)")
+            // The copy aside still names the recordings: none of them is an orphan to sweep.
+            readFailed = true
             changed(save: !entries.isEmpty)
         }
         isLoaded = true
@@ -486,7 +490,9 @@ final class HistoryStore {
 
     /// Writes immediately (used at quit).
     func flush() {
-        guard persists else { return }
+        // Before the file is read, `entries` has only what came since launch: writing it would empty History. What
+        // came since launch is in its journals until then.
+        guard persists, isLoaded else { return }
         saveTask?.cancel()
         saveTask = nil
         io.writeSync(entries, to: paths.historyFile)
@@ -625,7 +631,10 @@ final class HistoryStore {
         let files = saved.keys.reduce(into: [UUID: [URL]]()) { files, id in
             if let entry = entry(id: id) { files[id] = recordingURLs(for: entry) ?? [] }
         }
+        let io = io
         io.perform {
+            // Runs after the write it follows: if that failed, history.json doesn't have them yet.
+            guard !io.lastWriteFailed else { return }
             for (id, samples) in saved {
                 if let urls = files[id], !urls.contains(where: { FileManager.default.fileExists(atPath: $0.path) }) {
                     continue
@@ -802,7 +811,7 @@ final class HistoryStore {
             onRemove?(expired.map(\.id))
         }
 
-        guard persists, isLoaded else { return }
+        guard persists, isLoaded, !readFailed else { return }
         let referenced = Set(entries.compactMap(\.audioFileName))
         let dir = paths.recordings
         io.perform { [weak self] in
@@ -939,6 +948,9 @@ private final class HistoryIO: @unchecked Sendable {
     }
 
     private let queue = DispatchQueue(label: "dev.transcribe-thing.history", qos: .utility)
+    /// The last write of history.json failed (a full disk): the journals of what it held stay, for the next launch to
+    /// bring back. Only touched on `queue`.
+    private(set) var lastWriteFailed = false
     /// ISO 8601 with milliseconds: readable, and ordering survives a reload.
     private static let dateStyle = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
 
@@ -983,11 +995,11 @@ private final class HistoryIO: @unchecked Sendable {
     }
 
     func write(_ entries: [TranscriptEntry], to url: URL) {
-        queue.async { Self.writeNow(entries, to: url) }
+        queue.async { self.lastWriteFailed = !Self.writeNow(entries, to: url) }
     }
 
     func writeSync(_ entries: [TranscriptEntry], to url: URL) {
-        queue.sync { Self.writeNow(entries, to: url) }
+        queue.sync { self.lastWriteFailed = !Self.writeNow(entries, to: url) }
     }
 
     /// The entries of a history file; a malformed entry is skipped, a malformed file throws.
@@ -1014,7 +1026,8 @@ private final class HistoryIO: @unchecked Sendable {
         }
     }
 
-    private static func writeNow(_ entries: [TranscriptEntry], to url: URL) {
+    @discardableResult
+    private static func writeNow(_ entries: [TranscriptEntry], to url: URL) -> Bool {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .custom { date, encoder in
             var container = encoder.singleValueContainer()
@@ -1025,8 +1038,10 @@ private final class HistoryIO: @unchecked Sendable {
             let data = try encoder.encode(FileFormat(version: 1, entries: entries.map(LossyEntry.init)))
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try data.write(to: url, options: .atomic)
+            return true
         } catch {
             Log.app.error("Couldn't save history: \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 }
