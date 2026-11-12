@@ -160,7 +160,13 @@ final class TextInserter {
         if let previous = focus.precedingCharacter, Self.needsLeadingSpace(after: previous, before: text) {
             final = " " + text
         }
-        return await paste(final)
+        let outcome = await paste(final)
+        // Send's Return follows only a paste that could have gone into text: not one into a button, a list or a
+        // dialog (Return would press its default button), nor into transcribe-thing's own windows.
+        if focus.editability == .notEditable || lastPasteTarget == ProcessInfo.processInfo.processIdentifier {
+            lastPasteTarget = nil
+        }
+        return outcome
     }
 
     /// Send: Return in the app the last paste went to, after any paste still queued, once the keys held for the

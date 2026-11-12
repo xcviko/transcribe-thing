@@ -276,6 +276,22 @@ import Testing
         #expect(posted.value == 0)
     }
 
+    /// A paste into something that isn't text (a dialog's button, a list) or into transcribe-thing's own window gets no
+    /// Return: it would press that dialog's default button.
+    @Test func noReturnAfterAPasteIntoSomethingThatIsntText() async {
+        let box = Box(), posted = Posted()
+        let (inserter, pasteboard) = inserter(box, posted: posted)
+        defer { pasteboard.releaseGlobally() }
+        box.focus.editability = .notEditable
+        #expect(await inserter.insert("Send this.") == .pasted)
+        #expect(await inserter.pressReturn() == .failed)
+        box.focus.editability = .unknown
+        box.frontmost = ProcessInfo.processInfo.processIdentifier
+        #expect(await inserter.insert("Send this.") == .pasted)
+        #expect(await inserter.pressReturn() == .failed)
+        #expect(posted.value == 0)
+    }
+
     /// Send turned off (a click away) while Return waited for the keys to come up: no Return.
     @Test func sendTurnedOffDuringTheWaitPressesNothing() async {
         let box = Box(), posted = Posted()

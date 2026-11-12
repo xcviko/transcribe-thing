@@ -12,7 +12,9 @@ extension URLSession {
         config.waitsForConnectivity = false
         config.timeoutIntervalForRequest = 180
         config.timeoutIntervalForResource = 10_800
-        config.httpMaximumConnectionsPerHost = 2
+        // Race requests' three copies at once, plus the cost lookup of an earlier dictation, over an endpoint that
+        // speaks HTTP/1.1 (one request a connection): a third copy waiting for a free one wouldn't race at all.
+        config.httpMaximumConnectionsPerHost = 4
         config.urlCache = nil
         return URLSession(configuration: config)
     }()
