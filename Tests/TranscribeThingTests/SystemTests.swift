@@ -965,9 +965,14 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
     @Test func deleteClearsOnlyOptionalActions() {
         var paste = ShortcutCaptureEngine(action: .pasteLast)
         #expect(paste.keyDown(keyCode: KeyCode.delete, rawFlags: 0, isRepeat: false) == .clear)
+        // Push to talk can't be cleared, and a bare ⌫ would start a dictation at every Backspace: it stops recording.
         var ptt = ShortcutCaptureEngine(action: .pushToTalk)
-        #expect(ptt.keyDown(keyCode: KeyCode.delete, rawFlags: 0, isRepeat: false)
-            == .commit(Shortcut(modifiers: [], keyCode: KeyCode.delete)))
+        #expect(ptt.keyDown(keyCode: KeyCode.delete, rawFlags: 0, isRepeat: false) == .cancel)
+        #expect(ptt.keyDown(keyCode: KeyCode.forwardDelete, rawFlags: 0, isRepeat: false) == .cancel)
+        let fnDelete = CGEventFlags.maskSecondaryFn.rawValue
+        _ = ptt.flagsChanged(keyCode: KeyCode.function, rawFlags: fnDelete)
+        #expect(ptt.keyDown(keyCode: KeyCode.delete, rawFlags: fnDelete, isRepeat: false)
+            == .commit(Shortcut(modifiers: [.init(.function)], keyCode: KeyCode.delete)), "fn ⌫ is still a combination")
     }
 
     @Test func repeatsAreIgnored() {
@@ -2637,6 +2642,32 @@ private struct ClockedKeyboard {
         #expect(requests.gemini[1] == Polish.prompt && first.wasCancelled)
         try await waitUntil { rig.pasted.count == 1 && c.machine.activeJobs == 0 }
         #expect(rig.pasted.first?.contains("Polished words") == true)
+    }
+
+    /// fn P just after fn over a Parakeet dictation on its way can't polish it (only Gemini's are sent again): the new
+    /// recording isn't thrown away for nothing, the key is for it.
+    @Test func fnPOverAParakeetDictationKeepsTheNewRecording() async throws {
+        let gate = RequestGate()
+        let (rig, _, requests) = ProcessingRig.make { _, _, _ in
+            try await gate.wait()
+            return "parakeet words"
+        }
+        rig.h.settings.lineup.main = .parakeet
+        let c = rig.h.controller
+        ProcessingRig.dictate(rig)
+        try await waitUntil { requests.parakeet == 1 }
+        var kb = Keyboard(bindings: rig.h.settings.shortcuts)
+        kb.config = rig.h.hotkeys.currentConfig()
+        kb.press(.fn).events.forEach(c.handle)
+        #expect(c.machine.isRecording)
+        kb.config = rig.h.hotkeys.currentConfig()
+        rig.now += 0.3
+        kb.down(kVK_ANSI_P, fnFlagged: true).events.forEach(c.handle)
+        #expect(c.machine.isRecording, "the new recording goes on")
+        kb.up(kVK_ANSI_P, fnFlagged: true).events.forEach(c.handle)
+        kb.release(.fn).events.forEach(c.handle)
+        gate.isOpen = true
+        try await waitUntil { c.machine.activeJobs == 0 }
     }
 
     /// fn P well into a new recording (fn held, words said) is for that recording, as always: the one on its way isn't

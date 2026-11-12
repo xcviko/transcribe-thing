@@ -11,6 +11,8 @@ enum InsertionOutcome: Equatable, Sendable {
     case accessibilityMissing
     /// Nothing was pasted, and the clipboard is as it was.
     case failed(String)
+    /// A click away came while it waited to paste (`insert(_:unless:)`): nothing was pasted or copied.
+    case held
 }
 
 /// Pastes text at the cursor of the frontmost app: the text goes on the clipboard only for a synthetic, layout-correct
@@ -43,6 +45,8 @@ final class TextInserter {
         case pressed
         /// The app the text was pasted into isn't in front any more: Return would land somewhere else.
         case appChanged
+        /// Another paste (Paste Last, a card's Paste Here) came after the one Return was for: it isn't that one's.
+        case anotherPaste
         /// No paste to follow, no permission to post keys, or the key couldn't be posted.
         case failed
     }
@@ -86,6 +90,8 @@ final class TextInserter {
     private var pendingRestore: PendingRestore?
     /// The app the last paste's ⌘V went to (`System.frontmostApp`), for Send's Return.
     private var lastPasteTarget: pid_t?
+    /// Every paste, counted as it starts: Send's Return goes only after the paste it follows (`pressReturn(afterPaste:)`).
+    private(set) var pasteCount = 0
     /// The clipboard as `prepareToPaste()` read it, for the next paste while nothing has changed it since.
     private var prepared: (changeCount: Int, snapshot: PasteboardSnapshot?)?
     private var queueTail: Task<Void, Never>?
@@ -121,8 +127,9 @@ final class TextInserter {
     /// Pastes at the cursor of whatever has focus now. Whether a text field has it can't be told everywhere (Chrome
     /// and Electron apps don't say), so the paste never depends on it; only a password field, which macOS always
     /// names, is refused.
-    func insert(_ text: String) async -> InsertionOutcome {
-        await serialized { await self.performInsert(text) }
+    /// `held`: asked again right before the paste, after the wait for the keys to come up; true leaves it unpasted.
+    func insert(_ text: String, unless held: @escaping @MainActor () -> Bool = { false }) async -> InsertionOutcome {
+        await serialized { await self.performInsert(text, unless: held) }
     }
 
     /// "Paste here": paste into whatever has focus now, without focus or target checks.
@@ -130,9 +137,10 @@ final class TextInserter {
         await serialized { await self.performPasteNow(text) }
     }
 
-    private func performInsert(_ text: String) async -> InsertionOutcome {
+    private func performInsert(_ text: String, unless held: @MainActor () -> Bool) async -> InsertionOutcome {
         // Whatever this comes to, Send's Return follows it, never an earlier paste.
         lastPasteTarget = nil
+        pasteCount += 1
         guard !text.isEmpty else { return .failed("There was no text to paste.") }
         guard await mayPostEvents() else { return .accessibilityMissing }
 
@@ -144,6 +152,7 @@ final class TextInserter {
             // offers Copy.
             return .passwordField
         }
+        if held() { return .held }
 
         var final = text
         if let previous = focus.precedingCharacter, Self.needsLeadingSpace(after: previous, before: text) {
@@ -155,11 +164,13 @@ final class TextInserter {
     /// Send: Return in the app the last paste went to, after any paste still queued, once the keys held for the
     /// dictation are up (Return with ⌃ held is another key in most apps). Never into another app: one that came to the
     /// front since the paste gets nothing.
-    func pressReturn() async -> ReturnOutcome {
-        await serialized { await self.performPressReturn() }
+    /// `paste`: the `pasteCount` right after the paste it's for; another paste since gets no Return.
+    func pressReturn(afterPaste paste: Int? = nil) async -> ReturnOutcome {
+        await serialized { await self.performPressReturn(afterPaste: paste) }
     }
 
-    private func performPressReturn() async -> ReturnOutcome {
+    private func performPressReturn(afterPaste paste: Int?) async -> ReturnOutcome {
+        if let paste, paste != pasteCount { return .anotherPaste }
         guard let target = lastPasteTarget, await mayPostEvents() else { return .failed }
         await waitForModifierRelease()
         guard system.frontmostApp() == target else { return .appChanged }
@@ -170,6 +181,7 @@ final class TextInserter {
 
     private func performPasteNow(_ text: String) async -> InsertionOutcome {
         lastPasteTarget = nil
+        pasteCount += 1
         guard !text.isEmpty else { return .failed("There was no text to paste.") }
         guard await mayPostEvents() else { return .accessibilityMissing }
         await waitForModifierRelease()

@@ -11,6 +11,9 @@ import AppKit
 /// panel has caught up with the pointer goes through to the app below; it's asked about too (`isOwnContent`), so a
 /// click on the pill or a card never counts.
 ///
+/// Switching to another app counts too, by keyboard as much as by click (⌘Tab, a Dock icon, Spotlight): the text, and
+/// Send's Return, would land there (`switchedApp`).
+///
 /// Mouse monitors need no permission. It listens only while asked to (`isWatching`): while a dictation is processed.
 @MainActor
 final class ClickAwayMonitor {
@@ -26,6 +29,7 @@ final class ClickAwayMonitor {
     /// False in previews and tests: nothing is installed, and `mouseDown(at:)` stands for the clicks.
     private let listens: Bool
     private var monitor: Any?
+    private var activation: NSObjectProtocol?
 
     init(listens: Bool = true) {
         self.listens = listens
@@ -37,15 +41,30 @@ final class ClickAwayMonitor {
             monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
                 MainActor.assumeIsolated { self?.mouseDown(at: NSEvent.mouseLocation) }
             }
+            activation = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
+                // transcribe-thing's own windows (Home, Settings) aren't away, as clicks on them aren't.
+                let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+                guard app?.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
+                MainActor.assumeIsolated { self?.switchedApp() }
+            }
         } else if !isWatching, let monitor {
             NSEvent.removeMonitor(monitor)
             self.monitor = nil
+            if let activation { NSWorkspace.shared.notificationCenter.removeObserver(activation) }
+            activation = nil
         }
     }
 
     /// A click that went to another app, at `point` on the screen.
     func mouseDown(at point: CGPoint) {
         guard isWatching, isOwnContent?(point) != true else { return }
+        onClickAway?()
+    }
+
+    /// Another app came to the front.
+    func switchedApp() {
+        guard isWatching else { return }
         onClickAway?()
     }
 }

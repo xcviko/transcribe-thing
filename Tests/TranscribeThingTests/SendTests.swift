@@ -263,6 +263,32 @@ import Testing
         #expect(posted.value == 1)
     }
 
+    /// Paste Last (or a card's Paste Here) between a dictation's paste and its Return: the Return was that dictation's,
+    /// and isn't pressed after the other paste.
+    @Test func noReturnAfterAnotherPasteCameBetween() async {
+        let box = Box(), posted = Posted()
+        let (inserter, pasteboard) = inserter(box, posted: posted)
+        defer { pasteboard.releaseGlobally() }
+        #expect(await inserter.insert("Send this.") == .pasted)
+        let paste = inserter.pasteCount
+        #expect(await inserter.pasteNow("Last transcript.") == .pasted)
+        #expect(await inserter.pressReturn(afterPaste: paste) == .anotherPaste)
+        #expect(posted.value == 0)
+    }
+
+    /// A click away that comes while the paste waits for the keys to come up is still in time: nothing is pasted, and
+    /// the clipboard isn't touched.
+    @Test func aHoldAskedRightBeforeThePasteStopsIt() async {
+        let box = Box(), posted = Posted()
+        let (inserter, pasteboard) = inserter(box, posted: posted)
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        pasteboard.setString("mine", forType: .string)
+        #expect(await inserter.insert("Held words.", unless: { true }) == .held)
+        #expect(pasteboard.string(forType: .string) == "mine")
+        #expect(await inserter.pressReturn() == .failed, "nothing to follow")
+    }
+
     /// A paste that didn't happen (a password field) leaves nothing to follow, even after one that did.
     @Test func noReturnAfterAPasteThatDidntHappen() async {
         let box = Box(), posted = Posted()

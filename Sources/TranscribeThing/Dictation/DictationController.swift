@@ -452,7 +452,7 @@ final class DictationController {
     private func shortcutPressed(_ toggle: PillToggle) {
         if machine.isRecording {
             if machine.mode == .pushToTalk, let job = queue.last, let pressed = pressOverDictationsOnTheirWay,
-               clock() - pressed < Self.keyTakeoverWindow {
+               clock() - pressed < Self.keyTakeoverWindow, takesOver(toggle, for: job) {
                 pressOverDictationsOnTheirWay = nil
                 pressTakenByKey = true
                 pillModel.endChipFlash()
@@ -463,6 +463,23 @@ final class DictationController {
             self.toggle(toggle, on: .recording, byKey: true)
         } else if let job = queue.last {
             self.toggle(toggle, on: .processing(job.key), byKey: true)
+        }
+    }
+
+    /// A press of `toggle`'s key just after the talk key is for `job` on its way only when it led to the key (fn P off
+    /// fn, F5 P off F5: pressed with the talk key, not as a key of its own while a new dictation starts) and `job` can
+    /// take it (Polish and Translate on Gemini, Send while it isn't held by a click away). Otherwise it's the new one's.
+    private func takesOver(_ toggle: PillToggle, for job: Job) -> Bool {
+        let action: ShortcutAction = switch toggle {
+        case .polish: .polish
+        case .translate: .translate
+        case .send: .send
+        }
+        guard let talkKey = settings.shortcuts[.pushToTalk],
+              settings.shortcuts[action]?.keyOnTalkKey(talkKey) != nil else { return false }
+        switch toggle {
+        case .polish, .translate: return job.engine.isGemini
+        case .send: return !job.isHeldByClick
         }
     }
 
@@ -600,9 +617,9 @@ final class DictationController {
                 execute(machine.handle(.captureFailed(failure), now: clock()))
                 return
             case .stopCaptureAndTranscribe(let mode):
-                // A vanished device has no tail worth waiting for.
-                finishCapture(tail: effects.contains(.notice(.deviceLostTranscribing)) ? 0 : AudioRecorder.stopTail,
-                              mode: mode)
+                // A vanished device has no tail worth waiting for, and what it cut off is half a message: never sent.
+                let deviceLost = effects.contains(.notice(.deviceLostTranscribing))
+                finishCapture(tail: deviceLost ? 0 : AudioRecorder.stopTail, mode: mode, sends: !deviceLost)
             case .cancelCapture(let keepForUndo, let notify):
                 cancelCapture(keepForUndo: keepForUndo, notify: notify)
             case .discardCapture:
@@ -729,7 +746,7 @@ final class DictationController {
     }
 
     /// Queues the job right away (FIFO order is decided at release), then waits for the recorder's tail.
-    private func finishCapture(tail: TimeInterval, mode: DictationMachine.Mode) {
+    private func finishCapture(tail: TimeInterval, mode: DictationMachine.Mode, sends: Bool = true) {
         let resumedID = continuing?.id
         let resumedMode = continuingMode
         continuing = nil
@@ -742,7 +759,7 @@ final class DictationController {
         // The main model may have changed under it (Models, a notice's "Use Parakeet v3"): only Gemini polishes.
         job.polishes = isPolishing && effectiveChoice.isGemini
         job.translates = isTranslating && effectiveChoice.isGemini
-        job.sends = isSending
+        job.sends = isSending && sends
         queue.append(job)
         _ = machine.handle(.jobStarted, now: clock())
         finishingJob = job
@@ -1340,15 +1357,18 @@ final class DictationController {
                 Log.app.info("A continued dictation stayed in its History row: \(Brand.name, privacy: .public) was in front")
                 return
             }
-            if job.isHeldByClick {
-                // The user clicked somewhere else meanwhile: the text waits on its card, to paste there or copy.
+            // The user clicked somewhere else meanwhile, up to the moment of its ⌘V: the text waits on its card, to paste
+            // there or copy.
+            let insertion = job.isHeldByClick ? .held
+                : await insert(pasted(text, by: model, in: job.mode), unless: { job.isHeldByClick })
+            if insertion == .held {
                 toasts.post(Self.clickedAwayCard(text, by: model, in: job.mode, id: job.id, quiet: machine.isRecording))
                 return
             }
-            let insertion = await insert(pasted(text, by: model, in: job.mode))
+            let paste = inserter.pasteCount
             handleInsertion(insertion, text: text, by: model, in: job.mode, isDictation: true)
             // Only once its own text is in: a password field or a failed paste never sends anything.
-            if job.sends, insertion == .pasted { await pressReturn() }
+            if job.sends, insertion == .pasted { await pressReturn(for: job, afterPaste: paste) }
         }
     }
 
@@ -1359,9 +1379,12 @@ final class DictationController {
 
     /// Send's Return, `returnDelay` after the paste, in the app the text went to (`TextInserter.pressReturn`). The next
     /// dictation's paste waits for it.
-    private func pressReturn() async {
+    private func pressReturn(for job: Job, afterPaste paste: Int) async {
         try? await Task.sleep(for: returnDelay)
-        let outcome = if let pressReturnOverride { await pressReturnOverride() } else { await inserter.pressReturn() }
+        // A click away (or a switch to another app) during the wait turned Send off.
+        guard job.sends else { return }
+        let outcome = if let pressReturnOverride { await pressReturnOverride() }
+            else { await inserter.pressReturn(afterPaste: paste) }
         DiagnosticLog.shared.event(.dictation, "send.return", ["outcome": outcome.rawValue])
     }
 
@@ -1520,9 +1543,9 @@ final class DictationController {
 
     // MARK: - Insertion
 
-    private func insert(_ text: String) async -> InsertionOutcome {
-        if let insertOverride { return await insertOverride(text) }
-        return await inserter.insert(text)
+    private func insert(_ text: String, unless held: @escaping @MainActor () -> Bool = { false }) async -> InsertionOutcome {
+        if let insertOverride { return held() ? .held : await insertOverride(text) }
+        return await inserter.insert(text, unless: held)
     }
 
     private func copy(_ text: String) {
@@ -1564,6 +1587,9 @@ final class DictationController {
             Log.app.error("Paste failed: \(reason, privacy: .public)")
             toasts.post(transcriptCard(text, by: model, in: mode, title: "Couldn’t paste",
                                        body: "Copy it, or try pasting again.", pasteHere: true))
+        case .held:
+            // A dictation's delivery puts it on its click-away card first; nothing else is held.
+            break
         }
     }
 
@@ -2944,24 +2970,27 @@ final class DictationController {
     /// its text comes up on a card instead (`clickedAwayCard`). Send goes off for it, with its sound, and the plane
     /// leaves the pill. One click is enough; another changes nothing. It holds every dictation on its way at the
     /// click, each on its own pill; a dictation still recording isn't one of them: clicking into another field is part
-    /// of dictating it.
+    /// of dictating it. Switching to another app (⌘Tab) counts as a click away. With the setting off the text is pasted
+    /// wherever the user is now, but Send still goes off: its Return would send the message somewhere else.
     func clickedAway() {
-        guard settings.holdsPasteAfterClick else { return }
-        // Not the one being pasted right now: its text is on its way in.
-        let jobs = queue.filter { !$0.isHeldByClick }
+        let holds = settings.holdsPasteAfterClick
+        // The one being pasted right now too, until its ⌘V goes (`insert(_:unless:)`) and its Return after it.
+        let jobs = (queue + [deliveringJob].compactMap { $0 }).filter { !$0.isHeldByClick && (holds || $0.sends) }
         guard !jobs.isEmpty else { return }
         var sendOff = false
         for job in jobs {
-            job.isHeldByClick = true
+            if holds { job.isHeldByClick = true }
             if job.sends {
                 job.sends = false
-                job.sendOffByClick = true
+                // Taking the click back (the dashed pill) turns it on again; without a hold there's nothing to take back.
+                job.sendOffByClick = holds
                 sendOff = true
             }
         }
         // Send's one sound, as when its key turns it off.
         if sendOff { playCue(.sendOn) }
-        DiagnosticLog.shared.event(.dictation, "processing.clickedAway", ["sendOff": sendOff ? true : nil])
+        DiagnosticLog.shared.event(.dictation, "processing.clickedAway",
+                                   ["sendOff": sendOff ? true : nil, "held": holds ? nil : false])
         stateDidChange()
     }
 
@@ -2984,7 +3013,9 @@ final class DictationController {
 
     /// Listens for clicks only while one would hold a dictation's paste.
     private var watchesClicks: Bool {
-        settings.holdsPasteAfterClick && queue.contains { !$0.isHeldByClick }
+        (queue + [deliveringJob].compactMap { $0 }).contains {
+            !$0.isHeldByClick && (settings.holdsPasteAfterClick || $0.sends)
+        }
     }
 
     nonisolated static let clickedAwayCardPrefix = "dictation.clickedAway."

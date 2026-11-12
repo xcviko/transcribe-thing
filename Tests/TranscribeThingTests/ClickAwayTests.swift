@@ -216,6 +216,49 @@ import Testing
         #expect(Self.card(rig) == nil)
     }
 
+    /// Switching to another app (⌘Tab, no click) while it's processed is a click away: the text waits on its card, and
+    /// Send goes off.
+    @Test func switchingAppsIsAClickAway() async throws {
+        let first = RequestGate()
+        let (rig, _, requests, monitor) = Self.make(first: first)
+        let c = rig.h.controller
+        var returns = 0
+        c.returnDelay = .milliseconds(5)
+        c.pressReturnOverride = { returns += 1; return .pressed }
+        R.dictate(rig)
+        try await waitUntil { requests.gemini.count == 1 }
+        rig.h.pill.clickTray(.send)
+        #expect(rig.h.pill.sends && monitor.isWatching)
+        monitor.switchedApp()
+        #expect(rig.h.pill.holdsPaste && !rig.h.pill.sends)
+        first.isOpen = true
+        try await waitUntil { Self.card(rig) != nil && c.machine.activeJobs == 0 }
+        #expect(rig.pasted.isEmpty && returns == 0)
+    }
+
+    /// With the setting off the text is pasted wherever the user went, but Send's Return never follows it there: a click
+    /// or an app switch turns Send off, and only a dictation that sends is listened for.
+    @Test func withTheSettingOffSendStillGoesOffAway() async throws {
+        let first = RequestGate()
+        let (rig, _, requests, monitor) = Self.make(first: first)
+        let c = rig.h.controller
+        rig.h.settings.holdsPasteAfterClick = false
+        var returns = 0
+        c.returnDelay = .milliseconds(5)
+        c.pressReturnOverride = { returns += 1; return .pressed }
+        R.dictate(rig)
+        try await waitUntil { requests.gemini.count == 1 }
+        #expect(!monitor.isWatching)
+        rig.h.pill.clickTray(.send)
+        #expect(monitor.isWatching)
+        monitor.switchedApp()
+        #expect(!rig.h.pill.holdsPaste && !rig.h.pill.sends)
+        first.isOpen = true
+        try await waitUntil { rig.pasted.count == 1 && c.machine.activeJobs == 0 }
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(returns == 0 && Self.card(rig) == nil)
+    }
+
     /// Esc after a click cancels the dictation as always: no card, then or later.
     @Test func escAfterAClickCancels() async throws {
         let first = RequestGate()

@@ -87,6 +87,7 @@ extension InsertionOutcome: DiagnosticValue {
         case .passwordField: "passwordField"
         case .accessibilityMissing: "accessibilityMissing"
         case .failed: "failed"
+        case .held: "held"
         }
     }
 }
