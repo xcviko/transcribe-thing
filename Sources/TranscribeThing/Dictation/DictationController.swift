@@ -1794,7 +1794,10 @@ final class DictationController {
         beginHomeWork(kind, for: id)
         homeTasks[id] = Task { [weak self] in
             guard let self else { return }
-            let recording = await self.history.loadRecordingInBackground(for: entry)
+            // The launch's recovery may be bringing a longer copy of it back right now: that lands first.
+            await self.history.waitForRecovery()
+            guard !Task.isCancelled else { return }
+            let recording = await self.history.loadRecordingInBackground(for: self.history.entry(id: id) ?? entry)
             guard !Task.isCancelled else { return }
             guard let recording else {
                 _ = self.endHomeWork(for: id)
@@ -2165,7 +2168,10 @@ final class DictationController {
         startingContinuations.insert(id)
         Task { [weak self] in
             guard let self else { return }
-            let recording = await self.history.loadRecordingInBackground(for: row)
+            // The launch's recovery may be bringing a longer copy of it back right now: it lands first, and recording on
+            // never starts over a journal still being read.
+            await self.history.waitForRecovery()
+            let recording = await self.history.loadRecordingInBackground(for: self.history.entry(id: id) ?? row)
             self.startingContinuations.remove(id)
             guard let recording else {
                 self.homeFailures[id] = .recordingGone(.transcription(row.engine))

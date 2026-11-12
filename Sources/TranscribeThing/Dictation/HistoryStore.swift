@@ -385,6 +385,8 @@ final class HistoryStore {
     private var readFailed = false
     /// Rows deleted this run: a recovery that read their journal before the delete doesn't bring them back.
     @ObservationIgnored private var deletedIDs: Set<UUID> = []
+    /// Clear All ran this run: journals the launch's recovery hasn't brought back yet go too.
+    @ObservationIgnored private var clearedAll = false
     /// Recordings `compressLegacyRecordings` has converted so far (General's size line follows it).
     private(set) var compressedRecordings = 0
 
@@ -562,7 +564,9 @@ final class HistoryStore {
         let removed = entries.map(\.id)
         entries.removeAll()
         // Their recovery copies too, or the next launch (or this one's recovery, reading them) would bring them back.
+        // A recovery still under way brings nothing more back: everything was deleted.
         deletedIDs.formUnion(removed)
+        clearedAll = true
         savedJournals = [:]
         for id in removed { journal?.remove(id) }
         if persists {
@@ -660,7 +664,8 @@ final class HistoryStore {
         }
     }
 
-    /// Returns once the launch's `recoverJournals` is done: tests.
+    /// Returns once the launch's `recoverJournals` is done (at once when none runs): Home's Continue and Retry wait for it,
+    /// so a longer copy it's bringing back lands before they read the recording.
     func waitForRecovery() async {
         await recoveryTask?.value
     }
@@ -701,8 +706,10 @@ final class HistoryStore {
                 journal.remove(id)
                 continue
             }
-            // Deleted while its journal was read: it goes.
-            guard !deletedIDs.contains(id) else {
+            // Deleted while its journal was read (that row, or all of History), or Auto-delete shortened meanwhile: it goes.
+            let days = settings.autoDeleteHistoryDays
+            let expired = days > 0 && startedAt < Date().addingTimeInterval(-Double(days) * 86_400)
+            guard !deletedIDs.contains(id), !clearedAll, !expired else {
                 journal.remove(id)
                 continue
             }
