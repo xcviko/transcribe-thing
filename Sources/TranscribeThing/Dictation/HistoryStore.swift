@@ -385,6 +385,8 @@ final class HistoryStore {
     private var readFailed = false
     /// Rows deleted this run: a recovery that read their journal before the delete doesn't bring them back.
     @ObservationIgnored private var deletedIDs: Set<UUID> = []
+    /// Deleted rows whose recovery copy goes once Undo is over (`delete`).
+    @ObservationIgnored private var pendingJournalRemovals: Set<UUID> = []
     /// Clear All ran this run: journals the launch's recovery hasn't brought back yet go too.
     @ObservationIgnored private var clearedAll = false
     /// The launch's `recoverJournals` is running.
@@ -504,6 +506,9 @@ final class HistoryStore {
         // Before the file is read, `entries` has only what came since launch: writing it would empty History. What
         // came since launch is in its journals until then.
         guard persists, isLoaded else { return }
+        // Quitting ends Undo: the deleted rows' recovery copies go now.
+        for id in pendingJournalRemovals { journal?.remove(id) }
+        pendingJournalRemovals.removeAll()
         saveTask?.cancel()
         saveTask = nil
         io.writeSync(entries, to: paths.historyFile)
@@ -527,6 +532,9 @@ final class HistoryStore {
 
     func upsert(_ entry: TranscriptEntry) {
         if let file = entry.audioFileName { pendingFileRemovals.removeValue(forKey: file)?.cancel() }
+        // Back from a delete (Home's Undo): its recovery copy stays, and recovery may bring it back again.
+        pendingJournalRemovals.remove(entry.id)
+        deletedIDs.remove(entry.id)
         if let i = entries.firstIndex(where: { $0.id == entry.id }) {
             let old = entries[i]
             // The same recording in the other format takes over from its own file: the save that wrote it removed
@@ -556,10 +564,18 @@ final class HistoryStore {
         if let file = entries[i].audioFileName { removeAudioFileLater(file) }
         entries.remove(at: i)
         // A recovery copy kept for it (its save failed) would bring it back at the next launch, or this one's recovery
-        // if it's reading it right now.
+        // if it's reading it right now. It goes once Home's Undo can no longer bring the row back (its recording may be
+        // the only whole copy), or at quit.
         deletedIDs.insert(id)
         savedJournals[id] = nil
-        journal?.remove(id)
+        pendingJournalRemovals.insert(id)
+        if persists {
+            Task { [weak self, deletedAudioGrace] in
+                try? await Task.sleep(for: deletedAudioGrace)
+                guard let self, self.pendingJournalRemovals.remove(id) != nil else { return }
+                self.journal?.remove(id)
+            }
+        }
         changed()
         onRemove?([id])
     }

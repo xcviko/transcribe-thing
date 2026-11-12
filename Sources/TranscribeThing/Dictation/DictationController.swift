@@ -2205,7 +2205,10 @@ final class DictationController {
         guard waitingForRecovery.insert(id).inserted else { return }
         Task { [weak self] in
             await self?.history.waitForRecovery()
-            self?.waitingForRecovery.remove(id)
+            guard let self else { return }
+            self.waitingForRecovery.remove(id)
+            // Deleted meanwhile: nothing to work on (and nothing to pay for).
+            guard self.history.entry(id: id) != nil else { return }
             work()
         }
     }

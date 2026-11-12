@@ -310,6 +310,21 @@ func journalSpeech(seconds: Double) -> [Float] { speechLike(seconds: seconds) }
         #expect(again.entry(id: id) == nil)
     }
 
+    /// Home's Undo of a delete, before quitting: the recovery copy stays with the row.
+    @Test func undoingADeleteKeepsTheJournal() async throws {
+        let paths = AppPaths.temporary()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let id = UUID()
+        await leaveJournal(in: paths.journals, info(id, startedAt: Date()), samples: speechLike(seconds: 3))
+        let store = try await loaded(paths)
+        let entry = try #require(store.entry(id: id))
+        await leaveJournal(in: paths.journals, info(id, startedAt: Date()), samples: speechLike(seconds: 3))
+        store.delete(id)
+        store.upsert(entry)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(!files(in: paths.journals).isEmpty)
+    }
+
     /// The row says it's longer than its file (Continue added to it, and saving the longer recording failed): the
     /// journal isn't taken for kept. The longer recording comes back into the row's file.
     @Test func aRowLongerThanItsFileGetsTheJournalsRecording() async throws {
