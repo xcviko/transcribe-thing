@@ -34,8 +34,8 @@ struct WelcomeStep: View {
                         detail: "Parakeet runs on your Mac. Your voice never leaves it.")
                 feature("macwindow.on.rectangle", tint: .accent, title: "Works everywhere",
                         detail: "Mail, chat, your editor, any text field.")
-                feature("text.quote", tint: .inkSecondary, title: "Your words, verbatim",
-                        detail: "Transcription only. No rewriting, no surprises.")
+                feature("text.quote", tint: .inkSecondary, title: "Your words, as you said them",
+                        detail: "Polish and Translate only when you ask.")
             }
         }
     }

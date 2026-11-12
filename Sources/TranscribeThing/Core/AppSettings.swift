@@ -281,6 +281,8 @@ final class AppSettings {
         // Where Parakeet ran (on this Mac, or through OpenRouter until that was removed), or the main model of a build
         // before 0.2.0. Parakeet runs only on this Mac now, so a lineup that had it through OpenRouter has it here.
         let storedEngine = store.string(.selectedEngine).flatMap(EngineID.init(rawValue:))
+        // Read before the lineup is stored back without clean-up: Pasting's rules follow it below.
+        let cleanupWasMain = (store.json(.lineup) as StoredMainModel?)?.main == ModelChoice.retiredCleanup
         if let v: ModelLineup = store.json(.lineup) {
             lineup = v
         } else if let migrated = Self.migratedLineup(storedEngine: storedEngine,
@@ -350,13 +352,24 @@ final class AppSettings {
         handsFreeModel = Self.handsFreeModel(stored: store.string(.handsFreeModel), lineup: lineup)
         // Pasting's two switches held for every model; each is picked per model now. One an older build turned on
         // holds for all of them, once: the old keys go. The removed clean-up drops out of the sets (`ModelChoice.read`).
+        // Where clean-up was the main model, Parakeet took its place (`ModelLineup`): it takes its Pasting rules too,
+        // saved, so they stay once the lineup is saved without clean-up.
+        let readRules: ([String]) -> Set<ModelChoice> = { raw in
+            var rules = ModelChoice.read(raw)
+            if cleanupWasMain, raw.contains(ModelChoice.retiredCleanup) { rules.insert(.parakeet) }
+            return rules
+        }
         if let v: [String] = store.json(.modelsAddingSpace) {
-            modelsAddingSpace = ModelChoice.read(v)
+            modelsAddingSpace = readRules(v)
+            if cleanupWasMain { store.setJSON(ModelChoice.stored(modelsAddingSpace), .modelsAddingSpace) }
         } else if store.bool(.addSpaceAfterText) == true {
             modelsAddingSpace = Set(ModelChoice.allCases)
         }
         if let v: [String] = store.json(.modelsRemovingFinalPeriod) {
-            modelsRemovingFinalPeriod = ModelChoice.read(v)
+            modelsRemovingFinalPeriod = readRules(v)
+            if cleanupWasMain {
+                store.setJSON(ModelChoice.stored(modelsRemovingFinalPeriod), .modelsRemovingFinalPeriod)
+            }
         } else if store.bool(.removeFinalPeriod) == true {
             modelsRemovingFinalPeriod = Set(ModelChoice.allCases)
         }
@@ -594,4 +607,9 @@ private final class SettingsStore {
         guard let data = object(key) as? Data else { return nil }
         return try? JSONDecoder().decode(T.self, from: data)
     }
+}
+
+/// Only the main model of a stored lineup, as stored: names a removed model too (`ModelChoice.retiredCleanup`).
+private struct StoredMainModel: Decodable {
+    var main: String?
 }

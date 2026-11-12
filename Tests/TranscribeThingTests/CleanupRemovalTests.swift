@@ -108,6 +108,21 @@ import Testing
         }
     }
 
+    /// Clean-up as the main model: Parakeet took its place, and takes its Pasting rules too, for good.
+    @Test func cleanupsPastingRulesGoToParakeetWhereItWasMain() throws {
+        try withDefaults { defaults in
+            let json = #"{"main":"cleanup","order":["parakeet","cleanup","gemini"],"switchable":["gemini"]}"#
+            defaults.set(Data(json.utf8), forKey: SettingsKey.lineup.defaultsKey)
+            defaults.set(try JSONEncoder().encode(["cleanup"]), forKey: SettingsKey.modelsAddingSpace.defaultsKey)
+            defaults.set(try JSONEncoder().encode(["gemini"]), forKey: SettingsKey.modelsRemovingFinalPeriod.defaultsKey)
+            let settings = load(defaults)
+            #expect(settings.lineup.main == .parakeet)
+            #expect(settings.modelsAddingSpace == [.parakeet] && settings.modelsRemovingFinalPeriod == [.gemini])
+            #expect(stored(defaults, .modelsAddingSpace) == #"["parakeet"]"#)
+            #expect(load(defaults).modelsAddingSpace == [.parakeet], "it stays once the lineup is stored without it")
+        }
+    }
+
     /// Clean-up's color goes with it; the others keep theirs.
     @Test func cleanupsColorIsDropped() throws {
         try withDefaults { defaults in
