@@ -424,14 +424,15 @@ private struct HoldPasteRow: View {
     @Environment(AppSettings.self) private var settings
 
     static let help = "After you stop dictating and before the text is pasted, a click anywhere outside "
-        + "\(Brand.name), left or right button, means you’ve moved on. The pill’s outline turns dashed, and the text "
-        + "comes up on a card to paste or copy instead. Send turns off for that dictation. Clicks while you’re still "
-        + "recording, and clicks on the pill, its cards or the app’s windows, don’t count."
+        + "\(Brand.name), left or right button, or a switch to another app means you’ve moved on. The pill’s outline "
+        + "turns dashed, and the text comes up on a card to paste or copy instead; click the pill to paste it after all. "
+        + "Send turns off for that dictation. Clicks while you’re still recording, and clicks on the pill, its cards or "
+        + "the app’s windows, don’t count. Turned off, the text is pasted wherever you are, but Send still turns off."
 
     var body: some View {
         @Bindable var settings = settings
         SettingsRow(title: "Hold the paste after a click",
-                    subtitle: "Click elsewhere before it’s pasted, and the text waits on a card.",
+                    subtitle: "Click elsewhere or switch apps before it’s pasted, and the text waits on a card.",
                     systemImage: "cursorarrow.click", iconTint: .inkSecondary) {
             HStack(spacing: 10) {
                 InfoHint(text: Self.help)

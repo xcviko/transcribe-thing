@@ -25,7 +25,7 @@ When a new version is out, the app tells you, and Update Now in General → Soft
 | To | Do |
 |---|---|
 | Dictate | hold **fn**, speak, let go |
-| Dictate without holding a key | **fn Space** to start, **fn** to finish |
+| Dictate without holding a key | **fn Space** to start, a tap of **fn** to finish |
 | Cancel | **esc** (Undo brings it back) |
 | Switch model while you talk | **fn ⇥** |
 | Get the message you meant, not every word (Gemini) | **fn P**, or click the **wand** on the pill |
@@ -44,6 +44,11 @@ dictation; while texts are on their way, the keys go to the newest. Change the k
 You don't have to wait for the text. Start the next dictation while the last one is still being written: the earlier
 one moves up onto a pill of its own, and each text is pasted as soon as it's ready, in the order you dictated. Esc
 cancels the dictation you're recording, or, when you're not recording, the newest one still on its way.
+
+Moved on before the text came? Click somewhere else, or switch to another app, after you stop and before the text is
+pasted, and it waits on a card instead, to paste or copy. The pill's outline turns dashed; click the pill to paste it
+after all. Turn this off in General → Pasting → Hold the paste after a click. Either way, Send presses Return only
+where you dictated: a click elsewhere or a switch to another app before the paste turns it off for that dictation.
 
 If music or a video plays on your Mac's speakers while you dictate, the app takes it out of what your microphone hears,
 so you don't have to talk over it and the song's words mostly stay out of the transcript. This needs the System Audio
@@ -128,8 +133,6 @@ dictation: transcribe it again with another model, polish it or translate it.
 It takes MP3, M4A, WAV, Telegram voice notes (.ogg) and the sound of a video, up to three hours. Files don't count
 toward the numbers on Home: words, speed and dictations are only what you said.
 
-Recording and transcribing your calls as they happen is a separate app now, calls-thing.
-
 ## Your data
 
 History, the recordings, your dictionary and your API keys (OpenRouter's and your own endpoint's) stay on your Mac, in
@@ -145,8 +148,8 @@ delete it, so you can transcribe it again with another model, polish it or trans
 delete entries older than 1, 7, 30 or 90 days.
 
 If the app quits or crashes, or the Mac shuts down, while you dictate or wait for the transcript, the recording isn't
-lost. The next time the app starts, it's in History marked "Couldn't transcribe", with Retry. Nothing goes to a model
-until you click it.
+lost. The next time the app starts, it's in History marked "Interrupted". Continue records more where you stopped and
+then transcribes all of it, or, if you had already stopped, transcribes it. Nothing goes to a model until you click it.
 
 ## If something doesn't work
 
