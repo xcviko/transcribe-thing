@@ -2033,8 +2033,9 @@ final class DictationController {
 
     // MARK: - Retry and Undo from notices
 
-    /// A notice's Retry or "Use … Instead": the dictation is transcribed again and pasted where the user is now. Not
-    /// while another dictation records: its text would come with nowhere to go, so `notice` stays up, saying so.
+    /// A notice's Retry or "Use … Instead": the dictation is transcribed again and pasted where the user is now. While
+    /// another dictation records it goes on its way beside it, as one stopped just before would: its text is pasted
+    /// first, into the field in front, and the new one's after it.
     private func retry(recordingID: UUID?, engine: EngineID?, from notice: Notice) {
         guard let id = recordingID else { return }
         if let waiting = queue.first(where: { $0.id == id }) {
@@ -2047,14 +2048,6 @@ final class DictationController {
             return
         }
         guard !isInFlight(id) else { return }
-        guard !machine.isRecording else {
-            // A new notice: the clicked one goes once its button is handled.
-            toasts.post(Notice(dedupeKey: notice.dedupeKey, style: notice.style, symbol: notice.symbol,
-                               title: notice.title, body: "Finish this dictation first, then Retry.",
-                               actions: notice.actions, link: notice.link, lifetime: notice.lifetime,
-                               recordingID: notice.recordingID))
-            return
-        }
         // Transcribed since (from Home): its text is in History, and a notice never pastes it or makes it again.
         guard history.entry(id: id)?.status != .success else { return }
         guard let recording = recording(for: id) else {

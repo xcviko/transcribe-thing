@@ -225,7 +225,7 @@ enum ProcessingRig {
 
     /// A failed dictation's Retry while another records would bring text with nowhere to go: the notice stays,
     /// saying to finish first, and nothing is sent.
-    @Test func retryWaitsForTheRecordingToEnd() async throws {
+    @Test func retryGoesWhileANewDictationRecords() async throws {
         var fails = true
         let (rig, _, requests) = R.make { engine, prompt, _ in
             if fails { throw AppError.timeout(engine) }
@@ -236,12 +236,16 @@ enum ProcessingRig {
         try await waitUntil { rig.h.history.entries.first?.status == .failed && c.machine.activeJobs == 0 }
         let failure = try #require(rig.h.toasts.notices.first { $0.actions.contains { $0.kind == .retry } })
         fails = false
+        rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
         c.send(.handsFreeToggle)
         rig.h.toasts.perform(try #require(failure.actions.first { $0.kind == .retry }), on: failure)
-        #expect(requests.gemini.count == 1 && c.machine.isRecording)
-        let again = try #require(rig.notice(failure.dedupeKey))
-        #expect(again.body == "Finish this dictation first, then Retry." && again.sound == nil)
-        c.handle(.cancel)
+        try await waitUntil { requests.gemini.count == 2 && rig.pasted.count == 1 }
+        #expect(c.machine.isRecording, "the new recording goes on")
+        #expect(rig.notice(failure.dedupeKey) == nil)
+        #expect(rig.h.history.entries.first { $0.id == failure.recordingID }?.status == .success)
+        rig.now += 2
+        c.send(.pillStop)
+        try await waitUntil { rig.pasted.count == 2 && c.machine.activeJobs == 0 }
     }
 
     /// Each pill keeps its own dictation's state: Polish on the older one shows on its stacked pill, Send on the newer
