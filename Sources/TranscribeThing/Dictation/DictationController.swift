@@ -1384,7 +1384,7 @@ final class DictationController {
         // A click away (or a switch to another app) during the wait turned Send off.
         guard job.sends else { return }
         let outcome = if let pressReturnOverride { await pressReturnOverride() }
-            else { await inserter.pressReturn(afterPaste: paste) }
+            else { await inserter.pressReturn(afterPaste: paste, while: { job.sends }) }
         DiagnosticLog.shared.event(.dictation, "send.return", ["outcome": outcome.rawValue])
     }
 

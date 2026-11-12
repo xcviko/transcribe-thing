@@ -594,9 +594,11 @@ final class HistoryStore {
         let encode = encodeOverride ?? RecordingFile.aac
         let save = UUID()
         latestSaves[id] = save
+        let io = io
         io.perform { [weak self] in
             let saved = isStored && FileManager.default.fileExists(atPath: url.path)
                 ? url : RecordingFile.save(samples, as: url, encode: encode)
+            io.noteSave(of: id, succeeded: saved != nil)
             Task { @MainActor in self?.finishSaving(save, of: id, as: saved?.lastPathComponent) }
         }
         return name
@@ -636,6 +638,8 @@ final class HistoryStore {
             // Runs after the write it follows: if that failed, history.json doesn't have them yet.
             guard !io.lastWriteFailed else { return }
             for (id, samples) in saved {
+                // Its latest save failed: an older file of it (before Undo or Continue added to it) isn't this one.
+                if io.failedSaves.contains(id) { continue }
                 if let urls = files[id], !urls.contains(where: { FileManager.default.fileExists(atPath: $0.path) }) {
                     continue
                 }
@@ -951,6 +955,13 @@ private final class HistoryIO: @unchecked Sendable {
     /// The last write of history.json failed (a full disk): the journals of what it held stay, for the next launch to
     /// bring back. Only touched on `queue`.
     private(set) var lastWriteFailed = false
+    /// Recordings whose latest save failed: their journals stay. Only touched on `queue`.
+    private(set) var failedSaves: Set<UUID> = []
+
+    /// On `queue`, right after a recording's save.
+    func noteSave(of id: UUID, succeeded: Bool) {
+        if succeeded { failedSaves.remove(id) } else { failedSaves.insert(id) }
+    }
     /// ISO 8601 with milliseconds: readable, and ordering survives a reload.
     private static let dateStyle = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
 

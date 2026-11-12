@@ -276,6 +276,16 @@ import Testing
         #expect(posted.value == 0)
     }
 
+    /// Send turned off (a click away) while Return waited for the keys to come up: no Return.
+    @Test func sendTurnedOffDuringTheWaitPressesNothing() async {
+        let box = Box(), posted = Posted()
+        let (inserter, pasteboard) = inserter(box, posted: posted)
+        defer { pasteboard.releaseGlobally() }
+        #expect(await inserter.insert("Send this.") == .pasted)
+        #expect(await inserter.pressReturn(afterPaste: inserter.pasteCount, while: { false }) == .turnedOff)
+        #expect(posted.value == 0)
+    }
+
     /// A click away that comes while the paste waits for the keys to come up is still in time: nothing is pasted, and
     /// the clipboard isn't touched.
     @Test func aHoldAskedRightBeforeThePasteStopsIt() async {

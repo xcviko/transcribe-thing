@@ -47,6 +47,8 @@ final class TextInserter {
         case appChanged
         /// Another paste (Paste Last, a card's Paste Here) came after the one Return was for: it isn't that one's.
         case anotherPaste
+        /// Send went off (a click away) while Return waited for the keys to come up.
+        case turnedOff
         /// No paste to follow, no permission to post keys, or the key couldn't be posted.
         case failed
     }
@@ -164,15 +166,18 @@ final class TextInserter {
     /// Send: Return in the app the last paste went to, after any paste still queued, once the keys held for the
     /// dictation are up (Return with ⌃ held is another key in most apps). Never into another app: one that came to the
     /// front since the paste gets nothing.
-    /// `paste`: the `pasteCount` right after the paste it's for; another paste since gets no Return.
-    func pressReturn(afterPaste paste: Int? = nil) async -> ReturnOutcome {
-        await serialized { await self.performPressReturn(afterPaste: paste) }
+    /// `paste`: the `pasteCount` right after the paste it's for; another paste since gets no Return. `sends`: asked again
+    /// right before Return goes, after the wait for the keys to come up.
+    func pressReturn(afterPaste paste: Int? = nil,
+                     while sends: @escaping @MainActor () -> Bool = { true }) async -> ReturnOutcome {
+        await serialized { await self.performPressReturn(afterPaste: paste, while: sends) }
     }
 
-    private func performPressReturn(afterPaste paste: Int?) async -> ReturnOutcome {
+    private func performPressReturn(afterPaste paste: Int?, while sends: @MainActor () -> Bool) async -> ReturnOutcome {
         if let paste, paste != pasteCount { return .anotherPaste }
         guard let target = lastPasteTarget, await mayPostEvents() else { return .failed }
         await waitForModifierRelease()
+        guard sends() else { return .turnedOff }
         guard system.frontmostApp() == target else { return .appChanged }
         let post = system.postReturn
         let posted = await Task.detached(priority: .userInitiated) { post() }.value
