@@ -234,8 +234,9 @@ struct Shortcut: Codable, Hashable, Sendable {
         [keyCode, heldKeyCode].contains { $0.map(KeyNames.functionKeys.contains) == true }
     }
 
-    /// A key that types on its own: T, ⇧T or ⌥T, with no fn, ⌃ or ⌘ and no key held first. Bound to something live
-    /// while a dictation is on its way (Polish, Translate, Send), every T typed meanwhile would be taken.
+    /// A key that types on its own: T, ⇧T, ⌥T or Tab, with no fn, ⌃ or ⌘ and no key held first. Bound to something
+    /// used while dictating, every Tab typed in hands-free (and, for Polish, Translate and Send, every T typed while a
+    /// dictation is on its way) would be taken.
     var typesText: Bool {
         guard heldKeyCode == nil, let keyCode, !KeyNames.functionKeys.contains(keyCode) else { return false }
         return Set(modifiers.map(\.modifier)).isDisjoint(with: [.control, .command, .function])
@@ -584,9 +585,9 @@ struct ShortcutBindings: Codable, Equatable, Sendable {
                 result[action] = try c.decode(Shortcut.self, forKey: key)
             }
         }
-        // Polish, Translate or Send saved on a key that types on its own (T): it took every T typed while a dictation
-        // was on its way. It goes back to its default.
-        for action in ShortcutAction.allCases where action.isLiveWhileProcessing && result[action]?.typesText == true {
+        // A key used while dictating saved on a key that types on its own (Tab, T): it took every Tab typed in
+        // hands-free, every T typed while a dictation was on its way. It goes back to its default (fn Tab, fn T).
+        for action in ShortcutAction.allCases where action.isDuringDictation && result[action]?.typesText == true {
             result[action] = nil
             defaulted.append(action)
         }
@@ -936,10 +937,13 @@ enum ShortcutValidator {
                 return v
             }
         }
-        if action.isLiveWhileProcessing, s.typesText {
-            // Live while a dictation is on its way, when the user is typing again.
+        if action.isDuringDictation, s.typesText {
+            // Live in hands-free, while the user's hands are free to type, and (Polish, Translate, Send) while a
+            // dictation is on its way, when the user is typing again.
+            let when = action.isLiveWhileProcessing ? "while you dictate hands-free or a dictation is on its way"
+                : "while you dictate hands-free"
             v.errors.append("\(action.title) needs fn, ⌃ or ⌘ with it, or the talk key held first: on its own, "
-                + "\(s.compactDescription) would stop typing while a dictation is on its way.")
+                + "\(s.compactDescription) would stop typing \(when).")
             return v
         }
         if action == .addToDictionary, s.isModifierOnly {

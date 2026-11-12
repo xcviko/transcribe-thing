@@ -396,21 +396,28 @@ import Testing
                 == ["Push to talk is one key or combination, not one key held and then another."])
     }
 
-    /// Polish, Translate and Send are live while a dictation is on its way, when you type again: a key that types on
-    /// its own (T, ⇧T, ⌥T) is refused for them, and one saved by an older build goes back to its default at load. fn T,
-    /// ⌃T, ⌘T and T off a held talk key are fine.
+    /// The keys used while dictating are live in hands-free, when your hands are free to type, and Polish, Translate
+    /// and Send also while a dictation is on its way: a key that types on its own (T, ⇧T, ⌥T, Tab) is refused for
+    /// them, and one saved by an older build goes back to its default at load. fn T, ⌃T, ⌘T and T off a held talk key
+    /// are fine.
     @Test func theThreeNeedMoreThanATypingKey() throws {
         let t = Shortcut(modifiers: [], keyCode: KeyCode.ansiT)
         #expect(t.typesText && Shortcut(modifiers: [.init(.shift)], keyCode: KeyCode.ansiT).typesText)
         #expect(!Shortcut.fnT.typesText && !Self.onF5(KeyCode.ansiT).typesText && !Self.f5.typesText)
         let refused = validate(t, for: .translate, pushToTalk: .fn)
         #expect(refused.errors == ["Translate needs fn, ⌃ or ⌘ with it, or the talk key held first: on its own, "
-                                   + "T would stop typing while a dictation is on its way."])
+                                   + "T would stop typing while you dictate hands-free or a dictation is on its way."])
         #expect(validate(.fnT, for: .translate, pushToTalk: .fn).errors.isEmpty)
         #expect(validate(Shortcut(modifiers: [.init(.control)], keyCode: KeyCode.ansiT), for: .translate,
                          pushToTalk: .fn).errors.isEmpty)
-        // Switch model is live only while you record: a bare Tab stays allowed.
-        #expect(validate(Shortcut(modifiers: [], keyCode: KeyCode.tab), for: .switchModel, pushToTalk: .fn).errors.isEmpty)
+        // Switch model is live only while you record, but in hands-free you type: a bare Tab is refused too.
+        let tab = Shortcut(modifiers: [], keyCode: KeyCode.tab)
+        #expect(validate(tab, for: .switchModel, pushToTalk: .fn).errors
+                == ["Switch model needs fn, ⌃ or ⌘ with it, or the talk key held first: on its own, "
+                    + "⇥ would stop typing while you dictate hands-free."])
+        #expect(validate(Shortcut(modifiers: [], keyCode: KeyCode.ansiD), for: .addToDictionary, pushToTalk: .fn)
+                .errors.count == 1)
+        #expect(validate(.fnTab, for: .switchModel, pushToTalk: .fn).errors.isEmpty)
 
         let saved = #"{"pushToTalk":{"modifiers":[{"modifier":"function","side":"either"}]},"#
             + #""translate":{"keyCode":17,"modifiers":[]},"polish":{"keyCode":35,"modifiers":[]},"#
@@ -418,6 +425,12 @@ import Testing
         let decoded = try JSONDecoder().decode(ShortcutBindings.self, from: Data(saved.utf8))
         #expect(decoded[.translate] == .fnT && decoded[.polish] == .fnP, "bare T and P go back to fn T and fn P")
         #expect(decoded[.send] == Shortcut(modifiers: [.init(.control)], keyCode: KeyCode.returnKey), "⌃↩ stays")
+
+        // The bare Tab an older build let Switch model have goes back to fn Tab.
+        let bareTab = #"{"pushToTalk":{"modifiers":[{"modifier":"function","side":"either"}]},"#
+            + #""switchModel":{"keyCode":48,"modifiers":[]},"addToDictionary":{"keyCode":2,"modifiers":[]}}"#
+        let reset = try JSONDecoder().decode(ShortcutBindings.self, from: Data(bareTab.utf8))
+        #expect(reset[.switchModel] == .fnTab && reset[.addToDictionary] == .fnD)
     }
 
     @Test func chordsClash() {
@@ -425,9 +438,9 @@ import Testing
         #expect(twice.conflict == .handsFree && twice.errors == ["Already used for hands-free."])
         let bareSpace = validate(Shortcut(modifiers: [], keyCode: KeyCode.space), for: .send, [.handsFree: Self.f5Space])
         #expect(bareSpace.conflict == nil && bareSpace.errors.count == 1, "a key that types is refused first")
-        let bareSpaceForSwitch = validate(Shortcut(modifiers: [], keyCode: KeyCode.space), for: .switchModel,
-                                          [.handsFree: Self.f5Space])
-        #expect(bareSpaceForSwitch.conflict == .handsFree, "Space would go off with F5 held too")
+        let bareSpaceForPaste = validate(Shortcut(modifiers: [], keyCode: KeyCode.space), for: .pasteLast,
+                                         [.handsFree: Self.f5Space])
+        #expect(bareSpaceForPaste.conflict == .handsFree, "Space would go off with F5 held too")
         #expect(validate(Self.onF5(KeyCode.ansiP), for: .polish, [.handsFree: Self.f5Space]).errors.isEmpty)
         // Swap is offered for a duplicate, as for any other shortcut.
         var bindings = ShortcutBindings.defaults
@@ -506,13 +519,13 @@ import Testing
         #expect(clash[.polish] == .fnP, "F5 P is paste last's")
         #expect(clash[.translate] == Self.onF5(KeyCode.ansiT))
 
-        // Right ⌥ to talk: ⌥Space would fire while you type, so hands-free stays fn Space; ⌥P types π, and Polish is
-        // live while a dictation is on its way, when you type again: it stays fn P. Add to dictionary's ⌥D only goes off
-        // while you record, and moves.
+        // Right ⌥ to talk: ⌥Space would fire while you type, so hands-free stays fn Space; ⌥P, ⌥D and ⌥Tab type, and
+        // they'd be taken while you type in hands-free: they stay fn P, fn D and fn Tab.
         let option = record(.rightOption).bindings
         #expect(option[.handsFree] == .fnSpace)
         #expect(option[.polish] == .fnP)
-        #expect(option[.addToDictionary] == Shortcut(modifiers: [.init(.option)], keyCode: KeyCode.ansiD))
+        #expect(option[.addToDictionary] == .fnD)
+        #expect(option[.switchModel] == .fnTab)
     }
 
     /// Nothing moves when the new talk key can't carry them (⌃⌥D), when nothing was on the old one, when another

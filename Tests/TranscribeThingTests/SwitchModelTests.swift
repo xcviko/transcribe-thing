@@ -109,12 +109,13 @@ import Testing
         #expect(ShortcutValidator.validate(.rightCommand, for: .switchModel, bindings: .defaults, system: Self.quiet).isAcceptable)
     }
 
-    /// Like Esc for cancel, a plain key for switch model only goes to it during a dictation: no typing warning.
-    @Test func aPlainKeyIsFineForADuringDictationAction() {
+    /// A plain key for switch model would be taken from what you type in hands-free: refused. For paste last it's only
+    /// a warning.
+    @Test func aPlainKeyIsRefusedForADuringDictationAction() {
         let tab = Shortcut(modifiers: [], keyCode: KeyCode.tab)
         let forSwitch = ShortcutValidator.validate(tab, for: .switchModel, bindings: .defaults, system: Self.quiet)
-        #expect(forSwitch.isAcceptable)
-        #expect(!forSwitch.warnings.contains { $0.kind == .typing })
+        #expect(!forSwitch.isAcceptable)
+        #expect(ShortcutValidator.validate(.fnTab, for: .switchModel, bindings: .defaults, system: Self.quiet).isAcceptable)
         let forPaste = ShortcutValidator.validate(tab, for: .pasteLast, bindings: .defaults, system: Self.quiet)
         #expect(forPaste.warnings.contains { $0.kind == .typing })
     }

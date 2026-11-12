@@ -2120,25 +2120,26 @@ private func copyScreenshotAndFile(to pasteboard: NSPasteboard) {
         #expect(kb.release(.rightOption).events == [.pttUp])
     }
 
-    /// A switch key without modifiers still leaves fn+Space to hands-free: the exact match wins over the loose one
-    /// that sets the held fn aside.
-    @Test func aPlainSwitchKeyLeavesTheHandsFreeChordAlone() {
-        let space = Shortcut(modifiers: [], keyCode: KeyCode.space)
-        #expect(ShortcutValidator.validate(space, for: .switchModel).errors.isEmpty, "the validator accepts it")
-        var kb = Keyboard(bindings: bindings([.switchModel: space]))
-        #expect(kb.press(.fn).events == [.pttDown])
-        #expect(kb.down(kVK_Space).events == [.handsFreeToggle], "fn+Space while holding fn locks hands-free")
-        kb.up(kVK_Space)
-        kb.release(.fn)
+    /// A switch key that types on its own (a bare Space or Tab, saved somehow) is never taken: in hands-free it types,
+    /// and fn+Space is still the hands-free chord.
+    @Test func aPlainSwitchKeyIsNeverTaken() {
+        for key in [kVK_Space, kVK_Tab] {
+            let plainKey = Shortcut(modifiers: [], keyCode: UInt16(key))
+            #expect(!ShortcutValidator.validate(plainKey, for: .switchModel).errors.isEmpty, "the validator refuses it")
+            var kb = Keyboard(bindings: bindings([.switchModel: plainKey]))
+            #expect(kb.press(.fn).events == [.pttDown])
+            #expect(kb.down(kVK_Space).events == [.handsFreeToggle], "fn+Space while holding fn locks hands-free")
+            kb.up(kVK_Space)
+            kb.release(.fn)
 
-        // Hands-free: a plain Space steps, fn+Space is still the hands-free chord.
-        kb.config.isRecording = true
-        let plain = kb.down(kVK_Space)
-        #expect(plain.events == [.cycleEngine])
-        #expect(plain.swallow)
-        kb.up(kVK_Space)
-        #expect(kb.press(.fn).events == [.pttDown])
-        #expect(kb.down(kVK_Space).events == [.handsFreeToggle])
+            // Hands-free: the plain key types, fn+Space is still the hands-free chord.
+            kb.config.isRecording = true
+            let plain = kb.down(key)
+            #expect(plain.events.isEmpty && !plain.swallow)
+            kb.up(key)
+            #expect(kb.press(.fn).events == [.pttDown])
+            #expect(kb.down(kVK_Space).events == [.handsFreeToggle])
+        }
     }
 
     @Test func nothingFiresWhileTheRecorderCaptures() {
