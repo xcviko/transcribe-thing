@@ -294,6 +294,30 @@ func journalSpeech(seconds: Double) -> [Float] { speechLike(seconds: seconds) }
         try await waitUntil { files(in: paths.journals).isEmpty }
     }
 
+    /// The row says it's longer than its file (Continue added to it, and saving the longer recording failed): the
+    /// journal isn't taken for kept. The longer recording comes back into the row's file.
+    @Test func aRowLongerThanItsFileGetsTheJournalsRecording() async throws {
+        let paths = AppPaths.temporary()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let first = try await loaded(paths)
+        let short = Recording(samples: speechLike(seconds: 2), speech: SpeechStats(voicedSeconds: 1.5, peakDBFS: -12,
+                                                                                    isSilent: false))
+        let file = first.saveAudio(short)
+        let long = speechLike(seconds: 5)
+        first.upsert(TranscriptEntry(id: short.id, createdAt: Date(), text: "", engine: .parakeet, status: .failed,
+                                     audioDuration: 5, voicedSeconds: 4, audioFileName: file))
+        first.flush()
+        _ = first.loadRecording(for: try #require(first.entry(id: short.id)))
+        await first.journal?.settle()
+        await leaveJournal(in: paths.journals, info(short.id, startedAt: Date()), samples: long)
+
+        let store = try await loaded(paths)
+        let entry = try #require(store.entry(id: short.id))
+        try await waitUntil { files(in: paths.journals).isEmpty }
+        let recording = try #require(store.loadRecording(for: entry))
+        #expect(abs(recording.samples.count - long.count) <= Int(RecordingFile.lengthTolerance * rate))
+    }
+
     /// Cut off while it was recorded (the sidecar never said it ended): it comes back to be continued, saying so.
     @Test func aDictationCutOffWhileRecordingComesBackToContinue() async throws {
         let paths = AppPaths.temporary()

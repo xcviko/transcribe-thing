@@ -353,10 +353,12 @@ final class AppSettings {
         // Pasting's two switches held for every model; each is picked per model now. One an older build turned on
         // holds for all of them, once: the old keys go. The removed clean-up drops out of the sets (`ModelChoice.read`).
         // Where clean-up was the main model, Parakeet took its place (`ModelLineup`): it takes its Pasting rules too,
-        // saved, so they stay once the lineup is saved without clean-up.
+        // on or off, as every dictation had them; saved, so they stay once the lineup is saved without clean-up.
         let readRules: ([String]) -> Set<ModelChoice> = { raw in
             var rules = ModelChoice.read(raw)
-            if cleanupWasMain, raw.contains(ModelChoice.retiredCleanup) { rules.insert(.parakeet) }
+            if cleanupWasMain {
+                if raw.contains(ModelChoice.retiredCleanup) { rules.insert(.parakeet) } else { rules.remove(.parakeet) }
+            }
             return rules
         }
         if let v: [String] = store.json(.modelsAddingSpace) {

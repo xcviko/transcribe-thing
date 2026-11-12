@@ -121,6 +121,13 @@ import Testing
             #expect(stored(defaults, .modelsAddingSpace) == #"["parakeet"]"#)
             #expect(load(defaults).modelsAddingSpace == [.parakeet], "it stays once the lineup is stored without it")
         }
+        // Off for clean-up and on for Parakeet: every dictation went to clean-up, without it. Parakeet goes on so.
+        try withDefaults { defaults in
+            let json = #"{"main":"cleanup","order":["parakeet","cleanup","gemini"],"switchable":["gemini"]}"#
+            defaults.set(Data(json.utf8), forKey: SettingsKey.lineup.defaultsKey)
+            defaults.set(try JSONEncoder().encode(["parakeet", "gemini"]), forKey: SettingsKey.modelsAddingSpace.defaultsKey)
+            #expect(load(defaults).modelsAddingSpace == [.gemini])
+        }
     }
 
     /// Clean-up's color goes with it; the others keep theirs.

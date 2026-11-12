@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import Observation
 
@@ -680,9 +681,11 @@ final class HistoryStore {
             let existing = entry(id: id)
             let isWorthIt = duration >= AudioRecorder.minimumUndoDuration && !speech.isSilent
                 && speech.voicedSeconds >= Self.minimumRecoveredVoicedSeconds
-            let isKept = existing.map { entry in
-                hasRecordingFile(entry) && (entry.status == .success || entry.audioDuration >= duration - 0.5)
-            } ?? false
+            // Kept only when the file on disk holds all of it: a Continue whose longer save failed left the shorter file
+            // behind under the row's new length.
+            let urls = existing.flatMap { recordingURLs(for: $0) } ?? []
+            let savedSeconds = await Task.detached(priority: .utility) { Self.longestSavedDuration(urls) }.value
+            let isKept = existing != nil && (savedSeconds ?? 0) >= duration - 0.5
             guard isWorthIt, !isKept, cutoff.map({ startedAt >= $0 }) ?? true else {
                 journal.remove(id)
                 continue
@@ -718,12 +721,16 @@ final class HistoryStore {
         }
     }
 
+    /// How long the longest of these recording files is, by its header; nil when none is there or readable.
+    private nonisolated static func longestSavedDuration(_ urls: [URL]) -> TimeInterval? {
+        urls.compactMap { url -> TimeInterval? in
+            guard let file = try? AVAudioFile(forReading: url), file.fileFormat.sampleRate > 0 else { return nil }
+            return Double(file.length) / file.fileFormat.sampleRate
+        }.max()
+    }
+
     /// Speech a journal must hold to come back: what a dictation needs to be transcribed at all.
     private static let minimumRecoveredVoicedSeconds = 0.25
-
-    private func hasRecordingFile(_ entry: TranscriptEntry) -> Bool {
-        recordingURLs(for: entry)?.contains { FileManager.default.fileExists(atPath: $0.path) } ?? false
-    }
 
     /// The entry's recording read back, either format (`RecordingFile`); nil when it has none or it can't be read.
     /// When the file the entry names can't be read, the same recording in the other format is: the WAV a failed
