@@ -444,6 +444,25 @@ enum ProcessingRig {
         #expect(rig.pasted.count == 1)
     }
 
+    /// Esc after the paste, while Return still waits: the text is in, but Return isn't pressed.
+    @Test func escBetweenThePasteAndReturnStopsReturn() async throws {
+        let first = RequestGate()
+        let (rig, _, requests) = Self.make(first: first)
+        let c = rig.h.controller
+        var returns = 0
+        c.returnDelay = .milliseconds(300)
+        c.pressReturnOverride = { returns += 1; return .pressed }
+        R.dictate(rig)
+        try await waitUntil { requests.gemini.count == 1 }
+        rig.h.pill.clickTray(.send)
+        first.isOpen = true
+        try await waitUntil { rig.pasted.count == 1 }
+        c.handle(.cancel)
+        try await waitUntil { c.machine.activeJobs == 0 }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(returns == 0)
+    }
+
     /// On Parakeet the text is there at once: Polish and Translate are dimmed and do nothing; Send still works.
     @Test func onParakeetOnlySendWorks() async throws {
         let gate = RequestGate()

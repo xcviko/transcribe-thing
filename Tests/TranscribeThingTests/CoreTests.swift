@@ -556,6 +556,17 @@ import Testing
         #expect(reloaded == .defaults)
     }
 
+    /// v0.4.0 kept fn F13 apart from F13; an F-key is itself now, so hands-free on fn F13 next to push to talk on
+    /// F13 would be the same key: hands-free goes back to its default, and F13 stays push to talk.
+    @Test func aBindingThatBecameTheSameKeyAsPushToTalkGoesBack() throws {
+        let saved = #"{"pushToTalk":{"keyCode":105,"modifiers":[]},"#
+            + #""handsFree":{"keyCode":105,"modifiers":[{"modifier":"function","side":"either"}]}}"#
+        let decoded = try JSONDecoder().decode(ShortcutBindings.self, from: Data(saved.utf8))
+        #expect(decoded[.pushToTalk] == .f13)
+        #expect(decoded[.handsFree] != .f13)
+        #expect(decoded[.handsFree].map { decoded.conflict(for: $0, excluding: .handsFree) == nil } ?? true)
+    }
+
     /// A lone ⇧, or ⌘ / ⌥ / ⌃ on the left, is pressed all the time while typing: refused for the keys used while
     /// dictating, and reset at load. Right ⌘ alone is fine. Send next to Right ⌥ is fn ↩: ⌥↩ types.
     @Test func typingModifiersAndSendNextToRightOption() throws {

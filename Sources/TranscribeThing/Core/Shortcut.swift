@@ -651,6 +651,17 @@ struct ShortcutBindings: Codable, Equatable, Sendable {
                   let other = conflict(for: shortcut, excluding: action), !defaulted.contains(other) else { continue }
             bindings[action] = nil
         }
+        // Two saved bindings that now press the same keys (fn F13 is F13, since an F-key is itself): the later action
+        // (push to talk is first) goes back to its default, or is unbound, so push to talk keeps working.
+        for (index, action) in ShortcutAction.allCases.enumerated() {
+            guard let shortcut = bindings[action], let other = conflict(for: shortcut, excluding: action),
+                  let otherIndex = ShortcutAction.allCases.firstIndex(of: other), otherIndex < index else { continue }
+            bindings[action] = nil
+            if let fallback = Self.defaultShortcut(for: action, pushToTalk: bindings[.pushToTalk]),
+               conflict(for: fallback, excluding: action) == nil {
+                bindings[action] = fallback
+            }
+        }
     }
 }
 

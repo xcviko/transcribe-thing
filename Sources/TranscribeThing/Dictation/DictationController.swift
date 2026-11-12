@@ -1299,7 +1299,15 @@ final class DictationController {
     /// False when there was nothing left to cancel (the last result is already being delivered).
     @discardableResult
     private func cancelNewestJob() -> Bool {
-        guard let job = queue.last else { return false }
+        guard let job = queue.last else {
+            // Only the one being pasted is left: its text is going in, but Esc still stops its Return.
+            guard let delivering = deliveringJob, delivering.sends else { return false }
+            delivering.sends = false
+            DiagnosticLog.shared.event(.dictation, "send.canceled", [:])
+            playCue(.sendOn)
+            stateDidChange()
+            return true
+        }
         DiagnosticLog.shared.event(.dictation, "job.canceled", ["engine": job.engine])
         queue.removeLast()
         job.stop()
