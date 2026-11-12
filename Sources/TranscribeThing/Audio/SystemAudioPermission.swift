@@ -15,7 +15,7 @@ enum SystemAudioPermission {
     /// Brings up macOS's question, which comes the first time the app makes a tap: one of everything, let go a moment
     /// later. Nothing it hears is kept. General → Permissions' Allow, never a dictation.
     static func ask() {
-        let tap = ProcessTapSource(target: .everythingButThisApp, label: "permission")
+        let tap = ProcessTapSource(label: "permission")
         tap.start()
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2) {
             _ = tap.drain()

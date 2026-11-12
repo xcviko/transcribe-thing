@@ -2,7 +2,7 @@ import CoreAudio
 import Foundation
 
 /// The reference a dictation's echo canceller (`LiveEchoCanceller`) needs: what the Mac plays, as a process tap of
-/// every app but this one hears it (`ProcessTapSource`, `.everythingButThisApp`).
+/// every app but this one hears it (`ProcessTapSource`).
 ///
 /// Nothing of it runs at key-down: `start` returns at once and the checks run on a queue of their own while the mic
 /// opens. The tap is made only when macOS already lets the app record other apps' sound (it never asks: a tap made
@@ -31,7 +31,7 @@ final class DictationEcho: @unchecked Sendable {
         static let live = Sensors(
             permission: { SystemAudioPermission.current() },
             othersPlaying: { CoreAudioHAL.othersRunningOutput() },
-            makeTap: { ProcessTapSource(target: .everythingButThisApp, label: "dictation") })
+            makeTap: { ProcessTapSource(label: "dictation") })
     }
 
     enum Status: String, Sendable {

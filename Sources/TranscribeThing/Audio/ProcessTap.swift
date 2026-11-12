@@ -22,27 +22,18 @@ protocol AudioTapSource: AnyObject, Sendable {
     var problem: String? { get }
 }
 
-/// What a process tap takes in.
-enum TapTarget: Equatable, Sendable {
-    /// The sound of these HAL process objects, mixed: every process of one app (a browser's helpers included).
-    case processes([AudioObjectID])
-    /// Everything the Mac plays but this app's own sounds: what a dictation takes out of the mic (`DictationEcho`).
-    case everythingButThisApp
-}
-
-/// Other apps' sound: a CoreAudio process tap of everything the Mac plays but this app (or of one app's processes),
-/// mixed to mono, in a private aggregate device of its own that `HALDeviceInput` reads like any input, resampled to
-/// 16 kHz. Each stretch is stamped with the host time its IO cycle carries, so it lines up with the mic's.
-///
-/// It needs the "System Audio Recording Only" permission (`NSAudioCaptureUsageDescription`); macOS asks the first time
-/// a tap is made. A tap that can't be made leaves `problem` and no audio: the mic goes on alone. When the tapped
-/// processes change (`retarget`: Chrome starts a new helper), the tap is made again for the new set; the moment
-/// between is silence.
 enum ProcessTap {
     /// The UID every aggregate device the app makes starts with (`CoreAudioHAL` leaves them out of the microphones).
     static let ownDeviceUIDPrefix = "dev.transcribe-thing."
 }
 
+/// Other apps' sound: a CoreAudio process tap of everything the Mac plays but this app, mixed to mono, in a private
+/// aggregate device of its own that `HALDeviceInput` reads like any input, resampled to 16 kHz: what a dictation takes
+/// out of the mic (`DictationEcho`). Each stretch is stamped with the host time its IO cycle carries, so it lines up
+/// with the mic's.
+///
+/// It needs the "System Audio Recording Only" permission (`NSAudioCaptureUsageDescription`); macOS asks the first time
+/// a tap is made. A tap that can't be made leaves `problem` and no audio: the mic goes on alone.
 final class ProcessTapSource: AudioTapSource, @unchecked Sendable {
     private let control = DispatchQueue(label: "dev.transcribe-thing.audio.tap", qos: .userInitiated)
     private let lock = NSLock()
@@ -56,7 +47,6 @@ final class ProcessTapSource: AudioTapSource, @unchecked Sendable {
     private var stopped = false
     private var lastProblem: String?
     // Control-queue state.
-    private var target: TapTarget
     private var tapID = AudioObjectID(kAudioObjectUnknown)
     private var aggregateID = AudioObjectID(kAudioObjectUnknown)
     private var input: HALDeviceInput?
@@ -64,8 +54,7 @@ final class ProcessTapSource: AudioTapSource, @unchecked Sendable {
     /// What the tap is for, in its name and the log: "dictation" for the echo canceller's reference.
     private let label: String
 
-    init(target: TapTarget, label: String) {
-        self.target = target
+    init(label: String) {
         self.label = label
     }
 
@@ -73,16 +62,6 @@ final class ProcessTapSource: AudioTapSource, @unchecked Sendable {
 
     func start() {
         control.async { self.build() }
-    }
-
-    func retarget(_ processes: [AudioObjectID]) {
-        control.async {
-            guard case .processes(let current) = self.target, current != processes, !processes.isEmpty else { return }
-            Log.audio.info("Tap follows \(processes.count) processes now (was \(current.count))")
-            self.target = .processes(processes)
-            self.teardown()
-            self.build()
-        }
     }
 
     func drain() -> [TimedAudio] {
@@ -103,15 +82,8 @@ final class ProcessTapSource: AudioTapSource, @unchecked Sendable {
 
     private func build() {
         guard !lock.withLock({ stopped }) else { return }
-        let description: CATapDescription
-        switch target {
-        case .processes(let processes):
-            guard !processes.isEmpty else { return }
-            description = CATapDescription(monoMixdownOfProcesses: processes)
-        case .everythingButThisApp:
-            let own = CoreAudioHAL.processObjectID(pid: getpid()).map { [$0] } ?? []
-            description = CATapDescription(monoGlobalTapButExcludeProcesses: own)
-        }
+        let own = CoreAudioHAL.processObjectID(pid: getpid()).map { [$0] } ?? []
+        let description = CATapDescription(monoGlobalTapButExcludeProcesses: own)
         description.uuid = UUID()
         description.name = "transcribe-thing \(label)"
         description.isPrivate = true
