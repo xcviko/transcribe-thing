@@ -149,6 +149,10 @@ struct PillCanvasView: View {
         return PillStackMetrics.height(for: model.stack.count)
     }
 
+    /// Toasts make room for the chip, and for the Switch model hint too when pills are stacked: the stack stands above
+    /// either (`stackLift`), and the toasts above the stack.
+    private var toastsClearChip: Bool { showsChip || (stackHeight > 0 && showsSwitchHint) }
+
     /// The stack stands above the chip (or a hint in its place) while one floats over the pill.
     private var stackLift: CGFloat {
         PillCanvasMetrics.pillBottomInset + PillMetrics.maxHeight + PillStackMetrics.gap
@@ -159,7 +163,7 @@ struct PillCanvasView: View {
     private var toastOrigin: ToastOrigin {
         guard pillHoldsSlot else { return ToastOrigin(pillComesBack: model.isPresented) }
         let pill = PillView(model: model, context: .panel(nil)).visual.size
-        let lift = Self.toastBottomPadding(pillOnScreen: true, showsChip: showsChip, stackHeight: stackHeight)
+        let lift = Self.toastBottomPadding(pillOnScreen: true, showsChip: toastsClearChip, stackHeight: stackHeight)
             - PillCanvasMetrics.pillBottomInset
         return ToastOrigin(size: pill, drop: lift)
     }
@@ -176,7 +180,7 @@ struct PillCanvasView: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             ToastStack(center: toasts, regions: regions, origin: toastOrigin)
-                .padding(.bottom, Self.toastBottomPadding(pillOnScreen: pillHoldsSlot, showsChip: showsChip,
+                .padding(.bottom, Self.toastBottomPadding(pillOnScreen: pillHoldsSlot, showsChip: toastsClearChip,
                                                           stackHeight: stackHeight))
                 .animation(slotAnimation, value: pillHoldsSlot)
                 .animation(reduceMotion ? .easeInOut(duration: 0.15) : .spring(duration: 0.32, bounce: 0.15),

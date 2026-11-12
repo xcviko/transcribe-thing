@@ -223,7 +223,8 @@ final class PillController {
             try? await Task.sleep(for: .seconds(0.1))
             guard let self, let panel = self.panel else { return }
             self.fadeTask = nil
-            self.reposition(on: screen)
+            // A dictation that started during the fade put the pill where it's typed into: it stays there.
+            if !self.sessionActive { self.reposition(on: screen) }
             NSAnimationContext.runAnimationGroup({ context in
                 context.duration = 0.1
                 panel.animator().alphaValue = 1
@@ -297,10 +298,24 @@ final class PillController {
     /// A click on a tray button, by the same regions the hover uses: the toggle goes straight to the model, whatever
     /// SwiftUI's gestures around the tray would have made of it. False when the click isn't on an open tray's button.
     func clickTrayButton(at point: CGPoint) -> Bool {
-        guard let button = regions.trayButtons.first(where: { screenRect($0.value)?.contains(point) ?? false })?.key,
-              model.showsTray(button.owner), let state = model.trayState(button.owner) else { return false }
-        if state.isEnabled(button.toggle) { model.onToggle?(button.toggle, state.dictation) }
-        return true
+        let contains: (CGRect?) -> Bool = { rect in rect.flatMap(self.screenRect)?.contains(point) ?? false }
+        if let button = regions.trayButtons.first(where: { contains($0.value) })?.key,
+           model.showsTray(button.owner), let state = model.trayState(button.owner) {
+            if state.isEnabled(button.toggle) { model.onToggle?(button.toggle, state.dictation) }
+            return true
+        }
+        guard model.isPresented, !regions.toasts.values.contains(where: { contains($0) }) else { return false }
+        // The chip and the stacked pills float above the pill's own tap area, which SwiftUI keeps their clicks inside:
+        // they're answered here, over all of their drawn size.
+        if model.visiblePhase == .locked, contains(regions.chip) {
+            model.onEngineChipClick?()
+            return true
+        }
+        if let stacked = regions.stackPills.first(where: { contains($0.value) })?.key {
+            model.onStackClick?(stacked)
+            return true
+        }
+        return false
     }
 
     private func screenRect(_ canvasRect: CGRect) -> CGRect? {
