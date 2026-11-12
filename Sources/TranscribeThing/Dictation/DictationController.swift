@@ -1362,13 +1362,12 @@ final class DictationController {
             }
             // The user clicked somewhere else meanwhile, up to the moment of its ⌘V: the text waits on its card, to paste
             // there or copy.
-            let insertion = job.isHeldByClick ? .held
-                : await insert(pasted(text, by: model, in: job.mode), unless: { job.isHeldByClick })
+            let (insertion, paste) = job.isHeldByClick ? (InsertionOutcome.held, 0)
+                : await insertCounted(pasted(text, by: model, in: job.mode), unless: { job.isHeldByClick })
             if insertion == .held {
                 toasts.post(Self.clickedAwayCard(text, by: model, in: job.mode, id: job.id, quiet: machine.isRecording))
                 return
             }
-            let paste = inserter.pasteCount
             handleInsertion(insertion, text: text, by: model, in: job.mode, isDictation: true)
             // Only once its own text is in: a password field or a failed paste never sends anything.
             if job.sends, insertion == .pasted { await pressReturn(for: job, afterPaste: paste) }
@@ -1547,8 +1546,14 @@ final class DictationController {
     // MARK: - Insertion
 
     private func insert(_ text: String, unless held: @escaping @MainActor () -> Bool = { false }) async -> InsertionOutcome {
-        if let insertOverride { return held() ? .held : await insertOverride(text) }
-        return await inserter.insert(text, unless: held)
+        await insertCounted(text, unless: held).outcome
+    }
+
+    /// `insert`, with the number of the paste (`TextInserter.insertCounted`) for Send's Return.
+    private func insertCounted(_ text: String, unless held: @escaping @MainActor () -> Bool) async
+        -> (outcome: InsertionOutcome, paste: Int) {
+        if let insertOverride { return (held() ? .held : await insertOverride(text), inserter.pasteCount) }
+        return await inserter.insertCounted(text, unless: held)
     }
 
     private func copy(_ text: String) {

@@ -383,6 +383,8 @@ final class HistoryStore {
     private(set) var isLoaded = false
     /// The file was there but couldn't be read (a copy was set aside): its recordings aren't swept as orphans.
     private var readFailed = false
+    /// Rows deleted this run: a recovery that read their journal before the delete doesn't bring them back.
+    @ObservationIgnored private var deletedIDs: Set<UUID> = []
     /// Recordings `compressLegacyRecordings` has converted so far (General's size line follows it).
     private(set) var compressedRecordings = 0
 
@@ -545,7 +547,9 @@ final class HistoryStore {
         guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
         if let file = entries[i].audioFileName { removeAudioFileLater(file) }
         entries.remove(at: i)
-        // A recovery copy kept for it (its save failed) would bring it back at the next launch.
+        // A recovery copy kept for it (its save failed) would bring it back at the next launch, or this one's recovery
+        // if it's reading it right now.
+        deletedIDs.insert(id)
         savedJournals[id] = nil
         journal?.remove(id)
         changed()
@@ -557,7 +561,8 @@ final class HistoryStore {
         pendingFileRemovals.removeAll()
         let removed = entries.map(\.id)
         entries.removeAll()
-        // Their recovery copies too, or the next launch would bring them back.
+        // Their recovery copies too, or the next launch (or this one's recovery, reading them) would bring them back.
+        deletedIDs.formUnion(removed)
         savedJournals = [:]
         for id in removed { journal?.remove(id) }
         if persists {
@@ -693,6 +698,11 @@ final class HistoryStore {
             let savedSeconds = await Task.detached(priority: .utility) { Self.longestSavedDuration(urls) }.value
             let isKept = existing != nil && (savedSeconds ?? 0) >= duration - 0.5
             guard isWorthIt, !isKept, cutoff.map({ startedAt >= $0 }) ?? true else {
+                journal.remove(id)
+                continue
+            }
+            // Deleted while its journal was read: it goes.
+            guard !deletedIDs.contains(id) else {
                 journal.remove(id)
                 continue
             }

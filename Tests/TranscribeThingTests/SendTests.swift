@@ -292,6 +292,20 @@ import Testing
         #expect(posted.value == 0)
     }
 
+    /// A paste already queued behind the dictation's counts before the dictation's caller resumes: the number Send
+    /// goes after is the dictation's own, taken in the same turn of the queue.
+    @Test func thePasteNumberIsTheDictationsOwnEvenWithAnotherQueued() async {
+        let box = Box(), posted = Posted()
+        let (inserter, pasteboard) = inserter(box, posted: posted)
+        defer { pasteboard.releaseGlobally() }
+        async let dictation = inserter.insertCounted("Send this.")
+        async let other = inserter.pasteNow("Last transcript.")
+        let (counted, _) = await (dictation, other)
+        #expect(counted.outcome == .pasted && counted.paste == 1)
+        #expect(await inserter.pressReturn(afterPaste: counted.paste) == .anotherPaste)
+        #expect(posted.value == 0)
+    }
+
     /// Send turned off (a click away) while Return waited for the keys to come up: no Return.
     @Test func sendTurnedOffDuringTheWaitPressesNothing() async {
         let box = Box(), posted = Posted()

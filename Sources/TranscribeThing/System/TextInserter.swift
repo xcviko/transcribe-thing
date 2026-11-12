@@ -131,7 +131,17 @@ final class TextInserter {
     /// names, is refused.
     /// `held`: asked again right before the paste, after the wait for the keys to come up; true leaves it unpasted.
     func insert(_ text: String, unless held: @escaping @MainActor () -> Bool = { false }) async -> InsertionOutcome {
-        await serialized { await self.performInsert(text, unless: held) }
+        await insertCounted(text, unless: held).outcome
+    }
+
+    /// `insert`, with the `pasteCount` this paste took, read inside the same turn of the queue: a paste queued behind it
+    /// may count before the caller resumes. Send's Return goes after this number (`pressReturn(afterPaste:)`).
+    func insertCounted(_ text: String, unless held: @escaping @MainActor () -> Bool = { false }) async
+        -> (outcome: InsertionOutcome, paste: Int) {
+        await serialized {
+            let outcome = await self.performInsert(text, unless: held)
+            return (outcome, self.pasteCount)
+        }
     }
 
     /// "Paste here": paste into whatever has focus now, without focus or target checks.
