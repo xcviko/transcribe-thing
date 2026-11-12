@@ -387,6 +387,8 @@ final class HistoryStore {
     @ObservationIgnored private var deletedIDs: Set<UUID> = []
     /// Clear All ran this run: journals the launch's recovery hasn't brought back yet go too.
     @ObservationIgnored private var clearedAll = false
+    /// The launch's `recoverJournals` is running.
+    @ObservationIgnored private(set) var isRecovering = false
     /// Recordings `compressLegacyRecordings` has converted so far (General's size line follows it).
     private(set) var compressedRecordings = 0
 
@@ -490,7 +492,11 @@ final class HistoryStore {
         }
         isLoaded = true
         deleteExpired()
-        recoveryTask = Task { [weak self] in await self?.recoverJournals() }
+        isRecovering = true
+        recoveryTask = Task { [weak self] in
+            await self?.recoverJournals()
+            self?.isRecovering = false
+        }
     }
 
     /// Writes immediately (used at quit).

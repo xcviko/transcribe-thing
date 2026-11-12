@@ -27,6 +27,9 @@ struct HomeFailure: Equatable, Sendable {
 @MainActor
 protocol DictationRecorder: AnyObject {
     var isCapturing: Bool { get }
+    /// The capture's journal names the model and mode the dictation has now (Switch model, fn Space to hands-free), so a
+    /// crash brings it back as it was.
+    func relabelJournal()
     /// `prefix`: the canceled recording this capture continues (Undo). What `finish` and `cancel` return then
     /// starts with its audio and keeps its id and start time.
     func start(preferredDeviceUID: String?, continuing prefix: Recording?) throws
@@ -40,6 +43,10 @@ protocol DictationRecorder: AnyObject {
 }
 
 extension AudioRecorder: DictationRecorder {}
+
+extension DictationRecorder {
+    func relabelJournal() {}
+}
 
 /// Runs the dictation pipeline (SPEC §4.12): feeds hotkey/pill/recorder input into `DictationMachine`, executes
 /// its effects, transcribes finished recordings concurrently and delivers the results strictly in order.
@@ -145,6 +152,10 @@ final class DictationController {
     /// When the talk key's press went down while dictations were on their way (`clock`): a Polish, Translate or Send
     /// key pressed right after is for the newest of them (`shortcutPressed`). nil for any other press.
     @ObservationIgnored private var pressOverDictationsOnTheirWay: TimeInterval?
+    /// Rows whose Home work waits for the launch's recovery (`afterRecovery`).
+    @ObservationIgnored private var waitingForRecovery: Set<UUID> = []
+    /// The model and mode the recording's journal last named (`DictationRecorder.relabelJournal`).
+    @ObservationIgnored private var journalLabel: (engine: EngineID, mode: DictationMachine.Mode)?
     /// How soon after such a press its Polish, Translate or Send key is still for the dictation on its way.
     static let keyTakeoverWindow: TimeInterval = 1
     /// Keys the tap held for the selection, waiting for a lookup, in the order they came: the press's own release
@@ -1783,6 +1794,10 @@ final class DictationController {
     /// imported file hours long takes seconds to decode), the row showing the work running while it's read. One that
     /// can't be read leaves the row saying it's no longer kept.
     private func transcribeInHome(_ id: UUID, as kind: TranscriptVersionKind) {
+        if history.isRecovering {
+            afterRecovery(of: id) { [weak self] in self?.transcribeInHome(id, as: kind) }
+            return
+        }
         if let kept = retained[id] {
             transcribeInHome(kept, as: kind)
             return
@@ -1794,10 +1809,7 @@ final class DictationController {
         beginHomeWork(kind, for: id)
         homeTasks[id] = Task { [weak self] in
             guard let self else { return }
-            // The launch's recovery may be bringing a longer copy of it back right now: that lands first.
-            await self.history.waitForRecovery()
-            guard !Task.isCancelled else { return }
-            let recording = await self.history.loadRecordingInBackground(for: self.history.entry(id: id) ?? entry)
+            let recording = await self.history.loadRecordingInBackground(for: entry)
             guard !Task.isCancelled else { return }
             guard let recording else {
                 _ = self.endHomeWork(for: id)
@@ -2146,6 +2158,10 @@ final class DictationController {
     /// with all that's recorded, saying why under it (`keepInterrupted`).
     func continueDictation(_ entry: TranscriptEntry) {
         let id = entry.id
+        if history.isRecovering {
+            afterRecovery(of: id) { [weak self] in self?.continueDictation(entry) }
+            return
+        }
         guard let row = history.entry(id: id), row.status == .failed,
               let interruption = row.interruption else { return }
         DiagnosticLog.shared.event(.dictation, "home.continue", [
@@ -2168,10 +2184,7 @@ final class DictationController {
         startingContinuations.insert(id)
         Task { [weak self] in
             guard let self else { return }
-            // The launch's recovery may be bringing a longer copy of it back right now: it lands first, and recording on
-            // never starts over a journal still being read.
-            await self.history.waitForRecovery()
-            let recording = await self.history.loadRecordingInBackground(for: self.history.entry(id: id) ?? row)
+            let recording = await self.history.loadRecordingInBackground(for: row)
             self.startingContinuations.remove(id)
             guard let recording else {
                 self.homeFailures[id] = .recordingGone(.transcription(row.engine))
@@ -2182,6 +2195,18 @@ final class DictationController {
                   current.interruption == .whileRecording, !self.isInFlight(id),
                   !self.machine.isRecording else { return }
             _ = self.recordOn(recording, engine: current.engine, mode: current.mode)
+        }
+    }
+
+    /// Home work on `id` asked for while the launch's recovery runs: it may be bringing a longer copy of that recording
+    /// back, so `work` runs once it's done. Not in flight meanwhile (recovery leaves a recording in use alone), but a
+    /// second click waits with the first instead of running twice.
+    private func afterRecovery(of id: UUID, _ work: @escaping @MainActor () -> Void) {
+        guard waitingForRecovery.insert(id).inserted else { return }
+        Task { [weak self] in
+            await self?.history.waitForRecovery()
+            self?.waitingForRecovery.remove(id)
+            work()
         }
     }
 
@@ -3447,6 +3472,16 @@ final class DictationController {
         if let clickAway, clickAway.isWatching != watches { clickAway.isWatching = watches }
         // Polish Selection's card waits for this one.
         if toasts.isDictating != machine.isRecording { toasts.isDictating = machine.isRecording }
+        if machine.isRecording, captureDevice.isCapturing {
+            let label = (engine: effectiveEngine, mode: machine.mode ?? recordingMode)
+            // Unchanged, the journal writes nothing.
+            if journalLabel.map({ $0.engine != label.engine || $0.mode != label.mode }) ?? true {
+                captureDevice.relabelJournal()
+                journalLabel = label
+            }
+        } else {
+            journalLabel = nil
+        }
         syncCardKeys()
         updateSwitchHint()
         let count = queue.count + (isDelivering ? 1 : 0)

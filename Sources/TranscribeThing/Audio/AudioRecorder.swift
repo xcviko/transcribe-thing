@@ -228,6 +228,12 @@ final class AudioRecorder {
         return recording
     }
 
+    /// While capturing: the journal names the model and mode the dictation has now.
+    func relabelJournal() {
+        guard isCapturing else { return }
+        labelJournal()
+    }
+
     /// The journal names the model and mode the dictation ended with (Switch model, hands-free).
     private func labelJournal() {
         guard let journal, let label = journalLabel?() else { return }
