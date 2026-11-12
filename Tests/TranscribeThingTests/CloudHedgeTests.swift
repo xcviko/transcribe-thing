@@ -262,26 +262,10 @@ import Testing
     }
 }
 
-/// The service sends the same request two or three times, each copy to its own place on OpenRouter: Google AI Studio,
-/// Vertex global, Vertex US. Nothing else differs.
+/// The service sends the very same request two or three times.
 @MainActor
 @Suite(.serialized) struct CloudHedgeServiceTests {
     private let recording = Recording(samples: [Float](repeating: 0.1, count: 16_000))
-
-    /// The provider each copy went to, and the bodies with it set aside.
-    private static func split(_ bodies: [Data]) throws -> (providers: [String], rest: [NSDictionary]) {
-        var providers: [String] = [], rest: [NSDictionary] = []
-        for body in bodies {
-            let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
-            let provider = try #require(object["provider"] as? [String: Any])
-            #expect(provider["allow_fallbacks"] as? Bool == false)
-            providers.append(try #require((provider["only"] as? [String])?.first))
-            var others = object
-            others["provider"] = nil
-            rest.append(others as NSDictionary)
-        }
-        return (providers, rest)
-    }
 
     @Test func aGeminiRequestGoesTwiceWithTheSameBody() async throws {
         let replies = [StubURLProtocol.Reply.stream(SSE.answer("Hello.")), .stream(SSE.answer("Hello."))]
@@ -292,9 +276,8 @@ import Testing
         #expect(result.text == "Hello.")
         let bodies = try StubURLProtocol.registry.bodies(for: host)
         #expect(bodies.count == 2)
-        let (providers, rest) = try Self.split(bodies)
-        #expect(Set(providers) == ["google-ai-studio", "google-vertex/global"], "two places, never the same one")
-        #expect(rest.count == 2 && rest[0] == rest[1])
+        let decoded = try bodies.map { try #require(JSONSerialization.jsonObject(with: $0) as? NSDictionary) }
+        #expect(decoded.count == 2 && decoded[0] == decoded[1])
     }
 
     @Test func threeAtOnceGoWithTheSameBody() async throws {
@@ -305,9 +288,10 @@ import Testing
         let result = try await service.transcribe(recording, engine: .geminiFlash, hedge: .race(copies: 3))
         #expect(result.text == "Hello.")
         try await waitUntil { StubURLProtocol.registry.bodies(for: host).count == 3 }
-        let (providers, rest) = try Self.split(StubURLProtocol.registry.bodies(for: host))
-        #expect(Set(providers) == ["google-ai-studio", "google-vertex/global", "google-vertex/us"])
-        #expect(rest.count == 3 && rest[0] == rest[1] && rest[1] == rest[2])
+        let decoded = try StubURLProtocol.registry.bodies(for: host).map {
+            try #require(JSONSerialization.jsonObject(with: $0) as? NSDictionary)
+        }
+        #expect(decoded.count == 3 && decoded[0] == decoded[1] && decoded[1] == decoded[2])
     }
 
     @Test func withoutItTheRequestGoesOnce() async throws {

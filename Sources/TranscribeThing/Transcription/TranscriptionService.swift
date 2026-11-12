@@ -237,7 +237,7 @@ final class TranscriptionService {
                                             hooks.generation(id)
                                             generations?(id)
                                         },
-                                        provider: provider ?? .race(copy: hooks.copy))
+                                        provider: provider ?? .googleAIStudio)
         }
         var result = if let hedge {
             try await CloudHedge.run(hedge, .transcription, engine: engine, modelName: engine.modelName,

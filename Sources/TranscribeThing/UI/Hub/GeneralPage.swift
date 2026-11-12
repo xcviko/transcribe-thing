@@ -579,11 +579,9 @@ private struct SystemAudioRow: View {
 private struct RaceRequestsRow: View {
     @Environment(AppSettings.self) private var settings
 
-    static let help = "Sends each Gemini dictation 2 or 3 times at once, each through a different Google service "
-        + "(AI Studio, Google Cloud, Google Cloud in the US), and pastes whichever answer comes first, stopping the "
-        + "rest. Helps when Gemini stalls thinking, or one service is slow or busy. A dictation can cost up to 2 or 3 "
-        + "times as much (the US one 10% more). Only dictations on Gemini through OpenRouter: your own endpoint sends "
-        + "every copy to the same place."
+    static let help = "Sends each Gemini dictation 2 or 3 times at once and pastes whichever answer comes first, "
+        + "stopping the rest. Helps when Gemini stalls thinking on one of them. A dictation can cost up to 2 or 3 "
+        + "times as much. Only dictations on Gemini."
 
     var body: some View {
         SettingsRow(title: "Race requests", systemImage: "arrow.triangle.branch", iconTint: .inkSecondary) {

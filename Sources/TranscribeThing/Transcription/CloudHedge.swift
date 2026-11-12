@@ -30,8 +30,6 @@ enum CloudHedge: Sendable, Equatable {
     struct Hooks: Sendable {
         var progress: (@Sendable (ChatStreamProgress) -> Void)?
         var generation: @Sendable (String) -> Void
-        /// Which copy this is, from 0: each goes to its own place (`OpenRouterChatRequest.Provider.race`).
-        var copy = 0
     }
 
     /// Both answers of a measured request, the first one's and the other one's.
@@ -78,8 +76,7 @@ enum CloudHedge: Sendable, Equatable {
             measured?(measurement)
         }
         let tasks = (0..<copies).map { index in
-            var hooks = Hooks(progress: merger.reporter(for: index)) { id in generations.withLock { $0[index] = id } }
-            hooks.copy = index
+            let hooks = Hooks(progress: merger.reporter(for: index)) { id in generations.withLock { $0[index] = id } }
             return Task {
                 let started = ContinuousClock.now
                 let outcome: Result<CloudResult, any Error>
@@ -103,7 +100,7 @@ enum CloudHedge: Sendable, Equatable {
                 .compactMap(\.element).filter { $0 != result.generationID }
             result.otherGenerationIDs = others
             DiagnosticLog.shared.event(.engine, "hedge.won", [
-                "kind": kind.rawValue, "engine": engine, "copies": copies, "won": first.index, "seconds": first.seconds,
+                "kind": kind.rawValue, "engine": engine, "copies": copies, "seconds": first.seconds,
                 "reasoning": first.result.reasoningTokens, "otherNamed": others.count])
         }
         return result
