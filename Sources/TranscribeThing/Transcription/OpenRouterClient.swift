@@ -99,7 +99,21 @@ struct ConnectionWatch: Sendable {
     }
 }
 
-/// When OpenRouter last sent anything to a request (its response, a streamed line).
+/// Each piece of a request's body sent touches its `ConnectionActivity`: the connection is alive while it uploads, so the
+/// watch doesn't probe (and call offline) a link that's only slow.
+private final class UploadActivity: NSObject, URLSessionTaskDelegate, Sendable {
+    let activity: ConnectionActivity
+
+    init(_ activity: ConnectionActivity) { self.activity = activity }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64,
+                    totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
+        activity.touch()
+    }
+}
+
+/// When OpenRouter last sent anything to a request (its response, a streamed line), or the request's body last went
+/// out.
 final class ConnectionActivity: Sendable {
     private let last = OSAllocatedUnfairLock(initialState: ContinuousClock.now)
 
@@ -333,7 +347,7 @@ final class OpenRouterClient: Sendable {
                         generation: (@Sendable (String) -> Void)? = nil,
                         activity: ConnectionActivity) async throws -> CloudResult {
         let started = ContinuousClock.now
-        let (bytes, http) = try await open(request, engine: engine)
+        let (bytes, http) = try await open(request, engine: engine, activity: activity)
         activity.touch()
         guard http.statusCode == 200 else {
             let body = try await Self.prefix(of: bytes, limit: 64 * 1024)
@@ -680,8 +694,13 @@ final class OpenRouterClient: Sendable {
     }
 
     /// The response of a streamed request, its body still to come.
-    private func open(_ request: URLRequest, engine: EngineID) async throws -> (URLSession.AsyncBytes, HTTPURLResponse) {
-        try await transport(engine: engine) { try await session.bytes(for: request) }
+    /// The body going out counts as the connection being alive (`UploadActivity`): minutes of audio uploading on a slow
+    /// link aren't silence.
+    private func open(_ request: URLRequest, engine: EngineID,
+                      activity: ConnectionActivity) async throws -> (URLSession.AsyncBytes, HTTPURLResponse) {
+        try await transport(engine: engine) {
+            try await session.bytes(for: request, delegate: UploadActivity(activity))
+        }
     }
 
     /// Runs one URLSession call, mapping what it throws to an `AttemptFailure` (or `CancellationError`).

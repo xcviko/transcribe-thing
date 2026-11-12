@@ -55,6 +55,9 @@ struct ImportedAudio: Sendable, Identifiable {
             samples = read.samples
             isVideo = read.isVideo
         } catch .unreadable {
+            // Its length first, where the file says it: a long one isn't decoded whole only to be refused.
+            if let file = try? AVAudioFile(forReading: url), file.fileFormat.sampleRate > 0,
+               Double(file.length) / file.fileFormat.sampleRate > limit { throw .tooLong }
             guard let read = try? AudioFileLoader.load16kMono(url) else { throw .unreadable }
             guard Double(read.count) / Recording.sampleRate <= limit else { throw .tooLong }
             samples = read
@@ -104,6 +107,11 @@ struct ImportedAudio: Sendable, Identifiable {
         var samples: [Float] = []
         if duration.isNumeric { samples.reserveCapacity(Int(duration.seconds * Recording.sampleRate) + 1_024) }
         while let buffer = output.copyNextSampleBuffer() {
+            // A file that doesn't say how long it is is held to the limit as it's read.
+            if Double(samples.count) > limit * Recording.sampleRate {
+                reader.cancelReading()
+                throw .tooLong
+            }
             guard let block = CMSampleBufferGetDataBuffer(buffer) else { continue }
             let count = CMBlockBufferGetDataLength(block) / MemoryLayout<Float>.size
             guard count > 0 else { continue }

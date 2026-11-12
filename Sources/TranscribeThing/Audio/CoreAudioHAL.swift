@@ -151,6 +151,9 @@ enum CoreAudioHAL {
         var hidden: UInt32 = 0
         if read(id, kAudioDevicePropertyIsHidden, into: &hidden), hidden != 0 { return nil }
         guard let uid = string(id, kAudioDevicePropertyDeviceUID) else { return nil }
+        // The app's own private aggregate (the tap that takes music out of a dictation) is visible to the app that made
+        // it: it's no microphone to list or fall back to.
+        if uid.hasPrefix(ProcessTap.ownDeviceUIDPrefix) { return nil }
 
         var transportRaw: UInt32 = 0
         read(id, kAudioDevicePropertyTransportType, into: &transportRaw)

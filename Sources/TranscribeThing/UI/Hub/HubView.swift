@@ -26,8 +26,8 @@ final class HubContext: Observable {
     let paths: AppPaths
     /// General → Troubleshooting's Export Logs….
     let diagnostics: DiagnosticsCenter
-    /// Files dropped on Home, read and asked about whichever page is showing.
-    let imports = FileImport()
+    /// Files dropped on Home, read and asked about whichever page is showing, and after the Hub closed and opened again.
+    let imports: FileImport
     let isPreview: Bool
     /// Stand-in traffic lights so snapshots read like the real window.
     var drawsWindowControls = false
@@ -70,10 +70,15 @@ final class HubContext: Observable {
         diagnostics = env.diagnostics
         isPreview = env.isPreview
         firstName = HubGreeting.firstName(fullName: NSFullUserName(), accountName: NSUserName())
-        // Weak: reading a file outlives the Hub window, and with it this context.
-        imports.choices = { [weak self] seconds in
-            guard let self else { return [] }
-            return ImportChoices.make(main: self.settings.mainEngine, seconds: seconds, readiness: self.readiness(of:))
+        imports = env.imports
+        // Reading a file outlives the Hub window, and with it this context: only what lives as long as the app.
+        imports.choices = { [settings, models, account, proxy] seconds in
+            ImportChoices.make(main: settings.mainEngine, seconds: seconds) { engine in
+                EngineReadiness.of(engine, localState: models.state(of: engine),
+                                   keyStatus: CloudRoute.keyStatus(for: engine, account: account, proxy: proxy),
+                                   localError: models.lastErrors[engine],
+                                   provider: CloudRoute.provider(for: engine, proxy: proxy))
+            }
         }
         imports.start = { [dictation] file, kind in dictation.transcribe(file, as: kind) }
     }

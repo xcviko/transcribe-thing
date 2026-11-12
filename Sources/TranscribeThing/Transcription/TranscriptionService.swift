@@ -110,8 +110,11 @@ final class TranscriptionService {
             guard let key = proxy.apiKey(), let client = proxy.client() else {
                 throw AppError.vertexProxy(.keyUnreadable)
             }
+            // What a request says is about the key and URL it went with, not ones set up since.
+            let base = proxy.baseURL
             return ChatAccess(client: client, key: key, provider: .vertexProxy,
-                              noteFailure: { proxy.noteCloudFailure($0) }, noteSuccess: { proxy.noteCloudSuccess() })
+                              noteFailure: { proxy.noteCloudFailure($0, key: key, base: base) },
+                              noteSuccess: { proxy.noteCloudSuccess(key: key, base: base) })
         }
         guard let key = account.apiKey() else {
             throw account.isKeyUnreadable ? AppError.openRouterKeyUnreadable : AppError.openRouterMissingKey

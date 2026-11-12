@@ -35,6 +35,9 @@ final class AppEnvironment {
     let menuBar: MenuBarController
     /// The diagnostic log's launch, settings, permissions and microphone lines, and Export Logs….
     let diagnostics: DiagnosticsCenter
+    /// Files dropped on Home: as long as the app, so one still being read when the Hub closes is asked about when it
+    /// opens again.
+    let imports = FileImport()
     /// Preview environments never start services.
     let isPreview: Bool
 

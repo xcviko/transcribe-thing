@@ -38,6 +38,11 @@ enum TapTarget: Equatable, Sendable {
 /// a tap is made. A tap that can't be made leaves `problem` and no audio: the mic goes on alone. When the tapped
 /// processes change (`retarget`: Chrome starts a new helper), the tap is made again for the new set; the moment
 /// between is silence.
+enum ProcessTap {
+    /// The UID every aggregate device the app makes starts with (`CoreAudioHAL` leaves them out of the microphones).
+    static let ownDeviceUIDPrefix = "dev.transcribe-thing."
+}
+
 final class ProcessTapSource: AudioTapSource, @unchecked Sendable {
     private let control = DispatchQueue(label: "dev.transcribe-thing.audio.tap", qos: .userInitiated)
     private let lock = NSLock()
@@ -118,7 +123,7 @@ final class ProcessTapSource: AudioTapSource, @unchecked Sendable {
         }
         let aggregate: [String: Any] = [
             kAudioAggregateDeviceNameKey: "transcribe-thing \(label)",
-            kAudioAggregateDeviceUIDKey: "dev.transcribe-thing.\(label).\(UUID().uuidString)",
+            kAudioAggregateDeviceUIDKey: "\(ProcessTap.ownDeviceUIDPrefix)\(label).\(UUID().uuidString)",
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceIsStackedKey: false,
             kAudioAggregateDeviceTapAutoStartKey: true,

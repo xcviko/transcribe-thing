@@ -244,8 +244,10 @@ final class VertexProxyAccount {
         DiagnosticLog.shared.event(.net, "endpoint.checked", ["status": Self.code(of: status)])
     }
 
-    /// A failed request corrects the status: a key the endpoint no longer takes, a spend limit reached.
-    func noteCloudFailure(_ error: AppError) {
+    /// A failed request corrects the status: a key the endpoint no longer takes, a spend limit reached. `key` and `base`:
+    /// what the request went with; one that went with a key or URL replaced since says nothing about the new ones.
+    func noteCloudFailure(_ error: AppError, key: String? = nil, base: URL? = nil) {
+        guard isCurrent(key: key, base: base) else { return }
         switch error {
         case .vertexProxy(.keyRejected(let message)):
             generation += 1
@@ -259,10 +261,14 @@ final class VertexProxyAccount {
     }
 
     /// A request went through: whatever an earlier one said, the endpoint works now.
-    func noteCloudSuccess() {
-        guard status != .works, !isKeyUnreadable, isConfigured else { return }
+    func noteCloudSuccess(key: String? = nil, base: URL? = nil) {
+        guard status != .works, !isKeyUnreadable, isConfigured, isCurrent(key: key, base: base) else { return }
         generation += 1
         status = .works
+    }
+
+    private func isCurrent(key: String?, base: URL?) -> Bool {
+        (key == nil || key == cachedKey) && (base == nil || base == baseURL)
     }
 
     /// Checks again when the last check is older than `maxAge` (Models appeared). Never without a base URL and a key.
