@@ -70,9 +70,11 @@ struct ShortcutCaptureEngine: Equatable, Sendable {
             reset()
             return .cancel
         }
-        if bare.isEmpty && (keyCode == KeyCode.delete || keyCode == KeyCode.forwardDelete) && Self.canClear(action) {
+        if bare.isEmpty && (keyCode == KeyCode.delete || keyCode == KeyCode.forwardDelete) {
+            // Push to talk can't be cleared: ⌫ there stops recording, as on the other rows, instead of making every
+            // Backspace start a dictation.
             reset()
-            return .clear
+            return Self.canClear(action) ? .clear : .cancel
         }
         if let heldKey {
             // F5 held, then Space: F5 Space, with the modifiers held for Space.

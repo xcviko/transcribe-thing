@@ -505,8 +505,9 @@ struct HotkeyRouter: Equatable, Sendable {
         let recording = config.isRecording || gesture != .idle
         guard recording || config.isProcessing else { return [] }
         return ShortcutAction.allCases.compactMap { action in
-            // A key that types on its own (bare Tab) is never taken: the validator refuses it and loading resets it.
-            guard action.isDuringDictation, let shortcut = config.bindings[action], !shortcut.typesText else { return nil }
+            // A key that types (bare Tab, ⇧ alone) is never taken: the validator refuses it and loading resets it.
+            guard action.isDuringDictation, let shortcut = config.bindings[action], !shortcut.getsInTheWayOfTyping
+            else { return nil }
             if !recording, !action.isLiveWhileProcessing { return nil }
             if action == .switchModel, !config.switchesModels { return nil }
             // Held, then given back if nothing is selected: only a key can be (a modifier-only binding isn't).

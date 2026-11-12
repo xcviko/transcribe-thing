@@ -242,8 +242,11 @@ struct ShortcutRecorderView: View {
 
     private func swap() {
         guard case .conflict(let other, let attempted)? = message, let settings else { return }
-        let swapped = ShortcutEdit.swapping(allBindings, action: action, to: attempted, with: other)
+        var swapped = ShortcutEdit.swapping(allBindings, action: action, to: attempted, with: other)
+        // A swap that changes push to talk leaves F5 Space behind on a key that's no longer it.
+        let repaired = [action, other].contains(.pushToTalk) ? swapped.repairUnusable() : []
         settings.shortcuts[other] = swapped[other]
+        for changed in repaired where changed != action && changed != other { settings.shortcuts[changed] = swapped[changed] }
         write(attempted)
         message = .swapped(other, warning: ShortcutEdit.warningAfterSwap(swapped, action: action, other: other))
     }

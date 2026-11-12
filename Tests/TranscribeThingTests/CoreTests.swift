@@ -199,8 +199,8 @@ import Testing
         .polish: .fnP,
         .addToDictionary: .fnD,
         .translate: .fnT,
-        // Send follows their push to talk: ⌥↩ for Right ⌥.
-        .send: Shortcut(modifiers: [.init(.option)], keyCode: KeyCode.returnKey),
+        // Send would follow their push to talk, but ⌥↩ types: fn ↩.
+        .send: .fnReturn,
     ])
 
     @Test func conflictsAndSwap() {
@@ -526,6 +526,46 @@ import Testing
         #expect(option[.polish] == .fnP)
         #expect(option[.addToDictionary] == .fnD)
         #expect(option[.switchModel] == .fnTab)
+    }
+
+    /// Off F5 to a talk key nothing can be pressed off as F5 Space was (Right ⌥), the F5 chords can never go off: each
+    /// goes back to its default (fn Space, fn Tab…), and Move Back doesn't bring a dead one back.
+    @Test func leavingF5TakesItsChordsBackToTheirDefaults() {
+        let onF5 = record(Self.f5).bindings
+        #expect(onF5[.handsFree] == Self.f5Space)
+        let recorded = record(.rightOption, in: onF5)
+        let after = recorded.bindings
+        #expect(after[.handsFree] == .fnSpace && after[.switchModel] == .fnTab && after[.polish] == .fnP)
+        #expect(after[.translate] == .fnT && after[.addToDictionary] == .fnD && after[.send] == .fnReturn)
+        #expect(!after.bindings.values.contains { $0.heldKeyCode != nil })
+        var back = after
+        back.restore([.handsFree: Self.f5Space], movedOnto: .rightOption)
+        #expect(back[.handsFree] == .fnSpace)
+
+        // Saved that way by this build before the fix: loading repairs it.
+        var dead = onF5
+        dead[.pushToTalk] = .fn
+        let reloaded = try? JSONDecoder().decode(ShortcutBindings.self, from: JSONEncoder().encode(dead))
+        #expect(reloaded == .defaults)
+    }
+
+    /// A lone ⇧, or ⌘ / ⌥ / ⌃ on the left, is pressed all the time while typing: refused for the keys used while
+    /// dictating, and reset at load. Right ⌘ alone is fine. Send next to Right ⌥ is fn ↩: ⌥↩ types.
+    @Test func typingModifiersAndSendNextToRightOption() throws {
+        let shift = Shortcut(modifiers: [.init(.shift)])
+        #expect(shift.isTypingModifier && Shortcut(modifiers: [.init(.command)]).isTypingModifier)
+        #expect(!Shortcut.rightCommand.isTypingModifier && !Shortcut.fn.isTypingModifier)
+        #expect(validate(shift, for: .switchModel, pushToTalk: .fn).errors.count == 1)
+        #expect(validate(shift, for: .polish, pushToTalk: .fn).errors.count == 1)
+        #expect(validate(.rightCommand, for: .switchModel, pushToTalk: .fn).errors.isEmpty)
+
+        let saved = #"{"pushToTalk":{"modifiers":[{"modifier":"option","side":"right"}]},"#
+            + #""switchModel":{"modifiers":[{"modifier":"shift","side":"either"}]}}"#
+        let decoded = try JSONDecoder().decode(ShortcutBindings.self, from: Data(saved.utf8))
+        #expect(decoded[.switchModel] == .fnTab, "⇧ alone goes back to fn Tab")
+        #expect(decoded[.send] == .fnReturn, "Send next to Right ⌥ is fn ↩, not ⌥↩")
+        #expect(ShortcutBindings.sendShortcut(after: Shortcut(modifiers: [.init(.control, .right)]))
+                == Shortcut(modifiers: [.init(.control)], keyCode: KeyCode.returnKey), "⌃↩ for Right ⌃ stays")
     }
 
     /// Nothing moves when the new talk key can't carry them (⌃⌥D), when nothing was on the old one, when another

@@ -242,6 +242,21 @@ struct Shortcut: Codable, Hashable, Sendable {
         return Set(modifiers.map(\.modifier)).isDisjoint(with: [.control, .command, .function])
     }
 
+    /// A lone modifier pressed all the time while typing: ⇧ on either side, or ⌘, ⌥ or ⌃ on the left (or either) side.
+    /// Bound to something used while dictating, every capital, every ⌘C would set it off in hands-free.
+    var isTypingModifier: Bool {
+        guard isModifierOnly, modifiers.count == 1, let only = modifiers.first else { return false }
+        switch only.modifier {
+        case .shift: return true
+        case .function: return false
+        case .command, .option, .control: return only.side != .right
+        }
+    }
+
+    /// What a key used while dictating can't be: a key that types (`typesText`) or a modifier that's part of typing
+    /// (`isTypingModifier`).
+    var getsInTheWayOfTyping: Bool { typesText || isTypingModifier }
+
     // MARK: Well-known shortcuts
 
     static let fn = Shortcut(modifiers: [.init(.function)])
@@ -461,10 +476,13 @@ struct ShortcutBindings: Codable, Equatable, Sendable {
     ]
 
     /// Send's default: ↩ with the push-to-talk key's modifiers, on either side, so it's pressed with the key already
-    /// held (fn ↩ for fn, ⌃↩ for Right ⌃), as fn P is for Polish. A push-to-talk with no modifier (F13) gets fn ↩.
+    /// held (fn ↩ for fn, ⌃↩ for Right ⌃), as fn P is for Polish. A push-to-talk with no modifier (F13), or one whose ↩
+    /// would type (Right ⌥, Right ⇧), gets fn ↩.
     static func sendShortcut(after pushToTalk: Shortcut?) -> Shortcut {
         guard let pushToTalk, !pushToTalk.modifiers.isEmpty else { return .fnReturn }
-        return Shortcut(modifiers: pushToTalk.modifiers.map { .init($0.modifier) }, keyCode: KeyCode.returnKey)
+        let send = Shortcut(modifiers: pushToTalk.modifiers.map { .init($0.modifier) }, keyCode: KeyCode.returnKey)
+        // ⌥↩ for Right ⌥ types (a line break in many apps): it would be taken in hands-free. fn ↩ instead.
+        return send.typesText ? .fnReturn : send
     }
 
     /// `action`'s default next to this push to talk. A talk key that is a key on its own and types nothing (F5, F13)
@@ -501,14 +519,42 @@ struct ShortcutBindings: Codable, Equatable, Sendable {
             bindings[action] = target
             moved[action] = current
         }
+        // F5 Space left behind by a talk key that's no longer F5 can never go off: its default next to the new talk key
+        // (fn Space for Right ⌥), or nothing.
+        repairUnusable(system: system)
         return moved
+    }
+
+    /// A shortcut that can never work, or works against typing, can't stay: one held off a key that isn't push to
+    /// talk's (F5 Space with fn to talk), or a key used while dictating that types (Tab, ⌥↩, ⇧ alone). Each goes back to
+    /// its default next to push to talk, or is unbound when that default is taken or unusable too. Returns what changed.
+    @discardableResult
+    mutating func repairUnusable(system: SystemKeyboardState = .current) -> [ShortcutAction] {
+        var repaired: [ShortcutAction] = []
+        for action in ShortcutAction.allCases where action != .pushToTalk {
+            guard let current = bindings[action], isUnusable(current, for: action) else { continue }
+            var candidate = self
+            candidate[action] = nil
+            let fallback = Self.defaultShortcut(for: action, pushToTalk: bindings[.pushToTalk])
+            let fits = fallback.map { !isUnusable($0, for: action)
+                && ShortcutValidator.validate($0, for: action, bindings: candidate, system: system).errors.isEmpty } ?? false
+            bindings[action] = fits ? fallback : nil
+            repaired.append(action)
+        }
+        return repaired
+    }
+
+    private func isUnusable(_ shortcut: Shortcut, for action: ShortcutAction) -> Bool {
+        if let held = shortcut.heldKeyCode, held != bindings[.pushToTalk]?.holdableKey { return true }
+        return action.isDuringDictation && shortcut.getsInTheWayOfTyping
     }
 
     /// Undoes `moveOntoTalkKey`: each action in `previous` still on `talkKey` gets back what it had. One changed since
     /// keeps the change.
     mutating func restore(_ previous: [ShortcutAction: Shortcut], movedOnto talkKey: Shortcut) {
         for (action, shortcut) in previous {
-            guard let key = bindings[action]?.keyOnTalkKey(talkKey), key == shortcut.keyCode else { continue }
+            guard let key = bindings[action]?.keyOnTalkKey(talkKey), key == shortcut.keyCode,
+                  !isUnusable(shortcut, for: action) else { continue }
             bindings[action] = shortcut
         }
     }
@@ -585,13 +631,15 @@ struct ShortcutBindings: Codable, Equatable, Sendable {
                 result[action] = try c.decode(Shortcut.self, forKey: key)
             }
         }
-        // A key used while dictating saved on a key that types on its own (Tab, T): it took every Tab typed in
-        // hands-free, every T typed while a dictation was on its way. It goes back to its default (fn Tab, fn T).
-        for action in ShortcutAction.allCases where action.isDuringDictation && result[action]?.typesText == true {
-            result[action] = nil
+        bindings = result
+        // A key used while dictating saved on a key that types (Tab, T, ⇧ alone) took every Tab typed in hands-free,
+        // every T typed while a dictation was on its way; a chord held off a key that isn't push to talk's (F5 Space,
+        // with fn to talk) never went off. Each goes back to its default (fn Tab, fn T, fn Space).
+        for action in ShortcutAction.allCases where action != .pushToTalk {
+            guard let shortcut = bindings[action], isUnusable(shortcut, for: action) else { continue }
+            bindings[action] = nil
             defaulted.append(action)
         }
-        bindings = result
         // An action newer than the saved bindings follows the push to talk they have (⌃↩ for Right ⌃, F5 P for F5).
         for action in defaulted { bindings[action] = Self.defaultShortcut(for: action, pushToTalk: bindings[.pushToTalk]) }
         // An action newer than the saved bindings starts unbound when its default is already the user's for
@@ -936,6 +984,11 @@ enum ShortcutValidator {
                 v.errors.append("Only push to talk\(talkKey) can be the key you hold first.")
                 return v
             }
+        }
+        if action.isDuringDictation, s.isTypingModifier {
+            v.errors.append("\(action.title) can’t be \(s.compactDescription) alone: it’s pressed all the time while you "
+                + "type, and would go off while you dictate hands-free. Use the right-hand key, or add fn.")
+            return v
         }
         if action.isDuringDictation, s.typesText {
             // Live in hands-free, while the user's hands are free to type, and (Polish, Translate, Send) while a
