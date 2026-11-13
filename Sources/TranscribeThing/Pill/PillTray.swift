@@ -18,7 +18,7 @@ enum PillTrayMetrics {
     static let stagger: TimeInterval = 0.045
 }
 
-/// Polish, Translate and Send for the dictation a pill shows, in a small capsule of the pill's own black beside it, out
+/// Send, Polish and Translate for the dictation a pill shows, in a small capsule of the pill's own black beside it, out
 /// while the pointer is on the pill or the tray (`PillModel.openTray`). Opening, the capsule grows out of the pill's
 /// end and the three round buttons fan out of it one after another on the pill's springs; closing, they fold back the
 /// other way, quicker. A button that's on is a white disc with a black glyph, as hands-free's finish is, and the pill

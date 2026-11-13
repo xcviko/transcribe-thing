@@ -563,7 +563,7 @@ struct PillTiming: Equatable, Sendable {
 
 /// The buttons of a pill's tray (`PillTray`), in their order: what each turns on or off for the pill's dictation.
 enum PillToggle: String, CaseIterable, Sendable {
-    case polish, translate, send
+    case send, polish, translate
 
     var title: String {
         switch self {
