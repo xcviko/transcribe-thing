@@ -9,17 +9,15 @@ struct ModelStep: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             StepHeader(title: "Get \(EngineID.parakeet.modelName) on your Mac",
-                       subtitle: "It transcribes on your Mac, private and offline, with no key. "
-                           + "\(EngineID.geminiFlash.modelName), which hears the audio in the cloud with your own key, "
-                           + "is in Settings → Models.",
+                       subtitle: "It transcribes on your Mac, private and offline, with no key. Gemini models, "
+                           + "which hear the audio in the cloud with your own key, are in Settings → Models.",
                        titleSize: 28)
                 .padding(.bottom, 16)
 
             SectionHeader("On your Mac")
                 .padding(.bottom, 8)
-            ForEach(EngineID.localEngines) { engine in
-                LocalModelCard(model: model, engine: engine, compact: false)
-            }
+            // Parakeet alone: GigaAM, the other model on this Mac, is in Settings → Models.
+            LocalModelCard(model: model, engine: model.selectedEngine, compact: false)
 
             if mainIsGemini, model.ctx.proxy?.routesGemini != true {
                 OpenRouterKeyPanel(model: model)

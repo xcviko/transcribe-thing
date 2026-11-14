@@ -87,7 +87,7 @@ final class MenuBuilder {
         let main = env.dictation.activity == .recording ? env.dictation.effectiveChoice : env.settings.lineup.main
         let status = Self.status(of: main, models: env.models, account: env.account,
                                  proxy: env.proxy)
-        let title = Self.statusTitle(env.dictation.activity, model: main.title, status: status.text)
+        let title = Self.statusTitle(env.dictation.activity, model: env.settings.modelName(of: main), status: status.text)
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         item.isEnabled = false
         item.image = Self.dot(env.dictation.activity == .idle ? status.color : .systemRed)

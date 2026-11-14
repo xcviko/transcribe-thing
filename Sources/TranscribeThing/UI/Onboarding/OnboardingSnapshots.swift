@@ -62,6 +62,12 @@ enum OnboardingSnapshots {
                 ctx.models = .preview(states: [.parakeet: .ready])
                 ctx.settings.shortcuts[.switchModel] = .rightCommand
             }) { model in model.stage(step: .model) },
+            // Gemini 4 Carbon switched on after Parakeet: the line under the card names it.
+            entry("onboarding-3-model-carbon-step", context: { ctx in
+                ctx.models = .preview(states: [.parakeet: .ready])
+                ctx.settings.lineup.move(.carbon, to: 1)
+                ctx.settings.lineup.setSwitchable(.carbon, true)
+            }) { model in model.stage(step: .model) },
             entry("onboarding-3-model-gemini-main-missing", context: { ctx in
                 ctx.models = .preview(states: [.parakeet: .notInstalled])
                 ctx.settings.lineup.main = .gemini
@@ -136,6 +142,9 @@ enum OnboardingSnapshots {
             entry("onboarding-5-done", still: 0.42) { model in model.stage(step: .done) },
             entry("onboarding-5-done-gemini", still: 0.42, context: { ctx in
                 ctx.settings.lineup.main = .gemini
+            }) { model in model.stage(step: .done) },
+            entry("onboarding-5-done-carbon", still: 0.42, context: { ctx in
+                ctx.settings.lineup.main = .carbon
             }) { model in model.stage(step: .done) },
         ]
     }

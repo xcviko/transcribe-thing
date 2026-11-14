@@ -793,7 +793,9 @@ import Testing
         #expect(rig.h.pill.engineChipPulse == 2)
         #expect(cues.played.filter { $0 == .modelSwitch }.count == 2)
         let reason = try #require(rig.h.pill.unavailableReason)
-        #expect(ModelChoice.allCases.allSatisfy { reason($0) == nil }, "the key works: everything can run")
+        #expect(ModelChoice.allCases.filter { $0 != .gigaam }.allSatisfy { reason($0) == nil },
+                "the key works: everything can run")
+        #expect(reason(.gigaam) == "Not downloaded", "GigaAM's own state, not Parakeet's")
         c.send(.pillCancel)
     }
 

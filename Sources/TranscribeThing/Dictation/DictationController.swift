@@ -311,9 +311,9 @@ final class DictationController {
         toasts.onNoticesChange = { [weak self] in self?.syncCardKeys() }
         toasts.onSound = { [weak self] sound in self?.playCue(sound) }
         let previous = models.onDownloadFinished
-        models.onDownloadFinished = { [weak self] engine in
-            previous?(engine)
-            self?.downloadFinished(engine)
+        models.onDownloadFinished = { [weak self] model in
+            previous?(model)
+            self?.downloadFinished(model)
         }
         let previousFailure = models.onFailure
         models.onFailure = { [weak self] engine, error in
@@ -1459,6 +1459,18 @@ final class DictationController {
                 deliverSilence(job, result)
                 return
             }
+            // An answer with none of the tags it was asked for, from a model held to them (Gemini 4 Carbon), is stray
+            // tokens or its own thoughts, not a transcript: not pasted, the recording kept to retry.
+            if job.engine.answerNeedsTags, result.answerTags == TaggedTranscript.Tags.none {
+                let notice = keepFailed(job, recording, .engineFailed(job.engine, "Its answer wasn’t a transcript."),
+                                        modelAnswer: result.rawAnswer)
+                DiagnosticLog.shared.event(.dictation, "job.finished", [
+                    "engine": job.engine, "outcome": "untagged", "kept": true, "polished": job.polishes,
+                    "answerChars": result.rawAnswer?.count, "finish": result.finishReason])
+                Log.engine.info("\(job.engine.modelName, privacy: .public)'s answer had no tags; kept in History")
+                postFailure(notice)
+                return
+            }
             forget(job.id)
             // An older notice's Retry or Undo would transcribe it yet again, or record on, now that its audio is kept.
             toasts.dismiss(recordingID: job.id)
@@ -1831,12 +1843,13 @@ final class DictationController {
         case .retryWith(let engine):
             retry(recordingID: notice.recordingID, engine: engine, from: notice)
         case .selectEngine(let engine):
-            // "Use Parakeet v3": Parakeet in place of a Gemini main model, loading if it's on disk.
+            // "Use Parakeet v3": a model on this Mac in place of the main model that failed (a Gemini, or GigaAM),
+            // loading if it's on disk.
             if engine.isLocal, models.state(of: engine) == .installed { models.prepare(engine) }
-            if settings.lineup.main.isGemini { settings.lineup.main = ModelChoice(engine: engine) }
+            if settings.lineup.main.engine != engine { settings.lineup.main = ModelChoice(engine: engine) }
             let main = settings.lineup.main
             toasts.post(Notice(dedupeKey: "engine.selected", style: .success, symbol: main.symbolName,
-                               title: "Now using \(main.title)", lifetime: .seconds(3)))
+                               title: "Now using \(settings.modelName(of: main))", lifetime: .seconds(3)))
         case .undoCancel:
             undo(recordingID: notice.recordingID ?? lastCancelledID)
         case .chooseMicrophone:
@@ -2327,28 +2340,30 @@ final class DictationController {
         }
     }
 
+    /// `engine`'s picked model: GigaAM's version.
     private func startDownload(_ engine: EngineID) {
-        models.download(engine)
-        let size = engine.approxDownloadBytes.map { "About \(Fmt.bytes($0)). " } ?? ""
-        toasts.post(Notice(dedupeKey: "download.\(engine.rawValue)", style: .info, symbol: "arrow.down.circle",
-                           title: "Downloading \(engine.displayName)",
-                           body: "\(size)You’ll get a notice when it’s ready.",
+        guard let model = models.model(for: engine) else { return }
+        models.download(model: model)
+        toasts.post(Notice(dedupeKey: "download.\(model.id)", style: .info, symbol: "arrow.down.circle",
+                           title: "Downloading \(model.displayName)",
+                           body: "About \(Fmt.bytes(model.approxDownloadBytes)). You’ll get a notice when it’s ready.",
                            actions: [NoticeAction(title: "Show Progress", kind: .openHub(.models), isPrimary: true)],
                            lifetime: .seconds(6)))
     }
 
-    private func downloadFinished(_ engine: EngineID) {
-        toasts.post(Notice(dedupeKey: "download.\(engine.rawValue)", style: .success, symbol: "checkmark.circle.fill",
-                           title: "\(engine.displayName) is ready",
-                           body: engine == settings.mainEngine ? "Hold \(pttHint) and start talking." : nil,
+    private func downloadFinished(_ model: LocalModel) {
+        let runsNow = model == models.model(for: model.engine) && model.engine == settings.mainEngine
+        toasts.post(Notice(dedupeKey: "download.\(model.id)", style: .success, symbol: "checkmark.circle.fill",
+                           title: "\(model.displayName) is ready",
+                           body: runsNow ? "Hold \(pttHint) and start talking." : nil,
                            lifetime: .seconds(5), sound: .success))
     }
 
     /// Downloads and loads run in the background (often after the window that started them closed), so
     /// their failures surface as notices. A failed dictation's notice for the same error shares the dedupe key.
     private func modelFailed(_ engine: EngineID, _ error: AppError) {
-        // A load nothing needs now (Parakeet on this Mac while Switch model never reaches it) stays quiet.
-        if case .modelLoadFailed = error, !(engine.isLocal && settings.usesLocalParakeet) { return }
+        // A load nothing needs now (a model on this Mac that Switch model never reaches) stays quiet.
+        if case .modelLoadFailed = error, !settings.usesLocalModel(engine) { return }
         // A load Home work waits for: its row says why. A dictation that needs the model says it in its own notice.
         if case .modelLoadFailed = error, homeWork.values.contains(.transcription(engine)) { return }
         postFailure(error.notice(recordingID: nil, fallbackEngine: usableFallback(excluding: engine, after: error),
@@ -2489,10 +2504,12 @@ final class DictationController {
 
     // MARK: - Engines and recordings
 
-    /// Engines to fall back to from `engine`: from Gemini, Parakeet on this Mac; from Parakeet, none. Only Parakeet:
-    /// Gemini is never offered in another model's place.
+    /// Engines to fall back to from `engine`, in the order they're tried: from Gemini, the models on this Mac,
+    /// Parakeet first; from GigaAM, Parakeet, which writes Russian too; from Parakeet, none (GigaAM writes Russian, or
+    /// five languages in Multilingual, never Parakeet's 25). Only models on this Mac: Gemini is never offered in
+    /// another model's place.
     static func fallbackCandidates(for engine: EngineID) -> [EngineID] {
-        EngineID.localEngines.filter { $0 != engine }
+        EngineID.localEngines.filter { $0 != engine && (engine.isCloud || $0 == .parakeet) }
     }
 
     /// The engine offered in place of `engine`: "Retry with …" or "Use … Instead" for a saved recording, "Use …"
@@ -2551,10 +2568,10 @@ final class DictationController {
     // MARK: - Switch model
 
     /// Why `choice` can't take the dictation being recorded now, or nil when it can: the OpenRouter key when it goes
-    /// through it (`openRouterKeyProblem`), then Parakeet on this Mac when it uses it (`localRefusal`).
+    /// through it (`openRouterKeyProblem`), then its model on this Mac when it runs on one (`localRefusal`).
     private func switchRefusal(_ choice: ModelChoice) -> AppError? {
         if choice.isGemini, let keyProblem = keyProblem(for: choice.engine) { return keyProblem }
-        if choice.usesLocalParakeet { return localRefusal(choice.engine) }
+        if choice.isLocal { return localRefusal(choice.engine) }
         return nil
     }
 
@@ -2563,10 +2580,10 @@ final class DictationController {
     private func unavailableReason(_ choice: ModelChoice) -> String? {
         guard choice != settings.lineup.main, switchRefusal(choice) != nil else { return nil }
         let engine = choice.engine
-        return EngineReadiness.of(engine, localState: models.state(of: .parakeet),
+        return EngineReadiness.of(engine, localState: models.state(of: engine),
                                   keyStatus: CloudRoute.keyStatus(for: engine, account: account,
                                                                   proxy: transcription.proxy),
-                                  localError: models.lastErrors[.parakeet],
+                                  localError: models.lastErrors[engine],
                                   provider: transcription.provider(for: engine))
             .unavailableReason ?? "Unavailable"
     }

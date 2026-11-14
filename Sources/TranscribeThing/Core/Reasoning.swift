@@ -24,25 +24,31 @@ enum ReasoningEffort: String, Codable, CaseIterable, Sendable {
 
 extension EngineID {
     /// The levels the model can be asked to think at (the Reasoning menu on its row in Models): Low, Medium and High
-    /// for Gemini. Gemini 3.8 Flash takes neither Minimal (the user's endpoint sends it as Low) nor None (it can't turn
-    /// thinking off), so neither is offered. Empty for models that don't reason, and for a retired one, which never runs.
+    /// for Gemini. Neither Gemini model is offered Minimal (the user's endpoint sends it as Low) nor None (Gemini 3.8
+    /// Flash can't turn thinking off). Empty for models that don't reason, and for a retired one, which never runs.
     var reasoningEfforts: [ReasoningEffort] {
         switch self {
-        case .geminiFlash: [.low, .medium, .high]
-        case .parakeet, .parakeetCloud, .geminiArgon, .geminiPro: []
+        case .geminiFlash, .geminiCarbon: [.low, .medium, .high]
+        case .parakeet, .gigaam, .parakeetCloud, .geminiArgon, .geminiPro: []
         }
     }
 
-    /// The level the model thinks at until another is picked: medium for Gemini 3.8 Flash (at high it thought for
-    /// about 18k tokens, 76 s, on a 1:48 recording). nil for models that don't reason.
+    /// The level the model thinks at until another is picked, each model its own: medium for Gemini 3.8 Flash (at high
+    /// it thought for about 18k tokens, 76 s, on a 1:48 recording), low for Gemini 4 Carbon, which is slower and
+    /// dearer to begin with. nil for models that don't reason.
     var defaultReasoningEffort: ReasoningEffort? {
-        reasoningEfforts.isEmpty ? nil : .medium
+        switch self {
+        case .geminiFlash: .medium
+        case .geminiCarbon: .low
+        case .parakeet, .gigaam, .parakeetCloud, .geminiArgon, .geminiPro: nil
+        }
     }
 }
 
 /// The level each Gemini model thinks at, picked in Models (`AppSettings.reasoningEfforts`). Every request to the
 /// model goes at its level: dictation, Polish, Translate, file imports, History's versions. One JSON object
-/// under `SettingsKey.geminiReasoningEfforts`, keyed by `EngineID` raw value: {"geminiFlash":"medium"}.
+/// under `SettingsKey.geminiReasoningEfforts`, keyed by `EngineID` raw value:
+/// {"geminiCarbon":"low","geminiFlash":"medium"}.
 struct ReasoningEfforts: Equatable, Sendable {
     private var levels: [EngineID: ReasoningEffort] = [:]
 
@@ -57,6 +63,12 @@ struct ReasoningEfforts: Equatable, Sendable {
             guard let newValue, engine.reasoningEfforts.contains(newValue) else { return }
             levels[engine] = newValue
         }
+    }
+
+    /// The same levels for every model this build runs, picked or default alike: a stored value that spells out a
+    /// default (the load stores every model's level) equals one that leaves it out.
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        EngineID.offered.allSatisfy { lhs[$0] == rhs[$0] }
     }
 }
 

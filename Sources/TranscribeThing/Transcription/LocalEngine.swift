@@ -6,6 +6,9 @@ enum LocalEngineError: Error, Equatable, Sendable, LocalizedError {
     case notLoaded
     case incompleteDownload([String])
     case listingFailed(String)
+    /// There's nowhere to get it from yet: `file` isn't in the Downloads folder, and its release asset isn't published
+    /// (`ModelStore` says so as `AppError.modelNotPublished`).
+    case notPublished(file: String)
 
     var errorDescription: String? {
         switch self {
@@ -14,12 +17,76 @@ enum LocalEngineError: Error, Equatable, Sendable, LocalizedError {
         case .incompleteDownload(let missing):
             "The download is incomplete (\(missing.count) file\(missing.count == 1 ? "" : "s") missing)."
         case .listingFailed(let detail): "Couldn’t list the model files: \(detail)"
+        case .notPublished(let file): "The model isn’t published yet. Put \(file) in your Downloads folder."
         }
     }
 }
 
-/// A downloadable on-device model. ParakeetEngine implements it; ModelStore only talks to this protocol, so it
-/// never imports FluidAudio, and tests substitute fakes.
+/// One model on this Mac that downloads, loads and is deleted on its own: Parakeet, or one version of GigaAM, each in
+/// its own folder. ModelStore keeps each one's state; an `EngineID` stands for the one picked for it
+/// (`AppSettings.localModel(for:)`): GigaAM's picked version.
+enum LocalModel: Hashable, Sendable, Identifiable {
+    case parakeet
+    case gigaam(GigaAMEngine.Variant)
+
+    /// Parakeet, then each GigaAM version in the Version menu's order.
+    static var all: [LocalModel] { [.parakeet] + GigaAMEngine.Variant.allCases.map(LocalModel.gigaam) }
+
+    /// "parakeet", or the version's raw value.
+    var id: String {
+        switch self {
+        case .parakeet: "parakeet"
+        case .gigaam(let variant): variant.rawValue
+        }
+    }
+
+    var engine: EngineID {
+        switch self {
+        case .parakeet: .parakeet
+        case .gigaam: .gigaam
+        }
+    }
+
+    var variant: GigaAMEngine.Variant? {
+        if case .gigaam(let variant) = self { variant } else { nil }
+    }
+
+    /// "Parakeet v3", "GigaAM v3 e2e".
+    var displayName: String {
+        variant?.displayName ?? EngineID.parakeet.displayName
+    }
+
+    /// What its download takes: Parakeet's files, a GigaAM version's zip.
+    var approxDownloadBytes: Int64 {
+        variant?.downloadBytes ?? EngineID.parakeet.approxDownloadBytes ?? 0
+    }
+
+    /// What it takes on this Mac once installed: Parakeet's files as downloaded, a GigaAM zip unpacked.
+    var approxInstalledBytes: Int64 {
+        variant?.installedBytes ?? approxDownloadBytes
+    }
+
+    /// What installing it takes on disk at most: Parakeet downloads into place; a GigaAM zip and its unpacked folder
+    /// are both there for a moment.
+    var approxInstallPeakBytes: Int64 {
+        variant.map { $0.downloadBytes + $0.installedBytes } ?? approxDownloadBytes
+    }
+
+    /// Where its download comes from, as a failure to reach it says: "Couldn’t reach Hugging Face."
+    var downloadHost: String {
+        switch self {
+        case .parakeet: "Hugging Face"
+        case .gigaam: "GitHub"
+        }
+    }
+
+    /// What a transcript's metadata records as the model that wrote it (`TranscriptMetadata.modelID`): a GigaAM
+    /// version's raw value ("gigaam-v3-e2e-ctc"); nil for Parakeet, as before there were versions.
+    var modelID: String? { variant?.rawValue }
+}
+
+/// A downloadable on-device model. ParakeetEngine and GigaAMEngine implement it; ModelStore only talks to this
+/// protocol, so it never imports FluidAudio, and tests substitute fakes.
 protocol LocalEngine: Actor {
     nonisolated var engineID: EngineID { get }
     /// Everything this engine writes to disk: measured for disk usage, removed by `deleteFiles()`.

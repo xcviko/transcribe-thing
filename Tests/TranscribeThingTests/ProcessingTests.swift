@@ -544,7 +544,7 @@ extension PillModel {
             #expect(defaults.object(forKey: "tt.showsParakeetWhileGemini") == nil)
             settings.lineup.main = .gemini
             settings.lineup.setSwitchable(.parakeet, false)
-            #expect(!settings.usesLocalParakeet)
+            #expect(!settings.usesLocalModel(.parakeet))
             #expect(!DiagnosticSettingsSummary(settings: settings, keySaved: false).line.contains("parakeetWhileGemini"))
         }
     }

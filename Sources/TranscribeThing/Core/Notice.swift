@@ -234,6 +234,9 @@ enum AppError: Error, Equatable, Sendable {
     case modelPreparing(EngineID)
     case modelLoadFailed(EngineID, String)
     case downloadFailed(EngineID, String)
+    /// Its download has no source yet: `file` isn't in the Downloads folder and isn't published (a GigaAM version's
+    /// zip, until it is).
+    case modelNotPublished(EngineID, file: String)
     case notEnoughDisk(needed: Int64, available: Int64)
     case openRouterMissingKey
     /// A key file is there, but it couldn't be read.
@@ -290,7 +293,7 @@ enum AppError: Error, Equatable, Sendable {
             case .notSetUp, .keyUnreadable, .keyRejected, .spendLimit, .forbidden, .badRequest, .tooLarge: false
             }
         case .microphonePermissionDenied, .noMicrophone, .microphoneNotResponding, .microphoneSilent,
-             .accessibilityMissing, .modelNotDownloaded, .downloadFailed, .notEnoughDisk,
+             .accessibilityMissing, .modelNotDownloaded, .downloadFailed, .modelNotPublished, .notEnoughDisk,
              .openRouterMissingKey, .openRouterKeyUnreadable, .openRouterInvalidKey, .openRouterNoCredits,
              .openRouterKeyLimit, .openRouterNoRoute, .openRouterRefused, .openRouterBadRequest, .noSpeech,
              .recordingTooLarge:
@@ -329,7 +332,7 @@ enum AppError: Error, Equatable, Sendable {
              .regionBlocked, .connectionBlocked, .engineFailed, .recordingTooLarge, .vertexProxy, .heardNoSpeech:
             true
         case .microphonePermissionDenied, .noMicrophone, .microphoneNotResponding, .microphoneDisconnected,
-             .microphoneSilent, .accessibilityMissing, .downloadFailed, .notEnoughDisk, .noSpeech:
+             .microphoneSilent, .accessibilityMissing, .downloadFailed, .modelNotPublished, .notEnoughDisk, .noSpeech:
             false
         }
     }
@@ -348,6 +351,7 @@ enum AppError: Error, Equatable, Sendable {
         case .modelPreparing(let e): "modelPreparing.\(e.rawValue)"
         case .modelLoadFailed(let e, _): "modelLoadFailed.\(e.rawValue)"
         case .downloadFailed(let e, _): "downloadFailed.\(e.rawValue)"
+        case .modelNotPublished(let e, _): "modelNotPublished.\(e.rawValue)"
         case .notEnoughDisk: "notEnoughDisk"
         case .openRouterMissingKey: "openRouterMissingKey"
         case .openRouterKeyUnreadable: "openRouterKeyUnreadable"
@@ -479,8 +483,8 @@ extension AppError {
     private var failingEngine: EngineID? {
         switch self {
         case .modelNotDownloaded(let e), .modelDownloading(let e, _), .modelPreparing(let e),
-             .modelLoadFailed(let e, _), .downloadFailed(let e, _), .timeout(let e), .engineFailed(let e, _),
-             .heardNoSpeech(let e):
+             .modelLoadFailed(let e, _), .downloadFailed(let e, _), .modelNotPublished(let e, _), .timeout(let e),
+             .engineFailed(let e, _), .heardNoSpeech(let e):
             e
         case .openRouterMissingKey, .openRouterKeyUnreadable, .openRouterInvalidKey, .openRouterNoCredits,
              .openRouterKeyLimit, .openRouterRateLimited, .openRouterNoRoute, .openRouterProviderUnavailable,
@@ -594,6 +598,12 @@ extension AppError {
                         body: "\(e.displayName) couldn’t be downloaded. Check your connection and try again.",
                         fixes: [Fix(title: "Try Again", kind: .download(e)),
                                 Fix(title: "Models", kind: .openHub(.models))],
+                        order: .fixFirst)
+        case .modelNotPublished(let e, let file):
+            return Copy(symbol: "shippingbox",
+                        title: "\(e.displayName) isn’t published yet",
+                        body: "Put \(file) in your Downloads folder, then download it again.",
+                        fixes: [Fix(title: "Models", kind: .openHub(.models))],
                         order: .fixFirst)
         case .notEnoughDisk(let needed, let available):
             return Copy(symbol: "internaldrive",

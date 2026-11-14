@@ -428,8 +428,14 @@ enum CodeSignature {
 // MARK: - Download
 
 /// One download with byte progress (URLSession's async API reports none), cancellable through the task.
-/// file:// URLs are copied, for QA feeds.
+/// file:// URLs are copied, for QA feeds. GigaAM's install files come the same way (`GigaAMSource`).
 enum UpdateDownload {
+    /// GitHub answered with something other than the file: a 404 for an asset that isn't there.
+    struct HTTPStatus: Error, LocalizedError {
+        var status: Int
+        var errorDescription: String? { "GitHub answered with HTTP \(status)." }
+    }
+
     static func run(from url: URL, to destination: URL,
                     progress: @escaping @Sendable (Int64, Int64?) -> Void) async throws {
         if url.isFileURL {
@@ -481,7 +487,8 @@ enum UpdateDownload {
         func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
             // The file is gone once this returns: move it now.
             if let http = downloadTask.response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-                moveError = UpdateInstallError.downloadFailed("GitHub answered with HTTP \(http.statusCode).")
+                // The installer passes its message on as `UpdateInstallError.downloadFailed`.
+                moveError = HTTPStatus(status: http.statusCode)
                 return
             }
             do {

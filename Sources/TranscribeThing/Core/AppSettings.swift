@@ -44,8 +44,13 @@ final class AppSettings {
     /// Each model's color (Models): the pill wears the dictation's model's, and its tile, the sidebar chip and
     /// History's marks show it.
     var modelColors: ModelColors = .default { didSet { store.setJSON(modelColors, .modelColors) } }
-    /// The level Gemini thinks at (the Reasoning menu on its row in Models), Medium until picked. Every request to the
-    /// model goes at it (`reasoningEffort(for:)`).
+    /// The version of GigaAM every GigaAM dictation, Transcribe With and Retry runs (the Version menu on its row in
+    /// Models): v3 until picked. Each version installs on its own (`LocalModel.gigaam`).
+    var gigaamVariant: GigaAMEngine.Variant = .default {
+        didSet { store.set(gigaamVariant.rawValue, .gigaamVariant) }
+    }
+    /// The level each Gemini model thinks at (the Reasoning menu on its row in Models), its own default until picked
+    /// (`EngineID.defaultReasoningEffort`). Every request to the model goes at it (`reasoningEffort(for:)`).
     var reasoningEfforts: ReasoningEfforts = .default {
         didSet { store.setJSON(reasoningEfforts, .geminiReasoningEfforts) }
     }
@@ -78,7 +83,7 @@ final class AppSettings {
     var handsFreeModel: ModelChoice? = nil { didSet { store.set(handsFreeModel?.rawValue, .handsFreeModel) } }
     /// `handsFreeModel` while Switch model reaches it and it isn't the main model; nil otherwise. A hands-free
     /// dictation is on a model of the cycle, like any other: fn ⇥ steps on from it, the pill's menu checks it, and a
-    /// local Parakeet in the cycle is loaded at launch.
+    /// model on this Mac in the cycle is loaded at launch.
     var handsFreeChoice: ModelChoice? {
         handsFreeModel.flatMap { lineup.steps.contains($0) ? $0 : nil }
     }
@@ -222,9 +227,39 @@ final class AppSettings {
     /// The engine every dictation starts on: the main model's.
     var mainEngine: EngineID { lineup.main.engine }
 
-    /// Some model Switch model can reach needs Parakeet on this Mac, so it's worth loading.
-    var usesLocalParakeet: Bool {
-        lineup.cycle.contains(where: \.usesLocalParakeet)
+    /// Some model Switch model can reach runs on `engine` on this Mac (Parakeet, GigaAM), so it's worth loading.
+    /// Hands-free's model is one of them (`handsFreeChoice`).
+    func usesLocalModel(_ engine: EngineID) -> Bool {
+        engine.isLocal && lineup.cycle.contains { $0.engine == engine }
+    }
+
+    /// The models on this Mac that Switch model can reach, Parakeet first: what launch loads.
+    var localModelsInUse: [EngineID] {
+        EngineID.localEngines.filter(usesLocalModel)
+    }
+
+    /// What `engine` runs on this Mac: Parakeet, or GigaAM's picked version. nil for a cloud model.
+    func localModel(for engine: EngineID) -> LocalModel? {
+        switch engine {
+        case .parakeet: .parakeet
+        case .gigaam: .gigaam(gigaamVariant)
+        case .parakeetCloud, .geminiFlash, .geminiCarbon, .geminiArgon, .geminiPro: nil
+        }
+    }
+
+    /// `choice`'s name with GigaAM's picked version, where there's room for it: "GigaAM v3 e2e". The others' own.
+    func modelName(of choice: ModelChoice) -> String {
+        choice == .gigaam ? gigaamVariant.displayName : choice.modelName
+    }
+
+    /// The pill chip's name: GigaAM's with its picked version ("GigaAM v3 e2e"), the others' `chipName`.
+    func chipName(of choice: ModelChoice) -> String {
+        choice == .gigaam ? gigaamVariant.displayName : choice.chipName
+    }
+
+    /// `engine`'s name with GigaAM's picked version: "GigaAM v3 e2e". The others' `displayName`.
+    func engineName(_ engine: EngineID) -> String {
+        engine == .gigaam ? gigaamVariant.displayName : engine.displayName
     }
 
     /// The level `engine` thinks at: the one picked in Models for a Gemini model; nil for a model that doesn't reason.
@@ -254,6 +289,20 @@ final class AppSettings {
     nonisolated static func handsFreeModel(stored raw: String?, lineup: ModelLineup) -> ModelChoice? {
         guard raw == ModelChoice.retiredCleanup else { return raw.flatMap(ModelChoice.init(stored:)) }
         return lineup.steps.contains(.parakeet) ? .parakeet : nil
+    }
+
+    /// A Pasting rule's models from before Gemini 4 Carbon: Carbon checked where Gemini 3.8 Flash is.
+    nonisolated static func withCarbonLikeFlash(_ models: Set<ModelChoice>) -> Set<ModelChoice> {
+        var models = models
+        if models.contains(.gemini) { models.insert(.carbon) } else { models.remove(.carbon) }
+        return models
+    }
+
+    /// A Pasting rule's models from before GigaAM: GigaAM checked where Parakeet is, the other model on this Mac.
+    nonisolated static func withGigaAMLikeParakeet(_ models: Set<ModelChoice>) -> Set<ModelChoice> {
+        var models = models
+        if models.contains(.parakeet) { models.insert(.gigaam) } else { models.remove(.gigaam) }
+        return models
     }
 
     /// Onboarding had six steps (welcome, permissions, model, shortcuts, try it, done) until shortcuts and try it
@@ -300,6 +349,8 @@ final class AppSettings {
         if let v: ModelColors = store.json(.modelColors) { modelColors = v }
         // A level stored for a retired model (Gemini 4 Argon's) is dropped as it's read (`ReasoningEfforts`).
         if let v: ReasoningEfforts = store.json(.geminiReasoningEfforts) { reasoningEfforts = v }
+        // A version this build doesn't know (a newer one's) leaves v3.
+        if let v = store.string(.gigaamVariant).flatMap(GigaAMEngine.Variant.init(rawValue:)) { gigaamVariant = v }
         if let v = store.int(.switchHintShownCount) { switchHintShownCount = max(0, v) }
         if let v = store.string(.pillMode).flatMap(PillMode.init(rawValue:)) { pillMode = v }
         // Older builds could hide the pill for an hour; that deadline has no meaning now.
@@ -379,6 +430,19 @@ final class AppSettings {
         store.remove(.removeFinalPeriod)
         // Gemini 4 Argon, which was given Gemini 3.8 Flash's Pasting rules once, is gone: so is the mark of that.
         store.remove(.argonPastingAdded)
+        // Gemini 4 Carbon arrived after Pasting's rules were picked per model: it starts with Gemini 3.8 Flash's, once.
+        // Changed after that, it keeps its own.
+        if store.bool(.carbonPastingAdded) != true {
+            modelsAddingSpace = Self.withCarbonLikeFlash(modelsAddingSpace)
+            modelsRemovingFinalPeriod = Self.withCarbonLikeFlash(modelsRemovingFinalPeriod)
+            store.set(true, .carbonPastingAdded)
+        }
+        // GigaAM arrived after that too: it starts with Parakeet's, once, and keeps its own from then on.
+        if store.bool(.gigaamPastingAdded) != true {
+            modelsAddingSpace = Self.withGigaAMLikeParakeet(modelsAddingSpace)
+            modelsRemovingFinalPeriod = Self.withGigaAMLikeParakeet(modelsRemovingFinalPeriod)
+            store.set(true, .gigaamPastingAdded)
+        }
         if let v: [String] = store.json(.modesAddingSpace) { modesAddingSpace = DictationMachine.Mode.read(v) }
         if let v: [String] = store.json(.modesRemovingFinalPeriod) {
             modesRemovingFinalPeriod = DictationMachine.Mode.read(v)
@@ -545,6 +609,12 @@ enum SettingsKey: String, CaseIterable {
     case geminiReasoningEfforts
     /// Set once Pasting's rules had given the removed Gemini 4 Argon Gemini 3.8 Flash's checks; removed at load.
     case argonPastingAdded
+    /// Set once Pasting's rules have given Gemini 4 Carbon Gemini 3.8 Flash's checks (`load`).
+    case carbonPastingAdded
+    /// Set once Pasting's rules have given GigaAM Parakeet's checks (`load`).
+    case gigaamPastingAdded
+    /// GigaAM's picked version (`GigaAMEngine.Variant` raw value).
+    case gigaamVariant
     /// The removed "Show Parakeet's text while Gemini works" (General → Experimental), removed at load.
     case showsParakeetWhileGemini
 

@@ -728,7 +728,7 @@ struct EngineIcon: View {
     }
 }
 
-/// A model's mark: its symbol (Parakeet's bolt, Flash's sparkles) in the model's own color (`AppSettings.modelColors`), so a row in Models, the sidebar chip and the pill agree.
+/// A model's mark: its symbol (Parakeet's bolt, Flash's sparkles, Carbon's atom, GigaAM's speech bubble) in the model's own color (`AppSettings.modelColors`), so a row in Models, the sidebar chip and the pill agree.
 struct ModelChoiceIcon: View {
     var choice: ModelChoice
     var color: ModelColor
@@ -811,6 +811,12 @@ struct ModelStatusText: View {
         self.showsDot = showsDot
     }
 
+    /// A model on this Mac with its own sizes: one GigaAM version.
+    init(state: LocalModelState, model: LocalModel, showsDot: Bool = true, localError: AppError? = nil) {
+        (text, tone) = Self.describe(state, model: model, localError: localError)
+        self.showsDot = showsDot
+    }
+
     init(keyStatus: KeyStatus, showsDot: Bool = true) {
         (text, tone) = Self.describe(keyStatus)
         self.showsDot = showsDot
@@ -832,10 +838,24 @@ struct ModelStatusText: View {
 
     static func describe(_ state: LocalModelState, engine: EngineID,
                          localError: AppError? = nil) -> (text: String, tone: StatusTone) {
-        let size = engine.approxDownloadBytes.map { " · \(Fmt.bytes($0))" } ?? ""
+        describe(state, downloadBytes: engine.approxDownloadBytes, installedBytes: engine.approxDownloadBytes,
+                 localError: localError)
+    }
+
+    /// The size is the download's until it's done, then what it takes on this Mac (a GigaAM zip unpacks to more).
+    static func describe(_ state: LocalModelState, model: LocalModel,
+                         localError: AppError? = nil) -> (text: String, tone: StatusTone) {
+        describe(state, downloadBytes: model.approxDownloadBytes, installedBytes: model.approxInstalledBytes,
+                 localError: localError)
+    }
+
+    private static func describe(_ state: LocalModelState, downloadBytes: Int64?, installedBytes: Int64?,
+                                 localError: AppError?) -> (text: String, tone: StatusTone) {
+        let download = downloadBytes.map { " · \(Fmt.bytes($0))" } ?? ""
+        let size = installedBytes.map { " · \(Fmt.bytes($0))" } ?? ""
         switch state {
         case .notInstalled:
-            return ("Not downloaded\(size)", .neutral)
+            return ("Not downloaded\(download)", .neutral)
         case .downloading(let p):
             let eta = p.secondsRemaining.map { " · \(Fmt.eta($0))" } ?? ""
             return ("Downloading \(p.percent)%\(eta)", .progress)
@@ -850,6 +870,7 @@ struct ModelStatusText: View {
             case .download: return ("Didn’t finish · try again", .negative)
             case .disk: return ("Not enough space", .negative)
             case .load: return ("Couldn’t load · try again", .negative)
+            case .notPublished: return ("Not published yet", .negative)
             }
         }
     }

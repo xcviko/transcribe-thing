@@ -22,6 +22,11 @@ enum HubSnapshots {
             hub("hub-models-compact-high", .models, width: 820, height: 1400) { c in
                 c.settings.reasoningEfforts[.geminiFlash] = .high
             },
+            // The narrowest window with Gemini 4 Carbon switched on and thinking at High.
+            hub("hub-models-compact-carbon", .models, width: 820, height: 1100) { c in
+                c.settings.lineup.setSwitchable(.carbon, true)
+                c.settings.reasoningEfforts[.geminiCarbon] = .high
+            },
             hub("hub-home-search", .home) { c in
                 c.initialSearch = "zzz"
             },
@@ -102,13 +107,99 @@ enum HubSnapshots {
             hub("hub-home-selections", .home, height: 900) { c in
                 c.history = .preview(entries: Samples.selectionEntries() + c.history.entries)
             },
+            // Dictations by Gemini 4 Carbon, one polished: its C glyph in Carbon's blue.
+            hub("hub-home-carbon", .home, height: 900) { c in
+                c.history = .preview(entries: Samples.carbonEntries() + c.history.entries)
+            },
+            // GigaAM as the main model, in v3 e2e, and dictations by two of its versions: its G glyph in its green.
+            hub("hub-home-gigaam", .home, height: 900) { c in
+                c.settings.gigaamVariant = .v3e2e
+                c.models = Samples.models(c, [.parakeet: .ready, .gigaam(.v3): .installed, .gigaam(.v3e2e): .ready])
+                c.settings.lineup.main = .gigaam
+                c.history = .preview(entries: Samples.gigaamEntries() + c.history.entries)
+            },
 
             hub("hub-models", .models),
             hub("hub-models-full", .models, height: 1080),
             // Hands-free switches to Gemini.
             hub("hub-models-hands-free", .models, height: 1080) { c in c.settings.handsFreeModel = .gemini },
+            // Gemini 4 Carbon switched on, thinking at its default (Low), and hands-free's model; Flash at High.
+            hub("hub-models-carbon", .models, height: 1100) { c in
+                c.settings.lineup.setSwitchable(.carbon, true)
+                c.settings.handsFreeModel = .carbon
+                c.settings.reasoningEfforts[.geminiFlash] = .high
+            },
             hub("hub-models-downloading", .models) { c in
                 c.models = .preview(states: [.parakeet: .downloading(Samples.downloading)])
+            },
+            // GigaAM (`--only hub-models-gigaam`), v3 picked: not downloaded (Parakeet in use), its zip coming in,
+            // loading, ready but unused (Delete), in use (switched on and hands-free's), the main model.
+            hub("hub-models-gigaam-not-downloaded", .models, height: 1080),
+            hub("hub-models-gigaam-downloading", .models, height: 1080) { c in
+                c.models = Samples.models(c, [.parakeet: .ready, .gigaam(.v3): .downloading(Samples.gigaamDownloading)])
+            },
+            hub("hub-models-gigaam-preparing", .models, height: 1080) { c in
+                c.models = Samples.models(c, [.parakeet: .ready,
+                                              .gigaam(.v3): .preparing(since: Date().addingTimeInterval(-3))])
+                c.settings.lineup.setSwitchable(.gigaam, true)
+            },
+            hub("hub-models-gigaam-ready", .models, height: 1080) { c in
+                c.models = Samples.models(c, [.parakeet: .ready, .gigaam(.v3): .ready])
+            },
+            hub("hub-models-gigaam-in-use", .models, height: 1080) { c in
+                c.models = Samples.models(c, [.parakeet: .ready, .gigaam(.v3): .ready])
+                c.settings.lineup.setSwitchable(.gigaam, true)
+                c.settings.handsFreeModel = .gigaam
+            },
+            hub("hub-models-gigaam-main", .models, height: 1080) { c in
+                c.models = Samples.models(c, [.parakeet: .ready, .gigaam(.v3): .ready])
+                c.settings.lineup.main = .gigaam
+                c.settings.lineup.setSwitchable(.parakeet, false)
+            },
+            // v3 e2e picked after v3: e2e shows Download, and v3 stays on this Mac with its own Delete.
+            hub("hub-models-gigaam-e2e-not-downloaded", .models, height: 1180) { c in
+                c.settings.gigaamVariant = .v3e2e
+                c.settings.lineup.setSwitchable(.gigaam, true)
+                c.models = Samples.models(c, [.parakeet: .ready, .gigaam(.v3): .installed])
+            },
+            // Two versions on this Mac: e2e picked and in use, v3 kept (Delete frees it).
+            hub("hub-models-gigaam-two-installed", .models, height: 1180) { c in
+                c.settings.gigaamVariant = .v3e2e
+                c.settings.lineup.setSwitchable(.gigaam, true)
+                c.models = Samples.models(c, [.parakeet: .ready, .gigaam(.v3): .installed, .gigaam(.v3e2e): .ready])
+            },
+            // Multilingual picked and coming in; v3 and e2e on this Mac.
+            hub("hub-models-gigaam-multilingual-downloading", .models, height: 1280) { c in
+                c.settings.gigaamVariant = .multilingual
+                c.settings.lineup.setSwitchable(.gigaam, true)
+                c.models = Samples.models(c, [.parakeet: .ready, .gigaam(.v3): .installed, .gigaam(.v3e2e): .installed,
+                                              .gigaam(.multilingual): .downloading(Samples.multilingualDownloading)])
+            },
+            // Multilingual ready and in use.
+            hub("hub-models-gigaam-multilingual-ready", .models, height: 1080) { c in
+                c.settings.gigaamVariant = .multilingual
+                c.settings.lineup.setSwitchable(.gigaam, true)
+                c.models = Samples.models(c, [.parakeet: .ready, .gigaam(.multilingual): .ready])
+            },
+            hub("hub-models-gigaam-not-published", .models, height: 1080) { c in
+                c.settings.gigaamVariant = .v3e2e
+                let file = GigaAMEngine.Variant.v3e2e.zipName
+                c.models = .preview(
+                    states: [.parakeet: .ready,
+                             .gigaam: .failed("Not published yet. Put \(file) in your Downloads folder, then Retry.")],
+                    lastErrors: [.gigaam: .modelNotPublished(.gigaam, file: file)], settings: c.settings)
+            },
+            // The narrowest window: Multilingual coming in beside v3, the caption under the bar.
+            hub("hub-models-gigaam-compact", .models, width: 820, height: 1180) { c in
+                c.settings.gigaamVariant = .multilingual
+                c.settings.lineup.setSwitchable(.gigaam, true)
+                c.models = Samples.models(c, [.parakeet: .ready, .gigaam(.v3): .installed,
+                                              .gigaam(.multilingual): .downloading(Samples.multilingualDownloading)])
+            },
+            // The Version menu open over GigaAM's row (a menu doesn't render in a page snapshot): its three items, the
+            // picked one checked.
+            SnapshotEntry("hub-models-gigaam-version-menu", width: 640, height: 150) { _ in
+                GigaAMVersionMenuSnapshot(picked: .v3e2e)
             },
             hub("hub-models-preparing", .models) { c in
                 c.models = .preview(states: [.parakeet: .preparing(since: Date().addingTimeInterval(-24))])
@@ -180,6 +271,10 @@ enum HubSnapshots {
             hub("hub-models-main-gemini", .models, height: 1100) { c in
                 c.settings.lineup.main = .gemini
             },
+            // Gemini 4 Carbon as the main model: Parakeet gets a switch, and Parakeet and Flash stay in the cycle.
+            hub("hub-models-main-carbon", .models, height: 1100) { c in
+                c.settings.lineup.main = .carbon
+            },
             // Dragged into Gemini, Parakeet: the line follows the new order from the main model.
             hub("hub-models-reordered", .models, height: 1100) { c in
                 c.settings.lineup.move(.gemini, to: 0)
@@ -195,7 +290,10 @@ enum HubSnapshots {
             hub("hub-home-model-colors", .home, configure: Samples.pickColors),
             // Each model's colors as its tile opens them (a popover doesn't render in a page snapshot), in its default
             // color.
-            SnapshotEntry("hub-model-color-picker", width: 3 * ModelColorPopover.width + 4 * 24, height: 230) { _ in
+            SnapshotEntry("hub-model-color-picker",
+                          width: CGFloat(ModelChoice.allCases.count) * ModelColorPopover.width
+                              + CGFloat(ModelChoice.allCases.count + 1) * 24,
+                          height: 230) { _ in
                 HStack(alignment: .top, spacing: 24) {
                     ForEach(ModelChoice.allCases) { choice in
                         ModelColorPopover(choice: choice, color: choice.defaultColor) { _ in }
@@ -265,10 +363,10 @@ enum HubSnapshots {
                 c.settings.dictionary = dictionary
             },
             hub("hub-dictionary-empty", .dictionary, height: 560),
-            // Pasting set per model: quick Parakeet searches go in bare, Gemini gets a space after.
+            // Pasting set per model: quick Parakeet and GigaAM searches go in bare, Flash and Carbon get a space after.
             hub("hub-general", .general, height: 1080) { c in
-                c.settings.modelsAddingSpace = [.gemini]
-                c.settings.modelsRemovingFinalPeriod = [.parakeet]
+                c.settings.modelsAddingSpace = [.gemini, .carbon]
+                c.settings.modelsRemovingFinalPeriod = [.parakeet, .gigaam]
                 c.settings.modesRemovingFinalPeriod = [.pushToTalk]
             },
             // The whole page, down to Troubleshooting's Export Logs….
@@ -287,10 +385,10 @@ enum HubSnapshots {
                 c.settings.pillMode = .always
                 c.settings.soundsEnabled = false
             },
-            // The narrowest window: Pasting's chips still fit under each rule.
+            // The narrowest window: Pasting's chips still fit under each rule, a column for each of the four models.
             hub("hub-general-pasting-compact", .general, width: 820, height: 1080) { c in
-                c.settings.modelsAddingSpace = [.gemini]
-                c.settings.modelsRemovingFinalPeriod = [.parakeet]
+                c.settings.modelsAddingSpace = [.gemini, .carbon]
+                c.settings.modelsRemovingFinalPeriod = [.parakeet, .gigaam]
                 c.settings.modesRemovingFinalPeriod = [.pushToTalk]
             },
             hub("hub-general-permissions", .general, height: 1600) { c in
@@ -375,6 +473,7 @@ enum HubSnapshots {
         @MainActor static func pickColors(_ context: HubContext) {
             context.settings.modelColors[.parakeet] = .teal
             context.settings.modelColors[.gemini] = .blue
+            context.settings.modelColors[.carbon] = .orange
         }
 
         @MainActor static func updates(_ context: HubContext, releases: [Release] = PreviewFixtures.releases(),
@@ -387,6 +486,19 @@ enum HubSnapshots {
 
         static let downloading = DownloadProgress(fraction: 0.42, bytesReceived: 265_600_000, totalBytes: 632_321_326,
                                                   bytesPerSecond: 9_800_000, secondsRemaining: 38)
+        /// GigaAM v3's zip coming in from the release.
+        static let gigaamDownloading = DownloadProgress(fraction: 0.37, bytesReceived: 151_500_000,
+                                                        totalBytes: 409_369_862, bytesPerSecond: 8_200_000,
+                                                        secondsRemaining: 31)
+        /// GigaAM Multilingual's zip, more than twice as big.
+        static let multilingualDownloading = DownloadProgress(fraction: 0.18, bytesReceived: 194_900_000,
+                                                              totalBytes: 1_082_718_871, bytesPerSecond: 9_100_000,
+                                                              secondsRemaining: 98)
+
+        /// `states` on a store that reads the page's settings, so GigaAM's pick is the page's.
+        @MainActor static func models(_ c: HubContext, _ states: [LocalModel: LocalModelState]) -> ModelStore {
+            .preview(states: [:], models: states, settings: c.settings)
+        }
 
         /// Selected text rewritten by Flash: translated, and polished.
         static func selectionEntries() -> [TranscriptEntry] {
@@ -402,6 +514,41 @@ enum HubSnapshots {
                       .selectionTranslation(.geminiFlash), ago: 30),
                 entry("We ship the import on Friday, and Pasha checks the long files over the weekend.",
                       .selection(.geminiFlash), ago: 90),
+            ]
+        }
+
+        /// Dictations by Gemini 4 Carbon: a transcript at its default Low, and a polish.
+        static func carbonEntries() -> [TranscriptEntry] {
+            let now = Date()
+            func entry(_ text: String, _ kind: TranscriptVersionKind, ago: TimeInterval) -> TranscriptEntry {
+                var result = TranscriptResult(text: text, engine: kind.engine, processingTime: 9.4)
+                result.reasoningEffort = .low
+                return TranscriptEntry(createdAt: now.addingTimeInterval(-ago), engine: kind.engine,
+                                       audioDuration: 21.3, voicedSeconds: 18.2, audioFileName: "carbon.m4a",
+                                       versions: [result.version(kind)])
+            }
+            return [
+                entry("Let’s keep Carbon on for a few days and compare it with Flash on the long dictations.",
+                      .transcription(.geminiCarbon), ago: 40),
+                entry("Could you send the draft by Thursday? I’d like to go through it before the review.",
+                      .polish(by: .geminiCarbon), ago: 150),
+            ]
+        }
+
+        /// Dictations by GigaAM on this Mac: one by v3 e2e (punctuation, digits), one by v3 (plain).
+        static func gigaamEntries() -> [TranscriptEntry] {
+            let now = Date()
+            func entry(_ text: String, _ variant: GigaAMEngine.Variant, ago: TimeInterval,
+                       seconds: TimeInterval) -> TranscriptEntry {
+                var result = TranscriptResult(text: text, engine: .gigaam, processingTime: 0.36)
+                result.modelID = variant.rawValue
+                return TranscriptEntry(createdAt: now.addingTimeInterval(-ago), engine: .gigaam,
+                                       audioDuration: seconds, voicedSeconds: seconds * 0.85,
+                                       audioFileName: "gigaam.m4a", versions: [result.version(.transcription(.gigaam))])
+            }
+            return [
+                entry("Созвонимся в четверг в 11:30, я пришлю ссылку.", .v3e2e, ago: 35, seconds: 4.2),
+                entry("давай перенесём ревью на пятницу к этому времени допишу тесты", .v3, ago: 120, seconds: 6.8),
             ]
         }
 

@@ -101,22 +101,25 @@ enum StatFormat {
 
 /// What went wrong with a local model in `.failed`, read from the error ModelStore kept for it.
 enum ModelFailure: Equatable {
-    case download, disk, load
+    /// `notPublished`: its download has no source yet (`AppError.modelNotPublished`).
+    case download, disk, load, notPublished
 
     init(_ error: AppError?) {
         switch error {
         case .modelLoadFailed?: self = .load
         case .notEnoughDisk?: self = .disk
+        case .modelNotPublished?: self = .notPublished
         default: self = .download
         }
     }
 
-    /// "Download failed", "Not enough space", "Couldn’t load".
+    /// "Download failed", "Not enough space", "Couldn’t load", "Not published yet".
     var label: String {
         switch self {
         case .download: "Download failed"
         case .disk: "Not enough space"
         case .load: "Couldn’t load"
+        case .notPublished: "Not published yet"
         }
     }
 }
@@ -215,10 +218,12 @@ struct VersionsMenu: Equatable {
         /// "76 s · $0.07 · 17.7k thinking"; empty when nothing is known.
         var summary: String
         var isCurrent: Bool
+        /// The model its metadata names: which GigaAM version wrote it.
+        var modelID: String? = nil
 
         var id: TranscriptVersionKind { kind }
-        /// "Gemini 3.8 Flash", "Parakeet v3 + Clean-up by GPT-6 Luna".
-        var title: String { kind.displayName }
+        /// "Gemini 3.8 Flash", "Parakeet v3 + Clean-up by GPT-6 Luna", "GigaAM v3 e2e".
+        var title: String { kind.displayName(modelID: modelID) }
         /// The menu item: `title`, then `summary` set off by an em space: "Gemini 3.8 Flash  76 s · $0.07".
         var itemTitle: String { summary.isEmpty ? title : "\(title)\u{2003}\(summary)" }
     }
@@ -227,12 +232,15 @@ struct VersionsMenu: Equatable {
         var kind: TranscriptVersionKind
         var blocker: Blocker?
 
+        /// The engine's name where it isn't its own: GigaAM's with the version it would run ("GigaAM v3 e2e").
+        var engineName: String? = nil
+
         var id: TranscriptVersionKind { kind }
         var isEnabled: Bool { blocker == nil }
         /// "Gemini 3.8 Flash", "Polish with Gemini 3.8 Flash".
         var name: String {
             switch kind {
-            case .transcription(let engine): engine.displayName
+            case .transcription(let engine): engineName ?? engine.displayName
             // Never an action: nothing makes clean-ups any more.
             case .cleanup: kind.displayName
             case .polish(let engine): "Polish with \(engine.modelName)"
@@ -262,13 +270,16 @@ struct VersionsMenu: Equatable {
     static let versionsSectionTitle = "Versions"
     static let actionsSectionTitle = "Transcribe With"
 
-    /// `running`: what is being made for this recording right now. `readiness`: each engine's.
+    /// `running`: what is being made for this recording right now. `readiness`: each engine's. `engineName`: the
+    /// name an engine's action goes by (`AppSettings.engineName`: GigaAM with the version it would run).
     static func make(for entry: TranscriptEntry, running: TranscriptVersionKind?,
-                     readiness: (EngineID) -> EngineReadiness) -> VersionsMenu {
+                     readiness: (EngineID) -> EngineReadiness,
+                     engineName: (EngineID) -> String = \.displayName) -> VersionsMenu {
         let isRetry = entry.status != .success
         let hasAudio = entry.audioFileName != nil
         let versions = entry.versions.map {
-            Version(kind: $0.kind, summary: $0.metadata.summary, isCurrent: $0.kind == entry.currentKind)
+            Version(kind: $0.kind, summary: $0.metadata.summary, isCurrent: $0.kind == entry.currentKind,
+                    modelID: $0.metadata.modelID)
         }
         // A selection's polish has its models' answers to pick from, and no recording to make another one from.
         if entry.isSelection {
@@ -280,7 +291,7 @@ struct VersionsMenu: Equatable {
         func action(_ kind: TranscriptVersionKind) -> Action {
             let blocker = busy ?? (hasAudio ? nil : .recordingGone) ?? Blocker.length(entry.audioDuration, for: kind)
                 ?? readiness(kind.engine).unavailableReason.map(Blocker.engine)
-            return Action(kind: kind, blocker: blocker)
+            return Action(kind: kind, blocker: blocker, engineName: Self.engineName(for: kind, engineName))
         }
         var actions = EngineID.offered.filter { isRetry || !entry.hasVersion(.transcription($0)) }.map { engine in
             action(.transcription(engine))
@@ -299,6 +310,13 @@ struct VersionsMenu: Equatable {
     static func title(for entry: TranscriptEntry) -> String {
         entry.status == .success ? "Versions" : "Retry With"
     }
+
+    /// A transcription's engine by `engineName` where it differs from its own name; nil for the rest.
+    static func engineName(for kind: TranscriptVersionKind, _ engineName: (EngineID) -> String) -> String? {
+        guard case .transcription(let engine) = kind else { return nil }
+        let name = engineName(engine)
+        return name == engine.displayName ? nil : name
+    }
 }
 
 /// What a file dropped on Home can be transcribed with (`ImportedAudio`): each offered engine, the main model's first,
@@ -306,12 +324,14 @@ struct VersionsMenu: Equatable {
 /// Gemini's when `seconds` (the longest file's) is more than one request holds, too.
 enum ImportChoices {
     static func make(main: EngineID, seconds: TimeInterval = 0,
-                     readiness: (EngineID) -> EngineReadiness) -> [VersionsMenu.Action] {
+                     readiness: (EngineID) -> EngineReadiness,
+                     engineName: (EngineID) -> String = \.displayName) -> [VersionsMenu.Action] {
         let engines = EngineID.offered.filter { $0 == main } + EngineID.offered.filter { $0 != main }
         let kinds = engines.map(TranscriptVersionKind.transcription) + TranscriptVersionKind.rewrites
         return kinds.map { kind in
             VersionsMenu.Action(kind: kind, blocker: VersionsMenu.Blocker.length(seconds, for: kind)
-                                    ?? readiness(kind.engine).unavailableReason.map(VersionsMenu.Blocker.engine))
+                                    ?? readiness(kind.engine).unavailableReason.map(VersionsMenu.Blocker.engine),
+                                engineName: VersionsMenu.engineName(for: kind, engineName))
         }
     }
 }
@@ -340,7 +360,7 @@ enum VersionDetails {
     static func lines(for version: TranscriptVersion) -> [String] {
         let m = version.metadata
         var lines: [String] = []
-        lines.append(version.kind.displayName)
+        lines.append(version.kind.displayName(modelID: m.modelID))
         var source: [String] = []
         if let model = m.modelID, !model.isEmpty { source.append(model) }
         if let provider = m.provider, !provider.isEmpty { source.append("via \(provider)") }
@@ -582,7 +602,11 @@ enum HubAttention {
                     body: "Loading the model into memory. After installing it or updating macOS, this takes about half a minute.",
                     actionTitle: "View", action: .openModels, isIndeterminate: true))
             case .failed(let message):
-                let title = ModelFailure(input.localError) == .load ? "Couldn’t load \(name)" : "\(name) didn’t finish downloading"
+                let title = switch ModelFailure(input.localError) {
+                case .load: "Couldn’t load \(name)"
+                case .notPublished: "\(name) isn’t published yet"
+                case .download, .disk: "\(name) didn’t finish downloading"
+                }
                 items.append(AttentionItem(
                     id: "model", tone: .error, symbol: "exclamationmark.triangle.fill", title: title,
                     body: message.isEmpty ? "Something went wrong. Try again." : message,

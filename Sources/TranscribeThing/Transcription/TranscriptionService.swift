@@ -124,6 +124,10 @@ final class TranscriptionService {
                           noteFailure: { account.noteCloudFailure($0) }, noteSuccess: { account.noteCloudSuccess() })
     }
 
+    /// Another model's slug for Gemini's transcriptions, same prompt and request (`EngineCLI --model`, a hidden
+    /// comparison). The app never sets it.
+    var cloudModelOverride: String?
+
     /// Where `engine`'s requests go now: nil for the local model.
     func provider(for engine: EngineID) -> CloudProvider? {
         CloudRoute.provider(for: engine, proxy: proxy)
@@ -151,7 +155,11 @@ final class TranscriptionService {
         do {
             var result = TranscriptResult(text: "", engine: engine, processingTime: 0)
             if engine.isLocal {
-                result.text = try await models.transcribeLocal(engine, samples: recording.samples, background: background)
+                let local = try await models.transcribeLocalWithModel(engine, samples: recording.samples,
+                                                                      background: background)
+                result.text = local.text
+                // Which GigaAM version wrote it: "gigaam-v3-e2e-ctc". Parakeet records none, as before.
+                result.modelID = local.model.modelID
             } else {
                 let effort = effort ?? reasoningEffort(engine) ?? engine.defaultReasoningEffort ?? .medium
                 let prompt = UserDictionary.prompt(prompt ?? EngineID.geminiSystemPrompt, with: vocabulary(), heard: true)
@@ -198,7 +206,7 @@ final class TranscriptionService {
                                  provider: OpenRouterChatRequest.Provider? = nil,
                                  progress: (@Sendable (ChatStreamProgress) -> Void)?,
                                  generations: (@Sendable (String) -> Void)? = nil) async throws -> CloudResult {
-        guard engine.isGemini, let model = engine.openRouterModelID else {
+        guard engine.isGemini, let model = cloudModelOverride ?? engine.openRouterModelID else {
             throw AppError.engineFailed(engine, "No cloud model for \(engine.displayName).")
         }
         let access = try chatAccess()

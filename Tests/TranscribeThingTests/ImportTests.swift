@@ -416,15 +416,15 @@ import Testing
         #expect(CloudAudio.fitsChat(seconds: 3_600))
     }
 
-    /// A file past it isn't offered Gemini, Polish or Translate; Parakeet still is.
-    @Test func aLongFileIsOfferedOnlyParakeet() {
+    /// A file past it isn't offered Gemini, Polish or Translate; the models on this Mac still are.
+    @Test func aLongFileIsOfferedOnlyTheModelsOnThisMac() {
         let choices = ImportChoices.make(main: .geminiFlash, seconds: 2 * 3_600) { _ in .ready }
         let gemini = choices.filter { $0.kind.engine.isGemini }
-        #expect(gemini.map(\.kind) == [.transcription(.geminiFlash), .polish(by: .geminiFlash),
-                                       .translation(polished: false, by: .geminiFlash)])
+        #expect(gemini.map(\.kind) == [.transcription(.geminiFlash), .transcription(.geminiCarbon)]
+                + TranscriptVersionKind.rewrites)
         #expect(gemini.allSatisfy { $0.blocker == .tooLongForGemini })
         #expect(gemini.first?.title == "Gemini 3.8 Flash · Too long, Parakeet takes any length")
-        #expect(choices.filter(\.isEnabled).map(\.kind) == [.transcription(.parakeet)])
+        #expect(choices.filter(\.isEnabled).map(\.kind) == [.transcription(.parakeet), .transcription(.gigaam)])
         let hour = ImportChoices.make(main: .geminiFlash, seconds: 3_600) { _ in .ready }
         #expect(hour.allSatisfy { $0.isEnabled })
     }

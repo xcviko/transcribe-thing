@@ -36,17 +36,17 @@ import Testing
     @Test func aCleanupMainModelBecomesParakeet() throws {
         let decoded = try lineup(#"{"main":"cleanup","order":["parakeet","cleanup","gemini"],"switchable":["gemini"]}"#)
         #expect(decoded.main == .parakeet)
-        #expect(decoded.order == [.parakeet, .gemini])
+        #expect(decoded.order == [.parakeet, .gemini, .carbon, .gigaam])
         #expect(decoded.cycle == [.parakeet, .gemini])
         let reordered = try lineup(#"{"main":"cleanup","order":["gemini","cleanup","parakeet"],"switchable":["gemini"]}"#)
-        #expect(reordered.main == .parakeet && reordered.order == [.gemini, .parakeet])
+        #expect(reordered.main == .parakeet && reordered.order == [.gemini, .parakeet, .carbon, .gigaam])
         #expect(reordered.cycle == [.parakeet, .gemini])
     }
 
     /// Switch model reached clean-up: it reaches Parakeet now, even where Parakeet itself was switched off.
     @Test func aSwitchableCleanupSwitchesParakeetOn() throws {
         let decoded = try lineup(#"{"main":"gemini","order":["gemini","cleanup","parakeet"],"switchable":["cleanup"]}"#)
-        #expect(decoded.main == .gemini && decoded.order == [.gemini, .parakeet])
+        #expect(decoded.main == .gemini && decoded.order == [.gemini, .parakeet, .carbon, .gigaam])
         #expect(decoded.cycle == [.gemini, .parakeet])
         let off = try lineup(#"{"main":"gemini","order":["parakeet","cleanup","gemini"],"switchable":[]}"#)
         #expect(off.cycle == [.gemini], "clean-up wasn't a step: Parakeet stays off")
@@ -60,7 +60,7 @@ import Testing
             let settings = load(defaults)
             #expect(settings.lineup.main == .parakeet && settings.lineup.cycle == [.parakeet, .gemini])
             #expect(settings.mainEngine == .parakeet)
-            #expect(stored(defaults, .lineup) == #"{"main":"parakeet","order":["parakeet","gemini"],"switchable":["parakeet","gemini"]}"#)
+            #expect(stored(defaults, .lineup) == #"{"main":"parakeet","order":["parakeet","gemini","carbon","gigaam"],"switchable":["parakeet","gemini"]}"#)
             #expect(load(defaults).lineup == settings.lineup, "a reload changes nothing")
         }
     }
@@ -95,20 +95,22 @@ import Testing
         #expect(AppSettings.handsFreeModel(stored: nil, lineup: .default) == nil)
     }
 
-    /// General → Pasting's rules for clean-up have no model to hold for: they go, the others stay.
+    /// General → Pasting's rules for clean-up have no model to hold for: they go, the others stay (and Gemini 4
+    /// Carbon, which came later, starts with Flash's).
     @Test func cleanupDropsOutOfThePastingRules() throws {
         try withDefaults { defaults in
             defaults.set(try JSONEncoder().encode(["cleanup", "gemini"]), forKey: SettingsKey.modelsAddingSpace.defaultsKey)
             defaults.set(try JSONEncoder().encode(["cleanup"]), forKey: SettingsKey.modelsRemovingFinalPeriod.defaultsKey)
             let settings = load(defaults)
-            #expect(settings.modelsAddingSpace == [.gemini])
+            #expect(settings.modelsAddingSpace == [.gemini, .carbon])
             #expect(settings.modelsRemovingFinalPeriod.isEmpty)
-            #expect(stored(defaults, .modelsAddingSpace) == #"["gemini"]"#)
+            #expect(stored(defaults, .modelsAddingSpace) == #"["gemini","carbon"]"#)
             #expect(stored(defaults, .modelsRemovingFinalPeriod) == "[]")
         }
     }
 
-    /// Clean-up as the main model: Parakeet took its place, and takes its Pasting rules too, for good.
+    /// Clean-up as the main model: Parakeet took its place, and takes its Pasting rules too, for good (and GigaAM,
+    /// which came later, starts with Parakeet's).
     @Test func cleanupsPastingRulesGoToParakeetWhereItWasMain() throws {
         try withDefaults { defaults in
             let json = #"{"main":"cleanup","order":["parakeet","cleanup","gemini"],"switchable":["gemini"]}"#
@@ -117,16 +119,18 @@ import Testing
             defaults.set(try JSONEncoder().encode(["gemini"]), forKey: SettingsKey.modelsRemovingFinalPeriod.defaultsKey)
             let settings = load(defaults)
             #expect(settings.lineup.main == .parakeet)
-            #expect(settings.modelsAddingSpace == [.parakeet] && settings.modelsRemovingFinalPeriod == [.gemini])
-            #expect(stored(defaults, .modelsAddingSpace) == #"["parakeet"]"#)
-            #expect(load(defaults).modelsAddingSpace == [.parakeet], "it stays once the lineup is stored without it")
+            #expect(settings.modelsAddingSpace == [.parakeet, .gigaam]
+                    && settings.modelsRemovingFinalPeriod == [.gemini, .carbon])
+            #expect(stored(defaults, .modelsAddingSpace) == #"["parakeet","gigaam"]"#)
+            #expect(load(defaults).modelsAddingSpace == [.parakeet, .gigaam],
+                    "it stays once the lineup is stored without it")
         }
         // Off for clean-up and on for Parakeet: every dictation went to clean-up, without it. Parakeet goes on so.
         try withDefaults { defaults in
             let json = #"{"main":"cleanup","order":["parakeet","cleanup","gemini"],"switchable":["gemini"]}"#
             defaults.set(Data(json.utf8), forKey: SettingsKey.lineup.defaultsKey)
             defaults.set(try JSONEncoder().encode(["parakeet", "gemini"]), forKey: SettingsKey.modelsAddingSpace.defaultsKey)
-            #expect(load(defaults).modelsAddingSpace == [.gemini])
+            #expect(load(defaults).modelsAddingSpace == [.gemini, .carbon])
         }
     }
 
@@ -137,12 +141,12 @@ import Testing
             defaults.set(Data(json.utf8), forKey: SettingsKey.modelColors.defaultsKey)
             let settings = load(defaults)
             #expect(settings.modelColors[.parakeet] == .teal && settings.modelColors[.gemini] == .blue)
-            #expect(stored(defaults, .modelColors) == #"{"gemini":"blue","parakeet":"teal"}"#)
+            #expect(stored(defaults, .modelColors) == #"{"carbon":"blue","gemini":"blue","gigaam":"green","parakeet":"teal"}"#)
         }
     }
 
-    @Test func onlyParakeetAndGeminiAreLeft() {
-        #expect(ModelChoice.allCases == [.parakeet, .gemini])
+    @Test func onlyParakeetFlashCarbonAndGigaAMAreLeft() {
+        #expect(ModelChoice.allCases == [.parakeet, .gemini, .carbon, .gigaam])
         #expect(ModelChoice(rawValue: ModelChoice.retiredCleanup) == nil)
         #expect(ModelChoice.read(["parakeet", "cleanup", "gemini"]) == [.parakeet, .gemini])
     }
@@ -211,7 +215,8 @@ private let historyFile = #"""
         let m = menu(try entries()[0])
         #expect(m.versions.map(\.title) == ["Parakeet v3", "Parakeet v3 + Clean-up by GPT-6 Luna"])
         #expect(m.versions.map(\.isCurrent) == [false, true])
-        #expect(m.actions.map(\.kind) == [.transcription(.geminiFlash)] + TranscriptVersionKind.rewrites)
+        #expect(m.actions.map(\.kind) == [.transcription(.gigaam), .transcription(.geminiFlash),
+                                          .transcription(.geminiCarbon)] + TranscriptVersionKind.rewrites)
         #expect(!m.actions.contains { $0.kind.isCleanup || $0.title.contains("Clean Up") })
     }
 

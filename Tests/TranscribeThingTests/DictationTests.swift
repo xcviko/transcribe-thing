@@ -1175,9 +1175,13 @@ final class FakeRecorder: DictationRecorder {
         #expect(keyless.toasts.notices.first?.actions.map(\.kind) == [.download(.parakeet), .openHub(.models)])
     }
 
-    @Test func geminiFallsBackToParakeetOnThisMacAndParakeetToNothing() {
+    /// From Gemini, the models on this Mac, Parakeet first; from GigaAM, Parakeet (it writes Russian too); from
+    /// Parakeet, nothing (GigaAM writes far fewer languages).
+    @Test func geminiFallsBackToTheModelsOnThisMacAndParakeetToNothing() {
         #expect(DictationController.fallbackCandidates(for: .parakeet) == [])
-        #expect(DictationController.fallbackCandidates(for: .geminiFlash) == [.parakeet])
+        #expect(DictationController.fallbackCandidates(for: .geminiFlash) == [.parakeet, .gigaam])
+        #expect(DictationController.fallbackCandidates(for: .geminiCarbon) == [.parakeet, .gigaam])
+        #expect(DictationController.fallbackCandidates(for: .gigaam) == [.parakeet])
     }
 
     /// A failed dictation's Retry is the same model, whatever else could run: another one is the user's call, from

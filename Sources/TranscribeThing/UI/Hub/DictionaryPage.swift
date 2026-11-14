@@ -19,7 +19,7 @@ struct DictionaryPage: View {
     static let searchFrom = 16
 
     var body: some View {
-        HubPage("Dictionary", subtitle: "How you spell words and names: a hint for Gemini. Parakeet doesn’t use it.") {
+        HubPage("Dictionary", subtitle: "How you spell words and names: a hint for Gemini. Parakeet and GigaAM don’t use it.") {
             HubGroup("Add") {
                 SettingsGroup {
                     addRow

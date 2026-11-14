@@ -6,7 +6,7 @@ import Foundation
 /// Headless engine checks, dispatched by TranscribeThingMain before the app starts:
 ///
 ///     transcribe-thing --transcribe <audio file>
-///            --engine parakeet|geminiFlash
+///            --engine parakeet|gigaam|geminiFlash|geminiCarbon [--gigaam-version v3|e2e|multilingual]
 ///            [--download] [--prompt <text>] [--repeat <n>] [--effort low|medium|high]
 ///            [--upload wav|m4a]
 ///     transcribe-thing --model-status
@@ -14,16 +14,22 @@ import Foundation
 /// Hidden comparison (not in the usage text): `--provider <slug>` sends Gemini to another endpoint than Google AI
 /// Studio's ("google-ai-studio/priority"), pinned without fallbacks.
 ///
+/// Hidden comparison (not in the usage text): `--model <slug>` sends Gemini's request, prompt and all, to another
+/// model ("google/gemini-4-carbon"); `--endpoint <base URL>` sends it through that OpenAI-compatible endpoint instead
+/// of the app's, with the key from VERTEX_PROXY_KEY, without reading or changing the app's own endpoint and key.
+///
 /// Hidden comparison (not in the usage text): `--hedge race|race3|measure` sends a cloud engine's request twice (three
 /// times for `race3`) at once, as dictations do with Race requests on (`CloudHedge`); `measure` sends it twice, lets
 /// both run to their end and prints both times (`HEDGE:`).
 ///
-/// Hidden diagnostic (not in the usage text): `--parakeet-compute ane|gpu` loads the local model on other Core ML
+/// Hidden diagnostic (not in the usage text): `--parakeet-compute ane|gpu` loads Parakeet on other Core ML
 /// compute units. Core ML specializes and caches the model per compute unit, so the first run with a new choice
 /// is a cold load, and it can evict the default Neural Engine build (the next default load is cold again).
 ///
 /// Uses the real model folder (~/Library/Application Support/transcribe-thing) and the real pipeline
-/// (ModelStore → InferenceGate → engine, or OpenRouterClient). Cloud engines read the key from
+/// (ModelStore → InferenceGate → engine, or OpenRouterClient). `--download` installs a model on this Mac into that
+/// folder, as the app's Download does (a GigaAM version from its zip in Downloads while it isn't published).
+/// `--gigaam-version` picks GigaAM's version for the run (v3 unless given), never the app's pick. Cloud engines read the key from
 /// OPENROUTER_API_KEY, else from the app's key file (`keyStore`), never the Keychain.
 /// `--prompt` and `--effort` apply to Gemini only: `--effort` replaces the model's default level (medium; the CLI
 /// doesn't read the level picked in the app's Models) and is sent as given. Without `--prompt` Gemini gets the app's fixed prompt (`EngineID.geminiSystemPrompt`); `--prompt ""` sends
@@ -53,7 +59,7 @@ import Foundation
 enum EngineCLI {
     static func handles(_ arguments: [String]) -> Bool {
         arguments.contains("--transcribe") || arguments.contains("--model-status")
-            || arguments.contains(Recompress.flag)
+            || arguments.contains(Recompress.flag) || arguments.contains(EngineBatchCLI.flag)
     }
 
     /// Runs the CLI mode and exits the process.
@@ -83,6 +89,9 @@ enum EngineCLI {
         if arguments.contains(Recompress.flag) {
             return await recompress(arguments)
         }
+        if arguments.contains(EngineBatchCLI.flag) {
+            return await EngineBatchCLI.run(arguments)
+        }
         guard let options = Options(arguments) else {
             printError(Options.usage)
             return ExitCode.usage
@@ -107,7 +116,7 @@ enum EngineCLI {
     struct Options: Equatable {
         static let usage = """
         usage: transcribe-thing --transcribe <audio file> \
-        --engine parakeet|geminiFlash \
+        --engine parakeet|gigaam|geminiFlash|geminiCarbon [--gigaam-version v3|e2e|multilingual] \
         [--download] [--prompt <text>] [--repeat <n>] [--effort low|medium|high] [--upload wav|m4a]
                transcribe-thing --model-status
         """
@@ -127,6 +136,12 @@ enum EngineCLI {
         var provider: String?
         /// A dictionary to send as the app does, one word per line (`--vocabulary`, hidden): the CLI sends none by itself.
         var vocabulary: URL?
+        /// Another model for Gemini's request (`--model`, hidden).
+        var model: String?
+        /// Another OpenAI-compatible endpoint than the app's (`--endpoint`, hidden); its key is VERTEX_PROXY_KEY.
+        var endpoint: String?
+        /// GigaAM's version for the run (`--gigaam-version`), v3 unless given.
+        var gigaamVariant: GigaAMEngine.Variant = .default
 
         init?(_ arguments: [String]) {
             func value(_ flag: String) -> String? {
@@ -167,8 +182,22 @@ enum EngineCLI {
                 }
             }
             if arguments.contains("--parakeet-compute") {
-                guard let preset = value("--parakeet-compute").flatMap(ParakeetCompute.init(rawValue:)) else { return nil }
+                guard engine == .parakeet, let preset = value("--parakeet-compute").flatMap(ParakeetCompute.init(rawValue:)) else { return nil }
                 parakeetCompute = preset
+            }
+            if arguments.contains("--model") {
+                guard engine.isGemini, let slug = value("--model"), !slug.isEmpty else { return nil }
+                model = slug
+            }
+            if arguments.contains("--endpoint") {
+                guard engine.isCloud, let base = value("--endpoint"), !base.isEmpty else { return nil }
+                endpoint = base
+            }
+            if arguments.contains("--gigaam-version") {
+                guard engine == .gigaam,
+                      let variant = value("--gigaam-version").flatMap(GigaAMEngine.Variant.init(cliName:))
+                else { return nil }
+                gigaamVariant = variant
             }
             if arguments.contains("--vocabulary") {
                 guard engine.isCloud, let path = value("--vocabulary") else { return nil }
@@ -181,7 +210,9 @@ enum EngineCLI {
             if let id = EngineID.offered.first(where: { $0.rawValue == name }) { return id }
             switch name.lowercased().replacingOccurrences(of: "-", with: "").replacingOccurrences(of: "_", with: "") {
             case "parakeet": return .parakeet
+            case "gigaam", "gigaamv3": return .gigaam
             case "geminiflash", "flash": return .geminiFlash
+            case "geminicarbon", "carbon", "gemini4carbon": return .geminiCarbon
             default: return nil
             }
         }
@@ -204,14 +235,21 @@ enum EngineCLI {
         }
         let audioSeconds = Double(samples.count) / Recording.sampleRate
         print("AUDIO: \(url.lastPathComponent) · \(format(audioSeconds)) s · 16 kHz mono · decoded in \(format(seconds(since: decodeStart))) s")
-        print("ENGINE: \(options.engine.displayName) (\(options.engine.rawValue))")
-        if options.engine.isLocal {
+        if options.engine == .gigaam {
+            print("ENGINE: \(options.gigaamVariant.displayName) (gigaam · \(options.gigaamVariant.rawValue))")
+        } else {
+            print("ENGINE: \(options.engine.displayName) (\(options.engine.rawValue))")
+        }
+        if options.engine == .parakeet {
             let preset = options.parakeetCompute ?? .ane
             print("COMPUTE: \(preset.rawValue) · \(preset.summary)")
+        } else if options.engine == .gigaam {
+            print("COMPUTE: frontend CPU · encoder GPU")
         }
 
         let paths = AppPaths.live()
         let settings = AppSettings.inMemory()
+        settings.gigaamVariant = options.gigaamVariant
         // The model's default level unless --effort replaces it; nothing for a model that doesn't reason.
         let effort = options.engine.defaultReasoningEffort.map { options.effort ?? $0 }
         if let effort { print("EFFORT: \(effort.rawValue)") }
@@ -224,8 +262,22 @@ enum EngineCLI {
         let client = OpenRouterClient()
         // A copy of the key in memory: nothing the run does changes the app's key file.
         let account = OpenRouterAccount(keyStore: .inMemory(), client: client)
-        let proxy = appVertexProxy(paths: paths)
+        let proxy: VertexProxyAccount?
+        if let endpoint = options.endpoint {
+            guard let key = ProcessInfo.processInfo.environment["VERTEX_PROXY_KEY"], !key.isEmpty else {
+                printError("ERROR: --endpoint needs the endpoint's key in VERTEX_PROXY_KEY")
+                return ExitCode.usage
+            }
+            let endpointSettings = AppSettings.inMemory()
+            endpointSettings.vertexProxyURL = endpoint
+            endpointSettings.cloudProvider = .vertexProxy
+            proxy = VertexProxyAccount(keyStore: .inMemory(key), settings: endpointSettings)
+        } else {
+            proxy = appVertexProxy(paths: paths)
+        }
         let service = TranscriptionService(models: store, account: account, client: client, proxy: proxy)
+        service.cloudModelOverride = options.model
+        if let model = options.model { print("MODEL OVERRIDE: \(model)") }
         if let url = options.vocabulary {
             let words = try String(contentsOf: url, encoding: .utf8).split(whereSeparator: \.isNewline)
                 .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
@@ -303,12 +355,13 @@ enum EngineCLI {
     @MainActor
     private static func prepareLocal(_ options: Options, store: ModelStore) async throws -> Int32 {
         let id = options.engine
+        guard let model = store.model(for: id) else { return ExitCode.usage }
         await store.refreshFromDisk()
         print("MODEL: \(stateLine(store.state(of: id), id)) · \(Fmt.bytes(store.diskUsageBytes)) of models on disk")
 
         if store.state(of: id) == .notInstalled {
             guard options.download else {
-                printError("\(id.displayName) isn’t downloaded. Add --download to fetch it (about \(Fmt.bytes(id.approxDownloadBytes ?? 0))).")
+                printError("\(model.displayName) isn’t downloaded. Add --download to fetch it (about \(Fmt.bytes(model.approxDownloadBytes))).")
                 throw AppError.modelNotDownloaded(id)
             }
             let started = ContinuousClock.now
@@ -317,7 +370,7 @@ enum EngineCLI {
             if let error = store.lastErrors[id] { throw error }
             if case .failed(let message) = store.state(of: id) { throw AppError.downloadFailed(id, message) }
             let elapsed = seconds(since: started)
-            let size = Fmt.bytes(id.approxDownloadBytes ?? 0)
+            let size = Fmt.bytes(model.approxDownloadBytes)
             print("DOWNLOAD: done · \(size) in \(format(elapsed)) s")
         }
 
@@ -339,7 +392,7 @@ enum EngineCLI {
         }
         switch store.state(of: id) {
         case .ready:
-            let load = store.lastLoadDurations[id] ?? seconds(since: loadStarted)
+            let load = store.lastLoadDurations[model] ?? seconds(since: loadStarted)
             print("LOAD: \(format(load, digits: 2)) s")
         case .failed(let message):
             throw store.lastErrors[id] ?? AppError.modelLoadFailed(id, message)
@@ -628,15 +681,13 @@ enum EngineCLI {
         print("transcribe-thing models · \(paths.root.path)")
         print("Free disk: \(Fmt.bytes(paths.freeDiskBytes()))")
         let engines = ModelStore.makeEngines(paths: paths)
-        for id in EngineID.localEngines {
-            guard let engine = engines[id] else { continue }
+        for model in LocalModel.all {
+            guard let engine = engines[model] else { continue }
             let report = await Task.detached(priority: .utility) {
                 (installed: engine.isInstalled(), bytes: engine.bytesOnDisk())
             }.value
             let status = report.installed ? "installed" : (report.bytes > 0 ? "incomplete (resumable)" : "not installed")
-            let name = id.displayName.padding(toLength: 24, withPad: " ", startingAt: 0)
-            let state = status.padding(toLength: 24, withPad: " ", startingAt: 0)
-            print("\(id.rawValue.padding(toLength: 10, withPad: " ", startingAt: 0))\(name)\(state)\(Fmt.bytes(report.bytes)) on disk · \(engine.storageURLs[0].path)")
+            print(modelStatusLine(model, status: status, bytes: report.bytes, path: engine.storageURLs[0].path))
         }
         let envKey = ProcessInfo.processInfo.environment["OPENROUTER_API_KEY"].map { !$0.isEmpty } ?? false
         print("OpenRouter key: \(envKey ? "OPENROUTER_API_KEY is set" : "not in the environment (the app keeps it in \(paths.keyFile.path))")")
@@ -644,13 +695,23 @@ enum EngineCLI {
         print("Provider: \(geminiRouteLine(appVertexProxy(paths: paths)))")
     }
 
-    /// The cloud models `--transcribe --engine` takes, one line each: "geminiFlash  Gemini 3.8 Flash
-    /// google/gemini-3.8-flash · effort low|medium|high (default medium)".
+    /// A model on this Mac as `--model-status` lists it, by what `--engine` (and `--gigaam-version`) takes:
+    /// "gigaam e2e            GigaAM v3 e2e           not installed           0 bytes on disk · <path>".
+    static func modelStatusLine(_ model: LocalModel, status: String, bytes: Int64, path: String) -> String {
+        let id = model.variant.map { "gigaam \($0.cliName)" } ?? model.engine.rawValue
+        return id.padding(toLength: 22, withPad: " ", startingAt: 0)
+            + model.displayName.padding(toLength: 24, withPad: " ", startingAt: 0)
+            + status.padding(toLength: 24, withPad: " ", startingAt: 0)
+            + "\(Fmt.bytes(bytes)) on disk · \(path)"
+    }
+
+    /// The cloud models `--transcribe --engine` takes, one line each: "geminiCarbon  Gemini 4 Carbon
+    /// google/gemini-4-carbon · effort low|medium|high (default low)".
     static func cloudModelLines() -> [String] {
         EngineID.geminiEngines.map { id in
             let efforts = id.reasoningEfforts.map(\.rawValue).joined(separator: "|")
             let level = id.defaultReasoningEffort.map { " (default \($0.rawValue))" } ?? ""
-            return id.rawValue.padding(toLength: 12, withPad: " ", startingAt: 0)
+            return id.rawValue.padding(toLength: 14, withPad: " ", startingAt: 0)
                 + id.displayName.padding(toLength: 18, withPad: " ", startingAt: 0)
                 + (id.openRouterModelID ?? "") + " · effort \(efforts)\(level)"
         }
@@ -737,5 +798,23 @@ enum EngineCLI {
 
     private static func printError(_ message: String) {
         FileHandle.standardError.write(Data((message + "\n").utf8))
+    }
+}
+
+extension GigaAMEngine.Variant {
+    /// What `--gigaam-version` takes: "v3", "e2e", "multilingual".
+    var cliName: String {
+        switch self {
+        case .v3: "v3"
+        case .v3e2e: "e2e"
+        case .multilingual: "multilingual"
+        }
+    }
+
+    /// A `--gigaam-version` value: its CLI name, or its raw value.
+    init?(cliName: String) {
+        guard let variant = Self.allCases.first(where: { $0.cliName == cliName.lowercased() || $0.rawValue == cliName })
+        else { return nil }
+        self = variant
     }
 }

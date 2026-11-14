@@ -17,9 +17,9 @@ import Testing
     /// Switch model reaches Parakeet: once it lands it loads, so the next dictation doesn't wait.
     @Test func aDownloadThatLandsLoadsWhenTheLineupUsesIt() async throws {
         let (store, parakeet, settings) = makeStore()
-        #expect(settings.usesLocalParakeet)
+        #expect(settings.usesLocalModel(.parakeet))
         await store.refreshFromDisk()
-        var finished: EngineID?
+        var finished: LocalModel?
         store.onDownloadFinished = { finished = $0 }
         store.download(.parakeet)
         #expect(store.state(of: .parakeet).isDownloading)
@@ -33,7 +33,7 @@ import Testing
         let (store, _, settings) = makeStore()
         settings.lineup.main = .gemini
         settings.lineup.setSwitchable(.parakeet, false)
-        #expect(!settings.usesLocalParakeet)
+        #expect(!settings.usesLocalModel(.parakeet))
         await store.refreshFromDisk()
         store.download(.parakeet)
         await waitForObserved { store.state(of: .parakeet) == .installed }

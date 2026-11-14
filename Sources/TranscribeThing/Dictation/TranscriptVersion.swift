@@ -8,8 +8,8 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
     case transcription(EngineID)
     /// `model` over the text of `.transcription(engine)`. History only: nothing makes clean-ups any more.
     case cleanup(of: EngineID, by: CleanupModel)
-    /// Polish (`Polish`): the Gemini model's message from the audio (Gemini 3.8 Flash; History keeps the retired
-    /// Gemini 4 Argon's).
+    /// Polish (`Polish`): the Gemini model's message from the audio (the dictation's model: Gemini 3.8 Flash or Gemini
+    /// 4 Carbon; History keeps the retired Gemini 4 Argon's).
     case polish(by: EngineID = .geminiFlash)
     /// Polish Selection: the model's message from text selected in another app. No recording: the entry is this one
     /// version.
@@ -113,6 +113,14 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
         }
     }
 
+    /// `displayName`, with the GigaAM version `modelID` names (`TranscriptMetadata.modelID`): "GigaAM v3 e2e".
+    func displayName(modelID: String?) -> String {
+        if case .transcription(.gigaam) = self, let variant = modelID.flatMap(GigaAMEngine.Variant.init(rawValue:)) {
+            return variant.displayName
+        }
+        return displayName
+    }
+
     /// "Gemini Flash", "Parakeet v3 + Clean-up".
     var shortName: String {
         switch self {
@@ -153,7 +161,7 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
     /// Persisted: "parakeet", "cleanup:parakeet" (Flash Lite's: the form from before the choice of clean-up model,
     /// which older builds read), "cleanup:parakeet:gpt6Luna", "polish" (Gemini 3.8 Flash's, as before there was a
     /// choice), "selection:geminiFlash", "selection:gpt6Luna", "translation", "translation:polished",
-    /// "translated-selection:geminiFlash". Another Gemini's polish or translation names it: "polish:geminiArgon",
+    /// "translated-selection:geminiFlash". Another Gemini's polish or translation names it: "polish:geminiCarbon",
     /// "translation:polished:geminiArgon", as the retired Gemini 4 Argon's in History are. Never rename. An older build
     /// can't read a kind with a model and drops that version, not the entry (`TranscriptEntry.encode(to:)` keeps the
     /// text it tidied intact for them).

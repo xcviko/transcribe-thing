@@ -452,7 +452,7 @@ struct CountBadge: View {
     }
 }
 
-/// The engine mark on history rows: P, F, A, Pro, in the model's color (`ModelColor.markTint`, as the pill wears it).
+/// The engine mark on history rows: P, G, F, C, A, Pro, in the model's color (`ModelColor.markTint`, as the pill wears it).
 /// The retired cloud Parakeet shares the local letter and color, so it carries a small cloud; a clean-up, a wand after
 /// the letter.
 /// A selection's polish in History: the wand (Translate's glyph for its translation), in the color of the model that
@@ -494,8 +494,8 @@ struct EngineGlyph: View {
     /// The models' colors (`AppSettings.modelColors`).
     var colors: ModelColors = .default
 
-    /// The color of the model that made it: the retired Gemini 3.1 Pro and Gemini 4 Argon wear Flash's, the retired
-    /// cloud Parakeet and an old clean-up of Parakeet's text Parakeet's.
+    /// The color of the model that made it, Carbon's for Gemini 4 Carbon: the retired Gemini 3.1 Pro and Gemini 4
+    /// Argon wear Flash's, the retired cloud Parakeet and an old clean-up of Parakeet's text Parakeet's.
     var color: ModelColor {
         colors[ModelChoice(engine: engine)]
     }

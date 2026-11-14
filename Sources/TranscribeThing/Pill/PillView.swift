@@ -1678,8 +1678,8 @@ struct PillChipRoll: View, Animatable {
         let next = min(index + 1, last)
         let p = next == index ? 0 : CGFloat(at - Double(index))
         let from = names[index], to = names[next]
-        let fromWidth = Self.width(of: from)
-        let toWidth = Self.width(of: to)
+        let fromWidth = Self.width(of: from, name: settings.chipName(of: from))
+        let toWidth = Self.width(of: to, name: settings.chipName(of: to))
         let rolling = next != index && p > 0
         Group {
             if !rolling {
@@ -1707,16 +1707,17 @@ struct PillChipRoll: View, Animatable {
     }
 
     private func label(_ choice: ModelChoice) -> some View {
-        Self.label(choice,
+        Self.label(choice, name: settings.chipName(of: choice),
                    accent: PillPalette.accent(for: settings.modelColors[choice]))
     }
 
-    @MainActor static func label(_ choice: ModelChoice, accent: PillAccent?) -> some View {
+    /// `name`: the chip's name for `choice` (`AppSettings.chipName(of:)`: GigaAM's with its version).
+    @MainActor static func label(_ choice: ModelChoice, name: String, accent: PillAccent?) -> some View {
         HStack(spacing: 4) {
             Image(systemName: choice.symbolName)
                 .font(.system(size: 9.5, weight: .semibold))
                 .foregroundStyle(accent?.mark ?? .white.opacity(0.75))
-            Text(choice.chipName)
+            Text(name)
                 .foregroundStyle(.white.opacity(0.92))
         }
         .font(.system(size: 10.5, weight: .semibold))
@@ -1729,10 +1730,10 @@ struct PillChipRoll: View, Animatable {
     /// A name's width, laid out once ahead of any roll (so the very first one already knows where it goes).
     @MainActor private static var widths: [String: CGFloat] = [:]
 
-    @MainActor static func width(of choice: ModelChoice) -> CGFloat {
-        let key = "\(choice.rawValue).\(choice.symbolName)"
+    @MainActor static func width(of choice: ModelChoice, name: String) -> CGFloat {
+        let key = "\(name).\(choice.symbolName)"
         if let width = widths[key] { return width }
-        let host = NSHostingView(rootView: label(choice, accent: nil))
+        let host = NSHostingView(rootView: label(choice, name: name, accent: nil))
         let width = ceil(host.fittingSize.width)
         widths[key] = width
         return width

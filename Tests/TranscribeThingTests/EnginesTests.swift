@@ -1703,7 +1703,7 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
 
     @Test func downloadReportsProgressThenInstallsAndPreparesWhenSelected() async throws {
         let (store, parakeet, _) = makeStore(installed: false)
-        var finished: [EngineID] = []
+        var finished: [LocalModel] = []
         store.onDownloadFinished = { finished.append($0) }
         await store.refreshFromDisk()
         #expect(store.state(of: .parakeet) == .notInstalled)

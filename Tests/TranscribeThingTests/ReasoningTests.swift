@@ -21,11 +21,12 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
 // MARK: - Levels
 
 @Suite struct ReasoningEffortTests {
-    @Test func eachGeminiOffersLowMediumAndHighAndStartsAtMedium() {
+    @Test func eachGeminiOffersLowMediumAndHighAndStartsAtItsOwnDefault() {
         for engine in EngineID.geminiEngines {
             #expect(engine.reasoningEfforts == [.low, .medium, .high], "no Minimal, no None")
-            #expect(engine.defaultReasoningEffort == .medium)
         }
+        #expect(EngineID.geminiFlash.defaultReasoningEffort == .medium)
+        #expect(EngineID.geminiCarbon.defaultReasoningEffort == .low)
         for engine in [EngineID.parakeet, .parakeetCloud, .geminiArgon, .geminiPro] {
             #expect(engine.reasoningEfforts.isEmpty && engine.defaultReasoningEffort == nil, "\(engine)")
         }

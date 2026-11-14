@@ -15,12 +15,13 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
 
 @Suite struct CloudEngineFactsTests {
     @Test func rawValuesAreStableAndOrderIsLocalThenGemini() {
-        #expect(EngineID.allCases.map(\.rawValue) == ["parakeet", "parakeetCloud", "geminiFlash", "geminiArgon",
-                                                      "geminiPro"], "retired models stay readable")
-        #expect(EngineID.offered == [.parakeet, .geminiFlash])
+        #expect(EngineID.allCases.map(\.rawValue) == ["parakeet", "gigaam", "parakeetCloud", "geminiFlash",
+                                                      "geminiCarbon", "geminiArgon", "geminiPro"],
+                "retired models stay readable")
+        #expect(EngineID.offered == [.parakeet, .gigaam, .geminiFlash, .geminiCarbon])
         #expect(EngineID.allCases.filter(\.isRetired) == [.parakeetCloud, .geminiArgon, .geminiPro])
-        #expect(EngineID.localEngines == [.parakeet])
-        #expect(EngineID.geminiEngines == [.geminiFlash])
+        #expect(EngineID.localEngines == [.parakeet, .gigaam])
+        #expect(EngineID.geminiEngines == [.geminiFlash, .geminiCarbon])
     }
 
     @Test func namesAreUniqueAndTheRetiredCloudParakeetKeepsItsOwn() {
@@ -52,6 +53,7 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
     /// byte.
     @Test func geminisTimeoutIsAStallTimeout() {
         #expect(EngineID.geminiFlash.cloudTimeout == 120)
+        #expect(EngineID.geminiCarbon.cloudTimeout == 300, "Carbon can be silent for minutes before its first byte")
         #expect(EngineID.parakeet.cloudTimeout == 0)
         #expect(EngineID.parakeetCloud.cloudTimeout == 0, "retired: it never runs")
     }

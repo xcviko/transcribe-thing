@@ -9,12 +9,18 @@ import Foundation
 /// Gemini 4 Argon ("argon") was a model until it was removed too: a stored value that names it is read as Gemini 3.8
 /// Flash where it was the main, hands-free or a Switch model step, and dropped elsewhere (`retiredArgon`).
 /// Parakeet ran through OpenRouter too until that was removed (`EngineID.parakeetCloud`): Parakeet is on this Mac now.
+/// Gemini 4 Carbon ("carbon") came after Argon was removed: a choice of its own, never what "argon" reads as.
+/// GigaAM ("gigaam") came after Carbon: a second model on this Mac, in three versions, last in the default order.
 enum ModelChoice: String, Codable, CaseIterable, Identifiable, Sendable {
     /// Parakeet v3 on this Mac.
     case parakeet
-    /// Gemini 3.8 Flash (`EngineID.geminiFlash`), which hears the audio itself. Named when it was the only Gemini, as
-    /// it is again.
+    /// Gemini 3.8 Flash (`EngineID.geminiFlash`), which hears the audio itself. Named when it was the only Gemini.
     case gemini
+    /// Gemini 4 Carbon (`EngineID.geminiCarbon`): newer than Flash, slower, and about 2.7 times its cost.
+    case carbon
+    /// GigaAM on this Mac (`EngineID.gigaam`): Sber's model, in the version picked in Models
+    /// (`AppSettings.gigaamVariant`).
+    case gigaam
 
     var id: String { rawValue }
 
@@ -30,10 +36,16 @@ enum ModelChoice: String, Codable, CaseIterable, Identifiable, Sendable {
         self.init(rawValue: raw == Self.retiredArgon ? Self.gemini.rawValue : raw)
     }
 
-    /// The choice a job or a kept recording was made with (Undo, the processing pill, History's colors): any Gemini
-    /// (the retired ones too) is Gemini, and Parakeet anywhere (the retired cloud one too) is Parakeet.
+    /// The choice a job or a kept recording was made with (Undo, the processing pill, History's colors): Gemini 4
+    /// Carbon is Carbon, any other Gemini (Flash, and the retired Argon and 3.1 Pro) is Gemini, GigaAM is GigaAM, and
+    /// Parakeet anywhere (the retired cloud one too) is Parakeet.
     init(engine: EngineID) {
-        self = engine.isGemini ? .gemini : .parakeet
+        switch engine {
+        case .gigaam: self = .gigaam
+        case .geminiCarbon: self = .carbon
+        case .geminiFlash, .geminiArgon, .geminiPro: self = .gemini
+        case .parakeet, .parakeetCloud: self = .parakeet
+        }
     }
 
     /// The engine that hears the audio.
@@ -41,6 +53,8 @@ enum ModelChoice: String, Codable, CaseIterable, Identifiable, Sendable {
         switch self {
         case .parakeet: .parakeet
         case .gemini: .geminiFlash
+        case .carbon: .geminiCarbon
+        case .gigaam: .gigaam
         }
     }
 
@@ -48,42 +62,47 @@ enum ModelChoice: String, Codable, CaseIterable, Identifiable, Sendable {
     /// it while dictating.
     var isGemini: Bool { engine.isGemini }
 
-    /// It needs Parakeet on this Mac (downloaded, loaded).
-    var usesLocalParakeet: Bool { engine.isLocal }
+    /// It runs on this Mac (Parakeet, GigaAM): its engine has to be downloaded and loaded.
+    var isLocal: Bool { engine.isLocal }
 }
 
 extension ModelChoice {
-    /// The model's own name: "Parakeet v3", "Gemini 3.8 Flash". Models' rows, menus, the pill's menu and
-    /// accessibility, onboarding's Done step.
+    /// The model's own name: "Parakeet v3", "Gemini 3.8 Flash", "Gemini 4 Carbon", "GigaAM". Where there's room, GigaAM
+    /// goes by its picked version (`AppSettings.modelName(of:)`): Models' rows, menus, the pill's chip and menu.
     var modelName: String { engine.modelName }
 
     /// The full name. The same as `modelName` now that Parakeet runs only on this Mac.
     var title: String { modelName }
 
-    /// One word for chains, sentences and narrow columns: "Parakeet → Flash", "Flash needs…".
+    /// One word for chains, sentences and narrow columns: "Parakeet → Flash → Carbon", "Flash and Carbon need…".
     var shortName: String {
         switch self {
         case .parakeet: "Parakeet"
         case .gemini: "Flash"
+        case .carbon: "Carbon"
+        case .gigaam: "GigaAM"
         }
     }
 
-    /// The sidebar chip's name: "Parakeet v3", "Gemini 3.8 Flash".
+    /// The sidebar chip's name: "Parakeet v3", "Gemini 3.8 Flash", "Gemini 4 Carbon", "GigaAM".
     var compactName: String { engine.shortName }
 
-    /// The pill chip's name after its symbol: "Parakeet", "Gemini 3.8 Flash".
+    /// The pill chip's name after its symbol: "Parakeet", "Gemini 3.8 Flash", "Gemini 4 Carbon", "GigaAM".
     var chipName: String {
         switch self {
         case .parakeet: "Parakeet"
-        case .gemini: engine.modelName
+        case .gigaam: "GigaAM"
+        case .gemini, .carbon: engine.modelName
         }
     }
 
-    /// Parakeet's bolt, Flash's sparkles.
+    /// Parakeet's bolt, Flash's sparkles, Carbon's atom, GigaAM's speech bubble.
     var symbolName: String {
         switch self {
         case .parakeet: EngineID.parakeet.symbolName
         case .gemini: "sparkles"
+        case .carbon: EngineID.geminiCarbon.symbolName
+        case .gigaam: EngineID.gigaam.symbolName
         }
     }
 
@@ -121,8 +140,10 @@ struct ModelLineup: Equatable, Sendable {
     /// main, and is switched on when it stops being main (`main`).
     private(set) var switchable: Set<ModelChoice>
 
-    /// What every install starts with: Parakeet, then Gemini 3.8 Flash in the cycle.
-    static let `default` = ModelLineup(order: [.parakeet, .gemini], main: .parakeet, switchable: [.gemini])
+    /// What every install starts with: Parakeet, then Gemini 3.8 Flash in the cycle, and Gemini 4 Carbon and GigaAM
+    /// after them, switched off (Carbon costs about 2.7 times Flash's; GigaAM is a download of its own).
+    static let `default` = ModelLineup(order: [.parakeet, .gemini, .carbon, .gigaam], main: .parakeet,
+                                       switchable: [.gemini])
 
     /// `order` loses duplicates and gets every missing choice appended, in `allCases` order.
     init(order: [ModelChoice], main: ModelChoice, switchable: Set<ModelChoice>) {
@@ -168,8 +189,9 @@ extension ModelLineup: Codable {
     }
 
     /// Lenient, as a stored value outlives builds: unknown values and duplicates are dropped, a missing choice is
-    /// appended and switched off, and an unknown main model is Parakeet. The removed clean-up was Parakeet's text
-    /// tidied, so Parakeet stands in for it: as the main model, and switched on where clean-up was; it leaves the order.
+    /// appended and switched off (Gemini 4 Carbon and GigaAM, in a lineup stored before they came, in that
+    /// order), and an unknown main model is Parakeet. The removed clean-up was Parakeet's text tidied, so Parakeet
+    /// stands in for it: as the main model, and switched on where clean-up was; it leaves the order.
     /// The removed Gemini 4 Argon was a Gemini, so Gemini 3.8 Flash stands in for it the same way
     /// (`ModelChoice.init(stored:)`), keeping its own place in the order.
     init(from decoder: Decoder) throws {
@@ -216,11 +238,14 @@ enum ModelColor: String, Codable, CaseIterable, Identifiable, Sendable {
 }
 
 extension ModelChoice {
-    /// Its color until one is picked, as before colors could be: Parakeet the plain pill, Gemini violet.
+    /// Its color until one is picked: Parakeet the plain pill and Gemini violet, as before colors could be, Carbon
+    /// blue, as Argon was, and GigaAM green, as Sber's own.
     var defaultColor: ModelColor {
         switch self {
         case .parakeet: .graphite
         case .gemini: .violet
+        case .carbon: .blue
+        case .gigaam: .green
         }
     }
 }

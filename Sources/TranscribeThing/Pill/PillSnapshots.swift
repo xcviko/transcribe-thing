@@ -79,7 +79,7 @@ enum PillSnapshots {
                 ])
             },
             // Models (`--only pill-models`): the chip, the tint, the hint and the no-key notice.
-            SnapshotEntry("pill-models", width: 760, height: 44 + 13 * 92) { _ in PillModelSheet() },
+            SnapshotEntry("pill-models", width: 760, height: 44 + 18 * 92) { _ in PillModelSheet() },
             SnapshotEntry("pill-polish", width: 760, height: 44 + 8 * 92) { _ in PolishSheet() },
             // Send (`--only pill-send`): the plane right of the bars, the wave and the count, alone and with Polish.
             SnapshotEntry("pill-send", width: 760, height: 44 + 10 * 92) { _ in
@@ -752,9 +752,11 @@ private struct PillModelSheet: View {
     /// `chip`: right after the switch, the chip still up; else later on, the tint alone. `main`: the lineup's main
     /// model, which changes nothing the pill draws.
     @MainActor static func model(_ phase: PillPhase, choice: ModelChoice?, level: Float = 0.7, chip: Bool = true,
-                                 main: ModelChoice = .parakeet, recordingFor elapsed: TimeInterval? = nil) -> PillModel {
+                                 main: ModelChoice = .parakeet, gigaam: GigaAMEngine.Variant = .default,
+                                 recordingFor elapsed: TimeInterval? = nil) -> PillModel {
         let model = PillModel.preview(phase: phase, level: level, recordingFor: elapsed)
         model.settings.lineup.main = main
+        model.settings.gigaamVariant = gigaam
         model.sessionModel = choice
         if chip, choice != nil { model.flashChip() }
         return model
@@ -782,6 +784,30 @@ private struct PillModelSheet: View {
             Row(id: "processing-writing-gemini", caption: "Writing · Gemini Flash") {
                 Self.model(.processing, choice: .gemini, chip: false)
                     .previewCounter(PillTokenCount(phase: .writing, tokens: 17_700))
+            },
+            Row(id: "carbon", caption: "Push-to-talk · Gemini 4 Carbon") { Self.model(.listening, choice: .carbon) },
+            Row(id: "carbon-later", caption: "Gemini 4 Carbon · chip gone") {
+                Self.model(.listening, choice: .carbon, chip: false)
+            },
+            Row(id: "locked-carbon", caption: "Hands-free · Gemini 4 Carbon") {
+                Self.model(.locked, choice: .carbon, level: 0.5)
+            },
+            Row(id: "processing-thinking-carbon", caption: "Thinking · Gemini 4 Carbon") {
+                Self.model(.processing, choice: .carbon, chip: false)
+                    .previewCounter(PillTokenCount(phase: .thinking, tokens: 9_800))
+            },
+            Row(id: "gigaam", caption: "Push-to-talk · GigaAM v3") { Self.model(.listening, choice: .gigaam) },
+            Row(id: "gigaam-e2e", caption: "Push-to-talk · GigaAM v3 e2e") {
+                Self.model(.listening, choice: .gigaam, gigaam: .v3e2e)
+            },
+            Row(id: "gigaam-later", caption: "GigaAM v3 · chip gone") {
+                Self.model(.listening, choice: .gigaam, chip: false)
+            },
+            Row(id: "locked-gigaam", caption: "Hands-free · GigaAM v3") {
+                Self.model(.locked, choice: .gigaam, level: 0.5)
+            },
+            Row(id: "processing-gigaam", caption: "Processing · GigaAM v3") {
+                Self.model(.processing, choice: .gigaam, chip: false)
             },
         ]
     }
@@ -1221,7 +1247,7 @@ private struct PillStateSheet: View {
 /// The chip's roll between two models, every 40 ms of its spring (`PillChipRoll`), on the pill's dark ground.
 private struct ChipRollSheet: View {
     private let settings = AppSettings.inMemory()
-    private let rolls: [(ModelChoice, ModelChoice)] = [(.parakeet, .gemini), (.gemini, .parakeet)]
+    private let rolls: [(ModelChoice, ModelChoice)] = [(.parakeet, .gemini), (.gemini, .carbon), (.carbon, .parakeet)]
     private let times = Array(0...9).map { Double($0) * 0.04 }
 
     var body: some View {

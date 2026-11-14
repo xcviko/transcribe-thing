@@ -450,18 +450,28 @@ private struct PastingRules: View {
     @Environment(AppSettings.self) private var settings
 
     var body: some View {
+        // Four models and two ways of dictating don't fit the narrowest window with each symbol beside its name: there
+        // the symbol goes above the name, which makes each column as narrow as its name.
+        ViewThatFits(in: .horizontal) {
+            table(stacksHeaders: false)
+            table(stacksHeaders: true)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func table(stacksHeaders: Bool) -> some View {
         @Bindable var settings = settings
         let order = settings.lineup.order
-        Grid(alignment: .center, horizontalSpacing: 14, verticalSpacing: 12) {
-            GridRow {
+        return Grid(alignment: .center, horizontalSpacing: 14, verticalSpacing: 12) {
+            GridRow(alignment: .bottom) {
                 Color.clear
                     .gridCellUnsizedAxes([.horizontal, .vertical])
                 ForEach(order) { choice in
-                    columnHeader(choice.shortName, symbol: choice.symbolName)
+                    columnHeader(choice.shortName, symbol: choice.symbolName, stacked: stacksHeaders)
                         .help(choice.title)
                 }
                 ForEach(Array(DictationMachine.Mode.allCases.enumerated()), id: \.element) { index, mode in
-                    columnHeader(mode.chipTitle, symbol: mode.action.symbolName)
+                    columnHeader(mode.chipTitle, symbol: mode.action.symbolName, stacked: stacksHeaders)
                         .padding(.leading, index == 0 ? Self.groupGap : 0)
                         .help(mode.action.title)
                 }
@@ -471,19 +481,28 @@ private struct PastingRules: View {
             rule("Remove the final period", symbol: "delete.backward", order: order,
                  models: $settings.modelsRemovingFinalPeriod, modes: $settings.modesRemovingFinalPeriod)
         }
-        .padding(.vertical, 2)
     }
 
     /// Between the models' columns and the ways of dictating.
     private static let groupGap: CGFloat = 14
 
-    private func columnHeader(_ title: String, symbol: String) -> some View {
-        Label(title, systemImage: symbol)
-            .labelStyle(.titleAndIcon)
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-            .fixedSize()
+    /// The symbol beside the name, or above it (`stacked`).
+    private func columnHeader(_ title: String, symbol: String, stacked: Bool) -> some View {
+        Group {
+            if stacked {
+                VStack(spacing: 3) {
+                    Image(systemName: symbol)
+                    Text(title)
+                }
+            } else {
+                Label(title, systemImage: symbol)
+                    .labelStyle(.titleAndIcon)
+            }
+        }
+        .font(.system(size: 11, weight: .medium))
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .fixedSize()
     }
 
     private func rule(_ title: String, symbol: String, order: [ModelChoice], models: Binding<Set<ModelChoice>>,
@@ -495,7 +514,7 @@ private struct PastingRules: View {
                     .foregroundStyle(.inkSecondary)
                     .frame(width: 28, height: 28)
                     .background(Color.inkSecondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                // Three models' columns leave a narrow window little room: the rule wraps rather than cut off.
+                // Four models' columns leave a narrow window little room: the rule wraps rather than cut off.
                 Text(title)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.ink)

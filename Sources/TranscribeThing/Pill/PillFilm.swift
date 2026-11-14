@@ -266,7 +266,7 @@ private enum FilmScript {
             s.film("polish on (hands-free)") { s.model.polishes = true }
         },
         FilmScenario(name: "tray-open", mode: .always, area: CGSize(width: 340, height: 110),
-                     note: "The pointer on a Gemini dictation: the tray comes out, a hint, the next one's at once, "
+                     note: "The pointer on a Gemini dictation: the tray comes out, a hint, the next one’s at once, "
                          + "Polish goes on, the pointer leaves") { s in
             let keys: [PillToggle: String] = [.send: "fn ↩", .polish: "fn P", .translate: "fn T"]
             s.record(.listening, on: .gemini)

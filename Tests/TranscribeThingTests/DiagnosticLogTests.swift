@@ -282,7 +282,7 @@ private enum Fixture {
         for line in ["transcribe-thing logs", "Exported: 2026-10-03T14:03:22.481+04:00", "App: ", "macOS: ", "Mac: ",
                      "OpenRouter key saved: no",
                      "Settings: main=parakeet steps=gemini handsFreeModel=main "
-                         + "effort.geminiFlash=medium "
+                         + "effort.geminiFlash=medium effort.geminiCarbon=low "
                          + #"shortcut.pushToTalk=fn shortcut.handsFree="fn Space""#,
                      "pill=whileDictating sounds=on dictionaryWords=0 keySaved=no"] {
             #expect(header.contains(line), "header has \(line)")

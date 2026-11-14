@@ -73,12 +73,12 @@ final class HubContext: Observable {
         imports = env.imports
         // Reading a file outlives the Hub window, and with it this context: only what lives as long as the app.
         imports.choices = { [settings, models, account, proxy] seconds in
-            ImportChoices.make(main: settings.mainEngine, seconds: seconds) { engine in
+            ImportChoices.make(main: settings.mainEngine, seconds: seconds, readiness: { engine in
                 EngineReadiness.of(engine, localState: models.state(of: engine),
                                    keyStatus: CloudRoute.keyStatus(for: engine, account: account, proxy: proxy),
                                    localError: models.lastErrors[engine],
                                    provider: CloudRoute.provider(for: engine, proxy: proxy))
-            }
+            }, engineName: settings.engineName)
         }
         imports.start = { [dictation] file, kind in dictation.transcribe(file, as: kind) }
     }
@@ -138,7 +138,8 @@ final class HubContext: Observable {
     }
 
     func versionsMenu(for entry: TranscriptEntry) -> VersionsMenu {
-        VersionsMenu.make(for: entry, running: runningVersion(for: entry.id), readiness: readiness(of:))
+        VersionsMenu.make(for: entry, running: runningVersion(for: entry.id), readiness: readiness(of:),
+                          engineName: settings.engineName)
     }
 
     /// The row's dictation is being recorded on right now (its Continue, or Undo).

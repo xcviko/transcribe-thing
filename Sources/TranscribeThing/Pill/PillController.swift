@@ -383,7 +383,7 @@ final class PillController {
         guard let host, model.isPresented, model.visiblePhase == .locked, let chip = regions.chip else { return }
         let settings = model.settings
         let current = model.sessionModel ?? settings.lineup.main
-        let menu = Self.modelMenu(choices: model.menuChoices, current: current,
+        let menu = Self.modelMenu(choices: model.menuChoices, current: current, name: settings.modelName(of:),
                                   unavailableReason: model.unavailableReason ?? { _ in nil }) { [weak model] choice in
             model?.onSelectModel?(choice)
         }
@@ -395,14 +395,15 @@ final class PillController {
     }
 
     /// One item per choice, in cycle order (the main model first), titled with its symbol; `current` is checked. One
-    /// that can't take the dictation now is disabled, its reason beside it.
+    /// that can't take the dictation now is disabled, its reason beside it. `name`: GigaAM's with its version.
     static func modelMenu(choices: [ModelChoice], current: ModelChoice,
+                          name: (ModelChoice) -> String = \.title,
                           unavailableReason: (ModelChoice) -> String?,
                           select: @escaping @MainActor (ModelChoice) -> Void) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
         for choice in choices {
-            let title = choice.title
+            let title = name(choice)
             let item = MenuActionItem(title: title) { select(choice) }
             item.state = choice == current ? .on : .off
             if let reason = unavailableReason(choice) {
