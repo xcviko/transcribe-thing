@@ -402,6 +402,10 @@ enum ShortcutAction: String, Codable, CaseIterable, Sendable, Identifiable, Codi
         }
     }
 
+    /// Polish, Translate and Send: each press turns one on or off for a dictation (a button of the pill's tray), and
+    /// held down they flip again at every autorepeat.
+    var isToggle: Bool { isLiveWhileProcessing }
+
     var title: String {
         switch self {
         case .pushToTalk: "Push to talk"

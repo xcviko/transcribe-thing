@@ -106,11 +106,22 @@ final class PillModel {
     private(set) var stack: [PillStackItem] = []
     /// The stacked pills' own models, by dictation key: each draws its pill as this one draws the bottom pill.
     @ObservationIgnored private(set) var stackModels: [UUID: PillModel] = [:]
+    /// The bottom pill's dictation came down off the stack: the one on the bottom pill (the newest on its way, or the
+    /// recording) was canceled, and the next one took its place. Its stacked pill slides down onto the bottom pill as
+    /// it goes (`PillStack`), and the bottom pill comes in under it, once per `descentCount`.
+    private(set) var descentKey: UUID?
+    private(set) var descentCount = 0
+    /// The dictation the bottom pill showed at the last `setStack`.
+    @ObservationIgnored private var stackBottomKey: UUID?
     /// The pill whose tray is open: the pointer is over it or its tray, or left them a moment ago.
     private(set) var openTray: PillTrayOwner?
-    /// The tray button under the pointer (hover styling), and the one whose tooltip shows (after 500 ms).
+    /// The tray button under the pointer, and the one whose shortcut shows over it (`PillTrayState.keys`), after
+    /// `timing.controlTooltipDelay` on it.
     private(set) var hoveredTrayButton: PillTrayButton?
-    private(set) var trayTooltip: PillTrayButton?
+    private(set) var trayHint: PillTrayButton?
+    /// The hint came straight over from the button next to it, which had one up: it's there at once, with no fade, and
+    /// the other's goes at once too, as macOS tooltips do.
+    private(set) var trayHintCarriesOver = false
 
     /// Resolved by `PillController` from the pill mode. Standalone previews keep `true`.
     var isPresented = true
@@ -154,7 +165,7 @@ final class PillModel {
     @ObservationIgnored private var chipTask: Task<Void, Never>?
     @ObservationIgnored private var keyHintTask: Task<Void, Never>?
     @ObservationIgnored private var trayTask: Task<Void, Never>?
-    @ObservationIgnored private var trayTooltipTask: Task<Void, Never>?
+    @ObservationIgnored private var trayHintTask: Task<Void, Never>?
     @ObservationIgnored private var trayPointer: PillTrayOwner?
     @ObservationIgnored private var pointerInside = false
 
@@ -369,8 +380,8 @@ final class PillModel {
 
     /// The pointer is over a pill that shows a dictation, or over its tray (`owner`), or over neither (nil), as the
     /// controller tracks it. A tray opens after the hover's short dwell, at once when another one is open already (the
-    /// pointer went from one pill to the next), and goes `timing.trayLinger` after the pointer has left it: long enough
-    /// to cross the gap between pill and tray, or to come back.
+    /// pointer went from one pill to the next), and goes the moment the pointer has left both: the gap between pill
+    /// and tray is inside the pill's hover margin, so crossing it never closes the tray.
     func setPointerOverTray(_ owner: PillTrayOwner?) {
         guard owner != trayPointer else { return }
         trayPointer = owner
@@ -382,32 +393,44 @@ final class PillModel {
                 trayTask = delayed(timing.hoverIn) { $0.openTray = owner }
             }
         } else {
-            trayTask = delayed(timing.trayLinger) { model in
-                model.openTray = nil
-                model.setHoveredTrayButton(nil)
-            }
+            if openTray != nil { openTray = nil }
+            setHoveredTrayButton(nil)
         }
     }
 
-    /// Which tray button the pointer is on (hover styling, and its tooltip after `timing.controlTooltipDelay`).
+    /// Which tray button the pointer is on: its shortcut shows over it after `timing.controlTooltipDelay`, or at once
+    /// when another button's was up (`trayHintCarriesOver`). Off a button (the gap between two, say) the hint stays
+    /// `timing.trayHintCarryOver`, so the next button's still comes at once.
     func setHoveredTrayButton(_ button: PillTrayButton?) {
         guard button != hoveredTrayButton else { return }
         hoveredTrayButton = button
-        trayTooltipTask?.cancel()
-        if trayTooltip != nil { trayTooltip = nil }
+        trayHintTask?.cancel()
         if let button {
-            trayTooltipTask = delayed(timing.controlTooltipDelay) { model in
-                if model.hoveredTrayButton == button { model.trayTooltip = button }
+            if trayHint != nil {
+                trayHintCarriesOver = true
+                trayHint = button
+            } else {
+                trayHintCarriesOver = false
+                trayHintTask = delayed(timing.controlTooltipDelay) { model in
+                    if model.hoveredTrayButton == button { model.trayHint = button }
+                }
+            }
+        } else if trayHint != nil {
+            trayHintTask = delayed(timing.trayHintCarryOver) { model in
+                model.trayHint = nil
+                model.trayHintCarriesOver = false
             }
         }
     }
 
-    /// Opens `owner`'s tray at once, with `button` hovered and its tooltip up (snapshots, films).
-    func showTray(_ owner: PillTrayOwner?, tooltip button: PillTrayButton? = nil) {
+    /// Opens `owner`'s tray at once, with the pointer on `button` and its shortcut over it (snapshots, films).
+    func showTray(_ owner: PillTrayOwner?, hovering button: PillTrayButton? = nil) {
         trayTask?.cancel()
+        trayHintTask?.cancel()
         openTray = owner
         hoveredTrayButton = button
-        trayTooltip = button
+        trayHint = button
+        trayHintCarriesOver = false
     }
 
     /// Whether `owner`'s tray is out now: its pill shows a dictation that has one, and the pointer opened it or one of
@@ -416,7 +439,7 @@ final class PillModel {
         guard isPresented, let state = trayState(owner) else { return false }
         if case .bottom = owner, !(visiblePhase.isRecording || visiblePhase == .processing) { return false }
         if case .stacked(let key) = owner, !stack.contains(where: { $0.key == key }) { return false }
-        return openTray == owner || PillToggle.allCases.contains { state.isOn($0) }
+        return openTray == owner || state.isAimed || PillToggle.allCases.contains { state.isOn($0) }
     }
 
     /// The tray `owner` shows: the bottom pill's, or a stacked pill's.
@@ -433,6 +456,16 @@ final class PillModel {
     /// draws it processing (its count after the usual wait, its glyphs, its dashed edge); one that leaves the stack
     /// drops its model, and its tray closes.
     func setStack(_ items: [PillStackItem]) {
+        let bottomKey: UUID? = if case .processing(let key)? = tray?.dictation { key } else { nil }
+        if let bottomKey, bottomKey != stackBottomKey, stack.contains(where: { $0.key == bottomKey }),
+           !items.contains(where: { $0.key == bottomKey }) {
+            descentKey = bottomKey
+            descentCount += 1
+        } else if let key = descentKey, items.contains(where: { $0.key == key }) {
+            // Back up on the stack (a new dictation started): it leaves from there like any other.
+            descentKey = nil
+        }
+        stackBottomKey = bottomKey
         for item in items {
             let child = stackModels[item.key] ?? makeStackModel()
             stackModels[item.key] = child
@@ -548,6 +581,8 @@ struct PillTiming: Equatable, Sendable {
     var hoverOut: TimeInterval = 0.15
     var tooltipDelay: TimeInterval = 0.35
     var controlTooltipDelay: TimeInterval = 0.5
+    /// How long a tray button's hint stays once the pointer is off the button: long enough to reach the next one.
+    var trayHintCarryOver: TimeInterval = 0.2
     /// How long a token count waits before the processing pill shows it (`PillModel.showsCounter`).
     var counterDelay: TimeInterval = 1.0
     /// How long the model chip stays after a switch, before it fades and the tint alone says the model; Polish
@@ -555,8 +590,6 @@ struct PillTiming: Equatable, Sendable {
     var chipHold: TimeInterval = 1.2
     /// How long a word about a key that did nothing stays over the pill (`PillModel.keyHint`).
     var keyHintHold: TimeInterval = 1.8
-    /// How long a pill's tray stays out once the pointer has left it and its pill (`PillModel.openTray`).
-    var trayLinger: TimeInterval = 0.45
 }
 
 // MARK: - Tray and stack
@@ -578,6 +611,24 @@ enum PillToggle: String, CaseIterable, Sendable {
         case .polish: "wand.and.sparkles"
         case .translate: "translate"
         case .send: "paperplane.fill"
+        }
+    }
+
+    /// The shortcut that does what this button does.
+    var action: ShortcutAction {
+        switch self {
+        case .polish: .polish
+        case .translate: .translate
+        case .send: .send
+        }
+    }
+
+    init?(_ action: ShortcutAction) {
+        switch action {
+        case .polish: self = .polish
+        case .translate: self = .translate
+        case .send: self = .send
+        case .pushToTalk, .handsFree, .pasteLast, .switchModel, .addToDictionary: return nil
         }
     }
 }
@@ -611,6 +662,11 @@ struct PillTrayState: Equatable, Sendable {
     var rewrites = true
     /// Send can (not once a click away holds its text, nor while it's being pasted).
     var canSend = true
+    /// Each button's shortcut ("fn ↩", "fn P", "fn T"), shown over it while the pointer rests on it. Only the bottom
+    /// pill's: the keys are for the dictation it shows, never for one stacked above it.
+    var keys: [PillToggle: String] = [:]
+    /// The talk key is down over this dictation on its way (an aimed press): the tray is out, for its keys.
+    var isAimed = false
 
     func isOn(_ toggle: PillToggle) -> Bool {
         switch toggle {
@@ -622,6 +678,11 @@ struct PillTrayState: Equatable, Sendable {
 
     func isEnabled(_ toggle: PillToggle) -> Bool {
         toggle == .send ? canSend : rewrites
+    }
+
+    /// Why a dimmed button can't change the dictation (VoiceOver's hint).
+    static func reason(_ toggle: PillToggle) -> String {
+        toggle == .send ? "Its text waits on a card" : "Gemini only"
     }
 }
 

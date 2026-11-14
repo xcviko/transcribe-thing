@@ -13,6 +13,9 @@ enum SoundEffect: String, CaseIterable, Sendable {
     case dictionaryAdded
     /// Send turned on or off for a dictation (the pill's paper plane): an airy flick up, a breath rising into a tongue pop.
     case sendOn
+    /// A click away held a dictation's paste (its pill turned dashed): three tiny ticks rolling down. A click on the
+    /// dashed pill takes it back: the same three going up.
+    case pasteHeld, pasteTakenBack
 
     var fileName: String { rawValue }
     static let fileExtension = "wav"

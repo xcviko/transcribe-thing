@@ -149,15 +149,26 @@ final class DictationController {
     /// A key took this press's recording over (fn D in push-to-talk, Polish Selection) and fn is still down: another
     /// fn D in the same press still adds what's selected.
     @ObservationIgnored private var pressTakenByKey = false
-    /// When the talk key's press went down while dictations were on their way (`clock`): a Polish, Translate or Send
-    /// key pressed right after is for the newest of them (`shortcutPressed`). nil for any other press.
-    @ObservationIgnored private var pressOverDictationsOnTheirWay: TimeInterval?
+    /// The talk key went down over dictations on their way (`aimsAtDictationsOnTheirWay`): that press records nothing.
+    /// While it's held, Polish's, Translate's and Send's keys are for the newest of them, and its pill's tray is out with
+    /// those keys under its buttons. Let go of it without one, and a second press within `secondPressWindow` records a
+    /// new dictation after all; after that window the next press aims again.
+    @ObservationIgnored private var talkKeyAim: TalkKeyAim?
+    /// The talk key's press now down is an aimed one: its release (or interruption) ends the aim, never a recording.
+    @ObservationIgnored private var pressIsAimed = false
+    @ObservationIgnored private var aimTask: Task<Void, Never>?
+    /// A dictation on its way whose Polish or Translate a key flipped: it's sent again with what was picked last once
+    /// the key is up (`.toggleKeyUp`), one request however many times a held key flipped it.
+    @ObservationIgnored private weak var keyFlippedJob: Job?
+    @ObservationIgnored private var keyFlipTask: Task<Void, Never>?
     /// Rows whose Home work waits for the launch's recovery (`afterRecovery`).
     @ObservationIgnored private var waitingForRecovery: Set<UUID> = []
     /// The model and mode the recording's journal last named (`DictationRecorder.relabelJournal`).
     @ObservationIgnored private var journalLabel: (engine: EngineID, mode: DictationMachine.Mode)?
-    /// How soon after such a press its Polish, Translate or Send key is still for the dictation on its way.
-    static let keyTakeoverWindow: TimeInterval = 1
+    /// How soon after letting go of an aimed talk key a second press records a new dictation.
+    @ObservationIgnored var secondPressWindow: TimeInterval = 0.5
+    /// When a key's flips of a dictation on its way are settled even if the key's release never came.
+    @ObservationIgnored var keyFlipSettle: Duration = .seconds(2)
     /// Keys the tap held for the selection, waiting for a lookup, in the order they came: the press's own release
     /// waits with them (`heldRelease`), so what the press was is decided by its keys, not by when fn came up.
     @ObservationIgnored private var heldKeys: [(action: SelectionAction, key: KeyStroke?)] = []
@@ -342,8 +353,20 @@ final class DictationController {
         switch event {
         case .pttDown:
             pressTakenByKey = false
-            pressOverDictationsOnTheirWay = machine.isRecording || queue.isEmpty ? nil : clock()
-            send(.pttDown)
+            if let released = talkKeyAim?.releasedAt, clock() - released < secondPressWindow {
+                // The second press: a new dictation after all.
+                endAim()
+                send(.pttDown)
+            } else if aimsAtDictationsOnTheirWay {
+                aim()
+            } else {
+                endAim()
+                send(.pttDown)
+            }
+        case .pttUp where pressIsAimed:
+            releaseAim(interrupted: false)
+        case .pttInterrupted where pressIsAimed:
+            releaseAim(interrupted: true)
         case .pttUp where holdsRelease:
             // The press's key for the selection is still being decided: its release follows the decision.
             heldRelease = .pttUp
@@ -355,14 +378,22 @@ final class DictationController {
         case .pttInterrupted:
             pressTakenByKey = false
             send(.pttInterrupted)
-        case .handsFreeToggle: send(.handsFreeToggle)
-        case .cancel: send(.cancel)
+        case .handsFreeToggle:
+            // fn Space off an aimed press: hands-free starts at once, there's no mistaking it for a key of the aim.
+            endPressAim()
+            send(.handsFreeToggle)
+        case .cancel:
+            endPressAim()
+            send(.cancel)
         case .pasteLast: pasteLast()
         case .cycleEngine: send(.cycleEngine)
         case .cycleEngineRepeat: repeatCycle()
         case .polish: shortcutPressed(.polish)
         case .translate: shortcutPressed(.translate)
         case .send: shortcutPressed(.send)
+        case .toggleRepeat(let action):
+            if let toggle = PillToggle(action) { shortcutRepeated(toggle) }
+        case .toggleKeyUp: settleKeyFlips()
         case .heldForSelection(let action, let key):
             // Only Add to dictionary's key is held for the selection.
             guard action == .addToDictionary else { return }
@@ -432,6 +463,13 @@ final class DictationController {
     func toggle(_ toggle: PillToggle, on dictation: PillDictation, byKey: Bool = false) {
         DiagnosticLog.shared.event(.dictation, byKey ? "key.toggle" : "pill.button", [
             "button": toggle.rawValue, "on": { if case .recording = dictation { "recording" } else { "processing" } }()])
+        applyToggle(toggle, on: dictation, byKey: byKey)
+        stateDidChange()
+    }
+
+    /// `toggle` without its log line: a held key's autorepeats come here too. A key's flip of a dictation on its way
+    /// has it sent again only once the key is up (`settleKeyFlips`).
+    private func applyToggle(_ toggle: PillToggle, on dictation: PillDictation, byKey: Bool) {
         switch dictation {
         case .recording:
             guard machine.isRecording else { return }
@@ -451,47 +489,121 @@ final class DictationController {
             }
         case .processing(let key):
             guard let job = queue.first(where: { $0.key == key }) else { return }
-            self.toggle(toggle, of: job)
+            self.toggle(toggle, of: job, resendsNow: !byKey)
         }
-        stateDidChange()
     }
 
     /// The Polish, Translate or Send shortcut (fn P, fn T, fn ↩): what the pill's button does, for the dictation being
-    /// recorded, or with none recording, the newest one on its way. Pressed just as the talk key went down over
-    /// dictations on their way (fn T with fn as the talk key), it's for the newest of them: that press only led to the
-    /// key, and gives way without a sound, as Polish Selection's does.
+    /// recorded, or with none recording, the newest one on its way. There Polish and Translate have it sent again once
+    /// the key is up (`settleKeyFlips`): held down, the key flips them at every autorepeat, and one request goes with
+    /// what was picked last.
     private func shortcutPressed(_ toggle: PillToggle) {
         if machine.isRecording {
-            if machine.mode == .pushToTalk, let job = queue.last, let pressed = pressOverDictationsOnTheirWay,
-               clock() - pressed < Self.keyTakeoverWindow, takesOver(toggle, for: job) {
-                pressOverDictationsOnTheirWay = nil
-                pressTakenByKey = true
-                pillModel.endChipFlash()
-                send(.discard)
-                self.toggle(toggle, on: .processing(job.key), byKey: true)
-                return
-            }
             self.toggle(toggle, on: .recording, byKey: true)
         } else if let job = queue.last {
+            talkKeyAim?.usedKey = true
             self.toggle(toggle, on: .processing(job.key), byKey: true)
         }
     }
 
-    /// A press of `toggle`'s key just after the talk key is for `job` on its way only when it led to the key (fn P off
-    /// fn, F5 P off F5: pressed with the talk key, not as a key of its own while a new dictation starts) and `job` can
-    /// take it (Polish and Translate on Gemini, Send while it isn't held by a click away). Otherwise it's the new one's.
-    private func takesOver(_ toggle: PillToggle, for job: Job) -> Bool {
-        let action: ShortcutAction = switch toggle {
-        case .polish: .polish
-        case .translate: .translate
-        case .send: .send
+    /// The key held down: on and off again at every autorepeat, with its sound each time. Send on any model; Polish and
+    /// Translate while it records on Gemini (elsewhere the first press did what it could: Polish Selection), and on a
+    /// dictation on its way on Gemini.
+    private func shortcutRepeated(_ toggle: PillToggle) {
+        if machine.isRecording {
+            guard toggle == .send || effectiveChoice.isGemini else { return }
+            applyToggle(toggle, on: .recording, byKey: true)
+        } else if let job = queue.last {
+            applyToggle(toggle, on: .processing(job.key), byKey: true)
         }
+        stateDidChange()
+    }
+
+    /// A key's flips of a dictation on its way are settled: it's sent again, once, if what's picked now isn't what its
+    /// request went with.
+    private func settleKeyFlips() {
+        keyFlipTask?.cancel()
+        keyFlipTask = nil
+        guard let job = keyFlippedJob else { return }
+        keyFlippedJob = nil
+        guard queue.contains(where: { $0 === job }), job.recording != nil, job.sent != job.choice else { return }
+        DiagnosticLog.shared.event(.dictation, "processing.resent", [
+            "polish": job.polishes, "translate": job.translates, "answered": job.outcome != nil])
+        run(job)
+        stateDidChange()
+    }
+
+    /// A key of the talk key's press can do something for `job` on its way: it's pressed off the talk key (fn P off fn,
+    /// F5 P off F5) and `job` can take it (Polish and Translate on Gemini, Send while it isn't held by a click away).
+    private func takesKey(_ toggle: PillToggle, for job: Job) -> Bool {
         guard let talkKey = settings.shortcuts[.pushToTalk],
-              settings.shortcuts[action]?.keyOnTalkKey(talkKey) != nil else { return false }
+              settings.shortcuts[toggle.action]?.keyOnTalkKey(talkKey) != nil else { return false }
         switch toggle {
         case .polish, .translate: return job.engine.isGemini
         case .send: return !job.isHeldByClick
         }
+    }
+
+    // MARK: - The talk key over dictations on their way
+
+    /// The talk key pressed now records nothing: dictations are on their way and the newest can take a key of its press.
+    /// Almost always that press is for fn ↩, fn P or fn T; a new dictation takes a second press.
+    var aimsAtDictationsOnTheirWay: Bool {
+        guard !machine.isRecording, let job = queue.last else { return false }
+        return PillToggle.allCases.contains { takesKey($0, for: job) }
+    }
+
+    private func aim() {
+        aimTask?.cancel()
+        talkKeyAim = TalkKeyAim()
+        pressIsAimed = true
+        DiagnosticLog.shared.event(.dictation, "talkKey.aimed")
+        stateDidChange()
+    }
+
+    /// The aimed press let go. After a key of it, that was all; without one, a second press records for
+    /// `secondPressWindow` (the tray keeps its keys meanwhile). Another key that ended the hold ends it all.
+    private func releaseAim(interrupted: Bool) {
+        pressIsAimed = false
+        settleKeyFlips()
+        guard var aim = talkKeyAim else { return }
+        if interrupted || aim.usedKey {
+            endAim()
+        } else {
+            aim.releasedAt = clock()
+            talkKeyAim = aim
+            let window = secondPressWindow
+            aimTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(window))
+                guard !Task.isCancelled, let self, self.talkKeyAim?.releasedAt != nil else { return }
+                self.endAim()
+                self.stateDidChange()
+            }
+        }
+        stateDidChange()
+    }
+
+    /// The aimed press ended by its chord (fn Space, Esc): no release follows.
+    private func endPressAim() {
+        guard pressIsAimed || talkKeyAim != nil else { return }
+        pressIsAimed = false
+        settleKeyFlips()
+        endAim()
+    }
+
+    private func endAim() {
+        aimTask?.cancel()
+        aimTask = nil
+        talkKeyAim = nil
+    }
+
+    /// The bottom pill's tray buttons' shortcuts, shown over each while the pointer is on it: "fn ↩", "fn P", "fn T".
+    private var toggleKeyLabels: [PillToggle: String] {
+        var keys: [PillToggle: String] = [:]
+        for toggle in PillToggle.allCases {
+            if let shortcut = settings.shortcuts[toggle.action] { keys[toggle] = ShortcutFormatter.compact(shortcut) }
+        }
+        return keys
     }
 
     func send(_ input: DictationMachine.Input) {
@@ -1543,8 +1655,10 @@ final class DictationController {
         if job.polishes { polishIDs.insert(job.id) } else { polishIDs.remove(job.id) }
         if job.translates { translateIDs.insert(job.id) } else { translateIDs.remove(job.id) }
         sendIDs.remove(job.id)
-        // Its Retry is the same model: another one for this recording is the user's call, from History.
-        let notice = error.notice(recordingID: job.id, fallbackEngine: nil, engine: job.engine)
+        // Its Retry is the same model: another one for this recording is the user's call, from History, unless the
+        // same model would likely fail again (Gemini's refusal): then the notice offers Parakeet beside Retry.
+        let notice = error.notice(recordingID: job.id, fallbackEngine: usableFallback(excluding: job.engine, after: error),
+                                  engine: job.engine)
         if let row = interruptedRow(job.id) {
             // Home's Continue recorded on, then its transcription failed: the row stays one to continue.
             keepInterrupted(row, recording, failure: (job.rewrite ?? .transcription(job.engine), error),
@@ -2980,7 +3094,7 @@ final class DictationController {
     /// Gemini again at once, with the new prompt (still capturing its tail, its request goes with what's chosen then:
     /// `captured`); Send only has Return pressed after its paste. On Parakeet Polish and Translate do nothing: there's
     /// no prompt to change.
-    private func toggle(_ toggle: PillToggle, of job: Job) {
+    private func toggle(_ toggle: PillToggle, of job: Job, resendsNow: Bool = true) {
         switch toggle {
         case .polish, .translate:
             guard job.engine.isGemini else { return }
@@ -2993,7 +3107,17 @@ final class DictationController {
             }
             DiagnosticLog.shared.event(.dictation, "processing.toggle", [
                 "button": toggle.rawValue, "polish": job.polishes, "translate": job.translates])
-            if job.recording != nil, job.sent != job.choice {
+            if !resendsNow {
+                if let other = keyFlippedJob, other !== job { settleKeyFlips() }
+                keyFlippedJob = job
+                keyFlipTask?.cancel()
+                let settle = keyFlipSettle
+                keyFlipTask = Task { [weak self] in
+                    try? await Task.sleep(for: settle)
+                    guard !Task.isCancelled else { return }
+                    self?.settleKeyFlips()
+                }
+            } else if job.recording != nil, job.sent != job.choice {
                 DiagnosticLog.shared.event(.dictation, "processing.resent", [
                     "polish": job.polishes, "translate": job.translates, "answered": job.outcome != nil])
                 run(job)
@@ -3012,8 +3136,9 @@ final class DictationController {
     /// A click (left or right button) outside the app's own windows (`ClickAwayMonitor`). With General → Pasting's "Hold
     /// the paste after a click" on, a dictation being processed (from its stop until its text is pasted, it fails or
     /// it's canceled) isn't pasted: the user may be typing somewhere else by now. The pill's outline turns dashed, and
-    /// its text comes up on a card instead (`clickedAwayCard`). Send goes off for it, with its sound, and the plane
-    /// leaves the pill. One click is enough; another changes nothing. It holds every dictation on its way at the
+    /// its text comes up on a card instead (`clickedAwayCard`), and three ticks roll down (`.pasteHeld`), the one sound of
+    /// the click: Send goes off for it too, and the plane leaves the pill. While a new dictation records the click is
+    /// quiet, as the card is. One click is enough; another changes nothing. It holds every dictation on its way at the
     /// click, each on its own pill; a dictation still recording isn't one of them: clicking into another field is part
     /// of dictating it. Switching to another app (⌘Tab) counts as a click away. With the setting off the text is pasted
     /// wherever the user is now, but Send still goes off: its Return would send the message somewhere else.
@@ -3032,16 +3157,21 @@ final class DictationController {
                 sendOff = true
             }
         }
-        // Send's one sound, as when its key turns it off.
-        if sendOff { playCue(.sendOn) }
+        if holds {
+            if !machine.isRecording { playCue(.pasteHeld) }
+        } else if sendOff {
+            // Nothing held: Send's own sound, as when its key turns it off.
+            playCue(.sendOn)
+        }
         DiagnosticLog.shared.event(.dictation, "processing.clickedAway",
                                    ["sendOff": sendOff ? true : nil, "held": holds ? nil : false])
         stateDidChange()
     }
 
     /// A click on a dashed pill takes the click away back for its dictation: the outline is solid again, the dictation
-    /// is pasted after all (where the user is now), and Send is on again if that click turned it off, with its sound and
-    /// the plane. Other dashed pills stay held. A click elsewhere holds it again.
+    /// is pasted after all (where the user is now), and Send is on again if that click turned it off, with the plane.
+    /// Three ticks go up (`.pasteTakenBack`), quiet while a new dictation records. Other dashed pills stay held. A click
+    /// elsewhere holds it again.
     private func takeBackClickAway(of job: Job) {
         guard job.isHeldByClick, queue.contains(where: { $0 === job }) else { return }
         job.isHeldByClick = false
@@ -3051,7 +3181,7 @@ final class DictationController {
             job.sends = true
             sendOn = true
         }
-        if sendOn { playCue(.sendOn) }
+        if !machine.isRecording { playCue(.pasteTakenBack) }
         DiagnosticLog.shared.event(.dictation, "processing.clickTakenBack", ["sendOn": sendOn ? true : nil])
         stateDidChange()
     }
@@ -3438,9 +3568,15 @@ final class DictationController {
 
         // The tray beside the pill acts on the dictation it shows: the one recording, or the newest on its way.
         let tray: PillTrayState? = if phase.isRecording {
-            PillTrayState(dictation: .recording, polishes: polishes, translates: translates, sends: sends)
+            PillTrayState(dictation: .recording, polishes: polishes, translates: translates, sends: sends,
+                          keys: toggleKeyLabels)
         } else if phase == .processing, let job = pillJob {
-            trayState(of: job)
+            {
+                var state = trayState(of: job)
+                state.keys = toggleKeyLabels
+                state.isAimed = talkKeyAim != nil && queue.last === job
+                return state
+            }()
         } else {
             nil
         }
@@ -3467,6 +3603,8 @@ final class DictationController {
     }
 
     private func stateDidChange() {
+        // Nothing left on its way to take the aimed press's keys (it was pasted), or a recording started.
+        if talkKeyAim != nil, machine.isRecording || queue.isEmpty { endAim() }
         if hotkeys.isBusy != machine.isBusy { hotkeys.isBusy = machine.isBusy }
         if hotkeys.isRecording != machine.isRecording { hotkeys.isRecording = machine.isRecording }
         let onTheirWay = !machine.isRecording && !queue.isEmpty
@@ -3564,4 +3702,12 @@ extension DictationMachine.Effect {
     var transcribes: Bool {
         if case .stopCaptureAndTranscribe = self { true } else { false }
     }
+}
+
+/// An aimed press of the talk key (`DictationController.talkKeyAim`).
+private struct TalkKeyAim {
+    /// A key of the press went to the dictation on its way.
+    var usedKey = false
+    /// When the press was let go without one: a second press records until `secondPressWindow` after it.
+    var releasedAt: TimeInterval?
 }

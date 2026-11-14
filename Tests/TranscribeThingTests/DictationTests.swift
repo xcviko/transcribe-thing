@@ -1409,6 +1409,10 @@ final class FakeRecorder: DictationRecorder {
         let count = h.pill.tokenCount
 
         now = 105
+        // Over a dictation on its way the first press is only aimed at it: a second one records.
+        h.controller.handle(.pttDown)
+        #expect(!h.controller.machine.isRecording && h.pill.tray?.isAimed == true, "the first press aims")
+        h.controller.handle(.pttUp)
         h.controller.handle(.pttDown)
         #expect(h.controller.machine.capture.isArming && h.pill.visiblePhase == .listening)
         #expect(h.pill.stack.count == 1 && h.pill.stack.first?.count == count, "it moved up with its count")
@@ -1417,6 +1421,8 @@ final class FakeRecorder: DictationRecorder {
         #expect(h.pill.visiblePhase == .processing && h.pill.stack.isEmpty && h.pill.tokenCount == count)
 
         now = 107
+        h.controller.handle(.pttDown)
+        h.controller.handle(.pttUp)
         h.controller.handle(.pttDown)
         h.controller.send(.timer(.arming))
         #expect(h.controller.machine.capture.isListeningOrLocked, "a hold records")
@@ -1440,6 +1446,9 @@ final class FakeRecorder: DictationRecorder {
         h.controller.insertOverride = { _ in pastes ? .pasted : .passwordField }
         h.controller.enqueue(Self.recording(), engine: .parakeet)
         #expect(h.pill.visiblePhase == .processing)
+        // The first press over it is aimed at it; the second records.
+        h.controller.handle(.pttDown)
+        h.controller.handle(.pttUp)
         h.controller.handle(.pttDown)
         h.controller.send(.timer(.arming))
         #expect(h.controller.machine.capture.isListeningOrLocked && h.pill.visiblePhase == .listening)

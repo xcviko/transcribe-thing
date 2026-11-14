@@ -21,13 +21,13 @@ enum PillTraySnapshots {
 
     @MainActor static var recordingRows: [PillTraySheet.Row] {
         [
-            .init(id: "rec-off", caption: "Push-to-talk · Gemini · all off · Polish’s tooltip") {
-                recording(.listening, tooltip: .polish)
+            .init(id: "rec-off", caption: "Push-to-talk · Gemini · all off · pointer on Polish") {
+                recording(.listening, hovering: .polish)
             },
             .init(id: "rec-polish", caption: "Polish on") { recording(.listening, polishes: true) },
             .init(id: "rec-translate", caption: "Translate on") { recording(.listening, translates: true) },
-            .init(id: "rec-send", caption: "Send on · its tooltip") {
-                recording(.listening, sends: true, tooltip: .send)
+            .init(id: "rec-send", caption: "Send on · pointer on it") {
+                recording(.listening, sends: true, hovering: .send)
             },
             .init(id: "rec-all", caption: "Hands-free · all three on") {
                 recording(.locked, polishes: true, translates: true, sends: true)
@@ -45,16 +45,22 @@ enum PillTraySnapshots {
                 processing(choice: .gemini, count: PillTokenCount(phase: .thinking, tokens: 480))
             },
             .init(id: "proc-polish", caption: "Polish clicked · sent again") {
-                processing(choice: .gemini, polishes: true, tooltip: .polish)
+                processing(choice: .gemini, polishes: true, hovering: .polish)
             },
             .init(id: "proc-send", caption: "Send on · writing") {
                 processing(choice: .gemini, sends: true, count: PillTokenCount(phase: .writing, tokens: 36))
             },
             .init(id: "proc-parakeet", caption: "Parakeet · Polish and Translate dimmed") {
-                processing(choice: .parakeet, rewrites: false, tooltip: .translate)
+                processing(choice: .parakeet, rewrites: false, hovering: .send)
             },
             .init(id: "proc-held", caption: "Clicked away · Send dimmed") {
-                processing(choice: .gemini, held: true, tooltip: .send)
+                processing(choice: .gemini, held: true, hovering: .polish)
+            },
+            .init(id: "proc-aimed", caption: "fn held over it: the tray comes out") {
+                processing(choice: .gemini, count: PillTokenCount(phase: .writing, tokens: 140), open: false, aimed: true)
+            },
+            .init(id: "proc-aimed-sent", caption: "fn ↩ · Send on") {
+                processing(choice: .gemini, sends: true, open: false, aimed: true)
             },
         ]
     }
@@ -75,7 +81,7 @@ enum PillTraySnapshots {
                 let items = [item(.gemini, translates: true), item(.gemini)]
                 let model = stacked(bottom: .locked, items: items)
                 model.showTray(.stacked(items[1].key),
-                               tooltip: PillTrayButton(owner: .stacked(items[1].key), toggle: .polish))
+                               hovering: PillTrayButton(owner: .stacked(items[1].key), toggle: .polish))
                 return model
             },
             .init(id: "stack-more", caption: "Six: the oldest fold into +2", height: 230) {
@@ -91,21 +97,25 @@ enum PillTraySnapshots {
 
     @MainActor private static func recording(_ phase: PillPhase, choice: ModelChoice = .gemini, polishes: Bool = false,
                                              translates: Bool = false, sends: Bool = false, open: Bool = true,
-                                             tooltip: PillToggle? = nil) -> PillModel {
+                                             hovering tooltip: PillToggle? = nil) -> PillModel {
         let model = PillModel.preview(phase: phase, level: 0.6)
         model.sessionModel = choice
         model.polishes = polishes && choice.isGemini
         model.translates = translates && choice.isGemini
         model.sends = sends
         model.tray = PillTrayState(dictation: .recording, polishes: model.polishes, translates: model.translates,
-                                   sends: sends)
-        if open { model.showTray(.bottom, tooltip: tooltip.map { PillTrayButton(owner: .bottom, toggle: $0) }) }
+                                   sends: sends, keys: Self.keys)
+        if open { model.showTray(.bottom, hovering: tooltip.map { PillTrayButton(owner: .bottom, toggle: $0) }) }
         return model
     }
 
+    /// The defaults' shortcuts, over a hovered button of the bottom tray.
+    static let keys: [PillToggle: String] = [.send: "fn ↩", .polish: "fn P", .translate: "fn T"]
+
     @MainActor private static func processing(choice: ModelChoice, polishes: Bool = false, sends: Bool = false,
                                               rewrites: Bool = true, held: Bool = false,
-                                              count: PillTokenCount? = nil, tooltip: PillToggle? = nil) -> PillModel {
+                                              count: PillTokenCount? = nil, hovering tooltip: PillToggle? = nil,
+                                              open: Bool = true, aimed: Bool = false) -> PillModel {
         let model = PillModel.preview(phase: .processing)
         model.sessionModel = choice
         model.polishes = polishes
@@ -113,9 +123,10 @@ enum PillTraySnapshots {
         model.holdsPaste = held
         let key = UUID()
         model.tray = PillTrayState(dictation: .processing(key), polishes: polishes, sends: sends && !held,
-                                   rewrites: rewrites && choice.isGemini, canSend: !held)
+                                   rewrites: rewrites && choice.isGemini, canSend: !held, keys: Self.keys,
+                                   isAimed: aimed)
         if let count { _ = model.previewCounter(count) }
-        model.showTray(.bottom, tooltip: tooltip.map { PillTrayButton(owner: .bottom, toggle: $0) })
+        if open { model.showTray(.bottom, hovering: tooltip.map { PillTrayButton(owner: .bottom, toggle: $0) }) }
         return model
     }
 

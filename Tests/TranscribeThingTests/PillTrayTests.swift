@@ -8,27 +8,23 @@ import Testing
     static func model(_ phase: PillPhase) -> PillModel {
         let model = PillModel(settings: .inMemory(), levelMeter: .preview(level: 0.5))
         model.timing.hoverIn = 0.01
-        model.timing.trayLinger = 0.05
         model.timing.controlTooltipDelay = 0.01
         model.phase = phase
         return model
     }
 
-    /// The pointer on a pill with a dictation opens its tray after the short dwell; leaving, it stays a moment, then
-    /// goes. Coming back within that moment keeps it.
-    @Test func theTrayOpensOnHoverAndLingers() async throws {
+    /// The pointer on a pill with a dictation opens its tray after the short dwell; leaving, it goes at once.
+    @Test func theTrayOpensOnHoverAndGoesAtOnce() async throws {
         let model = Self.model(.listening)
         model.tray = PillTrayState(dictation: .recording)
         #expect(!model.showsTray(.bottom))
         model.setPointerOverTray(.bottom)
         try await waitUntil { model.showsTray(.bottom) }
         model.setPointerOverTray(nil)
-        #expect(model.showsTray(.bottom), "it lingers")
+        #expect(!model.showsTray(.bottom), "gone the moment the pointer left")
         model.setPointerOverTray(.bottom)
-        try await Task.sleep(for: .milliseconds(100))
-        #expect(model.showsTray(.bottom), "back in time: still out")
-        model.setPointerOverTray(nil)
-        try await waitUntil { !model.showsTray(.bottom) }
+        #expect(!model.showsTray(.bottom), "back: the dwell again")
+        try await waitUntil { model.showsTray(.bottom) }
     }
 
     /// No tray at rest or without a dictation's state, and none with the pill not on screen (Never).
@@ -47,13 +43,25 @@ import Testing
         #expect(!hidden.showsTray(.bottom))
     }
 
-    /// A hovered button's tooltip comes after its delay; Polish and Translate dimmed say why.
-    @Test func aButtonsTooltip() async throws {
+    /// A hovered button's shortcut shows over it after a short dwell, and goes with the pointer; Polish and Translate
+    /// dimmed say why to VoiceOver.
+    @Test func aButtonsHint() async throws {
         let model = Self.model(.processing)
         let button = PillTrayButton(owner: .bottom, toggle: .translate)
         model.setHoveredTrayButton(button)
-        try await waitUntil { model.trayTooltip == button }
-        #expect(PillTrayTooltip.reason(.translate) == "Gemini only")
+        #expect(model.hoveredTrayButton == button && model.trayHint == nil, "not at once")
+        try await waitUntil { model.trayHint == button }
+        #expect(!model.trayHintCarriesOver)
+        // Up already: the next button's comes at once, even across the gap between them.
+        model.setHoveredTrayButton(nil)
+        let next = PillTrayButton(owner: .bottom, toggle: .polish)
+        model.setHoveredTrayButton(next)
+        #expect(model.trayHint == next && model.trayHintCarriesOver, "straight over, no dwell")
+        model.setHoveredTrayButton(nil)
+        try await waitUntil { model.trayHint == nil }
+        model.setHoveredTrayButton(button)
+        #expect(model.trayHint == nil, "after a while off the buttons, the dwell again")
+        #expect(PillTrayState.reason(.translate) == "Gemini only")
         let parakeet = PillTrayState(dictation: .processing(UUID()), rewrites: false)
         #expect(!parakeet.isEnabled(.polish) && !parakeet.isEnabled(.translate) && parakeet.isEnabled(.send))
     }

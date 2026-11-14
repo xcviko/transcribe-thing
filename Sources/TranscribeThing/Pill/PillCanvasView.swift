@@ -218,6 +218,21 @@ struct PillCanvasView: View {
 
     private var pillArea: some View {
         PillView(model: model, context: .panel(regions), covered: pillCovered)
+            // The next dictation came down onto the bottom pill (the one there was canceled): the pill comes in under
+            // its stacked pill sliding down, as if it had brought it.
+            .keyframeAnimator(initialValue: PillArrival(), trigger: model.descentCount) { pill, arrival in
+                pill.opacity(arrival.opacity).scaleEffect(arrival.scale, anchor: .bottom)
+            } keyframes: { _ in
+                KeyframeTrack(\.opacity) {
+                    MoveKeyframe(reduceMotion ? 1 : 0)
+                    LinearKeyframe(reduceMotion ? 1 : 0, duration: 0.08)
+                    CubicKeyframe(1, duration: 0.18)
+                }
+                KeyframeTrack(\.scale) {
+                    MoveKeyframe(reduceMotion ? 1 : 0.9)
+                    SpringKeyframe(1, duration: 0.32, spring: .init(duration: 0.32, bounce: 0.3))
+                }
+            }
             // Polish, Translate and Send for the dictation on the pill, beside it while the pointer is on it.
             .overlay(alignment: .trailing) {
                 // Kept while it folds away as the dictation leaves the pill (pasted, canceled).
@@ -293,4 +308,10 @@ enum PillHint: Equatable {
     /// A key that did nothing (`PillModel.keyHint`).
     case key(String)
     case switchModel
+}
+
+/// The bottom pill coming in as a dictation comes down onto it (`PillModel.descentCount`).
+private struct PillArrival {
+    var opacity: Double = 1
+    var scale: CGFloat = 1
 }

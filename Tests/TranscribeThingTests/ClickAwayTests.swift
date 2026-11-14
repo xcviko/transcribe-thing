@@ -120,7 +120,7 @@ import Testing
         let before = cues.played.count
         monitor.mouseDown(at: Self.away)
         #expect(!rig.h.pill.sends && rig.h.pill.holdsPaste)
-        #expect(Array(cues.played.dropFirst(before)) == [.sendOn], "Send's sound, as its key turning it off")
+        #expect(Array(cues.played.dropFirst(before)) == [.pasteHeld], "one sound: three ticks down, Send off with it")
         c.clickedAway()
         #expect(rig.h.pill.tray?.canSend == false)
         rig.h.pill.clickTray(.send)
@@ -152,7 +152,7 @@ import Testing
         let before = cues.played.count
         rig.h.pill.onClick?()
         #expect(!rig.h.pill.holdsPaste && rig.h.pill.sends && rig.h.pill.phase == .processing)
-        #expect(Array(cues.played.dropFirst(before)) == [.sendOn], "Send's sound, as its key turning it on")
+        #expect(Array(cues.played.dropFirst(before)) == [.pasteTakenBack], "one sound: three ticks up, Send on with it")
         #expect(monitor.isWatching, "a click elsewhere would hold it again")
 
         first.isOpen = true
@@ -183,6 +183,26 @@ import Testing
         try await waitUntil { rig.pasted.count == 1 && returns == 1 && c.machine.activeJobs == 0 }
         #expect(Self.card(rig) == nil)
         #expect(!monitor.isWatching)
+    }
+
+    /// A click away while a new dictation records holds the one on its way all the same, quietly: clicking into
+    /// another field is part of dictating, and its ticks would be in the recording.
+    @Test func aClickDuringANewRecordingHoldsTheOneOnItsWayQuietly() async throws {
+        let first = RequestGate()
+        let (rig, cues, requests, monitor) = Self.make(first: first)
+        let c = rig.h.controller
+        R.dictate(rig)
+        try await waitUntil { requests.gemini.count == 1 }
+        rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
+        SwitchModelControllerTests.hold(rig)
+        #expect(c.machine.isRecording)
+        let before = cues.played.count
+        monitor.mouseDown(at: Self.away)
+        #expect(rig.h.pill.stack.first?.holdsPaste == true, "the one on its way is held")
+        #expect(!cues.played.dropFirst(before).contains(.pasteHeld), "quiet while recording")
+        c.handle(.cancel)
+        first.isOpen = true
+        try await waitUntil { c.machine.activeJobs == 0 }
     }
 
     /// A click on the pill or a card is the app's own, even one the panel let through: nothing changes.
@@ -306,6 +326,25 @@ import Testing
         try await waitUntil { rig.h.history.entries.first?.status == .failed && c.machine.activeJobs == 0 }
         #expect(rig.h.toasts.notices.contains { $0.actions.contains { $0.kind == .retry } })
         #expect(Self.card(rig) == nil)
+    }
+
+    /// Gemini refuses a dictation: its notice offers Parakeet beside Retry, and that button transcribes the saved
+    /// recording with Parakeet and pastes it.
+    @Test func aRefusalCanGoToParakeetInstead() async throws {
+        let (rig, _, requests) = R.make { engine, _, _ in
+            if engine.isGemini { throw AppError.openRouterRefused("Gemini refused to complete this request") }
+            return "parakeet words"
+        }
+        let c = rig.h.controller
+        R.dictate(rig)
+        try await waitUntil { rig.h.history.entries.first?.status == .failed && c.machine.activeJobs == 0 }
+        let notice = try #require(rig.h.toasts.notices.first { $0.dedupeKey == "error.openRouterRefused" })
+        #expect(notice.actions.map(\.kind) == [.retry, .retryWith(.parakeet)])
+        let parakeet = try #require(notice.actions.last)
+        c.perform(parakeet, from: notice)
+        try await waitUntil { rig.pasted == ["parakeet words"] && c.machine.activeJobs == 0 }
+        #expect(requests.parakeet == 1 && requests.gemini.count == 1)
+        #expect(rig.h.history.entries.first?.status == .success)
     }
 
     private func withDefaults(_ body: (UserDefaults) throws -> Void) throws {

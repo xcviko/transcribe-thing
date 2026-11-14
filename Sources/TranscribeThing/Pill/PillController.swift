@@ -363,7 +363,7 @@ final class PillController {
         model.setPointerOverChip(overChip)
         let control = overPill ? regions.controls.first { screenRect($0.value)?.contains(point) ?? false }?.key : nil
         model.setHoveredControl(model.visiblePhase == .locked ? control : nil)
-        // The tray of the pill under the pointer comes out, and stays a moment after it leaves.
+        // The tray of the pill under the pointer comes out, and goes as soon as the pointer leaves it and its pill.
         let trayOwner = overTray.flatMap { owner in model.trayState(owner) == nil ? nil : owner }
         model.setPointerOverTray(trayOwner)
         let trayButton = regions.trayButtons.first { screenRect($0.value)?.contains(point) ?? false }?.key

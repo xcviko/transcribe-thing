@@ -72,7 +72,8 @@ import Testing
         let c = rig.h.controller
         #expect(!c.effectiveChoice.isGemini)
         Switch.hold(rig)
-        #expect(rig.h.pill.tray == PillTrayState(dictation: .recording))
+        #expect(rig.h.pill.tray == PillTrayState(dictation: .recording,
+                                                 keys: [.send: "fn ↩", .polish: "fn P", .translate: "fn T"]))
         c.toggle(.send, on: .recording)
         #expect(c.isSending && rig.h.pill.sends && rig.h.pill.tray?.sends == true)
         #expect(PillView(model: rig.h.pill).visual == .listening() && rig.h.pill.tray?.sends == true)

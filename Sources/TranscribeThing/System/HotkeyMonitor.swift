@@ -14,6 +14,10 @@ enum HotkeyEvent: Equatable, Sendable {
     /// The Polish, Translate and Send shortcuts: on or off for the dictation being recorded, or, with none recording,
     /// the newest one on its way (the controller decides). The pill's buttons do the same.
     case polish, translate, send
+    /// Polish's, Translate's or Send's key held down: an autorepeat, which flips it again, with its sound each time.
+    case toggleRepeat(ShortcutAction)
+    /// That key let go: what its flips picked is settled (a dictation on its way is sent again with it, once).
+    case toggleKeyUp
     /// A key the tap held for the selection (Add to dictionary's: it reads what's selected now). What the key does with
     /// the selection if there is one; with none, the pill says to select a word first.
     case heldForSelection(ShortcutAction, KeyStroke)

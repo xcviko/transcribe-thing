@@ -413,18 +413,22 @@ extension AppError {
             actions.append(NoticeAction(title: title, kind: kind, isPrimary: actions.isEmpty))
         }
 
-        // Retry is always the same model, wherever another one could have helped too: switching models for this
-        // recording is the user's call, from History (Transcribe With).
+        // Retry is always the same model. Another one for this recording is the user's call, from History (Transcribe
+        // With), except where the same model would likely fail again (Gemini's refusal): then it's offered beside it.
         let canRetry = hasAudio && (isRetryable || fallbackCanHelp) && self != .recordingTooLarge
             && self != .vertexProxy(.tooLarge)
         let retryTitle = if case .microphoneDisconnected = self { "Transcribe It" } else { "Retry" }
         let switchEngine: (String, NoticeActionKind)? = if !hasAudio, copy.offersSwitch, let fallback {
             ("Use \(fallback.shortName)", .selectEngine(fallback))
         } else { nil }
+        let retryElsewhere: (String, NoticeActionKind)? = if hasAudio, copy.offersRetryWith, let fallback {
+            ("Use \(fallback.shortName) Instead", .retryWith(fallback))
+        } else { nil }
 
         func addRetry() { if canRetry { add(retryTitle, .retry) } }
         func addFallbacks() {
             if let switchEngine { add(switchEngine.0, switchEngine.1) }
+            if let retryElsewhere { add(retryElsewhere.0, retryElsewhere.1) }
         }
 
         switch copy.order {
@@ -502,6 +506,9 @@ extension AppError {
         var seconds: Double?
         /// Offer "Use <fallback>" when there is no recording to retry.
         var offersSwitch = false
+        /// With the recording saved, offer it to the fallback too, beside Retry ("Use Parakeet v3 Instead"): the same
+        /// model would likely fail the same way (Gemini's refusal).
+        var offersRetryWith = false
     }
 
     private static func oneLine(_ message: String, limit: Int = 110) -> String? {
@@ -644,7 +651,7 @@ extension AppError {
             return Copy(symbol: "hand.raised.fill",
                         title: "\(cloud.service) refused this request",
                         body: Self.oneLine(message) ?? "The provider declined to transcribe this recording.",
-                        order: .fallbackFirst)
+                        offersRetryWith: true)
         case .openRouterBadRequest(let message):
             return Copy(title: "\(cloud.service) couldn’t process this recording",
                         body: Self.oneLine(message) ?? "OpenRouter rejected the request.",

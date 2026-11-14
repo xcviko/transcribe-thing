@@ -79,7 +79,8 @@ struct KeyRepeat: Equatable, Sendable {
 ///   is no longer held, another key is pressed, a click comes, the dictation ends or the recorder captures. Add to
 ///   dictionary's is live the same way, on any model, always held as `.heldForSelection`: the controller reads what's
 ///   selected right then. Polish, Translate and Send are live the same way (`.polish`, `.translate`, `.send`); held
-///   down, their autorepeats are swallowed and say nothing: one press, one switch.
+///   down, their autorepeats flip them again (`.toggleRepeat`), each with its sound, as Switch model's step on; their
+///   release is `.toggleKeyUp`.
 /// - While dictations are only on their way (`Config.isProcessing`), Polish, Translate and Send stay live, with their
 ///   modifiers exactly (fn T, never a bare T): the controller gives them to the newest one. Nothing else of a dictation
 ///   is live then. The pill's buttons do the same with a click.
@@ -138,6 +139,8 @@ struct HotkeyRouter: Equatable, Sendable {
     private var firedModifierChords: Set<ShortcutAction> = []
     /// A modifier-only Switch model is held and its repeat timer runs: every tick steps on, as Tab's autorepeats do.
     private(set) var repeatsSwitchModel = false
+    /// Physical keys down that fired Polish, Translate or Send: their release is `.toggleKeyUp`.
+    private var toggleKeysDown: Set<UInt16> = []
 
     init() {}
 
@@ -304,10 +307,16 @@ struct HotkeyRouter: Equatable, Sendable {
         }
         if swallowedKeys.contains(physical) {
             decision.swallow = true
-            // The switch model key held down keeps stepping, at every autorepeat.
+            // The switch model key held down keeps stepping, and Polish's, Translate's and Send's keep flipping, at
+            // every autorepeat.
             if input.isRepeat, let switchModel = liveSwitchModel(config), switchModel.keyCode == key,
                matchesDuringDictation(switchModel, config.bindings) {
                 decision.events.append(.cycleEngineRepeat)
+            } else if input.isRepeat, toggleKeysDown.contains(physical),
+                      let toggle = liveDuringDictation(config).first(where: { action, shortcut in
+                          action.isToggle && shortcut.keyCode == key && matchesDuringDictation(shortcut, config.bindings)
+                      }) {
+                decision.events.append(.toggleRepeat(toggle.action))
             }
             return decision
         }
@@ -373,6 +382,7 @@ struct HotkeyRouter: Equatable, Sendable {
                 decision.events.append(.heldForSelection(action, KeyStroke(keyCode: physical, flags: input.flags,
                                                                            interruptsHold: offTheHold)))
             } else if let event = Self.event(for: action) {
+                if action.isToggle { toggleKeysDown.insert(physical) }
                 decision.events.append(event)
             }
             return decision
@@ -394,6 +404,7 @@ struct HotkeyRouter: Equatable, Sendable {
         }
         guard swallowedKeys.remove(physical) != nil else { return decision }
         decision.swallow = true
+        if toggleKeysDown.remove(physical) != nil { decision.events.append(.toggleKeyUp) }
         if gesture == .holdingKey(physical) {
             gesture = .idle
             decision.events.append(.pttUp)

@@ -150,7 +150,13 @@ import Testing
     }
 
     /// Push-to-talk held past the confirm delay.
+    /// Holds the talk key for a new dictation: over dictations on their way, the first press only aims at them, so a
+    /// second one records (`DictationController.aimsAtDictationsOnTheirWay`).
     static func hold(_ rig: Rig) {
+        if rig.h.controller.aimsAtDictationsOnTheirWay {
+            rig.h.controller.handle(.pttDown)
+            rig.h.controller.handle(.pttUp)
+        }
         rig.h.controller.handle(.pttDown)
         rig.h.controller.send(.timer(.arming))
     }

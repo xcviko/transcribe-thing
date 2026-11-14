@@ -243,7 +243,8 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
     }
 
     /// fn P, fn T and fn ↩ (a laptop's fn ↩ is Keypad Enter) are Polish, Translate and Send: swallowed, the hold going
-    /// on, one event a press however long it's held. Outside a dictation they're the app's.
+    /// on, held down they flip again at every autorepeat, and their release says so. Outside a dictation they're the
+    /// app's.
     @Test func fnPTAndReturnAreTheThree() {
         let cases: [(key: Int, event: HotkeyEvent)] = [
             (kVK_ANSI_P, .polish), (kVK_ANSI_T, .translate), (kVK_Return, .send), (kVK_ANSI_KeypadEnter, .send),
@@ -253,9 +254,11 @@ private func bindings(_ changes: [ShortcutAction: Shortcut?]) -> ShortcutBinding
             #expect(kb.press(.fn).events == [.pttDown])
             let pressed = kb.down(key, fnFlagged: true)
             #expect(pressed.events == [event] && pressed.swallow, "fn + key \(key)")
+            let action: ShortcutAction = event == .polish ? .polish : event == .translate ? .translate : .send
             let repeated = kb.down(key, isRepeat: true, fnFlagged: true)
-            #expect(repeated.events.isEmpty && repeated.swallow, "held down: one switch per press")
-            #expect(kb.up(key, fnFlagged: true).swallow)
+            #expect(repeated.events == [.toggleRepeat(action)] && repeated.swallow, "held down: it flips again")
+            let up = kb.up(key, fnFlagged: true)
+            #expect(up.swallow && up.events == [.toggleKeyUp])
             #expect(kb.release(.fn).events == [.pttUp], "the hold went on")
             let plain = kb.down(key)
             #expect(plain.events.isEmpty && !plain.swallow, "key \(key) outside a dictation")
@@ -2558,7 +2561,10 @@ private struct ClockedKeyboard {
             kb.press(.fn)
             let pressed = kb.down(key, fnFlagged: true)
             #expect(pressed.events == [event] && pressed.swallow, "fn + key \(key) while on their way")
-            kb.up(key, fnFlagged: true)
+            let action: ShortcutAction = event == .polish ? .polish : event == .translate ? .translate : .send
+            let repeated = kb.down(key, isRepeat: true, fnFlagged: true)
+            #expect(repeated.events == [.toggleRepeat(action)] && repeated.swallow, "held, it flips again")
+            #expect(kb.up(key, fnFlagged: true).events == [.toggleKeyUp])
             kb.release(.fn)
         }
         var kb = Keyboard(bindings: bindings)
@@ -2614,39 +2620,110 @@ private struct ClockedKeyboard {
 /// T, P and ↩ reach the app and nothing is sent again (the bug this fixes).
 @MainActor
 @Suite(.serialized) struct OldDictationKeysEndToEndTests {
-    /// fn P right as fn goes down, with fn the talk key and a Gemini dictation on its way: it's for that dictation,
-    /// which goes again polished, and the press only led to the key: no new recording is left behind.
+    /// fn over a Gemini dictation on its way records nothing: the press is aimed at it, its tray comes out, and fn P is
+    /// for it. It goes again polished once P is up, and fn's release leaves no
+    /// recording behind.
     @Test func fnPOverADictationOnItsWayPolishesIt() async throws {
         let first = RequestGate()
-        let (rig, _, requests) = ProcessingRig.make { _, prompt, number in
+        let (rig, cues, requests) = ProcessingRig.make { _, prompt, number in
             if number == 1 { try await first.wait() }
             return ProcessingRig.gemini(prompt)
         }
         let c = rig.h.controller
         ProcessingRig.dictate(rig)
         try await waitUntil { requests.gemini.count == 1 }
+        cues.played.removeAll()
         var kb = Keyboard(bindings: rig.h.settings.shortcuts)
         kb.config = rig.h.hotkeys.currentConfig()
         kb.press(.fn).events.forEach(c.handle)
-        #expect(c.machine.isRecording, "fn's press started a new dictation")
+        #expect(!c.machine.isRecording, "the press is aimed at the dictation on its way")
+        #expect(!cues.played.contains(.start), "no start sound: nothing records")
+        #expect(rig.h.pill.tray?.isAimed == true && rig.h.pill.showsTray(.bottom), "its tray is out")
+        #expect(rig.h.pill.tray?.keys == [.send: "fn ↩", .polish: "fn P", .translate: "fn T"],
+                "each button's shortcut, for the pointer on it")
         kb.config = rig.h.hotkeys.currentConfig()
         rig.now += 0.3
         let p = kb.down(kVK_ANSI_P, fnFlagged: true)
         #expect(p.events == [.polish])
         p.events.forEach(c.handle)
-        #expect(!c.machine.isRecording, "the press gave way to the key")
+        #expect(!c.machine.isRecording && cues.played == [.polishOn])
+        try await Task.sleep(for: .milliseconds(40))
+        #expect(requests.gemini.count == 1, "sent again only once P is up")
         kb.up(kVK_ANSI_P, fnFlagged: true).events.forEach(c.handle)
+        try await waitUntil { requests.gemini.count == 2 }
         kb.release(.fn).events.forEach(c.handle)
         #expect(!c.machine.isRecording)
-        try await waitUntil { requests.gemini.count == 2 }
+        #expect(rig.h.pill.tray?.isAimed != true, "a key of the press went: the aim is over at fn's release")
         #expect(requests.gemini[1] == Polish.prompt && first.wasCancelled)
         try await waitUntil { rig.pasted.count == 1 && c.machine.activeJobs == 0 }
         #expect(rig.pasted.first?.contains("Polished words") == true)
     }
 
-    /// fn P just after fn over a Parakeet dictation on its way can't polish it (only Gemini's are sent again): the new
-    /// recording isn't thrown away for nothing, the key is for it.
-    @Test func fnPOverAParakeetDictationKeepsTheNewRecording() async throws {
+    /// fn P held down over a Gemini dictation on its way flips Polish at every autorepeat, with its sound each time, and
+    /// one request goes when P is up, with what was picked last.
+    @Test func heldFnPFlipsPolishAndSendsOnce() async throws {
+        let first = RequestGate()
+        let (rig, cues, requests) = ProcessingRig.make { _, prompt, number in
+            if number == 1 { try await first.wait() }
+            return ProcessingRig.gemini(prompt)
+        }
+        let c = rig.h.controller
+        ProcessingRig.dictate(rig)
+        try await waitUntil { requests.gemini.count == 1 }
+        cues.played.removeAll()
+        var kb = Keyboard(bindings: rig.h.settings.shortcuts)
+        kb.config = rig.h.hotkeys.currentConfig()
+        kb.press(.fn).events.forEach(c.handle)
+        kb.config = rig.h.hotkeys.currentConfig()
+        kb.down(kVK_ANSI_P, fnFlagged: true).events.forEach(c.handle)
+        for _ in 0..<4 {
+            let again = kb.down(kVK_ANSI_P, isRepeat: true, fnFlagged: true)
+            #expect(again.events == [.toggleRepeat(.polish)] && again.swallow)
+            again.events.forEach(c.handle)
+        }
+        #expect(cues.played == [.polishOn, .polishOff, .polishOn, .polishOff, .polishOn])
+        try await Task.sleep(for: .milliseconds(40))
+        #expect(requests.gemini.count == 1, "nothing sent while P is held")
+        let up = kb.up(kVK_ANSI_P, fnFlagged: true)
+        #expect(up.events == [.toggleKeyUp])
+        up.events.forEach(c.handle)
+        try await waitUntil { requests.gemini.count == 2 }
+        kb.release(.fn).events.forEach(c.handle)
+        #expect(requests.gemini[1] == Polish.prompt, "five flips: Polish on")
+        try await Task.sleep(for: .milliseconds(40))
+        #expect(requests.gemini.count == 2, "one request for all the flips")
+        try await waitUntil { rig.pasted.count == 1 && c.machine.activeJobs == 0 }
+    }
+
+    /// fn ↩ held down over a dictation on its way flips Send at every autorepeat, each with Send's sound.
+    @Test func heldFnReturnFlipsSend() async throws {
+        let first = RequestGate()
+        let (rig, cues, requests) = ProcessingRig.make { _, prompt, number in
+            if number == 1 { try await first.wait() }
+            return ProcessingRig.gemini(prompt)
+        }
+        let c = rig.h.controller
+        ProcessingRig.dictate(rig)
+        try await waitUntil { requests.gemini.count == 1 }
+        cues.played.removeAll()
+        var kb = Keyboard(bindings: rig.h.settings.shortcuts)
+        kb.config = rig.h.hotkeys.currentConfig()
+        kb.press(.fn).events.forEach(c.handle)
+        kb.config = rig.h.hotkeys.currentConfig()
+        kb.down(kVK_Return, fnFlagged: true).events.forEach(c.handle)
+        for _ in 0..<2 { kb.down(kVK_Return, isRepeat: true, fnFlagged: true).events.forEach(c.handle) }
+        #expect(cues.played == [.sendOn, .sendOn, .sendOn])
+        #expect(rig.h.pill.tray?.sends == true, "three flips: Send on")
+        kb.up(kVK_Return, fnFlagged: true).events.forEach(c.handle)
+        kb.release(.fn).events.forEach(c.handle)
+        #expect(!c.machine.isRecording && requests.gemini.count == 1)
+        first.isOpen = true
+        try await waitUntil { rig.pasted.count == 1 && c.machine.activeJobs == 0 }
+    }
+
+    /// fn over a Parakeet dictation on its way is aimed at it too (Send works on any model): fn P does nothing to it,
+    /// and a tap then a second fn right after it records.
+    @Test func fnOverAParakeetDictationAimsForSendOnly() async throws {
         let gate = RequestGate()
         let (rig, _, requests) = ProcessingRig.make { _, _, _ in
             try await gate.wait()
@@ -2659,22 +2736,32 @@ private struct ClockedKeyboard {
         var kb = Keyboard(bindings: rig.h.settings.shortcuts)
         kb.config = rig.h.hotkeys.currentConfig()
         kb.press(.fn).events.forEach(c.handle)
-        #expect(c.machine.isRecording)
+        #expect(!c.machine.isRecording)
+        #expect(rig.h.pill.tray?.isAimed == true)
         kb.config = rig.h.hotkeys.currentConfig()
-        rig.now += 0.3
         kb.down(kVK_ANSI_P, fnFlagged: true).events.forEach(c.handle)
-        #expect(c.machine.isRecording, "the new recording goes on")
         kb.up(kVK_ANSI_P, fnFlagged: true).events.forEach(c.handle)
+        #expect(!c.machine.isRecording && rig.h.pill.tray?.polishes == false)
         kb.release(.fn).events.forEach(c.handle)
+        // A key went with that press, so the next one is aimed again; a tap and a second press record.
+        rig.now += 1
+        kb.config = rig.h.hotkeys.currentConfig()
+        kb.press(.fn).events.forEach(c.handle)
+        #expect(!c.machine.isRecording)
+        kb.release(.fn).events.forEach(c.handle)
+        rig.now += 0.2
+        kb.press(.fn).events.forEach(c.handle)
+        #expect(c.machine.isRecording, "the second press records")
+        c.handle(.cancel)
         gate.isOpen = true
         try await waitUntil { c.machine.activeJobs == 0 }
     }
 
-    /// fn P well into a new recording (fn held, words said) is for that recording, as always: the one on its way isn't
-    /// sent again.
-    @Test func fnPInANewRecordingIsForIt() async throws {
+    /// fn tapped over a dictation on its way, then pressed again within half a second: a new dictation, with the
+    /// start sound, and fn P in it is for it: the one on its way isn't sent again.
+    @Test func aSecondPressRecordsAndItsKeysAreItsOwn() async throws {
         let first = RequestGate()
-        let (rig, _, requests) = ProcessingRig.make { _, prompt, number in
+        let (rig, cues, requests) = ProcessingRig.make { _, prompt, number in
             if number == 1 { try await first.wait() }
             return ProcessingRig.gemini(prompt)
         }
@@ -2682,15 +2769,69 @@ private struct ClockedKeyboard {
         let c = rig.h.controller
         ProcessingRig.dictate(rig)
         try await waitUntil { requests.gemini.count == 1 }
+        cues.played.removeAll()
         var kb = Keyboard(bindings: rig.h.settings.shortcuts)
         kb.config = rig.h.hotkeys.currentConfig()
         kb.press(.fn).events.forEach(c.handle)
-        rig.now += DictationController.keyTakeoverWindow + 1
+        kb.release(.fn).events.forEach(c.handle)
+        #expect(!c.machine.isRecording && rig.h.pill.tray?.isAimed == true, "the tray waits for a second press")
+        rig.now += 0.3
+        kb.press(.fn).events.forEach(c.handle)
+        #expect(c.machine.isRecording && cues.played.contains(.start))
         kb.config = rig.h.hotkeys.currentConfig()
         kb.down(kVK_ANSI_P, fnFlagged: true).events.forEach(c.handle)
         #expect(c.machine.isRecording && c.isPolishing, "the new recording is polished")
         try await Task.sleep(for: .milliseconds(60))
         #expect(requests.gemini.count == 1 && !first.wasCancelled)
+        c.handle(.cancel)
+        first.isOpen = true
+    }
+
+    /// After the half second, the next fn is aimed again: nothing records.
+    @Test func afterTheWindowTheNextPressAimsAgain() async throws {
+        let first = RequestGate()
+        let (rig, _, requests) = ProcessingRig.make { _, prompt, number in
+            if number == 1 { try await first.wait() }
+            return ProcessingRig.gemini(prompt)
+        }
+        let c = rig.h.controller
+        ProcessingRig.dictate(rig)
+        try await waitUntil { requests.gemini.count == 1 }
+        var kb = Keyboard(bindings: rig.h.settings.shortcuts)
+        kb.config = rig.h.hotkeys.currentConfig()
+        kb.press(.fn).events.forEach(c.handle)
+        kb.release(.fn).events.forEach(c.handle)
+        rig.now += c.secondPressWindow + 0.1
+        kb.press(.fn).events.forEach(c.handle)
+        #expect(!c.machine.isRecording, "too late for a second press: aimed again")
+        kb.release(.fn).events.forEach(c.handle)
+        first.isOpen = true
+        try await waitUntil { rig.pasted.count == 1 && c.machine.activeJobs == 0 }
+        #expect(rig.h.pill.tray?.isAimed != true)
+    }
+
+    /// fn Space off an aimed press goes hands-free at once.
+    @Test func fnSpaceOverADictationOnItsWayGoesHandsFree() async throws {
+        let first = RequestGate()
+        let (rig, _, requests) = ProcessingRig.make { _, prompt, number in
+            if number == 1 { try await first.wait() }
+            return ProcessingRig.gemini(prompt)
+        }
+        let c = rig.h.controller
+        ProcessingRig.dictate(rig)
+        try await waitUntil { requests.gemini.count == 1 }
+        var kb = Keyboard(bindings: rig.h.settings.shortcuts)
+        kb.config = rig.h.hotkeys.currentConfig()
+        kb.press(.fn).events.forEach(c.handle)
+        kb.config = rig.h.hotkeys.currentConfig()
+        let space = kb.down(kVK_Space, fnFlagged: true)
+        #expect(space.events == [.handsFreeToggle])
+        space.events.forEach(c.handle)
+        c.send(.timer(.arming))
+        #expect(c.machine.isRecording && c.machine.mode == .handsFree)
+        kb.up(kVK_Space, fnFlagged: true).events.forEach(c.handle)
+        kb.release(.fn).events.forEach(c.handle)
+        #expect(c.machine.isRecording, "fn's release doesn't end it")
         c.handle(.cancel)
         first.isOpen = true
     }

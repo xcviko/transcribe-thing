@@ -897,8 +897,13 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
                     switch action.kind {
                     case .retry:
                         #expect(recordingID != nil, "\(error): Retry without retained audio")
-                    case .retryWith:
-                        Issue.record("\(error): a failure's Retry is always the same model")
+                    case .retryWith(let engine):
+                        // Only beside Retry, where the same model would likely fail again (Gemini's refusal).
+                        if case .openRouterRefused = error {
+                            #expect(recordingID != nil && fallback == engine)
+                        } else {
+                            Issue.record("\(error): a failure's Retry is always the same model")
+                        }
                     case .selectEngine(let engine):
                         #expect(recordingID == nil && fallback == engine)
                     default:
@@ -923,13 +928,26 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         let notice = AppError.timeout(.geminiFlash).notice(recordingID: UUID(), fallbackEngine: .parakeet)
         #expect(notice.actions.map(\.title) == ["Retry"])
         #expect(notice.actions.map(\.kind) == [.retry])
-        for error in [AppError.openRouterRefused("x"), .regionBlocked, .connectionBlocked, .offline] {
+        for error in [AppError.regionBlocked, .connectionBlocked, .offline] {
             #expect(error.notice(recordingID: UUID(), fallbackEngine: .parakeet).actions.map(\.kind) == [.retry],
                     "\(error.code)")
         }
         #expect(notice.style == .error)
         #expect(notice.sound == .error)
         #expect(notice.lifetime == .seconds(10))
+    }
+
+    /// Gemini's refusal would likely come again: beside Retry, the recording can go to Parakeet, once it's
+    /// downloaded (the controller passes it as the fallback only then).
+    @Test func aRefusalOffersParakeetBesideRetry() {
+        let refused = AppError.openRouterRefused("Gemini refused to complete this request")
+        let notice = refused.notice(recordingID: UUID(), fallbackEngine: .parakeet, engine: .geminiFlash)
+        #expect(notice.actions.map(\.title) == ["Retry", "Use Parakeet v3 Instead"])
+        #expect(notice.actions.map(\.kind) == [.retry, .retryWith(.parakeet)])
+        #expect(notice.actions.first?.isPrimary == true)
+        #expect(refused.notice(recordingID: UUID(), fallbackEngine: nil).actions.map(\.kind) == [.retry],
+                "no Parakeet on this Mac: Retry alone")
+        #expect(refused.notice(recordingID: nil, fallbackEngine: .parakeet).actions.isEmpty, "nothing saved to send")
     }
 
     /// No speech is news, not a failure: the quiet info notice, nothing to retry.

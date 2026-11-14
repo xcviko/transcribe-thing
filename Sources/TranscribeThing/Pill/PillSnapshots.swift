@@ -180,6 +180,9 @@ enum PillSnapshots {
             SnapshotEntry("pill-toast-error", width: 640, height: 270) { _ in
                 CanvasScene(model: .preview(phase: .error), notices: [PillSnapshotFixtures.keyRejected])
             },
+            SnapshotEntry("pill-toast-refused", width: 640, height: 270) { _ in
+                CanvasScene(model: .preview(phase: .error), notices: [PillSnapshotFixtures.refused])
+            },
             SnapshotEntry("pill-toast-cloud-speech", width: 640, height: 270) { _ in
                 CanvasScene(model: .preview(phase: .error), notices: [PillSnapshotFixtures.cloudSpeechRateLimited])
             },
@@ -314,6 +317,10 @@ enum PillSnapshotFixtures {
         .notice(recordingID: UUID(), fallbackEngine: .parakeet)
 
     /// A rate limit on Gemini 3.8 Flash offers Parakeet on this Mac.
+    /// Gemini's refusal, with Parakeet beside Retry.
+    static let refused = AppError.openRouterRefused("Gemini refused to complete this request.")
+        .notice(recordingID: UUID(), fallbackEngine: .parakeet, engine: .geminiFlash)
+
     static let cloudSpeechRateLimited = AppError.openRouterRateLimited(retryAfter: nil)
         .notice(recordingID: UUID(), fallbackEngine: .parakeet, engine: .geminiFlash)
 

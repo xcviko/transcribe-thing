@@ -266,14 +266,23 @@ private enum FilmScript {
             s.film("polish on (hands-free)") { s.model.polishes = true }
         },
         FilmScenario(name: "tray-open", mode: .always, area: CGSize(width: 340, height: 110),
-                     note: "The pointer on a Gemini dictation: the tray fans out, Polish goes on, the pointer leaves") { s in
+                     note: "The pointer on a Gemini dictation: the tray comes out, a hint, the next one's at once, "
+                         + "Polish goes on, the pointer leaves") { s in
+            let keys: [PillToggle: String] = [.send: "fn ↩", .polish: "fn P", .translate: "fn T"]
             s.record(.listening, on: .gemini)
-            s.model.tray = PillTrayState(dictation: .recording)
+            s.model.tray = PillTrayState(dictation: .recording, keys: keys)
             s.wait(0.6)
             s.film("pointer on the pill: the tray opens", for: 0.7) { s.model.setPointerOverTray(.bottom) }
+            s.film("pointer on Send: its hint after a moment", for: 0.8) {
+                s.model.setHoveredTrayButton(PillTrayButton(owner: .bottom, toggle: .send))
+            }
+            s.film("over to Polish: its hint at once", for: 0.4) {
+                s.model.setHoveredTrayButton(nil)
+                s.model.setHoveredTrayButton(PillTrayButton(owner: .bottom, toggle: .polish))
+            }
             s.film("Polish clicked") {
                 s.model.polishes = true
-                s.model.tray = PillTrayState(dictation: .recording, polishes: true)
+                s.model.tray = PillTrayState(dictation: .recording, polishes: true, keys: keys)
             }
             s.film("pointer gone: the tray folds", for: 0.9) { s.model.setPointerOverTray(nil) }
         },
@@ -298,6 +307,21 @@ private enum FilmScript {
             }
             s.wait(0.4)
             s.film("the first is pasted: the stack closes", for: 0.7) { s.model.setStack([item(second)]) }
+        },
+        FilmScenario(name: "stack-descend", mode: .always, area: CGSize(width: 300, height: 210),
+                     note: "Three on their way; Esc cancels the newest, on the bottom pill: the next comes down onto it") { s in
+            let oldest = UUID(), next = UUID(), newest = UUID()
+            func item(_ key: UUID) -> PillStackItem {
+                PillStackItem(key: key, choice: .gemini, tray: PillTrayState(dictation: .processing(key)))
+            }
+            s.process(on: .gemini)
+            s.model.tray = PillTrayState(dictation: .processing(newest))
+            s.model.setStack([item(next), item(oldest)])
+            s.wait(0.8)
+            s.film("Esc: the newest goes, the next comes down onto the bottom pill", for: 0.7) {
+                s.model.tray = PillTrayState(dictation: .processing(next))
+                s.model.setStack([item(oldest)])
+            }
         },
         FilmScenario(name: "error-glyph-to-listening", mode: .always,
                      note: "An error flash from rest, then fn within its hold") { s in

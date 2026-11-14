@@ -33,6 +33,9 @@ A "tongue click": pitch-dropping mouth pops (tongue voice), bodies 120-260 Hz, 1
   sendOn   an airy flick up: a breath of noise swelling up 380 -> 1200 Hz for 95 ms, flicked off by a tongue pop
                gliding up 210 -> 360 Hz at its crest (58 ms), 155 ms, -15 dBFS, as loud as polishOn (off is polishOff)
                (only this set has them: Polish came after the others were picked)
+  pasteHeld / pasteTakenBack  three tiny tongue ticks rolling down 345 -> 292 -> 248 Hz, or up the same steps, 32 ms
+               apart, each a little louder than the last, 114 ms, -18 dBFS: a click away holds a dictation's paste (its
+               pill turns dashed), and a click on the dashed pill takes it back
 
 B "low wood block": modal knocks, fundamentals 155-290 Hz, tau 11-19 ms, low-passed at 1.5-2 kHz, a faint sub thump.
   start    block 280 Hz, 90 ms                          stop     duller block 215 Hz sagging 1.5 semitones, 105 ms
@@ -529,6 +532,25 @@ def a_send_on():
     return finish(c.buf, -15, lowpass_hz=2200, fade_out_ms=16)
 
 
+def a_ticks(freqs, seed):
+    """Three tiny tongue ticks in a row, 32 ms apart, each a touch louder: pasteHeld down, pasteTakenBack up."""
+    gap = 0.032
+    c = Canvas(gap * (len(freqs) - 1) + 0.050)
+    for k, f in enumerate(freqs):
+        c.add(gap * k, tongue(f, f * 0.68, glide_s=0.007, tau=0.0042, seconds=0.040, h2_db=-14.0,
+                              cavity=(2.5, -10.0, 0.002), click_db=-18.0, seed=seed + k),
+              gain=0.75 + 0.25 * k / (len(freqs) - 1))
+    return finish(c.buf, -18, lowpass_hz=1700, fade_out_ms=8)
+
+
+def a_paste_held():
+    return a_ticks((345.0, 292.0, 248.0), seed=603)
+
+
+def a_paste_taken_back():
+    return a_ticks((248.0, 292.0, 345.0), seed=633)
+
+
 def a_alert():
     c = Canvas(0.250)
     c.add(0.000, tongue(215.0, 196.0, glide_s=0.010, tau=0.022, seconds=0.140, h2_db=-16.0,
@@ -724,7 +746,8 @@ SETS = {
     "A": {"start": a_start, "stop": a_stop, "lock": a_lock, "paste": a_paste,
           "cancel": a_cancel, "alert": a_alert, "error": a_error, "success": a_success,
           "modelSwitch": a_model_switch, "polishOn": a_polish_on, "polishOff": a_polish_off,
-          "polishReady": a_polish_ready, "dictionaryAdded": a_dictionary_added, "sendOn": a_send_on},
+          "polishReady": a_polish_ready, "dictionaryAdded": a_dictionary_added, "sendOn": a_send_on,
+          "pasteHeld": a_paste_held, "pasteTakenBack": a_paste_taken_back},
     "B": {"start": b_start, "stop": b_stop, "lock": b_lock, "paste": b_paste,
           "cancel": b_cancel, "alert": b_alert, "error": b_error, "success": b_success,
           "modelSwitch": b_model_switch},
