@@ -24,21 +24,24 @@ enum ReasoningEffort: String, Codable, CaseIterable, Sendable {
 
 extension EngineID {
     /// The levels the model can be asked to think at (the Reasoning menu on its row in Models): Low, Medium and High
-    /// for Gemini. Neither Gemini model is offered Minimal (the user's endpoint sends it as Low) nor None (Gemini 3.8
-    /// Flash can't turn thinking off). Empty for models that don't reason, and for a retired one, which never runs.
+    /// for Gemini. No Gemini model is offered Minimal (the user's endpoint sends it as Low, and Gemini 4 Hydrogen
+    /// refuses it: "Thinking level is unsupported") nor None (Gemini 3.8 Flash can't turn thinking off). Empty for
+    /// models that don't reason, and for a retired one, which never runs.
     var reasoningEfforts: [ReasoningEffort] {
         switch self {
-        case .geminiFlash, .geminiCarbon: [.low, .medium, .high]
+        case .geminiFlash, .geminiHydrogen, .geminiCarbon: [.low, .medium, .high]
         case .parakeet, .gigaam, .parakeetCloud, .geminiArgon, .geminiPro: []
         }
     }
 
     /// The level the model thinks at until another is picked, each model its own: medium for Gemini 3.8 Flash (at high
     /// it thought for about 18k tokens, 76 s, on a 1:48 recording), low for Gemini 4 Carbon, which is slower and
-    /// dearer to begin with. nil for models that don't reason.
+    /// dearer to begin with, and medium for Gemini 4 Hydrogen: at low it answered about twice as fast but left about
+    /// 2.8 times as many filler words and repeats, which the prompt has it clean while it thinks (measured on the
+    /// user's dictations). nil for models that don't reason.
     var defaultReasoningEffort: ReasoningEffort? {
         switch self {
-        case .geminiFlash: .medium
+        case .geminiFlash, .geminiHydrogen: .medium
         case .geminiCarbon: .low
         case .parakeet, .gigaam, .parakeetCloud, .geminiArgon, .geminiPro: nil
         }
@@ -48,7 +51,7 @@ extension EngineID {
 /// The level each Gemini model thinks at, picked in Models (`AppSettings.reasoningEfforts`). Every request to the
 /// model goes at its level: dictation, Polish, Translate, file imports, History's versions. One JSON object
 /// under `SettingsKey.geminiReasoningEfforts`, keyed by `EngineID` raw value:
-/// {"geminiCarbon":"low","geminiFlash":"medium"}.
+/// {"geminiCarbon":"low","geminiFlash":"medium","geminiHydrogen":"medium"}.
 struct ReasoningEfforts: Equatable, Sendable {
     private var levels: [EngineID: ReasoningEffort] = [:]
 

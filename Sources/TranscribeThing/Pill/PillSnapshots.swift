@@ -79,7 +79,7 @@ enum PillSnapshots {
                 ])
             },
             // Models (`--only pill-models`): the chip, the tint, the hint and the no-key notice.
-            SnapshotEntry("pill-models", width: 760, height: 44 + 18 * 92) { _ in PillModelSheet() },
+            SnapshotEntry("pill-models", width: 760, height: 44 + 22 * 92) { _ in PillModelSheet() },
             SnapshotEntry("pill-polish", width: 760, height: 44 + 8 * 92) { _ in PolishSheet() },
             // Send (`--only pill-send`): the plane right of the bars, the wave and the count, alone and with Polish.
             SnapshotEntry("pill-send", width: 760, height: 44 + 10 * 92) { _ in
@@ -107,7 +107,7 @@ enum PillSnapshots {
                 CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.clickedAwayPolished])
             },
             // fn ⇥ while the chip is up: its names roll on, frame by frame of the spring.
-            SnapshotEntry("pill-chip-roll", width: 2040, height: 270) { _ in ChipRollSheet() },
+            SnapshotEntry("pill-chip-roll", width: 2040, height: 335) { _ in ChipRollSheet() },
             // Polish clicked on Parakeet with nothing selected: it says Polish is Gemini's, and the dictation goes on.
             SnapshotEntry("pill-polish-gemini-only", width: 640, height: 150) { _ in
                 CanvasScene(model: polishGeminiOnlyModel(), notices: [])
@@ -785,6 +785,19 @@ private struct PillModelSheet: View {
                 Self.model(.processing, choice: .gemini, chip: false)
                     .previewCounter(PillTokenCount(phase: .writing, tokens: 17_700))
             },
+            Row(id: "hydrogen", caption: "Push-to-talk · Gemini 4 Hydrogen") {
+                Self.model(.listening, choice: .hydrogen)
+            },
+            Row(id: "hydrogen-later", caption: "Gemini 4 Hydrogen · chip gone") {
+                Self.model(.listening, choice: .hydrogen, chip: false)
+            },
+            Row(id: "locked-hydrogen", caption: "Hands-free · Gemini 4 Hydrogen") {
+                Self.model(.locked, choice: .hydrogen, level: 0.5)
+            },
+            Row(id: "processing-thinking-hydrogen", caption: "Thinking · Gemini 4 Hydrogen") {
+                Self.model(.processing, choice: .hydrogen, chip: false)
+                    .previewCounter(PillTokenCount(phase: .thinking, tokens: 3_100))
+            },
             Row(id: "carbon", caption: "Push-to-talk · Gemini 4 Carbon") { Self.model(.listening, choice: .carbon) },
             Row(id: "carbon-later", caption: "Gemini 4 Carbon · chip gone") {
                 Self.model(.listening, choice: .carbon, chip: false)
@@ -1247,7 +1260,8 @@ private struct PillStateSheet: View {
 /// The chip's roll between two models, every 40 ms of its spring (`PillChipRoll`), on the pill's dark ground.
 private struct ChipRollSheet: View {
     private let settings = AppSettings.inMemory()
-    private let rolls: [(ModelChoice, ModelChoice)] = [(.parakeet, .gemini), (.gemini, .carbon), (.carbon, .parakeet)]
+    private let rolls: [(ModelChoice, ModelChoice)] = [(.parakeet, .gemini), (.gemini, .hydrogen), (.hydrogen, .carbon),
+                                                       (.carbon, .parakeet)]
     private let times = Array(0...9).map { Double($0) * 0.04 }
 
     var body: some View {

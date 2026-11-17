@@ -72,6 +72,8 @@ manager may still keep the selected text.
   European languages by itself.
 - **Gemini 3.8 Flash** runs in the cloud and is very accurate. It thinks before it writes, so it's slower than
   Parakeet.
+- **Gemini 4 Hydrogen** runs in the cloud too: Google's newer model in Flash's class. It's faster than Flash on long
+  dictations and costs about twice as much per token.
 - **Gemini 4 Carbon** runs in the cloud too: Google's newest. It's slower than Flash and costs about 2.7 times as
   much. When Google is busy, it can take a few minutes to start answering.
 - **GigaAM** runs on your Mac, free and offline, like Parakeet: Sber's model for Russian. Pick one of three versions
@@ -79,7 +81,7 @@ manager may still keep the selected text.
   Multilingual also hears English, Kazakh, Kyrgyz and Uzbek, without punctuation. Each version is its own download
   (about 410 MB, 1.1 GB for Multilingual).
 
-Carbon and GigaAM are off until you switch them on in Models.
+Hydrogen, Carbon and GigaAM are off until you switch them on in Models.
 
 On Gemini, press fn P (or click the wand on the pill) and it pastes the message you meant, without the false starts,
 detours and repeats. Press fn T (or click Translate) and it pastes what you said in the other language. Russian becomes English and English becomes
@@ -92,9 +94,9 @@ In Models:
 
 - **Your models** picks the model every dictation starts on (the dot), which models fn ⇥ steps through while you talk
   (the switches, in the order of the list, which you can drag), and each one's pill color. Each Gemini's row also
-  has a Reasoning menu, under its name: how long it thinks before it writes, Low, Medium or High (Flash starts on
-  Medium, Carbon on Low). Higher is slower and costs more. It applies to everything that model does: dictations,
-  Polish, Translate, files and History. GigaAM's row has a Version menu instead.
+  has a Reasoning menu, under its name: how long it thinks before it writes, Low, Medium or High (Flash and Hydrogen
+  start on Medium, Carbon on Low). Higher is slower and costs more. It applies to everything that model does:
+  dictations, Polish, Translate, files and History. GigaAM's row has a Version menu instead.
 - **Hands-free** picks the model fn Space starts on.
 - **On this Mac** downloads Parakeet and the GigaAM version you picked, and shows how they're doing. Every GigaAM
   version you've downloaded stays listed with its size until you delete it. Delete Parakeet there once it's neither
@@ -122,8 +124,9 @@ For Custom endpoint, enter its base URL (the one that ends in `/v1`, like `https
 key. A URL without a path is read as `<address>/api/v1`, so an endpoint saved by its address alone keeps working. The
 app checks the key without spending anything and says whether it works. Until both are saved, Gemini shows "Needs
 endpoint". The endpoint gets the same request OpenRouter would, audio included, with OpenRouter's model name
-(`google/gemini-3.8-flash`, `google/gemini-4-carbon`), so it has to accept those names. If it fails, the error says it
-came from your endpoint. Costs in History are what your endpoint reports, and History names it by its address.
+(`google/gemini-3.8-flash`, `google/gemini-4-hydrogen`, `google/gemini-4-carbon`), so it has to accept those names. If
+it fails, the error says it came from your endpoint. Costs in History are what your endpoint reports, and History names
+it by its address.
 
 If you had an endpoint set up with "Use for Gemini" on, Custom endpoint is picked for you. Everyone else starts on
 OpenRouter.

@@ -211,14 +211,16 @@ private let historyFile = #"""
         #expect(!EngineID.offered.contains(.geminiPro))
         #expect(!EngineID.offered.contains(.parakeetCloud))
         #expect(!EngineID.offered.contains(.geminiArgon))
-        #expect(EngineID.geminiEngines == [.geminiFlash, .geminiCarbon])
-        #expect(TranscriptVersionKind.rewrites == [.polish(by: .geminiFlash), .polish(by: .geminiCarbon),
+        #expect(EngineID.geminiEngines == [.geminiFlash, .geminiHydrogen, .geminiCarbon])
+        #expect(TranscriptVersionKind.rewrites == [.polish(by: .geminiFlash), .polish(by: .geminiHydrogen),
+                                                   .polish(by: .geminiCarbon),
                                                    .translation(polished: false, by: .geminiFlash),
+                                                   .translation(polished: false, by: .geminiHydrogen),
                                                    .translation(polished: false, by: .geminiCarbon)])
         #expect(AppSettings.inMemory().lineup.cycle.map { $0.engine }
                 == [.parakeet, .geminiFlash])
         #expect(ModelLineup.default.order == ModelChoice.allCases
-                && ModelChoice.allCases == [.parakeet, .gemini, .carbon, .gigaam])
+                && ModelChoice.allCases == [.parakeet, .gemini, .hydrogen, .carbon, .gigaam])
         for engine in EngineID.allCases {
             #expect(DictationController.fallbackCandidates(for: engine).allSatisfy { !$0.isRetired })
         }
@@ -227,8 +229,8 @@ private let historyFile = #"""
         #expect(ImportChoices.make(main: .geminiFlash) { _ in .ready }.allSatisfy { !$0.kind.engine.isRetired })
     }
 
-    /// `--engine` takes the models the app runs: Parakeet, GigaAM, Gemini 3.8 Flash and Gemini 4 Carbon, by any
-    /// spelling. The retired ones are no engine at all.
+    /// `--engine` takes the models the app runs: Parakeet, GigaAM, Gemini 3.8 Flash, Gemini 4 Hydrogen and Gemini 4
+    /// Carbon, by any spelling. The retired ones are no engine at all.
     @Test func theCLITakesOnlyTheModelsTheAppRuns() {
         func options(_ extra: String...) -> EngineCLI.Options? {
             EngineCLI.Options(["transcribe-thing", "--transcribe", "/tmp/memo.m4a"] + extra)
@@ -240,10 +242,10 @@ private let historyFile = #"""
             #expect(options("--engine", retired) == nil, "\(retired)")
         }
         #expect(options("--engine", "parakeetCloud", "--speech-model", "openai/whisper") == nil)
-        #expect(EngineCLI.Options.usage.contains("--engine parakeet|gigaam|geminiFlash|geminiCarbon "))
+        #expect(EngineCLI.Options.usage.contains("--engine parakeet|gigaam|geminiFlash|geminiHydrogen|geminiCarbon "))
         #expect(!EngineCLI.Options.usage.contains("parakeetCloud") && !EngineCLI.Options.usage.contains("Argon"))
         let lines = EngineCLI.cloudModelLines()
-        #expect(lines.count == 2 && !lines.joined().contains("argon"))
+        #expect(lines.count == 3 && !lines.joined().contains("argon"))
         #expect(lines[0].hasPrefix("geminiFlash") && lines[0].contains("google/gemini-3.8-flash"))
         #expect(lines[0].hasSuffix("effort low|medium|high (default medium)"))
     }
@@ -384,12 +386,14 @@ private let argonHistoryFile = #"""
         }
     }
 
-    /// Whatever is made from an Argon row now is a model's this build runs (Gemini 3.8 Flash, Gemini 4 Carbon, Parakeet
-    /// or GigaAM), never Argon's: Transcribe With, Polish and Translate, and a failed row's Retry With.
+    /// Whatever is made from an Argon row now is a model's this build runs (Gemini 3.8 Flash, Gemini 4 Hydrogen, Gemini
+    /// 4 Carbon, Parakeet or GigaAM), never Argon's: Transcribe With, Polish and Translate, and a failed row's Retry
+    /// With.
     @Test func nothingMadeFromAnArgonRowIsArgons() throws {
         let entries = try entries()
         let ready: (EngineID) -> EngineReadiness = { _ in .ready }
-        let geminis: [TranscriptVersionKind] = [.transcription(.geminiFlash), .transcription(.geminiCarbon)]
+        let geminis: [TranscriptVersionKind] = [.transcription(.geminiFlash), .transcription(.geminiHydrogen),
+                                                .transcription(.geminiCarbon)]
         let rewrites = TranscriptVersionKind.rewrites
         let argon = VersionsMenu.make(for: entries[0], running: nil, readiness: ready)
         #expect(argon.versions.map(\.kind) == [.transcription(.geminiArgon)])
@@ -496,24 +500,25 @@ private let argonHistoryFile = #"""
 
             let settings = load(defaults)
             #expect(settings.lineup.main == .parakeet
-                    && settings.lineup.order == [.parakeet, .gemini, .carbon, .gigaam])
+                    && settings.lineup.order == [.parakeet, .gemini, .hydrogen, .carbon, .gigaam])
             #expect(settings.lineup.steps == [.gemini], "fn ⇥ steps to Flash where it stepped to Argon, not to Carbon")
             #expect(settings.handsFreeModel == .gemini && settings.handsFreeChoice == .gemini)
             #expect(settings.reasoningEffort(for: .geminiFlash) == .low && settings.reasoningEffort(for: .geminiArgon) == nil)
             #expect(settings.modelColors[.gemini] == .orange && settings.modelColors[.parakeet] == .graphite)
-            #expect(settings.modelsAddingSpace == [.gemini, .carbon], "Carbon starts with Flash's checks")
+            #expect(settings.modelsAddingSpace == [.gemini, .hydrogen, .carbon], "Carbon and Hydrogen start with Flash's checks")
             #expect(settings.modelsRemovingFinalPeriod == [.parakeet, .gigaam],
                     "Flash keeps its own checks, not Argon's; GigaAM starts with Parakeet's")
             #expect(settings.modelColors[.carbon] == .blue, "Carbon doesn't take Argon's color")
 
             // Stored as this build reads it: nothing names Argon any more.
             #expect(stored(defaults, .lineup)
-                    == #"{"main":"parakeet","order":["parakeet","gemini","carbon","gigaam"],"switchable":["parakeet","gemini"]}"#)
+                    == #"{"main":"parakeet","order":["parakeet","gemini","hydrogen","carbon","gigaam"],"switchable":["parakeet","gemini"]}"#)
             #expect(stored(defaults, .handsFreeModel) == "gemini")
-            #expect(stored(defaults, .geminiReasoningEfforts) == #"{"geminiCarbon":"low","geminiFlash":"low"}"#)
+            #expect(stored(defaults, .geminiReasoningEfforts)
+                    == #"{"geminiCarbon":"low","geminiFlash":"low","geminiHydrogen":"medium"}"#)
             #expect(stored(defaults, .modelColors)
-                    == #"{"carbon":"blue","gemini":"orange","gigaam":"green","parakeet":"graphite"}"#)
-            #expect(stored(defaults, .modelsAddingSpace) == #"["gemini","carbon"]"#)
+                    == #"{"carbon":"blue","gemini":"orange","gigaam":"green","hydrogen":"pink","parakeet":"graphite"}"#)
+            #expect(stored(defaults, .modelsAddingSpace) == #"["gemini","hydrogen","carbon"]"#)
             #expect(stored(defaults, .modelsRemovingFinalPeriod) == #"["parakeet","gigaam"]"#)
             #expect(defaults.object(forKey: SettingsKey.argonPastingAdded.defaultsKey) == nil)
 
@@ -530,11 +535,11 @@ private let argonHistoryFile = #"""
             defaults.set("argon", forKey: SettingsKey.handsFreeModel.defaultsKey)
             let settings = load(defaults)
             #expect(settings.lineup.main == .gemini && settings.mainEngine == .geminiFlash)
-            #expect(settings.lineup.order == [.parakeet, .gemini, .carbon, .gigaam])
+            #expect(settings.lineup.order == [.parakeet, .gemini, .hydrogen, .carbon, .gigaam])
             #expect(settings.lineup.cycle == [.gemini, .parakeet])
             #expect(settings.handsFreeChoice == nil, "hands-free on Argon, the main model, is on the main model still")
             #expect(stored(defaults, .lineup)
-                    == #"{"main":"gemini","order":["parakeet","gemini","carbon","gigaam"],"switchable":["parakeet"]}"#)
+                    == #"{"main":"gemini","order":["parakeet","gemini","hydrogen","carbon","gigaam"],"switchable":["parakeet"]}"#)
         }
     }
 
@@ -542,14 +547,14 @@ private let argonHistoryFile = #"""
     @Test func argonSwitchedOnSwitchesFlashOn() throws {
         let lineup = try JSONDecoder().decode(ModelLineup.self, from: Data(
             #"{"main":"parakeet","order":["gemini","parakeet","argon"],"switchable":["argon"]}"#.utf8))
-        #expect(lineup.order == [.gemini, .parakeet, .carbon, .gigaam] && lineup.steps == [.gemini])
+        #expect(lineup.order == [.gemini, .parakeet, .hydrogen, .carbon, .gigaam] && lineup.steps == [.gemini])
         let off = try JSONDecoder().decode(ModelLineup.self, from: Data(
             #"{"main":"parakeet","order":["parakeet","gemini","argon"],"switchable":[]}"#.utf8))
         #expect(off.steps.isEmpty, "Argon switched off switches nothing on")
     }
 
-    /// A level picked for Argon alone leaves Flash at Medium (and Carbon at its Low), and Argon takes no level any
-    /// more.
+    /// A level picked for Argon alone leaves Flash at Medium (Hydrogen at its Medium, Carbon at its Low), and Argon
+    /// takes no level any more.
     @Test func anArgonLevelIsIgnored() throws {
         try withDefaults { defaults in
             store(defaults, #"{"geminiArgon":"high"}"#, .geminiReasoningEfforts)
@@ -558,7 +563,8 @@ private let argonHistoryFile = #"""
             #expect(settings.reasoningEfforts == .default)
             settings.reasoningEfforts[.geminiArgon] = .high
             #expect(settings.reasoningEffort(for: .geminiArgon) == nil)
-            #expect(stored(defaults, .geminiReasoningEfforts) == #"{"geminiCarbon":"low","geminiFlash":"medium"}"#)
+            #expect(stored(defaults, .geminiReasoningEfforts)
+                    == #"{"geminiCarbon":"low","geminiFlash":"medium","geminiHydrogen":"medium"}"#)
         }
     }
 

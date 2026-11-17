@@ -397,11 +397,14 @@ import Testing
         #expect(m.title == "Versions" && !m.isRetry && m.runningTitle == nil)
         #expect(m.versions == [VersionsMenu.Version(kind: .transcription(.parakeet), summary: "0.4 s", isCurrent: true)])
         #expect(m.actions.map(\.kind) == [.transcription(.gigaam), .transcription(.geminiFlash),
-                                          .transcription(.geminiCarbon)] + TranscriptVersionKind.rewrites)
+                                          .transcription(.geminiHydrogen), .transcription(.geminiCarbon)]
+                + TranscriptVersionKind.rewrites)
         #expect(m.actions.allSatisfy { $0.isEnabled })
-        #expect(m.actions.map(\.title) == ["GigaAM", "Gemini 3.8 Flash", "Gemini 4 Carbon",
-                                           "Polish with Gemini 3.8 Flash", "Polish with Gemini 4 Carbon",
-                                           "Translate with Gemini 3.8 Flash", "Translate with Gemini 4 Carbon"])
+        #expect(m.actions.map(\.title) == ["GigaAM", "Gemini 3.8 Flash", "Gemini 4 Hydrogen", "Gemini 4 Carbon",
+                                           "Polish with Gemini 3.8 Flash", "Polish with Gemini 4 Hydrogen",
+                                           "Polish with Gemini 4 Carbon",
+                                           "Translate with Gemini 3.8 Flash", "Translate with Gemini 4 Hydrogen",
+                                           "Translate with Gemini 4 Carbon"])
     }
 
     @Test func aModelAlreadyUsedIsAVersionNotAnAction() {
@@ -413,7 +416,8 @@ import Testing
         #expect(m.versions.map(\.kind) == [.transcription(.parakeet), .transcription(.geminiFlash), flashLite])
         #expect(m.versions.map(\.isCurrent) == [false, true, false])
         #expect(m.versions[1].summary == "3.0 s · $0.002")
-        #expect(m.actions.map(\.kind) == [.transcription(.gigaam), .transcription(.geminiCarbon)]
+        #expect(m.actions.map(\.kind) == [.transcription(.gigaam), .transcription(.geminiHydrogen),
+                                          .transcription(.geminiCarbon)]
                 + TranscriptVersionKind.rewrites, "no clean-up, ever")
     }
 
@@ -453,10 +457,13 @@ import Testing
 
     @Test func withoutAKeyCloudActionsSaySo() {
         let m = menu(transcript(.parakeet), key: .missing)
-        #expect(m.actions.map(\.title) == ["GigaAM", "Gemini 3.8 Flash · Needs key", "Gemini 4 Carbon · Needs key",
+        #expect(m.actions.map(\.title) == ["GigaAM", "Gemini 3.8 Flash · Needs key",
+                                           "Gemini 4 Hydrogen · Needs key", "Gemini 4 Carbon · Needs key",
                                            "Polish with Gemini 3.8 Flash · Needs key",
+                                           "Polish with Gemini 4 Hydrogen · Needs key",
                                            "Polish with Gemini 4 Carbon · Needs key",
                                            "Translate with Gemini 3.8 Flash · Needs key",
+                                           "Translate with Gemini 4 Hydrogen · Needs key",
                                            "Translate with Gemini 4 Carbon · Needs key"])
         #expect(action(menu(transcript(.parakeetCloud), key: .invalid("401")), .transcription(.geminiFlash))?.title
                 == "Gemini 3.8 Flash · Key rejected")

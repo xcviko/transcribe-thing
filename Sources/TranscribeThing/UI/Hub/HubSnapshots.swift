@@ -27,6 +27,11 @@ enum HubSnapshots {
                 c.settings.lineup.setSwitchable(.carbon, true)
                 c.settings.reasoningEfforts[.geminiCarbon] = .high
             },
+            // The narrowest window with Gemini 4 Hydrogen switched on and thinking at High.
+            hub("hub-models-compact-hydrogen", .models, width: 820, height: 1100) { c in
+                c.settings.lineup.setSwitchable(.hydrogen, true)
+                c.settings.reasoningEfforts[.geminiHydrogen] = .high
+            },
             hub("hub-home-search", .home) { c in
                 c.initialSearch = "zzz"
             },
@@ -111,6 +116,10 @@ enum HubSnapshots {
             hub("hub-home-carbon", .home, height: 900) { c in
                 c.history = .preview(entries: Samples.carbonEntries() + c.history.entries)
             },
+            // Dictations by Gemini 4 Hydrogen, one polished: its H glyph in Hydrogen's pink.
+            hub("hub-home-hydrogen", .home, height: 900) { c in
+                c.history = .preview(entries: Samples.hydrogenEntries() + c.history.entries)
+            },
             // GigaAM as the main model, in v3 e2e, and dictations by two of its versions: its G glyph in its green.
             hub("hub-home-gigaam", .home, height: 900) { c in
                 c.settings.gigaamVariant = .v3e2e
@@ -128,6 +137,16 @@ enum HubSnapshots {
                 c.settings.lineup.setSwitchable(.carbon, true)
                 c.settings.handsFreeModel = .carbon
                 c.settings.reasoningEfforts[.geminiFlash] = .high
+            },
+            // Gemini 4 Hydrogen switched on, thinking at its default (Medium), and hands-free's model; Flash at Low.
+            hub("hub-models-hydrogen", .models, height: 1100) { c in
+                c.settings.lineup.setSwitchable(.hydrogen, true)
+                c.settings.handsFreeModel = .hydrogen
+                c.settings.reasoningEfforts[.geminiFlash] = .low
+            },
+            // Gemini 4 Hydrogen as the main model: Parakeet gets a switch, and Parakeet and Flash stay in the cycle.
+            hub("hub-models-main-hydrogen", .models, height: 1100) { c in
+                c.settings.lineup.main = .hydrogen
             },
             hub("hub-models-downloading", .models) { c in
                 c.models = .preview(states: [.parakeet: .downloading(Samples.downloading)])
@@ -363,9 +382,9 @@ enum HubSnapshots {
                 c.settings.dictionary = dictionary
             },
             hub("hub-dictionary-empty", .dictionary, height: 560),
-            // Pasting set per model: quick Parakeet and GigaAM searches go in bare, Flash and Carbon get a space after.
+            // Pasting set per model: quick Parakeet and GigaAM searches go in bare, the Geminis get a space after.
             hub("hub-general", .general, height: 1080) { c in
-                c.settings.modelsAddingSpace = [.gemini, .carbon]
+                c.settings.modelsAddingSpace = [.gemini, .hydrogen, .carbon]
                 c.settings.modelsRemovingFinalPeriod = [.parakeet, .gigaam]
                 c.settings.modesRemovingFinalPeriod = [.pushToTalk]
             },
@@ -385,9 +404,9 @@ enum HubSnapshots {
                 c.settings.pillMode = .always
                 c.settings.soundsEnabled = false
             },
-            // The narrowest window: Pasting's chips still fit under each rule, a column for each of the four models.
+            // The narrowest window: Pasting's chips still fit under each rule, a column for each of the five models.
             hub("hub-general-pasting-compact", .general, width: 820, height: 1080) { c in
-                c.settings.modelsAddingSpace = [.gemini, .carbon]
+                c.settings.modelsAddingSpace = [.gemini, .hydrogen, .carbon]
                 c.settings.modelsRemovingFinalPeriod = [.parakeet, .gigaam]
                 c.settings.modesRemovingFinalPeriod = [.pushToTalk]
             },
@@ -532,6 +551,24 @@ enum HubSnapshots {
                       .transcription(.geminiCarbon), ago: 40),
                 entry("Could you send the draft by Thursday? I’d like to go through it before the review.",
                       .polish(by: .geminiCarbon), ago: 150),
+            ]
+        }
+
+        /// Dictations by Gemini 4 Hydrogen: a transcript at its default Medium, and a polish.
+        static func hydrogenEntries() -> [TranscriptEntry] {
+            let now = Date()
+            func entry(_ text: String, _ kind: TranscriptVersionKind, ago: TimeInterval) -> TranscriptEntry {
+                var result = TranscriptResult(text: text, engine: kind.engine, processingTime: 6.1)
+                result.reasoningEffort = .medium
+                return TranscriptEntry(createdAt: now.addingTimeInterval(-ago), engine: kind.engine,
+                                       audioDuration: 48.6, voicedSeconds: 41.9, audioFileName: "hydrogen.m4a",
+                                       versions: [result.version(kind)])
+            }
+            return [
+                entry("Hydrogen came back in six seconds on a long one, so let’s see how it does on the rest this week.",
+                      .transcription(.geminiHydrogen), ago: 40),
+                entry("Can we move the call to Friday morning? Thursday is full of reviews for me.",
+                      .polish(by: .geminiHydrogen), ago: 150),
             ]
         }
 

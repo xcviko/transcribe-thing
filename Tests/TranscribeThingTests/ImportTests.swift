@@ -420,8 +420,8 @@ import Testing
     @Test func aLongFileIsOfferedOnlyTheModelsOnThisMac() {
         let choices = ImportChoices.make(main: .geminiFlash, seconds: 2 * 3_600) { _ in .ready }
         let gemini = choices.filter { $0.kind.engine.isGemini }
-        #expect(gemini.map(\.kind) == [.transcription(.geminiFlash), .transcription(.geminiCarbon)]
-                + TranscriptVersionKind.rewrites)
+        #expect(gemini.map(\.kind) == [.transcription(.geminiFlash), .transcription(.geminiHydrogen),
+                                        .transcription(.geminiCarbon)] + TranscriptVersionKind.rewrites)
         #expect(gemini.allSatisfy { $0.blocker == .tooLongForGemini })
         #expect(gemini.first?.title == "Gemini 3.8 Flash · Too long, Parakeet takes any length")
         #expect(choices.filter(\.isEnabled).map(\.kind) == [.transcription(.parakeet), .transcription(.gigaam)])

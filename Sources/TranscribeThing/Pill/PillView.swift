@@ -175,7 +175,7 @@ enum PillPalette {
 
     /// A model color on the pill; graphite is the plain pill. The new colors sit at one depth (OKLCH L 0.645 for the
     /// ring, 0.79 for the marks), so each reads on the fill at least as well as violet does; violet is Gemini's as it
-    /// always was, orange the removed clean-up's, and pink the retired Gemini 3.1 Pro's.
+    /// always was, orange the removed clean-up's, and pink the retired Gemini 3.1 Pro's (Gemini 4 Hydrogen's now).
     static func accent(for color: ModelColor) -> PillAccent? {
         switch color {
         case .graphite: nil

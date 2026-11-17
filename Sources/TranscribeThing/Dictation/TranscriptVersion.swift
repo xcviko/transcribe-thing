@@ -8,8 +8,8 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
     case transcription(EngineID)
     /// `model` over the text of `.transcription(engine)`. History only: nothing makes clean-ups any more.
     case cleanup(of: EngineID, by: CleanupModel)
-    /// Polish (`Polish`): the Gemini model's message from the audio (the dictation's model: Gemini 3.8 Flash or Gemini
-    /// 4 Carbon; History keeps the retired Gemini 4 Argon's).
+    /// Polish (`Polish`): the Gemini model's message from the audio (the dictation's model: Gemini 3.8 Flash, Gemini 4
+    /// Hydrogen or Gemini 4 Carbon; History keeps the retired Gemini 4 Argon's).
     case polish(by: EngineID = .geminiFlash)
     /// Polish Selection: the model's message from text selected in another app. No recording: the entry is this one
     /// version.

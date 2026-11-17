@@ -30,6 +30,7 @@ import Testing
     /// keeps that version to switch to.
     @Test func nothingOffersACleanUp() {
         #expect(menu(transcript()).actions.map(\.kind) == [.transcription(.gigaam), .transcription(.geminiFlash),
+                                                           .transcription(.geminiHydrogen),
                                                            .transcription(.geminiCarbon)]
                 + TranscriptVersionKind.rewrites)
         var entry = transcript(.parakeet)
@@ -52,7 +53,8 @@ import Testing
         #expect(proMenu.versions.map(\.kind) == [.transcription(.geminiPro)])
         #expect(proMenu.versions.map(\.title) == ["Gemini 3.1 Pro"])
         #expect(proMenu.actions.map(\.kind) == [.transcription(.parakeet), .transcription(.gigaam),
-                                                .transcription(.geminiFlash), .transcription(.geminiCarbon)]
+                                                .transcription(.geminiFlash), .transcription(.geminiHydrogen),
+                                                .transcription(.geminiCarbon)]
                 + TranscriptVersionKind.rewrites, "Pro's text isn't cleaned up either")
 
         var tidied = transcript()
@@ -61,7 +63,7 @@ import Testing
         let tidiedMenu = menu(tidied)
         #expect(tidiedMenu.versions.map(\.title) == ["Parakeet v3", "Parakeet v3 + Clean-up by Flash Lite"])
         #expect(tidiedMenu.actions.map(\.kind) == [.transcription(.gigaam), .transcription(.geminiFlash),
-                                                   .transcription(.geminiCarbon)]
+                                                   .transcription(.geminiHydrogen), .transcription(.geminiCarbon)]
                 + TranscriptVersionKind.rewrites)
 
         var failed = TranscriptEntry(text: "", engine: .geminiPro, status: .failed, audioDuration: 20, voicedSeconds: 10,

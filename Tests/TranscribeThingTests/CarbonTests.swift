@@ -26,9 +26,9 @@ private func json(_ body: Data) throws -> [String: Any] {
 @Suite struct CarbonModelTests {
     @Test func carbonIsAGeminiOfItsOwn() {
         #expect(EngineID.geminiCarbon.rawValue == "geminiCarbon" && ModelChoice.carbon.rawValue == "carbon")
-        #expect(EngineID.offered == [.parakeet, .gigaam, .geminiFlash, .geminiCarbon])
-        #expect(EngineID.geminiEngines == [.geminiFlash, .geminiCarbon])
-        #expect(ModelChoice.allCases == [.parakeet, .gemini, .carbon, .gigaam])
+        #expect(EngineID.offered == [.parakeet, .gigaam, .geminiFlash, .geminiHydrogen, .geminiCarbon])
+        #expect(EngineID.geminiEngines == [.geminiFlash, .geminiHydrogen, .geminiCarbon])
+        #expect(ModelChoice.allCases == [.parakeet, .gemini, .hydrogen, .carbon, .gigaam])
         let carbon = EngineID.geminiCarbon
         #expect(carbon.isGemini && carbon.isCloud && !carbon.isRetired)
         #expect(carbon.modelName == "Gemini 4 Carbon" && carbon.displayName == "Gemini 4 Carbon")
@@ -65,8 +65,10 @@ private func json(_ body: Data) throws -> [String: Any] {
         #expect(TranscriptVersionKind(rawValue: "polish:geminiArgon") == .polish(by: .geminiArgon))
         #expect(TranscriptVersionKind.transcription(.geminiArgon).dictationModel == .gemini)
         #expect(TranscriptVersionKind.polish(by: .geminiCarbon).displayName == "Polished by Gemini 4 Carbon")
-        #expect(TranscriptVersionKind.rewrites == [.polish(by: .geminiFlash), .polish(by: .geminiCarbon),
+        #expect(TranscriptVersionKind.rewrites == [.polish(by: .geminiFlash), .polish(by: .geminiHydrogen),
+                                                   .polish(by: .geminiCarbon),
                                                    .translation(polished: false, by: .geminiFlash),
+                                                   .translation(polished: false, by: .geminiHydrogen),
                                                    .translation(polished: false, by: .geminiCarbon)])
     }
 
@@ -107,12 +109,12 @@ private func json(_ body: Data) throws -> [String: Any] {
 
 @MainActor
 @Suite struct CarbonSettingsTests {
-    /// A fresh install lists Carbon after Flash, switched off (GigaAM v3 comes after it): Parakeet is the main model
-    /// and Flash its one step.
+    /// A fresh install lists Carbon after Flash and Hydrogen, switched off (GigaAM v3 comes after it): Parakeet is the
+    /// main model and Flash its one step.
     @Test func aFreshInstallListsCarbonSwitchedOff() throws {
         try withDefaults { defaults in
             let settings = load(defaults)
-            #expect(settings.lineup.order == [.parakeet, .gemini, .carbon, .gigaam])
+            #expect(settings.lineup.order == [.parakeet, .gemini, .hydrogen, .carbon, .gigaam])
             #expect(settings.lineup.main == .parakeet && settings.lineup.cycle == [.parakeet, .gemini])
             #expect(!settings.lineup.isSwitchable(.carbon))
             #expect(settings.modelColors[.carbon] == .blue && settings.modelColors[.gemini] == .violet)
@@ -128,10 +130,10 @@ private func json(_ body: Data) throws -> [String: Any] {
             defaults.set(Data(old.utf8), forKey: SettingsKey.lineup.defaultsKey)
             defaults.set("parakeet", forKey: SettingsKey.handsFreeModel.defaultsKey)
             let settings = load(defaults)
-            #expect(settings.lineup.order == [.gemini, .parakeet, .carbon, .gigaam])
+            #expect(settings.lineup.order == [.gemini, .parakeet, .hydrogen, .carbon, .gigaam])
             #expect(settings.lineup.main == .gemini && settings.lineup.cycle == [.gemini, .parakeet])
             #expect(!settings.lineup.isSwitchable(.carbon) && settings.handsFreeChoice == .parakeet)
-            #expect(load(defaults).lineup.order == [.gemini, .parakeet, .carbon, .gigaam], "stored as read")
+            #expect(load(defaults).lineup.order == [.gemini, .parakeet, .hydrogen, .carbon, .gigaam], "stored as read")
         }
         // From the days of Argon: Argon is Flash, and Carbon doesn't take its place.
         try withDefaults { defaults in
@@ -139,27 +141,28 @@ private func json(_ body: Data) throws -> [String: Any] {
             defaults.set(Data(argon.utf8), forKey: SettingsKey.lineup.defaultsKey)
             defaults.set("argon", forKey: SettingsKey.handsFreeModel.defaultsKey)
             let settings = load(defaults)
-            #expect(settings.lineup.main == .gemini && settings.lineup.order == [.parakeet, .gemini, .carbon, .gigaam])
+            #expect(settings.lineup.main == .gemini
+                    && settings.lineup.order == [.parakeet, .gemini, .hydrogen, .carbon, .gigaam])
             #expect(!settings.lineup.isSwitchable(.carbon))
         }
     }
 
     /// Pasting's rules from before Carbon: Carbon starts with Flash's checks, once. Unchecked later, it stays unchecked.
-    /// (GigaAM, which came after, starts with Parakeet's.)
+    /// (GigaAM, which came after, starts with Parakeet's, and Hydrogen, after that, with Flash's.)
     @Test func carbonStartsWithFlashsPastingRulesOnce() throws {
         try withDefaults { defaults in
             defaults.set(try JSONEncoder().encode(["parakeet", "gemini"]),
                          forKey: SettingsKey.modelsAddingSpace.defaultsKey)
             defaults.set(try JSONEncoder().encode(["parakeet"]), forKey: SettingsKey.modelsRemovingFinalPeriod.defaultsKey)
             let settings = load(defaults)
-            #expect(settings.modelsAddingSpace == [.parakeet, .gemini, .carbon, .gigaam])
+            #expect(settings.modelsAddingSpace == [.parakeet, .gemini, .hydrogen, .carbon, .gigaam])
             #expect(settings.modelsRemovingFinalPeriod == [.parakeet, .gigaam])
             #expect(settings.addsSpace(by: .carbon, in: .pushToTalk))
             #expect(defaults.bool(forKey: SettingsKey.carbonPastingAdded.defaultsKey))
             settings.modelsAddingSpace.remove(.carbon)
             settings.modelsRemovingFinalPeriod.insert(.carbon)
             let reloaded = load(defaults)
-            #expect(reloaded.modelsAddingSpace == [.parakeet, .gemini, .gigaam], "a choice made since stays")
+            #expect(reloaded.modelsAddingSpace == [.parakeet, .gemini, .hydrogen, .gigaam], "a choice made since stays")
             #expect(reloaded.modelsRemovingFinalPeriod == [.parakeet, .carbon, .gigaam])
         }
         try withDefaults { defaults in
@@ -283,16 +286,16 @@ private func json(_ body: Data) throws -> [String: Any] {
         #expect(options("--engine", "carbon")?.engine == .geminiCarbon)
         #expect(options("--engine", "gemini-4-carbon")?.engine == .geminiCarbon)
         #expect(options("--engine", "geminiArgon") == nil, "retired")
-        #expect(EngineCLI.Options.usage.contains("--engine parakeet|gigaam|geminiFlash|geminiCarbon "))
+        #expect(EngineCLI.Options.usage.contains("--engine parakeet|gigaam|geminiFlash|geminiHydrogen|geminiCarbon "))
     }
 
     @Test func modelStatusListsCarbon() {
         let lines = EngineCLI.cloudModelLines()
-        #expect(lines.count == 2)
+        #expect(lines.count == 3)
         #expect(lines[0].hasPrefix("geminiFlash ") && lines[0].hasSuffix("effort low|medium|high (default medium)"))
-        #expect(lines[1].hasPrefix("geminiCarbon ") && lines[1].contains("Gemini 4 Carbon")
-                && lines[1].contains("google/gemini-4-carbon"))
-        #expect(lines[1].hasSuffix("effort low|medium|high (default low)"))
+        #expect(lines[2].hasPrefix("geminiCarbon ") && lines[2].contains("Gemini 4 Carbon")
+                && lines[2].contains("google/gemini-4-carbon"))
+        #expect(lines[2].hasSuffix("effort low|medium|high (default low)"))
     }
 }
 

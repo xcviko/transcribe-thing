@@ -615,7 +615,7 @@ private func load(_ defaults: UserDefaults) -> AppSettings {
     @Test func aFreshInstallListsGigaAMLastSwitchedOff() throws {
         try withDefaults { defaults in
             let settings = load(defaults)
-            #expect(settings.lineup.order == [.parakeet, .gemini, .carbon, .gigaam])
+            #expect(settings.lineup.order == [.parakeet, .gemini, .hydrogen, .carbon, .gigaam])
             #expect(settings.lineup.main == .parakeet && !settings.lineup.isSwitchable(.gigaam))
             #expect(settings.lineup.cycle == [.parakeet, .gemini])
             #expect(settings.modelColors[.gigaam] == .green)
@@ -648,22 +648,23 @@ private func load(_ defaults: UserDefaults) -> AppSettings {
     }
 
     /// A lineup stored before GigaAM gets it appended at the end, switched off; the main model, the order and
-    /// hands-free stay. One from before Carbon gets Carbon, then GigaAM.
+    /// hands-free stay. Gemini 4 Hydrogen, which came after, is missing too: the missing come in the default order,
+    /// Hydrogen before GigaAM. One from before Carbon gets Hydrogen, Carbon, then GigaAM.
     @Test func aLineupFromBeforeGigaAMGetsItAppendedSwitchedOff() throws {
         try withDefaults { defaults in
             let old = #"{"main":"gemini","order":["carbon","gemini","parakeet"],"switchable":["parakeet","carbon"]}"#
             defaults.set(Data(old.utf8), forKey: SettingsKey.lineup.defaultsKey)
             defaults.set("carbon", forKey: SettingsKey.handsFreeModel.defaultsKey)
             let settings = load(defaults)
-            #expect(settings.lineup.order == [.carbon, .gemini, .parakeet, .gigaam])
+            #expect(settings.lineup.order == [.carbon, .gemini, .parakeet, .hydrogen, .gigaam])
             #expect(settings.lineup.main == .gemini && settings.lineup.cycle == [.gemini, .parakeet, .carbon])
             #expect(!settings.lineup.isSwitchable(.gigaam) && settings.handsFreeChoice == .carbon)
-            #expect(load(defaults).lineup.order == [.carbon, .gemini, .parakeet, .gigaam], "stored as read")
+            #expect(load(defaults).lineup.order == [.carbon, .gemini, .parakeet, .hydrogen, .gigaam], "stored as read")
         }
         try withDefaults { defaults in
             let older = #"{"main":"parakeet","order":["gemini","parakeet"],"switchable":["gemini"]}"#
             defaults.set(Data(older.utf8), forKey: SettingsKey.lineup.defaultsKey)
-            #expect(load(defaults).lineup.order == [.gemini, .parakeet, .carbon, .gigaam])
+            #expect(load(defaults).lineup.order == [.gemini, .parakeet, .hydrogen, .carbon, .gigaam])
         }
     }
 
@@ -681,7 +682,8 @@ private func load(_ defaults: UserDefaults) -> AppSettings {
         #expect(!settings.usesLocalModel(.geminiFlash), "a cloud model is no model on this Mac")
     }
 
-    /// Pasting's rules from before GigaAM: it starts with Parakeet's checks, once, and keeps its own after.
+    /// Pasting's rules from before GigaAM: it starts with Parakeet's checks, once, and keeps its own after. (Hydrogen,
+    /// which came after, starts with Flash's.)
     @Test func gigaamStartsWithParakeetsPastingRulesOnce() throws {
         try withDefaults { defaults in
             defaults.set(try JSONEncoder().encode(["parakeet", "gemini", "carbon"]),
@@ -689,15 +691,15 @@ private func load(_ defaults: UserDefaults) -> AppSettings {
             defaults.set(try JSONEncoder().encode(["gemini"]), forKey: SettingsKey.modelsRemovingFinalPeriod.defaultsKey)
             defaults.set(true, forKey: SettingsKey.carbonPastingAdded.defaultsKey)
             let settings = load(defaults)
-            #expect(settings.modelsAddingSpace == [.parakeet, .gemini, .carbon, .gigaam])
-            #expect(settings.modelsRemovingFinalPeriod == [.gemini])
+            #expect(settings.modelsAddingSpace == [.parakeet, .gemini, .hydrogen, .carbon, .gigaam])
+            #expect(settings.modelsRemovingFinalPeriod == [.gemini, .hydrogen])
             #expect(settings.addsSpace(by: .gigaam, in: .handsFree))
             #expect(defaults.bool(forKey: SettingsKey.gigaamPastingAdded.defaultsKey))
             settings.modelsAddingSpace.remove(.gigaam)
             settings.modelsRemovingFinalPeriod.insert(.gigaam)
             let reloaded = load(defaults)
-            #expect(reloaded.modelsAddingSpace == [.parakeet, .gemini, .carbon], "a choice made since stays")
-            #expect(reloaded.modelsRemovingFinalPeriod == [.gemini, .gigaam])
+            #expect(reloaded.modelsAddingSpace == [.parakeet, .gemini, .hydrogen, .carbon], "a choice made since stays")
+            #expect(reloaded.modelsRemovingFinalPeriod == [.gemini, .hydrogen, .gigaam])
         }
         try withDefaults { defaults in
             let settings = load(defaults)
@@ -877,7 +879,7 @@ private func load(_ defaults: UserDefaults) -> AppSettings {
         #expect(options("--engine", "parakeet", "--gigaam-version", "e2e") == nil, "GigaAM's only")
         #expect(options("--engine", "gigaam", "--parakeet-compute", "gpu") == nil, "Parakeet's diagnostic only")
         #expect(options("--engine", "gigaam", "--download")?.download == true)
-        #expect(EngineCLI.Options.usage.contains("--engine parakeet|gigaam|geminiFlash|geminiCarbon "))
+        #expect(EngineCLI.Options.usage.contains("--engine parakeet|gigaam|geminiFlash|geminiHydrogen|geminiCarbon "))
         #expect(EngineCLI.Options.usage.contains("[--gigaam-version v3|e2e|multilingual]"))
         #expect(EngineCLI.cloudModelLines().allSatisfy { !$0.contains("gigaam") }, "not a cloud model")
     }

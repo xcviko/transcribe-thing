@@ -450,41 +450,57 @@ private struct PastingRules: View {
     @Environment(AppSettings.self) private var settings
 
     var body: some View {
-        // Four models and two ways of dictating don't fit the narrowest window with each symbol beside its name: there
-        // the symbol goes above the name, which makes each column as narrow as its name.
+        // Five models and two ways of dictating don't fit a window of the default width with each symbol beside its
+        // name: there the symbol goes above the name, which makes each column as narrow as its name. In the narrowest
+        // window even that is too wide: the columns move closer and the rules wrap sooner.
         ViewThatFits(in: .horizontal) {
-            table(stacksHeaders: false)
-            table(stacksHeaders: true)
+            table(.wide)
+            table(.stacked)
+            table(.tight)
         }
         .padding(.vertical, 2)
     }
 
-    private func table(stacksHeaders: Bool) -> some View {
+    /// How much room the table takes, from the most to the least.
+    private enum Layout {
+        /// Each symbol beside its name.
+        case wide
+        /// Each symbol above its name.
+        case stacked
+        /// Stacked, the columns closer together and the rules wrapping sooner: the narrowest window.
+        case tight
+
+        var stacksHeaders: Bool { self != .wide }
+        var columnSpacing: CGFloat { self == .tight ? 10 : 14 }
+        /// Between the models' columns and the ways of dictating.
+        var groupGap: CGFloat { self == .tight ? 10 : 14 }
+        /// A rule's title wraps to two lines rather than get narrower than this.
+        var ruleMinWidth: CGFloat { self == .tight ? 92 : 110 }
+    }
+
+    private func table(_ layout: Layout) -> some View {
         @Bindable var settings = settings
         let order = settings.lineup.order
-        return Grid(alignment: .center, horizontalSpacing: 14, verticalSpacing: 12) {
+        return Grid(alignment: .center, horizontalSpacing: layout.columnSpacing, verticalSpacing: 12) {
             GridRow(alignment: .bottom) {
                 Color.clear
                     .gridCellUnsizedAxes([.horizontal, .vertical])
                 ForEach(order) { choice in
-                    columnHeader(choice.shortName, symbol: choice.symbolName, stacked: stacksHeaders)
+                    columnHeader(choice.shortName, symbol: choice.symbolName, stacked: layout.stacksHeaders)
                         .help(choice.title)
                 }
                 ForEach(Array(DictationMachine.Mode.allCases.enumerated()), id: \.element) { index, mode in
-                    columnHeader(mode.chipTitle, symbol: mode.action.symbolName, stacked: stacksHeaders)
-                        .padding(.leading, index == 0 ? Self.groupGap : 0)
+                    columnHeader(mode.chipTitle, symbol: mode.action.symbolName, stacked: layout.stacksHeaders)
+                        .padding(.leading, index == 0 ? layout.groupGap : 0)
                         .help(mode.action.title)
                 }
             }
-            rule("Add a space after the text", symbol: "space", order: order,
+            rule("Add a space after the text", symbol: "space", order: order, layout: layout,
                  models: $settings.modelsAddingSpace, modes: $settings.modesAddingSpace)
-            rule("Remove the final period", symbol: "delete.backward", order: order,
+            rule("Remove the final period", symbol: "delete.backward", order: order, layout: layout,
                  models: $settings.modelsRemovingFinalPeriod, modes: $settings.modesRemovingFinalPeriod)
         }
     }
-
-    /// Between the models' columns and the ways of dictating.
-    private static let groupGap: CGFloat = 14
 
     /// The symbol beside the name, or above it (`stacked`).
     private func columnHeader(_ title: String, symbol: String, stacked: Bool) -> some View {
@@ -505,8 +521,8 @@ private struct PastingRules: View {
         .fixedSize()
     }
 
-    private func rule(_ title: String, symbol: String, order: [ModelChoice], models: Binding<Set<ModelChoice>>,
-                      modes: Binding<Set<DictationMachine.Mode>>) -> some View {
+    private func rule(_ title: String, symbol: String, order: [ModelChoice], layout: Layout,
+                      models: Binding<Set<ModelChoice>>, modes: Binding<Set<DictationMachine.Mode>>) -> some View {
         GridRow {
             HStack(spacing: Theme.Spacing.sm) {
                 Image(systemName: symbol)
@@ -514,13 +530,13 @@ private struct PastingRules: View {
                     .foregroundStyle(.inkSecondary)
                     .frame(width: 28, height: 28)
                     .background(Color.inkSecondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                // Four models' columns leave a narrow window little room: the rule wraps rather than cut off.
+                // Five models' columns leave a narrow window little room: the rule wraps rather than cut off.
                 Text(title)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.ink)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
-                    .frame(minWidth: 110, alignment: .leading)
+                    .frame(minWidth: layout.ruleMinWidth, alignment: .leading)
                 Spacer(minLength: 0)
             }
             .gridColumnAlignment(.leading)
@@ -529,7 +545,7 @@ private struct PastingRules: View {
             }
             ForEach(Array(DictationMachine.Mode.allCases.enumerated()), id: \.element) { index, mode in
                 check(modes, mode, label: "\(mode.chipTitle): \(title)")
-                    .padding(.leading, index == 0 ? Self.groupGap : 0)
+                    .padding(.leading, index == 0 ? layout.groupGap : 0)
             }
         }
     }

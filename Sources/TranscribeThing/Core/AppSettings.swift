@@ -243,7 +243,7 @@ final class AppSettings {
         switch engine {
         case .parakeet: .parakeet
         case .gigaam: .gigaam(gigaamVariant)
-        case .parakeetCloud, .geminiFlash, .geminiCarbon, .geminiArgon, .geminiPro: nil
+        case .parakeetCloud, .geminiFlash, .geminiHydrogen, .geminiCarbon, .geminiArgon, .geminiPro: nil
         }
     }
 
@@ -302,6 +302,14 @@ final class AppSettings {
     nonisolated static func withGigaAMLikeParakeet(_ models: Set<ModelChoice>) -> Set<ModelChoice> {
         var models = models
         if models.contains(.parakeet) { models.insert(.gigaam) } else { models.remove(.gigaam) }
+        return models
+    }
+
+    /// A Pasting rule's models from before Gemini 4 Hydrogen: Hydrogen checked where Gemini 3.8 Flash is, the model
+    /// it's most like.
+    nonisolated static func withHydrogenLikeFlash(_ models: Set<ModelChoice>) -> Set<ModelChoice> {
+        var models = models
+        if models.contains(.gemini) { models.insert(.hydrogen) } else { models.remove(.hydrogen) }
         return models
     }
 
@@ -442,6 +450,12 @@ final class AppSettings {
             modelsAddingSpace = Self.withGigaAMLikeParakeet(modelsAddingSpace)
             modelsRemovingFinalPeriod = Self.withGigaAMLikeParakeet(modelsRemovingFinalPeriod)
             store.set(true, .gigaamPastingAdded)
+        }
+        // Gemini 4 Hydrogen arrived after GigaAM: it starts with Gemini 3.8 Flash's, once, then keeps its own.
+        if store.bool(.hydrogenPastingAdded) != true {
+            modelsAddingSpace = Self.withHydrogenLikeFlash(modelsAddingSpace)
+            modelsRemovingFinalPeriod = Self.withHydrogenLikeFlash(modelsRemovingFinalPeriod)
+            store.set(true, .hydrogenPastingAdded)
         }
         if let v: [String] = store.json(.modesAddingSpace) { modesAddingSpace = DictationMachine.Mode.read(v) }
         if let v: [String] = store.json(.modesRemovingFinalPeriod) {
@@ -613,6 +627,8 @@ enum SettingsKey: String, CaseIterable {
     case carbonPastingAdded
     /// Set once Pasting's rules have given GigaAM Parakeet's checks (`load`).
     case gigaamPastingAdded
+    /// Set once Pasting's rules have given Gemini 4 Hydrogen Gemini 3.8 Flash's checks (`load`).
+    case hydrogenPastingAdded
     /// GigaAM's picked version (`GigaAMEngine.Variant` raw value).
     case gigaamVariant
     /// The removed "Show Parakeet's text while Gemini works" (General → Experimental), removed at load.

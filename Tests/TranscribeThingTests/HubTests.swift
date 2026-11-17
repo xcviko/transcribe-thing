@@ -335,7 +335,7 @@ import Testing
         #expect(SwitchModelLine.explanation(.ready(.fnTab), lineup: lineup)
             == "Press \(fnTab) while dictating to step from Flash to Parakeet.")
         lineup.move(.gemini, to: 0)
-        #expect(lineup.order == [.gemini, .parakeet, .carbon, .gigaam])
+        #expect(lineup.order == [.gemini, .parakeet, .hydrogen, .carbon, .gigaam])
         #expect(SwitchModelLine.explanation(.ready(rightCommand), lineup: lineup)
             == "Press \(rightCommand.spokenDescription) while dictating to step from Flash to Parakeet.")
     }

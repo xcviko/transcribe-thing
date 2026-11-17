@@ -5,9 +5,11 @@ import Foundation
 enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
     /// `parakeetCloud`, `geminiArgon` and `geminiPro` are retired (`isRetired`): History still holds what they wrote.
     /// `geminiCarbon` is Gemini 4 Carbon, offered after Argon was retired: a model of its own, never Argon's case.
+    /// `geminiHydrogen` is Gemini 4 Hydrogen, Google's newer Flash-class model, offered after Carbon: listed between
+    /// Flash and Carbon.
     /// `gigaam` is Sber's GigaAM on this Mac, beside Parakeet: one model in three versions (`GigaAMEngine.Variant`),
     /// the one picked in Models running (`AppSettings.gigaamVariant`).
-    case parakeet, gigaam, parakeetCloud, geminiFlash, geminiCarbon, geminiArgon, geminiPro
+    case parakeet, gigaam, parakeetCloud, geminiFlash, geminiHydrogen, geminiCarbon, geminiArgon, geminiPro
 
     var id: String { rawValue }
 
@@ -25,13 +27,13 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
 
     /// The models that run on this Mac: Parakeet v3, then GigaAM (in its picked version).
     static var localEngines: [EngineID] { offered.filter(\.isLocal) }
-    /// The Gemini models this build runs: Gemini 3.8 Flash and Gemini 4 Carbon.
+    /// The Gemini models this build runs: Gemini 3.8 Flash, Gemini 4 Hydrogen and Gemini 4 Carbon.
     static var geminiEngines: [EngineID] { offered.filter(\.isGemini) }
 
     var isLocal: Bool {
         switch self {
         case .parakeet, .gigaam: true
-        case .parakeetCloud, .geminiFlash, .geminiCarbon, .geminiArgon, .geminiPro: false
+        case .parakeetCloud, .geminiFlash, .geminiHydrogen, .geminiCarbon, .geminiArgon, .geminiPro: false
         }
     }
 
@@ -42,7 +44,7 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
     /// Every cloud model this build runs is one.
     var isGemini: Bool {
         switch self {
-        case .geminiFlash, .geminiCarbon, .geminiArgon, .geminiPro: true
+        case .geminiFlash, .geminiHydrogen, .geminiCarbon, .geminiArgon, .geminiPro: true
         case .parakeet, .gigaam, .parakeetCloud: false
         }
     }
@@ -55,6 +57,7 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
         // The version picked names it where there's room (`AppSettings.modelName(of:)`).
         case .gigaam: "GigaAM"
         case .geminiFlash: "Gemini 3.8 Flash"
+        case .geminiHydrogen: "Gemini 4 Hydrogen"
         case .geminiCarbon: "Gemini 4 Carbon"
         case .geminiArgon: "Gemini 4 Argon"
         case .geminiPro: "Gemini 3.1 Pro"
@@ -64,7 +67,7 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
     /// Unique per engine: the retired cloud Parakeet carries "· Cloud".
     var displayName: String {
         switch self {
-        case .parakeet, .gigaam, .geminiFlash, .geminiCarbon, .geminiArgon, .geminiPro: modelName
+        case .parakeet, .gigaam, .geminiFlash, .geminiHydrogen, .geminiCarbon, .geminiArgon, .geminiPro: modelName
         case .parakeetCloud: "Parakeet v3 · Cloud"
         }
     }
@@ -76,7 +79,7 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
         case .gigaam: "GigaAM"
         case .parakeetCloud: "Parakeet v3 · Cloud"
         // With the version: "Gemini Flash" alone doesn't say which model it is.
-        case .geminiFlash, .geminiCarbon, .geminiArgon, .geminiPro: modelName
+        case .geminiFlash, .geminiHydrogen, .geminiCarbon, .geminiArgon, .geminiPro: modelName
         }
     }
 
@@ -85,7 +88,7 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
         case .parakeet: "NVIDIA · on your Mac"
         case .gigaam: "Sber · on your Mac"
         case .parakeetCloud: "NVIDIA · via OpenRouter · Together"
-        case .geminiFlash, .geminiCarbon, .geminiArgon, .geminiPro: "Google · via OpenRouter"
+        case .geminiFlash, .geminiHydrogen, .geminiCarbon, .geminiArgon, .geminiPro: "Google · via OpenRouter"
         }
     }
 
@@ -95,6 +98,7 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
         case .gigaam: "Russian, with or without punctuation, or 5 languages · fast on the GPU"
         case .parakeetCloud: "25 European languages · ≈ $0.09 per hour of audio"
         case .geminiFlash: "Fast and very accurate · pay per use"
+        case .geminiHydrogen: "Newer than Flash · faster on long dictations · about 2× Flash’s price per token"
         case .geminiCarbon: "Newest · slower · about 2.7× Flash’s cost"
         case .geminiArgon, .geminiPro: "Most accurate · slower · higher cost"
         }
@@ -106,7 +110,7 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
         switch self {
         case .parakeet, .gigaam: nil
         case .parakeetCloud: "Together"
-        case .geminiFlash, .geminiCarbon, .geminiArgon, .geminiPro: "Google AI Studio"
+        case .geminiFlash, .geminiHydrogen, .geminiCarbon, .geminiArgon, .geminiPro: "Google AI Studio"
         }
     }
 
@@ -117,7 +121,7 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
         switch self {
         case .parakeet: ["Recommended", "Private", "Offline"]
         case .gigaam: ["Private", "Offline"]
-        case .parakeetCloud, .geminiFlash, .geminiCarbon, .geminiArgon, .geminiPro: ["Cloud"]
+        case .parakeetCloud, .geminiFlash, .geminiHydrogen, .geminiCarbon, .geminiArgon, .geminiPro: ["Cloud"]
         }
     }
 
@@ -127,6 +131,8 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
         case .gigaam: "character.bubble.fill"
         case .parakeetCloud: "cloud.bolt.fill"
         case .geminiFlash: "sparkle"
+        // A drop: hydrogen is "water-former".
+        case .geminiHydrogen: "drop.fill"
         case .geminiCarbon: "atom"
         case .geminiArgon, .geminiPro: "sparkles"
         }
@@ -139,6 +145,7 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
         case .parakeet, .parakeetCloud: "P"
         case .gigaam: "G"
         case .geminiFlash: "F"
+        case .geminiHydrogen: "H"
         case .geminiCarbon: "C"
         case .geminiArgon: "A"
         case .geminiPro: "Pro"
@@ -150,7 +157,7 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
     var approxDownloadBytes: Int64? {
         switch self {
         case .parakeet: 632_321_326
-        case .gigaam, .parakeetCloud, .geminiFlash, .geminiCarbon, .geminiArgon, .geminiPro: nil
+        case .gigaam, .parakeetCloud, .geminiFlash, .geminiHydrogen, .geminiCarbon, .geminiArgon, .geminiPro: nil
         }
     }
 
@@ -161,6 +168,7 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
         case .parakeet, .gigaam: nil
         case .parakeetCloud: "nvidia/parakeet-tdt-0.6b-v3"
         case .geminiFlash: "google/gemini-3.8-flash"
+        case .geminiHydrogen: "google/gemini-4-hydrogen"
         case .geminiCarbon: "google/gemini-4-carbon"
         case .geminiArgon: "google/gemini-4-argon"
         case .geminiPro: "google/gemini-3.1-pro-preview"
@@ -172,20 +180,22 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
     /// comments while the model is busy, so 2 minutes of silence means a stalled connection, however long the
     /// recording. Gemini 4 Carbon gets 5 minutes: when Google is short of capacity it often sends nothing for 2-5
     /// minutes before its first byte, and the user's endpoint sends no keep-alive before that byte, so at 2 minutes
-    /// 3-5 of 24 requests per Reasoning level were cut off (measured on the user's endpoint). 0 for the models that
+    /// 3-5 of 24 requests per Reasoning level were cut off (measured on the user's endpoint). Gemini 4 Hydrogen keeps
+    /// Flash's 2 minutes: measured the same way, it never went silent before its first byte. 0 for the models that
     /// never run in the cloud.
     var cloudTimeout: TimeInterval {
         switch self {
         case .parakeet, .gigaam, .parakeetCloud: 0
-        case .geminiFlash, .geminiArgon, .geminiPro: 120
+        case .geminiFlash, .geminiHydrogen, .geminiArgon, .geminiPro: 120
         case .geminiCarbon: 300
         }
     }
 
     /// Its transcription answer without the tags the prompt asks for is no transcript: not pasted, the recording kept
     /// in History to retry (`DictationController`). Gemini 4 Argon, Carbon's predecessor, sometimes answered with
-    /// stray tokens or its own thoughts and no tags ("!#", "1 1 2 4 8"), so Carbon is held to the same. Flash always
-    /// tags its answer, and one that doesn't is still words.
+    /// stray tokens or its own thoughts and no tags ("!#", "1 1 2 4 8"), so Carbon is held to the same. Flash and
+    /// Gemini 4 Hydrogen always tag their answers (Hydrogen did in every measured run), and one that doesn't is still
+    /// words.
     var answerNeedsTags: Bool { self == .geminiCarbon }
 
     /// The system prompt of every Gemini transcription, fixed: it changes only with a new version of the app.

@@ -1181,6 +1181,7 @@ final class FakeRecorder: DictationRecorder {
         #expect(DictationController.fallbackCandidates(for: .parakeet) == [])
         #expect(DictationController.fallbackCandidates(for: .geminiFlash) == [.parakeet, .gigaam])
         #expect(DictationController.fallbackCandidates(for: .geminiCarbon) == [.parakeet, .gigaam])
+        #expect(DictationController.fallbackCandidates(for: .geminiHydrogen) == [.parakeet, .gigaam])
         #expect(DictationController.fallbackCandidates(for: .gigaam) == [.parakeet])
     }
 
