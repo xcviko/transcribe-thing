@@ -7,7 +7,7 @@ import Testing
 @Suite struct VersionsMenuItemTests {
     private func menu(_ entry: TranscriptEntry, running: TranscriptVersionKind? = nil) -> VersionsMenu {
         VersionsMenu.make(for: entry, running: running, readiness: {
-            EngineReadiness.of($0, localState: .ready, keyStatus: .valid(KeyInfo(label: "k")))
+            EngineReadiness.of($0.engine, localState: .ready, keyStatus: .valid(KeyInfo(label: "k")))
         })
     }
 
@@ -29,7 +29,7 @@ import Testing
     /// Clean-up is gone: no transcript offers it, whatever Parakeet texts it has, and one GPT-6 Luna already tidied
     /// keeps that version to switch to.
     @Test func nothingOffersACleanUp() {
-        #expect(menu(transcript()).actions.map(\.kind) == [.transcription(.gigaam), .transcription(.geminiFlash),
+        #expect(menu(transcript()).actions.map(\.kind) == [.gigaam(.v3), .gigaam(.v3e2e), .gigaam(.multilingual), .transcription(.geminiFlash),
                                                            .transcription(.geminiHydrogen),
                                                            .transcription(.geminiCarbon)]
                 + TranscriptVersionKind.rewrites)
@@ -52,7 +52,7 @@ import Testing
         let proMenu = menu(pro)
         #expect(proMenu.versions.map(\.kind) == [.transcription(.geminiPro)])
         #expect(proMenu.versions.map(\.title) == ["Gemini 3.1 Pro"])
-        #expect(proMenu.actions.map(\.kind) == [.transcription(.parakeet), .transcription(.gigaam),
+        #expect(proMenu.actions.map(\.kind) == [.transcription(.parakeet), .gigaam(.v3), .gigaam(.v3e2e), .gigaam(.multilingual),
                                                 .transcription(.geminiFlash), .transcription(.geminiHydrogen),
                                                 .transcription(.geminiCarbon)]
                 + TranscriptVersionKind.rewrites, "Pro's text isn't cleaned up either")
@@ -62,14 +62,14 @@ import Testing
                                             metadata: TranscriptMetadata()))
         let tidiedMenu = menu(tidied)
         #expect(tidiedMenu.versions.map(\.title) == ["Parakeet v3", "Parakeet v3 + Clean-up by Flash Lite"])
-        #expect(tidiedMenu.actions.map(\.kind) == [.transcription(.gigaam), .transcription(.geminiFlash),
+        #expect(tidiedMenu.actions.map(\.kind) == [.gigaam(.v3), .gigaam(.v3e2e), .gigaam(.multilingual), .transcription(.geminiFlash),
                                                    .transcription(.geminiHydrogen), .transcription(.geminiCarbon)]
                 + TranscriptVersionKind.rewrites)
 
         var failed = TranscriptEntry(text: "", engine: .geminiPro, status: .failed, audioDuration: 20, voicedSeconds: 10,
                                      audioFileName: "a.wav")
         #expect(menu(failed).actions.map(\.kind)
-                == EngineID.offered.map(TranscriptVersionKind.transcription) + TranscriptVersionKind.rewrites)
+                == TranscriptVersionKind.transcripts + TranscriptVersionKind.rewrites)
         failed.status = .cancelled
         #expect(!menu(failed).actions.contains { $0.kind.engine.isRetired || $0.kind.isCleanup })
     }

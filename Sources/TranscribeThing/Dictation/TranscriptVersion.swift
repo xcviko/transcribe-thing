@@ -5,7 +5,12 @@ import Foundation
 /// each kind, so the same model never runs twice on a recording. Kinds by retired models (Gemini 4 Argon, Gemini 3.1
 /// Pro, every clean-up) are read, named, shown and switched to like any other; nothing makes new ones.
 enum TranscriptVersionKind: Hashable, Sendable, Codable {
+    /// `engine`'s transcript. GigaAM's are `.gigaam`, a kind per version: nothing makes `.transcription(.gigaam)`.
     case transcription(EngineID)
+    /// A GigaAM version's transcript (`EngineID.gigaam`): a kind per version, so one recording holds each version's
+    /// side by side. Before there was one per version, GigaAM's one kind was "gigaam": an entry stored then reads it
+    /// as the version its metadata names (`TranscriptMetadata.modelID`), or as v3 when it names none.
+    case gigaam(GigaAMEngine.Variant)
     /// `model` over the text of `.transcription(engine)`. History only: nothing makes clean-ups any more.
     case cleanup(of: EngineID, by: CleanupModel)
     /// Polish (`Polish`): the Gemini model's message from the audio (the dictation's model: Gemini 3.8 Flash, Gemini 4
@@ -25,10 +30,40 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
         switch self {
         case .transcription(let engine), .cleanup(let engine, _), .polish(let engine), .translation(_, let engine):
             engine
+        case .gigaam: .gigaam
         // Nothing heard any audio: the model that wrote it stands in (Flash for Luna's old ones); the entry is never
         // transcribed again.
         case .selection(let model), .selectionTranslation(let model): model.engine ?? .geminiFlash
         }
+    }
+
+    /// The transcript `engine` writes: its own kind, and for GigaAM its version's: `variant`, else the one `modelID`
+    /// names (what a result or a version's metadata records), else v3.
+    static func transcript(by engine: EngineID, gigaam variant: GigaAMEngine.Variant? = nil,
+                           modelID: String? = nil) -> TranscriptVersionKind {
+        guard engine == .gigaam else { return .transcription(engine) }
+        return .gigaam(variant ?? modelID.flatMap(GigaAMEngine.Variant.init(rawValue:)) ?? .default)
+    }
+
+    /// What can write a recording's transcript, in menu order: each engine this build offers, GigaAM's versions each
+    /// on their own.
+    static var transcripts: [TranscriptVersionKind] {
+        EngineID.offered.flatMap { engine in
+            engine == .gigaam ? GigaAMEngine.Variant.allCases.map(TranscriptVersionKind.gigaam) : [.transcription(engine)]
+        }
+    }
+
+    /// An engine's transcript of the audio: a plain transcription, or a GigaAM version's.
+    var isTranscript: Bool {
+        switch self {
+        case .transcription, .gigaam: true
+        default: false
+        }
+    }
+
+    /// The GigaAM version that wrote it; nil for anything else.
+    var gigaamVariant: GigaAMEngine.Variant? {
+        if case .gigaam(let variant) = self { variant } else { nil }
     }
 
     /// What Home can make from a recording besides its transcripts, in menu order: Polish with each Gemini model,
@@ -80,6 +115,7 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
     var dictationModel: ModelChoice? {
         switch self {
         case .transcription(let engine): ModelChoice(engine: engine)
+        case .gigaam: .gigaam
         case .cleanup(let engine, _): ModelChoice(engine: engine)
         case .polish(let engine), .translation(_, let engine): ModelChoice(engine: engine)
         case .selection, .selectionTranslation: nil
@@ -87,10 +123,10 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
     }
 
     /// Builds from before the choice of clean-up model read it: a transcription, or a clean-up by Flash Lite. A
-    /// clean-up by another model has the model in its raw value, which they can't read.
+    /// clean-up by another model has the model in its raw value, which they can't read; so has a GigaAM version's.
     var isReadableByOlderBuilds: Bool {
         switch self {
-        case .polish, .selection, .translation, .selectionTranslation: return false
+        case .polish, .selection, .translation, .selectionTranslation, .gigaam: return false
         default: return cleanupModel.map { $0 == .geminiFlashLite } ?? true
         }
     }
@@ -104,6 +140,7 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
     var displayName: String {
         switch self {
         case .transcription(let engine): engine.displayName
+        case .gigaam(let variant): variant.displayName
         case .cleanup(let engine, let model): "\(engine.displayName) + Clean-up by \(model.shortName)"
         case .polish(let engine): "Polished by \(engine.displayName)"
         case .selection(let model): "Selection polished by \(model.modelName)"
@@ -113,18 +150,12 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
         }
     }
 
-    /// `displayName`, with the GigaAM version `modelID` names (`TranscriptMetadata.modelID`): "GigaAM v3 e2e".
-    func displayName(modelID: String?) -> String {
-        if case .transcription(.gigaam) = self, let variant = modelID.flatMap(GigaAMEngine.Variant.init(rawValue:)) {
-            return variant.displayName
-        }
-        return displayName
-    }
 
     /// "Gemini Flash", "Parakeet v3 + Clean-up".
     var shortName: String {
         switch self {
         case .transcription(let engine): engine.shortName
+        case .gigaam(let variant): variant.displayName
         case .cleanup(let engine, _): "\(engine.shortName) + Clean-up"
         case .polish: "Polished"
         case .selection: "Polished selection"
@@ -137,6 +168,7 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
     var progressTitle: String {
         switch self {
         case .transcription(let engine): "Transcribing with \(engine.shortName)…"
+        case .gigaam(let variant): "Transcribing with \(variant.displayName)…"
         case .cleanup(_, let model): "Cleaning up with \(model.shortName)…"
         case .polish(let engine): "Polishing with \(engine.shortName)…"
         case .selection(let model): "Polishing with \(model.modelName)…"
@@ -150,6 +182,7 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
     var failureTitle: String {
         switch self {
         case .transcription(let engine): "Couldn’t transcribe with \(engine.shortName)"
+        case .gigaam(let variant): "Couldn’t transcribe with \(variant.displayName)"
         case .cleanup(_, let model): "Couldn’t clean up with \(model.shortName)"
         case .polish(let engine): "Couldn’t polish with \(engine.shortName)"
         case .selection(let model): "Couldn’t polish with \(model.modelName)"
@@ -165,9 +198,16 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
     /// "translation:polished:geminiArgon", as the retired Gemini 4 Argon's in History are. Never rename. An older build
     /// can't read a kind with a model and drops that version, not the entry (`TranscriptEntry.encode(to:)` keeps the
     /// text it tidied intact for them).
+    /// A GigaAM version's: "gigaam:" and the version's raw value, "gigaam:gigaam-v3-e2e-ctc", which no other kind
+    /// starts with. "gigaam" alone is GigaAM's one kind from before (0.5.2 and 0.5.3), only ever read
+    /// (`legacyGigaAM`). Those builds can't read a version's kind: they drop that version, not the entry, and where it
+    /// was the current one they show its text (the flat fields, `TranscriptEntry.encode(to:)`) as their "GigaAM"
+    /// transcript. History they save after that holds only what they read. A build older than 0.5.2 knows no GigaAM
+    /// and skips the whole entry, as it skipped any GigaAM entry.
     var rawValue: String {
         switch self {
         case .transcription(let engine): engine.rawValue
+        case .gigaam(let variant): "\(Self.gigaamPrefix)\(variant.rawValue)"
         case .cleanup(let engine, .geminiFlashLite): "cleanup:\(engine.rawValue)"
         case .cleanup(let engine, let model): "cleanup:\(engine.rawValue):\(model.rawValue)"
         case .polish(let engine): engine == .geminiFlash ? "polish" : "polish:\(engine.rawValue)"
@@ -178,14 +218,25 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
         }
     }
 
+    /// GigaAM's one kind before each version had its own.
+    static let legacyGigaAM = "gigaam"
+    private static let gigaamPrefix = "gigaam:"
+
     /// Engines removed long ago read as their successors (`TranscriptEntry.retiredEngines`); retired models
-    /// (`EngineID.isRetired`, every `CleanupModel`) read as themselves. nil for an engine or a clean-up model
-    /// this build doesn't know.
+    /// (`EngineID.isRetired`, every `CleanupModel`) read as themselves. nil for an engine, a clean-up model or a GigaAM
+    /// version this build doesn't know. The old "gigaam" reads as v3: a version's metadata says better
+    /// (`init(rawValue:modelID:)`).
     init?(rawValue: String) {
         func engine(_ raw: Substring) -> EngineID? {
             EngineID(rawValue: String(raw)) ?? TranscriptEntry.retiredEngines[String(raw)]
         }
-        if rawValue == "polish" {
+        if rawValue == Self.legacyGigaAM {
+            self = .gigaam(.default)
+        } else if rawValue.hasPrefix(Self.gigaamPrefix) {
+            guard let variant = GigaAMEngine.Variant(rawValue: String(rawValue.dropFirst(Self.gigaamPrefix.count)))
+            else { return nil }
+            self = .gigaam(variant)
+        } else if rawValue == "polish" {
             self = .polish()
         } else if rawValue.hasPrefix("polish:") {
             guard let by = EngineID(rawValue: String(rawValue.dropFirst("polish:".count))) else { return nil }
@@ -224,6 +275,16 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
         } else {
             guard let source = engine(Substring(rawValue)) else { return nil }
             self = .transcription(source)
+        }
+    }
+
+    /// A version's kind with what its metadata says: the old "gigaam" is the GigaAM version `modelID` names (as
+    /// GigaAM's transcripts recorded it), v3 when it names none.
+    init?(rawValue: String, modelID: String?) {
+        if rawValue == Self.legacyGigaAM {
+            self = .transcript(by: .gigaam, modelID: modelID)
+        } else {
+            self.init(rawValue: rawValue)
         }
     }
 
@@ -353,10 +414,10 @@ struct TranscriptVersion: Codable, Equatable, Identifiable, Sendable {
         self.metadata = metadata
     }
 
-    /// A transcription by `engine` with just the facts older builds recorded.
+    /// A transcription by `engine` with just the facts older builds recorded (GigaAM's, v3's).
     init(text: String, engine: EngineID, provider: String? = nil, costUSD: Double? = nil,
          processingTime: TimeInterval? = nil, createdAt: Date = Date()) {
-        self.init(kind: .transcription(engine), text: text,
+        self.init(kind: .transcript(by: engine), text: text,
                   metadata: TranscriptMetadata(createdAt: createdAt, provider: provider, costUSD: costUSD,
                                                processingTime: processingTime))
     }
@@ -373,11 +434,15 @@ struct TranscriptVersion: Codable, Equatable, Identifiable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         text = try c.decode(String.self, forKey: .text)
         if c.contains(.kind) {
-            kind = try c.decode(TranscriptVersionKind.self, forKey: .kind)
             metadata = try c.decodeIfPresent(TranscriptMetadata.self, forKey: .metadata)
                 ?? TranscriptMetadata(createdAt: Date(timeIntervalSince1970: 0))
+            let raw = try c.decode(String.self, forKey: .kind)
+            guard let kind = TranscriptVersionKind(rawValue: raw, modelID: metadata.modelID) else {
+                throw DecodingError.dataCorruptedError(forKey: .kind, in: c, debugDescription: "Unknown version \(raw)")
+            }
+            self.kind = kind
         } else {
-            kind = .transcription(try TranscriptEntry.decodeEngine(from: c, forKey: .engine))
+            kind = .transcript(by: try TranscriptEntry.decodeEngine(from: c, forKey: .engine))
             metadata = TranscriptMetadata(createdAt: Self.legacyDate,
                                           provider: try c.decodeIfPresent(String.self, forKey: .provider),
                                           costUSD: try c.decodeIfPresent(Double.self, forKey: .costUSD),

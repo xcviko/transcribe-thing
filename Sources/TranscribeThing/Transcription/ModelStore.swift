@@ -110,6 +110,13 @@ final class ModelStore {
         settings.localModel(for: engine)
     }
 
+    /// What `engine` runs on this Mac for one job: GigaAM in `gigaam` when given (Transcribe With of another
+    /// version), else as `model(for:)`.
+    func model(for engine: EngineID, gigaam variant: GigaAMEngine.Variant?) -> LocalModel? {
+        if engine == .gigaam, let variant { return .gigaam(variant) }
+        return model(for: engine)
+    }
+
     /// The state of `id`'s picked model.
     func state(of id: EngineID) -> LocalModelState {
         model(for: id).map { state(model: $0) } ?? .notInstalled
@@ -183,7 +190,8 @@ final class ModelStore {
 
     // MARK: GigaAM's version
 
-    /// Makes `variant` GigaAM's version: every GigaAM dictation, Transcribe With and Retry runs it from now on.
+    /// Makes `variant` GigaAM's version: every GigaAM dictation and its Retry runs it from now on (Transcribe With
+    /// names its version itself).
     /// Versions already downloaded stay on disk; only one is loaded at a time, so the others unload, and this one
     /// loads when it's downloaded and Switch model reaches GigaAM.
     func pickGigaAMVariant(_ variant: GigaAMEngine.Variant) {
@@ -482,10 +490,12 @@ final class ModelStore {
         try await transcribeLocalWithModel(id, samples: samples, background: background).text
     }
 
-    /// `transcribeLocal`, with the model that wrote it: GigaAM's version picked when it started.
-    func transcribeLocalWithModel(_ id: EngineID, samples: [Float],
+    /// `transcribeLocal`, with the model that wrote it: GigaAM's version picked when it started, or `gigaam` when
+    /// given. A version other than the picked one loads for the job, unloading the one loaded (one at a time); the
+    /// pick stays, and the next job without a version loads the picked one back.
+    func transcribeLocalWithModel(_ id: EngineID, gigaam variant: GigaAMEngine.Variant? = nil, samples: [Float],
                                   background: Bool = false) async throws -> (text: String, model: LocalModel) {
-        guard let model = model(for: id) else {
+        guard let model = model(for: id, gigaam: variant) else {
             throw AppError.engineFailed(id, "\(id.displayName) doesn’t run on this Mac.")
         }
         let text = try await runLocal(model, background: background) { try await $0.transcribe(samples) }

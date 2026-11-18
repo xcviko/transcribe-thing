@@ -50,9 +50,10 @@ struct TranscriptResult: Sendable, Equatable {
                            pendingGenerationIDs: otherGenerationIDs.isEmpty ? nil : otherGenerationIDs)
     }
 
-    /// This result as a history version of `kind` (a transcription by its engine unless said otherwise).
+    /// This result as a history version of `kind` (a transcription by its engine unless said otherwise: GigaAM's, by
+    /// the version that wrote it, `modelID`).
     func version(_ kind: TranscriptVersionKind? = nil, text: String? = nil, createdAt: Date = Date()) -> TranscriptVersion {
-        TranscriptVersion(kind: kind ?? .transcription(engine), text: text ?? self.text,
+        TranscriptVersion(kind: kind ?? .transcript(by: engine, modelID: modelID), text: text ?? self.text,
                           metadata: metadata(createdAt: createdAt))
     }
 }
@@ -144,7 +145,9 @@ final class TranscriptionService {
     /// `hedge`: Gemini's request goes two or three times at once (`CloudHedge`).
     /// `generations` hears each Gemini request's generation as OpenRouter names it, so one cancelled before it answers
     /// can still have its cost looked up (a dictation sent again with Polish).
-    func transcribe(_ recording: Recording, engine: EngineID, effort: ReasoningEffort? = nil,
+    /// `gigaam`: GigaAM's version for this one (Transcribe With), its picked one otherwise.
+    func transcribe(_ recording: Recording, engine: EngineID, gigaam: GigaAMEngine.Variant? = nil,
+                    effort: ReasoningEffort? = nil,
                     prompt: String? = nil, upload: UploadFormat? = nil, hedge: CloudHedge? = nil, provider: OpenRouterChatRequest.Provider? = nil, background: Bool = false,
                     progress: (@Sendable (ChatStreamProgress) -> Void)? = nil,
                     generations: (@Sendable (String) -> Void)? = nil) async throws -> TranscriptResult {
@@ -155,7 +158,7 @@ final class TranscriptionService {
         do {
             var result = TranscriptResult(text: "", engine: engine, processingTime: 0)
             if engine.isLocal {
-                let local = try await models.transcribeLocalWithModel(engine, samples: recording.samples,
+                let local = try await models.transcribeLocalWithModel(engine, gigaam: gigaam, samples: recording.samples,
                                                                       background: background)
                 result.text = local.text
                 // Which GigaAM version wrote it: "gigaam-v3-e2e-ctc". Parakeet records none, as before.

@@ -315,8 +315,8 @@ import Testing
 
     /// The dialog's models: the main one first, then Polish and Translate, and each says why it can't run.
     @Test func theMainModelComesFirst() {
-        let choices = ImportChoices.make(main: .geminiFlash) { engine in
-            engine.isLocal ? .needsDownload : .ready
+        let choices = ImportChoices.make(main: .geminiFlash) { kind in
+            kind.engine.isLocal ? .needsDownload : .ready
         }
         #expect(choices.first?.kind == .transcription(.geminiFlash))
         #expect(choices.suffix(TranscriptVersionKind.rewrites.count).map(\.kind) == TranscriptVersionKind.rewrites)
@@ -424,7 +424,7 @@ import Testing
                                         .transcription(.geminiCarbon)] + TranscriptVersionKind.rewrites)
         #expect(gemini.allSatisfy { $0.blocker == .tooLongForGemini })
         #expect(gemini.first?.title == "Gemini 3.8 Flash · Too long, Parakeet takes any length")
-        #expect(choices.filter(\.isEnabled).map(\.kind) == [.transcription(.parakeet), .transcription(.gigaam)])
+        #expect(choices.filter(\.isEnabled).map(\.kind) == [.transcription(.parakeet), .gigaam(.v3), .gigaam(.v3e2e), .gigaam(.multilingual)])
         let hour = ImportChoices.make(main: .geminiFlash, seconds: 3_600) { _ in .ready }
         #expect(hour.allSatisfy { $0.isEnabled })
     }

@@ -391,18 +391,19 @@ private let argonHistoryFile = #"""
     /// With.
     @Test func nothingMadeFromAnArgonRowIsArgons() throws {
         let entries = try entries()
-        let ready: (EngineID) -> EngineReadiness = { _ in .ready }
+        let ready: (TranscriptVersionKind) -> EngineReadiness = { _ in .ready }
         let geminis: [TranscriptVersionKind] = [.transcription(.geminiFlash), .transcription(.geminiHydrogen),
                                                 .transcription(.geminiCarbon)]
         let rewrites = TranscriptVersionKind.rewrites
         let argon = VersionsMenu.make(for: entries[0], running: nil, readiness: ready)
         #expect(argon.versions.map(\.kind) == [.transcription(.geminiArgon)])
-        let locals: [TranscriptVersionKind] = [.transcription(.parakeet), .transcription(.gigaam)]
+        let gigaams: [TranscriptVersionKind] = [.gigaam(.v3), .gigaam(.v3e2e), .gigaam(.multilingual)]
+        let locals: [TranscriptVersionKind] = [.transcription(.parakeet)] + gigaams
         #expect(argon.actions.map(\.kind) == locals + geminis + rewrites)
         #expect(argon.actions.allSatisfy { $0.isEnabled })
 
         let rewritten = VersionsMenu.make(for: entries[1], running: nil, readiness: ready)
-        #expect(rewritten.actions.map(\.kind) == [.transcription(.gigaam)] + geminis + rewrites,
+        #expect(rewritten.actions.map(\.kind) == gigaams + geminis + rewrites,
                 "Argon's polish and translation don't stand in for Flash's or Carbon's")
 
         let failed = VersionsMenu.make(for: entries[3], running: nil, readiness: ready)

@@ -73,12 +73,11 @@ final class HubContext: Observable {
         imports = env.imports
         // Reading a file outlives the Hub window, and with it this context: only what lives as long as the app.
         imports.choices = { [settings, models, account, proxy] seconds in
-            ImportChoices.make(main: settings.mainEngine, seconds: seconds, readiness: { engine in
-                EngineReadiness.of(engine, localState: models.state(of: engine),
-                                   keyStatus: CloudRoute.keyStatus(for: engine, account: account, proxy: proxy),
-                                   localError: models.lastErrors[engine],
-                                   provider: CloudRoute.provider(for: engine, proxy: proxy))
-            }, engineName: settings.engineName)
+            ImportChoices.make(main: settings.mainEngine, gigaam: settings.gigaamVariant, seconds: seconds) { kind in
+                Self.readiness(of: kind, models: models,
+                               keyStatus: CloudRoute.keyStatus(for: kind.engine, account: account, proxy: proxy),
+                               provider: CloudRoute.provider(for: kind.engine, proxy: proxy))
+            }
         }
         imports.start = { [dictation] file, kind in dictation.transcribe(file, as: kind) }
     }
@@ -111,6 +110,21 @@ final class HubContext: Observable {
         readiness(of: choice.engine)
     }
 
+    /// What can make `kind` now: its engine's readiness, or a GigaAM version's own (its own download and state, the
+    /// version picked in Models or not).
+    func readiness(ofKind kind: TranscriptVersionKind) -> EngineReadiness {
+        Self.readiness(of: kind, models: models, keyStatus: keyStatus(for: kind.engine),
+                       provider: provider(for: kind.engine))
+    }
+
+    static func readiness(of kind: TranscriptVersionKind, models: ModelStore, keyStatus: KeyStatus,
+                          provider: CloudProvider?) -> EngineReadiness {
+        let model = kind.gigaamVariant.map(LocalModel.gigaam) ?? models.model(for: kind.engine)
+        return EngineReadiness.of(kind.engine, localState: model.map { models.state(model: $0) } ?? .notInstalled,
+                                  keyStatus: keyStatus, localError: model.flatMap { models.modelErrors[$0] },
+                                  provider: provider)
+    }
+
     /// The status of the key `engine`'s requests go with: the custom endpoint's for Gemini while it routes Gemini,
     /// else OpenRouter's.
     func keyStatus(for engine: EngineID) -> KeyStatus {
@@ -138,8 +152,7 @@ final class HubContext: Observable {
     }
 
     func versionsMenu(for entry: TranscriptEntry) -> VersionsMenu {
-        VersionsMenu.make(for: entry, running: runningVersion(for: entry.id), readiness: readiness(of:),
-                          engineName: settings.engineName)
+        VersionsMenu.make(for: entry, running: runningVersion(for: entry.id), readiness: readiness(ofKind:))
     }
 
     /// The row's dictation is being recorded on right now (its Continue, or Undo).
@@ -153,8 +166,8 @@ final class HubContext: Observable {
         if entry.interruption == .whileRecording, previewDictating ?? (dictation.activity == .recording) {
             return "Finish the dictation you’re recording first"
         }
-        // The row's model, as its Retry With menu says: "Needs key", "Not downloaded".
-        let kind = TranscriptVersionKind.transcription(entry.engine)
+        // The row's model, as its Retry With menu says: "Needs key", "Not downloaded". GigaAM's picked version.
+        let kind = TranscriptVersionKind.transcript(by: entry.engine, gigaam: settings.gigaamVariant)
         return versionsMenu(for: entry).actions.first { $0.kind == kind }?.blocker?.label
     }
 

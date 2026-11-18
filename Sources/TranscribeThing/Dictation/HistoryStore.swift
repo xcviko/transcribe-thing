@@ -210,8 +210,13 @@ struct TranscriptEntry: Codable, Identifiable, Equatable, Sendable {
         attemptedEngine = try Self.decodeEngine(from: c, forKey: .engine)
 
         var decoded = ((try? c.decodeIfPresent([LossyVersion].self, forKey: .versions)) ?? []).compactMap(\.value)
-        var current = (try? c.decodeIfPresent(String.self, forKey: .currentKind)).flatMap { $0 }
-            .flatMap(TranscriptVersionKind.init(rawValue:))
+        let rawCurrent = (try? c.decodeIfPresent(String.self, forKey: .currentKind)).flatMap { $0 }
+        var current = rawCurrent.flatMap(TranscriptVersionKind.init(rawValue:))
+        // GigaAM's one kind from before each version had its own ("gigaam"): its version read as the one its metadata
+        // names (`TranscriptVersion`), and it's still the current one. An entry then had at most one.
+        if rawCurrent == TranscriptVersionKind.legacyGigaAM, let gigaam = decoded.first(where: { $0.engine == .gigaam }) {
+            current = gigaam.kind
+        }
         if status == .success, current.map({ kind in !decoded.contains { $0.kind == kind } }) ?? true {
             // No versions yet (an older file), or the current one is unreadable: the flat transcript is current.
             let flat = TranscriptVersion(

@@ -127,6 +127,20 @@ enum HubSnapshots {
                 c.settings.lineup.main = .gigaam
                 c.history = .preview(entries: Samples.gigaamEntries() + c.history.entries)
             },
+            // GigaAM's versions side by side (`--only hub-gigaam-compare`): a dictation Parakeet wrote and each GigaAM
+            // version transcribed again, its row showing v3's text and four versions.
+            hub("hub-gigaam-compare-home", .home, height: 760) { c in
+                c.models = Samples.models(c, Dictionary(uniqueKeysWithValues: LocalModel.all.map { ($0, .ready) }))
+                c.history = .preview(entries: [Samples.gigaamCompareEntry()] + c.history.entries)
+            },
+            // Its Versions menu (drawn: a menu doesn't render in a snapshot): the four versions, v3's checked, and
+            // Transcribe With offering no GigaAM version, all three there.
+            menu("hub-gigaam-compare-menu", entry: Samples.gigaamCompareEntry(),
+                 models: Dictionary(uniqueKeysWithValues: LocalModel.all.map { ($0, .ready) })),
+            // A Parakeet dictation's Transcribe With: each GigaAM version on its own, Multilingual not downloaded.
+            menu("hub-gigaam-compare-transcribe-with", entry: Samples.gigaamCompareEntry(parakeetOnly: true),
+                 models: [.parakeet: .ready, .gigaam(.v3): .installed, .gigaam(.v3e2e): .ready,
+                          .gigaam(.multilingual): .notInstalled]),
 
             hub("hub-models", .models),
             hub("hub-models-full", .models, height: 1080),
@@ -477,6 +491,16 @@ enum HubSnapshots {
         }
     }
 
+    /// A row's Versions menu as it opens (`VersionsMenuDrawing`), for `entry` with the models in `models`.
+    private static func menu(_ name: String, entry: TranscriptEntry,
+                             models: [LocalModel: LocalModelState]) -> SnapshotEntry {
+        SnapshotEntry(name: name, size: CGSize(width: 520, height: 460)) { env in
+            let context = HubContext(env: env)
+            context.models = .preview(states: [:], models: models, settings: context.settings)
+            return AnyView(VersionsMenuDrawing(menu: context.versionsMenu(for: entry)))
+        }
+    }
+
     private enum Samples {
         /// 2:40 PM today, so the hidden pill reads "Back at 3:40 PM".
         static var now: Date {
@@ -572,6 +596,28 @@ enum HubSnapshots {
             ]
         }
 
+        /// A dictation with English terms in Russian speech, as Parakeet wrote it, then each GigaAM version: v3 hears
+        /// them in Cyrillic, e2e and Multilingual mangle them. v3's is current. `parakeetOnly`: before any of them.
+        static func gigaamCompareEntry(parakeetOnly: Bool = false) -> TranscriptEntry {
+            let created = Date().addingTimeInterval(-25 * 60)
+            func version(_ kind: TranscriptVersionKind, _ text: String, _ seconds: Double) -> TranscriptVersion {
+                TranscriptVersion(kind: kind, text: text,
+                                  metadata: TranscriptMetadata(createdAt: created, modelID: kind.gigaamVariant?.rawValue,
+                                                               processingTime: seconds))
+            }
+            let parakeet = version(.transcription(.parakeet),
+                                   "Открой Chrome DevTools MCP и проверь, что Claude Code видит вкладку.", 0.4)
+            let versions = parakeetOnly ? [parakeet] : [
+                parakeet,
+                version(.gigaam(.v3e2e), "Открой hrome Deftuls MCP и проверь, что Clod Code видит вкладку.", 0.36),
+                version(.gigaam(.multilingual), "открой chrome devtuls mcp и проверь что clod chr видит вкладку", 0.59),
+                version(.gigaam(.v3), "открой хром девтулс эм си пи и проверь что клод код видит вкладку", 0.35),
+            ]
+            return TranscriptEntry(id: UUID(uuidString: "7D3A4E6A-0000-4A7B-9C3D-5E6F7A8B9C01")!, createdAt: created,
+                                   engine: .parakeet, audioDuration: 6.4, voicedSeconds: 5.6,
+                                   audioFileName: "compare.m4a", versions: versions)
+        }
+
         /// Dictations by GigaAM on this Mac: one by v3 e2e (punctuation, digits), one by v3 (plain).
         static func gigaamEntries() -> [TranscriptEntry] {
             let now = Date()
@@ -581,7 +627,7 @@ enum HubSnapshots {
                 result.modelID = variant.rawValue
                 return TranscriptEntry(createdAt: now.addingTimeInterval(-ago), engine: .gigaam,
                                        audioDuration: seconds, voicedSeconds: seconds * 0.85,
-                                       audioFileName: "gigaam.m4a", versions: [result.version(.transcription(.gigaam))])
+                                       audioFileName: "gigaam.m4a", versions: [result.version()])
             }
             return [
                 entry("Созвонимся в четверг в 11:30, я пришлю ссылку.", .v3e2e, ago: 35, seconds: 4.2),
@@ -648,5 +694,66 @@ enum HubSnapshots {
         static func homeFailure(_ kind: TranscriptVersionKind, _ error: AppError) -> HomeFailure {
             HomeFailure(kind: kind, reason: DictationController.homeFailureReason(error, making: kind))
         }
+    }
+}
+
+/// A row's Versions menu drawn as it opens, for snapshots (a menu doesn't render in one): what's running, the versions
+/// with the current one checked, then Transcribe With (or Retry With), unavailable items dimmed with their reason. The
+/// items are `VersionsMenuItems`' own, from the same `VersionsMenu`.
+private struct VersionsMenuDrawing: View {
+    var menu: VersionsMenu
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if let running = menu.runningTitle { item(running, enabled: false) }
+            if !menu.versions.isEmpty {
+                header(VersionsMenu.versionsSectionTitle)
+                ForEach(menu.versions) { version in
+                    item(version.itemTitle, checked: version.isCurrent)
+                }
+            }
+            if !menu.actions.isEmpty {
+                if !menu.versions.isEmpty { Divider().padding(.vertical, 5).padding(.horizontal, 10) }
+                header(menu.isRetry ? menu.title : VersionsMenu.actionsSectionTitle)
+                ForEach(menu.actions) { action in
+                    item(action.title, symbol: "waveform", enabled: action.isEnabled)
+                }
+            }
+        }
+        .padding(5)
+        .fixedSize()
+        .background {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color(nsColor: .windowBackgroundColor))
+                .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
+                .overlay { RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(.stroke, lineWidth: 0.5) }
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Color.bgCanvas)
+    }
+
+    private func header(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(.inkTertiary)
+            .padding(.horizontal, 10)
+            .frame(height: 22, alignment: .leading)
+    }
+
+    private func item(_ title: String, checked: Bool = false, symbol: String? = nil, enabled: Bool = true) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "checkmark")
+                .font(.system(size: 11, weight: .semibold))
+                .opacity(checked ? 1 : 0)
+                .frame(width: 14)
+            if let symbol {
+                Image(systemName: symbol).font(.system(size: 12)).frame(width: 16)
+            }
+            Text(title).font(.system(size: 13)).lineLimit(1)
+        }
+        .foregroundStyle(enabled ? Color.ink : Color.inkTertiary)
+        .padding(.horizontal, 8)
+        .frame(height: 24, alignment: .leading)
     }
 }

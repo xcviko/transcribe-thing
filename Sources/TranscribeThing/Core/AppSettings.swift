@@ -44,8 +44,9 @@ final class AppSettings {
     /// Each model's color (Models): the pill wears the dictation's model's, and its tile, the sidebar chip and
     /// History's marks show it.
     var modelColors: ModelColors = .default { didSet { store.setJSON(modelColors, .modelColors) } }
-    /// The version of GigaAM every GigaAM dictation, Transcribe With and Retry runs (the Version menu on its row in
-    /// Models): v3 until picked. Each version installs on its own (`LocalModel.gigaam`).
+    /// The version of GigaAM every GigaAM dictation and its Retry runs (the Version menu on its row in Models): v3
+    /// until picked. Each version installs on its own (`LocalModel.gigaam`). History's Transcribe With offers each
+    /// version on its own, and running another one leaves this as it is.
     var gigaamVariant: GigaAMEngine.Variant = .default {
         didSet { store.set(gigaamVariant.rawValue, .gigaamVariant) }
     }
@@ -255,11 +256,6 @@ final class AppSettings {
     /// The pill chip's name: GigaAM's with its picked version ("GigaAM v3 e2e"), the others' `chipName`.
     func chipName(of choice: ModelChoice) -> String {
         choice == .gigaam ? gigaamVariant.displayName : choice.chipName
-    }
-
-    /// `engine`'s name with GigaAM's picked version: "GigaAM v3 e2e". The others' `displayName`.
-    func engineName(_ engine: EngineID) -> String {
-        engine == .gigaam ? gigaamVariant.displayName : engine.displayName
     }
 
     /// The level `engine` thinks at: the one picked in Models for a Gemini model; nil for a model that doesn't reason.

@@ -1305,20 +1305,25 @@ final class DictationController {
     /// `hedge`: a dictation's cloud request goes 2 or 3 times at once when Race requests says so (`CloudHedge.race`);
     /// Home's never does.
     /// `generations`: a dictation's, which hears the generations Gemini names (`TranscriptionService.transcribe`).
-    private func transcribe(_ recording: Recording, engine: EngineID, prompt: String? = nil, background: Bool = false,
+    /// `gigaam`: GigaAM's version for this one (Home's Transcribe With of another version), else the picked one.
+    private func transcribe(_ recording: Recording, engine: EngineID, gigaam: GigaAMEngine.Variant? = nil,
+                            prompt: String? = nil, background: Bool = false,
                             hedge: CloudHedge? = nil,
                             progress: (@Sendable (ChatStreamProgress) -> Void)? = nil,
                             generations: (@Sendable (String) -> Void)? = nil) async -> Outcome {
         do {
             let overridden = requestOverride != nil || transcribeOverride != nil
-            if engine.isLocal, !overridden { try await waitForLocalModel(engine) }
+            if engine.isLocal, !overridden, let model = models.model(for: engine, gigaam: gigaam) {
+                try await waitForLocalModel(model)
+            }
             let result: TranscriptResult
             if let requestOverride {
                 result = try await requestOverride(recording, engine, prompt, generations ?? { _ in })
             } else if let transcribeOverride {
                 result = try await transcribeOverride(recording, engine)
             } else {
-                result = try await transcription.transcribe(recording, engine: engine, prompt: prompt, hedge: hedge,
+                result = try await transcription.transcribe(recording, engine: engine, gigaam: gigaam, prompt: prompt,
+                                                            hedge: hedge,
                                                             background: background, progress: progress,
                                                             generations: generations)
             }
@@ -1373,7 +1378,7 @@ final class DictationController {
     nonisolated static let modelWaitNoticeDelay: TimeInterval = 3
 
     /// A model still downloading can't transcribe yet: wait for it (Esc cancels a dictation, Cancel Home's work).
-    private func waitForLocalModel(_ engine: EngineID) async throws {
+    private func waitForLocalModel(_ model: LocalModel) async throws {
         while true {
             try Task.checkCancellation()
             // Right after launch every model reads as not installed until the first disk scan lands.
@@ -1381,14 +1386,14 @@ final class DictationController {
                 try await Task.sleep(for: .milliseconds(100))
                 continue
             }
-            switch models.state(of: engine) {
+            switch models.state(model: model) {
             case .downloading:
                 try await Task.sleep(for: .milliseconds(300))
             case .installed:
-                models.prepare(engine)
+                models.prepare(model: model)
                 return
             case .notInstalled:
-                throw AppError.modelNotDownloaded(engine)
+                throw AppError.modelNotDownloaded(model.engine)
             case .preparing, .ready, .failed:
                 return
             }
@@ -1626,7 +1631,7 @@ final class DictationController {
         if let row = interruptedRow(job.id), let recording = job.recording {
             // Home's Continue: the row the user brought back stays, to continue or transcribe with another model.
             retain(recording)
-            keepInterrupted(row, recording, failure: (job.rewrite ?? .transcription(job.engine), .noSpeech),
+            keepInterrupted(row, recording, failure: (job.rewrite ?? transcriptKind(job.engine), .noSpeech),
                             modelAnswer: result?.rawAnswer)
             reportNoSpeech(model: ModelChoice(engine: job.engine))
             return
@@ -1673,7 +1678,7 @@ final class DictationController {
                                   engine: job.engine)
         if let row = interruptedRow(job.id) {
             // Home's Continue recorded on, then its transcription failed: the row stays one to continue.
-            keepInterrupted(row, recording, failure: (job.rewrite ?? .transcription(job.engine), error),
+            keepInterrupted(row, recording, failure: (job.rewrite ?? transcriptKind(job.engine), error),
                             modelAnswer: modelAnswer)
             return notice
         }
@@ -1883,7 +1888,7 @@ final class DictationController {
     /// or why it didn't come (`homeFailures`). Deleting the row cancels it.
     func makeVersion(_ kind: TranscriptVersionKind, of entry: TranscriptEntry) {
         switch kind {
-        case .transcription(let engine): retry(entry, with: engine)
+        case .transcription, .gigaam: transcribeAgain(entry, as: kind)
         case .polish, .translation: rewrite(entry, as: kind)
         // Nothing makes clean-ups any more (History only reads old ones), and a selection has no recording to make
         // another version from.
@@ -1892,12 +1897,17 @@ final class DictationController {
     }
 
     /// Home: "Retry" of a failed or canceled row, or "Transcribe With" of a transcript, with any engine the
-    /// transcript has no version from (one it has is shown instead). Nothing happens while something else runs for
-    /// the recording.
+    /// transcript has no version from (one it has is shown instead): GigaAM in its picked version. Nothing happens
+    /// while something else runs for the recording.
     func retry(_ entry: TranscriptEntry, with engine: EngineID) {
+        transcribeAgain(entry, as: transcriptKind(engine))
+    }
+
+    /// `retry(_:with:)` with a transcript's kind: an engine's, or a GigaAM version's, picked or not (that version loads
+    /// for the job, and the pick stays as it is).
+    private func transcribeAgain(_ entry: TranscriptEntry, as kind: TranscriptVersionKind) {
         let id = entry.id
         guard !isInFlight(id) else { return }
-        let kind = TranscriptVersionKind.transcription(engine)
         if let current = history.entry(id: id), current.status == .success, current.hasVersion(kind) {
             showVersion(kind, of: id)
             return
@@ -1960,9 +1970,11 @@ final class DictationController {
     /// The body of a Home task (`homeTasks`), once it has the recording.
     private func makeInHome(_ kind: TranscriptVersionKind, from recording: Recording) async {
         let engine = kind.engine
+        // A GigaAM version's is made as itself, whichever version is picked.
         let made: TranscriptVersionKind? = if case .transcription = kind { nil } else { kind }
         let prompt = made.flatMap(geminiPrompt(for:))
-        var outcome = await transcribe(recording, engine: engine, prompt: prompt, background: true)
+        var outcome = await transcribe(recording, engine: engine, gigaam: kind.gigaamVariant, prompt: prompt,
+                                       background: true)
         guard endHomeWork(for: recording.id) else { return }
         if made?.answersInMessageTags == true, case .success(var result) = outcome {
             // Once, from the whole answer (see `run`).
@@ -1981,8 +1993,13 @@ final class DictationController {
         case .polish: Polish.prompt
         case .translation(polished: false, _): Translate.prompt(settings.translationPair)
         case .translation(polished: true, _): Translate.polishedPrompt(settings.translationPair)
-        case .transcription, .cleanup, .selection, .selectionTranslation: nil
+        case .transcription, .gigaam, .cleanup, .selection, .selectionTranslation: nil
         }
+    }
+
+    /// The transcript `engine` writes for a dictation: GigaAM's in its picked version.
+    private func transcriptKind(_ engine: EngineID) -> TranscriptVersionKind {
+        .transcript(by: engine, gigaam: settings.gigaamVariant)
     }
 
     /// What Gemini (`engine`, the dictation's) writes for a dictation with Polish and Translate on or off: its
@@ -2111,7 +2128,7 @@ final class DictationController {
         Log.engine.error("Home transcription failed: \(failure.code, privacy: .public)")
         DiagnosticLog.shared.event(.dictation, "home.finished",
                                    ["engine": engine, "made": made?.rawValue ?? "transcription", "outcome": "failure", "code": failure])
-        let kind = made ?? .transcription(engine)
+        let kind = made ?? transcriptKind(engine)
         guard entry.status != .success else {
             homeFailures[id] = HomeFailure(kind: kind, reason: Self.homeFailureReason(failure, making: kind))
             return
@@ -2152,8 +2169,8 @@ final class DictationController {
         case (.modelNotDownloaded?, _): "It isn’t downloaded yet."
         case (.modelLoadFailed?, _): "It couldn’t be loaded."
         case (.openRouterNoRoute?, _): "It isn’t available for your key."
-        case (let error?, .transcription(let engine)):
-            accountFailureReason(error) ?? error.notice(recordingID: nil, fallbackEngine: nil, engine: engine).title
+        case (let error?, .transcription), (let error?, .gigaam):
+            accountFailureReason(error) ?? error.notice(recordingID: nil, fallbackEngine: nil, engine: kind.engine).title
         }
     }
 
@@ -2304,7 +2321,7 @@ final class DictationController {
             return
         }
         guard row.audioFileName != nil else {
-            homeFailures[id] = .recordingGone(.transcription(row.engine))
+            homeFailures[id] = .recordingGone(transcriptKind(row.engine))
             return
         }
         // Read off the main actor: a dictation that ran on for an hour takes a moment to decode.
@@ -2314,7 +2331,7 @@ final class DictationController {
             let recording = await self.history.loadRecordingInBackground(for: row)
             self.startingContinuations.remove(id)
             guard let recording else {
-                self.homeFailures[id] = .recordingGone(.transcription(row.engine))
+                self.homeFailures[id] = .recordingGone(self.transcriptKind(row.engine))
                 return
             }
             // Deleted, transcribed or taken up meanwhile, or another dictation started: nothing to record on now.
@@ -2365,7 +2382,9 @@ final class DictationController {
         // A load nothing needs now (a model on this Mac that Switch model never reaches) stays quiet.
         if case .modelLoadFailed = error, !settings.usesLocalModel(engine) { return }
         // A load Home work waits for: its row says why. A dictation that needs the model says it in its own notice.
-        if case .modelLoadFailed = error, homeWork.values.contains(.transcription(engine)) { return }
+        if case .modelLoadFailed = error, homeWork.values.contains(where: { $0.isTranscript && $0.engine == engine }) {
+            return
+        }
         postFailure(error.notice(recordingID: nil, fallbackEngine: usableFallback(excluding: engine, after: error),
                                  engine: engine))
     }
@@ -3646,7 +3665,7 @@ final class DictationController {
         if pendingJobCount != count { pendingJobCount = count }
         var running = homeWork
         for job in (deliveringJob.map { [$0] } ?? []) + queue where job.recording != nil {
-            running[job.id] = job.rewrite ?? .transcription(job.engine)
+            running[job.id] = job.rewrite ?? transcriptKind(job.engine)
         }
         if runningVersions != running { runningVersions = running }
         if recordingOnID != continuing?.id { recordingOnID = continuing?.id }

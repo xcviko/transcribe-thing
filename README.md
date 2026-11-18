@@ -79,7 +79,8 @@ manager may still keep the selected text.
 - **GigaAM** runs on your Mac, free and offline, like Parakeet: Sber's model for Russian. Pick one of three versions
   on its row: v3 writes plain lowercase text without punctuation, v3 e2e adds punctuation, capitals and digits, and
   Multilingual also hears English, Kazakh, Kyrgyz and Uzbek, without punctuation. Each version is its own download
-  (about 410 MB, 1.1 GB for Multilingual).
+  (about 410 MB, 1.1 GB for Multilingual). To compare them, run a recording through each downloaded version from History →
+  Transcribe With: the transcripts stay side by side.
 
 Hydrogen, Carbon and GigaAM are off until you switch them on in Models.
 

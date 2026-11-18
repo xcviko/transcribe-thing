@@ -379,7 +379,7 @@ import Testing
     private func menu(_ entry: TranscriptEntry, key: KeyStatus = .valid(KeyInfo()), local: LocalModelState = .ready,
                       running: TranscriptVersionKind? = nil) -> VersionsMenu {
         VersionsMenu.make(for: entry, running: running, readiness: {
-            EngineReadiness.of($0, localState: local, keyStatus: key)
+            EngineReadiness.of($0.engine, localState: local, keyStatus: key)
         })
     }
 
@@ -396,11 +396,11 @@ import Testing
         let m = menu(transcript(.parakeet))
         #expect(m.title == "Versions" && !m.isRetry && m.runningTitle == nil)
         #expect(m.versions == [VersionsMenu.Version(kind: .transcription(.parakeet), summary: "0.4 s", isCurrent: true)])
-        #expect(m.actions.map(\.kind) == [.transcription(.gigaam), .transcription(.geminiFlash),
+        #expect(m.actions.map(\.kind) == [.gigaam(.v3), .gigaam(.v3e2e), .gigaam(.multilingual), .transcription(.geminiFlash),
                                           .transcription(.geminiHydrogen), .transcription(.geminiCarbon)]
                 + TranscriptVersionKind.rewrites)
         #expect(m.actions.allSatisfy { $0.isEnabled })
-        #expect(m.actions.map(\.title) == ["GigaAM", "Gemini 3.8 Flash", "Gemini 4 Hydrogen", "Gemini 4 Carbon",
+        #expect(m.actions.map(\.title) == ["GigaAM v3", "GigaAM v3 e2e", "GigaAM Multilingual", "Gemini 3.8 Flash", "Gemini 4 Hydrogen", "Gemini 4 Carbon",
                                            "Polish with Gemini 3.8 Flash", "Polish with Gemini 4 Hydrogen",
                                            "Polish with Gemini 4 Carbon",
                                            "Translate with Gemini 3.8 Flash", "Translate with Gemini 4 Hydrogen",
@@ -416,7 +416,7 @@ import Testing
         #expect(m.versions.map(\.kind) == [.transcription(.parakeet), .transcription(.geminiFlash), flashLite])
         #expect(m.versions.map(\.isCurrent) == [false, true, false])
         #expect(m.versions[1].summary == "3.0 s · $0.002")
-        #expect(m.actions.map(\.kind) == [.transcription(.gigaam), .transcription(.geminiHydrogen),
+        #expect(m.actions.map(\.kind) == [.gigaam(.v3), .gigaam(.v3e2e), .gigaam(.multilingual), .transcription(.geminiHydrogen),
                                           .transcription(.geminiCarbon)]
                 + TranscriptVersionKind.rewrites, "no clean-up, ever")
     }
@@ -457,7 +457,7 @@ import Testing
 
     @Test func withoutAKeyCloudActionsSaySo() {
         let m = menu(transcript(.parakeet), key: .missing)
-        #expect(m.actions.map(\.title) == ["GigaAM", "Gemini 3.8 Flash · Needs key",
+        #expect(m.actions.map(\.title) == ["GigaAM v3", "GigaAM v3 e2e", "GigaAM Multilingual", "Gemini 3.8 Flash · Needs key",
                                            "Gemini 4 Hydrogen · Needs key", "Gemini 4 Carbon · Needs key",
                                            "Polish with Gemini 3.8 Flash · Needs key",
                                            "Polish with Gemini 4 Hydrogen · Needs key",
@@ -499,7 +499,7 @@ import Testing
         let m = menu(failed)
         #expect(m.title == "Retry With" && m.isRetry && m.versions.isEmpty)
         #expect(m.actions.map(\.kind)
-                == EngineID.offered.map { .transcription($0) } + TranscriptVersionKind.rewrites,
+                == TranscriptVersionKind.transcripts + TranscriptVersionKind.rewrites,
                 "any engine, Polish or Translate")
         var gone = failed
         gone.audioFileName = nil

@@ -184,7 +184,7 @@ private let historyFile = #"""
 
     private func menu(_ entry: TranscriptEntry) -> VersionsMenu {
         VersionsMenu.make(for: entry, running: nil, readiness: {
-            EngineReadiness.of($0, localState: .ready, keyStatus: .valid(KeyInfo()))
+            EngineReadiness.of($0.engine, localState: .ready, keyStatus: .valid(KeyInfo()))
         })
     }
 
@@ -216,7 +216,7 @@ private let historyFile = #"""
         let m = menu(try entries()[0])
         #expect(m.versions.map(\.title) == ["Parakeet v3", "Parakeet v3 + Clean-up by GPT-6 Luna"])
         #expect(m.versions.map(\.isCurrent) == [false, true])
-        #expect(m.actions.map(\.kind) == [.transcription(.gigaam), .transcription(.geminiFlash),
+        #expect(m.actions.map(\.kind) == [.gigaam(.v3), .gigaam(.v3e2e), .gigaam(.multilingual), .transcription(.geminiFlash),
                                           .transcription(.geminiHydrogen), .transcription(.geminiCarbon)]
                 + TranscriptVersionKind.rewrites)
         #expect(!m.actions.contains { $0.kind.isCleanup || $0.title.contains("Clean Up") })
