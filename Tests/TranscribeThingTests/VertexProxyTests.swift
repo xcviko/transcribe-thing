@@ -189,6 +189,8 @@ enum ProxyFixture {
         #expect(body["model"] as? String == "google/gemini-3.8-flash")
         #expect(body["provider"] == nil, "no OpenRouter routing")
         #expect(body["stream"] as? Bool == true)
+        #expect((body["stream_options"] as? [String: Any])?["include_usage"] as? Bool == true,
+                "the endpoint sends the usage, and with it the cost, only when asked")
         #expect((body["reasoning"] as? [String: Any])?["effort"] as? String == "medium")
         let content = (body["messages"] as? [[String: Any]])?.last?["content"] as? [[String: Any]]
         #expect(content?.first?["type"] as? String == "input_audio")

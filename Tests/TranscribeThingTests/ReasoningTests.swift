@@ -186,7 +186,7 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
     @Test func aTextRequestIsTextInTextOutPinnedToGoogle() throws {
         let route = try #require(PolishSelectionModel.geminiFlash.route)
         let json = try object(.text(route: route, systemPrompt: "  Polish it.\n", text: "Можешь, пожалуйста, убрать это?"))
-        #expect(Set(json.keys) == ["model", "messages", "reasoning", "provider", "max_tokens", "stream"])
+        #expect(Set(json.keys) == ["model", "messages", "reasoning", "provider", "max_tokens", "stream", "stream_options"])
         #expect(json["model"] as? String == "google/gemini-3.8-flash")
         #expect(json["temperature"] == nil)
         #expect(json["stream"] as? Bool == true)

@@ -16,6 +16,16 @@ struct OpenRouterChatRequest: Encodable, Equatable {
     let stream: Bool
     /// Sent only when set: otherwise the model's default (every request the app sends).
     var temperature: Double? = nil
+    /// Asks for the usage (tokens and cost) in the stream's last chunk. OpenRouter sends it unasked; the user's own
+    /// endpoint, like OpenAI's API, sends it only when asked, and without it History has no cost or tokens there.
+    var streamOptions: StreamOptions? = .includeUsage
+
+    struct StreamOptions: Encodable, Equatable {
+        let includeUsage: Bool
+        enum CodingKeys: String, CodingKey { case includeUsage = "include_usage" }
+
+        static let includeUsage = StreamOptions(includeUsage: true)
+    }
 
     struct Reasoning: Encodable, Equatable {
         let effort: String
@@ -34,6 +44,7 @@ struct OpenRouterChatRequest: Encodable, Equatable {
     enum CodingKeys: String, CodingKey {
         case model, messages, reasoning, provider, stream, temperature
         case maxTokens = "max_tokens"
+        case streamOptions = "stream_options"
     }
 
     /// Gemini via Google AI Studio only, streamed, thinking at `effort` (the level picked for the model,

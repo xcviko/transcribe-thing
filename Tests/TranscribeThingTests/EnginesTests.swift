@@ -16,7 +16,9 @@ import Testing
             model: "google/gemini-3.8-flash", audioBase64: "UklG+/==", format: "wav", systemPrompt: "", effort: .high,
             maxTokens: OpenRouterClient.transcriptionMaxTokens(audioSeconds: 60))
         let json = try object(body)
-        #expect(Set(json.keys) == ["model", "messages", "reasoning", "provider", "max_tokens", "stream"])
+        #expect(Set(json.keys) == ["model", "messages", "reasoning", "provider", "max_tokens", "stream", "stream_options"])
+        #expect((json["stream_options"] as? [String: Any])?["include_usage"] as? Bool == true,
+                "asks for the usage, which the user's endpoint sends only when asked")
         #expect(json["model"] as? String == "google/gemini-3.8-flash")
         #expect(json["temperature"] == nil)
         #expect(json["max_tokens"] as? Int == 32_768)
@@ -131,7 +133,7 @@ import Testing
             "model": "google/gemini-3.8-flash", "messages": messages,
             "reasoning": ["effort": "medium", "exclude": false],
             "provider": ["only": ["google-ai-studio"], "allow_fallbacks": false],
-            "max_tokens": 32_768, "stream": true,
+            "max_tokens": 32_768, "stream": true, "stream_options": ["include_usage": true],
         ] as NSDictionary
     }
 
@@ -157,6 +159,7 @@ import Testing
             "reasoning": ["effort": route.effort, "exclude": false],
             "provider": ["only": ["google-ai-studio"], "allow_fallbacks": false],
             "max_tokens": TextRoute.maxTokens(forCharacterCount: 2, effort: route.budget), "stream": true,
+            "stream_options": ["include_usage": true],
         ]
         #expect(try object(body.encoded()) == expected)
     }
