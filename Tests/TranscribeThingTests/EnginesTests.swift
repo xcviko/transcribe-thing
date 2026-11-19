@@ -1295,77 +1295,6 @@ final class ProgressLog: @unchecked Sendable {
     }
 }
 
-// MARK: - Install detection on disk
-
-@Suite struct InstallDetectionTests {
-    private func tempDir() throws -> URL {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("transcribe-thing-engines-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        return url
-    }
-
-    private func write(_ url: URL, bytes: Int = 4) throws {
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data(count: bytes).write(to: url)
-    }
-
-    private func fakeParakeet(in root: URL) throws -> URL {
-        let repo = root.appendingPathComponent("parakeet-tdt-0.6b-v3")
-        for bundle in ["Preprocessor.mlmodelc", "Encoder_v2.mlmodelc", "Decoder.mlmodelc", "JointDecisionv3.mlmodelc"] {
-            for inner in ["coremldata.bin", "model.mil", "weights/weight.bin", "analytics/coremldata.bin"] {
-                try write(repo.appendingPathComponent(bundle).appendingPathComponent(inner))
-            }
-        }
-        try write(repo.appendingPathComponent("parakeet_vocab.json"))
-        try write(repo.appendingPathComponent("parakeet_v3_vocab.json"))
-        try write(repo.appendingPathComponent("config.json"))
-        return repo
-    }
-
-    @Test func parakeetNeedsEveryCompiledFileAndNoPartials() throws {
-        let root = try tempDir()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let engine = ParakeetEngine(modelsRoot: root)
-        #expect(engine.repoDirectory.lastPathComponent == "parakeet-tdt-0.6b-v3")
-        #expect(!engine.isInstalled())
-
-        let repo = try fakeParakeet(in: root)
-        #expect(engine.isInstalled())
-
-        let partial = repo.appendingPathComponent("Encoder_v2.mlmodelc/weights/weight.bin.partial")
-        try write(partial)
-        #expect(!engine.isInstalled(), "an interrupted download leaves *.partial files")
-        try FileManager.default.removeItem(at: partial)
-        #expect(engine.isInstalled())
-
-        try FileManager.default.removeItem(at: repo.appendingPathComponent("Encoder_v2.mlmodelc/weights/weight.bin"))
-        #expect(!engine.isInstalled(), "bundle folders alone don't make an install")
-    }
-
-    @Test func parakeetWithTheOtherEncoderIsNotInstalled() throws {
-        let root = try tempDir()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let repo = try fakeParakeet(in: root)
-        try FileManager.default.moveItem(at: repo.appendingPathComponent("Encoder_v2.mlmodelc"),
-                                         to: repo.appendingPathComponent("Encoder.mlmodelc"))
-        #expect(!ParakeetEngine(modelsRoot: root).isInstalled())
-    }
-
-    @Test func treeListingParsesFilesAndLFSSizes() throws {
-        let json = #"""
-        [{"type":"directory","oid":"a","size":0,"path":"Encoder_v2.mlmodelc"},
-         {"type":"file","oid":"b","size":135,"path":"Encoder_v2.mlmodelc/weights/weight.bin","lfs":{"oid":"c","size":594211328,"pointerSize":135}},
-         {"type":"file","oid":"d","size":475,"path":"config.json"}]
-        """#
-        let files = try HuggingFaceTree.parse(Data(json.utf8))
-        #expect(files == [.init(path: "Encoder_v2.mlmodelc/weights/weight.bin", size: 594_211_328),
-                          .init(path: "config.json", size: 475)])
-        let link = #"<https://huggingface.co/api/models/x/tree/main?recursive=1&cursor=abc>; rel="next""#
-        #expect(HuggingFaceTree.nextPage(fromLinkHeader: link)?.absoluteString
-                == "https://huggingface.co/api/models/x/tree/main?recursive=1&cursor=abc")
-    }
-}
-
 // MARK: - Inference gate
 
 actor ConcurrencyProbe {
@@ -1676,18 +1605,18 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
 
 @MainActor
 @Suite(.timeLimit(.minutes(1))) struct ModelStoreTests {
-    /// `usedByLineup` false: Gemini is the main model and Parakeet is switched off, so nothing loads it.
+    /// `usedByLineup` false: Gemini is the main model and GigaAM is switched off, so nothing loads it.
     private func makeStore(installed: Bool = true, freeBytes: Int64 = 50_000_000_000, usedByLineup: Bool = true)
         -> (ModelStore, FakeEngine, AppSettings) {
         let settings = AppSettings.inMemory()
         if !usedByLineup {
             settings.lineup.main = .gemini
-            settings.lineup.setSwitchable(.parakeet, false)
+            settings.lineup.setSwitchable(.gigaam, false)
         }
-        let parakeet = FakeEngine(.parakeet, installed: installed)
-        let store = ModelStore(paths: .temporary(), settings: settings, engines: [.parakeet: parakeet],
+        let gigaam = FakeEngine(.gigaam, installed: installed)
+        let store = ModelStore(paths: .temporary(), settings: settings, engines: [.gigaam(.v3): gigaam],
                                gate: InferenceGate(), freeDiskBytes: { freeBytes })
-        return (store, parakeet, settings)
+        return (store, gigaam, settings)
     }
 
     private func waitUntil(_ condition: () -> Bool) async {
@@ -1695,209 +1624,209 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
     }
 
     @Test func startScansAndPreparesTheSelectedModel() async throws {
-        let (store, parakeet, _) = makeStore()
+        let (store, gigaam, _) = makeStore()
         store.start()
-        await waitUntil { store.state(of: .parakeet) == .ready }
-        #expect(await parakeet.isLoaded)
+        await waitUntil { store.state(of: .gigaam) == .ready }
+        #expect(await gigaam.isLoaded)
     }
 
     @Test func downloadReportsProgressThenInstallsAndPreparesWhenSelected() async throws {
-        let (store, parakeet, _) = makeStore(installed: false)
+        let (store, gigaam, _) = makeStore(installed: false)
         var finished: [LocalModel] = []
         store.onDownloadFinished = { finished.append($0) }
         await store.refreshFromDisk()
-        #expect(store.state(of: .parakeet) == .notInstalled)
-        let gate = await parakeet.gateDownloads()
-        store.download(.parakeet)
-        #expect(store.state(of: .parakeet).isDownloading)
+        #expect(store.state(of: .gigaam) == .notInstalled)
+        let gate = await gigaam.gateDownloads()
+        store.download(.gigaam)
+        #expect(store.state(of: .gigaam).isDownloading)
         // The fake holds each step until the gate opens, so every fraction stays on screen until it's seen.
         for fraction in [0.25, 0.5, 0.75] {
             gate.open()
-            await waitUntil { store.state(of: .parakeet).downloadProgress?.fraction == fraction }
-            #expect(store.state(of: .parakeet).downloadProgress?.totalBytes == 1_000_000)
+            await waitUntil { store.state(of: .gigaam).downloadProgress?.fraction == fraction }
+            #expect(store.state(of: .gigaam).downloadProgress?.totalBytes == 1_000_000)
             #expect(finished.isEmpty)
         }
-        await waitUntil { store.state(of: .parakeet) == .ready }
-        #expect(finished == [.parakeet])
-        #expect(await parakeet.isLoaded)
+        await waitUntil { store.state(of: .gigaam) == .ready }
+        #expect(finished == [.gigaam(.v3)])
+        #expect(await gigaam.isLoaded)
     }
 
     @Test func downloadOfAModelNothingUsesStopsAtInstalled() async throws {
         let (store, _, _) = makeStore(installed: false, usedByLineup: false)
-        store.download(.parakeet)
-        await waitUntil { store.state(of: .parakeet) == .installed }
+        store.download(.gigaam)
+        await waitUntil { store.state(of: .gigaam) == .installed }
     }
 
     @Test func notEnoughDiskFailsBeforeDownloading() async throws {
-        let (store, parakeet, _) = makeStore(installed: false, freeBytes: 100_000_000)
+        let (store, gigaam, _) = makeStore(installed: false, freeBytes: 100_000_000)
         var failures: [AppError] = []
         store.onFailure = { _, error in failures.append(error) }
-        store.download(.parakeet)
-        await waitUntil { if case .failed = store.state(of: .parakeet) { true } else { false } }
-        let needed = Int64((Double(EngineID.parakeet.approxDownloadBytes!) * 1.25).rounded(.up))
-        #expect(store.lastErrors[.parakeet] == .notEnoughDisk(needed: needed, available: 100_000_000))
+        store.download(.gigaam)
+        await waitUntil { if case .failed = store.state(of: .gigaam) { true } else { false } }
+        let needed = Int64((Double(LocalModel.gigaam(.v3).approxInstallPeakBytes) * 1.25).rounded(.up))
+        #expect(store.lastErrors[.gigaam] == .notEnoughDisk(needed: needed, available: 100_000_000))
         #expect(failures == [.notEnoughDisk(needed: needed, available: 100_000_000)])
-        #expect(!parakeet.isInstalled())
+        #expect(!gigaam.isInstalled())
     }
 
     @Test func downloadFailureIsReported() async throws {
-        let (store, parakeet, _) = makeStore(installed: false)
-        await parakeet.configure(downloadError: URLError(.notConnectedToInternet))
-        store.download(.parakeet)
-        await waitUntil { if case .failed = store.state(of: .parakeet) { true } else { false } }
-        #expect(store.state(of: .parakeet) == .failed("Download didn’t finish. No internet connection."))
-        #expect(store.lastErrors[.parakeet] == .downloadFailed(.parakeet, "No internet connection."))
+        let (store, gigaam, _) = makeStore(installed: false)
+        await gigaam.configure(downloadError: URLError(.notConnectedToInternet))
+        store.download(.gigaam)
+        await waitUntil { if case .failed = store.state(of: .gigaam) { true } else { false } }
+        #expect(store.state(of: .gigaam) == .failed("Download didn’t finish. No internet connection."))
+        #expect(store.lastErrors[.gigaam] == .downloadFailed(.gigaam, "No internet connection."))
     }
 
     @Test func cancelledDownloadReturnsQuietly() async throws {
-        let (store, parakeet, _) = makeStore(installed: false)
-        let gate = await parakeet.gateDownloads()
+        let (store, gigaam, _) = makeStore(installed: false)
+        let gate = await gigaam.gateDownloads()
         var failures = 0
         store.onFailure = { _, _ in failures += 1 }
-        store.download(.parakeet)
+        store.download(.gigaam)
         gate.open()
-        await waitUntil { store.state(of: .parakeet).downloadProgress?.fraction == 0.25 }
+        await waitUntil { store.state(of: .gigaam).downloadProgress?.fraction == 0.25 }
         // Mid-download: the fake has reported a step and is held before the next one.
-        store.cancelDownload(.parakeet)
-        #expect(store.state(of: .parakeet) == .notInstalled)
-        await store.waitForDownloadToSettle(.parakeet)
+        store.cancelDownload(.gigaam)
+        #expect(store.state(of: .gigaam) == .notInstalled)
+        await store.waitForDownloadToSettle(.gigaam)
         #expect(gate.cancellations == 1, "the engine's download saw the cancellation")
-        #expect(store.state(of: .parakeet) == .notInstalled)
-        #expect(store.lastErrors[.parakeet] == nil)
+        #expect(store.state(of: .gigaam) == .notInstalled)
+        #expect(store.lastErrors[.gigaam] == nil)
         #expect(failures == 0)
-        #expect(!parakeet.isInstalled())
+        #expect(!gigaam.isInstalled())
     }
 
     @Test func downloadRestartedRightAfterCancelFinishes() async throws {
-        let (store, parakeet, _) = makeStore(installed: false, usedByLineup: false)
-        let gate = await parakeet.gateDownloads()
-        store.download(.parakeet)
+        let (store, gigaam, _) = makeStore(installed: false, usedByLineup: false)
+        let gate = await gigaam.gateDownloads()
+        store.download(.gigaam)
         await gate.arrival(1)
         // The first run is inside the engine's download, held before its first step.
-        store.cancelDownload(.parakeet)
-        store.download(.parakeet)
-        #expect(store.state(of: .parakeet).isDownloading)
+        store.cancelDownload(.gigaam)
+        store.download(.gigaam)
+        #expect(store.state(of: .gigaam).isDownloading)
         // The restart reaches the engine only after the cancelled run has fully unwound.
         await gate.arrival(2)
         #expect(gate.cancellations == 1)
-        #expect(store.state(of: .parakeet).isDownloading, "the cancelled run must not reset the new one")
+        #expect(store.state(of: .gigaam).isDownloading, "the cancelled run must not reset the new one")
         gate.openForGood()
-        await waitUntil { store.state(of: .parakeet) == .installed }
-        await store.waitForDownloadToSettle(.parakeet)
-        #expect(store.state(of: .parakeet) == .installed)
+        await waitUntil { store.state(of: .gigaam) == .installed }
+        await store.waitForDownloadToSettle(.gigaam)
+        #expect(store.state(of: .gigaam) == .installed)
     }
 
     @Test func transcribeWaitsForPreparing() async throws {
-        let (store, parakeet, _) = makeStore()
-        await parakeet.configure(loadDelay: .milliseconds(250))
+        let (store, gigaam, _) = makeStore()
+        await gigaam.configure(loadDelay: .milliseconds(250))
         await store.refreshFromDisk()
-        store.prepare(.parakeet)
-        #expect(store.state(of: .parakeet).isPreparing)
-        let text = try await store.transcribeLocal(.parakeet, samples: [0, 0.1])
+        store.prepare(.gigaam)
+        #expect(store.state(of: .gigaam).isPreparing)
+        let text = try await store.transcribeLocal(.gigaam, samples: [0, 0.1])
         #expect(text == "hello from the fake")
-        #expect(store.state(of: .parakeet) == .ready)
+        #expect(store.state(of: .gigaam) == .ready)
     }
 
     @Test func transcribeLoadsAnInstalledModelOnDemand() async throws {
         let (store, _, _) = makeStore()
         await store.refreshFromDisk()
-        #expect(store.state(of: .parakeet) == .installed)
-        #expect(try await store.transcribeLocal(.parakeet, samples: [0]) == "hello from the fake")
+        #expect(store.state(of: .gigaam) == .installed)
+        #expect(try await store.transcribeLocal(.gigaam, samples: [0]) == "hello from the fake")
     }
 
     @Test func missingModelThrowsNotDownloaded() async throws {
         let (store, _, _) = makeStore(installed: false)
         await store.refreshFromDisk()
-        await #expect(throws: AppError.modelNotDownloaded(.parakeet)) {
-            try await store.transcribeLocal(.parakeet, samples: [0])
+        await #expect(throws: AppError.modelNotDownloaded(.gigaam)) {
+            try await store.transcribeLocal(.gigaam, samples: [0])
         }
     }
 
     @Test func loadFailureSurfacesAsModelLoadFailed() async throws {
-        let (store, parakeet, _) = makeStore()
-        await parakeet.configure(loadError: FakeFailure(message: "corrupt weights"))
+        let (store, gigaam, _) = makeStore()
+        await gigaam.configure(loadError: FakeFailure(message: "corrupt weights"))
         await store.refreshFromDisk()
-        store.prepare(.parakeet)
-        await waitUntil { if case .failed = store.state(of: .parakeet) { true } else { false } }
-        #expect(store.lastErrors[.parakeet] == .modelLoadFailed(.parakeet, "corrupt weights"))
-        await #expect(throws: AppError.modelLoadFailed(.parakeet, "corrupt weights")) {
-            try await store.transcribeLocal(.parakeet, samples: [0])
+        store.prepare(.gigaam)
+        await waitUntil { if case .failed = store.state(of: .gigaam) { true } else { false } }
+        #expect(store.lastErrors[.gigaam] == .modelLoadFailed(.gigaam, "corrupt weights"))
+        await #expect(throws: AppError.modelLoadFailed(.gigaam, "corrupt weights")) {
+            try await store.transcribeLocal(.gigaam, samples: [0])
         }
-        #expect(store.state(of: .parakeet) == .failed("Couldn’t load the model. Retry, or download it again."))
-        #expect(await parakeet.loadCount == 2, "one retry per dictation")
+        #expect(store.state(of: .gigaam) == .failed("Couldn’t load the model. Retry, or download it again."))
+        #expect(await gigaam.loadCount == 2, "one retry per dictation")
     }
 
     @Test func retryAfterAFailedLoadLoadsAgainInsteadOfDownloading() async throws {
-        let (store, parakeet, _) = makeStore()
-        await parakeet.configure(loadError: FakeFailure(message: "boom"))
+        let (store, gigaam, _) = makeStore()
+        await gigaam.configure(loadError: FakeFailure(message: "boom"))
         await store.refreshFromDisk()
-        store.prepare(.parakeet)
-        await waitUntil { if case .failed = store.state(of: .parakeet) { true } else { false } }
-        await parakeet.configure()
-        store.download(.parakeet)
-        #expect(store.state(of: .parakeet).isPreparing)
-        await waitUntil { store.state(of: .parakeet) == .ready }
-        #expect(store.lastErrors[.parakeet] == nil)
+        store.prepare(.gigaam)
+        await waitUntil { if case .failed = store.state(of: .gigaam) { true } else { false } }
+        await gigaam.configure()
+        store.download(.gigaam)
+        #expect(store.state(of: .gigaam).isPreparing)
+        await waitUntil { store.state(of: .gigaam) == .ready }
+        #expect(store.lastErrors[.gigaam] == nil)
     }
 
     @Test func reinstallReplacesAModelThatWontLoad() async throws {
-        let (store, parakeet, _) = makeStore()
-        await parakeet.configure(loadError: FakeFailure(message: "corrupt weights"))
+        let (store, gigaam, _) = makeStore()
+        await gigaam.configure(loadError: FakeFailure(message: "corrupt weights"))
         store.start()
-        await waitUntil { if case .failed = store.state(of: .parakeet) { true } else { false } }
-        await parakeet.configure()
-        await store.reinstall(.parakeet)
-        #expect(store.state(of: .parakeet).isDownloading)
-        await waitUntil { store.state(of: .parakeet) == .ready }
-        #expect(store.lastErrors[.parakeet] == nil)
-        #expect(await parakeet.loadCount == 2)
+        await waitUntil { if case .failed = store.state(of: .gigaam) { true } else { false } }
+        await gigaam.configure()
+        await store.reinstall(.gigaam)
+        #expect(store.state(of: .gigaam).isDownloading)
+        await waitUntil { store.state(of: .gigaam) == .ready }
+        #expect(store.lastErrors[.gigaam] == nil)
+        #expect(await gigaam.loadCount == 2)
     }
 
     @Test func aGeminiMainModelKeepsTheLocalModelLoaded() async throws {
-        let (store, parakeet, settings) = makeStore()
+        let (store, gigaam, settings) = makeStore()
         store.start()
-        await waitUntil { store.state(of: .parakeet) == .ready }
+        await waitUntil { store.state(of: .gigaam) == .ready }
         settings.lineup.main = .gemini
-        #expect(store.state(of: .parakeet) == .ready)
-        #expect(await parakeet.isLoaded)
+        #expect(store.state(of: .gigaam) == .ready)
+        #expect(await gigaam.isLoaded)
     }
 
     @Test func deleteUnloadsAndRemoves() async throws {
-        let (store, parakeet, _) = makeStore()
+        let (store, gigaam, _) = makeStore()
         store.start()
-        await waitUntil { store.state(of: .parakeet) == .ready }
-        await store.delete(.parakeet)
-        #expect(store.state(of: .parakeet) == .notInstalled)
-        #expect(!parakeet.isInstalled())
-        #expect(await !parakeet.isLoaded)
+        await waitUntil { store.state(of: .gigaam) == .ready }
+        await store.delete(.gigaam)
+        #expect(store.state(of: .gigaam) == .notInstalled)
+        #expect(!gigaam.isInstalled())
+        #expect(await !gigaam.isLoaded)
     }
 
     @Test func cancellingAWaitingJobThrowsCancellation() async throws {
-        let (store, parakeet, _) = makeStore()
-        let gate = await parakeet.gateLoads()
+        let (store, gigaam, _) = makeStore()
+        let gate = await gigaam.gateLoads()
         await store.refreshFromDisk()
-        store.prepare(.parakeet)
-        let job = Task { try await store.transcribeLocal(.parakeet, samples: [0]) }
+        store.prepare(.gigaam)
+        let job = Task { try await store.transcribeLocal(.gigaam, samples: [0]) }
         await gate.arrival(1)
         // The load is held, so the job can only be waiting for it (or not started yet).
         job.cancel()
         await #expect(throws: CancellationError.self) { try await job.value }
-        #expect(store.state(of: .parakeet).isPreparing)
+        #expect(store.state(of: .gigaam).isPreparing)
         gate.openForGood()
-        await waitUntil { store.state(of: .parakeet) == .ready }
+        await waitUntil { store.state(of: .gigaam) == .ready }
     }
 
     @Test func previewStoreNeverTouchesEngines() {
-        let ready = ModelStore.preview(states: [.parakeet: .ready])
+        let ready = ModelStore.preview(states: [.gigaam: .ready])
         ready.start()
-        ready.prepare(.parakeet)
-        #expect(ready.state(of: .parakeet) == .ready)
-        #expect(ready.diskUsageBytes == EngineID.parakeet.approxDownloadBytes)
+        ready.prepare(.gigaam)
+        #expect(ready.state(of: .gigaam) == .ready)
+        #expect(ready.diskUsageBytes == LocalModel.gigaam(.v3).approxInstalledBytes)
 
-        let downloading = ModelStore.preview(states: [.parakeet: .downloading(DownloadProgress(fraction: 0.4))])
-        downloading.download(.parakeet)
-        downloading.cancelDownload(.parakeet)
-        #expect(downloading.state(of: .parakeet).downloadProgress?.fraction == 0.4)
+        let downloading = ModelStore.preview(states: [.gigaam: .downloading(DownloadProgress(fraction: 0.4))])
+        downloading.download(.gigaam)
+        downloading.cancelDownload(.gigaam)
+        #expect(downloading.state(of: .gigaam).downloadProgress?.fraction == 0.4)
         #expect(downloading.diskUsageBytes == 0)
     }
 }
@@ -1926,7 +1855,7 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
                                            localTranscript: String = "hello from the fake")
         -> (TranscriptionService, ModelStore, OpenRouterAccount, String) {
         let store = ModelStore(paths: .temporary(), settings: .inMemory(),
-                               engines: [.parakeet: FakeEngine(.parakeet, installed: true, transcript: localTranscript)],
+                               engines: [.gigaam(.v3): FakeEngine(.gigaam, installed: true, transcript: localTranscript)],
                                gate: InferenceGate(), freeDiskBytes: { 50_000_000_000 })
         let (client, host) = StubURLProtocol.client(replies)
         let keyStore = KeyFileStore.inMemory(key)
@@ -1942,9 +1871,9 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
     @Test func localRoute() async throws {
         let (service, store) = makeService()
         await store.refreshFromDisk()
-        let result = try await service.transcribe(speech(), engine: .parakeet)
+        let result = try await service.transcribe(speech(), engine: .gigaam)
         #expect(result.text == "hello from the fake")
-        #expect(result.engine == .parakeet)
+        #expect(result.engine == .gigaam)
         #expect(result.processingTime > 0)
         #expect(result.costUSD == nil)
     }
@@ -2085,9 +2014,9 @@ func waitForObserved(timeout: Duration = .seconds(30), _ condition: () -> Bool) 
     @Test func emptyLocalTextIsAnEmptyResult() async throws {
         let (service, store, _) = makeServiceAndAccount(localTranscript: "  \n ")
         await store.refreshFromDisk()
-        let result = try await service.transcribe(speech(), engine: .parakeet)
+        let result = try await service.transcribe(speech(), engine: .gigaam)
         #expect(result.text.isEmpty)
-        #expect(result.engine == .parakeet)
+        #expect(result.engine == .gigaam)
     }
 
     @Test func unreadableKeyFileIsNotAMissingKey() async throws {

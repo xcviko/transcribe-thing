@@ -58,7 +58,7 @@ private func speech(seconds: Double) -> Recording {
 
         /// The app launches and finds a journal an earlier run left: cut off while it recorded `samples`, or with
         /// its recording ended. Returns the row it comes back as.
-        func launch(with samples: [Float], cutOff: Bool = true, engine: EngineID = .parakeet,
+        func launch(with samples: [Float], cutOff: Bool = true, engine: EngineID = .gigaam,
                     mode: DictationMachine.Mode = .pushToTalk) async throws -> TranscriptEntry {
             let info = RecordingJournal.Info(id: UUID(), startedAt: Date().addingTimeInterval(-600),
                                              engine: engine.rawValue, mode: mode.rawValue,
@@ -115,7 +115,7 @@ private func speech(seconds: Double) -> Recording {
         try await waitUntil { rig.pasted == ["all of it"] && rig.h.controller.machine.activeJobs == 0 }
         #expect(rig.transcribed.count == 1)
         let (whole, engine) = try #require(rig.transcribed.first)
-        #expect(engine == .parakeet, "the row's model")
+        #expect(engine == .gigaam, "the row's model")
         #expect(whole.id == entry.id)
         #expect(whole.samples.count == saved.count + more.samples.count)
         #expect(maxError(Array(whole.samples.prefix(saved.count)), saved) <= 1.0 / 32_767, "the saved part, as saved")
@@ -166,7 +166,7 @@ private func speech(seconds: Double) -> Recording {
 
         let row = try #require(rig.h.history.entry(id: entry.id))
         #expect(row.status == .failed && row.interruption == .whileRecording)
-        #expect(row.errorMessage == entry.errorMessage && row.mode == .pushToTalk && row.engine == .parakeet)
+        #expect(row.errorMessage == entry.errorMessage && row.mode == .pushToTalk && row.engine == .gigaam)
         #expect(abs(row.audioDuration - 4) < 0.001, "what was said after Continue is kept too")
         try await waitUntil { rig.savedSamples(of: entry.id) == saved.count + more.samples.count }
         try await Task.sleep(for: .milliseconds(150))
@@ -204,7 +204,7 @@ private func speech(seconds: Double) -> Recording {
     @Test func continueAfterTheRecordingEndedTranscribesIt() async throws {
         let rig = Rig()
         let saved = journalSpeech(seconds: 2)
-        let entry = try await rig.launch(with: saved, cutOff: false, engine: .parakeet)
+        let entry = try await rig.launch(with: saved, cutOff: false, engine: .gigaam)
         #expect(entry.interruption == .whileTranscribing)
         #expect(entry.errorMessage == HistoryStore.interruptedMessage)
 
@@ -214,7 +214,7 @@ private func speech(seconds: Double) -> Recording {
         }
         #expect(rig.h.recorder.starts == 0, "no recording")
         #expect(rig.pasted.isEmpty)
-        #expect(rig.transcribed.count == 1 && rig.transcribed.first?.engine == .parakeet)
+        #expect(rig.transcribed.count == 1 && rig.transcribed.first?.engine == .gigaam)
         #expect(rig.transcribed.first?.recording.samples.count == saved.count)
         #expect(rig.h.history.entry(id: entry.id)?.text == "all of it")
     }
@@ -295,14 +295,14 @@ private func speech(seconds: Double) -> Recording {
         let rig = Rig()
         let saved = journalSpeech(seconds: 3)
         let entry = try await rig.launch(with: saved)
-        rig.result = { _ in throw AppError.engineFailed(.parakeet, "Couldn’t transcribe") }
+        rig.result = { _ in throw AppError.engineFailed(.gigaam, "Couldn’t transcribe") }
         rig.h.controller.retry(entry, with: entry.engine)
         try await waitUntil { rig.h.controller.homeFailures[entry.id] != nil && rig.h.controller.runningVersions.isEmpty }
         let row = try #require(rig.h.history.entry(id: entry.id))
         #expect(row.status == .failed && row.interruption == .whileRecording)
         #expect(row.errorMessage == entry.errorMessage, "it still says the app quit while recording")
         let failure = try #require(rig.h.controller.homeFailures[entry.id])
-        #expect(failure.kind == .transcription(.parakeet) && failure.reason == "It ran into a problem.")
+        #expect(failure.kind == .gigaam(.v3) && failure.reason == "It ran into a problem.")
         #expect(!failure.isRecordingGone)
 
         rig.result = { _ in "all of it" }
@@ -320,7 +320,7 @@ private func speech(seconds: Double) -> Recording {
         let entry = try await rig.launch(with: saved)
         let more = speech(seconds: 2)
         rig.h.recorder.next = more
-        rig.result = { _ in throw AppError.engineFailed(.parakeet, "Couldn’t transcribe") }
+        rig.result = { _ in throw AppError.engineFailed(.gigaam, "Couldn’t transcribe") }
         rig.h.controller.continueDictation(entry)
         try await waitUntil { rig.h.recorder.starts == 1 }
         rig.now += 2
@@ -368,7 +368,7 @@ private func speech(seconds: Double) -> Recording {
     @Test func aFailedContinueAfterTheRecordingEndedKeepsContinue() async throws {
         let rig = Rig()
         let entry = try await rig.launch(with: journalSpeech(seconds: 2), cutOff: false)
-        rig.result = { _ in throw AppError.engineFailed(.parakeet, "Couldn’t transcribe") }
+        rig.result = { _ in throw AppError.engineFailed(.gigaam, "Couldn’t transcribe") }
         rig.h.controller.continueDictation(entry)
         try await waitUntil { rig.h.controller.homeFailures[entry.id] != nil && rig.h.controller.runningVersions.isEmpty }
         let row = try #require(rig.h.history.entry(id: entry.id))
@@ -410,10 +410,10 @@ private func speech(seconds: Double) -> Recording {
     /// row's model not ready.
     @Test func continueSaysWhyItCantRun() {
         let context = HubContext(env: .preview())
-        context.models = .preview(states: [.parakeet: .ready])
+        context.models = .preview(states: [.gigaam: .ready])
         context.account = .preview(status: .missing)
-        let cutOff = row(.whileRecording, engine: .parakeet)
-        let ended = row(.whileTranscribing, engine: .parakeet)
+        let cutOff = row(.whileRecording, engine: .gigaam)
+        let ended = row(.whileTranscribing, engine: .gigaam)
         #expect(context.continueBlocker(for: cutOff) == nil)
         context.previewDictating = true
         #expect(context.continueBlocker(for: cutOff) == "Finish the dictation you’re recording first")

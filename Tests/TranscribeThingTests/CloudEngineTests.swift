@@ -16,12 +16,13 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
 @Suite struct CloudEngineFactsTests {
     @Test func rawValuesAreStableAndOrderIsLocalThenGemini() {
         #expect(EngineID.allCases.map(\.rawValue) == ["parakeet", "gigaam", "parakeetCloud", "geminiFlash",
-                                                      "geminiHydrogen", "geminiCarbon", "geminiArgon", "geminiPro"],
+                                                      "geminiHydrogen", "geminiNeon", "geminiCarbon", "geminiArgon",
+                                                      "geminiPro"],
                 "retired models stay readable")
-        #expect(EngineID.offered == [.parakeet, .gigaam, .geminiFlash, .geminiHydrogen, .geminiCarbon])
-        #expect(EngineID.allCases.filter(\.isRetired) == [.parakeetCloud, .geminiArgon, .geminiPro])
-        #expect(EngineID.localEngines == [.parakeet, .gigaam])
-        #expect(EngineID.geminiEngines == [.geminiFlash, .geminiHydrogen, .geminiCarbon])
+        #expect(EngineID.offered == [.gigaam, .geminiFlash, .geminiHydrogen, .geminiNeon, .geminiCarbon])
+        #expect(EngineID.allCases.filter(\.isRetired) == [.parakeet, .parakeetCloud, .geminiArgon, .geminiPro])
+        #expect(EngineID.localEngines == [.gigaam])
+        #expect(EngineID.geminiEngines == [.geminiFlash, .geminiHydrogen, .geminiNeon, .geminiCarbon])
     }
 
     @Test func namesAreUniqueAndTheRetiredCloudParakeetKeepsItsOwn() {
@@ -111,7 +112,7 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
 @Suite struct ServedProviderTests {
     private func makeService(_ replies: [StubURLProtocol.Reply], key: String? = "sk-or-v1-test")
         -> (TranscriptionService, String, OpenRouterAccount) {
-        let store = ModelStore.preview(states: [.parakeet: .ready])
+        let store = ModelStore.preview(states: [.gigaam: .ready])
         let (client, host) = StubURLProtocol.client(replies)
         let keyStore = KeyFileStore.inMemory(key)
         let account = OpenRouterAccount(keyStore: keyStore, client: client, debounce: .zero)
@@ -278,7 +279,7 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
     }
 
     @Test func aMissingKeyRefusesGeminiBeforeRecording() throws {
-        let h = DictationControllerTests.make(models: [.parakeet: .ready], keyStatus: .missing)
+        let h = DictationControllerTests.make(models: [.gigaam: .ready], keyStatus: .missing)
         h.settings.lineup.main = .gemini
         h.controller.send(.handsFreeToggle)
         #expect(h.recorder.starts == 0)
@@ -286,7 +287,7 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
         let notice = try #require(h.toasts.notices.first)
         #expect(notice.title == "Add your OpenRouter key")
         #expect(notice.body == "Gemini needs a key to transcribe.")
-        #expect(notice.actions.map(\.kind) == [.openHub(.models), .selectEngine(.parakeet)])
+        #expect(notice.actions.map(\.kind) == [.openHub(.models), .selectEngine(.gigaam)])
     }
 }
 
@@ -297,10 +298,10 @@ private func generationReply(_ provider: String?) -> StubURLProtocol.Reply {
     /// no Retry, the body says what takes it.
     @Test(arguments: EngineID.geminiEngines)
     func tooLargeIsWhatOpenRouterSaid(_ engine: EngineID) {
-        let notice = AppError.recordingTooLarge.notice(recordingID: UUID(), fallbackEngine: .parakeet, engine: engine)
+        let notice = AppError.recordingTooLarge.notice(recordingID: UUID(), fallbackEngine: .gigaam, engine: engine)
         #expect(notice.title == "Too large to send to OpenRouter")
         #expect(notice.body?.hasPrefix(
-            "OpenRouter refused this recording as too large. Parakeet v3 on this Mac takes any length.") == true)
+            "OpenRouter refused this recording as too large. GigaAM v3 on this Mac takes any length.") == true)
         #expect(!notice.actions.contains { $0.kind == .retry })
     }
 

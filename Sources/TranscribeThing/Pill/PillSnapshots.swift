@@ -79,7 +79,7 @@ enum PillSnapshots {
                 ])
             },
             // Models (`--only pill-models`): the chip, the tint, the hint and the no-key notice.
-            SnapshotEntry("pill-models", width: 760, height: 44 + 22 * 92) { _ in PillModelSheet() },
+            SnapshotEntry("pill-models", width: 760, height: 44 + 23 * 92) { _ in PillModelSheet() },
             SnapshotEntry("pill-polish", width: 760, height: 44 + 8 * 92) { _ in PolishSheet() },
             // Send (`--only pill-send`): the plane right of the bars, the wave and the count, alone and with Polish.
             SnapshotEntry("pill-send", width: 760, height: 44 + 10 * 92) { _ in
@@ -107,8 +107,8 @@ enum PillSnapshots {
                 CanvasScene(model: restModel(), notices: [PillSnapshotFixtures.clickedAwayPolished])
             },
             // fn ⇥ while the chip is up: its names roll on, frame by frame of the spring.
-            SnapshotEntry("pill-chip-roll", width: 2040, height: 335) { _ in ChipRollSheet() },
-            // Polish clicked on Parakeet with nothing selected: it says Polish is Gemini's, and the dictation goes on.
+            SnapshotEntry("pill-chip-roll", width: 2040, height: 400) { _ in ChipRollSheet() },
+            // Polish clicked on GigaAM with nothing selected: it says Polish is Gemini's, and the dictation goes on.
             SnapshotEntry("pill-polish-gemini-only", width: 640, height: 150) { _ in
                 CanvasScene(model: polishGeminiOnlyModel(), notices: [])
             },
@@ -251,7 +251,7 @@ enum PillSnapshots {
     }
 
     /// Polish Selection: the polish (or translation) being written by `choice`'s model.
-    @MainActor private static func selectionModel(_ phase: PillPhase, choice: ModelChoice = .parakeet,
+    @MainActor private static func selectionModel(_ phase: PillPhase, choice: ModelChoice = .gigaam,
                                                   translates: Bool = false) -> PillModel {
         let model = PillModelSheet.model(phase, choice: choice, level: 0.7, chip: false)
         model.polishes = !translates
@@ -265,7 +265,7 @@ enum PillSnapshots {
         + "калориях, а часы - о дистанции, скорости и т. д.\n\nЗавтра схожу ещё раз и проверю, как оно с тренировкой."
 
     @MainActor private static func polishGeminiOnlyModel() -> PillModel {
-        let model = PillModelSheet.model(.listening, choice: .parakeet, level: 0.7, chip: false)
+        let model = PillModelSheet.model(.listening, choice: .gigaam, level: 0.7, chip: false)
         model.showKeyHint("Polish works on Gemini only")
         return model
     }
@@ -314,21 +314,21 @@ enum PillSnapshotFixtures {
         .notice(recordingID: UUID(), fallbackEngine: nil, engine: .geminiFlash)
 
     static let keyRejected = AppError.openRouterInvalidKey("Invalid API key")
-        .notice(recordingID: UUID(), fallbackEngine: .parakeet)
+        .notice(recordingID: UUID(), fallbackEngine: .gigaam)
 
-    /// A rate limit on Gemini 3.8 Flash offers Parakeet on this Mac.
-    /// Gemini's refusal, with Parakeet beside Retry.
+    /// A rate limit on Gemini 3.8 Flash offers GigaAM v3 on this Mac.
+    /// Gemini's refusal, with GigaAM v3 beside Retry.
     static let refused = AppError.openRouterRefused("Gemini refused to complete this request.")
-        .notice(recordingID: UUID(), fallbackEngine: .parakeet, engine: .geminiFlash)
+        .notice(recordingID: UUID(), fallbackEngine: .gigaam, engine: .geminiFlash)
 
     static let cloudSpeechRateLimited = AppError.openRouterRateLimited(retryAfter: nil)
-        .notice(recordingID: UUID(), fallbackEngine: .parakeet, engine: .geminiFlash)
+        .notice(recordingID: UUID(), fallbackEngine: .gigaam, engine: .geminiFlash)
 
     /// OpenRouter out of reach (a VPN that stopped), and a VPN that went off where Gemini isn't served.
-    static let noConnection = AppError.offline.notice(recordingID: UUID(), fallbackEngine: .parakeet)
-    static let regionBlocked = AppError.regionBlocked.notice(recordingID: UUID(), fallbackEngine: .parakeet)
+    static let noConnection = AppError.offline.notice(recordingID: UUID(), fallbackEngine: .gigaam)
+    static let regionBlocked = AppError.regionBlocked.notice(recordingID: UUID(), fallbackEngine: .gigaam)
     /// OpenRouter's firewall turning a VPN's address away.
-    static let connectionBlocked = AppError.connectionBlocked.notice(recordingID: UUID(), fallbackEngine: .parakeet)
+    static let connectionBlocked = AppError.connectionBlocked.notice(recordingID: UUID(), fallbackEngine: .gigaam)
 
     static let truncated = AppError.openRouterTruncated(
         "So the plan for Thursday is to move the design review to the afternoon so Maya can join, and then so the plan for Thursday is to move the design review to the afternoon so Maya can join, and then so the plan for Thursday is")
@@ -338,7 +338,7 @@ enum PillSnapshotFixtures {
         dedupeKey: "paste.transcript", style: .info, symbol: "doc.on.clipboard",
         title: "Not pasted", body: "The cursor left the text field while it was transcribing.",
         transcript: "Let's move the design review to Thursday afternoon so Maya can join, and I'll send the updated deck tonight. Also, can someone check whether the staging build picked up the new onboarding copy?",
-        actions: [NoticeAction(title: "Paste Here", kind: .pasteText("…", by: .parakeet, in: .pushToTalk), isPrimary: true),
+        actions: [NoticeAction(title: "Paste Here", kind: .pasteText("…", by: .gigaam, in: .pushToTalk), isPrimary: true),
                   NoticeAction(title: "Copy", kind: .copyText("…"))],
         lifetime: .seconds(20))
 
@@ -752,11 +752,10 @@ private struct PillModelSheet: View {
     /// `chip`: right after the switch, the chip still up; else later on, the tint alone. `main`: the lineup's main
     /// model, which changes nothing the pill draws.
     @MainActor static func model(_ phase: PillPhase, choice: ModelChoice?, level: Float = 0.7, chip: Bool = true,
-                                 main: ModelChoice = .parakeet, gigaam: GigaAMEngine.Variant = .default,
+                                 main: ModelChoice = .gigaam,
                                  recordingFor elapsed: TimeInterval? = nil) -> PillModel {
         let model = PillModel.preview(phase: phase, level: level, recordingFor: elapsed)
         model.settings.lineup.main = main
-        model.settings.gigaamVariant = gigaam
         model.sessionModel = choice
         if chip, choice != nil { model.flashChip() }
         return model
@@ -764,8 +763,8 @@ private struct PillModelSheet: View {
 
     private var rows: [Row] {
         [
-            Row(id: "parakeet", caption: "Push-to-talk · Parakeet") {
-                Self.model(.listening, choice: .parakeet, chip: false)
+            Row(id: "gigaam", caption: "Push-to-talk · GigaAM v3 (main)") {
+                Self.model(.listening, choice: .gigaam, chip: false)
             },
             Row(id: "gemini-main", caption: "Push-to-talk · Gemini (main)") {
                 Self.model(.listening, choice: .gemini, chip: false, main: .gemini)
@@ -774,7 +773,7 @@ private struct PillModelSheet: View {
             Row(id: "flash-later", caption: "Gemini Flash · chip gone") {
                 Self.model(.listening, choice: .gemini, chip: false)
             },
-            Row(id: "back", caption: "Back to Parakeet") { Self.model(.listening, choice: .parakeet) },
+            Row(id: "back", caption: "Back to GigaAM v3") { Self.model(.listening, choice: .gigaam) },
             Row(id: "locked-flash", caption: "Hands-free · Gemini Flash") { Self.model(.locked, choice: .gemini, level: 0.5) },
             Row(id: "processing-flash", caption: "Processing · Gemini Flash") { Self.model(.processing, choice: .gemini) },
             Row(id: "processing-thinking-gemini", caption: "Thinking · Gemini Flash") {
@@ -798,6 +797,17 @@ private struct PillModelSheet: View {
                 Self.model(.processing, choice: .hydrogen, chip: false)
                     .previewCounter(PillTokenCount(phase: .thinking, tokens: 3_100))
             },
+            Row(id: "neon", caption: "Push-to-talk · Gemini 4 Neon") { Self.model(.listening, choice: .neon) },
+            Row(id: "neon-later", caption: "Gemini 4 Neon · chip gone") {
+                Self.model(.listening, choice: .neon, chip: false)
+            },
+            Row(id: "locked-neon", caption: "Hands-free · Gemini 4 Neon") {
+                Self.model(.locked, choice: .neon, level: 0.5)
+            },
+            Row(id: "processing-thinking-neon", caption: "Thinking · Gemini 4 Neon") {
+                Self.model(.processing, choice: .neon, chip: false)
+                    .previewCounter(PillTokenCount(phase: .thinking, tokens: 4_600))
+            },
             Row(id: "carbon", caption: "Push-to-talk · Gemini 4 Carbon") { Self.model(.listening, choice: .carbon) },
             Row(id: "carbon-later", caption: "Gemini 4 Carbon · chip gone") {
                 Self.model(.listening, choice: .carbon, chip: false)
@@ -808,13 +818,6 @@ private struct PillModelSheet: View {
             Row(id: "processing-thinking-carbon", caption: "Thinking · Gemini 4 Carbon") {
                 Self.model(.processing, choice: .carbon, chip: false)
                     .previewCounter(PillTokenCount(phase: .thinking, tokens: 9_800))
-            },
-            Row(id: "gigaam", caption: "Push-to-talk · GigaAM v3") { Self.model(.listening, choice: .gigaam) },
-            Row(id: "gigaam-e2e", caption: "Push-to-talk · GigaAM v3 e2e") {
-                Self.model(.listening, choice: .gigaam, gigaam: .v3e2e)
-            },
-            Row(id: "gigaam-later", caption: "GigaAM v3 · chip gone") {
-                Self.model(.listening, choice: .gigaam, chip: false)
             },
             Row(id: "locked-gigaam", caption: "Hands-free · GigaAM v3") {
                 Self.model(.locked, choice: .gigaam, level: 0.5)
@@ -891,13 +894,13 @@ private struct PolishSheet: View {
     static var sendRows: [Row] {
         [
             Row(id: "send-listening", caption: "Push-to-talk · Send") {
-                Self.model(.listening, polishes: false, sends: true, choice: .parakeet)
+                Self.model(.listening, polishes: false, sends: true, choice: .gigaam)
             },
             Row(id: "send-locked", caption: "Hands-free · Send") {
-                Self.model(.locked, level: 0.5, polishes: false, sends: true, choice: .parakeet)
+                Self.model(.locked, level: 0.5, polishes: false, sends: true, choice: .gigaam)
             },
             Row(id: "send-processing", caption: "Processing · Send") {
-                Self.model(.processing, polishes: false, sends: true, choice: .parakeet)
+                Self.model(.processing, polishes: false, sends: true, choice: .gigaam)
             },
             Row(id: "send-thinking", caption: "Thinking · Send") {
                 Self.model(.processing, polishes: false, sends: true)
@@ -919,7 +922,7 @@ private struct PolishSheet: View {
                 Self.model(.listening, translates: true, sends: true)
             },
             Row(id: "send-locked-hours", caption: "Hands-free past an hour · Send") {
-                Self.model(.locked, level: 0.5, polishes: false, sends: true, choice: .parakeet, recordingFor: 3_723)
+                Self.model(.locked, level: 0.5, polishes: false, sends: true, choice: .gigaam, recordingFor: 3_723)
             },
         ]
     }
@@ -934,8 +937,8 @@ private struct PolishSheet: View {
                 held(Self.model(.processing, polishes: false))
                     .previewCounter(PillTokenCount(phase: .thinking, tokens: 480))
             },
-            Row(id: "held-parakeet", caption: "Clicked away · Parakeet") {
-                held(Self.model(.processing, polishes: false, choice: .parakeet))
+            Row(id: "held-gigaam", caption: "Clicked away · GigaAM") {
+                held(Self.model(.processing, polishes: false, choice: .gigaam))
             },
             Row(id: "held-untinted", caption: "Clicked away · no tint") {
                 held(PillModelSheet.model(.processing, choice: nil, chip: false))
@@ -1081,14 +1084,14 @@ private struct ModelColorSheet: View {
     }
 
     private static let columns: [Column] = [
-        Column(title: "Listening", width: 140) { standing(pill($0, .listening, choice: .parakeet)) },
+        Column(title: "Listening", width: 140) { standing(pill($0, .listening, choice: .gigaam)) },
         Column(title: "Gemini chip", width: 170) { standing(pill($0, .listening, choice: .gemini, chip: true)) },
         // The counter's word is the dimmest text on the fill.
         Column(title: "Chip over a count", width: 200) {
             standing(pill($0, .processing, choice: .gemini, chip: true)
                 .previewCounter(PillTokenCount(phase: .writing, tokens: 340)))
         },
-        Column(title: "Processing", width: 130) { standing(pill($0, .processing, choice: .parakeet)) },
+        Column(title: "Processing", width: 130) { standing(pill($0, .processing, choice: .gigaam)) },
         Column(title: "Hands-free", width: 230) {
             standing(pill($0, .locked, choice: .gemini, level: 0.5, recordingFor: 42))
         },
@@ -1260,8 +1263,8 @@ private struct PillStateSheet: View {
 /// The chip's roll between two models, every 40 ms of its spring (`PillChipRoll`), on the pill's dark ground.
 private struct ChipRollSheet: View {
     private let settings = AppSettings.inMemory()
-    private let rolls: [(ModelChoice, ModelChoice)] = [(.parakeet, .gemini), (.gemini, .hydrogen), (.hydrogen, .carbon),
-                                                       (.carbon, .parakeet)]
+    private let rolls: [(ModelChoice, ModelChoice)] = [(.gigaam, .gemini), (.gemini, .hydrogen), (.hydrogen, .neon),
+                                                       (.neon, .carbon), (.carbon, .gigaam)]
     private let times = Array(0...9).map { Double($0) * 0.04 }
 
     var body: some View {
@@ -1271,7 +1274,7 @@ private struct ChipRollSheet: View {
                 ForEach(Array(times.enumerated()), id: \.offset) { index, _ in
                     let position = Double(index) / Double(times.count - 1) * 3
                     VStack(spacing: 6) {
-                        PillChipRoll(names: [.parakeet, .gemini, .parakeet, .gemini], position: position,
+                        PillChipRoll(names: [.gigaam, .gemini, .gigaam, .gemini], position: position,
                                      settings: settings)
                             .frame(width: 200, height: 30)
                         Text(String(format: "%.2f", position))

@@ -435,7 +435,7 @@ final class FakeCueOutput: CueOutput, @unchecked Sendable {
     static func make(_ output: FakeCueOutput, idle: TimeInterval = 1) -> (DictationController, CueEngine, AudioRecorder) {
         let settings = AppSettings.inMemory()
         let meter = LevelMeter.preview(level: 0)
-        let store = ModelStore.preview(states: [.parakeet: .ready], lastErrors: [:])
+        let store = ModelStore.preview(states: [.gigaam: .ready], lastErrors: [:])
         let account = OpenRouterAccount.preview(status: .missing)
         let engine = CueEngine(idleRelease: idle, makeOutput: { output })
         let sounds = SoundPlayer(settings: settings, engine: engine)

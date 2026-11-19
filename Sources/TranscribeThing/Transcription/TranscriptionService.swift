@@ -141,13 +141,11 @@ final class TranscriptionService {
     /// any (`--prompt`; empty sends only the audio). `upload` sends Gemini the audio in that format instead of
     /// an .m4a (`--upload`). The app passes only `prompt`.
     /// `background`: Home's work, which lets dictations have the local model first.
-    /// `progress` hears how much of a streamed answer has come (Gemini's reasoning and text); Parakeet has none.
+    /// `progress` hears how much of a streamed answer has come (Gemini's reasoning and text); GigaAM has none.
     /// `hedge`: Gemini's request goes two or three times at once (`CloudHedge`).
     /// `generations` hears each Gemini request's generation as OpenRouter names it, so one cancelled before it answers
     /// can still have its cost looked up (a dictation sent again with Polish).
-    /// `gigaam`: GigaAM's version for this one (Transcribe With), its picked one otherwise.
-    func transcribe(_ recording: Recording, engine: EngineID, gigaam: GigaAMEngine.Variant? = nil,
-                    effort: ReasoningEffort? = nil,
+    func transcribe(_ recording: Recording, engine: EngineID, effort: ReasoningEffort? = nil,
                     prompt: String? = nil, upload: UploadFormat? = nil, hedge: CloudHedge? = nil, provider: OpenRouterChatRequest.Provider? = nil, background: Bool = false,
                     progress: (@Sendable (ChatStreamProgress) -> Void)? = nil,
                     generations: (@Sendable (String) -> Void)? = nil) async throws -> TranscriptResult {
@@ -158,10 +156,10 @@ final class TranscriptionService {
         do {
             var result = TranscriptResult(text: "", engine: engine, processingTime: 0)
             if engine.isLocal {
-                let local = try await models.transcribeLocalWithModel(engine, gigaam: gigaam, samples: recording.samples,
+                let local = try await models.transcribeLocalWithModel(engine, samples: recording.samples,
                                                                       background: background)
                 result.text = local.text
-                // Which GigaAM version wrote it: "gigaam-v3-e2e-ctc". Parakeet records none, as before.
+                // Which GigaAM version wrote it: "gigaam-v3-ctc".
                 result.modelID = local.model.modelID
             } else {
                 let effort = effort ?? reasoningEffort(engine) ?? engine.defaultReasoningEffort ?? .medium

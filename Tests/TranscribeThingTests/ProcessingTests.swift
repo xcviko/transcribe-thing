@@ -23,7 +23,7 @@ import Testing
 @MainActor final class Requests {
     var made: [(engine: EngineID, prompt: String?)] = []
     var gemini: [String?] { made.filter { $0.engine.isGemini }.map(\.prompt) }
-    var parakeet: Int { made.filter { $0.engine == .parakeet }.count }
+    var gigaam: Int { made.filter { $0.engine == .gigaam }.count }
 }
 
 @MainActor
@@ -34,7 +34,7 @@ enum ProcessingRig {
     /// A rig dictating on Gemini, wired as the app is, whose requests are recorded and answered by `answer` (the
     /// request's engine, prompt and number, from 1). Each Gemini request names its generation "gen-<number>".
     /// `clickAway`: the clicks away the controller hears, wired as the app wires them.
-    static func make(models: [EngineID: LocalModelState] = [.parakeet: .ready], clickAway: ClickAwayMonitor? = nil,
+    static func make(models: [EngineID: LocalModelState] = [.gigaam: .ready], clickAway: ClickAwayMonitor? = nil,
                      answer: @escaping @MainActor (EngineID, String?, Int) async throws -> String)
         -> (Rig, Switch.Cues, Requests) {
         let (rig, cues) = Switch.make(models: models)
@@ -463,20 +463,20 @@ enum ProcessingRig {
         #expect(returns == 0)
     }
 
-    /// On Parakeet the text is there at once: Polish and Translate are dimmed and do nothing; Send still works.
-    @Test func onParakeetOnlySendWorks() async throws {
+    /// On GigaAM the text is there at once: Polish and Translate are dimmed and do nothing; Send still works.
+    @Test func onGigaAMOnlySendWorks() async throws {
         let gate = RequestGate()
         let (rig, cues, requests) = R.make { _, _, _ in
             try await gate.wait()
-            return "parakeet words"
+            return "gigaam words"
         }
-        rig.h.settings.lineup.main = .parakeet
+        rig.h.settings.lineup.main = .gigaam
         let c = rig.h.controller
         var returns = 0
         c.returnDelay = .milliseconds(5)
         c.pressReturnOverride = { returns += 1; return .pressed }
         R.dictate(rig)
-        try await waitUntil { requests.parakeet == 1 }
+        try await waitUntil { requests.gigaam == 1 }
         #expect(rig.h.pill.tray?.rewrites == false && rig.h.pill.tray?.canSend == true)
         let played = cues.played
         rig.h.pill.clickTray(.polish)
@@ -536,29 +536,29 @@ extension PillModel {
         try body(defaults)
     }
 
-    /// The switch an older build stored goes at load, Parakeet isn't kept loaded for it, and the log no longer says it.
+    /// The switch an older build stored goes at load, the model on this Mac isn't kept loaded for it, and the log no longer says it.
     @Test func theStoredSwitchGoesAtLoad() throws {
         try withDefaults { defaults in
             defaults.set(true, forKey: "tt.showsParakeetWhileGemini")
             let settings = AppSettings(defaults: defaults, microphoneProbe: { MicrophoneMigrationProbe() })
             #expect(defaults.object(forKey: "tt.showsParakeetWhileGemini") == nil)
             settings.lineup.main = .gemini
-            settings.lineup.setSwitchable(.parakeet, false)
-            #expect(!settings.usesLocalModel(.parakeet))
+            settings.lineup.setSwitchable(.gigaam, false)
+            #expect(!settings.usesLocalModel(.gigaam))
             #expect(!DiagnosticSettingsSummary(settings: settings, keySaved: false).line.contains("parakeetWhileGemini"))
         }
     }
 
-    /// A plain dictation on Gemini goes to Gemini alone, with Parakeet downloaded and loaded: no request to Parakeet,
+    /// A plain dictation on Gemini goes to Gemini alone, with GigaAM downloaded and loaded: no request to GigaAM,
     /// no card, Gemini's text pasted.
     @Test func aGeminiDictationGoesToGeminiAlone() async throws {
         let (rig, _, requests) = ProcessingRig.make { _, prompt, _ in ProcessingRig.gemini(prompt) }
         let c = rig.h.controller
         ProcessingRig.dictate(rig)
         try await waitUntil { rig.pasted.count == 1 && c.machine.activeJobs == 0 }
-        #expect(requests.parakeet == 0 && requests.gemini == [nil])
+        #expect(requests.gigaam == 0 && requests.gemini == [nil])
         #expect(rig.pasted.first?.contains("plain words") == true)
-        #expect(!rig.h.toasts.notices.contains { $0.dedupeKey.hasPrefix("dictation.parakeet.") })
+        #expect(!rig.h.toasts.notices.contains { $0.dedupeKey.hasPrefix("dictation.gigaam.") })
     }
 }
 

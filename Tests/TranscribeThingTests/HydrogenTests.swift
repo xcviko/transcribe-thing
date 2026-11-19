@@ -27,8 +27,8 @@ private func json(_ body: Data) throws -> [String: Any] {
 @Suite struct HydrogenModelTests {
     @Test func hydrogenIsAGeminiOfItsOwnBetweenFlashAndCarbon() {
         #expect(EngineID.geminiHydrogen.rawValue == "geminiHydrogen" && ModelChoice.hydrogen.rawValue == "hydrogen")
-        #expect(EngineID.geminiEngines == [.geminiFlash, .geminiHydrogen, .geminiCarbon])
-        #expect(ModelChoice.allCases.filter(\.isGemini) == [.gemini, .hydrogen, .carbon])
+        #expect(EngineID.geminiEngines == [.geminiFlash, .geminiHydrogen, .geminiNeon, .geminiCarbon])
+        #expect(ModelChoice.allCases.filter(\.isGemini) == [.gemini, .hydrogen, .neon, .carbon])
         let hydrogen = EngineID.geminiHydrogen
         #expect(hydrogen.isGemini && hydrogen.isCloud && !hydrogen.isLocal && !hydrogen.isRetired)
         #expect(hydrogen.modelName == "Gemini 4 Hydrogen" && hydrogen.displayName == "Gemini 4 Hydrogen")
@@ -109,12 +109,12 @@ private func json(_ body: Data) throws -> [String: Any] {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         #expect(String(decoding: try encoder.encode(ReasoningEfforts.default), as: UTF8.self)
-                == #"{"geminiCarbon":"low","geminiFlash":"medium","geminiHydrogen":"medium"}"#)
+                == #"{"geminiCarbon":"low","geminiFlash":"medium","geminiHydrogen":"medium","geminiNeon":"low"}"#)
     }
 
     /// When Hydrogen can't answer, a dictation falls back to the models on this Mac, as from any Gemini.
     @MainActor @Test func itFallsBackToTheModelsOnThisMac() {
-        #expect(DictationController.fallbackCandidates(for: .geminiHydrogen) == [.parakeet, .gigaam])
+        #expect(DictationController.fallbackCandidates(for: .geminiHydrogen) == [.gigaam])
     }
 }
 
@@ -122,32 +122,34 @@ private func json(_ body: Data) throws -> [String: Any] {
 
 @MainActor
 @Suite struct HydrogenSettingsTests {
-    /// A fresh install lists Hydrogen between Flash and Carbon, switched off: Parakeet is the main model and Flash its
-    /// one step.
+    /// A fresh install lists Hydrogen between Flash and Carbon, switched off: GigaAM v3 is the main model and Flash
+    /// its one step.
     @Test func aFreshInstallListsHydrogenAfterFlashSwitchedOff() throws {
         try withDefaults { defaults in
             let settings = load(defaults)
-            #expect(settings.lineup.order == [.parakeet, .gemini, .hydrogen, .carbon, .gigaam])
-            #expect(settings.lineup.main == .parakeet && settings.lineup.cycle == [.parakeet, .gemini])
+            #expect(settings.lineup.order == [.gigaam, .gemini, .hydrogen, .neon, .carbon])
+            #expect(settings.lineup.main == .gigaam && settings.lineup.cycle == [.gigaam, .gemini])
             #expect(!settings.lineup.isSwitchable(.hydrogen))
             #expect(settings.modelColors[.hydrogen] == .pink && settings.modelColors[.gemini] == .violet)
             #expect(settings.reasoningEffort(for: .geminiHydrogen) == .medium)
-            #expect(settings.localModel(for: .geminiHydrogen) == nil && !settings.usesLocalModel(.geminiHydrogen))
+            #expect(LocalModel(engine: .geminiHydrogen) == nil && !settings.usesLocalModel(.geminiHydrogen))
         }
     }
 
     /// A lineup stored before Hydrogen gets it appended at the end, switched off: nobody's fn ⇥ starts costing more by
-    /// itself, and the main model, the order and hands-free stay.
+    /// itself, and the main model, the order and hands-free stay. (Neon, which came after, follows it; GigaAM takes
+    /// the retired Parakeet's place.)
     @Test func aLineupFromBeforeHydrogenGetsItAppendedSwitchedOff() throws {
         try withDefaults { defaults in
             let old = #"{"main":"carbon","order":["parakeet","carbon","gemini","gigaam"],"switchable":["parakeet","gemini"]}"#
             defaults.set(Data(old.utf8), forKey: SettingsKey.lineup.defaultsKey)
             defaults.set("gemini", forKey: SettingsKey.handsFreeModel.defaultsKey)
             let settings = load(defaults)
-            #expect(settings.lineup.order == [.parakeet, .carbon, .gemini, .gigaam, .hydrogen])
-            #expect(settings.lineup.main == .carbon && settings.lineup.cycle == [.carbon, .gemini, .parakeet])
+            #expect(settings.lineup.order == [.gigaam, .carbon, .gemini, .hydrogen, .neon])
+            #expect(settings.lineup.main == .carbon && settings.lineup.cycle == [.carbon, .gemini, .gigaam])
             #expect(!settings.lineup.isSwitchable(.hydrogen) && settings.handsFreeChoice == .gemini)
-            #expect(load(defaults).lineup.order == [.parakeet, .carbon, .gemini, .gigaam, .hydrogen], "stored as read")
+            #expect(load(defaults).lineup.order == [.gigaam, .carbon, .gemini, .hydrogen, .neon],
+                    "stored as read")
         }
     }
 
@@ -159,7 +161,7 @@ private func json(_ body: Data) throws -> [String: Any] {
         #expect(settings.lineup.steps == [.gemini, .hydrogen] && settings.handsFreeChoice == .hydrogen)
         settings.lineup.main = .hydrogen
         #expect(settings.mainEngine == .geminiHydrogen && settings.lineup.cycle.first == .hydrogen)
-        #expect(settings.localModelsInUse == [.parakeet], "Parakeet, switched on when it stopped being main")
+        #expect(settings.localModelsInUse == [.gigaam], "GigaAM, switched on when it stopped being main")
     }
 
     /// Pasting's rules from before Hydrogen: Hydrogen starts with Flash's checks, once. Changed later, it keeps its own.
@@ -171,15 +173,15 @@ private func json(_ body: Data) throws -> [String: Any] {
             defaults.set(true, forKey: SettingsKey.carbonPastingAdded.defaultsKey)
             defaults.set(true, forKey: SettingsKey.gigaamPastingAdded.defaultsKey)
             let settings = load(defaults)
-            #expect(settings.modelsAddingSpace == [.gemini, .hydrogen, .carbon])
-            #expect(settings.modelsRemovingFinalPeriod == [.parakeet, .gigaam])
+            #expect(settings.modelsAddingSpace == [.gemini, .hydrogen, .neon, .carbon])
+            #expect(settings.modelsRemovingFinalPeriod == [.gigaam], "Parakeet's own goes with it")
             #expect(settings.addsSpace(by: .hydrogen, in: .pushToTalk))
             #expect(defaults.bool(forKey: SettingsKey.hydrogenPastingAdded.defaultsKey))
             settings.modelsAddingSpace.remove(.hydrogen)
             settings.modelsRemovingFinalPeriod.insert(.hydrogen)
             let reloaded = load(defaults)
-            #expect(reloaded.modelsAddingSpace == [.gemini, .carbon], "a choice made since stays")
-            #expect(reloaded.modelsRemovingFinalPeriod == [.parakeet, .hydrogen, .gigaam])
+            #expect(reloaded.modelsAddingSpace == [.gemini, .neon, .carbon], "a choice made since stays")
+            #expect(reloaded.modelsRemovingFinalPeriod == [.hydrogen, .gigaam])
         }
         // A fresh install has no rules to copy, and copies none later.
         try withDefaults { defaults in
@@ -188,7 +190,7 @@ private func json(_ body: Data) throws -> [String: Any] {
             #expect(defaults.bool(forKey: SettingsKey.hydrogenPastingAdded.defaultsKey))
         }
         #expect(AppSettings.withHydrogenLikeFlash([.gemini]) == [.gemini, .hydrogen])
-        #expect(AppSettings.withHydrogenLikeFlash([.hydrogen, .parakeet]) == [.parakeet])
+        #expect(AppSettings.withHydrogenLikeFlash([.hydrogen, .gigaam]) == [.gigaam])
     }
 
     /// A level picked for Hydrogen sticks, apart from Flash's and Carbon's.
@@ -302,16 +304,17 @@ private func json(_ body: Data) throws -> [String: Any] {
         #expect(options("--engine", "hydrogen")?.engine == .geminiHydrogen)
         #expect(options("--engine", "gemini-4-hydrogen")?.engine == .geminiHydrogen)
         #expect(options("--engine", "geminiHydrogen", "--effort", "high")?.effort == .high)
-        #expect(EngineCLI.Options.usage.contains("--engine parakeet|gigaam|geminiFlash|geminiHydrogen|geminiCarbon "))
+        #expect(EngineCLI.Options.usage
+                    .contains("--engine gigaam|geminiFlash|geminiHydrogen|geminiNeon|geminiCarbon "))
     }
 
-    /// `--model-status` lists it between Flash and Carbon, its columns still apart.
+    /// `--model-status` lists it between Flash and Neon, its columns still apart.
     @Test func modelStatusListsHydrogen() {
         let lines = EngineCLI.cloudModelLines()
-        #expect(lines.count == 3)
+        #expect(lines.count == 4)
         #expect(lines[1].hasPrefix("geminiHydrogen  Gemini 4 Hydrogen  google/gemini-4-hydrogen"))
         #expect(lines[1].hasSuffix("effort low|medium|high (default medium)"))
-        #expect(lines[0].hasPrefix("geminiFlash ") && lines[2].hasPrefix("geminiCarbon "))
+        #expect(lines[0].hasPrefix("geminiFlash ") && lines[2].hasPrefix("geminiNeon "))
     }
 }
 

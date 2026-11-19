@@ -8,15 +8,16 @@ struct ModelStep: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            StepHeader(title: "Get \(EngineID.parakeet.modelName) on your Mac",
-                       subtitle: "It transcribes on your Mac, private and offline, with no key. Gemini models, "
-                           + "which hear the audio in the cloud with your own key, are in Settings → Models.",
+            StepHeader(title: "Get \(EngineID.gigaam.modelName) on your Mac",
+                       subtitle: "It transcribes Russian on your Mac, private and offline, with no key. It writes "
+                           + "plain lowercase text without punctuation, and English words in Cyrillic letters, as it "
+                           + "hears them. For punctuation and other languages, Gemini models hear the audio in the "
+                           + "cloud with your own key: they’re in Settings → Models.",
                        titleSize: 28)
                 .padding(.bottom, 16)
 
             SectionHeader("On your Mac")
                 .padding(.bottom, 8)
-            // Parakeet alone: GigaAM, the other model on this Mac, is in Settings → Models.
             LocalModelCard(model: model, engine: model.selectedEngine, compact: false)
 
             if mainIsGemini, model.ctx.proxy?.routesGemini != true {
@@ -51,11 +52,12 @@ private struct SwitchModelNote: View {
 }
 
 private extension EngineID {
-    /// The local card's spec strip: what running on this Mac gets you. Only the local model has a card.
+    /// The local card's spec strip: what it writes, and what running on this Mac gets you. Only the local model has
+    /// a card.
     var localFacts: [LocalFact] {
-        guard self == .parakeet else { return [] }
-        return [LocalFact(symbol: "bolt.fill", title: "Fastest", detail: "No upload, no waiting"),
-                LocalFact(symbol: "globe", title: "25 languages", detail: "European, auto-detected"),
+        guard self == .gigaam else { return [] }
+        return [LocalFact(symbol: "character.bubble", title: "Russian", detail: "English words in Cyrillic"),
+                LocalFact(symbol: "textformat", title: "Plain text", detail: "No punctuation"),
                 LocalFact(symbol: "lock.fill", title: "Private", detail: "Audio stays on this Mac"),
                 LocalFact(symbol: "wifi.slash", title: "Offline", detail: "No internet, no key")]
     }
@@ -266,16 +268,16 @@ private struct LocalModelCard: View {
         }
     }
 
-    /// "Downloads once · 632 MB · 212 GB free on this Mac"
+    /// "Downloads once · 409 MB · 212 GB free on this Mac"
     private var downloadNote: String {
         let size = engine.approxDownloadBytes.map { " · \(Fmt.bytes($0))" } ?? ""
         let free = model.freeDiskBytes < .max ? " · \(Fmt.bytes(model.freeDiskBytes)) free on this Mac" : ""
         return "Downloads once\(size)\(free)"
     }
 
-    /// "Downloaded · 632 MB on this Mac"
+    /// "Downloaded · 443 MB on this Mac": what it takes unpacked.
     private var onDiskNote: String {
-        engine.approxDownloadBytes.map { "Downloaded · \(Fmt.bytes($0)) on this Mac" } ?? "Downloaded"
+        LocalModel(engine: engine).map { "Downloaded · \(Fmt.bytes($0.approxInstalledBytes)) on this Mac" } ?? "Downloaded"
     }
 
     private var downloadStyle: AnyButtonStyle {

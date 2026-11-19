@@ -35,8 +35,13 @@ extension EngineID: DiagnosticValue {
 }
 
 extension LocalModel: DiagnosticValue {
-    /// "parakeet" (as the engine read before there were versions), "gigaam-v3-e2e-ctc".
+    /// "gigaam-v3-ctc".
     var diagnosticText: String { id }
+}
+
+extension RetiredLocalModel: DiagnosticValue {
+    /// "parakeet", "gigaamV3e2e".
+    var diagnosticText: String { rawValue }
 }
 
 extension ModelChoice: DiagnosticValue {

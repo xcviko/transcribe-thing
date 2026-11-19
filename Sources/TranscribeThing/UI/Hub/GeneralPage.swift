@@ -450,9 +450,10 @@ private struct PastingRules: View {
     @Environment(AppSettings.self) private var settings
 
     var body: some View {
-        // Five models and two ways of dictating don't fit a window of the default width with each symbol beside its
+        // Six models and two ways of dictating don't fit a window of the default width with each symbol beside its
         // name: there the symbol goes above the name, which makes each column as narrow as its name. In the narrowest
-        // window even that is too wide: the columns move closer and the rules wrap sooner.
+        // window even that is too wide: the columns move closer, their names get a point smaller and the rules wrap
+        // sooner.
         ViewThatFits(in: .horizontal) {
             table(.wide)
             table(.stacked)
@@ -467,13 +468,16 @@ private struct PastingRules: View {
         case wide
         /// Each symbol above its name.
         case stacked
-        /// Stacked, the columns closer together and the rules wrapping sooner: the narrowest window.
+        /// Stacked, the columns closer together, their names a point smaller and the rules wrapping sooner: the
+        /// narrowest window.
         case tight
 
         var stacksHeaders: Bool { self != .wide }
-        var columnSpacing: CGFloat { self == .tight ? 10 : 14 }
+        var columnSpacing: CGFloat { self == .tight ? 8 : 14 }
         /// Between the models' columns and the ways of dictating.
-        var groupGap: CGFloat { self == .tight ? 10 : 14 }
+        var groupGap: CGFloat { self == .tight ? 8 : 14 }
+        /// The columns' names and symbols.
+        var headerFontSize: CGFloat { self == .tight ? 10 : 11 }
         /// A rule's title wraps to two lines rather than get narrower than this.
         var ruleMinWidth: CGFloat { self == .tight ? 92 : 110 }
     }
@@ -486,11 +490,11 @@ private struct PastingRules: View {
                 Color.clear
                     .gridCellUnsizedAxes([.horizontal, .vertical])
                 ForEach(order) { choice in
-                    columnHeader(choice.shortName, symbol: choice.symbolName, stacked: layout.stacksHeaders)
+                    columnHeader(choice.shortName, symbol: choice.symbolName, layout: layout)
                         .help(choice.title)
                 }
                 ForEach(Array(DictationMachine.Mode.allCases.enumerated()), id: \.element) { index, mode in
-                    columnHeader(mode.chipTitle, symbol: mode.action.symbolName, stacked: layout.stacksHeaders)
+                    columnHeader(mode.chipTitle, symbol: mode.action.symbolName, layout: layout)
                         .padding(.leading, index == 0 ? layout.groupGap : 0)
                         .help(mode.action.title)
                 }
@@ -502,10 +506,10 @@ private struct PastingRules: View {
         }
     }
 
-    /// The symbol beside the name, or above it (`stacked`).
-    private func columnHeader(_ title: String, symbol: String, stacked: Bool) -> some View {
+    /// The symbol beside the name, or above it (`Layout.stacksHeaders`), at the layout's size.
+    private func columnHeader(_ title: String, symbol: String, layout: Layout) -> some View {
         Group {
-            if stacked {
+            if layout.stacksHeaders {
                 VStack(spacing: 3) {
                     Image(systemName: symbol)
                     Text(title)
@@ -515,7 +519,7 @@ private struct PastingRules: View {
                     .labelStyle(.titleAndIcon)
             }
         }
-        .font(.system(size: 11, weight: .medium))
+        .font(.system(size: layout.headerFontSize, weight: .medium))
         .foregroundStyle(.secondary)
         .lineLimit(1)
         .fixedSize()
@@ -530,7 +534,7 @@ private struct PastingRules: View {
                     .foregroundStyle(.inkSecondary)
                     .frame(width: 28, height: 28)
                     .background(Color.inkSecondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                // Five models' columns leave a narrow window little room: the rule wraps rather than cut off.
+                // Six models' columns leave a narrow window little room: the rule wraps rather than cut off.
                 Text(title)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.ink)

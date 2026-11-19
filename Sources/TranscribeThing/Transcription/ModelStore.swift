@@ -27,9 +27,9 @@ extension LocalModelState {
     var isReady: Bool { self == .ready }
 }
 
-/// Owns the models on this Mac: Parakeet v3, and each version of GigaAM (`LocalModel`): install state, download,
-/// loading and local inference. An `EngineID` stands for the model picked for it (`AppSettings.localModel(for:)`):
-/// `state(of: .gigaam)` is GigaAM's picked version's. Only one GigaAM version is loaded at a time.
+/// Owns the model on this Mac, GigaAM v3 (`LocalModel`): install state, download, loading and local inference. An
+/// `EngineID` stands for it (`LocalModel.init(engine:)`): `state(of: .gigaam)` is GigaAM v3's. It also keeps what the
+/// retired models left on this Mac (`leftovers`), to delete when the user says so.
 /// State is main-actor observable; file scans, downloads, loads and inference run off the main thread,
 /// and every load and inference goes through `InferenceGate`.
 @MainActor @Observable
@@ -52,6 +52,11 @@ final class ModelStore {
     private(set) var modelErrors: [LocalModel: AppError] = [:]
     /// Wall time of the last successful load per model.
     private(set) var lastLoadDurations: [LocalModel: TimeInterval] = [:]
+    /// What each retired model still has on this Mac, in bytes: only those with a folder there (`RetiredLocalModel`).
+    /// Nothing deletes them but `deleteLeftover(_:)`.
+    private(set) var leftovers: [RetiredLocalModel: Int64] = [:]
+    /// The leftovers being deleted right now.
+    private(set) var deletingLeftovers: Set<RetiredLocalModel> = []
 
     @ObservationIgnored var onDownloadFinished: ((LocalModel) -> Void)?
     /// A download or load failed (never called for a cancellation).
@@ -61,7 +66,7 @@ final class ModelStore {
     @ObservationIgnored private var downloadTokens: [LocalModel: UUID] = [:]
     @ObservationIgnored private var prepareTasks: [LocalModel: Task<Void, Never>] = [:]
 
-    static let diskHeadroom = 1.25
+    nonisolated static let diskHeadroom = 1.25
 
     convenience init(paths: AppPaths, settings: AppSettings) {
         self.init(paths: paths, settings: settings, engines: Self.makeEngines(paths: paths), gate: .shared,
@@ -78,46 +83,43 @@ final class ModelStore {
     }
 
     nonisolated static func makeEngines(paths: AppPaths) -> [LocalModel: any LocalEngine] {
-        var engines: [LocalModel: any LocalEngine] = [.parakeet: ParakeetEngine(modelsRoot: paths.models)]
-        for variant in GigaAMEngine.Variant.allCases {
-            engines[.gigaam(variant)] = GigaAMEngine(variant: variant, modelsRoot: paths.models)
+        var engines: [LocalModel: any LocalEngine] = [:]
+        for model in LocalModel.all {
+            engines[model] = GigaAMEngine(variant: model.variant, modelsRoot: paths.models)
         }
         return engines
     }
 
-    /// `states` and `lastErrors` are each engine's picked model's (GigaAM's version in `settings`); `models` sets any
-    /// model's, GigaAM's other versions too. `settings`: the ones the views read, so GigaAM's pick is the same.
+    /// `states` and `lastErrors` are each engine's model's (GigaAM v3's); `leftovers`, what retired models left on
+    /// this Mac. `settings`: the ones the views read.
     static func preview(states: [EngineID: LocalModelState], lastErrors: [EngineID: AppError] = [:],
-                        models: [LocalModel: LocalModelState] = [:], settings: AppSettings? = nil) -> ModelStore {
-        let settings = settings ?? .inMemory()
-        let store = ModelStore(paths: .temporary(), settings: settings)
+                        leftovers: [RetiredLocalModel: Int64] = [:], settings: AppSettings? = nil) -> ModelStore {
+        let store = ModelStore(paths: .temporary(), settings: settings ?? .inMemory())
         store.isPreview = true
         store.hasScannedDisk = true
-        for (id, state) in states { if let model = settings.localModel(for: id) { store.modelStates[model] = state } }
-        for (model, state) in models { store.modelStates[model] = state }
-        for (id, error) in lastErrors { if let model = settings.localModel(for: id) { store.modelErrors[model] = error } }
+        for (id, state) in states { if let model = LocalModel(engine: id) { store.modelStates[model] = state } }
+        for (id, error) in lastErrors { if let model = LocalModel(engine: id) { store.modelErrors[model] = error } }
+        store.leftovers = leftovers
         store.diskUsageBytes = store.modelStates.reduce(Int64(0)) { total, entry in
             switch entry.value {
             case .ready, .installed, .preparing: total + entry.key.approxInstalledBytes
             default: total
             }
-        }
+        } + leftovers.values.reduce(0, +)
         return store
     }
 
-    /// What `engine` runs on this Mac now: Parakeet, or GigaAM's picked version. nil for a cloud model.
+    /// What `engine` runs on this Mac: GigaAM v3 for GigaAM. nil for a cloud model and for the retired Parakeet.
     func model(for engine: EngineID) -> LocalModel? {
-        settings.localModel(for: engine)
+        LocalModel(engine: engine)
     }
 
-    /// What `engine` runs on this Mac for one job: GigaAM in `gigaam` when given (Transcribe With of another
-    /// version), else as `model(for:)`.
-    func model(for engine: EngineID, gigaam variant: GigaAMEngine.Variant?) -> LocalModel? {
-        if engine == .gigaam, let variant { return .gigaam(variant) }
-        return model(for: engine)
+    /// The retired models with files still on this Mac, Parakeet first.
+    var leftoverModels: [RetiredLocalModel] {
+        RetiredLocalModel.allCases.filter { leftovers[$0] != nil }
     }
 
-    /// The state of `id`'s picked model.
+    /// The state of `id`'s model.
     func state(of id: EngineID) -> LocalModelState {
         model(for: id).map { state(model: $0) } ?? .notInstalled
     }
@@ -126,7 +128,7 @@ final class ModelStore {
         modelStates[model] ?? .notInstalled
     }
 
-    /// The most recent download or load failure of each engine's picked model.
+    /// The most recent download or load failure of each engine's model.
     var lastErrors: [EngineID: AppError] {
         var errors: [EngineID: AppError] = [:]
         for id in EngineID.localEngines {
@@ -138,11 +140,10 @@ final class ModelStore {
     // MARK: Start
 
     /// Scans the disk, then prepares each model on this Mac that's installed and that a model Switch model reaches
-    /// (hands-free's too) runs on, GigaAM in its picked version: Parakeet first, then GigaAM once Parakeet is ready.
+    /// (hands-free's too) runs on: GigaAM v3, the one there is.
     func start() {
         guard !isPreview, !hasStarted else { return }
         hasStarted = true
-        ParakeetEngine.quietLibraryLogging()
         Task { [weak self] in
             guard let self else { return }
             await self.refreshFromDisk()
@@ -155,17 +156,21 @@ final class ModelStore {
         }
     }
 
-    /// Re-reads install state and disk usage. Models that are busy (downloading, preparing) keep their state.
+    /// Re-reads install state, what the retired models left and disk usage. Models that are busy (downloading,
+    /// preparing) keep their state.
     func refreshFromDisk() async {
         let engines = self.engines
-        let scan = await Task.detached(priority: .utility) { () -> ([LocalModel: Bool], Int64) in
+        let root = paths.models
+        let scan = await Task.detached(priority: .utility) {
+            () -> ([LocalModel: Bool], Int64, [RetiredLocalModel: Int64]) in
             var installed: [LocalModel: Bool] = [:]
             var usage: Int64 = 0
             for (model, engine) in engines {
                 installed[model] = engine.isInstalled()
                 usage += engine.bytesOnDisk()
             }
-            return (installed, usage)
+            let leftovers = Self.scanLeftovers(in: root)
+            return (installed, usage + leftovers.values.reduce(0, +), leftovers)
         }.value
         for (model, isInstalled) in scan.0 {
             switch state(model: model) {
@@ -178,51 +183,53 @@ final class ModelStore {
             }
         }
         diskUsageBytes = scan.1
+        leftovers = scan.2
         if !hasScannedDisk { hasScannedDisk = true }
     }
 
     private func refreshDiskUsage() async {
         let engines = Array(self.engines.values)
-        diskUsageBytes = await Task.detached(priority: .utility) {
-            engines.reduce(Int64(0)) { $0 + $1.bytesOnDisk() }
+        let root = paths.models
+        let scan = await Task.detached(priority: .utility) { () -> (Int64, [RetiredLocalModel: Int64]) in
+            let leftovers = Self.scanLeftovers(in: root)
+            return (engines.reduce(Int64(0)) { $0 + $1.bytesOnDisk() } + leftovers.values.reduce(0, +), leftovers)
         }.value
+        diskUsageBytes = scan.0
+        leftovers = scan.1
     }
 
-    // MARK: GigaAM's version
+    /// Each retired model with a folder in `root`, and what its folders take. Stat-only.
+    nonisolated static func scanLeftovers(in root: URL) -> [RetiredLocalModel: Int64] {
+        var found: [RetiredLocalModel: Int64] = [:]
+        for model in RetiredLocalModel.allCases where model.isOnDisk(in: root) {
+            found[model] = model.bytesOnDisk(in: root)
+        }
+        return found
+    }
 
-    /// Makes `variant` GigaAM's version: every GigaAM dictation and its Retry runs it from now on (Transcribe With
-    /// names its version itself).
-    /// Versions already downloaded stay on disk; only one is loaded at a time, so the others unload, and this one
-    /// loads when it's downloaded and Switch model reaches GigaAM.
-    func pickGigaAMVariant(_ variant: GigaAMEngine.Variant) {
-        guard settings.gigaamVariant != variant else { return }
-        settings.gigaamVariant = variant
-        guard !isPreview else { return }
-        let model = LocalModel.gigaam(variant)
-        if settings.usesLocalModel(.gigaam), state(model: model) == .installed {
-            // Its prepare unloads the others first.
-            prepare(model: model)
-        } else {
-            let earlier = gigaamPrepares(except: model)
-            Task { [weak self] in
-                for task in earlier { await task.value }
-                await self?.unloadGigaAM(except: model)
+    // MARK: Leftovers
+
+    /// Deletes what `model`, retired, left on this Mac: its folders, and nothing else. Nothing runs it, so nothing has
+    /// it loaded. A folder that can't go stays listed.
+    func deleteLeftover(_ model: RetiredLocalModel) async {
+        guard !isPreview, leftovers[model] != nil, !deletingLeftovers.contains(model) else { return }
+        deletingLeftovers.insert(model)
+        defer { deletingLeftovers.remove(model) }
+        let folders = model.folders(in: paths.models)
+        let failure = await Task.detached(priority: .utility) { () -> String? in
+            let fm = FileManager.default
+            do {
+                for folder in folders where fm.fileExists(atPath: folder.path) { try fm.removeItem(at: folder) }
+                return nil
+            } catch {
+                return String(describing: error)
             }
+        }.value
+        if let failure {
+            Log.engine.error("Delete of \(model.id, privacy: .public) failed: \(failure, privacy: .public)")
         }
-    }
-
-    /// The GigaAM versions' prepares under way, but `model`'s.
-    private func gigaamPrepares(except model: LocalModel) -> [Task<Void, Never>] {
-        prepareTasks.filter { $0.key.engine == .gigaam && $0.key != model }.map(\.value)
-    }
-
-    /// Unloads every GigaAM version but `kept`, each in its turn at the gate: a loaded one reads as downloaded again.
-    private func unloadGigaAM(except kept: LocalModel) async {
-        for model in LocalModel.all where model.engine == .gigaam && model != kept {
-            guard let engine = engines[model], await engine.isLoaded else { continue }
-            try? await gate.run { await engine.unload() }
-            if state(model: model) == .ready { modelStates[model] = .installed }
-        }
+        DiagnosticLog.shared.event(.models, "leftover.deleted", ["model": model, "failed": failure != nil ? true : nil])
+        await refreshDiskUsage()
     }
 
     // MARK: Download
@@ -233,7 +240,7 @@ final class ModelStore {
         download(model: model)
     }
 
-    /// Checks free space, downloads (resuming any partial files), then prepares the model if it is in use.
+    /// Checks free space, downloads, then prepares the model if it is in use.
     func download(model: LocalModel) {
         guard !isPreview, let engine = engines[model] else { return }
         switch state(model: model) {
@@ -377,7 +384,7 @@ final class ModelStore {
 
     // MARK: Delete
 
-    /// Deletes `id`'s picked model (`delete(model:)`).
+    /// Deletes `id`'s model (`delete(model:)`).
     func delete(_ id: EngineID) async {
         guard let model = model(for: id) else { return }
         await delete(model: model)
@@ -418,19 +425,18 @@ final class ModelStore {
 
     // MARK: Select and prepare
 
-    /// Loads `id`'s picked model in the background (`prepare(model:)`).
+    /// Loads `id`'s model in the background (`prepare(model:)`).
     func prepare(_ id: EngineID) {
         guard let model = model(for: id) else { return }
         prepare(model: model)
     }
 
-    /// Loads the model in the background: `.preparing` → `.ready` (or `.failed`). A GigaAM version unloads the others
-    /// first: one is loaded at a time.
+    /// Loads the model in the background: `.preparing` → `.ready` (or `.failed`).
     func prepare(model: LocalModel) {
         prepare(model: model, after: nil)
     }
 
-    /// `previous`: another model's prepare to let finish first (launch loads Parakeet before GigaAM).
+    /// `previous`: another model's prepare to let finish first (launch loads them one after another).
     private func prepare(model: LocalModel, after previous: Task<Void, Never>?) {
         guard !isPreview, let engine = engines[model] else { return }
         switch state(model: model) {
@@ -443,12 +449,8 @@ final class ModelStore {
         }
         modelStates[model] = .preparing(since: Date())
         let gate = self.gate
-        // Another GigaAM version's load under way finishes before this one unloads it: never two at once.
-        let earlier = model.engine == .gigaam ? gigaamPrepares(except: model) : []
         prepareTasks[model] = Task { [weak self] in
             await previous?.value
-            for task in earlier { await task.value }
-            if model.engine == .gigaam { await self?.unloadGigaAM(except: model) }
             let started = ProcessInfo.processInfo.systemUptime
             let result: Result<Void, Error>
             do {
@@ -483,19 +485,17 @@ final class ModelStore {
 
     // MARK: Transcribe
 
-    /// Waits while the model downloads or loads, then transcribes with `id`'s picked model. Throws `AppError`, or
+    /// Waits while the model downloads or loads, then transcribes with `id`'s model. Throws `AppError`, or
     /// `CancellationError` when the calling task is cancelled. `background`: Home's work, which lets dictations have
     /// the model first (`InferenceGate`).
     func transcribeLocal(_ id: EngineID, samples: [Float], background: Bool = false) async throws -> String {
         try await transcribeLocalWithModel(id, samples: samples, background: background).text
     }
 
-    /// `transcribeLocal`, with the model that wrote it: GigaAM's version picked when it started, or `gigaam` when
-    /// given. A version other than the picked one loads for the job, unloading the one loaded (one at a time); the
-    /// pick stays, and the next job without a version loads the picked one back.
-    func transcribeLocalWithModel(_ id: EngineID, gigaam variant: GigaAMEngine.Variant? = nil, samples: [Float],
+    /// `transcribeLocal`, with the model that wrote it.
+    func transcribeLocalWithModel(_ id: EngineID, samples: [Float],
                                   background: Bool = false) async throws -> (text: String, model: LocalModel) {
-        guard let model = model(for: id, gigaam: variant) else {
+        guard let model = model(for: id) else {
             throw AppError.engineFailed(id, "\(id.displayName) doesn’t run on this Mac.")
         }
         let text = try await runLocal(model, background: background) { try await $0.transcribe(samples) }
@@ -568,7 +568,7 @@ final class ModelStore {
     // MARK: Messages
 
     /// `host`: where the download comes from (`LocalModel.downloadHost`), named when it can't be reached.
-    static func describeDownloadFailure(_ error: Error, host: String? = "Hugging Face") -> String {
+    static func describeDownloadFailure(_ error: Error, host: String? = nil) -> String {
         if let urlError = error as? URLError {
             switch urlError.code {
             case .notConnectedToInternet, .networkConnectionLost, .dataNotAllowed, .internationalRoamingOff:

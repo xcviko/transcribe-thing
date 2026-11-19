@@ -109,11 +109,11 @@ import Testing
         }
         #expect(StubURLProtocol.registry.requests(for: openRouterHost).isEmpty)
         #expect(CloudRoute.provider(for: .geminiFlash, proxy: proxy) == .vertexProxy)
-        #expect(CloudRoute.provider(for: .parakeet, proxy: proxy) == nil)
+        #expect(CloudRoute.provider(for: .gigaam, proxy: proxy) == nil)
     }
 
     @Test func theNotSetUpNoticePointsAtModels() {
-        let notice = AppError.vertexProxy(.notSetUp).notice(recordingID: UUID(), fallbackEngine: .parakeet,
+        let notice = AppError.vertexProxy(.notSetUp).notice(recordingID: UUID(), fallbackEngine: .gigaam,
                                                              engine: .geminiFlash)
         #expect(notice.title == "Your endpoint isn’t set up")
         #expect(notice.actions.first?.kind == .openHub(.models))
@@ -143,7 +143,7 @@ import Testing
         }
         #expect(EngineReadiness.of(.geminiFlash, localState: .ready, keyStatus: .missing, provider: .openRouter)
                 == .needsKey)
-        #expect(EngineReadiness.of(.parakeet, localState: .ready, keyStatus: .missing, provider: nil) == .ready)
+        #expect(EngineReadiness.of(.gigaam, localState: .ready, keyStatus: .missing, provider: nil) == .ready)
     }
 
     /// OpenRouter picked: its key decides, whatever the endpoint's state.

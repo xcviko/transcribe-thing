@@ -383,7 +383,7 @@ final class PillController {
         guard let host, model.isPresented, model.visiblePhase == .locked, let chip = regions.chip else { return }
         let settings = model.settings
         let current = model.sessionModel ?? settings.lineup.main
-        let menu = Self.modelMenu(choices: model.menuChoices, current: current, name: settings.modelName(of:),
+        let menu = Self.modelMenu(choices: model.menuChoices, current: current,
                                   unavailableReason: model.unavailableReason ?? { _ in nil }) { [weak model] choice in
             model?.onSelectModel?(choice)
         }

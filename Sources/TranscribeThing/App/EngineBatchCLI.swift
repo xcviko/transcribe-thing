@@ -2,16 +2,17 @@ import CoreML
 import Darwin
 import Foundation
 
-/// Hidden comparison of the local models (not in the usage text), free, with no key:
+/// Hidden comparison of GigaAM's builds (not in the usage text), free, with no key:
 ///
-///     transcribe-thing --batch <list.txt> --engine parakeet|gigaam-v3|gigaam-v3-e2e|gigaam-multilingual
-///            [--gigaam-models <dir>] [--compute all|ane|gpu|cpu] [--out <file.jsonl>]
+///     transcribe-thing --batch <list.txt> --engine gigaam-v3|gigaam-v3-e2e|gigaam-multilingual
+///            --gigaam-models <dir> [--compute all|ane|gpu|cpu] [--out <file.jsonl>]
 ///
 /// Loads one model once, then transcribes every audio file listed in `<list.txt>` (one path per line, anything
 /// AVFoundation reads) as the app reads a recording. Prints, and writes to `--out` as JSON lines, each file's
 /// length, time and text, then the load time and the process's memory (phys_footprint, what Activity Monitor shows
-/// as Memory): before the load, after it, and the peak. Parakeet loads from the app's model folder, read only;
-/// GigaAM from `<dir>/<model>` (`scripts/convert-gigaam.py`, compiled to .mlmodelc). Writes nothing but `--out`.
+/// as Memory): before the load, after it, and the peak. GigaAM loads from `<dir>/<model>` (`scripts/convert-gigaam.py`,
+/// compiled to .mlmodelc), never from the app's model folder. The app runs v3 alone; the retired v3 e2e and
+/// Multilingual stay here, to compare a build of them with it. Writes nothing but `--out`.
 enum EngineBatchCLI {
     static let flag = "--batch"
 
@@ -32,7 +33,7 @@ enum EngineBatchCLI {
         guard let list = value(flag), let engineName = value("--engine"),
               let listText = try? String(contentsOf: path(list), encoding: .utf8)
         else {
-            print("usage: transcribe-thing --batch <list.txt> --engine parakeet|gigaam-v3|gigaam-v3-e2e|gigaam-multilingual [--gigaam-models <dir>] [--compute all|ane|gpu|cpu] [--out <file.jsonl>]")
+            print("usage: transcribe-thing --batch <list.txt> --engine gigaam-v3|gigaam-v3-e2e|gigaam-multilingual --gigaam-models <dir> [--compute all|ane|gpu|cpu] [--out <file.jsonl>]")
             return 2
         }
         let files = listText.split(whereSeparator: \.isNewline).map { path(String($0)) }
@@ -51,11 +52,6 @@ enum EngineBatchCLI {
         let loadStart = ContinuousClock.now
         do {
             switch engineName {
-            case "parakeet":
-                ParakeetEngine.quietLibraryLogging()
-                let engine = ParakeetEngine(modelsRoot: AppPaths.live().models)
-                try await engine.load()
-                transcribe = { try await engine.transcribe($0) }
             case "gigaam-v3", "gigaam-v3-e2e", "gigaam-multilingual":
                 let variant: GigaAMEngine.Variant = switch engineName {
                 case "gigaam-v3": .v3

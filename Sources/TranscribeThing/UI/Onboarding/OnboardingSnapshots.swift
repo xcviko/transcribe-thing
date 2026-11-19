@@ -21,60 +21,60 @@ enum OnboardingSnapshots {
             entry("onboarding-2-permissions-granted") { model in model.stage(step: .permissions) },
 
             entry("onboarding-3-model", context: { ctx in
-                ctx.models = .preview(states: [.parakeet: .notInstalled])
+                ctx.models = .preview(states: [.gigaam: .notInstalled])
                 ctx.account = .preview(status: .missing)
             }) { model in model.stage(step: .model) },
             entry("onboarding-3-model-downloading", context: { ctx in
                 ctx.models = .preview(states: [
-                    .parakeet: .downloading(DownloadProgress(fraction: 0.335, bytesReceived: 212_000_000,
-                                                             totalBytes: 632_321_326, bytesPerSecond: 14_000_000,
-                                                             secondsRemaining: 30)),
+                    .gigaam: .downloading(DownloadProgress(fraction: 0.335, bytesReceived: 137_000_000,
+                                                           totalBytes: 409_369_862, bytesPerSecond: 14_000_000,
+                                                           secondsRemaining: 20)),
                 ])
                 ctx.account = .preview(status: .missing)
             }) { model in model.stage(step: .model) },
             entry("onboarding-3-model-ready", context: { ctx in
-                ctx.models = .preview(states: [.parakeet: .ready])
+                ctx.models = .preview(states: [.gigaam: .ready])
                 ctx.account = .preview(status: .missing)
             }) { model in model.stage(step: .model) },
             entry("onboarding-3-model-optimizing", context: { ctx in
-                ctx.models = .preview(states: [.parakeet: .preparing(since: Date().addingTimeInterval(-24))])
+                ctx.models = .preview(states: [.gigaam: .preparing(since: Date().addingTimeInterval(-24))])
                 ctx.account = .preview(status: .missing)
             }) { model in model.stage(step: .model) },
             entry("onboarding-3-model-load-failed", context: { ctx in
-                ctx.models = .preview(states: [.parakeet: .failed("Couldn’t load the model. Retry, or download it again.")],
-                                      lastErrors: [.parakeet: .modelLoadFailed(.parakeet, "Corrupt weights")])
+                ctx.models = .preview(states: [.gigaam: .failed("Couldn’t load the model. Retry, or download it again.")],
+                                      lastErrors: [.gigaam: .modelLoadFailed(.gigaam, "Corrupt weights")])
                 ctx.account = .preview(status: .missing)
             }) { model in model.stage(step: .model) },
             entry("onboarding-3-model-disk", context: { ctx in
-                ctx.models = .preview(states: [.parakeet: .notInstalled])
+                ctx.models = .preview(states: [.gigaam: .notInstalled])
                 ctx.account = .preview(status: .missing)
             }) { model in
                 model.stage(step: .model)
                 model.stageDisk(free: 412_000_000)
             },
-            // Onboarding replayed with Gemini as the main model: its key under the Parakeet card.
+            // Onboarding replayed with Gemini as the main model: its key under the GigaAM card.
             entry("onboarding-3-model-gemini-main", context: { ctx in
-                ctx.models = .preview(states: [.parakeet: .ready])
+                ctx.models = .preview(states: [.gigaam: .ready])
                 ctx.settings.lineup.main = .gemini
             }) { model in model.stage(step: .model) },
             // Switch model rebound to right ⌘: the Gemini line names it.
             entry("onboarding-3-model-custom-switch", context: { ctx in
-                ctx.models = .preview(states: [.parakeet: .ready])
+                ctx.models = .preview(states: [.gigaam: .ready])
                 ctx.settings.shortcuts[.switchModel] = .rightCommand
             }) { model in model.stage(step: .model) },
-            // Gemini 4 Carbon switched on after Parakeet: the line under the card names it.
+            // Gemini 4 Carbon switched on after GigaAM: the line under the card names it.
             entry("onboarding-3-model-carbon-step", context: { ctx in
-                ctx.models = .preview(states: [.parakeet: .ready])
+                ctx.models = .preview(states: [.gigaam: .ready])
                 ctx.settings.lineup.move(.carbon, to: 1)
                 ctx.settings.lineup.setSwitchable(.carbon, true)
             }) { model in model.stage(step: .model) },
             entry("onboarding-3-model-gemini-main-missing", context: { ctx in
-                ctx.models = .preview(states: [.parakeet: .notInstalled])
+                ctx.models = .preview(states: [.gigaam: .notInstalled])
                 ctx.settings.lineup.main = .gemini
                 ctx.account = .preview(status: .missing)
             }) { model in model.stage(step: .model) },
             entry("onboarding-3-model-gemini-invalid", context: { ctx in
-                ctx.models = .preview(states: [.parakeet: .notInstalled])
+                ctx.models = .preview(states: [.gigaam: .notInstalled])
                 ctx.settings.lineup.main = .gemini
                 ctx.account = .preview(status: .invalid("401"))
             }) { model in
@@ -127,12 +127,12 @@ enum OnboardingSnapshots {
                 model.stageKeyboardHint(true)
             },
             entry("onboarding-4-tryit-preparing", context: { ctx in
-                ctx.models = .preview(states: [.parakeet: .preparing(since: Date().addingTimeInterval(-12))])
+                ctx.models = .preview(states: [.gigaam: .preparing(since: Date().addingTimeInterval(-12))])
             }) { model in model.stage(step: .tryIt) },
             entry("onboarding-4-tryit-downloading", context: { ctx in
                 ctx.models = .preview(states: [
-                    .parakeet: .downloading(DownloadProgress(fraction: 0.62, bytesReceived: 392_000_000,
-                                                             totalBytes: 632_321_326, secondsRemaining: 18)),
+                    .gigaam: .downloading(DownloadProgress(fraction: 0.62, bytesReceived: 254_000_000,
+                                                           totalBytes: 409_369_862, secondsRemaining: 12)),
                 ])
             }) { model in
                 model.stage(step: .tryIt)

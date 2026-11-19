@@ -459,7 +459,7 @@ final class DictationController {
     ///
     /// While it's processed on Gemini, Polish and Translate send it again with the new prompt at once (the request
     /// under way is stopped, and its cost still counts): one click, one request. Send says whether Return follows its
-    /// paste. On Parakeet Polish and Translate do nothing (the pill shows them off and dimmed).
+    /// paste. On GigaAM Polish and Translate do nothing (the pill shows them off and dimmed).
     func toggle(_ toggle: PillToggle, on dictation: PillDictation, byKey: Bool = false) {
         DiagnosticLog.shared.event(.dictation, byKey ? "key.toggle" : "pill.button", [
             "button": toggle.rawValue, "on": { if case .recording = dictation { "recording" } else { "processing" } }()])
@@ -879,7 +879,7 @@ final class DictationController {
         let job = Job(recording: nil, engine: effectiveEngine, id: resumedID)
         // Home's Continue pastes by the rules of how the dictation was first dictated.
         job.mode = resumedMode ?? mode
-        // The main model may have changed under it (Models, a notice's "Use Parakeet v3"): only Gemini polishes.
+        // The main model may have changed under it (Models, a notice's "Use GigaAM v3"): only Gemini polishes.
         job.polishes = isPolishing && effectiveChoice.isGemini
         job.translates = isTranslating && effectiveChoice.isGemini
         job.sends = isSending && sends
@@ -1170,7 +1170,7 @@ final class DictationController {
         var attemptGenerations: [String] = []
         var stoppedGenerations: [String] = []
         /// How many tokens its model is thinking or writing, as far as the stream shows (`streamed(_:for:)`): nil until
-        /// the first streamed character, and always for Parakeet. The processing pill shows the newest job's.
+        /// the first streamed character, and always for GigaAM. The processing pill shows the newest job's.
         var count: PillTokenCount?
         /// How characters of the stream under way turn into that count, learned from History for its model.
         var estimate = TokenEstimate()
@@ -1230,7 +1230,7 @@ final class DictationController {
         let engine = job.engine
         job.count = nil
         job.estimate = TokenEstimate.learned(from: history.entries, modelID: engine.openRouterModelID)
-        // Only a streamed answer has tokens to count: Gemini's (Parakeet has none).
+        // Only a streamed answer has tokens to count: Gemini's (GigaAM has none).
         let progress = engine.isGemini ? streamProgress(for: job, generation: generation) : nil
         let generations: @Sendable (String) -> Void = { [weak self] id in
             Task { @MainActor [weak self] in self?.generationNamed(id, for: job, attempt: generation) }
@@ -1305,15 +1305,13 @@ final class DictationController {
     /// `hedge`: a dictation's cloud request goes 2 or 3 times at once when Race requests says so (`CloudHedge.race`);
     /// Home's never does.
     /// `generations`: a dictation's, which hears the generations Gemini names (`TranscriptionService.transcribe`).
-    /// `gigaam`: GigaAM's version for this one (Home's Transcribe With of another version), else the picked one.
-    private func transcribe(_ recording: Recording, engine: EngineID, gigaam: GigaAMEngine.Variant? = nil,
-                            prompt: String? = nil, background: Bool = false,
+    private func transcribe(_ recording: Recording, engine: EngineID, prompt: String? = nil, background: Bool = false,
                             hedge: CloudHedge? = nil,
                             progress: (@Sendable (ChatStreamProgress) -> Void)? = nil,
                             generations: (@Sendable (String) -> Void)? = nil) async -> Outcome {
         do {
             let overridden = requestOverride != nil || transcribeOverride != nil
-            if engine.isLocal, !overridden, let model = models.model(for: engine, gigaam: gigaam) {
+            if engine.isLocal, !overridden, let model = models.model(for: engine) {
                 try await waitForLocalModel(model)
             }
             let result: TranscriptResult
@@ -1322,8 +1320,7 @@ final class DictationController {
             } else if let transcribeOverride {
                 result = try await transcribeOverride(recording, engine)
             } else {
-                result = try await transcription.transcribe(recording, engine: engine, gigaam: gigaam, prompt: prompt,
-                                                            hedge: hedge,
+                result = try await transcription.transcribe(recording, engine: engine, prompt: prompt, hedge: hedge,
                                                             background: background, progress: progress,
                                                             generations: generations)
             }
@@ -1673,7 +1670,7 @@ final class DictationController {
         if job.translates { translateIDs.insert(job.id) } else { translateIDs.remove(job.id) }
         sendIDs.remove(job.id)
         // Its Retry is the same model: another one for this recording is the user's call, from History, unless the
-        // same model would likely fail again (Gemini's refusal): then the notice offers Parakeet beside Retry.
+        // same model would likely fail again (Gemini's refusal): then the notice offers GigaAM v3 beside Retry.
         let notice = error.notice(recordingID: job.id, fallbackEngine: usableFallback(excluding: job.engine, after: error),
                                   engine: job.engine)
         if let row = interruptedRow(job.id) {
@@ -1848,13 +1845,13 @@ final class DictationController {
         case .retryWith(let engine):
             retry(recordingID: notice.recordingID, engine: engine, from: notice)
         case .selectEngine(let engine):
-            // "Use Parakeet v3": a model on this Mac in place of the main model that failed (a Gemini, or GigaAM),
-            // loading if it's on disk.
+            // "Use GigaAM v3": the model on this Mac in place of the main model that failed (a Gemini), loading if
+            // it's on disk.
             if engine.isLocal, models.state(of: engine) == .installed { models.prepare(engine) }
             if settings.lineup.main.engine != engine { settings.lineup.main = ModelChoice(engine: engine) }
             let main = settings.lineup.main
             toasts.post(Notice(dedupeKey: "engine.selected", style: .success, symbol: main.symbolName,
-                               title: "Now using \(settings.modelName(of: main))", lifetime: .seconds(3)))
+                               title: "Now using \(main.modelName)", lifetime: .seconds(3)))
         case .undoCancel:
             undo(recordingID: notice.recordingID ?? lastCancelledID)
         case .chooseMicrophone:
@@ -1887,6 +1884,8 @@ final class DictationController {
     /// pill, notice or sound: its row shows it running (with Cancel, `cancelHomeWork(for:)`), then the new version,
     /// or why it didn't come (`homeFailures`). Deleting the row cancels it.
     func makeVersion(_ kind: TranscriptVersionKind, of entry: TranscriptEntry) {
+        // A retired model's kind never runs, nor stands for the model that took its place.
+        guard kind.isOffered else { return }
         switch kind {
         case .transcription, .gigaam: transcribeAgain(entry, as: kind)
         case .polish, .translation: rewrite(entry, as: kind)
@@ -1897,17 +1896,16 @@ final class DictationController {
     }
 
     /// Home: "Retry" of a failed or canceled row, or "Transcribe With" of a transcript, with any engine the
-    /// transcript has no version from (one it has is shown instead): GigaAM in its picked version. Nothing happens
-    /// while something else runs for the recording.
+    /// transcript has no version from (one it has is shown instead): GigaAM as v3. Nothing happens while something
+    /// else runs for the recording.
     func retry(_ entry: TranscriptEntry, with engine: EngineID) {
         transcribeAgain(entry, as: transcriptKind(engine))
     }
 
-    /// `retry(_:with:)` with a transcript's kind: an engine's, or a GigaAM version's, picked or not (that version loads
-    /// for the job, and the pick stays as it is).
+    /// `retry(_:with:)` with a transcript's kind: an engine's, or GigaAM v3's.
     private func transcribeAgain(_ entry: TranscriptEntry, as kind: TranscriptVersionKind) {
         let id = entry.id
-        guard !isInFlight(id) else { return }
+        guard kind.isOffered, !isInFlight(id) else { return }
         if let current = history.entry(id: id), current.status == .success, current.hasVersion(kind) {
             showVersion(kind, of: id)
             return
@@ -1970,11 +1968,10 @@ final class DictationController {
     /// The body of a Home task (`homeTasks`), once it has the recording.
     private func makeInHome(_ kind: TranscriptVersionKind, from recording: Recording) async {
         let engine = kind.engine
-        // A GigaAM version's is made as itself, whichever version is picked.
+        // GigaAM v3's is made as itself.
         let made: TranscriptVersionKind? = if case .transcription = kind { nil } else { kind }
         let prompt = made.flatMap(geminiPrompt(for:))
-        var outcome = await transcribe(recording, engine: engine, gigaam: kind.gigaamVariant, prompt: prompt,
-                                       background: true)
+        var outcome = await transcribe(recording, engine: engine, prompt: prompt, background: true)
         guard endHomeWork(for: recording.id) else { return }
         if made?.answersInMessageTags == true, case .success(var result) = outcome {
             // Once, from the whole answer (see `run`).
@@ -1997,9 +1994,9 @@ final class DictationController {
         }
     }
 
-    /// The transcript `engine` writes for a dictation: GigaAM's in its picked version.
+    /// The transcript `engine` writes for a dictation: GigaAM's as v3.
     private func transcriptKind(_ engine: EngineID) -> TranscriptVersionKind {
-        .transcript(by: engine, gigaam: settings.gigaamVariant)
+        .transcript(by: engine)
     }
 
     /// What Gemini (`engine`, the dictation's) writes for a dictation with Polish and Translate on or off: its
@@ -2017,7 +2014,7 @@ final class DictationController {
     /// as a dictation would, marked with the file's name, and `kind` (a transcription, Polish or Translate) makes its
     /// first version as Home work. From there it's a row like any other: Transcribe With, Polish, Retry. It pastes nothing.
     func transcribe(_ file: ImportedAudio, as kind: TranscriptVersionKind) {
-        guard !kind.isCleanup, !kind.isSelection else { return }
+        guard kind.isOffered else { return }
         var recording = Recording(samples: file.samples, startedAt: Date(), speech: file.speech)
         let audioFileName = history.saveAudio(recording)
         // `land` saves the recording again with its transcript: this keeps the file just written.
@@ -2298,6 +2295,9 @@ final class DictationController {
     ///
     /// Quit after, while it was transcribed: nothing was cut off, so it's transcribed from Home, as Retry does.
     ///
+    /// A row of a model retired since (Parakeet, Gemini 4 Argon) goes on with the one that took its place
+    /// (`EngineID.replacement`): GigaAM v3, Gemini 3.8 Flash.
+    ///
     /// Either way, and for the row's Transcribe, a transcription that doesn't come leaves the row one to continue,
     /// with all that's recorded, saying why under it (`keepInterrupted`).
     func continueDictation(_ entry: TranscriptEntry) {
@@ -2311,17 +2311,18 @@ final class DictationController {
         DiagnosticLog.shared.event(.dictation, "home.continue", [
             "interrupted": interruption.rawValue, "seconds": row.audioDuration, "busy": isInFlight(id) ? true : nil,
             "recording": machine.isRecording ? true : nil])
+        let engine = row.engine.replacement
         guard interruption == .whileRecording else {
-            retry(row, with: row.engine)
+            retry(row, with: engine)
             return
         }
         guard !isInFlight(id), !machine.isRecording else { return }
         if let kept = retained[id] {
-            _ = recordOn(kept, engine: row.engine, mode: row.mode)
+            _ = recordOn(kept, engine: engine, mode: row.mode)
             return
         }
         guard row.audioFileName != nil else {
-            homeFailures[id] = .recordingGone(transcriptKind(row.engine))
+            homeFailures[id] = .recordingGone(transcriptKind(engine))
             return
         }
         // Read off the main actor: a dictation that ran on for an hour takes a moment to decode.
@@ -2331,14 +2332,14 @@ final class DictationController {
             let recording = await self.history.loadRecordingInBackground(for: row)
             self.startingContinuations.remove(id)
             guard let recording else {
-                self.homeFailures[id] = .recordingGone(self.transcriptKind(row.engine))
+                self.homeFailures[id] = .recordingGone(self.transcriptKind(engine))
                 return
             }
             // Deleted, transcribed or taken up meanwhile, or another dictation started: nothing to record on now.
             guard let current = self.history.entry(id: id), current.status == .failed,
                   current.interruption == .whileRecording, !self.isInFlight(id),
                   !self.machine.isRecording else { return }
-            _ = self.recordOn(recording, engine: current.engine, mode: current.mode)
+            _ = self.recordOn(recording, engine: current.engine.replacement, mode: current.mode)
         }
     }
 
@@ -2357,7 +2358,7 @@ final class DictationController {
         }
     }
 
-    /// `engine`'s picked model: GigaAM's version.
+    /// `engine`'s model: GigaAM v3.
     private func startDownload(_ engine: EngineID) {
         guard let model = models.model(for: engine) else { return }
         models.download(model: model)
@@ -2446,8 +2447,8 @@ final class DictationController {
         flashError()
     }
 
-    /// A dictation still waiting for its local model says so: "Still downloading Parakeet v3 · 42%" or "Getting
-    /// Parakeet v3 ready…", with "Use … Instead" when another model could take it now. Nothing once the model is at
+    /// A dictation still waiting for its local model says so: "Still downloading GigaAM v3 · 42%" or "Getting
+    /// GigaAM v3 ready…", with "Use … Instead" when another model could take it now. Nothing once the model is at
     /// work.
     private func postModelWaitNotice(for job: Job) {
         var fallback = usableFallback(excluding: job.engine)
@@ -2523,12 +2524,10 @@ final class DictationController {
 
     // MARK: - Engines and recordings
 
-    /// Engines to fall back to from `engine`, in the order they're tried: from Gemini, the models on this Mac,
-    /// Parakeet first; from GigaAM, Parakeet, which writes Russian too; from Parakeet, none (GigaAM writes Russian, or
-    /// five languages in Multilingual, never Parakeet's 25). Only models on this Mac: Gemini is never offered in
-    /// another model's place.
+    /// Engines to fall back to from `engine`, in the order they're tried: from Gemini, the model on this Mac, GigaAM
+    /// v3; from GigaAM, none. Only models on this Mac: Gemini is never offered in another model's place.
     static func fallbackCandidates(for engine: EngineID) -> [EngineID] {
-        EngineID.localEngines.filter { $0 != engine && (engine.isCloud || $0 == .parakeet) }
+        engine.isCloud ? EngineID.localEngines : []
     }
 
     /// The engine offered in place of `engine`: "Retry with …" or "Use … Instead" for a saved recording, "Use …"
@@ -3128,7 +3127,7 @@ final class DictationController {
     /// Polish, Translate or Send clicked on the pill of a dictation being processed, as it would be while it records:
     /// the wand, the translate glyph or the plane on its pill, and their sounds. Polish and Translate have it sent to
     /// Gemini again at once, with the new prompt (still capturing its tail, its request goes with what's chosen then:
-    /// `captured`); Send only has Return pressed after its paste. On Parakeet Polish and Translate do nothing: there's
+    /// `captured`); Send only has Return pressed after its paste. On GigaAM Polish and Translate do nothing: there's
     /// no prompt to change.
     private func toggle(_ toggle: PillToggle, of job: Job, resendsNow: Bool = true) {
         switch toggle {
@@ -3412,7 +3411,7 @@ final class DictationController {
     }
 
     /// A switch that can't happen: the model stays, the pill shakes, and a notice says why. What the OpenRouter key
-    /// can't pay for (every step it blocked), or else the first blocked step's own problem ("Parakeet v3 isn’t
+    /// can't pay for (every step it blocked), or else the first blocked step's own problem ("GigaAM v3 isn’t
     /// downloaded yet", with Download).
     private func rejectSwitch(blocked: [(choice: ModelChoice, error: AppError)]) {
         pillModel.shakeTrigger += 1

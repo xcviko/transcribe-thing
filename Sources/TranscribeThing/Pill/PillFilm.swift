@@ -110,10 +110,10 @@ private struct FilmScenario {
 private enum FilmScript {
     @MainActor static let all: [FilmScenario] = [
         FilmScenario(name: "handsfree-start-accent", mode: .always,
-                     note: "fn Space on Parakeet, Gemini the hands-free model: graphite, no ring → locked, violet ring") { s in
-            s.record(.listening, on: .parakeet)
+                     note: "fn Space on GigaAM, Gemini the hands-free model: graphite, no ring → locked, violet ring") { s in
+            s.record(.listening, on: .gigaam)
             s.wait(0.8)
-            s.film("listening (Parakeet) → locked (Gemini)") {
+            s.film("listening (GigaAM) → locked (Gemini)") {
                 s.switchModel(to: .gemini)
                 s.record(.locked, on: .gemini)
             }
@@ -130,7 +130,7 @@ private enum FilmScript {
             s.process(on: .gemini)
             s.wait(0.6)
             s.film("processing → “No speech detected” (Gemini ring)") { s.noSpeech(on: .gemini) }
-            s.film("“No speech detected” → listening (Parakeet)") { s.record(.listening, on: .parakeet) }
+            s.film("“No speech detected” → listening (GigaAM)") { s.record(.listening, on: .gigaam) }
         },
         FilmScenario(name: "nospeech-to-hidden", mode: .whileDictating,
                      note: "“No speech detected” on Gemini, left alone until its hold runs out") { s in
@@ -143,7 +143,7 @@ private enum FilmScript {
         },
         FilmScenario(name: "canceled-undo", mode: .always, area: FilmScenario.toast,
                      note: "Esc, then Undo clicked on “Dictation canceled” over the resting pill, the pointer on the toast") { s in
-            s.record(.listening, on: .parakeet)
+            s.record(.listening, on: .gigaam)
             s.wait(0.6)
             let canceled = FilmScript.canceled()
             s.toasts.post(canceled)
@@ -156,7 +156,7 @@ private enum FilmScript {
             // DictationController.undo: the dictation goes on hands-free with its model, its kept audio first.
             s.toasts.onAction = { _, action in
                 guard case .undoCancel = action.kind else { return }
-                s.record(.locked, on: .parakeet, startedAgo: 4)
+                s.record(.locked, on: .gigaam, startedAgo: 4)
             }
             // A click: ToastCenter hands the action over, then dismisses the toast.
             s.film("Undo: “Dictation canceled” → locked", for: 0.8) {
@@ -164,7 +164,7 @@ private enum FilmScript {
             }
         },
         FilmScenario(name: "handsfree-cancel-then-fn", mode: .whileDictating, area: FilmScenario.toast,
-                     note: "Hands-free on Gemini with its chip, Esc (“Dictation canceled”), fn again 0.3 s later on Parakeet") { s in
+                     note: "Hands-free on Gemini with its chip, Esc (“Dictation canceled”), fn again 0.3 s later on GigaAM") { s in
             s.record(.locked, on: .gemini, startedAgo: 3)
             s.switchModel(to: .gemini)
             s.wait(0.6)
@@ -172,7 +172,7 @@ private enum FilmScript {
             s.rest()
             s.wait(0.3)
             s.film("fn while the hands-free pill is still leaving", for: 0.6) {
-                s.record(.listening, on: .parakeet)
+                s.record(.listening, on: .gigaam)
             }
         },
         FilmScenario(name: "handsfree-cancel-then-fn-later", mode: .whileDictating, area: FilmScenario.toast,
@@ -184,14 +184,14 @@ private enum FilmScript {
             s.rest()
             s.wait(0.8)
             s.film("fn after the hands-free pill has gone", for: 0.6) {
-                s.record(.listening, on: .parakeet)
+                s.record(.listening, on: .gigaam)
             }
         },
         FilmScenario(name: "processing-to-toast", mode: .always, area: FilmScenario.toast,
                      note: "Esc while processing: rest, and “Dictation canceled” grows out of the pill") { s in
-            s.record(.listening, on: .parakeet)
+            s.record(.listening, on: .gigaam)
             s.wait(0.5)
-            s.process(on: .parakeet)
+            s.process(on: .gigaam)
             s.wait(0.8)
             s.film("processing → rest + one-row toast", for: 0.7) {
                 s.toasts.post(FilmScript.canceled())
@@ -201,11 +201,11 @@ private enum FilmScript {
         FilmScenario(name: "toast-dismiss-uncover", mode: .always, area: FilmScenario.toast,
                      note: "A one-row toast in the resting pill’s slot runs out; the pill comes back") { s in
             s.toasts.post(Notice(dedupeKey: "engine.selected", style: .success, symbol: "waveform",
-                                 title: "Now using Parakeet v3", lifetime: .seconds(3)))
+                                 title: "Now using GigaAM v3", lifetime: .seconds(3)))
             s.film("toast expires → rest pill back", when: { s.toasts.notices.isEmpty }, for: 0.8)
         },
         FilmScenario(name: "appear-at-once", mode: .whileDictating, note: "Key down with no pill on screen") { s in
-            s.film("hidden → listening") { s.record(.listening, on: .parakeet) }
+            s.film("hidden → listening") { s.record(.listening, on: .gigaam) }
         },
         FilmScenario(name: "appear-at-once-colored", mode: .whileDictating,
                      note: "A polish of selected text (Gemini, violet ring) with no pill on screen") { s in
@@ -248,10 +248,10 @@ private enum FilmScript {
         },
         FilmScenario(name: "chip-switch", mode: .always,
                      note: "fn ⇥ twice while listening, then the chip’s hold runs out") { s in
-            s.record(.listening, on: .parakeet)
+            s.record(.listening, on: .gigaam)
             s.wait(0.6)
             s.film("switch to Gemini: chip up, violet ring") { s.switchModel(to: .gemini) }
-            s.film("back to Parakeet: chip rolls, ring goes") { s.switchModel(to: .parakeet) }
+            s.film("back to GigaAM: chip rolls, ring goes") { s.switchModel(to: .gigaam) }
             s.film("chip goes", when: { !s.model.isChipFlashing })
         },
         FilmScenario(name: "polish-toggle", mode: .always,
@@ -326,16 +326,16 @@ private enum FilmScript {
         FilmScenario(name: "error-glyph-to-listening", mode: .always,
                      note: "An error flash from rest, then fn within its hold") { s in
             s.film("rest → error (shake)") { s.errorFlash() }
-            s.film("error → listening (Parakeet)") { s.record(.listening, on: .parakeet) }
+            s.film("error → listening (GigaAM)") { s.record(.listening, on: .gigaam) }
         },
         FilmScenario(name: "handsfree-hours", mode: .always, note: "Hands-free reaches its first hour") { s in
-            s.record(.locked, on: .parakeet, startedAgo: 3600 - 1)
+            s.record(.locked, on: .gigaam, startedAgo: 3600 - 1)
             s.film("the hour comes: the timer widens", when: { s.model.showsHours })
         },
         FilmScenario(name: "toast-dismiss-stacked", mode: .always, area: FilmScenario.toast,
                      note: "Two toasts over the resting pill’s slot; X on the newest: it closes, the older comes down") { s in
             s.toasts.post(Notice(dedupeKey: "engine.selected", style: .success, symbol: "waveform",
-                                 title: "Now using Parakeet v3", lifetime: .seconds(30)))
+                                 title: "Now using GigaAM v3", lifetime: .seconds(30)))
             s.wait(0.6)
             let canceled = FilmScript.canceled()
             s.toasts.post(canceled)
@@ -345,19 +345,19 @@ private enum FilmScript {
         FilmScenario(name: "toast-dismiss-older", mode: .always, area: FilmScenario.toast,
                      note: "Two toasts over the resting pill’s slot; X on the older one, above: it goes where it is") { s in
             let older = Notice(dedupeKey: "engine.selected", style: .success, symbol: "waveform",
-                               title: "Now using Parakeet v3", lifetime: .seconds(30))
+                               title: "Now using GigaAM v3", lifetime: .seconds(30))
             s.toasts.post(older)
             s.wait(0.6)
             s.toasts.post(FilmScript.canceled())
             s.wait(1)
             s.toasts.setPaused(true)
             s.wait(0.3)
-            s.film("X on “Now using Parakeet v3”", for: 0.5) { s.toasts.dismiss(older.id) }
+            s.film("X on “Now using GigaAM v3”", for: 0.5) { s.toasts.dismiss(older.id) }
         },
         FilmScenario(name: "toast-trim", mode: .always, area: FilmScenario.toast,
                      note: "Two toasts up, a third comes: the oldest goes, the others move up") { s in
             s.toasts.post(Notice(dedupeKey: "engine.selected", style: .success, symbol: "waveform",
-                                 title: "Now using Parakeet v3", lifetime: .seconds(30)))
+                                 title: "Now using GigaAM v3", lifetime: .seconds(30)))
             s.wait(0.6)
             s.toasts.post(FilmScript.canceled())
             s.wait(1)
@@ -368,7 +368,7 @@ private enum FilmScript {
         },
         FilmScenario(name: "toast-over-handsfree-expires", mode: .always, area: FilmScenario.toast,
                      note: "A toast above a hands-free pill runs out: it closes into the pill below") { s in
-            s.record(.locked, on: .parakeet, startedAgo: 12)
+            s.record(.locked, on: .gigaam, startedAgo: 12)
             s.wait(0.6)
             s.toasts.post(Notice(dedupeKey: "mic.switched", style: .success, symbol: "laptopcomputer",
                                  title: "Switched to MacBook Pro Microphone", lifetime: .seconds(2.4)))
@@ -390,12 +390,12 @@ private enum FilmScript {
         },
         FilmScenario(name: "switch-hint-to-handsfree", mode: .always,
                      note: "The Switch model hint over a long hold, then fn Space: it goes as the pill widens") { s in
-            s.record(.listening, on: .parakeet)
+            s.record(.listening, on: .gigaam)
             s.model.showsTabHint = true
             s.wait(0.8)
             s.film("listening + hint → locked") {
                 s.model.showsTabHint = false
-                s.record(.locked, on: .parakeet)
+                s.record(.locked, on: .gigaam)
             }
         },
         FilmScenario(name: "chip-to-error-glyph", mode: .always,
@@ -425,7 +425,7 @@ private enum FilmScript {
                      note: "Pointer on the resting pill with its tooltip up, then fn") { s in
             s.model.setPointerInside(true)
             s.wait(0.8)
-            s.film("peek + tooltip → listening") { s.record(.listening, on: .parakeet) }
+            s.film("peek + tooltip → listening") { s.record(.listening, on: .gigaam) }
         },
     ]
 
@@ -472,6 +472,8 @@ private final class FilmSet {
         let canvas = PillCanvasMetrics.size
         region = CGRect(x: ((canvas.width - area.width) / 2).rounded(), y: 0, width: area.width, height: area.height)
         model = PillModel(settings: .inMemory(), levelMeter: .preview(level: 0.55, animated: false))
+        // GigaAM in graphite, the plain pill, as Parakeet was before it: the films show a model's ring come and go.
+        model.settings.modelColors[.gigaam] = .graphite
         panel = PillPanel(size: canvas)
         // As `PillController.start()` sets it up.
         host = PillHostingView(rootView: PillCanvasView(model: model, toasts: toasts, regions: PillHitRegions()))

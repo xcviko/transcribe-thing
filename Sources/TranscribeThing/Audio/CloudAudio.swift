@@ -56,7 +56,7 @@ enum CloudAudio {
     }
 
     /// `seconds` of audio fit one Gemini request: at 16 kbps, the lowest `aacBitRate`, up to `maxChatSeconds`.
-    /// Longer, Gemini can't take it; Parakeet on this Mac takes any length.
+    /// Longer, Gemini can't take it; GigaAM on this Mac takes any length.
     static func fitsChat(seconds: TimeInterval, budget: Int = OpenRouterClient.maxBase64Bytes) -> Bool {
         fits(seconds: seconds, bitRate: 16_000, budget: budget)
     }

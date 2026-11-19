@@ -2,19 +2,21 @@ import Foundation
 
 /// What wrote a transcript of a recording: an engine hearing the audio, Polish, Polish Selection, or (in entries from
 /// before clean-up was removed) a clean-up model tidying the text an engine wrote. An entry has at most one version of
-/// each kind, so the same model never runs twice on a recording. Kinds by retired models (Gemini 4 Argon, Gemini 3.1
-/// Pro, every clean-up) are read, named, shown and switched to like any other; nothing makes new ones.
+/// each kind, so the same model never runs twice on a recording. Kinds by retired models (Parakeet v3, GigaAM v3 e2e
+/// and Multilingual, Gemini 4 Argon, Gemini 3.1 Pro, every clean-up) are read, named, shown and switched to like any
+/// other; nothing makes new ones.
 enum TranscriptVersionKind: Hashable, Sendable, Codable {
     /// `engine`'s transcript. GigaAM's are `.gigaam`, a kind per version: nothing makes `.transcription(.gigaam)`.
     case transcription(EngineID)
     /// A GigaAM version's transcript (`EngineID.gigaam`): a kind per version, so one recording holds each version's
     /// side by side. Before there was one per version, GigaAM's one kind was "gigaam": an entry stored then reads it
-    /// as the version its metadata names (`TranscriptMetadata.modelID`), or as v3 when it names none.
+    /// as the version its metadata names (`TranscriptMetadata.modelID`), or as v3 when it names none. Only v3 makes
+    /// new ones: v3 e2e and Multilingual are retired (`GigaAMEngine.Variant.isRetired`).
     case gigaam(GigaAMEngine.Variant)
     /// `model` over the text of `.transcription(engine)`. History only: nothing makes clean-ups any more.
     case cleanup(of: EngineID, by: CleanupModel)
     /// Polish (`Polish`): the Gemini model's message from the audio (the dictation's model: Gemini 3.8 Flash, Gemini 4
-    /// Hydrogen or Gemini 4 Carbon; History keeps the retired Gemini 4 Argon's).
+    /// Hydrogen, Neon or Carbon; History keeps the retired Gemini 4 Argon's).
     case polish(by: EngineID = .geminiFlash)
     /// Polish Selection: the model's message from text selected in another app. No recording: the entry is this one
     /// version.
@@ -38,20 +40,25 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
     }
 
     /// The transcript `engine` writes: its own kind, and for GigaAM its version's: `variant`, else the one `modelID`
-    /// names (what a result or a version's metadata records), else v3.
+    /// names (what a result or a version's metadata records), else v3, the one that runs.
     static func transcript(by engine: EngineID, gigaam variant: GigaAMEngine.Variant? = nil,
                            modelID: String? = nil) -> TranscriptVersionKind {
         guard engine == .gigaam else { return .transcription(engine) }
         return .gigaam(variant ?? modelID.flatMap(GigaAMEngine.Variant.init(rawValue:)) ?? .default)
     }
 
-    /// What can write a recording's transcript, in menu order: each engine this build offers, GigaAM's versions each
-    /// on their own.
+    /// What can write a recording's transcript, in menu order: each engine this build offers, GigaAM as its one
+    /// version offered (v3).
     static var transcripts: [TranscriptVersionKind] {
         EngineID.offered.flatMap { engine in
-            engine == .gigaam ? GigaAMEngine.Variant.allCases.map(TranscriptVersionKind.gigaam) : [.transcription(engine)]
+            engine == .gigaam ? GigaAMEngine.Variant.offered.map(TranscriptVersionKind.gigaam) : [.transcription(engine)]
         }
     }
+
+    /// This build can make it: a transcript by an engine it offers (GigaAM as v3), or Polish or Translate by a Gemini it
+    /// offers. What a retired model wrote (Parakeet, GigaAM v3 e2e and Multilingual, Gemini 4 Argon, every clean-up) is
+    /// History's to read, and a selection's has no recording to make it from.
+    var isOffered: Bool { Self.transcripts.contains(self) || Self.rewrites.contains(self) }
 
     /// An engine's transcript of the audio: a plain transcription, or a GigaAM version's.
     var isTranscript: Bool {
@@ -109,9 +116,9 @@ enum TranscriptVersionKind: Hashable, Sendable, Codable {
         if case .cleanup = self { true } else { false }
     }
 
-    /// The model in Models that wrote it, whose General → Pasting rules its paste follows: Parakeet for its own
-    /// transcript and an old clean-up of it, Gemini for its transcript and Polish. nil for Polish Selection, which
-    /// isn't a dictation.
+    /// The model in Models that wrote it, whose General → Pasting rules its paste follows: GigaAM for its own
+    /// transcripts and for what the retired Parakeet wrote (an old clean-up of it too), Gemini for its transcript and
+    /// Polish. nil for Polish Selection, which isn't a dictation.
     var dictationModel: ModelChoice? {
         switch self {
         case .transcription(let engine): ModelChoice(engine: engine)

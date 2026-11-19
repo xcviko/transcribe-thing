@@ -125,7 +125,7 @@ import Testing
     private func service(_ replies: [StubURLProtocol.Reply], words: [String]) -> (TranscriptionService, String) {
         let (client, host) = StubURLProtocol.client(replies)
         let account = OpenRouterAccount(keyStore: KeyFileStore.inMemory("sk-or-v1-test"), client: client, debounce: .zero)
-        let service = TranscriptionService(models: .preview(states: [.parakeet: .ready]), account: account,
+        let service = TranscriptionService(models: .preview(states: [.gigaam: .ready]), account: account,
                                            client: client, providerLookupDelay: .milliseconds(10))
         service.vocabulary = { words }
         return (service, host)

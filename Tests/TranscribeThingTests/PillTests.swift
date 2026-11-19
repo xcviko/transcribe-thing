@@ -1432,7 +1432,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
     /// A switch names the new model for a moment; then the tint alone says it.
     @Test func eachSwitchFlashesTheChipThenItGoes() async throws {
         let model = makeModel()
-        model.sessionModel = .parakeet
+        model.sessionModel = .gigaam
         #expect(model.chipModel == nil, "a clean pill until a switch")
         model.engineChipPulse += 1
         model.sessionModel = .gemini
@@ -1445,8 +1445,8 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         let model = makeModel()
         model.sessionModel = .gemini
         model.engineChipPulse += 1
-        model.sessionModel = .parakeet
-        #expect(model.chipModel == .parakeet)
+        model.sessionModel = .gigaam
+        #expect(model.chipModel == .gigaam)
         try await waitUntil { !model.showsChip }
         #expect(model.chipModel == nil)
     }
@@ -1488,27 +1488,28 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
 
     @Test func theMenuOffersTheLineupFromTheMainModel() {
         let model = makeModel()
-        #expect(model.menuChoices == [.parakeet, .gemini])
+        #expect(model.menuChoices == [.gigaam, .gemini])
         model.settings.lineup.setSwitchable(.gemini, false)
-        #expect(model.menuChoices == [.parakeet])
+        #expect(model.menuChoices == [.gigaam])
         model.settings.lineup.setSwitchable(.gemini, true)
         model.settings.lineup.main = .gemini
-        #expect(model.menuChoices == [.gemini, .parakeet], "from the main model on, wrapping around")
+        #expect(model.menuChoices == [.gemini, .gigaam], "from the main model on, wrapping around")
     }
 
     /// Color means the model, whichever is main: the one Models gives it; today's by default.
     @Test func eachModelKeepsItsColorWhateverTheMainModel() {
         let colors = ModelColors.default
         #expect(PillPalette.accent(for: .gemini, in: colors) == PillAccent(ringHex: 0x7F77DD, markHex: 0xAFA9EC))
-        #expect(PillPalette.accent(for: .parakeet, in: colors) == nil && PillPalette.accent(for: nil, in: colors) == nil)
+        #expect(PillPalette.accent(for: .gigaam, in: colors) == PillPalette.accent(for: ModelColor.green))
+        #expect(PillPalette.accent(for: nil, in: colors) == nil)
 
         var picked = ModelColors.default
-        picked[.parakeet] = .teal
+        picked[.gigaam] = .teal
         picked[.gemini] = .graphite
-        #expect(PillPalette.accent(for: .parakeet, in: picked) == PillPalette.accent(for: ModelColor.teal))
+        #expect(PillPalette.accent(for: .gigaam, in: picked) == PillPalette.accent(for: ModelColor.teal))
         #expect(PillPalette.accent(for: .gemini, in: picked) == nil, "graphite is the plain pill")
         picked[.gemini] = .teal
-        #expect(PillPalette.accent(for: .gemini, in: picked) == PillPalette.accent(for: .parakeet, in: picked),
+        #expect(PillPalette.accent(for: .gemini, in: picked) == PillPalette.accent(for: .gigaam, in: picked),
                 "two may share one")
         // The main model changes nothing the pill draws.
         let model = makeModel()
@@ -1532,13 +1533,13 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
 
     @Test func theModelMenuChecksTheCurrentChoiceAndDisablesWhatCantRun() throws {
         var picked: [ModelChoice] = []
-        let menu = PillController.modelMenu(choices: [.gemini, .parakeet], current: .gemini,
-                                            unavailableReason: { $0 == .parakeet ? "Not downloaded" : nil }) {
+        let menu = PillController.modelMenu(choices: [.gemini, .gigaam], current: .gemini,
+                                            unavailableReason: { $0 == .gigaam ? "Not downloaded" : nil }) {
             picked.append($0)
         }
         // The cycle as it is, the main model first: no separators.
         #expect(menu.items.allSatisfy { !$0.isSeparatorItem })
-        #expect(menu.items.map(\.title) == ["Gemini 3.8 Flash", "Parakeet v3  Not downloaded"])
+        #expect(menu.items.map(\.title) == ["Gemini 3.8 Flash", "GigaAM v3  Not downloaded"])
         #expect(menu.items.map { $0.image != nil } == [true, true], "each with its model's symbol")
         #expect(menu.items.map(\.state) == [.on, .off])
         #expect(menu.items.map(\.isEnabled) == [true, false])
@@ -1550,8 +1551,8 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
 
     @Test func theHintNamesTheOneStepOrWhatTheyShare() {
         #expect(PillSwitchHint.label(for: [.gemini]) == "Gemini 3.8 Flash")
-        #expect(PillSwitchHint.label(for: [.parakeet]) == "Parakeet v3")
-        #expect(PillSwitchHint.label(for: [.parakeet, .gemini]) == "Parakeet, Flash")
+        #expect(PillSwitchHint.label(for: [.gigaam]) == "GigaAM v3")
+        #expect(PillSwitchHint.label(for: [.gigaam, .gemini]) == "GigaAM, Flash")
     }
 
     @Test func toastsClearTheChip() {
@@ -1585,7 +1586,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
     }
 
     @Test func theDefaultsAreTodaysAndPinkIsTheRetiredOne() {
-        #expect(ModelColors.default[.parakeet] == .graphite)
+        #expect(ModelColors.default[.gigaam] == .green && ModelColors.default.parakeet == .graphite)
         #expect(ModelColors.default[.gemini] == .violet)
         #expect(ModelChoice.allCases.allSatisfy { ModelColors.default[$0] == $0.defaultColor })
         #expect(PillPalette.accent(for: ModelColor.violet) == PillAccent(ringHex: 0x7F77DD, markHex: 0xAFA9EC))
@@ -1605,7 +1606,7 @@ private func notice(_ key: String, _ title: String = "Title", lifetime: NoticeLi
         #expect(white(0.70, on: capsule) >= 7 && white(0.70, on: pill) >= 7 && white(0.70, on: tooltip) >= 7,
                 "the timer, the hint's label, Click for hands-free")
         #expect(white(0.55, on: capsule) >= 5, "the counter's word")
-        #expect(white(0.50, on: pill) >= 4.5, "the chip's dimmed Parakeet")
+        #expect(white(0.50, on: pill) >= 4.5, "the chip's dimmed name")
         #expect(white(0.45, on: pill) >= 4, "silence and processing dots")
         #expect(white(0.35, on: pill) >= 3, "the peek's dots")
         // A key's "left" or "right", in the tooltip and in the hint.

@@ -95,10 +95,10 @@ import Testing
 
     @Test func whenBothFailTheFirstFailureIsThrown() async {
         let calls = Calls()
-        await #expect(throws: AppError.timeout(.parakeet)) {
+        await #expect(throws: AppError.timeout(.gigaam)) {
             try await CloudHedge.run(.race(copies: 2), .transcription, engine: .geminiFlash, modelName: "Gemini 3.8 Flash", progress: nil,
                                      work(calls, delays: [0.01, 0.05],
-                                          failures: [0: .timeout(.parakeet), 1: .openRouterTruncated("")]))
+                                          failures: [0: .timeout(.gigaam), 1: .openRouterTruncated("")]))
         }
     }
 
@@ -204,11 +204,11 @@ import Testing
 
     @Test func whenAllThreeFailTheFirstFailureIsThrown() async {
         let calls = Calls()
-        await #expect(throws: AppError.timeout(.parakeet)) {
+        await #expect(throws: AppError.timeout(.gigaam)) {
             try await CloudHedge.run(.race(copies: 3), .transcription, engine: .geminiFlash,
                                      modelName: "Gemini 3.8 Flash", progress: nil,
                                      work(calls, delays: [0.01, 0.05, 0.1], texts: ["a", "b", "c"],
-                                          failures: [0: .timeout(.parakeet), 1: .openRouterTruncated(""),
+                                          failures: [0: .timeout(.gigaam), 1: .openRouterTruncated(""),
                                                      2: .openRouterProviderUnavailable("")]))
         }
     }

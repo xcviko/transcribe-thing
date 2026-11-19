@@ -70,7 +70,7 @@ private struct DesignGallery: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Good morning, Sam").typeface(.greeting).foregroundStyle(.ink)
                 Text("Choose your model").typeface(.title).foregroundStyle(.ink)
-                Text("Parakeet v3 is ready").typeface(.headline).foregroundStyle(.ink)
+                Text("GigaAM v3 is ready").typeface(.headline).foregroundStyle(.ink)
                 Text("Hold fn, speak, and let go. Your words appear wherever you type.")
                     .typeface(.body).foregroundStyle(.ink)
                 Text("Runs entirely on your Mac. Nothing leaves this computer.")
@@ -111,10 +111,10 @@ private struct DesignGallery: View {
                     }
                 }
                 VStack(alignment: .leading, spacing: 6) {
-                    ModelStatusText(state: .ready, engine: .parakeet)
-                    ModelStatusText(state: .downloading(DownloadProgress(fraction: 0.42, bytesReceived: 265_000_000, totalBytes: 632_321_326, bytesPerSecond: 6_000_000, secondsRemaining: 64)), engine: .parakeet)
-                    ModelStatusText(state: .preparing(since: Date()), engine: .parakeet)
-                    ModelStatusText(state: .notInstalled, engine: .parakeet)
+                    ModelStatusText(state: .ready, engine: .gigaam)
+                    ModelStatusText(state: .downloading(DownloadProgress(fraction: 0.42, bytesReceived: 172_000_000, totalBytes: 409_369_862, bytesPerSecond: 6_000_000, secondsRemaining: 40)), engine: .gigaam)
+                    ModelStatusText(state: .preparing(since: Date()), engine: .gigaam)
+                    ModelStatusText(state: .notInstalled, engine: .gigaam)
                     ModelStatusText(keyStatus: .valid(PreviewFixtures.keyInfo))
                     ModelStatusText(keyStatus: .missing)
                     ModelStatusText(keyStatus: .invalid("401"))
@@ -193,8 +193,8 @@ private struct DesignGallery: View {
     private var models: some View {
         section("Model card") {
             HStack(alignment: .top, spacing: 12) {
-                modelCard(.parakeet, state: .ready, selected: true)
-                modelCard(.parakeet, state: .downloading(DownloadProgress(fraction: 0.42, secondsRemaining: 64)), selected: false)
+                modelCard(.gigaam, state: .ready, selected: true)
+                modelCard(.gigaam, state: .downloading(DownloadProgress(fraction: 0.42, secondsRemaining: 64)), selected: false)
             }
         }
     }

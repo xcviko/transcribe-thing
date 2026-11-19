@@ -7,9 +7,6 @@ let package = Package(
     products: [
         .executable(name: "transcribe-thing", targets: ["transcribe-thing"])
     ],
-    dependencies: [
-        .package(url: "https://github.com/FluidInference/FluidAudio", from: "0.17.4", traits: []),
-    ],
     targets: [
         // SpeexDSP's echo canceller and preprocessor, vendored (Sources/CSpeexDSP/README.md).
         .target(
@@ -27,10 +24,7 @@ let package = Package(
         ),
         .target(
             name: "TranscribeThing",
-            dependencies: [
-                "CSpeexDSP",
-                .product(name: "FluidAudio", package: "FluidAudio"),
-            ],
+            dependencies: ["CSpeexDSP"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .executableTarget(

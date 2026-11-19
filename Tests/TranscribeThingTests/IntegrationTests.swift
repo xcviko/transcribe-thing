@@ -4,60 +4,60 @@ import Testing
 
 /// Cross-module behavior added while wiring the app together.
 @MainActor
-@Suite(.timeLimit(.minutes(1))) struct ParakeetDownloadTests {
-    /// Parakeet on this Mac not downloaded (or already on disk).
-    private func makeStore(parakeetInstalled: Bool = false) -> (ModelStore, FakeEngine, AppSettings) {
+@Suite(.timeLimit(.minutes(1))) struct LocalModelDownloadTests {
+    /// GigaAM v3 on this Mac not downloaded (or already on disk).
+    private func makeStore(installed: Bool = false) -> (ModelStore, FakeEngine, AppSettings) {
         let settings = AppSettings.inMemory()
-        let parakeet = FakeEngine(.parakeet, installed: parakeetInstalled)
-        let store = ModelStore(paths: .temporary(), settings: settings, engines: [.parakeet: parakeet],
+        let gigaam = FakeEngine(.gigaam, installed: installed)
+        let store = ModelStore(paths: .temporary(), settings: settings, engines: [.gigaam(.v3): gigaam],
                                gate: InferenceGate(), freeDiskBytes: { 50_000_000_000 })
-        return (store, parakeet, settings)
+        return (store, gigaam, settings)
     }
 
-    /// Switch model reaches Parakeet: once it lands it loads, so the next dictation doesn't wait.
+    /// Switch model reaches GigaAM: once it lands it loads, so the next dictation doesn't wait.
     @Test func aDownloadThatLandsLoadsWhenTheLineupUsesIt() async throws {
-        let (store, parakeet, settings) = makeStore()
-        #expect(settings.usesLocalModel(.parakeet))
+        let (store, gigaam, settings) = makeStore()
+        #expect(settings.usesLocalModel(.gigaam))
         await store.refreshFromDisk()
         var finished: LocalModel?
         store.onDownloadFinished = { finished = $0 }
-        store.download(.parakeet)
-        #expect(store.state(of: .parakeet).isDownloading)
-        await waitForObserved { store.state(of: .parakeet) == .ready }
-        #expect(finished == .parakeet)
-        #expect(await parakeet.isLoaded)
+        store.download(.gigaam)
+        #expect(store.state(of: .gigaam).isDownloading)
+        await waitForObserved { store.state(of: .gigaam) == .ready }
+        #expect(finished == .gigaam(.v3))
+        #expect(await gigaam.isLoaded)
     }
 
-    /// Gemini is the main model and Parakeet is switched off: it downloads, and waits on disk.
+    /// Gemini is the main model and GigaAM is switched off: it downloads, and waits on disk.
     @Test func aDownloadNothingUsesStaysOnDisk() async throws {
         let (store, _, settings) = makeStore()
         settings.lineup.main = .gemini
-        settings.lineup.setSwitchable(.parakeet, false)
-        #expect(!settings.usesLocalModel(.parakeet))
+        settings.lineup.setSwitchable(.gigaam, false)
+        #expect(!settings.usesLocalModel(.gigaam))
         await store.refreshFromDisk()
-        store.download(.parakeet)
-        await waitForObserved { store.state(of: .parakeet) == .installed }
-        #expect(store.state(of: .parakeet) == .installed)
+        store.download(.gigaam)
+        await waitForObserved { store.state(of: .gigaam) == .installed }
+        #expect(store.state(of: .gigaam) == .installed)
     }
 
     @Test func aFailedDownloadSaysSo() async throws {
-        let (store, parakeet, _) = makeStore()
-        await parakeet.configure(downloadError: URLError(.notConnectedToInternet))
+        let (store, gigaam, _) = makeStore()
+        await gigaam.configure(downloadError: URLError(.notConnectedToInternet))
         await store.refreshFromDisk()
-        store.download(.parakeet)
-        await waitForObserved { if case .failed = store.state(of: .parakeet) { true } else { false } }
-        #expect(store.lastErrors[.parakeet] != nil)
+        store.download(.gigaam)
+        await waitForObserved { if case .failed = store.state(of: .gigaam) { true } else { false } }
+        #expect(store.lastErrors[.gigaam] != nil)
     }
 
     @Test func cancellingTheDownloadLeavesItNotInstalled() async throws {
-        let (store, parakeet, _) = makeStore()
-        let gate = await parakeet.gateDownloads()
+        let (store, gigaam, _) = makeStore()
+        let gate = await gigaam.gateDownloads()
         await store.refreshFromDisk()
-        store.download(.parakeet)
+        store.download(.gigaam)
         await gate.arrival(1)
-        store.cancelDownload(.parakeet)
-        await store.waitForDownloadToSettle(.parakeet)
+        store.cancelDownload(.gigaam)
+        await store.waitForDownloadToSettle(.gigaam)
         #expect(gate.cancellations == 1)
-        #expect(store.state(of: .parakeet) == .notInstalled)
+        #expect(store.state(of: .gigaam) == .notInstalled)
     }
 }

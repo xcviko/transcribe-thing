@@ -16,7 +16,7 @@ Takes about two minutes. Requires macOS 26 on Apple silicon.
    ```
 
 4. Setup walks you through the rest: Microphone and Accessibility permissions, the speech model download (about
-   600 MB) and a practice round. The cloud models and their key are in Models, whenever you want them.
+   410 MB) and a practice round. The cloud models and their key are in Models, whenever you want them.
 
 When a new version is out, the app tells you, and Update Now in General → Software Update installs it.
 
@@ -29,9 +29,9 @@ When a new version is out, the app tells you, and Update Now in General → Soft
 | Cancel | **esc** (Undo brings it back) |
 | Switch model while you talk | **fn ⇥** |
 | Get the message you meant, not every word (Gemini) | **fn P**, or click the **wand** on the pill |
-| Polish text you've selected (on Parakeet) | select it, then **fn P** or the **wand** |
+| Polish text you've selected (on GigaAM) | select it, then **fn P** or the **wand** |
 | Get what you say in the other language (Gemini) | **fn T**, or click **Translate** on the pill |
-| Translate text you've selected (on Parakeet) | select it, then **fn T** or **Translate** |
+| Translate text you've selected (on GigaAM) | select it, then **fn T** or **Translate** |
 | Press Return once the text is pasted (sends a chat message) | **fn ↩**, or click the **paper plane** on the pill |
 | Teach the cloud models a word or a name | select it, hold **fn**, press **D** |
 | Paste the last transcript again | **⌘ fn V** |
@@ -68,27 +68,25 @@ manager may still keep the selected text.
 
 ## Models
 
-- **Parakeet v3** (the default) runs on your Mac. It's the fastest, works offline, needs no key, and recognizes 25
-  European languages by itself.
+- **GigaAM v3** (the default) runs on your Mac: Sber's model for Russian. It's fast, works offline and needs no key.
+  It hears Russian only and writes plain lowercase text without punctuation; English words come out in Cyrillic
+  letters, as it hears them. For punctuation, capitals or another language, dictate on Gemini.
 - **Gemini 3.8 Flash** runs in the cloud and is very accurate. It thinks before it writes, so it's slower than
-  Parakeet.
+  GigaAM.
 - **Gemini 4 Hydrogen** runs in the cloud too: Google's newer model in Flash's class. It's faster than Flash on long
   dictations and costs about twice as much per token.
-- **Gemini 4 Carbon** runs in the cloud too: Google's newest. It's slower than Flash and costs about 2.7 times as
-  much. When Google is busy, it can take a few minutes to start answering.
-- **GigaAM** runs on your Mac, free and offline, like Parakeet: Sber's model for Russian. Pick one of three versions
-  on its row: v3 writes plain lowercase text without punctuation, v3 e2e adds punctuation, capitals and digits, and
-  Multilingual also hears English, Kazakh, Kyrgyz and Uzbek, without punctuation. Each version is its own download
-  (about 410 MB, 1.1 GB for Multilingual). To compare them, run a recording through each downloaded version from History →
-  Transcribe With: the transcripts stay side by side.
+- **Gemini 4 Neon** runs in the cloud too: Google's newest, between Hydrogen and Carbon in the Gemini 4 family. It
+  costs about 3.6 times as much as Flash per token, and Google says that will go up.
+- **Gemini 4 Carbon** runs in the cloud too: the top of Google's Gemini 4 family. It's slower than Flash and costs
+  about 2.7 times as much. When Google is busy, it can take a few minutes to start answering.
 
-Hydrogen, Carbon and GigaAM are off until you switch them on in Models.
+Hydrogen, Neon and Carbon are off until you switch them on in Models.
 
 On Gemini, press fn P (or click the wand on the pill) and it pastes the message you meant, without the false starts,
 detours and repeats. Press fn T (or click Translate) and it pastes what you said in the other language. Russian becomes English and English becomes
 Russian; pick another pair in General → Translate. With both on, you get the message you meant, translated.
 
-On Parakeet and GigaAM, fn P and fn T (the wand and Translate) work on the text you've selected instead: Gemini 3.8 Flash writes the result
+On GigaAM, fn P and fn T (the wand and Translate) work on the text you've selected instead: Gemini 3.8 Flash writes the result
 on a card, and Paste Here puts it in place of the selection.
 
 In Models:
@@ -96,12 +94,11 @@ In Models:
 - **Your models** picks the model every dictation starts on (the dot), which models fn ⇥ steps through while you talk
   (the switches, in the order of the list, which you can drag), and each one's pill color. Each Gemini's row also
   has a Reasoning menu, under its name: how long it thinks before it writes, Low, Medium or High (Flash and Hydrogen
-  start on Medium, Carbon on Low). Higher is slower and costs more. It applies to everything that model does:
-  dictations, Polish, Translate, files and History. GigaAM's row has a Version menu instead.
+  start on Medium, Neon and Carbon on Low). Higher is slower and costs more. It applies to everything that model
+  does: dictations, Polish, Translate, files and History.
 - **Hands-free** picks the model fn Space starts on.
-- **On this Mac** downloads Parakeet and the GigaAM version you picked, and shows how they're doing. Every GigaAM
-  version you've downloaded stays listed with its size until you delete it. Delete Parakeet there once it's neither
-  the main model nor switched on.
+- **On this Mac** downloads GigaAM v3 and shows how it's doing. Delete it there once it's neither the main model nor
+  switched on. Files of models the app no longer uses are listed there too, each with its size and Delete.
 
 Gemini runs on your own [OpenRouter](https://openrouter.ai) key, and you pay OpenRouter per use. Each dictation goes
 to Gemini once. If Gemini sometimes thinks for a long time before it writes, try General → Experimental → Race
@@ -109,8 +106,10 @@ requests (off by default): at 2 or 3, each Gemini dictation is sent that many ti
 pasted and the rest are stopped. A dictation can then cost up to 2 or 3 times as much. Selected text, files and History
 aren't affected.
 
-If you ran Parakeet v3 through OpenRouter, that option is gone: Parakeet runs only on your Mac now. If it isn't
-downloaded yet, download it in Models (about 600 MB). Transcripts it made stay in History as "Parakeet v3 · Cloud".
+Parakeet v3, GigaAM v3 e2e and GigaAM Multilingual are gone. Wherever you had picked Parakeet (your main model, fn ⇥,
+hands-free), GigaAM v3 takes its place; if it isn't downloaded yet, its row in Models has Download (about 410 MB).
+Transcripts they made stay in History under their names. Their files stay on your Mac until you delete them in
+Models → On this Mac. Parakeet through OpenRouter went earlier; its transcripts stay as "Parakeet v3 · Cloud".
 
 Gemini 4 Argon is gone too. Wherever you had picked it (your main model, fn ⇥, hands-free), Gemini 3.8 Flash
 takes its place, so there's nothing to change. Transcripts it made stay in History as "Gemini 4 Argon".
@@ -125,9 +124,9 @@ For Custom endpoint, enter its base URL (the one that ends in `/v1`, like `https
 key. A URL without a path is read as `<address>/api/v1`, so an endpoint saved by its address alone keeps working. The
 app checks the key without spending anything and says whether it works. Until both are saved, Gemini shows "Needs
 endpoint". The endpoint gets the same request OpenRouter would, audio included, with OpenRouter's model name
-(`google/gemini-3.8-flash`, `google/gemini-4-hydrogen`, `google/gemini-4-carbon`), so it has to accept those names. If
-it fails, the error says it came from your endpoint. Costs in History are what your endpoint reports, and History names
-it by its address.
+(`google/gemini-3.8-flash`, `google/gemini-4-hydrogen`, `google/gemini-4-neon`, `google/gemini-4-carbon`), so it has
+to accept those names. If it fails, the error says it came from your endpoint. Costs in History are what your endpoint
+reports, and History names it by its address.
 
 If you had an endpoint set up with "Use for Gemini" on, Custom endpoint is picked for you. Everyone else starts on
 OpenRouter.
@@ -135,7 +134,7 @@ OpenRouter.
 ## Dictionary
 
 Words, names and terms you use, and how they're spelled. Gemini gets them as a hint, so a dictation
-spells "Wispr Flow" the way you do; Parakeet and GigaAM take no hints. Add one with fn D over selected text, or in the
+spells "Wispr Flow" the way you do; GigaAM takes no hints. Add one with fn D over selected text, or in the
 app's Dictionary page, where you can also sort them into groups by dragging. Groups are only for you: the models get
 every word.
 
@@ -152,7 +151,9 @@ toward the numbers on Home: words, speed and dictations are only what you said.
 
 History, the recordings, your dictionary and your API keys (OpenRouter's and your own endpoint's) stay on your Mac, in
 `~/Library/Application Support/transcribe-thing`. Each key is in a file only you can read. Audio leaves your Mac only
-when Gemini transcribes it: through OpenRouter, or through your own endpoint when it's the provider. Text leaves it only
+when Gemini transcribes it: through OpenRouter, or through your own endpoint when it's the provider. GigaAM v3 is
+downloaded once, from this project's releases on GitHub, into the same folder, and hears your audio on your Mac. Text
+leaves it only
 when Gemini 3.8 Flash polishes or translates text you selected. Your dictionary's words go along with everything sent to Gemini.
 
 The same folder keeps a log of what the app did in the last 7 days, without your dictations, your selected text or
@@ -194,7 +195,7 @@ it, run `make reset-tcc` after a rebuild and grant access again.
 The binary also works without the UI, for checking the models:
 
 ```sh
-.build/debug/transcribe-thing --transcribe memo.m4a --engine parakeet --download
+.build/debug/transcribe-thing --transcribe memo.m4a --engine gigaam --download
 .build/debug/transcribe-thing --transcribe memo.m4a --engine geminiFlash --effort high
 ```
 

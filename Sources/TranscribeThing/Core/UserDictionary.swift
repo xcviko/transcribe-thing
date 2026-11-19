@@ -2,7 +2,7 @@ import Foundation
 
 /// The user's dictionary (Hub → Dictionary, or fn D over selected text): words, names and terms that Gemini 3.8 Flash
 /// gets as a hint (Polish and Polish Selection too): they exist, and this is how they're spelled (`prompt(_:with:)`).
-/// Parakeet hears without instructions and can't use it. Words keep the order they came in, each once (case aside); one JSON
+/// GigaAM hears without instructions and can't use it. Words keep the order they came in, each once (case aside); one JSON
 /// array under `SettingsKey.dictionary`. The user may sort them into groups (`Group`) for their own overview on the
 /// Dictionary page; the prompts get every word alike, and the groups are kept apart (`grouping`).
 struct UserDictionary: Equatable, Sendable {

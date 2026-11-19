@@ -53,12 +53,12 @@ plutil -lint -s "$CONTENTS/Info.plist"
 cp "$RES"/Sounds/*.wav "$CONTENTS/Resources/Sounds/"
 
 shopt -s nullglob
-# SwiftPM resource bundles (FluidAudio_FluidAudio.bundle, ...): the generated Bundle.module accessor looks
+# SwiftPM resource bundles (none today), should a dependency bring one: the generated Bundle.module accessor looks
 # in Bundle.main.resourceURL first, so an app must carry them in Contents/Resources.
 for bundle in "$BIN_DIR"/*.bundle; do
   ditto "$bundle" "$CONTENTS/Resources/$(basename "$bundle")"
 done
-# Dynamic frameworks and dylibs (none today: FluidAudio links statically).
+# Dynamic frameworks and dylibs (none today).
 for framework in "$BIN_DIR"/PackageFrameworks/*.framework "$BIN_DIR"/*.framework; do
   ditto "$framework" "$CONTENTS/Frameworks/$(basename "$framework")"
 done

@@ -26,15 +26,15 @@ private func json(_ body: Data) throws -> [String: Any] {
 @Suite struct CarbonModelTests {
     @Test func carbonIsAGeminiOfItsOwn() {
         #expect(EngineID.geminiCarbon.rawValue == "geminiCarbon" && ModelChoice.carbon.rawValue == "carbon")
-        #expect(EngineID.offered == [.parakeet, .gigaam, .geminiFlash, .geminiHydrogen, .geminiCarbon])
-        #expect(EngineID.geminiEngines == [.geminiFlash, .geminiHydrogen, .geminiCarbon])
-        #expect(ModelChoice.allCases == [.parakeet, .gemini, .hydrogen, .carbon, .gigaam])
+        #expect(EngineID.offered == [.gigaam, .geminiFlash, .geminiHydrogen, .geminiNeon, .geminiCarbon])
+        #expect(EngineID.geminiEngines == [.geminiFlash, .geminiHydrogen, .geminiNeon, .geminiCarbon])
+        #expect(ModelChoice.allCases == [.gigaam, .gemini, .hydrogen, .neon, .carbon])
         let carbon = EngineID.geminiCarbon
         #expect(carbon.isGemini && carbon.isCloud && !carbon.isRetired)
         #expect(carbon.modelName == "Gemini 4 Carbon" && carbon.displayName == "Gemini 4 Carbon")
         #expect(carbon.shortName == "Gemini 4 Carbon" && carbon.glyph == "C" && carbon.symbolName == "atom")
         #expect(carbon.openRouterModelID == "google/gemini-4-carbon" && carbon.provider == "Google AI Studio")
-        #expect(carbon.factLine == "Newest · slower · about 2.7× Flash’s cost")
+        #expect(carbon.factLine == "Top of Gemini 4 · slower · about 2.7× Flash’s cost")
         #expect(OpenRouterClient.engine(forModel: "google/gemini-4-carbon") == .geminiCarbon)
         #expect(ModelChoice.carbon.modelName == "Gemini 4 Carbon" && ModelChoice.carbon.shortName == "Carbon")
         #expect(ModelChoice.carbon.chipName == "Gemini 4 Carbon" && ModelChoice.carbon.compactName == "Gemini 4 Carbon")
@@ -49,7 +49,7 @@ private func json(_ body: Data) throws -> [String: Any] {
         for engine in [EngineID.geminiFlash, .geminiArgon, .geminiPro] {
             #expect(ModelChoice(engine: engine) == .gemini, "\(engine)")
         }
-        #expect(ModelChoice(engine: .parakeet) == .parakeet && ModelChoice(engine: .parakeetCloud) == .parakeet)
+        #expect(ModelChoice(engine: .parakeet) == .gigaam && ModelChoice(engine: .parakeetCloud) == .gigaam)
         #expect(ModelChoice(stored: "argon") == .gemini && ModelChoice(stored: "carbon") == .carbon)
         #expect(ModelChoice.read(["argon", "carbon"]) == [.carbon], "Argon's own checks are dropped, Carbon's kept")
     }
@@ -66,9 +66,10 @@ private func json(_ body: Data) throws -> [String: Any] {
         #expect(TranscriptVersionKind.transcription(.geminiArgon).dictationModel == .gemini)
         #expect(TranscriptVersionKind.polish(by: .geminiCarbon).displayName == "Polished by Gemini 4 Carbon")
         #expect(TranscriptVersionKind.rewrites == [.polish(by: .geminiFlash), .polish(by: .geminiHydrogen),
-                                                   .polish(by: .geminiCarbon),
+                                                   .polish(by: .geminiNeon), .polish(by: .geminiCarbon),
                                                    .translation(polished: false, by: .geminiFlash),
                                                    .translation(polished: false, by: .geminiHydrogen),
+                                                   .translation(polished: false, by: .geminiNeon),
                                                    .translation(polished: false, by: .geminiCarbon)])
     }
 
@@ -109,13 +110,13 @@ private func json(_ body: Data) throws -> [String: Any] {
 
 @MainActor
 @Suite struct CarbonSettingsTests {
-    /// A fresh install lists Carbon after Flash and Hydrogen, switched off (GigaAM v3 comes after it): Parakeet is the
-    /// main model and Flash its one step.
+    /// A fresh install lists Carbon after Flash, Hydrogen and Neon, switched off: GigaAM v3 is the main model and Flash
+    /// its one step.
     @Test func aFreshInstallListsCarbonSwitchedOff() throws {
         try withDefaults { defaults in
             let settings = load(defaults)
-            #expect(settings.lineup.order == [.parakeet, .gemini, .hydrogen, .carbon, .gigaam])
-            #expect(settings.lineup.main == .parakeet && settings.lineup.cycle == [.parakeet, .gemini])
+            #expect(settings.lineup.order == [.gigaam, .gemini, .hydrogen, .neon, .carbon])
+            #expect(settings.lineup.main == .gigaam && settings.lineup.cycle == [.gigaam, .gemini])
             #expect(!settings.lineup.isSwitchable(.carbon))
             #expect(settings.modelColors[.carbon] == .blue && settings.modelColors[.gemini] == .violet)
             #expect(settings.reasoningEffort(for: .geminiCarbon) == .low)
@@ -130,10 +131,11 @@ private func json(_ body: Data) throws -> [String: Any] {
             defaults.set(Data(old.utf8), forKey: SettingsKey.lineup.defaultsKey)
             defaults.set("parakeet", forKey: SettingsKey.handsFreeModel.defaultsKey)
             let settings = load(defaults)
-            #expect(settings.lineup.order == [.gemini, .parakeet, .hydrogen, .carbon, .gigaam])
-            #expect(settings.lineup.main == .gemini && settings.lineup.cycle == [.gemini, .parakeet])
-            #expect(!settings.lineup.isSwitchable(.carbon) && settings.handsFreeChoice == .parakeet)
-            #expect(load(defaults).lineup.order == [.gemini, .parakeet, .hydrogen, .carbon, .gigaam], "stored as read")
+            #expect(settings.lineup.order == [.gemini, .gigaam, .hydrogen, .neon, .carbon], "GigaAM in Parakeet's place")
+            #expect(settings.lineup.main == .gemini && settings.lineup.cycle == [.gemini, .gigaam])
+            #expect(!settings.lineup.isSwitchable(.carbon) && settings.handsFreeChoice == .gigaam)
+            #expect(load(defaults).lineup.order == [.gemini, .gigaam, .hydrogen, .neon, .carbon],
+                    "stored as read")
         }
         // From the days of Argon: Argon is Flash, and Carbon doesn't take its place.
         try withDefaults { defaults in
@@ -142,28 +144,28 @@ private func json(_ body: Data) throws -> [String: Any] {
             defaults.set("argon", forKey: SettingsKey.handsFreeModel.defaultsKey)
             let settings = load(defaults)
             #expect(settings.lineup.main == .gemini
-                    && settings.lineup.order == [.parakeet, .gemini, .hydrogen, .carbon, .gigaam])
+                    && settings.lineup.order == [.gigaam, .gemini, .hydrogen, .neon, .carbon])
             #expect(!settings.lineup.isSwitchable(.carbon))
         }
     }
 
     /// Pasting's rules from before Carbon: Carbon starts with Flash's checks, once. Unchecked later, it stays unchecked.
-    /// (GigaAM, which came after, starts with Parakeet's, and Hydrogen, after that, with Flash's.)
+    /// (GigaAM, which came after, starts with the retired Parakeet's, and Hydrogen and Neon, after that, with Flash's.)
     @Test func carbonStartsWithFlashsPastingRulesOnce() throws {
         try withDefaults { defaults in
             defaults.set(try JSONEncoder().encode(["parakeet", "gemini"]),
                          forKey: SettingsKey.modelsAddingSpace.defaultsKey)
             defaults.set(try JSONEncoder().encode(["parakeet"]), forKey: SettingsKey.modelsRemovingFinalPeriod.defaultsKey)
             let settings = load(defaults)
-            #expect(settings.modelsAddingSpace == [.parakeet, .gemini, .hydrogen, .carbon, .gigaam])
-            #expect(settings.modelsRemovingFinalPeriod == [.parakeet, .gigaam])
+            #expect(settings.modelsAddingSpace == [.gemini, .hydrogen, .neon, .carbon, .gigaam])
+            #expect(settings.modelsRemovingFinalPeriod == [.gigaam])
             #expect(settings.addsSpace(by: .carbon, in: .pushToTalk))
             #expect(defaults.bool(forKey: SettingsKey.carbonPastingAdded.defaultsKey))
             settings.modelsAddingSpace.remove(.carbon)
             settings.modelsRemovingFinalPeriod.insert(.carbon)
             let reloaded = load(defaults)
-            #expect(reloaded.modelsAddingSpace == [.parakeet, .gemini, .hydrogen, .gigaam], "a choice made since stays")
-            #expect(reloaded.modelsRemovingFinalPeriod == [.parakeet, .carbon, .gigaam])
+            #expect(reloaded.modelsAddingSpace == [.gemini, .hydrogen, .neon, .gigaam], "a choice made since stays")
+            #expect(reloaded.modelsRemovingFinalPeriod == [.carbon, .gigaam])
         }
         try withDefaults { defaults in
             let settings = load(defaults)
@@ -171,7 +173,7 @@ private func json(_ body: Data) throws -> [String: Any] {
             #expect(defaults.bool(forKey: SettingsKey.carbonPastingAdded.defaultsKey))
         }
         #expect(AppSettings.withCarbonLikeFlash([.gemini]) == [.gemini, .carbon])
-        #expect(AppSettings.withCarbonLikeFlash([.carbon, .parakeet]) == [.parakeet])
+        #expect(AppSettings.withCarbonLikeFlash([.carbon, .gigaam]) == [.gigaam])
     }
 
     /// A level picked for Carbon sticks, apart from Flash's.
@@ -286,16 +288,17 @@ private func json(_ body: Data) throws -> [String: Any] {
         #expect(options("--engine", "carbon")?.engine == .geminiCarbon)
         #expect(options("--engine", "gemini-4-carbon")?.engine == .geminiCarbon)
         #expect(options("--engine", "geminiArgon") == nil, "retired")
-        #expect(EngineCLI.Options.usage.contains("--engine parakeet|gigaam|geminiFlash|geminiHydrogen|geminiCarbon "))
+        #expect(EngineCLI.Options.usage
+                    .contains("--engine gigaam|geminiFlash|geminiHydrogen|geminiNeon|geminiCarbon "))
     }
 
     @Test func modelStatusListsCarbon() {
         let lines = EngineCLI.cloudModelLines()
-        #expect(lines.count == 3)
+        #expect(lines.count == 4)
         #expect(lines[0].hasPrefix("geminiFlash ") && lines[0].hasSuffix("effort low|medium|high (default medium)"))
-        #expect(lines[2].hasPrefix("geminiCarbon ") && lines[2].contains("Gemini 4 Carbon")
-                && lines[2].contains("google/gemini-4-carbon"))
-        #expect(lines[2].hasSuffix("effort low|medium|high (default low)"))
+        #expect(lines[3].hasPrefix("geminiCarbon ") && lines[3].contains("Gemini 4 Carbon")
+                && lines[3].contains("google/gemini-4-carbon"))
+        #expect(lines[3].hasSuffix("effort low|medium|high (default low)"))
     }
 }
 

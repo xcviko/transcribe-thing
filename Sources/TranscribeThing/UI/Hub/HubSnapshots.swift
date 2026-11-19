@@ -12,11 +12,11 @@ enum HubSnapshots {
             },
             hub("hub-home-attention", .home, height: 900) { c in
                 c.permissions = .preview(mic: .denied, ax: .notDetermined)
-                c.models = .preview(states: [.parakeet: .downloading(Samples.downloading)])
+                c.models = .preview(states: [.gigaam: .downloading(Samples.downloading)])
             },
             hub("hub-home-compact", .home, width: 820, height: 560),
             hub("hub-models-compact", .models, width: 820, height: 560) { c in
-                c.models = .preview(states: [.parakeet: .downloading(Samples.downloading)])
+                c.models = .preview(states: [.gigaam: .downloading(Samples.downloading)])
             },
             // The narrowest window with Gemini thinking at High: the rows and pickers keep their ends.
             hub("hub-models-compact-high", .models, width: 820, height: 1400) { c in
@@ -32,6 +32,11 @@ enum HubSnapshots {
                 c.settings.lineup.setSwitchable(.hydrogen, true)
                 c.settings.reasoningEfforts[.geminiHydrogen] = .high
             },
+            // The narrowest window with Gemini 4 Neon switched on and thinking at High.
+            hub("hub-models-compact-neon", .models, width: 820, height: 1200) { c in
+                c.settings.lineup.setSwitchable(.neon, true)
+                c.settings.reasoningEfforts[.geminiNeon] = .high
+            },
             hub("hub-home-search", .home) { c in
                 c.initialSearch = "zzz"
             },
@@ -46,7 +51,7 @@ enum HubSnapshots {
                 var running: [UUID: TranscriptVersionKind] = [:]
                 if let first = entries.first { running[first.id] = .polish() }
                 if entries.count > 1 { running[entries[1].id] = .transcription(.geminiFlash) }
-                if let failed = entries.first(where: { $0.status == .failed }) { running[failed.id] = .transcription(.parakeet) }
+                if let failed = entries.first(where: { $0.status == .failed }) { running[failed.id] = .gigaam(.v3) }
                 c.previewRunning = running
             },
             // Home work that didn't come, said in its row with Retry and a × to dismiss it: Gemini Flash took too long
@@ -70,7 +75,7 @@ enum HubSnapshots {
                     entries[2].id: Samples.homeFailure(.transcription(.geminiFlash), .timeout(.geminiFlash)),
                 ]
                 var running = [entries[1].id: TranscriptVersionKind.transcription(.geminiFlash)]
-                if let failed = entries.first(where: { $0.status == .failed }) { running[failed.id] = .transcription(.parakeet) }
+                if let failed = entries.first(where: { $0.status == .failed }) { running[failed.id] = .gigaam(.v3) }
                 c.previewRunning = running
             },
             // Files dropped on Home: one transcribed, one Gemini is transcribing now, one that failed.
@@ -100,7 +105,7 @@ enum HubSnapshots {
                 c.history = .preview(entries: interrupted + c.history.entries)
                 c.previewFailures = [
                     interrupted[0].id: Samples.homeFailure(.transcription(.geminiFlash), .timeout(.geminiFlash)),
-                    interrupted[1].id: Samples.homeFailure(.transcription(.parakeet), .engineFailed(.parakeet, "")),
+                    interrupted[1].id: Samples.homeFailure(.gigaam(.v3), .engineFailed(.gigaam, "")),
                 ]
             },
             // Another dictation is being recorded: Continue waits for it, and says so on hover.
@@ -120,27 +125,26 @@ enum HubSnapshots {
             hub("hub-home-hydrogen", .home, height: 900) { c in
                 c.history = .preview(entries: Samples.hydrogenEntries() + c.history.entries)
             },
-            // GigaAM as the main model, in v3 e2e, and dictations by two of its versions: its G glyph in its green.
+            // Dictations by Gemini 4 Neon, one polished: its N glyph in Neon's orange.
+            hub("hub-home-neon", .home, height: 900) { c in
+                c.history = .preview(entries: Samples.neonEntries() + c.history.entries)
+            },
+            // GigaAM v3 as the main model, and dictations by it and by the retired v3 e2e: its G glyph in its green.
             hub("hub-home-gigaam", .home, height: 900) { c in
-                c.settings.gigaamVariant = .v3e2e
-                c.models = Samples.models(c, [.parakeet: .ready, .gigaam(.v3): .installed, .gigaam(.v3e2e): .ready])
-                c.settings.lineup.main = .gigaam
                 c.history = .preview(entries: Samples.gigaamEntries() + c.history.entries)
             },
-            // GigaAM's versions side by side (`--only hub-gigaam-compare`): a dictation Parakeet wrote and each GigaAM
-            // version transcribed again, its row showing v3's text and four versions.
+            // What retired models wrote, still in History (`--only hub-gigaam-compare`): a dictation Parakeet wrote and
+            // each GigaAM version transcribed again before v3 e2e and Multilingual were retired, its row showing v3's
+            // text and four versions.
             hub("hub-gigaam-compare-home", .home, height: 760) { c in
-                c.models = Samples.models(c, Dictionary(uniqueKeysWithValues: LocalModel.all.map { ($0, .ready) }))
                 c.history = .preview(entries: [Samples.gigaamCompareEntry()] + c.history.entries)
             },
             // Its Versions menu (drawn: a menu doesn't render in a snapshot): the four versions, v3's checked, and
-            // Transcribe With offering no GigaAM version, all three there.
-            menu("hub-gigaam-compare-menu", entry: Samples.gigaamCompareEntry(),
-                 models: Dictionary(uniqueKeysWithValues: LocalModel.all.map { ($0, .ready) })),
-            // A Parakeet dictation's Transcribe With: each GigaAM version on its own, Multilingual not downloaded.
+            // Transcribe With offering no GigaAM, v3 being there; the retired ones are never offered.
+            menu("hub-gigaam-compare-menu", entry: Samples.gigaamCompareEntry(), models: [.gigaam: .ready]),
+            // A Parakeet dictation's Transcribe With: GigaAM v3, the one version left, downloaded.
             menu("hub-gigaam-compare-transcribe-with", entry: Samples.gigaamCompareEntry(parakeetOnly: true),
-                 models: [.parakeet: .ready, .gigaam(.v3): .installed, .gigaam(.v3e2e): .ready,
-                          .gigaam(.multilingual): .notInstalled]),
+                 models: [.gigaam: .installed]),
 
             hub("hub-models", .models),
             hub("hub-models-full", .models, height: 1080),
@@ -158,96 +162,79 @@ enum HubSnapshots {
                 c.settings.handsFreeModel = .hydrogen
                 c.settings.reasoningEfforts[.geminiFlash] = .low
             },
-            // Gemini 4 Hydrogen as the main model: Parakeet gets a switch, and Parakeet and Flash stay in the cycle.
+            // Gemini 4 Hydrogen as the main model: GigaAM gets a switch, and GigaAM and Flash stay in the cycle.
             hub("hub-models-main-hydrogen", .models, height: 1100) { c in
                 c.settings.lineup.main = .hydrogen
             },
-            hub("hub-models-downloading", .models) { c in
-                c.models = .preview(states: [.parakeet: .downloading(Samples.downloading)])
+            // Gemini 4 Neon switched on beside Hydrogen, thinking at its default (Low), and hands-free's model: the two
+            // new colors side by side.
+            hub("hub-models-neon", .models, height: 1200) { c in
+                c.settings.lineup.setSwitchable(.hydrogen, true)
+                c.settings.lineup.setSwitchable(.neon, true)
+                c.settings.handsFreeModel = .neon
             },
-            // GigaAM (`--only hub-models-gigaam`), v3 picked: not downloaded (Parakeet in use), its zip coming in,
-            // loading, ready but unused (Delete), in use (switched on and hands-free's), the main model.
-            hub("hub-models-gigaam-not-downloaded", .models, height: 1080),
+            // Gemini 4 Neon as the main model: GigaAM gets a switch, and GigaAM and Flash stay in the cycle.
+            hub("hub-models-main-neon", .models, height: 1200) { c in
+                c.settings.lineup.main = .neon
+            },
+            hub("hub-models-downloading", .models) { c in
+                c.models = .preview(states: [.gigaam: .downloading(Samples.downloading)])
+            },
+            // GigaAM v3 (`--only hub-models-gigaam`): the main model not downloaded (an update from Parakeet, which it
+            // took the place of), its zip coming in, loading; ready but unused (Delete), in use (switched on and
+            // hands-free's) beside Gemini as the main model.
+            hub("hub-models-gigaam-not-downloaded", .models, height: 1080) { c in
+                c.models = .preview(states: [.gigaam: .notInstalled], settings: c.settings)
+            },
             hub("hub-models-gigaam-downloading", .models, height: 1080) { c in
-                c.models = Samples.models(c, [.parakeet: .ready, .gigaam(.v3): .downloading(Samples.gigaamDownloading)])
+                c.models = .preview(states: [.gigaam: .downloading(Samples.gigaamDownloading)], settings: c.settings)
             },
             hub("hub-models-gigaam-preparing", .models, height: 1080) { c in
-                c.models = Samples.models(c, [.parakeet: .ready,
-                                              .gigaam(.v3): .preparing(since: Date().addingTimeInterval(-3))])
-                c.settings.lineup.setSwitchable(.gigaam, true)
+                c.models = .preview(states: [.gigaam: .preparing(since: Date().addingTimeInterval(-3))],
+                                    settings: c.settings)
             },
             hub("hub-models-gigaam-ready", .models, height: 1080) { c in
-                c.models = Samples.models(c, [.parakeet: .ready, .gigaam(.v3): .ready])
+                c.settings.lineup.main = .gemini
+                c.settings.lineup.setSwitchable(.gigaam, false)
             },
             hub("hub-models-gigaam-in-use", .models, height: 1080) { c in
-                c.models = Samples.models(c, [.parakeet: .ready, .gigaam(.v3): .ready])
+                c.settings.lineup.main = .gemini
                 c.settings.lineup.setSwitchable(.gigaam, true)
                 c.settings.handsFreeModel = .gigaam
             },
-            hub("hub-models-gigaam-main", .models, height: 1080) { c in
-                c.models = Samples.models(c, [.parakeet: .ready, .gigaam(.v3): .ready])
-                c.settings.lineup.main = .gigaam
-                c.settings.lineup.setSwitchable(.parakeet, false)
-            },
-            // v3 e2e picked after v3: e2e shows Download, and v3 stays on this Mac with its own Delete.
-            hub("hub-models-gigaam-e2e-not-downloaded", .models, height: 1180) { c in
-                c.settings.gigaamVariant = .v3e2e
-                c.settings.lineup.setSwitchable(.gigaam, true)
-                c.models = Samples.models(c, [.parakeet: .ready, .gigaam(.v3): .installed])
-            },
-            // Two versions on this Mac: e2e picked and in use, v3 kept (Delete frees it).
-            hub("hub-models-gigaam-two-installed", .models, height: 1180) { c in
-                c.settings.gigaamVariant = .v3e2e
-                c.settings.lineup.setSwitchable(.gigaam, true)
-                c.models = Samples.models(c, [.parakeet: .ready, .gigaam(.v3): .installed, .gigaam(.v3e2e): .ready])
-            },
-            // Multilingual picked and coming in; v3 and e2e on this Mac.
-            hub("hub-models-gigaam-multilingual-downloading", .models, height: 1280) { c in
-                c.settings.gigaamVariant = .multilingual
-                c.settings.lineup.setSwitchable(.gigaam, true)
-                c.models = Samples.models(c, [.parakeet: .ready, .gigaam(.v3): .installed, .gigaam(.v3e2e): .installed,
-                                              .gigaam(.multilingual): .downloading(Samples.multilingualDownloading)])
-            },
-            // Multilingual ready and in use.
-            hub("hub-models-gigaam-multilingual-ready", .models, height: 1080) { c in
-                c.settings.gigaamVariant = .multilingual
-                c.settings.lineup.setSwitchable(.gigaam, true)
-                c.models = Samples.models(c, [.parakeet: .ready, .gigaam(.multilingual): .ready])
-            },
             hub("hub-models-gigaam-not-published", .models, height: 1080) { c in
-                c.settings.gigaamVariant = .v3e2e
-                let file = GigaAMEngine.Variant.v3e2e.zipName
+                let file = GigaAMEngine.Variant.v3.zipName
                 c.models = .preview(
-                    states: [.parakeet: .ready,
-                             .gigaam: .failed("Not published yet. Put \(file) in your Downloads folder, then Retry.")],
+                    states: [.gigaam: .failed("Not published yet. Put \(file) in your Downloads folder, then Retry.")],
                     lastErrors: [.gigaam: .modelNotPublished(.gigaam, file: file)], settings: c.settings)
             },
-            // The narrowest window: Multilingual coming in beside v3, the caption under the bar.
-            hub("hub-models-gigaam-compact", .models, width: 820, height: 1180) { c in
-                c.settings.gigaamVariant = .multilingual
-                c.settings.lineup.setSwitchable(.gigaam, true)
-                c.models = Samples.models(c, [.parakeet: .ready, .gigaam(.v3): .installed,
-                                              .gigaam(.multilingual): .downloading(Samples.multilingualDownloading)])
+            // What the retired models left on this Mac (`--only hub-models-leftovers`): Parakeet, GigaAM v3 e2e and
+            // Multilingual, each with its size, "No longer used" and Delete, and the footer that says so. Then one
+            // left, GigaAM v3 still downloading; and the narrowest window.
+            hub("hub-models-leftovers", .models, height: 1300) { c in
+                c.models = .preview(states: [.gigaam: .ready], leftovers: Samples.leftovers, settings: c.settings)
             },
-            // The Version menu open over GigaAM's row (a menu doesn't render in a page snapshot): its three items, the
-            // picked one checked.
-            SnapshotEntry("hub-models-gigaam-version-menu", width: 640, height: 150) { _ in
-                GigaAMVersionMenuSnapshot(picked: .v3e2e)
+            hub("hub-models-leftovers-one", .models, height: 1180) { c in
+                c.models = .preview(states: [.gigaam: .downloading(Samples.gigaamDownloading)],
+                                    leftovers: [.parakeet: Samples.leftovers[.parakeet] ?? 0], settings: c.settings)
+            },
+            hub("hub-models-leftovers-compact", .models, width: 820, height: 1300) { c in
+                c.models = .preview(states: [.gigaam: .ready], leftovers: Samples.leftovers, settings: c.settings)
             },
             hub("hub-models-preparing", .models) { c in
-                c.models = .preview(states: [.parakeet: .preparing(since: Date().addingTimeInterval(-24))])
+                c.models = .preview(states: [.gigaam: .preparing(since: Date().addingTimeInterval(-24))])
             },
             hub("hub-models-failed", .models) { c in
-                c.models = .preview(states: [.parakeet: .failed("Download didn’t finish. The connection was lost.")],
-                                    lastErrors: [.parakeet: .downloadFailed(.parakeet, "The connection was lost.")])
+                c.models = .preview(states: [.gigaam: .failed("Download didn’t finish. The connection was lost.")],
+                                    lastErrors: [.gigaam: .downloadFailed(.gigaam, "The connection was lost.")])
             },
             hub("hub-models-load-failed", .models) { c in
-                c.models = .preview(states: [.parakeet: .failed("Couldn’t load the model. Retry, or download it again.")],
-                                    lastErrors: [.parakeet: .modelLoadFailed(.parakeet, "Corrupt weights")])
+                c.models = .preview(states: [.gigaam: .failed("Couldn’t load the model. Retry, or download it again.")],
+                                    lastErrors: [.gigaam: .modelLoadFailed(.gigaam, "Corrupt weights")])
             },
             hub("hub-home-load-failed", .home) { c in
-                c.models = .preview(states: [.parakeet: .failed("Couldn’t load the model. Retry, or download it again.")],
-                                    lastErrors: [.parakeet: .modelLoadFailed(.parakeet, "Corrupt weights")])
+                c.models = .preview(states: [.gigaam: .failed("Couldn’t load the model. Retry, or download it again.")],
+                                    lastErrors: [.gigaam: .modelLoadFailed(.gigaam, "Corrupt weights")])
             },
             hub("hub-models-key-limit", .models, height: 1100) { c in
                 c.settings.lineup.main = .gemini
@@ -300,15 +287,15 @@ enum HubSnapshots {
             hub("hub-models-extra-unbound", .models, height: 1100) { c in
                 c.settings.shortcuts[.switchModel] = nil
             },
-            // Gemini as the main model: its row takes the radio and "Main", and Parakeet gets a switch.
+            // Gemini as the main model: its row takes the radio and "Main", and GigaAM gets a switch.
             hub("hub-models-main-gemini", .models, height: 1100) { c in
                 c.settings.lineup.main = .gemini
             },
-            // Gemini 4 Carbon as the main model: Parakeet gets a switch, and Parakeet and Flash stay in the cycle.
+            // Gemini 4 Carbon as the main model: GigaAM gets a switch, and GigaAM and Flash stay in the cycle.
             hub("hub-models-main-carbon", .models, height: 1100) { c in
                 c.settings.lineup.main = .carbon
             },
-            // Dragged into Gemini, Parakeet: the line follows the new order from the main model.
+            // Dragged into Gemini, GigaAM: the line follows the new order from the main model.
             hub("hub-models-reordered", .models, height: 1100) { c in
                 c.settings.lineup.move(.gemini, to: 0)
             },
@@ -316,8 +303,8 @@ enum HubSnapshots {
             hub("hub-models-only-main", .models, height: 1100) { c in
                 c.settings.lineup.setSwitchable(.gemini, false)
             },
-            // Colors picked in Models: every tile wears its model's, the Parakeet on this Mac tile and the sidebar chip
-            // Parakeet's.
+            // Colors picked in Models: every tile wears its model's, the GigaAM on this Mac tile and the sidebar chip
+            // GigaAM's.
             hub("hub-models-colors", .models, height: 1100, configure: Samples.pickColors),
             // History's marks in the picked colors.
             hub("hub-home-model-colors", .home, configure: Samples.pickColors),
@@ -396,10 +383,10 @@ enum HubSnapshots {
                 c.settings.dictionary = dictionary
             },
             hub("hub-dictionary-empty", .dictionary, height: 560),
-            // Pasting set per model: quick Parakeet and GigaAM searches go in bare, the Geminis get a space after.
+            // Pasting set per model: quick GigaAM searches go in bare, the Geminis get a space after.
             hub("hub-general", .general, height: 1080) { c in
-                c.settings.modelsAddingSpace = [.gemini, .hydrogen, .carbon]
-                c.settings.modelsRemovingFinalPeriod = [.parakeet, .gigaam]
+                c.settings.modelsAddingSpace = [.gemini, .hydrogen, .neon, .carbon]
+                c.settings.modelsRemovingFinalPeriod = [.gigaam]
                 c.settings.modesRemovingFinalPeriod = [.pushToTalk]
             },
             // The whole page, down to Troubleshooting's Export Logs….
@@ -420,8 +407,8 @@ enum HubSnapshots {
             },
             // The narrowest window: Pasting's chips still fit under each rule, a column for each of the five models.
             hub("hub-general-pasting-compact", .general, width: 820, height: 1080) { c in
-                c.settings.modelsAddingSpace = [.gemini, .hydrogen, .carbon]
-                c.settings.modelsRemovingFinalPeriod = [.parakeet, .gigaam]
+                c.settings.modelsAddingSpace = [.gemini, .hydrogen, .neon, .carbon]
+                c.settings.modelsRemovingFinalPeriod = [.gigaam]
                 c.settings.modesRemovingFinalPeriod = [.pushToTalk]
             },
             hub("hub-general-permissions", .general, height: 1600) { c in
@@ -493,10 +480,10 @@ enum HubSnapshots {
 
     /// A row's Versions menu as it opens (`VersionsMenuDrawing`), for `entry` with the models in `models`.
     private static func menu(_ name: String, entry: TranscriptEntry,
-                             models: [LocalModel: LocalModelState]) -> SnapshotEntry {
+                             models: [EngineID: LocalModelState]) -> SnapshotEntry {
         SnapshotEntry(name: name, size: CGSize(width: 520, height: 460)) { env in
             let context = HubContext(env: env)
-            context.models = .preview(states: [:], models: models, settings: context.settings)
+            context.models = .preview(states: models, settings: context.settings)
             return AnyView(VersionsMenuDrawing(menu: context.versionsMenu(for: entry)))
         }
     }
@@ -512,9 +499,9 @@ enum HubSnapshots {
         }
         static let newVersion = AppVersion(major: 0, minor: 3, patch: 0)
 
-        /// Colors other than the defaults, one each: Parakeet teal, Gemini blue.
+        /// Colors other than the defaults, one each: GigaAM teal, Gemini blue.
         @MainActor static func pickColors(_ context: HubContext) {
-            context.settings.modelColors[.parakeet] = .teal
+            context.settings.modelColors[.gigaam] = .teal
             context.settings.modelColors[.gemini] = .blue
             context.settings.modelColors[.carbon] = .orange
         }
@@ -527,21 +514,15 @@ enum HubSnapshots {
                             lastChecked: checkedAt, isChecking: isChecking, checkError: checkError, install: install)
         }
 
-        static let downloading = DownloadProgress(fraction: 0.42, bytesReceived: 265_600_000, totalBytes: 632_321_326,
-                                                  bytesPerSecond: 9_800_000, secondsRemaining: 38)
+        static let downloading = DownloadProgress(fraction: 0.42, bytesReceived: 171_900_000, totalBytes: 409_369_862,
+                                                  bytesPerSecond: 9_800_000, secondsRemaining: 24)
         /// GigaAM v3's zip coming in from the release.
         static let gigaamDownloading = DownloadProgress(fraction: 0.37, bytesReceived: 151_500_000,
                                                         totalBytes: 409_369_862, bytesPerSecond: 8_200_000,
                                                         secondsRemaining: 31)
-        /// GigaAM Multilingual's zip, more than twice as big.
-        static let multilingualDownloading = DownloadProgress(fraction: 0.18, bytesReceived: 194_900_000,
-                                                              totalBytes: 1_082_718_871, bytesPerSecond: 9_100_000,
-                                                              secondsRemaining: 98)
-
-        /// `states` on a store that reads the page's settings, so GigaAM's pick is the page's.
-        @MainActor static func models(_ c: HubContext, _ states: [LocalModel: LocalModelState]) -> ModelStore {
-            .preview(states: [:], models: states, settings: c.settings)
-        }
+        /// What the retired models leave on disk: Parakeet's files, GigaAM v3 e2e's and Multilingual's unpacked zips.
+        static let leftovers: [RetiredLocalModel: Int64] = [.parakeet: 632_400_000, .gigaamV3e2e: 443_698_324,
+                                                            .gigaamMultilingual: 1_173_144_132]
 
         /// Selected text rewritten by Flash: translated, and polished.
         static func selectionEntries() -> [TranscriptEntry] {
@@ -596,8 +577,27 @@ enum HubSnapshots {
             ]
         }
 
-        /// A dictation with English terms in Russian speech, as Parakeet wrote it, then each GigaAM version: v3 hears
-        /// them in Cyrillic, e2e and Multilingual mangle them. v3's is current. `parakeetOnly`: before any of them.
+        /// Dictations by Gemini 4 Neon: a transcript at its default Low, and a polish.
+        static func neonEntries() -> [TranscriptEntry] {
+            let now = Date()
+            func entry(_ text: String, _ kind: TranscriptVersionKind, ago: TimeInterval) -> TranscriptEntry {
+                var result = TranscriptResult(text: text, engine: kind.engine, processingTime: 7.8)
+                result.reasoningEffort = .low
+                return TranscriptEntry(createdAt: now.addingTimeInterval(-ago), engine: kind.engine,
+                                       audioDuration: 36.2, voicedSeconds: 30.4, audioFileName: "neon.m4a",
+                                       versions: [result.version(kind)])
+            }
+            return [
+                entry("Let’s try Neon on the long ones next to Carbon and see whether it’s worth the price.",
+                      .transcription(.geminiNeon), ago: 40),
+                entry("I’ll send the slides tonight, so we can go through them first thing tomorrow.",
+                      .polish(by: .geminiNeon), ago: 150),
+            ]
+        }
+
+        /// A dictation with English terms in Russian speech, as Parakeet wrote it, then each GigaAM version, from before
+        /// Parakeet, v3 e2e and Multilingual were retired: v3 hears the terms in Cyrillic, e2e and Multilingual mangle
+        /// them. v3's is current. `parakeetOnly`: before any of them.
         static func gigaamCompareEntry(parakeetOnly: Bool = false) -> TranscriptEntry {
             let created = Date().addingTimeInterval(-25 * 60)
             func version(_ kind: TranscriptVersionKind, _ text: String, _ seconds: Double) -> TranscriptVersion {
@@ -618,7 +618,7 @@ enum HubSnapshots {
                                    audioFileName: "compare.m4a", versions: versions)
         }
 
-        /// Dictations by GigaAM on this Mac: one by v3 e2e (punctuation, digits), one by v3 (plain).
+        /// Dictations by GigaAM on this Mac: one by the retired v3 e2e (punctuation, digits), one by v3 (plain).
         static func gigaamEntries() -> [TranscriptEntry] {
             let now = Date()
             func entry(_ text: String, _ variant: GigaAMEngine.Variant, ago: TimeInterval,
@@ -672,7 +672,7 @@ enum HubSnapshots {
         }
 
         /// Home work that didn't come, in the words the controller uses: Gemini Flash on the newest row, Polish on the
-        /// second, and Parakeet · Cloud on the third and Parakeet on the failed row, whose recordings couldn't be read.
+        /// second, and Parakeet · Cloud on the third and GigaAM v3 on the failed row, whose recordings couldn't be read.
         static func homeFailures(_ entries: [TranscriptEntry], keyMissing: Bool = false) -> [UUID: HomeFailure] {
             var failures: [UUID: HomeFailure] = [:]
             if let first = entries.first {
@@ -685,7 +685,7 @@ enum HubSnapshots {
             }
             if entries.count > 2 { failures[entries[2].id] = .recordingGone(.transcription(.parakeetCloud)) }
             if let failed = entries.first(where: { $0.status == .failed }) {
-                failures[failed.id] = .recordingGone(.transcription(.parakeet))
+                failures[failed.id] = .recordingGone(.gigaam(.v3))
             }
             return failures
         }

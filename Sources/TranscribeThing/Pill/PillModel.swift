@@ -37,7 +37,7 @@ final class PillModel {
     /// it (`PillMetrics.lockedHoursSize`).
     private(set) var showsHours = false
     /// How many tokens the model of the processing pill's dictation is thinking or writing right now, as far as its
-    /// stream tells (`TokenEstimate`). Set by the controller; nil for Parakeet, and until the first streamed character.
+    /// stream tells (`TokenEstimate`). Set by the controller; nil for GigaAM, and until the first streamed character.
     var tokenCount: PillTokenCount? {
         didSet { if tokenCount != oldValue { updateCounter() } }
     }
@@ -49,7 +49,7 @@ final class PillModel {
     /// The dictation's model from key-down until its text lands, set by the controller; nil at rest. The pill's
     /// tint shows it throughout (`PillPalette.accent`, in the color Models gives it, whichever model is main); the
     /// chip only now and then (`showsChip`). With the dictation over, its chip goes with it: the next dictation never
-    /// starts under the last one's chip (Esc in hands-free on Gemini, then fn on Parakeet).
+    /// starts under the last one's chip (Esc in hands-free on Gemini, then fn on GigaAM).
     var sessionModel: ModelChoice? {
         didSet { if sessionModel == nil, oldValue != nil { endChipFlash() } }
     }

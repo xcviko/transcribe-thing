@@ -2,11 +2,11 @@ import Foundation
 import Testing
 @testable import TranscribeThing
 
-// GigaAM, a second model on this Mac next to Parakeet, in three versions: CTC greedy decoding and where a long
-// recording is cut, its engine, choice and versions, each version's install from its own zip (never the real ones,
-// never the real Downloads folder), the version picked and what it loads and unloads, the lineup and Pasting rules it
-// joins, which models on this Mac launch loads and in what order, fallbacks with two models on this Mac, its copy and
-// History's names, and the CLI. The model itself runs only on a real install (`--batch`, the app).
+// GigaAM v3, the one model on this Mac since Parakeet, GigaAM v3 e2e and Multilingual were retired: CTC greedy
+// decoding and where a long recording is cut, its engine and choice, its install from its zip (never the real one,
+// never the real Downloads folder) beside a retired version's folder, what launch loads, the lineup and Pasting rules it
+// has from Parakeet, the fallback it is for Gemini, its copy and History's names (the retired versions' too, never
+// offered), and the CLI. The model itself runs only on a real install (`--batch`, the app).
 
 @Suite struct GigaAMDecodingTests {
     private let vocabulary = [" ", "а", "б", "в"]
@@ -63,62 +63,60 @@ import Testing
 // MARK: - Engine, choice and versions
 
 @Suite struct GigaAMModelTests {
-    @Test func gigaamIsOneLocalModelInThreeVersions() {
+    /// GigaAM v3 is the one model on this Mac, named by its version everywhere, as Parakeet v3 was.
+    @Test func gigaamV3IsTheOneModelOnThisMac() {
         #expect(EngineID.gigaam.rawValue == "gigaam" && ModelChoice.gigaam.rawValue == "gigaam")
-        #expect(EngineID.localEngines == [.parakeet, .gigaam], "Parakeet first")
+        #expect(EngineID.localEngines == [.gigaam] && EngineID.default == .gigaam)
         let gigaam = EngineID.gigaam
         #expect(gigaam.isLocal && !gigaam.isCloud && !gigaam.isGemini && !gigaam.isRetired)
-        #expect(gigaam.modelName == "GigaAM" && gigaam.displayName == "GigaAM" && gigaam.shortName == "GigaAM")
+        #expect(gigaam.modelName == "GigaAM v3" && gigaam.displayName == "GigaAM v3" && gigaam.shortName == "GigaAM v3")
         #expect(gigaam.providerLine == "Sber · on your Mac")
-        #expect(gigaam.badges == ["Private", "Offline"], "Parakeet's, without Recommended")
+        #expect(gigaam.factLine == "Russian · plain text, no punctuation · fast on the GPU")
+        #expect(gigaam.badges == ["Private", "Offline"])
         #expect(gigaam.glyph == "G" && gigaam.symbolName != EngineID.parakeet.symbolName)
-        #expect(gigaam.approxDownloadBytes == nil, "each version's own")
+        #expect(gigaam.approxDownloadBytes == 409_369_862, "v3's zip")
         #expect(gigaam.provider == nil && gigaam.openRouterModelID == nil && gigaam.cloudTimeout == 0)
         #expect(gigaam.reasoningEfforts.isEmpty && gigaam.defaultReasoningEffort == nil)
         let choice = ModelChoice.gigaam
-        #expect(choice.modelName == "GigaAM" && choice.shortName == "GigaAM" && choice.chipName == "GigaAM")
+        #expect(choice.modelName == "GigaAM v3" && choice.compactName == "GigaAM v3" && choice.chipName == "GigaAM v3")
+        #expect(choice.shortName == "GigaAM", "one word for chains and narrow columns")
         #expect(choice.isLocal && !choice.isGemini && choice.defaultColor == .green)
         #expect(Set(ModelChoice.allCases.map(\.defaultColor)).count == ModelChoice.allCases.count, "its own color")
     }
 
+    /// Each version keeps its name, folder and zip: v3 to run, the retired two for History and their leftovers.
     @Test func eachVersionHasItsNameFilesAndSizes() {
         typealias V = GigaAMEngine.Variant
         #expect(V.allCases == [.v3, .v3e2e, .multilingual] && V.default == .v3)
+        #expect(V.allCases.filter(\.isRetired) == [.v3e2e, .multilingual] && V.offered == [.v3])
         #expect(V.allCases.map(\.rawValue) == ["gigaam-v3-ctc", "gigaam-v3-e2e-ctc", "gigaam-multilingual-600m-ctc"])
         #expect(V.allCases.map(\.versionName) == ["v3", "v3 e2e", "Multilingual"])
         #expect(V.allCases.map(\.displayName) == ["GigaAM v3", "GigaAM v3 e2e", "GigaAM Multilingual"])
-        #expect(V.allCases.map(\.facts) == ["Russian · no punctuation", "Russian · punctuation",
-                                            "Russian, English and more · no punctuation"])
         #expect(V.allCases.map(\.zipName)
                 == ["gigaam-v3-ctc.zip", "gigaam-v3-e2e-ctc.zip", "gigaam-multilingual-600m-ctc.zip"])
         #expect(V.allCases.map(\.downloadBytes) == [409_369_862, 409_641_058, 1_082_718_871])
         #expect(V.allCases.map(\.installedBytes) == [443_353_203, 443_698_324, 1_173_144_132])
         #expect(V.v3.sha256 == "c2d31e7dba58b5a5aed45abeb60ccc617c6a4ccb5531f30887d2a26e05e34f17")
-        #expect(V.v3e2e.sha256 == "eb2c35f78382e7c12dd5ff0a1eec9367c28a349d2f9ac48c744510c17ec3b658")
-        #expect(V.multilingual.sha256 == "4384fe127886f666e419b6b0c00599b8b767dfefb3abddae32c87e7a699dab3a")
-        #expect(GigaAMSource.releaseURL(.v3e2e).absoluteString
-                == "https://github.com/xcviko/transcribe-thing/releases/download/gigaam-1/gigaam-v3-e2e-ctc.zip")
-        let live = GigaAMSource.live(.multilingual)
-        #expect(live.fileName == "gigaam-multilingual-600m-ctc.zip" && live.expectedBytes == 1_082_718_871)
-        #expect(live.localZip?.lastPathComponent == "gigaam-multilingual-600m-ctc.zip")
+        #expect(GigaAMSource.releaseURL(.v3).absoluteString
+                == "https://github.com/xcviko/transcribe-thing/releases/download/gigaam-1/gigaam-v3-ctc.zip")
+        let live = GigaAMSource.live(.v3)
+        #expect(live.fileName == "gigaam-v3-ctc.zip" && live.expectedBytes == 409_369_862)
+        #expect(live.localZip?.lastPathComponent == "gigaam-v3-ctc.zip", "the zip in Downloads still wins")
         #expect(live.localZip?.deletingLastPathComponent().lastPathComponent == "Downloads")
     }
 
-    /// Each version installs, loads and is deleted on its own; Parakeet stays "parakeet" in the logs.
-    @Test func localModelsAreParakeetAndEachVersion() {
-        #expect(LocalModel.all == [.parakeet, .gigaam(.v3), .gigaam(.v3e2e), .gigaam(.multilingual)])
-        #expect(LocalModel.all.map(\.id) == ["parakeet", "gigaam-v3-ctc", "gigaam-v3-e2e-ctc",
-                                             "gigaam-multilingual-600m-ctc"])
-        #expect(LocalModel.all.map(\.engine) == [.parakeet, .gigaam, .gigaam, .gigaam])
-        let e2e = LocalModel.gigaam(.v3e2e)
-        #expect(e2e.displayName == "GigaAM v3 e2e" && e2e.modelID == "gigaam-v3-e2e-ctc")
-        #expect(e2e.approxDownloadBytes == 409_641_058 && e2e.approxInstalledBytes == 443_698_324)
-        #expect(e2e.approxInstallPeakBytes == 409_641_058 + 443_698_324, "the zip and its unpacked folder at once")
-        #expect(e2e.downloadHost == "GitHub" && LocalModel.parakeet.downloadHost == "Hugging Face")
-        #expect(LocalModel.parakeet.displayName == "Parakeet v3" && LocalModel.parakeet.modelID == nil)
-        #expect(LocalModel.parakeet.approxDownloadBytes == 632_321_326)
-        #expect(LocalModel.parakeet.approxInstalledBytes == 632_321_326)
-        #expect(LocalModel.parakeet.approxInstallPeakBytes == 632_321_326)
+    /// The app runs v3 alone: it's the one model on this Mac that downloads, loads and is deleted.
+    @Test func theModelOnThisMacIsV3() {
+        #expect(LocalModel.all == [.gigaam(.v3)])
+        #expect(LocalModel(engine: .gigaam) == .gigaam(.v3))
+        #expect(LocalModel(engine: .parakeet) == nil && LocalModel(engine: .geminiFlash) == nil)
+        let v3 = LocalModel.gigaam(.v3)
+        #expect(v3.id == "gigaam-v3-ctc" && v3.engine == .gigaam && v3.variant == .v3)
+        #expect(v3.displayName == "GigaAM v3" && v3.modelID == "gigaam-v3-ctc")
+        #expect(v3.approxDownloadBytes == 409_369_862 && v3.approxInstalledBytes == 443_353_203)
+        #expect(v3.approxInstallPeakBytes == 409_369_862 + 443_353_203, "the zip and its unpacked folder at once")
+        #expect(v3.downloadHost == "GitHub")
+        #expect(Array(ModelStore.makeEngines(paths: .temporary()).keys) == [.gigaam(.v3)])
     }
 
     /// GigaAM is GigaAM wherever a job or History names it; a version's transcript is its own kind.
@@ -127,7 +125,8 @@ import Testing
         #expect(ModelChoice(stored: "gigaam") == .gigaam && ModelChoice.read(["gigaam", "x"]) == [.gigaam])
         let kind = TranscriptVersionKind.gigaam(.v3e2e)
         #expect(kind.engine == .gigaam && kind.dictationModel == .gigaam && kind.isTranscript)
-        #expect(kind.displayName == "GigaAM v3 e2e")
+        #expect(kind.displayName == "GigaAM v3 e2e" && !kind.isOffered)
+        #expect(TranscriptVersionKind.gigaam(.v3).isOffered)
     }
 }
 
@@ -262,20 +261,23 @@ private final class Fractions: @unchecked Sendable {
         #expect(values == values.sorted())
     }
 
-    /// Two versions install side by side, each from its own zip into its own folder; deleting one leaves the other.
-    @Test func eachVersionInstallsOnItsOwn() async throws {
+    /// v3 installs beside what a retired version left, in a folder of its own: the leftover's folders are the ones
+    /// that version's engine wrote (`RetiredLocalModel`), and deleting v3 leaves them.
+    @Test func v3InstallsBesideARetiredVersionsFolder() async throws {
         let v3 = try FakeInstall(.v3)
         defer { v3.remove() }
         let e2e = try FakeInstall(.v3e2e, root: v3.root)
-        let first = v3.engine(v3.source()), second = e2e.engine(e2e.source())
+        let first = v3.engine(v3.source()), retired = e2e.engine(e2e.source())
+        // As an older build left it.
+        try await retired.download { _ in }
         try await first.download { _ in }
-        #expect(first.isInstalled() && !second.isInstalled())
-        try await second.download { _ in }
-        #expect(first.isInstalled() && second.isInstalled())
+        #expect(first.isInstalled() && retired.isInstalled())
         #expect(try FileManager.default.contentsOfDirectory(atPath: v3.models.path).sorted()
                 == ["gigaam-v3-ctc", "gigaam-v3-e2e-ctc"])
+        #expect(RetiredLocalModel.gigaamV3e2e.folders(in: v3.models).map(\.path) == retired.storageURLs.map(\.path))
+        #expect(Array(ModelStore.scanLeftovers(in: v3.models).keys) == [.gigaamV3e2e])
         try await first.deleteFiles()
-        #expect(!first.isInstalled() && second.isInstalled())
+        #expect(!first.isInstalled() && retired.isInstalled())
     }
 
     @Test func aZipOfAnotherChecksumOrSizeIsRefusedAndLeavesNothing() async throws {
@@ -415,7 +417,7 @@ private final class Fractions: @unchecked Sendable {
     }
 }
 
-// MARK: - ModelStore with GigaAM's versions
+// MARK: - ModelStore with GigaAM v3
 
 @MainActor
 @Suite(.timeLimit(.minutes(1))) struct GigaAMModelStoreTests {
@@ -425,32 +427,27 @@ private final class Fractions: @unchecked Sendable {
                    freeDiskBytes: { 50_000_000_000 })
     }
 
-    /// A store with fake engines: Parakeet, and each GigaAM version, `installed` the ones on disk.
-    private func makeFakes(_ settings: AppSettings, installed: Set<LocalModel>)
-        -> (ModelStore, [LocalModel: FakeEngine]) {
-        var fakes: [LocalModel: FakeEngine] = [:]
-        for model in LocalModel.all {
-            fakes[model] = FakeEngine(model.engine, installed: installed.contains(model), transcript: "by \(model.id)")
-        }
-        return (makeStore(settings, fakes), fakes)
+    /// A store with a fake GigaAM v3, on disk or not, writing "by gigaam-v3-ctc".
+    private func makeFake(_ settings: AppSettings, installed: Bool) -> (ModelStore, FakeEngine) {
+        let fake = FakeEngine(.gigaam, installed: installed, transcript: "by gigaam-v3-ctc")
+        return (makeStore(settings, [.gigaam(.v3): fake]), fake)
     }
 
-    /// Downloaded from a zip through ModelStore: GigaAM's picked version ends installed, not loaded, while nothing
-    /// uses it.
-    @Test func aDownloadThroughTheStoreInstallsThePickedVersion() async throws {
-        let install = try FakeInstall(.v3e2e)
+    /// Downloaded from its zip through ModelStore: GigaAM v3 ends installed, not loaded, while nothing uses it.
+    @Test func aDownloadThroughTheStoreInstallsV3() async throws {
+        let install = try FakeInstall(.v3)
         defer { install.remove() }
         let settings = AppSettings.inMemory()
-        settings.gigaamVariant = .v3e2e
-        let store = makeStore(settings, [.gigaam(.v3e2e): install.engine(install.source())])
+        settings.lineup.main = .gemini
+        settings.lineup.setSwitchable(.gigaam, false)
+        let store = makeStore(settings, [.gigaam(.v3): install.engine(install.source())])
         var finished: [LocalModel] = []
         store.onDownloadFinished = { finished.append($0) }
         store.download(.gigaam)
-        #expect(store.state(model: .gigaam(.v3e2e)).downloadProgress?.totalBytes == 409_641_058)
+        #expect(store.state(model: .gigaam(.v3)).downloadProgress?.totalBytes == 409_369_862)
         await waitForObserved { store.state(of: .gigaam) == .installed }
         await store.waitForDownloadToSettle(.gigaam)
-        #expect(store.state(model: .gigaam(.v3e2e)) == .installed && store.state(model: .gigaam(.v3)) == .notInstalled)
-        #expect(finished == [.gigaam(.v3e2e)] && store.lastErrors[.gigaam] == nil)
+        #expect(finished == [.gigaam(.v3)] && store.lastErrors[.gigaam] == nil)
         #expect(store.diskUsageBytes > 0)
     }
 
@@ -470,125 +467,57 @@ private final class Fractions: @unchecked Sendable {
         await #expect(throws: error) { try await store.transcribeLocal(.gigaam, samples: [0]) }
     }
 
-    /// Picking a version that isn't downloaded shows its Download; the one already on disk stays there, unloaded.
-    @Test func pickingAVersionKeepsTheOthersOnDiskAndUnloadsThem() async throws {
-        let settings = AppSettings.inMemory()
-        settings.lineup.setSwitchable(.gigaam, true)
-        let (store, fakes) = makeFakes(settings, installed: [.parakeet, .gigaam(.v3)])
-        store.start()
-        await waitForObserved { store.state(model: .gigaam(.v3)) == .ready }
-        #expect(await fakes[.gigaam(.v3)]!.isLoaded)
-        store.pickGigaAMVariant(.v3e2e)
-        #expect(settings.gigaamVariant == .v3e2e)
-        #expect(store.state(of: .gigaam) == .notInstalled, "e2e's own state: Download")
-        await waitForObserved { store.state(model: .gigaam(.v3)) == .installed }
-        #expect(await !fakes[.gigaam(.v3)]!.isLoaded, "unloaded, still on disk")
-        #expect(fakes[.gigaam(.v3)]!.isInstalled())
-    }
-
-    /// Picking a version on disk while GigaAM is in use loads it and unloads the other: one loaded at a time. Every
-    /// dictation runs the picked one, and its transcript says which.
-    @Test func pickingAVersionOnDiskSwapsWhatsLoaded() async throws {
-        let settings = AppSettings.inMemory()
-        settings.lineup.setSwitchable(.gigaam, true)
-        let (store, fakes) = makeFakes(settings, installed: [.parakeet, .gigaam(.v3), .gigaam(.v3e2e)])
-        store.start()
-        await waitForObserved { store.state(model: .gigaam(.v3)) == .ready }
-        #expect(await !fakes[.gigaam(.v3e2e)]!.isLoaded, "only the picked one loads at launch")
-        store.pickGigaAMVariant(.v3e2e)
-        await waitForObserved {
-            store.state(model: .gigaam(.v3e2e)) == .ready && store.state(model: .gigaam(.v3)) == .installed
-        }
-        #expect(await fakes[.gigaam(.v3e2e)]!.isLoaded)
-        #expect(await !fakes[.gigaam(.v3)]!.isLoaded)
-
+    /// Every GigaAM dictation is v3's, and its transcript says so.
+    @Test func aDictationIsV3s() async throws {
+        let (store, _) = makeFake(.inMemory(), installed: true)
+        await store.refreshFromDisk()
         let account = OpenRouterAccount(keyStore: .inMemory(), client: OpenRouterClient(), debounce: .zero)
         let service = TranscriptionService(models: store, account: account, client: OpenRouterClient())
         let result = try await service.transcribe(Recording(samples: [Float](repeating: 0.1, count: 16_000)),
                                                   engine: .gigaam)
-        #expect(result.text == "by gigaam-v3-e2e-ctc" && result.modelID == "gigaam-v3-e2e-ctc")
-        #expect(result.metadata().modelID == "gigaam-v3-e2e-ctc")
-        let parakeet = try await service.transcribe(Recording(samples: [Float](repeating: 0.1, count: 16_000)),
-                                                    engine: .parakeet)
-        #expect(parakeet.modelID == nil, "Parakeet records none, as before")
+        #expect(result.text == "by gigaam-v3-ctc" && result.modelID == "gigaam-v3-ctc")
+        #expect(result.version().kind == .gigaam(.v3))
     }
 
-    /// Delete frees a version that isn't picked; the picked one keeps its state.
-    @Test func aVersionThatIsntPickedDeletesOnItsOwn() async throws {
+    /// Launch loads GigaAM v3 when the lineup reaches it (a fresh install's main model), and leaves it on disk when
+    /// it doesn't.
+    @Test func launchLoadsGigaAMWhenTheLineupUsesIt() async throws {
+        let used = AppSettings.inMemory()
+        #expect(used.localModelsInUse == [.gigaam])
+        let (store, fake) = makeFake(used, installed: true)
+        store.start()
+        await waitForObserved { store.state(of: .gigaam) == .ready }
+        #expect(await fake.loadCount == 1)
+
+        let unused = AppSettings.inMemory()
+        unused.lineup.main = .gemini
+        unused.lineup.setSwitchable(.gigaam, false)
+        let (idle, idleFake) = makeFake(unused, installed: true)
+        idle.start()
+        await waitForObserved { idle.state(of: .gigaam) == .installed }
+        #expect(await idleFake.loadCount == 0)
+    }
+
+    /// A download the lineup uses loads once it lands; delete frees it.
+    @Test func aDownloadInUseLoadsAndDeleteFreesIt() async throws {
         let settings = AppSettings.inMemory()
-        let (store, fakes) = makeFakes(settings, installed: [.parakeet, .gigaam(.v3), .gigaam(.multilingual)])
+        let (store, fake) = makeFake(settings, installed: false)
         await store.refreshFromDisk()
-        await store.delete(model: .gigaam(.multilingual))
-        #expect(store.state(model: .gigaam(.multilingual)) == .notInstalled && !fakes[.gigaam(.multilingual)]!.isInstalled())
-        #expect(store.state(of: .gigaam) == .installed && fakes[.gigaam(.v3)]!.isInstalled())
-    }
-
-    /// Launch loads only the models on this Mac the lineup reaches, GigaAM in its picked version.
-    @Test func launchLoadsOnlyWhatTheLineupUses() async throws {
-        let settings = AppSettings.inMemory()
-        let (store, fakes) = makeFakes(settings, installed: [.parakeet, .gigaam(.v3)])
-        store.start()
-        await waitForObserved { store.state(of: .parakeet) == .ready }
-        await waitForObserved { store.state(of: .gigaam) == .installed }
-        #expect(await fakes[.gigaam(.v3)]!.loadCount == 0)
-    }
-
-    /// Both in use: Parakeet loads first, and GigaAM only once Parakeet is ready.
-    @Test func launchLoadsParakeetFirstThenGigaAM() async throws {
-        let settings = AppSettings.inMemory()
-        settings.lineup.setSwitchable(.gigaam, true)
-        settings.gigaamVariant = .multilingual
-        let (store, fakes) = makeFakes(settings, installed: [.parakeet, .gigaam(.v3), .gigaam(.multilingual)])
-        let gate = await fakes[.parakeet]!.gateLoads()
-        store.start()
-        await gate.arrival(1)
-        #expect(store.state(of: .gigaam).isPreparing)
-        #expect(await fakes[.gigaam(.multilingual)]!.loadCount == 0, "waits for Parakeet")
-        gate.openForGood()
-        await waitForObserved { store.state(of: .parakeet) == .ready && store.state(of: .gigaam) == .ready }
-        #expect(await fakes[.gigaam(.multilingual)]!.loadCount == 1)
-        #expect(await fakes[.gigaam(.v3)]!.loadCount == 0)
-    }
-
-    /// GigaAM as the main model, Parakeet switched off: only GigaAM loads.
-    @Test func launchLoadsGigaAMAloneWhenOnlyItIsUsed() async throws {
-        let settings = AppSettings.inMemory()
-        settings.lineup.main = .gigaam
-        settings.lineup.setSwitchable(.parakeet, false)
-        #expect(settings.localModelsInUse == [.gigaam])
-        let (store, fakes) = makeFakes(settings, installed: [.parakeet, .gigaam(.v3)])
-        store.start()
-        await waitForObserved { store.state(of: .gigaam) == .ready }
-        await waitForObserved { store.state(of: .parakeet) == .installed }
-        #expect(await fakes[.parakeet]!.loadCount == 0)
-    }
-
-    /// A download of the picked version the lineup uses loads it; one it doesn't use, or another version, stays
-    /// installed.
-    @Test func aDownloadedVersionInUseLoads() async throws {
-        let settings = AppSettings.inMemory()
-        let (store, _) = makeFakes(settings, installed: [])
         store.download(.gigaam)
-        await waitForObserved { store.state(of: .gigaam) == .installed }
-        settings.lineup.setSwitchable(.gigaam, true)
-        store.download(model: .gigaam(.v3e2e))
-        await waitForObserved { store.state(model: .gigaam(.v3e2e)) == .installed }
-        #expect(store.state(model: .gigaam(.v3e2e)) == .installed, "not the picked version: stays on disk")
+        await waitForObserved { store.state(of: .gigaam) == .ready }
+        #expect(await fake.isLoaded)
         await store.delete(.gigaam)
-        store.download(.gigaam)
-        await waitForObserved { store.state(of: .gigaam) == .ready }
+        #expect(store.state(of: .gigaam) == .notInstalled && !fake.isInstalled())
     }
 
-    /// The preview reads its engines' states through the page's settings: GigaAM's pick is the page's.
-    @Test func thePreviewFollowsThePagesPick() {
-        let settings = AppSettings.inMemory()
-        settings.gigaamVariant = .multilingual
-        let store = ModelStore.preview(states: [.gigaam: .ready], models: [.gigaam(.v3): .installed],
-                                       settings: settings)
-        #expect(store.state(model: .gigaam(.multilingual)) == .ready && store.state(model: .gigaam(.v3)) == .installed)
-        #expect(store.diskUsageBytes == 1_173_144_132 + 443_353_203)
-        settings.gigaamVariant = .v3
-        #expect(store.state(of: .gigaam) == .installed)
+    /// The preview takes what retired models left too, and counts it in what's on disk.
+    @Test func thePreviewListsLeftovers() {
+        let store = ModelStore.preview(states: [.gigaam: .ready], leftovers: [.gigaamMultilingual: 1_000, .parakeet: 500])
+        #expect(store.state(of: .gigaam) == .ready && store.state(model: .gigaam(.v3)) == .ready)
+        #expect(store.leftoverModels == [.parakeet, .gigaamMultilingual], "Parakeet first")
+        #expect(store.diskUsageBytes == 443_353_203 + 1_500)
+        #expect(ModelStore.preview(states: [.parakeet: .ready]).state(of: .parakeet) == .notInstalled,
+                "nothing runs Parakeet on this Mac")
     }
 }
 
@@ -608,77 +537,57 @@ private func load(_ defaults: UserDefaults) -> AppSettings {
 
 @MainActor
 @Suite struct GigaAMSettingsTests {
-    /// A fresh install lists GigaAM last, switched off, in its own green, in v3: nothing loads it until it's picked.
-    @Test func aFreshInstallListsGigaAMLastSwitchedOff() throws {
+    /// A fresh install starts on GigaAM v3, in its own green, Gemini 3.8 Flash its one step: Parakeet's shape.
+    @Test func aFreshInstallStartsOnGigaAMv3() throws {
         try withDefaults { defaults in
             let settings = load(defaults)
-            #expect(settings.lineup.order == [.parakeet, .gemini, .hydrogen, .carbon, .gigaam])
-            #expect(settings.lineup.main == .parakeet && !settings.lineup.isSwitchable(.gigaam))
-            #expect(settings.lineup.cycle == [.parakeet, .gemini])
+            #expect(settings.lineup.order == [.gigaam, .gemini, .hydrogen, .neon, .carbon])
+            #expect(settings.lineup.main == .gigaam && settings.lineup.cycle == [.gigaam, .gemini])
             #expect(settings.modelColors[.gigaam] == .green)
-            #expect(settings.localModelsInUse == [.parakeet] && !settings.usesLocalModel(.gigaam))
-            #expect(settings.gigaamVariant == .v3 && settings.localModel(for: .gigaam) == .gigaam(.v3))
+            #expect(settings.localModelsInUse == [.gigaam] && settings.usesLocalModel(.gigaam))
+            #expect(settings.mainEngine == .gigaam && LocalModel(engine: settings.mainEngine) == .gigaam(.v3))
         }
     }
 
-    /// The picked version is stored by its raw value and read back; one this build doesn't know leaves v3.
-    @Test func thePickedVersionPersists() throws {
-        try withDefaults { defaults in
-            let settings = load(defaults)
-            settings.gigaamVariant = .v3e2e
-            #expect(defaults.string(forKey: SettingsKey.gigaamVariant.defaultsKey) == "gigaam-v3-e2e-ctc")
-            #expect(load(defaults).gigaamVariant == .v3e2e)
-            defaults.set("gigaam-v4-ctc", forKey: SettingsKey.gigaamVariant.defaultsKey)
-            #expect(load(defaults).gigaamVariant == .v3)
-        }
-    }
-
-    /// Where there's room GigaAM goes by its version; the others by their own names.
-    @Test func namesFollowThePick() {
-        let settings = AppSettings.inMemory()
-        settings.gigaamVariant = .multilingual
-        #expect(settings.modelName(of: .gigaam) == "GigaAM Multilingual" && settings.chipName(of: .gigaam) == "GigaAM Multilingual")
-        #expect(settings.modelName(of: .parakeet) == "Parakeet v3" && settings.chipName(of: .parakeet) == "Parakeet")
-        #expect(settings.localModel(for: .parakeet) == .parakeet && settings.localModel(for: .geminiFlash) == nil)
-    }
-
-    /// A lineup stored before GigaAM gets it appended at the end, switched off; the main model, the order and
-    /// hands-free stay. Gemini 4 Hydrogen, which came after, is missing too: the missing come in the default order,
-    /// Hydrogen before GigaAM. One from before Carbon gets Hydrogen, Carbon, then GigaAM.
-    @Test func aLineupFromBeforeGigaAMGetsItAppendedSwitchedOff() throws {
+    /// A lineup stored before GigaAM had Parakeet: GigaAM takes its place, and Hydrogen and Neon, which came after,
+    /// are appended in the default order, switched off. The main model, the rest of the order and hands-free stay.
+    @Test func aLineupFromBeforeGigaAMHasItWhereParakeetWas() throws {
         try withDefaults { defaults in
             let old = #"{"main":"gemini","order":["carbon","gemini","parakeet"],"switchable":["parakeet","carbon"]}"#
             defaults.set(Data(old.utf8), forKey: SettingsKey.lineup.defaultsKey)
             defaults.set("carbon", forKey: SettingsKey.handsFreeModel.defaultsKey)
             let settings = load(defaults)
-            #expect(settings.lineup.order == [.carbon, .gemini, .parakeet, .hydrogen, .gigaam])
-            #expect(settings.lineup.main == .gemini && settings.lineup.cycle == [.gemini, .parakeet, .carbon])
-            #expect(!settings.lineup.isSwitchable(.gigaam) && settings.handsFreeChoice == .carbon)
-            #expect(load(defaults).lineup.order == [.carbon, .gemini, .parakeet, .hydrogen, .gigaam], "stored as read")
+            #expect(settings.lineup.order == [.carbon, .gemini, .gigaam, .hydrogen, .neon])
+            #expect(settings.lineup.main == .gemini && settings.lineup.cycle == [.gemini, .gigaam, .carbon])
+            #expect(settings.handsFreeChoice == .carbon && !settings.lineup.isSwitchable(.hydrogen))
+            #expect(load(defaults).lineup.order == [.carbon, .gemini, .gigaam, .hydrogen, .neon], "stored as read")
         }
         try withDefaults { defaults in
             let older = #"{"main":"parakeet","order":["gemini","parakeet"],"switchable":["gemini"]}"#
             defaults.set(Data(older.utf8), forKey: SettingsKey.lineup.defaultsKey)
-            #expect(load(defaults).lineup.order == [.gemini, .parakeet, .hydrogen, .carbon, .gigaam])
+            let settings = load(defaults)
+            #expect(settings.lineup.order == [.gemini, .gigaam, .hydrogen, .neon, .carbon])
+            #expect(settings.lineup.main == .gigaam && settings.lineup.cycle == [.gigaam, .gemini])
         }
     }
 
-    /// Switched on, GigaAM is in use and can be hands-free's model; as the main model too.
+    /// Switched on beside another main model, GigaAM is in use and can be hands-free's model; switched off, nothing
+    /// on this Mac is.
     @Test func gigaamInTheCycleIsInUse() throws {
         let settings = AppSettings.inMemory()
-        settings.lineup.setSwitchable(.gigaam, true)
+        settings.lineup.main = .gemini
+        #expect(settings.localModelsInUse == [.gigaam], "switched on when it stopped being main")
         settings.handsFreeModel = .gigaam
         #expect(settings.handsFreeChoice == .gigaam)
-        #expect(settings.localModelsInUse == [.parakeet, .gigaam])
         settings.lineup.setSwitchable(.gigaam, false)
-        #expect(settings.handsFreeChoice == nil && settings.localModelsInUse == [.parakeet])
+        #expect(settings.handsFreeChoice == nil && settings.localModelsInUse.isEmpty)
         settings.lineup.main = .gigaam
         #expect(settings.mainEngine == .gigaam && settings.usesLocalModel(.gigaam))
         #expect(!settings.usesLocalModel(.geminiFlash), "a cloud model is no model on this Mac")
     }
 
-    /// Pasting's rules from before GigaAM: it starts with Parakeet's checks, once, and keeps its own after. (Hydrogen,
-    /// which came after, starts with Flash's.)
+    /// Pasting's rules from before GigaAM: it starts with the checks Parakeet had, once, and keeps its own after;
+    /// Parakeet's own go with it. (Hydrogen and Neon, which came after, start with Flash's.)
     @Test func gigaamStartsWithParakeetsPastingRulesOnce() throws {
         try withDefaults { defaults in
             defaults.set(try JSONEncoder().encode(["parakeet", "gemini", "carbon"]),
@@ -686,23 +595,26 @@ private func load(_ defaults: UserDefaults) -> AppSettings {
             defaults.set(try JSONEncoder().encode(["gemini"]), forKey: SettingsKey.modelsRemovingFinalPeriod.defaultsKey)
             defaults.set(true, forKey: SettingsKey.carbonPastingAdded.defaultsKey)
             let settings = load(defaults)
-            #expect(settings.modelsAddingSpace == [.parakeet, .gemini, .hydrogen, .carbon, .gigaam])
-            #expect(settings.modelsRemovingFinalPeriod == [.gemini, .hydrogen])
+            #expect(settings.modelsAddingSpace == [.gigaam, .gemini, .hydrogen, .neon, .carbon])
+            #expect(settings.modelsRemovingFinalPeriod == [.gemini, .hydrogen, .neon])
             #expect(settings.addsSpace(by: .gigaam, in: .handsFree))
             #expect(defaults.bool(forKey: SettingsKey.gigaamPastingAdded.defaultsKey))
+            #expect(try JSONDecoder().decode([String].self,
+                                             from: #require(defaults.data(forKey: SettingsKey.modelsAddingSpace.defaultsKey)))
+                    == ["gigaam", "gemini", "hydrogen", "neon", "carbon"], "stored back without Parakeet")
             settings.modelsAddingSpace.remove(.gigaam)
             settings.modelsRemovingFinalPeriod.insert(.gigaam)
             let reloaded = load(defaults)
-            #expect(reloaded.modelsAddingSpace == [.parakeet, .gemini, .hydrogen, .carbon], "a choice made since stays")
-            #expect(reloaded.modelsRemovingFinalPeriod == [.gemini, .hydrogen, .gigaam])
+            #expect(reloaded.modelsAddingSpace == [.gemini, .hydrogen, .neon, .carbon], "a choice made since stays")
+            #expect(reloaded.modelsRemovingFinalPeriod == [.gemini, .hydrogen, .neon, .gigaam])
         }
         try withDefaults { defaults in
             let settings = load(defaults)
             #expect(settings.modelsAddingSpace.isEmpty && settings.modelsRemovingFinalPeriod.isEmpty)
             #expect(defaults.bool(forKey: SettingsKey.gigaamPastingAdded.defaultsKey))
         }
-        #expect(AppSettings.withGigaAMLikeParakeet([.parakeet]) == [.parakeet, .gigaam])
-        #expect(AppSettings.withGigaAMLikeParakeet([.gigaam, .gemini]) == [.gemini])
+        #expect(AppSettings.withGigaAMLikeParakeet([.gemini], parakeet: true) == [.gemini, .gigaam])
+        #expect(AppSettings.withGigaAMLikeParakeet([.gigaam, .gemini], parakeet: false) == [.gemini])
     }
 }
 
@@ -712,61 +624,43 @@ private func load(_ defaults: UserDefaults) -> AppSettings {
 @Suite(.serialized) struct GigaAMFallbackTests {
     typealias H = DictationControllerTests
 
-    /// Gemini refuses a dictation: the notice offers the models on this Mac that are downloaded, Parakeet first.
-    @Test func aRefusedDictationOffersTheInstalledModelsOnThisMacParakeetFirst() async throws {
-        let cases: [([EngineID: LocalModelState], EngineID?)] = [
-            ([.parakeet: .ready, .gigaam: .ready], .parakeet),
-            ([.parakeet: .notInstalled, .gigaam: .installed], .gigaam),
-            ([.parakeet: .downloading(DownloadProgress(fraction: 0.3)), .gigaam: .ready], .gigaam),
-            ([.parakeet: .notInstalled, .gigaam: .notInstalled], nil),
+    /// Gemini refuses a dictation: the notice offers GigaAM v3 beside Retry once it's downloaded, never while it isn't
+    /// there yet.
+    @Test func aRefusedDictationOffersGigaAMv3OnceItsDownloaded() async throws {
+        let cases: [(LocalModelState, Bool)] = [
+            (.ready, true), (.installed, true), (.preparing(since: Date()), true),
+            (.downloading(DownloadProgress(fraction: 0.3)), false), (.notInstalled, false),
         ]
-        for (models, fallback) in cases {
-            let h = H.make(models: models, keyStatus: .valid(KeyInfo()))
+        for (state, offered) in cases {
+            let h = H.make(models: [.gigaam: state], keyStatus: .valid(KeyInfo()))
+            h.settings.lineup.main = .gemini
             h.controller.transcribeOverride = { _, _ in throw AppError.openRouterRefused("refused") }
             let r = H.recording()
             h.controller.enqueue(r, engine: .geminiFlash)
             try await waitUntil { h.controller.machine.activeJobs == 0 }
             let notice = try #require(h.toasts.notices.first { $0.recordingID == r.id })
-            #expect(notice.actions.map(\.kind) == [.retry] + (fallback.map { [.retryWith($0)] } ?? []), "\(models)")
+            #expect(notice.actions.map(\.kind) == [.retry] + (offered ? [.retryWith(.gigaam)] : []), "\(state)")
+            if offered { #expect(notice.actions.last?.title == "Use GigaAM v3 Instead") }
         }
     }
 
-    /// A Gemini main model without a key: "Use GigaAM" where Parakeet isn't downloaded, and it becomes the main
-    /// model, named by its version.
-    @Test func aKeylessGeminiMainModelOffersGigaAMWithoutParakeet() throws {
-        let (rig, _) = SwitchModelControllerTests.make(key: .missing, models: [.parakeet: .notInstalled, .gigaam: .ready])
+    /// A Gemini main model without a key: "Use GigaAM v3", and it becomes the main model.
+    @Test func aKeylessGeminiMainModelOffersGigaAM() throws {
+        let (rig, _) = SwitchModelControllerTests.make(key: .missing, models: [.gigaam: .ready])
         rig.h.settings.lineup.main = .gemini
         rig.h.controller.send(.handsFreeToggle)
         let notice = try #require(rig.h.toasts.notices.first)
-        #expect(notice.actions.contains { $0.kind == .selectEngine(.gigaam) })
+        let use = try #require(notice.actions.first { $0.kind == .selectEngine(.gigaam) })
+        #expect(use.title == "Use GigaAM v3")
         try rig.click(.selectEngine(.gigaam), in: notice.dedupeKey)
         #expect(rig.h.settings.lineup.main == .gigaam)
         #expect(rig.notice("engine.selected")?.title == "Now using GigaAM v3")
     }
 
-    /// A dictation waiting for GigaAM to load offers Parakeet, ready now.
-    @Test func waitingForGigaAMOffersParakeet() async throws {
-        let h = H.make(models: [.parakeet: .ready, .gigaam: .preparing(since: Date())], keyStatus: .valid(KeyInfo()))
-        h.controller.waitNoticeDelayOverride = 0.05
-        h.controller.transcribeOverride = { _, engine in
-            if engine == .gigaam { try await Task.sleep(for: .seconds(5)) }
-            return TranscriptResult(text: "by \(engine.rawValue)", engine: engine, processingTime: 0.2)
-        }
-        h.controller.insertOverride = { _ in .pasted }
-        let r = H.recording()
-        h.controller.enqueue(r, engine: .gigaam)
-        try await waitUntil { h.toasts.notices.contains { $0.dedupeKey == "slow.\(r.id)" } }
-        let wait = try #require(h.toasts.notices.first { $0.dedupeKey == "slow.\(r.id)" })
-        #expect(wait.title == "Getting GigaAM ready…")
-        #expect(wait.body == "The first run on this Mac takes a moment.")
-        #expect(wait.actions.map(\.kind) == [.retryWith(.parakeet)])
-        #expect(wait.actions.first?.title == "Use Parakeet v3 Instead")
-        h.controller.handle(.cancel)
-    }
-
-    /// Parakeet's wait never offers GigaAM, which writes far fewer languages.
-    @Test func waitingForParakeetNeverOffersGigaAM() async throws {
-        let h = H.make(models: [.parakeet: .preparing(since: Date()), .gigaam: .ready], keyStatus: .valid(KeyInfo()))
+    /// A dictation waiting for GigaAM to load says so, and offers no other model: Gemini never takes another model's
+    /// place, and there's no other model on this Mac.
+    @Test func waitingForGigaAMOffersNothingElse() async throws {
+        let h = H.make(models: [.gigaam: .preparing(since: Date())], keyStatus: .valid(KeyInfo()))
         h.controller.waitNoticeDelayOverride = 0.05
         h.controller.transcribeOverride = { _, engine in
             try await Task.sleep(for: .seconds(5))
@@ -774,9 +668,10 @@ private func load(_ defaults: UserDefaults) -> AppSettings {
         }
         h.controller.insertOverride = { _ in .pasted }
         let r = H.recording()
-        h.controller.enqueue(r, engine: .parakeet)
+        h.controller.enqueue(r, engine: .gigaam)
         try await waitUntil { h.toasts.notices.contains { $0.dedupeKey == "slow.\(r.id)" } }
         let wait = try #require(h.toasts.notices.first { $0.dedupeKey == "slow.\(r.id)" })
+        #expect(wait.title == "Getting GigaAM v3 ready…")
         #expect(wait.body == "The first run on this Mac takes a moment.")
         #expect(wait.actions.isEmpty)
         h.controller.handle(.cancel)
@@ -794,18 +689,22 @@ private func load(_ defaults: UserDefaults) -> AppSettings {
                                               keyStatus: .missing, localError: error)).first
     }
 
-    /// Each version's size is its download's until it's done, then what it takes on this Mac.
-    @Test func sizesAreEachVersions() {
+    /// Its size is the download's until it's done, then what it takes on this Mac, by the model and by the engine.
+    @Test func sizesAreV3s() {
         #expect(ModelStatusText.describe(.notInstalled, model: .gigaam(.v3)).text == "Not downloaded · 409 MB")
         #expect(ModelStatusText.describe(.ready, model: .gigaam(.v3)).text == "Ready · 443 MB")
-        #expect(ModelStatusText.describe(.notInstalled, model: .gigaam(.multilingual)).text == "Not downloaded · 1.1 GB")
-        #expect(ModelStatusText.describe(.installed, model: .gigaam(.multilingual)).text == "Downloaded · 1.2 GB")
-        #expect(ModelStatusText.describe(.ready, model: .parakeet).text == "Ready · 632 MB")
-        #expect(ModelStatusText.describe(.ready, engine: .parakeet).text == "Ready · 632 MB")
+        #expect(ModelStatusText.describe(.notInstalled, engine: .gigaam).text == "Not downloaded · 409 MB")
+        #expect(ModelStatusText.describe(.installed, engine: .gigaam).text == "Downloaded · 443 MB")
+        let missing = attention(.gigaam, .notInstalled)
+        #expect(missing?.title == "GigaAM v3 isn’t downloaded yet")
+        #expect(missing?.body == "Download it (409 MB) to start dictating, or pick another model.")
+        #expect(missing?.action == .download(.gigaam))
+        #expect(AppError.modelNotDownloaded(.gigaam).notice(recordingID: nil, fallbackEngine: nil).body
+                == "Download it (about 409 MB) or pick another model.")
     }
 
-    /// Loading takes seconds on the GPU: Parakeet's words, nothing about minutes.
-    @Test func loadingCopyIsParakeetsAsBefore() {
+    /// Loading takes seconds on the GPU: the same words as before, nothing about minutes.
+    @Test func loadingCopyIsAsBefore() {
         #expect(attention(.gigaam, .preparing(since: Date()))?.body
                 == "Loading the model into memory. After installing it or updating macOS, this takes about half a minute.")
         #expect(AppError.modelPreparing(.gigaam).notice(recordingID: nil, fallbackEngine: nil).body
@@ -814,23 +713,23 @@ private func load(_ defaults: UserDefaults) -> AppSettings {
 
     /// Not published yet: said plainly, with what to do, wherever the failure shows.
     @Test func notPublishedSaysWhatToDo() {
-        let error = AppError.modelNotPublished(.gigaam, file: "gigaam-v3-e2e-ctc.zip")
-        let notice = error.notice(recordingID: nil, fallbackEngine: .parakeet)
-        #expect(notice.title == "GigaAM isn’t published yet")
-        #expect(notice.body == "Put gigaam-v3-e2e-ctc.zip in your Downloads folder, then download it again.")
+        let error = AppError.modelNotPublished(.gigaam, file: "gigaam-v3-ctc.zip")
+        let notice = error.notice(recordingID: nil, fallbackEngine: nil)
+        #expect(notice.title == "GigaAM v3 isn’t published yet")
+        #expect(notice.body == "Put gigaam-v3-ctc.zip in your Downloads folder, then download it again.")
         #expect(notice.actions.map(\.kind) == [.openHub(.models)])
         #expect(error.code == "modelNotPublished.gigaam" && !error.isRetryable)
         #expect(ModelFailure(error) == .notPublished && ModelFailure(error).label == "Not published yet")
-        #expect(ModelStatusText.describe(.failed("x"), model: .gigaam(.v3e2e), localError: error).text
+        #expect(ModelStatusText.describe(.failed("x"), model: .gigaam(.v3), localError: error).text
                 == "Not published yet")
         #expect(EngineReadiness.of(.gigaam, localState: .failed("x"), keyStatus: .missing, localError: error)
                 == .failed("Not published yet"))
-        #expect(attention(.gigaam, .failed("x"), error: error)?.title == "GigaAM isn’t published yet")
+        #expect(attention(.gigaam, .failed("x"), error: error)?.title == "GigaAM v3 isn’t published yet")
         #expect(ModelStore.describeDownloadFailure(URLError(.cannotFindHost), host: "GitHub") == "Couldn’t reach GitHub.")
-        #expect(ModelStore.describeDownloadFailure(URLError(.cannotFindHost)) == "Couldn’t reach Hugging Face.")
+        #expect(ModelStore.describeDownloadFailure(URLError(.cannotFindHost)) == "Couldn’t reach the server.")
     }
 
-    /// History names a GigaAM transcript by the version that wrote it, as its own kind.
+    /// History names a GigaAM transcript by the version that wrote it, a retired one too; only v3 makes another.
     @Test func historyNamesTheVersion() {
         var result = TranscriptResult(text: "привет", engine: .gigaam, processingTime: 0.3)
         result.modelID = GigaAMEngine.Variant.v3e2e.rawValue
@@ -842,12 +741,10 @@ private func load(_ defaults: UserDefaults) -> AppSettings {
                                     versions: [version])
         let menu = VersionsMenu.make(for: entry, running: nil, readiness: { _ in .ready })
         #expect(menu.versions.map(\.title) == ["GigaAM v3 e2e"])
-        #expect(!menu.actions.contains { $0.kind == .gigaam(.v3e2e) }, "it ran on it: a version, not an action")
-        #expect(menu.actions.contains { $0.kind == .gigaam(.v3) } && menu.actions.contains { $0.kind == .gigaam(.multilingual) })
-        let imports = ImportChoices.make(main: .gigaam, gigaam: .multilingual, readiness: { _ in .ready })
-        #expect(imports.first?.title == "GigaAM Multilingual", "the picked version first")
-        #expect(imports.filter { $0.kind.engine == .gigaam }.map(\.title)
-                == ["GigaAM Multilingual", "GigaAM v3", "GigaAM v3 e2e"])
+        #expect(menu.actions.filter { $0.kind.engine == .gigaam }.map(\.kind) == [.gigaam(.v3)])
+        let imports = ImportChoices.make(main: .gigaam, readiness: { _ in .ready })
+        #expect(imports.first?.title == "GigaAM v3", "the main model first")
+        #expect(imports.filter { $0.kind.engine == .gigaam }.map(\.kind) == [.gigaam(.v3)])
     }
 }
 
@@ -858,27 +755,31 @@ private func load(_ defaults: UserDefaults) -> AppSettings {
         EngineCLI.Options(["transcribe-thing", "--transcribe", "/tmp/memo.m4a"] + extra)
     }
 
-    @Test func gigaamTakesAVersion() {
+    /// `--engine gigaam` runs v3. An older script's `--gigaam-version v3` still runs; the retired versions are refused,
+    /// not run as v3.
+    @Test func gigaamRunsV3Alone() {
         #expect(options("--engine", "gigaam")?.engine == .gigaam)
-        #expect(options("--engine", "gigaam")?.gigaamVariant == .v3, "v3 unless given")
-        #expect(options("--engine", "gigaam", "--gigaam-version", "e2e")?.gigaamVariant == .v3e2e)
-        #expect(options("--engine", "gigaam", "--gigaam-version", "multilingual")?.gigaamVariant == .multilingual)
-        #expect(options("--engine", "gigaam", "--gigaam-version", "gigaam-v3-e2e-ctc")?.gigaamVariant == .v3e2e)
-        #expect(options("--engine", "gigaam", "--gigaam-version", "v4") == nil)
-        #expect(options("--engine", "parakeet", "--gigaam-version", "e2e") == nil, "GigaAM's only")
-        #expect(options("--engine", "gigaam", "--parakeet-compute", "gpu") == nil, "Parakeet's diagnostic only")
+        #expect(options("--engine", "gigaam-v3")?.engine == .gigaam)
+        #expect(options("--engine", "gigaam", "--gigaam-version", "v3")?.engine == .gigaam)
+        #expect(options("--engine", "gigaam", "--gigaam-version", "gigaam-v3-ctc")?.engine == .gigaam)
+        for retired in ["e2e", "multilingual", "gigaam-v3-e2e-ctc", "v4"] {
+            #expect(options("--engine", "gigaam", "--gigaam-version", retired) == nil, "\(retired)")
+        }
+        #expect(options("--engine", "geminiFlash", "--gigaam-version", "v3") == nil, "GigaAM's only")
         #expect(options("--engine", "gigaam", "--download")?.download == true)
-        #expect(EngineCLI.Options.usage.contains("--engine parakeet|gigaam|geminiFlash|geminiHydrogen|geminiCarbon "))
-        #expect(EngineCLI.Options.usage.contains("[--gigaam-version v3|e2e|multilingual]"))
+        #expect(EngineCLI.Options.usage.contains("--engine gigaam|geminiFlash|geminiHydrogen|geminiNeon|geminiCarbon "))
+        #expect(!EngineCLI.Options.usage.contains("--gigaam-version") && !EngineCLI.Options.usage.contains("parakeet"))
         #expect(EngineCLI.cloudModelLines().allSatisfy { !$0.contains("gigaam") }, "not a cloud model")
     }
 
-    /// `--model-status` lists each version by what `--engine` and `--gigaam-version` take.
-    @Test func modelStatusListsEachVersion() {
-        let line = EngineCLI.modelStatusLine(.gigaam(.v3e2e), status: "installed", bytes: 443_698_324, path: "/M/x")
-        #expect(line.hasPrefix("gigaam e2e") && line.contains("GigaAM v3 e2e") && line.hasSuffix("444 MB on disk · /M/x"))
-        #expect(EngineCLI.modelStatusLine(.parakeet, status: "not installed", bytes: 0, path: "/p").hasPrefix("parakeet "))
-        #expect(LocalModel.all.compactMap(\.variant).map(\.cliName) == ["v3", "e2e", "multilingual"])
+    /// `--model-status` lists GigaAM v3 by what `--engine` takes, and what a retired model left as no longer used.
+    @Test func modelStatusListsV3AndLeftovers() {
+        let line = EngineCLI.modelStatusLine(id: "gigaam", name: "GigaAM v3", status: "installed", bytes: 443_353_203,
+                                             path: "/M/x")
+        #expect(line.hasPrefix("gigaam ") && line.contains("GigaAM v3") && line.hasSuffix("443 MB on disk · /M/x"))
+        let leftover = EngineCLI.modelStatusLine(id: "retired", name: "Parakeet v3", status: "no longer used",
+                                                 bytes: 632_400_000, path: "/M/p")
+        #expect(leftover.hasPrefix("retired ") && leftover.contains("Parakeet v3") && leftover.contains("no longer used"))
     }
 }
 
@@ -927,17 +828,20 @@ private let gigaamHistoryFile = #"""
         #expect(others.allSatisfy { !$0.rawValue.hasPrefix("gigaam:") })
     }
 
-    /// What can write a transcript: each engine, GigaAM's versions on their own; and which kind a result is.
-    @Test func transcriptsListEachVersion() {
-        #expect(TranscriptVersionKind.transcripts == [.transcription(.parakeet), .gigaam(.v3), .gigaam(.v3e2e),
-                                                      .gigaam(.multilingual), .transcription(.geminiFlash),
-                                                      .transcription(.geminiHydrogen), .transcription(.geminiCarbon)])
+    /// What can write a transcript: each engine offered, GigaAM as v3; and which kind a result is. A retired
+    /// version's kind still reads, as History has it, and is never offered.
+    @Test func transcriptsListV3Alone() {
+        #expect(TranscriptVersionKind.transcripts == [.gigaam(.v3), .transcription(.geminiFlash),
+                                                      .transcription(.geminiHydrogen), .transcription(.geminiNeon),
+                                                      .transcription(.geminiCarbon)])
         #expect(TranscriptVersionKind.transcript(by: .gigaam) == .gigaam(.v3))
-        #expect(TranscriptVersionKind.transcript(by: .gigaam, gigaam: .multilingual) == .gigaam(.multilingual))
         #expect(TranscriptVersionKind.transcript(by: .gigaam, modelID: "gigaam-v3-e2e-ctc") == .gigaam(.v3e2e))
         #expect(TranscriptVersionKind.transcript(by: .parakeet, gigaam: .v3e2e) == .transcription(.parakeet))
         #expect(TranscriptResult(text: "x", engine: .gigaam, processingTime: 0).version().kind == .gigaam(.v3))
         #expect(TranscriptVersion(text: "x", engine: .gigaam).kind == .gigaam(.v3))
+        for retired in [TranscriptVersionKind.gigaam(.v3e2e), .gigaam(.multilingual), .transcription(.parakeet)] {
+            #expect(!retired.isOffered && !TranscriptVersionKind.transcripts.contains(retired), "\(retired)")
+        }
     }
 
     /// 0.5.2 and 0.5.3 stored GigaAM's transcripts as "gigaam": each reads as the version its metadata names (v3 when
@@ -990,8 +894,8 @@ private let gigaamHistoryFile = #"""
         { HubContext.readiness(of: $0, models: store, keyStatus: .valid(KeyInfo()), provider: .openRouter) }
     }
 
-    private func store(_ models: [LocalModel: LocalModelState]) -> ModelStore {
-        ModelStore.preview(states: [:], models: models, settings: .inMemory())
+    private func store(_ state: LocalModelState) -> ModelStore {
+        ModelStore.preview(states: [.gigaam: state], settings: .inMemory())
     }
 
     private func parakeet(status: TranscriptStatus = .success) -> TranscriptEntry {
@@ -1003,138 +907,70 @@ private let gigaamHistoryFile = #"""
         actions.filter { $0.kind.engine == .gigaam }
     }
 
-    /// Each version its own item; one not downloaded is listed, disabled, saying so (no download from here); one on
-    /// its way waits for it.
-    @Test func eachVersionIsAnItemOfItsOwn() {
-        let models = store([.parakeet: .ready, .gigaam(.v3): .installed, .gigaam(.v3e2e): .ready,
-                            .gigaam(.multilingual): .notInstalled])
-        let menu = VersionsMenu.make(for: parakeet(), running: nil, readiness: readiness(models))
-        #expect(gigaam(menu.actions).map(\.kind) == [.gigaam(.v3), .gigaam(.v3e2e), .gigaam(.multilingual)])
-        #expect(gigaam(menu.actions).map(\.title) == ["GigaAM v3", "GigaAM v3 e2e", "GigaAM Multilingual · Not downloaded"])
-        #expect(gigaam(menu.actions).map(\.isEnabled) == [true, true, false])
-        #expect(menu.actions.map(\.kind).prefix(4) == [.gigaam(.v3), .gigaam(.v3e2e), .gigaam(.multilingual),
-                                                       .transcription(.geminiFlash)], "in the engines' order")
+    /// A Parakeet transcript's Transcribe With offers GigaAM v3, first, as the engines go; not downloaded, it's
+    /// listed, disabled, saying so (no download from here).
+    @Test func gigaamV3IsTheOneGigaAMItem() {
+        let menu = VersionsMenu.make(for: parakeet(), running: nil, readiness: readiness(store(.installed)))
+        #expect(gigaam(menu.actions).map(\.kind) == [.gigaam(.v3)])
+        #expect(gigaam(menu.actions).map(\.title) == ["GigaAM v3"] && gigaam(menu.actions)[0].isEnabled)
+        #expect(menu.actions.map(\.kind).prefix(2) == [.gigaam(.v3), .transcription(.geminiFlash)])
 
-        let coming = store([.gigaam(.multilingual): .downloading(DownloadProgress(fraction: 0.4))])
-        let waiting = VersionsMenu.make(for: parakeet(), running: nil, readiness: readiness(coming))
-        #expect(gigaam(waiting.actions).map(\.isEnabled) == [false, false, true])
+        let missing = VersionsMenu.make(for: parakeet(), running: nil, readiness: readiness(store(.notInstalled)))
+        #expect(gigaam(missing.actions).map(\.title) == ["GigaAM v3 · Not downloaded"])
+        #expect(gigaam(missing.actions).map(\.isEnabled) == [false])
     }
 
-    /// A version already on the recording isn't offered again; the others still are. A failed dictation retries
-    /// with any of the three.
-    @Test func aVersionOnTheRecordingIsntOfferedAgain() {
-        let models = store(Dictionary(uniqueKeysWithValues: LocalModel.all.map { ($0, LocalModelState.ready) }))
+    /// The versions the retired ones wrote stay, to switch to; only v3 is offered, and not once it's there. A failed
+    /// dictation retries with v3.
+    @Test func retiredVersionsAreVersionsNeverItems() {
+        let models = store(.ready)
         var entry = parakeet()
-        entry.addVersion(TranscriptVersion(kind: .gigaam(.v3), text: "открой хром", metadata: TranscriptMetadata()))
+        entry.addVersion(TranscriptVersion(kind: .gigaam(.v3e2e), text: "Открой hrome.", metadata: TranscriptMetadata()))
         entry.addVersion(TranscriptVersion(kind: .gigaam(.multilingual), text: "open chrome", metadata: TranscriptMetadata()))
-        let menu = VersionsMenu.make(for: entry, running: nil, readiness: readiness(models))
-        #expect(menu.versions.map(\.title) == ["Parakeet v3", "GigaAM v3", "GigaAM Multilingual"])
+        var menu = VersionsMenu.make(for: entry, running: nil, readiness: readiness(models))
+        #expect(menu.versions.map(\.title) == ["Parakeet v3", "GigaAM v3 e2e", "GigaAM Multilingual"])
         #expect(menu.versions.map(\.isCurrent) == [false, false, true])
-        #expect(gigaam(menu.actions).map(\.kind) == [.gigaam(.v3e2e)])
+        #expect(gigaam(menu.actions).map(\.kind) == [.gigaam(.v3)])
+        entry.addVersion(TranscriptVersion(kind: .gigaam(.v3), text: "открой хром", metadata: TranscriptMetadata()))
+        menu = VersionsMenu.make(for: entry, running: nil, readiness: readiness(models))
+        #expect(gigaam(menu.actions).isEmpty)
 
         let retry = VersionsMenu.make(for: parakeet(status: .failed), running: nil, readiness: readiness(models))
-        #expect(retry.isRetry && gigaam(retry.actions).map(\.kind) == [.gigaam(.v3), .gigaam(.v3e2e), .gigaam(.multilingual)])
+        #expect(retry.isRetry && gigaam(retry.actions).map(\.kind) == [.gigaam(.v3)])
+        #expect(!retry.actions.contains { $0.kind == .transcription(.parakeet) }, "Parakeet never retries")
     }
 }
 
 @MainActor
-@Suite(.serialized, .timeLimit(.minutes(1))) struct GigaAMCompareControllerTests {
+@Suite(.serialized, .timeLimit(.minutes(1))) struct GigaAMRetiredVersionControllerTests {
     private typealias H = DictationControllerTests
 
-    /// A controller over a store with fake engines for Parakeet and each GigaAM version (`installed`), each writing
-    /// "by <model>", GigaAM switched on and v3 picked, and a Parakeet dictation with its audio kept.
-    private func make(installed: Set<LocalModel> = Set(LocalModel.all))
-        async throws -> (H.Harness, ModelStore, AppSettings, [LocalModel: FakeEngine], UUID) {
-        let settings = AppSettings.inMemory()
-        settings.lineup.setSwitchable(.gigaam, true)
-        var fakes: [LocalModel: FakeEngine] = [:]
-        for model in LocalModel.all {
-            fakes[model] = FakeEngine(model.engine, installed: installed.contains(model), transcript: "by \(model.id)")
-        }
-        let store = ModelStore(paths: .temporary(), settings: settings, engines: fakes, gate: InferenceGate(),
-                               freeDiskBytes: { 50_000_000_000 })
+    /// Asked for a retired version (a menu from an older build, a stale action): nothing loads or runs, and nothing
+    /// is made under its name. v3's own is made as v3's.
+    @Test func aRetiredVersionIsNeverMade() async throws {
+        let fake = FakeEngine(.gigaam, installed: true, transcript: "by gigaam-v3-ctc")
+        let store = ModelStore(paths: .temporary(), settings: .inMemory(), engines: [.gigaam(.v3): fake],
+                               gate: InferenceGate(), freeDiskBytes: { 50_000_000_000 })
         await store.refreshFromDisk()
         let h = H.make(store: store, keyStatus: .valid(KeyInfo()), persistsHistory: true)
-        h.controller.insertOverride = { _ in .pasted }
+        defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
         let recording = H.recording()
-        h.controller.enqueue(recording, engine: .parakeet)
-        try await waitUntil(timeout: .seconds(10)) { h.controller.machine.activeJobs == 0 && h.history.entry(id: recording.id) != nil }
-        return (h, store, settings, fakes, recording.id)
-    }
-
-    private func loaded(_ fakes: [LocalModel: FakeEngine]) async -> [LocalModel] {
-        var loaded: [LocalModel] = []
-        for model in LocalModel.all where await fakes[model]!.isLoaded { loaded.append(model) }
-        return loaded
-    }
-
-    /// Transcribe With each version in turn: the recording holds the three side by side, named and recorded by
-    /// version, the newest current; one at a time is loaded; the pick stays v3. Asked again, one already there is
-    /// shown, not made twice.
-    @Test func threeVersionsSideBySideOnOneRecording() async throws {
-        let (h, _, settings, fakes, id) = try await make()
-        defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
-        for variant in [GigaAMEngine.Variant.v3e2e, .multilingual, .v3] {
-            h.controller.makeVersion(.gigaam(variant), of: try #require(h.history.entry(id: id)))
-            #expect(h.controller.homeWork[id] == .gigaam(variant))
-            #expect(h.controller.runningVersions[id] == .gigaam(variant))
-            try await waitUntil(timeout: .seconds(10)) { h.history.entry(id: id)?.hasVersion(.gigaam(variant)) == true
-                && h.controller.homeWork.isEmpty }
-            let gigaamsLoaded = await loaded(fakes).filter { $0.engine == .gigaam }
-            #expect(gigaamsLoaded == [.gigaam(variant)], "one version loaded at a time")
+        let entry = TranscriptEntry(id: recording.id, createdAt: recording.startedAt, text: "Open Chrome.",
+                                    engine: .parakeet, audioDuration: recording.duration, voicedSeconds: 1,
+                                    audioFileName: h.history.saveAudio(recording))
+        h.history.upsert(entry)
+        for retired in [TranscriptVersionKind.gigaam(.v3e2e), .gigaam(.multilingual), .transcription(.parakeet)] {
+            h.controller.makeVersion(retired, of: entry)
+            #expect(h.controller.homeWork.isEmpty && h.controller.runningVersions.isEmpty, "\(retired)")
         }
-        let entry = try #require(h.history.entry(id: id))
-        #expect(entry.versions.map(\.kind) == [.transcription(.parakeet), .gigaam(.v3e2e), .gigaam(.multilingual),
-                                               .gigaam(.v3)])
-        #expect(entry.versions.dropFirst().map(\.text)
-                == ["by gigaam-v3-e2e-ctc", "by gigaam-multilingual-600m-ctc", "by gigaam-v3-ctc"])
-        #expect(entry.versions.dropFirst().map { $0.metadata.modelID }
-                == ["gigaam-v3-e2e-ctc", "gigaam-multilingual-600m-ctc", "gigaam-v3-ctc"])
-        #expect(entry.currentKind == .gigaam(.v3) && settings.gigaamVariant == .v3)
-        #expect(h.toasts.notices.isEmpty, "Home work: no notice")
+        h.controller.retry(entry, with: .parakeet)
+        #expect(h.controller.homeWork.isEmpty)
+        #expect(await fake.transcribeCount == 0)
 
-        h.controller.makeVersion(.gigaam(.v3e2e), of: entry)
-        #expect(h.controller.homeWork.isEmpty && h.history.entry(id: id)?.currentKind == .gigaam(.v3e2e))
-
-        // Saved and read back: all four.
-        let data = try JSONEncoder().encode(try #require(h.history.entry(id: id)))
-        #expect(try JSONDecoder().decode(TranscriptEntry.self, from: data).versions.count == 4)
-    }
-
-    /// A version other than the picked one loads for its job and the picked one unloads; the pick stays, and the next
-    /// dictation on GigaAM loads the picked one back and is its transcript.
-    @Test func anotherVersionLoadsForItsJobAndThePickedOneComesBack() async throws {
-        let (h, store, settings, fakes, id) = try await make()
-        defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
-        store.prepare(.gigaam)
-        await waitForObserved { store.state(of: .gigaam) == .ready }
-        #expect(await loaded(fakes).contains(.gigaam(.v3)))
-
-        h.controller.makeVersion(.gigaam(.multilingual), of: try #require(h.history.entry(id: id)))
-        try await waitUntil(timeout: .seconds(10)) { h.history.entry(id: id)?.hasVersion(.gigaam(.multilingual)) == true }
-        #expect(await loaded(fakes).filter { $0.engine == .gigaam } == [.gigaam(.multilingual)])
-        #expect(store.state(model: .gigaam(.v3)) == .installed && settings.gigaamVariant == .v3)
-
-        var pasted: [String] = []
-        h.controller.insertOverride = { text in pasted.append(text); return .pasted }
-        let next = H.recording()
-        h.controller.enqueue(next, engine: .gigaam)
-        try await waitUntil(timeout: .seconds(10)) { !pasted.isEmpty }
-        #expect(pasted == ["by gigaam-v3-ctc"])
-        #expect(h.history.entry(id: next.id)?.currentKind == .gigaam(.v3))
-        #expect(await loaded(fakes).filter { $0.engine == .gigaam } == [.gigaam(.v3)])
-    }
-
-    /// Asked for a version that isn't downloaded (a menu left open across a delete): nothing loads or downloads, and
-    /// the row says it isn't downloaded.
-    @Test func aVersionNotDownloadedIsntMade() async throws {
-        let (h, store, _, fakes, id) = try await make(installed: [.parakeet, .gigaam(.v3)])
-        defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
-        h.controller.makeVersion(.gigaam(.multilingual), of: try #require(h.history.entry(id: id)))
-        try await waitUntil(timeout: .seconds(10)) { h.controller.homeFailures[id] != nil }
-        #expect(h.controller.homeFailures[id] == HomeFailure(kind: .gigaam(.multilingual), reason: "It isn’t downloaded yet."))
-        #expect(h.controller.homeFailures[id]?.kind.failureTitle == "Couldn’t transcribe with GigaAM Multilingual")
-        #expect(store.state(model: .gigaam(.multilingual)) == .notInstalled && !fakes[.gigaam(.multilingual)]!.isInstalled())
-        #expect(h.history.entry(id: id)?.versions.count == 1)
+        h.controller.makeVersion(.gigaam(.v3), of: entry)
+        try await waitUntil(timeout: .seconds(10)) { h.history.entry(id: entry.id)?.hasVersion(.gigaam(.v3)) == true }
+        let made = try #require(h.history.entry(id: entry.id))
+        #expect(made.versions.map(\.kind) == [.transcription(.parakeet), .gigaam(.v3)])
+        #expect(made.text == "by gigaam-v3-ctc" && made.version(.gigaam(.v3))?.metadata.modelID == "gigaam-v3-ctc")
     }
 }

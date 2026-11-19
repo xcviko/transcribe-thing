@@ -510,7 +510,7 @@ extension AppError {
         var seconds: Double?
         /// Offer "Use <fallback>" when there is no recording to retry.
         var offersSwitch = false
-        /// With the recording saved, offer it to the fallback too, beside Retry ("Use Parakeet v3 Instead"): the same
+        /// With the recording saved, offer it to the fallback too, beside Retry ("Use GigaAM v3 Instead"): the same
         /// model would likely fail the same way (Gemini's refusal).
         var offersRetryWith = false
     }
@@ -712,7 +712,7 @@ extension AppError {
             return Copy(symbol: "waveform.badge.exclamationmark",
                         title: "Too large to send to OpenRouter",
                         body: "OpenRouter refused this recording as too large. "
-                            + "\(EngineID.parakeet.displayName) on this Mac takes any length.",
+                            + "\(EngineID.gigaam.displayName) on this Mac takes any length.",
                         order: .fallbackFirst)
         case .vertexProxy(let failure):
             return Self.copy(for: failure)
@@ -777,7 +777,7 @@ extension AppError {
             return Copy(symbol: "waveform.badge.exclamationmark",
                         title: "Too large to send to your endpoint",
                         body: "Your endpoint refused this recording as too large. "
-                            + "\(EngineID.parakeet.displayName) on this Mac takes any length.",
+                            + "\(EngineID.gigaam.displayName) on this Mac takes any length.",
                         order: .fallbackFirst)
         }
     }

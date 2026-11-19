@@ -860,22 +860,22 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
     static let allErrors: [AppError] = [
         .microphonePermissionDenied, .noMicrophone, .microphoneNotResponding("AVAudioEngine start failed"),
         .microphoneDisconnected, .microphoneSilent, .accessibilityMissing,
-        .modelNotDownloaded(.parakeet), .modelDownloading(.parakeet, 0.64), .modelPreparing(.parakeet),
-        .modelLoadFailed(.parakeet, "Corrupt weights"), .downloadFailed(.parakeet, "Connection lost"),
-        .modelNotPublished(.gigaam, file: "gigaam-v3-e2e-ctc-int8.zip"), .modelPreparing(.gigaam),
+        .modelNotDownloaded(.gigaam), .modelDownloading(.gigaam, 0.64), .modelPreparing(.gigaam),
+        .modelLoadFailed(.gigaam, "Corrupt weights"), .downloadFailed(.gigaam, "Connection lost"),
+        .modelNotPublished(.gigaam, file: "gigaam-v3-ctc.zip"),
         .notEnoughDisk(needed: 2_000_000_000, available: 1_200_000_000),
         .openRouterMissingKey, .openRouterInvalidKey("No auth credentials found"),
         .openRouterNoCredits("Insufficient credits"), .openRouterRateLimited(retryAfter: 4),
         .openRouterRateLimited(retryAfter: nil), .openRouterNoRoute("No endpoints found"),
         .openRouterProviderUnavailable("Provider returned error"), .openRouterRefused("Content blocked by the provider"),
         .openRouterBadRequest("Invalid audio format"), .openRouterServer("Internal server error"),
-        .timeout(.geminiFlash), .timeout(.parakeet), .offline, .noSpeech,
-        .engineFailed(.parakeet, "CoreML error"), .recordingTooLarge,
+        .timeout(.geminiFlash), .timeout(.gigaam), .offline, .noSpeech,
+        .engineFailed(.gigaam, "CoreML error"), .recordingTooLarge,
         .openRouterKeyUnreadable, .openRouterKeyLimit("Key limit exceeded"),
         .openRouterTruncated("So the plan is so the plan is so the plan is"), .openRouterTruncated(""),
     ]
 
-    static let fallbacks: [EngineID?] = [nil, .parakeet, .geminiFlash]
+    static let fallbacks: [EngineID?] = [nil, .gigaam, .geminiFlash]
 
     @Test(arguments: allErrors)
     func copyIsPoliteAndCompact(_ error: AppError) {
@@ -924,13 +924,13 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         #expect(NSImage(systemSymbolName: symbol, accessibilityDescription: nil) != nil, "Missing SF Symbol \(symbol)")
     }
 
-    /// Retry is the same model, never another one ("Retry with Parakeet v3"): that's the user's call, from History.
+    /// Retry is the same model, never another one ("Retry with GigaAM v3"): that's the user's call, from History.
     @Test func aCloudFailureOffersRetryWithTheSameModel() {
-        let notice = AppError.timeout(.geminiFlash).notice(recordingID: UUID(), fallbackEngine: .parakeet)
+        let notice = AppError.timeout(.geminiFlash).notice(recordingID: UUID(), fallbackEngine: .gigaam)
         #expect(notice.actions.map(\.title) == ["Retry"])
         #expect(notice.actions.map(\.kind) == [.retry])
         for error in [AppError.regionBlocked, .connectionBlocked, .offline] {
-            #expect(error.notice(recordingID: UUID(), fallbackEngine: .parakeet).actions.map(\.kind) == [.retry],
+            #expect(error.notice(recordingID: UUID(), fallbackEngine: .gigaam).actions.map(\.kind) == [.retry],
                     "\(error.code)")
         }
         #expect(notice.style == .error)
@@ -938,22 +938,22 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         #expect(notice.lifetime == .seconds(10))
     }
 
-    /// Gemini's refusal would likely come again: beside Retry, the recording can go to Parakeet, once it's
+    /// Gemini's refusal would likely come again: beside Retry, the recording can go to GigaAM v3, once it's
     /// downloaded (the controller passes it as the fallback only then).
-    @Test func aRefusalOffersParakeetBesideRetry() {
+    @Test func aRefusalOffersGigaAMBesideRetry() {
         let refused = AppError.openRouterRefused("Gemini refused to complete this request")
-        let notice = refused.notice(recordingID: UUID(), fallbackEngine: .parakeet, engine: .geminiFlash)
-        #expect(notice.actions.map(\.title) == ["Retry", "Use Parakeet v3 Instead"])
-        #expect(notice.actions.map(\.kind) == [.retry, .retryWith(.parakeet)])
+        let notice = refused.notice(recordingID: UUID(), fallbackEngine: .gigaam, engine: .geminiFlash)
+        #expect(notice.actions.map(\.title) == ["Retry", "Use GigaAM v3 Instead"])
+        #expect(notice.actions.map(\.kind) == [.retry, .retryWith(.gigaam)])
         #expect(notice.actions.first?.isPrimary == true)
         #expect(refused.notice(recordingID: UUID(), fallbackEngine: nil).actions.map(\.kind) == [.retry],
-                "no Parakeet on this Mac: Retry alone")
-        #expect(refused.notice(recordingID: nil, fallbackEngine: .parakeet).actions.isEmpty, "nothing saved to send")
+                "no GigaAM on this Mac: Retry alone")
+        #expect(refused.notice(recordingID: nil, fallbackEngine: .gigaam).actions.isEmpty, "nothing saved to send")
     }
 
     /// No speech is news, not a failure: the quiet info notice, nothing to retry.
     @Test func noSpeechIsAQuietInfoNotice() {
-        let notice = AppError.noSpeech.notice(recordingID: nil, fallbackEngine: .geminiFlash, engine: .parakeet)
+        let notice = AppError.noSpeech.notice(recordingID: nil, fallbackEngine: .geminiFlash, engine: .gigaam)
         #expect(notice.style == .info)
         #expect(notice.title == "No speech detected")
         #expect(notice.sound == nil)
@@ -964,7 +964,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
 
     /// Gemini's reasoning used every output token before any text: a real failure, retryable, never silence.
     @Test func runningOutOfTokensBeforeAnyTextIsAFailure() {
-        let notice = AppError.openRouterTruncated("").notice(recordingID: UUID(), fallbackEngine: .parakeet)
+        let notice = AppError.openRouterTruncated("").notice(recordingID: UUID(), fallbackEngine: .gigaam)
         #expect(notice.title == "Gemini stopped before finishing")
         #expect(notice.body == "It ran out of room before writing any text. Your recording is saved.")
         #expect(notice.transcript == nil)
@@ -981,31 +981,31 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
     }
 
     @Test func keyLimitPointsAtTheKeysPage() {
-        let notice = AppError.openRouterKeyLimit("limit").notice(recordingID: nil, fallbackEngine: .parakeet)
-        #expect(notice.actions.map(\.kind) == [.openURL(OpenRouterLinks.keys), .selectEngine(.parakeet)])
+        let notice = AppError.openRouterKeyLimit("limit").notice(recordingID: nil, fallbackEngine: .gigaam)
+        #expect(notice.actions.map(\.kind) == [.openURL(OpenRouterLinks.keys), .selectEngine(.gigaam)])
     }
 
     @Test func keyProblemsLeadWithTheFix() {
-        let invalid = AppError.openRouterInvalidKey("401").notice(recordingID: UUID(), fallbackEngine: .parakeet)
+        let invalid = AppError.openRouterInvalidKey("401").notice(recordingID: UUID(), fallbackEngine: .gigaam)
         #expect(invalid.actions.map(\.title) == ["Update Key", "Retry"])
-        let missing = AppError.openRouterMissingKey.notice(recordingID: nil, fallbackEngine: .parakeet)
-        #expect(missing.actions.map(\.kind) == [.openHub(.models), .selectEngine(.parakeet)])
+        let missing = AppError.openRouterMissingKey.notice(recordingID: nil, fallbackEngine: .gigaam)
+        #expect(missing.actions.map(\.kind) == [.openHub(.models), .selectEngine(.gigaam)])
     }
 
     @Test func noRetryWithoutAudioOrForUnusableRecordings() {
-        let noAudio = AppError.engineFailed(.parakeet, "x").notice(recordingID: nil, fallbackEngine: .geminiFlash)
+        let noAudio = AppError.engineFailed(.gigaam, "x").notice(recordingID: nil, fallbackEngine: .geminiFlash)
         #expect(!noAudio.actions.contains { $0.kind == .retry })
-        let silent = AppError.microphoneSilent.notice(recordingID: UUID(), fallbackEngine: .parakeet)
+        let silent = AppError.microphoneSilent.notice(recordingID: UUID(), fallbackEngine: .gigaam)
         #expect(!silent.actions.contains { $0.kind == .retry })
-        #expect(AppError.noSpeech.notice(recordingID: UUID(), fallbackEngine: .parakeet).actions.isEmpty)
+        #expect(AppError.noSpeech.notice(recordingID: UUID(), fallbackEngine: .gigaam).actions.isEmpty)
     }
 
     @Test func missingModelOffersDownloadThenSwitch() {
-        let withFallback = AppError.modelNotDownloaded(.parakeet).notice(recordingID: nil, fallbackEngine: .geminiFlash)
+        let withFallback = AppError.modelNotDownloaded(.gigaam).notice(recordingID: nil, fallbackEngine: .geminiFlash)
         #expect(withFallback.actions.map(\.title) == ["Download", "Use Gemini 3.8 Flash"])
-        let alone = AppError.modelNotDownloaded(.parakeet).notice(recordingID: nil, fallbackEngine: nil)
-        #expect(alone.actions.map(\.kind) == [.download(.parakeet), .openHub(.models)])
-        #expect(alone.body == "Download it (about 632 MB) or pick another model.")
+        let alone = AppError.modelNotDownloaded(.gigaam).notice(recordingID: nil, fallbackEngine: nil)
+        #expect(alone.actions.map(\.kind) == [.download(.gigaam), .openHub(.models)])
+        #expect(alone.body == "Download it (about 409 MB) or pick another model.")
     }
 
     @Test func onlyTheLocalModelHelpsWhenTheKeyOrConnectionFails() {
@@ -1014,7 +1014,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
             #expect(error.stopsEveryCloudModel, "\(error.code)")
         }
         for error in [AppError.openRouterRateLimited(retryAfter: nil), .openRouterNoRoute(""), .timeout(.geminiFlash),
-                      .openRouterProviderUnavailable(""), .recordingTooLarge, .modelNotDownloaded(.parakeet)] {
+                      .openRouterProviderUnavailable(""), .recordingTooLarge, .modelNotDownloaded(.gigaam)] {
             #expect(!error.stopsEveryCloudModel, "\(error.code)")
         }
     }
@@ -1025,7 +1025,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
     }
 
     @Test func fallbackEqualToTheFailingEngineIsIgnored() {
-        let notice = AppError.engineFailed(.parakeet, "x").notice(recordingID: nil, fallbackEngine: .parakeet)
+        let notice = AppError.engineFailed(.gigaam, "x").notice(recordingID: nil, fallbackEngine: .gigaam)
         #expect(!notice.actions.contains { if case .selectEngine = $0.kind { true } else { false } })
     }
 
@@ -1139,35 +1139,34 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         settings.reasoningEfforts[.geminiFlash] = .low
         settings.lineup.main = .gemini
         settings.lineup.move(.gemini, to: 0)
-        settings.handsFreeModel = .parakeet
+        settings.handsFreeModel = .gigaam
         settings.modelColors[.gemini] = .blue
-        settings.modelColors[.parakeet] = .teal
+        settings.modelColors[.gigaam] = .teal
         settings.switchHintShownCount = 2
         settings.pillMode = .always
         settings.microphoneUID = "usb-mic"
         settings.soundsEnabled = false
         settings.autoDeleteHistoryDays = 30
         settings.modelsAddingSpace = [.gemini]
-        settings.modelsRemovingFinalPeriod = [.parakeet]
+        settings.modelsRemovingFinalPeriod = [.gigaam]
         var bindings = ShortcutBindings.defaults
         bindings[.pushToTalk] = .rightOption
         settings.shortcuts = bindings
 
         let reloaded = AppSettings(defaults: defaults)
         #expect(reloaded.reasoningEffort(for: .geminiFlash) == .low)
-        #expect(reloaded.handsFreeModel == .parakeet)
+        #expect(reloaded.handsFreeModel == .gigaam)
         #expect(reloaded.lineup == settings.lineup)
-        #expect(reloaded.lineup.order == [.gemini, .parakeet, .hydrogen, .carbon, .gigaam]
-                && reloaded.lineup.main == .gemini)
-        #expect(reloaded.lineup.cycle == [.gemini, .parakeet])
-        #expect(reloaded.modelColors[.gemini] == .blue && reloaded.modelColors[.parakeet] == .teal)
+        #expect(reloaded.lineup.order == [.gemini, .gigaam, .hydrogen, .neon, .carbon] && reloaded.lineup.main == .gemini)
+        #expect(reloaded.lineup.cycle == [.gemini, .gigaam])
+        #expect(reloaded.modelColors[.gemini] == .blue && reloaded.modelColors[.gigaam] == .teal)
         #expect(reloaded.switchHintShownCount == 2)
         #expect(reloaded.pillMode == .always)
         #expect(reloaded.microphoneUID == "usb-mic")
         #expect(!reloaded.soundsEnabled)
         #expect(reloaded.autoDeleteHistoryDays == 30)
         #expect(reloaded.modelsAddingSpace == [.gemini])
-        #expect(reloaded.modelsRemovingFinalPeriod == [.parakeet])
+        #expect(reloaded.modelsRemovingFinalPeriod == [.gigaam])
         #expect(reloaded.shortcuts[.pushToTalk] == .rightOption)
 
         settings.microphoneUID = nil
@@ -1190,16 +1189,16 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
     @Test func storedModelColorsDecodeLeniently() throws {
         let json = #"{"gemini":"blue","cleanup":"chartreuse","whisper":"pink","parakeet":7}"#
         let decoded = try JSONDecoder().decode(ModelColors.self, from: Data(json.utf8))
-        #expect(decoded[.gemini] == .blue && decoded[.parakeet] == .graphite)
+        #expect(decoded[.gemini] == .blue && decoded.parakeet == .graphite, "the retired Parakeet's, of the wrong kind")
         #expect(try JSONDecoder().decode(ModelColors.self, from: Data("{}".utf8)) == .default)
         #expect(SettingsKey.modelColors.defaultsKey == "tt.modelColors")
 
         try withSuite { defaults in
             defaults.set(Data(json.utf8), forKey: SettingsKey.modelColors.defaultsKey)
             let settings = AppSettings(defaults: defaults)
-            #expect(settings.modelColors[.gemini] == .blue && settings.modelColors[.parakeet] == .graphite)
+            #expect(settings.modelColors[.gemini] == .blue && settings.modelColors.parakeet == .graphite)
             let stored = defaults.data(forKey: SettingsKey.modelColors.defaultsKey).map { String(decoding: $0, as: UTF8.self) }
-            #expect(stored == #"{"carbon":"blue","gemini":"blue","gigaam":"green","hydrogen":"pink","parakeet":"graphite"}"#,
+            #expect(stored == #"{"carbon":"blue","gemini":"blue","gigaam":"green","hydrogen":"pink","neon":"orange","parakeet":"graphite"}"#,
                     "the removed clean-up's color goes")
             #expect(AppSettings(defaults: defaults).modelColors == settings.modelColors, "a reload changes nothing")
             // Not an object at all: the defaults.
@@ -1212,11 +1211,11 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let json = String(decoding: try encoder.encode(ModelColors.default), as: UTF8.self)
-        #expect(json == #"{"carbon":"blue","gemini":"violet","gigaam":"green","hydrogen":"pink","parakeet":"graphite"}"#)
+        #expect(json == #"{"carbon":"blue","gemini":"violet","gigaam":"green","hydrogen":"pink","neon":"orange","parakeet":"graphite"}"#)
         var colors = ModelColors.default
-        colors[.parakeet] = .violet
+        colors[.gigaam] = .violet
         #expect(try JSONDecoder().decode(ModelColors.self, from: encoder.encode(colors)) == colors)
-        #expect(colors[.parakeet] == colors[.gemini], "two may share one")
+        #expect(colors[.gigaam] == colors[.gemini], "two may share one")
     }
 
     /// Bindings as a build before Send saved them: no "send" key at all.
@@ -1272,10 +1271,10 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
             // The old keys are gone, so this reload reads what the migration stored.
             #expect(AppSettings(defaults: defaults).modelsAddingSpace == Set(ModelChoice.allCases))
 
-            settings.modelsAddingSpace.remove(.parakeet)
+            settings.modelsAddingSpace.remove(.gigaam)
             let stored = defaults.data(forKey: "tt.modelsAddingSpace").map { String(decoding: $0, as: UTF8.self) }
-            #expect(stored == #"["gemini","hydrogen","carbon","gigaam"]"#)
-            #expect(AppSettings(defaults: defaults).modelsAddingSpace == [.gemini, .hydrogen, .carbon, .gigaam],
+            #expect(stored == #"["gemini","hydrogen","neon","carbon"]"#)
+            #expect(AppSettings(defaults: defaults).modelsAddingSpace == [.gemini, .hydrogen, .neon, .carbon],
                     "migrated only once")
         }
     }
@@ -1290,14 +1289,14 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         }
     }
 
-    /// A stored set outlives builds: a model this build doesn't know is dropped. (GigaAM, new since, starts with
-    /// Parakeet's check.)
+    /// A stored set outlives builds: a model this build doesn't know is dropped, the retired Parakeet too. (GigaAM, new
+    /// since, starts with Parakeet's check.)
     @Test func storedPastingModelsDecodeLeniently() throws {
         try withSuite { defaults in
             defaults.set(Data(#"["parakeet","whisper"]"#.utf8), forKey: "tt.modelsRemovingFinalPeriod")
             // A newer set wins over an old switch an older build may have left.
             defaults.set(true, forKey: "tt.removeFinalPeriod")
-            #expect(AppSettings(defaults: defaults).modelsRemovingFinalPeriod == [.parakeet, .gigaam])
+            #expect(AppSettings(defaults: defaults).modelsRemovingFinalPeriod == [.gigaam])
         }
     }
 
@@ -1311,12 +1310,12 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
 
             settings.modelsAddingSpace = [.gemini]
             settings.modesAddingSpace = [.handsFree]
-            settings.modelsRemovingFinalPeriod = [.parakeet]
+            settings.modelsRemovingFinalPeriod = [.gigaam]
             #expect(settings.addsSpace(by: .gemini, in: .handsFree))
             #expect(!settings.addsSpace(by: .gemini, in: .pushToTalk), "held: not picked")
-            #expect(!settings.addsSpace(by: .parakeet, in: .handsFree), "Parakeet: not picked")
-            #expect(settings.removesFinalPeriod(by: .parakeet, in: .pushToTalk))
-            #expect(settings.removesFinalPeriod(by: .parakeet, in: .handsFree))
+            #expect(!settings.addsSpace(by: .gigaam, in: .handsFree), "GigaAM: not picked")
+            #expect(settings.removesFinalPeriod(by: .gigaam, in: .pushToTalk))
+            #expect(settings.removesFinalPeriod(by: .gigaam, in: .handsFree))
 
             let stored = defaults.data(forKey: "tt.modesAddingSpace").map { String(decoding: $0, as: UTF8.self) }
             #expect(stored == #"["handsFree"]"#)
@@ -1386,39 +1385,42 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         #expect(settings.shortcuts != .defaults)
     }
 
+    /// Where Parakeet ran: read once and gone, GigaAM v3 the main model, as on a fresh install.
     @Test(arguments: ["whisper", "whisperCloud", "someFutureEngine", "parakeet", "parakeetCloud"])
     func whereParakeetRanIsReadOnceAndGoes(_ raw: String) throws {
         try withSuite { defaults in
             defaults.set(raw, forKey: SettingsKey.selectedEngine.defaultsKey)
             let settings = AppSettings(defaults: defaults)
             #expect(settings.lineup == .default)
-            #expect(settings.mainEngine == .parakeet)
+            #expect(settings.mainEngine == .gigaam)
             #expect(defaults.object(forKey: SettingsKey.selectedEngine.defaultsKey) == nil)
         }
     }
 
-    /// Gemini was the main model in builds before 0.2.0 (Gemini 3.1 Pro too): it is again, with Parakeet in its
-    /// place under the old key.
+    /// Gemini was the main model in builds before 0.2.0 (Gemini 3.1 Pro too): it is again, with GigaAM in the place
+    /// Parakeet had under the old key.
     @Test(arguments: [EngineID.geminiFlash, .geminiPro])
     func aStoredGeminiMainModelIsTheMainAgain(_ engine: EngineID) throws {
         try withSuite { defaults in
             defaults.set(engine.rawValue, forKey: SettingsKey.selectedEngine.defaultsKey)
             let settings = AppSettings(defaults: defaults)
             #expect(settings.lineup.main == .gemini)
-            #expect(settings.lineup.cycle == [.gemini, .parakeet])
+            #expect(settings.lineup.cycle == [.gemini, .gigaam])
             #expect(defaults.object(forKey: SettingsKey.selectedEngine.defaultsKey) == nil)
             #expect(AppSettings(defaults: defaults).lineup == settings.lineup, "once")
         }
     }
 
     @Test func eachChoiceHasItsEngine() {
-        #expect(ModelChoice.allCases.map(\.engine) == [.parakeet, .geminiFlash, .geminiHydrogen, .geminiCarbon, .gigaam])
-        #expect(ModelChoice.allCases.map(\.rawValue) == ["parakeet", "gemini", "hydrogen", "carbon", "gigaam"])
+        #expect(ModelChoice.allCases.map(\.engine)
+                == [.gigaam, .geminiFlash, .geminiHydrogen, .geminiNeon, .geminiCarbon])
+        #expect(ModelChoice.allCases.map(\.rawValue) == ["gigaam", "gemini", "hydrogen", "neon", "carbon"])
         for engine in EngineID.offered { #expect(ModelChoice(engine: engine).engine == engine) }
-        #expect(ModelChoice(engine: .parakeetCloud) == .parakeet, "an old cloud Parakeet job reads as Parakeet")
+        #expect(ModelChoice(engine: .parakeet) == .gigaam && ModelChoice(engine: .parakeetCloud) == .gigaam,
+                "an old Parakeet job reads as GigaAM, which took its place")
         #expect(ModelChoice(engine: .geminiPro) == .gemini && ModelChoice(engine: .geminiArgon) == .gemini)
-        #expect(ModelChoice.allCases.filter(\.isGemini) == [.gemini, .hydrogen, .carbon])
-        #expect(ModelChoice.allCases.map(\.shortName) == ["Parakeet", "Flash", "Hydrogen", "Carbon", "GigaAM"])
+        #expect(ModelChoice.allCases.filter(\.isGemini) == [.gemini, .hydrogen, .neon, .carbon])
+        #expect(ModelChoice.allCases.map(\.shortName) == ["GigaAM", "Flash", "Hydrogen", "Neon", "Carbon"])
     }
 
     /// The user's settings from 0.2.0 (clean-up off, Gemini on) become the lineup once; the old keys go. Clean-up's
@@ -1430,7 +1432,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
             defaults.set(try JSONEncoder().encode(["geminiFlash"]), forKey: SettingsKey.switchEngines.defaultsKey)
             let settings = AppSettings(defaults: defaults)
             #expect(settings.lineup.switchable == [.gemini])
-            #expect(settings.lineup.cycle == [.parakeet, .gemini])
+            #expect(settings.lineup.cycle == [.gigaam, .gemini])
             #expect(defaults.object(forKey: SettingsKey.switchCleanup.defaultsKey) == nil)
             #expect(defaults.object(forKey: SettingsKey.switchEngines.defaultsKey) == nil)
             #expect(defaults.data(forKey: SettingsKey.lineup.defaultsKey) != nil, "written once, explicitly")
@@ -1449,7 +1451,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
             defaults.set(try JSONEncoder().encode([String]()), forKey: SettingsKey.switchEngines.defaultsKey)
             let settings = AppSettings(defaults: defaults)
             #expect(!settings.lineup.isSwitchable(.gemini))
-            #expect(settings.lineup.cycle == [.parakeet])
+            #expect(settings.lineup.cycle == [.gigaam])
         }
         #expect(AppSettings.migratedLineup(storedEngine: nil, switchCleanup: nil, switchEngines: ["geminiPro"])?
             .isSwitchable(.gemini) == false, "the retired Pro isn’t Flash")
@@ -1601,10 +1603,11 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
     }
 
     @Test func engineFacts() {
-        #expect(EngineID.default == .parakeet)
-        #expect(EngineID.localEngines == [.parakeet, .gigaam])
+        #expect(EngineID.default == .gigaam)
+        #expect(EngineID.localEngines == [.gigaam])
         #expect(EngineID.geminiPro.openRouterModelID == "google/gemini-3.1-pro-preview")
-        #expect(EngineID.parakeet.approxDownloadBytes == 632_321_326)
+        #expect(EngineID.gigaam.approxDownloadBytes == 409_369_862)
+        #expect(EngineID.parakeet.approxDownloadBytes == nil, "nothing downloads it any more")
         #expect(EngineID.geminiFlash.approxDownloadBytes == nil)
     }
 
@@ -1624,31 +1627,31 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
 // MARK: - The lineup
 
 @Suite struct ModelLineupTests {
-    @Test func theDefaultLineupStepsParakeetThenGemini() {
+    @Test func theDefaultLineupStepsGigaAMThenGemini() {
         let lineup = ModelLineup.default
-        #expect(lineup.order == [.parakeet, .gemini, .hydrogen, .carbon, .gigaam] && lineup.main == .parakeet)
-        #expect(lineup.cycle == [.parakeet, .gemini], "Hydrogen, Carbon and GigaAM are listed, switched off")
+        #expect(lineup.order == [.gigaam, .gemini, .hydrogen, .neon, .carbon] && lineup.main == .gigaam)
+        #expect(lineup.cycle == [.gigaam, .gemini], "Hydrogen, Neon and Carbon are listed, switched off")
         #expect(lineup.steps == [.gemini])
-        #expect(ModelChoice.allCases == [.parakeet, .gemini, .hydrogen, .carbon, .gigaam],
+        #expect(ModelChoice.allCases == [.gigaam, .gemini, .hydrogen, .neon, .carbon],
                 "declaration order is the default order")
     }
 
     @Test func theCycleStartsAtTheMainModelAndWrapsInOrder() {
         var lineup = ModelLineup.default
         lineup.main = .gemini
-        #expect(lineup.cycle == [.gemini, .parakeet])
+        #expect(lineup.cycle == [.gemini, .gigaam])
         #expect(lineup.cycle.first == lineup.main)
     }
 
     @Test func aModelSwitchedOffIsLeftOutButTheMainModelNeverIs() {
         var lineup = ModelLineup.default
-        lineup.setSwitchable(.parakeet, false)
-        #expect(lineup.isSwitchable(.parakeet) && lineup.cycle.first == .parakeet, "the main model's flag is ignored")
+        lineup.setSwitchable(.gigaam, false)
+        #expect(lineup.isSwitchable(.gigaam) && lineup.cycle.first == .gigaam, "the main model's flag is ignored")
         lineup.setSwitchable(.gemini, false)
-        #expect(lineup.cycle == [.parakeet] && lineup.steps.isEmpty)
+        #expect(lineup.cycle == [.gigaam] && lineup.steps.isEmpty)
         // The main model it replaces stays in the cycle.
         lineup.main = .gemini
-        #expect(lineup.cycle == [.gemini, .parakeet])
+        #expect(lineup.cycle == [.gemini, .gigaam])
     }
 
     /// A model switched off, then main for a while, is in the cycle after: it was in it all the while it was main.
@@ -1656,38 +1659,38 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         var lineup = ModelLineup.default
         lineup.setSwitchable(.gemini, false)
         lineup.main = .gemini
-        lineup.main = .parakeet
+        lineup.main = .gigaam
         #expect(lineup.isSwitchable(.gemini))
-        #expect(lineup.cycle == [.parakeet, .gemini])
+        #expect(lineup.cycle == [.gigaam, .gemini])
     }
 
     @Test func aSentenceListsModelsByShortName() {
         #expect(ModelChoice.sentenceList([]) == ("", false))
         #expect(ModelChoice.sentenceList([.gemini]) == ("Flash", false))
-        #expect(ModelChoice.sentenceList([.parakeet, .gemini]) == ("Parakeet and Flash", true))
+        #expect(ModelChoice.sentenceList([.gigaam, .gemini]) == ("GigaAM and Flash", true))
     }
 
     @Test func movingAModelReordersTheCycle() {
         var lineup = ModelLineup.default
         lineup.move(.gemini, to: 0)
-        #expect(lineup.order == [.gemini, .parakeet, .hydrogen, .carbon, .gigaam])
-        #expect(lineup.cycle == [.parakeet, .gemini], "from the main model, wrapping around")
+        #expect(lineup.order == [.gemini, .gigaam, .hydrogen, .neon, .carbon])
+        #expect(lineup.cycle == [.gigaam, .gemini], "from the main model, wrapping around")
         lineup.move(.gemini, to: 99)
-        #expect(lineup.order == [.parakeet, .hydrogen, .carbon, .gigaam, .gemini], "clamped to the end")
+        #expect(lineup.order == [.gigaam, .hydrogen, .neon, .carbon, .gemini], "clamped to the end")
         lineup.move(.gemini, to: -3)
-        #expect(lineup.order == [.gemini, .parakeet, .hydrogen, .carbon, .gigaam], "clamped to the start")
+        #expect(lineup.order == [.gemini, .gigaam, .hydrogen, .neon, .carbon], "clamped to the start")
         lineup.move(.gemini, to: 1)
-        #expect(lineup.order == [.parakeet, .gemini, .hydrogen, .carbon, .gigaam])
+        #expect(lineup.order == [.gigaam, .gemini, .hydrogen, .neon, .carbon])
     }
 
     @Test func aStoredLineupDecodesLeniently() throws {
-        let json = #"{"main":"whisper","order":["gemini","whisper","gemini","parakeet"],"switchable":["gemini","x"]}"#
+        let json = #"{"main":"whisper","order":["gemini","whisper","gemini","gigaam"],"switchable":["gemini","x"]}"#
         let lineup = try JSONDecoder().decode(ModelLineup.self, from: Data(json.utf8))
-        #expect(lineup.order == [.gemini, .parakeet, .hydrogen, .carbon, .gigaam], "unknown and duplicate dropped")
-        #expect(lineup.main == .parakeet)
+        #expect(lineup.order == [.gemini, .gigaam, .hydrogen, .neon, .carbon], "unknown and duplicate dropped")
+        #expect(lineup.main == .gigaam)
         #expect(lineup.switchable == [.gemini])
         let missing = try JSONDecoder().decode(ModelLineup.self, from: Data(#"{"main":"gemini","order":["gemini"],"switchable":[]}"#.utf8))
-        #expect(missing.order == [.gemini, .parakeet, .hydrogen, .carbon, .gigaam] && missing.switchable.isEmpty,
+        #expect(missing.order == [.gemini, .gigaam, .hydrogen, .neon, .carbon] && missing.switchable.isEmpty,
                 "the missing appended, off")
         #expect(try JSONDecoder().decode(ModelLineup.self, from: Data("{}".utf8)).order == ModelChoice.allCases)
     }
@@ -1698,7 +1701,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let json = String(decoding: try encoder.encode(lineup), as: UTF8.self)
-        #expect(json == #"{"main":"parakeet","order":["gemini","parakeet","hydrogen","carbon","gigaam"],"switchable":["gemini"]}"#)
+        #expect(json == #"{"main":"gigaam","order":["gemini","gigaam","hydrogen","neon","carbon"],"switchable":["gemini"]}"#)
         #expect(try JSONDecoder().decode(ModelLineup.self, from: Data(json.utf8)) == lineup)
     }
 
@@ -1708,21 +1711,21 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
             #expect(ModelChoice(engine: choice.engine) == choice)
         }
         #expect(ModelChoice(engine: .geminiPro) == .gemini && ModelChoice(engine: .geminiArgon) == .gemini)
-        #expect(ModelChoice(engine: .parakeetCloud) == .parakeet)
+        #expect(ModelChoice(engine: .parakeet) == .gigaam && ModelChoice(engine: .parakeetCloud) == .gigaam)
     }
 
     @Test func modelChoiceNames() {
         #expect(ModelChoice.allCases.map(\.modelName)
-                == ["Parakeet v3", "Gemini 3.8 Flash", "Gemini 4 Hydrogen", "Gemini 4 Carbon", "GigaAM"])
+                == ["GigaAM v3", "Gemini 3.8 Flash", "Gemini 4 Hydrogen", "Gemini 4 Neon", "Gemini 4 Carbon"])
         #expect(ModelChoice.allCases.map(\.title) == ModelChoice.allCases.map(\.modelName))
-        #expect(ModelChoice.allCases.map(\.shortName) == ["Parakeet", "Flash", "Hydrogen", "Carbon", "GigaAM"])
+        #expect(ModelChoice.allCases.map(\.shortName) == ["GigaAM", "Flash", "Hydrogen", "Neon", "Carbon"])
         #expect(ModelChoice.allCases.map { $0.compactName }
-                == ["Parakeet v3", "Gemini 3.8 Flash", "Gemini 4 Hydrogen", "Gemini 4 Carbon", "GigaAM"])
+                == ["GigaAM v3", "Gemini 3.8 Flash", "Gemini 4 Hydrogen", "Gemini 4 Neon", "Gemini 4 Carbon"])
         #expect(ModelChoice.allCases.map { $0.chipName }
-                == ["Parakeet", "Gemini 3.8 Flash", "Gemini 4 Hydrogen", "Gemini 4 Carbon", "GigaAM"])
+                == ["GigaAM v3", "Gemini 3.8 Flash", "Gemini 4 Hydrogen", "Gemini 4 Neon", "Gemini 4 Carbon"])
         #expect(ModelChoice.allCases.map { $0.symbolName }
-                == ["bolt.fill", "sparkles", "drop.fill", "atom", "character.bubble.fill"])
-        #expect(ModelChoice.allCases.map { $0.isLocal } == [true, false, false, false, true])
-        #expect(ModelChoice.allCases.map { $0.isGemini } == [false, true, true, true, false])
+                == ["character.bubble.fill", "sparkles", "drop.fill", "lightbulb.fill", "atom"])
+        #expect(ModelChoice.allCases.map { $0.isLocal } == [true, false, false, false, false])
+        #expect(ModelChoice.allCases.map { $0.isGemini } == [false, true, true, true, true])
     }
 }

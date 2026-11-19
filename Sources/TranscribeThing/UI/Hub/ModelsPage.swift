@@ -3,10 +3,9 @@ import UniformTypeIdentifiers
 
 /// The models in the user's order: the main model every dictation starts on (a radio), which others the Switch model
 /// shortcut steps to (a switch), the order it steps in (drag a row by its handle), and each one's color on the pill
-/// (its tile), how hard each Gemini model thinks (its Reasoning menu), and GigaAM's version (its Version menu). Then the
-/// model hands-free starts on, the models on this Mac, Parakeet and each GigaAM version picked or downloaded (download,
-/// delete, storage), and the API keys: OpenRouter's, and the user's own OpenAI-compatible endpoint that can take
-/// Gemini's requests instead.
+/// (its tile), and how hard each Gemini model thinks (its Reasoning menu). Then the model hands-free starts on, the
+/// model on this Mac, GigaAM v3 (download, delete, storage), with the files retired models left there to delete, and
+/// the API keys: OpenRouter's, and the user's own OpenAI-compatible endpoint that can take Gemini's requests instead.
 struct ModelsPage: View {
     @Environment(HubContext.self) private var hub
     @Environment(ModelStore.self) private var models
@@ -46,9 +45,12 @@ struct ModelsPage: View {
                 HubGroup("On this Mac", footer: onThisMacFooter) {
                     SettingsGroup {
                         // Ids of their own: the form mixes its sections up over ids that repeat between them
-                        // (Your models has a "parakeet" too).
-                        ForEach(onThisMac, id: \.onThisMacRowID) { model in
+                        // (Your models has a "gigaam" too).
+                        ForEach(LocalModel.all, id: \.onThisMacRowID) { model in
                             ModelRow(model: model)
+                        }
+                        ForEach(models.leftoverModels, id: \.onThisMacRowID) { leftover in
+                            LeftoverModelRow(model: leftover)
                         }
                     }
                 }
@@ -133,24 +135,14 @@ struct ModelsPage: View {
     }
 
     private func handsFreeLabel(_ choice: ModelChoice?) -> String {
-        choice.map(settings.modelName(of:)) ?? "Main model"
+        choice.map(\.modelName) ?? "Main model"
     }
 
     // MARK: On this Mac
 
-    /// Parakeet, then each GigaAM version that's picked or on its way or on disk: the others aren't anywhere yet.
-    private var onThisMac: [LocalModel] {
-        LocalModel.all.filter { model in
-            model.engine != .gigaam || models.model(for: .gigaam) == model || models.state(model: model) != .notInstalled
-        }
-    }
-
-    /// Only once a GigaAM version other than the picked one is on this Mac: it stays there until deleted.
+    /// Only while a retired model's files are still on this Mac (`LeftoverModelCopy`).
     private var onThisMacFooter: String? {
-        let picked = models.model(for: .gigaam)
-        let others = onThisMac.filter { $0.engine == .gigaam && $0 != picked }
-        guard !others.isEmpty else { return nil }
-        return "GigaAM’s versions download on their own. One you don’t use stays on this Mac until you delete it."
+        LeftoverModelCopy.footer(models.leftoverModels)
     }
 
 }
@@ -208,103 +200,30 @@ private extension LocalModel {
     var onThisMacRowID: String { "onThisMac.\(id)" }
 }
 
+private extension RetiredLocalModel {
+    var onThisMacRowID: String { "onThisMac.retired.\(id)" }
+}
+
+/// What Models says about the files retired models left on this Mac.
+enum LeftoverModelCopy {
+    /// Under each one's name.
+    static let note = "No longer used"
+
+    /// "Parakeet v3 and GigaAM v3 e2e are no longer used. History keeps what they wrote; delete their files to free
+    /// the space." nil when none is left.
+    static func footer(_ leftovers: [RetiredLocalModel]) -> String? {
+        let names = leftovers.map(\.displayName)
+        guard let last = names.last else { return nil }
+        let list = names.count > 1 ? names.dropLast().joined(separator: ", ") + " and " + last : last
+        let they = names.count > 1 ? "they" : "it"
+        let their = names.count > 1 ? "their" : "its"
+        return "\(list) \(names.count > 1 ? "are" : "is") no longer used. History keeps what \(they) wrote; delete "
+            + "\(their) files to free the space."
+    }
+}
+
 enum ModelsAnchor: Hashable {
     case key, proxy
-}
-
-/// GigaAM's version (`AppSettings.gigaamVariant`) on its lineup row, after its status: "Version: v3", a borderless
-/// menu of the three, as Gemini's Reasoning menu. Its click is its own: it never makes the model main. Picking one that
-/// isn't downloaded leaves its Download on the row; the others stay on disk (`ModelStore.pickGigaAMVariant`).
-struct GigaAMVersionMenu: View {
-    @Environment(ModelStore.self) private var models
-    @Environment(AppSettings.self) private var settings
-
-    var body: some View {
-        let current = settings.gigaamVariant
-        Menu {
-            Picker("Version", selection: variant) {
-                ForEach(GigaAMEngine.Variant.allCases) { Text($0.menuTitle).tag($0) }
-            }
-            .pickerStyle(.inline)
-            .labelsHidden()
-        } label: {
-            VersionMenuLabel(title: "Version: \(current.versionName)")
-        }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("The version of GigaAM your dictations use. Each downloads on its own.")
-        .accessibilityLabel("Version of GigaAM")
-        .accessibilityValue(current.versionName)
-    }
-
-    private var variant: Binding<GigaAMEngine.Variant> {
-        let settings = settings, models = models
-        return Binding(get: { settings.gigaamVariant }, set: { models.pickGigaAMVariant($0) })
-    }
-}
-
-/// The Version menu as it opens over GigaAM's row, drawn for snapshots (a menu doesn't render in one): the row's
-/// status line, then its items, `picked` checked.
-struct GigaAMVersionMenuSnapshot: View {
-    var picked: GigaAMEngine.Variant
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 4) {
-                StatusDot(color: StatusTone.positive.color, size: 6).frame(width: 12, height: 12)
-                Text("Ready").typeface(.callout).foregroundStyle(.inkSecondary)
-                Text("·").typeface(.callout).foregroundStyle(.inkTertiary)
-                VersionMenuLabel(title: "Version: \(picked.versionName)")
-            }
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(GigaAMEngine.Variant.allCases) { variant in
-                    HStack(spacing: 6) {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 11, weight: .semibold))
-                            .opacity(variant == picked ? 1 : 0)
-                            .frame(width: 14)
-                        Text(variant.menuTitle)
-                            .font(.system(size: 13))
-                    }
-                    .foregroundStyle(.ink)
-                    .padding(.horizontal, 8)
-                    .frame(height: 24)
-                }
-            }
-            .padding(5)
-            .background {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color(nsColor: .windowBackgroundColor))
-                    .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(.stroke, lineWidth: 0.5)
-                    }
-            }
-            .padding(.leading, 120)
-        }
-        .padding(24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color.bgCanvas)
-    }
-}
-
-/// The Version menu's label: a plain line with a small chevron, styled as the status beside it.
-struct VersionMenuLabel: View {
-    var title: String
-
-    var body: some View {
-        HStack(spacing: 3) {
-            Text(title)
-            Image(systemName: "chevron.up.chevron.down")
-                .font(.system(size: 8, weight: .semibold))
-                .foregroundStyle(.inkTertiary)
-        }
-        .typeface(.callout)
-        .foregroundStyle(.inkSecondary)
-        .contentShape(Rectangle())
-    }
 }
 
 // MARK: - Your models
@@ -356,7 +275,7 @@ private struct LineupRow: View {
             }
             ModelColorButton(choice: choice)
             VStack(alignment: .leading, spacing: 3) {
-                Text(settings.modelName(of: choice))
+                Text(choice.modelName)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.ink)
                     .lineLimit(1)
@@ -446,19 +365,13 @@ private struct LineupRow: View {
                 .foregroundStyle(tone == .negative ? Color.danger : Color.inkSecondary)
                 .contentTransition(.numericText())
                 .lineLimit(1)
-            // A Gemini model's Reasoning level, after its status; the models on this Mac don't reason. GigaAM's version.
+            // A Gemini model's Reasoning level, after its status; the model on this Mac doesn't reason.
             if !choice.engine.reasoningEfforts.isEmpty {
                 Text("·")
                     .typeface(.callout)
                     .foregroundStyle(.inkTertiary)
                     .accessibilityHidden(true)
                 ReasoningMenu(engine: choice.engine)
-            } else if choice == .gigaam {
-                Text("·")
-                    .typeface(.callout)
-                    .foregroundStyle(.inkTertiary)
-                    .accessibilityHidden(true)
-                GigaAMVersionMenu()
             }
         }
     }
@@ -669,8 +582,8 @@ private struct StateCapsule: View {
 
 // MARK: - On this Mac
 
-/// A model on this Mac (Parakeet v3, a GigaAM version): its download (or load) and how it's doing, its size, and
-/// Delete. While Switch model reaches it (GigaAM in its picked version), it's in use and can't be deleted.
+/// The model on this Mac (GigaAM v3): its download (or load) and how it's doing, its size, and Delete. While Switch
+/// model reaches it, it's in use and can't be deleted.
 private struct ModelRow: View {
     var model: LocalModel
 
@@ -681,10 +594,8 @@ private struct ModelRow: View {
 
     private var state: LocalModelState { models.state(model: model) }
     private var choice: ModelChoice { ModelChoice(engine: model.engine) }
-    /// Its engine's picked model: Parakeet, GigaAM's picked version.
-    private var isPicked: Bool { models.model(for: model.engine) == model }
-    /// Switch model reaches it (as the main model, a step or hands-free's) and it's the version picked: in use.
-    private var isInUse: Bool { isPicked && settings.usesLocalModel(model.engine) }
+    /// Switch model reaches it (as the main model, a step or hands-free's): in use.
+    private var isInUse: Bool { settings.usesLocalModel(model.engine) }
     /// Downloaded, loaded or loading: what "In use" needs.
     private var isOnDisk: Bool {
         switch state {
@@ -717,9 +628,9 @@ private struct ModelRow: View {
         .accessibilityElement(children: .contain)
     }
 
-    /// What it costs and needs; a GigaAM version's also says what it's good for.
+    /// What it writes, what it costs and needs.
     private var subtitle: String {
-        model.variant.map { "\($0.facts) · free · works offline" } ?? "Free · works offline"
+        "Russian · no punctuation · free · works offline"
     }
 
     // MARK: Status
@@ -823,8 +734,7 @@ private struct ModelRow: View {
         }
         .buttonStyle(IconButtonStyle(size: 26))
         .disabled(!isEnabled)
-        .help(isEnabled ? "Delete \(model.displayName)" : model.engine == .gigaam
-              ? "Pick another version, or make another model the main model and switch GigaAM off, to delete it."
+        .help(isEnabled ? "Delete \(model.displayName)"
               : "Make another model the main model and switch \(choice.shortName) off in Your models to delete it.")
         .accessibilityLabel("Delete \(model.displayName)")
         .popover(isPresented: $confirmingDelete, arrowEdge: .bottom) {
@@ -836,6 +746,63 @@ private struct ModelRow: View {
                 confirmingDelete = false
             }
         }
+    }
+}
+
+/// What a retired model left on this Mac (Parakeet v3, GigaAM v3 e2e, GigaAM Multilingual): its name, "No longer
+/// used", what it takes, and Delete, which asks first. Nothing runs it, so nothing keeps it from going.
+private struct LeftoverModelRow: View {
+    var model: RetiredLocalModel
+
+    @Environment(ModelStore.self) private var models
+    @Environment(\.inNativeForm) private var inNativeForm
+    @State private var confirmingDelete = false
+
+    private var bytes: Int64 { models.leftovers[model] ?? 0 }
+    private var isDeleting: Bool { models.deletingLeftovers.contains(model) }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            EngineIcon(engine: model.engine, size: 36, tint: .inkTertiary)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(model.displayName)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.inkSecondary)
+                    .lineLimit(1)
+                Text(LeftoverModelCopy.note)
+                    .typeface(.callout)
+                    .foregroundStyle(.inkSecondary)
+                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    StatusDot(color: StatusTone.neutral.color, size: 6).frame(width: 12, height: 12)
+                    Text(isDeleting ? "Deleting…" : "\(Fmt.bytes(bytes)) on this Mac")
+                        .typeface(.callout)
+                        .monospacedDigit()
+                        .foregroundStyle(.inkSecondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 8)
+            Button("Delete") { confirmingDelete = true }
+                .buttonStyle(SecondaryButtonStyle(size: .small))
+                .disabled(isDeleting)
+                .help("Delete \(model.displayName)’s files")
+                .accessibilityLabel("Delete \(model.displayName)")
+                .popover(isPresented: $confirmingDelete, arrowEdge: .bottom) {
+                    DeleteModelConfirmation(name: model.displayName, freedBytes: bytes, canDownloadAgain: false) {
+                        confirmingDelete = false
+                        let models = models, model = model
+                        Task { await models.deleteLeftover(model) }
+                    } cancel: {
+                        confirmingDelete = false
+                    }
+                }
+        }
+        // In a form, the form's row insets.
+        .padding(.horizontal, inNativeForm ? 0 : Theme.Spacing.md)
+        .padding(.vertical, inNativeForm ? 4 : 12)
+        .frame(minHeight: inNativeForm ? 0 : 76)
+        .accessibilityElement(children: .contain)
     }
 }
 
@@ -867,6 +834,8 @@ private struct BarThenCaption<Bar: View, Caption: View>: View {
 private struct DeleteModelConfirmation: View {
     var name: String
     var freedBytes: Int64?
+    /// False for a retired model's files: nothing downloads it any more.
+    var canDownloadAgain = true
     var confirm: () -> Void
     var cancel: () -> Void
 
@@ -894,6 +863,7 @@ private struct DeleteModelConfirmation: View {
 
     private var message: String {
         let size = freedBytes.map { "This frees \(Fmt.bytes($0)). " } ?? ""
-        return "\(size)You can download it again anytime."
+        return size + (canDownloadAgain ? "You can download it again anytime."
+            : "It can’t be downloaded again. History keeps what it wrote.")
     }
 }

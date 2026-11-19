@@ -37,7 +37,7 @@ import Testing
         c.send(.pillCancel)
     }
 
-    /// On Parakeet the key does nothing at all; switching away from Gemini turns Polish off.
+    /// On GigaAM the key does nothing at all; switching away from Gemini turns Polish off.
     @Test func onlyGeminiPolishes() {
         let (rig, cues) = Switch.make()
         let c = rig.h.controller
@@ -48,7 +48,7 @@ import Testing
         c.selectModelForCurrentDictation(.gemini)
         c.toggle(.polish, on: .recording)
         #expect(c.isPolishing)
-        c.selectModelForCurrentDictation(.parakeet)
+        c.selectModelForCurrentDictation(.gigaam)
         #expect(!c.isPolishing, "off once it's not Gemini")
         c.send(.pillCancel)
     }
@@ -99,7 +99,7 @@ import Testing
         c.send(.pillCancel)
     }
 
-    /// The main model changed under a polishing dictation (Models, a notice's "Use Parakeet v3"): it goes to Parakeet
+    /// The main model changed under a polishing dictation (Models, a notice's "Use GigaAM v3"): it goes to GigaAM
     /// as a plain transcript, never as a polished one.
     @Test func aDictationThatLeftGeminiIsNotPolished() async throws {
         let (rig, _) = Switch.make()
@@ -112,11 +112,11 @@ import Testing
         }
         Switch.hold(rig)
         c.toggle(.polish, on: .recording)
-        rig.h.settings.lineup.main = .parakeet
+        rig.h.settings.lineup.main = .gigaam
         try await Switch.release(rig)
-        #expect(engines == [.parakeet])
+        #expect(engines == [.gigaam])
         let entry = try #require(rig.h.history.entries.first)
-        #expect(entry.versions.map(\.kind) == [.transcription(.parakeet)])
+        #expect(entry.versions.map(\.kind) == [.gigaam(.v3)])
     }
 
     /// Polish from a failed dictation's Retry With: the polished message becomes its text.
@@ -448,12 +448,12 @@ import Testing
         rig.h.controller.send(.pillCancel)
     }
 
-    /// Nothing selected, on Parakeet, Gemini in the lineup: the polish key moves this dictation to Gemini and polishes
+    /// Nothing selected, on GigaAM, Gemini in the lineup: the polish key moves this dictation to Gemini and polishes
     /// it, as Switch model then fn P would.
     @Test func offGeminiThePolishKeyMovesTheDictationToGemini() async throws {
         let (rig, _, asked) = Self.make(selection: nil)
         Switch.hold(rig)
-        #expect(rig.h.controller.effectiveChoice == .parakeet)
+        #expect(rig.h.controller.effectiveChoice == .gigaam)
         rig.h.controller.toggle(.polish, on: .recording)
         try await waitUntil { rig.h.controller.isPolishing }
         #expect(rig.h.controller.effectiveChoice == .gemini)
@@ -567,7 +567,7 @@ import Testing
             .version(.selection(.gpt6Luna))
         let store = HistoryStore.preview(entries: [
             TranscriptEntry(engine: .geminiFlash, audioDuration: 0, voicedSeconds: 0, versions: [version]),
-            TranscriptEntry(createdAt: Date().addingTimeInterval(-60), text: "dictated", engine: .parakeet,
+            TranscriptEntry(createdAt: Date().addingTimeInterval(-60), text: "dictated", engine: .gigaam,
                             audioDuration: 1, voicedSeconds: 1),
         ])
         #expect(store.lastSuccessful?.text == "dictated")
@@ -575,7 +575,7 @@ import Testing
 
     // MARK: Gemini 3.8 Flash, whatever the dictation is on
 
-    /// Gemini as the main model, switched to Parakeet mid-dictation: the selection goes to Flash, at Flash's level, in
+    /// Gemini as the main model, switched to GigaAM mid-dictation: the selection goes to Flash, at Flash's level, in
     /// Gemini's color while it writes.
     @Test func theMainGeminiRewritesTheSelection() async throws {
         let (rig, _, asked) = Self.make()
@@ -585,7 +585,7 @@ import Testing
         Switch.hold(rig)
         try await waitUntil { rig.h.controller.machine.isRecording }
         rig.h.controller.handle(.cycleEngine)
-        #expect(!rig.h.controller.effectiveChoice.isGemini, "on Parakeet now: the key is Polish Selection's")
+        #expect(!rig.h.controller.effectiveChoice.isGemini, "on GigaAM now: the key is Polish Selection's")
         rig.h.controller.toggle(.polish, on: .recording)
         try await waitUntil { !asked.calls.isEmpty }
         #expect(rig.h.pill.sessionModel == .gemini, "the pill wears Gemini's color while it writes")
@@ -597,7 +597,7 @@ import Testing
         rig.h.controller.handle(.cardClose)
     }
 
-    /// Nothing but Parakeet: the selection goes to Gemini 3.8 Flash, at Flash's level.
+    /// Nothing but GigaAM: the selection goes to Gemini 3.8 Flash, at Flash's level.
     @Test func withNoGeminiInUseFlashRewritesTheSelection() async throws {
         let (rig, _, asked) = Self.make()
         rig.h.settings.reasoningEfforts[.geminiFlash] = .high

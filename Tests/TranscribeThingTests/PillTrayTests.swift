@@ -62,8 +62,8 @@ import Testing
         model.setHoveredTrayButton(button)
         #expect(model.trayHint == nil, "after a while off the buttons, the dwell again")
         #expect(PillTrayState.reason(.translate) == "Gemini only")
-        let parakeet = PillTrayState(dictation: .processing(UUID()), rewrites: false)
-        #expect(!parakeet.isEnabled(.polish) && !parakeet.isEnabled(.translate) && parakeet.isEnabled(.send))
+        let local = PillTrayState(dictation: .processing(UUID()), rewrites: false)
+        #expect(!local.isEnabled(.polish) && !local.isEnabled(.translate) && local.isEnabled(.send))
     }
 
     /// Each stacked dictation gets a pill model of its own, drawing it processing with its own glyphs, edge and
@@ -73,12 +73,12 @@ import Testing
         let a = UUID(), b = UUID()
         model.setStack([
             PillStackItem(key: a, choice: .gemini, tray: PillTrayState(dictation: .processing(a), polishes: true)),
-            PillStackItem(key: b, choice: .parakeet, tray: PillTrayState(dictation: .processing(b), rewrites: false),
+            PillStackItem(key: b, choice: .gigaam, tray: PillTrayState(dictation: .processing(b), rewrites: false),
                           holdsPaste: true),
         ])
         let first = try? #require(model.stackModels[a]), second = try? #require(model.stackModels[b])
         #expect(first?.visiblePhase == .processing && first?.polishes == true && first?.sessionModel == .gemini)
-        #expect(second?.holdsPaste == true && second?.sessionModel == .parakeet)
+        #expect(second?.holdsPaste == true && second?.sessionModel == .gigaam)
         model.showTray(.stacked(b))
         #expect(model.showsTray(.stacked(b)) && model.trayState(.stacked(b))?.rewrites == false)
         model.setStack([model.stack[0]])

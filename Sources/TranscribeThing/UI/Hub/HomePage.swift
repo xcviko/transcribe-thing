@@ -198,7 +198,7 @@ struct HomePage: View {
         if importOffer.contains(where: { $0.blocker == .tooLongForGemini }) {
             let limit = Int(CloudAudio.maxChatSeconds())
             message += " Gemini isn’t offered: it takes at most \(limit / 3600) h \(limit % 3600 / 60) min of audio."
-                + " Parakeet takes any length."
+                + " GigaAM takes any length."
         }
         return message
     }

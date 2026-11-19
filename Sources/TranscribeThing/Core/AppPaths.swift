@@ -9,7 +9,7 @@ struct AppPaths: Sendable {
         self.root = root
     }
 
-    /// root/Models (Parakeet lives in Models/parakeet-tdt-0.6b-v3).
+    /// root/Models: GigaAM v3 in Models/gigaam-v3-ctc, and what a retired model left there (`RetiredLocalModel`).
     var models: URL { root.appendingPathComponent("Models", isDirectory: true) }
     /// root/Recordings: each History entry's recording (`RecordingFile`).
     var recordings: URL { root.appendingPathComponent("Recordings", isDirectory: true) }

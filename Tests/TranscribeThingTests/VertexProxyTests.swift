@@ -604,9 +604,9 @@ enum ProxyFixture {
         let (proxy, _) = ProxyFixture.proxy()
         let account = OpenRouterAccount.preview(status: .missing)
         #expect(CloudRoute.provider(for: .geminiFlash, proxy: proxy) == .vertexProxy)
-        #expect(CloudRoute.provider(for: .parakeet, proxy: proxy) == nil)
+        #expect(CloudRoute.provider(for: .gigaam, proxy: proxy) == nil)
         #expect(CloudRoute.keyStatus(for: .geminiFlash, account: account, proxy: proxy) == .checking)
-        #expect(CloudRoute.keyStatus(for: .parakeet, account: account, proxy: proxy) == .missing)
+        #expect(CloudRoute.keyStatus(for: .gigaam, account: account, proxy: proxy) == .missing)
         proxy.isEnabled = false
         #expect(CloudRoute.provider(for: .geminiFlash, proxy: proxy) == .openRouter)
         #expect(CloudRoute.keyStatus(for: .geminiFlash, account: account, proxy: proxy) == .missing)
@@ -624,7 +624,7 @@ enum ProxyFixture {
 
     @Test func everyEndpointFailureSaysYourEndpointAndPointsToModels() {
         for failure in Self.failures {
-            let notice = AppError.vertexProxy(failure).notice(recordingID: UUID(), fallbackEngine: .parakeet,
+            let notice = AppError.vertexProxy(failure).notice(recordingID: UUID(), fallbackEngine: .gigaam,
                                                               engine: .geminiFlash)
             #expect(notice.title.contains("endpoint"), "\(failure)")
             #expect(!notice.title.contains("OpenRouter") && !(notice.body ?? "").contains("openrouter.ai"))
@@ -672,7 +672,7 @@ enum ProxyFixture {
         texts += [VertexProxy.URLProblem.empty, .notHTTPS, .invalid].map(\.message)
         for failure in Self.failures {
             let error = AppError.vertexProxy(failure)
-            let notice = error.notice(recordingID: UUID(), fallbackEngine: .parakeet, engine: .geminiFlash)
+            let notice = error.notice(recordingID: UUID(), fallbackEngine: .gigaam, engine: .geminiFlash)
             texts += [notice.title, notice.body ?? "", error.localizedDescription]
             texts += notice.actions.map(\.title)
             texts.append(DictationController.homeFailureReason(error, making: .polish()))
@@ -831,8 +831,8 @@ extension DiagnosticDictationTests {
         let h = DictationControllerTests.make(keyStatus: .valid(KeyInfo()), proxy: proxy)
         h.settings.lineup.main = .gemini
         #expect(h.controller.captureRefusal() == .vertexProxy(.keyRejected("API key not valid.")))
-        h.settings.lineup.main = .parakeet
-        #expect(h.controller.captureRefusal() == nil, "Parakeet on this Mac needs no key")
+        h.settings.lineup.main = .gigaam
+        #expect(h.controller.captureRefusal() == nil, "GigaAM on this Mac needs no key")
     }
 
     @Test func anUnreadableProxyKeyRefusesGemini() {

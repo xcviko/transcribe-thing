@@ -29,9 +29,9 @@ import Testing
     /// Clean-up is gone: no transcript offers it, whatever Parakeet texts it has, and one GPT-6 Luna already tidied
     /// keeps that version to switch to.
     @Test func nothingOffersACleanUp() {
-        #expect(menu(transcript()).actions.map(\.kind) == [.gigaam(.v3), .gigaam(.v3e2e), .gigaam(.multilingual), .transcription(.geminiFlash),
-                                                           .transcription(.geminiHydrogen),
-                                                           .transcription(.geminiCarbon)]
+        #expect(menu(transcript()).actions.map(\.kind) == [.gigaam(.v3),
+                                                           .transcription(.geminiFlash), .transcription(.geminiHydrogen),
+                                                           .transcription(.geminiNeon), .transcription(.geminiCarbon)]
                 + TranscriptVersionKind.rewrites)
         var entry = transcript(.parakeet)
         entry.addVersion(TranscriptVersion(text: "cloud", engine: .parakeetCloud))
@@ -44,7 +44,7 @@ import Testing
         #expect(m.versions.last?.isCurrent == true)
     }
 
-    /// Gemini 3.1 Pro and Flash Lite's clean-ups stay in the menu as versions, but nothing offers to run them: not
+    /// Gemini 3.1 Pro, Parakeet and Flash Lite's clean-ups stay in the menu as versions, but nothing offers to run them: not
     /// for a transcript they wrote, not for one they didn't, not for a failed dictation of theirs.
     @Test func noRetiredModelIsOffered() {
         let pro = TranscriptEntry(text: "pro", engine: .geminiPro, audioDuration: 20, voicedSeconds: 10,
@@ -52,8 +52,8 @@ import Testing
         let proMenu = menu(pro)
         #expect(proMenu.versions.map(\.kind) == [.transcription(.geminiPro)])
         #expect(proMenu.versions.map(\.title) == ["Gemini 3.1 Pro"])
-        #expect(proMenu.actions.map(\.kind) == [.transcription(.parakeet), .gigaam(.v3), .gigaam(.v3e2e), .gigaam(.multilingual),
-                                                .transcription(.geminiFlash), .transcription(.geminiHydrogen),
+        #expect(proMenu.actions.map(\.kind) == [.gigaam(.v3), .transcription(.geminiFlash),
+                                                .transcription(.geminiHydrogen), .transcription(.geminiNeon),
                                                 .transcription(.geminiCarbon)]
                 + TranscriptVersionKind.rewrites, "Pro's text isn't cleaned up either")
 
@@ -62,8 +62,9 @@ import Testing
                                             metadata: TranscriptMetadata()))
         let tidiedMenu = menu(tidied)
         #expect(tidiedMenu.versions.map(\.title) == ["Parakeet v3", "Parakeet v3 + Clean-up by Flash Lite"])
-        #expect(tidiedMenu.actions.map(\.kind) == [.gigaam(.v3), .gigaam(.v3e2e), .gigaam(.multilingual), .transcription(.geminiFlash),
-                                                   .transcription(.geminiHydrogen), .transcription(.geminiCarbon)]
+        #expect(tidiedMenu.actions.map(\.kind) == [.gigaam(.v3),
+                                                   .transcription(.geminiFlash), .transcription(.geminiHydrogen),
+                                                   .transcription(.geminiNeon), .transcription(.geminiCarbon)]
                 + TranscriptVersionKind.rewrites)
 
         var failed = TranscriptEntry(text: "", engine: .geminiPro, status: .failed, audioDuration: 20, voicedSeconds: 10,

@@ -159,7 +159,7 @@ import Testing
         c.selectModelForCurrentDictation(.gemini)
         c.handle(.translate)
         #expect(c.isTranslating)
-        c.selectModelForCurrentDictation(.parakeet)
+        c.selectModelForCurrentDictation(.gigaam)
         #expect(!c.isTranslating)
         c.send(.pillCancel)
     }
@@ -260,7 +260,7 @@ import Testing
         asked.release(.geminiFlash)
     }
 
-    /// Nothing selected, on Parakeet, Gemini in the lineup: the translate key moves this dictation to Gemini and
+    /// Nothing selected, on GigaAM, Gemini in the lineup: the translate key moves this dictation to Gemini and
     /// translates it.
     @Test func offGeminiTheTranslateKeyMovesTheDictationToGemini() async throws {
         let (rig, _, asked) = PolishSelectionTests.make(selection: nil)

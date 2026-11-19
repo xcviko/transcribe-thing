@@ -125,7 +125,7 @@ final class AppEnvironment {
             devices: .preview(),
             makeAccount: { _, _ in .preview(status: .valid(PreviewFixtures.keyInfo)) },
             proxy: .preview(status: .notSet, settings: settings),
-            models: .preview(states: [.parakeet: .ready], settings: settings),
+            models: .preview(states: [.gigaam: .ready], settings: settings),
             history: .preview(entries: PreviewFixtures.history()),
             permissions: .preview(mic: .granted, ax: .granted),
             hotkeys: .preview(),

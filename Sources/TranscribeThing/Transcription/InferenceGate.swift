@@ -1,8 +1,8 @@
 import Foundation
 
 /// Serializes every local model load, unload, delete and inference, in FIFO order, except that a background caller
-/// (Home's work) lets every other caller go first. Concurrent Core ML work can crash inside libBNNS (FluidAudio
-/// issue #661), and AsrManager is unsafe to call re-entrantly (it suspends mid-inference).
+/// (Home's work) lets every other caller go first. Concurrent Core ML work on one model can crash inside libBNNS, and
+/// an engine suspends mid-inference, so it mustn't be called again before it's done.
 actor InferenceGate {
     static let shared = InferenceGate()
 

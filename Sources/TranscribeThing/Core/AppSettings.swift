@@ -44,12 +44,6 @@ final class AppSettings {
     /// Each model's color (Models): the pill wears the dictation's model's, and its tile, the sidebar chip and
     /// History's marks show it.
     var modelColors: ModelColors = .default { didSet { store.setJSON(modelColors, .modelColors) } }
-    /// The version of GigaAM every GigaAM dictation and its Retry runs (the Version menu on its row in Models): v3
-    /// until picked. Each version installs on its own (`LocalModel.gigaam`). History's Transcribe With offers each
-    /// version on its own, and running another one leaves this as it is.
-    var gigaamVariant: GigaAMEngine.Variant = .default {
-        didSet { store.set(gigaamVariant.rawValue, .gigaamVariant) }
-    }
     /// The level each Gemini model thinks at (the Reasoning menu on its row in Models), its own default until picked
     /// (`EngineID.defaultReasoningEffort`). Every request to the model goes at it (`reasoningEffort(for:)`).
     var reasoningEfforts: ReasoningEfforts = .default {
@@ -228,34 +222,15 @@ final class AppSettings {
     /// The engine every dictation starts on: the main model's.
     var mainEngine: EngineID { lineup.main.engine }
 
-    /// Some model Switch model can reach runs on `engine` on this Mac (Parakeet, GigaAM), so it's worth loading.
-    /// Hands-free's model is one of them (`handsFreeChoice`).
+    /// Some model Switch model can reach runs on `engine` on this Mac (GigaAM), so it's worth loading. Hands-free's
+    /// model is one of them (`handsFreeChoice`).
     func usesLocalModel(_ engine: EngineID) -> Bool {
         engine.isLocal && lineup.cycle.contains { $0.engine == engine }
     }
 
-    /// The models on this Mac that Switch model can reach, Parakeet first: what launch loads.
+    /// The models on this Mac that Switch model can reach: what launch loads.
     var localModelsInUse: [EngineID] {
         EngineID.localEngines.filter(usesLocalModel)
-    }
-
-    /// What `engine` runs on this Mac: Parakeet, or GigaAM's picked version. nil for a cloud model.
-    func localModel(for engine: EngineID) -> LocalModel? {
-        switch engine {
-        case .parakeet: .parakeet
-        case .gigaam: .gigaam(gigaamVariant)
-        case .parakeetCloud, .geminiFlash, .geminiHydrogen, .geminiCarbon, .geminiArgon, .geminiPro: nil
-        }
-    }
-
-    /// `choice`'s name with GigaAM's picked version, where there's room for it: "GigaAM v3 e2e". The others' own.
-    func modelName(of choice: ModelChoice) -> String {
-        choice == .gigaam ? gigaamVariant.displayName : choice.modelName
-    }
-
-    /// The pill chip's name: GigaAM's with its picked version ("GigaAM v3 e2e"), the others' `chipName`.
-    func chipName(of choice: ModelChoice) -> String {
-        choice == .gigaam ? gigaamVariant.displayName : choice.chipName
     }
 
     /// The level `engine` thinks at: the one picked in Models for a Gemini model; nil for a model that doesn't reason.
@@ -266,7 +241,7 @@ final class AppSettings {
     /// The lineup that stands for what an older build stored, or nil when it stored nothing the lineup replaces (the
     /// engine is Parakeet or absent, and neither switch flag is there). Gemini takes part unless its old flag said no
     /// (the clean-up flag has nothing left to say: clean-up is gone); a Gemini selection from builds before 0.2.0
-    /// (Gemini 3.1 Pro too) is the main model again.
+    /// (Gemini 3.1 Pro too) is the main model again. Parakeet's place is GigaAM's, as in any stored lineup.
     nonisolated static func migratedLineup(storedEngine: EngineID?, switchCleanup: Bool?,
                                            switchEngines: [String]?) -> ModelLineup? {
         let geminiWasMain = storedEngine?.isGemini == true
@@ -277,14 +252,14 @@ final class AppSettings {
         return lineup
     }
 
-    /// The stored hands-free model, read leniently. The removed clean-up was Parakeet's text tidied, so it becomes
-    /// Parakeet while Switch model reaches Parakeet (`ModelLineup` turns Parakeet on where clean-up was), and
-    /// otherwise no model of its own: the main model, which is then Parakeet or one Parakeet was switched off for. The
-    /// removed Gemini 4 Argon becomes Gemini 3.8 Flash (`ModelChoice.init(stored:)`), which `ModelLineup` turns on
-    /// where Argon was.
+    /// The stored hands-free model, read leniently. The removed Parakeet becomes GigaAM, and the removed Gemini 4
+    /// Argon Gemini 3.8 Flash (`ModelChoice.init(stored:)`), which `ModelLineup` turns on where they were. The removed
+    /// clean-up was Parakeet's text tidied, so it becomes GigaAM too while Switch model reaches GigaAM (`ModelLineup`
+    /// turns it on where clean-up was), and otherwise no model of its own: the main model, which is then GigaAM or
+    /// one GigaAM was switched off for.
     nonisolated static func handsFreeModel(stored raw: String?, lineup: ModelLineup) -> ModelChoice? {
         guard raw == ModelChoice.retiredCleanup else { return raw.flatMap(ModelChoice.init(stored:)) }
-        return lineup.steps.contains(.parakeet) ? .parakeet : nil
+        return lineup.steps.contains(.gigaam) ? .gigaam : nil
     }
 
     /// A Pasting rule's models from before Gemini 4 Carbon: Carbon checked where Gemini 3.8 Flash is.
@@ -294,10 +269,11 @@ final class AppSettings {
         return models
     }
 
-    /// A Pasting rule's models from before GigaAM: GigaAM checked where Parakeet is, the other model on this Mac.
-    nonisolated static func withGigaAMLikeParakeet(_ models: Set<ModelChoice>) -> Set<ModelChoice> {
+    /// A Pasting rule's models from before GigaAM: GigaAM checked where Parakeet was (`parakeet`: the rule as stored
+    /// named it), the other model on this Mac then.
+    nonisolated static func withGigaAMLikeParakeet(_ models: Set<ModelChoice>, parakeet: Bool) -> Set<ModelChoice> {
         var models = models
-        if models.contains(.parakeet) { models.insert(.gigaam) } else { models.remove(.gigaam) }
+        if parakeet { models.insert(.gigaam) } else { models.remove(.gigaam) }
         return models
     }
 
@@ -306,6 +282,14 @@ final class AppSettings {
     nonisolated static func withHydrogenLikeFlash(_ models: Set<ModelChoice>) -> Set<ModelChoice> {
         var models = models
         if models.contains(.gemini) { models.insert(.hydrogen) } else { models.remove(.hydrogen) }
+        return models
+    }
+
+    /// A Pasting rule's models from before Gemini 4 Neon: Neon checked where Gemini 3.8 Flash is, as Hydrogen and
+    /// Carbon started.
+    nonisolated static func withNeonLikeFlash(_ models: Set<ModelChoice>) -> Set<ModelChoice> {
+        var models = models
+        if models.contains(.gemini) { models.insert(.neon) } else { models.remove(.neon) }
         return models
     }
 
@@ -332,7 +316,7 @@ final class AppSettings {
             store.remove(.onboardingStep)
         }
         // Where Parakeet ran (on this Mac, or through OpenRouter until that was removed), or the main model of a build
-        // before 0.2.0. Parakeet runs only on this Mac now, so a lineup that had it through OpenRouter has it here.
+        // before 0.2.0. Parakeet is retired either way, so a lineup that had it has GigaAM in its place.
         let storedEngine = store.string(.selectedEngine).flatMap(EngineID.init(rawValue:))
         // Read before the lineup is stored back without clean-up: Pasting's rules follow it below.
         let cleanupWasMain = (store.json(.lineup) as StoredMainModel?)?.main == ModelChoice.retiredCleanup
@@ -345,16 +329,17 @@ final class AppSettings {
             lineup = migrated
             store.setJSON(migrated, .lineup)
         }
-        // A Gemini selection from builds before 0.2.0 is the lineup's main model now, and Parakeet runs on this Mac:
-        // the key has nothing left to say.
+        // A Gemini selection from builds before 0.2.0 is the lineup's main model now, and Parakeet is retired: the key
+        // has nothing left to say.
         store.remove(.selectedEngine)
         store.remove(.switchCleanup)
         store.remove(.switchEngines)
         if let v: ModelColors = store.json(.modelColors) { modelColors = v }
         // A level stored for a retired model (Gemini 4 Argon's) is dropped as it's read (`ReasoningEfforts`).
         if let v: ReasoningEfforts = store.json(.geminiReasoningEfforts) { reasoningEfforts = v }
-        // A version this build doesn't know (a newer one's) leaves v3.
-        if let v = store.string(.gigaamVariant).flatMap(GigaAMEngine.Variant.init(rawValue:)) { gigaamVariant = v }
+        // GigaAM runs v3, the one version left: the version picked when it had three (v3, v3 e2e or Multilingual)
+        // has nothing left to say.
+        store.remove(.gigaamVariant)
         if let v = store.int(.switchHintShownCount) { switchHintShownCount = max(0, v) }
         if let v = store.string(.pillMode).flatMap(PillMode.init(rawValue:)) { pillMode = v }
         // Older builds could hide the pill for an hour; that deadline has no meaning now.
@@ -406,29 +391,28 @@ final class AppSettings {
         store.remove(.returnFinishesHandsFree)
         handsFreeModel = Self.handsFreeModel(stored: store.string(.handsFreeModel), lineup: lineup)
         // Pasting's two switches held for every model; each is picked per model now. One an older build turned on
-        // holds for all of them, once: the old keys go. The removed clean-up drops out of the sets (`ModelChoice.read`).
-        // Where clean-up was the main model, Parakeet took its place (`ModelLineup`): it takes its Pasting rules too,
-        // on or off, as every dictation had them; saved, so they stay once the lineup is saved without clean-up.
-        let readRules: ([String]) -> Set<ModelChoice> = { raw in
-            var rules = ModelChoice.read(raw)
-            if cleanupWasMain {
-                if raw.contains(ModelChoice.retiredCleanup) { rules.insert(.parakeet) } else { rules.remove(.parakeet) }
-            }
-            return rules
+        // holds for all of them, once: the old keys go. The removed clean-up, Gemini 4 Argon and Parakeet drop out of
+        // the sets (`ModelChoice.read`), and the sets are stored back without them. Where clean-up was the main
+        // model, Parakeet took its place then: its Pasting rules too, on or off, as every dictation had them.
+        // Whether a rule had Parakeet is kept for GigaAM's first rules below.
+        func storedRules(_ raw: [String]) -> (rules: Set<ModelChoice>, parakeet: Bool) {
+            let parakeet = cleanupWasMain ? raw.contains(ModelChoice.retiredCleanup)
+                : raw.contains(ModelChoice.retiredParakeet)
+            return (ModelChoice.read(raw), parakeet)
         }
+        var parakeetAddsSpace = false
+        var parakeetRemovesFinalPeriod = false
         if let v: [String] = store.json(.modelsAddingSpace) {
-            modelsAddingSpace = readRules(v)
-            if cleanupWasMain { store.setJSON(ModelChoice.stored(modelsAddingSpace), .modelsAddingSpace) }
+            (modelsAddingSpace, parakeetAddsSpace) = storedRules(v)
         } else if store.bool(.addSpaceAfterText) == true {
             modelsAddingSpace = Set(ModelChoice.allCases)
+            parakeetAddsSpace = true
         }
         if let v: [String] = store.json(.modelsRemovingFinalPeriod) {
-            modelsRemovingFinalPeriod = readRules(v)
-            if cleanupWasMain {
-                store.setJSON(ModelChoice.stored(modelsRemovingFinalPeriod), .modelsRemovingFinalPeriod)
-            }
+            (modelsRemovingFinalPeriod, parakeetRemovesFinalPeriod) = storedRules(v)
         } else if store.bool(.removeFinalPeriod) == true {
             modelsRemovingFinalPeriod = Set(ModelChoice.allCases)
+            parakeetRemovesFinalPeriod = true
         }
         store.remove(.addSpaceAfterText)
         store.remove(.removeFinalPeriod)
@@ -441,10 +425,12 @@ final class AppSettings {
             modelsRemovingFinalPeriod = Self.withCarbonLikeFlash(modelsRemovingFinalPeriod)
             store.set(true, .carbonPastingAdded)
         }
-        // GigaAM arrived after that too: it starts with Parakeet's, once, and keeps its own from then on.
+        // GigaAM arrived after that too: it starts with Parakeet's, once, and keeps its own from then on (Parakeet's
+        // went with it).
         if store.bool(.gigaamPastingAdded) != true {
-            modelsAddingSpace = Self.withGigaAMLikeParakeet(modelsAddingSpace)
-            modelsRemovingFinalPeriod = Self.withGigaAMLikeParakeet(modelsRemovingFinalPeriod)
+            modelsAddingSpace = Self.withGigaAMLikeParakeet(modelsAddingSpace, parakeet: parakeetAddsSpace)
+            modelsRemovingFinalPeriod = Self.withGigaAMLikeParakeet(modelsRemovingFinalPeriod,
+                                                                    parakeet: parakeetRemovesFinalPeriod)
             store.set(true, .gigaamPastingAdded)
         }
         // Gemini 4 Hydrogen arrived after GigaAM: it starts with Gemini 3.8 Flash's, once, then keeps its own.
@@ -452,6 +438,12 @@ final class AppSettings {
             modelsAddingSpace = Self.withHydrogenLikeFlash(modelsAddingSpace)
             modelsRemovingFinalPeriod = Self.withHydrogenLikeFlash(modelsRemovingFinalPeriod)
             store.set(true, .hydrogenPastingAdded)
+        }
+        // Gemini 4 Neon arrived after Hydrogen: it starts with Gemini 3.8 Flash's, once, then keeps its own.
+        if store.bool(.neonPastingAdded) != true {
+            modelsAddingSpace = Self.withNeonLikeFlash(modelsAddingSpace)
+            modelsRemovingFinalPeriod = Self.withNeonLikeFlash(modelsRemovingFinalPeriod)
+            store.set(true, .neonPastingAdded)
         }
         if let v: [String] = store.json(.modesAddingSpace) { modesAddingSpace = DictationMachine.Mode.read(v) }
         if let v: [String] = store.json(.modesRemovingFinalPeriod) {
@@ -562,7 +554,7 @@ struct MicrophoneMigrationProbe: Sendable, Equatable {
 
 enum SettingsKey: String, CaseIterable {
     /// `selectedEngine` held where Parakeet ran (on this Mac or through OpenRouter; named when it was the main
-    /// model): read once by the lineup's migration and removed at load, as Parakeet runs only on this Mac now.
+    /// model): read once by the lineup's migration and removed at load, as Parakeet is retired.
     /// `onboardingStep` holds a six-step index from older builds, read once and moved to `onboardingResumeStep`.
     /// `soundVolume` is the removed volume slider's, read once (zero turns sounds off) and removed.
     /// `pillHiddenUntil` is the removed "Hide Pill for 1 Hour" deadline, removed at load.
@@ -621,11 +613,14 @@ enum SettingsKey: String, CaseIterable {
     case argonPastingAdded
     /// Set once Pasting's rules have given Gemini 4 Carbon Gemini 3.8 Flash's checks (`load`).
     case carbonPastingAdded
-    /// Set once Pasting's rules have given GigaAM Parakeet's checks (`load`).
+    /// Set once Pasting's rules have given GigaAM Parakeet's checks (`load`), which went with Parakeet since.
     case gigaamPastingAdded
     /// Set once Pasting's rules have given Gemini 4 Hydrogen Gemini 3.8 Flash's checks (`load`).
     case hydrogenPastingAdded
-    /// GigaAM's picked version (`GigaAMEngine.Variant` raw value).
+    /// Set once Pasting's rules have given Gemini 4 Neon Gemini 3.8 Flash's checks (`load`).
+    case neonPastingAdded
+    /// GigaAM's picked version (`GigaAMEngine.Variant` raw value) from when it had three, removed at load: GigaAM v3
+    /// is the one left.
     case gigaamVariant
     /// The removed "Show Parakeet's text while Gemini works" (General → Experimental), removed at load.
     case showsParakeetWhileGemini

@@ -717,18 +717,19 @@ struct StageBackground: View {
     }
 }
 
-/// Where an engine runs: this Mac in ink, the cloud in gray. Onboarding's Parakeet card; in the Hub a model wears its
-/// own color (`ModelChoiceIcon`).
+/// Where an engine runs: this Mac in ink, the cloud in gray, or `tint` when given. Onboarding's GigaAM card, and a
+/// retired model's files in Models (dimmed); in the Hub a model wears its own color (`ModelChoiceIcon`).
 struct EngineIcon: View {
     var engine: EngineID
     var size: CGFloat = 32
+    var tint: Color?
 
     var body: some View {
-        ModelTile(symbol: engine.symbolName, tint: engine.isLocal ? .accent : .inkSecondary, size: size)
+        ModelTile(symbol: engine.symbolName, tint: tint ?? (engine.isLocal ? .accent : .inkSecondary), size: size)
     }
 }
 
-/// A model's mark: its symbol (Parakeet's bolt, Flash's sparkles, Hydrogen's drop, Carbon's atom, GigaAM's speech bubble) in the model's own color (`AppSettings.modelColors`), so a row in Models, the sidebar chip and the pill agree.
+/// A model's mark: its symbol (GigaAM's speech bubble, Flash's sparkles, Hydrogen's drop, Neon's lamp, Carbon's atom) in the model's own color (`AppSettings.modelColors`), so a row in Models, the sidebar chip and the pill agree.
 struct ModelChoiceIcon: View {
     var choice: ModelChoice
     var color: ModelColor
@@ -836,10 +837,12 @@ struct ModelStatusText: View {
         }
     }
 
+    /// `engine`'s model on this Mac (GigaAM v3), with its sizes.
     static func describe(_ state: LocalModelState, engine: EngineID,
                          localError: AppError? = nil) -> (text: String, tone: StatusTone) {
-        describe(state, downloadBytes: engine.approxDownloadBytes, installedBytes: engine.approxDownloadBytes,
-                 localError: localError)
+        let model = LocalModel(engine: engine)
+        return describe(state, downloadBytes: model?.approxDownloadBytes, installedBytes: model?.approxInstalledBytes,
+                        localError: localError)
     }
 
     /// The size is the download's until it's done, then what it takes on this Mac (a GigaAM zip unpacks to more).

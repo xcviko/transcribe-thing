@@ -32,8 +32,8 @@ enum PillTraySnapshots {
             .init(id: "rec-all", caption: "Hands-free · all three on") {
                 recording(.locked, polishes: true, translates: true, sends: true)
             },
-            .init(id: "rec-parakeet", caption: "Push-to-talk · Parakeet · Polish works on selected text") {
-                recording(.listening, choice: .parakeet)
+            .init(id: "rec-gigaam", caption: "Push-to-talk · GigaAM · Polish works on selected text") {
+                recording(.listening, choice: .gigaam)
             },
             .init(id: "rec-closed", caption: "Pointer elsewhere: no tray") { recording(.listening, open: false) },
         ]
@@ -50,8 +50,8 @@ enum PillTraySnapshots {
             .init(id: "proc-send", caption: "Send on · writing") {
                 processing(choice: .gemini, sends: true, count: PillTokenCount(phase: .writing, tokens: 36))
             },
-            .init(id: "proc-parakeet", caption: "Parakeet · Polish and Translate dimmed") {
-                processing(choice: .parakeet, rewrites: false, hovering: .send)
+            .init(id: "proc-gigaam", caption: "GigaAM · Polish and Translate dimmed") {
+                processing(choice: .gigaam, rewrites: false, hovering: .send)
             },
             .init(id: "proc-held", caption: "Clicked away · Send dimmed") {
                 processing(choice: .gemini, held: true, hovering: .polish)
@@ -73,7 +73,7 @@ enum PillTraySnapshots {
             .init(id: "stack-four", caption: "Four: one dashed (clicked away)", height: 220) {
                 stacked(bottom: .processing, items: [
                     item(.gemini, polishes: true),
-                    item(.parakeet, held: true),
+                    item(.gigaam, held: true),
                     item(.gemini, sends: true, count: PillTokenCount(phase: .writing, tokens: 140)),
                 ])
             },
@@ -86,7 +86,7 @@ enum PillTraySnapshots {
             },
             .init(id: "stack-more", caption: "Six: the oldest fold into +2", height: 230) {
                 stacked(bottom: .listening, items: [
-                    item(.gemini), item(.gemini, polishes: true), item(.parakeet),
+                    item(.gemini), item(.gemini, polishes: true), item(.gigaam),
                     item(.gemini), item(.gemini),
                 ])
             },

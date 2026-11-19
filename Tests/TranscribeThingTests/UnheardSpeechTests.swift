@@ -86,12 +86,12 @@ import Testing
         #expect(done.modelAnswer == nil, "a transcript has nothing to explain")
     }
 
-    /// From Home, the kept row takes Transcribe With like any failed one: Parakeet writes it.
+    /// From Home, the kept row takes Transcribe With like any failed one: GigaAM writes it.
     @Test func theKeptRowCanBeTranscribedWithAnotherModel() async throws {
         let h = H.make(keyStatus: .valid(KeyInfo()), persistsHistory: true)
         defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
         h.controller.transcribeOverride = { _, engine in
-            engine == .parakeet ? TranscriptResult(text: "Привет, это Parakeet.", engine: engine, processingTime: 0.1)
+            engine == .gigaam ? TranscriptResult(text: "привет это гигаам", engine: engine, processingTime: 0.1)
                 : Self.empty(engine)
         }
         h.controller.insertOverride = { _ in .pasted }
@@ -102,19 +102,19 @@ import Testing
         #expect(failed.errorMessage == "Gemini 3.8 Flash heard no speech")
         #expect(failed.modelAnswer == "<transcript></transcript>")
 
-        h.controller.retry(failed, with: .parakeet)
+        h.controller.retry(failed, with: .gigaam)
         try await waitUntil { h.history.entry(id: r.id)?.status == .success }
         let entry = try #require(h.history.entry(id: r.id))
-        #expect(entry.text == "Привет, это Parakeet." && entry.engine == .parakeet)
+        #expect(entry.text == "привет это гигаам" && entry.engine == .gigaam)
     }
 
     /// Below the threshold an empty answer is silence, as before: nothing kept, "No speech detected" in the pill.
-    /// Parakeet's empty answer is silence whatever the speech: the threshold is for cloud models only.
+    /// GigaAM's empty answer is silence whatever the speech: the threshold is for cloud models only.
     @Test func littleSpeechOrALocalModelIsStillSilence() async throws {
         let cases: [(EngineID, Recording)] = [
             (.geminiFlash, Self.speech(voiced: DictationController.keepsUnheardSpeechVoicedSeconds - 0.1)),
             (.geminiFlash, Self.speech(voiced: 0.6)),
-            (.parakeet, Self.longSpeech()),
+            (.gigaam, Self.longSpeech()),
         ]
         for (engine, recording) in cases {
             let h = H.make(keyStatus: .valid(KeyInfo()))

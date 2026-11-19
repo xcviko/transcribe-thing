@@ -73,7 +73,7 @@ final class HubContext: Observable {
         imports = env.imports
         // Reading a file outlives the Hub window, and with it this context: only what lives as long as the app.
         imports.choices = { [settings, models, account, proxy] seconds in
-            ImportChoices.make(main: settings.mainEngine, gigaam: settings.gigaamVariant, seconds: seconds) { kind in
+            ImportChoices.make(main: settings.mainEngine, seconds: seconds) { kind in
                 Self.readiness(of: kind, models: models,
                                keyStatus: CloudRoute.keyStatus(for: kind.engine, account: account, proxy: proxy),
                                provider: CloudRoute.provider(for: kind.engine, proxy: proxy))
@@ -110,8 +110,7 @@ final class HubContext: Observable {
         readiness(of: choice.engine)
     }
 
-    /// What can make `kind` now: its engine's readiness, or a GigaAM version's own (its own download and state, the
-    /// version picked in Models or not).
+    /// What can make `kind` now: its engine's readiness.
     func readiness(ofKind kind: TranscriptVersionKind) -> EngineReadiness {
         Self.readiness(of: kind, models: models, keyStatus: keyStatus(for: kind.engine),
                        provider: provider(for: kind.engine))
@@ -119,7 +118,7 @@ final class HubContext: Observable {
 
     static func readiness(of kind: TranscriptVersionKind, models: ModelStore, keyStatus: KeyStatus,
                           provider: CloudProvider?) -> EngineReadiness {
-        let model = kind.gigaamVariant.map(LocalModel.gigaam) ?? models.model(for: kind.engine)
+        let model = models.model(for: kind.engine)
         return EngineReadiness.of(kind.engine, localState: model.map { models.state(model: $0) } ?? .notInstalled,
                                   keyStatus: keyStatus, localError: model.flatMap { models.modelErrors[$0] },
                                   provider: provider)
@@ -166,8 +165,9 @@ final class HubContext: Observable {
         if entry.interruption == .whileRecording, previewDictating ?? (dictation.activity == .recording) {
             return "Finish the dictation you’re recording first"
         }
-        // The row's model, as its Retry With menu says: "Needs key", "Not downloaded". GigaAM's picked version.
-        let kind = TranscriptVersionKind.transcript(by: entry.engine, gigaam: settings.gigaamVariant)
+        // The row's model, as its Retry With menu says: "Needs key", "Not downloaded". A retired one's is the model that
+        // took its place, which its Continue goes on with (`EngineID.replacement`).
+        let kind = TranscriptVersionKind.transcript(by: entry.engine.replacement)
         return versionsMenu(for: entry).actions.first { $0.kind == kind }?.blocker?.label
     }
 

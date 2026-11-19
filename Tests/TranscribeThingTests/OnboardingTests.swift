@@ -6,7 +6,7 @@ import Testing
 
 @Suite struct OnboardingGateTests {
     private func inputs(mic: PermissionState = .granted, ax: PermissionState = .granted,
-                        engine: EngineID = .parakeet, local: LocalModelState = .ready,
+                        engine: EngineID = .gigaam, local: LocalModelState = .ready,
                         key: KeyStatus = .missing, stored: Bool = false) -> OnboardingGate.Inputs {
         OnboardingGate.Inputs(microphone: mic, accessibility: ax, engine: engine, localState: local,
                               keyStatus: key, hasStoredKey: stored)
@@ -102,14 +102,17 @@ import Testing
         #expect(!OnboardingGate.keyIsCheckable("sk-proj-" + String(repeating: "a", count: 64)))
     }
 
+    /// The zip and its unpacked folder are both on disk for a moment: what GigaAM v3's install takes, and a quarter
+    /// more, as ModelStore checks it.
     @Test func diskHeadroomIsTwentyFivePercent() throws {
-        let needed = try #require(OnboardingGate.requiredDiskBytes(for: .parakeet))
-        #expect(needed == Int64((Double(632_321_326) * 1.25).rounded(.up)))
+        let needed = try #require(OnboardingGate.requiredDiskBytes(for: .gigaam))
+        #expect(needed == Int64((Double(409_369_862 + 443_353_203) * 1.25).rounded(.up)))
+        #expect(OnboardingGate.requiredDiskBytes(for: .parakeet) == nil, "nothing downloads it any more")
         #expect(OnboardingGate.requiredDiskBytes(for: .geminiFlash) == nil)
     }
 
     @Test func practiceReadinessOrder() {
-        func eval(mic: PermissionState = .granted, ax: PermissionState = .granted, engine: EngineID = .parakeet,
+        func eval(mic: PermissionState = .granted, ax: PermissionState = .granted, engine: EngineID = .gigaam,
                   local: LocalModelState = .ready, key: KeyStatus = .missing, stored: Bool = false) -> PracticeReadiness {
             PracticeReadiness.evaluate(microphone: mic, accessibility: ax, engine: engine, localState: local,
                                        keyStatus: key, hasStoredKey: stored)
@@ -117,10 +120,10 @@ import Testing
         #expect(eval(mic: .denied, ax: .denied, local: .notInstalled) == .needsMicrophone)
         #expect(eval(ax: .notDetermined) == .needsAccessibility)
         #expect(eval() == .ready)
-        #expect(eval(local: .preparing(since: .distantPast)) == .warmingUp(.parakeet))
-        #expect(eval(local: .installed) == .warmingUp(.parakeet))
-        #expect(eval(local: .downloading(DownloadProgress(fraction: 0.62))) == .downloading(.parakeet, 0.62))
-        #expect(eval(local: .failed("x")) == .notDownloaded(.parakeet))
+        #expect(eval(local: .preparing(since: .distantPast)) == .warmingUp(.gigaam))
+        #expect(eval(local: .installed) == .warmingUp(.gigaam))
+        #expect(eval(local: .downloading(DownloadProgress(fraction: 0.62))) == .downloading(.gigaam, 0.62))
+        #expect(eval(local: .failed("x")) == .notDownloaded(.gigaam))
         #expect(eval(engine: .geminiFlash, key: .missing) == .needsKey(.geminiFlash))
         #expect(eval(engine: .geminiFlash, key: .valid(KeyInfo()), stored: true) == .ready)
         #expect(eval(local: .downloading(DownloadProgress(fraction: 0.1))).allowsPractice == false)
@@ -220,7 +223,7 @@ import Testing
 
     @Test func modelStepBlocksUntilSomethingIsUsable() {
         let model = makeModel(step: 2) { ctx in
-            ctx.models = .preview(states: [.parakeet: .notInstalled])
+            ctx.models = .preview(states: [.gigaam: .notInstalled])
             ctx.account = .preview(status: .missing)
         }
         #expect(!model.canContinue)
@@ -231,7 +234,7 @@ import Testing
     /// Onboarding replayed with a Gemini main model: its key is what the step needs.
     @Test func aGeminiMainModelNeedsItsKey() {
         let missing = makeModel(step: 2) { ctx in
-            ctx.models = .preview(states: [.parakeet: .notInstalled])
+            ctx.models = .preview(states: [.gigaam: .notInstalled])
             ctx.account = .preview(status: .missing)
             ctx.settings.lineup.main = .gemini
         }
@@ -240,7 +243,7 @@ import Testing
         #expect(!missing.canContinue)
 
         let connected = makeModel(step: 2) { ctx in
-            ctx.models = .preview(states: [.parakeet: .notInstalled])
+            ctx.models = .preview(states: [.gigaam: .notInstalled])
             ctx.account = .preview(status: .valid(KeyInfo(limitRemaining: 4.2)))
             ctx.settings.lineup.main = .gemini
         }
@@ -260,14 +263,33 @@ import Testing
     }
 
     @Test func diskCheckBlocksTheDownload() {
-        let model = makeModel(step: 2) { ctx in ctx.models = .preview(states: [.parakeet: .notInstalled]) }
+        let model = makeModel(step: 2) { ctx in ctx.models = .preview(states: [.gigaam: .notInstalled]) }
         model.stageDisk(free: 100_000_000)
-        #expect(!model.hasEnoughDisk(for: .parakeet))
-        model.download(.parakeet)
-        #expect(!model.celebrateReady.contains(.parakeet))
+        #expect(!model.hasEnoughDisk(for: .gigaam))
+        model.download(.gigaam)
+        #expect(!model.celebrateReady.contains(.gigaam))
         model.stageDisk(free: 10_000_000_000)
-        model.download(.parakeet)
-        #expect(model.celebrateReady.contains(.parakeet))
+        model.download(.gigaam)
+        #expect(model.celebrateReady.contains(.gigaam))
+    }
+
+    /// The model step's Download fetches GigaAM v3, the one model on this Mac, as Models' would: it lands, and loads
+    /// for the first dictation, the main model on a fresh install.
+    @Test func theModelStepDownloadsGigaAMv3() async throws {
+        let fake = FakeEngine(.gigaam, installed: false)
+        let model = makeModel(step: 2) { ctx in
+            ctx.models = ModelStore(paths: .temporary(), settings: ctx.settings, engines: [.gigaam(.v3): fake],
+                                    gate: InferenceGate(), freeDiskBytes: { 50_000_000_000 })
+        }
+        model.stageDisk(free: 10_000_000_000)
+        #expect(model.selectedEngine == .gigaam && model.ctx.settings.lineup.main == .gigaam)
+        #expect(model.ctx.models.state(of: .gigaam) == .notInstalled)
+        model.download(model.selectedEngine)
+        #expect(model.celebrateReady.contains(.gigaam))
+        await waitForObserved { model.ctx.models.state(of: .gigaam) == .ready }
+        #expect(fake.isInstalled())
+        #expect(await fake.isLoaded)
+        #expect(EngineID.gigaam.approxDownloadBytes == 409_369_862, "the card's Downloads once · 409 MB")
     }
 
     @Test func holdingFnLightsTheKeysWithoutTickingALesson() {
@@ -285,7 +307,7 @@ import Testing
 
     @Test func keysTickTheLessonsWhileTheModelDownloads() {
         let model = makeModel(step: 3) { ctx in
-            ctx.models = .preview(states: [.parakeet: .downloading(DownloadProgress(fraction: 0.4))])
+            ctx.models = .preview(states: [.gigaam: .downloading(DownloadProgress(fraction: 0.4))])
         }
         #expect(model.lessonsFollowKeys)
         let t0 = Date()
@@ -659,7 +681,7 @@ import Testing
 // MARK: - Switch model
 
 @Suite struct OnboardingSwitchModelGateTests {
-    private static func lineup(main: ModelChoice = .parakeet, on: [ModelChoice]) -> ModelLineup {
+    private static func lineup(main: ModelChoice = .gigaam, on: [ModelChoice]) -> ModelLineup {
         var lineup = ModelLineup.default
         lineup.main = main
         for choice in ModelChoice.allCases { lineup.setSwitchable(choice, on.contains(choice)) }
@@ -668,7 +690,7 @@ import Testing
 
     @Test func theLessonNeedsAStepAndAWorkingKeyForIt() {
         let valid = KeyStatus.valid(KeyInfo(limitRemaining: 3))
-        func usable(_ lineup: ModelLineup, _ key: KeyStatus, parakeet: EngineID = .parakeet) -> Bool {
+        func usable(_ lineup: ModelLineup, _ key: KeyStatus) -> Bool {
             OnboardingGate.switchModelUsable(lineup: lineup, keyStatus: key, hasStoredKey: true)
         }
         #expect(usable(Self.lineup(on: [.gemini]), valid))
@@ -676,7 +698,7 @@ import Testing
         #expect(!usable(Self.lineup(on: [.gemini]), .missing))
         #expect(!usable(Self.lineup(on: [.gemini]), .invalid("401")))
         #expect(usable(Self.lineup(on: [.gemini]), .offline))
-        #expect(usable(Self.lineup(main: .gemini, on: [.parakeet]), .missing), "Parakeet on this Mac needs no key")
+        #expect(usable(Self.lineup(main: .gemini, on: [.gigaam]), .missing), "GigaAM on this Mac needs no key")
     }
 
     @Test func noteNamesTheActualSwitchModelBinding() {
@@ -695,12 +717,12 @@ import Testing
 
     @Test func theDefaultNoteNamesGemini() {
         #expect(OnboardingGate.lineupNote(binding: .fnTab, lineup: .default)
-            == "For a long talk where every word counts, press fn\u{00A0}⇥ while dictating to use Gemini 3.8 Flash. "
-                + "Add its OpenRouter key later in Models.")
+            == "For punctuation, English or a long talk where every word counts, press fn\u{00A0}⇥ while dictating "
+                + "to use Gemini 3.8 Flash. Add its OpenRouter key later in Models.")
     }
 
-    @Test func theNoteNamesAMainModelOtherThanParakeet() {
-        #expect(OnboardingGate.lineupNote(binding: .fnTab, lineup: Self.lineup(main: .gemini, on: [.parakeet]))
+    @Test func theNoteNamesAMainModelOtherThanGigaAM() {
+        #expect(OnboardingGate.lineupNote(binding: .fnTab, lineup: Self.lineup(main: .gemini, on: [.gigaam]))
             == "Your dictations start on Gemini 3.8 Flash, your main model. Change it anytime in Models.")
         #expect(OnboardingGate.lineupNote(binding: nil, lineup: Self.lineup(main: .gemini, on: []))
             == "Your dictations start on Gemini 3.8 Flash, your main model. Change it anytime in Models.")
@@ -718,13 +740,13 @@ import Testing
         return OnboardingModel(context: ctx)
     }
 
-    @Test func theModelStepIsParakeetOnThisMac() {
+    @Test func theModelStepIsGigaAMv3OnThisMac() {
         let model = makeModel()
         for engine in EngineID.allCases {
             model.select(engine)
-            #expect(model.selectedEngine == .parakeet, "\(engine) isn’t picked here")
+            #expect(model.selectedEngine == .gigaam, "\(engine) isn’t picked here")
         }
-        #expect(model.ctx.settings.lineup.main == .parakeet)
+        #expect(model.ctx.settings.lineup.main == .gigaam)
     }
 
     /// The line under the card names the model Switch model steps to.
@@ -743,10 +765,10 @@ import Testing
                 "nothing to step to")
     }
 
-    /// The practice step's checks follow the main model: Gemini needs the key, Parakeet on this Mac doesn't.
+    /// The practice step's checks follow the main model: Gemini needs the key, GigaAM on this Mac doesn't.
     @Test func theGateFollowsTheMainEngine() {
-        let parakeet = makeModel { ctx in ctx.account = .preview(status: .missing) }
-        #expect(parakeet.gateInputs.engine == .parakeet)
+        let gigaam = makeModel { ctx in ctx.account = .preview(status: .missing) }
+        #expect(gigaam.gateInputs.engine == .gigaam)
         let gemini = makeModel { ctx in
             ctx.account = .preview(status: .missing)
             ctx.settings.lineup.main = .gemini

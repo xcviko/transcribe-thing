@@ -63,7 +63,7 @@ import Testing
         let now = Calendar.current.date(bySettingHour: 23, minute: 0, second: 0, of: Date())!
         let entries = HomeScrollBenchmark.entries(4, every: 60, before: now)
         let empty = (1...2).map { i in
-            TranscriptEntry(createdAt: now.addingTimeInterval(-Double(i) * 10), text: "", engine: .parakeet,
+            TranscriptEntry(createdAt: now.addingTimeInterval(-Double(i) * 10), text: "", engine: .gigaam,
                             audioDuration: 5, voicedSeconds: 0, audioFileName: "empty-\(i).wav")
         }
         let failed = entries.first { $0.status == .failed }!
@@ -76,7 +76,7 @@ import Testing
             entries[1].id: HomeFailure(kind: .polish(), reason: "It took too long."),
             empty[1].id: HomeFailure(kind: .transcription(.geminiFlash), reason: "It took too long."),
             entries[2].id: .recordingGone(.transcription(.geminiFlash)),
-            failed.id: .recordingGone(.transcription(.parakeet)),
+            failed.id: .recordingGone(.gigaam(.v3)),
         ]
         env.windows.hubSection = .home
         let labels = Self.accessibleButtons(HubView(context: context).appTheme(), height: 1100)
@@ -102,7 +102,7 @@ import Testing
         // Home work that needs no kept audio: a file dropped on Home.
         dictation.transcribe(ImportedAudio(fileName: "memo.m4a", samples: Array(repeating: 0.1, count: 16_000),
                                            speech: SpeechStats(voicedSeconds: 0.8, peakDBFS: -10, isSilent: false)),
-                             as: .transcription(.parakeet))
+                             as: .gigaam(.v3))
         let imported = try #require(env.history.entries.first { $0.importedFrom == "memo.m4a" })
         #expect(dictation.runningVersions.count == 2 && dictation.homeWork.count == 1)
         let context = HubContext(env: env)

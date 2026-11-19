@@ -2,9 +2,11 @@ import Foundation
 import Testing
 @testable import TranscribeThing
 
-// Gemini 3.1 Pro, Gemini 3.5 Flash Lite, Parakeet v3 · Cloud and Gemini 4 Argon are retired: History keeps reading,
-// naming and drawing what they wrote, settings an older build stored about them (and the Thinking levels and clean-up
-// model choice that are gone) load without them, and nothing runs them.
+// Gemini 3.1 Pro, Gemini 3.5 Flash Lite, Parakeet v3 · Cloud, Gemini 4 Argon, Parakeet v3 on this Mac, GigaAM v3 e2e
+// and GigaAM Multilingual are retired: History keeps reading, naming and drawing what they wrote, settings an older
+// build stored about them (and the Thinking levels and clean-up model choice that are gone) load as the model that took
+// their place, nothing runs them, and the files a retired model on this Mac left are listed to delete, never deleted
+// by themselves.
 
 /// A history file as the app writes it: a transcript only Gemini 3.1 Pro wrote, one where Pro's version is current
 /// over Parakeet's and Flash Lite's clean-up, a cloud Parakeet one showing Flash Lite's clean-up, and a failed Pro
@@ -141,7 +143,7 @@ private let historyFile = #"""
             // Gemini 3.1 Pro was the main model: Gemini 3.8 Flash is, and the old key goes.
             #expect(defaults.object(forKey: SettingsKey.selectedEngine.defaultsKey) == nil)
             #expect(settings.lineup.main == .gemini)
-            #expect(settings.lineup.cycle == [.gemini, .parakeet])
+            #expect(settings.lineup.cycle == [.gemini, .gigaam])
             for key in [SettingsKey.reasoningEfforts, .cleanupModel, .cleanupReasoningEfforts, .cleanupReasoningEffort] {
                 #expect(defaults.object(forKey: key.defaultsKey) == nil, "\(key) is removed at load")
             }
@@ -150,7 +152,7 @@ private let historyFile = #"""
         try withDefaults { defaults in
             try storeOldSettings(defaults, switchEngines: ["geminiPro"])
             let settings = load(defaults)
-            #expect(!settings.lineup.switchable.contains(.gemini) && settings.lineup.switchable.contains(.parakeet),
+            #expect(!settings.lineup.switchable.contains(.gemini) && settings.lineup.switchable.contains(.gigaam),
                     "Pro alone taking part isn't Flash taking part")
         }
     }
@@ -208,44 +210,52 @@ private let historyFile = #"""
     }
 
     @Test func nothingOffersARetiredModel() {
+        #expect(!EngineID.offered.contains(.parakeet))
         #expect(!EngineID.offered.contains(.geminiPro))
         #expect(!EngineID.offered.contains(.parakeetCloud))
         #expect(!EngineID.offered.contains(.geminiArgon))
-        #expect(EngineID.geminiEngines == [.geminiFlash, .geminiHydrogen, .geminiCarbon])
+        #expect(EngineID.geminiEngines == [.geminiFlash, .geminiHydrogen, .geminiNeon, .geminiCarbon])
         #expect(TranscriptVersionKind.rewrites == [.polish(by: .geminiFlash), .polish(by: .geminiHydrogen),
-                                                   .polish(by: .geminiCarbon),
+                                                   .polish(by: .geminiNeon), .polish(by: .geminiCarbon),
                                                    .translation(polished: false, by: .geminiFlash),
                                                    .translation(polished: false, by: .geminiHydrogen),
+                                                   .translation(polished: false, by: .geminiNeon),
                                                    .translation(polished: false, by: .geminiCarbon)])
         #expect(AppSettings.inMemory().lineup.cycle.map { $0.engine }
-                == [.parakeet, .geminiFlash])
+                == [.gigaam, .geminiFlash])
         #expect(ModelLineup.default.order == ModelChoice.allCases
-                && ModelChoice.allCases == [.parakeet, .gemini, .hydrogen, .carbon, .gigaam])
+                && ModelChoice.allCases == [.gigaam, .gemini, .hydrogen, .neon, .carbon])
         for engine in EngineID.allCases {
             #expect(DictationController.fallbackCandidates(for: engine).allSatisfy { !$0.isRetired })
         }
         #expect(ModelChoice(engine: .geminiPro) == .gemini, "a job it made reads as Gemini")
         #expect(ModelChoice(engine: .geminiArgon) == .gemini, "a job it made reads as Gemini")
+        #expect(ModelChoice(engine: .parakeet) == .gigaam, "a job it made reads as GigaAM")
         #expect(ImportChoices.make(main: .geminiFlash) { _ in .ready }.allSatisfy { !$0.kind.engine.isRetired })
+        #expect(ImportChoices.make(main: .parakeet) { _ in .ready }.allSatisfy { $0.kind.isOffered },
+                "a retired main model's files go to what's offered")
+        #expect(TranscriptVersionKind.transcripts.allSatisfy { $0.isOffered && $0.gigaamVariant?.isRetired != true })
     }
 
-    /// `--engine` takes the models the app runs: Parakeet, GigaAM, Gemini 3.8 Flash, Gemini 4 Hydrogen and Gemini 4
-    /// Carbon, by any spelling. The retired ones are no engine at all.
+    /// `--engine` takes the models the app runs: GigaAM, Gemini 3.8 Flash, Gemini 4 Hydrogen, Neon and Carbon, by any
+    /// spelling. The retired ones are no engine at all.
     @Test func theCLITakesOnlyTheModelsTheAppRuns() {
         func options(_ extra: String...) -> EngineCLI.Options? {
             EngineCLI.Options(["transcribe-thing", "--transcribe", "/tmp/memo.m4a"] + extra)
         }
         #expect(options("--engine", "geminiFlash")?.engine == .geminiFlash)
         #expect(options("--engine", "gemini-flash")?.engine == .geminiFlash)
-        #expect(options("--engine", "parakeet")?.engine == .parakeet)
-        for retired in ["geminiArgon", "argon", "gemini-4-argon", "parakeetCloud", "cloudParakeet", "geminiPro"] {
+        #expect(options("--engine", "gigaam")?.engine == .gigaam)
+        for retired in ["geminiArgon", "argon", "gemini-4-argon", "parakeetCloud", "cloudParakeet", "geminiPro",
+                        "parakeet", "Parakeet"] {
             #expect(options("--engine", retired) == nil, "\(retired)")
         }
         #expect(options("--engine", "parakeetCloud", "--speech-model", "openai/whisper") == nil)
-        #expect(EngineCLI.Options.usage.contains("--engine parakeet|gigaam|geminiFlash|geminiHydrogen|geminiCarbon "))
-        #expect(!EngineCLI.Options.usage.contains("parakeetCloud") && !EngineCLI.Options.usage.contains("Argon"))
+        #expect(EngineCLI.Options.usage
+                    .contains("--engine gigaam|geminiFlash|geminiHydrogen|geminiNeon|geminiCarbon "))
+        #expect(!EngineCLI.Options.usage.contains("parakeet") && !EngineCLI.Options.usage.contains("Argon"))
         let lines = EngineCLI.cloudModelLines()
-        #expect(lines.count == 3 && !lines.joined().contains("argon"))
+        #expect(lines.count == 4 && !lines.joined().contains("argon"))
         #expect(lines[0].hasPrefix("geminiFlash") && lines[0].contains("google/gemini-3.8-flash"))
         #expect(lines[0].hasSuffix("effort low|medium|high (default medium)"))
     }
@@ -270,8 +280,8 @@ private let historyFile = #"""
     }
 
     /// Parakeet ran through OpenRouter: the main model, hands-free and Pasting's rules said "Parakeet", and the
-    /// runtime key said where. Parakeet is on this Mac now; the key goes, the rest stays Parakeet's.
-    @Test func settingsThatChoseCloudParakeetRunParakeetOnThisMac() throws {
+    /// runtime key said where. Parakeet is retired on this Mac too: the key goes, and GigaAM has what was Parakeet's.
+    @Test func settingsThatChoseCloudParakeetRunGigaAMOnThisMac() throws {
         try withDefaults { defaults in
             defaults.set("parakeetCloud", forKey: SettingsKey.selectedEngine.defaultsKey)
             var lineup = ModelLineup.default
@@ -280,15 +290,15 @@ private let historyFile = #"""
             defaults.set("parakeet", forKey: SettingsKey.handsFreeModel.defaultsKey)
             defaults.set(try JSONEncoder().encode(["parakeet"]), forKey: SettingsKey.modelsAddingSpace.defaultsKey)
             let settings = load(defaults)
-            #expect(settings.handsFreeModel == .parakeet && settings.handsFreeChoice == .parakeet)
-            #expect(settings.handsFreeChoice?.engine == .parakeet)
-            #expect(settings.modelsAddingSpace == [.parakeet, .gigaam], "GigaAM, new since, starts with Parakeet's")
-            #expect(settings.usesLocalModel(.parakeet), "Parakeet in the cycle is Parakeet on this Mac: it's worth loading")
+            #expect(settings.handsFreeModel == .gigaam && settings.handsFreeChoice == .gigaam)
+            #expect(settings.handsFreeChoice?.engine == .gigaam)
+            #expect(settings.modelsAddingSpace == [.gigaam], "GigaAM, new since, starts with Parakeet's")
+            #expect(settings.usesLocalModel(.gigaam), "GigaAM in the cycle is worth loading")
             #expect(defaults.object(forKey: SettingsKey.selectedEngine.defaultsKey) == nil)
 
             defaults.set(try JSONEncoder().encode(ModelLineup.default), forKey: SettingsKey.lineup.defaultsKey)
             defaults.set("parakeetCloud", forKey: SettingsKey.selectedEngine.defaultsKey)
-            #expect(load(defaults).mainEngine == .parakeet, "the main model on OpenRouter is the one on this Mac")
+            #expect(load(defaults).mainEngine == .gigaam, "the main model on OpenRouter is the one on this Mac")
         }
     }
 }
@@ -386,19 +396,19 @@ private let argonHistoryFile = #"""
         }
     }
 
-    /// Whatever is made from an Argon row now is a model's this build runs (Gemini 3.8 Flash, Gemini 4 Hydrogen, Gemini
-    /// 4 Carbon, Parakeet or GigaAM), never Argon's: Transcribe With, Polish and Translate, and a failed row's Retry
+    /// Whatever is made from an Argon row now is a model's this build runs (Gemini 3.8 Flash, Gemini 4 Hydrogen, Neon
+    /// or Carbon, Parakeet or GigaAM), never Argon's: Transcribe With, Polish and Translate, and a failed row's Retry
     /// With.
     @Test func nothingMadeFromAnArgonRowIsArgons() throws {
         let entries = try entries()
         let ready: (TranscriptVersionKind) -> EngineReadiness = { _ in .ready }
         let geminis: [TranscriptVersionKind] = [.transcription(.geminiFlash), .transcription(.geminiHydrogen),
-                                                .transcription(.geminiCarbon)]
+                                                .transcription(.geminiNeon), .transcription(.geminiCarbon)]
         let rewrites = TranscriptVersionKind.rewrites
         let argon = VersionsMenu.make(for: entries[0], running: nil, readiness: ready)
         #expect(argon.versions.map(\.kind) == [.transcription(.geminiArgon)])
-        let gigaams: [TranscriptVersionKind] = [.gigaam(.v3), .gigaam(.v3e2e), .gigaam(.multilingual)]
-        let locals: [TranscriptVersionKind] = [.transcription(.parakeet)] + gigaams
+        let gigaams: [TranscriptVersionKind] = [.gigaam(.v3)]
+        let locals = gigaams
         #expect(argon.actions.map(\.kind) == locals + geminis + rewrites)
         #expect(argon.actions.allSatisfy { $0.isEnabled })
 
@@ -500,27 +510,28 @@ private let argonHistoryFile = #"""
             defaults.set(true, forKey: SettingsKey.argonPastingAdded.defaultsKey)
 
             let settings = load(defaults)
-            #expect(settings.lineup.main == .parakeet
-                    && settings.lineup.order == [.parakeet, .gemini, .hydrogen, .carbon, .gigaam])
+            #expect(settings.lineup.main == .gigaam
+                    && settings.lineup.order == [.gigaam, .gemini, .hydrogen, .neon, .carbon])
             #expect(settings.lineup.steps == [.gemini], "fn ⇥ steps to Flash where it stepped to Argon, not to Carbon")
             #expect(settings.handsFreeModel == .gemini && settings.handsFreeChoice == .gemini)
             #expect(settings.reasoningEffort(for: .geminiFlash) == .low && settings.reasoningEffort(for: .geminiArgon) == nil)
-            #expect(settings.modelColors[.gemini] == .orange && settings.modelColors[.parakeet] == .graphite)
-            #expect(settings.modelsAddingSpace == [.gemini, .hydrogen, .carbon], "Carbon and Hydrogen start with Flash's checks")
-            #expect(settings.modelsRemovingFinalPeriod == [.parakeet, .gigaam],
+            #expect(settings.modelColors[.gemini] == .orange && settings.modelColors.parakeet == .graphite)
+            #expect(settings.modelsAddingSpace == [.gemini, .hydrogen, .neon, .carbon],
+                    "Carbon, Hydrogen and Neon start with Flash's checks")
+            #expect(settings.modelsRemovingFinalPeriod == [.gigaam],
                     "Flash keeps its own checks, not Argon's; GigaAM starts with Parakeet's")
             #expect(settings.modelColors[.carbon] == .blue, "Carbon doesn't take Argon's color")
 
             // Stored as this build reads it: nothing names Argon any more.
             #expect(stored(defaults, .lineup)
-                    == #"{"main":"parakeet","order":["parakeet","gemini","hydrogen","carbon","gigaam"],"switchable":["parakeet","gemini"]}"#)
+                    == #"{"main":"gigaam","order":["gigaam","gemini","hydrogen","neon","carbon"],"switchable":["gigaam","gemini"]}"#)
             #expect(stored(defaults, .handsFreeModel) == "gemini")
             #expect(stored(defaults, .geminiReasoningEfforts)
-                    == #"{"geminiCarbon":"low","geminiFlash":"low","geminiHydrogen":"medium"}"#)
+                    == #"{"geminiCarbon":"low","geminiFlash":"low","geminiHydrogen":"medium","geminiNeon":"low"}"#)
             #expect(stored(defaults, .modelColors)
-                    == #"{"carbon":"blue","gemini":"orange","gigaam":"green","hydrogen":"pink","parakeet":"graphite"}"#)
-            #expect(stored(defaults, .modelsAddingSpace) == #"["gemini","hydrogen","carbon"]"#)
-            #expect(stored(defaults, .modelsRemovingFinalPeriod) == #"["parakeet","gigaam"]"#)
+                    == #"{"carbon":"blue","gemini":"orange","gigaam":"green","hydrogen":"pink","neon":"orange","parakeet":"graphite"}"#)
+            #expect(stored(defaults, .modelsAddingSpace) == #"["gemini","hydrogen","neon","carbon"]"#)
+            #expect(stored(defaults, .modelsRemovingFinalPeriod) == #"["gigaam"]"#)
             #expect(defaults.object(forKey: SettingsKey.argonPastingAdded.defaultsKey) == nil)
 
             let again = load(defaults)
@@ -536,11 +547,11 @@ private let argonHistoryFile = #"""
             defaults.set("argon", forKey: SettingsKey.handsFreeModel.defaultsKey)
             let settings = load(defaults)
             #expect(settings.lineup.main == .gemini && settings.mainEngine == .geminiFlash)
-            #expect(settings.lineup.order == [.parakeet, .gemini, .hydrogen, .carbon, .gigaam])
-            #expect(settings.lineup.cycle == [.gemini, .parakeet])
+            #expect(settings.lineup.order == [.gigaam, .gemini, .hydrogen, .neon, .carbon])
+            #expect(settings.lineup.cycle == [.gemini, .gigaam])
             #expect(settings.handsFreeChoice == nil, "hands-free on Argon, the main model, is on the main model still")
             #expect(stored(defaults, .lineup)
-                    == #"{"main":"gemini","order":["parakeet","gemini","hydrogen","carbon","gigaam"],"switchable":["parakeet"]}"#)
+                    == #"{"main":"gemini","order":["gigaam","gemini","hydrogen","neon","carbon"],"switchable":["gigaam"]}"#)
         }
     }
 
@@ -548,14 +559,14 @@ private let argonHistoryFile = #"""
     @Test func argonSwitchedOnSwitchesFlashOn() throws {
         let lineup = try JSONDecoder().decode(ModelLineup.self, from: Data(
             #"{"main":"parakeet","order":["gemini","parakeet","argon"],"switchable":["argon"]}"#.utf8))
-        #expect(lineup.order == [.gemini, .parakeet, .hydrogen, .carbon, .gigaam] && lineup.steps == [.gemini])
+        #expect(lineup.order == [.gemini, .gigaam, .hydrogen, .neon, .carbon] && lineup.steps == [.gemini])
         let off = try JSONDecoder().decode(ModelLineup.self, from: Data(
             #"{"main":"parakeet","order":["parakeet","gemini","argon"],"switchable":[]}"#.utf8))
         #expect(off.steps.isEmpty, "Argon switched off switches nothing on")
     }
 
-    /// A level picked for Argon alone leaves Flash at Medium (Hydrogen at its Medium, Carbon at its Low), and Argon
-    /// takes no level any more.
+    /// A level picked for Argon alone leaves Flash at Medium (Hydrogen at its Medium, Neon and Carbon at their Low),
+    /// and Argon takes no level any more.
     @Test func anArgonLevelIsIgnored() throws {
         try withDefaults { defaults in
             store(defaults, #"{"geminiArgon":"high"}"#, .geminiReasoningEfforts)
@@ -565,18 +576,347 @@ private let argonHistoryFile = #"""
             settings.reasoningEfforts[.geminiArgon] = .high
             #expect(settings.reasoningEffort(for: .geminiArgon) == nil)
             #expect(stored(defaults, .geminiReasoningEfforts)
-                    == #"{"geminiCarbon":"low","geminiFlash":"medium","geminiHydrogen":"medium"}"#)
+                    == #"{"geminiCarbon":"low","geminiFlash":"medium","geminiHydrogen":"medium","geminiNeon":"low"}"#)
         }
     }
 
     /// "argon" reads as Flash only where it was picked: main, hands-free, a step. Elsewhere it's dropped.
     @Test func storedArgonReadsAsFlashOnlyWhereItWasPicked() throws {
         #expect(ModelChoice(stored: "argon") == .gemini && ModelChoice(stored: "gemini") == .gemini)
-        #expect(ModelChoice(stored: "parakeet") == .parakeet && ModelChoice(stored: "cleanup") == nil)
+        #expect(ModelChoice(stored: "parakeet") == .gigaam && ModelChoice(stored: "cleanup") == nil)
         #expect(ModelChoice(rawValue: "argon") == nil)
-        #expect(ModelChoice.read(["argon", "parakeet"]) == [.parakeet])
+        #expect(ModelChoice.read(["argon", "gigaam"]) == [.gigaam])
         #expect(AppSettings.handsFreeModel(stored: "argon", lineup: .default) == .gemini)
         let colors = try JSONDecoder().decode(ModelColors.self, from: Data(#"{"argon":"pink"}"#.utf8))
         #expect(colors == .default)
+    }
+}
+
+// MARK: - Parakeet v3, GigaAM v3 e2e and GigaAM Multilingual
+
+/// A history file with what the retired models on this Mac wrote, as 0.5.4 stored it: a Parakeet dictation, one GigaAM
+/// v3 e2e wrote, one GigaAM Multilingual wrote (beside Parakeet's, current), and a failed Parakeet dictation.
+private let localHistoryFile = #"""
+{"version":1,"entries":[
+ {"id":"2C8B4E6A-1111-4D9E-8F0A-7B8C9D0E1F01","createdAt":"2026-11-18T09:00:00.000Z","status":"success",
+  "audioDuration":5,"voicedSeconds":4,"engine":"parakeet","text":"Open Chrome DevTools.","audioFileName":"p.m4a",
+  "currentVersion":"parakeet",
+  "versions":[{"kind":"parakeet","text":"Open Chrome DevTools.","metadata":{"createdAt":"2026-11-18T09:00:00.000Z","processingTime":0.3}}]},
+ {"id":"2C8B4E6A-2222-4D9E-8F0A-7B8C9D0E1F02","createdAt":"2026-11-18T08:00:00.000Z","status":"success",
+  "audioDuration":4,"voicedSeconds":3,"engine":"gigaam","text":"Открой hrome.","audioFileName":"e.m4a",
+  "currentVersion":"gigaam:gigaam-v3-e2e-ctc",
+  "versions":[{"kind":"gigaam:gigaam-v3-e2e-ctc","text":"Открой hrome.","metadata":{"createdAt":"2026-11-18T08:00:00.000Z",
+    "modelID":"gigaam-v3-e2e-ctc","processingTime":0.36}}]},
+ {"id":"2C8B4E6A-3333-4D9E-8F0A-7B8C9D0E1F03","createdAt":"2026-11-18T07:00:00.000Z","status":"success",
+  "audioDuration":4,"voicedSeconds":3,"engine":"parakeet","text":"open chrome","audioFileName":"m.m4a",
+  "currentVersion":"gigaam:gigaam-multilingual-600m-ctc",
+  "versions":[{"kind":"parakeet","text":"Open Chrome.","metadata":{"createdAt":"2026-11-18T07:00:00.000Z"}},
+              {"kind":"gigaam:gigaam-multilingual-600m-ctc","text":"open chrome","metadata":{"createdAt":"2026-11-18T07:00:01.000Z",
+                "modelID":"gigaam-multilingual-600m-ctc"}}]},
+ {"id":"2C8B4E6A-4444-4D9E-8F0A-7B8C9D0E1F04","createdAt":"2026-11-18T06:00:00.000Z","status":"failed",
+  "audioDuration":6,"voicedSeconds":5,"engine":"parakeet","text":"","errorMessage":"Couldn’t transcribe",
+  "audioFileName":"f.m4a"}
+]}
+"""#
+
+@MainActor
+@Suite struct RetiredLocalModelHistoryTests {
+    private func entries() throws -> [TranscriptEntry] {
+        try HistoryStore.readEntries(from: Data(localHistoryFile.utf8))
+    }
+
+    /// Parakeet's dictations read as before: its name, its P, its color (the one last picked for it).
+    @Test func parakeetsTranscriptsKeepTheirNameGlyphAndColor() throws {
+        let entries = try entries()
+        #expect(entries.count == 4, "no entry is lost")
+        let parakeet = entries[0]
+        #expect(parakeet.engine == .parakeet && parakeet.currentKind == .transcription(.parakeet))
+        #expect(parakeet.text == "Open Chrome DevTools." && parakeet.currentKind?.displayName == "Parakeet v3")
+        #expect(parakeet.engine.glyph == "P" && parakeet.engine.symbolName == "bolt.fill")
+        let colors = try JSONDecoder().decode(ModelColors.self, from: Data(#"{"parakeet":"teal","gigaam":"green"}"#.utf8))
+        #expect(EngineGlyph(engine: parakeet.engine, colors: colors).color == .teal)
+        #expect(EngineGlyph(engine: parakeet.engine).color == .graphite, "the plain pill's, as by default")
+        #expect(EngineGlyph(engine: parakeet.engine).label == "Parakeet v3")
+        #expect(VersionDetails.lines(for: try #require(parakeet.currentVersion)) == ["Parakeet v3", "Took 0.3 s"])
+    }
+
+    /// GigaAM v3 e2e's and Multilingual's read under their names, current where they were, beside Parakeet's.
+    @Test func retiredGigaAMVersionsReadUnderTheirNames() throws {
+        let entries = try entries()
+        let e2e = entries[1]
+        #expect(e2e.currentKind == .gigaam(.v3e2e) && e2e.text == "Открой hrome.")
+        #expect(e2e.currentKind?.displayName == "GigaAM v3 e2e" && e2e.engine.glyph == "G")
+        #expect(VersionDetails.lines(for: try #require(e2e.currentVersion)).prefix(2) == ["GigaAM v3 e2e", "gigaam-v3-e2e-ctc"])
+        let multilingual = entries[2]
+        #expect(multilingual.versions.map(\.kind) == [.transcription(.parakeet), .gigaam(.multilingual)])
+        #expect(multilingual.currentKind == .gigaam(.multilingual) && multilingual.text == "open chrome")
+        #expect(multilingual.versions.map(\.kind.displayName) == ["Parakeet v3", "GigaAM Multilingual"])
+    }
+
+    /// Their versions are switched to as any other; what they offer is GigaAM v3 and the Geminis, never themselves.
+    /// A failed Parakeet dictation retries with GigaAM v3.
+    @Test func theyAreVersionsNeverActions() throws {
+        let entries = try entries()
+        let ready: (TranscriptVersionKind) -> EngineReadiness = { _ in .ready }
+        let offered = TranscriptVersionKind.transcripts + TranscriptVersionKind.rewrites
+        let multilingual = VersionsMenu.make(for: entries[2], running: nil, readiness: ready)
+        #expect(multilingual.versions.map(\.title) == ["Parakeet v3", "GigaAM Multilingual"])
+        #expect(multilingual.actions.map(\.kind) == offered)
+        #expect(multilingual.actions.first?.title == "GigaAM v3")
+        let retired: [TranscriptVersionKind] = [.transcription(.parakeet), .gigaam(.v3e2e), .gigaam(.multilingual)]
+        for entry in entries {
+            let menu = VersionsMenu.make(for: entry, running: nil, readiness: ready)
+            #expect(!menu.actions.contains { retired.contains($0.kind) }, "\(entry.id)")
+        }
+        let failed = VersionsMenu.make(for: entries[3], running: nil, readiness: ready)
+        #expect(failed.isRetry && failed.actions.map(\.kind) == offered)
+    }
+
+    /// Saved again, they're written as they were read.
+    @Test func theyAreWrittenBackUnchanged() throws {
+        let entries = try entries()
+        for entry in entries {
+            #expect(try JSONDecoder().decode(TranscriptEntry.self, from: JSONEncoder().encode(entry)) == entry)
+        }
+        let json = String(decoding: try JSONEncoder().encode(entries[2]), as: UTF8.self)
+        #expect(json.contains(#""kind":"parakeet""#) && json.contains(#""currentVersion":"gigaam:gigaam-multilingual-600m-ctc""#))
+    }
+}
+
+@MainActor
+@Suite struct RetiredLocalModelRunTests {
+    /// Parakeet never runs: a request for it fails before anything loads.
+    @Test func parakeetNeverRuns() async throws {
+        let fake = FakeEngine(.gigaam, installed: true)
+        let store = ModelStore(paths: .temporary(), settings: .inMemory(), engines: [.gigaam(.v3): fake],
+                               gate: InferenceGate(), freeDiskBytes: { 50_000_000_000 })
+        await store.refreshFromDisk()
+        let account = OpenRouterAccount(keyStore: .inMemory(), client: OpenRouterClient(), debounce: .zero)
+        let service = TranscriptionService(models: store, account: account, client: OpenRouterClient())
+        await #expect(throws: AppError.engineFailed(.parakeet, "Parakeet v3 is no longer offered.")) {
+            try await service.transcribe(Recording(samples: [Float](repeating: 0.1, count: 16_000)), engine: .parakeet)
+        }
+        #expect(await fake.transcribeCount == 0 && store.model(for: .parakeet) == nil)
+        #expect(EngineID.parakeet.isRetired && EngineID.parakeet.replacement == .gigaam)
+        #expect(EngineID.parakeetCloud.replacement == .gigaam && EngineID.geminiArgon.replacement == .geminiFlash)
+        #expect(EngineID.gigaam.replacement == .gigaam && EngineID.geminiNeon.replacement == .geminiNeon)
+        #expect(GigaAMEngine.Variant.v3e2e.isRetired && GigaAMEngine.Variant.multilingual.isRetired)
+        #expect(!GigaAMEngine.Variant.v3.isRetired)
+    }
+}
+
+@MainActor
+@Suite struct RetiredParakeetSettingsTests {
+    private func withDefaults(_ body: (UserDefaults) throws -> Void) throws {
+        let suite = NSTemporaryDirectory() + "transcribe-thing-tests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(atPath: suite + ".plist")
+        }
+        try body(defaults)
+    }
+
+    private func load(_ defaults: UserDefaults) -> AppSettings {
+        AppSettings(defaults: defaults, microphoneProbe: { MicrophoneMigrationProbe() })
+    }
+
+    private func store(_ defaults: UserDefaults, _ json: String, _ key: SettingsKey) {
+        defaults.set(Data(json.utf8), forKey: key.defaultsKey)
+    }
+
+    private func stored(_ defaults: UserDefaults, _ key: SettingsKey) -> String? {
+        if let string = defaults.string(forKey: key.defaultsKey) { return string }
+        return defaults.data(forKey: key.defaultsKey).map { String(decoding: $0, as: UTF8.self) }
+    }
+
+    /// 0.5.4's settings with Parakeet the main model, GigaAM on in v3 e2e: GigaAM v3 is the main model in Parakeet's
+    /// place, the cycle steps on from it as it did, the version picked goes, GigaAM keeps its own Pasting checks and
+    /// color, and Parakeet's color stays for History.
+    @Test func whereParakeetWasMainGigaAMv3IsNow() throws {
+        try withDefaults { defaults in
+            store(defaults, #"{"main":"parakeet","order":["parakeet","gemini","hydrogen","neon","carbon","gigaam"],"switchable":["gemini","gigaam"]}"#,
+                  .lineup)
+            defaults.set("gemini", forKey: SettingsKey.handsFreeModel.defaultsKey)
+            defaults.set("gigaam-v3-e2e-ctc", forKey: SettingsKey.gigaamVariant.defaultsKey)
+            store(defaults, #"{"carbon":"blue","gemini":"violet","gigaam":"orange","hydrogen":"pink","neon":"orange","parakeet":"teal"}"#,
+                  .modelColors)
+            store(defaults, #"["gemini","hydrogen","neon","carbon"]"#, .modelsAddingSpace)
+            store(defaults, #"["parakeet"]"#, .modelsRemovingFinalPeriod)
+            for key in [SettingsKey.carbonPastingAdded, .gigaamPastingAdded, .hydrogenPastingAdded, .neonPastingAdded] {
+                defaults.set(true, forKey: key.defaultsKey)
+            }
+
+            let settings = load(defaults)
+            #expect(settings.lineup.main == .gigaam && settings.mainEngine == .gigaam)
+            #expect(settings.lineup.order == [.gigaam, .gemini, .hydrogen, .neon, .carbon])
+            #expect(settings.lineup.cycle == [.gigaam, .gemini] && settings.handsFreeChoice == .gemini)
+            #expect(settings.localModelsInUse == [.gigaam] && LocalModel(engine: settings.mainEngine) == .gigaam(.v3))
+            #expect(defaults.object(forKey: SettingsKey.gigaamVariant.defaultsKey) == nil, "v3 e2e reads as v3")
+            #expect(settings.modelsRemovingFinalPeriod.isEmpty, "GigaAM keeps its own checks; Parakeet's go with it")
+            #expect(settings.modelColors[.gigaam] == .orange && settings.modelColors.parakeet == .teal)
+
+            #expect(stored(defaults, .lineup)
+                    == #"{"main":"gigaam","order":["gigaam","gemini","hydrogen","neon","carbon"],"switchable":["gigaam","gemini"]}"#)
+            #expect(stored(defaults, .modelsRemovingFinalPeriod) == "[]")
+            #expect(stored(defaults, .modelColors)
+                    == #"{"carbon":"blue","gemini":"violet","gigaam":"orange","hydrogen":"pink","neon":"orange","parakeet":"teal"}"#)
+            let again = load(defaults)
+            #expect(again.lineup == settings.lineup && again.modelColors == settings.modelColors, "a reload changes nothing")
+        }
+    }
+
+    /// Parakeet as a step of the cycle and hands-free's model: GigaAM is both, in Parakeet's place in the order.
+    @Test func aParakeetStepAndHandsFreeModelAreGigaAMs() throws {
+        try withDefaults { defaults in
+            store(defaults, #"{"main":"gemini","order":["gemini","parakeet","gigaam"],"switchable":["parakeet"]}"#, .lineup)
+            defaults.set("parakeet", forKey: SettingsKey.handsFreeModel.defaultsKey)
+            let settings = load(defaults)
+            #expect(settings.lineup.order == [.gemini, .gigaam, .hydrogen, .neon, .carbon])
+            #expect(settings.lineup.cycle == [.gemini, .gigaam] && settings.usesLocalModel(.gigaam))
+            #expect(settings.handsFreeModel == .gigaam && settings.handsFreeChoice == .gigaam)
+            #expect(stored(defaults, .handsFreeModel) == "gigaam")
+        }
+        // GigaAM already first and main, Parakeet later in the order: GigaAM keeps its own place.
+        try withDefaults { defaults in
+            store(defaults, #"{"main":"gigaam","order":["gigaam","hydrogen","parakeet","gemini","carbon","neon"],"switchable":["gigaam","neon"]}"#,
+                  .lineup)
+            defaults.set("neon", forKey: SettingsKey.handsFreeModel.defaultsKey)
+            let settings = load(defaults)
+            #expect(settings.lineup.order == [.gigaam, .hydrogen, .gemini, .carbon, .neon])
+            #expect(settings.lineup.cycle == [.gigaam, .neon] && settings.handsFreeChoice == .neon)
+        }
+        #expect(AppSettings.handsFreeModel(stored: "parakeet", lineup: .default) == .gigaam)
+    }
+
+    /// GigaAM's picked version, whichever it was (or a newer build's), goes at load: GigaAM runs v3.
+    @Test(arguments: ["gigaam-v3-ctc", "gigaam-v3-e2e-ctc", "gigaam-multilingual-600m-ctc", "gigaam-v4-ctc"])
+    func aStoredGigaAMVersionReadsAsV3(_ raw: String) throws {
+        try withDefaults { defaults in
+            defaults.set(raw, forKey: SettingsKey.gigaamVariant.defaultsKey)
+            let settings = load(defaults)
+            #expect(defaults.object(forKey: SettingsKey.gigaamVariant.defaultsKey) == nil)
+            let models = ModelStore.preview(states: [.gigaam: .ready], settings: settings)
+            #expect(models.model(for: .gigaam) == .gigaam(.v3) && models.state(model: .gigaam(.v3)) == .ready)
+            #expect(ModelChoice.gigaam.modelName == "GigaAM v3" && TranscriptVersionKind.transcript(by: .gigaam) == .gigaam(.v3))
+        }
+    }
+}
+
+@MainActor
+@Suite(.serialized) struct RetiredParakeetHomeTests {
+    typealias H = DictationControllerTests
+
+    /// A Parakeet dictation the app quit during, from before the update: its Continue says what GigaAM v3 needs, and
+    /// goes on with it, GigaAM having taken Parakeet's place.
+    @Test func anInterruptedParakeetRowGoesOnWithGigaAM() async throws {
+        let h = H.make(models: [.gigaam: .ready], keyStatus: .valid(KeyInfo()), persistsHistory: true)
+        defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
+        var asked: [EngineID] = []
+        h.controller.transcribeOverride = { _, engine in
+            asked.append(engine)
+            return TranscriptResult(text: "открой хром", engine: engine, processingTime: 0.1)
+        }
+        h.controller.insertOverride = { _ in Issue.record("Home work is never pasted"); return .pasted }
+        let recording = H.recording()
+        var row = TranscriptEntry(id: recording.id, createdAt: recording.startedAt, text: "", engine: .parakeet,
+                                  status: .failed, audioDuration: recording.duration, voicedSeconds: 1,
+                                  errorMessage: TranscriptEntry.Interruption.whileTranscribing.message,
+                                  audioFileName: h.history.saveAudio(recording))
+        row.interruption = .whileTranscribing
+        h.history.upsert(row)
+
+        let context = HubContext(env: .preview())
+        context.models = .preview(states: [.gigaam: .notInstalled])
+        #expect(context.continueBlocker(for: row) == "Not downloaded", "GigaAM's, not Parakeet's")
+        context.models = .preview(states: [.gigaam: .ready])
+        #expect(context.continueBlocker(for: row) == nil)
+
+        h.controller.continueDictation(row)
+        try await waitUntil { h.history.entry(id: row.id)?.status == .success }
+        #expect(asked == [.gigaam])
+        let done = try #require(h.history.entry(id: row.id))
+        #expect(done.currentKind == .gigaam(.v3) && done.text == "открой хром")
+    }
+}
+
+@MainActor
+@Suite(.timeLimit(.minutes(1))) struct LeftoverModelTests {
+    /// A models folder as an update from 0.5.4 finds it: GigaAM v3 in use, and what Parakeet, GigaAM v3 e2e and an
+    /// unfinished Multilingual download left.
+    private func makeFolder() throws -> AppPaths {
+        let paths = AppPaths.temporary()
+        let fm = FileManager.default
+        for (folder, bytes) in [("gigaam-v3-ctc", 300), ("parakeet-tdt-0.6b-v3", 200), ("gigaam-v3-e2e-ctc", 120),
+                                ("gigaam-multilingual-600m-ctc.partial", 80)] {
+            let file = paths.models.appendingPathComponent(folder).appendingPathComponent("weights/weight.bin")
+            try fm.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(count: bytes * 1024).write(to: file)
+        }
+        return paths
+    }
+
+    private func makeStore(_ paths: AppPaths) -> (ModelStore, FakeEngine) {
+        let fake = FakeEngine(.gigaam, installed: true)
+        return (ModelStore(paths: paths, settings: .inMemory(), engines: [.gigaam(.v3): fake], gate: InferenceGate(),
+                           freeDiskBytes: { 50_000_000_000 }), fake)
+    }
+
+    private func exists(_ paths: AppPaths, _ folder: String) -> Bool {
+        FileManager.default.fileExists(atPath: paths.models.appendingPathComponent(folder).path)
+    }
+
+    /// Each retired model with a folder on disk is listed, Parakeet first, with what it takes; GigaAM v3's own folder
+    /// never is. Launch deletes nothing.
+    @Test func leftoversAreListedWithTheirSizeAndNothingIsDeletedByItself() async throws {
+        let paths = try makeFolder()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let (store, _) = makeStore(paths)
+        store.start()
+        await waitForObserved { store.hasScannedDisk && store.state(of: .gigaam) == .ready }
+        #expect(store.leftoverModels == [.parakeet, .gigaamV3e2e, .gigaamMultilingual])
+        #expect(store.leftovers.values.allSatisfy { $0 > 0 })
+        #expect(try #require(store.leftovers[.parakeet]) > #require(store.leftovers[.gigaamV3e2e]))
+        #expect(store.diskUsageBytes >= store.leftovers.values.reduce(0, +))
+        for folder in ["gigaam-v3-ctc", "parakeet-tdt-0.6b-v3", "gigaam-v3-e2e-ctc", "gigaam-multilingual-600m-ctc.partial"] {
+            #expect(exists(paths, folder), "\(folder) is still there")
+        }
+        #expect(RetiredLocalModel.allCases.map(\.displayName) == ["Parakeet v3", "GigaAM v3 e2e", "GigaAM Multilingual"])
+        #expect(RetiredLocalModel.allCases.map(\.engine) == [.parakeet, .gigaam, .gigaam])
+    }
+
+    /// Delete takes a leftover's folders and nothing else; once none is left, the list is empty.
+    @Test func deleteTakesOnlyThatLeftover() async throws {
+        let paths = try makeFolder()
+        defer { try? FileManager.default.removeItem(at: paths.root) }
+        let (store, fake) = makeStore(paths)
+        await store.refreshFromDisk()
+        await store.deleteLeftover(.parakeet)
+        #expect(!exists(paths, "parakeet-tdt-0.6b-v3") && exists(paths, "gigaam-v3-e2e-ctc") && exists(paths, "gigaam-v3-ctc"))
+        #expect(store.leftoverModels == [.gigaamV3e2e, .gigaamMultilingual] && store.deletingLeftovers.isEmpty)
+        await store.deleteLeftover(.gigaamV3e2e)
+        await store.deleteLeftover(.gigaamMultilingual)
+        #expect(store.leftoverModels.isEmpty && store.leftovers.isEmpty)
+        #expect(exists(paths, "gigaam-v3-ctc") && fake.isInstalled(), "GigaAM v3 stays")
+        await store.deleteLeftover(.parakeet)
+        #expect(store.leftoverModels.isEmpty, "deleting what isn't there does nothing")
+    }
+
+    /// The preview shows leftovers and deletes nothing.
+    @Test func thePreviewNeverDeletes() async {
+        let store = ModelStore.preview(states: [.gigaam: .ready], leftovers: [.parakeet: 632_400_000])
+        await store.deleteLeftover(.parakeet)
+        #expect(store.leftoverModels == [.parakeet])
+    }
+
+    /// What On this Mac says under them, and under each.
+    @Test func theFooterNamesWhatsLeft() {
+        #expect(LeftoverModelCopy.note == "No longer used")
+        #expect(LeftoverModelCopy.footer([]) == nil)
+        #expect(LeftoverModelCopy.footer([.parakeet])
+                == "Parakeet v3 is no longer used. History keeps what it wrote; delete its files to free the space.")
+        #expect(LeftoverModelCopy.footer(RetiredLocalModel.allCases)
+                == "Parakeet v3, GigaAM v3 e2e and GigaAM Multilingual are no longer used. History keeps what they "
+                    + "wrote; delete their files to free the space.")
     }
 }

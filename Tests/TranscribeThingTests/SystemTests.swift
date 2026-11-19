@@ -2721,18 +2721,18 @@ private struct ClockedKeyboard {
         try await waitUntil { rig.pasted.count == 1 && c.machine.activeJobs == 0 }
     }
 
-    /// fn over a Parakeet dictation on its way is aimed at it too (Send works on any model): fn P does nothing to it,
+    /// fn over a GigaAM dictation on its way is aimed at it too (Send works on any model): fn P does nothing to it,
     /// and a tap then a second fn right after it records.
-    @Test func fnOverAParakeetDictationAimsForSendOnly() async throws {
+    @Test func fnOverAGigaAMDictationAimsForSendOnly() async throws {
         let gate = RequestGate()
         let (rig, _, requests) = ProcessingRig.make { _, _, _ in
             try await gate.wait()
-            return "parakeet words"
+            return "gigaam words"
         }
-        rig.h.settings.lineup.main = .parakeet
+        rig.h.settings.lineup.main = .gigaam
         let c = rig.h.controller
         ProcessingRig.dictate(rig)
-        try await waitUntil { requests.parakeet == 1 }
+        try await waitUntil { requests.gigaam == 1 }
         var kb = Keyboard(bindings: rig.h.settings.shortcuts)
         kb.config = rig.h.hotkeys.currentConfig()
         kb.press(.fn).events.forEach(c.handle)

@@ -26,7 +26,7 @@ enum PillTrayMetrics {
 /// it fades in while it slides in from the pill's side and grows from its leading edge on a bouncy spring, and goes
 /// back the same way. A button that's on is a white disc with a black glyph, as hands-free's finish is, and the pill
 /// itself shows the same glyph inside (the wand, Translate's glyph, the plane). One that can't change this dictation
-/// (Polish and Translate on Parakeet while it's processed) is dimmed and takes no click. The pointer over a button
+/// (Polish and Translate on GigaAM while it's processed) is dimmed and takes no click. The pointer over a button
 /// puts a faint disc under it at once, with no animation, and its shortcut over it after a short dwell
 /// (`PillTrayState.keys`). The tray sits at the pill's
 /// height, so it covers no more of what's above the Dock than the pill does.

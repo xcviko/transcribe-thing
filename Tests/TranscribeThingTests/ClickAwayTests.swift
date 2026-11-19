@@ -328,22 +328,22 @@ import Testing
         #expect(Self.card(rig) == nil)
     }
 
-    /// Gemini refuses a dictation: its notice offers Parakeet beside Retry, and that button transcribes the saved
-    /// recording with Parakeet and pastes it.
-    @Test func aRefusalCanGoToParakeetInstead() async throws {
+    /// Gemini refuses a dictation: its notice offers GigaAM v3 beside Retry, and that button transcribes the saved
+    /// recording with GigaAM and pastes it.
+    @Test func aRefusalCanGoToGigaAMInstead() async throws {
         let (rig, _, requests) = R.make { engine, _, _ in
             if engine.isGemini { throw AppError.openRouterRefused("Gemini refused to complete this request") }
-            return "parakeet words"
+            return "gigaam words"
         }
         let c = rig.h.controller
         R.dictate(rig)
         try await waitUntil { rig.h.history.entries.first?.status == .failed && c.machine.activeJobs == 0 }
         let notice = try #require(rig.h.toasts.notices.first { $0.dedupeKey == "error.openRouterRefused" })
-        #expect(notice.actions.map(\.kind) == [.retry, .retryWith(.parakeet)])
-        let parakeet = try #require(notice.actions.last)
-        c.perform(parakeet, from: notice)
-        try await waitUntil { rig.pasted == ["parakeet words"] && c.machine.activeJobs == 0 }
-        #expect(requests.parakeet == 1 && requests.gemini.count == 1)
+        #expect(notice.actions.map(\.kind) == [.retry, .retryWith(.gigaam)])
+        let gigaam = try #require(notice.actions.last)
+        c.perform(gigaam, from: notice)
+        try await waitUntil { rig.pasted == ["gigaam words"] && c.machine.activeJobs == 0 }
+        #expect(requests.gigaam == 1 && requests.gemini.count == 1)
         #expect(rig.h.history.entries.first?.status == .success)
     }
 

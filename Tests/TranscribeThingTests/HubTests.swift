@@ -45,7 +45,7 @@ import Testing
 
     private func entry(hoursAgo: Double, text: String = "hello", status: TranscriptStatus = .success,
                        error: String? = nil) -> TranscriptEntry {
-        TranscriptEntry(createdAt: now.addingTimeInterval(-hoursAgo * 3600), text: text, engine: .parakeet,
+        TranscriptEntry(createdAt: now.addingTimeInterval(-hoursAgo * 3600), text: text, engine: .gigaam,
                         status: status, audioDuration: 4, voicedSeconds: 3, errorMessage: error)
     }
 
@@ -66,7 +66,7 @@ import Testing
     /// A file's transcript is listed under its day, but its words aren't the user's: the header leaves them out, as
     /// the stats do.
     @Test func aDaysWordsLeaveOutFiles() {
-        let imported = TranscriptEntry(createdAt: now.addingTimeInterval(-3600), text: "a b c d e f", engine: .parakeet,
+        let imported = TranscriptEntry(createdAt: now.addingTimeInterval(-3600), text: "a b c d e f", engine: .gigaam,
                                        audioDuration: 60, voicedSeconds: 50, importedFrom: "talk.mp3")
         let days = HistoryGrouping.days([entry(hoursAgo: 2, text: "one two three"), imported], now: now,
                                         calendar: calendar)
@@ -92,7 +92,7 @@ import Testing
 /// Home's list comes from `HistoryStore.days(matching:now:)`, cached until the history, the day or the search changes.
 @Suite @MainActor struct HistoryDaysCacheTests {
     private func entry(minutesAgo: Double, text: String) -> TranscriptEntry {
-        TranscriptEntry(createdAt: Date().addingTimeInterval(-minutesAgo * 60), text: text, engine: .parakeet,
+        TranscriptEntry(createdAt: Date().addingTimeInterval(-minutesAgo * 60), text: text, engine: .gigaam,
                         status: .success, audioDuration: 4, voicedSeconds: 3)
     }
 
@@ -124,31 +124,31 @@ import Testing
 
 @Suite struct EngineReadinessTests {
     @Test func localStates() {
-        #expect(EngineReadiness.of(.parakeet, localState: .ready, keyStatus: .missing) == .ready)
-        #expect(EngineReadiness.of(.parakeet, localState: .installed, keyStatus: .missing) == .ready)
-        #expect(EngineReadiness.of(.parakeet, localState: .downloading(.zero), keyStatus: .missing) == .warming)
-        #expect(EngineReadiness.of(.parakeet, localState: .preparing(since: Date()), keyStatus: .missing) == .warming)
-        #expect(EngineReadiness.of(.parakeet, localState: .notInstalled, keyStatus: .missing) == .needsDownload)
-        #expect(EngineReadiness.of(.parakeet, localState: .failed("x"), keyStatus: .missing) == .failed("Download failed"))
+        #expect(EngineReadiness.of(.gigaam, localState: .ready, keyStatus: .missing) == .ready)
+        #expect(EngineReadiness.of(.gigaam, localState: .installed, keyStatus: .missing) == .ready)
+        #expect(EngineReadiness.of(.gigaam, localState: .downloading(.zero), keyStatus: .missing) == .warming)
+        #expect(EngineReadiness.of(.gigaam, localState: .preparing(since: Date()), keyStatus: .missing) == .warming)
+        #expect(EngineReadiness.of(.gigaam, localState: .notInstalled, keyStatus: .missing) == .needsDownload)
+        #expect(EngineReadiness.of(.gigaam, localState: .failed("x"), keyStatus: .missing) == .failed("Download failed"))
     }
 
     @Test func failedModelsSayWhatFailed() {
-        let loadError = AppError.modelLoadFailed(.parakeet, "corrupt")
-        #expect(EngineReadiness.of(.parakeet, localState: .failed("x"), keyStatus: .missing, localError: loadError)
+        let loadError = AppError.modelLoadFailed(.gigaam, "corrupt")
+        #expect(EngineReadiness.of(.gigaam, localState: .failed("x"), keyStatus: .missing, localError: loadError)
             .unavailableReason == "Couldn’t load")
-        #expect(EngineReadiness.of(.parakeet, localState: .failed("x"), keyStatus: .missing,
+        #expect(EngineReadiness.of(.gigaam, localState: .failed("x"), keyStatus: .missing,
                                    localError: .notEnoughDisk(needed: 2, available: 1)).unavailableReason == "Not enough space")
-        #expect(EngineSummary.make(engine: .parakeet, localState: .failed("x"), keyStatus: .missing, localError: loadError)
+        #expect(EngineSummary.make(engine: .gigaam, localState: .failed("x"), keyStatus: .missing, localError: loadError)
             .status == "Couldn’t load")
-        #expect(EngineSummary.make(engine: .parakeet, localState: .failed("x"), keyStatus: .missing,
-                                   localError: .downloadFailed(.parakeet, "offline")).status == "Download failed")
+        #expect(EngineSummary.make(engine: .gigaam, localState: .failed("x"), keyStatus: .missing,
+                                   localError: .downloadFailed(.gigaam, "offline")).status == "Download failed")
         var input = HubAttention.Input(microphone: .granted, accessibility: .granted, accessibilityLikelyStale: false,
-                                       fnKeyUsage: .doNothing, pushToTalkUsesFn: true, engine: .parakeet,
+                                       fnKeyUsage: .doNothing, pushToTalkUsesFn: true, engine: .gigaam,
                                        localState: .failed("Couldn’t load the model."), keyStatus: .missing,
                                        localError: loadError)
-        #expect(HubAttention.items(input).first?.title == "Couldn’t load Parakeet v3")
-        input.localError = .downloadFailed(.parakeet, "offline")
-        #expect(HubAttention.items(input).first?.title == "Parakeet v3 didn’t finish downloading")
+        #expect(HubAttention.items(input).first?.title == "Couldn’t load GigaAM v3")
+        input.localError = .downloadFailed(.gigaam, "offline")
+        #expect(HubAttention.items(input).first?.title == "GigaAM v3 didn’t finish downloading")
     }
 
     @Test func cloudStatesIgnoreLocalState() {
@@ -161,10 +161,10 @@ import Testing
     }
 
     @Test func summaryChip() {
-        #expect(EngineSummary.make(engine: .parakeet, localState: .ready, keyStatus: .missing)
-            == EngineSummary(name: "Parakeet v3", status: "Ready", tone: .positive))
-        #expect(EngineSummary.make(engine: .parakeet, localState: .preparing(since: Date()), keyStatus: .missing).status == "Loading model…")
-        #expect(EngineSummary.make(engine: .parakeet, localState: .downloading(DownloadProgress(fraction: 0.42)), keyStatus: .missing).status
+        #expect(EngineSummary.make(engine: .gigaam, localState: .ready, keyStatus: .missing)
+            == EngineSummary(name: "GigaAM v3", status: "Ready", tone: .positive))
+        #expect(EngineSummary.make(engine: .gigaam, localState: .preparing(since: Date()), keyStatus: .missing).status == "Loading model…")
+        #expect(EngineSummary.make(engine: .gigaam, localState: .downloading(DownloadProgress(fraction: 0.42)), keyStatus: .missing).status
             == "Downloading 42%")
         #expect(EngineSummary.make(engine: .geminiFlash, localState: .notInstalled, keyStatus: .missing)
             == EngineSummary(name: "Gemini 3.8 Flash", status: "Needs key", tone: .warning))
@@ -173,7 +173,7 @@ import Testing
 
 @Suite struct HubAttentionTests {
     private func input(mic: PermissionState = .granted, ax: PermissionState = .granted, stale: Bool = false,
-                       fn: FnKeyUsage = .doNothing, pttUsesFn: Bool = true, engine: EngineID = .parakeet,
+                       fn: FnKeyUsage = .doNothing, pttUsesFn: Bool = true, engine: EngineID = .gigaam,
                        local: LocalModelState = .ready, key: KeyStatus = .missing) -> HubAttention.Input {
         HubAttention.Input(microphone: mic, accessibility: ax, accessibilityLikelyStale: stale, fnKeyUsage: fn,
                            pushToTalkUsesFn: pttUsesFn, engine: engine, localState: local, keyStatus: key)
@@ -182,16 +182,16 @@ import Testing
     @Test func nothingWhenAllIsWell() {
         #expect(HubAttention.items(input()).isEmpty)
         // A missing key only matters when a cloud engine is selected.
-        #expect(HubAttention.items(input(engine: .parakeet, key: .invalid("401"))).isEmpty)
+        #expect(HubAttention.items(input(engine: .gigaam, key: .invalid("401"))).isEmpty)
     }
 
     @Test func blockingIssuesComeFirst() {
         let items = HubAttention.items(input(mic: .denied, ax: .notDetermined, fn: .other("Emoji & Symbols"),
-                                             engine: .parakeet, local: .notInstalled))
+                                             engine: .gigaam, local: .notInstalled))
         #expect(items.map(\.id) == ["microphone", "accessibility", "model", "fnKey"])
         #expect(items[0].action == .openPane(.microphone))
         #expect(items[1].action == .requestAccessibility)
-        #expect(items[2].action == .download(.parakeet))
+        #expect(items[2].action == .download(.gigaam))
         #expect(items[3].title == "The fn key opens Emoji & Symbols")
     }
 
@@ -230,8 +230,8 @@ import Testing
 
     @Test func downloadShowsProgress() throws {
         let progress = DownloadProgress(fraction: 0.64, secondsRemaining: 30)
-        let item = try #require(HubAttention.items(input(engine: .parakeet, local: .downloading(progress))).first)
-        #expect(item.title == "Parakeet v3 is downloading · 64%")
+        let item = try #require(HubAttention.items(input(engine: .gigaam, local: .downloading(progress))).first)
+        #expect(item.title == "GigaAM v3 is downloading · 64%")
         #expect(item.body == "About 30 s left.")
         #expect(item.progress == 0.64)
         #expect(item.action == .openModels)
@@ -273,12 +273,12 @@ import Testing
             == "Gemini 3.8 Flash")
     }
 
-    @Test func preparingCopyFitsParakeetsShortFirstLoad() throws {
+    @Test func preparingCopyFitsAShortFirstLoad() throws {
         let input = HubAttention.Input(microphone: .granted, accessibility: .granted, accessibilityLikelyStale: false,
-                                       fnKeyUsage: .doNothing, pushToTalkUsesFn: true, engine: .parakeet,
+                                       fnKeyUsage: .doNothing, pushToTalkUsesFn: true, engine: .gigaam,
                                        localState: .preparing(since: Date()), keyStatus: .missing)
         let item = try #require(HubAttention.items(input).first)
-        #expect(item.title == "Getting Parakeet v3 ready")
+        #expect(item.title == "Getting GigaAM v3 ready")
         #expect(!item.body.contains("minutes"))
     }
 }
@@ -330,25 +330,25 @@ import Testing
         var lineup = ModelLineup.default
         let fnTab = Shortcut.fnTab.spokenDescription
         #expect(SwitchModelLine.explanation(.ready(.fnTab), lineup: lineup)
-            == "Press \(fnTab) while dictating to step from Parakeet to Flash.")
+            == "Press \(fnTab) while dictating to step from GigaAM to Flash.")
         lineup.main = .gemini
         #expect(SwitchModelLine.explanation(.ready(.fnTab), lineup: lineup)
-            == "Press \(fnTab) while dictating to step from Flash to Parakeet.")
+            == "Press \(fnTab) while dictating to step from Flash to GigaAM.")
         lineup.move(.gemini, to: 0)
-        #expect(lineup.order == [.gemini, .parakeet, .hydrogen, .carbon, .gigaam])
+        #expect(lineup.order == [.gemini, .gigaam, .hydrogen, .neon, .carbon])
         #expect(SwitchModelLine.explanation(.ready(rightCommand), lineup: lineup)
-            == "Press \(rightCommand.spokenDescription) while dictating to step from Flash to Parakeet.")
+            == "Press \(rightCommand.spokenDescription) while dictating to step from Flash to GigaAM.")
     }
 
     /// Steps that can't run now (no key yet) stay in the line, which says so: Switch model skips them.
     @Test func lineupLineSaysWhichStepsArentReady() {
         let fnTab = Shortcut.fnTab.spokenDescription
         #expect(SwitchModelLine.explanation(.ready(.fnTab), lineup: .default, blocked: [.gemini])
-            == "Press \(fnTab) while dictating to step from Parakeet to Flash. Flash isn’t ready yet.")
-        var parakeetStep = ModelLineup.default
-        parakeetStep.main = .gemini
-        #expect(SwitchModelLine.explanation(.ready(.fnTab), lineup: parakeetStep, blocked: [.parakeet])
-            == "Press \(fnTab) while dictating to step from Flash to Parakeet. Parakeet isn’t ready yet.")
+            == "Press \(fnTab) while dictating to step from GigaAM to Flash. Flash isn’t ready yet.")
+        var gigaamStep = ModelLineup.default
+        gigaamStep.main = .gemini
+        #expect(SwitchModelLine.explanation(.ready(.fnTab), lineup: gigaamStep, blocked: [.gigaam])
+            == "Press \(fnTab) while dictating to step from Flash to GigaAM. GigaAM isn’t ready yet.")
         var geminiMain = ModelLineup.default
         geminiMain.main = .gemini
         #expect(!SwitchModelLine.explanation(.ready(.fnTab), lineup: geminiMain, blocked: [.gemini]).contains("ready yet"),
@@ -375,27 +375,27 @@ import Testing
 }
 
 @Suite struct ModelChoiceHubTests {
-    /// A model is as ready as the engine that hears it: Parakeet on this Mac, or a Gemini.
+    /// A model is as ready as the engine that hears it: GigaAM on this Mac, or a Gemini.
     @Test func aModelsReadinessIsItsEngines() {
-        #expect(EngineReadiness.of(ModelChoice.parakeet.engine, localState: .notInstalled, keyStatus: .missing)
+        #expect(EngineReadiness.of(ModelChoice.gigaam.engine, localState: .notInstalled, keyStatus: .missing)
             == .needsDownload)
-        #expect(EngineReadiness.of(ModelChoice.parakeet.engine, localState: .ready, keyStatus: .missing) == .ready)
+        #expect(EngineReadiness.of(ModelChoice.gigaam.engine, localState: .ready, keyStatus: .missing) == .ready)
         #expect(EngineReadiness.of(ModelChoice.gemini.engine, localState: .notInstalled, keyStatus: .valid(KeyInfo()))
             == .ready)
         #expect(EngineReadiness.of(ModelChoice.gemini.engine, localState: .ready, keyStatus: .missing) == .needsKey)
     }
 
     @Test func theSidebarChipNamesTheMainModel() {
-        #expect(EngineSummary.make(choice: .parakeet, localState: .ready, keyStatus: .missing)
-            == EngineSummary(name: "Parakeet v3", status: "Ready", tone: .positive))
-        #expect(EngineSummary.make(choice: .parakeet, localState: .preparing(since: Date()),
+        #expect(EngineSummary.make(choice: .gigaam, localState: .ready, keyStatus: .missing)
+            == EngineSummary(name: "GigaAM v3", status: "Ready", tone: .positive))
+        #expect(EngineSummary.make(choice: .gigaam, localState: .preparing(since: Date()),
                                    keyStatus: .missing).status == "Loading model…")
         #expect(EngineSummary.make(choice: .gemini, localState: .notInstalled,
                                    keyStatus: .valid(KeyInfo()))
             == EngineSummary(name: "Gemini 3.8 Flash", status: "Ready", tone: .positive))
     }
 
-    /// One key state reads the same on a lineup row, the sidebar chip and Where Parakeet runs: a missing key or
+    /// One key state reads the same on a lineup row, the sidebar chip and Where GigaAM runs: a missing key or
     /// spent credit is a warning to act on, as the key card's triangle says, a rejected key an error.
     @Test func oneKeyStateHasOneColor() {
         let states: [KeyStatus] = [.missing, .checking, .valid(KeyInfo()), .invalid("401"), .noCredit(nil),
@@ -424,20 +424,23 @@ import Testing
         }
     }
 
-    /// Each mark in the color of the model that made it: the retired cloud Parakeet Parakeet's, the retired Gemini 3.1
-    /// Pro and Gemini 4 Argon Flash's, an old clean-up of Parakeet's text Parakeet's (with its wand).
-    @Test func historyMarksWearTheirModelsColor() {
-        var picked = ModelColors.default
-        picked[.parakeet] = .teal
+    /// Each mark in the color of the model that made it: GigaAM's own for its transcripts; the retired Parakeet, on
+    /// this Mac or in the cloud, and an old clean-up of its text keep Parakeet's own (the one last picked for it, the
+    /// plain graphite until then); the retired Gemini 3.1 Pro and Gemini 4 Argon wear Flash's.
+    @Test func historyMarksWearTheirModelsColor() throws {
+        var picked = try JSONDecoder().decode(ModelColors.self, from: Data(#"{"parakeet":"teal","gigaam":"orange"}"#.utf8))
         picked[.gemini] = .blue
         #expect(EngineGlyph(engine: .parakeet, colors: picked).color == .teal)
         #expect(EngineGlyph(engine: .parakeetCloud, colors: picked).color == .teal)
         #expect(EngineGlyph(engine: .parakeet, cleanupModel: .gpt6Luna, colors: picked).color == .teal)
+        #expect(EngineGlyph(engine: .gigaam, colors: picked).color == .orange, "GigaAM's own, not Parakeet's")
         #expect(EngineGlyph(engine: .geminiFlash, colors: picked).color == .blue)
         #expect(EngineGlyph(engine: .geminiPro, colors: picked).color == .blue)
         #expect(EngineGlyph(engine: .parakeet).color == .graphite)
         #expect(EngineGlyph(engine: .parakeetCloud, cleanupModel: .gpt6Luna).color == .graphite)
+        #expect(EngineGlyph(engine: .gigaam).color == .green)
         #expect(EngineGlyph(engine: .parakeet, cleanupModel: .gpt6Luna).label == "Parakeet v3 + Clean-up by GPT-6 Luna")
+        #expect(EngineGlyph(engine: .parakeet).label == "Parakeet v3" && EngineGlyph(engine: .parakeet).engine.glyph == "P")
         #expect(EngineGlyph(engine: .geminiFlash).color == .violet)
         #expect(EngineGlyph(engine: .geminiArgon).color == .violet)
         #expect(EngineGlyph(engine: .geminiArgon, colors: picked).color == .blue)
@@ -447,7 +450,7 @@ import Testing
 
     /// Parakeet on this Mac needs no key, whatever happens to it: no key card.
     @Test func aParakeetMainWithoutAKeyShowsNoKeyCard() throws {
-        func items(_ key: KeyStatus, engine: EngineID = .parakeet) -> [AttentionItem] {
+        func items(_ key: KeyStatus, engine: EngineID = .gigaam) -> [AttentionItem] {
             HubAttention.items(HubAttention.Input(microphone: .granted, accessibility: .granted,
                                                   accessibilityLikelyStale: false, fnKeyUsage: .doNothing,
                                                   pushToTalkUsesFn: true, engine: engine, localState: .ready,

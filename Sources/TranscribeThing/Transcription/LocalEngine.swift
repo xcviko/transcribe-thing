@@ -5,7 +5,6 @@ enum LocalEngineError: Error, Equatable, Sendable, LocalizedError {
     case notInstalled
     case notLoaded
     case incompleteDownload([String])
-    case listingFailed(String)
     /// There's nowhere to get it from yet: `file` isn't in the Downloads folder, and its release asset isn't published
     /// (`ModelStore` says so as `AppError.modelNotPublished`).
     case notPublished(file: String)
@@ -16,84 +15,113 @@ enum LocalEngineError: Error, Equatable, Sendable, LocalizedError {
         case .notLoaded: "The model isn’t loaded."
         case .incompleteDownload(let missing):
             "The download is incomplete (\(missing.count) file\(missing.count == 1 ? "" : "s") missing)."
-        case .listingFailed(let detail): "Couldn’t list the model files: \(detail)"
         case .notPublished(let file): "The model isn’t published yet. Put \(file) in your Downloads folder."
         }
     }
 }
 
-/// One model on this Mac that downloads, loads and is deleted on its own: Parakeet, or one version of GigaAM, each in
-/// its own folder. ModelStore keeps each one's state; an `EngineID` stands for the one picked for it
-/// (`AppSettings.localModel(for:)`): GigaAM's picked version.
+/// The model on this Mac that downloads, loads and is deleted on its own: GigaAM v3, in its own folder. ModelStore keeps
+/// its state; an `EngineID` stands for it (`init(engine:)`). Parakeet and GigaAM's other two versions are retired: what
+/// they left on this Mac is a `RetiredLocalModel`.
 enum LocalModel: Hashable, Sendable, Identifiable {
-    case parakeet
     case gigaam(GigaAMEngine.Variant)
 
-    /// Parakeet, then each GigaAM version in the Version menu's order.
-    static var all: [LocalModel] { [.parakeet] + GigaAMEngine.Variant.allCases.map(LocalModel.gigaam) }
+    /// What the app runs on this Mac: GigaAM v3.
+    static var all: [LocalModel] { GigaAMEngine.Variant.offered.map(LocalModel.gigaam) }
 
-    /// "parakeet", or the version's raw value.
-    var id: String {
+    /// What `engine` runs on this Mac: GigaAM v3 for GigaAM. nil for a cloud model, and for the retired Parakeet.
+    init?(engine: EngineID) {
+        guard engine == .gigaam else { return nil }
+        self = .gigaam(.default)
+    }
+
+    /// The version's raw value: "gigaam-v3-ctc".
+    var id: String { variant.rawValue }
+
+    var engine: EngineID { .gigaam }
+
+    var variant: GigaAMEngine.Variant {
         switch self {
-        case .parakeet: "parakeet"
-        case .gigaam(let variant): variant.rawValue
+        case .gigaam(let variant): variant
         }
     }
 
-    var engine: EngineID {
-        switch self {
-        case .parakeet: .parakeet
-        case .gigaam: .gigaam
-        }
-    }
+    /// "GigaAM v3".
+    var displayName: String { variant.displayName }
 
-    var variant: GigaAMEngine.Variant? {
-        if case .gigaam(let variant) = self { variant } else { nil }
-    }
+    /// What its download takes: its zip.
+    var approxDownloadBytes: Int64 { variant.downloadBytes }
 
-    /// "Parakeet v3", "GigaAM v3 e2e".
-    var displayName: String {
-        variant?.displayName ?? EngineID.parakeet.displayName
-    }
+    /// What it takes on this Mac once installed: its zip unpacked.
+    var approxInstalledBytes: Int64 { variant.installedBytes }
 
-    /// What its download takes: Parakeet's files, a GigaAM version's zip.
-    var approxDownloadBytes: Int64 {
-        variant?.downloadBytes ?? EngineID.parakeet.approxDownloadBytes ?? 0
-    }
+    /// What installing it takes on disk at most: the zip and its unpacked folder are both there for a moment.
+    var approxInstallPeakBytes: Int64 { variant.downloadBytes + variant.installedBytes }
 
-    /// What it takes on this Mac once installed: Parakeet's files as downloaded, a GigaAM zip unpacked.
-    var approxInstalledBytes: Int64 {
-        variant?.installedBytes ?? approxDownloadBytes
-    }
+    /// Where its download comes from, as a failure to reach it says: "Couldn’t reach GitHub."
+    var downloadHost: String { "GitHub" }
 
-    /// What installing it takes on disk at most: Parakeet downloads into place; a GigaAM zip and its unpacked folder
-    /// are both there for a moment.
-    var approxInstallPeakBytes: Int64 {
-        variant.map { $0.downloadBytes + $0.installedBytes } ?? approxDownloadBytes
-    }
-
-    /// Where its download comes from, as a failure to reach it says: "Couldn’t reach Hugging Face."
-    var downloadHost: String {
-        switch self {
-        case .parakeet: "Hugging Face"
-        case .gigaam: "GitHub"
-        }
-    }
-
-    /// What a transcript's metadata records as the model that wrote it (`TranscriptMetadata.modelID`): a GigaAM
-    /// version's raw value ("gigaam-v3-e2e-ctc"); nil for Parakeet, as before there were versions.
-    var modelID: String? { variant?.rawValue }
+    /// What a transcript's metadata records as the model that wrote it (`TranscriptMetadata.modelID`): the version's
+    /// raw value ("gigaam-v3-ctc").
+    var modelID: String { variant.rawValue }
 }
 
-/// A downloadable on-device model. ParakeetEngine and GigaAMEngine implement it; ModelStore only talks to this
-/// protocol, so it never imports FluidAudio, and tests substitute fakes.
+/// A model this build no longer runs whose files may still be on this Mac: Parakeet v3 (in the folder FluidAudio
+/// downloaded it to), GigaAM v3 e2e and GigaAM Multilingual. Models → On this Mac lists the ones still there, each
+/// with what it takes on disk and Delete (`ModelStore.leftovers`); nothing deletes them by itself. Never the folder of
+/// a model the app runs.
+enum RetiredLocalModel: String, CaseIterable, Identifiable, Sendable {
+    case parakeet
+    case gigaamV3e2e
+    case gigaamMultilingual
+
+    var id: String { rawValue }
+
+    /// The retired GigaAM version; nil for Parakeet.
+    var variant: GigaAMEngine.Variant? {
+        switch self {
+        case .parakeet: nil
+        case .gigaamV3e2e: .v3e2e
+        case .gigaamMultilingual: .multilingual
+        }
+    }
+
+    /// The engine that wrote with it: its symbol and color.
+    var engine: EngineID { variant == nil ? .parakeet : .gigaam }
+
+    /// "Parakeet v3", "GigaAM v3 e2e", "GigaAM Multilingual".
+    var displayName: String { variant?.displayName ?? EngineID.parakeet.displayName }
+
+    /// Its folders in the models folder: Parakeet's as FluidAudio named it ("parakeet-tdt-0.6b-v3"), a GigaAM version's
+    /// and the one an unfinished download of it left beside it.
+    func folders(in modelsRoot: URL) -> [URL] {
+        guard let variant else {
+            return [modelsRoot.appendingPathComponent("parakeet-tdt-0.6b-v3", isDirectory: true)]
+        }
+        return [modelsRoot.appendingPathComponent(variant.rawValue, isDirectory: true),
+                modelsRoot.appendingPathComponent(variant.rawValue + ".partial", isDirectory: true)]
+    }
+
+    /// What its folders in `modelsRoot` take on disk; 0 when none is there.
+    func bytesOnDisk(in modelsRoot: URL) -> Int64 {
+        folders(in: modelsRoot).reduce(Int64(0)) { $0 + AppPaths.allocatedSize(of: $1) }
+    }
+
+    /// Some folder of it is there, empty or not.
+    func isOnDisk(in modelsRoot: URL) -> Bool {
+        folders(in: modelsRoot).contains { FileManager.default.fileExists(atPath: $0.path) }
+    }
+}
+
+/// A downloadable on-device model. GigaAMEngine implements it; ModelStore only talks to this protocol, so tests
+/// substitute fakes.
 protocol LocalEngine: Actor {
     nonisolated var engineID: EngineID { get }
     /// Everything this engine writes to disk: measured for disk usage, removed by `deleteFiles()`.
     nonisolated var storageURLs: [URL] { get }
     /// Complete and verified on disk. Stat-only; safe from any thread.
     nonisolated func isInstalled() -> Bool
-    /// Bytes the full download takes, from the Hugging Face tree API when reachable (cached per process).
+    /// Bytes the full download takes.
     func remoteDownloadBytes() async -> Int64
     /// Downloads or resumes. `progress` receives byte-weighted 0...1 values, throttled, from any thread.
     /// Cancel by cancelling the calling task; partial files stay on disk and resume next time.
@@ -138,56 +166,5 @@ final class ProgressThrottle: Sendable {
             return true
         }
         if forward { send(value) }
-    }
-}
-
-/// Hugging Face "tree" API: the file list (with byte sizes) of a model repo, used for byte-weighted progress.
-enum HuggingFaceTree {
-    struct File: Sendable, Equatable, Decodable {
-        let path: String
-        let size: Int64
-    }
-
-    /// Every file in the repo, recursively.
-    static func list(repo: String, session: URLSession = .shared) async throws -> [File] {
-        var components = URLComponents(string: "https://huggingface.co")!
-        components.path = "/api/models/\(repo)/tree/main"
-        components.queryItems = [URLQueryItem(name: "recursive", value: "1")]
-        guard var next = components.url else { throw LocalEngineError.listingFailed("bad URL") }
-
-        var files: [File] = []
-        for _ in 0..<20 {
-            var request = URLRequest(url: next)
-            request.timeoutInterval = 20
-            let (data, response) = try await session.data(for: request)
-            guard let http = response as? HTTPURLResponse else { throw LocalEngineError.listingFailed("no response") }
-            guard http.statusCode == 200 else { throw LocalEngineError.listingFailed("HTTP \(http.statusCode)") }
-            files += try parse(data)
-            guard let link = http.value(forHTTPHeaderField: "Link"), let url = nextPage(fromLinkHeader: link) else { break }
-            next = url
-        }
-        return files
-    }
-
-    static func parse(_ data: Data) throws -> [File] {
-        struct Entry: Decodable {
-            struct LFS: Decodable { let size: Int64? }
-            let type: String
-            let path: String
-            let size: Int64?
-            let lfs: LFS?
-        }
-        return try JSONDecoder().decode([Entry].self, from: data)
-            .filter { $0.type == "file" }
-            .map { File(path: $0.path, size: $0.lfs?.size ?? $0.size ?? 0) }
-    }
-
-    /// `<https://…?cursor=abc>; rel="next"`
-    static func nextPage(fromLinkHeader header: String) -> URL? {
-        for part in header.split(separator: ",") where part.contains("rel=\"next\"") {
-            guard let start = part.firstIndex(of: "<"), let end = part.firstIndex(of: ">"), start < end else { continue }
-            return URL(string: String(part[part.index(after: start)..<end]))
-        }
-        return nil
     }
 }

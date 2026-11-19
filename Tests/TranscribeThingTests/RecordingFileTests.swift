@@ -234,7 +234,7 @@ private final class Calls: Sendable {
     private func entry(_ id: UUID = UUID(), file: String?, status: TranscriptStatus = .failed,
                        daysAgo: Double = 0) -> TranscriptEntry {
         TranscriptEntry(id: id, createdAt: Date().addingTimeInterval(-daysAgo * 86_400),
-                        text: status == .success ? "hi" : "", engine: .parakeet, status: status, audioDuration: 1,
+                        text: status == .success ? "hi" : "", engine: .gigaam, status: status, audioDuration: 1,
                         voicedSeconds: 1, audioFileName: file)
     }
 
@@ -562,7 +562,7 @@ private final class Calls: Sendable {
             await withCheckedContinuation { release = $0 }
             return TranscriptResult(text: "from the WAV", engine: engine, processingTime: 0.1)
         }
-        h.controller.retry(worked.entry, with: .parakeet)
+        h.controller.retry(worked.entry, with: .gigaam)
         try await waitUntil { release != nil }
         #expect(heard == [worked.samples.count], "Home hears the WAV")
 
@@ -634,7 +634,7 @@ private final class Calls: Sendable {
         let base = Date()
         for i in 0..<HistoryStore.maxEntries {
             s.history.upsert(TranscriptEntry(createdAt: base.addingTimeInterval(Double(i)), text: "n\(i)",
-                                             engine: .parakeet, audioDuration: 1, voicedSeconds: 1))
+                                             engine: .gigaam, audioDuration: 1, voicedSeconds: 1))
         }
         await s.settle()
         #expect(oldest.allSatisfy { s.history.entry(id: $0.id) == nil })

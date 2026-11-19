@@ -84,7 +84,7 @@ struct DiagnosticSettingsSummary: Equatable, Sendable {
         self.fields = fields
     }
 
-    /// "main=parakeet steps=gemini …", as a log line has it.
+    /// "main=gigaam steps=gemini …", as a log line has it.
     var line: String {
         fields.map { "\($0.key)=\(DiagnosticLog.quoted($0.value))" }.joined(separator: " ")
     }

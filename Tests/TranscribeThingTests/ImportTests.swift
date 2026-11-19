@@ -346,7 +346,7 @@ import Testing
                                  speech: SpeechStats(voicedSeconds: 3, peakDBFS: -10, isSilent: false))
         }
         imports.choices = { seconds in
-            ImportChoices.make(main: .parakeet, seconds: seconds) { _ in ready ? .ready : .needsKey }
+            ImportChoices.make(main: .gigaam, seconds: seconds) { _ in ready ? .ready : .needsKey }
         }
         imports.start = { file, kind in started.files.append((file.fileName, kind)) }
         return (imports, started)
@@ -362,9 +362,9 @@ import Testing
         #expect(imports.reading == ["one.mp3", "two.m4a"])
         try await waitUntil { imports.prompt == .models }
         #expect(imports.pending.map(\.fileName) == ["one.mp3", "two.m4a"] && imports.reading.isEmpty)
-        imports.transcribe(imports.pending, as: .transcription(.parakeet))
+        imports.transcribe(imports.pending, as: .gigaam(.v3))
         #expect(started.files.map(\.name) == ["one.mp3", "two.m4a"])
-        #expect(started.files.allSatisfy { $0.kind == .transcription(.parakeet) })
+        #expect(started.files.allSatisfy { $0.kind == .gigaam(.v3) })
         #expect(imports.pending.isEmpty && imports.prompt == nil)
     }
 
@@ -408,7 +408,7 @@ import Testing
 // MARK: - Too long for Gemini
 
 @Suite struct GeminiLengthTests {
-    /// One Gemini request holds just under 1 h 48 min (16 kbps AAC in 19 MB of base64); Parakeet takes any length.
+    /// One Gemini request holds just under 1 h 48 min (16 kbps AAC in 19 MB of base64); GigaAM takes any length.
     @Test func oneRequestHoldsAboutAnHourAndThreeQuarters() {
         let limit = CloudAudio.maxChatSeconds()
         #expect(limit > 6_400 && limit < 6_500)
@@ -421,20 +421,22 @@ import Testing
         let choices = ImportChoices.make(main: .geminiFlash, seconds: 2 * 3_600) { _ in .ready }
         let gemini = choices.filter { $0.kind.engine.isGemini }
         #expect(gemini.map(\.kind) == [.transcription(.geminiFlash), .transcription(.geminiHydrogen),
-                                        .transcription(.geminiCarbon)] + TranscriptVersionKind.rewrites)
+                                        .transcription(.geminiNeon), .transcription(.geminiCarbon)]
+                + TranscriptVersionKind.rewrites)
         #expect(gemini.allSatisfy { $0.blocker == .tooLongForGemini })
-        #expect(gemini.first?.title == "Gemini 3.8 Flash · Too long, Parakeet takes any length")
-        #expect(choices.filter(\.isEnabled).map(\.kind) == [.transcription(.parakeet), .gigaam(.v3), .gigaam(.v3e2e), .gigaam(.multilingual)])
+        #expect(gemini.first?.title == "Gemini 3.8 Flash · Too long, GigaAM takes any length")
+        #expect(choices.filter(\.isEnabled).map(\.kind) == [.gigaam(.v3)])
         let hour = ImportChoices.make(main: .geminiFlash, seconds: 3_600) { _ in .ready }
         #expect(hour.allSatisfy { $0.isEnabled })
     }
 
-    /// A long row's Versions menu says the same of Gemini's actions.
-    @Test func aLongRowsVersionsMenuPointsAtParakeet() {
+    /// A long row's Versions menu says the same of Gemini's actions; GigaAM v3 can take it.
+    @Test func aLongRowsVersionsMenuPointsAtGigaAM() {
         let entry = TranscriptEntry(text: "a podcast", engine: .parakeet, audioDuration: 3 * 3_600,
                                     voicedSeconds: 10_000, audioFileName: "x.m4a", importedFrom: "episode.mp3")
         let menu = VersionsMenu.make(for: entry, running: nil) { _ in .ready }
-        #expect(menu.actions.first { $0.kind == .transcription(.parakeet) } == nil, "it has Parakeet's already")
+        #expect(menu.actions.first { $0.kind == .transcription(.parakeet) } == nil, "Parakeet's is a version, retired")
+        #expect(menu.actions.first { $0.kind == .gigaam(.v3) }?.isEnabled == true)
         for kind in [.transcription(.geminiFlash)] + TranscriptVersionKind.rewrites {
             #expect(menu.actions.first { $0.kind == kind }?.blocker == .tooLongForGemini)
         }

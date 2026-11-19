@@ -281,8 +281,9 @@ private enum Fixture {
         let header = text.components(separatedBy: "\n\n").first ?? ""
         for line in ["transcribe-thing logs", "Exported: 2026-10-03T14:03:22.481+04:00", "App: ", "macOS: ", "Mac: ",
                      "OpenRouter key saved: no",
-                     "Settings: main=parakeet steps=gemini handsFreeModel=main "
-                         + "effort.geminiFlash=medium effort.geminiHydrogen=medium effort.geminiCarbon=low "
+                     "Settings: main=gigaam steps=gemini handsFreeModel=main "
+                         + "effort.geminiFlash=medium effort.geminiHydrogen=medium "
+                         + "effort.geminiNeon=low effort.geminiCarbon=low "
                          + #"shortcut.pushToTalk=fn shortcut.handsFree="fn Space""#,
                      "pill=whileDictating sounds=on dictionaryWords=0 keySaved=no"] {
             #expect(header.contains(line), "header has \(line)")
@@ -364,9 +365,9 @@ private enum Fixture {
         // Generous: the full test run is busy enough to slow the paste down.
         try await waitUntil(timeout: .seconds(10)) { h.controller.machine.activeJobs == 0 && !h.history.entries.isEmpty }
         let text = DiagnosticLog.shared.retainedText()
-        #expect(text.contains("[dictation] dictation.started mode=handsFree model=parakeet engine=parakeet"))
+        #expect(text.contains("[dictation] dictation.started mode=handsFree model=gigaam engine=gigaam"))
         #expect(text.contains("[dictation] dictation.stopped seconds=2 voiced=1.5"))
-        #expect(text.contains("[dictation] job.finished engine=parakeet outcome=success seconds=0.4 retry=no"))
+        #expect(text.contains("[dictation] job.finished engine=gigaam outcome=success seconds=0.4 retry=no"))
         #expect(text.contains("[dictation] paste outcome=pasted dictation=yes"))
         #expect(!text.contains("com.example.secret-notes"), "never the app the text went to")
         #expect(!text.contains("private place"), "never the transcript")
@@ -403,7 +404,7 @@ private enum Fixture {
         try await waitUntil(timeout: .seconds(10)) { h.controller.machine.activeJobs == 0 && pasted.count == 2 }
         let text = DiagnosticLog.shared.retainedText()
         #expect(text.contains("alongside=1"))
-        #expect(text.contains("[dictation] job.finished engine=parakeet outcome=success seconds=0.4 retry=no"
+        #expect(text.contains("[dictation] job.finished engine=gigaam outcome=success seconds=0.4 retry=no"
                                 + " polished=no"))
         #expect(!text.contains("private place"), "never the transcript")
     }

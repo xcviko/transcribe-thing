@@ -27,6 +27,7 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         }
         #expect(EngineID.geminiFlash.defaultReasoningEffort == .medium)
         #expect(EngineID.geminiHydrogen.defaultReasoningEffort == .medium)
+        #expect(EngineID.geminiNeon.defaultReasoningEffort == .low)
         #expect(EngineID.geminiCarbon.defaultReasoningEffort == .low)
         for engine in [EngineID.parakeet, .parakeetCloud, .geminiArgon, .geminiPro] {
             #expect(engine.reasoningEfforts.isEmpty && engine.defaultReasoningEffort == nil, "\(engine)")
@@ -337,7 +338,7 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
 @Suite struct TextRequestServiceTests {
     private func makeService(_ replies: [StubURLProtocol.Reply],
                              key: String? = "sk-or-v1-test") -> (TranscriptionService, String) {
-        let store = ModelStore.preview(states: [.parakeet: .ready])
+        let store = ModelStore.preview(states: [.gigaam: .ready])
         let (client, host) = StubURLProtocol.client(replies)
         let keyStore = KeyFileStore.inMemory(key)
         let account = OpenRouterAccount(keyStore: keyStore, client: client, debounce: .zero)
@@ -420,7 +421,7 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
     /// leaves the same record History always kept, and now how soon it started writing and how much it showed of
     /// its thinking.
     @Test func geminiTranscriptionThinksAtMediumAndRecordsItsUsage() async throws {
-        let store = ModelStore.preview(states: [.parakeet: .ready])
+        let store = ModelStore.preview(states: [.gigaam: .ready])
         let (client, host) = StubURLProtocol.client([chatReply("Hallo.", cost: 0.01, reasoning: 900,
                                                                reasoningText: "**Listening** for German.", id: "gen-g",
                                                                model: "google/gemini-3.8-flash",
@@ -488,16 +489,16 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         }
         h.controller.insertOverride = { _ in .pasted }
         let r = H.recording()
-        h.controller.enqueue(r, engine: .parakeet)
+        h.controller.enqueue(r, engine: .gigaam)
         try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id) != nil }
         h.controller.makeVersion(.transcription(.geminiFlash), of: try #require(h.history.entry(id: r.id)))
         try await waitUntil { h.history.entry(id: r.id)?.versions.count == 2 && h.controller.runningVersions.isEmpty }
-        h.controller.showVersion(.transcription(.parakeet), of: r.id)
+        h.controller.showVersion(.gigaam(.v3), of: r.id)
         h.controller.makeVersion(.transcription(.geminiFlash), of: try #require(h.history.entry(id: r.id)))
-        h.controller.retry(try #require(h.history.entry(id: r.id)), with: .parakeet)
+        h.controller.retry(try #require(h.history.entry(id: r.id)), with: .gigaam)
         #expect(h.controller.runningVersions.isEmpty)
-        #expect(runs == [.parakeet, .geminiFlash])
-        #expect(h.history.entry(id: r.id)?.currentKind == .transcription(.parakeet), "the version it has is shown")
+        #expect(runs == [.gigaam, .geminiFlash])
+        #expect(h.history.entry(id: r.id)?.currentKind == .gigaam(.v3), "the version it has is shown")
     }
 
     @Test func aCloudVersionLearnsItsProviderAndTimingLater() async throws {

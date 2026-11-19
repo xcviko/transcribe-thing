@@ -476,7 +476,7 @@ import Testing
                       status: TranscriptStatus = .success) -> TranscriptEntry {
         TranscriptEntry(createdAt: now.addingTimeInterval(-daysAgo * 86_400),
                         text: status == .success ? Array(repeating: "word", count: words).joined(separator: " ") : "",
-                        engine: .parakeet, status: status, audioDuration: audio, voicedSeconds: voiced)
+                        engine: .gigaam, status: status, audioDuration: audio, voicedSeconds: voiced)
     }
 
     @Test func emptyHistory() {
@@ -536,7 +536,7 @@ import Testing
     @Test func upsertKeepsNewestFirstAndReplacesInPlace() {
         let store = HistoryStore.preview(entries: [])
         let now = Date()
-        let older = TranscriptEntry(createdAt: now.addingTimeInterval(-60), text: "older", engine: .parakeet,
+        let older = TranscriptEntry(createdAt: now.addingTimeInterval(-60), text: "older", engine: .gigaam,
                                     audioDuration: 1, voicedSeconds: 1)
         let newer = TranscriptEntry(createdAt: now, text: "newer", engine: .geminiPro, audioDuration: 1, voicedSeconds: 1)
         store.upsert(newer)
@@ -552,7 +552,7 @@ import Testing
     @Test func lastSuccessfulTextSkipsFailures() {
         let store = HistoryStore.preview(entries: [
             TranscriptEntry(createdAt: Date(), text: "", engine: .geminiPro, status: .failed, audioDuration: 3, voicedSeconds: 2),
-            TranscriptEntry(createdAt: Date().addingTimeInterval(-10), text: "keep me", engine: .parakeet,
+            TranscriptEntry(createdAt: Date().addingTimeInterval(-10), text: "keep me", engine: .gigaam,
                             audioDuration: 3, voicedSeconds: 2),
         ])
         #expect(store.lastSuccessful?.text == "keep me")
@@ -561,9 +561,9 @@ import Testing
     /// Paste Last pastes the last dictation, never a file's transcript (a whole podcast).
     @Test func lastSuccessfulSkipsImportedFiles() {
         let store = HistoryStore.preview(entries: [
-            TranscriptEntry(createdAt: Date(), text: "an hour of podcast", engine: .parakeet, audioDuration: 3_600,
+            TranscriptEntry(createdAt: Date(), text: "an hour of podcast", engine: .gigaam, audioDuration: 3_600,
                             voicedSeconds: 3_000, importedFrom: "episode.mp3"),
-            TranscriptEntry(createdAt: Date().addingTimeInterval(-10), text: "dictated", engine: .parakeet,
+            TranscriptEntry(createdAt: Date().addingTimeInterval(-10), text: "dictated", engine: .gigaam,
                             audioDuration: 3, voicedSeconds: 2),
         ])
         #expect(store.lastSuccessful?.text == "dictated")
@@ -573,7 +573,7 @@ import Testing
         let store = HistoryStore.preview(entries: [])
         let base = Date()
         for i in 0..<(HistoryStore.maxEntries + 5) {
-            store.upsert(TranscriptEntry(createdAt: base.addingTimeInterval(Double(i)), text: "n\(i)", engine: .parakeet,
+            store.upsert(TranscriptEntry(createdAt: base.addingTimeInterval(Double(i)), text: "n\(i)", engine: .gigaam,
                                          audioDuration: 1, voicedSeconds: 1))
         }
         #expect(store.entries.count == HistoryStore.maxEntries)
@@ -590,9 +590,9 @@ import Testing
         try FileManager.default.createDirectory(at: paths.recordings, withIntermediateDirectories: true)
         for name in ["old.wav", "recent.wav"] { try Data([1, 2]).write(to: paths.recordingURL(fileName: name)) }
         let now = Date()
-        let old = TranscriptEntry(createdAt: now.addingTimeInterval(-20 * 86_400), text: "old", engine: .parakeet,
+        let old = TranscriptEntry(createdAt: now.addingTimeInterval(-20 * 86_400), text: "old", engine: .gigaam,
                                   audioDuration: 3, voicedSeconds: 2, audioFileName: "old.wav")
-        let recent = TranscriptEntry(createdAt: now.addingTimeInterval(-2 * 86_400), text: "", engine: .parakeet,
+        let recent = TranscriptEntry(createdAt: now.addingTimeInterval(-2 * 86_400), text: "", engine: .gigaam,
                                      status: .failed, audioDuration: 3, voicedSeconds: 2, audioFileName: "recent.wav")
         store.upsert(old)
         store.upsert(recent)
@@ -609,9 +609,9 @@ import Testing
     @Test func neverKeepsEverything() {
         let now = Date()
         let store = HistoryStore.preview(entries: [
-            TranscriptEntry(createdAt: now.addingTimeInterval(-400 * 86_400), text: "", engine: .parakeet, status: .failed,
+            TranscriptEntry(createdAt: now.addingTimeInterval(-400 * 86_400), text: "", engine: .gigaam, status: .failed,
                             audioDuration: 3, voicedSeconds: 2, audioFileName: "old.wav"),
-            TranscriptEntry(createdAt: now.addingTimeInterval(-2 * 86_400), text: "hi", engine: .parakeet,
+            TranscriptEntry(createdAt: now.addingTimeInterval(-2 * 86_400), text: "hi", engine: .gigaam,
                             audioDuration: 3, voicedSeconds: 2, audioFileName: "recent.wav"),
         ])
         store.deleteExpired(now: now)
@@ -726,7 +726,7 @@ final class FakeRecorder: DictationRecorder {
         var paths: AppPaths?
     }
 
-    static func make(models: [EngineID: LocalModelState] = [.parakeet: .ready],
+    static func make(models: [EngineID: LocalModelState] = [.gigaam: .ready],
                      modelErrors: [EngineID: AppError] = [:], store: ModelStore? = nil,
                      mic: PermissionState = .granted, micLive: Bool = false, keyStatus: KeyStatus = .missing,
                      meter: LevelMeter = .preview(level: 0), persistsHistory: Bool = false,
@@ -778,7 +778,7 @@ final class FakeRecorder: DictationRecorder {
             return .pasted
         }
         for r in [first, second, third] {
-            h.controller.enqueue(r, engine: .parakeet)
+            h.controller.enqueue(r, engine: .gigaam)
         }
         #expect(h.controller.machine.activeJobs == 3)
         #expect(h.pill.phase == .processing)
@@ -796,7 +796,7 @@ final class FakeRecorder: DictationRecorder {
         h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "kept", engine: engine, processingTime: 0.1) }
         h.controller.insertOverride = { _ in .pasted }
         let r = Self.recording()
-        h.controller.enqueue(r, engine: .parakeet)
+        h.controller.enqueue(r, engine: .gigaam)
         try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id) != nil }
         let entry = try #require(h.history.entry(id: r.id))
         #expect(entry.audioFileName == "\(r.id.uuidString).m4a")
@@ -813,10 +813,10 @@ final class FakeRecorder: DictationRecorder {
         let voiced = (0..<16_000).map { 0.2 * sin(Float($0) * 0.05) }
         let first = Recording(samples: voiced, speech: SpeechStats(voicedSeconds: 1, peakDBFS: -14, isSilent: false))
         let second = Recording(samples: voiced, speech: SpeechStats(voicedSeconds: 1, peakDBFS: -14, isSilent: false))
-        h.controller.enqueue(first, engine: .parakeet)
+        h.controller.enqueue(first, engine: .gigaam)
         try await waitUntil { h.history.entry(id: first.id)?.status == .failed }
         #expect(h.controller.retainedRecordingIDs == [first.id])
-        h.controller.enqueue(second, engine: .parakeet)
+        h.controller.enqueue(second, engine: .gigaam)
         try await waitUntil { h.history.entry(id: second.id)?.status == .failed }
         #expect(h.controller.retainedRecordingIDs == [second.id], "2 s kept is past the budget: the older one goes")
 
@@ -825,7 +825,7 @@ final class FakeRecorder: DictationRecorder {
             heard.append(recording.samples.count)
             return TranscriptResult(text: "back from disk", engine: engine, processingTime: 0.1)
         }
-        h.controller.retry(try #require(h.history.entry(id: first.id)), with: .parakeet)
+        h.controller.retry(try #require(h.history.entry(id: first.id)), with: .gigaam)
         try await waitUntil { h.history.entry(id: first.id)?.status == .success }
         #expect(heard == [first.samples.count])
     }
@@ -834,8 +834,8 @@ final class FakeRecorder: DictationRecorder {
     /// Copy keep the text as the model wrote it.
     @Test func thePastingSettingsShapeOnlyWhatIsPasted() async throws {
         let h = Self.make()
-        h.settings.modelsAddingSpace = [.parakeet]
-        h.settings.modelsRemovingFinalPeriod = [.parakeet]
+        h.settings.modelsAddingSpace = [.gigaam]
+        h.settings.modelsRemovingFinalPeriod = [.gigaam]
         h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "Hello.", engine: engine, processingTime: 0.1) }
         var pasted: [String] = []
         h.controller.insertOverride = { text in pasted.append(text); return .failed("no ⌘V") }
@@ -847,7 +847,7 @@ final class FakeRecorder: DictationRecorder {
         h.controller.pasteLastOverride = { pastedLast.append($0); return .pasted }
 
         let r = Self.recording()
-        h.controller.enqueue(r, engine: .parakeet)
+        h.controller.enqueue(r, engine: .gigaam)
         try await waitUntil { h.controller.machine.activeJobs == 0 && !pasted.isEmpty }
         #expect(pasted == ["Hello "])
         #expect(h.history.entry(id: r.id)?.text == "Hello.")
@@ -865,30 +865,32 @@ final class FakeRecorder: DictationRecorder {
     }
 
     /// Whose Pasting rules a transcript's paste follows: the model that wrote it. Polish is Gemini's, an old clean-up
-    /// Parakeet's (it tidied Parakeet's text); Polish Selection, which takes the selection's place, goes as written.
+    /// GigaAM's, as the retired Parakeet's own (it tidied Parakeet's text, and GigaAM took Parakeet's place); Polish
+    /// Selection, which takes the selection's place, goes as written.
     @Test func eachKindOfTranscriptPastesByItsModel() {
-        #expect(TranscriptVersionKind.transcription(.parakeet).dictationModel == .parakeet)
-        #expect(TranscriptVersionKind.transcription(.parakeetCloud).dictationModel == .parakeet)
+        #expect(TranscriptVersionKind.gigaam(.v3).dictationModel == .gigaam)
+        #expect(TranscriptVersionKind.transcription(.parakeetCloud).dictationModel == .gigaam)
         #expect(TranscriptVersionKind.transcription(.geminiFlash).dictationModel == .gemini)
         #expect(TranscriptVersionKind.transcription(.geminiPro).dictationModel == .gemini)
         // The retired Gemini 4 Argon's old versions paste by Gemini's rules.
         #expect(TranscriptVersionKind.transcription(.geminiArgon).dictationModel == .gemini)
         #expect(TranscriptVersionKind.polish(by: .geminiArgon).dictationModel == .gemini)
         #expect(TranscriptVersionKind.translation(polished: true, by: .geminiArgon).dictationModel == .gemini)
-        #expect(TranscriptVersionKind.cleanup(of: .parakeet, by: .gpt6Luna).dictationModel == .parakeet)
-        #expect(TranscriptVersionKind.cleanup(of: .parakeetCloud, by: .geminiFlashLite).dictationModel == .parakeet)
+        #expect(TranscriptVersionKind.cleanup(of: .parakeet, by: .gpt6Luna).dictationModel == .gigaam)
+        #expect(TranscriptVersionKind.transcription(.parakeet).dictationModel == .gigaam)
+        #expect(TranscriptVersionKind.cleanup(of: .parakeetCloud, by: .geminiFlashLite).dictationModel == .gigaam)
         #expect(TranscriptVersionKind.polish().dictationModel == .gemini)
         for model in PolishSelectionModel.allCases {
             #expect(TranscriptVersionKind.selection(model).dictationModel == nil)
         }
     }
 
-    /// Each model has its own Pasting rules: Parakeet's quick searches go in bare, Gemini's sentences keep their
+    /// Each model has its own Pasting rules: GigaAM's quick searches go in bare, Gemini's sentences keep their
     /// period and get a space. Paste Last and a card's Paste Here follow the model that wrote the text.
     @Test func pastingFollowsTheModelThatWroteTheText() async throws {
         let h = Self.make()
         h.settings.modelsAddingSpace = [.gemini]
-        h.settings.modelsRemovingFinalPeriod = [.parakeet]
+        h.settings.modelsRemovingFinalPeriod = [.gigaam]
         h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "Hello.", engine: engine, processingTime: 0.1) }
         var pasted: [String] = []
         h.controller.insertOverride = { text in pasted.append(text); return pasted.count == 1 ? .pasted : .failed("no ⌘V") }
@@ -897,7 +899,7 @@ final class FakeRecorder: DictationRecorder {
         var pastedHere: [String] = []
         h.controller.pasteNowOverride = { pastedHere.append($0); return .pasted }
 
-        h.controller.enqueue(Self.recording(), engine: .parakeet)
+        h.controller.enqueue(Self.recording(), engine: .gigaam)
         try await waitUntil { pasted.count == 1 }
         h.controller.pasteLast()
         try await waitUntil { pastedLast.count == 1 }
@@ -920,9 +922,9 @@ final class FakeRecorder: DictationRecorder {
     /// so do its Paste Last, its card's Paste Here and the Retry of one that failed.
     @Test func pastingFollowsHowTheTextWasDictated() async throws {
         let h = Self.make()
-        h.settings.modelsAddingSpace = [.parakeet]
+        h.settings.modelsAddingSpace = [.gigaam]
         h.settings.modesAddingSpace = [.pushToTalk]
-        h.settings.modelsRemovingFinalPeriod = [.parakeet]
+        h.settings.modelsRemovingFinalPeriod = [.gigaam]
         h.settings.modesRemovingFinalPeriod = [.handsFree]
         var transcriptionFails = false
         h.controller.transcribeOverride = { _, engine in
@@ -946,7 +948,7 @@ final class FakeRecorder: DictationRecorder {
         try await waitUntil { pastedLast.count == 1 }
         #expect(pastedLast == ["Hello"])
 
-        h.controller.enqueue(Self.recording(), engine: .parakeet)
+        h.controller.enqueue(Self.recording(), engine: .gigaam)
         try await waitUntil { pasted.count == 2 }
         #expect(pasted.last == "Hello. ", "held: the period stays, and a space goes after")
 
@@ -1037,10 +1039,10 @@ final class FakeRecorder: DictationRecorder {
         let h = Self.make()
         h.controller.transcribeOverride = { _, engine in throw AppError.engineFailed(engine, "CoreML error") }
         let r = Self.recording()
-        h.controller.enqueue(r, engine: .parakeet)
+        h.controller.enqueue(r, engine: .gigaam)
         try await waitUntil { h.controller.machine.activeJobs == 0 }
         #expect(h.history.entry(id: r.id)?.status == .failed)
-        let notice = try #require(h.toasts.notices.first { $0.dedupeKey == "error.engineFailed.parakeet" })
+        let notice = try #require(h.toasts.notices.first { $0.dedupeKey == "error.engineFailed.gigaam" })
         #expect(notice.actions.first?.kind == .retry)
         #expect(!h.toasts.notices.contains { $0.dedupeKey == "error.noSpeech" })
     }
@@ -1053,7 +1055,7 @@ final class FakeRecorder: DictationRecorder {
         for _ in 0..<4 {
             h.pill.errorMessage = nil
             let shakes = h.pill.shakeCount
-            h.controller.enqueue(Self.recording(), engine: .parakeet)
+            h.controller.enqueue(Self.recording(), engine: .gigaam)
             try await waitUntil { h.controller.machine.activeJobs == 0 }
             #expect(h.pill.errorMessage == PillMetrics.noSpeechText)
             #expect(PillView(model: h.pill).visual == .message(PillMetrics.noSpeechText))
@@ -1063,7 +1065,7 @@ final class FakeRecorder: DictationRecorder {
         h.settings.pillMode = .never
         for _ in 0..<4 {
             h.toasts.dismissAll()
-            h.controller.enqueue(Self.recording(), engine: .parakeet)
+            h.controller.enqueue(Self.recording(), engine: .gigaam)
             try await waitUntil { h.controller.machine.activeJobs == 0 }
             #expect(h.toasts.notices.contains { $0.dedupeKey == "error.noSpeech" })
         }
@@ -1074,11 +1076,11 @@ final class FakeRecorder: DictationRecorder {
         let h = Self.make()
         h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "Hello there", engine: engine, processingTime: 0.1) }
         h.controller.insertOverride = { _ in .failed("no event source") }
-        h.controller.enqueue(Self.recording(), engine: .parakeet)
+        h.controller.enqueue(Self.recording(), engine: .gigaam)
         try await waitUntil { h.controller.machine.activeJobs == 0 }
         let card = try #require(h.toasts.notices.first { $0.transcript != nil })
         #expect(card.transcript == "Hello there")
-        #expect(card.actions.map(\.kind) == [.pasteText("Hello there", by: .parakeet, in: .pushToTalk), .copyText("Hello there")])
+        #expect(card.actions.map(\.kind) == [.pasteText("Hello there", by: .gigaam, in: .pushToTalk), .copyText("Hello there")])
         #expect(h.history.entries.first?.text == "Hello there")
     }
 
@@ -1160,37 +1162,35 @@ final class FakeRecorder: DictationRecorder {
     }
 
     @Test func missingModelRefusesHandsFreeImmediately() {
-        let h = Self.make(models: [.parakeet: .notInstalled], keyStatus: .valid(KeyInfo()))
+        let h = Self.make(models: [.gigaam: .notInstalled], keyStatus: .valid(KeyInfo()))
         h.controller.send(.handsFreeToggle)
         #expect(h.recorder.starts == 0)
         #expect(h.controller.machine.capture == .idle)
         let notice = h.toasts.notices.first
-        #expect(notice?.dedupeKey == "error.modelNotDownloaded.parakeet")
-        #expect(notice?.actions.map(\.kind) == [.download(.parakeet), .openHub(.models)],
-                "Gemini is never offered in Parakeet's place")
+        #expect(notice?.dedupeKey == "error.modelNotDownloaded.gigaam")
+        #expect(notice?.actions.map(\.kind) == [.download(.gigaam), .openHub(.models)],
+                "Gemini is never offered in GigaAM's place")
         #expect(h.pill.visiblePhase == .error)
 
-        let keyless = Self.make(models: [.parakeet: .notInstalled])
+        let keyless = Self.make(models: [.gigaam: .notInstalled])
         keyless.controller.send(.handsFreeToggle)
-        #expect(keyless.toasts.notices.first?.actions.map(\.kind) == [.download(.parakeet), .openHub(.models)])
+        #expect(keyless.toasts.notices.first?.actions.map(\.kind) == [.download(.gigaam), .openHub(.models)])
     }
 
-    /// From Gemini, the models on this Mac, Parakeet first; from GigaAM, Parakeet (it writes Russian too); from
-    /// Parakeet, nothing (GigaAM writes far fewer languages).
-    @Test func geminiFallsBackToTheModelsOnThisMacAndParakeetToNothing() {
-        #expect(DictationController.fallbackCandidates(for: .parakeet) == [])
-        #expect(DictationController.fallbackCandidates(for: .geminiFlash) == [.parakeet, .gigaam])
-        #expect(DictationController.fallbackCandidates(for: .geminiCarbon) == [.parakeet, .gigaam])
-        #expect(DictationController.fallbackCandidates(for: .geminiHydrogen) == [.parakeet, .gigaam])
-        #expect(DictationController.fallbackCandidates(for: .gigaam) == [.parakeet])
+    /// From Gemini, the model on this Mac, GigaAM v3; from GigaAM, nothing: Gemini never takes another model's place.
+    @Test func geminiFallsBackToGigaAMAndGigaAMToNothing() {
+        for engine in EngineID.geminiEngines {
+            #expect(DictationController.fallbackCandidates(for: engine) == [.gigaam], "\(engine)")
+        }
+        #expect(DictationController.fallbackCandidates(for: .gigaam) == [])
     }
 
     /// A failed dictation's Retry is the same model, whatever else could run: another one is the user's call, from
     /// History (Transcribe With).
     @Test func aFailedDictationOffersRetryWithTheSameModelOnly() async throws {
-        for (engine, error) in [(EngineID.parakeet, AppError.engineFailed(.parakeet, "CoreML error")),
+        for (engine, error) in [(EngineID.gigaam, AppError.engineFailed(.gigaam, "CoreML error")),
                                 (.geminiFlash, .openRouterRateLimited(retryAfter: nil)), (.geminiFlash, .offline)] {
-            let h = Self.make(models: [.parakeet: .ready], keyStatus: .valid(KeyInfo()))
+            let h = Self.make(models: [.gigaam: .ready], keyStatus: .valid(KeyInfo()))
             h.controller.transcribeOverride = { _, _ in throw error }
             let r = Self.recording()
             h.controller.enqueue(r, engine: engine)
@@ -1220,27 +1220,27 @@ final class FakeRecorder: DictationRecorder {
         #expect(h.controller.machine.activeJobs == 0)
     }
 
-    /// A dictation waiting for Parakeet on this Mac to download says so. Nothing else runs Parakeet, and Gemini is
+    /// A dictation waiting for GigaAM on this Mac to download says so. Nothing else runs GigaAM, and Gemini is
     /// never offered in its place: no "Use … Instead".
     @Test func aDictationWaitingForItsDownloadSaysSo() async throws {
-        let h = Self.make(models: [.parakeet: .downloading(DownloadProgress(fraction: 0.42))],
+        let h = Self.make(models: [.gigaam: .downloading(DownloadProgress(fraction: 0.42))],
                           keyStatus: .valid(KeyInfo()))
         h.controller.waitNoticeDelayOverride = 0.05
         var runs: [EngineID] = []
         h.controller.transcribeOverride = { _, engine in
             runs.append(engine)
-            if engine == .parakeet { try await Task.sleep(for: .seconds(5)) }
+            if engine == .gigaam { try await Task.sleep(for: .seconds(5)) }
             return TranscriptResult(text: "by \(engine.rawValue)", engine: engine, processingTime: 0.2)
         }
         var pasted: [String] = []
         h.controller.insertOverride = { text in pasted.append(text); return .pasted }
         let r = Self.recording()
-        h.controller.enqueue(r, engine: .parakeet)
+        h.controller.enqueue(r, engine: .gigaam)
         try await waitUntil { h.toasts.notices.contains { $0.dedupeKey == "slow.\(r.id)" } }
         let wait = try #require(h.toasts.notices.first { $0.dedupeKey == "slow.\(r.id)" })
-        #expect(wait.title == "Still downloading Parakeet v3 · 42%")
+        #expect(wait.title == "Still downloading GigaAM v3 · 42%")
         #expect(!wait.actions.contains { $0.title.hasPrefix("Use ") })
-        #expect(runs == [.parakeet] && pasted.isEmpty)
+        #expect(runs == [.gigaam] && pasted.isEmpty)
         h.controller.handle(.cancel)
     }
 
@@ -1376,7 +1376,7 @@ final class FakeRecorder: DictationRecorder {
         // No text: the job ends with a shake, held back while the press is arming.
         h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "", engine: engine, processingTime: 0.1) }
         h.controller.handle(.pttDown)
-        h.controller.enqueue(Self.recording(), engine: .parakeet)
+        h.controller.enqueue(Self.recording(), engine: .gigaam)
         try await waitUntil { h.controller.machine.activeJobs == 0 }
         #expect(h.pill.visiblePhase == .listening)
         h.controller.send(.timer(.arming))
@@ -1449,7 +1449,7 @@ final class FakeRecorder: DictationRecorder {
             return TranscriptResult(text: "dictated", engine: engine, processingTime: 0.1)
         }
         h.controller.insertOverride = { _ in pastes ? .pasted : .passwordField }
-        h.controller.enqueue(Self.recording(), engine: .parakeet)
+        h.controller.enqueue(Self.recording(), engine: .gigaam)
         #expect(h.pill.visiblePhase == .processing)
         // The first press over it is aimed at it; the second records.
         h.controller.handle(.pttDown)
@@ -1475,7 +1475,7 @@ final class FakeRecorder: DictationRecorder {
             TranscriptResult(text: pastes ? "dictated" : "", engine: engine, processingTime: 0.1)
         }
         h.controller.insertOverride = { _ in .pasted }
-        h.controller.enqueue(Self.recording(), engine: .parakeet)
+        h.controller.enqueue(Self.recording(), engine: .gigaam)
         try await waitUntil { h.controller.machine.activeJobs == 0 }
         #expect(h.pill.visiblePhase == (pastes ? .rest : .error))
         now = 100.5
@@ -1517,32 +1517,32 @@ final class FakeRecorder: DictationRecorder {
     }
 
     @Test func failedDownloadKeepsItsOwnNotice() {
-        let h = Self.make(models: [.parakeet: .failed("Download didn’t finish.")],
-                          modelErrors: [.parakeet: .downloadFailed(.parakeet, "offline")])
-        #expect(h.controller.captureRefusal() == .downloadFailed(.parakeet, "offline"))
-        let noDisk = Self.make(models: [.parakeet: .failed("Not enough space.")],
-                               modelErrors: [.parakeet: .notEnoughDisk(needed: 2, available: 1)])
+        let h = Self.make(models: [.gigaam: .failed("Download didn’t finish.")],
+                          modelErrors: [.gigaam: .downloadFailed(.gigaam, "offline")])
+        #expect(h.controller.captureRefusal() == .downloadFailed(.gigaam, "offline"))
+        let noDisk = Self.make(models: [.gigaam: .failed("Not enough space.")],
+                               modelErrors: [.gigaam: .notEnoughDisk(needed: 2, available: 1)])
         #expect(noDisk.controller.captureRefusal() == .notEnoughDisk(needed: 2, available: 1))
-        let unknown = Self.make(models: [.parakeet: .failed("Couldn’t remove all model files.")])
-        #expect(unknown.controller.captureRefusal() == .modelLoadFailed(.parakeet, "Couldn’t remove all model files."))
+        let unknown = Self.make(models: [.gigaam: .failed("Couldn’t remove all model files.")])
+        #expect(unknown.controller.captureRefusal() == .modelLoadFailed(.gigaam, "Couldn’t remove all model files."))
     }
 
     @Test func failedLoadStillRecordsSoTheJobCanLoadAgain() {
         // The files are complete: the job retries the load once and keeps the audio if that fails too.
-        let h = Self.make(models: [.parakeet: .failed("Couldn’t load the model.")],
-                          modelErrors: [.parakeet: .modelLoadFailed(.parakeet, "corrupt weights")])
+        let h = Self.make(models: [.gigaam: .failed("Couldn’t load the model.")],
+                          modelErrors: [.gigaam: .modelLoadFailed(.gigaam, "corrupt weights")])
         #expect(h.controller.captureRefusal() == nil)
     }
 
     @Test func modelsArentMissingBeforeTheFirstDiskScan() async throws {
         let settings = AppSettings.inMemory()
         let store = ModelStore(paths: .temporary(), settings: settings,
-                               engines: [.parakeet: FakeEngine(.parakeet, installed: false)],
+                               engines: [.gigaam(.v3): FakeEngine(.gigaam, installed: false)],
                                gate: InferenceGate(), freeDiskBytes: { 50_000_000_000 })
         let h = Self.make(store: store)
         #expect(h.controller.captureRefusal() == nil, "not known yet is not missing")
         await store.refreshFromDisk()
-        #expect(h.controller.captureRefusal() == .modelNotDownloaded(.parakeet))
+        #expect(h.controller.captureRefusal() == .modelNotDownloaded(.gigaam))
     }
 
     @Test func stoppedByOtherKeyNeverOffersAnOlderRecording() {
@@ -1604,7 +1604,7 @@ final class FakeRecorder: DictationRecorder {
         h.controller.insertOverride = { text in pasted.append(text); return .pasted }
         let long = Recording(samples: Array(repeating: 0.1, count: 16_000 * 3),
                              speech: SpeechStats(voicedSeconds: 2, peakDBFS: -10, isSilent: false))
-        h.controller.enqueue(long, engine: .parakeet)
+        h.controller.enqueue(long, engine: .gigaam)
         h.controller.handle(.cancel)
         #expect(h.controller.machine.activeJobs == 0)
         let undo = try #require(h.toasts.notices.first { $0.dedupeKey == "dictation.canceled" })
@@ -1653,7 +1653,7 @@ final class FakeRecorder: DictationRecorder {
     /// Paste last only pastes (the inserter puts the clipboard back): no copy, no card.
     @Test func pasteLastPastesTheLatestTranscript() async throws {
         let h = Self.make()
-        h.history.upsert(TranscriptEntry(text: "last words", engine: .parakeet, audioDuration: 1, voicedSeconds: 1))
+        h.history.upsert(TranscriptEntry(text: "last words", engine: .gigaam, audioDuration: 1, voicedSeconds: 1))
         var pasted: [String] = [], copied: [String] = []
         h.controller.pasteLastOverride = { text in
             pasted.append(text)
@@ -1690,7 +1690,7 @@ final class FakeRecorder: DictationRecorder {
             readWhileTranscribing = canvas.requests
             return TranscriptResult(text: "Hello there", engine: engine, processingTime: 0.1)
         }
-        h.controller.enqueue(Self.recording(), engine: .parakeet)
+        h.controller.enqueue(Self.recording(), engine: .gigaam)
         try await waitUntil { h.controller.machine.activeJobs == 0 }
         #expect(readWhileTranscribing == 1)
         #expect(pasteboard.string(forType: .string) == "Hello there", "what ⌘V pastes")
@@ -1705,7 +1705,7 @@ final class FakeRecorder: DictationRecorder {
     func pasteLastWithNowhereToPasteOffersTheTextToCopy(_ outcome: InsertionOutcome, _ title: String,
                                                        _ offersPasteHere: Bool) async throws {
         let h = Self.make()
-        h.history.upsert(TranscriptEntry(text: "last words", engine: .parakeet, audioDuration: 1, voicedSeconds: 1))
+        h.history.upsert(TranscriptEntry(text: "last words", engine: .gigaam, audioDuration: 1, voicedSeconds: 1))
         var copied: [String] = []
         h.controller.pasteLastOverride = { _ in outcome }
         h.controller.copyOverride = { copied.append($0) }
@@ -1715,7 +1715,7 @@ final class FakeRecorder: DictationRecorder {
         let card = try #require(h.toasts.notices.first)
         #expect(card.title == title)
         #expect(card.transcript == "last words")
-        #expect(card.actions.contains { $0.kind == .pasteText("last words", by: .parakeet, in: .pushToTalk) } == offersPasteHere)
+        #expect(card.actions.contains { $0.kind == .pasteText("last words", by: .gigaam, in: .pushToTalk) } == offersPasteHere)
         h.controller.perform(try #require(card.actions.first { $0.kind == .copyText("last words") }), from: card)
         #expect(copied == ["last words"])
     }
@@ -1727,7 +1727,7 @@ final class FakeRecorder: DictationRecorder {
         h.controller.insertOverride = { _ in .accessibilityMissing }
         var copied: [String] = []
         h.controller.copyOverride = { copied.append($0) }
-        h.controller.enqueue(Self.recording(), engine: .parakeet)
+        h.controller.enqueue(Self.recording(), engine: .gigaam)
         try await waitUntil { h.toasts.notices.contains { $0.dedupeKey == "error.accessibilityMissing" } }
         let notice = try #require(h.toasts.notices.first { $0.dedupeKey == "error.accessibilityMissing" })
         #expect(notice.transcript == "Hello there")
@@ -1754,17 +1754,17 @@ final class FakeRecorder: DictationRecorder {
         let h = Self.make()
         h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "Hello there", engine: engine, processingTime: 0.1) }
         h.controller.insertOverride = { _ in .failed("no event source") }
-        h.controller.enqueue(Self.recording(), engine: .parakeet)
+        h.controller.enqueue(Self.recording(), engine: .gigaam)
         try await waitUntil { h.controller.machine.activeJobs == 0 }
         let card = try #require(h.toasts.notices.first { $0.transcript == "Hello there" })
-        let pasteHere = try #require(card.actions.first { $0.kind == .pasteText("Hello there", by: .parakeet, in: .pushToTalk) })
+        let pasteHere = try #require(card.actions.first { $0.kind == .pasteText("Hello there", by: .gigaam, in: .pushToTalk) })
 
         h.controller.pasteNowOverride = { _ in .failed("no event source") }
         h.controller.perform(pasteHere, from: card)
         try await waitUntil { h.toasts.notices.contains { $0.transcript == "Hello there" && $0.id != card.id } }
 
         let again = try #require(h.toasts.notices.first { $0.transcript == "Hello there" })
-        let retry = try #require(again.actions.first { $0.kind == .pasteText("Hello there", by: .parakeet, in: .pushToTalk) })
+        let retry = try #require(again.actions.first { $0.kind == .pasteText("Hello there", by: .gigaam, in: .pushToTalk) })
         h.controller.pasteNowOverride = { _ in .accessibilityMissing }
         h.controller.perform(retry, from: again)
         try await waitUntil { h.toasts.notices.contains { $0.dedupeKey == "error.accessibilityMissing" } }
@@ -1866,11 +1866,11 @@ final class FakeRecorder: DictationRecorder {
         #expect(h.pill.tokenCount == nil && !h.pill.showsCounter)
     }
 
-    @Test func aParakeetJobHasNoCount() async throws {
+    @Test func aGigaAMJobHasNoCount() async throws {
         let h = harness()
         let gate = Gate()
         hold(h, gate)
-        for engine in [EngineID.parakeet] {
+        for engine in [EngineID.gigaam] {
             let r = H.recording()
             h.controller.enqueue(r, engine: engine)
             h.controller.streamed(ChatStreamProgress(reasoningCharacters: 800, outputCharacters: 80), for: r.id)
@@ -1943,10 +1943,10 @@ final class FakeRecorder: DictationRecorder {
         let (h, host) = streamingHarness([openStream([SSE.chunk(reasoning: String(repeating: "Listening. ", count: 40))])],
                                          persistsHistory: true)
         defer { h.paths.map { try? FileManager.default.removeItem(at: $0.root) } }
-        h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "parakeet text", engine: engine, processingTime: 0.1) }
+        h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "gigaam text", engine: engine, processingTime: 0.1) }
         h.controller.insertOverride = { _ in .pasted }
         let r = H.recording()
-        h.controller.enqueue(r, engine: .parakeet)
+        h.controller.enqueue(r, engine: .gigaam)
         try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id) != nil }
         h.controller.transcribeOverride = nil
         h.controller.retry(try #require(h.history.entry(id: r.id)), with: .geminiFlash)
@@ -2020,7 +2020,7 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
         let env = AppEnvironment.preview()
         let menu = env.menuBar.builder.makeMenu(includeQuit: true)
         #expect(Self.titles(menu) == [
-            "Parakeet v3 · Ready", "—",
+            "GigaAM v3 · Ready", "—",
             "Copy Last Transcript", "—",
             "Microphone", "—",
             "Home", "Settings…", "—", "Quit",
@@ -2044,19 +2044,19 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
         let keyless = OpenRouterAccount.preview(status: .missing)
         #expect(MenuBuilder.status(of: .gemini, models: env.models, account: keyless).text
             == "Needs key")
-        #expect(MenuBuilder.status(of: .parakeet, models: env.models, account: keyless).text
-            == "Ready", "Parakeet needs no key")
-        let bare = ModelStore.preview(states: [.parakeet: .notInstalled])
-        #expect(MenuBuilder.status(of: .parakeet, models: bare, account: keyless).text
+        #expect(MenuBuilder.status(of: .gigaam, models: env.models, account: keyless).text
+            == "Ready", "GigaAM needs no key")
+        let bare = ModelStore.preview(states: [.gigaam: .notInstalled])
+        #expect(MenuBuilder.status(of: .gigaam, models: bare, account: keyless).text
             == "Not downloaded")
     }
 
     /// What the app is doing replaces the status; work on a selection names itself instead of the model.
     @Test func theStatusLineSaysWhatTheAppIsDoing() {
-        let model = "Parakeet v3"
-        #expect(MenuBuilder.statusTitle(.idle, model: model, status: "Ready") == "Parakeet v3 · Ready")
-        #expect(MenuBuilder.statusTitle(.recording, model: model, status: "Ready") == "Parakeet v3 · Listening…")
-        #expect(MenuBuilder.statusTitle(.processing, model: model, status: "Ready") == "Parakeet v3 · Transcribing…")
+        let model = "GigaAM v3"
+        #expect(MenuBuilder.statusTitle(.idle, model: model, status: "Ready") == "GigaAM v3 · Ready")
+        #expect(MenuBuilder.statusTitle(.recording, model: model, status: "Ready") == "GigaAM v3 · Listening…")
+        #expect(MenuBuilder.statusTitle(.processing, model: model, status: "Ready") == "GigaAM v3 · Transcribing…")
         #expect(MenuBuilder.statusTitle(.polishing, model: model, status: "Ready") == "Polish Selection · Polishing…")
         #expect(MenuBuilder.statusTitle(.translating, model: model, status: "Ready")
                 == "Translate Selection · Translating…")
@@ -2134,7 +2134,7 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
         for includeQuit in [true, false] {
             let menu = env.menuBar.builder.makeMenu(includeQuit: includeQuit)
             #expect(Array(Self.titles(menu).prefix(6)) == [
-                "Parakeet v3 · Listening…", "—", "Finish Dictation", "Cancel Dictation", "Copy Last Transcript", "—",
+                "GigaAM v3 · Listening…", "—", "Finish Dictation", "Cancel Dictation", "Copy Last Transcript", "—",
             ])
             Self.expectTidySeparators(menu, "hands-free")
         }

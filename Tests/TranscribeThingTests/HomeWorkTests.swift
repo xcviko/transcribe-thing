@@ -35,9 +35,9 @@ import Testing
         return h
     }
 
-    /// A real model store whose Parakeet is `FakeEngine`, installed; `gate` is its inference gate.
+    /// A real model store whose GigaAM is `FakeEngine`, installed; `gate` is its inference gate.
     private func localStore(_ engine: FakeEngine, gate: InferenceGate = InferenceGate()) -> ModelStore {
-        ModelStore(paths: .temporary(), settings: .inMemory(), engines: [.parakeet: engine], gate: gate,
+        ModelStore(paths: .temporary(), settings: .inMemory(), engines: [.gigaam(.v3): engine], gate: gate,
                    freeDiskBytes: { 50_000_000_000 })
     }
 
@@ -45,12 +45,12 @@ import Testing
         h.paths.map { try? FileManager.default.removeItem(at: $0.root) }
     }
 
-    /// A dictation Parakeet transcribed and pasted, its audio kept.
+    /// A dictation GigaAM transcribed and pasted, its audio kept.
     private func transcript(_ h: H.Harness) async throws -> UUID {
-        h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "parakeet text", engine: engine, processingTime: 0.1) }
+        h.controller.transcribeOverride = { _, engine in TranscriptResult(text: "gigaam text", engine: engine, processingTime: 0.1) }
         h.controller.insertOverride = { _ in .pasted }
         let r = H.recording()
-        h.controller.enqueue(r, engine: .parakeet)
+        h.controller.enqueue(r, engine: .gigaam)
         try await waitUntil { h.controller.machine.activeJobs == 0 && h.history.entry(id: r.id) != nil }
         return r.id
     }
@@ -179,8 +179,8 @@ import Testing
             return TranscriptResult(text: "dictated", engine: engine, processingTime: 1)
         }
         h.controller.makeVersion(.polish(), of: try #require(h.history.entry(id: id)))
-        h.controller.retry(try #require(h.history.entry(id: failed)), with: .parakeet)
-        h.controller.enqueue(H.recording(), engine: .parakeet)
+        h.controller.retry(try #require(h.history.entry(id: failed)), with: .gigaam)
+        h.controller.enqueue(H.recording(), engine: .gigaam)
         #expect(h.controller.homeWork.count == 2)
         h.controller.cancelHomeWork(for: id)
         h.controller.cancelHomeWork(for: failed)
@@ -248,8 +248,8 @@ import Testing
         #expect(polish.failureTitle == "Couldn’t polish with Gemini 3.8 Flash")
         #expect(reason(.timeout(.geminiFlash), flash) == "It took too long.")
         #expect(reason(.timeout(.geminiFlash), polish) == "It took too long.")
-        #expect(reason(.engineFailed(.parakeet, "CoreML"), .transcription(.parakeet)) == "It ran into a problem.")
-        #expect(reason(.modelLoadFailed(.parakeet, "corrupt"), .transcription(.parakeet)) == "It couldn’t be loaded.")
+        #expect(reason(.engineFailed(.gigaam, "CoreML"), .gigaam(.v3)) == "It ran into a problem.")
+        #expect(reason(.modelLoadFailed(.gigaam, "corrupt"), .gigaam(.v3)) == "It couldn’t be loaded.")
         #expect(reason(nil, polish) == "It returned no text.")
         #expect(reason(.openRouterBadRequest(""), flash) == "It couldn’t process this recording.")
         #expect(reason(.openRouterProviderUnavailable(""), flash) == "Google AI Studio is unavailable")
@@ -264,11 +264,11 @@ import Testing
     /// them: the retry already running finishes, then the dictation is transcribed and pasted while the other Home
     /// retry still waits.
     @Test func aDictationGetsTheLocalModelBeforeHomeWorkWaitingForIt() async throws {
-        let engine = FakeEngine(.parakeet, installed: true)
+        let engine = FakeEngine(.gigaam, installed: true)
         let gate = InferenceGate()
         let store = localStore(engine, gate: gate)
         store.start()
-        try await waitUntil { store.state(of: .parakeet) == .ready }
+        try await waitUntil { store.state(of: .gigaam) == .ready }
         let h = harness(store: store)
         defer { removeFiles(h) }
         let first = try await failedDictation(h), second = try await failedDictation(h)
@@ -286,11 +286,11 @@ import Testing
             }
         }
         let steps = await engine.gateTranscriptions()
-        h.controller.retry(try #require(h.history.entry(id: first)), with: .parakeet)
+        h.controller.retry(try #require(h.history.entry(id: first)), with: .gigaam)
         await steps.arrival(1)
-        h.controller.retry(try #require(h.history.entry(id: second)), with: .parakeet)
+        h.controller.retry(try #require(h.history.entry(id: second)), with: .gigaam)
         try await waitForQueue(1)
-        h.controller.enqueue(H.recording(), engine: .parakeet)
+        h.controller.enqueue(H.recording(), engine: .gigaam)
         try await waitForQueue(2)
 
         steps.open()
@@ -298,7 +298,7 @@ import Testing
         steps.open()
         try await waitUntil { pasted == ["hello from the fake"] }
         #expect(h.history.entry(id: first)?.status == .success)
-        #expect(h.controller.homeWork[second] == .transcription(.parakeet), "still waiting for the model")
+        #expect(h.controller.homeWork[second] == .gigaam(.v3), "still waiting for the model")
         steps.openForGood()
         try await waitUntil { h.controller.homeWork.isEmpty }
         #expect(h.history.entry(id: second)?.status == .success)
@@ -307,20 +307,20 @@ import Testing
 
     /// A model load only Home work was waiting for fails in the row, never in a notice.
     @Test func aModelThatWontLoadForHomeWorkSaysSoInTheRow() async throws {
-        let engine = FakeEngine(.parakeet, installed: true)
+        let engine = FakeEngine(.gigaam, installed: true)
         await engine.configure(loadError: FakeFailure(message: "corrupt weights"))
         let store = localStore(engine)
         await store.refreshFromDisk()
-        #expect(store.state(of: .parakeet) == .installed)
+        #expect(store.state(of: .gigaam) == .installed)
         let h = harness(store: store)
         defer { removeFiles(h) }
         let failed = try await failedDictation(h)
         h.controller.transcribeOverride = nil
         let outside = Outside(h)
-        h.controller.retry(try #require(h.history.entry(id: failed)), with: .parakeet)
+        h.controller.retry(try #require(h.history.entry(id: failed)), with: .gigaam)
         try await waitUntil { h.controller.homeWork.isEmpty }
         #expect(await engine.loadCount == 2, "loaded, and tried once more")
-        #expect(h.history.entry(id: failed)?.errorMessage == "Couldn’t load Parakeet v3")
+        #expect(h.history.entry(id: failed)?.errorMessage == "Couldn’t load GigaAM v3")
         #expect(h.toasts.notices.isEmpty)
         #expect(outside.cues.isEmpty && outside.failedDictations == 0)
     }
@@ -383,9 +383,9 @@ import Testing
     /// Nothing cleans up any more: not even a transcript with no text (a legacy "No speech detected" row).
     @Test func anEmptyTranscriptIsntCleanedUp() {
         let h = H.make(keyStatus: .valid(KeyInfo()))
-        let entry = TranscriptEntry(text: "", engine: .parakeet, audioDuration: 4, voicedSeconds: 0)
+        let entry = TranscriptEntry(text: "", engine: .gigaam, audioDuration: 4, voicedSeconds: 0)
         h.history.upsert(entry)
-        h.controller.makeVersion(.cleanup(of: .parakeet, by: .gpt6Luna), of: entry)
+        h.controller.makeVersion(.cleanup(of: .gigaam, by: .gpt6Luna), of: entry)
         #expect(h.controller.homeWork.isEmpty && h.controller.homeFailures.isEmpty)
         let menu = VersionsMenu.make(for: entry, running: nil, readiness: { _ in .ready })
         #expect(!menu.actions.contains { $0.kind.isCleanup })

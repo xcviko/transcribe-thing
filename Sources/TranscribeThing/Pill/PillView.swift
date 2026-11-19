@@ -175,7 +175,8 @@ enum PillPalette {
 
     /// A model color on the pill; graphite is the plain pill. The new colors sit at one depth (OKLCH L 0.645 for the
     /// ring, 0.79 for the marks), so each reads on the fill at least as well as violet does; violet is Gemini's as it
-    /// always was, orange the removed clean-up's, and pink the retired Gemini 3.1 Pro's (Gemini 4 Hydrogen's now).
+    /// always was, orange the removed clean-up's (Gemini 4 Neon's now), and pink the retired Gemini 3.1 Pro's (Gemini 4
+    /// Hydrogen's now).
     static func accent(for color: ModelColor) -> PillAccent? {
         switch color {
         case .graphite: nil
@@ -190,7 +191,7 @@ enum PillPalette {
     }
 
     /// Color means the model, whichever is main: the one Models gives it (`AppSettings.modelColors`). By default
-    /// Gemini violet and Parakeet graphite, the plain pill. nil at rest.
+    /// Gemini violet and GigaAM green. nil at rest.
     static func accent(for choice: ModelChoice?, in colors: ModelColors) -> PillAccent? {
         choice.flatMap { accent(for: colors[$0]) }
     }
@@ -1059,7 +1060,7 @@ struct PillCapsule: View {
 
 /// The capsule's hairline, or the model's ring in its place: one ring whose color changes, never a ring that comes or
 /// goes. A ring on its way out is no longer laid out, so it stayed the old size while the capsule changed under it (a
-/// colored "No speech detected" ring around a narrowing Parakeet pill).
+/// colored "No speech detected" ring around a narrowing GigaAM pill).
 ///
 /// Only the color fades (a color picked mid-dictation, the next dictation's model): the animation is scoped to it. On
 /// the whole face, it also animated whatever changed with the color, so a pill appearing on a colored model grew out
@@ -1601,7 +1602,7 @@ private struct PillControlButton: View {
 }
 
 /// The dictation's model, floating above the pill for a moment after a switch, by its full name: sparkles and
-/// "Gemini 3.8 Flash" in its color, or a bolt and "Parakeet". It comes up naming the new model. One chip for the whole cycle: each switch while
+/// "Gemini 3.8 Flash" in its color, or a speech bubble and "GigaAM v3". It comes up naming the new model. One chip for the whole cycle: each switch while
 /// it's up puts the new name at the end of a strip, and the strip rolls on to it (`PillChipRoll`). The strip only ever
 /// moves on, so switches in a row (fn ⇥ held down) keep it rolling: the spring takes each new end in its stride and
 /// never starts over. In hands-free it stays while the pointer is on it, and opens the model menu (the controller pops
@@ -1678,8 +1679,8 @@ struct PillChipRoll: View, Animatable {
         let next = min(index + 1, last)
         let p = next == index ? 0 : CGFloat(at - Double(index))
         let from = names[index], to = names[next]
-        let fromWidth = Self.width(of: from, name: settings.chipName(of: from))
-        let toWidth = Self.width(of: to, name: settings.chipName(of: to))
+        let fromWidth = Self.width(of: from, name: from.chipName)
+        let toWidth = Self.width(of: to, name: to.chipName)
         let rolling = next != index && p > 0
         Group {
             if !rolling {
@@ -1707,11 +1708,11 @@ struct PillChipRoll: View, Animatable {
     }
 
     private func label(_ choice: ModelChoice) -> some View {
-        Self.label(choice, name: settings.chipName(of: choice),
+        Self.label(choice, name: choice.chipName,
                    accent: PillPalette.accent(for: settings.modelColors[choice]))
     }
 
-    /// `name`: the chip's name for `choice` (`AppSettings.chipName(of:)`: GigaAM's with its version).
+    /// `name`: the chip's name for `choice` (`ModelChoice.chipName`).
     @MainActor static func label(_ choice: ModelChoice, name: String, accent: PillAccent?) -> some View {
         HStack(spacing: 4) {
             Image(systemName: choice.symbolName)

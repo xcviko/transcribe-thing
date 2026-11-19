@@ -125,9 +125,9 @@ enum OnboardingGate {
     }
 
     /// The model step's line under the tiles, with the user's own Switch model binding: what the shortcut steps to
-    /// from Parakeet, or which main model dictations start on when it isn't Parakeet.
+    /// from GigaAM, or which main model dictations start on when it isn't GigaAM.
     static func lineupNote(binding: Shortcut?, lineup: ModelLineup) -> String {
-        guard lineup.main == .parakeet else {
+        guard lineup.main == .gigaam else {
             return "Your dictations start on \(lineup.main.title), your main model. "
                 + "Change it anytime in Models."
         }
@@ -136,15 +136,17 @@ enum OnboardingGate {
             // "fn ⇥" stays on one line inside running copy.
             let key = binding.compactDescription.replacingOccurrences(of: " ", with: "\u{00A0}")
             let next = lineup.steps.first?.modelName ?? EngineID.geminiFlash.modelName
-            return "For a long talk where every word counts, press \(key) while dictating to use \(next). "
-                + "Add its OpenRouter key later in Models."
+            return "For punctuation, English or a long talk where every word counts, press \(key) while dictating "
+                + "to use \(next). Add its OpenRouter key later in Models."
         case .alone, .unbound:
-            return "Gemini is there for long talks where every word counts. Set it up later in Settings."
+            return "Gemini is there for punctuation, other languages and long talks. Set it up later in Settings."
         }
     }
 
+    /// What installing `engine`'s model takes on disk at its peak (the zip and its unpacked folder), with
+    /// `ModelStore`'s headroom.
     static func requiredDiskBytes(for engine: EngineID) -> Int64? {
-        engine.approxDownloadBytes.map { Int64((Double($0) * 1.25).rounded(.up)) }
+        LocalModel(engine: engine).map { Int64((Double($0.approxInstallPeakBytes) * ModelStore.diskHeadroom).rounded(.up)) }
     }
 }
 
@@ -424,8 +426,8 @@ final class OnboardingModel {
     var canSkipAccessibility: Bool { step == .permissions && OnboardingGate.canSkipAccessibility(gateInputs) }
     var practiceStarted: Bool { !completedLessons.isEmpty }
     var primaryTitle: String { OnboardingGate.primaryTitle(step, gateInputs, practiceStarted: practiceStarted) }
-    /// The model step's card: Parakeet on this Mac, the only model onboarding sets up.
-    var selectedEngine: EngineID { .parakeet }
+    /// The model step's card: GigaAM v3 on this Mac, the only model onboarding sets up.
+    var selectedEngine: EngineID { .gigaam }
 
     var fnKeyUsage: FnKeyUsage { fnKeyUsageOverride ?? ctx.permissions.fnKeyUsage }
     var accessibilityLooksStale: Bool { accessibilityStaleOverride ?? ctx.permissions.accessibilityLikelyStale }
@@ -669,7 +671,7 @@ final class OnboardingModel {
 
     // MARK: Models
 
-    /// The model step's Parakeet card: a model already on disk starts loading, so the first dictation doesn't wait
+    /// The model step's GigaAM card: a model already on disk starts loading, so the first dictation doesn't wait
     /// for it. Gemini isn't picked here: it's one of the models in Settings → Models.
     func select(_ engine: EngineID) {
         guard engine.isLocal else { return }

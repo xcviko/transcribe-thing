@@ -8,10 +8,11 @@ import Foundation
 /// `Encoder.mlmodelc` (Conformer and CTC head, float16) and `vocabulary.json` (the alphabet, the blank, the window
 /// lengths both models take).
 ///
-/// The app runs all three as one model, GigaAM (`EngineID.gigaam`), in the version picked in Models
-/// (`AppSettings.gigaamVariant`): each installs on its own from its own zip (`GigaAMSource`) into
+/// The app runs GigaAM v3 alone, as GigaAM (`EngineID.gigaam`): it installs from its zip (`GigaAMSource`) into
 /// `<Models>/<variant raw value>` (`init(variant:modelsRoot:source:)`), and runs on the GPU (float16 builds: a load takes
-/// 2-5 s). The hidden comparison (`EngineBatchCLI`) reads any of them from a folder of its own.
+/// 2-5 s). v3 e2e and Multilingual are retired (`Variant.isRetired`): History keeps what they wrote, and the files of
+/// one still on this Mac are listed to delete (`RetiredLocalModel`). The hidden comparison (`EngineBatchCLI`) reads any
+/// of the three from a folder of its own.
 ///
 /// A recording goes in stretches of at most the longest window (25 s, GigaAM's own limit), cut at the quietest
 /// moment between 15 and 25 s (`GigaAMChunker`), each padded to the next window with its real length passed along,
@@ -20,19 +21,28 @@ import Foundation
 /// digits.
 actor GigaAMEngine: LocalEngine {
     /// A version of GigaAM. Raw values are its folder, its zip's name without ".zip", the transcript metadata's
-    /// `modelID`, and the stored pick (`AppSettings.gigaamVariant`): never rename them. Declaration order is the
-    /// Version menu's.
+    /// `modelID`, History's kind of its transcripts ("gigaam:gigaam-v3-ctc"), and what older builds stored as the pick
+    /// (`SettingsKey.gigaamVariant`): never rename them. Declaration order is History's.
     enum Variant: String, CaseIterable, Identifiable, Sendable {
         case v3 = "gigaam-v3-ctc"
+        /// Retired: it mangled English terms in Russian speech.
         case v3e2e = "gigaam-v3-e2e-ctc"
+        /// Retired: it mangled English terms in Russian speech.
         case multilingual = "gigaam-multilingual-600m-ctc"
 
-        /// The one a fresh install picks: plain fast text, for agents and searches.
+        /// The one the app runs: plain fast text, for agents and searches.
         static let `default`: Variant = .v3
+
+        /// A version this build no longer downloads or runs: v3 e2e and Multilingual. History keeps reading and naming
+        /// what they wrote; their zips stay on the `gigaam-1` release for older builds.
+        var isRetired: Bool { self != .v3 }
+
+        /// The versions this build runs: v3.
+        static var offered: [Variant] { allCases.filter { !$0.isRetired } }
 
         var id: String { rawValue }
 
-        /// The Version menu's word for it: "v3", "v3 e2e", "Multilingual".
+        /// The word after "GigaAM": "v3", "v3 e2e", "Multilingual".
         var versionName: String {
             switch self {
             case .v3: "v3"
@@ -41,26 +51,8 @@ actor GigaAMEngine: LocalEngine {
             }
         }
 
-        /// "GigaAM v3", "GigaAM v3 e2e", "GigaAM Multilingual": its row, the pill's chip, History.
+        /// "GigaAM v3", "GigaAM v3 e2e", "GigaAM Multilingual": History, and the files of a retired one on this Mac.
         var displayName: String { "GigaAM \(versionName)" }
-
-        /// What it's good for: "Russian · no punctuation".
-        var facts: String {
-            switch self {
-            case .v3: "Russian · no punctuation"
-            case .v3e2e: "Russian · punctuation"
-            case .multilingual: "Russian, English and more · no punctuation"
-            }
-        }
-
-        /// The Version menu's item: "v3 · Russian, no punctuation".
-        var menuTitle: String {
-            switch self {
-            case .v3: "v3 · Russian, no punctuation"
-            case .v3e2e: "v3 e2e · Russian with punctuation, capitals and digits"
-            case .multilingual: "Multilingual · Russian, English, Kazakh, Kyrgyz, Uzbek"
-            }
-        }
 
         /// Its install file, as `scripts/convert-gigaam.py package` makes it: one folder named as the zip without
         /// ".zip".

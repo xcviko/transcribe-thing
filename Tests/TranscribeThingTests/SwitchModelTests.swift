@@ -70,9 +70,9 @@ import Testing
 @Suite struct SwitchModelShortcutTests {
     static let quiet = ShortcutPolicyTests.stock(fnUsage: .doNothing)
 
-    /// The chip names Parakeet just "Parakeet" wherever it runs, and Gemini in full.
+    /// The chip names each model in full: GigaAM by its version, Gemini by its.
     @Test func theChipNamesEachModel() {
-        #expect(ModelChoice.parakeet.chipName == "Parakeet")
+        #expect(ModelChoice.gigaam.chipName == "GigaAM v3")
         #expect(ModelChoice.gemini.chipName == "Gemini 3.8 Flash")
     }
 
@@ -142,7 +142,7 @@ import Testing
     }
 
     static func make(key: KeyStatus = .valid(KeyInfo()),
-                     models: [EngineID: LocalModelState] = [.parakeet: .ready]) -> (Rig, Cues) {
+                     models: [EngineID: LocalModelState] = [.gigaam: .ready]) -> (Rig, Cues) {
         let rig = Rig(keyStatus: key, models: models)
         let cues = Cues()
         rig.h.controller.playCueOverride = { cues.played.append($0) }
@@ -189,7 +189,7 @@ import Testing
             choices.append(c.modelOverride)
             #expect(rig.h.pill.sessionModel == c.effectiveChoice)
         }
-        #expect(choices == [.parakeet, nil])
+        #expect(choices == [.gigaam, nil])
         #expect(rig.h.pill.engineChipPulse == 2, "back to the main model pulses too")
         #expect(cues.played.filter { $0 == .modelSwitch }.count == 2)
         #expect(c.machine.capture.isListeningOrLocked, "switching never stops the recording")
@@ -204,10 +204,10 @@ import Testing
         c.handle(.cycleEngine)
         try await Self.release(rig)
 
-        #expect(used == [.geminiFlash, .parakeet, .geminiFlash])
+        #expect(used == [.geminiFlash, .gigaam, .geminiFlash])
         #expect(rig.pasted == ["words", "words", "words"])
         let entries = rig.h.history.entries.sorted { $0.createdAt < $1.createdAt }
-        #expect(entries.map(\.engine) == [.geminiFlash, .parakeet, .geminiFlash], "history records the engine used")
+        #expect(entries.map(\.engine) == [.geminiFlash, .gigaam, .geminiFlash], "history records the engine used")
     }
 
     @Test func theOrderOfModelsIsTheOrderOfSteps() {
@@ -231,13 +231,13 @@ import Testing
         c.cycleEngine()
         #expect(c.effectiveEngine == .geminiFlash)
         c.cycleEngine()
-        #expect(c.effectiveEngine == .parakeet && c.modelOverride == nil)
+        #expect(c.effectiveEngine == .gigaam && c.modelOverride == nil)
 
         rig.h.settings.lineup.setSwitchable(.gemini, false)
         #expect(!c.canSwitchModels)
         let shakes = rig.h.pill.shakeCount
         c.cycleEngine()
-        #expect(c.effectiveEngine == .parakeet)
+        #expect(c.effectiveEngine == .gigaam)
         #expect(rig.notice(DictationController.switchModelNoticeKey) == nil, "nothing to switch to, nothing to say")
         #expect(rig.h.pill.shakeCount == shakes)
         #expect(cues.played.filter { $0 == .modelSwitch }.count == 2)
@@ -254,7 +254,7 @@ import Testing
         #expect(!c.canSwitchModels)
         let shakes = rig.h.pill.shakeCount
         c.cycleEngine()
-        #expect(c.effectiveEngine == .parakeet)
+        #expect(c.effectiveEngine == .gigaam)
         #expect(c.machine.capture.isListeningOrLocked)
         #expect(rig.h.pill.shakeCount == shakes + 1)
         #expect(!cues.played.contains(.modelSwitch))
@@ -275,7 +275,7 @@ import Testing
     /// A model that can't take the dictation now is stepped over; with none to land on, the press is rejected with
     /// the reason.
     @Test func aStepThatCantRunIsSkipped() throws {
-        // Parakeet on this Mac as the main model, and no credit for Gemini.
+        // GigaAM on this Mac as the main model, and no credit for Gemini.
         let (broke, _) = Self.make(key: .noCredit(nil))
         broke.h.controller.send(.handsFreeToggle)
         let shakes = broke.h.pill.shakeCount
@@ -285,28 +285,28 @@ import Testing
             == "Flash needs OpenRouter credit")
         broke.h.controller.send(.pillCancel)
 
-        // Gemini as the main model, Parakeet on this Mac not downloaded: Parakeet can't run.
-        let (bare, _) = Self.make(models: [.parakeet: .notInstalled])
+        // Gemini as the main model, GigaAM on this Mac not downloaded: GigaAM can't run.
+        let (bare, _) = Self.make(models: [.gigaam: .notInstalled])
         bare.h.settings.lineup.main = .gemini
         bare.h.controller.send(.handsFreeToggle)
-        #expect(bare.h.settings.lineup.cycle == [.gemini, .parakeet])
+        #expect(bare.h.settings.lineup.cycle == [.gemini, .gigaam])
         #expect(!bare.h.controller.canSwitchModels)
         let bareShakes = bare.h.pill.shakeCount
         bare.h.controller.cycleEngine()
         #expect(bare.h.controller.modelOverride == nil && bare.h.pill.shakeCount == bareShakes + 1)
         let notice = try #require(bare.notice(DictationController.switchModelNoticeKey))
-        #expect(notice.title == "Parakeet v3 isn’t downloaded yet")
-        #expect(notice.actions.first?.kind == .download(.parakeet))
+        #expect(notice.title == "GigaAM v3 isn’t downloaded yet")
+        #expect(notice.actions.first?.kind == .download(.gigaam))
         bare.h.controller.send(.pillCancel)
 
-        // Gemini as the main model and no credit: Parakeet on this Mac still answers, and the main model is always
+        // Gemini as the main model and no credit: GigaAM on this Mac still answers, and the main model is always
         // there to go back to.
         let (skip, cues) = Self.make(key: .noCredit(nil))
         skip.h.settings.lineup.main = .gemini
         skip.h.controller.send(.handsFreeToggle)
         let skipShakes = skip.h.pill.shakeCount
         skip.h.controller.cycleEngine()
-        #expect(skip.h.controller.modelOverride == .parakeet)
+        #expect(skip.h.controller.modelOverride == .gigaam)
         skip.h.controller.cycleEngine()
         #expect(skip.h.controller.modelOverride == nil, "back to Gemini")
         #expect(skip.h.pill.shakeCount == skipShakes && skip.notice(DictationController.switchModelNoticeKey) == nil)
@@ -331,7 +331,7 @@ import Testing
     }
 
     /// Color means the model, whichever is main: a Gemini main model tints the pill while it listens and while it
-    /// transcribes; switched to Parakeet, the pill is plain.
+    /// transcribes; switched to GigaAM, the pill wears GigaAM's green.
     @Test func eachModelTintsThePillWhateverTheMainModel() async throws {
         let (rig, _) = Self.make()
         let c = rig.h.controller
@@ -353,8 +353,9 @@ import Testing
 
         Self.hold(rig)
         c.handle(.cycleEngine)
-        #expect(c.modelOverride == .parakeet && rig.h.pill.sessionModel == .parakeet)
-        #expect(PillPalette.accent(for: rig.h.pill.sessionModel, in: rig.h.pill.settings.modelColors) == nil)
+        #expect(c.modelOverride == .gigaam && rig.h.pill.sessionModel == .gigaam)
+        #expect(PillPalette.accent(for: rig.h.pill.sessionModel, in: rig.h.pill.settings.modelColors)
+                == PillPalette.accent(for: ModelColor.green))
         c.handle(.cancel)
     }
 
@@ -364,32 +365,32 @@ import Testing
         let (rig, _) = Self.make()
         let c = rig.h.controller
         rig.h.settings.lineup.main = .gemini
-        rig.h.settings.modelColors[.parakeet] = .teal
+        rig.h.settings.modelColors[.gigaam] = .teal
         rig.h.settings.modelColors[.gemini] = .graphite
         Self.hold(rig)
         #expect(rig.h.pill.sessionModel == .gemini)
         #expect(PillPalette.accent(for: rig.h.pill.sessionModel, in: rig.h.pill.settings.modelColors) == nil,
                 "graphite is the plain pill")
         c.handle(.cycleEngine)
-        #expect(rig.h.pill.sessionModel == .parakeet)
+        #expect(rig.h.pill.sessionModel == .gigaam)
         #expect(PillPalette.accent(for: rig.h.pill.sessionModel, in: rig.h.pill.settings.modelColors)
                 == PillPalette.accent(for: ModelColor.teal))
         c.handle(.cancel)
     }
 
-    /// Gemini as the main model without a key: the dictation is refused, and "Use Parakeet v3" makes Parakeet the
+    /// Gemini as the main model without a key: the dictation is refused, and "Use GigaAM v3" makes GigaAM the
     /// main model.
-    @Test func aGeminiMainModelWithoutAKeyOffersParakeet() throws {
+    @Test func aGeminiMainModelWithoutAKeyOffersGigaAM() throws {
         let (rig, _) = Self.make(key: .missing)
         let c = rig.h.controller
         rig.h.settings.lineup.main = .gemini
         c.send(.handsFreeToggle)
         #expect(rig.h.recorder.starts == 0)
         let notice = try #require(rig.h.toasts.notices.first)
-        #expect(notice.actions.contains { $0.kind == .selectEngine(.parakeet) })
-        try rig.click(.selectEngine(.parakeet), in: notice.dedupeKey)
-        #expect(rig.h.settings.lineup.main == .parakeet)
-        #expect(rig.notice("engine.selected")?.title == "Now using Parakeet v3")
+        #expect(notice.actions.contains { $0.kind == .selectEngine(.gigaam) })
+        try rig.click(.selectEngine(.gigaam), in: notice.dedupeKey)
+        #expect(rig.h.settings.lineup.main == .gigaam)
+        #expect(rig.notice("engine.selected")?.title == "Now using GigaAM v3")
         #expect(rig.h.settings.lineup.isSwitchable(.gemini), "Gemini stays a step")
     }
 
@@ -401,7 +402,7 @@ import Testing
         rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
         Self.hold(rig)
         c.handle(.cycleEngine)
-        #expect(c.modelOverride == .parakeet && c.effectiveEngine == .parakeet)
+        #expect(c.modelOverride == .gigaam && c.effectiveEngine == .gigaam)
         rig.now += 2
         c.handle(.cancel)
         #expect(c.modelOverride == nil && c.effectiveEngine == .geminiFlash)
@@ -409,8 +410,8 @@ import Testing
         rig.now += 1
         try rig.click(.undoCancel, in: "dictation.canceled")
         #expect(c.machine.capture.isListeningOrLocked)
-        #expect(c.modelOverride == .parakeet)
-        #expect(rig.h.pill.sessionModel == .parakeet)
+        #expect(c.modelOverride == .gigaam)
+        #expect(rig.h.pill.sessionModel == .gigaam)
 
         var used: [EngineID] = []
         rig.result = { _, engine in
@@ -421,7 +422,7 @@ import Testing
         rig.now += 1
         c.send(.pillStop)
         try await waitUntil { rig.pasted == ["resumed"] && c.machine.activeJobs == 0 }
-        #expect(used == [.parakeet])
+        #expect(used == [.gigaam])
         #expect(c.effectiveEngine == .geminiFlash)
     }
 
@@ -450,9 +451,9 @@ import Testing
         try await waitUntil { rig.pasted == ["words"] && c.machine.activeJobs == 0 }
 
         Self.hold(rig)
-        #expect(c.modelOverride == nil && c.effectiveEngine == .parakeet)
+        #expect(c.modelOverride == nil && c.effectiveEngine == .gigaam)
         try await Self.release(rig)
-        #expect(used == [.geminiFlash, .parakeet])
+        #expect(used == [.geminiFlash, .gigaam])
     }
 
     /// Space while holding the key goes hands-free too, and switches the same way.
@@ -471,7 +472,7 @@ import Testing
         let (rig, cues) = Self.make()
         let c = rig.h.controller
         rig.h.settings.lineup.main = .gemini
-        rig.h.settings.handsFreeModel = .parakeet
+        rig.h.settings.handsFreeModel = .gigaam
         Self.hold(rig)
         c.handle(.cycleEngine)
         c.handle(.cycleEngine)
@@ -499,7 +500,7 @@ import Testing
         rig.h.settings.handsFreeModel = .gemini
         let shakes = rig.h.pill.shakeCount
         rig.h.controller.send(.handsFreeToggle)
-        #expect(rig.h.controller.modelOverride == nil && rig.h.controller.effectiveEngine == .parakeet)
+        #expect(rig.h.controller.modelOverride == nil && rig.h.controller.effectiveEngine == .gigaam)
         #expect(rig.h.pill.shakeCount == shakes + 1)
         #expect(rig.notice(DictationController.switchModelNoticeKey) != nil)
         rig.h.controller.send(.pillCancel)
@@ -512,9 +513,9 @@ import Testing
         rig.h.settings.handsFreeModel = .gemini
         Self.hold(rig)
         for _ in rig.h.settings.lineup.cycle { c.handle(.cycleEngine) }
-        #expect(c.modelOverride == nil, "around the cycle and back on Parakeet")
+        #expect(c.modelOverride == nil, "around the cycle and back on GigaAM")
         c.handle(.handsFreeToggle)
-        #expect(c.modelOverride == nil && c.effectiveEngine == .parakeet)
+        #expect(c.modelOverride == nil && c.effectiveEngine == .gigaam)
         c.send(.pillCancel)
     }
 
@@ -523,7 +524,7 @@ import Testing
         let (rig, cues) = Self.make()
         let c = rig.h.controller
         rig.h.settings.lineup.main = .gemini
-        rig.h.settings.handsFreeModel = .parakeet
+        rig.h.settings.handsFreeModel = .gigaam
         Self.hold(rig)
         c.toggle(.polish, on: .recording)
         c.handle(.handsFreeToggle)
@@ -538,14 +539,14 @@ import Testing
         let (rig, _) = Self.make(key: .missing)
         let c = rig.h.controller
         rig.h.settings.lineup.main = .gemini
-        rig.h.settings.handsFreeModel = .parakeet
+        rig.h.settings.handsFreeModel = .gigaam
         c.send(.handsFreeToggle)
-        #expect(c.machine.capture.isListeningOrLocked && c.effectiveEngine == .parakeet)
+        #expect(c.machine.capture.isListeningOrLocked && c.effectiveEngine == .gigaam)
         c.send(.pillCancel)
 
         c.handle(.pttDown)
         c.handle(.handsFreeToggle)
-        #expect(c.machine.capture.isListeningOrLocked && c.effectiveEngine == .parakeet)
+        #expect(c.machine.capture.isListeningOrLocked && c.effectiveEngine == .gigaam)
         #expect(rig.h.toasts.notices.allSatisfy { $0.style == .info }, "nothing refused")
         c.send(.pillCancel)
     }
@@ -557,13 +558,13 @@ import Testing
         let c = rig.h.controller
         c.runsTimers = false
         rig.h.settings.lineup.main = .gemini
-        rig.h.settings.handsFreeModel = .parakeet
+        rig.h.settings.handsFreeModel = .gigaam
         c.handle(.pttDown)
         c.send(.timer(.arming))
         #expect(rig.h.toasts.notices.isEmpty && !cues.played.contains(.start))
         rig.now += 0.15
         c.handle(.handsFreeToggle)
-        #expect(c.machine.capture.isListeningOrLocked && c.machine.mode == .handsFree && c.effectiveEngine == .parakeet)
+        #expect(c.machine.capture.isListeningOrLocked && c.machine.mode == .handsFree && c.effectiveEngine == .gigaam)
         #expect(rig.h.toasts.notices.allSatisfy { $0.style == .info }, "nothing refused")
         c.send(.pillCancel)
     }
@@ -575,7 +576,7 @@ import Testing
         let c = rig.h.controller
         c.runsTimers = false
         rig.h.settings.lineup.main = .gemini
-        rig.h.settings.handsFreeModel = .parakeet
+        rig.h.settings.handsFreeModel = .gigaam
         c.handle(.pttDown)
         c.send(.timer(.arming))
         c.toggle(.polish, on: .recording)
@@ -591,7 +592,7 @@ import Testing
         let c = rig.h.controller
         c.runsTimers = false
         rig.h.settings.lineup.main = .gemini
-        rig.h.settings.handsFreeModel = .parakeet
+        rig.h.settings.handsFreeModel = .gigaam
         c.handle(.pttDown)
         c.send(.timer(.arming))
         rig.now += 2
@@ -600,8 +601,8 @@ import Testing
         #expect(rig.h.toasts.notices.contains { $0.style != .info }, "the refusal")
     }
 
-    /// The main model refused the hold (Gemini without a key) and fn Tab moves it to Parakeet, before the hold is
-    /// confirmed or after: the mic opens for Parakeet, the dictation is Parakeet's, and Gemini's refusal is never told.
+    /// The main model refused the hold (Gemini without a key) and fn Tab moves it to GigaAM, before the hold is
+    /// confirmed or after: the mic opens for GigaAM, the dictation is GigaAM's, and Gemini's refusal is never told.
     @Test func switchingAwayFromARefusedHoldRecordsOnTheNewModel() async throws {
         for confirmedFirst in [false, true] {
             let (rig, _) = Self.make(key: .missing)
@@ -609,7 +610,7 @@ import Testing
             c.runsTimers = false
             rig.h.settings.lineup.main = .gemini
             // With hands-free's model able to start, a confirmed hold's refusal waits for fn Space (deferred).
-            rig.h.settings.handsFreeModel = .parakeet
+            rig.h.settings.handsFreeModel = .gigaam
             var used: [EngineID] = []
             rig.result = { _, engine in
                 used.append(engine)
@@ -619,11 +620,11 @@ import Testing
             if confirmedFirst { c.send(.timer(.arming)) }
             #expect(rig.h.recorder.starts == 0)
             c.handle(.cycleEngine)
-            #expect(c.effectiveEngine == .parakeet && rig.h.recorder.starts == 1, "confirmed first: \(confirmedFirst)")
+            #expect(c.effectiveEngine == .gigaam && rig.h.recorder.starts == 1, "confirmed first: \(confirmedFirst)")
             if !confirmedFirst { c.send(.timer(.arming)) }
             #expect(c.machine.capture.isListeningOrLocked)
             try await Self.release(rig)
-            #expect(used == [.parakeet])
+            #expect(used == [.gigaam])
             #expect(rig.h.toasts.notices.allSatisfy { $0.style == .info }, "nothing refused")
         }
     }
@@ -638,7 +639,7 @@ import Testing
         let micFails = AppError.microphoneNotResponding("busy")
         rig.h.recorder.startError = micFails
         c.handle(.cycleEngine)
-        #expect(c.effectiveEngine == .parakeet)
+        #expect(c.effectiveEngine == .gigaam)
         c.send(.timer(.arming))
         #expect(!c.machine.isRecording)
         #expect(rig.notice("error.\(micFails.code)") != nil)
@@ -658,7 +659,7 @@ import Testing
         #expect(settings.handsFreeChoice == nil, "back in the cycle, but not picked again")
         settings.handsFreeModel = .gemini
         settings.lineup.main = .gemini
-        settings.lineup.main = .parakeet
+        settings.lineup.main = .gigaam
         #expect(settings.handsFreeModel == nil, "it was the main model meanwhile")
     }
 
@@ -674,7 +675,7 @@ import Testing
         rig.now += 1
         try rig.click(.undoCancel, in: "dictation.canceled")
         #expect(c.machine.capture.isListeningOrLocked)
-        #expect(c.modelOverride == nil && c.effectiveEngine == .parakeet)
+        #expect(c.modelOverride == nil && c.effectiveEngine == .gigaam)
         c.send(.pillCancel)
     }
 
@@ -747,12 +748,12 @@ import Testing
     @Test func theKeyNoticeNamesWhatItBlocks() {
         #expect(DictationController.switchWithoutKeyNotice(.missing, blocked: [.gemini]).title
             == "Flash needs an OpenRouter key")
-        #expect(DictationController.switchWithoutKeyNotice(.missing, blocked: [.parakeet]).title
-            == "Parakeet needs an OpenRouter key")
+        #expect(DictationController.switchWithoutKeyNotice(.missing, blocked: [.hydrogen]).title
+            == "Hydrogen needs an OpenRouter key")
         #expect(DictationController.switchWithoutKeyNotice(.noCredit(nil), blocked: [.gemini]).title
             == "Flash needs OpenRouter credit")
-        let all = DictationController.switchWithoutKeyNotice(.invalid("401"), blocked: [.parakeet, .gemini])
-        #expect(all.title == "Parakeet and Flash need an OpenRouter key")
+        let all = DictationController.switchWithoutKeyNotice(.invalid("401"), blocked: [.hydrogen, .gemini])
+        #expect(all.title == "Hydrogen and Flash need an OpenRouter key")
         #expect(all.body == "OpenRouter rejected yours. Update it to switch models.")
         #expect(DictationController.switchWithoutKeyNotice(.missing, blocked: [.gemini]).body
             == "Add one to switch models while dictating.")
@@ -779,7 +780,7 @@ import Testing
         let (rig, cues) = Self.make()
         let c = rig.h.controller
         c.start()
-        #expect(rig.h.pill.menuChoices == [.parakeet, .gemini])
+        #expect(rig.h.pill.menuChoices == [.gigaam, .gemini])
         c.selectModelForCurrentDictation(.gemini)
         #expect(c.modelOverride == nil, "no dictation, nothing to pick for")
         c.send(.handsFreeToggle)
@@ -788,14 +789,13 @@ import Testing
         #expect(rig.h.pill.sessionModel == .gemini)
         c.selectModelForCurrentDictation(.gemini)
         c.selectModelForCurrentDictation(rig.h.settings.lineup.main)
-        #expect(c.modelOverride == nil && c.effectiveEngine == .parakeet)
-        #expect(rig.h.pill.sessionModel == .parakeet)
+        #expect(c.modelOverride == nil && c.effectiveEngine == .gigaam)
+        #expect(rig.h.pill.sessionModel == .gigaam)
         #expect(rig.h.pill.engineChipPulse == 2)
         #expect(cues.played.filter { $0 == .modelSwitch }.count == 2)
         let reason = try #require(rig.h.pill.unavailableReason)
-        #expect(ModelChoice.allCases.filter { $0 != .gigaam }.allSatisfy { reason($0) == nil },
-                "the key works: everything can run")
-        #expect(reason(.gigaam) == "Not downloaded", "GigaAM's own state, not Parakeet's")
+        #expect(ModelChoice.allCases.allSatisfy { reason($0) == nil },
+                "the key works and GigaAM is ready: everything can run")
         c.send(.pillCancel)
     }
 
@@ -805,7 +805,7 @@ import Testing
         let c = rig.h.controller
         c.start()
         let reason = try #require(rig.h.pill.unavailableReason)
-        #expect(reason(.parakeet) == nil, "the main model always can")
+        #expect(reason(.gigaam) == nil, "the main model always can")
         #expect(reason(.gemini) == "Needs key")
         c.send(.handsFreeToggle)
         c.selectModelForCurrentDictation(.gemini)

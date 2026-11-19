@@ -31,7 +31,7 @@ struct WelcomeStep: View {
 
             VStack(alignment: .leading, spacing: 14) {
                 feature("lock.shield.fill", tint: .success, title: "Private by default",
-                        detail: "Parakeet runs on your Mac. Your voice never leaves it.")
+                        detail: "GigaAM runs on your Mac. Your voice never leaves it.")
                 feature("macwindow.on.rectangle", tint: .accent, title: "Works everywhere",
                         detail: "Mail, chat, your editor, any text field.")
                 feature("text.quote", tint: .inkSecondary, title: "Your words, as you said them",

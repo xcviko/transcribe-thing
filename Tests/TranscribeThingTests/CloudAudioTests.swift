@@ -135,7 +135,7 @@ private func format(of data: Data, ext: String) throws -> (codec: AudioFormatID,
         #expect(options("--engine", "geminiFlash", "--upload", "flac") == nil, "FLAC went with cloud Parakeet")
         #expect(options("--engine", "geminiFlash", "--upload") == nil)
         #expect(options("--engine", "geminiFlash", "--upload", "--repeat", "2") == nil)
-        #expect(options("--engine", "parakeet", "--upload", "wav") == nil, "the model on this Mac uploads nothing")
+        #expect(options("--engine", "gigaam", "--upload", "wav") == nil, "the model on this Mac uploads nothing")
         #expect(EngineCLI.Options.usage.contains("[--upload wav|m4a]"))
         #expect(EngineCLI.handles(["transcribe-thing", "--transcribe", "/tmp/memo.m4a", "--upload", "wav"]))
     }

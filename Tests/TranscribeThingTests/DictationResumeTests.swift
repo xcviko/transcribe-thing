@@ -17,7 +17,7 @@ import Testing
         var pasted: [String] = []
         var result: @MainActor (Recording, EngineID) async throws -> String = { _, _ in "" }
 
-        init(keyStatus: KeyStatus = .missing, models: [EngineID: LocalModelState] = [.parakeet: .ready]) {
+        init(keyStatus: KeyStatus = .missing, models: [EngineID: LocalModelState] = [.gigaam: .ready]) {
             h = DictationControllerTests.make(models: models, keyStatus: keyStatus)
             // Weak: a test that timed out leaves its controller at work after the rig is gone, and that test should
             // fail on its own rather than crash every other one.
@@ -56,7 +56,7 @@ import Testing
     }
 
     /// One second of room noise: SpeechAnalyzer counted 0.6 s "voiced" in the user's real recording, but nothing
-    /// was said, so Parakeet returns no text.
+    /// was said, so GigaAM returns no text.
     static func roomNoise(seconds: Double = 1) -> Recording {
         Recording(samples: Array(repeating: 0.003, count: Int(16_000 * seconds)),
                   speech: SpeechStats(voicedSeconds: 0.6, peakDBFS: -32, isSilent: false))
@@ -113,7 +113,7 @@ import Testing
     /// No text from any model means the user was silent: "No speech detected", with nothing to retry and
     /// nothing kept, whichever model and whatever the key.
     @Test func noTextFromAnyModelIsSilenceNotAFailure() async throws {
-        for (engine, key) in [(EngineID.parakeet, KeyStatus.valid(KeyInfo())), (.parakeet, .missing),
+        for (engine, key) in [(EngineID.gigaam, KeyStatus.valid(KeyInfo())), (.gigaam, .missing),
                               (.geminiFlash, .valid(KeyInfo()))] {
             let rig = Rig(keyStatus: key)
             rig.h.settings.pillMode = .never   // the notice itself is what's checked here
@@ -430,12 +430,12 @@ import Testing
         }
         rig.result = { _, _ in "once" }
         let r = Self.speech(seconds: 2)
-        rig.h.controller.enqueue(r, engine: .parakeet)
-        rig.h.controller.enqueue(r, engine: .parakeet)
+        rig.h.controller.enqueue(r, engine: .gigaam)
+        rig.h.controller.enqueue(r, engine: .gigaam)
         #expect(rig.h.controller.pendingJobCount == 1)
         // Being pasted now (it has left the queue): still not queued again.
         try await waitUntil { pasting }
-        rig.h.controller.enqueue(r, engine: .parakeet)
+        rig.h.controller.enqueue(r, engine: .gigaam)
         releasePaste = true
         try await waitUntil { rig.h.controller.machine.activeJobs == 0 }
         try await Task.sleep(for: .milliseconds(100))
@@ -450,7 +450,7 @@ import Testing
         rig.holdThenEsc(21)
         let entry = try #require(rig.h.history.entry(id: kept.id))
         try rig.click(.undoCancel, in: "dictation.canceled")
-        rig.h.controller.retry(entry, with: .parakeet)
+        rig.h.controller.retry(entry, with: .gigaam)
         #expect(rig.h.controller.homeWork.isEmpty && rig.h.controller.pendingJobCount == 0)
         rig.h.controller.send(.pillCancel)
     }
