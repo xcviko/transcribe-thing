@@ -15,8 +15,10 @@ import Foundation
 /// of the three from a folder of its own.
 ///
 /// A recording goes in stretches of at most the longest window (25 s, GigaAM's own limit), cut at the quietest
-/// moment between 15 and 25 s (`GigaAMChunker`), each padded to the next window with its real length passed along,
-/// so the padding changes nothing. CTC greedy decoding. v3 and Multilingual write lowercase letters without
+/// moment between 15 and 25 s (`GigaAMChunker`), each padded to that longest window with its real length passed along,
+/// so the padding changes nothing. Always the longest, though the model takes shorter ones too: on the GPU Core ML keeps
+/// only the shape it ran last ready, so a stretch in another window than the one before it took 0.35-0.4 s (up to 1.2 s
+/// after a pause), the same window 0.02-0.08 s whatever the length of speech in it (M1 Max). CTC greedy decoding. v3 and Multilingual write lowercase letters without
 /// punctuation and numbers as words; e2e writes SentencePiece pieces ("▁" for a space) with punctuation, capitals and
 /// digits.
 actor GigaAMEngine: LocalEngine {
@@ -92,6 +94,9 @@ actor GigaAMEngine: LocalEngine {
         let windowSamples: [Int]
         let hop: Int
         let win: Int
+
+        /// The window every stretch runs in (25 s): see the type's comment.
+        var longestWindow: Int { windowSamples.max() ?? 0 }
 
         enum CodingKeys: String, CodingKey {
             case model, vocabulary, pieces, blank, hop, win
@@ -243,7 +248,7 @@ actor GigaAMEngine: LocalEngine {
 
     // MARK: Load
 
-    /// Loads both models and the vocabulary, then runs each window size once. On the GPU a load takes 2-5 s. (On the
+    /// Loads both models and the vocabulary, then runs the longest window once. On the GPU a load takes 2-5 s. (On the
     /// Neural Engine, int8 builds took about 3 minutes in `MLModel.load` alone, cold again after a rebuild of the app.)
     func load() async throws {
         guard encoder == nil else { return }
@@ -264,10 +269,9 @@ actor GigaAMEngine: LocalEngine {
         self.frontend = frontend
         self.encoder = encoder
         self.vocabulary = vocabulary
-        // Warm-up: the first prediction of each window size pays for its specialization.
-        for window in vocabulary.windowSamples {
-            _ = try run(Array(repeating: 0, count: window / 2), window: window)
-        }
+        // Warm-up: the first prediction in a window pays for its specialization.
+        let window = vocabulary.longestWindow
+        _ = try run(Array(repeating: 0, count: window / 2), window: window)
     }
 
     func unload() {
@@ -281,11 +285,10 @@ actor GigaAMEngine: LocalEngine {
     /// 16 kHz mono Float32 in [-1, 1]. "" when it hears no speech.
     func transcribe(_ samples: [Float]) async throws -> String {
         guard encoder != nil, let vocabulary else { throw LocalEngineError.notLoaded }
-        let longest = vocabulary.windowSamples.max() ?? 0
+        let window = vocabulary.longestWindow
         var parts: [String] = []
-        for range in GigaAMChunker.split(samples, maxLength: longest) {
+        for range in GigaAMChunker.split(samples, maxLength: window) {
             guard range.count >= vocabulary.win else { continue }
-            let window = vocabulary.windowSamples.first { $0 >= range.count } ?? longest
             let text = try run(Array(samples[range]), window: window)
             if !text.isEmpty { parts.append(text) }
         }
