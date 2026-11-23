@@ -1860,8 +1860,6 @@ final class DictationController {
             useBuiltInMicrophone()
         case .installUpdate:
             installUpdate?()
-        case .undoDictionaryAdd(let word, let before, let after):
-            settings.dictionary.undoAdding(word, before: before, after: after)
         case .dismiss, .copyText, .pasteText:
             break
         }
@@ -3315,8 +3313,8 @@ final class DictationController {
 
     // MARK: - Dictionary
 
-    /// The dictionary key over a selection: the selection goes into the dictionary (`UserDictionary`), and a card
-    /// says what happened, with Undo. A push-to-talk hold was only the way to the key, so its dictation gives way
+    /// The dictionary key over a selection: the selection goes into the dictionary (`UserDictionary`), and a one-line
+    /// toast names the word for a second. A push-to-talk hold was only the way to the key, so its dictation gives way
     /// (kept for Undo only if something was said in it); a hands-free dictation goes on, fn's release included.
     private func addToDictionary(_ text: String) {
         let before = settings.dictionary
@@ -3332,14 +3330,9 @@ final class DictationController {
         case .added(let word, let replaced):
             DiagnosticLog.shared.event(.dictation, "dictionary.added", [
                 "characters": word.count, "words": settings.dictionary.words.count, "respelled": replaced != nil])
-            toasts.post(Self.dictionaryCard(added: word, replacing: replaced, before: before,
-                                            after: settings.dictionary))
+            toasts.post(Self.dictionaryCard(added: word, replacing: replaced))
         case .alreadyThere(let word):
-            // Under its own key: an "Added" card still up keeps its Undo.
-            toasts.post(Notice(dedupeKey: Self.dictionaryNoteKey, style: .info, symbol: "character.book.closed",
-                               title: "Already in your dictionary", body: "“\(word)”",
-                               actions: [NoticeAction(title: "Open Dictionary", kind: .openHub(.dictionary))],
-                               lifetime: .seconds(6)))
+            toasts.post(Self.dictionaryCard(alreadyThere: word))
         case .invalid(let reason):
             postDictionaryRefusal(reason)
         }
@@ -3361,25 +3354,27 @@ final class DictationController {
         }
     }
 
+    /// What fn D did with a word: added, or already there. The next fn D's takes its place.
     nonisolated static let dictionaryCardKey = "dictionary.added"
-    /// "Already in your dictionary", "Select a word or a name".
+    /// "Select a word or a name", "Can’t read the selection here".
     nonisolated static let dictionaryNoteKey = "dictionary.note"
 
-    /// "Added to your dictionary": the word (and the spelling it replaced), with Close first (fn D was meant, so the
-    /// card is mostly there to be closed) and Undo, which takes back just this add (`before` to `after`).
-    nonisolated static func dictionaryCard(added word: String, replacing replaced: String? = nil,
-                                           before: UserDictionary, after: UserDictionary) -> Notice {
-        let body = if let replaced {
-            "“\(word)” replaces “\(replaced)”. Gemini gets it as a hint."
-        } else {
-            "Gemini now knows “\(word)” and how it’s spelled."
-        }
-        return Notice(dedupeKey: dictionaryCardKey, style: .info, symbol: "character.book.closed",
-                      title: "Added to your dictionary", body: body,
-                      actions: [NoticeAction(title: "Close", kind: .dismiss, isPrimary: true),
-                                NoticeAction(title: "Undo", kind: .undoDictionaryAdd(word, before: before,
-                                                                                     after: after))],
-                      lifetime: .seconds(10), sound: .dictionaryAdded)
+    /// How long fn D's one line stays: a second on screen (`ToastCountdown.speed`). fn D was meant; the toast only
+    /// names the word.
+    nonisolated static let dictionaryCardLifetime: NoticeLifetime = .seconds(2)
+
+    /// "Added “Wispr Flow”", or "“WISPR” replaces “Wispr”" for a spelling it took the place of: one line, no buttons,
+    /// gone in a second. Taking a word out is the Dictionary page's.
+    nonisolated static func dictionaryCard(added word: String, replacing replaced: String? = nil) -> Notice {
+        let title = replaced.map { "“\(word)” replaces “\($0)”" } ?? "Added “\(word)”"
+        return Notice(dedupeKey: dictionaryCardKey, style: .info, symbol: "character.book.closed", title: title,
+                      lifetime: dictionaryCardLifetime, sound: .dictionaryAdded)
+    }
+
+    /// "Already there: “Wispr Flow”", as briefly, without the sound of an add.
+    nonisolated static func dictionaryCard(alreadyThere word: String) -> Notice {
+        Notice(dedupeKey: dictionaryCardKey, style: .info, symbol: "character.book.closed",
+               title: "Already there: “\(word)”", lifetime: dictionaryCardLifetime)
     }
 
     /// Another choice for this dictation: the pill's chip, and for the user's own

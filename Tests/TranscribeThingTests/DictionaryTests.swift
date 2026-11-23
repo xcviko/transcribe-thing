@@ -54,26 +54,6 @@ import Testing
         #expect(dictionary.words.first == "word1")
     }
 
-    /// Undo of an add takes back only that add: the spelling it replaced and the words it pushed out come back where
-    /// they were, and what changed since stays.
-    @Test func undoingAnAddKeepsWhatChangedSince() {
-        let before = UserDictionary(words: ["Wispr", "Kubernetes", "Gemini"])
-        var dictionary = before
-        dictionary.add("WISPR")
-        let after = dictionary
-        dictionary.remove("Gemini")
-        dictionary.add("New one")
-        dictionary.undoAdding("WISPR", before: before, after: after)
-        #expect(dictionary.words == ["Wispr", "Kubernetes", "New one"])
-
-        let full = UserDictionary(words: (0..<UserDictionary.maxCount).map { "word\($0)" })
-        var more = full
-        more.add("One more")
-        let added = more
-        more.undoAdding("One more", before: full, after: added)
-        #expect(more == full, "the oldest word it pushed out comes back first")
-    }
-
     @Test func itStoresAsAListAndReadsLeniently() throws {
         let dictionary = UserDictionary(words: ["Wispr", "Flow"])
         let data = try JSONEncoder().encode(dictionary)
@@ -216,15 +196,6 @@ import Testing
         #expect(d.group(of: "Gemini") == nil)
     }
 
-    @Test func undoingAnAddPutsTheOldSpellingBackInItsGroup() {
-        var (d, models, _) = sample()
-        let before = d
-        d.add("GPT-6 LUNA")
-        let after = d
-        d.undoAdding("GPT-6 LUNA", before: before, after: after)
-        #expect(d.words(in: models) == ["Gemini", "GPT-6 Luna"])
-    }
-
     @Test func theGroupingIsStoredApartAndCleanedOnTheWayBack() throws {
         let (d, models, _) = sample()
         var stale = d.grouping
@@ -272,7 +243,8 @@ import Testing
         rig.h.controller.handle(.heldForSelection(.addToDictionary, d))
     }
 
-    /// fn D: the word goes in, the push-to-talk dictation goes without a trace, and a card says so with Undo.
+    /// fn D: the word goes in, the push-to-talk dictation goes without a trace, and one line names the word for a
+    /// second, with no buttons.
     @Test func fnDAddsTheSelection() async throws {
         let (rig, _) = Self.make()
         Switch.hold(rig)
@@ -281,25 +253,20 @@ import Testing
         #expect(rig.h.controller.machine.capture == .idle && rig.transcribed.isEmpty)
         #expect(rig.notice("dictation.canceled") == nil)
         let card = try #require(rig.notice(DictationController.dictionaryCardKey))
-        #expect(card.title == "Added to your dictionary")
-        try rig.click(.undoDictionaryAdd("Wispr Flow", before: UserDictionary(), after: UserDictionary(words: ["Wispr Flow"])),
-                      in: DictationController.dictionaryCardKey)
-        #expect(rig.h.settings.dictionary.words.isEmpty)
+        #expect(card.title == "Added “Wispr Flow”" && card.sound == .dictionaryAdded)
+        #expect(ToastCard.isCompact(card) && card.actions.isEmpty && card.body == nil)
+        #expect(ToastCountdown(lifetime: card.lifetime, now: Date(), paused: false)?.total == 1, "a second on screen")
     }
 
-    /// The same word in other capitals takes the old spelling's place, and Undo brings the old one back.
-    @Test func undoBringsBackTheSpellingItReplaced() async throws {
+    /// The same word in other capitals takes the old spelling's place, and the line says so.
+    @Test func aRespellingSaysWhichItReplaced() async throws {
         let (rig, _) = Self.make(selection: "WISPR")
         rig.h.settings.dictionary.add("Wispr")
         Switch.hold(rig)
         Self.pressD(rig)
         try await waitUntil { rig.h.settings.dictionary.words == ["WISPR"] }
         let card = try #require(rig.notice(DictationController.dictionaryCardKey))
-        #expect(card.body?.contains("replaces “Wispr”") == true)
-        try rig.click(.undoDictionaryAdd("WISPR", before: UserDictionary(words: ["Wispr"]),
-                                         after: UserDictionary(words: ["WISPR"])),
-                      in: DictationController.dictionaryCardKey)
-        #expect(rig.h.settings.dictionary.words == ["Wispr"])
+        #expect(card.title == "“WISPR” replaces “Wispr”")
     }
 
     @Test func aWordAlreadyThereSaysSo() async throws {
@@ -307,8 +274,9 @@ import Testing
         rig.h.settings.dictionary.add("Wispr Flow")
         Switch.hold(rig)
         Self.pressD(rig)
-        try await waitUntil { rig.notice(DictationController.dictionaryNoteKey) != nil }
-        #expect(rig.notice(DictationController.dictionaryNoteKey)?.title == "Already in your dictionary")
+        try await waitUntil { rig.notice(DictationController.dictionaryCardKey) != nil }
+        let card = try #require(rig.notice(DictationController.dictionaryCardKey))
+        #expect(card.title == "Already there: “Wispr Flow”" && card.sound == nil && card.actions.isEmpty)
         #expect(rig.h.settings.dictionary.words == ["Wispr Flow"])
     }
 
@@ -367,10 +335,9 @@ import Testing
         #expect(c.machine.capture.isListeningOrLocked && rig.transcribed.isEmpty)
         c.handle(.pttDown)
         Self.pressD(rig)
-        try await waitUntil { rig.notice(DictationController.dictionaryNoteKey) != nil }
+        try await waitUntil { rig.notice(DictationController.dictionaryCardKey)?.title.hasPrefix("Already") == true }
         c.handle(.pttUp)
         #expect(c.machine.capture.isListeningOrLocked, "already there: the same")
-        #expect(rig.notice(DictationController.dictionaryCardKey) != nil, "the Added card keeps its Undo")
         c.send(.pillCancel)
     }
 

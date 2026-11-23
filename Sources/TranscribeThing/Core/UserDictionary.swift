@@ -149,18 +149,6 @@ struct UserDictionary: Equatable, Sendable {
         if index(of: word) == nil { membership[Self.key(word)] = nil }
     }
 
-    /// Takes back the add of `word` that made `after` out of `before`, keeping whatever changed since: the word goes,
-    /// and the spelling it replaced and the oldest words it pushed out come back where they were, in their groups.
-    mutating func undoAdding(_ word: String, before: UserDictionary, after: UserDictionary) {
-        remove(word)
-        for (i, taken) in before.words.enumerated() where !after.words.contains(taken) && index(of: taken) == nil {
-            words.insert(taken, at: min(i, words.count))
-            if let group = before.group(of: taken), groups.contains(where: { $0.id == group }) {
-                membership[Self.key(taken)] = group
-            }
-        }
-    }
-
     // MARK: Groups
 
     private static func key(_ word: String) -> String { word.lowercased() }

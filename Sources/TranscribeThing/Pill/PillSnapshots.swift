@@ -117,7 +117,7 @@ enum PillSnapshots {
             },
             // Polish Selection (`--only pill-selection`): the polish while the models write, and the cards.
             SnapshotEntry("pill-dictionary-added", width: 640, height: 260) { _ in
-                CanvasScene(model: restModel(), notices: [DictationController.dictionaryCard(added: "Wispr Flow", before: UserDictionary(), after: UserDictionary(words: ["Wispr Flow"]))])
+                CanvasScene(model: restModel(), notices: [DictationController.dictionaryCard(added: "Wispr Flow")])
             },
             SnapshotEntry("pill-selection-polishing", width: 640, height: 150) { _ in
                 CanvasScene(model: selectionModel(.processing, choice: .gemini), notices: [])
