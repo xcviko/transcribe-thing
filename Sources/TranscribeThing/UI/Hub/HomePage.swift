@@ -79,12 +79,10 @@ struct HomePage: View {
         } isTargeted: { targeted in
             withAnimation(Theme.Motion.fade) { dropTargeted = targeted }
         }
-        .confirmationDialog(importTitle, isPresented: Binding(get: { imports.prompt == .models && !imports.pending.isEmpty },
-                                                              set: { if !$0 { imports.dialogDismissed() } }),
-                            titleVisibility: .visible) {
-            importButtons
-        } message: {
-            Text(importMessage)
+        // A sheet of the app's own: an alert shows three buttons at most, and drops the rest, Cancel too.
+        .sheet(item: importBatch) { batch in
+            ImportSheet(files: batch.files, imports: imports)
+                .environment(settings)
         }
         .alert(imports.problem?.title ?? "", isPresented: Binding(get: { imports.prompt == .problem && imports.problem != nil },
                                                                  set: { if !$0 { imports.problemDismissed() } })) {
@@ -181,35 +179,12 @@ struct HomePage: View {
     /// Reading the files and asking about them live with the Hub (`FileImport`), so leaving Home loses nothing.
     private var imports: FileImport { hub.imports }
 
-    /// What can transcribe the files waiting, the main model first; Gemini's too, disabled, past what it takes.
-    private var importOffer: [VersionsMenu.Action] { imports.choices(imports.longest) }
-
-    /// The models that can transcribe the files waiting right now.
-    private var importChoices: [VersionsMenu.Action] { importOffer.filter(\.isEnabled) }
-
-    private var importTitle: String {
-        let files = imports.pending
-        return files.count == 1 ? "Transcribe “\(files[0].fileName)”?" : "Transcribe \(files.count) files?"
-    }
-
-    private var importMessage: String {
-        let seconds = imports.pending.reduce(0) { $0 + $1.duration }
-        var message = "\(Fmt.duration(seconds)) of audio. The transcript shows up in your history, marked with the file’s name."
-        if importOffer.contains(where: { $0.blocker == .tooLongForGemini }) {
-            let limit = Int(CloudAudio.maxChatSeconds())
-            message += " Gemini isn’t offered: it takes at most \(limit / 3600) h \(limit % 3600 / 60) min of audio."
-                + " GigaAM takes any length."
-        }
-        return message
-    }
-
-    @ViewBuilder private var importButtons: some View {
-        let files = imports.pending
-        ForEach(Array(importChoices.enumerated()), id: \.element.id) { index, choice in
-            Button(choice.name) { imports.transcribe(files, as: choice.kind) }
-                .keyboardShortcut(index == 0 ? .defaultAction : nil)
-        }
-        Button("Cancel", role: .cancel) {}
+    /// The files the dialog asks about while it's up. Going away (Esc, Cancel) leaves them untranscribed; a pick
+    /// takes them first, so its dismissal finds nothing to drop. Read in the page's body, so the page follows them.
+    private var importBatch: Binding<ImportBatch?> {
+        let imports = imports
+        let batch = imports.prompt == .models && !imports.pending.isEmpty ? ImportBatch(files: imports.pending) : nil
+        return Binding(get: { batch }, set: { if $0 == nil { imports.dialogDismissed() } })
     }
 
     @ViewBuilder private var readingBar: some View {
@@ -265,6 +240,30 @@ struct HomePage: View {
     }
 }
 
+
+// MARK: - Transcribe a file
+
+/// The files one dialog asks about: another batch (files joined it) is another dialog.
+private struct ImportBatch: Identifiable {
+    var files: [ImportedAudio]
+    var id: [UUID] { files.map(\.id) }
+}
+
+/// The dialog for `files`, its choices as things are now: a download finishing, or a key added, while it's up turns
+/// its row on.
+private struct ImportSheet: View {
+    var files: [ImportedAudio]
+    var imports: FileImport
+
+    var body: some View {
+        let choices = imports.choices(files.map(\.duration).max() ?? 0)
+        ImportDialog(title: ImportChoices.title(fileNames: files.map(\.fileName)),
+                     message: choices.message(seconds: files.reduce(0) { $0 + $1.duration }),
+                     choices: choices,
+                     start: { kind in imports.transcribe(files, as: kind) },
+                     cancel: { imports.dialogDismissed() })
+    }
+}
 
 // MARK: - Attention card
 

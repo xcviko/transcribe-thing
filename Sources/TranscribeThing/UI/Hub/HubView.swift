@@ -73,7 +73,7 @@ final class HubContext: Observable {
         imports = env.imports
         // Reading a file outlives the Hub window, and with it this context: only what lives as long as the app.
         imports.choices = { [settings, models, account, proxy] seconds in
-            ImportChoices.make(main: settings.mainEngine, seconds: seconds) { kind in
+            ImportChoices.make(lineup: settings.lineup, seconds: seconds) { kind in
                 Self.readiness(of: kind, models: models,
                                keyStatus: CloudRoute.keyStatus(for: kind.engine, account: account, proxy: proxy),
                                provider: CloudRoute.provider(for: kind.engine, proxy: proxy))

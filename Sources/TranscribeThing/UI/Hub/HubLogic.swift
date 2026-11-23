@@ -197,6 +197,9 @@ struct VersionsMenu: Equatable {
         case running(TranscriptVersionKind)
         /// Gemini (its transcript, Polish, Translate) on audio longer than one request holds (`CloudAudio.fitsChat`).
         case tooLongForGemini
+        /// Polish or Translate (`what`, as the file dialog's picker names it) on GigaAM, which only writes down what it
+        /// hears: it takes no prompt. The file dialog's GigaAM row says it; the Versions menu never offers it.
+        case geminiOnly(String)
 
         var label: String {
             switch self {
@@ -204,6 +207,7 @@ struct VersionsMenu: Equatable {
             case .recordingGone: "Recording no longer kept"
             case .running: "Busy"
             case .tooLongForGemini: "Too long, GigaAM takes any length"
+            case .geminiOnly(let what): "\(what) works on Gemini only"
             }
         }
 
@@ -305,20 +309,109 @@ struct VersionsMenu: Equatable {
     }
 }
 
-/// What a file dropped on Home can be transcribed with (`ImportedAudio`): each offered engine (GigaAM as v3), the
-/// main model's first, then Polish and Translate with each Gemini model. Each says why it can't run right now, as the
-/// Versions menu's actions do: Gemini's when `seconds` (the longest file's) is more than one request holds, too.
-enum ImportChoices {
-    static func make(main: EngineID, seconds: TimeInterval = 0,
-                     readiness: (TranscriptVersionKind) -> EngineReadiness) -> [VersionsMenu.Action] {
-        let first = TranscriptVersionKind.transcript(by: main)
-        let transcripts = TranscriptVersionKind.transcripts
-        let kinds = transcripts.filter { $0 == first } + transcripts.filter { $0 != first }
-            + TranscriptVersionKind.rewrites
-        return kinds.map { kind in
-            VersionsMenu.Action(kind: kind, blocker: VersionsMenu.Blocker.length(seconds, for: kind)
-                                    ?? readiness(kind).unavailableReason.map(VersionsMenu.Blocker.engine))
+/// What files dropped on Home (`ImportedAudio`) can be made into, as the dialog that asks offers it: a transcript,
+/// Polish or Translate (`Mode`, its picker), each with every model, one row each. The rows follow Your models
+/// (`ModelLineup.order`) with the main model lifted to the top, the same models in every mode, so the list doesn't
+/// move when the picker does. Each row says why it can't run right now, as the Versions menu's actions do: GigaAM
+/// can't Polish or Translate (it takes no prompt), Gemini can't take more than one request holds of the longest file
+/// (`seconds`), and a model not downloaded or without its key can't run at all.
+struct ImportChoices: Equatable {
+    /// What the dialog's picker makes of the files.
+    enum Mode: CaseIterable, Hashable, Identifiable, Sendable {
+        case transcribe, polish, translate
+
+        var id: Self { self }
+
+        var title: String {
+            switch self {
+            case .transcribe: "Transcribe"
+            case .polish: "Polish"
+            case .translate: "Translate"
+            }
         }
+
+        /// What `model` makes in this mode: its transcript (GigaAM's v3), or Gemini's Polish or Translate (`Polish`,
+        /// `Translate`). nil for GigaAM's Polish and Translate: it writes down what it hears, and takes no prompt.
+        func kind(by model: ModelChoice) -> TranscriptVersionKind? {
+            switch self {
+            case .transcribe: .transcript(by: model.engine)
+            case .polish: model.isGemini ? .polish(by: model.engine) : nil
+            case .translate: model.isGemini ? .translation(polished: false, by: model.engine) : nil
+            }
+        }
+    }
+
+    /// A model in one mode: what clicking it makes, or why it can't.
+    struct Row: Equatable, Identifiable {
+        var model: ModelChoice
+        /// nil where the model can't make the mode's kind at all (GigaAM's Polish): `blocker` says why.
+        var kind: TranscriptVersionKind?
+        var blocker: VersionsMenu.Blocker?
+
+        var id: ModelChoice { model }
+        var isEnabled: Bool { kind != nil && blocker == nil }
+        /// "Not downloaded", "Polish works on Gemini only"; nil when it can run.
+        var reason: String? { blocker?.label }
+    }
+
+    /// The models in the dialog's order: the main one, then the others as Your models lists them.
+    private(set) var models: [ModelChoice]
+    private var rowsByMode: [Mode: [Row]]
+
+    /// Nothing to offer: before the Hub sets up how `FileImport` asks.
+    static let none = ImportChoices(models: [], rowsByMode: [:])
+
+    /// `lineup`: the user's order and main model. `seconds`: the longest file's length. `readiness`: what can make each
+    /// kind, its engine's (GigaAM not downloaded says so: the dialog offers no download).
+    static func make(lineup: ModelLineup, seconds: TimeInterval = 0,
+                     readiness: (TranscriptVersionKind) -> EngineReadiness) -> ImportChoices {
+        let models = [lineup.main] + lineup.order.filter { $0 != lineup.main }
+        var rowsByMode: [Mode: [Row]] = [:]
+        for mode in Mode.allCases {
+            rowsByMode[mode] = models.map { model in
+                guard let kind = mode.kind(by: model) else {
+                    return Row(model: model, kind: nil, blocker: .geminiOnly(mode.title))
+                }
+                let blocker = VersionsMenu.Blocker.length(seconds, for: kind)
+                    ?? readiness(kind).unavailableReason.map(VersionsMenu.Blocker.engine)
+                return Row(model: model, kind: kind, blocker: blocker)
+            }
+        }
+        return ImportChoices(models: models, rowsByMode: rowsByMode)
+    }
+
+    /// One row per model, in `models` order.
+    func rows(_ mode: Mode) -> [Row] { rowsByMode[mode] ?? [] }
+
+    /// What Return starts in `mode`: the main model's row when it can run, else the first after it that can.
+    func defaultRow(_ mode: Mode) -> Row? { rows(mode).first(where: \.isEnabled) }
+
+    /// Something in some mode can run: the dialog is worth showing.
+    var canRun: Bool { Mode.allCases.contains { defaultRow($0) != nil } }
+
+    /// Why the main model can't transcribe the files: what Home says when nothing can run.
+    var mainBlocker: VersionsMenu.Blocker? { rows(.transcribe).first?.blocker }
+
+    /// Gemini's rows are off for the length of the longest file: the message says how much it takes.
+    var isTooLongForGemini: Bool {
+        Mode.allCases.contains { rows($0).contains { $0.blocker == .tooLongForGemini } }
+    }
+
+    /// "Transcribe “Standup.m4a”?", "Transcribe 3 files?".
+    static func title(fileNames: [String]) -> String {
+        fileNames.count == 1 ? "Transcribe “\(fileNames[0])”?" : "Transcribe \(fileNames.count) files?"
+    }
+
+    /// How long the files are together (`seconds`), and where the transcript goes; with Gemini's rows off for the
+    /// length, how much Gemini takes.
+    func message(seconds: TimeInterval) -> String {
+        var message = "\(Fmt.duration(seconds)) of audio. The transcript shows up in your history, marked with the file’s name."
+        if isTooLongForGemini {
+            let limit = Int(CloudAudio.maxChatSeconds())
+            message += " Gemini isn’t offered: it takes at most \(limit / 3600) h \(limit % 3600 / 60) min of audio."
+                + " GigaAM takes any length."
+        }
+        return message
     }
 }
 

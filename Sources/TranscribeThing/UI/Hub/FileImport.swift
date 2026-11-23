@@ -34,7 +34,7 @@ final class FileImport {
     var longest: TimeInterval { pending.map(\.duration).max() ?? 0 }
 
     /// What can transcribe files the longest of which is `seconds` long, as the dialog offers it (`ImportChoices`).
-    @ObservationIgnored var choices: (_ seconds: TimeInterval) -> [VersionsMenu.Action] = { _ in [] }
+    @ObservationIgnored var choices: (_ seconds: TimeInterval) -> ImportChoices = { _ in .none }
     /// Transcribes a file into History (`DictationController.transcribe(_:as:)`).
     @ObservationIgnored var start: (ImportedAudio, TranscriptVersionKind) -> Void = { _, _ in }
     @ObservationIgnored var read: (URL) async throws(ImportedAudio.ReadError) -> ImportedAudio = {
@@ -99,10 +99,10 @@ final class FileImport {
         }
         if !files.isEmpty {
             let offered = choices(max(longest, files.map(\.duration).max() ?? 0))
-            if offered.contains(where: \.isEnabled) {
+            if offered.canRun {
                 pending += files
             } else {
-                let reason = offered.first?.blocker?.label ?? "No model is ready"
+                let reason = offered.mainBlocker?.label ?? "No model is ready"
                 problems.append(Problem(title: "No model can transcribe it right now",
                                         message: "\(reason). Set one up in Models."))
             }
@@ -144,6 +144,153 @@ extension FileImport {
             guard response == .OK else { return }
             done(panel.urls)
         }
+    }
+}
+
+// MARK: - The dialog
+
+/// What the files dropped on Home are made into, and by which model (`ImportChoices`), on a sheet over the Hub: the
+/// title and how long they are, a picker of Transcribe, Polish and Translate, then a row per model as Your models
+/// lists them, the main model's first. A click on a row starts it on every file; Return starts the first that can run
+/// (its ↩ says so), Esc or Cancel closes the dialog with nothing started. A row that can't run keeps its place, dimmed,
+/// and says why.
+struct ImportDialog: View {
+    var title: String
+    var message: String
+    var choices: ImportChoices
+    var start: (TranscriptVersionKind) -> Void
+    var cancel: () -> Void
+
+    @State private var mode: ImportChoices.Mode
+
+    static let width: CGFloat = 440
+
+    /// `mode`: the one picked as it opens (snapshots); Transcribe otherwise.
+    init(title: String, message: String, choices: ImportChoices, mode: ImportChoices.Mode = .transcribe,
+         start: @escaping (TranscriptVersionKind) -> Void, cancel: @escaping () -> Void) {
+        self.title = title
+        self.message = message
+        self.choices = choices
+        self.start = start
+        self.cancel = cancel
+        _mode = State(initialValue: mode)
+    }
+
+    var body: some View {
+        let defaultRow = choices.defaultRow(mode)
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(title)
+                    .typeface(.headline)
+                    .foregroundStyle(.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityAddTraits(.isHeader)
+                Text(message)
+                    .typeface(.callout)
+                    .foregroundStyle(.inkSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Picker("Make", selection: $mode) {
+                ForEach(ImportChoices.Mode.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: .infinity)
+            .padding(.top, Theme.Spacing.md)
+            // The same models in every mode, in the same places: only what they say changes with the picker.
+            SettingsGroup {
+                ForEach(choices.rows(mode)) { row in
+                    ImportChoiceRow(row: row, isDefault: row.id == defaultRow?.id, start: start)
+                }
+            }
+            .padding(.top, Theme.Spacing.sm)
+            HStack {
+                Spacer()
+                Button("Cancel", action: cancel)
+                    .buttonStyle(.appSecondary)
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(.top, Theme.Spacing.md)
+        }
+        .padding(Theme.Spacing.lg)
+        .frame(width: Self.width)
+        .environment(\.inNativeForm, false)
+    }
+}
+
+/// A model's row in the dialog: its tile and name as Your models draws them, then the Reasoning level a Gemini model
+/// thinks at, or why the row can't run. The default one (Return's) wears the soft fill of a row picked in Your models.
+private struct ImportChoiceRow: View {
+    var row: ImportChoices.Row
+    var isDefault: Bool
+    var start: (TranscriptVersionKind) -> Void
+
+    @Environment(AppSettings.self) private var settings
+    @State private var hovering = false
+
+    var body: some View {
+        Button {
+            if let kind = row.kind { start(kind) }
+        } label: {
+            HStack(spacing: 12) {
+                ModelChoiceIcon(choice: row.model, color: settings.modelColors[row.model], size: 30)
+                    .opacity(row.isEnabled ? 1 : 0.4)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(row.model.modelName)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(row.isEnabled ? Color.ink : Color.ink.opacity(0.4))
+                        .lineLimit(1)
+                    if let detail {
+                        Text(detail)
+                            .typeface(.callout)
+                            .foregroundStyle(.inkSecondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 8)
+                if isDefault {
+                    Image(systemName: "return")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.inkTertiary)
+                        .accessibilityHidden(true)
+                }
+            }
+            .padding(.horizontal, Theme.Spacing.md - 2)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(ImportRowButtonStyle(isDefault: isDefault, isHovering: hovering && row.isEnabled))
+        .disabled(!row.isEnabled)
+        .keyboardShortcut(isDefault ? .defaultAction : nil)
+        .onHover { hovering = $0 }
+        .animation(Theme.Motion.hover, value: hovering)
+        .accessibilityLabel(row.model.modelName)
+        .accessibilityValue(detail ?? "")
+    }
+
+    /// Why it can't run; else "Reasoning: Medium" for a Gemini model, nothing for GigaAM.
+    private var detail: String? {
+        if let reason = row.reason { return reason }
+        guard !row.model.engine.reasoningEfforts.isEmpty else { return nil }
+        return "Reasoning: \((settings.reasoningEffort(for: row.model.engine) ?? .medium).title)"
+    }
+}
+
+/// A dialog row lit as Your models' rows are (`RowHighlight`): the default's soft fill, hover's and a press's in its
+/// place.
+private struct ImportRowButtonStyle: ButtonStyle {
+    var isDefault: Bool
+    var isHovering: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background {
+                RoundedRectangle(cornerRadius: Theme.Radius.row, style: .continuous)
+                    .fill(configuration.isPressed ? Color.pressed
+                          : isHovering ? Color.hover : isDefault ? Color.accentSoft.opacity(0.7) : Color.clear)
+                    .padding(4)
+            }
     }
 }
 

@@ -231,9 +231,14 @@ private let historyFile = #"""
         #expect(ModelChoice(engine: .geminiPro) == .gemini, "a job it made reads as Gemini")
         #expect(ModelChoice(engine: .geminiArgon) == .gemini, "a job it made reads as Gemini")
         #expect(ModelChoice(engine: .parakeet) == .gigaam, "a job it made reads as GigaAM")
-        #expect(ImportChoices.make(main: .geminiFlash) { _ in .ready }.allSatisfy { !$0.kind.engine.isRetired })
-        #expect(ImportChoices.make(main: .parakeet) { _ in .ready }.allSatisfy { $0.kind.isOffered },
-                "a retired main model's files go to what's offered")
+        // A lineup stored with Parakeet as the main model and Argon in it reads as GigaAM and Flash: a file goes to
+        // what's offered.
+        let stored = Data(#"{"main":"parakeet","order":["parakeet","argon"],"switchable":["argon"]}"#.utf8)
+        let lineup = (try? JSONDecoder().decode(ModelLineup.self, from: stored)) ?? .default
+        #expect(lineup.main == .gigaam)
+        let imports = ImportChoices.make(lineup: lineup) { _ in .ready }
+        let kinds = ImportChoices.Mode.allCases.flatMap { imports.rows($0) }.compactMap(\.kind)
+        #expect(kinds.allSatisfy { $0.isOffered && !$0.engine.isRetired })
         #expect(TranscriptVersionKind.transcripts.allSatisfy { $0.isOffered && $0.gigaamVariant?.isRetired != true })
     }
 

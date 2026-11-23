@@ -742,9 +742,10 @@ private func load(_ defaults: UserDefaults) -> AppSettings {
         let menu = VersionsMenu.make(for: entry, running: nil, readiness: { _ in .ready })
         #expect(menu.versions.map(\.title) == ["GigaAM v3 e2e"])
         #expect(menu.actions.filter { $0.kind.engine == .gigaam }.map(\.kind) == [.gigaam(.v3)])
-        let imports = ImportChoices.make(main: .gigaam, readiness: { _ in .ready })
-        #expect(imports.first?.title == "GigaAM v3", "the main model first")
-        #expect(imports.filter { $0.kind.engine == .gigaam }.map(\.kind) == [.gigaam(.v3)])
+        let imports = ImportChoices.make(lineup: .default, readiness: { _ in .ready })
+        #expect(imports.rows(.transcribe).first?.model.modelName == "GigaAM v3", "the main model first")
+        let kinds = ImportChoices.Mode.allCases.flatMap { imports.rows($0) }.compactMap(\.kind)
+        #expect(kinds.filter { $0.engine == .gigaam } == [.gigaam(.v3)])
     }
 }
 

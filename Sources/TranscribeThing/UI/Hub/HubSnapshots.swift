@@ -87,6 +87,19 @@ enum HubSnapshots {
             hub("hub-home-drop", .home) { c in
                 c.previewDropTarget = true
             },
+            // What the files dropped are made into, and by which model (`--only hub-import`), for the lineup the user
+            // has: GigaAM main, then Hydrogen, Flash, Carbon and Neon. One file, Transcribe picked; Polish picked, GigaAM
+            // dimmed in its place; a file longer than Gemini takes; GigaAM not downloaded, Return on Hydrogen; three
+            // files at once.
+            importDialog("hub-import", files: [("Standup 2026-10-09.m4a", 12 * 60 + 34)]),
+            importDialog("hub-import-polish", files: [("Standup 2026-10-09.m4a", 12 * 60 + 34)], mode: .polish),
+            importDialog("hub-import-too-long", files: [("Podcast, episode 112.mp3", 2 * 3_600 + 14 * 60)]),
+            importDialog("hub-import-not-downloaded", files: [("Standup 2026-10-09.m4a", 12 * 60 + 34)]) { c in
+                c.models = .preview(states: [.gigaam: .notInstalled], settings: c.settings)
+            },
+            importDialog("hub-import-files", files: [("Standup 2026-10-09.m4a", 12 * 60 + 34),
+                                                     ("Interview with Anna, part 2.mp3", 41 * 60 + 8),
+                                                     ("voice_2026-10-08.ogg", 47)]),
             // Dictations the app quit during, brought back at launch: one cut off while it was recorded (Continue
             // records on, Transcribe beside it), one quit while it was transcribed (Continue transcribes it).
             hub("hub-home-interrupted", .home) { c in
@@ -478,6 +491,39 @@ enum HubSnapshots {
         }
     }
 
+    /// The dialog files dropped on Home ask with (`ImportDialog`), for `files` (names and lengths) and `mode` picked,
+    /// drawn where its sheet comes down over Home: a sheet doesn't render in a snapshot.
+    private static func importDialog(_ name: String, files: [(name: String, seconds: TimeInterval)],
+                                     mode: ImportChoices.Mode = .transcribe,
+                                     configure: @escaping @MainActor (HubContext) -> Void = { _ in }) -> SnapshotEntry {
+        SnapshotEntry(name: name, size: CGSize(width: 980, height: 680)) { env in
+            env.windows.hubSection = .home
+            let context = HubContext(env: env)
+            context.drawsWindowControls = true
+            context.firstName = "Sam"
+            context.settings.lineup = Samples.usersLineup
+            configure(context)
+            let choices = ImportChoices.make(lineup: context.settings.lineup, seconds: files.map(\.seconds).max() ?? 0,
+                                             readiness: context.readiness(ofKind:))
+            let sheet = RoundedRectangle(cornerRadius: 18, style: .continuous)
+            return AnyView(ZStack(alignment: .top) {
+                // The window's own background, which an offscreen Hub leaves out: the dark sheet reads on it as it does.
+                Color.bgCanvas
+                HubView(context: context)
+                ImportDialog(title: ImportChoices.title(fileNames: files.map(\.name)),
+                             message: choices.message(seconds: files.reduce(0) { $0 + $1.seconds }),
+                             choices: choices, mode: mode, start: { _ in }, cancel: {})
+                    .environment(context.settings)
+                    .background {
+                        sheet.fill(Color.bgCanvas)
+                            .overlay { sheet.strokeBorder(Color.strokeStrong, lineWidth: 0.5) }
+                            .shadow(color: .black.opacity(0.28), radius: 28, y: 12)
+                    }
+                    .padding(.top, 58)
+            })
+        }
+    }
+
     /// A row's Versions menu as it opens (`VersionsMenuDrawing`), for `entry` with the models in `models`.
     private static func menu(_ name: String, entry: TranscriptEntry,
                              models: [EngineID: LocalModelState]) -> SnapshotEntry {
@@ -498,6 +544,11 @@ enum HubSnapshots {
             Calendar.current.date(bySettingHour: 14, minute: 5, second: 0, of: Date()) ?? Date()
         }
         static let newVersion = AppVersion(major: 0, minor: 3, patch: 0)
+
+        /// The user's Your models: GigaAM v3 main, then Gemini 4 Hydrogen, Gemini 3.8 Flash, Gemini 4 Carbon and Gemini
+        /// 4 Neon, Neon switched on.
+        static let usersLineup = ModelLineup(order: [.gigaam, .hydrogen, .gemini, .carbon, .neon], main: .gigaam,
+                                             switchable: [.neon])
 
         /// Colors other than the defaults, one each: GigaAM teal, Gemini blue.
         @MainActor static func pickColors(_ context: HubContext) {

@@ -312,16 +312,110 @@ import Testing
         #expect(try JSONDecoder().decode(TranscriptEntry.self, from: data).importedFrom == "Standup 10-09.m4a")
         #expect(HistoryGrouping.filter([entry], query: "standup").count == 1)
     }
+}
 
-    /// The dialog's models: the main one first, then Polish and Translate, and each says why it can't run.
-    @Test func theMainModelComesFirst() {
-        let choices = ImportChoices.make(main: .geminiFlash) { kind in
-            kind.engine.isLocal ? .needsDownload : .ready
+// MARK: - The dialog's choices
+
+/// What the dialog offers for files dropped on Home (`ImportChoices`), without the dialog.
+@Suite struct ImportChoicesTests {
+    /// The lineup the user has in Your models: GigaAM v3 main, then Gemini 4 Hydrogen, Gemini 3.8 Flash, Gemini 4
+    /// Carbon and Gemini 4 Neon, Neon switched on.
+    static let lineup = ModelLineup(order: [.gigaam, .hydrogen, .gemini, .carbon, .neon], main: .gigaam,
+                                    switchable: [.neon])
+
+    private static func kinds(_ choices: ImportChoices) -> [TranscriptVersionKind] {
+        ImportChoices.Mode.allCases.flatMap { choices.rows($0) }.compactMap(\.kind)
+    }
+
+    /// Every model, in the user's order, in every mode: five rows each, the main model's first and Return's. The alert
+    /// this replaced showed three, in the app's order.
+    @Test func theRowsFollowYourModels() {
+        let choices = ImportChoices.make(lineup: Self.lineup) { _ in .ready }
+        for mode in ImportChoices.Mode.allCases {
+            #expect(choices.rows(mode).map(\.model) == [.gigaam, .hydrogen, .gemini, .carbon, .neon], "\(mode)")
         }
-        #expect(choices.first?.kind == .transcription(.geminiFlash))
-        #expect(choices.suffix(TranscriptVersionKind.rewrites.count).map(\.kind) == TranscriptVersionKind.rewrites)
-        #expect(choices.filter { !$0.isEnabled }.allSatisfy { $0.kind.engine.isLocal })
-        #expect(Set(choices.map(\.kind)).count == choices.count)
+        #expect(choices.rows(.transcribe).map(\.kind) == [.gigaam(.v3), .transcription(.geminiHydrogen),
+                                                          .transcription(.geminiFlash), .transcription(.geminiCarbon),
+                                                          .transcription(.geminiNeon)])
+        #expect(choices.rows(.transcribe).allSatisfy { $0.isEnabled })
+        #expect(choices.defaultRow(.transcribe)?.kind == .gigaam(.v3))
+        #expect(Set(choices.rows(.transcribe).compactMap(\.kind)) == Set(TranscriptVersionKind.transcripts),
+                "every model offered")
+        #expect(Set(Self.kinds(choices)).count == Self.kinds(choices).count)
+        #expect(choices.canRun && choices.mainBlocker == nil && !choices.isTooLongForGemini)
+    }
+
+    /// Another main model goes first; the others keep their order in Your models around it (not Switch model's
+    /// cycle, which wraps around from the main model).
+    @Test func theMainModelComesFirst() {
+        var lineup = Self.lineup
+        lineup.main = .gemini
+        let choices = ImportChoices.make(lineup: lineup) { _ in .ready }
+        #expect(choices.rows(.transcribe).map(\.model) == [.gemini, .gigaam, .hydrogen, .carbon, .neon])
+        #expect(choices.defaultRow(.transcribe)?.kind == .transcription(.geminiFlash))
+        #expect(choices.defaultRow(.polish)?.kind == .polish(by: .geminiFlash))
+        #expect(choices.defaultRow(.translate)?.kind == .translation(polished: false, by: .geminiFlash))
+    }
+
+    /// Polish and Translate are Gemini's: GigaAM keeps its row, off, and says so, so the list doesn't move.
+    @Test func polishAndTranslateAreGeminis() {
+        let choices = ImportChoices.make(lineup: Self.lineup) { _ in .ready }
+        let polish = choices.rows(.polish), translate = choices.rows(.translate)
+        #expect(polish.first?.model == .gigaam && polish.first?.kind == nil && polish.first?.isEnabled == false)
+        #expect(polish.first?.blocker == .geminiOnly("Polish"))
+        #expect(polish.first?.reason == "Polish works on Gemini only")
+        #expect(translate.first?.reason == "Translate works on Gemini only" && translate.first?.kind == nil)
+        #expect(polish.dropFirst().map(\.kind) == [.polish(by: .geminiHydrogen), .polish(by: .geminiFlash),
+                                                  .polish(by: .geminiCarbon), .polish(by: .geminiNeon)])
+        #expect(translate.dropFirst().map(\.kind) == [.translation(polished: false, by: .geminiHydrogen),
+                                                     .translation(polished: false, by: .geminiFlash),
+                                                     .translation(polished: false, by: .geminiCarbon),
+                                                     .translation(polished: false, by: .geminiNeon)])
+        #expect(Set((polish + translate).compactMap(\.kind)) == Set(TranscriptVersionKind.rewrites))
+        #expect((polish + translate).filter { $0.isEnabled }.allSatisfy { $0.model.isGemini })
+        #expect(choices.defaultRow(.polish)?.model == .hydrogen, "Return: the first that can run")
+    }
+
+    /// A model that can't run now keeps its row, saying why: GigaAM not downloaded, Gemini 4 Neon without its key.
+    @Test func blockersStayInTheirRows() {
+        let choices = ImportChoices.make(lineup: Self.lineup) { kind in
+            switch kind.engine {
+            case .gigaam: .needsDownload
+            case .geminiNeon: .needsKey
+            default: .ready
+            }
+        }
+        let rows = choices.rows(.transcribe)
+        #expect(rows.map(\.model) == [.gigaam, .hydrogen, .gemini, .carbon, .neon])
+        #expect(rows[0].blocker == .engine("Not downloaded") && rows[0].reason == "Not downloaded" && !rows[0].isEnabled)
+        #expect(rows[4].blocker == .engine("Needs key") && rows[4].kind == .transcription(.geminiNeon))
+        #expect(choices.rows(.polish)[4].blocker == .engine("Needs key"))
+        #expect(choices.rows(.polish)[0].blocker == .geminiOnly("Polish"), "Gemini only says more than not downloaded")
+        #expect(choices.defaultRow(.transcribe)?.model == .hydrogen, "Return skips the main model that can't run")
+        #expect(choices.canRun && choices.mainBlocker == .engine("Not downloaded"))
+    }
+
+    /// Nothing can run: there's no dialog to show, and the main model's reason says why.
+    @Test func nothingReadyHasNothingToStart() {
+        let choices = ImportChoices.make(lineup: Self.lineup) { _ in .needsKey }
+        #expect(!choices.canRun)
+        #expect(ImportChoices.Mode.allCases.allSatisfy { choices.defaultRow($0) == nil })
+        #expect(choices.mainBlocker == .engine("Needs key"))
+        #expect(ImportChoices.none.rows(.transcribe).isEmpty && !ImportChoices.none.canRun)
+    }
+
+    /// The dialog's title and message, as the alert had them.
+    @Test func titleAndMessage() {
+        #expect(ImportChoices.title(fileNames: ["talk.mp3"]) == "Transcribe “talk.mp3”?")
+        #expect(ImportChoices.title(fileNames: ["a.mp3", "b.m4a", "c.ogg"]) == "Transcribe 3 files?")
+        let short = ImportChoices.make(lineup: Self.lineup, seconds: 754) { _ in .ready }
+        #expect(short.message(seconds: 754)
+                == "12:34 of audio. The transcript shows up in your history, marked with the file’s name.")
+        let long = ImportChoices.make(lineup: Self.lineup, seconds: 2 * 3_600) { _ in .ready }
+        let limit = Int(CloudAudio.maxChatSeconds())
+        #expect(long.message(seconds: 2 * 3_600 + 60) == "2:01:00 of audio. The transcript shows up in your history, "
+                + "marked with the file’s name. Gemini isn’t offered: it takes at most \(limit / 3600) h "
+                + "\(limit % 3600 / 60) min of audio. GigaAM takes any length.")
     }
 }
 
@@ -346,7 +440,7 @@ import Testing
                                  speech: SpeechStats(voicedSeconds: 3, peakDBFS: -10, isSilent: false))
         }
         imports.choices = { seconds in
-            ImportChoices.make(main: .gigaam, seconds: seconds) { _ in ready ? .ready : .needsKey }
+            ImportChoices.make(lineup: .default, seconds: seconds) { _ in ready ? .ready : .needsKey }
         }
         imports.start = { file, kind in started.files.append((file.fileName, kind)) }
         return (imports, started)
@@ -416,18 +510,24 @@ import Testing
         #expect(CloudAudio.fitsChat(seconds: 3_600))
     }
 
-    /// A file past it isn't offered Gemini, Polish or Translate; the models on this Mac still are.
+    /// A file past it isn't offered Gemini, Polish or Translate: their rows stay, off, saying so. The model on this
+    /// Mac still is, though Gemini is the main model.
     @Test func aLongFileIsOfferedOnlyTheModelsOnThisMac() {
-        let choices = ImportChoices.make(main: .geminiFlash, seconds: 2 * 3_600) { _ in .ready }
-        let gemini = choices.filter { $0.kind.engine.isGemini }
-        #expect(gemini.map(\.kind) == [.transcription(.geminiFlash), .transcription(.geminiHydrogen),
-                                        .transcription(.geminiNeon), .transcription(.geminiCarbon)]
-                + TranscriptVersionKind.rewrites)
-        #expect(gemini.allSatisfy { $0.blocker == .tooLongForGemini })
-        #expect(gemini.first?.title == "Gemini 3.8 Flash · Too long, GigaAM takes any length")
-        #expect(choices.filter(\.isEnabled).map(\.kind) == [.gigaam(.v3)])
-        let hour = ImportChoices.make(main: .geminiFlash, seconds: 3_600) { _ in .ready }
-        #expect(hour.allSatisfy { $0.isEnabled })
+        var lineup = ModelLineup.default
+        lineup.main = .gemini
+        let choices = ImportChoices.make(lineup: lineup, seconds: 2 * 3_600) { _ in .ready }
+        for mode in ImportChoices.Mode.allCases {
+            let gemini = choices.rows(mode).filter(\.model.isGemini)
+            #expect(gemini.map(\.model) == [.gemini, .hydrogen, .neon, .carbon], "\(mode)")
+            #expect(gemini.allSatisfy { $0.blocker == .tooLongForGemini && $0.kind != nil }, "\(mode)")
+        }
+        #expect(choices.rows(.transcribe).first?.reason == "Too long, GigaAM takes any length")
+        #expect(choices.isTooLongForGemini && choices.mainBlocker == .tooLongForGemini)
+        let enabled = ImportChoices.Mode.allCases.flatMap { choices.rows($0) }.filter(\.isEnabled)
+        #expect(enabled.map(\.kind) == [.gigaam(.v3)])
+        #expect(choices.defaultRow(.transcribe)?.kind == .gigaam(.v3) && choices.canRun)
+        let hour = ImportChoices.make(lineup: lineup, seconds: 3_600) { _ in .ready }
+        #expect(hour.rows(.transcribe).allSatisfy { $0.isEnabled } && !hour.isTooLongForGemini)
     }
 
     /// A long row's Versions menu says the same of Gemini's actions; GigaAM v3 can take it.
