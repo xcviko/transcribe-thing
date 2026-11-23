@@ -136,6 +136,13 @@ enum PillMetrics {
     static let sendPlaneOffset = -polishWandOffset
     /// A sent dictation's count ends with the plane: its gap and its frame, as the wand's before a polish's count.
     static let sendCounterRoom = counterWandGap + counterWandSize + 2
+    /// What a dictation whose text waits its turn says, after a check (`PillVisual.ready`).
+    static let readyText = "ready"
+    /// The check before it: as big as the wand before a polish's count.
+    static let readySize = CGSize(
+        width: (2 * counterPadding + counterWandSize + 2 + counterWandGap
+                + textWidth(readyText, size: captionFontSize, weight: .medium, rounded: true)).rounded(.up),
+        height: listeningSize.height)
     /// What a selection's polish says until the model's count comes.
     static let polishingText = "Polishing"
     /// A selection's polish before its count: the wand and "Polishing", with the counter's padding and nothing more.
@@ -282,15 +289,18 @@ enum PillVisual: Equatable, Sendable {
     /// the count.
     case processing(afterHandsFree: Bool, counting: Bool = false, polish: PillPolish? = nil,
                     label: PillCountLabel? = nil, sends: Bool = false)
+    /// A dictation on its way whose text is there, waiting for an older one's to be pasted first (`PillModel.isReady`):
+    /// a check and "ready" in place of the wave or the count, the capsule just around them.
+    case ready
     case error
     /// The error flash as a sentence instead of the glyph ("No speech detected"): no red, no shake.
     case message(String)
 
     enum Content: Hashable {
-        case empty, peek, hello, recording, processing, error, message
+        case empty, peek, hello, recording, processing, ready, error, message
 
         /// Everything but `.empty`, which draws nothing: one layer each on the pill's stage (`PillFace`).
-        static let drawn: [Content] = [.peek, .hello, .recording, .processing, .error, .message]
+        static let drawn: [Content] = [.peek, .hello, .recording, .processing, .ready, .error, .message]
     }
 
     var size: CGSize {
@@ -312,6 +322,7 @@ enum PillVisual: Equatable, Sendable {
             Self.wider(PillMetrics.listeningSize, by: (polishes ? PillMetrics.polishWandRoom : 0)
                                                       + (sends ? PillMetrics.sendRoom : 0))
         case .hello: PillMetrics.listeningSize
+        case .ready: PillMetrics.readySize
         case .locked(let hours, let polishes, let sends):
             CGSize(width: (hours ? PillMetrics.lockedHoursSize : PillMetrics.lockedSize).width
                        + (polishes ? PillMetrics.polishWandRoom : 0) + (sends ? PillMetrics.sendRoom : 0),
@@ -332,14 +343,20 @@ enum PillVisual: Equatable, Sendable {
         case .hello: .hello
         case .listening, .locked: .recording
         case .processing: .processing
+        case .ready: .ready
         case .error: .error
         case .message: .message
         }
     }
 
-    /// Recording and processing show a dictation, so they carry its model (chip and tint), and so does the sentence
-    /// about how it ended ("No speech detected"); nothing else does.
-    var carriesModel: Bool { content == .recording || content == .processing || content == .message }
+    /// Recording and processing show a dictation (ready too), so they carry its model (chip and tint), and so does the
+    /// sentence about how it ended ("No speech detected"); nothing else does.
+    var carriesModel: Bool {
+        content == .recording || content == .processing || content == .ready || content == .message
+    }
+
+    /// A dictation on its way, processed or ready: the dashed edge of a click away is its.
+    var isOnItsWay: Bool { content == .processing || content == .ready }
 
     /// Resting shapes cast half the shadow.
     var isQuiet: Bool {
@@ -474,6 +491,7 @@ struct PillView: View {
         case .locked:
             return .locked(hours: model.showsHours)
         case .processing:
+            if model.isReady, !model.selectionPolishing { return .ready }
             let selection: PillPolish = model.translates ? .translatedSelection : .selection
             return .processing(afterHandsFree: model.processingOrigin == .locked, counting: model.showsCounter,
                                polish: model.rewrite != nil && model.selectionPolishing ? selection : nil,
@@ -551,7 +569,7 @@ struct PillView: View {
         case .hello: return .spring(duration: 0.42, bounce: 0.3)
         case .listening: return .spring(duration: 0.32, bounce: 0.26)
         case .locked: return .spring(duration: 0.34, bounce: 0.3)
-        case .processing: return .spring(duration: 0.3, bounce: 0.12)
+        case .processing, .ready: return .spring(duration: 0.3, bounce: 0.12)
         case .error: return .spring(duration: 0.3, bounce: 0.2)
         case .message: return .spring(duration: 0.3, bounce: 0.12)
         }
@@ -567,11 +585,12 @@ struct PillView: View {
         case .processing(_, _, polish: .some, _, _):
             "transcribe-thing is \(model.translates ? "translating" : "polishing")"
         case .processing: "transcribe-thing is transcribing"
+        case .ready: "transcribe-thing has the text, waiting for the dictation before it"
         case .error: "Dictation failed"
         case .message(let text): text
         }
         // What the dashed outline says (`PillModel.holdsPaste`).
-        let held = visual.content == .processing && model.holdsPaste ? ". The text will wait on a card" : ""
+        let held = visual.isOnItsWay && model.holdsPaste ? ". The text will wait on a card" : ""
         guard let choice, visual.carriesModel, !visual.isPolishing else { return label + held }
         return "\(label) with \(choice.title)\(held)"
     }
@@ -924,7 +943,7 @@ struct PillFace: View {
             .overlay {
                 // A click away holds the dictation's text (`PillModel.holdsPaste`): its edge is dashed.
                 PillCapsuleEdge(accent: capsule.content == .empty ? nil : accent,
-                                dashed: capsule.content == .processing && model.holdsPaste)
+                                dashed: capsule.isOnItsWay && model.holdsPaste)
             }
             // Above the pill and part of it: it springs in on a switch, shrinks into the resting capsule with the
             // content and leaves with the pill in one piece. When it goes by itself (its hold over, the content no
@@ -1002,6 +1021,9 @@ struct PillFace: View {
                               count: model.tokenCount, isCounting: visual.isCounting, polish: visual.polish,
                               sends: visual.sends)
                 .frame(width: frame.width, height: frame.height)
+                .modifier(fit)
+        case .ready:
+            PillReadyLabel()
                 .modifier(fit)
         case .error:
             ErrorGlyph()
@@ -1322,6 +1344,23 @@ private struct ProcessingContent: View {
         if reduceMotion { return .opacity.animation(.easeInOut(duration: 0.15)) }
         return .opacity.combined(with: .scale(scale: 0.96))
             .animation(.easeOut(duration: 0.22).delay(0.08))
+    }
+}
+
+/// A dictation whose text waits for an older one's: a check and "ready", in white as everything inside the capsule is.
+private struct PillReadyLabel: View {
+    var body: some View {
+        HStack(spacing: PillMetrics.counterWandGap) {
+            Image(systemName: "checkmark")
+                .font(.system(size: PillMetrics.counterWandSize - 1, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: PillMetrics.counterWandSize + 2)
+            Text(PillMetrics.readyText)
+                .font(PillMetrics.captionFont)
+                .foregroundStyle(.white.opacity(0.92))
+                .fixedSize()
+        }
+        .accessibilityHidden(true)
     }
 }
 

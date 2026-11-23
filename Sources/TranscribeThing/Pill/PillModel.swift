@@ -69,6 +69,9 @@ final class PillModel {
     /// "Hold the paste after a click"), and its text will come up on a card. The processing pill's outline is dashed,
     /// and stays so as the pill leaves with it.
     var holdsPaste = false
+    /// The dictation on screen has its text, and it waits for an older one's to be pasted first: the processing pill
+    /// shows a check and "ready" in place of its wave or its count, so it never looks like it's still being written.
+    var isReady = false
     /// Bumped on every switch of the dictation's model, back to the main model too, so the chip names the new one
     /// for a moment.
     var engineChipPulse = 0 {
@@ -495,6 +498,7 @@ final class PillModel {
         if translates != item.tray.translates { translates = item.tray.translates }
         if sends != item.tray.sends { sends = item.tray.sends }
         if holdsPaste != item.holdsPaste { holdsPaste = item.holdsPaste }
+        if isReady != item.isReady { isReady = item.isReady }
         if tokenCount != item.count { tokenCount = item.count }
         if tray != item.tray { tray = item.tray }
     }
@@ -594,12 +598,14 @@ struct PillTiming: Equatable, Sendable {
 
 // MARK: - Tray and stack
 
-/// The buttons of a pill's tray (`PillTray`), in their order: what each turns on or off for the pill's dictation.
+/// The buttons of a pill's tray (`PillTray`), in their order: Paste now, on a dictation whose text waits for an older
+/// one's (`PillTrayState.canPasteNow`), then what each of the others turns on or off for the pill's dictation.
 enum PillToggle: String, CaseIterable, Sendable {
-    case send, polish, translate
+    case pasteNow, send, polish, translate
 
     var title: String {
         switch self {
+        case .pasteNow: "Paste now"
         case .polish: "Polish"
         case .translate: "Translate"
         case .send: "Send"
@@ -608,15 +614,17 @@ enum PillToggle: String, CaseIterable, Sendable {
 
     var symbolName: String {
         switch self {
+        case .pasteNow: "arrow.down.to.line"
         case .polish: "wand.and.sparkles"
         case .translate: "translate"
         case .send: "paperplane.fill"
         }
     }
 
-    /// The shortcut that does what this button does.
-    var action: ShortcutAction {
+    /// The shortcut that does what this button does; Paste now has none.
+    var action: ShortcutAction? {
         switch self {
+        case .pasteNow: nil
         case .polish: .polish
         case .translate: .translate
         case .send: .send
@@ -660,8 +668,11 @@ struct PillTrayState: Equatable, Sendable {
     var sends = false
     /// Polish and Translate can change this dictation (everywhere while it records; while it's processed, on Gemini).
     var rewrites = true
-    /// Send can (not once a click away holds its text, nor while it's being pasted).
+    /// Send can (not while it's being pasted). On a dashed pill it takes the click away back.
     var canSend = true
+    /// Its text is there and waits for an older dictation's: Paste now shows, first in the tray, and pastes it ahead of
+    /// them. Not on a dashed pill: its text goes to a card, not into the field.
+    var canPasteNow = false
     /// Each button's shortcut ("fn ↩", "fn P", "fn T"), shown over it while the pointer rests on it. Only the bottom
     /// pill's: the keys are for the dictation it shows, never for one stacked above it.
     var keys: [PillToggle: String] = [:]
@@ -670,6 +681,7 @@ struct PillTrayState: Equatable, Sendable {
 
     func isOn(_ toggle: PillToggle) -> Bool {
         switch toggle {
+        case .pasteNow: false
         case .polish: polishes
         case .translate: translates
         case .send: sends
@@ -677,12 +689,23 @@ struct PillTrayState: Equatable, Sendable {
     }
 
     func isEnabled(_ toggle: PillToggle) -> Bool {
-        toggle == .send ? canSend : rewrites
+        switch toggle {
+        case .pasteNow: canPasteNow
+        case .send: canSend
+        case .polish, .translate: rewrites
+        }
     }
+
+    /// The buttons the tray has, in order: Paste now only while it can.
+    var buttons: [PillToggle] { PillToggle.allCases.filter { $0 != .pasteNow || canPasteNow } }
 
     /// Why a dimmed button can't change the dictation (VoiceOver's hint).
     static func reason(_ toggle: PillToggle) -> String {
-        toggle == .send ? "Its text waits on a card" : "Gemini only"
+        switch toggle {
+        case .pasteNow: "Its text isn’t there yet"
+        case .send: "It’s being pasted"
+        case .polish, .translate: "Gemini only"
+        }
     }
 }
 
@@ -692,6 +715,8 @@ struct PillStackItem: Equatable, Sendable {
     var choice: ModelChoice
     var tray: PillTrayState
     var holdsPaste = false
+    /// Its text is there, waiting for an older one's (`PillModel.isReady`).
+    var isReady = false
     var count: PillTokenCount?
 }
 

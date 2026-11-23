@@ -10,8 +10,16 @@ enum PillTrayMetrics {
     /// Around the buttons, inside the tray's capsule.
     static let inset: CGFloat = 3
     static let height: CGFloat = buttonSize + 2 * inset
-    static let width: CGFloat = 2 * inset + CGFloat(PillToggle.allCases.count) * buttonSize
-        + CGFloat(PillToggle.allCases.count - 1) * spacing
+    /// Paste now's words, and the capsule around them: as tall as a round button, and a little apart from them.
+    static let pasteNowFontSize: CGFloat = 10
+    static let pasteNowPadding: CGFloat = 7
+    static let pasteNowGap: CGFloat = 2
+    static let pasteNowWidth: CGFloat = PillMetrics.textWidth(PillToggle.pasteNow.title, size: pasteNowFontSize,
+                                                              weight: .semibold, rounded: false) + 2 * pasteNowPadding
+    /// The three round buttons' tray: Send, Polish, Translate.
+    static let width: CGFloat = 2 * inset + 3 * buttonSize + 2 * spacing
+    /// With Paste now first: only beside a ready pill (`PillVisual.ready`), never a recording's.
+    static let widthWithPasteNow: CGFloat = width + pasteNowWidth + spacing + pasteNowGap
     /// How far left of its place the tray starts as it comes out, and how small (from its leading edge).
     static let slide: CGFloat = 10
     static let startScale: CGFloat = 0.8
@@ -20,13 +28,15 @@ enum PillTrayMetrics {
     static let keyLabelHeight: CGFloat = 14
 }
 
-/// Send, Polish and Translate for the dictation a pill shows, in a small capsule of the pill's own black beside it, with
+/// Send, Polish and Translate (and Paste now, while it waits) for the dictation a pill shows, in a small capsule of the pill's own black beside it, with
 /// no edge, out while the pointer is on the pill or the tray (`PillModel.openTray`), and while the talk key is down over
 /// the dictation on its way (`PillTrayState.isAimed`). The whole tray comes out at once:
 /// it fades in while it slides in from the pill's side and grows from its leading edge on a bouncy spring, and goes
 /// back the same way. A button that's on is a white disc with a black glyph, as hands-free's finish is, and the pill
 /// itself shows the same glyph inside (the wand, Translate's glyph, the plane). One that can't change this dictation
-/// (Polish and Translate on GigaAM while it's processed) is dimmed and takes no click. The pointer over a button
+/// (Polish and Translate on GigaAM while it's processed) is dimmed and takes no click. A dictation whose text is
+/// there and waits for an older one's has Paste now first, in words on a faint capsule: it's done once, not on or off.
+/// The pointer over a button
 /// puts a faint disc under it at once, with no animation, and its shortcut over it after a short dwell
 /// (`PillTrayState.keys`). The tray sits at the pill's
 /// height, so it covers no more of what's above the Dock than the pill does.
@@ -47,9 +57,10 @@ struct PillTray: View {
     var body: some View {
         let shown = isOpen || reduceMotion
         HStack(spacing: PillTrayMetrics.spacing) {
-            ForEach(PillToggle.allCases, id: \.self) { toggle in
+            ForEach(state.buttons, id: \.self) { toggle in
                 PillTrayButtonView(model: model, button: PillTrayButton(owner: owner, toggle: toggle), state: state,
                                    isLive: isOpen, regions: regions)
+                    .padding(.trailing, toggle == .pasteNow ? PillTrayMetrics.pasteNowGap : 0)
             }
         }
         .padding(PillTrayMetrics.inset)
@@ -110,17 +121,32 @@ private struct PillTrayButtonView: View {
         Button {
             model.onToggle?(toggle, state.dictation)
         } label: {
-            ZStack {
-                Circle()
-                    .fill(isOn ? PillPalette.finish : .white.opacity(hovered ? 0.16 : 0))
-                    .brightness(isOn && hovered ? 0.04 : 0)
-                Image(systemName: toggle.symbolName)
-                    .font(.system(size: toggle == .translate ? 9 : 10, weight: .semibold))
-                    .foregroundStyle(isOn ? Color.black : .white.opacity(isEnabled ? (hovered ? 1 : 0.9) : 0.28))
-                    .symbolEffect(.bounce, options: .speed(1.4), value: reduceMotion ? false : isOn)
+            Group {
+                if toggle == .pasteNow {
+                    Text(toggle.title)
+                        .font(.system(size: PillTrayMetrics.pasteNowFontSize, weight: .semibold))
+                        .foregroundStyle(.white.opacity(hovered ? 1 : 0.92))
+                        .lineLimit(1)
+                        .fixedSize()
+                        .padding(.horizontal, PillTrayMetrics.pasteNowPadding)
+                        .frame(height: PillTrayMetrics.buttonSize)
+                        .background(Capsule(style: .continuous).fill(.white.opacity(hovered ? 0.22 : 0.12)))
+                        .contentShape(Capsule(style: .continuous))
+                } else {
+                    ZStack {
+                        Circle()
+                            .fill(isOn ? PillPalette.finish : .white.opacity(hovered ? 0.16 : 0))
+                            .brightness(isOn && hovered ? 0.04 : 0)
+                        Image(systemName: toggle.symbolName)
+                            .font(.system(size: toggle == .translate ? 9 : 10, weight: .semibold))
+                            .foregroundStyle(isOn ? Color.black
+                                : .white.opacity(isEnabled ? (hovered ? 1 : 0.9) : 0.28))
+                            .symbolEffect(.bounce, options: .speed(1.4), value: reduceMotion ? false : isOn)
+                    }
+                    .frame(width: PillTrayMetrics.buttonSize, height: PillTrayMetrics.buttonSize)
+                    .contentShape(Circle())
+                }
             }
-            .frame(width: PillTrayMetrics.buttonSize, height: PillTrayMetrics.buttonSize)
-            .contentShape(Circle())
             // The hover is never animated, whatever else animates as the pointer comes or goes.
             .transaction(value: hovered) { $0.animation = nil }
         }
@@ -149,8 +175,9 @@ private struct PillTrayButtonView: View {
         .onChange(of: isLive) { _, live in regions?.setTrayButton(button, rect: live ? frame : nil) }
         .onDisappear { regions?.setTrayButton(button, rect: nil) }
         .accessibilityLabel(toggle.title)
-        .accessibilityValue(isOn ? "On" : "Off")
-        .accessibilityHint(isEnabled ? (state.keys[toggle] ?? "") : PillTrayState.reason(toggle))
+        .accessibilityValue(toggle == .pasteNow ? "" : isOn ? "On" : "Off")
+        .accessibilityHint(toggle == .pasteNow ? "Pastes it before the dictations above it"
+            : isEnabled ? (state.keys[toggle] ?? "") : PillTrayState.reason(toggle))
     }
 }
 

@@ -111,6 +111,9 @@ import Testing
     @Test func theTrayFitsBesideTheWidestPill() {
         let widest = PillVisual.locked(hours: true, polishes: true, sends: true).size.width
         #expect(widest / 2 + PillTrayMetrics.gap + PillTrayMetrics.width + 8 < PillCanvasMetrics.size.width / 2)
+        // Paste now's wider tray is a ready pill's alone.
+        #expect(PillVisual.ready.size.width / 2 + PillTrayMetrics.gap + PillTrayMetrics.widthWithPasteNow + 8
+                < PillCanvasMetrics.size.width / 2)
         #expect(PillTrayMetrics.height <= PillMetrics.maxHeight)
     }
 }

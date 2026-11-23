@@ -101,8 +101,8 @@ import Testing
         #expect(Self.card(rig) == nil && rig.pasted.isEmpty)
     }
 
-    /// Send on for it: the click turns it off with Send's sound and the plane leaves the pill. Its tray button can't turn
-    /// it back on (it's dimmed), and no Return is ever pressed. Another click changes nothing more.
+    /// Send on for it: the click turns it off with Send's sound and the plane leaves the pill, and no Return is ever
+    /// pressed. Another click changes nothing more.
     @Test func aClickTurnsSendOff() async throws {
         let first = RequestGate()
         let (rig, cues, requests, monitor) = Self.make(first: first)
@@ -122,8 +122,6 @@ import Testing
         #expect(!rig.h.pill.sends && rig.h.pill.holdsPaste)
         #expect(Array(cues.played.dropFirst(before)) == [.pasteHeld], "one sound: three ticks down, Send off with it")
         c.clickedAway()
-        #expect(rig.h.pill.tray?.canSend == false)
-        rig.h.pill.clickTray(.send)
         #expect(!rig.h.pill.sends && cues.played.count == before + 1, "nothing more")
 
         first.isOpen = true
@@ -153,6 +151,36 @@ import Testing
         rig.h.pill.onClick?()
         #expect(!rig.h.pill.holdsPaste && rig.h.pill.sends && rig.h.pill.phase == .processing)
         #expect(Array(cues.played.dropFirst(before)) == [.pasteTakenBack], "one sound: three ticks up, Send on with it")
+        #expect(monitor.isWatching, "a click elsewhere would hold it again")
+
+        first.isOpen = true
+        try await waitUntil { c.machine.activeJobs == 0 && rig.pasted == ["plain words"] }
+        #expect(Self.card(rig) == nil)
+        try await waitUntil { returns == 1 }
+    }
+
+    /// The plane on the dashed pill takes the click away back too, and turns Send on even when it was never on: the
+    /// outline is solid again, and the text is pasted after all with Return after it. One sound, Send's own: no three
+    /// ticks up over it.
+    @Test func thePlaneOnTheDashedPillTakesItBackWithSendsSound() async throws {
+        let first = RequestGate()
+        let (rig, cues, requests, monitor) = Self.make(first: first)
+        let c = rig.h.controller
+        var returns = 0
+        c.returnDelay = .milliseconds(5)
+        c.pressReturnOverride = { returns += 1; return .pressed }
+        rig.h.recorder.next = DictationResumeTests.speech(seconds: 2)
+        SwitchModelControllerTests.hold(rig)
+        rig.now += 2
+        c.handle(.pttUp)
+        try await waitUntil { requests.gemini.count == 1 }
+        monitor.mouseDown(at: Self.away)
+        #expect(rig.h.pill.holdsPaste && !rig.h.pill.sends)
+        #expect(rig.h.pill.tray?.canSend == true, "the plane can be clicked on the dashed pill")
+        let before = cues.played.count
+        rig.h.pill.clickTray(.send)
+        #expect(!rig.h.pill.holdsPaste && rig.h.pill.sends && rig.h.pill.phase == .processing)
+        #expect(Array(cues.played.dropFirst(before)) == [.sendOn], "Send's sound alone, no ticks")
         #expect(monitor.isWatching, "a click elsewhere would hold it again")
 
         first.isOpen = true

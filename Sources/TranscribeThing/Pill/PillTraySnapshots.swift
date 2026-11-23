@@ -53,6 +53,9 @@ enum PillTraySnapshots {
             .init(id: "proc-gigaam", caption: "GigaAM · Polish and Translate dimmed") {
                 processing(choice: .gigaam, rewrites: false, hovering: .send)
             },
+            .init(id: "proc-ready", caption: "GigaAM · ready, waits its turn · pointer on Paste now") {
+                processing(choice: .gigaam, rewrites: false, ready: true, hovering: .pasteNow)
+            },
             .init(id: "proc-held", caption: "Clicked away · Send dimmed") {
                 processing(choice: .gemini, held: true, hovering: .polish)
             },
@@ -74,6 +77,16 @@ enum PillTraySnapshots {
                 stacked(bottom: .processing, items: [
                     item(.gemini, polishes: true),
                     item(.gigaam, held: true),
+                    item(.gemini, sends: true, count: PillTokenCount(phase: .writing, tokens: 140)),
+                ])
+            },
+            .init(id: "stack-ready", caption: "Ready under one still thinking", height: 150) {
+                stacked(bottom: .processing, bottomChoice: .gigaam, bottomReady: true,
+                        items: [item(.gemini, count: PillTokenCount(phase: .thinking, tokens: 820))])
+            },
+            .init(id: "stack-ready-above", caption: "Recording · a ready one waits above", height: 180) {
+                stacked(bottom: .listening, items: [
+                    item(.gigaam, ready: true),
                     item(.gemini, sends: true, count: PillTokenCount(phase: .writing, tokens: 140)),
                 ])
             },
@@ -113,7 +126,7 @@ enum PillTraySnapshots {
     static let keys: [PillToggle: String] = [.send: "fn ↩", .polish: "fn P", .translate: "fn T"]
 
     @MainActor private static func processing(choice: ModelChoice, polishes: Bool = false, sends: Bool = false,
-                                              rewrites: Bool = true, held: Bool = false,
+                                              rewrites: Bool = true, held: Bool = false, ready: Bool = false,
                                               count: PillTokenCount? = nil, hovering tooltip: PillToggle? = nil,
                                               open: Bool = true, aimed: Bool = false) -> PillModel {
         let model = PillModel.preview(phase: .processing)
@@ -121,30 +134,38 @@ enum PillTraySnapshots {
         model.polishes = polishes
         model.sends = sends && !held
         model.holdsPaste = held
+        model.isReady = ready
         let key = UUID()
         model.tray = PillTrayState(dictation: .processing(key), polishes: polishes, sends: sends && !held,
-                                   rewrites: rewrites && choice.isGemini, canSend: !held, keys: Self.keys,
-                                   isAimed: aimed)
+                                   rewrites: rewrites && choice.isGemini, canSend: !held,
+                                   canPasteNow: ready && !held, keys: Self.keys, isAimed: aimed)
         if let count { _ = model.previewCounter(count) }
         if open { model.showTray(.bottom, hovering: tooltip.map { PillTrayButton(owner: .bottom, toggle: $0) }) }
         return model
     }
 
     private static func item(_ choice: ModelChoice, polishes: Bool = false, translates: Bool = false,
-                             sends: Bool = false, held: Bool = false, count: PillTokenCount? = nil) -> PillStackItem {
+                             sends: Bool = false, held: Bool = false, ready: Bool = false,
+                             count: PillTokenCount? = nil) -> PillStackItem {
         let key = UUID()
         return PillStackItem(key: key, choice: choice,
                              tray: PillTrayState(dictation: .processing(key), polishes: polishes,
                                                  translates: translates, sends: sends && !held,
-                                                 rewrites: choice.isGemini, canSend: !held),
-                             holdsPaste: held, count: count)
+                                                 rewrites: choice.isGemini, canSend: !held,
+                                                 canPasteNow: ready && !held),
+                             holdsPaste: held, isReady: ready, count: count)
     }
 
     /// `items`, the nearest first, above a bottom pill in `bottom`.
-    @MainActor private static func stacked(bottom: PillPhase, items: [PillStackItem]) -> PillModel {
+    /// `bottomReady`: the bottom pill's text waits for theirs, its tray out with Paste now.
+    @MainActor private static func stacked(bottom: PillPhase, bottomChoice: ModelChoice = .gemini,
+                                           bottomReady: Bool = false, items: [PillStackItem]) -> PillModel {
         let model = PillModel.preview(phase: bottom, level: 0.6)
-        model.sessionModel = .gemini
-        model.tray = PillTrayState(dictation: bottom == .processing ? .processing(UUID()) : .recording)
+        model.sessionModel = bottomChoice
+        model.isReady = bottomReady
+        model.tray = PillTrayState(dictation: bottom == .processing ? .processing(UUID()) : .recording,
+                                   rewrites: bottomChoice.isGemini, canPasteNow: bottomReady)
+        if bottomReady { model.showTray(.bottom) }
         model.setStack(items)
         for item in items {
             if let count = item.count { _ = model.stackModels[item.key]?.previewCounter(count) }

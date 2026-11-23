@@ -474,6 +474,9 @@ final class DictationController {
         case .recording:
             guard machine.isRecording else { return }
             switch toggle {
+            case .pasteNow:
+                // A recording has no text yet.
+                return
             case .send:
                 // On any model: it's about where the text goes, not what's written.
                 send(.send)
@@ -489,6 +492,10 @@ final class DictationController {
             }
         case .processing(let key):
             guard let job = queue.first(where: { $0.key == key }) else { return }
+            if toggle == .send, !byKey, job.isHeldByClick {
+                sendTakesBackClickAway(of: job)
+                return
+            }
             self.toggle(toggle, of: job, resendsNow: !byKey)
         }
     }
@@ -536,9 +543,10 @@ final class DictationController {
     /// A key of the talk key's press can do something for `job` on its way: it's pressed off the talk key (fn P off fn,
     /// F5 P off F5) and `job` can take it (Polish and Translate on Gemini, Send while it isn't held by a click away).
     private func takesKey(_ toggle: PillToggle, for job: Job) -> Bool {
-        guard let talkKey = settings.shortcuts[.pushToTalk],
-              settings.shortcuts[toggle.action]?.keyOnTalkKey(talkKey) != nil else { return false }
+        guard let action = toggle.action, let talkKey = settings.shortcuts[.pushToTalk],
+              settings.shortcuts[action]?.keyOnTalkKey(talkKey) != nil else { return false }
         switch toggle {
+        case .pasteNow: return false
         case .polish, .translate: return job.engine.isGemini
         case .send: return !job.isHeldByClick
         }
@@ -601,7 +609,9 @@ final class DictationController {
     private var toggleKeyLabels: [PillToggle: String] {
         var keys: [PillToggle: String] = [:]
         for toggle in PillToggle.allCases {
-            if let shortcut = settings.shortcuts[toggle.action] { keys[toggle] = ShortcutFormatter.compact(shortcut) }
+            if let action = toggle.action, let shortcut = settings.shortcuts[action] {
+                keys[toggle] = ShortcutFormatter.compact(shortcut)
+            }
         }
         return keys
     }
@@ -1148,8 +1158,15 @@ final class DictationController {
         var translates = false
         /// A sent dictation (`Send`): Return once its text is pasted where the user is typing.
         var sends = false
+        /// Paste now was clicked on its tray: it's pasted as soon as its text is there, ahead of older dictations.
+        var pastesNow = false
+        /// Its text came while an older dictation's wasn't pasted yet, so it waited (`drain`): its pill says "ready".
+        var waited = false
         /// Who it is to its pill, from the stop to the paste: `id` changes once the recorder hands over the audio.
         let key = UUID()
+        /// Its place among dictations, in the order they were made: the pills stand in it, whatever is pasted first.
+        let order: Int
+        private static var made = 0
         /// The user clicked away from the app while it was processed (`clickedAway`): its text comes up on a card, never
         /// pasted, unless a click on the dashed pill takes that back (`takeBackClickAway`).
         var isHeldByClick = false
@@ -1181,6 +1198,8 @@ final class DictationController {
             self.recording = recording
             self.engine = engine
             self.placeholderID = id ?? UUID()
+            Self.made += 1
+            self.order = Self.made
         }
 
         /// The recording's id once it exists (history, retry and undo all key on it).
@@ -1225,6 +1244,9 @@ final class DictationController {
         job.attemptGenerations = []
         job.generation += 1
         job.outcome = nil
+        // Asked again (Polish, Translate): Paste now and "ready" were for the text it had.
+        job.pastesNow = false
+        job.waited = false
         job.sent = job.choice
         let generation = job.generation
         let engine = job.engine
@@ -1398,12 +1420,16 @@ final class DictationController {
     }
 
     /// Pastes the oldest dictation once its text is there, then the next: in the order they were recorded, also while
-    /// a newer one records (into the field in front, as each would have been).
+    /// a newer one records (into the field in front, as each would have been). One whose Paste now was clicked goes
+    /// ahead of them.
     private func drain() {
         defer { stateDidChange() }
-        guard !isDelivering, let head = queue.first, let outcome = head.outcome else { return }
+        let next = isDelivering ? nil : queue.first(where: { $0.pastesNow && $0.outcome != nil }) ?? queue.first
+        // What has its answer but isn't pasted now waits for an older one: its pill says "ready" until it's gone.
+        for job in queue where job.outcome != nil && job !== next { job.waited = true }
+        guard let head = next, let outcome = head.outcome else { return }
         deliveringJob = head
-        queue.removeFirst()
+        queue.removeAll { $0 === head }
         Task { [weak self] in
             guard let self else { return }
             await self.deliver(head, outcome)
@@ -2706,6 +2732,8 @@ final class DictationController {
     /// off when pressed again, with the same flick: Send has the one sound. On any model.
     private func toggleSend() {
         isSending.toggle()
+        // The dictation being recorded is the newest: Return goes after its paste alone.
+        if isSending { sendOnlyLast(nil) }
         playCue(.sendOn)
     }
 
@@ -3159,9 +3187,54 @@ final class DictationController {
             // A click away holds its text on a card: there's no paste for Return to follow, so Send stays off.
             guard !job.isHeldByClick else { return }
             job.sends.toggle()
+            if job.sends { sendOnlyLast(job) }
             playCue(.sendOn)
             DiagnosticLog.shared.event(.dictation, "processing.toggle", ["button": "send", "on": job.sends])
+        case .pasteNow:
+            pasteNow(job)
         }
+    }
+
+    /// Send came on for `job`, or with nil for the dictation being recorded: every older dictation on its way goes
+    /// without Return (and a click away's taking back won't bring it back), so Return is pressed once, after the last
+    /// of their pastes, and the texts go as one message. Quietly: the one sound is the Send that came on. Newer
+    /// dictations keep theirs. The one being pasted right now too, until its Return goes.
+    private func sendOnlyLast(_ job: Job?) {
+        var turnedOff = 0
+        for other in onTheirWay where other !== job && (job.map { other.order < $0.order } ?? true) {
+            if other.sends {
+                other.sends = false
+                turnedOff += 1
+            }
+            other.sendOffByClick = false
+        }
+        guard turnedOff > 0 else { return }
+        DiagnosticLog.shared.event(.dictation, "send.olderOff", ["count": turnedOff])
+    }
+
+    /// Paste now, on the tray of a dictation whose text waits for an older one's: it goes in at once (right after the
+    /// one being pasted this moment, if any), ahead of them, with its Send; they follow in their order. Its pill leaves
+    /// from where it stands.
+    private func pasteNow(_ job: Job) {
+        guard canPasteNow(job) else { return }
+        job.pastesNow = true
+        DiagnosticLog.shared.event(.dictation, "processing.pasteNow", [
+            "ahead": queue.prefix { $0 !== job }.count, "sends": job.sends ? true : nil])
+        drain()
+    }
+
+    /// Its text is there and waited for an older dictation's to be pasted first: its pill says "ready" until it's gone,
+    /// while it's pasted too. One pasted the moment its text came never says it, nor one with no words (no speech):
+    /// it never pastes.
+    private func showsReady(_ job: Job) -> Bool {
+        guard job.waited, case .success(let result)? = job.outcome,
+              job === deliveringJob || queue.contains(where: { $0 === job }) else { return false }
+        return !result.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Ready and still waiting, not held by a click away (its text goes to a card), not already on its way in.
+    private func canPasteNow(_ job: Job) -> Bool {
+        showsReady(job) && job !== deliveringJob && !job.isHeldByClick && !job.pastesNow
     }
 
     // MARK: - A click away holds the paste
@@ -3205,7 +3278,7 @@ final class DictationController {
     /// is pasted after all (where the user is now), and Send is on again if that click turned it off, with the plane.
     /// Three ticks go up (`.pasteTakenBack`), quiet while a new dictation records. Other dashed pills stay held. A click
     /// elsewhere holds it again.
-    private func takeBackClickAway(of job: Job) {
+    private func takeBackClickAway(of job: Job, quietly: Bool = false) {
         guard job.isHeldByClick, queue.contains(where: { $0 === job }) else { return }
         job.isHeldByClick = false
         var sendOn = false
@@ -3213,10 +3286,22 @@ final class DictationController {
             job.sendOffByClick = false
             job.sends = true
             sendOn = true
+            sendOnlyLast(job)
         }
-        if !machine.isRecording { playCue(.pasteTakenBack) }
+        if !quietly, !machine.isRecording { playCue(.pasteTakenBack) }
         DiagnosticLog.shared.event(.dictation, "processing.clickTakenBack", ["sendOn": sendOn ? true : nil])
         stateDidChange()
+    }
+
+    /// The plane clicked on a dashed pill: the click away is taken back, as a click on the pill would, and Send is on.
+    /// The pill's outline is solid again and its text is pasted where the user is now, with Return after it. One
+    /// sound, Send's own: the taking back is quiet, so the three ticks don't play over it.
+    private func sendTakesBackClickAway(of job: Job) {
+        takeBackClickAway(of: job, quietly: true)
+        job.sends = true
+        sendOnlyLast(job)
+        playCue(.sendOn)
+        DiagnosticLog.shared.event(.dictation, "processing.toggle", ["button": "send", "on": true, "tookBack": true])
     }
 
     /// Listens for clicks only while one would hold a dictation's paste.
@@ -3580,6 +3665,9 @@ final class DictationController {
         let holdsPaste = phase == .processing ? pillJob?.isHeldByClick == true
             : phase.isRecording ? false : pillModel.holdsPaste
         if pillModel.holdsPaste != holdsPaste { pillModel.holdsPaste = holdsPaste }
+        // Its text is there, waiting for an older one's: "ready", never the wave of one still being written.
+        let isReady = phase == .processing && pillJob.map(showsReady) == true
+        if pillModel.isReady != isReady { pillModel.isReady = isReady }
         // No job on the pill: the polish is the selection's, with no audio behind it.
         let selectionPolishing = (polishes || translates) && phase == .processing && pillJob == nil
         if pillModel.selectionPolishing != selectionPolishing { pillModel.selectionPolishing = selectionPolishing }
@@ -3613,23 +3701,30 @@ final class DictationController {
         if pillModel.tray != tray { pillModel.tray = tray }
         // Every other dictation on its way stands above it, on a pill of its own, the newest nearest.
         let bottom = phase.isRecording ? nil : pillJob
-        let stacked = ((deliveringJob.map { [$0] } ?? []) + queue).filter { $0 !== bottom }.reversed()
+        let stacked = onTheirWay.filter { $0 !== bottom }.reversed()
         pillModel.setStack(stacked.map { job in
             PillStackItem(key: job.key, choice: ModelChoice(engine: job.engine), tray: trayState(of: job),
-                          holdsPaste: job.isHeldByClick, count: job.count)
+                          holdsPaste: job.isHeldByClick, isReady: showsReady(job), count: job.count)
         })
     }
 
-    /// The job the processing pill speaks for: the newest dictation still being transcribed, or the one being pasted.
-    private var pillJob: Job? { queue.last ?? deliveringJob }
+    /// The job the processing pill speaks for: the newest dictation on its way, being transcribed, waiting with its
+    /// text, or being pasted (one pasted ahead of older ones with Paste now is still the newest).
+    private var pillJob: Job? { onTheirWay.last }
 
-    /// The tray of a dictation on its way: Polish and Translate on Gemini only, Send unless a click away holds its
-    /// text. Nothing changes one being pasted right now.
+    /// Every dictation on its way, the one being pasted too, in the order they were made: the pills stand in it.
+    private var onTheirWay: [Job] {
+        guard let deliveringJob else { return queue }
+        return (queue + [deliveringJob]).sorted { $0.order < $1.order }
+    }
+
+    /// The tray of a dictation on its way: Polish and Translate on Gemini only, Send on any (on a dashed pill it takes
+    /// the click away back: `sendTakesBackClickAway`). Nothing changes one being pasted right now.
     private func trayState(of job: Job) -> PillTrayState {
         let queued = queue.contains { $0 === job }
         return PillTrayState(dictation: .processing(job.key), polishes: job.polishes, translates: job.translates,
                              sends: job.sends, rewrites: queued && job.engine.isGemini,
-                             canSend: queued && !job.isHeldByClick)
+                             canSend: queued, canPasteNow: canPasteNow(job))
     }
 
     private func stateDidChange() {
