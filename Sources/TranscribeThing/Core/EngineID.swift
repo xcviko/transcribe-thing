@@ -28,10 +28,13 @@ enum EngineID: String, Codable, CaseIterable, Identifiable, Sendable {
     /// Every engine this build offers and runs, in display order. Every list of models to pick, switch to, fall
     /// back to or transcribe with comes from here, never from `allCases`.
     static var offered: [EngineID] { allCases.filter { !$0.isRetired } }
+    /// The models a call can go to (General → Calls → Model): every Gemini model this build runs, a new one too.
+    static var callModels: [EngineID] { offered.filter(\.isGemini) }
 
     /// The models that run on this Mac: GigaAM v3.
     static var localEngines: [EngineID] { offered.filter(\.isLocal) }
-    /// The Gemini models this build runs: Gemini 3.8 Flash, Gemini 4 Hydrogen, Gemini 4 Neon and Gemini 4 Carbon.
+    /// The Gemini models this build runs: Gemini 3.8 Flash, Gemini 4 Hydrogen, Gemini 4 Neon and Gemini 4 Carbon. Each
+    /// takes calls too (`AppSettings.callModel`).
     static var geminiEngines: [EngineID] { offered.filter(\.isGemini) }
 
     var isLocal: Bool {

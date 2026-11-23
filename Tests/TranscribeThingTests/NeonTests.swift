@@ -78,9 +78,10 @@ private func json(_ body: Data) throws -> [String: Any] {
                 == [.polish(by: .geminiNeon), .translation(polished: false, by: .geminiNeon)])
     }
 
-    /// Neon offers Low, Medium and High, never Minimal (not known to work) or None, and thinks at Low until picked.
+    /// Neon offers Low, Medium, High and xHigh, never Minimal (not known to work) or None, and thinks at Low until
+    /// picked.
     @Test func neonThinksAtLowAndIsNotOfferedMinimal() {
-        #expect(EngineID.geminiNeon.reasoningEfforts == [.low, .medium, .high])
+        #expect(EngineID.geminiNeon.reasoningEfforts == [.low, .medium, .high, .xhigh])
         #expect(EngineID.geminiNeon.defaultReasoningEffort == .low)
         #expect(ReasoningEfforts.default[.geminiNeon] == .low)
         #expect(ReasoningEfforts.default[.geminiHydrogen] == .medium && ReasoningEfforts.default[.geminiFlash] == .medium)
@@ -317,7 +318,7 @@ private func json(_ body: Data) throws -> [String: Any] {
         let lines = EngineCLI.cloudModelLines()
         #expect(lines.count == 4)
         #expect(lines[2].hasPrefix("geminiNeon      Gemini 4 Neon      google/gemini-4-neon"))
-        #expect(lines[2].hasSuffix("effort low|medium|high (default low)"))
+        #expect(lines[2].hasSuffix("effort low|medium|high|xhigh (default low)"))
         #expect(lines[1].hasPrefix("geminiHydrogen ") && lines[3].hasPrefix("geminiCarbon "))
     }
 }

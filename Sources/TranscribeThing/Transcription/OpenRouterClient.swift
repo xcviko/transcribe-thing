@@ -244,11 +244,15 @@ final class OpenRouterClient: Sendable {
 
     /// `max_tokens` of a Gemini transcription. Its floor, 32,768, covers the first minute, so short dictations
     /// ask for what they always have (a 1:48 recording already thought for about 18k tokens at high, and less
-    /// would cut them short); every further minute started adds 600 tokens to write it out. At high, which thinks
-    /// the longest, it starts 16,384 higher. Never more than 65,536, Gemini's most.
+    /// would cut them short); every further minute started adds 600 tokens to write it out. At high it starts 16,384
+    /// higher, at xHigh (Gemini 4 Neon's, which thinks the longest) 32,768. Never more than 65,536, Gemini's most.
     static func transcriptionMaxTokens(audioSeconds: TimeInterval, effort: ReasoningEffort = .medium) -> Int {
         let minutes = Int((max(0, audioSeconds) / 60).rounded(.up))
-        let thinking = effort == .high ? 16_384 : 0
+        let thinking = switch effort {
+        case .high: 16_384
+        case .xhigh: 32_768
+        case .off, .minimal, .low, .medium: 0
+        }
         return min(65_536, 32_768 + thinking + 600 * max(0, minutes - 1))
     }
 
@@ -266,11 +270,16 @@ final class OpenRouterClient: Sendable {
     /// failures reported quickly inside the stream before any of the answer) and only when the wait is at most 8 s;
     /// never after a timeout (the user already waited). Cancelling stops the stream, though not the bill: Google AI
     /// Studio doesn't support stream cancellation, so the model finishes and is paid for in full.
+    /// With `extractsTags` false the answer comes back exactly as the model wrote it, a cut-off one too
+    /// (`openRouterTruncated`): a call's transcript (`CallTranscriber`) has its own format and asks for no tags.
+    /// `voiceSample`, a call's only: a sample of the person's voice in `format`, sent as an audio part before `audio`
+    /// (`OpenRouterChatRequest.transcription`).
     func transcribe(audio: Data, format: String, model: String, systemPrompt: String?, effort: ReasoningEffort,
-                    maxTokens: Int, apiKey: String, timeout: TimeInterval,
+                    maxTokens: Int, apiKey: String, timeout: TimeInterval, extractsTags: Bool = true,
                     progress: (@Sendable (ChatStreamProgress) -> Void)? = nil,
                     generation: (@Sendable (String) -> Void)? = nil,
-                    provider: OpenRouterChatRequest.Provider = .googleAIStudio) async throws -> CloudResult {
+                    provider: OpenRouterChatRequest.Provider = .googleAIStudio,
+                    voiceSample: Data? = nil) async throws -> CloudResult {
         let engine = Self.engine(forModel: model)
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw adapted(AppError.openRouterMissingKey) }
@@ -279,7 +288,8 @@ final class OpenRouterClient: Sendable {
         do {
             body = try adjusted(OpenRouterChatRequest.transcription(
                 model: model, audioBase64: audio.base64EncodedString(), format: format, systemPrompt: systemPrompt,
-                effort: effort, maxTokens: maxTokens, provider: provider)).encoded()
+                effort: effort, maxTokens: maxTokens, provider: provider,
+                voiceSampleBase64: voiceSample?.base64EncodedString())).encoded()
         } catch {
             throw adapted(AppError.openRouterBadRequest("Couldn’t build the request."))
         }
@@ -288,6 +298,9 @@ final class OpenRouterClient: Sendable {
         let (open, close) = systemPrompt?.contains(Polish.open) == true ? (Polish.open, Polish.close)
             : (TaggedTranscript.open, TaggedTranscript.close)
         var result: CloudResult
+        guard extractsTags else {
+            return try await streamWithRetry(request, engine: engine, progress: progress, generation: generation)
+        }
         do {
             result = try await streamWithRetry(request, engine: engine, progress: progress, generation: generation)
         } catch AppError.openRouterTruncated(let partial) {
@@ -304,8 +317,8 @@ final class OpenRouterClient: Sendable {
         return result
     }
 
-    /// `text` over chat completions by the model, provider and effort of `route` (Polish Selection): text in,
-    /// text out, with `systemPrompt` as the instructions, streamed to `progress` like
+    /// `text` over chat completions by the model, provider and effort of `route` (Polish Selection, a call's
+    /// summary): text in, text out, with `systemPrompt` as the instructions, streamed to `progress` like
     /// transcription. Same retry policy; a failure is mapped as the route's model's. Cancelling stops the generation and its bill. The returned text is the
     /// model's reply without any tags or quotes it put around it.
     func sendText(_ text: String, route: TextRoute, systemPrompt: String, apiKey: String,
@@ -326,6 +339,27 @@ final class OpenRouterClient: Sendable {
         return result
     }
 
+    /// A question about a video uploaded to the endpoint (`uploadVideo`), its file's `uri` and then `text` in one user
+    /// message (`OpenRouterChatRequest.video`), looked at with Vertex's agentic processing. The endpoint's only: it
+    /// has the Files API the video went up through. Same stream, retry policy and failures as `sendText`, but for an
+    /// answer cut off by `maxTokens`: it comes back as it is (finish reason "length"), with what it cost. The answer
+    /// comes back as the model wrote it.
+    func askAboutVideo(fileURI: String, text: String, model: String, effort: ReasoningEffort, maxTokens: Int,
+                       apiKey: String, timeout: TimeInterval) async throws -> CloudResult {
+        let engine = Self.engine(forModel: model)
+        let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { throw adapted(AppError.openRouterMissingKey) }
+        let body: Data
+        do {
+            body = try adjusted(OpenRouterChatRequest.video(model: model, fileURI: fileURI, processing: "agentic",
+                                                            text: text, effort: effort, maxTokens: maxTokens)).encoded()
+        } catch {
+            throw adapted(AppError.openRouterBadRequest("Couldn’t build the request."))
+        }
+        let request = makeTranscriptionRequest(body: body, apiKey: key, timeout: timeout)
+        return try await streamWithRetry(request, engine: engine, progress: nil, keepTruncated: true)
+    }
+
     /// Sends a chat `request` and reads its answer as it streams in, retrying once per the policy above. Its
     /// `timeoutInterval` is a stall timeout: seconds with no byte at all, OpenRouter's comments included.
     /// `progress` hears at once of the first reasoning and the first text, then at most every 250 ms (a change held
@@ -334,11 +368,12 @@ final class OpenRouterClient: Sendable {
     /// done can still be looked up for what it cost.
     private func streamWithRetry(_ request: URLRequest, engine: EngineID,
                                  progress: (@Sendable (ChatStreamProgress) -> Void)?,
-                                 generation: (@Sendable (String) -> Void)? = nil) async throws -> CloudResult {
+                                 generation: (@Sendable (String) -> Void)? = nil,
+                                 keepTruncated: Bool = false) async throws -> CloudResult {
         try await withRetry {
             try await watching { activity in
                 try await self.stream(request, engine: engine, progress: progress, generation: generation,
-                                      activity: activity)
+                                      keepTruncated: keepTruncated, activity: activity)
             }
         }
     }
@@ -346,7 +381,7 @@ final class OpenRouterClient: Sendable {
     /// One attempt of `streamWithRetry`. A failure before the 200 is retried like any request's; one inside the
     /// stream only when it came quickly and before any of the answer: the model's work is never thrown away.
     private func stream(_ request: URLRequest, engine: EngineID, progress: (@Sendable (ChatStreamProgress) -> Void)?,
-                        generation: (@Sendable (String) -> Void)? = nil,
+                        generation: (@Sendable (String) -> Void)? = nil, keepTruncated: Bool = false,
                         activity: ConnectionActivity) async throws -> CloudResult {
         let started = ContinuousClock.now
         let (bytes, http) = try await open(request, engine: engine, activity: activity)
@@ -428,7 +463,7 @@ final class OpenRouterClient: Sendable {
         var result: CloudResult
         do {
             do {
-                result = try stream.result(engine: engine)
+                result = try stream.result(engine: engine, keepTruncated: keepTruncated)
             } catch let error as AppError where isProxy {
                 // The endpoint reports a failure inside the stream with its HTTP status as the code.
                 if let body = stream.error {

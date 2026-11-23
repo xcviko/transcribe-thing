@@ -3,9 +3,9 @@ import UniformTypeIdentifiers
 
 /// The models in the user's order: the main model every dictation starts on (a radio), which others the Switch model
 /// shortcut steps to (a switch), the order it steps in (drag a row by its handle), and each one's color on the pill
-/// (its tile), and how hard each Gemini model thinks (its Reasoning menu). Then the model hands-free starts on, the
-/// model on this Mac, GigaAM v3 (download, delete, storage), with the files retired models left there to delete, and
-/// the API keys: OpenRouter's, and the user's own OpenAI-compatible endpoint that can take Gemini's requests instead.
+/// (its tile), and how hard each Gemini model thinks for dictation (its Reasoning menu; calls pick their own in
+/// General). Then the model hands-free starts on, the model on this Mac, GigaAM v3 (download, delete, storage), with the
+/// files retired models left there to delete, and the API keys: OpenRouter's, and the user's own OpenAI-compatible endpoint that can take Gemini's requests instead.
 struct ModelsPage: View {
     @Environment(HubContext.self) private var hub
     @Environment(ModelStore.self) private var models
@@ -121,11 +121,12 @@ struct ModelsPage: View {
         return Binding(get: { settings.handsFreeChoice }, set: { settings.handsFreeModel = $0 })
     }
 
-    /// What the list can't say by itself: what the dot and the switches mean, and what Reasoning costs.
+    /// What the list can't say by itself: what the dot and the switches mean, what Reasoning costs, and where calls
+    /// pick theirs.
     private var lineupFooter: String {
         let keys = settings.shortcuts[.switchModel].map { " (\($0.compactDescription))" } ?? ""
         return "The dot picks the main model: every dictation starts on it. Models switched on are the ones "
-            + "Switch model\(keys) steps through while you dictate. " + ReasoningCopy.footer
+            + "Switch model\(keys) steps through while you dictate. " + ReasoningCopy.footer + " " + ReasoningCopy.calls
     }
 
     /// Which key the setting is about.
@@ -147,9 +148,10 @@ struct ModelsPage: View {
 
 }
 
-/// What Models says about Reasoning.
+/// What Models says about Reasoning, and where calls pick theirs.
 enum ReasoningCopy {
     static let footer = "Higher Reasoning thinks longer before it writes: answers come slower and cost more."
+    static let calls = "Calls pick their own model and level in General → Calls."
 }
 
 /// A Gemini model's level (`AppSettings.reasoningEfforts`) on its lineup row, after its status: "Reasoning: Medium", a

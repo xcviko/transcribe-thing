@@ -2,14 +2,16 @@ import Foundation
 
 /// How long a model thinks before it answers: OpenRouter's `reasoning.effort`. Gemini gets it as `thinkingLevel`
 /// one to one (minimal → minimal … high → high). Raw values go on the wire and are persisted (a history version
-/// records the level it was asked for). Each Gemini model thinks at the level picked for it in Models
-/// (`ReasoningEfforts`, one of `EngineID.reasoningEfforts`); `off`
+/// records the level it was asked for). Each Gemini model thinks at the level picked for it in Models, and calls at the
+/// one picked for it in General → Calls (`ReasoningEfforts`, one of `EngineID.reasoningEfforts`); `off`
 /// ("none") is for a model that can skip thinking (GPT-6 Luna, whose clean-ups History still keeps). Declaration order
 /// is from least to most thinking.
 enum ReasoningEffort: String, Codable, CaseIterable, Sendable {
     /// Sent as "none". Not named `none`, which would read as `Optional.none` wherever a level is optional.
     case off = "none"
     case minimal, low, medium, high
+    /// Above High: Gemini 4 Neon's most, as the user's endpoint takes it ("xhigh").
+    case xhigh
 
     var title: String {
         switch self {
@@ -18,18 +20,20 @@ enum ReasoningEffort: String, Codable, CaseIterable, Sendable {
         case .low: "Low"
         case .medium: "Medium"
         case .high: "High"
+        case .xhigh: "xHigh"
         }
     }
 }
 
 extension EngineID {
-    /// The levels the model can be asked to think at (the Reasoning menu on its row in Models): Low, Medium and High
-    /// for Gemini. No Gemini model is offered Minimal (the user's endpoint sends it as Low, Gemini 4 Hydrogen refuses
+    /// The levels the model can be asked to think at (the Reasoning menu on its row in Models, and General → Calls'
+    /// while it's the call model): Low, Medium and High for Gemini, and for Gemini 4 Neon xHigh too. No Gemini model is offered Minimal (the user's endpoint sends it as Low, Gemini 4 Hydrogen refuses
     /// it: "Thinking level is unsupported", and whether Gemini 4 Neon takes it isn't known) nor None (Gemini 3.8 Flash
     /// can't turn thinking off). Empty for models that don't reason, and for a retired one, which never runs.
     var reasoningEfforts: [ReasoningEffort] {
         switch self {
-        case .geminiFlash, .geminiHydrogen, .geminiNeon, .geminiCarbon: [.low, .medium, .high]
+        case .geminiFlash, .geminiHydrogen, .geminiCarbon: [.low, .medium, .high]
+        case .geminiNeon: [.low, .medium, .high, .xhigh]
         case .parakeet, .gigaam, .parakeetCloud, .geminiArgon, .geminiPro: []
         }
     }
@@ -47,22 +51,34 @@ extension EngineID {
         case .parakeet, .gigaam, .parakeetCloud, .geminiArgon, .geminiPro: nil
         }
     }
+
+    /// The level a call on the model thinks at until another is picked in General → Calls: Medium for every Gemini model
+    /// (Gemini 4 Neon at xHigh thought for about 50k tokens, 7 minutes, on a 51-second call, measured in November
+    /// 2026). nil for models that don't reason.
+    var defaultCallReasoningEffort: ReasoningEffort? {
+        defaultReasoningEffort == nil ? nil : .medium
+    }
 }
 
 /// The level each Gemini model thinks at, picked in Models (`AppSettings.reasoningEfforts`). Every request to the
-/// model goes at its level: dictation, Polish, Translate, file imports, History's versions. One JSON object
+/// model goes at its level: dictation, Polish, Translate, file imports, History's versions, calls. One JSON object
 /// under `SettingsKey.geminiReasoningEfforts`, keyed by `EngineID` raw value:
 /// {"geminiCarbon":"low","geminiFlash":"medium","geminiHydrogen":"medium","geminiNeon":"low"}.
 struct ReasoningEfforts: Equatable, Sendable {
     private var levels: [EngineID: ReasoningEffort] = [:]
+    /// Calls' levels (`AppSettings.callReasoningEfforts`): a model not picked for calls is at its
+    /// `defaultCallReasoningEffort`, not its dictation default. Not stored: the setting says which it is.
+    var forCalls = false
 
     /// Every model at its `defaultReasoningEffort`.
     static let `default` = ReasoningEfforts()
+    /// Every model at its `defaultCallReasoningEffort`.
+    static let calls = ReasoningEfforts(forCalls: true)
 
     /// `engine`'s level: the one picked, else its default. nil for a model that doesn't reason. Setting a level the
     /// model doesn't offer (`EngineID.reasoningEfforts`) does nothing.
     subscript(_ engine: EngineID) -> ReasoningEffort? {
-        get { levels[engine] ?? engine.defaultReasoningEffort }
+        get { levels[engine] ?? (forCalls ? engine.defaultCallReasoningEffort : engine.defaultReasoningEffort) }
         set {
             guard let newValue, engine.reasoningEfforts.contains(newValue) else { return }
             levels[engine] = newValue

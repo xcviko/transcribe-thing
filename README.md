@@ -149,25 +149,103 @@ dictation: transcribe it again with another model, polish it or translate it.
 It takes MP3, M4A, WAV, Telegram voice notes (.ogg) and the sound of a video, up to three hours. Files don't count
 toward the numbers on Home: words, speed and dictations are only what you said.
 
+## Calls
+
+The app records your calls and transcribes them with who said what. They're in the Calls tab.
+
+### Coming from calls-thing
+
+Calls were a separate app, calls-thing, for a while. The first time this version opens, it copies your calls and their
+settings from calls-thing: the model and its Reasoning, Record calls, Never recorded and call notices. calls-thing has to
+quit first, since it records calls too: the app asks, and Not Now asks again at the next launch. Nothing in calls-thing
+is changed or deleted. Once your calls are here, you can delete calls-thing. Its browser extension can't talk to this
+app: remove it in each browser profile and add this app's in General → Browser Extension.
+
+### What counts as a call
+
+A call is any app that uses your microphone and plays sound at the same time for 20 seconds: Zoom, Telegram, FaceTime,
+Teams, WhatsApp or anything else. Music and recording apps never count: GarageBand, Logic Pro, Ableton Live, OBS,
+QuickTime Player, Voice Memos, Simulator, Audio Hijack, Loopback, Final Cut Pro, DaVinci Resolve and Audacity.
+
+In a browser, a call is a tab. In Chrome, Arc, Edge, Brave, Vivaldi, Opera and Yandex Browser, any tab that uses the
+microphone counts, and the call is named after the page. Safari and Firefox don't show which tab uses the microphone,
+so there only Google Meet, Zoom, Discord, Telegram Web, Slack and Telemost tabs count. The app finds the tab through
+Accessibility (already on for pasting); without it, the whole browser counts as the call. With the browser extension
+(General → Browser Extension → Install, for Chrome, Arc, Edge, Brave, Vivaldi and Yandex Browser), the app hears from
+inside the page which tab has the call, when you mute, in a background tab too, and the moment the call ends. To record
+anything else, Start Call Recording in the menu bar records your mic and everything the Mac plays.
+
+### When a call starts
+
+Recording starts too, and the app asks "Transcribe your call in Google Meet?":
+
+- **Transcribe** keeps it.
+- **Don't Keep** deletes the recording.
+- **Never for Google Meet** (or Never for FaceTime, Never for This Site) deletes the recording, and calls in that app or
+  on that site are never recorded again, in any browser. A site other than the services above is known by the start
+  of its page title, up to the first separator such as " - " or " | ". To undo it, click − next to it in General →
+  Calls → Never recorded.
+
+If you don't answer, the call waits in the Calls tab, and nothing is sent until you click Transcribe there. To transcribe
+every call without asking, or to stop noticing calls, change General → Calls → Record calls.
+
+### The transcript and the summary
+
+The model picked in General → Calls → Model writes the transcript, at the Reasoning level picked there: Gemini 4 Neon at
+Medium until you pick another. Each model keeps its own level for calls, apart from the one in Models that dictation
+uses. Calls go on your OpenRouter key or through your own endpoint. Someone whose name comes up in the call is named;
+the rest are "Participant 1", "Participant 2", and anyone in the room with you is "Nearby 1". On the call's page, click
+a name to rename them, or a phrase to move the player to it; right-click a phrase to play from there. Once you've played
+it, the play/pause key (F8 on Apple keyboards), your headphones' button and Control Center pause and resume it, until
+you leave the page. Space works too.
+
+The player plays a call as your Mac heard and played it, at 48 kHz, with both sides equally loud. Calls recorded before
+play as they were.
+
+Above the transcript, each call gets a summary in the call's language: what it was about, the key points, what was
+decided, the tasks people took on, and the questions left open. Tick a task off when it's done; the Calls tab shows how
+many are, like "2/3 tasks". A call up to 45 minutes gets its summary in the same request as its transcript. A longer one
+sends its transcript once more, as text, which costs a little extra. If a summary fails, the transcript is still there,
+and Summarize tries again. The summary also gives the call a short title, like "Friday release and slow long files":
+the Calls tab and the call's page show it, with where the call happened under it. Search finds a call by either.
+
+### Your mute and the other side
+
+In Zoom, Discord, Slack, Google Meet, Telemost and Telegram, the app follows your mute: while you're muted, your
+microphone isn't recorded, so what you say then is neither kept nor transcribed. Your first words right after you unmute
+may be cut too. In other apps, and in a menu bar recording, what you say while muted is recorded and may end up in the
+transcript.
+
+To record the other side, turn on transcribe-thing in System Settings → Privacy & Security → Screen & System Audio
+Recording, under System Audio Recording Only. Without it, their side comes out silent and the call says so. In a
+browser, the app records all of the browser's sound, so music in another tab ends up in the recording.
+
+On your Mac's speakers, your microphone hears the other side too. When a call is kept, the app takes their voices out of
+your microphone's track, using the call app's own sound, so the transcript mixes you up with them less. With headphones
+there's nothing to take out, and your microphone stays as it was recorded. That original is kept in the call's folder as
+`mic-raw.m4a` and deleted with the call.
+
 ## Your data
 
 History, the recordings, your dictionary and your API keys (OpenRouter's and your own endpoint's) stay on your Mac, in
 `~/Library/Application Support/transcribe-thing`. Each key is in a file only you can read. Audio leaves your Mac only
-when Gemini transcribes it: through OpenRouter, or through your own endpoint when it's the provider. GigaAM v3 is
-downloaded once, from this project's releases on GitHub, into the same folder, and hears your audio on your Mac. Text
-leaves it only
-when Gemini 3.8 Flash polishes or translates text you selected. Your dictionary's words go along with everything sent to Gemini.
+when Gemini transcribes it, a call's too: through OpenRouter, or through your own endpoint when it's the provider.
+GigaAM v3 is downloaded once, from this project's releases on GitHub, into the same folder, and hears your audio on
+your Mac. Text leaves it only when Gemini 3.8 Flash polishes or translates text you selected, or when a long call's
+transcript goes back for its summary. Your dictionary's words go along with everything sent to Gemini.
 
 The same folder keeps a log of what the app did in the last 7 days, without your dictations, your selected text or
 your key. It stays there until you send it: General → Troubleshooting → Export Logs… saves it as a file.
 
 History keeps every dictation with its recording, and a copy of the sound of every file you transcribe, until you
 delete it, so you can transcribe it again with another model, polish it or translate it. General → History can
-delete entries older than 1, 7, 30 or 90 days.
+delete entries older than 1, 7, 30 or 90 days. Calls are kept in the same folder until you delete them, about 130 MB an
+hour of call, and that setting deletes old calls too.
 
 If the app quits or crashes, or the Mac shuts down, while you dictate or wait for the transcript, the recording isn't
 lost. The next time the app starts, it's in History marked "Interrupted". Continue records more where you stopped and
 then transcribes all of it, or, if you had already stopped, transcribes it. Nothing goes to a model until you click it.
+A call the app was recording then is kept up to that point, in the Calls tab with Transcribe.
 
 ## If something doesn't work
 

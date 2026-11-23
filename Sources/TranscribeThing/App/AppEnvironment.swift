@@ -18,6 +18,15 @@ final class AppEnvironment {
     let models: ModelStore
     let transcription: TranscriptionService
     let history: HistoryStore
+    /// Recorded calls, apart from History (`CallStore`), how they're noticed and recorded (`CallMonitor`), and
+    /// transcribed (`CallTranscriber`).
+    let calls: CallStore
+    let callTranscriber: CallTranscriber
+    let callMonitor: CallMonitor
+    /// The browser extension: the socket its hosts reach (`BrowserBridge`), which tells `callMonitor` about calls in
+    /// web pages, and its setup in each browser (`BrowserExtension`).
+    let browserBridge: BrowserBridge
+    let browserExtension: BrowserExtension
     let permissions: PermissionsCenter
     let hotkeys: HotkeyMonitor
     let inserter: TextInserter
@@ -40,6 +49,8 @@ final class AppEnvironment {
     let imports = FileImport()
     /// Preview environments never start services.
     let isPreview: Bool
+    /// What the launch's import from calls-thing did (`CallsThingImport`): logged once the log has started.
+    var callsImport: CallsThingImport.Outcome = .notRun
 
     private var isStarted = false
     private var maintenanceTask: Task<Void, Never>?
@@ -50,7 +61,7 @@ final class AppEnvironment {
          devices: AudioDeviceCatalog, recorder: AudioRecorder, openRouterClient: OpenRouterClient,
          account: OpenRouterAccount, proxy: VertexProxyAccount, models: ModelStore,
          transcription: TranscriptionService,
-         history: HistoryStore, permissions: PermissionsCenter, hotkeys: HotkeyMonitor,
+         history: HistoryStore, calls: CallStore, permissions: PermissionsCenter, hotkeys: HotkeyMonitor,
          inserter: TextInserter, secureInput: SecureInputMonitor, launchAtLogin: LaunchAtLogin,
          sounds: SoundPlayer, pillModel: PillModel, toasts: ToastCenter, pill: PillController,
          dictation: DictationController, updates: UpdateCenter, windows: WindowCoordinator,
@@ -67,6 +78,23 @@ final class AppEnvironment {
         self.models = models
         self.transcription = transcription
         self.history = history
+        self.calls = calls
+        let callModel: @MainActor () -> CallModel = { [settings] in settings.callModel }
+        callTranscriber = CallTranscriber(store: calls,
+                                          send: CallTranscriber.openRouter(client: openRouterClient, account: account,
+                                                                           proxy: proxy, model: callModel),
+                                          sendText: CallTranscriber.openRouterText(client: openRouterClient,
+                                                                                   account: account, proxy: proxy,
+                                                                                   model: callModel),
+                                          videoNames: CallTranscriber.endpointVideoNames(proxy: proxy,
+                                                                                         model: callModel))
+        // A preview never listens, and its extension's files go to a temporary folder.
+        browserBridge = BrowserBridge(socketPath: isPreview ? nil : BrowserBridge.socketPath(for: paths))
+        browserExtension = isPreview
+            ? .preview(browsers: [])
+            : BrowserExtension(places: .live(paths: paths), bridge: browserBridge)
+        callMonitor = CallMonitor(settings: settings, store: calls, transcriber: callTranscriber,
+                                  dependencies: .live(settings: settings, bridge: browserBridge))
         self.permissions = permissions
         self.hotkeys = hotkeys
         self.inserter = inserter
@@ -92,8 +120,12 @@ final class AppEnvironment {
 
     static func live() -> AppEnvironment {
         let paths = AppPaths.live()
+        // Before AppSettings: its load() writes values back, and the import copies only the call settings this app
+        // doesn't have. While calls-thing runs, it's asked to quit; Not Now goes on without the import this time.
+        let callsImport = CallsThingImport.atLaunch(destination: paths,
+                                                    whileCallsThingRuns: CallsThingImport.askToQuitCallsThing)
         let settings = AppSettings()
-        return assemble(
+        let environment = assemble(
             paths: paths,
             settings: settings,
             keyStore: KeyFileStore(url: paths.keyFile),
@@ -103,6 +135,7 @@ final class AppEnvironment {
             proxy: VertexProxyAccount(keyStore: KeyFileStore(url: paths.vertexProxyKeyFile), settings: settings),
             models: ModelStore(paths: paths, settings: settings),
             history: HistoryStore(paths: paths, settings: settings),
+            calls: CallStore(paths: paths, settings: settings),
             permissions: PermissionsCenter(),
             hotkeys: HotkeyMonitor(settings: settings),
             secureInput: SecureInputMonitor(),
@@ -110,6 +143,9 @@ final class AppEnvironment {
             makeUpdates: { settings, toasts in UpdateCenter.live(settings: settings, toasts: toasts, paths: paths) },
             isPreview: false
         )
+        environment.callsImport = callsImport
+        if let notice = CallsThingImport.notice(for: callsImport) { environment.toasts.post(notice) }
+        return environment
     }
 
     /// In-memory everything with fixture data; nothing is started. `releases`: what the update feed lists (by
@@ -127,6 +163,7 @@ final class AppEnvironment {
             proxy: .preview(status: .notSet, settings: settings),
             models: .preview(states: [.gigaam: .ready], settings: settings),
             history: .preview(entries: PreviewFixtures.history()),
+            calls: .preview(calls: []),
             permissions: .preview(mic: .granted, ax: .granted),
             hotkeys: .preview(),
             secureInput: .preview(),
@@ -141,7 +178,7 @@ final class AppEnvironment {
         devices: AudioDeviceCatalog,
         makeAccount: (KeyFileStore, OpenRouterClient) -> OpenRouterAccount,
         proxy: VertexProxyAccount,
-        models: ModelStore, history: HistoryStore, permissions: PermissionsCenter,
+        models: ModelStore, history: HistoryStore, calls: CallStore, permissions: PermissionsCenter,
         hotkeys: HotkeyMonitor,
         secureInput: SecureInputMonitor, launchAtLogin: LaunchAtLogin,
         makeUpdates: (AppSettings, ToastCenter) -> UpdateCenter, isPreview: Bool
@@ -166,7 +203,7 @@ final class AppEnvironment {
         return AppEnvironment(
             paths: paths, settings: settings, keyStore: keyStore, levelMeter: levelMeter, devices: devices,
             recorder: recorder, openRouterClient: client, account: account, proxy: proxy, models: models,
-            transcription: transcription, history: history, permissions: permissions, hotkeys: hotkeys,
+            transcription: transcription, history: history, calls: calls, permissions: permissions, hotkeys: hotkeys,
             inserter: inserter, secureInput: secureInput, launchAtLogin: launchAtLogin, sounds: sounds,
             pillModel: pillModel, toasts: toasts, pill: pill, dictation: dictation,
             updates: makeUpdates(settings, toasts),
@@ -201,6 +238,28 @@ final class AppEnvironment {
         recorder.isMicrophoneAllowed = { [weak permissions] in
             permissions?.microphone == .granted || AudioRecorder.isMicrophoneAuthorized
         }
+        wireCalls()
+    }
+
+    /// A call's question is a toast (sticky: unanswered, the call waits in the Calls tab); deleting a call stops its
+    /// transcription, or its recording.
+    private func wireCalls() {
+        callTranscriber.userName = { [settings] in settings.displayName }
+        callTranscriber.vocabulary = { [settings] in settings.dictionary.words }
+        // The local model tells Gemini when the person spoke, from their own mic.
+        calls.onRemove = { [weak self] ids in
+            for id in ids { self?.callTranscriber.cancel(id) }
+            self?.callMonitor.removed(ids)
+        }
+        callMonitor.onAsk = { [weak toasts] info in
+            toasts?.post(.transcribeCall(info.id, service: info.title, never: CallExclusion.of(info)?.actionTitle))
+        }
+        callMonitor.onAnswered = { [weak toasts] id in toasts?.dismiss(dedupeKey: Notice.callQuestionKey(id)) }
+        dictation.answerCall = { [weak callMonitor] id, answer in callMonitor?.answer(answer, callID: id) }
+        // What the call engine notices, as brief notices above the pill; never over a dictation's pill.
+        callMonitor.notices = CallNotices(toasts: toasts, settings: settings) { [weak dictation] in
+            (dictation?.activity ?? .idle) != .idle
+        }
     }
 
     /// Starts services in the SPEC §4.14 order.
@@ -213,14 +272,17 @@ final class AppEnvironment {
             Log.app.error("Couldn't create app folders: \(error.localizedDescription, privacy: .public)")
         }
         diagnostics.log.start(directory: paths.logs)
+        CallsThingImport.logEvent(callsImport, to: diagnostics.log)
         // Before anything reads the key. Older builds kept it in the login keychain; reading it there may ask for the
         // keychain password, a last time.
         KeychainMigration.run(into: keyStore, from: .live, settings: settings)
         // After the migration, so the settings line knows whether a key is saved.
         diagnostics.start()
         history.load()
-        // Calls have moved to calls-thing: browsers stop starting this app for the old extension.
-        LegacyBrowserHost.removeOldManifests(browserSupport: LegacyBrowserHost.liveBrowserSupport)
+        calls.load()
+        // Browsers that have the extension reach this copy of the app, and load this version of it.
+        browserExtension.reprepare()
+        browserBridge.start()
         devices.start()
         permissions.refresh()
         models.start()
@@ -246,6 +308,8 @@ final class AppEnvironment {
             windows.showOnboarding()
         }
         observeAutoDelete()
+        observeCallRecording()
+        observeCallState()
         scheduleMaintenance()
         scheduleCompression()
         updates.start()
@@ -269,6 +333,7 @@ final class AppEnvironment {
 
     /// Called at quit: persist what's pending and release the event tap.
     func stop() {
+        browserBridge.stop()
         diagnostics.stop()
         history.flush()
         inserter.flushPendingRestore()
@@ -319,9 +384,30 @@ final class AppEnvironment {
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 self?.history.deleteExpired()
+                self?.calls.deleteExpired()
                 self?.observeAutoDelete()
             }
         }
+    }
+
+    /// Calls are noticed while the setting isn't Off, from launch and from the moment it changes.
+    private func observeCallRecording() {
+        let mode = withObservationTracking {
+            settings.callRecording
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in self?.observeCallRecording() }
+        }
+        if mode == .off { callMonitor.stop() } else { callMonitor.start() }
+    }
+
+    /// The menu bar's red dot while a call is recorded, asked about or kept.
+    private func observeCallState() {
+        let state = withObservationTracking {
+            callMonitor.state
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in self?.observeCallState() }
+        }
+        menuBar.showCall(recording: CallsList.liveInfo(state) != nil)
     }
 
     /// transcribe-thing runs for weeks at a time: Auto-delete runs every hour, not only at launch (loading the
@@ -332,6 +418,7 @@ final class AppEnvironment {
                 try? await Task.sleep(for: .seconds(3600))
                 guard !Task.isCancelled else { return }
                 self?.history.deleteExpired()
+                self?.calls.deleteExpired()
             }
         }
     }

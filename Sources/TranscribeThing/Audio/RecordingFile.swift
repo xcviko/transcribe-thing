@@ -175,7 +175,7 @@ enum RecordingFile {
         }
     }
 
-    private static func partialURL(beside url: URL) -> URL {
+    static func partialURL(beside url: URL) -> URL {
         url.deletingLastPathComponent().appendingPathComponent(UUID().uuidString + partialSuffix, isDirectory: false)
     }
 

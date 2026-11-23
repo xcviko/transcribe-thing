@@ -932,6 +932,29 @@ private final class MeterTestClock: @unchecked Sendable {
         #expect(state.finalize(discard: false).isEmpty)
     }
 
+    /// A call's mic is also kept at the listening rate, from the same buffers: the same second of it, at 48 kHz, and the
+    /// stereo device's two channels mixed, not one dropped.
+    @Test func alsoKeepsTheListeningRate() {
+        var state = CaptureState(device: Self.device, keepsSamples: true, listeningRate: 48_000)
+        feed(&state, seconds: 0.5, start: 100, amplitude: 0.5)
+        let taken = state.take()
+        feed(&state, seconds: 0.5, start: 100.5, amplitude: 0.5)
+        let rest = state.finalize(discard: false)
+        let restListening = state.takeListening()
+        let low = (taken?.samples.count ?? 0) + rest.count
+        let high = (taken?.listening.count ?? 0) + restListening.count
+        #expect(abs(low - 16_000) <= 16)
+        #expect(abs(high - 48_000) <= 48)
+        #expect(taken?.start == 100)
+        let level = Signal.rmsDB((taken?.listening ?? [])[4_800...])
+        #expect(abs(level - Signal.rmsDB(Signal.sine(700, seconds: 0.2, rate: 48_000, amplitude: 0.5)[...])) < 0.5)
+        #expect(state.takeListening().isEmpty, "taken once")
+
+        var plain = CaptureState(device: Self.device, keepsSamples: true)
+        feed(&plain, seconds: 0.2, start: 0)
+        #expect(plain.take()?.listening.isEmpty == true, "without a listening rate, 16 kHz only")
+    }
+
     @Test func monitoringKeepsNothing() {
         var state = CaptureState(device: Self.device, keepsSamples: false)
         let levels = feed(&state, seconds: 0.5, start: 0)

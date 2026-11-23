@@ -2,8 +2,9 @@ import AVFoundation
 import Foundation
 import UniformTypeIdentifiers
 
-/// An audio or video file read for Home to transcribe as if it had been dictated: its sound as 16 kHz mono samples,
-/// like a recording's (`Recording`), with its file's name for the row.
+/// An audio or video file read for Home to transcribe as if it had been dictated, or for Calls as if it had been a
+/// recorded call (`CallStore.addImported`): its sound as 16 kHz mono samples, like a recording's (`Recording`), with
+/// its file's name for the row.
 struct ImportedAudio: Sendable, Identifiable {
     let id = UUID()
     var fileName: String
@@ -11,7 +12,8 @@ struct ImportedAudio: Sendable, Identifiable {
     var speech: SpeechStats
     /// Where it was read from; nil for one made up in a test.
     var url: URL?
-    /// The file has a picture (a screen recording), not only sound.
+    /// The file has a picture (a screen recording, a call's video), not only sound: Calls keeps its path so the
+    /// picture can be looked at later.
     var isVideo = false
 
     var duration: TimeInterval { Double(samples.count) / Recording.sampleRate }

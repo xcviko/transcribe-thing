@@ -508,6 +508,7 @@ private let argonHistoryFile = #"""
             store(defaults, #"{"main":"parakeet","order":["parakeet","gemini","argon"],"switchable":["parakeet","argon"]}"#,
                   .lineup)
             defaults.set("argon", forKey: SettingsKey.handsFreeModel.defaultsKey)
+            defaults.set("geminiArgon", forKey: SettingsKey.callEngine.defaultsKey)
             store(defaults, #"{"geminiArgon":"high","geminiFlash":"low"}"#, .geminiReasoningEfforts)
             store(defaults, #"{"argon":"pink","gemini":"orange","parakeet":"graphite"}"#, .modelColors)
             store(defaults, #"["gemini","argon"]"#, .modelsAddingSpace)
@@ -519,6 +520,7 @@ private let argonHistoryFile = #"""
                     && settings.lineup.order == [.gigaam, .gemini, .hydrogen, .neon, .carbon])
             #expect(settings.lineup.steps == [.gemini], "fn ⇥ steps to Flash where it stepped to Argon, not to Carbon")
             #expect(settings.handsFreeModel == .gemini && settings.handsFreeChoice == .gemini)
+            #expect(settings.callModel == .default, "calls keep their own model and level")
             #expect(settings.reasoningEffort(for: .geminiFlash) == .low && settings.reasoningEffort(for: .geminiArgon) == nil)
             #expect(settings.modelColors[.gemini] == .orange && settings.modelColors.parakeet == .graphite)
             #expect(settings.modelsAddingSpace == [.gemini, .hydrogen, .neon, .carbon],
@@ -541,7 +543,7 @@ private let argonHistoryFile = #"""
 
             let again = load(defaults)
             #expect(again.lineup == settings.lineup && again.handsFreeModel == .gemini, "a reload changes nothing")
-            #expect(again.reasoningEfforts == settings.reasoningEfforts && again.modelColors == settings.modelColors)
+            #expect(again.callModel == settings.callModel && again.modelColors == settings.modelColors)
         }
     }
 

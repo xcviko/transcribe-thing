@@ -3,6 +3,10 @@ import Foundation
 /// One captured dictation: 16 kHz mono Float32 samples in [-1, 1].
 struct Recording: Sendable, Identifiable, Equatable {
     static let sampleRate: Double = 16_000
+    /// The rate a call's tracks are also kept at for listening (`CallListening`): what the Mac plays and hears, with
+    /// none of what 16 kHz cuts off above 8 kHz. Everything else (transcription, the waveform, the mic's cleaning for
+    /// Gemini) works on the 16 kHz tracks.
+    static let listeningRate: Double = 48_000
 
     let id: UUID
     var samples: [Float]

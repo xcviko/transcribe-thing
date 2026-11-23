@@ -1130,7 +1130,7 @@ private func chord(_ keys: Shortcut.ModifierKey...) -> Shortcut {
 
         let settings = AppSettings(defaults: defaults)
         #expect(settings.lineup == .default)
-        #expect(settings.reasoningEfforts == .default)
+        #expect(settings.reasoningEfforts == .default && settings.callModel == .default)
         #expect(settings.pillMode == .whileDictating)
         #expect(settings.modelColors == .default)
         #expect(settings.shortcuts == .defaults)

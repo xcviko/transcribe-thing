@@ -2022,8 +2022,9 @@ func waitUntil(timeout: Duration = .seconds(3), _ condition: () -> Bool) async t
         #expect(Self.titles(menu) == [
             "GigaAM v3 · Ready", "—",
             "Copy Last Transcript", "—",
+            "Start Call Recording", "—",
             "Microphone", "—",
-            "Home", "Settings…", "—", "Quit",
+            "Home", "Calls", "Settings…", "—", "Quit",
         ])
         #expect(menu.items.first?.isEnabled == false)
     }

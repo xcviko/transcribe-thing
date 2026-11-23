@@ -160,9 +160,10 @@ final class RecordingJournal: @unchecked Sendable {
     }
 
     /// A journal file's start: the WAV header with its sizes left open (the file is as long as what was written, and
-    /// `WAVEncoder.decode` reads to its end), then `prefix`.
-    static func openHeader(_ prefix: [Float] = []) -> Data {
-        var data = WAVEncoder.pcm16(prefix)
+    /// `WAVEncoder.decode` reads to its end), then `prefix`. `rate`: what the header says (a call's listening tracks
+    /// are 48 kHz); the app reads its journals by sample, whatever the header says.
+    static func openHeader(_ prefix: [Float] = [], rate: Double = Recording.sampleRate) -> Data {
+        var data = WAVEncoder.pcm16(prefix, sampleRate: Int(rate))
         data.replaceSubrange(4..<8, with: [0xFF, 0xFF, 0xFF, 0xFF])
         data.replaceSubrange(40..<44, with: [0xFF, 0xFF, 0xFF, 0xFF])
         return data

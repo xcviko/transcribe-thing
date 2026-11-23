@@ -3,7 +3,7 @@ import os
 
 /// What an event is about: the word in brackets on its line.
 enum DiagnosticCategory: String, Sendable {
-    case app, settings, dictation, engine, net, models, updates, mic, permissions, hotkeys
+    case app, settings, dictation, engine, net, models, updates, mic, permissions, hotkeys, calls
 }
 
 /// The log a friend can send when something breaks: what the app did over the last few days, one line per event, in

@@ -22,9 +22,10 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
 
 @Suite struct ReasoningEffortTests {
     @Test func eachGeminiOffersLowMediumAndHighAndStartsAtItsOwnDefault() {
-        for engine in EngineID.geminiEngines {
+        for engine in EngineID.geminiEngines where engine != .geminiNeon {
             #expect(engine.reasoningEfforts == [.low, .medium, .high], "no Minimal, no None")
         }
+        #expect(EngineID.geminiNeon.reasoningEfforts == [.low, .medium, .high, .xhigh], "Neon's xHigh on top")
         #expect(EngineID.geminiFlash.defaultReasoningEffort == .medium)
         #expect(EngineID.geminiHydrogen.defaultReasoningEffort == .medium)
         #expect(EngineID.geminiNeon.defaultReasoningEffort == .low)
@@ -32,7 +33,8 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         for engine in [EngineID.parakeet, .parakeetCloud, .geminiArgon, .geminiPro] {
             #expect(engine.reasoningEfforts.isEmpty && engine.defaultReasoningEffort == nil, "\(engine)")
         }
-        #expect(ReasoningEffort.allCases.map(\.rawValue) == ["none", "minimal", "low", "medium", "high"])
+        #expect(ReasoningEffort.allCases.map(\.rawValue) == ["none", "minimal", "low", "medium", "high", "xhigh"])
+        #expect(ReasoningEffort.xhigh.title == "xHigh")
         #expect(ReasoningEffort.off.title == "None" && ReasoningEffort.medium.title == "Medium")
     }
 }
@@ -162,6 +164,86 @@ private func chatReply(_ content: String, cost: Double = 0.0002, reasoning: Int 
         #expect(OpenRouterClient.transcriptionMaxTokens(audioSeconds: 60, effort: .medium) == 32_768)
         #expect(OpenRouterClient.transcriptionMaxTokens(audioSeconds: 60, effort: .high) == 49_152)
         #expect(OpenRouterClient.transcriptionMaxTokens(audioSeconds: 3_600, effort: .high) == 65_536)
+    }
+}
+
+// MARK: - Calls
+
+@MainActor
+@Suite struct CallModelRequestTests {
+    private func json(_ body: Data) throws -> [String: Any] {
+        try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+    }
+
+    /// The audio request and the summary's text request go to Gemini 3.8 Flash at the level calls go at, read as each
+    /// request goes.
+    @Test func bothRequestsFollowTheCallModel() async throws {
+        let (client, host) = StubURLProtocol.client([.stream(SSE.answer("[00:00-00:02] Anna: Hi.")),
+                                                     .stream(SSE.answer("<summary>Hi.</summary>")),
+                                                     .stream(SSE.answer("[00:00-00:02] Anna: Hi."))])
+        let account = OpenRouterAccount(keyStore: .inMemory("sk-or-v1-test"), client: client, debounce: .zero)
+        let settings = AppSettings.inMemory()
+        settings.callEngine = .geminiFlash
+        settings.callReasoningEfforts[.geminiFlash] = .high
+        // Dictation's level for Flash, in Models, isn't calls'.
+        settings.reasoningEfforts[.geminiFlash] = .low
+        let send = CallTranscriber.openRouter(client: client, account: account, model: { settings.callModel })
+        let sendText = CallTranscriber.openRouterText(client: client, account: account, model: { settings.callModel })
+        _ = try await send(Data([1, 2]), "Transcribe the call.", 2, nil)
+        _ = try await sendText("Anna: Hi.", "Sum it up.")
+        settings.callReasoningEfforts[.geminiFlash] = .low
+        _ = try await send(Data([1, 2]), "Transcribe the call.", 2, nil)
+        let bodies = try StubURLProtocol.registry.bodies(for: host).map(json)
+        #expect(bodies.map { $0["model"] as? String } == Array(repeating: "google/gemini-3.8-flash", count: 3))
+        #expect(bodies.map { ($0["reasoning"] as? [String: Any])?["effort"] as? String } == ["high", "high", "low"])
+        #expect(StubURLProtocol.registry.requests(for: host).first?.timeoutInterval == 120)
+    }
+
+    /// Through the user's endpoint too: the same slug, which it takes without "google/".
+    @Test func theProxyGetsTheCallModel() async throws {
+        let (proxy, proxyHost) = ProxyFixture.proxy([.stream(SSE.answer("[00:00-00:02] Sam: Hi.")),
+                                                     .stream(SSE.answer("Summary."))])
+        let (client, openRouterHost) = StubURLProtocol.client([])
+        let account = OpenRouterAccount(keyStore: .inMemory(nil), client: client, debounce: .zero)
+        let model = CallModel(engine: .geminiFlash, effort: .low)
+        let send = CallTranscriber.openRouter(client: client, account: account, proxy: proxy, model: { model })
+        let sendText = CallTranscriber.openRouterText(client: client, account: account, proxy: proxy, model: { model })
+        _ = try await send(Data([1, 2]), "The call.", 2, nil)
+        _ = try await sendText("Sam: Hi.", "Sum it up.")
+        let bodies = try StubURLProtocol.registry.bodies(for: proxyHost).map(json)
+        #expect(bodies.map { $0["model"] as? String } == ["google/gemini-3.8-flash", "google/gemini-3.8-flash"])
+        #expect(bodies.map { ($0["reasoning"] as? [String: Any])?["effort"] as? String } == ["low", "low"])
+        #expect(StubURLProtocol.registry.requests(for: openRouterHost).isEmpty)
+    }
+
+    @Test func theDefaultCallModelIsNeonAtMedium() {
+        #expect(CallModel.default == CallModel(engine: .geminiNeon, effort: .medium))
+        #expect(AppSettings.inMemory().callModel == .default)
+        #expect(CallModel.default.modelID == "google/gemini-4-neon")
+        #expect(EngineID.callModels == [.geminiFlash, .geminiHydrogen, .geminiNeon, .geminiCarbon])
+    }
+
+    /// Each model keeps its own level for calls, Medium until picked, apart from its level for dictation; both, and
+    /// the model, outlast a relaunch. A stored model this build doesn't run reads as Neon.
+    @Test func callsKeepTheirOwnModelAndLevels() {
+        let defaults = UserDefaults(suiteName: "calls-model-\(UUID().uuidString)")!
+        let settings = AppSettings(defaults: defaults)
+        #expect(settings.callModel == CallModel(engine: .geminiNeon, effort: .medium))
+        #expect(settings.reasoningEffort(for: .geminiNeon) == .low, "dictation's Neon starts at Low")
+        settings.callReasoningEfforts[.geminiNeon] = .xhigh
+        settings.callEngine = .geminiHydrogen
+        #expect(settings.callModel == CallModel(engine: .geminiHydrogen, effort: .medium))
+        settings.callReasoningEfforts[.geminiHydrogen] = .xhigh
+        #expect(settings.callModel.effort == .medium, "Hydrogen has no xHigh")
+        settings.callEngine = .geminiNeon
+        #expect(settings.callModel.effort == .xhigh && settings.reasoningEffort(for: .geminiNeon) == .low)
+
+        let reloaded = AppSettings(defaults: defaults)
+        #expect(reloaded.callModel == CallModel(engine: .geminiNeon, effort: .xhigh))
+        #expect(reloaded.callReasoningEfforts[.geminiFlash] == .medium && reloaded.reasoningEffort(for: .geminiNeon) == .low)
+
+        defaults.set("geminiArgon", forKey: SettingsKey.callModel.defaultsKey)
+        #expect(AppSettings(defaults: defaults).callModel.engine == .geminiNeon)
     }
 }
 

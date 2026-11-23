@@ -3,10 +3,18 @@ import CoreAudio
 import Foundation
 
 /// A stretch of one track's audio: 16 kHz mono samples and the `AudioClock` time its first one was captured; nil
-/// when it goes straight on from the stretch before.
+/// when it goes straight on from the stretch before. `listening`: the same stretch at `Recording.listeningRate`, for the
+/// tracks kept for listening (`CallListening`); empty from a source that doesn't keep them.
 struct TimedAudio: Equatable, Sendable {
     var samples: [Float]
+    var listening: [Float] = []
     var start: TimeInterval?
+
+    init(samples: [Float], listening: [Float] = [], start: TimeInterval?) {
+        self.samples = samples
+        self.listening = listening
+        self.start = start
+    }
 }
 
 /// Somewhere other apps' sound comes from, a stretch at a time: a process tap (`ProcessTapSource`), or a test's fake.
@@ -27,19 +35,33 @@ enum ProcessTap {
     static let ownDeviceUIDPrefix = "dev.transcribe-thing."
 }
 
-/// Other apps' sound: a CoreAudio process tap of everything the Mac plays but this app, mixed to mono, in a private
-/// aggregate device of its own that `HALDeviceInput` reads like any input, resampled to 16 kHz: what a dictation takes
-/// out of the mic (`DictationEcho`). Each stretch is stamped with the host time its IO cycle carries, so it lines up
-/// with the mic's.
+/// What a process tap takes in.
+enum TapTarget: Equatable, Sendable {
+    /// The sound of these HAL process objects, mixed: every process of the call app (a browser's helpers included).
+    case processes([AudioObjectID])
+    /// Everything the Mac plays but this app's own sounds: a manual recording, and what a dictation takes out of the
+    /// mic (`DictationEcho`).
+    case everythingButThisApp
+}
+
+/// Other apps' sound: a CoreAudio process tap of a call app's processes (a call's other side), or of everything the
+/// Mac plays but this app (a manual recording, a dictation's echo canceller), mixed to mono, in a private aggregate device of its own that `HALDeviceInput` reads like any input,
+/// resampled to 16 kHz. Each stretch is stamped with the host time its IO cycle carries, so the track lines up with
+/// the mic's.
 ///
 /// It needs the "System Audio Recording Only" permission (`NSAudioCaptureUsageDescription`); macOS asks the first time
-/// a tap is made. A tap that can't be made leaves `problem` and no audio: the mic goes on alone.
+/// a tap is made. A tap that can't be made leaves `problem` and no audio: the mic goes on alone. When
+/// the app's processes change (Chrome starts a new helper), the tap is made again for the new set; the moment
+/// between is silence on the call's clock.
 final class ProcessTapSource: AudioTapSource, @unchecked Sendable {
-    private let control = DispatchQueue(label: "dev.transcribe-thing.audio.tap", qos: .userInitiated)
+    private let control = DispatchQueue(label: "dev.transcribe-thing.calls.tap", qos: .userInitiated)
     private let lock = NSLock()
     // Lock state.
     private var pending: [TimedAudio] = []
     private let resampler = StreamingResampler(targetSampleRate: Recording.sampleRate)
+    /// The same sound at the listening rate, from the same buffers: a call's other side (`CallListening`); nil for a
+    /// tap only a dictation's echo canceller reads.
+    private let listeningResampler: StreamingResampler?
     /// When the next IO cycle should start if nothing was lost.
     private var expected: TimeInterval?
     /// The tap the IO cycles must come from: a late cycle of a torn-down one is ignored.
@@ -47,14 +69,18 @@ final class ProcessTapSource: AudioTapSource, @unchecked Sendable {
     private var stopped = false
     private var lastProblem: String?
     // Control-queue state.
+    private var target: TapTarget
     private var tapID = AudioObjectID(kAudioObjectUnknown)
     private var aggregateID = AudioObjectID(kAudioObjectUnknown)
     private var input: HALDeviceInput?
 
-    /// What the tap is for, in its name and the log: "dictation" for the echo canceller's reference.
+    /// What the tap is for, in its name and the log: "call", or "dictation" for the echo canceller's reference.
     private let label: String
 
-    init(label: String) {
+    /// `listening`: keep the sound at `Recording.listeningRate` too (`TimedAudio.listening`).
+    init(target: TapTarget, label: String = "call", listening: Bool = false) {
+        self.target = target
+        listeningResampler = listening ? StreamingResampler(targetSampleRate: Recording.listeningRate) : nil
         self.label = label
     }
 
@@ -62,6 +88,16 @@ final class ProcessTapSource: AudioTapSource, @unchecked Sendable {
 
     func start() {
         control.async { self.build() }
+    }
+
+    func retarget(_ processes: [AudioObjectID]) {
+        control.async {
+            guard case .processes(let current) = self.target, current != processes, !processes.isEmpty else { return }
+            Log.audio.info("Call tap follows \(processes.count) processes now (was \(current.count))")
+            self.target = .processes(processes)
+            self.teardown()
+            self.build()
+        }
     }
 
     func drain() -> [TimedAudio] {
@@ -82,8 +118,15 @@ final class ProcessTapSource: AudioTapSource, @unchecked Sendable {
 
     private func build() {
         guard !lock.withLock({ stopped }) else { return }
-        let own = CoreAudioHAL.processObjectID(pid: getpid()).map { [$0] } ?? []
-        let description = CATapDescription(monoGlobalTapButExcludeProcesses: own)
+        let description: CATapDescription
+        switch target {
+        case .processes(let processes):
+            guard !processes.isEmpty else { return }
+            description = CATapDescription(monoMixdownOfProcesses: processes)
+        case .everythingButThisApp:
+            let own = CoreAudioHAL.processObjectID(pid: getpid()).map { [$0] } ?? []
+            description = CATapDescription(monoGlobalTapButExcludeProcesses: own)
+        }
         description.uuid = UUID()
         description.name = "transcribe-thing \(label)"
         description.isPrivate = true
@@ -172,17 +215,24 @@ final class ProcessTapSource: AudioTapSource, @unchecked Sendable {
             expected = start + Double(buffer.frameLength) / buffer.format.sampleRate
             do {
                 try resampler.process(buffer, into: &pending[pending.count - 1].samples)
+                try listeningResampler?.process(buffer, into: &pending[pending.count - 1].listening)
             } catch {
                 Log.audio.error("Dropped a chunk of other apps' sound the converter rejected")
             }
         }
     }
 
-    /// What the converter still holds, onto the last stretch. Lock held.
+    /// What the converters still hold, onto the last stretch. Lock held.
     private func flushResampler() {
-        var tail: [Float] = []
+        var tail: [Float] = [], listeningTail: [Float] = []
         try? resampler.flush(into: &tail)
-        guard !tail.isEmpty else { return }
-        if pending.isEmpty { pending.append(TimedAudio(samples: tail, start: nil)) } else { pending[pending.count - 1].samples += tail }
+        try? listeningResampler?.flush(into: &listeningTail)
+        guard !tail.isEmpty || !listeningTail.isEmpty else { return }
+        if pending.isEmpty {
+            pending.append(TimedAudio(samples: tail, listening: listeningTail, start: nil))
+        } else {
+            pending[pending.count - 1].samples += tail
+            pending[pending.count - 1].listening += listeningTail
+        }
     }
 }
