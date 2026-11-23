@@ -44,7 +44,9 @@ them out for it too. Change the keys (all but esc) in Shortcuts.
 
 You don't have to wait for the text. To start the next dictation while the last one is still being written, press fn
 twice and hold the second press (fn Space starts a hands-free one right away). The earlier one moves up onto a pill of
-its own, and each text is pasted as soon as it's ready, in the order you dictated. Esc
+its own, and each text is pasted as soon as it's ready, in the order you dictated. A text that's ready while an
+older one is still being written says "ready" on its pill; Paste now beside it pastes it first. Send turned on for
+one dictation turns it off on the ones before it, so Return is pressed once, after the last text. Esc
 cancels the dictation you're recording, or, when you're not recording, the newest one still on its way.
 
 Moved on before the text came? Click somewhere else, or switch to another app, after you stop and before the text is
